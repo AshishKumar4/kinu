@@ -50,7 +50,7 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
   private open(): ProbeActors {
     if (!this.ready) {
       // `initWorkspaceSchema` creates the identity and roster tables; the probe adds only the identity row.
-      initWorkspaceSchema({ execRaw: this.execRaw, sql: this.sql, exec: this.exec });
+      initWorkspaceSchema({ execRaw: this.execRaw, sql: this.sql, exec: this.exec, transactionSync: (write) => this.ctx.storage.transactionSync(write) });
       void this.sql`INSERT OR IGNORE INTO workspace_identity (id, name) VALUES (${'ws-db-probe'}, ${'db-probe'})`;
       const directory = new WorkspaceActorDirectory(this.sql, { workspaceId: 'ws-db-probe', ownerUserId: '' });
       const main = directory.createMain({ name: 'db-probe' });

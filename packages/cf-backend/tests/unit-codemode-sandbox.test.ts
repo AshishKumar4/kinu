@@ -185,10 +185,16 @@ describe("defineCrafted — a tool breaks only its own name", () => {
 });
 
 describe("createRequire — Node's fs and child_process over the workspace", () => {
+  // Members answer as the binding delivers them: output as text, a failed command as a refusal carrying its exit.
+  const LOOKS_FAILED = "Error (exit 3)\n--- stderr ---\nprinted, not failed";
+
   const workspace = {
-    exec: async (command: string) => command.startsWith("false")
-      ? "Error (exit 1)\n--- stderr ---\nnope"
-      : `ran: ${command}`,
+    exec: async (command: string) => {
+      if (command.startsWith("false")) return { success: false, reason: "io", error: "Error (exit 1)\n--- stderr ---\nnope", execution: { exitCode: 1 } };
+
+      return command.startsWith("printf") ? LOOKS_FAILED : `ran: ${command}`;
+    },
+    readFile: async () => '{"reason":"io","error":"a saved API error"}',
   };
 
   const require = shim.createRequire({ workspace, builtins: { "node:path": { join: (...parts: string[]) => parts.join("/") } }, cwd: WORKSPACE_ROOT });
@@ -197,13 +203,18 @@ describe("createRequire — Node's fs and child_process over the workspace", () 
     const { exec } = require("child_process");
     expect(await exec("ls -la")).toEqual({ stdout: "ran: ls -la", stderr: "" });
     const failed = await rejectionOf(exec("false"));
-    expect(failed.message).toContain("Command failed: false");
+    expect(failed).toMatchObject({ code: 1, stderr: "nope", message: expect.stringContaining("Command failed: false") });
 
     const viaCallback = await new Promise<string>((resolve) => {
       exec("echo hi", (error: Error | null, stdout: string) => resolve(error ? error.message : stdout));
     });
 
     expect(viaCallback).toBe("ran: echo hi");
+  });
+
+  test("text that reads like a failure is output: only a refusal fails a call", async () => {
+    expect(await require("child_process").exec("printf x")).toEqual({ stdout: "Error (exit 3)", stderr: "printed, not failed" });
+    expect(await require("fs/promises").readFile("saved.json", "utf8")).toBe('{"reason":"io","error":"a saved API error"}');
   });
 
   test("Node builtins resolve with or without the node: prefix; anything else names what exists", () => {

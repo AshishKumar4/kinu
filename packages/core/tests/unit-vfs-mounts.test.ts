@@ -5,17 +5,20 @@ import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { fakeMossaic } from '@kinu.run/test-utils/mossaic';
+import { SqliteFilesystemAuthority } from '@nimbus-sh/core/runtime/filesystem-authority.js';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { inlineWorkspaceStorage } from '../src/identity/inline-primitives';
 import type { VFS, VfsRevision } from '../src/types/primitives';
-import { walkRecursive } from '@kinu.run/agent-utils/vfs';
 import { isVfsError, makeVfsError } from '../src/vfs/errno';
 import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, type VfsMount } from '../src/vfs/mounts';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
+import { mountedAuthority } from '../src/vfs/shell-mounts';
 import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { observeWrites } from '../src/vfs/observe';
 import { createWorkspaceBundle } from './helpers';
 
-/** readdir returns entry names and stat distinguishes dirs, so walkRecursive crosses it; a miss throws the
- *  VfsError the real backends throw. */
+/** readdir returns entry names and stat distinguishes dirs; a miss throws the VfsError the real backends throw. */
 function fakeTree(entries: Record<string, string>): VFS {
 	const files = new Map<string, string>(Object.entries(entries));
 	const dirs = new Set<string>();
@@ -65,7 +68,7 @@ function mountOf(name: string, files: VFS | null, reason = 'not live'): VfsMount
 }
 
 describe('the workspace plane mount table', () => {
-	test('a walk across /pc returns the device entries', async () => {
+	test('/pc lists and stats the device tree at every depth', async () => {
 		const device = fakeTree({
 			'/home/dev/report.txt': 'from the machine',
 			'/home/dev/src/app.ts': 'export {};',
@@ -73,19 +76,17 @@ describe('the workspace plane mount table', () => {
 
 		const mounted = withMountTable(fakeTree({ 'notes.md': 'workspace' }), [mountOf('pc', device)]);
 
-		const walk = await walkRecursive(mounted, '/pc', 10, 100);
-		expect(walk.truncated).toBe(false);
-		expect(walk.entries.map((e) => e.path).sort()).toEqual(['/pc/home', '/pc/home/dev', '/pc/home/dev/report.txt', '/pc/home/dev/src', '/pc/home/dev/src/app.ts']);
-		const report = walk.entries.find((e) => e.path === '/pc/home/dev/report.txt')?.stat;
-		expect(report && 'isDir' in report ? report.isDir : null).toBe(false);
+		expect((await mounted.readdir('/pc/home/dev')).sort()).toEqual(['report.txt', 'src']);
+		expect(await mounted.readdir('/pc/home/dev/src')).toEqual(['app.ts']);
+		expect((await mounted.stat('/pc/home/dev/src'))?.isDir).toBe(true);
+		expect((await mounted.stat('/pc/home/dev/report.txt'))?.isDir).toBe(false);
 	});
 
-	test('a walk across /sandbox returns the container entries', async () => {
+	test('/sandbox lists the container tree', async () => {
 		const container = fakeTree({ '/workspace/build.log': 'ok' });
 		const mounted = withMountTable(fakeTree({}), [mountOf('sandbox', container)]);
 
-		const walk = await walkRecursive(mounted, '/sandbox', 10, 100);
-		expect(walk.entries.map((e) => e.path).sort()).toEqual(['/sandbox/workspace', '/sandbox/workspace/build.log']);
+		expect(await mounted.readdir('/sandbox/workspace')).toEqual(['build.log']);
 	});
 
 	test('reads and writes under a live mount cross to the owning machine', async () => {
@@ -634,5 +635,19 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		expect(await shell.exec('mv /shared/notes.md /sandbox/workspace/notes.md')).toMatchObject({ exitCode: 0 });
 		expect(await drive.exists('/notes.md')).toBe(false);
 		expect(await container.readFile('/workspace/notes.md', { encoding: 'utf8' })).toBe('from the Drive\n');
+	});
+
+	test('a runtime path anchored at the root resolves beneath it, and one that climbs out of its root is refused', async () => {
+		// The bash runner names every path it opens as `{ root: '/', path }`: its rc, each cd and redirection target.
+		const storage = inlineWorkspaceStorage(new Database(':memory:'));
+		const vfs = new SqliteVFS(storage.sql, storage.transactions);
+		await vfs.as(CRED_KERNEL).mkdir('/home/main', { recursive: true });
+		await vfs.as(CRED_KERNEL).writeFile('/home/main/marker.txt', 'here');
+		const { fs } = mountedAuthority(new SqliteFilesystemAuthority(vfs), () => null).openHost(CRED_KERNEL);
+
+		expect(await fs.stat({ root: '/', path: 'home/main/marker.txt', beneath: true })).toMatchObject({ type: 'file' });
+		expect(await fs.stat({ root: '/', path: 'etc/nimbus.bashrc', beneath: true })).toBeNull();
+		await expect(Promise.resolve().then(() => fs.stat({ root: '/home/main', path: '../../etc', beneath: true })))
+			.rejects.toMatchObject({ code: 'EPERM' });
 	});
 });

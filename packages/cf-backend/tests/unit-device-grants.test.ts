@@ -13,6 +13,8 @@ import {
 import type { UserCaller } from '@kinu.run/core';
 import { DeviceSocketHub } from '@kinu.run/core';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
+import { mockAgentsSdk } from './helpers/agents-sdk';
+import { appProbe, concretePath, PROBE_ORIGIN } from './helpers/app-probe';
 import {
   DEVICE_CONNECT_PATH, DEVICE_CONSENT_DENIED,
   DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
@@ -21,6 +23,11 @@ import {
 } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
+
+// The /api app's module graph reaches the Agents SDK: mocked before it loads.
+mockAgentsSdk();
+
+const { api } = await import('../src/api/app');
 
 const DeviceRpcFrameSchema = v.object({
   id: v.string(),
@@ -1377,6 +1384,37 @@ describe('a copied device.json goes stale', () => {
     expect((incumbent?.sent ?? []).filter((raw) => raw.includes(DEVICE_TOKEN_ROTATION))).toHaveLength(1);
     await harness.joinFibers();
     harness.close();
+  });
+});
+
+describe('device RPC stays unreachable from owner HTTP routes', () => {
+  test('no /api route reaches deviceRpc, whatever it is sent', async () => {
+    // Checkpoint reads are the only consent-free methods; an HTTP pass-through would widen the
+    // device RPC surface. Every route the app registers is sent a forward-shaped body by a live
+    // session; none may call `deviceRpc`.
+    const { env, ctx, cookie, accountCalls } = await appProbe();
+    const probed = new Set<string>();
+
+    for (const route of api.routes) {
+      const method = route.method === 'ALL' ? 'POST' : route.method;
+      const path = concretePath(route.path);
+
+      if (probed.has(`${method} ${path}`)) continue;
+      probed.add(`${method} ${path}`);
+
+      const answer = await api.fetch(new Request(`${PROBE_ORIGIN}${path}`, {
+        method,
+        headers: { cookie, origin: PROBE_ORIGIN, 'content-type': 'application/json' },
+        body: method === 'GET' ? undefined : JSON.stringify({ method: 'exec', args: ['ls'], deviceId: 'device-1', path: '/' }),
+      }), env, ctx);
+
+      // Wherever the session gate applies, the request got past it and its cross-site check.
+      expect(await answer.text(), `${method} ${path}`).not.toMatch(/No Kinu session|Kinu session expired|CROSS_SITE/);
+    }
+
+    await Promise.allSettled(ctx.retained);
+    expect(probed.size).toBeGreaterThan(50);
+    expect(accountCalls).not.toContain('deviceRpc');
   });
 });
 

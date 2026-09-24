@@ -29,7 +29,7 @@ const { db, rt } = openTerminalWorkspace(dbPath);
 
 await armShadowTrials(rt);
 
-captureTakes(rt, 'root-child', Date.now() + 1_000);
+captureTakes(rt, 'root-child');
 
 if (mode === 'inside-claim') {
   // The roster's first row, inside the commit holding the outer claim; installed before the session is built.

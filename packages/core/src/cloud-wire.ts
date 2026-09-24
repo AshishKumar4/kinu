@@ -13,6 +13,12 @@ type PlatformRedactedHeader = `${string}${'auth' | 'key' | 'secret' | 'token' | 
 // Carries DEV_IDENTITY_SECRET; a cookie would make it ambient.
 export const DEV_IDENTITY_HEADER = 'x-kinu-dev-identity-secret' satisfies PlatformRedactedHeader;
 
+export const DEV_IDENTITY_ACCOUNT_HEADER = 'x-kinu-dev-identity-account';
+
+export const EVAL_ACCOUNTS = ['devices'] as const;
+
+export type EvalAccount = (typeof EVAL_ACCOUNTS)[number];
+
 // Cloud chat messages persist as one DO SQLite row (`do.sqlite.row_bytes`); file parts must fit whole under the
 // SDK's 1.8 MB row guard. 1 MiB raw is ~1.4 MB base64; unit-files.test.ts asserts it against the catalog.
 export const CLOUD_MAX_INLINE_ATTACHMENT_BYTES = 1024 * 1024;

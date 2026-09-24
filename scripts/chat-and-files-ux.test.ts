@@ -3232,7 +3232,7 @@ describe('WorkTab draws a section only when it has something to show', () => {
     });
   });
 
-  test('a workspace where nothing has happened draws no section, two empty lines and no failure', async () => {
+  test('a workspace where nothing has happened draws no section, one empty line and no failure', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 720, height: 900 });
@@ -3246,15 +3246,14 @@ describe('WorkTab draws a section only when it has something to show', () => {
         // The change-set tab is GATED on there being changes, and the card
         // reports presence for a FAILED read as well — so a tab here is a read
         // that broke, in the one column with nothing to read.
-        diffs: document.querySelector('[aria-label="Diffs"]') !== null,
+        diffs: document.querySelector('[aria-label="Changes"]') !== null,
       }));
 
-      // Two lines, because two cards are empty: the column's own and the
-      // change-set's, which this column always draws. Nothing failed, so
-      // nothing owes a retry and the gated tab stays away. Each of the last
-      // three was the other answer while the change-set fixture handed a
-      // record reader an array and the card rendered the TypeError instead.
-      expect(column).toEqual({ sections: 0, lines: 2, retries: 0, diffs: false });
+      // One line: the column's own empty card. The change-set draws nothing
+      // while nothing has changed, and its gated tab stays away. Nothing
+      // failed, so nothing owes a retry. The last two were the other answer
+      // while a fixture handed the change-set's record reader an array.
+      expect(column).toEqual({ sections: 0, lines: 1, retries: 0, diffs: false });
       await page.close();
     });
   });

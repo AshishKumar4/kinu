@@ -10,7 +10,6 @@ import { createChatModel } from '../src/llm';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { decodeModelMessageValues } from '../src/session/message-codec';
 import { TurnAccumulator, type StepLike } from '../src/orchestrator/turn-accumulator';
-import { TurnContextMeter } from '../src/context-meter';
 import { makeSql, makeExecRaw } from './helpers';
 import { renderThrownChain } from '../src/obs/index';
 
@@ -484,7 +483,7 @@ describe('a step records the breakdown of the request it sent', () => {
       for await (const ev of runChat({
         model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }],
         tools, stopWhen: stepCountIs(20), signal: abort.signal,
-        meter: new TurnContextMeter(),
+        measureContext: true,
         observeStream: async (stream) => { for await (const part of stream) void part; },
       })) {
         if (ev.type !== 'step-finish') continue;

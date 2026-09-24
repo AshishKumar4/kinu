@@ -13,7 +13,8 @@ import {
   withCloudflareAccount,
 } from '@kinu.run/core';
 import { buildCliInstallCommand } from '@kinu.run/core';
-import { handleCliRequest } from '../src/cli/routes';
+import { cliRoutes, handleCliRequest } from '../src/cli/routes';
+import { serveFamily } from './helpers/api';
 import { escapeHtml } from '@kinu.run/core';
 import { sanitizeReturnTo } from '../src/auth/store';
 import { handleAuthRequest, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
@@ -26,7 +27,7 @@ import {
 } from '../src/auth/session';
 import { pollCliAuth, startCliAuth } from '../src/cli/auth-store';
 import type { CliRoutesEnv } from '../src/cli/routes';
-import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
+import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { makeKv, type FakeKv } from './helpers/kv';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
@@ -163,9 +164,9 @@ describe('auth and desktop security invariants', () => {
   });
 
   test('the ambient session cookie cannot approve a device flow over JSON', async () => {
-    // The CLI module runs ahead of server.ts's CSRF gate, so a cookie-authed JSON approval was
+    // The CLI family answers ahead of the app's CSRF gate, so a cookie-authed JSON approval was
     // reachable same-site and minted an unrestricted token. Approval is the browser form's alone.
-    const response = await handleCliRequest(
+    const response = await serveFamily(cliRoutes)(
       new Request('https://kinu.example.com/api/cli/auth/approve', {
         method: 'POST',
         headers: {
@@ -179,6 +180,28 @@ describe('auth and desktop security invariants', () => {
     );
 
     expect(response?.status).toBe(401);
+
+    // Nor does a verified CLI session find a JSON approval route to call.
+    const bearer = `ptc_${OWNER_IDENTITY.userId}_${'s'.repeat(26)}`;
+
+    const account = cliAccount({
+      verifyCliToken: async (_caller: UserCaller, presented: string) => ({
+        ok: presented === bearer, tokenHash: 'session-hash',
+        user: { id: OWNER_IDENTITY.userId, email: OWNER_IDENTITY.email, displayName: null },
+      }),
+    });
+
+    const signedIn = await serveFamily(cliRoutes)(new Request('https://kinu.example.com/api/cli/auth/approve', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
+      body: JSON.stringify({ userCode: 'ABCD-EFGH' }),
+    }), {
+      ...PUBLIC_ROUTE_ENV,
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+      UserDO: { idFromName: (name) => name, get: () => account },
+    });
+
+    expect(signedIn?.status).toBe(404);
   });
 
   test('the dashboard hands out the token-free setup commands', async () => {
@@ -195,7 +218,7 @@ describe('auth and desktop security invariants', () => {
     };
 
     const answer = async (request: Request) =>
-      present(await handleUserRequest(request, env, OWNER_IDENTITY), request.url).json();
+      present(await serveFamily(userRoutes, { identity: OWNER_IDENTITY, ctx: workerContext() })(request, env), request.url).json();
 
     const cli = v.parse(v.object({ installCommand: v.string(), setupCommand: v.string(), authCommand: v.string() }),
       await answer(new Request(`${APP}/api/user/cli`)));
@@ -825,7 +848,7 @@ async function cloudflareSignInSteps(
   });
 
   test('the CLI model menu answers a CLI bearer, never a browser session', async () => {
-    const menu = await handleCliRequest(new Request(`${ORIGIN}/api/cli/models`, {
+    const menu = await serveFamily(cliRoutes)(new Request(`${ORIGIN}/api/cli/models`, {
       headers: { cookie: `${SESSION_COOKIE_NAME}=${'s'.repeat(40)}` },
     }), PUBLIC_ROUTE_ENV);
 

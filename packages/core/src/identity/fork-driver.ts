@@ -20,7 +20,7 @@ export interface ForkTransport {
 }
 
 export interface ForkDriverDeps {
-  /** The workspace filesystem a fork inherits SOUL.md and memory/ from. */
+  /** The workspace files a fork inherits, as one snapshot. */
   readonly vfs: ForkFileSource;
   /** The source workspace's own SQL — where the snapshot is read from. */
   sql: SqlExecutor;
@@ -44,7 +44,7 @@ export interface ForkOutcome {
 }
 
 /**
- * Fork at a message: copies messages, SOUL.md, memory, crafted tools and config; evolution state starts clean.
+ * Fork at a message: its conversation, crafted tools, config, and the workspace files as they are now; evolution state starts clean.
  * Throws on caller mistakes (busy agent, unknown cut point, bad or taken name).
  */
 export async function forkWorkspace(

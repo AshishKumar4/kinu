@@ -75,7 +75,7 @@ function normalAbsolute(path: string): string {
 function beneath(base: string, relative: string, confined: boolean): string {
   const joined = normalAbsolute(`${base}/${relative}`);
 
-  if (confined && joined !== base && !joined.startsWith(`${base}/`)) {
+  if (confined && joined !== base && !joined.startsWith(base === '/' ? '/' : `${base}/`)) {
     throw makeVfsError('EPERM', `the path climbs out of ${base}, the directory it resolves beneath`, joined);
   }
 

@@ -97,17 +97,18 @@ import * as v from 'valibot';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 import {
-  DEV_IDENTITY_HEADER, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema, STEER_STEP_METADATA_KEY,
-  parseJsonValue, renderSoulMarkdown, CommandResultSchema,
-  type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent, type WorkspaceSpend,
+  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema,
+  STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, CommandResultSchema,
+  type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
+  type WorkspaceSpend,
 } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
 import { createUserUiMessage, type AgentSendResult, type AgentTurnResult } from '../../packages/cli/src/agent-client';
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
 import {
-  absorbingRunId, compareRunEventOrder, DeploymentAnswer, evalNameSlug, evalTargetVerdict, evalWorkspaceName,
-  INFRA_FAILURE_MARKER, infraBoundary, liveModelTarget, resolveEvalBackend, workerSession,
+  absorbingRunId, compareRunEventOrder, DeploymentAnswer, evalAccount, evalNameSlug, evalTargetVerdict,
+  evalWorkspaceName, INFRA_FAILURE_MARKER, infraBoundary, liveModelTarget, resolveEvalBackend, workerSession,
   EVAL_BACKEND_ENV,
 } from '@kinu.run/test-utils';
 
@@ -169,12 +170,13 @@ export const HEADER_WEBSOCKET = v.parse(
   globalThis.WebSocket,
 );
 
-/** How this session proves it may act as the deployment's web identity. */
+/** How this session proves it may act as the deployment's web identity, and as which of its eval accounts:
+ *  `account` absent is the eval service's own. */
 export type PublicWebIdentity =
   /** A loopback deployment: the machine is the boundary, no header needed. */
-  | { readonly kind: 'loopback' }
+  | { readonly kind: 'loopback'; readonly account?: EvalAccount }
   /** A remote deployment: the synthetic identity's secret, sent per request. */
-  | { readonly kind: 'secret'; readonly secret: string };
+  | { readonly kind: 'secret'; readonly secret: string; readonly account?: EvalAccount };
 
 export type PublicWebIdentityResolution =
   | { readonly kind: 'ready'; readonly identity: PublicWebIdentity }
@@ -194,11 +196,13 @@ export function resolveWebIdentity(
   env: Record<string, string | undefined> = process.env,
 ): PublicWebIdentityResolution {
   const secret = env[PUBLIC_IDENTITY_ENV]?.trim();
+  const account = evalAccount(env);
+  const named = account === undefined ? {} : { account };
 
-  if (secret) return { kind: 'ready', identity: { kind: 'secret', secret } };
+  if (secret) return { kind: 'ready', identity: { kind: 'secret', secret, ...named } };
 
   if (LOOPBACK_HOSTS.includes(new URL(origin).hostname)) {
-    return { kind: 'ready', identity: { kind: 'loopback' } };
+    return { kind: 'ready', identity: { kind: 'loopback', ...named } };
   }
 
   return {
@@ -925,7 +929,11 @@ async function* sseMessages(body: ReadableStream<Uint8Array>): AsyncGenerator<{ 
 }
 
 export function webHeaders(identity: PublicWebIdentity): Record<string, string> {
-  return identity.kind === 'secret' ? { [DEV_IDENTITY_HEADER]: identity.secret } : {};
+  const headers: Record<string, string> = identity.kind === 'secret' ? { [DEV_IDENTITY_HEADER]: identity.secret } : {};
+
+  if (identity.account !== undefined) headers[DEV_IDENTITY_ACCOUNT_HEADER] = identity.account;
+
+  return headers;
 }
 
 /** One response body, or the deployment's own words on a failure. The body is

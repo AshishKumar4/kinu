@@ -4,6 +4,7 @@
  */
 import './helpers/ui-module-globals';
 import { afterAll, describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -19,6 +20,8 @@ import {
   buildWorkspacePreviewHost,
 } from '@kinu.run/core';
 import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
+import { PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH } from '@kinu.run/core';
+import { DEPLOY_API } from '@kinu.run/core/deploy';
 import {
   CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, crossSiteRejection,
 } from '../src/auth/session';
@@ -34,12 +37,12 @@ import { makeKv } from './helpers/kv';
 import { sandboxPreviewExposures } from '@kinu.run/core';
 import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
 import { unreachableNamespace, unreachableObjects, workerContext } from './helpers/bindings';
+import { appProbe, concretePath, PROBE_ORIGIN } from './helpers/app-probe';
 import type { NimbusPreviewEnv, WorkspacePreviewHost } from '../src/nimbus-route';
 import type { SandboxPreviewEnv } from '../src/preview-proxy';
 import { PreviewFrame } from '../src/components/PreviewFrame';
 import type { SandboxOptions } from '@cloudflare/sandbox';
 import { present } from '@kinu.run/test-utils';
-import * as v from 'valibot';
 
 // The SDK entry pulls in `cloudflare:workers`, which only exists inside workerd; proxyToSandbox is
 // the seam the Worker delegates to, so everything Kinu owns stays under test.
@@ -93,6 +96,9 @@ const { servePreviewRequest } =
 
 // Dynamic: the entry's graph reaches `cloudflare:email` and `cloudflare:workers` through `agents`.
 const { default: worker } = await import('../src/server');
+
+// The /api app the Worker hands every `/api/` path to.
+const { api } = await import('../src/api/app');
 
 const root = join(import.meta.dir, '..');
 
@@ -1085,11 +1091,50 @@ describe('CSRF on cookie-authenticated requests', () => {
   });
 });
 
+/** What the /api app answers before its session gate: each authorizes itself, or is public by design. */
+const PUBLIC_API = [
+  '/api/control/', // Cloudflare Access, ahead of every bypass
+  '/api/auth/', // the sign-in state reads; every other path there is the app shell
+  `${USER_AI_PROXY_PATH}/`, // a CLI bearer holding ai.proxy
+  `${PROVIDER_PROXY_PATH}/`, // the same
+  '/api/cli', // a CLI bearer
+  `${DEPLOY_API}/`, // the deploy door's run key
+  '/api/health', // the build stamp
+  '/api/shared/blueprint/', // a signed blueprint id
+  '/api/workspaces/:name/webhook/', // a signed delivery URL
+];
+
 describe('worker wiring', () => {
   const ZONE = { PREVIEW_HOST_SUFFIX: SUFFIX };
 
+  test('the CSRF gate runs before any authenticated route', async () => {
+    // Every write route outside the listed public prefixes refuses an anonymous request, and a
+    // cross-site one carrying the session cookie, before it runs.
+    const { env, ctx, cookie } = await appProbe();
+    const signedIn = api.routes.filter(({ method, path }) => method !== 'GET' && !PUBLIC_API.some((prefix) => path.startsWith(prefix)));
+    expect(signedIn.length).toBeGreaterThan(20);
+
+    for (const route of signedIn) {
+      const method = route.method === 'ALL' ? 'POST' : route.method;
+      const url = `${PROBE_ORIGIN}${concretePath(route.path)}`;
+      const anonymous = await api.fetch(new Request(url, { method }), env, ctx);
+      expect(anonymous.status, `${method} ${route.path}`).toBe(401);
+
+      const forged = await api.fetch(new Request(url, { method, headers: { cookie, origin: 'https://evil.example' } }), env, ctx);
+      expect(forged.status, `${method} ${route.path}`).toBe(403);
+      expect(v.parse(v.object({ code: v.string() }), await forged.json()).code).toBe('CROSS_SITE');
+    }
+  });
+
+  test('an /api path no route answers is the app document, under its policy', async () => {
+    const answer = await served(`${APP}/api/auth/unknown`, ZONE);
+
+    expect(frameSources(answer)).toEqual(["'self'", `https://*.${SUFFIX}`]);
+    expect((await metaTags(answer)).get(previewSuffixMetaName())).toBe(SUFFIX);
+  });
+
   test('the preview host answers every path itself, never an app route', async () => {
-    for (const path of ['/install', '/pc/install', '/login']) {
+    for (const path of ['/install', '/pc/install', '/login', '/api/user/profile']) {
       const answer = await served(`https://probe.${SUFFIX}${path}`, ZONE);
 
       expect(answer.status).toBe(404);

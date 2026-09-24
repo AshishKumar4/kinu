@@ -44,7 +44,7 @@ function workspace() {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   const exec = makeSqlExec(db);
-  initWorkspaceSchema({ execRaw, sql, exec });
+  initWorkspaceSchema({ execRaw, sql, exec, transactionSync: (write) => db.transaction(write)() });
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'read-model-test');
 
   return { db, sql, execRaw, actor, vfs: createWorkspaceBundle(db).vfs, config: actor.config };
@@ -479,17 +479,6 @@ describe('workspace change-set', () => {
     expect((await getWorkspaceDiff(rt)).files).toEqual([]);
     db.close();
   });
-
-  test('binary files are excluded from the change-set', async () => {
-    const { rt, db } = createTestRuntime();
-    initWorkspaceBaselineTable(rt.storage.execRaw);
-    await resetWorkspaceBaseline(rt);
-    await rt.storage.vfs.writeFile('text.txt', 'readable');
-    await rt.storage.vfs.writeFile('blob.bin', 'has\u0000nul');
-
-    expect((await getWorkspaceDiff(rt)).files.map((file) => file.path)).toEqual(['text.txt']);
-    db.close();
-  });
 });
 
 describe('executor file plane', () => {
@@ -537,12 +526,11 @@ describe('executor file plane', () => {
   test('the listed directory comes back absolute and resolved, so the caller can walk up', async () => {
     const { rt, db } = createTestRuntime();
     await rt.storage.vfs.writeFile('/home/main/SOUL.md', 'me');
-    await rt.storage.vfs.writeFile('/home/SHARED', 's');
 
-    // `..` from the agent's home is /home, not the filesystem root.
+    // `..` from the agent's home is /home, not the filesystem root: the old root's link sits beside it.
     const up = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/main/..');
     expect(up.path).toBe('/home');
-    expect(up.entries?.map((e) => e.name)).toContain('SHARED');
+    expect(up.entries?.map((e) => e.name)).toContain('user');
     db.close();
   });
 

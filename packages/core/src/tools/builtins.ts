@@ -17,6 +17,7 @@ import {
 import type { ProfileCatalogEnvelope } from '../types/profile';
 import { TaskListStore, TASK_STATUSES } from '../tasks/store';
 import { clampToolResult, withClampedToolResult, type ClampToolResultOptions } from './clamp';
+import { withCheckedInput, withCheckedInputs } from './tool-schema';
 import { codemodeInputSchema } from './sandbox-contract';
 import { connectedDevices } from '../execution/device-status';
 import { deviceMountSegment } from '../execution/device-tunnel-executor';
@@ -568,7 +569,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     }
   }
 
-  return toolsInWorkMode(deps.workMode ?? 'build', tools);
+  return toolsInWorkMode(deps.workMode ?? 'build', withCheckedInputs(tools));
 }
 
 function formatSearchResults(res: WebSearchResponse): string {
@@ -622,17 +623,18 @@ export function installCodemode(
 
   const built = build({ native: toolsInWorkMode(deps.workMode ?? 'build', surface), craftedTools, providers: rt.executionRouter?.getProviders() ?? [] });
   const clamp = { vfs: rt.storage.vfs, producer: 'eval' as const };
-  surface.eval = withClampedToolResult(
+  surface.eval = withCheckedInput('eval', withClampedToolResult(
     built,
     deps.contextBudget ? { ...clamp, budget: deps.contextBudget } : clamp,
-  );
+  ));
 }
 
 /** The one tool assembly: builtins, admitted narrow, kind tools, allowed narrow, then `eval`. */
 export interface ToolSurfaceDeps extends BuiltinToolDeps {
   admitted?: readonly string[];
-  wrapAdmitted?: (admitted: ToolSet) => ToolSet;
   extra?: ToolSet;
+  /** Wraps the admitted builtins and `extra` outside their input check, so it sees a refused call too. */
+  wrapCalls?: (tools: ToolSet) => ToolSet;
   allowed?: readonly string[];
   /** Wins over `codemodeTool`. */
   codemode?: CodemodeBuilder;
@@ -654,13 +656,13 @@ export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
 
   const built = buildBuiltinTools(builtin.workMode === 'plan' ? { ...builtin, workMode: 'build' } : builtin);
   const narrowed = deps.admitted === undefined ? built : keepBuiltins(built, deps.admitted);
-  const recorded = deps.wrapAdmitted === undefined ? narrowed : deps.wrapAdmitted(narrowed);
-  const merged = deps.extra === undefined ? recorded : { ...recorded, ...deps.extra };
+  const merged = deps.extra === undefined ? narrowed : { ...narrowed, ...withCheckedInputs(deps.extra) };
+  const wrapped = deps.wrapCalls === undefined ? merged : deps.wrapCalls(merged);
   const allow = deps.allowed === undefined ? undefined : new Set(deps.allowed);
 
   const surface = allow === undefined
-    ? merged
-    : Object.fromEntries(Object.entries(merged).filter(([name]) => allow.has(name)));
+    ? wrapped
+    : Object.fromEntries(Object.entries(wrapped).filter(([name]) => allow.has(name)));
 
   if (deps.codemode !== undefined) {
     installCodemode(surface, deps.codemode, deps);
@@ -670,11 +672,11 @@ export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
     if (buildFromSurface.success && 'eval' in surface) {
       const entry = { value: buildFromSurface.output(surface) };
 
-      if (isExecutableToolEntry(entry)) surface.eval = entry.value;
+      if (isExecutableToolEntry(entry)) surface.eval = withCheckedInput('eval', entry.value);
     }
   }
 
-  const finished = deps.post === undefined ? surface : { ...surface, ...deps.post };
+  const finished = deps.post === undefined ? surface : { ...surface, ...withCheckedInputs(deps.post) };
   const modeBound = toolsInWorkMode(deps.workMode ?? 'build', finished);
 
   return deps.wrapFinished === undefined ? modeBound : deps.wrapFinished(modeBound);

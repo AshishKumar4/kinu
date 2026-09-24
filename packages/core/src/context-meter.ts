@@ -127,20 +127,24 @@ export function measureContext(input: {
   };
 }
 
-/** Written by the step pipeline and drained at `step_finish`, pairing each measurement with its request's usage. */
+/** What a turn fixes before its first request. */
+interface TurnConstants {
+  readonly system?: SystemText;
+  readonly tools?: ToolDefsLike | undefined;
+}
+
+/** One per turn, made by `runChat`: the step pipeline writes it and each `step-finish` event drains it, pairing a
+ *  measurement with its request's usage. */
 export class TurnContextMeter {
-  private system: SystemText;
-  private tools: ToolDefsLike | undefined;
+  private readonly turn: TurnConstants;
   private latest: ContextComposition | undefined;
 
-  openTurn(input: { system?: SystemText; tools?: ToolDefsLike | undefined }): void {
-    this.system = input.system;
-    this.tools = input.tools;
-    this.latest = undefined;
+  constructor(turn: TurnConstants) {
+    this.turn = turn;
   }
 
   measure(messages: readonly ModelMessage[]): void {
-    this.latest = measureContext({ system: this.system, tools: this.tools, messages });
+    this.latest = measureContext({ ...this.turn, messages });
   }
 
   /** Undefined when nothing measured the step; callers report no breakdown rather than an empty one. */

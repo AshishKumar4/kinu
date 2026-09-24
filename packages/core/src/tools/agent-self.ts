@@ -18,7 +18,7 @@ import type { TrustLevel } from '../events/hub/types';
 import { nanoid } from '../utils/nanoid';
 import { TOOL_REACH } from './registry';
 import { decodeJsonValue, JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
-import { renderThrownChain } from '../obs/index';
+import { KinuError } from '../obs/index';
 
 type CurriculumStatus = (typeof PROPOSED_TASK_STATUSES)[number];
 
@@ -61,7 +61,7 @@ export declare const agent: {
    *  only through \`host.*\`; \`rationale\` is at least 50 characters. It goes live only after winning a
    *  shadow evaluation against the current version. \`baseVersion\` branches from an archived one. */
   proposeScaffold(rationale: string, code: string, baseVersion?: number):
-    Promise<{ ok: boolean; version?: number; error?: string; stage?: number }>;
+    Promise<{ ok: boolean; version?: number; error?: string; stage?: number } | Refusal>;
   /** Your scaffold versions with status, lineage and shadow-evaluation record. */
   scaffoldVersions(limit?: number): Promise<unknown>;
   /** A future turn: \`cron\` recurs, \`atMs\` (epoch ms) fires once. \`budget_usd\`/\`budget_tokens\` cap
@@ -69,15 +69,15 @@ export declare const agent: {
   schedule(opts: {
     cron?: string; atMs?: number; label?: string; payload?: object;
     budget_usd?: number; budget_tokens?: number; budget_label?: string;
-  }): Promise<{ id: string; kind: string; nextFireAt: number | null; budget?: unknown }>;
-  cancelSchedule(id: string): Promise<{ ok: boolean; changed: boolean }>;
+  }): Promise<{ id: string; kind: string; nextFireAt: number | null; budget?: unknown } | Refusal>;
+  cancelSchedule(id: string): Promise<{ ok: boolean; changed: boolean } | Refusal>;
   /** One mission budget, or with no label every budget this turn spends against; [] when uncapped. */
   budget(label?: string): Promise<unknown>;
   /** A background job's row. A running job has no result yet; its result wakes you when it settles. */
-  jobResult(jobId: string): Promise<{ id: string; kind: string; status: 'running' | 'completed' | 'failed' | 'cancelled'; result?: string | null; error?: string | null; note?: string } | null>;
+  jobResult(jobId: string): Promise<{ id: string; kind: string; status: 'running' | 'completed' | 'failed' | 'cancelled'; result?: string | null; error?: string | null; note?: string } | null | Refusal>;
   backgroundJobs(limit?: number): Promise<unknown>;
   /** Compact the conversation when the next turn is assembled; the folded range stays archived. */
-  compactNow(): Promise<{ armed: boolean; appliesAt: 'next-turn-assembly' }>;
+  compactNow(): Promise<{ armed: boolean; appliesAt: 'next-turn-assembly' } | Refusal>;
   /** Past turns replayed against your current config, newest first: loss = 1 − mean score, with a 95% interval. */
   replayEvals(limit?: number): Promise<unknown>;
 };
@@ -151,11 +151,10 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(OptionalNumberSchema, args[0]);
 
-          if (!parsed.success) return { error: 'agent.proposeCurriculum: count must be a number when given' };
+          if (!parsed.success) throw new KinuError('bad_input', 'agent.proposeCurriculum: count must be a number when given');
           const count = parsed.output;
 
-          try { return await host.proposeCurriculumTasks(count); }
-          catch (err) { return { error: `agent.proposeCurriculum: ${renderThrownChain({ cause: err })}` }; }
+          return await host.proposeCurriculumTasks(count);
         },
       },
       listCurriculum: {
@@ -163,11 +162,10 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(OptionalCurriculumStatusSchema, args[0]);
 
-          if (!parsed.success) return { error: 'agent.listCurriculum: invalid status' };
+          if (!parsed.success) throw new KinuError('bad_input', 'agent.listCurriculum: invalid status');
           const status = parsed.output;
 
-          try { return await host.listCurriculumTasks(status); }
-          catch (err) { return { error: `agent.listCurriculum: ${renderThrownChain({ cause: err })}` }; }
+          return await host.listCurriculumTasks(status);
         },
       },
       acceptCurriculumTask: {
@@ -175,10 +173,9 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(NonEmptyStringSchema, args[0]);
 
-          if (!parsed.success) return { error: 'agent.acceptCurriculumTask: id must be a non-empty string' };
+          if (!parsed.success) throw new KinuError('bad_input', 'agent.acceptCurriculumTask: id must be a non-empty string');
 
-          try { return await host.setCurriculumTaskStatus(parsed.output, 'accepted'); }
-          catch (err) { return { error: `agent.acceptCurriculumTask: ${renderThrownChain({ cause: err })}` }; }
+          return await host.setCurriculumTaskStatus(parsed.output, 'accepted');
         },
       },
       proposeScaffold: {
@@ -187,16 +184,15 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           const [rationale, code, baseVersion] = args;
           const parsedRationale = v.safeParse(NonEmptyStringSchema, rationale);
 
-          if (!parsedRationale.success) return { error: 'agent.proposeScaffold: rationale must be a non-empty string' };
+          if (!parsedRationale.success) throw new KinuError('bad_input', 'agent.proposeScaffold: rationale must be a non-empty string');
           const parsedCode = v.safeParse(NonEmptyStringSchema, code);
 
-          if (!parsedCode.success) return { error: 'agent.proposeScaffold: code must be a non-empty string' };
+          if (!parsedCode.success) throw new KinuError('bad_input', 'agent.proposeScaffold: code must be a non-empty string');
           const parsedBase = v.safeParse(OptionalBaseVersionSchema, baseVersion);
 
-          if (!parsedBase.success) return { error: 'agent.proposeScaffold: baseVersion must be a non-negative integer when given' };
+          if (!parsedBase.success) throw new KinuError('bad_input', 'agent.proposeScaffold: baseVersion must be a non-negative integer when given');
 
-          try { return await host.proposeScaffold(parsedRationale.output, parsedCode.output, parsedBase.output); }
-          catch (err) { return { error: `agent.proposeScaffold: ${renderThrownChain({ cause: err })}` }; }
+          return await host.proposeScaffold(parsedRationale.output, parsedCode.output, parsedBase.output);
         },
       },
       scaffoldVersions: {
@@ -204,10 +200,9 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(OptionalNumberSchema, args[0]);
 
-          if (!parsed.success) return { error: 'agent.scaffoldVersions: limit must be a number when given' };
+          if (!parsed.success) throw new KinuError('bad_input', 'agent.scaffoldVersions: limit must be a number when given');
 
-          try { return await host.listScaffoldVersions(parsed.output); }
-          catch (err) { return { error: `agent.scaffoldVersions: ${renderThrownChain({ cause: err })}` }; }
+          return await host.listScaffoldVersions(parsed.output);
         },
       },
       schedule: {
@@ -215,15 +210,15 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(ScheduleOptionsSchema, args[0] ?? {});
 
-          if (!parsed.success) return { error: 'agent.schedule: invalid schedule options' };
+          if (!parsed.success) throw new KinuError('bad_input', 'agent.schedule: invalid schedule options');
           const opts = parsed.output;
           const { cron, atMs } = opts;
 
-          if (!cron && atMs === undefined) return { error: 'agent.schedule: provide { cron } or { atMs }' };
+          if (!cron && atMs === undefined) throw new KinuError('bad_input', 'agent.schedule: provide { cron } or { atMs }');
 
-          if (cron && nextCronFire(cron, Date.now()) === null) return { error: `agent.schedule: unsupported cron expression: ${cron}` };
+          if (cron && nextCronFire(cron, Date.now()) === null) throw new KinuError('bad_input', `agent.schedule: unsupported cron expression: ${cron}`);
 
-          if (atMs !== undefined && atMs <= Date.now()) return { error: 'agent.schedule: atMs must be in the future' };
+          if (atMs !== undefined && atMs <= Date.now()) throw new KinuError('bad_input', 'agent.schedule: atMs must be in the future');
           // Declared before the trigger so the first fire carries the label; a named label re-enters its row.
           const limits = readMissionLimits(opts);
 
@@ -233,19 +228,17 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           // A blank label names no sub-ledger; the generated one keeps it addressable.
           if (limits) missionLabel = declaredLabel === undefined || declaredLabel === '' ? `schedule-${nanoid()}` : declaredLabel;
 
-          try {
-            const budget = limits && missionLabel ? host.budget.declare(missionLabel, limits) : undefined;
+          const budget = limits && missionLabel ? host.budget.declare(missionLabel, limits) : undefined;
 
-            const result: TimerTrigger & { budget?: JsonValue } = await host.createTimerTrigger({
-                cron, atMs, missionLabel,
-                label: opts.label,
-                payload: opts.payload,
-              });
+          const result: TimerTrigger & { budget?: JsonValue } = await host.createTimerTrigger({
+              cron, atMs, missionLabel,
+              label: opts.label,
+              payload: opts.payload,
+            });
 
-            if (budget) result.budget = decodeJsonValue({ value: budget });
+          if (budget) result.budget = decodeJsonValue({ value: budget });
 
-            return result;
-          } catch (err) { return { error: `agent.schedule: ${renderThrownChain({ cause: err })}` }; }
+          return result;
         },
       },
       budget: {
@@ -253,10 +246,9 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(v.optional(v.string()), args[0]);
 
-          if (!parsed.success) return { error: 'agent.budget: label must be a string when given' };
+          if (!parsed.success) throw new KinuError('bad_input', 'agent.budget: label must be a string when given');
 
-          try { return host.budget.snapshot(parsed.output); }
-          catch (err) { return { error: `agent.budget: ${renderThrownChain({ cause: err })}` }; }
+          return host.budget.snapshot(parsed.output);
         },
       },
       cancelSchedule: {
@@ -264,10 +256,9 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(NonEmptyStringSchema, args[0]);
 
-          if (!parsed.success) return { error: 'agent.cancelSchedule: id must be a non-empty string' };
+          if (!parsed.success) throw new KinuError('bad_input', 'agent.cancelSchedule: id must be a non-empty string');
 
-          try { return await host.cancelTrigger(parsed.output, 'self'); }
-          catch (err) { return { error: `agent.cancelSchedule: ${renderThrownChain({ cause: err })}` }; }
+          return await host.cancelTrigger(parsed.output, 'self');
         },
       },
       jobResult: {
@@ -275,10 +266,9 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(NonEmptyStringSchema, args[0]);
 
-          if (!parsed.success) return { error: 'agent.jobResult: jobId must be a non-empty string' };
+          if (!parsed.success) throw new KinuError('bad_input', 'agent.jobResult: jobId must be a non-empty string');
 
-          try { return formatJobRead(await host.jobResult(parsed.output)); }
-          catch (err) { return { error: `agent.jobResult: ${renderThrownChain({ cause: err })}` }; }
+          return formatJobRead(await host.jobResult(parsed.output));
         },
       },
       backgroundJobs: {
@@ -286,20 +276,17 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(OptionalNumberSchema, args[0]);
 
-          if (!parsed.success) return { error: 'agent.backgroundJobs: limit must be a number when given' };
+          if (!parsed.success) throw new KinuError('bad_input', 'agent.backgroundJobs: limit must be a number when given');
 
-          try { return await host.listBackgroundJobs(parsed.output); }
-          catch (err) { return { error: `agent.backgroundJobs: ${renderThrownChain({ cause: err })}` }; }
+          return await host.listBackgroundJobs(parsed.output);
         },
       },
       compactNow: {
         description: 'Fold the conversation now: arm the compaction ladder so your NEXT turn is assembled from a fresh handoff checkpoint instead of waiting for the token trigger. Use it at a phase boundary. The folded range is archived verbatim and listed in the checkpoint\'s Compaction Archive manifest, so nothing is lost.',
         execute: async () => {
-          try {
-            host.armCompactNow();
+          host.armCompactNow();
 
-            return { armed: true, appliesAt: 'next-turn-assembly' };
-          } catch (err) { return { error: `agent.compactNow: ${renderThrownChain({ cause: err })}` }; }
+          return { armed: true, appliesAt: 'next-turn-assembly' };
         },
       },
       replayEvals: {
@@ -307,10 +294,9 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(OptionalNumberSchema, args[0]);
 
-          if (!parsed.success) return { error: 'agent.replayEvals: limit must be a number when given' };
+          if (!parsed.success) throw new KinuError('bad_input', 'agent.replayEvals: limit must be a number when given');
 
-          try { return await host.getReplayEvals(parsed.output); }
-          catch (err) { return { error: `agent.replayEvals: ${renderThrownChain({ cause: err })}` }; }
+          return await host.getReplayEvals(parsed.output);
         },
       },
     },

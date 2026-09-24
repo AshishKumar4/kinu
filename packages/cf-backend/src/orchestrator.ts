@@ -168,7 +168,7 @@ import {
   type Page, type PageRequest,
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
-  getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
+  getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceDiffResult,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, listEnvironments,
@@ -2608,7 +2608,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (this._schemaReady) return;
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
 
-    initWorkspaceSchema({ execRaw, sql: this.boundSql, exec: this.ctx.storage.sql });
+    initWorkspaceSchema({
+      execRaw, sql: this.boundSql, exec: this.ctx.storage.sql, transactionSync: (write) => this.ctx.storage.transactionSync(write),
+    });
     initWorkspaceBaselineTable(execRaw);
     initWorkspaceActorTable(execRaw);
 
@@ -3614,6 +3616,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async resetWorkspaceBaseline(): Promise<{ ok: true; files: number }> {
     return resetWorkspaceBaseline(this.rt);
+  }
+
+  @callable()
+  async restoreWorkspaceBaseline(): Promise<{ ok: true; capturedAt: number } | { ok: false; error: string }> {
+    return restoreWorkspaceBaseline(this.rt);
   }
 
   /** Recent branching-head runs, grouped by root_id with heads, step traces and merged synthesis. */
@@ -4794,8 +4801,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const fork = await forkWorkspace({
       sql: this.boundSql,
       actor: this.rt.actor,
-      // Inherited files stream through ranged reads: a fork holds one frame, never a whole file.
-      vfs: createWorkspaceForkSource(this.hostedWorkspace().bundle, this.rt.localVfs),
+      // One snapshot of the workspace files, streamed through ranged reads: a fork holds one frame, never a whole file.
+      vfs: createWorkspaceForkSource(this.hostedWorkspace().bundle),
       artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
       sourceName: this.name,
       busy: () => this._inFlight,
@@ -4861,7 +4868,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   #forkReceiverFor(forkName: string, transferId: string, ownerUserId: string): ForkTransferReceiver {
     if (this.forkReceiver?.transferId === transferId) return this.forkReceiver.receiver;
 
-    const writer = new ForkTargetWriter(this.boundSql, this.rt.storage.vfs, {
+    const writer = new ForkTargetWriter(this.boundSql, {
       workspaceId: this.ctx.id.toString(), workspaceName: forkName, ownerUserId,
       // The target's own payload plane: carried payloads are re-rooted so the fork never reads its source.
       artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
@@ -5115,7 +5122,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return listRefinements(this.refinementDeps, limit);
   }
 
-  /** Called by `handleHubRequest` so publish + dedupe + reply channel open run atomically in this DO. */
+  /** Called by `webhookDeliveryRoutes` so publish + dedupe + reply channel open run atomically in this DO. */
   async acceptWebhookDelivery(opts: WebhookDelivery): Promise<WebhookDeliveryResult> {
     return acceptWebhookDelivery({
       triggers: this.triggerRegistry,

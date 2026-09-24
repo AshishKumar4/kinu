@@ -245,6 +245,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     slate_receipts: EVERYWHERE,
     // The authored slate's `this.storage` KV.
     slate_state: EVERYWHERE,
+    slate_file_manifest: EVERYWHERE,
     slate_shares: EVERYWHERE,
     slate_share_users: EVERYWHERE,
     slate_live_shares: EVERYWHERE,
@@ -333,6 +334,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     },
     vfs_baseline_manifest: EVERYWHERE,
     vfs_baseline_blob: EVERYWHERE,
+    vfs_baseline_generation: EVERYWHERE,
     // Container lifecycle announcement dedupe, keyed to the workspace's container.
     sandbox_lifecycle_incidents: {
       'cf-orchestrator': WIRED,

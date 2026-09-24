@@ -2,29 +2,18 @@
  * `/api/drive/*`: the owner's Mossaic tenant, mounted at `/shared` in every workspace.
  * The tenant is never named on the wire; bytes cross in bounded chunks as in `files-routes.ts`.
  */
+import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import {
-  err, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, fileResponseHeaders, json, ownerCaller, OwnerCapabilityUnavailableError,
+  err, ERROR_STATUS, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, fileResponseHeaders, json,
   pumpUploadChunks, retryTransientDO, safeJson, type DriveFailure, type DriveUploadTarget, type UserCaller,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
-import type { AuthIdentity } from '../auth/session';
+import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import type { DriveAnswer, UserDO } from '../user/user-do';
-
-const FAILURE_STATUS: Readonly<Record<ErrorCode, number>> = {
-  bad_input: 400,
-  denied: 403,
-  missing: 404,
-  unsupported: 415,
-  budget: 413,
-  unavailable: 503,
-  timeout: 504,
-  cancelled: 400,
-  oom: 507,
-  io: 500,
-};
+import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
 
 export type DriveRouteObject = Pick<UserDO,
+  | 'ensureProfile'
   | 'drive_list' | 'drive_mkdir' | 'drive_rename' | 'drive_delete' | 'drive_markAsSkill' | 'drive_addSkill'
   | 'drive_writeChunk' | 'drive_abortUpload' | 'drive_startDownload' | 'drive_readChunk' | 'drive_abortDownload'>;
 
@@ -33,8 +22,13 @@ interface DriveContext {
   readonly owner: UserCaller;
 }
 
+interface DriveVariables extends ApiVariables {
+  owner: UserCaller;
+  drive: DriveContext;
+}
+
 function failed(failure: DriveFailure): Response {
-  return err(FAILURE_STATUS[failure.code], failure.error);
+  return err(ERROR_STATUS[failure.code], failure.error);
 }
 
 function answered<Value>(answer: DriveAnswer<Value>): Response {
@@ -47,86 +41,72 @@ const RenameBody = v.strictObject({ from: v.string(), to: v.string() });
 
 const SkillBody = v.strictObject({ skill: v.string() });
 
-async function resolveObject(env: Env, identity: AuthIdentity): Promise<DriveRouteObject> {
-  const stub = env.UserDO.get(env.UserDO.idFromName(identity.userId));
-  const owner = await ownerCaller(env);
-  // The tenant derives from the profile row, so upsert it before any Drive call.
-  await retryTransientDO('ensureProfile', () => stub.ensureProfile(owner, identity.email, identity.displayName ?? undefined));
+function pathAction<Value>(act: (drive: DriveContext, path: string) => Promise<DriveAnswer<Value>>) {
+  return async (c: Context<FamilyEnv<Env, DriveVariables>>): Promise<Response> => {
+    const body = await safeJson(c.req.raw, PathBody);
 
-  return stub;
+    return body === null ? err(400, 'expected { path }') : answered(await act(c.get('drive'), body.path));
+  };
 }
 
-export async function handleDriveRequest(
-  request: Request,
-  env: Env,
-  identity: AuthIdentity,
-  resolve: (env: Env, identity: AuthIdentity) => Promise<DriveRouteObject> = resolveObject,
-): Promise<Response | null> {
-  const url = new URL(request.url);
+export const driveRoutes = new Hono<FamilyEnv<Env, DriveVariables>>();
 
-  if (url.pathname !== '/api/drive' && !url.pathname.startsWith('/api/drive/')) return null;
-  let owner: UserCaller;
+// The tenant derives from the profile row, so upsert it before any Drive call, known path or not.
+driveRoutes.use('/api/drive/*', ownerGate(), async (c, next) => {
+  const identity = c.get('identity');
+  const owner = c.get('owner');
+  const object: DriveRouteObject = c.env.UserDO.get(c.env.UserDO.idFromName(identity.userId));
+  await retryTransientDO('ensureProfile', () => object.ensureProfile(owner, identity.email, identity.displayName ?? undefined));
+  c.set('drive', { object, owner });
+  await next();
+});
 
-  try { owner = await ownerCaller(env); }
-  catch (cause) {
-    if (cause instanceof OwnerCapabilityUnavailableError) return err(503, cause.message);
-    throw cause;
-  }
+driveRoutes.get('/api/drive', async (c) => {
+  const { object, owner } = c.get('drive');
 
-  const ctx: DriveContext = { object: await resolve(env, identity), owner };
-  const path = url.pathname.slice('/api/drive'.length);
-  const method = request.method;
+  return answered(await object.drive_list(owner, new URL(c.req.url).searchParams.get('path') ?? '/'));
+});
 
-  if (path === '' && method === 'GET') return answered(await ctx.object.drive_list(owner, url.searchParams.get('path') ?? '/'));
+driveRoutes.delete('/api/drive', async (c) => {
+  const { object, owner } = c.get('drive');
+  const target = new URL(c.req.url).searchParams.get('path');
 
-  if (path === '' && method === 'DELETE') {
-    const target = url.searchParams.get('path');
+  return target === null ? err(400, 'path query parameter required') : answered(await object.drive_delete(owner, target));
+});
 
-    return target === null ? err(400, 'path query parameter required') : answered(await ctx.object.drive_delete(owner, target));
-  }
+driveRoutes.post('/api/drive/folders', pathAction(({ object, owner }, path) => object.drive_mkdir(owner, path)));
 
-  if (path === '/folders' && method === 'POST') {
-    const body = await safeJson(request, PathBody);
+driveRoutes.post('/api/drive/rename', async (c) => {
+  const { object, owner } = c.get('drive');
+  const body = await safeJson(c.req.raw, RenameBody);
 
-    return body === null ? err(400, 'expected { path }') : answered(await ctx.object.drive_mkdir(owner, body.path));
-  }
+  return body === null ? err(400, 'expected { from, to }') : answered(await object.drive_rename(owner, body.from, body.to));
+});
 
-  if (path === '/rename' && method === 'POST') {
-    const body = await safeJson(request, RenameBody);
+driveRoutes.post('/api/drive/skills/mark', pathAction(({ object, owner }, path) => object.drive_markAsSkill(owner, path)));
 
-    return body === null ? err(400, 'expected { from, to }') : answered(await ctx.object.drive_rename(owner, body.from, body.to));
-  }
+driveRoutes.post('/api/drive/skills', async (c) => {
+  const { object, owner } = c.get('drive');
+  const body = await safeJson(c.req.raw, SkillBody);
 
-  if (path === '/skills/mark' && method === 'POST') {
-    const body = await safeJson(request, PathBody);
+  return body === null ? err(400, 'expected { skill }') : answered(await object.drive_addSkill(owner, body.skill));
+});
 
-    return body === null ? err(400, 'expected { path }') : answered(await ctx.object.drive_markAsSkill(owner, body.path));
-  }
+driveRoutes.put('/api/drive/skills', async (c) =>
+  upload(c.req.raw, c.get('drive'), { kind: 'skill', name: new URL(c.req.url).searchParams.get('name') }));
 
-  if (path === '/skills' && method === 'POST') {
-    const body = await safeJson(request, SkillBody);
+driveRoutes.put('/api/drive/files', async (c) => {
+  const target = uploadTarget(new URL(c.req.url));
 
-    return body === null ? err(400, 'expected { skill }') : answered(await ctx.object.drive_addSkill(owner, body.skill));
-  }
+  return target === null ? err(400, 'path, or folder with unpack=zip, query parameter required') : upload(c.req.raw, c.get('drive'), target);
+});
 
-  if (path === '/skills' && method === 'PUT') {
-    return upload(request, ctx, { kind: 'skill', name: url.searchParams.get('name') });
-  }
+driveRoutes.get('/api/drive/files', async (c) => {
+  const url = new URL(c.req.url);
+  const target = url.searchParams.get('path');
 
-  if (path === '/files' && method === 'PUT') {
-    const target = uploadTarget(url);
-
-    return target === null ? err(400, 'path, or folder with unpack=zip, query parameter required') : upload(request, ctx, target);
-  }
-
-  if (path === '/files' && method === 'GET') {
-    const target = url.searchParams.get('path');
-
-    return target === null ? err(400, 'path query parameter required') : download(ctx, target, url.searchParams.get('download') !== null);
-  }
-
-  return null;
-}
+  return target === null ? err(400, 'path query parameter required') : download(c.get('drive'), target, url.searchParams.get('download') !== null);
+});
 
 function uploadTarget(url: URL): DriveUploadTarget | null {
   const folder = url.searchParams.get('folder');
@@ -179,7 +159,7 @@ async function upload(request: Request, ctx: DriveContext, target: DriveUploadTa
   } catch (cause) {
     await abandon();
 
-    if (cause instanceof KinuError) return err(FAILURE_STATUS[cause.code], cause.message);
+    if (cause instanceof KinuError) return err(ERROR_STATUS[cause.code], cause.message);
     diagnostics.failure('drive.upload_failed', toKinuError({
       doing: 'streaming an upload to the Drive',
       cause,

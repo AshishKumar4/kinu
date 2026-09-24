@@ -375,8 +375,10 @@ for (const c of cases) {
       expect(s.size).toBe(BINARY.length);
     });
 
-    test('reading a missing file throws ENOENT (closed taxonomy)', async () => {
+    test('an empty file reads as empty; only a missing one throws ENOENT (closed taxonomy)', async () => {
       const vfs = c.make();
+      await vfs.writeFile(c.path('empty.txt'), '');
+      expect(await vfs.readFile(c.path('empty.txt'), { encoding: 'utf8' })).toBe('');
       expect(await rejectionCode(() => vfs.readFile(c.path('nope.txt')))).toBe('ENOENT');
     });
 

@@ -22,7 +22,7 @@ import {
 import { applyCacheBreakpoints, hasCacheMarkers, type CacheBreakpointPlan } from './prompting/cache-breakpoints';
 import type { ResolvedModelWindow } from './prompting/step-prune';
 import type { CacheRetention } from './providers/types';
-import type { ContextComposition, TurnContextMeter } from './context-meter';
+import { TurnContextMeter, type ContextComposition } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
 import type { MissionGovernor } from './mission-budget';
 import type { AttachmentPolicy } from './prompting/attachment-sanitizer';
@@ -71,9 +71,9 @@ export type ChatEvent =
     /** The breakdown of the request this step sent, taken when the SDK finished the step and before it
      *  prepares the next one: a reader that lags the model still records each step's own request. */
     context?: ContextComposition;
-    /** The fallback that served the step, by its spec; absent when the turn's own model did. */
+    /** The fallback spec that served the step; absent for the turn's own model. */
     fallback?: string;
-    /** The provider's own model id for the step, when it reported one. */
+    /** The provider's model id for the step, when reported. */
     modelId?: string;
   }
   /** A failure the turn survived. `runChat` never yields this; the scaffold seam (scaffold/chat-transform.ts) does. */
@@ -85,8 +85,7 @@ export type ChatEvent =
 
 export type ChatToolOutput = Extract<TextStreamPart<ToolSet>, { type: 'tool-result' }>;
 
-/** Which provider call of a turn a relayed stream belongs to: a continuation or a fallback is another SDK
- *  stream, whose state a relay renews while the answer stays one message. */
+/** Which provider call of a turn a relayed stream belongs to: a continuation or fallback is another SDK stream. */
 export interface ObservedCall {
   readonly index: number;
 }
@@ -109,7 +108,8 @@ export interface ChatOptions {
   history: ModelMessage[];
   /** Re-read and re-woven at every step, never at turn assembly, so a compaction plugin never sees or persists it. */
   dynamicContext?: StepDynamicContext;
-  meter?: TurnContextMeter;
+  /** Measure each request, delivered as its `step-finish` event's `context`. */
+  measureContext?: boolean;
   /** Durable context plane; absent for unclaimed work (a head's own inference, a shadow-eval replay). */
   stepContext?: StepContextPlane;
   persistStreamPart?: (part: TextStreamPart<ToolSet>) => Promise<void>;
@@ -230,7 +230,7 @@ type PendingStepEvent = Omit<Extract<ChatEvent, { type: 'step-finish' }>, 'type'
 interface CallFailure {
   readonly cause: unknown;
   readonly error: Error;
-  /** The failing step had already streamed text or started a tool: the person saw it, and a tool may have run. */
+  /** The failing step had streamed text or started a tool. */
   readonly streamed: boolean;
 }
 
@@ -245,9 +245,8 @@ interface CallOutcome {
 }
 
 /**
- * The next model of a chain takes a failed call only before the failing step streamed anything, and only for a
- * failure of the provider or the account: unavailable, slow, out of allowance, or this account refused (401, 402).
- * A request refused as malformed, missing or too large fails the turn, as every model after would refuse it too.
+ * The next model takes a failed call only before its step streamed anything, and only for a failure of the provider
+ * or account (unavailable, slow, out of allowance, 401, 402). A malformed or too-large request fails the turn.
  */
 function handsOver(failure: CallFailure): boolean {
   if (failure.streamed) return false;
@@ -269,7 +268,7 @@ class ProviderCall {
   /** An aborted run never settles `result.steps`, so this is a cut call's only record of its steps. */
   recordedSteps: readonly StepResult<ToolSet>[] = [];
   streamError: unknown;
-  /** Whether the step the error cut had streamed anything, read when the error arrives: its end clears the step. */
+  /** Whether the step the error cut had streamed, read on arrival: the step's end clears it. */
   private streamedBeforeError = false;
   lastFinishReason: string | undefined;
   /** No finish reason and no output: a provider stream that died, which the SDK would record as a normal stop. */
@@ -286,8 +285,8 @@ class ProviderCall {
   /** When the in-flight step's request left, stamped in `prepareStep`: a cache warm counts its TTL from the request's
    *  start (docs/research/harness/anthropic-sources.md §2). */
   private stepSentAt = Date.now();
-  /** A finished step whose record failed. The SDK drops a throw from its step callback (ai 6.0.214 `notify`), so
-   *  the call stops after that step and the turn fails on this. */
+  /** A finished step whose record failed. The SDK drops a step-callback throw (ai 6.0.214 `notify`), so the call
+   *  stops after that step and the turn fails on this. */
   recordFailure: { readonly cause: unknown } | null = null;
 
   constructor(private readonly fallback: string | undefined) {}
@@ -591,11 +590,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   };
 
   const chain = [...(opts.fallbacks ?? [])];
-  /** The fallback serving the turn, once one has taken it over. */
+  /** The fallback serving the turn, once one took over. */
   let servingFallback: string | undefined;
   let calls = 0;
 
-  opts.meter?.openTurn({ system: cache.system, tools });
+  const meter = opts.measureContext === true ? new TurnContextMeter({ system: cache.system, tools }) : undefined;
 
   /** What the turn streamed across all its calls; the answer is narrower. */
   let allText = '';
@@ -673,7 +672,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           budget: opts.budget,
           dynamic: opts.dynamicContext,
           destinationProviderId: opts.cache?.providerId,
-          meter: opts.meter,
+          meter,
           context: stepContextPlane,
         }, { stepNumber: stepOffset + stepNumber, messages, steps });
       },
@@ -687,7 +686,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         try {
           stepCount++;
           await opts.persistStep?.(step.response.messages);
-          call.stepFinished(step, stepCount, opts.meter?.take());
+          call.stepFinished(step, stepCount, meter?.take());
           await opts.onStep?.(step);
         } catch (cause) {
           call.recordFailure ??= { cause };

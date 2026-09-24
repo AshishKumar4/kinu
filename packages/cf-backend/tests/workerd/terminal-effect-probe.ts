@@ -103,6 +103,7 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
       execRaw: this.execRaw,
       sql: this.sql,
       exec: this.ctx.storage.sql,
+      transactionSync: (write) => this.ctx.storage.transactionSync(write),
     });
     initTerminalEffectTable(this.execRaw);
     initToolEffectClaimTable(this.execRaw);

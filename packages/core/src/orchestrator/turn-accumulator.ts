@@ -35,7 +35,7 @@ export interface StepLike {
   account?: CallAccount | undefined;
   /** The breakdown of the request this step sent. */
   context?: ContextComposition;
-  /** The fallback that served this step, by its spec; absent when the turn's own model did. */
+  /** The fallback spec that served this step; absent for the turn's own model. */
   fallback?: string | undefined;
 }
 
@@ -236,8 +236,7 @@ export class TurnAccumulator {
 
     if (ctx.context) stepEvent.context = ctx.context;
 
-    // Priced with the same rate and arithmetic as the mission ledger: the rate of the model that served the step, and
-    // no rate means no `usd`.
+    // Priced as the mission ledger prices it, at the serving model's rate; no rate means no `usd`.
     if (reported) {
       stepEvent.usage = usage;
       const pricing = this.budget?.pricing(ctx.fallback) ?? null;

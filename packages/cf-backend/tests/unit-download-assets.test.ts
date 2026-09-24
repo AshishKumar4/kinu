@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import { BUILTIN_TOOLS, NAMED_SWARM_PRESETS, SWARM_PRESETS } from '@kinu.run/core';
 import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
 import { unreachableKv, unreachableNamespace } from './helpers/bindings';
-import { handleHealthRequest, type AssetFetcher } from '@kinu.run/core';
+import { healthResponse, type AssetFetcher } from '@kinu.run/core';
 import { HealthAnswerSchema } from '@kinu.run/core/deploy';
 import { CLI_DIST_PATHS } from '@kinu.run/core';
 
@@ -143,7 +143,7 @@ describe('CLI download assets', () => {
 
 describe('GET /api/health build stamp', () => {
   test('reports the deployed build and is ok', async () => {
-    const response = requiredResponse(await handleHealthRequest(new Request(`${ORIGIN}/api/health`), envWithAssets(PUBLISHED)));
+    const response = (await healthResponse(new Request(`${ORIGIN}/api/health`), envWithAssets(PUBLISHED)));
     const body = v.parse(HealthResponseSchema, await response.json());
     expect(body.ok).toBe(true);
     expect(body.build).toEqual(STAMP);
@@ -152,13 +152,13 @@ describe('GET /api/health build stamp', () => {
   // The deploy smoke's proof that its version override reached the staged version.
   test('names the Worker version that answered, in the shape the deploy smoke reads', async () => {
     const env = { ...envWithAssets(PUBLISHED), CF_VERSION_METADATA: { id: 'version-7' } };
-    const response = requiredResponse(await handleHealthRequest(new Request(`${ORIGIN}/api/health`), env));
+    const response = (await healthResponse(new Request(`${ORIGIN}/api/health`), env));
 
     expect(v.parse(HealthAnswerSchema, await response.json()).versionId).toBe('version-7');
   });
 
   test('is not ok when the deploy shipped no build stamp', async () => {
-    const response = requiredResponse(await handleHealthRequest(
+    const response = (await healthResponse(
       new Request(`${ORIGIN}/api/health`),
       envWithAssets(new Map()),
     ));
@@ -174,21 +174,15 @@ describe('GET /api/health build stamp', () => {
         ['/downloads/kinu-version.json', { body: malformed, contentType: 'application/json' }],
       ]));
 
-      const response = requiredResponse(await handleHealthRequest(new Request(`${ORIGIN}/api/health`), env));
+      const response = (await healthResponse(new Request(`${ORIGIN}/api/health`), env));
       const body = v.parse(HealthResponseSchema, await response.json());
       expect(body.ok).toBe(false);
       expect(body.build).toBeNull();
     }
   });
 
-  test('ignores non-health paths and non-GET methods', async () => {
-    const env = envWithAssets(PUBLISHED);
-    expect(await handleHealthRequest(new Request(`${ORIGIN}/api/other`), env)).toBeNull();
-    expect(await handleHealthRequest(new Request(`${ORIGIN}/api/health`, { method: 'POST' }), env)).toBeNull();
-  });
-
   test('the feature counts are read out of the registries, not declared by hand', async () => {
-    const response = requiredResponse(await handleHealthRequest(new Request(`${ORIGIN}/api/health`), envWithAssets(PUBLISHED)));
+    const response = (await healthResponse(new Request(`${ORIGIN}/api/health`), envWithAssets(PUBLISHED)));
     const body = v.parse(HealthResponseSchema, await response.json());
     // Held to the registries themselves: a hand-listed number lies at the next registry edit.
     expect(body.features).toEqual({

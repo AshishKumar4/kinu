@@ -13,7 +13,7 @@ import type { AsyncResource } from "@/hooks/use-async-resource";
 import type { ExecutorInfo } from "@kinu.run/core";
 import type { ToolInfo, MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
-import { DiffsSurface } from "./DiffsSurface";
+import { ChangesSurface } from "./ChangesSurface";
 import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -28,7 +28,7 @@ import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ShareSlateControl } from "@/components/slates/ShareSlateControl";
 import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
 import {
-  ACTIVITY_SURFACE, SLATE_PREFIX, SURFACES, landedSurface, openPortOf, surfaceHasContent,
+  ACTIVITY_SURFACE, SLATE_PREFIX, SURFACES, landedSurface, openPortOf, parentDir, surfaceHasContent,
   type SlateSurfaceKind, type SurfaceKind,
 } from "@kinu.run/core";
 import { useSurfaceFocus } from "./use-surface-focus";
@@ -40,7 +40,7 @@ const slateId = (surface: SurfaceKind | null): string | null =>
   surface?.startsWith(SLATE_PREFIX) === true ? surface.slice(SLATE_PREFIX.length) : null;
 
 const SURFACE_LABEL = {
-  Diffs: "Diffs",
+  Changes: "Changes",
   Work: "Work",
   Files: "Files",
   Releases: "Releases",
@@ -133,8 +133,8 @@ function OpenSlatePanel(props: WorkSurfaceProps & { readonly slate: string; read
 export function WorkSurface(props: WorkSurfaceProps) {
   const requested = props.surface;
   const strip = useRef<HTMLDivElement>(null);
-  const [hasDiffs, setHasDiffs] = useState(false);
-  const content = { tabPresence: props.tabPresence, mctsTrees: props.mctsTrees, slates: props.slates, hasDiffs };
+  const [changeCount, setChangeCount] = useState<number | null>(null);
+  const content = { tabPresence: props.tabPresence, mctsTrees: props.mctsTrees, slates: props.slates, hasChanges: changeCount !== null };
   const ports = props.pinnedPorts.filter(port => !props.slates?.some(slate => port.executor === "workspace" && slate.port === port.port));
   // Settled once this workspace's presence has picked the first tab, or the
   // reader has; from then on the tab asked for is the tab shown.
@@ -175,12 +175,14 @@ export function WorkSurface(props: WorkSurfaceProps) {
   const openPort = surface === null ? undefined : openPortOf(surface, ports);
   const previewSelected = surface?.startsWith(SLATE_PREFIX) === true || surface?.startsWith("preview:") === true;
   // One-shot intent: an Environment card's Files action opens that environment's root.
-  const [filesJump, setFilesJump] = useState<{ path: string; nonce: number } | null>(null);
+  const [filesJump, setFilesJump] = useState<{ path: string; file?: string; nonce: number } | null>(null);
 
-  const openFiles = useCallback((path: string) => {
-    setFilesJump((prev) => ({ path, nonce: (prev?.nonce ?? 0) + 1 }));
+  const openFiles = useCallback((path: string, file?: string) => {
+    setFilesJump((prev) => ({ path, file, nonce: (prev?.nonce ?? 0) + 1 }));
     focus.navigate("Files");
   }, [focus.navigate]);
+
+  const openChangedFile = useCallback((file: string) => openFiles(parentDir(file), file), [openFiles]);
 
   const openSlate = slateId(surface);
 
@@ -227,6 +229,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               className={`${tabCls} ${surface === s ? "p-tab-active p-accent" : ""}`}>
               <span>{SURFACE_LABEL[s]}</span>
               {s === "Work" && props.pendingActions.length > 0 && <span className="p-accent p-t-status">{props.pendingActions.length}</span>}
+              {s === "Changes" && changeCount !== null && changeCount > 0 && <span className="p-t-status p-text-3">{changeCount}</span>}
             </button>
           ))}
         </div>
@@ -256,7 +259,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
         </div>
       </div>
 
-      <div className={`flex-1 min-h-0 ${surface === "Diffs" ? "hidden" : bodyFit}`}>
+      <div className={`flex-1 min-h-0 ${surface === "Changes" ? "hidden" : bodyFit}`}>
         <div className={surface === "Work" ? "" : "hidden"}>
           <ErrorBoundary label="Work">
             {/* Keyed by workspace, never by agent: a chat-tab switch must not remount Work. */}
@@ -317,8 +320,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
           {openSlate !== null && <OpenSlatePanel {...props} slate={openSlate} summary={openSlateSummary} />}
         </ErrorBoundary>
       </div>
-      <div className={surface === "Diffs" ? "flex-1 min-h-0" : "hidden"}>
-        <DiffsSurface executors={props.executors} lastActiveExecutor={props.lastActiveExecutor} rpc={props.rpc} onPresence={setHasDiffs} />
+      <div className={surface === "Changes" ? "flex-1 min-h-0" : "hidden"}>
+        <ChangesSurface executors={props.executors} lastActiveExecutor={props.lastActiveExecutor} rpc={props.rpc} onOpenFile={openChangedFile} onCount={setChangeCount} />
       </div>
       {props.previewError && <LoadFailure what="preview listings" message={props.previewError} onRetry={props.onRefreshPorts} />}
       {connecting && <ConnectDeviceDialog onClose={closeConnect} />}

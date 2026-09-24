@@ -32,7 +32,7 @@ function deps(source: ForkSourceFixture, transport: ForkTransport, busy = false)
   return {
     sql: source.workspace.sql,
     actor: source.actor,
-    vfs: source.workspace.vfs,
+    vfs: source.workspace.forkSource,
     artifactDirectory: SOURCE_ARTIFACTS,
     sourceName: 'atlas',
     busy: () => busy,
@@ -186,7 +186,7 @@ describe('forkWorkspace', () => {
     const out = await forkWorkspace(deps(src, {
       async occupied() { return false; },
       async deliver(name, source) {
-        const landed = await streamFork(source, target, {
+        const landed = await streamFork({ sql: source.sql, forkSource: source.vfs }, target, {
           workspaceId: 'TGT', workspaceName: name, artifactDirectory: TARGET_ARTIFACTS, now: 5000,
         }, { untilMessageId: source.untilMessageId, artifactDirectory: source.artifactDirectory });
 

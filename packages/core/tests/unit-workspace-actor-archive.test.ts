@@ -32,7 +32,7 @@ function sqlOver(db: Database): SqlExecutor {
 function workspace(): Workspace {
   const db = new Database(':memory:');
   const sql = sqlOver(db);
-  initWorkspaceSchema({ execRaw: (ddl) => { db.exec(ddl); }, sql, exec: makeSqlExec(db) });
+  initWorkspaceSchema({ execRaw: (ddl) => { db.exec(ddl); }, sql, exec: makeSqlExec(db), transactionSync: (write) => db.transaction(write)() });
   const workspaceId = crypto.randomUUID();
   void sql`INSERT INTO workspace_identity (id, name) VALUES (${workspaceId}, 'hosted')`;
   const directory = new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' });

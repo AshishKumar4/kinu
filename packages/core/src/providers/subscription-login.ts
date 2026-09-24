@@ -1,5 +1,4 @@
-// A subscription login is an OAuth credential its issuer renews: Codex and Claude, any account of either. A
-// machine's config and a hosted account's credentials both renew one through this table.
+// Codex and Claude logins, any account: the CLI's config and a hosted account's credentials renew through this.
 import { baseCredentialKey } from '../credentials/accounts';
 import type { OAuthCredential } from '../credentials/store';
 import { CLAUDE_CRED_KEY } from './claude';
@@ -30,7 +29,7 @@ export const CLAUDE_LOGIN_ISSUER: SubscriptionIssuer = {
 
 const ISSUERS: ReadonlyMap<string, SubscriptionIssuer> = new Map([[CODEX_CRED_KEY, CODEX_LOGIN_ISSUER], [CLAUDE_CRED_KEY, CLAUDE_LOGIN_ISSUER]]);
 
-/** The issuer that renews a stored login, for any account of it; null for every other credential. */
+/** The issuer renewing a stored login, any account; null for other credentials. */
 export function subscriptionIssuer(key: string): SubscriptionIssuer | null {
   return ISSUERS.get(baseCredentialKey(key)) ?? null;
 }

@@ -1,6 +1,7 @@
 import {
   TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, provisionTestWorkspace, testOwner,
 } from './helpers/user-do';
+import { serveFamily } from './helpers/api';
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import {
   approveCliAuth,
@@ -10,7 +11,7 @@ import {
 } from '../src/cli/auth-store';
 import { makeKv } from './helpers/kv';
 import { RateLimitError } from '../src/cli/auth-store';
-import { handleCliRequest, type CliRoutesAuthority, type CliRoutesEnv } from '../src/cli/routes';
+import { cliRoutes, type CliRoutesAuthority, type CliRoutesEnv } from '../src/cli/routes';
 import {
   bootstrappedProfile, cliAccount, unreachableAssets, unreachableNamespace,
 } from './helpers/bindings';
@@ -19,6 +20,8 @@ import type { KvStore } from '@kinu.run/agent-utils';
 import type { UserCaller } from '@kinu.run/core';
 import { sha256Hex } from '@kinu.run/core';
 import * as v from 'valibot';
+
+const cli = serveFamily(cliRoutes);
 
 const ErrorResponseSchema = v.object({ error: v.string() });
 
@@ -247,14 +250,14 @@ describe('CLI auth route status mapping', () => {
       await startAuth(env, 'https://o.example', 't');
     }
 
-    const res = await handleCliRequest(startRequest(), env);
+    const res = await cli(startRequest(), env);
     expect(res?.status).toBe(429);
   });
 
   test('infra failure during start → 500, not 429', async () => {
     const env = testEnv(brokenKv(), unreachableNamespace('UserDO'));
 
-    const res = handled(await handleCliRequest(startRequest(), env));
+    const res = handled(await cli(startRequest(), env));
     expect(res.status).toBe(500);
     expect(v.parse(ErrorResponseSchema, await res.json()).error).toMatch(/namespace unavailable/i);
   });
@@ -292,7 +295,7 @@ describe('the CLI session inventory', () => {
     // Recovery works from the inventory: the lost machine's raw token is what no longer exists.
     const inventory = v.parse(
       v.object({ sessions: v.array(v.object({ tokenHash: v.string(), label: v.string() })) }),
-      await handled(await handleCliRequest(sessionsRequest(device.token), env)).json(),
+      await handled(await cli(sessionsRequest(device.token), env)).json(),
     );
 
     expect(inventory.sessions.map((row) => row.label).sort())
@@ -300,9 +303,7 @@ describe('the CLI session inventory', () => {
     const orphan = inventory.sessions.find((row) => row.label === 'the machine that is gone');
     expect(orphan?.tokenHash).toBe(lost.tokenHash);
 
-    const revoked = await handleCliRequest(
-      sessionsRequest(device.token, { method: 'DELETE', hash: orphan?.tokenHash ?? '' }), env,
-    );
+    const revoked = await cli(sessionsRequest(device.token, { method: 'DELETE', hash: orphan?.tokenHash ?? '' }), env);
 
     expect(revoked?.status).toBe(200);
     expect(await harness.userDO.verifyCliToken(owner, lost.token))
@@ -317,7 +318,7 @@ describe('the CLI session inventory', () => {
   test('revoke-all is the answer when no hash can name the orphan', async () => {
     const { harness, owner, env, device, lost } = await account();
 
-    const response = await handleCliRequest(sessionsRequest(device.token, { method: 'DELETE' }), env);
+    const response = await cli(sessionsRequest(device.token, { method: 'DELETE' }), env);
 
     expect(v.parse(v.object({ ok: v.boolean(), revoked: v.number() }), await handled(response).json()))
       .toEqual({ ok: true, revoked: 2 });
@@ -340,7 +341,7 @@ describe('the CLI session inventory', () => {
       sessionsRequest(ci.token, { method: 'DELETE' }),
       sessionsRequest(ci.token, { method: 'DELETE', hash: device.tokenHash }),
     ]) {
-      const refused = await handleCliRequest(request, env);
+      const refused = await cli(request, env);
       expect(refused?.status).toBe(403);
       expect(v.parse(ErrorResponseSchema, await handled(refused).json()).error)
         .toContain('interactive CLI session token');
@@ -353,9 +354,7 @@ describe('the CLI session inventory', () => {
   test('a hash that is not 64 hex is not a route at all', async () => {
     const { harness, env, device } = await account();
 
-    const refused = await handleCliRequest(
-      sessionsRequest(device.token, { method: 'DELETE', hash: 'not-a-hash' }), env,
-    );
+    const refused = await cli(sessionsRequest(device.token, { method: 'DELETE', hash: 'not-a-hash' }), env);
 
     expect(refused?.status).toBe(404);
     harness.close();

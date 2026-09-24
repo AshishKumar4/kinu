@@ -18,6 +18,8 @@ import {
 } from './helpers/fork-conversation';
 import { deliver, reassemble, sinkFor, sourceFrames, type ForkContent } from './helpers/fork-stream';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
+import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 
 const OWNER: ForkWriteTarget = {
   workspaceId: 'FORK-ID', workspaceName: 'my-fork', artifactDirectory: TARGET_ARTIFACTS, now: 4242,
@@ -29,6 +31,19 @@ const EMPTY_COUNTS: ForkSectionCounts = {
   sessionMessages: 0, conversationEntries: 0, conversationEntryParts: 0, contextMembers: 0,
   files: 1,
 };
+
+/** Mode and mtime every hand-built file frame carries. */
+const FILE_META = { mode: 0o644, mtimeMs: 1_700_000_000_000 };
+
+/** The whole-entry half of a native port, for fixtures whose only files are ranged: directories are
+ *  placed and stamped, nothing else. */
+const RANGED_ONLY = {
+  async writeFile() { throw new Error('this fixture stages ranged files only'); },
+  async mkdir() {},
+  async symlink() { throw new Error('this fixture holds no symlinks'); },
+  async stamp() {},
+  async remove() {},
+} satisfies Pick<ForkNativeFilePort, 'writeFile' | 'mkdir' | 'symlink' | 'stamp' | 'remove'>;
 
 /** The big-file fixture both 256 MiB arms stream; never materialized, its digest folds per frame. */
 const HUGE_PATH = 'memory/huge.bin';
@@ -157,7 +172,7 @@ function framesFor(snapshot: ForkContent, opts: {
     const digest = new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
 
     if (bytes.byteLength === 0) {
-      push({ kind: 'file', path, offset: 0, bytes, last: true, fileDigest: digest, artifact });
+      push({ kind: 'file', path, offset: 0, bytes, last: true, fileDigest: digest, artifact, ...FILE_META });
 
       return;
     }
@@ -166,7 +181,7 @@ function framesFor(snapshot: ForkContent, opts: {
       const last = at + fileBytes >= bytes.byteLength;
       push({
         kind: 'file', path, offset: at, bytes: bytes.slice(at, at + fileBytes), last, artifact,
-        fileDigest: last ? digest : undefined,
+        fileDigest: last ? digest : undefined, ...FILE_META,
       });
     }
   };
@@ -181,7 +196,7 @@ function framesFor(snapshot: ForkContent, opts: {
 }
 
 function receiverFor(tgt: TestWorkspace, opts: Partial<ForkWriteTarget> = {}): ForkTransferReceiver {
-  return new ForkTransferReceiver(new ForkTargetWriter(tgt.sql, tgt.vfs, { ...OWNER, ...opts }), sinkFor(tgt));
+  return new ForkTransferReceiver(new ForkTargetWriter(tgt.sql, { ...OWNER, ...opts }), sinkFor(tgt));
 }
 
 /** Everything that exists only once a transfer has published; all "no" means staged, not forked. */
@@ -230,6 +245,11 @@ function stagingNativePort(
       temps.delete(from);
     },
     async unlink(path) { temps.delete(path); },
+    async writeFile(path, bytes) { files.set(path, bytes); },
+    async mkdir() {},
+    async symlink() { throw new Error('this fixture holds no symlinks'); },
+    async stamp() {},
+    async remove(path) { files.delete(path); },
   };
 }
 
@@ -274,7 +294,7 @@ describe('fork transfer receiver', () => {
     const begin = frames[0];
 
     if (begin?.kind !== 'begin') throw new Error('expected a begin frame');
-    const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, OWNER);
+    const writer = new ForkTargetWriter(tgt.sql, OWNER);
     await drain(new ForkTransferReceiver(writer, sinkFor(tgt)), frames);
 
     expect(writer.staged).toEqual(begin.counts);
@@ -424,6 +444,25 @@ describe('fork transfer receiver', () => {
     await drain(receiver, second);
     expect(await tgt.vfs.exists('memory/abandoned.md')).toBe(false);
     expect(await tgt.vfs.readFile('memory/replacement.md', { encoding: 'utf8' })).toBe('new bytes');
+    expect(readForkLineage(tgt.sql)?.sourceMessageId).toBe('m1');
+  });
+
+  test('a reset removes the directories and symlinks an abandoned transfer placed', async () => {
+    const abandoned = await source();
+    await abandoned.vfs.writeFile('app/src/main.ts', 'export {};');
+    (await abandoned.bundle.session()).vfs.as(CRED_SESSION_USER).symlink('src/main.ts', `${WORKSPACE_ROOT}/app/entry.ts`);
+    const replacement = await source();
+    const tgt = fresh();
+    const receiver = receiverFor(tgt);
+    const first = await sourceFrames(abandoned, 'm3', { transferId: 'tx-first' });
+    await drain(receiver, first.slice(0, first.findIndex((frame) => frame.kind === 'commit')));
+    expect(await tgt.vfs.exists('app/src/main.ts')).toBe(true);
+
+    await drain(receiver, await sourceFrames(replacement, 'm1', { transferId: 'tx-second' }));
+
+    const target = (await tgt.bundle.session()).vfs.as(CRED_SESSION_USER);
+    expect(target.exists(`${WORKSPACE_ROOT}/app`)).toBe(false);
+    expect(target.isSymlink(`${WORKSPACE_ROOT}/app/entry.ts`)).toBe(false);
     expect(readForkLineage(tgt.sql)?.sourceMessageId).toBe('m1');
   });
 
@@ -578,38 +617,36 @@ describe('fork transfer receiver', () => {
    */
   async function streamHugeFork(sink: ForkFileSink): Promise<{
     peakRead: number; peakFrameBytes: number; peakRetained: number;
-    peakRetainedHeapDelta: number; readWholeCalls: number; published: boolean;
+    peakRetainedHeapDelta: number; published: boolean;
   }> {
     let peakRead = 0;
-    let readWholeCalls = 0;
 
     const plane: ForkFileSource = {
-      async readFile() { readWholeCalls += 1; throw new Error('the fork sender must not read an inherited file whole'); },
-      async readRange(path, offset, length) {
-        if (path !== HUGE_PATH) throw new Error(`unexpected ranged read of ${path}`);
-        peakRead = Math.max(peakRead, length);
+      async open() {
+        return {
+          lstat(path) {
+            if (path === HUGE_PATH) return { kind: 'file', size: HUGE_SIZE, mode: 0o644, mtimeMs: 1 };
 
-        return hugeForkBytes(offset, length);
+            return path === 'memory' ? { kind: 'directory', size: 0, mode: 0o755, mtimeMs: 1 } : null;
+          },
+          readdir(path) { return { '': ['memory'], memory: ['huge.bin'] }[path] ?? []; },
+          readlink() { throw new Error('the fixture holds no symlinks'); },
+          readRange(path, offset, length) {
+            if (path !== HUGE_PATH) throw new Error(`unexpected ranged read of ${path}`);
+            peakRead = Math.max(peakRead, length);
+
+            return hugeForkBytes(offset, length);
+          },
+          revision() { return 0; },
+        };
       },
-      async writeFile() { throw new Error('the fork sender never writes'); },
-      async readdir(path) { return path === 'memory' ? ['huge.bin'] : []; },
-      async stat(path) {
-        if (path === HUGE_PATH) return { size: HUGE_SIZE, mtimeMs: 1, isDir: false };
-
-        if (path === 'memory') return { size: 0, mtimeMs: 1, isDir: true };
-
-        return null;
-      },
-      async unlink() { throw new Error('the fork sender never unlinks'); },
-      async mkdir() { throw new Error('the fork sender never makes directories'); },
-      async exists(path) { return path === 'memory'; },
     };
 
     const src = fresh();
     const chat = await seedForkSource(src, { workspaceId: 'BIG', workspaceName: 'big', memory: [] });
     await chat.say({ id: 'm1', role: 'user', text: 'only', parentId: null });
     const tgt = fresh();
-    const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, OWNER);
+    const writer = new ForkTargetWriter(tgt.sql, OWNER);
     const receiver = new ForkTransferReceiver(writer, sink);
 
     let peakRetained = 0;
@@ -649,7 +686,7 @@ describe('fork transfer receiver', () => {
       peakRetained = Math.max(peakRetained, receiver.stagingBytes);
     }
 
-    return { peakRead, peakFrameBytes, peakRetained, peakRetainedHeapDelta, readWholeCalls, published };
+    return { peakRead, peakFrameBytes, peakRetained, peakRetainedHeapDelta, published };
   }
 
   test('a 256 MiB logical file crosses end to end without either side holding it', async () => {
@@ -699,11 +736,11 @@ describe('fork transfer receiver', () => {
         temp.delete(from);
       },
       async unlink(path) { temp.delete(path); },
+      ...RANGED_ONLY,
     };
 
     const run = await streamHugeFork(new NativeSinkPlan(native, '256m'));
 
-    expect(run.readWholeCalls).toBe(0);
     expect(run.peakRead).toBe(HUGE_FRAME);
     expect(run.peakFrameBytes).toBe(HUGE_FRAME);
     expect(peakWrite).toBe(HUGE_FRAME);
@@ -738,6 +775,8 @@ describe('fork transfer receiver', () => {
       },
       async commitFile() { return {}; },
       async abortFile() { kept.length = 0; },
+      async place() {},
+      async remove() {},
     };
 
     const run = await streamHugeFork(buffering);
@@ -761,7 +800,7 @@ describe('fork transfer receiver', () => {
     expect(temps.size).toBe(0);
     await sink.beginFile('memory/existing.md', 0);
     await sink.writeRange('memory/existing.md', 0, new TextEncoder().encode('new'), true);
-    await sink.commitFile('memory/existing.md');
+    await sink.commitFile('memory/existing.md', FILE_META);
     expect(new TextDecoder().decode(files.get('memory/existing.md'))).toBe('new');
     expect(temps.size).toBe(0);
   });
@@ -772,7 +811,7 @@ describe('fork transfer receiver', () => {
     const native = stagingNativePort(files, temps);
 
     const tgt = fresh();
-    const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, OWNER);
+    const writer = new ForkTargetWriter(tgt.sql, OWNER);
     const receiver = new ForkTransferReceiver(writer, new NativeSinkPlan(native, 'refusal'));
 
     const begin = sealForkFrame({
@@ -784,7 +823,7 @@ describe('fork transfer receiver', () => {
     await receiver.accept(begin);
     await receiver.accept(sealForkFrame({
       version: FORK_TRANSFER_VERSION, transferId: 'tx-refuse', seq: 1, kind: 'file', path: 'memory/keep.md',
-      offset: 0, bytes: new TextEncoder().encode('new'), last: false, artifact: false,
+      offset: 0, bytes: new TextEncoder().encode('new'), last: false, artifact: false, ...FILE_META,
     }));
     expect(temps.size).toBe(1);
 
@@ -810,14 +849,14 @@ describe('fork transfer receiver', () => {
 
     // File plane and SQLite persist; receiver, writer and sink plan do not: a Durable Object reset.
     const activation = (): ForkTransferReceiver => new ForkTransferReceiver(
-      new ForkTargetWriter(tgt.sql, tgt.vfs, OWNER),
+      new ForkTargetWriter(tgt.sql, OWNER),
       new NativeSinkPlan(native, transferId),
     );
 
     const range = (seq: number, offset: number, last: boolean): ForkFrame => sealForkFrame({
       version: FORK_TRANSFER_VERSION, transferId, seq, kind: 'file', path: 'memory/resume.md',
       offset, bytes: content.subarray(offset, offset + 10), last, artifact: false,
-      fileDigest: last ? digest : undefined,
+      fileDigest: last ? digest : undefined, ...FILE_META,
     });
 
     // Publication refuses a transfer that does not carry the head's cut entry.
@@ -869,6 +908,7 @@ describe('fork transfer receiver', () => {
       },
       async rename(from, to) { calls.push(`rename:${from}->${to}`); },
       async unlink(path) { calls.push(`unlink:${path}`); },
+      ...RANGED_ONLY,
     };
 
     let publishedBytes: Uint8Array = new Uint8Array(0);
@@ -885,12 +925,25 @@ describe('fork transfer receiver', () => {
     const soul = new TextEncoder().encode('## Mission\nship it');
     await sink.beginFile(SOUL_PATH, 0);
     await sink.writeRange(SOUL_PATH, 0, soul, true);
-    const commit = await sink.commitFile(SOUL_PATH);
+    const commit = await sink.commitFile(SOUL_PATH, FILE_META);
 
     expect(commit).toEqual({ mission: 'carried by the protected write' });
     expect(publishedBytes).toBe(soul);
     // The protected write is the publication, so the plan never touches the filesystem.
     expect(calls).toEqual([]);
+  });
+
+  test('a whole entry naming a protected destination is refused: it publishes only through its own write', async () => {
+    const files = new Map<string, Uint8Array>();
+
+    const sink = new NativeSinkPlan(stagingNativePort(files, new Map()), 'protected', {
+      owns: (targetPath) => targetPath === SOUL_PATH,
+      async publish() { throw new Error('a whole entry must never reach the protected write'); },
+    });
+
+    await expect(sink.place([{ kind: 'file', path: SOUL_PATH, bytes: new TextEncoder().encode('## Mission\nswapped'), ...FILE_META }]))
+      .rejects.toThrow(/arrived as a whole entry, not through its protected write/);
+    expect(files.has(SOUL_PATH)).toBe(false);
   });
 
   test('a protected destination larger than one frame is refused before it is held', async () => {
@@ -900,6 +953,7 @@ describe('fork transfer receiver', () => {
       async readRange() { throw new Error('unused'); },
       async rename() { throw new Error('unused'); },
       async unlink() { throw new Error('unused'); },
+      ...RANGED_ONLY,
     }, 'protected', {
       owns: (targetPath) => targetPath === SOUL_PATH,
       async publish() { throw new Error('a refused protected file must never be published'); },
@@ -930,7 +984,7 @@ describe('fork transfer receiver', () => {
     let frames = 0;
 
     for await (const frame of forkTransferFrames({
-      sql: src.sql, actor: chat.actor, vfs: src.vfs, artifactDirectory: SOURCE_ARTIFACTS,
+      sql: src.sql, actor: chat.actor, vfs: src.forkSource, artifactDirectory: SOURCE_ARTIFACTS,
       untilMessageId: 'm99', transferId: 'tx-long', frameBytes: 1024 * 1024,
     })) {
       await receiver.accept(frame);
@@ -987,7 +1041,7 @@ describe('fork transfer receiver', () => {
 describe('fork target writer', () => {
   test('a publication before any head is refused', async () => {
     const tgt = fresh();
-    const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, OWNER);
+    const writer = new ForkTargetWriter(tgt.sql, OWNER);
 
     await expect(writer.publish()).rejects.toThrow(/before the transfer declared its head/);
     expect(isFork(tgt)).toBe(false);
@@ -997,7 +1051,7 @@ describe('fork target writer', () => {
     const tgt = fresh();
     void tgt.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SOMEONE-ELSE'}, ${'other'}, ${1})`;
     new WorkspaceActorDirectory(tgt.sql, { workspaceId: 'SOMEONE-ELSE', ownerUserId: '' }).createMain({ name: 'other' });
-    const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, OWNER);
+    const writer = new ForkTargetWriter(tgt.sql, OWNER);
 
     expect(() => writer.begin({
       source: { workspaceId: 'S', workspaceName: 's' }, cut: { messageId: 'm1', createdAtMs: 1 },

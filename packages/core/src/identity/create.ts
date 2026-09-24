@@ -1,5 +1,5 @@
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { RawSqlExec, SqlExecutor, Storage } from '../types/primitives';
 import type { LLMProviderConfig } from '../llm';
 import { initAllTables } from './schema';
 import { seedSoul, UNTITLED_WORKSPACE_NAME } from './soul';
@@ -33,13 +33,14 @@ interface WorkspaceComponents {
   readonly db: AgentDatabase;
   readonly sql: SqlExecutor;
   readonly execRaw: RawSqlExec;
+  readonly transactionSync: Storage['transactionSync'];
   readonly workspace: WorkspaceBundle;
   readonly actor: ActorHandle;
   readonly llm: LLMProviderConfig;
 }
 
 function buildComponents(components: WorkspaceComponents) {
-  const { db, sql, execRaw, workspace, actor } = components;
+  const { db, sql, execRaw, transactionSync, workspace, actor } = components;
   const vfs = workspace.vfs;
   const memory = createInlineMemory(db, vfs);
   const craftStore = createInlineCraftStore(db);
@@ -50,7 +51,7 @@ function buildComponents(components: WorkspaceComponents) {
   return buildRuntime({
     actor,
     workspaceIsMachine: false,
-    sql, execRaw, transactionSync: write => db.transaction(write)(), vfs, llm, executor, schedule, shell: workspace.shell,
+    sql, execRaw, transactionSync, vfs, llm, executor, schedule, shell: workspace.shell,
     memory, craftStore,
     // Birth-only runtime: a fake exploration result would be indistinguishable from a real one,
     // so fail loudly; running surfaces use createCLIRuntime's real spawner.
@@ -70,16 +71,19 @@ function buildComponents(components: WorkspaceComponents) {
 export async function createWorkspace(
   db: AgentDatabase, config: WorkspaceBirthConfig,
 ): Promise<AgentRuntime> {
-  const { sql, execRaw } = wrapDatabase(db);
+  const { sql, execRaw, transactionSync } = wrapDatabase(db);
 
-  initAllTables(execRaw, sql);
-  initWorkspaceBaselineTable(execRaw);
-  const workspace = createInlineWorkspace(db);
+  const { workspace, actor } = transactionSync(() => {
+    initAllTables(execRaw, sql);
+    initWorkspaceBaselineTable(execRaw);
+    const bundle = createInlineWorkspace(db);
 
-  const workspaceId = nanoid();
-  void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${workspaceId}, ${config.name}, ${nowMs()})`;
-  initWorkspaceActorTable(execRaw);
-  const actor = new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' }).createMain({ name: config.name });
+    const workspaceId = nanoid();
+    void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${workspaceId}, ${config.name}, ${nowMs()})`;
+    initWorkspaceActorTable(execRaw);
+
+    return { workspace: bundle, actor: new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' }).createMain({ name: config.name }) };
+  });
 
   const titled = config.title?.trim();
   const heading = titled === undefined || titled === '' ? UNTITLED_WORKSPACE_NAME : titled;
@@ -97,7 +101,7 @@ export async function createWorkspace(
   await workspace.vfs.mkdir('memory', { recursive: true });
   await workspace.vfs.writeFile('memory/MEMORY.md', `# ${heading}\n\nCreated: ${new Date().toISOString()}\n`);
 
-  const runtime = buildComponents({ db, sql, execRaw, workspace, actor, llm: config.llm });
+  const runtime = buildComponents({ db, sql, execRaw, transactionSync, workspace, actor, llm: config.llm });
 
   await resetWorkspaceBaseline(runtime);
 

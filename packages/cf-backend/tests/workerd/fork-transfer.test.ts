@@ -54,9 +54,10 @@ describe('a fork transfer interrupted by a real eviction', () => {
 
     const files = await source(name).deliver({ target: name, from: rows.nextSeq, stop: 'commit' });
     expect(files.refusal).toBeNull();
-    // SOUL in its one protected frame, then four ranges each for proof.bin and notes.md.
-    expect(files.sent).toBe(9);
-    expect(files.staged).toBe(9);
+    // SOUL in its one protected frame, four ranges each for proof.bin and notes.md, and each directory
+    // in an entries frame after its contents.
+    expect(files.sent).toBe(11);
+    expect(files.staged).toBe(11);
 
     const beforeCommit = await target(name).state();
     expect(beforeCommit.files).toEqual(inherited);
@@ -158,7 +159,8 @@ describe('a fork transfer interrupted by a real eviction', () => {
     // The staged offset is a column: the resumed activation adopts the staging and writes the next byte.
     const rest = await source(name).deliver({ target: name, from: range.nextSeq, stop: 'end' });
     expect(rest.refusal).toBeNull();
-    expect(rest.sent).toBe(8);
+    // Three more ranges of proof.bin, memory/deep, four of notes.md, memory, then the commit.
+    expect(rest.sent).toBe(10);
     expect(rest.fork).toEqual({ forkPointMs: CUT_MS, messagesCopied: 3, craftedToolsCopied: 1 });
 
     // Digest computed by reading the staging back, since no activation saw every range.

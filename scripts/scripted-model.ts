@@ -133,7 +133,8 @@ export function readScriptedRequest(body: string): ScriptedRequest {
 
 const CHUNK = { id: 'chatcmpl-scripted', object: 'chat.completion.chunk', created: 1, model: SCRIPTED_MODEL_ID };
 
-function streamOf(answer: ScriptedAnswer): string {
+/** `step`: the calls the request already holds, so each call a turn makes has its own id, as a provider gives it. */
+function streamOf(answer: ScriptedAnswer, step: number): string {
   const events: unknown[] = [];
   const call = answer.toolCall;
 
@@ -150,7 +151,7 @@ function streamOf(answer: ScriptedAnswer): string {
           role: 'assistant',
           tool_calls: [{
             index: 0,
-            id: `call-${call.name}-${String(events.length)}`,
+            id: `call-${call.name}-${String(step)}`,
             type: 'function',
             function: { name: call.name, arguments: JSON.stringify(call.arguments) },
           }],
@@ -167,7 +168,7 @@ function streamOf(answer: ScriptedAnswer): string {
 
 /** Write a paced answer the way a slow provider streams one: the role chunk at once, then each silence as a real
  *  wait on the socket, then the answer. */
-function writePaced(response: ServerResponse, answer: ScriptedAnswer, pace: ScriptedPace): void {
+function writePaced(response: ServerResponse, answer: ScriptedAnswer, pace: ScriptedPace, step: number): void {
   const frame = (delta: Record<string, string>): string =>
     `data: ${JSON.stringify({ ...CHUNK, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`;
 
@@ -176,7 +177,7 @@ function writePaced(response: ServerResponse, answer: ScriptedAnswer, pace: Scri
   (pace.hold ?? Promise.resolve()).then(() => {
     setTimeout(() => {
       response.write(frame({ content: pace.lead }));
-      setTimeout(() => { response.end(streamOf(answer)); }, pace.leadMs);
+      setTimeout(() => { response.end(streamOf(answer, step)); }, pace.leadMs);
     }, pace.firstTokenMs);
   }, () => { response.destroy(); });
 }
@@ -215,8 +216,8 @@ export async function startScriptedModel(script: ScriptedModel): Promise<Scripte
         answers.push(answer);
         response.setHeader('content-type', 'text/event-stream');
 
-        if (answer.pace === undefined) response.end(streamOf(answer));
-        else writePaced(response, answer, answer.pace);
+        if (answer.pace === undefined) response.end(streamOf(answer, asked.called.length));
+        else writePaced(response, answer, answer.pace, asked.called.length);
 
         return;
       }
@@ -331,6 +332,43 @@ export function pacedFirstTurn(request: ScriptedRequest, held: HeldCall): Script
   return answer.pace === undefined || request.called.includes('file')
     ? answer
     : { ...answer, pace: { ...answer.pace, hold: held.hold() } };
+}
+
+/* ── The reconnect turn ───────────────────────────────────────────────── */
+
+/** The words that ask for the reconnect turn. */
+export const RECONNECT_TURN_ASK = 'Reconnect probe: take your steps, then wait.';
+
+/** The folders the reconnect turn lists before its held call, one step each; a new workspace has both. (Listing its
+ *  `memory` folder fails, which would leave a row that never reads done.) */
+const RECONNECT_FOLDERS = ['', 'scaffold', ''];
+
+/** The reconnect turn's steps before its held call, each a sentence and a tool call. */
+export const RECONNECT_STEPS = RECONNECT_FOLDERS.length;
+
+/**
+ * The reconnect turn: {@link RECONNECT_STEPS} steps that each say what they do and list a folder, then a call held on
+ * `held` whose answer closes the turn, so the turn is still running whatever the row does meanwhile. Each lists a
+ * different folder, since a third identical call makes the harness steer the turn (turn-steering.ts). Null for any
+ * request that did not ask for it.
+ */
+export function reconnectTurn(request: ScriptedRequest, held: HeldCall): ScriptedAnswer | null {
+  if (!request.userTexts.some((text) => text.includes(RECONNECT_TURN_ASK))) return null;
+
+  if (!request.available.includes('file')) return { text: FALLBACK_ANSWER };
+
+  const done = request.called.filter((name) => name === 'file').length;
+
+  const folder = RECONNECT_FOLDERS[done];
+
+  if (folder !== undefined) {
+    return {
+      text: `Step ${String(done + 1)}: listing ${folder === '' ? 'the workspace' : folder}.`,
+      toolCall: { name: 'file', arguments: { action: 'list', path: workspacePath(folder) } },
+    };
+  }
+
+  return { text: 'Done.', pace: { firstTokenMs: 0, lead: '', leadMs: 0, hold: held.hold() } };
 }
 
 /* ── The plan walkthrough ──────────────────────────────────────────────── */

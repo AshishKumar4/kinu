@@ -37,7 +37,7 @@ const AGENTS_CODEMODE_MEMBER_DOCS = {
 /** Per-member return annotations. `unknown` where the caller only reads it
  *  incidentally; the swarm union is spelled out because scripts branch on it. */
 const AGENTS_CODEMODE_RETURNS = {
-  swarm: 'Promise<{ preset: string; config: unknown; caps: unknown; report: unknown; publication: unknown; best: unknown; candidates: unknown[] } | { reason: string; error: string }>',
+  swarm: 'Promise<{ preset: string; config: unknown; caps: unknown; report: unknown; publication: unknown; best: unknown; candidates: unknown[] } | Refusal>',
   hire: 'Promise<unknown>',
   msg: 'Promise<unknown>',
   list: 'Promise<unknown>',

@@ -552,7 +552,7 @@ export interface CredentialSummary {
 /** What one OAuth refresh established; see `UserDO.refreshOAuthCredential`. */
 type OAuthRefresh = OAuthCredential | 'revoked' | { readonly failed: KinuError };
 
-/** How a failed refresh of each login `UserDO` renews reads, by base key: a named account reads as its issuer's. */
+/** What a failed refresh names, per base key. */
 const REFRESH_DOING: ReadonlyMap<string, string> = new Map([
   [CODEX_CRED_KEY, 'refreshing the Codex credential'],
   [CLAUDE_CRED_KEY, 'refreshing the Claude credential'],
@@ -3874,8 +3874,7 @@ export class UserDO extends Agent<Env> {
     );
   }
 
-  /** Only model calls read a subscription login, so a rejected refresh deletes that login's row and the connect
-   * CTA resurfaces; another account of the same issuer is left alone. */
+  /** A rejected refresh deletes only that login's row, so its connect CTA resurfaces. */
   private refreshSubscriptionLogin(key: string, current: OAuthCredential, issuer: SubscriptionIssuer): Promise<OAuthRefresh> {
     return this.refreshOAuthCredential(
       key,

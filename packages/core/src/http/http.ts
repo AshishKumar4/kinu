@@ -1,7 +1,7 @@
 // Shared HTTP helpers for backend route modules, plus the policy for rebuilding a request for an upstream.
 import { inlineFileType } from '../read-models/file-types';
 import { projectJsonValue } from '../utils/json';
-import { KinuError, toKinuError, tolerateAsync } from '../obs/index';
+import { KinuError, toKinuError, tolerateAsync, type ErrorCode } from '../obs/index';
 import { PRIVATE_NO_STORE } from './security-headers';
 import { copyHeaders } from '../providers/fetch-shim';
 import * as v from 'valibot';
@@ -20,6 +20,19 @@ export function json(answer: { body: unknown }, init: ResponseInit = {}): Respon
 export function err(status: number, message: string): Response {
   return json({ body: { error: message } }, { status });
 }
+
+export const ERROR_STATUS: Readonly<Record<ErrorCode, number>> = {
+  bad_input: 400,
+  denied: 403,
+  missing: 404,
+  unsupported: 415,
+  budget: 413,
+  unavailable: 503,
+  timeout: 504,
+  cancelled: 400,
+  oom: 507,
+  io: 500,
+};
 
 /** First-match dispatch over a route family's handlers; null when none matches. */
 export async function firstResponse(

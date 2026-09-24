@@ -139,8 +139,11 @@ const CHAT_IDLE = `[...document.querySelectorAll('#chat button')].some((el) => e
  *  never show as ended; the welcome page, which stands in front of every route
  *  until the account finishes setup, once it offers its next step again (while
  *  it saves one, Next and Finish setup are disabled, and a save that fails
- *  enables them beside its error); or a danger notice, the product saying why
- *  the thing asked for will not come. */
+ *  enables them beside its error); or a failure the page shows, the product
+ *  saying why the thing asked for will not come: a danger notice, or what a
+ *  load that failed or a view that crashed draws in its place (`data-failure`).
+ *  A Drive whose listing failed draws no section and no empty state, so a wait
+ *  for either outlived the failure it showed (2026-09-24, 36 minutes). */
 const DEAD_END = `(() => {
   const script = (window.__scriptFailures ?? []).at(-1);
   if (script !== undefined) return 'the app script ' + script + ' failed to load, which leaves the page blank';
@@ -152,7 +155,9 @@ const DEAD_END = `(() => {
     const said = [...document.querySelectorAll('.p-danger')].map((el) => (el.textContent ?? '').trim()).join(' ');
     return 'the welcome page, which the account has not finished' + (said === '' ? '' : ': ' + said);
   }
-  const notice = [...document.querySelectorAll('.p-notice-danger')].map((el) => (el.textContent ?? '').trim())
+  const notice = [...document.querySelectorAll('.p-notice-danger, [data-failure]')]
+    .filter((el) => el.getClientRects().length > 0)
+    .map((el) => (el.textContent ?? '').trim())
     .find((text) => text !== '');
   return notice === undefined ? null : 'a notice: ' + notice;
 })()`;
@@ -202,9 +207,21 @@ export async function until(page: Page, what: string, condition: string): Promis
 }
 
 /** Wait on a promise the page cannot be polled for, such as a turn closing on its socket, named as {@link until}
- *  names its waits. */
-export async function waitOn<Value>(what: string, promise: Promise<Value>): Promise<Value> {
-  return named(what, () => promise);
+ *  names its waits and ended as it ends them: by the first dead end `page` shows. */
+export async function waitOn<Value>(page: Page, what: string, promise: Promise<Value>): Promise<Value> {
+  return named(what, async () => {
+    const reached = new AbortController();
+
+    const deadEnd = page.waitForFunction(DEAD_END, { polling: 100, signal: reached.signal }).then(async (handle) => {
+      throw new Error(`waiting for ${what}, the page showed ${String(await handle.jsonValue())}`);
+    });
+
+    try {
+      return await Promise.race([promise, deadEnd]);
+    } finally {
+      reached.abort();
+    }
+  });
 }
 
 async function openWorkspacePage(target: FlowTarget, path: string): Promise<Page> {
@@ -775,15 +792,11 @@ const FILES_LISTED = `[...document.querySelectorAll('[data-files-entry]')].map((
 /** The workspace's own folder, from the Files tab's root, one row at a time. */
 const HOME_FOLDER = ['home', 'user'] as const;
 
-/** The Diffs tab has read its change-set: a file row or its empty state is drawn. */
-const DIFFS_SETTLED = `(() => {
-  const pane = document.querySelector('#inspector');
-  const text = pane?.textContent ?? '';
-  return /Workspace changes|Uncommitted changes|No diffs yet|Not a git repository/u.test(text);
-})()`;
+/** The Changes tab has read its change-set: its file tree is drawn. */
+const CHANGES_SETTLED = `document.querySelector('#inspector [data-file-tree]') !== null`;
 
-/** The changed paths the Diffs tab lists, as its file rows show them. */
-const DIFF_PATHS = `[...document.querySelectorAll('#inspector .font-mono')].map((cell) => (cell.textContent ?? '').trim())`;
+/** The changed paths the Changes tab lists, as its file rows name them. */
+const CHANGED_PATHS = `[...document.querySelectorAll('#inspector [data-file-row]')].map((row) => row.getAttribute('data-file-row') ?? '')`;
 
 /** A file name no scaffold file can carry. */
 export const FLOW_PROBE = 'flow-probe.txt';
@@ -792,19 +805,19 @@ export interface WrittenFileVerdict {
   readonly workspace: string;
   /** Every entry the Files tab listed once its listing settled. */
   readonly filesListed: readonly string[];
-  /** Whether the strip drew a Diffs tab once the turn had written. */
-  readonly diffsTab: boolean;
-  /** The Diffs tab's changed paths; empty when it drew no Diffs tab. */
-  readonly diffPaths: readonly string[];
+  /** Whether the strip drew a Changes tab once the turn had written. */
+  readonly changesTab: boolean;
+  /** The Changes tab's changed paths; empty when it drew no Changes tab. */
+  readonly changedPaths: readonly string[];
 }
 
 /**
- * Row: a file the agent writes shows in the Files tab and in the Diffs tab.
+ * Row: a file the agent writes shows in the Files tab and in the Changes tab.
  *
  * One turn writes one file; the reader opens the inspector, reads the Files
- * tab's listing, and opens the Diffs tab the write should have raised.
+ * tab's listing, and opens the Changes tab the write should have raised.
  */
-export async function writtenFileShowsInFilesAndDiffs(target: FlowTarget): Promise<WrittenFileVerdict> {
+export async function writtenFileShowsInFilesAndChanges(target: FlowTarget): Promise<WrittenFileVerdict> {
   const workspace = await createFlowWorkspace(target, 'files-diffs');
 
   try {
@@ -826,18 +839,18 @@ export async function writtenFileShowsInFilesAndDiffs(target: FlowTarget): Promi
     }
 
     const filesListed = v.parse(v.array(v.string()), await page.evaluate(FILES_LISTED));
-    const diffsTab = v.parse(v.boolean(), await page.evaluate(stripHas('Diffs')));
-    let diffPaths: readonly string[] = [];
+    const changesTab = v.parse(v.boolean(), await page.evaluate(stripHas('Changes')));
+    let changedPaths: readonly string[] = [];
 
-    if (diffsTab) {
-      await page.evaluate(stripTab('Diffs'));
-      await until(page, "the Diffs tab's change-set", DIFFS_SETTLED);
-      diffPaths = v.parse(v.array(v.string()), await page.evaluate(DIFF_PATHS));
+    if (changesTab) {
+      await page.evaluate(stripTab('Changes'));
+      await until(page, "the Changes tab's change-set", CHANGES_SETTLED);
+      changedPaths = v.parse(v.array(v.string()), await page.evaluate(CHANGED_PATHS));
     }
 
     await page.close();
 
-    return { workspace, filesListed, diffsTab, diffPaths };
+    return { workspace, filesListed, changesTab, changedPaths };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }
@@ -891,7 +904,7 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
       const frame = await (await page.$(frameSelector))?.contentFrame();
 
       if (frame !== null && frame !== undefined) {
-        await frame.waitForFunction('document.readyState === "complete"', { polling: 100 });
+        await waitOn(page, "the slate's preview to load", frame.waitForFunction('document.readyState === "complete"', { polling: 100 }));
         frameText = v.parse(v.string(), await frame.evaluate('(document.body?.textContent ?? "").trim()'));
       }
     }

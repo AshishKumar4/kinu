@@ -427,8 +427,8 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
     expect(result).toEqual(releaseCheck);
     expect(recorded).toEqual([{ changeId: 'chg-1', input: { name: 'tests', status: 'passed' } }]);
-    const refused = await runReleaseAction(deps, { action: 'apply' });
-    expect(refused).toMatchObject({ error: expect.stringContaining('execution engine') });
+    await expect(runReleaseAction(deps, { action: 'apply' }))
+      .rejects.toMatchObject({ code: 'unsupported', message: expect.stringContaining('execution engine') });
   });
 
   test('with an engine, record_check is refused as an assertion — run_checks earns it', async () => {
@@ -453,11 +453,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       },
     };
 
-    const result = await runReleaseAction(deps, {
+    await expect(runReleaseAction(deps, {
       action: 'record_check', changeId: 'chg-1', check: { name: 'tests', status: 'passed' },
-    });
+    })).rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('action=run_checks') });
 
-    expect(result).toMatchObject({ error: expect.stringContaining('action=run_checks') });
     expect(called).toBe(0);
   });
 

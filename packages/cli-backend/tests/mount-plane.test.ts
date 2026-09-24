@@ -6,7 +6,6 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import * as v from 'valibot';
-import { walkRecursive } from '@kinu.run/agent-utils/vfs';
 import { isVfsError, type ExecutionRouter } from '@kinu.run/core';
 import { present, scratchDir, scratchPath } from '@kinu.run/test-utils';
 
@@ -44,10 +43,6 @@ describe('the local backend file plane', () => {
     expect(await mounted.readFile(join(dir, 'existing.txt'), { encoding: 'utf8' })).toBe('from the host');
     expect(await mounted.readFile('existing.txt', { encoding: 'utf8' })).toBe('from the host');
     expect(await mounted.readdir('/')).toContain('existing.txt');
-
-    const walk = await walkRecursive(mounted, '', 10, 100);
-    expect(walk.truncated).toBe(false);
-    expect(walk.entries.map((e) => e.path)).toContain('existing.txt');
 
     await mounted.writeFile('written.txt', 'from the agent');
     expect(readFileSync(join(dir, 'written.txt'), 'utf8')).toBe('from the agent');

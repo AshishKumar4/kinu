@@ -10,7 +10,7 @@ import type { VFS } from '../types/primitives';
 import { makeVfsError, type VfsErrorCode } from '../vfs/errno';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
-import { commandResult, COMMAND_RESULT_TYPE, refusalText } from './exec-result';
+import { commandResult } from './exec-result';
 import { KinuError, refusalOf } from '../obs/index';
 
 type Stat = { size: number; mtimeMs: number; isDir: boolean } | null;
@@ -93,16 +93,16 @@ export function createParentWorkspaceVfs(handle: ParentWorkspaceHandle): VFS {
 
 const TYPES = `declare namespace parent {
   /** Read a file from the parent workspace, in the parent's own paths. */
-  function readFile(path: string): Promise<string>;
-  function writeFile(path: string, content: string): Promise<string>;
-  function readdir(path: string): Promise<string[]>;
-  function exists(path: string): Promise<boolean>;
+  function readFile(path: string): Promise<string | Refusal>;
+  function writeFile(path: string, content: string): Promise<string | Refusal>;
+  function readdir(path: string): Promise<string[] | Refusal>;
+  function exists(path: string): Promise<boolean | Refusal>;
   /**
    * Run a command in the parent workspace's REAL shell — the same ~95
    * coreutils, pipes, redirects and loops its own agent has. This is the fast
    * way to search it: \`grep -rn TODO .\`, \`find . -name '*.ts'\`.
    */
-  function exec(command: string): Promise<${COMMAND_RESULT_TYPE}>;
+  function exec(command: string): Promise<string | Refusal>;
 }`;
 
 /** Register the parent workspace as an executor. `vfs` may be pre-wrapped (e.g. `observeWrites`) for attribution. */
@@ -143,7 +143,7 @@ export function createParentExecutor(deps: {
           const path = parseInput(StringSchema, { value: args[0] });
 
           if (path === undefined) {
-            return refusalText(new KinuError('bad_input', 'parent readFile: path must be a string'));
+            return refusalOf(new KinuError('bad_input', 'parent readFile: path must be a string'));
           }
 
           const content = await vfs.readFile(path, { encoding: 'utf8' });
@@ -157,7 +157,7 @@ export function createParentExecutor(deps: {
           const path = parseInput(StringSchema, { value: args[0] });
 
           if (path === undefined) {
-            return refusalText(new KinuError('bad_input', 'parent writeFile: path must be a string'));
+            return refusalOf(new KinuError('bad_input', 'parent writeFile: path must be a string'));
           }
 
           const text = String(args[1]);
@@ -173,7 +173,7 @@ export function createParentExecutor(deps: {
           const path = args[0] === undefined ? '.' : parseInput(StringSchema, { value: args[0] });
 
           if (path === undefined) {
-            return refusalText(new KinuError('bad_input', 'parent readdir: path must be a string'));
+            return refusalOf(new KinuError('bad_input', 'parent readdir: path must be a string'));
           }
 
           return vfs.readdir(path);
@@ -186,7 +186,7 @@ export function createParentExecutor(deps: {
           const path = parseInput(StringSchema, { value: args[0] });
 
           if (path === undefined) {
-            return refusalText(new KinuError('bad_input', 'parent exists: path must be a string'));
+            return refusalOf(new KinuError('bad_input', 'parent exists: path must be a string'));
           }
 
           return vfs.exists(path);

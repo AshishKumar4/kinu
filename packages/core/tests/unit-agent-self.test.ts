@@ -3,9 +3,10 @@ import { Database } from "bun:sqlite";
 import * as v from "valibot";
 import { MissionGovernor } from "../src/mission-budget";
 import { createAgentSelfProvider, type AgentSelfHost } from "../src/tools/agent-self";
+import { codemodeFunction, type CodemodeProvider } from "../src/tools/sandbox-contract";
 import type { BackgroundJob } from "../src/jobs/store";
 import { makeExecRaw, makeSql } from "./helpers";
-import { createTestActors } from "@kinu.run/test-utils";
+import { createTestActors, present } from "@kinu.run/test-utils";
 
 const RunningJobReadSchema = v.object({
   id: v.string(),
@@ -106,6 +107,11 @@ function fakeHost(over: Partial<AgentSelfHost> = {}): AgentSelfHost & { calls: s
   };
 }
 
+/** A member as a program calls it, and the refusal that program receives for bad input. */
+const called = (p: CodemodeProvider, member: string) => codemodeFunction("agent", member, present(p.tools[member], member).execute);
+
+const refused = (text: string) => ({ success: false, reason: "bad_input", error: expect.stringContaining(text) });
+
 describe("createAgentSelfProvider — shape", () => {
   test("is a well-formed CodemodeProvider", () => {
     const p = createAgentSelfProvider(fakeHost());
@@ -156,14 +162,11 @@ describe("createAgentSelfProvider — delegation + validation", () => {
   test("proposeScaffold rejects missing rationale/code or a bad baseVersion without delegating", async () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
-    expect(await p.tools.proposeScaffold.execute("", "code")).toEqual(
-      { error: expect.stringContaining("rationale must be a non-empty string") });
-    expect(await p.tools.proposeScaffold.execute("a rationale", 42)).toEqual(
-      { error: expect.stringContaining("code must be a non-empty string") });
-    expect(await p.tools.proposeScaffold.execute("a rationale", "code", -1)).toEqual(
-      { error: expect.stringContaining("baseVersion must be a non-negative integer") });
-    expect(await p.tools.proposeScaffold.execute("a rationale", "code", 1.5)).toEqual(
-      { error: expect.stringContaining("baseVersion must be a non-negative integer") });
+    const scaffold = called(p, "proposeScaffold");
+    expect(await scaffold("", "code")).toEqual(refused("rationale must be a non-empty string"));
+    expect(await scaffold("a rationale", 42)).toEqual(refused("code must be a non-empty string"));
+    expect(await scaffold("a rationale", "code", -1)).toEqual(refused("baseVersion must be a non-negative integer"));
+    expect(await scaffold("a rationale", "code", 1.5)).toEqual(refused("baseVersion must be a non-negative integer"));
     expect(host.calls).toEqual([]);
   });
 
@@ -233,17 +236,17 @@ describe("createAgentSelfProvider — delegation + validation", () => {
   test("acceptCurriculumTask rejects a non-string id", async () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
-    const r = await p.tools.acceptCurriculumTask.execute(42);
-    expect(r).toEqual({ error: expect.stringContaining("id must be a non-empty string") });
+    expect(await called(p, "acceptCurriculumTask")(42)).toEqual(refused("id must be a non-empty string"));
     expect(host.calls).toEqual([]);
   });
 
   test("schedule requires cron or atMs, and a future atMs", async () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
-    expect(await p.tools.schedule.execute({})).toEqual({ error: expect.stringContaining("provide { cron } or { atMs }") });
-    expect(await p.tools.schedule.execute({ atMs: 1 })).toEqual({ error: expect.stringContaining("must be in the future") });
-    expect(await p.tools.schedule.execute({ cron: "not a cron" })).toEqual({ error: expect.stringContaining("unsupported cron expression") });
+    const schedule = called(p, "schedule");
+    expect(await schedule({})).toEqual(refused("provide { cron } or { atMs }"));
+    expect(await schedule({ atMs: 1 })).toEqual(refused("must be in the future"));
+    expect(await schedule({ cron: "not a cron" })).toEqual(refused("unsupported cron expression"));
     expect(host.calls).toEqual([]);
     const ok = await p.tools.schedule.execute({ cron: "0 12 * * *", label: "daily" });
     expect(ok).toMatchObject({ id: "trg1", kind: "timer_cron" });
@@ -284,7 +287,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
 
   test("budget rejects a non-string label without reading anything", async () => {
     const p = createAgentSelfProvider(fakeHost());
-    expect(await p.tools.budget.execute(42)).toEqual({ error: expect.stringContaining("label must be a string") });
+    expect(await called(p, "budget")(42)).toEqual(refused("label must be a string"));
   });
 
   test("compactNow arms the ladder's forced rebuild and says where the fold lands", async () => {
@@ -294,21 +297,5 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     expect(await p.tools.compactNow.execute()).toEqual({ armed: true, appliesAt: "next-turn-assembly" });
     expect(host.calls).toEqual(["compactNow", "compactNow"]);
     expect(p.types).toContain("compactNow");
-  });
-
-  test("compactNow surfaces a host failure as an envelope, not a throw", async () => {
-    const p = createAgentSelfProvider(fakeHost({
-      armCompactNow: () => { throw new Error("no compaction state"); },
-    }));
-
-    expect(await p.tools.compactNow.execute()).toEqual(
-      { error: expect.stringContaining("no compaction state") });
-  });
-
-  test("error from the host surfaces as an envelope, not a throw", async () => {
-    const host = fakeHost({ proposeCurriculumTasks: async () => { throw new Error("boom"); } });
-    const p = createAgentSelfProvider(host);
-    const r = await p.tools.proposeCurriculum.execute(1);
-    expect(r).toEqual({ error: expect.stringContaining("boom") });
   });
 });

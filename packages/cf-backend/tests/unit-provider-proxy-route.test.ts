@@ -1,14 +1,18 @@
 // General provider proxy (/api/user/ai/proxy/*): a key connected in the web UI serves a local
 // agent without a second copy of the secret; targets outside the credential's endpoint are refused.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { serveFamily } from './helpers/api';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
+import type { CliRoutesEnv } from '../src/cli/routes';
+import { providerProxyRoutes } from '../src/user/provider-proxy';
 import { cliAccount, unreachableAssets, unreachableKv, unreachableNamespace } from './helpers/bindings';
 import { asFetchFunction } from '@kinu.run/core';
 import type { AccessTokenScope, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import { requestUrl } from '@kinu.run/core';
 import { requestBodyText } from '@kinu.run/test-utils';
+
+const providerProxy = serveFamily(providerProxyRoutes);
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -148,7 +152,7 @@ function handled(response: Response | null): Response {
 describe('provider proxy auth gate', () => {
   test('requires a CLI bearer', async () => {
     const env = setupEnv([]);
-    const res = await handleCliRequest(forwardRequest({ token: null }), env);
+    const res = await providerProxy(forwardRequest({ token: null }), env);
     expect(res?.status).toBe(401);
   });
 
@@ -156,13 +160,13 @@ describe('provider proxy auth gate', () => {
     const env = setupEnv([{ key: 'openrouter.bearer', headers: { Authorization: 'Bearer sk-or-real' } }]);
     captureUpstream(() => new Response('ok'));
 
-    const denied = await handleCliRequest(forwardRequest({
+    const denied = await providerProxy(forwardRequest({
       token: READ_TOKEN, cred: 'openrouter.bearer', target: 'https://openrouter.ai/api/v1/chat/completions',
     }), env);
 
     expect(denied?.status).toBe(403);
 
-    const allowed = await handleCliRequest(forwardRequest({
+    const allowed = await providerProxy(forwardRequest({
       token: AI_TOKEN, cred: 'openrouter.bearer', target: 'https://openrouter.ai/api/v1/chat/completions',
     }), env);
 
@@ -180,7 +184,7 @@ describe('GET /credentials', () => {
 
     captureUpstream(() => new Response('unused'));
 
-    const res = await handleCliRequest(new Request(CREDENTIALS_URL, {
+    const res = await providerProxy(new Request(CREDENTIALS_URL, {
       headers: { authorization: `Bearer ${SESSION_TOKEN}` },
     }), env);
 
@@ -202,7 +206,7 @@ describe('GET /credentials', () => {
 
     captureUpstream(() => new Response('unused'));
 
-    const res = await handleCliRequest(new Request(CREDENTIALS_URL, {
+    const res = await providerProxy(new Request(CREDENTIALS_URL, {
       headers: { authorization: `Bearer ${SESSION_TOKEN}` },
     }), env);
 
@@ -219,7 +223,7 @@ describe('GET /credentials', () => {
 
     captureUpstream(() => new Response('unused'));
 
-    const res = await handleCliRequest(new Request(CREDENTIALS_URL, {
+    const res = await providerProxy(new Request(CREDENTIALS_URL, {
       headers: { authorization: `Bearer ${SESSION_TOKEN}` },
     }), env);
 
@@ -233,7 +237,7 @@ describe('POST /forward', () => {
     const env = setupEnv([{ key: 'openrouter.bearer', headers: { Authorization: 'Bearer sk-or-real' } }]);
     const seen = captureUpstream(() => Response.json({ ok: true }));
 
-    const res = await handleCliRequest(forwardRequest({
+    const res = await providerProxy(forwardRequest({
       cred: 'openrouter.bearer',
       target: 'https://openrouter.ai/api/v1/chat/completions',
       body: '{"model":"anthropic/claude"}',
@@ -266,7 +270,7 @@ describe('POST /forward', () => {
       { headers: { 'content-type': 'text/event-stream' } },
     ));
 
-    const res = await handleCliRequest(forwardRequest({
+    const res = await providerProxy(forwardRequest({
       cred: 'openai.bearer', target: 'https://api.openai.com/v1/chat/completions',
     }), env);
 
@@ -280,7 +284,7 @@ describe('POST /forward', () => {
     const env = setupEnv([{ key: 'openai.bearer', headers: { Authorization: 'Bearer sk-real' } }]);
     const seen = captureUpstream(() => new Response('should not happen'));
 
-    const res = await handleCliRequest(forwardRequest({
+    const res = await providerProxy(forwardRequest({
       cred: 'openai.bearer', target: 'https://attacker.example/v1/chat/completions',
     }), env);
 
@@ -301,7 +305,7 @@ describe('POST /forward', () => {
     ]) {
       const env = setupEnv([{ ...denied, headers: { authorization: 'Bearer denied' } }]);
       const seen = captureUpstream(() => new Response('should not happen'));
-      const res = await handleCliRequest(forwardRequest({ cred: denied.key, target: denied.target }), env);
+      const res = await providerProxy(forwardRequest({ cred: denied.key, target: denied.target }), env);
 
       expect(res?.status).toBe(403);
       expect(seen).toHaveLength(0);
@@ -316,14 +320,14 @@ describe('POST /forward', () => {
 
     const seen = captureUpstream(() => Response.json({ ok: true }));
 
-    const res = await handleCliRequest(forwardRequest({
+    const res = await providerProxy(forwardRequest({
       cred: 'openai.bearer@work', target: 'https://api.openai.com/v1/chat/completions',
     }), env);
 
     expect(res?.status).toBe(200);
     expect(seen[0]?.headers.get('authorization')).toBe('Bearer sk-work');
 
-    const stray = await handleCliRequest(forwardRequest({
+    const stray = await providerProxy(forwardRequest({
       cred: 'openai.bearer@work', target: 'https://attacker.example/v1/chat/completions',
     }), env);
 
@@ -335,7 +339,7 @@ describe('POST /forward', () => {
     const env = setupEnv([]);
     captureUpstream(() => new Response('should not happen'));
 
-    const res = await handleCliRequest(forwardRequest({
+    const res = await providerProxy(forwardRequest({
       cred: 'openai.bearer', target: 'https://api.openai.com/v1/chat/completions',
     }), env);
 
@@ -347,7 +351,7 @@ describe('POST /forward', () => {
     const env = setupEnv([{ key: 'github', headers: { Authorization: 'Bearer ghp' } }]);
     const seen = captureUpstream(() => new Response('should not happen'));
 
-    const res = await handleCliRequest(forwardRequest({
+    const res = await providerProxy(forwardRequest({
       cred: 'github', target: 'https://api.github.com/user',
     }), env);
 
@@ -362,7 +366,7 @@ describe('POST /forward', () => {
       status: 302, headers: { location: 'https://attacker.example/collect' },
     }));
 
-    const res = await handleCliRequest(forwardRequest({
+    const res = await providerProxy(forwardRequest({
       cred: 'openai.bearer', target: 'https://api.openai.com/v1/chat/completions',
     }), env);
 
@@ -382,7 +386,7 @@ describe('POST /forward', () => {
       'http://api.openai.com/v1/chat/completions',                    // downgrade
       'https://api.openai.com/v1/../admin',                           // traversal
     ]) {
-      const res = await handleCliRequest(forwardRequest({ cred: 'openai.bearer', target }), env);
+      const res = await providerProxy(forwardRequest({ cred: 'openai.bearer', target }), env);
       expect(res?.status).toBe(403);
     }
 
@@ -394,7 +398,7 @@ describe('POST /forward', () => {
     const env = setupEnv([{ key: 'openai.bearer', headers: { Authorization: 'Bearer sk-real' } }]);
     const seen = captureUpstream(() => new Response('should not happen'));
 
-    const res = await handleCliRequest(forwardRequest({
+    const res = await providerProxy(forwardRequest({
       token: AI_TOKEN,
       cred: 'openai.bearer',
       target: 'https://api.openai.com/v1/models/ft-abc123',
@@ -410,12 +414,12 @@ describe('POST /forward', () => {
     const env = setupEnv([{ key: 'openai.bearer', headers: { Authorization: 'Bearer sk-real' } }]);
     const seen = captureUpstream(() => Response.json({ ok: true }));
 
-    const listed = await handleCliRequest(forwardRequest({
+    const listed = await providerProxy(forwardRequest({
       token: AI_TOKEN, cred: 'openai.bearer',
       target: 'https://api.openai.com/v1/models', method: 'GET',
     }), env);
 
-    const inferred = await handleCliRequest(forwardRequest({
+    const inferred = await providerProxy(forwardRequest({
       token: AI_TOKEN, cred: 'openai.bearer',
       target: 'https://api.openai.com/v1/chat/completions',
     }), env);
@@ -431,7 +435,7 @@ describe('POST /forward', () => {
   test('requires both control headers', async () => {
     const env = setupEnv([{ key: 'openai.bearer', headers: { Authorization: 'Bearer sk-real' } }]);
     captureUpstream(() => new Response('should not happen'));
-    expect((await handleCliRequest(forwardRequest({ target: 'https://api.openai.com/v1/x' }), env))?.status).toBe(400);
-    expect((await handleCliRequest(forwardRequest({ cred: 'openai.bearer' }), env))?.status).toBe(400);
+    expect((await providerProxy(forwardRequest({ target: 'https://api.openai.com/v1/x' }), env))?.status).toBe(400);
+    expect((await providerProxy(forwardRequest({ cred: 'openai.bearer' }), env))?.status).toBe(400);
   });
 });

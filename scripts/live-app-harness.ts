@@ -27,6 +27,7 @@ import puppeteer, { type Browser, type LaunchOptions, type Page } from 'puppetee
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '@kinu.run/core';
 import { holdForRelease, releaseScratch, scratchDir } from '../packages/test-utils/src/scratch';
+import { declaredSettings } from './browser-declarations';
 import { signalGroup } from './process-group';
 import { devPreviewTlsDir } from '../packages/cf-backend/vite-preview-zone';
 
@@ -334,13 +335,13 @@ function freePort(): number {
 }
 
 /** Chrome for a browser row: the box's own build when one is installed, a
- *  desktop pointer declared, and no protocol clock. */
+ *  desktop pointer and colour scheme declared, and no protocol clock. */
 async function openBrowser(extraArgs: readonly string[]): Promise<Browser> {
   const launchOptions: LaunchOptions = {
     args: [
       '--no-sandbox',
       '--disable-dev-shm-usage',
-      '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2',
+      declaredSettings({ mouse: true }),
       ...devPreviewTrust(),
       ...extraArgs,
     ],
@@ -392,6 +393,8 @@ export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, 
         KINU_DEV_CACHE_DIR: scratchDir('live-app-vite-cache'),
         // The preview zone's own https port, so boots side by side never share one.
         KINU_DEV_PREVIEW_PORT: String(previewPort),
+        // And no Workers inspector, whose default port every boot would race for (vite.config.ts).
+        KINU_DEV_INSPECTOR: 'off',
       },
       // setsid, so vite leads its own process group: teardown can signal the
       // workerd children with it rather than orphaning them to systemd

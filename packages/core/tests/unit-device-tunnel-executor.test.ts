@@ -2,12 +2,6 @@ import { describe, expect, test } from 'bun:test';
 import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import type { DeviceStatus } from '../src/execution/device-status';
 import type { JsonValue } from '../src/utils/json';
-import * as v from 'valibot';
-
-/** The refusal a device tool answered with — always a JSON document, never a bare object. */
-function refusalDocument(answer: JsonValue | undefined): string {
-  return v.parse(v.string(), answer);
-}
 
 function staticTransport(status: DeviceStatus, rpc: DeviceTransport['rpc']): DeviceTransport {
   return { status: () => status, refreshStatus: async () => status, rpc };
@@ -112,7 +106,7 @@ describe('createDeviceTunnelExecutor', () => {
     const exists = await provider.tools.exists.execute('/root/.ssh/id_ed25519');
 
     for (const answer of [read, write, list, exists]) {
-      expect(refusalDocument(answer)).toContain('outside the consented device directory');
+      expect(answer).toMatchObject({ error: expect.stringContaining('outside the consented device directory') });
     }
 
     expect(t.calls).toEqual([]);
@@ -143,7 +137,7 @@ describe('createDeviceTunnelExecutor', () => {
       await provider.tools.exists.execute('/home/dev/.kinu/config.json'),
       await provider.tools.writeFile.execute('/home/dev/x', 'y'),
     ]) {
-      expect(refusalDocument(answer)).toContain('reported no consented directory');
+      expect(answer).toMatchObject({ error: expect.stringContaining('reported no consented directory') });
     }
 
     expect(t.calls).toEqual([]);
@@ -346,10 +340,8 @@ describe('createDeviceTunnelExecutor', () => {
     const fromTunnel = await createDeviceTunnelExecutor(tunnelDropped).tools.readFile.execute('/tmp/a');
 
     // `unavailable` classifies an unattached device as platform, not a tool failure.
-    expect(fromHub).toMatchObject({ reason: 'unavailable' });
-    expect(JSON.parse(refusalDocument(fromTunnel))).toMatchObject({ reason: 'unavailable' });
-    expect(fromHub).toMatchObject({ error: expect.stringContaining('kinu connect') });
-    expect(fromTunnel).toContain('kinu connect');
+    expect(fromHub).toMatchObject({ reason: 'unavailable', error: expect.stringContaining('kinu connect') });
+    expect(fromTunnel).toMatchObject({ reason: 'unavailable', error: expect.stringContaining('kinu connect') });
     await expect(createDeviceTunnelExecutor(hubRejects).connect()).rejects.toThrow('kinu connect');
   });
 
@@ -374,7 +366,7 @@ describe('createDeviceTunnelExecutor', () => {
 
     // `false` would claim the path is absent; an unreachable read is a different fact.
     expect(answer).not.toBe(false);
-    expect(JSON.parse(refusalDocument(answer))).toMatchObject({ reason: 'io' });
+    expect(answer).toMatchObject({ reason: 'io' });
   });
 
   test('an unanswered or string-valued exists RPC never asserts absence', async () => {
@@ -386,7 +378,7 @@ describe('createDeviceTunnelExecutor', () => {
 
       const answer = await createDeviceTunnelExecutor(t).tools.exists.execute('/tmp/a');
       expect(answer).not.toBe(false);
-      expect(JSON.parse(refusalDocument(answer))).toMatchObject({ reason: 'io' });
+      expect(answer).toMatchObject({ reason: 'io' });
     }
   });
 
@@ -398,6 +390,6 @@ describe('createDeviceTunnelExecutor', () => {
 
     const answer = await createDeviceTunnelExecutor(t).tools.readFile.execute('/tmp/a');
     expect(answer).not.toBe('');
-    expect(JSON.parse(refusalDocument(answer))).toMatchObject({ reason: 'io' });
+    expect(answer).toMatchObject({ reason: 'io' });
   });
 });

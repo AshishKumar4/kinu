@@ -23,7 +23,9 @@ import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 import {
   createInlineMemory, createInlineWorkspace, sqlStorageOver, wrapDatabase,
 } from '../src/identity/inline-primitives';
-import type { WorkspaceVFS } from '../src/vfs/nimbus-workspace';
+import type { WorkspaceBundle, WorkspaceVFS } from '../src/vfs/nimbus-workspace';
+import { createWorkspaceForkSource } from '../src/vfs/workspace-planes';
+import type { ForkFileSource } from '../src/identity/fork-transfer';
 import type { VfsNativeReads } from '../src/vfs/mounts';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { createAgentStores, type AgentStores } from '../src/state/agent-stores';
@@ -49,18 +51,21 @@ export interface TestWorkspace {
   readonly db: Database;
   readonly sql: SqlExecutor;
   readonly execRaw: RawSqlExec;
-  /** The embedded Nimbus plane, for the ranged read the fork wire requires. */
+  /** The embedded Nimbus plane. */
   readonly vfs: WorkspaceVFS;
+  readonly bundle: WorkspaceBundle;
+  /** The same plane as a fork reads it: one synchronous snapshot, so a write through `vfs` is seen. */
+  readonly forkSource: ForkFileSource;
 }
 
 /** A workspace database with the production schema: a subset would test a shape no workspace has. */
 export function createTestWorkspace(): TestWorkspace {
   const db = new Database(':memory:');
-  const sql = makeSql(db);
-  const execRaw = makeExecRaw(db);
-  initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db) });
+  const { sql, execRaw, transactionSync } = wrapDatabase(db);
+  initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db), transactionSync });
+  const bundle = createWorkspaceBundle(db);
 
-  return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs };
+  return { db, sql, execRaw, vfs: bundle.vfs, bundle, forkSource: createWorkspaceForkSource(bundle) };
 }
 
 export function makeSql(db: Database): SqlExecutor {
@@ -219,8 +224,7 @@ export function createTestRuntime(opts?: {
   llmResponses?: Record<string, string>;
 }) {
   const db = new Database(':memory:');
-  const sql = makeSql(db);
-  const execRaw = makeExecRaw(db);
+  const { sql, execRaw, transactionSync } = wrapDatabase(db);
   // One workspace, so the shell and the VFS are two views of the same bytes.
   const workspace = createWorkspaceBundle(db);
 
@@ -230,7 +234,7 @@ export function createTestRuntime(opts?: {
       .then(() => workspace.vfs.writeFile('scaffold/agent.js', 'initial')));
 
   // Production schema first: a helper's own copy of an actor-scoped table would win `IF NOT EXISTS`.
-  initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db) });
+  initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db), transactionSync });
   const actor = createTestActor(sql, execRaw, 'test-agent-id', 'test-agent');
   // The memory's tail reads through the plane's ranged read; `storage.vfs` stays the seven base methods.
   const memory = createMemoryMemory(db, { ...vfs, readRange });
@@ -254,7 +258,7 @@ export function createTestRuntime(opts?: {
   const rt: AgentRuntime = {
     workspaceIsMachine: false,
     actor,
-    storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
+    storage: { vfs, sql, execRaw, transactionSync },
     memory,
     executor,
     llm,

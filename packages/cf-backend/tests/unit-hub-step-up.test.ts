@@ -1,12 +1,13 @@
 // Step-up gate on web trigger creation (events/routes.ts): the CLI webhook route's isFreshAuthTime rule.
 import type { HubEnv, HubTarget } from '../src/events/routes';
+import { serveFamily } from './helpers/api';
 import { describe, test, expect } from 'bun:test';
 import { isFreshAuthTime } from '../src/auth/session';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
 
-const { handleHubRequest } = await import('../src/events/routes');
+const { hubRoutes } = await import('../src/events/routes');
 
 /** Any call reaching the workspace object fails: the gate is proven only if nothing else answered. */
 function unreached(member: string) {
@@ -59,7 +60,7 @@ function createTriggerRequest(authTime: number | null) {
 describe('web trigger-creation step-up gate', () => {
   test('fresh auth time → trigger created', async () => {
     const { env, calls, resolveAgent } = hubWorkspace();
-    const res = await handleHubRequest(createTriggerRequest(Date.now() - 1000), env, 'jarvis', resolveAgent);
+    const res = await serveFamily(hubRoutes(() => resolveAgent), { workspace: { name: 'jarvis' } })(createTriggerRequest(Date.now() - 1000), env);
     expect(res?.status).toBe(201);
     expect(calls).toHaveLength(1);
   });
@@ -67,9 +68,7 @@ describe('web trigger-creation step-up gate', () => {
   test('stale auth time → 401, orchestrator never invoked', async () => {
     const { env, calls, resolveAgent } = hubWorkspace();
 
-    const res = await handleHubRequest(
-      createTriggerRequest(Date.now() - 5 * 60 * 1000 - 1000), env, 'jarvis', resolveAgent,
-    );
+    const res = await serveFamily(hubRoutes(() => resolveAgent), { workspace: { name: 'jarvis' } })(createTriggerRequest(Date.now() - 5 * 60 * 1000 - 1000), env);
 
     expect(res?.status).toBe(401);
     expect(calls).toHaveLength(0);
@@ -77,7 +76,7 @@ describe('web trigger-creation step-up gate', () => {
 
   test('missing auth time → 401', async () => {
     const { env, calls, resolveAgent } = hubWorkspace();
-    const res = await handleHubRequest(createTriggerRequest(null), env, 'jarvis', resolveAgent);
+    const res = await serveFamily(hubRoutes(() => resolveAgent), { workspace: { name: 'jarvis' } })(createTriggerRequest(null), env);
     expect(res?.status).toBe(401);
     expect(calls).toHaveLength(0);
   });

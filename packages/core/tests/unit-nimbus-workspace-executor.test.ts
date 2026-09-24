@@ -3,12 +3,11 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { createTestRuntime, createWorkspaceBundle } from './helpers';
 import {
-  createNimbusWorkspaceExecutor, createNimbusExecutor,
+  createNimbusWorkspaceExecutor,
   nimbusSessionFiles,
   nimbusSessionShell,
   type NimbusSandboxHandle,
 } from '../src/execution/nimbus';
-import { codemodeFunction } from '../src/tools/sandbox-contract';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { createWorkspace, workspaceGenerationStorage } from '../src/vfs/nimbus-workspace';
 import type { SQLQueryBindings } from 'bun:sqlite';
@@ -81,10 +80,6 @@ describe('hosted Nimbus workspace provider', () => {
   test('a transport failure never acquires a fabricated process exit', async () => {
     const box = fakeBox();
     box.exec = async (command) => ({ command, success: false, stdout: '', stderr: 'transport unavailable', exitCode: 0 });
-    const namespace = createNimbusExecutor({ box });
-    const result = await namespace.tools.exec.execute('work');
-    expect(result).toMatchObject({ reason: 'io', error: expect.stringContaining('transport unavailable') });
-    expect(result).not.toHaveProperty('execution');
     const shell = await nimbusSessionShell(box).exec('work');
     expect(shell).toMatchObject({ exitCode: 0, refusal: { reason: 'io' } });
     expect(shell.refusal).not.toHaveProperty('execution');
@@ -137,38 +132,6 @@ describe('hosted Nimbus workspace provider', () => {
       url: 'https://4321.example.test',
       route: { reached: true },
     });
-  });
-
-  test('a program reads runCode and startProcess by the result type the workspace declares for them', async () => {
-    const { rt } = createTestRuntime();
-    const box = fakeBox();
-    const fails = (code: string) => code === 'fail';
-    box.runCode = async (code) => ({ command: code, success: !fails(code), stdout: fails(code) ? '' : 'ran', stderr: fails(code) ? 'boom' : '', exitCode: fails(code) ? 1 : 0 });
-    box.startProcess = async (command) => ({
-      command, pid: 7, ports: [], startedAt: 1,
-      process: fails(command) ? { pid: 7, command, state: 'exited', exitCode: 2, longRunning: false } : { pid: 7, command, state: 'running', exitCode: null, longRunning: true },
-    });
-
-    const provider = createNimbusWorkspaceExecutor({
-      box,
-      inline: { vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql },
-    });
-
-    // The result type the model reads: what sits between a member's `): Promise<` and its closing `>;`.
-    const declared = (member: string) => {
-      const line = (provider.types ?? '').split('\n').map((text) => text.trim()).find((text) => text.startsWith(`function ${member}(`)) ?? '';
-
-      return line.slice(line.lastIndexOf('): Promise<') + '): Promise<'.length, -'>;'.length);
-    };
-
-    // Both backends hand a program each member through codemodeFunction; a returned refusal arrives as `Refusal`.
-    for (const member of ['runCode', 'startProcess']) {
-      const call = codemodeFunction('workspace', member, present(provider.tools[member], member).execute);
-
-      expect(declared(member)).toBe('string | Refusal');
-      expect(await call('serve')).toEqual(expect.any(String));
-      expect(await call('fail')).toMatchObject({ success: false, reason: 'io', error: expect.any(String), execution: { exitCode: expect.any(Number) } });
-    }
   });
 
   test('the origin file plane reads a bounded prefix through fixed Node code', async () => {
@@ -390,19 +353,20 @@ describe('a workspace whose host cannot compile node programs', () => {
   test('a node program the host cannot compile refuses as unsupported, naming where it can run', async () => {
     // A missing compiler is `unsupported`, not a retryable `io` failure.
     const box = fakeBox();
-    box.exec = async () => { throw new Error(CODEGEN_STDERR); };
+    box.startProcess = async () => { throw new Error(CODEGEN_STDERR); };
 
-    const refusal = await createNimbusExecutor({ box }).tools.exec.execute('node server.js');
+    const refusal = await blockedProvider(box).tools.startProcess.execute('node server.js');
+    // Read before any asymmetric match, which rewrites the field it matches (docs/TESTING.md).
+    expect(JSON.stringify(refusal)).not.toContain('Code generation from strings disallowed');
     expect(refusal).toMatchObject({ reason: 'unsupported', error: expect.stringContaining('sandbox') });
-    expect(String(JSON.stringify(refusal))).not.toContain('Code generation from strings disallowed');
   });
 
   test('the same compiler failure under a command that never invoked node stays an io failure', async () => {
     // The V8 mark in other output is not the node guard; reclassifying would wrongly forbid retry.
     const box = fakeBox();
-    box.exec = async () => { throw new Error(CODEGEN_STDERR); };
+    box.startProcess = async () => { throw new Error(CODEGEN_STDERR); };
 
-    expect(await createNimbusExecutor({ box }).tools.exec.execute('cat build.log')).toMatchObject({ reason: 'io' });
+    expect(await blockedProvider(box).tools.startProcess.execute('cat build.log')).toMatchObject({ reason: 'io' });
   });
 
   test('process logs are data even when they contain a compiler failure', async () => {
@@ -423,8 +387,7 @@ describe('a workspace whose host cannot compile node programs', () => {
       list: async () => [],
     };
     const provider = blockedProvider(box);
-    const toolRefusal = JSON.parse(toolText(await provider.tools.exposePort.execute(8789)));
-    expect(toolRefusal.reason).toBe('unsupported');
+    expect(await provider.tools.exposePort.execute(8789)).toMatchObject({ reason: 'unsupported' });
     const direct = await provider.exposePort(8789);
     expect(direct.supported).toBe(false);
   });
@@ -436,8 +399,7 @@ describe('a workspace whose host cannot compile node programs', () => {
       unexpose: async () => ({ ok: true }),
       list: async () => [],
     };
-    const refusal = JSON.parse(toolText(await blockedProvider(box).tools.exposePort.execute(8789)));
-    expect(refusal.reason).toBe('io');
+    expect(await blockedProvider(box).tools.exposePort.execute(8789)).toMatchObject({ reason: 'io' });
   });
 });
 

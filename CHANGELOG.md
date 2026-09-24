@@ -20,8 +20,13 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- The Worker's `/api` routes are served by one Hono app whose route order is the old dispatch order, gate for gate. An error no route catches is now answered as JSON with its class's status and a message naming only that class (the cause goes to the log), never cached, instead of the platform's error page; the run-event routes read the workspace whose ownership was just proven, even when the request spells its name with escapes.
+- **The Diffs tab is now Changes.** It lists the changed files as a tree with their counts; a file opens to a diff
+  that keeps three lines around each change, folds the rest, marks the changed words and keeps the code's colours.
+  Expand shows every file split beside the tree (one column on a phone). A binary file or one over 2 MB says so
+  instead of "File exceeds 1000 lines", and a new binary file is listed. Mark reviewed can be undone for 10 seconds.
 - **The Drive is one tiled place for your stuff.** Two tabs: My stuff (slates, blueprints, folders and files, with the Skills folder first) and Shared (what others shared with you, then what you shared), each a grid of one tile. Nothing empty is drawn: a section with no tiles is absent, the Shared tab appears once something is shared, and a first visit lands on the tab that holds something. A file opens in the viewer beside the grid; a slate opens in its workspace. The share dialog (#25) says one sentence per mode, then people, who else can open it, the fork choice, the members it reaches folded behind one row, its limits, and the shares already made with Stop sharing. The Drive's `/blueprints` folder and its Public and People I know lists are gone, and one `/api/shared/revoke` route ends a live share or a blueprint link.
-
+- **A new workspace syncs the disk far less while it is created.** Its tables, the row naming it and its main agent are written in one transaction instead of one per statement: `kinu create` went from 269 fsyncs to 88, and creating the tables alone from 708 to 4. A hosted workspace creates its tables in one Durable Object transaction too, so a failure partway leaves none.
 - Hosted actors now use the Agents platform directly, without Think's duplicate session, workspace, inference queue or recovery boot. The shared Kinu chat loop retains the existing browser/CLI protocol and initializes the root transcript through the public session provider. Accepted sends and unfinished workspace work keep the sandbox protected across eviction.
 - **Tool descriptions carry only what a call needs.** Each built-in tool's
   description is now a one-line summary plus the facts its schema cannot
@@ -31,6 +36,31 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   takes the input that tool's own schema declares. The hosted request's seven
   tool definitions shrink from 66.0 KB to 30.1 KB, the local one's from 52.2 KB
   to 22.8 KB.
+- **A refused call gives a program one shape, in every namespace.** `sandbox`,
+  `device`, `parent` and the workspace's process and port members
+  (`killProcess`, `logs`, `exposePort`, `unexposePort`, `listPorts`,
+  `installRuntime`, `listRuntimes`) returned a refusal as JSON text, which a
+  program could not tell from file content or command output and which `eval`
+  never counted as a failure; `agent.*` and `release.*` returned `{ error }`
+  with no reason. Each now resolves to `{ success: false, reason, error }` and
+  is recorded among the call's failures, so a program that parsed the text
+  (`JSON.parse(out).reason`) reads `out.reason` instead. The eval description
+  declares one `Refusal` type ahead of the namespaces and every member's result
+  names it; `sandbox.writeFile`, which existed undeclared, is declared.
+  `require('child_process').exec` reports a failed command's own exit code, and
+  neither it nor `fs` reads output text as a refusal. The eval description grows
+  from 16.6 KB to 16.9 KB on the hosted request and from 12.5 KB to 12.7 KB on
+  the local one.
+- **A native tool runs only on input that has the fields its schema requires,
+  each of its declared type, whether the model, a program or a scaffold calls
+  it.** Anything else refuses as `bad_input` before the tool runs, naming the
+  field (``shell requires `command`, a string``); a model's `shell({})` used to
+  run the shell with no command. A value outside a declared enum still reaches
+  the tool, which resolves it (a device runtime goes by nickname), and rules
+  that span fields stay with each tool's own parse. A head's journal records a
+  refused call of its own tools (`record_evidence`, `record_decision`,
+  `split_subheads`) like any other, and no longer stores evidence or a decision
+  from a call that lacked a required field.
 - **The default model lives in the profile's default tier, and nowhere else.** `kinu setup` and the first provider connect set it only while it is unset, a later connect leaves it, and Defaults on the home screen change it; `config.json` keeps no top-level `model` or `reasoningEffort`. `/model`, `/effort`, the TUI model picker, `kinu model`, `kinu effort` and the rpc `model` command set the open workspace's own model or effort, and a new workspace pins a model only when `--model` names one.
 
 ### Added

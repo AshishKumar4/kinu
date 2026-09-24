@@ -435,10 +435,16 @@ export type EntrypointKind =
   | 'platform-hook'
   /** A property of a module's `export default` object. On `cf-backend/src/server.ts`
    *  that object is the Workers module contract — `fetch`, `email`, `scheduled` —
-   *  and every HTTP route on this backend is dispatched inside `fetch`, so this
-   *  is the kind that covers routes: they are reached through the module graph
-   *  from the handler rather than registered in a table a detector could read. */
+   *  and every HTTP route on this backend is dispatched inside `fetch`: the Worker
+   *  hands `/api/` to the Hono app it imports, so a route file is live when the
+   *  module graph from `fetch` reaches it. */
   | 'module-default'
+  /** A Hono route registration — `userRoutes.get('/api/user/profile', …)` — read
+   *  off the registration call, so the `/api` route table is named here route by
+   *  route. A registration serves nothing until an app the Worker serves mounts it,
+   *  so it roots nothing: one in a file `fetch` never reaches is a finding
+   *  (`findUnserved`), the Hono-era endpoint nobody can call. */
+  | 'http-route'
   /** A `createRoot(…)` or `hydrateRoot(…)` mount: a browser bundle's entry, and
    *  the whole frontend hangs off one. The knip config has to DECLARE
    *  `src/gallery.tsx` as an entry because no tool can see it; this detector
@@ -771,6 +777,96 @@ function importMetaMainNode(tree: SyntaxNode): SyntaxNode | undefined {
   return found;
 }
 
+/** `new Hono(…)`, type arguments and all. */
+function isNewHono(node: SyntaxNode): boolean {
+  const { raw } = node;
+
+  return raw.type === 'NewExpression' && raw.callee.type === 'Identifier' && raw.callee.name === 'Hono';
+}
+
+/** The method each Hono registration verb serves; `use` is middleware over every method. */
+const HONO_VERBS: ReadonlyMap<string, string> = new Map([
+  ['get', 'GET'], ['post', 'POST'], ['put', 'PUT'], ['patch', 'PATCH'], ['delete', 'DELETE'],
+  ['options', 'OPTIONS'], ['all', 'ALL'], ['use', 'ALL'],
+]);
+
+/**
+ * A route pattern or method as written: a string, a template's source, an array of either, or a
+ * constant. A constant this file binds to one of those is read through; any other name (an import,
+ * a computed value) is kept as written, so the registration is still inventoried under it.
+ */
+function routeText(node: SyntaxNode, text: string, consts: ReadonlyMap<string, SyntaxNode>, seen: ReadonlySet<string> = new Set()): string | undefined {
+  const { raw } = node;
+
+  if (raw.type === 'Literal') return literalText(node);
+
+  if (raw.type === 'TemplateLiteral') return text.slice(node.start + 1, node.end - 1);
+
+  if (raw.type === 'Identifier') {
+    const bound = seen.has(raw.name) ? undefined : consts.get(raw.name);
+    const read = bound === undefined ? undefined : routeText(bound, text, consts, new Set([...seen, raw.name]));
+
+    return read ?? raw.name;
+  }
+
+  if (raw.type !== 'ArrayExpression') return undefined;
+  const parts = node.children.map((child) => routeText(child, text, consts, seen));
+
+  return parts.every((part) => part !== undefined) ? parts.join(' | ') : undefined;
+}
+
+/** `GET /api/user/profile` for a registration on a Hono app this file binds; a bare `use(mw)` is none. */
+function honoRoute(node: SyntaxNode, text: string, apps: ReadonlySet<string>, consts: ReadonlyMap<string, SyntaxNode>): string | undefined {
+  const { raw } = node;
+
+  if (raw.type !== 'CallExpression' || raw.callee.type !== 'MemberExpression' || raw.callee.computed
+    || raw.callee.object.type !== 'Identifier' || !apps.has(raw.callee.object.name)
+    || raw.callee.property.type !== 'Identifier') return undefined;
+  const verb = raw.callee.property.name;
+  const [first, second] = raw.arguments.map((argument) => node.children.find((child) => child.raw === argument));
+
+  if (verb === 'on') {
+    const methods = first === undefined ? undefined : routeText(first, text, consts);
+    const paths = second === undefined ? undefined : routeText(second, text, consts);
+
+    return methods === undefined || paths === undefined ? undefined : `${methods.toUpperCase()} ${paths}`;
+  }
+
+  const method = HONO_VERBS.get(verb);
+  const path = first === undefined ? undefined : routeText(first, text, consts);
+
+  return method === undefined || path === undefined ? undefined : `${method} ${path}`;
+}
+
+/** Every Hono registration in a file — `app.get('/api/health', …)` — on an app the file binds. */
+function honoRoutes(tree: SyntaxNode, text: string): { node: SyntaxNode; at: string }[] {
+  const apps = new Set<string>();
+  const consts = new Map<string, SyntaxNode>();
+
+  walk(tree, (node) => {
+    if (node.raw.type !== 'VariableDeclarator') return;
+    const bound = identifierText(node.children[0] ?? node);
+    const init = node.children[1];
+
+    if (bound === undefined || init === undefined) return;
+
+    if (isNewHono(init)) apps.add(bound);
+    else consts.set(bound, init);
+  });
+
+  const routes: { node: SyntaxNode; at: string }[] = [];
+
+  if (apps.size === 0) return routes;
+
+  walk(tree, (node) => {
+    const at = honoRoute(node, text, apps, consts);
+
+    if (at !== undefined) routes.push({ node, at });
+  });
+
+  return routes;
+}
+
 export function findEntrypoints(
   reachers: ReadonlyMap<string, string>,
   modules: ReadonlyMap<string, Module>,
@@ -820,6 +916,13 @@ export function findEntrypoints(
 
       if (bound !== undefined && init !== undefined) bindings.set(bound, init);
     });
+
+    // Hono registrations root nothing: `symbol` stays undefined, and `measureReach`
+    // does not seed from them, so the app one sits on is served only if `fetch`
+    // reaches this file.
+    for (const route of honoRoutes(tree, text)) {
+      found.push({ file, line: lineAt(route.node.start), kind: 'http-route', at: route.at, symbol: undefined });
+    }
 
     walk(tree, (node) => {
       const { raw } = node;
@@ -994,7 +1097,8 @@ export function measureReach(
   entrypoints: readonly Entrypoint[],
 ): Reach {
   const live = new Set<string>();
-  const frontier = [...new Set(entrypoints.map((entry) => entry.file))];
+  // A route registration is surface only once a served app mounts it: it is reached, never a root.
+  const frontier = [...new Set(entrypoints.filter((entry) => entry.kind !== 'http-route').map((entry) => entry.file))];
 
   for (const file of frontier) live.add(file);
 
@@ -1038,7 +1142,7 @@ export function measureReach(
 
 /* ── The two findings ─────────────────────────────────────────────────── */
 
-export type WiredClass = 'unreached-export' | 'unsupplied-field';
+export type WiredClass = 'unreached-export' | 'unsupplied-field' | 'unserved-route';
 
 export interface Unwired {
   readonly file: string;
@@ -1114,6 +1218,16 @@ export function findUnreached(
   }
 
   return found;
+}
+
+/** A route registered in a file the Worker's `fetch` never reaches: an endpoint nobody can call. */
+export function findUnserved(reach: Reach, entrypoints: readonly Entrypoint[]): Unwired[] {
+  return entrypoints
+    .filter((entry) => entry.kind === 'http-route' && !reach.live.has(entry.file))
+    .map((entry) => ({
+      file: entry.file, line: entry.line, name: entry.at, kind: 'unserved-route',
+      reason: 'registered on a Hono app that no served module reaches',
+    }));
 }
 
 /* ── Interface fields nothing supplies ────────────────────────────────── */
@@ -1931,6 +2045,9 @@ export const BLIND_SPOTS: readonly string[] = [
   + 'that; whether anything ever SELECTS either strategy is a fact about the registry, and '
   + 'this gate cannot see it. `gate:reachability` closes the one case where the string is the '
   + 'whole surface (`@callable`); every other registry here is open.',
+  'A HONO APP IMPORTED BUT NEVER MOUNTED — NOT DETECTED. Route liveness is file-level: a family '
+  + 'module the served app imports reads as served whether or not `app.route(…)` mounts it. The '
+  + 'route table itself is the runtime check: `unit-preview-origin` walks `api.routes`.',
   'A SYMBOL REACHED ONLY FROM A CONFIG FILE — NOT DETECTED, and it fails in the FALSE '
   + 'POSITIVE direction rather than the quiet one. `wrangler.jsonc` binds five Durable Object '
   + 'classes by string, and no config is in this corpus; the classes are rooted on their '
@@ -2047,6 +2164,7 @@ if (import.meta.main) {
   const findings = [
     ...findUnreached(graph, reach, tests, read),
     ...findUnsupplied(graph, reach, facts, read),
+    ...findUnserved(reach, entrypoints),
   ].sort((a, b) => keyOf(a).localeCompare(keyOf(b)));
 
   const detail = new Map(findings.map((entry) => [keyOf(entry), describe(entry)]));

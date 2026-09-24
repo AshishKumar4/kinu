@@ -10,7 +10,9 @@ import { recordTurnOutcome } from '../src/evolution/outcomes';
 function setup() {
   const { rt, db } = createTestRuntime();
   // The full production table set: a thinner harness hides code that tolerates missing tables.
-  initWorkspaceSchema({ execRaw: rt.storage.execRaw, sql: rt.storage.sql, exec: makeSqlExec(db) });
+  initWorkspaceSchema({
+    execRaw: rt.storage.execRaw, sql: rt.storage.sql, exec: makeSqlExec(db), transactionSync: (write) => rt.storage.transactionSync(write),
+  });
 
   return { rt };
 }

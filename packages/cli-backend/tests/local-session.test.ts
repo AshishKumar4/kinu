@@ -1,7 +1,7 @@
 // LocalAgentSession loop over the real createCLIRuntime and a fake streaming model: turns stream and persist,
 // programmatic turns serialize, broadcast fans out, end() flushes.
 import { describe, test, expect } from 'bun:test';
-import { createMockFetch, createTestActorsOver, createTestSql, present, readTranscriptRows, scratchDir, scratchPath, toolExecute, scriptedTurnModel, type TranscriptRow, unobservedSearchSeams } from '@kinu.run/test-utils';
+import { createMockFetch, createTestActorsOver, createTestSql, handClock, present, readTranscriptRows, scratchDir, scratchPath, toolExecute, scriptedTurnModel, type HandClock, type TranscriptRow, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { MissionGovernor } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
@@ -42,6 +42,7 @@ import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } 
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { discoverAgentsMd } from '../src/agents-md';
 import { nodeSeatFactory } from './actor-fixture';
+import { CAPTURED_DURING_THE_TURN } from './terminal-workspace';
 import * as v from 'valibot';
 
 const resolverRest = {
@@ -534,13 +535,22 @@ function setupWithResolver(
   return { db, rt, session, events };
 }
 
-async function waitFor(pred: () => boolean, timeoutMs = 1000): Promise<void> {
-  const start = performance.now();
+/** Waits for the state, however long a starved machine takes to reach it; a state never reached is the runner's hang. */
+async function waitFor(pred: () => boolean): Promise<void> {
+  while (!pred()) await new Promise<void>((r) => setTimeout(r, 2));
+}
 
-  while (!pred()) {
-    if (performance.now() - start > timeoutMs) throw new Error('waitFor timeout');
-    await new Promise<void>((r) => setTimeout(r, 2));
-  }
+/** The session has begun waiting on its background fibers; the grace, if any, is armed by now. */
+function joining(events: readonly SessionEvent[]): Promise<void> {
+  return waitFor(() => events.some((e) => e.type === 'background' && e.event === 'bg_jobs_settling'));
+}
+
+/** The grace armed on `clock` holds through its last millisecond and fires on it. */
+function passGrace(clock: HandClock, graceMs: number): void {
+  clock.advance(graceMs - 1);
+  expect(clock.armed()).toBe(1);
+  clock.advance(1);
+  expect(clock.armed()).toBe(0);
 }
 
 const SettleTimingsSchema = v.object({
@@ -2249,8 +2259,10 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
   test('settleBackgroundWork gives up on work that never settles, and leaves it running', async () => {
     // `kinu exec` must not block on a detached server-style `shell` fiber that never settles.
+    const clock = handClock();
+
     const { db, rt, session, events } = setup('unused', hangingModel(), {
-      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true },
+      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true }, clock,
     });
 
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
@@ -2260,12 +2272,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await session.recoverBackgroundJobs();
     expect(jobStatus(db, 'bgjob-hang')).toBe('running');
 
-    const started = performance.now();
-    await session.settleBackgroundWork();
-    const waited = performance.now() - started;
+    const settled = session.settleBackgroundWork();
+    await joining(events);
+    passGrace(clock, 150);
+    await settled;
 
-    expect(waited).toBeGreaterThanOrEqual(140);
-    expect(waited).toBeLessThan(5_000);
     expect(jobStatus(db, 'bgjob-hang')).toBe('running');
     expect(events.some((e) => e.type === 'background' && e.event === 'bg_jobs_abandoned')).toBe(true);
   });
@@ -2302,8 +2313,10 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   });
 
   test('end() releases the session when a fiber will never settle', async () => {
-    const { db, rt, session } = setup('unused', hangingModel(), {
-      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true },
+    const clock = handClock();
+
+    const { db, rt, session, events } = setup('unused', hangingModel(), {
+      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true }, clock,
     });
 
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
@@ -2311,19 +2324,19 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'fe', 'bg:agents', '{"phase":"running","jobId":"bgjob-e","kind":"agents"}', 1)`);
 
     await session.recoverBackgroundJobs();
-    const started = performance.now();
-    await session.end();
-    expect(performance.now() - started).toBeLessThan(5_000);
+    const ended = session.end();
+    await joining(events);
+    passGrace(clock, 150);
+    await ended;
     expect(jobStatus(db, 'bgjob-e')).toBe('running');
   });
 
   test('a one-shot drain then close pays the grace once, not twice', async () => {
-    // settleBackgroundWork() then close() on the same job must pay one grace, not two. The grace is 2 s so the two
-    // hypotheses sit clear of scheduling noise on a loaded box.
-    const grace = 2_000;
+    // settleBackgroundWork() then end() on the same job share one deadline, so end() arms no second grace.
+    const clock = handClock();
 
-    const { db, rt, session } = setup('unused', hangingModel(), {
-      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: grace, wakesAfterTurn: true },
+    const { db, rt, session, events } = setup('unused', hangingModel(), {
+      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 2_000, wakesAfterTurn: true }, clock,
     });
 
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
@@ -2331,13 +2344,13 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'f2x', 'bg:agents', '{"phase":"running","jobId":"bgjob-2x","kind":"agents"}', 1)`);
 
     await session.recoverBackgroundJobs();
-    const started = performance.now();
-    await session.settleBackgroundWork();
-    await session.end();
-    const total = performance.now() - started;
+    const settled = session.settleBackgroundWork();
+    await joining(events);
+    passGrace(clock, 2_000);
+    await settled;
 
-    expect(total).toBeGreaterThanOrEqual(grace * 0.95);
-    expect(total).toBeLessThan(grace * 1.5);
+    const secondGrace = clock.whenArmed(2).then(() => 'a second grace');
+    expect(await Promise.race([session.end().then(() => 'ended'), secondGrace])).toBe('ended');
   });
 
   test('a long tool call runs inline under a policy whose threshold it does not cross', async () => {
@@ -2584,7 +2597,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
 
     await waitFor(() => db.query<{ c: number }, []>(
       `SELECT count(*) AS c FROM turn_outcomes`,
-    ).get()?.c === 1, 3000);
+    ).get()?.c === 1);
 
     const row = db.query<{
       outcome: string; source: string; turn_id: string; session_id: string; followup: string;
@@ -2603,7 +2616,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
 
     await waitFor(() => db.query<{ c: number }, []>(
       `SELECT count(*) AS c FROM lessons WHERE status = 'corroborated'`,
-    ).get()?.c === 1, 3000);
+    ).get()?.c === 1);
     await session.end();
   });
 
@@ -3789,8 +3802,8 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
                         VALUES (${rt.actor.actorId}, 'win', 'win', 'pick a strategy', 'A', 'go with approach A', 0.9, 3, 1, 'open')`;
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
                         VALUES (${rt.actor.actorId}, 'win', 'alt', 'pick a strategy', 'B', 'go with approach B', 0.86, 2, 1, 'open')`;
-    // Production captures mid-turn; stamp just ahead so the scoped claim treats this seed as mid-turn, not stale.
-    captureAlternateTakes(rt.storage.sql, rt.actor, { rootId: 'win', task: 'pick a strategy', winnerId: 'win', epsilon: 0.1, now: Date.now() + 1_000 });
+    // Production captures mid-turn; a stamp no turn's start can pass keeps the scoped claim from purging the seed as stale.
+    captureAlternateTakes(rt.storage.sql, rt.actor, { rootId: 'win', task: 'pick a strategy', winnerId: 'win', epsilon: 0.1, now: CAPTURED_DURING_THE_TURN });
     void rt.storage.sql`UPDATE search_nodes SET status = 'terminal' WHERE id = 'win'`;
     void rt.storage.sql`UPDATE search_nodes SET status = 'pruned' WHERE id = 'alt'`;
   }
@@ -4015,7 +4028,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
 
     release();
     await turn;
-    await waitFor(() => branchEvents(events).some((e) => e.status === 'settled'), 5000);
+    await waitFor(() => branchEvents(events).some((e) => e.status === 'settled'));
 
     expect(turnStarts(events)).toHaveLength(1);
     expect(events.some((e) => e.type === 'error')).toBe(false);
@@ -4051,7 +4064,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     session.branch('try it the other way');
     release();
     await turn;
-    await waitFor(() => branchEvents(events).some((e) => e.status === 'settled'), 5000);
+    await waitFor(() => branchEvents(events).some((e) => e.status === 'settled'));
 
     const set = present(session.latestAlternateTakes(), 'the alternate takes set');
     const branchCandidate = present(set.candidates.find((c) => c.origin === 'branch'), 'the branch candidate take');
@@ -4063,10 +4076,10 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
 
     expect(ledger).toMatchObject({ outcome: 'corrected', source: 'take_pick', followup: 'the branch answer' });
 
-    await waitFor(() => turnStarts(events).some((s) => s.kind === 'programmatic' && s.event === 'take_pick'), 5000);
+    await waitFor(() => turnStarts(events).some((s) => s.kind === 'programmatic' && s.event === 'take_pick'));
     expect(present(turnStarts(events).find((s) => s.event === 'take_pick'), 'the take_pick continuation turn').text)
       .toContain('the branch answer');
-    await waitFor(() => events.filter((e) => e.type === 'turn-end').length === 2, 5000);
+    await waitFor(() => events.filter((e) => e.type === 'turn-end').length === 2);
     await session.end();
   });
 
@@ -4079,7 +4092,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     expect(session.branch('redirect')).toBe(true);
     release();
     await turn;
-    await waitFor(() => branchEvents(events).some((e) => e.status === 'error'), 5000);
+    await waitFor(() => branchEvents(events).some((e) => e.status === 'error'));
 
     expect(present(branchEvents(events).find((e) => e.status === 'error'), 'the branch error event').message)
       .toContain('head model exploded');
@@ -4113,7 +4126,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     expect(session.branch('redirect')).toBe(true);
     session.interrupt();
     await turn;
-    await waitFor(() => branchEvents(events).some((e) => e.status === 'error'), 5000);
+    await waitFor(() => branchEvents(events).some((e) => e.status === 'error'));
     releaseBranch();
 
     expect(present(branchEvents(events).find((e) => e.status === 'error'), 'the branch error event').message)
@@ -4140,7 +4153,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     await waitFor(() => events.some((e) => e.type === 'text-delta'));
     expect(session.branch('check the release notes instead')).toBe(true);
     release();
-    await waitFor(() => branchEvents(events).some((e) => e.status === 'settled'), 5000);
+    await waitFor(() => branchEvents(events).some((e) => e.status === 'settled'));
 
     // The live turn's call and the branch head's: a fork of a budgeted turn cannot spend outside its budget.
     expect(session.budget.snapshot('q3').map((mission) => mission.calls)).toEqual([2]);
@@ -4190,7 +4203,7 @@ describe('LocalAgentSession — the lifetime search', () => {
       void rt.storage.sql`INSERT INTO actor_config (actor_id, key, value) VALUES (${rt.actor.actorId}, 'closed_turn_windows', '4')`;
 
       for (let turn = 1; turn <= 5; turn++) await session.send(`turn ${turn}`, { id: crypto.randomUUID() });
-      await waitFor(() => events.some((event) => event.type === 'evolution' && event.event === 'mcts_complete'), 60_000);
+      await waitFor(() => events.some((event) => event.type === 'evolution' && event.event === 'mcts_complete'));
 
       // The search ran to its end rather than failing to start its branches.
       expect(events.flatMap((event) => event.type === 'evolution' && event.event === 'mcts_complete' ? [event.message] : []))

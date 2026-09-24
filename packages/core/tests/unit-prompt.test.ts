@@ -828,7 +828,9 @@ describe('buildSystemPromptSync', () => {
 
   test('root and child provider requests carry static Plan policy and live reach without widening execution', async () => {
     const { rt, testSql } = createTestRuntime();
-    initWorkspaceSchema({ sql: testSql.sql, execRaw: testSql.execRaw, exec: makeSqlExec(testSql.db) });
+    initWorkspaceSchema({
+      sql: testSql.sql, execRaw: testSql.execRaw, exec: makeSqlExec(testSql.db), transactionSync: (write) => rt.storage.transactionSync(write),
+    });
     const actors = createTestActors(testSql.sql, testSql.execRaw);
     const catalog = { roles: {}, tiers: { default: { model: 'test' } } };
 

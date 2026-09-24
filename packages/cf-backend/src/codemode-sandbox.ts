@@ -7,8 +7,8 @@ import { DynamicWorkerExecutor } from '@cloudflare/codemode';
 import { normalizeCode } from '@cloudflare/codemode/normalize';
 import {
   explainNativeToolReferenceError, parsesAsExpression,
-  NO_TIMER_DEADLINE_MS, bindTaskPlan, codemodeFunction,
-  type CraftedToolSource,
+  NO_TIMER_DEADLINE_MS, bindTaskPlan, codemodeFunction, decodeJsonValue,
+  type CraftedToolSource, type ExecuteResult, type Executor, type ResolvedProvider as HostProvider,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE, WORKSPACE_ROOT } from '@kinu.run/core';
@@ -81,18 +81,22 @@ export interface KinuSandboxExecutorOptions {
   readonly egress: Fetcher | null;
 }
 
+/** No work deadline, where codemode's default is 60 s: a node agent's whole scaffold loop is one program, bounded
+ *  by the detach window and the platform CPU limit. */
+function programWorker(input: { readonly loader: WorkerLoader; readonly egress: Fetcher | null; readonly kinuNode: boolean }): DynamicWorkerExecutor {
+  return new DynamicWorkerExecutor({
+    loader: input.loader,
+    timeout: NO_TIMER_DEADLINE_MS,
+    globalOutbound: input.egress,
+    modules: input.kinuNode ? { [KINU_NODE_MODULE_NAME]: KINU_NODE_MODULE_SOURCE } : {},
+  });
+}
+
 export class KinuSandboxExecutor {
   readonly #inner: DynamicWorkerExecutor;
 
   constructor(options: KinuSandboxExecutorOptions) {
-    // No work deadline: programs mostly await long host calls. The detach window bounds them;
-    // the platform CPU limit stops runaways.
-    this.#inner = new DynamicWorkerExecutor({
-      loader: options.loader,
-      timeout: NO_TIMER_DEADLINE_MS,
-      modules: { [KINU_NODE_MODULE_NAME]: KINU_NODE_MODULE_SOURCE },
-      globalOutbound: options.egress,
-    });
+    this.#inner = programWorker({ loader: options.loader, egress: options.egress, kinuNode: true });
   }
 
   async execute(code: string, providers: DynamicProviderInput) {
@@ -117,4 +121,40 @@ export class KinuSandboxExecutor {
       return { result: undefined, error: renderThrownChain({ cause: err }) };
     }
   }
+}
+
+/** `rt.executor`: heads, swarm scoring, mcts and craft run programs through it. */
+export function createRuntimeExecutor(loader: WorkerLoader): Executor {
+  const dwe = programWorker({ loader, egress: null, kinuNode: false });
+
+  return {
+    languages: ['javascript'],
+    async execute(code: string, providers: HostProvider[]): Promise<ExecuteResult> {
+      try {
+        const normalized = Array.isArray(providers)
+          ? providers
+          : [{ name: 'codemode', fns: providers }];
+
+        const bridged = normalized.map((provider) => ({
+          name: provider.name,
+          fns: Object.fromEntries(Object.entries(provider.fns).map(([name, fn]) => [
+            name,
+            async (...args: unknown[]) => fn(...args.map((value) => decodeJsonValue({ value }))),
+          ])),
+        }));
+
+        const res = await dwe.execute(code, bridged);
+        const result = res.result === undefined ? undefined : decodeJsonValue({ value: res.result });
+        const output: ExecuteResult = { result };
+
+        if (res.error !== undefined) output.error = res.error;
+
+        if (res.logs !== undefined) output.logs = res.logs;
+
+        return output;
+      } catch (e) {
+        return { result: undefined, error: renderThrownChain({ cause: e }) };
+      }
+    },
+  };
 }

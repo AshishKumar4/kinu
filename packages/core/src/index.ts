@@ -1153,14 +1153,14 @@ export {
   type DeviceCancelOutcome, type DeviceTransferOutcome,
   DeviceTerminalHub, terminalFromSocket,
   type TerminalHolder,
-  createNimbusExecutor, createNimbusWorkspaceExecutor, nimbusSessionShell,
-  type NimbusExecutorOpts, type NimbusWorkspaceExecutorOpts, type NimbusSandboxHandle,
+  createNimbusWorkspaceExecutor, nimbusSessionShell,
+  type NimbusWorkspaceExecutorOpts, type NimbusSandboxHandle,
   type NimbusStartResult, type NimbusExecOptions, type NimbusExecResult, type NimbusPortInfo,
   EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits, type PreviewRouteCheck,
-  commandResult, CommandResultSchema, COMMAND_RESULT_TYPE, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
+  commandResult, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
   BoundedOutput, COMMAND_OUTPUT_LIMITS, type OutputSpill, type SpillOutcome,
   unsandboxedCommandEnvironment,
   TurnEscalationLedger, ESCALATION_OUTCOMES,
@@ -1202,7 +1202,7 @@ export {
 
 export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observe';
 
-export { ensureDir } from './utils/vfs-helpers';
+export { ensureDir, vfsBasename, vfsDirname } from './utils/vfs-helpers';
 
 export { mossaicVfs, type MossaicClient, type MossaicVfs, type MossaicStat, type MossaicChild } from './vfs/mossaic-vfs';
 
@@ -1447,7 +1447,10 @@ export {
 
 export {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
+  DEV_IDENTITY_ACCOUNT_HEADER,
   DEV_IDENTITY_HEADER,
+  EVAL_ACCOUNTS,
+  type EvalAccount,
   DEVICE_CONNECT_PATH,
   DEVICE_TERMINAL_PATH,
   ORCHESTRATOR_AGENT_SLUG,
@@ -1941,16 +1944,24 @@ export type {
 } from './read-models/tool-failures';
 
 export {
-  getExecutorDiff, getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
+  getExecutorDiff, getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline, restoreWorkspaceBaseline,
 } from './read-models/workspace-diff';
 
 export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff';
 
 export {
+  changeBlocks, changeBody, changeTotals, changeTree, inReadingOrder, keepUnchanged, sideBySide,
+} from './read-models/change-view';
+
+export type {
+  ChangeBlock, ChangeBody, ChangePair, ChangeRow, ChangeSet, ChangeSpan, ChangeTreeRow,
+} from './read-models/change-view';
+
+export {
   diffLines, fileDiff, parseGitDiff, MAX_LINES_PER_FILE,
 } from './vfs/diff';
 
-export type { DiffLine, FileDiff, FileStatus, LineDiff } from './vfs/diff';
+export type { DiffLine, FileDiff, FileStatus, LineDiff, Omitted } from './vfs/diff';
 
 export {
   getExecutorFiles, readExecutorFile, sortDirEntries, writeExecutorFileOp,
@@ -2200,13 +2211,15 @@ export {
 } from './preview/preview-exposures';
 
 export {
-  err, escapeHtml, fileResponseHeaders, firstResponse, json,
+  err, ERROR_STATUS, escapeHtml, fileResponseHeaders, firstResponse, json,
   readBounded, readBoundedStream, reoriginateRequest, requestUrl, safeJson,
 } from './http/http';
 
 export { KINU_USER_AGENT, kinuUserAgent } from './utils/user-agent';
 
 export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './http/security-headers';
+
+export { serveApp } from './http/app-shell';
 
 export { ingressAdmitted, ingressDenied, peerIp } from './http/ingress-budget';
 
@@ -2536,7 +2549,7 @@ export {
 } from './events/webhook-route';
 
 export {
-  handleHealthRequest,
+  healthResponse,
 } from './http/health-route';
 
 export {

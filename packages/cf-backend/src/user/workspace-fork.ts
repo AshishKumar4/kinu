@@ -33,7 +33,7 @@ export interface CloudForkSource {
    * actor and a snapshot without one would carry a sibling's. Same fenced handle the fork point used.
    */
   actor: ActorHandle;
-  /** Workspace plane providing the ranged read used to stream each inherited file. */
+  /** The workspace files the fork inherits, read as one snapshot. */
   vfs: ForkFileSource;
   untilMessageId: string;
   /** Where that actor's payload files live: the carried conversation references

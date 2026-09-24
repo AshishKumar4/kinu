@@ -3,7 +3,10 @@
 // from edge to ticket to object runs end to end in workerd/cli-scoped-socket.test.ts.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { cliScopesConnectionTag, rejectOutOfScopeRpc } from '../src/cli/rpc-gate';
+import {
+  appendIdentityHeaders, CLI_BEARER_HEADER, CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc,
+  SESSION_BEARER_HEADER,
+} from '../src/cli/rpc-gate';
 import {
   AGENT_RPC_ACCESS, extractTicketOrchestratorAgentName, requiredRpcAccess, rpcAccessScope,
 } from '@kinu.run/core';
@@ -166,6 +169,34 @@ describe('rpc gate on scoped connections', () => {
       if (access !== 'interactive') continue;
       expect(rejectOutOfScopeRpc(READ_EXEC, rpcFrame(method))).not.toBeNull();
     }
+  });
+});
+
+describe('the edge rewrites identity headers from the verified identity', () => {
+  test("a client's own identity headers never survive the edge", () => {
+    // Each is rewritten from the verified identity, or removed when the identity has none.
+    const forged = new Headers({
+      [CLI_SCOPES_HEADER]: 'workspace.exec',
+      [CLI_BEARER_HEADER]: 'forged:9',
+      [SESSION_BEARER_HEADER]: 'forged',
+    });
+
+    const browser = appendIdentityHeaders(forged, {
+      userId: 'user-1', email: 'owner@example.com', sub: 'sub', authTime: 5, sessionTokenHash: 'session-1',
+    });
+
+    expect(browser.get(SESSION_BEARER_HEADER)).toBe('session-1');
+    expect(browser.has(CLI_SCOPES_HEADER)).toBe(false);
+    expect(browser.has(CLI_BEARER_HEADER)).toBe(false);
+
+    const ticket = appendIdentityHeaders(forged, {
+      userId: 'user-1', email: 'owner@example.com', sub: 'cli', authTime: 5,
+      cliScopes: ['workspace.read'], cliBearer: { tokenHash: 'token-1', generation: 2 },
+    });
+
+    expect(ticket.get(CLI_SCOPES_HEADER)).toBe('workspace.read');
+    expect(ticket.get(CLI_BEARER_HEADER)).toBe('token-1:2');
+    expect(ticket.has(SESSION_BEARER_HEADER)).toBe(false);
   });
 });
 

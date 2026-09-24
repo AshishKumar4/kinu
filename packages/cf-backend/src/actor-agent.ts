@@ -4275,7 +4275,6 @@ export abstract class ActorAgent extends Agent<Env> {
     this._turnDurableLength = rawMessages.length;
     // Must be awaited before submission: synchronous catalog reads return static stand-in values
     // while the lookup is in flight (#20).
-    // The fallbacks' rates price the steps they serve.
     const [window] = await Promise.all([this.modelCatalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks)]);
     this._turnContextWindow = window.contextWindow;
     const measured = measureCompactionTrigger(this.compactionState, this.name, rawMessages.length);

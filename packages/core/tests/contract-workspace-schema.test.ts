@@ -80,18 +80,16 @@ const OWNED = {
 const ROOT_ONLY_TABLES = [
   'fork_lineage', 'fork_staged_files', 'fork_transfer',
   'slate_deployment_reservations',
-  'slate_deployments', 'slate_invocations', 'slate_live_share_users', 'slate_live_shares',
+  'slate_deployments', 'slate_file_manifest', 'slate_invocations', 'slate_live_share_users', 'slate_live_shares',
   'slate_previews', 'slate_publications',
   'slate_receipts', 'slate_resource_reservations', 'slate_resources',
   'slate_share_users', 'slate_shares', 'slate_state', 'slate_versions',
   'slate_viewer_requests', 'slates', 'workspace_actors', 'workspace_identity',
 ];
 
-/** The three dialects initWorkspaceSchema takes, over one bun:sqlite handle; core may not import cli-backend. */
+/** The three dialects initWorkspaceSchema takes and its transaction, over one bun:sqlite handle; core may not import cli-backend. */
 function schemaSql(db: InstanceType<typeof Database>): WorkspaceSchemaSql {
-  const wrapped = wrapDatabase(db);
-
-  return { execRaw: wrapped.execRaw, sql: wrapped.sql, exec: makeSqlExec(db) };
+  return { ...wrapDatabase(db), exec: makeSqlExec(db) };
 }
 
 /** The real table set, with SQLite bookkeeping and FTS5 shadow tables folded away. */
@@ -184,6 +182,27 @@ describe('workspace schema is the only path', () => {
     // Opening an actor's state inside a booted workspace must add nothing.
     initActorStateSchema(sql);
     expect(declaredColumns(db)).toEqual(first);
+    db.close();
+  });
+
+  test('a schema run that fails partway leaves no table behind', () => {
+    // One transaction: a new workspace whose genesis stops mid-way must not open with some initializers' tables.
+    const db = new Database(':memory:');
+    const sql = schemaSql(db);
+    let statements = 0;
+
+    const failing: WorkspaceSchemaSql = {
+      ...sql,
+      execRaw: (ddl) => {
+        statements++;
+
+        if (statements === 50) throw new Error('the disk filled mid-genesis');
+        sql.execRaw(ddl);
+      },
+    };
+
+    expect(() => initWorkspaceSchema(failing)).toThrow('the disk filled mid-genesis');
+    expect([...tablesOf(db)]).toEqual([]);
     db.close();
   });
 });

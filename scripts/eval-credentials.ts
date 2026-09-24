@@ -35,9 +35,11 @@
 // precedence over whatever this script resolved. So the endpoint is ruled on
 // here, by the same allowlist, before an origin is printed.
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import {
   EVAL_IDENTITY_ENV,
+  evalAccount,
+  evalSessionPath,
+  isEvalAccountEmail,
   refusedEvalEndpoint,
   resolveEvalIdentity,
 } from '../packages/test-utils/src/eval-identity';
@@ -46,11 +48,17 @@ import * as v from 'valibot';
 const PersistedEvalIdentitySchema = v.object({
   origin: v.string(),
   accessToken: v.string(),
+  user: v.nullish(v.object({ email: v.string() })),
 });
 
-const persistedPath = `${homedir()}/.config/kinu/eval-session/config.json`;
+const account = evalAccount();
+
+const persistedPath = evalSessionPath(account);
 
 const identityEnv: NodeJS.ProcessEnv = { ...process.env };
+
+// KINU_EVAL_TOKEN is the eval service's own bearer; a named account's is only the one minted for it.
+if (account !== undefined) delete identityEnv[EVAL_IDENTITY_ENV.token];
 
 if (!identityEnv[EVAL_IDENTITY_ENV.token] && existsSync(persistedPath)) {
   const permissions = statSync(persistedPath).mode & 0o077;
@@ -64,6 +72,15 @@ if (!identityEnv[EVAL_IDENTITY_ENV.token] && existsSync(persistedPath)) {
     PersistedEvalIdentitySchema,
     JSON.parse(readFileSync(persistedPath, 'utf8')),
   );
+
+  const email = persisted.user?.email;
+
+  // A named account's bearer that is not that account's user would act as the eval service itself.
+  if (account !== undefined && (email === undefined || !isEvalAccountEmail(email, account))) {
+    console.error(`eval-credentials: REFUSED — ${persistedPath} holds ${email ?? 'an unnamed user'}'s bearer, `
+      + `not the ${account} eval account's; move it aside and mint again.`);
+    process.exit(1);
+  }
 
   identityEnv[EVAL_IDENTITY_ENV.origin] = persisted.origin;
   identityEnv[EVAL_IDENTITY_ENV.token] = persisted.accessToken;

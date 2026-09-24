@@ -53,7 +53,7 @@ export interface FileEditDiffView {
   readonly truncated: boolean;
 }
 
-const DIFF_PREFIX: Record<DiffLine['kind'], string> = { add: '+', del: '−', ctx: ' ' };
+const DIFF_PREFIX: Record<DiffLine['kind'], string> = { add: '+', del: '−', ctx: ' ', hunk: ' ' };
 
 function fileWriteResult(content: string):
   | { readonly kind: 'edit'; readonly body: v.InferOutput<typeof EditResultSchema> }
@@ -195,7 +195,7 @@ export function FileDiffCard({ view, expanded, previewWidth, lineCap = EXPANDED_
   readonly lineCap?: number;
 }) {
   const { well } = useTuiTheme().colors;
-  const inkFor = { add: well.success, del: well.danger, ctx: well.muted } as const;
+  const inkFor = { add: well.success, del: well.danger, ctx: well.muted, hunk: well.muted } as const;
   const hunks = view.hunks ?? [];
   const shown = expanded ? hunks : hunks.slice(0, 1);
   const totalLines = hunks.reduce((sum, hunk) => sum + hunk.length, 0);

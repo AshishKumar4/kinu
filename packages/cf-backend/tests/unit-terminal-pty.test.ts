@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { serveFamily } from './helpers/api';
 import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
@@ -20,7 +21,7 @@ await installSandboxSdkMock();
 // `agents` reaches `cloudflare:email`: mock first, then the dynamic import.
 mockAgentsSdk();
 
-const { handleTerminalRequest } = await import('../src/terminal-route');
+const { terminalRoutes } = await import('../src/terminal-route');
 
 import type { TerminalRouteDeps, TerminalWorkspace } from '../src/terminal-route';
 
@@ -126,7 +127,7 @@ function terminalRequest(
   deps: TerminalRouteDeps,
   ctx: Pick<ExecutionContext, 'waitUntil'> = executionContext(),
 ): Promise<Response | null> {
-  return handleTerminalRequest(request, deps, WORKSPACE, ctx);
+  return serveFamily(terminalRoutes(() => deps), { workspace: { name: WORKSPACE }, ctx: ctx })(request, {});
 }
 
 function attachRequest(query: string, init: RequestInit = {}): Request {

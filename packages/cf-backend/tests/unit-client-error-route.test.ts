@@ -9,7 +9,8 @@ import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../src/auth/session';
-import { handleClientErrorRequest, type ClientErrorEnv } from '../src/client-error/route';
+import { clientErrorRoutes, type ClientErrorEnv } from '../src/client-error/route';
+import { serveFamily } from './helpers/api';
 import {
   CLIENT_ERROR_ENDPOINT,
   CLIENT_ERROR_MAX_REQUEST_BYTES,
@@ -87,7 +88,7 @@ async function send(
   identity: AuthIdentity | null = ME,
   stamp: typeof STAMP | null = STAMP,
 ): Promise<Response> {
-  const response = await handleClientErrorRequest(post(body), envWithStamp(stamp), identity);
+  const response = await serveFamily(clientErrorRoutes, identity === null ? {} : { identity })(post(body), envWithStamp(stamp));
 
   if (!response) throw new Error('the route did not answer its own endpoint');
 
@@ -109,16 +110,12 @@ afterEach(() => { setDiagnosticsSink(createRecordingLogger()); });
 
 describe('routing', () => {
   test('another path is not this module’s business', async () => {
-    expect(await handleClientErrorRequest(
-      new Request(`${ORIGIN}/api/other`, { method: 'POST' }), envWithStamp(STAMP), ME,
-    )).toBeNull();
+    expect(await serveFamily(clientErrorRoutes, { identity: ME })(new Request(`${ORIGIN}/api/other`, { method: 'POST' }), envWithStamp(STAMP))).toBeNull();
   });
 
   test('a GET of the endpoint is a 405, not the SPA', async () => {
     // Falling through would answer an API path with the app shell.
-    const response = await handleClientErrorRequest(
-      new Request(URL_), envWithStamp(STAMP), ME,
-    );
+    const response = await serveFamily(clientErrorRoutes, { identity: ME })(new Request(URL_), envWithStamp(STAMP));
 
     expect(response?.status).toBe(405);
   });
@@ -126,7 +123,7 @@ describe('routing', () => {
 
 describe('who may write to the log sink', () => {
   test('an unauthenticated report is refused by the route itself', async () => {
-    // Guarded here too, not only by server.ts: a caller-only guard is one refactor from absent.
+    // Guarded here too, not only by the app's session gate: a caller-only guard is one refactor from absent.
     const response = await send(JSON.stringify(report()), null);
     expect(response.status).toBe(401);
   });
@@ -224,9 +221,7 @@ describe('the bound', () => {
       },
     });
 
-    const response = await handleClientErrorRequest(
-      new Request(URL_, { method: 'POST', body: stream }), envWithStamp(STAMP), ME,
-    );
+    const response = await serveFamily(clientErrorRoutes, { identity: ME })(new Request(URL_, { method: 'POST', body: stream }), envWithStamp(STAMP));
 
     expect(response?.status).toBe(413);
   });

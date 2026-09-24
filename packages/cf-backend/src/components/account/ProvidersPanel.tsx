@@ -492,7 +492,7 @@ async function forgetDefaultAccount(key: string): Promise<void> {
   if (chosen === accountOf(key)) await updateProfileCatalog({ ...envelope.catalog, accounts: others }, envelope.version);
 }
 
-/** Per provider with several accounts: the one a model naming none runs on. */
+/** Per multi-account provider: the account an unnamed model runs on. */
 function DefaultAccounts({ keys, catalog }: { keys: readonly string[]; catalog: readonly ProviderCatalogEntry[] }) {
   const profile = useAsyncResource(getProfileCatalog);
   const [saving, setSaving] = useState(false);

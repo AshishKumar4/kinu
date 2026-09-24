@@ -1,6 +1,6 @@
 {
   "measuredAt": "2026-09-24",
-  "total": 195,
+  "total": 178,
   "files": {
     "packages/cf-backend/tests/helpers/kv.ts": {
       "clock-compare": 1
@@ -78,8 +78,8 @@
       "sleep": 1
     },
     "packages/cli-backend/tests/local-session.test.ts": {
-      "clock-compare": 7,
-      "sleep": 8
+      "sleep": 8,
+      "clock-compare": 1
     },
     "packages/cli-backend/tests/loop-admission.test.ts": {
       "clock-compare": 1,
@@ -187,11 +187,6 @@
     "packages/pc-agent/tests/pty.test.js": {
       "clock-compare": 1,
       "sleep": 1
-    },
-    "scripts/app-background-ux.test.ts": {
-      "timeout-option": 3,
-      "sleep": 1,
-      "test-timeout": 7
     },
     "scripts/bench.test.ts": {
       "sleep": 2

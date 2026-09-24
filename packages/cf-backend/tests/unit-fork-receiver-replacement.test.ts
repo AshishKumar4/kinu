@@ -49,7 +49,7 @@ function range({ transferId, seq, offset, end, last }: RangeFrame): ForkFrame {
   return sealForkFrame({
     version: FORK_TRANSFER_VERSION, transferId, seq, kind: 'file',
     path: 'memory/replaced.md', offset, bytes: CONTENT.subarray(offset, end), last,
-    artifact: false, fileDigest: last ? DIGEST : undefined,
+    artifact: false, fileDigest: last ? DIGEST : undefined, mode: 0o644, mtimeMs: 1,
   });
 }
 

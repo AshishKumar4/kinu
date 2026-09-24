@@ -55,7 +55,7 @@ describe("parseGitDiff", () => {
     const out = parseGitDiff(raw);
     expect(out.length).toBe(1);
     expect(out[0]).toMatchObject({ path: "src/app.ts", status: "changed", added: 1, removed: 1 });
-    expect(out[0].lines[0]).toEqual({ kind: "ctx", text: "@@ -1,3 +1,3 @@" });
+    expect(out[0].lines[0]).toEqual({ kind: "hunk", text: "@@ -1,3 +1,3 @@" });
     expect(out[0].lines.some((l) => l.kind === "add" && l.text === "const y = 3;")).toBe(true);
     expect(out[0].lines.some((l) => l.kind === "del" && l.text === "const y = 2;")).toBe(true);
   });
@@ -103,16 +103,14 @@ describe("parseGitDiff", () => {
     expect(out[0].path).toBe("new/name.ts");
   });
 
-  test("binary file → single context note, zero counts", () => {
+  test("binary file → marked binary, with no rows and no counts", () => {
     const raw = [
       "diff --git a/img.png b/img.png",
       "index 5555555..6666666 100644",
       "Binary files a/img.png and b/img.png differ",
     ].join("\n");
 
-    const out = parseGitDiff(raw);
-    expect(out[0]).toMatchObject({ path: "img.png", status: "changed", added: 0, removed: 0 });
-    expect(out[0].lines).toEqual([{ kind: "ctx", text: "(binary file differs)" }]);
+    expect(parseGitDiff(raw)).toEqual([{ path: "img.png", status: "changed", added: 0, removed: 0, lines: [], omitted: "binary" }]);
   });
 
   test("multiple files parsed independently", () => {

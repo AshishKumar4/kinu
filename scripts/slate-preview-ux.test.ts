@@ -205,7 +205,7 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         // The workspace-wide read lands once and lists the whole roster —
         // there is no unscanned frontier for a live actor to hide behind.
         await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Courier rollout'));
-        expect(await page.$('[aria-label="Diffs"]')).toBeNull();
+        expect(await page.$('[aria-label="Changes"]')).toBeNull();
 
         for (const title of ['Dashboard', 'Sandbox app', 'Device app']) {
           await page.click(`[aria-label="${title}"]`);
@@ -257,7 +257,7 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await page.click('[data-refresh-preview]');
         expect(await page.$eval('[aria-label="Work"]', el => el.getAttribute('aria-current'))).toBe('true');
         await page.click('[data-add-diff]');
-        await page.waitForSelector('[aria-label="Diffs"]');
+        await page.waitForSelector('[aria-label="Changes"]');
         await page.click('[aria-label="Sandbox app"]');
         await page.click('[aria-label="Work"]');
         // The roster is always in the read: the dismissed actor's card says
@@ -352,6 +352,85 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         // stays a card in the list, reachable like every other row.
         expect(await page.$eval('[data-work-plans]', el => el.textContent)).toContain('Courier rollout');
       }
+    } finally { await page.close(); }
+  });
+});
+
+test('a change-set read that fails raises the Changes tab, which says what failed', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+
+    try {
+      await page.setViewport({ width: 1100, height: 850 });
+      await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Dashboard"]');
+      expect(await page.$('[aria-label="Changes"]')).toBeNull();
+      // Nothing changed anywhere, so only the failure can raise the tab. The tab polls every
+      // 2 s, so by the second failed read the first one's answer has rendered.
+      await page.click('[data-break-diff]');
+      await page.waitForFunction(() => Number(document.querySelector('[data-break-diff]')?.getAttribute('data-reads')) >= 2);
+      expect(await page.$('[aria-label="Changes"]')).not.toBeNull();
+      await page.click('[aria-label="Changes"]');
+      await page.waitForSelector('[data-changes-error]');
+      expect(await page.$eval('[data-changes] header', el => el.textContent?.trim())).toBe("Can't read Workspace");
+      expect(await page.$eval('[data-changes-error]', el => el.textContent)).toBe('the change-set read failed');
+    } finally { await page.close(); }
+  });
+});
+
+/** Opens the Changes tab of the preview-tabs frame with two edited workspace files, and a machine when asked. */
+async function openChanges(newPage: () => Promise<Page>, origin: string, machine: boolean): Promise<Page> {
+  const page = await newPage();
+
+  await page.setViewport({ width: 1280, height: 850 });
+  await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
+  await page.waitForSelector('[aria-label="Dashboard"]');
+  await page.click('[data-add-diff]');
+
+  if (machine) await page.click('[data-add-machine]');
+  await page.waitForSelector('[aria-label="Changes"]');
+  await page.click('[aria-label="Changes"]');
+
+  return page;
+}
+
+async function pickSource(page: Page, scope: string, label: string): Promise<void> {
+  await page.click(`${scope} [data-source-menu]`);
+  await page.waitForSelector('[role="menuitemradio"]');
+  await page.$$eval('[role="menuitemradio"]', (items, wanted) => {
+    items.find((item) => item.textContent?.includes(wanted))?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  }, label);
+}
+
+test('the review sheet takes the keys while it is open, and Escape returns to the file it was expanded from', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await openChanges(newPage, origin, false);
+
+    try {
+      await page.click('[data-file-row="src/app.ts"]');
+      await page.click('[data-changes="file"] [aria-label="Expand: every file side by side"]');
+      await page.waitForSelector('[data-review-sheet] [data-file-row="src/app.ts"][aria-current="true"]');
+      await page.keyboard.press('j');
+      await page.waitForSelector('[data-review-sheet] [data-file-row="src/ready.ts"][aria-current="true"]');
+      expect(await page.$eval('[data-changes="file"] [data-open-file]', (el) => el.textContent)).toBe('app.ts');
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => document.querySelector('[data-review-sheet]') === null);
+      expect(await page.$eval('[data-changes] [data-open-file]', (el) => el.textContent)).toBe('app.ts');
+    } finally { await page.close(); }
+  });
+});
+
+test('after Mark reviewed, the source menu still reaches a machine\'s changes', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await openChanges(newPage, origin, true);
+
+    try {
+      await page.waitForSelector('[data-file-row="src/device.ts"]');
+      await pickSource(page, '[data-changes]', 'Workspace');
+      await page.click('[data-mark-reviewed]');
+      await page.waitForSelector('[data-changes="reviewed"]');
+      await pickSource(page, '[data-changes="reviewed"]', 'Your PC');
+      await page.waitForSelector('[data-file-row="src/device.ts"]');
     } finally { await page.close(); }
   });
 });

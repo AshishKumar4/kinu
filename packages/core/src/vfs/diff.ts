@@ -4,7 +4,8 @@
  */
 import { PLATFORM_CATALOG } from '../platform-catalog';
 
-export interface DiffLine { kind: 'add' | 'del' | 'ctx'; text: string }
+/** `hunk`: a git hunk header (`@@ -40,6 +40,8 @@ context`), never a line of the file. */
+export interface DiffLine { kind: 'add' | 'del' | 'ctx' | 'hunk'; text: string }
 
 export interface LineDiff {
   lines: DiffLine[]; added: number; removed: number;
@@ -112,10 +113,15 @@ export function diffLines(before: string, after: string): LineDiff {
 
 export type FileStatus = 'added' | 'removed' | 'changed';
 
+/** Why a file has no lines: `binary` (a NUL byte, or git says so) or `large` (past one stored row). */
+export type Omitted = 'binary' | 'large';
+
 export interface FileDiff {
   path: string; status: FileStatus; added: number; removed: number; lines: DiffLine[];
   /** Body bounded; `added`/`removed` still count the whole file. */
   truncated?: boolean;
+  /** Not compared, so it has no lines and no counts. */
+  omitted?: Omitted;
 }
 
 function carry(file: FileDiff, l: DiffLine): void {
@@ -154,7 +160,7 @@ function bodyKind(line: string): DiffLine['kind'] | null {
   return null;
 }
 
-/** Parse `git diff` unified output into FileDiff[]; hunk `@@` headers are kept as context rows. */
+/** Parse `git diff` unified output into FileDiff[]; hunk `@@` headers are kept as `hunk` rows. */
 export function parseGitDiff(unified: string): FileDiff[] {
   const out: FileDiff[] = [];
   const lines = unified.split('\n');
@@ -211,9 +217,9 @@ export function parseGitDiff(unified: string): FileDiff[] {
     if (line.startsWith('index ') || line.startsWith('old mode') || line.startsWith('new mode')
       || line.startsWith('similarity index') || line.startsWith('\\ No newline')) continue;
 
-    if (line.startsWith('Binary files')) { carry(cur, { kind: 'ctx', text: '(binary file differs)' }); continue; }
+    if (line.startsWith('Binary files')) { cur.omitted = 'binary'; continue; }
 
-    if (line.startsWith('@@')) { carry(cur, { kind: 'ctx', text: line }); continue; }
+    if (line.startsWith('@@')) { carry(cur, { kind: 'hunk', text: line }); continue; }
 
     // Count first, then carry: the row bound must never gate the counts.
     const kind = bodyKind(line);

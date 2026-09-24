@@ -11,8 +11,8 @@ Each preview gets a titled tab at the left of the workspace surface strip. A
 slate and the workspace port it serves share one tab. The pane renders the same
 component as the chat card (`SlateFrame` is `InlineSlate` in `pane` display),
 fills the available height and shows the URL. A new preview takes focus once;
-refreshing its source or reconnecting does not take it again. Diffs keep their
-own tab, shown only when there are diffs.
+refreshing its source or reconnecting does not take it again. Changes keep their
+own tab, shown only when something changed.
 
 The Work tab lists the workspace's plans newest first, from one workspace-wide
 read (`listWorkspaceWork`), with the owning actor named on each. A new pending
@@ -227,6 +227,18 @@ source, commit freezes a version, fork materializes a version into a new slate,
 and restore replaces source inside a workspace VFS transaction. All of these
 survive host recreation. None of them checkpoint JavaScript heap state or keep a
 process alive.
+
+Version content is addressed by SHA-256 under `/etc/kinu-slate-content`, so an
+unchanged file is stored once across versions and forks. `slate_file_manifest`
+(`packages/core/src/slates/files.ts`) records each slate file's size, mtime,
+inode and content as of the last capture or restore. A capture reads and hashes
+only files whose row moved, and still checks that the caller can read each one.
+A restore rewrites only files whose bytes or mode differ. Measured in workerd at
+10,000 files on 2026-09-24: a version after a one-file edit takes 52 ms instead
+of 194 ms, and a restore takes 52 ms instead of 942 ms. A fork's first version reads nothing: 47 ms
+instead of 191 ms. The first version of a tree still reads every byte, and a
+fork still writes every byte into the new slate's directory, because Nimbus
+keeps each file's content under its own id.
 
 The hosted source runtime does not supply the optional `WorkspaceSlates` build,
 process or deployment capabilities. Operations that need them refuse as

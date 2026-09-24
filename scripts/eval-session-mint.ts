@@ -9,18 +9,24 @@
 // which `authenticateRequest` honours for exactly that header and nothing else.
 //
 // Writes `~/.config/kinu/eval-session/config.json` (mode 0600), the file
-// `scripts/eval-credentials.ts` reads. Never touches the person's own config.
-// Exits 0 having written nothing when a bearer for this origin already exists.
+// `scripts/eval-credentials.ts` reads; with KINU_EVAL_ACCOUNT, the named eval
+// account's bearer, approved as that account, beside it (`evalSessionPath`).
+// Never touches the person's own config. Exits 0 having written nothing when a
+// bearer for this origin already exists.
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir, hostname } from 'node:os';
+import { hostname } from 'node:os';
 import { dirname } from 'node:path';
 import * as v from 'valibot';
-import { DEV_IDENTITY_HEADER } from '@kinu.run/core';
-import { EVAL_DEPLOYMENT_ORIGIN, EVAL_IDENTITY_ENV, evalTargetVerdict } from '@kinu.run/test-utils';
+import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER } from '@kinu.run/core';
+import {
+  EVAL_DEPLOYMENT_ORIGIN, EVAL_IDENTITY_ENV, evalAccount, evalSessionPath, evalTargetVerdict, isEvalAccountEmail,
+} from '@kinu.run/test-utils';
 import { pollCliAuth, startCliAuth } from '../packages/cli/src/cloud-api';
 
-const persistedPath = `${homedir()}/.config/kinu/eval-session/config.json`;
+const account = evalAccount();
+
+const persistedPath = evalSessionPath(account);
 
 // An origin set to blank names no target, so it reads as absent.
 const originFromEnv = process.env[EVAL_IDENTITY_ENV.origin]?.trim();
@@ -43,10 +49,22 @@ if (!webIdentity) {
   process.exit(1);
 }
 
+/** Refuses a bearer whose user is not the named account's, before it is kept or handed out. */
+function refuseOtherUser(email: string | undefined, holding: string): void {
+  if (account === undefined || (email !== undefined && isEvalAccountEmail(email, account))) return;
+  console.error(`eval-session-mint: REFUSED — ${holding} is ${email ?? 'an unnamed user'}'s, not the ${account} `
+    + `eval account's: a deployment older than x-kinu-dev-identity-account answers as the eval service itself.`);
+  process.exit(1);
+}
+
 if (existsSync(persistedPath)) {
-  const persisted = v.safeParse(v.object({ origin: v.string() }), JSON.parse(readFileSync(persistedPath, 'utf8')));
+  const persisted = v.safeParse(
+    v.object({ origin: v.string(), user: v.nullish(v.object({ email: v.string() })) }),
+    JSON.parse(readFileSync(persistedPath, 'utf8')),
+  );
 
   if (persisted.success && persisted.output.origin === target.origin) {
+    refuseOtherUser(persisted.output.user?.email, `the bearer ${persistedPath} holds`);
     console.error(`eval-session-mint: a session for ${target.origin} is already persisted`);
     process.exit(0);
   }
@@ -57,12 +75,14 @@ if (existsSync(persistedPath)) {
   process.exit(1);
 }
 
-const flow = await startCliAuth(target.origin, `eval-service@${hostname()}`);
+const flow = await startCliAuth(target.origin, `eval-service${account === undefined ? '' : `+${account}`}@${hostname()}`);
 
 // The approval is the browser form: GET issues the CSRF cookie and the form
 // carrying its twin; POST returns both with a same-origin `Origin`. The dev
 // identity travels in its header on both, and only there.
-const identity = { [DEV_IDENTITY_HEADER]: webIdentity };
+const identity = new Headers({ [DEV_IDENTITY_HEADER]: webIdentity });
+
+if (account !== undefined) identity.set(DEV_IDENTITY_ACCOUNT_HEADER, account);
 
 const page = await fetch(`${target.origin}/cli/auth?code=${encodeURIComponent(flow.userCode)}`, { headers: identity });
 
@@ -83,7 +103,7 @@ if (!csrf || !cookie) {
 
 const approval = await fetch(`${target.origin}/cli/auth`, {
   method: 'POST',
-  headers: { ...identity, cookie, origin: target.origin },
+  headers: new Headers([...identity, ['cookie', cookie], ['origin', target.origin]]),
   body: new URLSearchParams({ userCode: flow.userCode, csrf }),
 });
 
@@ -97,6 +117,22 @@ const poll = await pollCliAuth(target.origin, flow.deviceToken);
 if (poll.status !== 'approved' || !poll.token) {
   console.error(`eval-session-mint: the flow is ${poll.status} after approval${poll.message ? `: ${poll.message}` : ''}`);
   process.exit(1);
+}
+
+refuseOtherUser(poll.user?.email, 'the approved bearer');
+
+// A named eval account is a new user the first time it is minted, and every page it opens lands on /welcome until
+// its setup is stamped (App.tsx). It is stamped before its bearer is kept, so no kept bearer's account lacks it.
+if (account !== undefined) {
+  const stamped = await fetch(`${target.origin}/api/user/onboarding/complete`, {
+    method: 'POST',
+    headers: new Headers([...identity, ['origin', target.origin]]),
+  });
+
+  if (!stamped.ok) {
+    console.error(`eval-session-mint: the deployment refused to stamp the ${account} account's setup (${stamped.status})`);
+    process.exit(1);
+  }
 }
 
 mkdirSync(dirname(persistedPath), { recursive: true, mode: 0o700 });

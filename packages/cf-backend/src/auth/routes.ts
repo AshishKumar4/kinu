@@ -1,4 +1,5 @@
 import * as oauth from 'oauth4webapi';
+import { Hono } from 'hono';
 import {
   AuthError, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, authenticateRequest, readCookie,
   readSessionToken, setCookie,
@@ -29,6 +30,7 @@ import type { KvStore } from '@kinu.run/agent-utils';
 import type { OwnerCapabilityEnv } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import * as v from 'valibot';
+import type { FamilyEnv } from '../api/context';
 
 const CloudflareUserEnvelopeSchema = v.object({
   success: v.optional(v.boolean()), result: v.optional(JsonValueSchema),
@@ -71,24 +73,26 @@ export interface AuthRoutesEnv<Id = DurableObjectId> extends OAuthProviderEnv, O
   DEV_IDENTITY_SECRET?: string;
 }
 
+/** Sign-in state reads; other `/api/auth/*` paths are the app's. */
+export const authApiRoutes = new Hono<FamilyEnv<AuthRoutesEnv<unknown>, object>>();
+
+authApiRoutes.get('/api/auth/providers', async (c) => json({ body: { providers: listConfiguredOAuthProviders(c.env) } }));
+
+authApiRoutes.get('/api/auth/me', async (c) => {
+  try {
+    const identity = await authenticateRequest(c.req.raw, c.env);
+
+    return json({ body: { user: publicIdentity(identity) } });
+  } catch (e) {
+    if (e instanceof AuthError && e.status === 401) return json({ body: { user: null } }, { status: 401 });
+    throw e;
+  }
+});
+
+/** Sign-in pages and OAuth legs. */
 export async function handleAuthRequest<Id>(request: Request, env: AuthRoutesEnv<Id>, ctx?: Pick<ExecutionContext, 'waitUntil'>): Promise<Response | null> {
   const url = new URL(request.url);
   const method = request.method;
-
-  if (url.pathname === '/api/auth/providers' && method === 'GET') {
-    return json({ body: { providers: listConfiguredOAuthProviders(env) } });
-  }
-
-  if (url.pathname === '/api/auth/me' && method === 'GET') {
-    try {
-      const identity = await authenticateRequest(request, env);
-
-      return json({ body: { user: publicIdentity(identity) } });
-    } catch (e) {
-      if (e instanceof AuthError && e.status === 401) return json({ body: { user: null } }, { status: 401 });
-      throw e;
-    }
-  }
 
   if (url.pathname === '/login' && method === 'GET') {
     return renderLogin(request, env);

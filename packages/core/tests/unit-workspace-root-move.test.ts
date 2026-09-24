@@ -8,7 +8,9 @@ import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import { CRED_KERNEL, CRED_SESSION_USER, type SqlDatabase, type SqlRow, type SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
-import { agentIdentity, provisionAgentHome, subordinateAgentName } from '../src/vfs/agent-home';
+import {
+  SESSION_UID, agentIdentity, provisionAgentHome, settleWorkspaceRoot, subordinateAgentName, type RootMoveVfs,
+} from '../src/vfs/agent-home';
 import { createWorkspace, workspaceGenerationStorage } from '../src/vfs/nimbus-workspace';
 
 const SOUL = 'I keep this workspace small and proven.\n';
@@ -130,6 +132,30 @@ describe('a new workspace', () => {
   });
 });
 
+describe('the link', () => {
+  test('the agent can neither remove nor replace it', async () => {
+    const { bundle, kernel, user } = await boot(new Database(':memory:'));
+
+    user.writeFile('/home/main/notes.md', 'mine');
+
+    expect(() => user.unlink('/home/user')).toThrow('EACCES');
+    expect(() => user.rename('/home/main/notes.md', '/home/user')).toThrow('EACCES');
+    expect((await bundle.shell.exec('rm /home/user')).exitCode).not.toBe(0);
+    expect(kernel.readlink('/home/user')).toBe('/home/main');
+  });
+
+  test("a workspace settled while /home was its agent's takes /home back on its next boot", async () => {
+    const database = await legacyWorkspace();
+    const settled = await boot(database);
+    // As a boot before this one left it.
+    settled.kernel.chown('/home', SESSION_UID, SESSION_UID);
+
+    const { user } = await boot(database);
+
+    expect(() => user.unlink('/home/user')).toThrow('EACCES');
+  });
+});
+
 describe('a subagent', () => {
   test('keeps its own home at /home/<name>, beside the main agent\'s', async () => {
     const database = await legacyWorkspace();
@@ -163,8 +189,10 @@ describe('a move cut short', () => {
   test('finishes on the next boot when /home/user holds only what was not yet retired', async () => {
     const database = await legacyWorkspace();
     await boot(database);
-    // A boot that published everything and stopped while retiring the old name, deepest first.
-    const { user } = await substrate(database);
+    // A boot that published everything and stopped while retiring the old name, deepest first, so before /home
+    // was taken from the agent.
+    const { kernel, user } = await substrate(database);
+    kernel.chown('/home', SESSION_UID, SESSION_UID);
     user.unlink('/home/user');
     user.mkdir('/home/user/data', { recursive: true });
 
@@ -174,10 +202,25 @@ describe('a move cut short', () => {
     expect(booted.readlink('/home/user')).toBe('/home/main');
   });
 
+  test('a boot that stops before the link leaves /home to the agent, so the next boot still starts', async () => {
+    const database = await legacyWorkspace();
+    const { kernel } = await substrate(database);
+    const stopping: RootMoveVfs = { ...kernel, symlink: () => { throw new Error('stopped before the link'); } };
+
+    expect(() => settleWorkspaceRoot(stopping)).toThrow('stopped before the link');
+    expect(kernel.stat('/home').uid).toBe(SESSION_UID);
+
+    const booted = (await boot(database)).kernel;
+
+    expect(booted.readlink('/home/user')).toBe('/home/main');
+    expect(booted.readFileString('/home/main/notes.md')).toBe('# coupon regression\n');
+  });
+
   test('a removed link comes back on the next boot', async () => {
     const database = await legacyWorkspace();
-    const { user } = await boot(database);
-    // The session user owns /home, so the agent can remove the link.
+    const { kernel, user } = await boot(database);
+    // Its agent could remove the link while /home was its own, as every boot before this one left it.
+    kernel.chown('/home', SESSION_UID, SESSION_UID);
     user.unlink('/home/user');
 
     const booted = (await boot(database)).kernel;

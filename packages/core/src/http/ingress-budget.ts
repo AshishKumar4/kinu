@@ -1,6 +1,6 @@
 /**
  * Knock budget for unauthenticated rails that pick a Durable Object by caller-supplied name before any identity
- * exists (`pc-handler.ts` ticket exchange, `server.ts` webhooks). Rate limiting, not route verification.
+ * exists (`pc-handler.ts` ticket exchange, webhook deliveries). Rate limiting, not route verification.
  */
 import * as v from 'valibot';
 import { json } from './http';

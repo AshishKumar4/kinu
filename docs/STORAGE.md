@@ -256,7 +256,7 @@ erDiagram
         INTEGER published "1 once the commit published the fork"
     }
     fork_staged_files {
-        TEXT path PK "A file this unpublished transfer already published"
+        TEXT path PK "A file, directory or symlink this unpublished transfer already placed"
     }
 
     workspace_actors ||--o{ workspace_actors : "parent_actor_id"

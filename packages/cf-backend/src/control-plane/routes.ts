@@ -1,13 +1,9 @@
-/**
- * `/api/control/*`. The operator gate lives here, at the top of `handleControlRequest`, never in
- * callers. Cloudflare Access runs earlier in `server.ts`; the required `AccessIdentity` parameter
- * keeps it structural. One mutation endpoint (`POST /actions`) so every mutation is audited in one place.
- */
+/** `/api/control/*`: the operator gate is the first middleware; Access, the app's first gate, sets the required `access`. One audited mutation endpoint. */
+import { Hono, type Context } from 'hono';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import type { Page, PageRequest } from '@kinu.run/core';
 import * as v from 'valibot';
-import type { AuthIdentity } from '../auth/session';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
 import { err, json, safeJson } from '@kinu.run/core';
@@ -17,7 +13,7 @@ import {
   actorDigest, adminCaller, adminDenialMessage, adminDenialStatus, authorizeAdmin,
   reportAdminDenial, type AdminGateEnv, type AuthorizedAdmin, type ControlCaller,
 } from './admin-caller';
-import { isControlPlaneApiPath, type AccessIdentity } from './access-gate';
+import { rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 import { controlPlaneStub } from './stub';
 import {
   ControlActionSchema, describeAction, runControlAction, UserIdSchema,
@@ -69,132 +65,130 @@ export interface ControlEnv<Id> extends ActionEnv<Id>, AdminGateEnv, AnalyticsSq
   MonitorDO: ObjectNamespace<Id, Pick<MonitorDO, 'listIncidents'>>;
 }
 
-/** `access` is required; the path test is shared with `access-gate.ts` so answered and gated paths match. */
-export async function handleControlRequest<Id>(
-  request: Request,
-  env: ControlEnv<Id>,
-  identity: AuthIdentity,
-  access: AccessIdentity,
-): Promise<Response | null> {
-  const url = new URL(request.url);
-
-  if (!isControlPlaneApiPath(url.pathname)) return null;
-
-  // Authorize as a reader first: a stale-sign-in operator is refused at the mutation check below,
-  // so the attempt still gets an audit row.
-  const authorization = authorizeAdmin(env, identity, access, { mutating: false });
-
-  if (!authorization.ok) {
-    reportAdminDenial(authorization.denial, url.pathname, request.method);
-
-    return err(adminDenialStatus(authorization.denial), adminDenialMessage(authorization.denial));
-  }
-
-  const admin = authorization.admin;
-
-  try {
-    const caller = await adminCaller(env, admin);
-
-    return await dispatch(request, url, { env, admin, caller });
-  } catch (cause) {
-    diagnostics.failure('control_plane.request_failed', toKinuError({
-      doing: 'serving an admin control-plane request',
-      cause,
-      otherwise: 'unavailable',
-    }), { path: url.pathname, method: request.method });
-
-    return err(500, renderThrownChain({ cause }));
-  }
-}
-
 interface ControlContext<Id> {
   env: ControlEnv<Id>;
   admin: AuthorizedAdmin;
   caller: ControlCaller;
 }
 
-async function dispatch<Id>(request: Request, url: URL, control: ControlContext<Id>): Promise<Response> {
-  const { env, admin, caller } = control;
+interface ControlVariables extends ApiVariables {
+  control: ControlContext<unknown>;
+}
 
-  const segments = url.pathname.replace(/^\/api\/control\/?/, '').split('/').filter(Boolean);
-  const head = segments[0] ?? '';
-  const stub = controlPlaneStub(env);
+type ControlContextOf = Context<FamilyEnv<ControlEnv<unknown>, ControlVariables>>;
 
-  if (request.method === 'POST') {
-    return head === 'actions'
-      ? await handleAction(request, env, admin, caller)
-      : err(404, 'Not found');
+/** Each section answers its whole subtree. */
+export const controlRoutes = new Hono<FamilyEnv<ControlEnv<unknown>, ControlVariables>>();
+
+// Past the operator gate a throw is recorded and answered 500.
+controlRoutes.onError((cause, c) => {
+  diagnostics.failure('control_plane.request_failed', toKinuError({
+    doing: 'serving an admin control-plane request',
+    cause,
+    otherwise: 'unavailable',
+  }), { path: new URL(c.req.url).pathname, method: c.req.method });
+
+  return err(500, renderThrownChain({ cause }));
+});
+
+// Reader first: a stale operator is refused, and audited, at `handleAction`'s mutation check.
+controlRoutes.use('/api/control/*', async (c, next) => {
+  const authorization = authorizeAdmin(c.env, c.get('identity'), c.get('access'), { mutating: false });
+
+  if (!authorization.ok) {
+    reportAdminDenial(authorization.denial, new URL(c.req.url).pathname, c.req.method);
+
+    return err(adminDenialStatus(authorization.denial), adminDenialMessage(authorization.denial));
   }
 
-  if (request.method !== 'GET') return err(405, 'GET or POST');
+  const admin = authorization.admin;
+  c.set('control', { env: c.env, admin, caller: await adminCaller(c.env, admin) });
+  await next();
+});
 
-  switch (head) {
-    case 'overview':
-      return json({ body: await stub.overview(caller) });
+controlRoutes.post('/api/control/actions/*', async (c) => {
+  const { env, admin, caller } = c.get('control');
 
-    case 'users': {
-      const userId = segments[1];
+  return handleAction(c.req.raw, env, admin, caller);
+});
 
-      if (userId === undefined) return json({ body: await stub.listUsers(caller, pageQuery(url)) });
+controlRoutes.post('/api/control/*', async () => err(404, 'Not found'));
 
-      return await handleUserDetail(control, userId, url);
-    }
+controlRoutes.get('/api/control/overview/*', async (c) => {
+  const { env, caller } = c.get('control');
 
-    case 'workspaces': {
-      const name = segments[1] === undefined ? undefined : decodeURIComponent(segments[1]);
+  return json({ body: await controlPlaneStub(env).overview(caller) });
+});
 
-      if (name === undefined) {
-        // An absent `?userId=` must leave the property absent: `userId: ''` matches no account.
-        const filter: WorkspaceFilter = {
-          includeRemoved: url.searchParams.get('includeRemoved') === '1',
-        };
+controlRoutes.get('/api/control/users/:userId/*', async (c) => handleUserDetail(c.get('control'), rawParam(c, 'userId'), new URL(c.req.url)));
 
-        const userId = url.searchParams.get('userId');
+controlRoutes.get('/api/control/users/*', pagedRead((store, caller, page) => store.listUsers(caller, page)));
 
-        if (userId !== null) filter.userId = userId;
+controlRoutes.get('/api/control/workspaces/:name/*', async (c) => {
+  const name = decodeURIComponent(rawParam(c, 'name'));
+  // Required: without `?userId=` the name resolves whichever account's global DO holds it.
+  const owner = new URL(c.req.url).searchParams.get('userId');
 
-        return json({ body: await stub.listWorkspaces(caller, pageQuery(url), filter) });
-      }
-
-      // Required: without `?userId=` the name resolves whichever account's global DO holds it.
-      const owner = url.searchParams.get('userId');
-
-      if (owner === null || !v.is(UserIdSchema, owner)) {
-        return err(400, 'a workspace read must name the account that owns it (?userId=)');
-      }
-
-      return await handleWorkspaceDetail(env, owner, name);
-    }
-
-    case 'incidents':
-      return json({
-        body: {
-          incidents: await env.MonitorDO
-            .get(env.MonitorDO.idFromName(MONITOR_SINGLETON))
-            .listIncidents(INCIDENT_MAX),
-        },
-      });
-
-    case 'feedback':
-      return json({ body: await stub.listFeedback(caller, pageQuery(url)) });
-
-    case 'audit':
-      return json({ body: await stub.listAudit(caller, pageQuery(url)) });
-
-    case 'metrics': {
-      const ask: MetricsRequest = { hours: numberParam(url, 'hours') ?? 24 };
-      const workspace = url.searchParams.get('workspace');
-
-      if (workspace !== null) ask.workspace = workspace;
-
-      if (url.searchParams.get('refresh') === '1') ask.forceRefresh = true;
-
-      return json({ body: await controlPlaneMetrics(env, ask) });
-    }
-
-    default:
-      return err(404, 'Not found');
+  if (owner === null || !v.is(UserIdSchema, owner)) {
+    return err(400, 'a workspace read must name the account that owns it (?userId=)');
   }
+
+  return handleWorkspaceDetail(c.get('control').env, owner, name);
+});
+
+controlRoutes.get('/api/control/workspaces/*', async (c) => workspaceList(c));
+
+controlRoutes.get('/api/control/incidents/*', async (c) => json({
+  body: {
+    incidents: await c.env.MonitorDO
+      .get(c.env.MonitorDO.idFromName(MONITOR_SINGLETON))
+      .listIncidents(INCIDENT_MAX),
+  },
+}));
+
+controlRoutes.get('/api/control/feedback/*', pagedRead((store, caller, page) => store.listFeedback(caller, page)));
+
+controlRoutes.get('/api/control/audit/*', pagedRead((store, caller, page) => store.listAudit(caller, page)));
+
+controlRoutes.get('/api/control/metrics/*', async (c) => {
+  const url = new URL(c.req.url);
+  const ask: MetricsRequest = { hours: numberParam(url, 'hours') ?? 24 };
+  const workspace = url.searchParams.get('workspace');
+
+  if (workspace !== null) ask.workspace = workspace;
+
+  if (url.searchParams.get('refresh') === '1') ask.forceRefresh = true;
+
+  return json({ body: await controlPlaneMetrics(c.env, ask) });
+});
+
+controlRoutes.get('/api/control/*', async () => err(404, 'Not found'));
+
+controlRoutes.all('/api/control/*', async () => err(405, 'GET or POST'));
+
+/** A cursored index read. */
+function pagedRead<Body>(read: (store: ControlPlaneReach, caller: ControlCaller, page: PageRequest) => Promise<Body>) {
+  return async (c: ControlContextOf): Promise<Response> => {
+    const { env, caller } = c.get('control');
+
+    return json({ body: await read(controlPlaneStub(env), caller, pageQuery(new URL(c.req.url))) });
+  };
+}
+
+async function workspaceList(c: ControlContextOf): Promise<Response> {
+  const { env, caller } = c.get('control');
+  const url = new URL(c.req.url);
+
+  // An absent `?userId=` must leave the property absent: `userId: ''` matches no account.
+  const filter: WorkspaceFilter = {
+    includeRemoved: url.searchParams.get('includeRemoved') === '1',
+  };
+
+  const userId = url.searchParams.get('userId');
+
+  if (userId !== null) filter.userId = userId;
+
+  return json({ body: await controlPlaneStub(env).listWorkspaces(caller, pageQuery(url), filter) });
 }
 
 /**

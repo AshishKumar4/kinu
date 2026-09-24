@@ -210,21 +210,40 @@ A workspace holds the state. Agents are the actors that work inside it.
     roster. `hire` with `scope: 'workspace'` creates a whole specialist
     workspace instead of a subordinate, and only the workspace orchestrator may
     do it: a fresh workspace is the root of its own delegation tree, so a
-    subordinate that could call it could not be its child. The hire names a
-    fresh workspace and records `fork_lineage` (`source_workspace_id/name`).
-    `forkTransferFrames` (`packages/core/src/identity/fork-transfer.ts`) streams
-    the copy as bounded frames and `ForkTransferReceiver` lands them; `deliverCloudFork`
-    (`packages/cf-backend/src/user/workspace-fork.ts#deliverCloudFork`) is the
-    hosted entry point. The roster the UI shows comes from `listSubordinates()`
+    subordinate that could call it could not be its child. The hire creates a
+    fresh workspace from the mission and sends it the message: no conversation
+    history or file crosses, and no lineage is recorded. The roster the UI shows
+    comes from `listSubordinates()`
     (RPC, plus the `subordinates_changed` socket event) and holds this
     workspace's durable subordinates. Swarm nodes are left off because they
     live only for the search that spawned them.
+
+  A workspace fork is the owner's "Fork the workspace from here" on a
+  message: the `forkAgent` callable runs `forkWorkspace`
+  (`packages/core/src/identity/fork-driver.ts`) and the new workspace records
+  `fork_lineage` (`source_workspace_id/name`). It carries the conversation up to
+  that message, crafted tools and settings, and the workspace files as they are
+  when the fork is made, which can hold work from after that message: SOUL.md,
+  memory and the project tree, with directories, symlinks, modes and mtimes.
+  That is what the Files tab shows, minus the scaffold, which the fork
+  re-bootstraps at v0. `.nimbus` (installed runtimes) and `.kinu` (agent state)
+  stay behind, except the payload files the carried conversation references.
+  The files are one snapshot: `snapshotForkFiles`
+  (`packages/core/src/identity/fork.ts`) walks the tree in one synchronous step,
+  and each later read checks Nimbus's mutation clock, so a file that changes
+  before it is copied refuses the fork by name rather than landing a mix.
+  `forkTransferFrames` (`packages/core/src/identity/fork-transfer.ts`) streams
+  the copy as bounded frames and `ForkTransferReceiver` lands them;
+  `deliverCloudFork` (`packages/cf-backend/src/user/workspace-fork.ts`) is the
+  hosted entry point.
 
   On the hosted path the source and the target are two Durable Objects. One
   serialized RPC argument is capped at 32 MiB (`do.facet.rpc_bytes`) and a
   workspace's history is not, so the snapshot crosses as frames: a `begin` that
   declares what is coming, a bounded batch of rows of one section, a bounded
-  byte range of one inherited file, and a `commit`
+  batch of whole small files, directories and symlinks (each directory after
+  its contents, so its mtime holds), a bounded byte range of one larger file,
+  and a `commit`
   (`packages/core/src/identity/fork-transfer.ts#forkTransferFrames`). Each
   frame is one `rawCopyFromFork` call straight to the target stub, and
   `ForkTransferReceiver` stages it into the target's own storage. Neither side

@@ -4,7 +4,7 @@ import { SlateId, SlateVersionId } from '@agent-core/core/slates';
 import * as v from 'valibot';
 import { CRED_KERNEL, CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
-  SlateFiles, SlateShareStore, WorkspaceSlateContentStore, SqliteSlateStateStore, SqliteSlateStore, WorkspaceBlueprints, WorkspaceSlates, slateDirectory,
+  forgetSlateFiles, SlateFiles, SlateShareStore, WorkspaceSlateContentStore, SqliteSlateStateStore, SqliteSlateStore, WorkspaceBlueprints, WorkspaceSlates, slateDirectory,
   type BlueprintReading, type DurableAppIdentity, type DurableApps, type ShareUser,
 } from '@kinu.run/core/slates';
 import { SlateLiveShareStore, initSlateLiveShareTables, WorkspaceLiveShares } from '@kinu.run/core/slates';
@@ -416,7 +416,7 @@ export class SlateHost {
     if (runtime === undefined) {
       runtime = new WorkspaceSlates({
         workspaceId: new WorkspaceId(this.deps.workspace), store: this.store,
-        files: new SlateFiles(session.vfs.as(cred), this.content, (body) => session.vfs.withTransaction(body)),
+        files: new SlateFiles(session.vfs.as(cred), this.content, this.deps.ctx.storage.sql, (body) => session.vfs.withTransaction(body)),
         mutations: { mutate: async (request, mutation) => {
           if (request.workspaceId.value !== this.deps.workspace) throw new KinuError('denied', 'Slate mutation belongs to another workspace');
 
@@ -611,7 +611,10 @@ export class SlateHost {
       const removed = await this.deps.apps.remove(id);
       const vfs = session.vfs.as(caller.cred);
 
-      if (vfs.exists(root)) session.vfs.withTransaction(() => { vfs.removeRecursive(root); });
+      session.vfs.withTransaction(() => {
+        if (vfs.exists(root)) vfs.removeRecursive(root);
+        forgetSlateFiles(this.deps.ctx.storage.sql, new SlateId(id));
+      });
 
       return { ok: true, value: { id, removed: removed.removed, port: removed.port } };
     } catch (cause) {

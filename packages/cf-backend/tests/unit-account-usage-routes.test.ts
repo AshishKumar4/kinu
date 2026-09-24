@@ -3,11 +3,12 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { AccountUsageSchema, type AccessTokenScope, type AccountSpend, type UserCaller } from '@kinu.run/core';
-import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
-import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
+import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
+import { cliRoutes, type CliRoutesEnv } from '../src/cli/routes';
 import type { AuthIdentity } from '../src/auth/session';
 import { asFetchFunction } from '@kinu.run/core';
-import { bootstrappedProfile, cliAccount, unreachableAssets, unreachableKv, userAccount, workspaceObject } from './helpers/bindings';
+import { bootstrappedProfile, cliAccount, unreachableAssets, unreachableKv, userAccount, workerContext, workspaceObject } from './helpers/bindings';
+import { serveFamily } from './helpers/api';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
@@ -92,9 +93,7 @@ describe('the owner\'s usage per account, across workspaces', () => {
     };
 
     try {
-      const response = await handleUserRequest(new Request('https://kinu.example.com/api/user/usage'), env, identity, {
-        waitUntil() {},
-      });
+      const response = await serveFamily(userRoutes, { identity, ctx: workerContext() })(new Request('https://kinu.example.com/api/user/usage'), env);
 
       expect(response?.status).toBe(200);
 
@@ -142,7 +141,7 @@ describe('the owner\'s usage per account, across workspaces', () => {
       ASSETS: unreachableAssets(),
     };
 
-    const usageWith = (token: string) => handleCliRequest(new Request('https://kinu.example.com/api/cli/usage', {
+    const usageWith = (token: string) => serveFamily(cliRoutes)(new Request('https://kinu.example.com/api/cli/usage', {
       headers: { authorization: `Bearer ${token}` },
     }), env);
 

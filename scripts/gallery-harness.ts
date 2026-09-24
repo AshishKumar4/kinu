@@ -23,11 +23,12 @@ import { createReadStream, existsSync, readdirSync, rmSync, statSync } from 'nod
 import { createServer as createHttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
-import puppeteer, { type Browser, type LaunchOptions, type Page } from 'puppeteer';
+import puppeteer, { type LaunchOptions, type Page } from 'puppeteer';
 import { build } from 'vite';
 import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
 import { holdForRelease, releaseScratch, scratchDir, SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
+import { declaredSettings } from './browser-declarations';
 import { signalGroup } from './process-group';
 
 const REPO = join(import.meta.dir, '..');
@@ -39,11 +40,6 @@ const TcpAddressSchema = v.object({
 });
 
 export interface Gallery {
-  /** The launched browser. A page opened here directly carries puppeteer's
-   *  30 s per-wait default; `newPage` below is the seam every suite opens
-   *  pages through, and `gate:test-clocks` lists the one suite still on this
-   *  handle. */
-  readonly browser: Browser;
   /** A page with no clock: puppeteer's per-page and navigation defaults are 0,
    *  so every `waitFor*` ends on its condition or on the target closing, never
    *  on a duration. A wait that can genuinely hang is killed with the browser
@@ -296,15 +292,9 @@ function builtAssetContentType(file: string): string {
  *  transcript; this is what an unwrapped hand run sees. */
 const SIGTERM_EXIT_CODE = 143;
 
-/** A mouse, declared at launch: a fine pointer that hovers. */
-const DECLARED_MOUSE = '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2';
-
 export interface GalleryOptions {
-  /** Declare a mouse; default true. Headless Chrome reports no pointing
-   *  device, so `(hover: hover)` and `(pointer: fine)` are both false and every
-   *  `hover:` utility Tailwind emits behind them is dead. Chrome re-applies
-   *  this launch setting over touch emulation on every preferences push, so a
-   *  touch-only visitor launches without it (measured in app-background-ux). */
+  /** Declare a mouse at launch; default true. A touch-only visitor launches
+   *  without it (`declaredSettings`). */
   readonly mouse?: boolean;
   /** Launch flags for the one test that needs a capability the default lane
    *  disables (e.g. WebGPU). */
@@ -370,7 +360,7 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
       args: [
         '--no-sandbox',
         '--disable-dev-shm-usage',
-        ...(options.mouse === false ? [] : [DECLARED_MOUSE]),
+        declaredSettings({ mouse: options.mouse !== false }),
         ...(options.browserArgs ?? []),
       ],
       // No clock on the launch or a CDP round trip: puppeteer's 30 s launch and
@@ -440,7 +430,7 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
     };
 
     try {
-      return await body({ browser, newPage, origin });
+      return await body({ newPage, origin });
     } finally {
       process.off('SIGTERM', endOnSignal);
       dropHold();

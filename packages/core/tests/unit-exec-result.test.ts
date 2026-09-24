@@ -1,12 +1,11 @@
 // A non-zero exit must not drop stdout (where pytest/make write diagnostics), on every public exec surface.
 import { describe, test, expect } from 'bun:test';
-import * as v from 'valibot';
 import { toolExecute } from '@kinu.run/test-utils';
-import { answeredRefusal, formatExecResult, refusalText, type CommandResult, type ExecOutcome } from '../src/execution/exec-result';
+import { answeredRefusal, formatExecResult, type CommandResult, type ExecOutcome } from '../src/execution/exec-result';
 import { KinuError, refusalOf } from '../src/obs/index';
 import { parseJsonValue } from '../src/utils/json';
 import { createInlineExecutor } from '../src/execution/inline';
-import { createNimbusExecutor } from '../src/execution/nimbus';
+import { createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell, type NimbusSandboxHandle } from '../src/execution/nimbus';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createTestRuntime, storesFor } from './helpers';
@@ -87,7 +86,7 @@ describe('formatExecResult', () => {
   test('a refusal round-trip keeps the exit the error carried', () => {
     const refusal = refusalOf(new KinuError('unavailable', 'no such command', { execution: { exitCode: 127 } }));
 
-    expect(parseJsonValue(refusalText(refusal))).toMatchObject({
+    expect(parseJsonValue(formatExecResult({ refusal }))).toMatchObject({
       reason: 'unavailable', execution: { exitCode: 127 },
     });
     expect(answeredRefusal(refusal)).toEqual(refusal);
@@ -133,23 +132,21 @@ describe('the surfaces the model reads', () => {
     expect(out).toMatchObject({ reason: 'io', error: expect.stringContaining('1 failed, 2 passed') });
   });
 
-  test('a remote container exec retains its exit failure and diagnostics', async () => {
-    const nimbus = createNimbusExecutor({
-      box: {
-        ready: async () => {},
-        exec: async () => ({ ...PYTEST, command: 'pytest', success: false }),
-        files: {
-          read: async () => null,
-          write: async () => {},
-          list: async () => [],
-          exists: async () => false,
-          delete: async () => {},
-        },
-      },
+  test('the hosted workspace, over a Nimbus session, retains a command\'s exit failure and diagnostics', async () => {
+    const { rt } = createTestRuntime();
+
+    const box: NimbusSandboxHandle = {
+      ready: async () => {},
+      exec: async () => ({ ...PYTEST, command: 'pytest', success: false }),
+      files: { read: async () => null, write: async () => {}, list: async () => [], exists: async () => false, delete: async () => {} },
+    };
+
+    const workspace = createNimbusWorkspaceExecutor({
+      box, inline: { vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
     });
 
-    const out = await nimbus.tools.exec?.execute('pytest');
-    expect(out).toMatchObject({ reason: 'io', error: expect.stringContaining('test_add - assert 3 == 4') });
+    const out = await workspace.tools.exec?.execute('pytest');
+    expect(out).toMatchObject({ reason: 'io', execution: { exitCode: 1 }, error: expect.stringContaining('test_add - assert 3 == 4') });
   });
 
   test('the device tunnel reports failures the same way', async () => {
@@ -161,43 +158,5 @@ describe('the surfaces the model reads', () => {
 
     const out = await device.tools.exec?.execute('pytest');
     expect(out).toMatchObject({ reason: 'io', error: expect.stringContaining('test_add - assert 3 == 4') });
-  });
-  test('nimbus readFile on a missing path refuses with reason missing, not an empty string', async () => {
-    const nimbus = createNimbusExecutor({
-      box: {
-        ready: async () => {},
-        exec: async () => ({ stdout: '', stderr: '', exitCode: 0, command: 'noop', success: true }),
-        files: {
-          read: async () => null,
-          write: async () => {},
-          list: async () => [],
-          exists: async () => false,
-          delete: async () => {},
-        },
-      },
-    });
-
-    const out = v.parse(v.string(), await nimbus.tools.readFile.execute('/missing.txt'));
-    expect(parseJsonValue(out)).toMatchObject({ reason: 'missing' });
-  });
-
-  test('nimbus readFile on an empty file stays success — empty content is not a refusal', async () => {
-    const nimbus = createNimbusExecutor({
-      box: {
-        ready: async () => {},
-        exec: async () => ({ stdout: '', stderr: '', exitCode: 0, command: 'noop', success: true }),
-        files: {
-          read: async () => '',
-          write: async () => {},
-          list: async () => [],
-          exists: async () => true,
-          delete: async () => {},
-        },
-      },
-    });
-
-    const out = await nimbus.tools.readFile.execute('/empty.txt');
-
-    expect(out).toBe('');
   });
 });

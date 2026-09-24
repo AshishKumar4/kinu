@@ -3,10 +3,10 @@
 // codemode's default deadline killed `eval` programs awaiting long host tool calls.
 import { describe, test, expect } from "bun:test";
 import type { KinuSandbox } from "../src/kinu-sandbox";
-import { NO_TIMER_DEADLINE_MS } from "@kinu.run/core";
 import { adaptCloudflareSandbox } from "../src/sandbox-exec-lane";
 // codemode reaches `cloudflare:workers` at load; the preload's boundary stub serves it.
-import { KinuSandboxExecutor } from "../src/codemode-sandbox";
+import { createRuntimeExecutor, KinuSandboxExecutor } from "../src/codemode-sandbox";
+import { inProcessWorkerLoader } from "./helpers/worker-loader";
 
 interface ProcessDouble {
   id: string;
@@ -246,28 +246,58 @@ describe("adaptCloudflareSandbox — cancellation reaches the process", () => {
 
 // KINU-034 is enforced in the container object: packages/devbox/tests/resource-lane.test.ts.
 
-describe("the codemode program carries no execution deadline of its own", () => {
-  test("the generated dynamic Worker gets no 60s kill", async () => {
-    let generated = "";
+/** A timer source a test moves by hand: `advance` fires every timer then due, in order. */
+function workerClock() {
+  let now = 0;
+  const pending: Array<{ readonly at: number; readonly fire: () => void }> = [];
+  const armed = Promise.withResolvers<void>();
 
-    // codemode races the program against a `setTimeout(… "Execution timed out")` from its `timeout`.
-    const loader = {
-      load: (spec: { modules: Record<string, string> }) => {
-        generated = spec.modules["executor.js"] ?? "";
+  return {
+    /** Settles once the program has armed a timer, so it is running. */
+    armed: armed.promise,
+    setTimeout: (fire: () => void, ms: number): void => {
+      pending.push({ at: now + ms, fire });
+      armed.resolve();
+    },
+    advance: (ms: number): void => {
+      now += ms;
 
-        return { getEntrypoint: () => ({ evaluate: async () => ({ result: 1, logs: [] }) }) };
-      },
-    };
+      for (const due of pending.filter((timer) => timer.at <= now).sort((a, b) => a.at - b.at)) {
+        pending.splice(pending.indexOf(due), 1);
+        due.fire();
+      }
+    },
+  };
+}
 
-    // `WorkerLoader` is a workerd binding with no constructible form; codemode reaches only `load`.
-    const workerLoader: WorkerLoader = Object.create(loader);
-    const executor = new KinuSandboxExecutor({ loader: workerLoader, egress: null });
+type RunProgram = (code: string, providers: Array<{ name: string; fns: Record<string, () => Promise<string>> }>) => Promise<object>;
 
-    await executor.execute("return 1", []);
+/** A program that awaits one host call, which answers only after a minute of the isolate's time has passed. */
+async function reportAfterAMinute(build: (loader: WorkerLoader) => RunProgram): Promise<object> {
+  const clock = workerClock();
+  const report = Promise.withResolvers<string>();
+  // `WorkerLoader` is a workerd binding with no constructible form; codemode reaches only `load`.
+  const loader: WorkerLoader = Object.create(inProcessWorkerLoader(clock));
+  const run = build(loader)("async () => await agent.report()", [{ name: "agent", fns: { report: async () => report.promise } }]);
 
-    expect(generated).toContain("Execution timed out");
-    // codemode's own default deadline killed detached programs the model was told were running.
-    expect(generated).not.toContain("60000");
-    expect(generated).toContain(String(NO_TIMER_DEADLINE_MS));
+  await clock.armed;
+  clock.advance(61_000);
+  report.resolve("banana");
+
+  return run;
+}
+
+// 2026-09-24, the first-run tier on d2053b1a8: all five swarm nodes died together, "errored after 0 step(s) in
+// 60157 ms: run agent <id> to a report: Execution timed out". codemode races each program against its `timeout`
+// (default 60 s), and a node agent's whole scaffold loop runs as one program through `rt.executor`.
+describe("a program awaiting a host call past a minute still gets its answer", () => {
+  test("in the runtime's executor, where a node agent's scaffold loop runs", async () => {
+    expect(await reportAfterAMinute((loader) => (code, providers) => createRuntimeExecutor(loader).execute(code, providers)))
+      .toEqual({ result: "banana", logs: [] });
+  });
+
+  test("in the eval sandbox", async () => {
+    expect(await reportAfterAMinute((loader) => (code, providers) => new KinuSandboxExecutor({ loader, egress: null }).execute(code, providers)))
+      .toEqual({ result: "banana", logs: [] });
   });
 });
