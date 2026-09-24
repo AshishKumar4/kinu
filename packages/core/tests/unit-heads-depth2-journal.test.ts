@@ -120,7 +120,7 @@ async function runSplitWithNestedSplit(opts: {
         { task: 'branch two', rationale: 'second angle' },
       ],
     },
-    parentBudget: { maxDepth: 3, maxWallClockMs: undefined, spawnedAt: Date.now() },
+    parentBudget: { maxDepth: 3, spawnedAt: Date.now() },
   });
 
   return { depth1Id, depth2Ids };

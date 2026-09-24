@@ -1010,7 +1010,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts',
+    run: 'bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts',
     label: 'Gate ladder wiring and cache soundness',
     tier: 'push',
     // Measured 2026-09-16 on the 24-thread workstation (load 8.1): 1.25/1.20 s
@@ -1021,7 +1021,9 @@ export const LADDER: readonly Gate[] = [
       + 'it, the two proofs the cache stands on: a closure that errs narrow (a computed import, '
       + 'an environment read whole, an undeclared path read or an untracked file each refuse '
       + 'rather than shrink), and a store that never hits across a touched closure file, a red '
-      + 'result, a tool version change, a live row or a closure that moved mid-run.',
+      + 'result, a tool version change, a live row or a closure that moved mid-run. And the '
+      + 'cost table\'s one wait: a row is measured beside this checkout\'s own suites never, '
+      + 'beside another checkout\'s always, as load.',
     blind: 'whether any individual gate can actually fail. That is each gate\'s own '
       + 'self-test, and the seeded tier nobody has paid for yet. For the cache: a `reads` or '
       + '`env` declaration is a claim these suites cannot check against a live gate; '
@@ -1834,8 +1836,8 @@ export const LADDER: readonly Gate[] = [
     // wave that day. With `isolate: false` (see the row above) the whole half
     // measured 178 s on 2026-09-18 at load 6-8. Same runner, same config, same `include`; the split is by path
     // filter so no file can be in both halves or in neither — `bun run
-    // test:workerd` still runs all three workerd rows in sequence for a hand
-    // run, and ladder.test.ts holds the three rows to a partition of it.
+    // test:workerd` still runs every workerd row in sequence for a hand
+    // run, and ladder.test.ts holds the rows to a partition of it.
     seconds: 183,
     catches: 'the same defect classes as the row above, on the suites that hold a Durable '
       + 'Object across a real wake, a retention sweep, a spend aggregate over 20,000 rows, '
@@ -1852,6 +1854,25 @@ export const LADDER: readonly Gate[] = [
     catches: 'the devbox bench worker\'s admission and selected-arm guards as workerd runs '
       + 'them (`packages/devbox/tests/workerd`), which no bun test can express.',
     blind: 'everything above the platform, as the cf-backend row states.',
+    inputs: AMBIENT_BY_NAME,
+  },
+  {
+    run: 'bun run test:workerd:cf-complexity',
+    label: 'Storage cost grows no faster than declared, under workerd',
+    tier: 'push',
+    // 29 to 32 s at load 7 on 2026-09-24 (vitest boot, then four subjects: the 300-turn session and
+    // the 10,000-file workspace are most of it); 59 s at load 16 under gate-cost-measure that night.
+    seconds: 32,
+    catches: 'a storage path whose cost per operation grows faster with its size than it '
+      + 'declares: the rows each table\'s statements read and write, each table\'s stored rows '
+      + 'and payload bytes, and the model request\'s bytes, counted in workerd on a Durable '
+      + 'Object\'s own SQLite at two or three sizes, never timed. Four subjects: the session '
+      + 'store per turn at 50 and 300 turns (red on 2026-09-24 against the request copies and '
+      + 'per-entry validation reads that grew with the history), Diffs per read at 10, 1,000 '
+      + 'and 10,000 files, and a slate\'s versions and its fork.',
+    blind: 'CPU, memory and wall time; storage outside the object\'s SQLite; growth past the '
+      + 'largest size measured; which of the tables a statement names its rows came from; and '
+      + 'bytes rewritten in place. The suite prints the whole list on every run.',
     inputs: AMBIENT_BY_NAME,
   },
   {

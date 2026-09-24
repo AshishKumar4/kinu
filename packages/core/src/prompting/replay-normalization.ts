@@ -32,6 +32,20 @@ const AnthropicReasoningOptionsSchema = v.object({
   redactedData: v.optional(v.string()),
 });
 
+/** A frozen message's copy per rewrite: the same rewrite returns the object the request store already recorded. */
+const copies = new WeakMap<ModelMessage, { readonly rewrite: string; readonly copy: ModelMessage }>();
+
+function copied(message: ModelMessage, rewrite: readonly (string | null)[], copy: () => ModelMessage): ModelMessage {
+  if (!Object.isFrozen(message)) return copy();
+  const key = JSON.stringify(rewrite);
+  const known = copies.get(message);
+
+  if (known?.rewrite === key) return known.copy;
+  const fresh = copy();
+  copies.set(message, { rewrite: key, copy: fresh });
+
+  return fresh;
+}
 
 export function normalizeReplayForDestination(
   messages: readonly ModelMessage[],
@@ -47,58 +61,59 @@ export function normalizeReplayForDestination(
 
   const normalized = messages.map((message): ModelMessage => {
     if (message.role === 'assistant' && Array.isArray(message.content)) {
-      let contentChanged = false;
-      const content: Exclude<AssistantContent, string> = [];
+      const parts = message.content;
 
-      for (const part of message.content) {
+      const rewrite = parts.map((part): string | null => {
         if (part.type === 'reasoning') {
           const crossing = reasoningCrossing(part, destinationIsAnthropic);
 
-          if (crossing === 'as-text') content.push({ type: 'text', text: part.text });
-
-          if (crossing !== 'unchanged') {
-            contentChanged = true;
-            continue;
-          }
+          return crossing === 'unchanged' ? null : crossing;
         }
 
-        if (part.type === 'tool-call') {
-          const id = ids.get(part.toolCallId) ?? toolCallIdFor({ scope: 'kinu', index: calls++ });
-          ids.set(part.toolCallId, id);
+        if (part.type !== 'tool-call') return null;
+        const id = ids.get(part.toolCallId) ?? toolCallIdFor({ scope: 'kinu', index: calls++ });
+        ids.set(part.toolCallId, id);
 
-          if (id !== part.toolCallId) {
-            contentChanged = true;
-            content.push({ ...part, toolCallId: id });
-            continue;
-          }
-        }
+        return id === part.toolCallId ? null : id;
+      });
 
-        content.push(part);
-      }
-
-      if (!contentChanged) return message;
+      if (rewrite.every((step) => step === null)) return message;
       changed = true;
 
-      return { ...message, content } satisfies AssistantModelMessage;
+      return copied(message, rewrite, () => {
+        const content: Exclude<AssistantContent, string> = [];
+
+        for (const [index, part] of parts.entries()) {
+          const step = rewrite[index] ?? null;
+
+          if (step === null) content.push(part);
+          else if (part.type === 'reasoning') {
+            if (step === 'as-text') content.push({ type: 'text', text: part.text });
+          } else if (part.type === 'tool-call') content.push({ ...part, toolCallId: step });
+        }
+
+        return { ...message, content } satisfies AssistantModelMessage;
+      });
     }
 
     if (message.role === 'tool') {
-      let contentChanged = false;
+      const parts = message.content;
 
-      const content = message.content.map((part) => {
-        if (part.type !== 'tool-result') return part;
+      const rewrite = parts.map((part): string | null => {
+        if (part.type !== 'tool-result') return null;
         const id = ids.get(part.toolCallId);
 
-        if (id === undefined || id === part.toolCallId) return part;
-        contentChanged = true;
-
-        return { ...part, toolCallId: id };
+        return id === undefined || id === part.toolCallId ? null : id;
       });
 
-      if (!contentChanged) return message;
+      if (rewrite.every((id) => id === null)) return message;
       changed = true;
 
-      return { ...message, content } satisfies ToolModelMessage;
+      return copied(message, rewrite, () => ({ ...message, content: parts.map((part, index) => {
+        const id = rewrite[index] ?? null;
+
+        return id === null || part.type !== 'tool-result' ? part : { ...part, toolCallId: id };
+      }) } satisfies ToolModelMessage));
     }
 
     return message;

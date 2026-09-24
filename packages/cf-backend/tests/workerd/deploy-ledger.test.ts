@@ -101,7 +101,7 @@ describe('a guided run in a Durable Object', () => {
     expect(made.uploads).toBe(1);
     // The refresh token is now a secret on the new Worker and the run's vault is empty.
     expect(made.secrets.KINU_SELF_DEPLOY_REFRESH_TOKEN).toBe(DEPLOY_FAKE_REFRESH_TOKEN);
-    expect(await stub.heldSecretNames()).toEqual([]);
+    expect(await stub.heldCredentials()).toEqual([]);
   });
 
   it('keeps no key digest, token or minted secret in a durable row', async () => {
@@ -140,7 +140,7 @@ describe('a guided run in a Durable Object', () => {
     expect(stateOf(snapshot, 'upload')).toBe('pending');
     expect((await env.DEPLOY_FAKE.state()).uploads).toBe(0);
     // A refusal is not a reason to drop the authorization a person gave; the run is resumable.
-    expect(await stub.heldSecretNames()).not.toEqual([]);
+    expect(await stub.heldCredentials()).not.toEqual([]);
   });
 
   it('resumes after a refusal and creates nothing twice', async () => {
@@ -167,7 +167,7 @@ describe('a guided run in a Durable Object', () => {
     expect(resumed.steps.find((row) => row.id === 'kv')?.attempt).toBe(1);
     expect(twice).toEqual([]);
     expect(made.uploads).toBe(1);
-    expect(await stub.heldSecretNames()).toEqual([]);
+    expect(await stub.heldCredentials()).toEqual([]);
   });
 });
 
@@ -211,7 +211,7 @@ describe('the door\'s authorization leg', () => {
     const stub = env.DEPLOY_RUN_PROBE.get(env.DEPLOY_RUN_PROBE.idFromName(run.runId));
 
     expect(await stub.authorized()).toBe(false);
-    expect(await stub.heldSecretNames()).toEqual([]);
+    expect(await stub.heldCredentials()).toEqual([]);
 
     const landed = await env.DEPLOY_DOOR_PROBE.hit(
       'GET', `/deploy/callback?code=probe-code&state=${encodeURIComponent(state)}`,
@@ -294,7 +294,7 @@ describe('a run nobody finished', () => {
     await stub.start(INPUTS);
 
     expect((await settled(stub)).state).toBe('failed');
-    expect(await stub.heldSecretNames()).not.toEqual([]);
+    expect(await stub.heldCredentials()).not.toEqual([]);
 
     const due = await stub.alarmAt();
     const armed = await stub.armedAt();
@@ -307,7 +307,7 @@ describe('a run nobody finished', () => {
 
     const expired = await stub.settledAfter(['expired']);
 
-    expect(await stub.heldSecretNames()).toEqual([]);
+    expect(await stub.heldCredentials()).toEqual([]);
     // The ledger survives so the page can offer signing in again into the same run.
     expect(expired.state).toBe('expired');
     expect(expired.steps.length).toBeGreaterThan(0);
@@ -363,7 +363,7 @@ describe('a run the runtime could not finish', () => {
     expect(twice).toEqual([]);
     expect(made.uploads).toBe(1);
     expect(made.buckets.length).toBe(new Set(made.buckets).size);
-    expect(await again.heldSecretNames()).toEqual([]);
+    expect(await again.heldCredentials()).toEqual([]);
   });
 });
 

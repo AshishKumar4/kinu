@@ -382,9 +382,9 @@ describe('the ladder measures something', () => {
     // monotonicity- and reachability-checked like every bun suite.
     expect(claims('bun run test:workerd', tracked).length).toBeGreaterThan(0);
 
-    // The three rows partition the script's set: no workerd file is in two
+    // The four rows partition the script's set: no workerd file is in two
     // rows or in none.
-    const rows = ['bun run test:workerd:cf', 'bun run test:workerd:cf-long', 'bun run test:workerd:devbox']
+    const rows = ['bun run test:workerd:cf', 'bun run test:workerd:cf-long', 'bun run test:workerd:devbox', 'bun run test:workerd:cf-complexity']
       .map((run) => claims(run, tracked));
 
     expect(rows.every((files) => files.length > 0)).toBe(true);

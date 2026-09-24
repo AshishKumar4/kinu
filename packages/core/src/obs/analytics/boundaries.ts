@@ -1,6 +1,6 @@
 /**
  * Declared fleet event boundaries. `boundaryOf` stamps the `boundary` slot on every write, and
- * `tests/unit-analytics-boundaries.test.ts` asserts set equality with the emit sites in `site`.
+ * `scripts/analytics-datasets.test.ts` holds the set equal to the emit sites in `site`.
  */
 import type { LogEventName } from '../log';
 

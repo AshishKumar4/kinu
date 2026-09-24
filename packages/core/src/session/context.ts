@@ -9,6 +9,12 @@ export interface ContextEntry extends MessageReference { readonly entryId: strin
 
 interface MemberRow { entry_id: string; position: number; message_id: string }
 
+/** `recordUnchanged`: an authored edit is a statement even when it moves nothing. */
+interface RevisionOrigin {
+  readonly author: string; readonly cause: string; readonly turnId: string | null; readonly proposalId: string | null;
+  readonly recordUnchanged: boolean;
+}
+
 export interface ContextCommitRequest {
   /** What the revision is recorded as: `input`, `output`, `edit`, `context_transform`. */
   readonly cause: string;
@@ -28,11 +34,11 @@ export class SessionContext {
   selected(): ContextSelection | null {
     this.actor.assertCurrent();
 
-    const row = this.sql<{ context_id: string; revision: number }>`SELECT s.context_id,MAX(r.revision) AS revision
-      FROM actor_context_selection s JOIN context_revisions r ON r.actor_id=s.actor_id AND r.context_id=s.context_id
-      WHERE s.actor_id=${this.actor.actorId} GROUP BY s.context_id`[0];
+    // One index seek; MAX over a GROUP BY join read every revision.
+    const row = this.sql<{ context_id: string; revision: number | null }>`SELECT s.context_id,(SELECT MAX(r.revision) FROM context_revisions r
+      WHERE r.actor_id=s.actor_id AND r.context_id=s.context_id) AS revision FROM actor_context_selection s WHERE s.actor_id=${this.actor.actorId}`[0];
 
-    return row === undefined ? null : { contextId: row.context_id, revision: row.revision };
+    return row === undefined || row.revision === null ? null : { contextId: row.context_id, revision: row.revision };
   }
 
   revisions(contextId: string): readonly { revision: number; author: string; cause: string; turn_id: string | null; proposal_id: string | null; recorded_at: number }[] {
@@ -63,9 +69,8 @@ export class SessionContext {
     const exists = this.sql<{ revision: number }>`SELECT revision FROM context_revisions WHERE actor_id=${this.actor.actorId} AND context_id=${selection.contextId} AND revision=${selection.revision}`[0];
 
     if (exists === undefined) throw new KinuError('missing', 'context revision does not exist');
-    const head = this.sql<{ revision: number }>`SELECT MAX(revision) AS revision FROM context_revisions WHERE actor_id=${this.actor.actorId} AND context_id=${selection.contextId}`[0];
 
-    const rows = head?.revision === selection.revision
+    const rows = this.head(selection.contextId) === selection.revision
       ? this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships WHERE actor_id=${this.actor.actorId} AND context_id=${selection.contextId} AND to_revision IS NULL ORDER BY position`
       : this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships WHERE actor_id=${this.actor.actorId} AND context_id=${selection.contextId} AND from_revision<=${selection.revision} AND (to_revision IS NULL OR to_revision>${selection.revision}) ORDER BY position`;
 
@@ -99,38 +104,60 @@ export class SessionContext {
         ids.add(entry.entryId);
       }
 
-      const retained = new Set<string>();
-
-      for (const entry of next) {
-        const old = prior.get(entry.entryId);
-
-        if (old !== undefined && old.position === entry.position && old.messageId === entry.messageId) retained.add(entry.entryId);
-      }
-
       // An empty authored edit is still recorded: an explicitly empty history is a statement.
-      if (proposal === undefined && cause !== 'edit' && retained.size === current.length && current.length === next.length) return expected;
-      const revision = expected.revision + 1;
-      const actorId = this.actor.actorId;
-      void this.sql`INSERT INTO context_revisions(actor_id,context_id,revision,author,cause,turn_id,proposal_id,recorded_at)
-        VALUES(${actorId},${expected.contextId},${revision},${proposal?.author ?? actorId},${cause},${turnId},${proposal?.id ?? null},${Date.now()})`;
-
-      // Release all changed live positions before inserting replacements: swaps cannot collide.
-      for (const entry of current) if (!retained.has(entry.entryId)) {
-        void this.sql`UPDATE context_memberships SET to_revision=${revision}
-          WHERE actor_id=${actorId} AND context_id=${expected.contextId} AND entry_id=${entry.entryId} AND to_revision IS NULL`;
-      }
-
-      for (const entry of next) if (!retained.has(entry.entryId)) {
-        void this.sql`INSERT INTO context_memberships(actor_id,context_id,entry_id,from_revision,position,message_id)
-          VALUES(${actorId},${expected.contextId},${entry.entryId},${revision},${entry.position},${entry.messageId})`;
-      }
-
-      return { contextId: expected.contextId, revision };
+      return this.revise(expected, current, next, { author: proposal?.author ?? this.actor.actorId, cause, turnId, proposalId: proposal?.id ?? null,
+        recordUnchanged: proposal !== undefined || cause === 'edit' });
     });
   }
 
+  /** The next revision of an unselected context, opened on first use: an entry is its position, so a kept message writes nothing. */
+  record(contextId: string, messages: readonly MessageReference[]): ContextSelection {
+    return this.atomic(() => {
+      this.actor.assertCurrent();
+      const head = this.head(contextId);
+      const expected = head === null ? this.fork(null, contextId) : { contextId, revision: head };
+      const next = messages.map((message, position) => ({ messageId: message.messageId, entryId: String(position), position }));
+
+      return this.revise(expected, this.entries(expected), next, { author: this.actor.actorId, cause: 'render', turnId: null, proposalId: null, recordUnchanged: false });
+    });
+  }
+
+  private revise(expected: ContextSelection, current: readonly ContextEntry[], next: readonly ContextEntry[], origin: RevisionOrigin): ContextSelection {
+    const prior = new Map(current.map(entry => [entry.entryId, entry]));
+    const retained = new Set<string>();
+
+    for (const entry of next) {
+      const old = prior.get(entry.entryId);
+
+      if (old !== undefined && old.position === entry.position && old.messageId === entry.messageId) retained.add(entry.entryId);
+    }
+
+    if (!origin.recordUnchanged && retained.size === current.length && current.length === next.length) return expected;
+    const revision = expected.revision + 1;
+    const actorId = this.actor.actorId;
+    void this.sql`INSERT INTO context_revisions(actor_id,context_id,revision,author,cause,turn_id,proposal_id,recorded_at)
+      VALUES(${actorId},${expected.contextId},${revision},${origin.author},${origin.cause},${origin.turnId},${origin.proposalId},${Date.now()})`;
+
+    // Release all changed live positions before inserting replacements: swaps cannot collide.
+    for (const entry of current) if (!retained.has(entry.entryId)) {
+      void this.sql`UPDATE context_memberships SET to_revision=${revision}
+        WHERE actor_id=${actorId} AND context_id=${expected.contextId} AND entry_id=${entry.entryId} AND to_revision IS NULL`;
+    }
+
+    for (const entry of next) if (!retained.has(entry.entryId)) {
+      void this.sql`INSERT INTO context_memberships(actor_id,context_id,entry_id,from_revision,position,message_id)
+        VALUES(${actorId},${expected.contextId},${entry.entryId},${revision},${entry.position},${entry.messageId})`;
+    }
+
+    return { contextId: expected.contextId, revision };
+  }
+
+  private head(contextId: string): number | null {
+    return this.sql<{ revision: number | null }>`SELECT MAX(revision) AS revision FROM context_revisions WHERE actor_id=${this.actor.actorId} AND context_id=${contextId}`[0]?.revision ?? null;
+  }
+
   /** A new context at revision 0: the source's live entries when given, empty otherwise. */
-  fork(source: ContextSelection | null, contextId = crypto.randomUUID()): ContextSelection {
+  fork(source: ContextSelection | null, contextId: string = crypto.randomUUID()): ContextSelection {
     this.actor.assertCurrent();
 
     return this.atomic(() => {
@@ -161,10 +188,7 @@ export class SessionContext {
 
       if (selected?.contextId !== expected.contextId || selected.revision !== expected.revision) throw new KinuError('denied', 'context selection changed');
 
-      const head = this.sql<{ revision: number | null }>`SELECT MAX(revision) AS revision FROM context_revisions
-        WHERE actor_id=${this.actor.actorId} AND context_id=${target.contextId}`[0]?.revision;
-
-      if (head !== target.revision) throw new KinuError('denied', 'branch selection must name its current revision');
+      if (this.head(target.contextId) !== target.revision) throw new KinuError('denied', 'branch selection must name its current revision');
       void this.sql`UPDATE actor_context_selection SET context_id=${target.contextId} WHERE actor_id=${this.actor.actorId}`;
     });
   }

@@ -30,9 +30,10 @@ import {
   cliScopesConnectionTag,
   sessionBearerConnectionTag,
   sessionBearerFromTags,
-  rejectOutOfScopeRpc, requiredRpcAccess,
+  rejectOutOfScopeRpc,
   type CliSocketBearer,
 } from "./cli/rpc-gate";
+import { requiredRpcAccess } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
@@ -175,7 +176,7 @@ import {
   type CFRuntime, type CFRuntimeHooks,
 } from "./runtime";
 import {
-  hostNodeSeat, hostBranch, abortHostedBranch,
+  hostNodeSeat, hostBranch, abortHostedBranch, nodeCodemodeTool,
   type ExplorationHostSeams, type BranchRunnerDeps,
 } from "./exploration-hosting";
 import { hostedSubordinateRuntime, type SubordinateHostSeams } from "./subordinate-hosting";
@@ -1748,6 +1749,7 @@ export abstract class ActorAgent extends Agent<Env> {
       send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
       interrupt: () => { this.chatLoop.interrupt(); },
       clear: () => this.clearConversation(),
+      turnClosed: () => { this.turnClaimChanged(); },
     });
 
     return this._chatTransport;
@@ -1818,6 +1820,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Fires once per emptying, in the close hook, after the room has been told. */
   protected lastConnectionClosed(): void {}
+
+  /** Fires after each root turn closes, when its durable claim has settled. */
+  protected abstract turnClaimChanged(): void;
 
   protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
 
@@ -2629,6 +2634,9 @@ export abstract class ActorAgent extends Agent<Env> {
     const swarm: AgentsSwarmDeps = {
       rt: this.rt,
       model: this.getModel(),
+      reportModelCall: (report) => { this.reportModelCall(report); },
+      nodeCodemode: (actor) => nodeCodemodeTool(seams, actor),
+      webSearch: seams.webSearch(),
       originContext: () => this._turnOriginContext,
       resolveModel: (spec: string) => this.ownedModelServices.resolveModel(spec),
       // Same catalog session as the context window and mission ledger, so a search's estimate
@@ -3496,15 +3504,13 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Resolves on admission, not landing; where the words land reaches clients as steer_status
-   * under the same id. Unrecognized mode runs as build; an already-held id is refused. */
+   * under the same id. Unrecognized mode runs as build. */
   @callable()
   async send(text: string, id: string, files: readonly PromptFile[] = [], mode?: WorkMode): Promise<void> {
     this.ensureSchema();
     const attachments = v.parse(v.array(PromptFileSchema), files);
-    const messageId = v.parse(v.pipe(v.string(), v.nonEmpty(), v.maxLength(128)), id);
 
-    if (this.admittedSend(messageId)) throw new KinuError('bad_input', `message ${messageId} was already sent`);
-    await this.chatLoop.admit({ text, files: attachments }, { id: messageId, mode: isWorkMode(mode) ? mode : 'build' });
+    await this.chatLoop.admit({ text, files: attachments }, { id, mode: isWorkMode(mode) ? mode : 'build' });
   }
 
   /** Aborts the in-flight LLM request first so stop works even if the cancel frame is lost.

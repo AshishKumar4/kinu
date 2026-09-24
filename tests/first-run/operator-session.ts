@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import * as v from 'valibot';
 import { AgentClient } from 'agents/client';
-import { JsonValueSchema, RunEventSchema, pageSchema, workspaceSlug, type JsonValue, type RunEvent, type SeekCursor } from '@kinu.run/core';
+import { JsonValueSchema, RunEventSchema, pageSchema, workspaceSlug, type AgentRpcMethod, type JsonValue, type RunEvent, type SeekCursor } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { compareRunEventOrder } from '@kinu.run/test-utils';
 import {
@@ -113,7 +113,7 @@ export class OperatorFirstRunSession implements FirstRunSession {
     return v.parse(JsonValueSchema, await this.client.call(method, args));
   }
 
-  rpcAt(workspace: string, method: string, args: JsonValue[] = []): Promise<JsonValue> {
+  rpcAt(workspace: string, method: AgentRpcMethod, args: JsonValue[] = []): Promise<JsonValue> {
     if (!this.owned.has(workspace)) throw new Error('Refusing RPC outside this case\'s created resources');
 
     return callAgentRpc({

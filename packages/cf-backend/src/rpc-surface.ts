@@ -7,7 +7,7 @@
  * an allowlist, so a new member is unreachable until listed; native RPC has no dispatch hook to intercept.
  */
 
-import { AGENT_RPC_ACCESS } from './cli/rpc-gate';
+import { AGENT_RPC_ACCESS } from '@kinu.run/core';
 import type { ActorAgent } from './actor-agent';
 import type { OrchestratorAgent } from './orchestrator';
 import type { UserDO } from './user/user-do';

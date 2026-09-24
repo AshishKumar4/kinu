@@ -83,6 +83,7 @@ export {
 
 export {
   DeferredApprovalQueue,
+  decideDeferredApprovals,
   DeferredApprovalStore,
   initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL,

@@ -203,7 +203,9 @@ describe('E2E Lifecycle', () => {
     rt = target.runtime;
     db = target.db;
     events = [];
-    engine = new EvolutionEngine(rt, rt.stores.history, { enabled: true });
+    engine = new EvolutionEngine(rt, rt.stores.history, {
+      enabled: true, reportModelCall: liveModelCallSink(rt.storage.sql, rt.actor),
+    });
     engine.onEvent(e => events.push(e));
     turns = [];
 

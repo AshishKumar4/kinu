@@ -13,6 +13,7 @@ import {
   type ExplorationRecord, type JsonObject, type JsonValue, type Page,
   type RecordCellHandle, type RecordCellSummary, type RecordObjectiveHandle,
   type RecordObjectiveSummary, type SeekCursor, type Usage,
+  type AgentRpcMethod,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { resolveAgentTarget } from '../agent-target';
@@ -250,7 +251,7 @@ interface DebugSource {
 }
 
 function cloudDebugSource(cloudName: string, auth: { origin: string; token: string }): DebugSource {
-  const rpc = <T>(method: string, schema: v.GenericSchema<T>, args: JsonValue[] = []) =>
+  const rpc = <T>(method: AgentRpcMethod, schema: v.GenericSchema<T>, args: JsonValue[] = []) =>
     callAgentRpc({ origin: auth.origin, token: auth.token, name: cloudName, method, schema, args });
 
   return {

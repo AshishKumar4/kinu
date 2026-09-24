@@ -1,6 +1,5 @@
 import { expect, test } from 'bun:test';
-import { SLATE_READ_MODELS, parseSlateProject } from '@kinu.run/core';
-import { AGENT_RPC_ACCESS, requiredRpcAccess } from '../src/cli/rpc-gate';
+import { AGENT_RPC_ACCESS, SLATE_READ_MODELS, parseSlateProject, requiredRpcAccess } from '@kinu.run/core';
 
 test('every accepted Slate read model requires only workspace.read', () => {
   for (const method of SLATE_READ_MODELS) {

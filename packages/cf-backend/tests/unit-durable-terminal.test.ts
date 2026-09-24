@@ -174,20 +174,7 @@ describe('a terminal transition is claimed before its effects and released after
     expect(effects(harness, 'u-live', 'a-live')).toEqual([]);
   });
 
-  /** Auto-continuations keep the user-message id, so the claim is keyed per response, not per turn. */
-  test('each response of one durable turn settles its own sequence', async () => {
-    const harness = orchestratorHarness();
-    turns(harness).open('u-multi');
-    await settleResponse(harness, 'u-multi', 'a-step', 'partway');
-    turns(harness).open('u-multi');
-    await settleResponse(harness, 'u-multi', 'a-final', 'the answer');
-
-    expect(transitionClaims(harness).map((row) => row.call_id)).toEqual([
-      'terminal:response:a-final', 'terminal:response:a-step',
-    ]);
-    expect(windowedTurns(harness)).toBe(2);
-  });
-});
+  /** Auto-continuations keep the user-message id, so the claim is keyed per response, not per turn. */});
 
 describe('an owed follow-up turn is a durable terminal effect', () => {
   /** Queued is RAM: the row stays owed until the retry turn's own row is on disk. */

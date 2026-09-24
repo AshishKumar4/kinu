@@ -154,7 +154,7 @@ function capturingHeadModel(
 
 const aHeadInput = (over?: Partial<HeadInput>): HeadInput => ({
   id: 'h1', rootId: 'r1', parentId: null, depth: 0, task: 't', rationale: 'r',
-  inheritedContext: [], budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+  inheritedContext: [], budget: { maxDepth: 2, spawnedAt: Date.now() },
   mergeStrategy: 'synthesize', ...over,
   mode: over?.mode ?? 'build', loop: over?.loop ?? defaultLoopOrigin('head'),
 });
@@ -228,7 +228,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
       const journal = new HeadJournal(parent.storage.sql, parent.actor);
 
       const branch = await startBranchHead(session.headRuntime, journal, {
-        id: 'spend-branch', task: 'Inspect another angle.', inheritedContext: [],
+        id: 'spend-branch', task: 'Inspect another angle.', inheritedContext: [], missionLabels: [],
       });
 
       const report = await branch.result;
@@ -287,7 +287,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
           { task: 'review the grammar', rationale: 'precedence + recovery' },
         ],
       },
-      parentBudget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+      parentBudget: { maxDepth: 2, spawnedAt: Date.now() },
     });
 
     expect(result.mergedNarrative).toContain('Unified');
@@ -322,7 +322,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
           { task: 'review the grammar', rationale: 'precedence + recovery' },
         ],
       },
-      parentBudget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+      parentBudget: { maxDepth: 2, spawnedAt: Date.now() },
     });
 
     expect(reports).toHaveLength(1);
@@ -343,7 +343,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
         rationale: 'compare two views',
         heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }],
       },
-      parentBudget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+      parentBudget: { maxDepth: 2, spawnedAt: Date.now() },
     });
 
     expect(probe.asked).toEqual([MERGE_POLICY_BINDING]);
@@ -369,7 +369,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
         rationale: 'compare two views',
         heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }],
       },
-      parentBudget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+      parentBudget: { maxDepth: 2, spawnedAt: Date.now() },
     });
 
     expect(mergeOptions?.maxOutputTokens).toBeUndefined();
@@ -449,7 +449,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
       parentHeadId: null,
       inheritedContext: [],
       request: { rationale: 'r', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
-      parentBudget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+      parentBudget: { maxDepth: 2, spawnedAt: Date.now() },
       onPhase: (e) => phases.push(e.kind),
     });
     expect(phases).toEqual(['split', 'merge']);
@@ -464,7 +464,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
       parentHeadId: null,
       inheritedContext: [],
       request: { rationale: 'trace me', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
-      parentBudget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+      parentBudget: { maxDepth: 2, spawnedAt: Date.now() },
     });
 
     const run = journal.readRun(result.headIds[0].split('-d')[0]);

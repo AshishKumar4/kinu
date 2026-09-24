@@ -7,13 +7,11 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   archiveSqlFromDatabase, CHAT_SESSION_ID, readWorkspaceArchivePage, restoreWorkspaceArchive,
-  SessionHistory, type ActorHandle, type ArchiveCursor, type SqlExec, type VFS,
+  SessionHistory, AGENT_RPC_ACCESS, requiredRpcAccess, type ActorHandle, type ArchiveCursor, type SqlExec, type VFS,
 } from '@kinu.run/core';
 import { readTranscriptRows, sqlOver } from '@kinu.run/test-utils';
 import { createTestActor, createTestWorkspace } from '../../core/tests/helpers';
-import {
-  AGENT_RPC_ACCESS, cliScopesConnectionTag, rejectOutOfScopeRpc, requiredRpcAccess,
-} from '../src/cli/rpc-gate';
+import { cliScopesConnectionTag, rejectOutOfScopeRpc } from '../src/cli/rpc-gate';
 
 /** Enough chained entries that one page cannot hold the conversation. */
 const MESSAGES = 450;

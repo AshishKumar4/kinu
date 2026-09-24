@@ -21,6 +21,8 @@ import { verifyClaimedProgram } from '../orchestrator/actor-claims';
 import { readVersionedScaffoldSource } from '../scaffold/shadow';
 import { sha256Hex } from '../safety/argument-digest';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { CHAT_SESSION_ID } from '../session/transcript-schema';
+import { requestDetailsNotKept } from '../session/requests';
 
 /** The runtime must be built over this same handle, never a second binding. */
 export interface BoundActor {
@@ -436,7 +438,20 @@ export function childContextResolver(deps: {
   };
 }
 
-/** Call only with recovery authority. Verified claims stay owed: bytes alone do not prove the turn finished. */
+/** Once: the entry id is the claim's. */
+async function noteInterrupted(stores: AgentStores, claim: StoredActorClaim): Promise<void> {
+  const transcript = stores.history.transcript(CHAT_SESSION_ID);
+  const id = `${claim.turnId}:${String(claim.epoch)}:interrupted`;
+
+  if (transcript.has(id)) return;
+  await stores.history.record(CHAT_SESSION_ID, { id, parentId: transcript.newestId(), origin: 'render',
+    message: { role: 'system', content: `This turn was interrupted by an update. ${requestDetailsNotKept(stores.history.requests.keptSince())}` } });
+}
+
+/**
+ * Call only with recovery authority. Verified claims stay owed: bytes alone do not prove the turn finished. A turn whose
+ * consumed step predates kept request lists settles `aborted` and says so.
+ */
 export async function recoverActorTurns(
   host: Pick<ActorHost, 'resumable'> & {
     acquire(reference: ActorReference): Promise<Pick<HostedActor, 'runtime' | 'stores'> & {
@@ -447,11 +462,13 @@ export async function recoverActorTurns(
 ): Promise<{
   readonly verified: readonly string[];
   readonly refused: readonly string[];
+  readonly interrupted: readonly string[];
   readonly unreadable: readonly string[];
   readonly active: readonly string[];
 }> {
   const verified: string[] = [];
   const refused: string[] = [];
+  const interrupted: string[] = [];
   const unreadable: string[] = [];
   const active: string[] = [];
 
@@ -481,6 +498,13 @@ export async function recoverActorTurns(
         continue;
       }
 
+      if (verdict.kind === 'not_kept') {
+        await noteInterrupted(actor.stores, turn.claim);
+        actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'aborted');
+        interrupted.push(turn.claim.turnId);
+        continue;
+      }
+
       actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'indeterminate');
       refused.push(turn.claim.turnId);
     }
@@ -493,5 +517,5 @@ export async function recoverActorTurns(
     }
   }
 
-  return { verified, refused, unreadable, active };
+  return { verified, refused, interrupted, unreadable, active };
 }

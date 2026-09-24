@@ -28,22 +28,20 @@ import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
 } from '@kinu.run/core/obs';
 import type { UserDO } from '../../src/user/user-do';
-import type { SlateHost } from '../../src/slates/host';
 import type { WorkspaceHostTarget } from '../../src/workspace-host';
 import {
   actorReferenceOf,
   type ActorHandle,
-  type ActorHost, type HostedActor, type SubordinateSeed, type HeadStreamFrame,
+  type ActorHost, type HostedActor, type SubordinateSeed,
 } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
-  type AgentOrchestrator, type AgentRuntime, type DynamicContext,
+  type AgentRuntime, type DynamicContext,
   type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
   type RoleCatalog, type ResolvedTurnProfile, type SqlValue,
   type TierAssignments,
   composePrepareStep,
   BackgroundJobStore, type JsonValue,
-  type DeviceStatus,
   type WorkMode, type JsonObject,
   type HeadInput, type HeadReport, type HeadRuntime,
   type SleepTimeUpdate,
@@ -57,8 +55,6 @@ import {
   TerminalEffectInterrupt,
   type TerminalEffectFault, type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
-import type { ExplorationHostSeams } from '../../src/exploration-hosting';
-import type { AgentProviderRegistry } from '../../src/providers/agent-registry';
 import { SCRIPT_EXPORTS, serveObject } from './programmatic-host';
 
 mockAgentsSdk();
@@ -183,29 +179,14 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     });
   }
 
-  /** The head-stream broadcaster (`protected` on the actor). */
-  observePublishHeadStreamFrame(frame: HeadStreamFrame): void { this.publishHeadStreamFrame(frame); }
   /** The child substrate, for lifecycle verbs without a roster row. */
   observeSubordinateRuntime() { return this.subordinateRuntime(); }
-  /** The per-turn logic, for asserting what the steering + opportunity ledger saw. */
-  observeOrch(): AgentOrchestrator { return this.orch; }
   observeRuntime(): AgentRuntime { return this.rt; }
-  /** The slate host, so a suite can arm its one launch seam (`ensure`) as a tripwire. */
-  observeSlateHost(): SlateHost { return this.slates; }
-  /** The turn-start device-status refresh, awaited; production detaches it. */
-  harnessRefreshDeviceStatus(): Promise<DeviceStatus> { return this.rt.deviceTransport.refreshStatus(); }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }
   /** The webhook signing secret, absent from the harness env by default. */
   declareWebhookRouteSecret(secret: string): void {
     Object.assign(this.env, { WEBHOOK_ROUTE_SECRET: secret });
-  }
-  /**
-   * The container binding, absent by default: `createCFRuntime` gates `sandboxHandle` on it.
-   * Declare before the actor is acquired: `ActorHostDeps.runtimeFor` memoizes one runtime per handle.
-   */
-  declareContainerBinding(): void {
-    Object.assign(this.env, { Sandbox: { idFromName: (name: string) => name, get: () => ({}) } });
   }
   /** Deployment bindings declared after construction (AUTH_KV, preview suffix).
    *  Declare before the read: `slates` memoizes its deps on first use. */
@@ -459,14 +440,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
 
   observeActorHost(): ActorHost { return this.actorHost(); }
-  /** The seams the production head runtime and node seat factory are built from. */
-  observeExplorationSeams(): ExplorationHostSeams { return this.explorationSeams(); }
-
-  /** Instance-level seam override: under bun the owned model services have no
-   *  provider; everything downstream of resolution is production's. */
-  overrideProviderRegistry(registry: AgentProviderRegistry): void {
-    Object.assign(this.ownedModelServices, { providerRegistry: (): AgentProviderRegistry => registry });
-  }
 
   /** Every programmatic turn the loop was asked to admit through the host. */
   readonly harnessEnqueued: ProgrammaticTurn[] = [];
@@ -1274,6 +1247,9 @@ export interface HarnessActorWorld {
   aiGateway?: StubbedAiBinding;
   /** The `send_email` binding at `env.EMAIL`; unset, the workspace has no mail route. */
   email?: SendEmail;
+  /** The container binding at `env.Sandbox`: the runtime registers the sandbox executor over the Sandbox SDK,
+   *  whose `getSandbox` a suite doubles. Unset, the workspace has no container. */
+  container?: boolean;
   /** Every method this object served over its own namespace's stub, in call order. */
   rpcServed?: string[];
   /** This activation's isolate stops once in its terminal sequence, at that effect, before or after
@@ -1313,6 +1289,7 @@ export function makeEnv(
     // The platform gateway is the harness's model provider, over a recording AI binding.
     ...platformGatewayEnv(world?.aiGateway),
     ...(world?.email !== undefined && { EMAIL: world.email }),
+    ...(world?.container === true && { Sandbox: { idFromName: (name: string) => name, get: () => ({}) } }),
     UserDO: {
       idFromName: (n: string) => ({ toString: () => n }),
       // Recording when asked, refusing otherwise, so an unannounced user-plane path fails
