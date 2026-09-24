@@ -45,8 +45,7 @@ export interface ProviderPacerOptions {
   readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
-/** Keyed by host, not credential: the retry layer has no credential in reach, and
- *  two accounts sharing one host's budget is the conservative direction. */
+/** Keyed by host and, where named, account: accounts have their own budgets. */
 export class ProviderPacer {
   private readonly lanes: number;
   private readonly now: () => number;

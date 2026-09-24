@@ -8,7 +8,7 @@ import { OPENAI_BASE_URL, OPENAI_CRED_KEY } from './openai';
 import { OPENROUTER_BASE_URL, OPENROUTER_CRED_KEY } from './openrouter';
 import { asFetchFunction } from './fetch-shim';
 import type { AuthResolution, ProviderDeps } from './types';
-import { copyHeaders } from './util';
+import { copyHeaders } from './fetch-shim';
 
 /** Names the credential the server must attach; its presence marks a proxied request. */
 export const PROXY_CRED_HEADER = 'x-kinu-proxy-cred';

@@ -4,7 +4,10 @@ import { describe, expect, test } from 'bun:test';
 import { tool, type ToolSet } from 'ai';
 import * as v from 'valibot';
 import { z } from 'zod';
-import { createChatModel, runChat, type ChatEvent, type ChatFallback } from '../src/index';
+import {
+  createChatModel, createOpenAICompatProvider, createProviderRegistry, runChat,
+  type AuthResolution, type ChatEvent, type ChatFallback, type ProviderDeps,
+} from '../src/index';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 
@@ -139,5 +142,89 @@ describe('a failed call hands the turn down its fallback chain', () => {
     expect(events.filter((event) => event.type === 'model-fallback')).toHaveLength(1);
     expect(threw?.message ?? '').toContain('HTTP 401');
     expect(events.some((event) => event.type === 'done')).toBe(false);
+  });
+});
+
+/** Two accounts of one OpenAI-compatible provider on one endpoint; `answerFor` decides by the key each request carries. */
+async function accountTurn(answerFor: (key: string, seen: number) => Response, fallbacks: readonly string[]) {
+  const served: { key: string; handover: boolean }[] = [];
+
+  const server = Bun.serve({
+    port: 0,
+    fetch(request) {
+      const key = request.headers.get('authorization') ?? '';
+      served.push({ key, handover: request.headers.has('x-kinu-rate-limit-handover') });
+
+      return answerFor(key, served.filter((entry) => entry.key === key).length);
+    },
+  });
+
+  const baseURL = `http://localhost:${String(server.port)}/v1`;
+
+  const stored = new Map<string, AuthResolution>([
+    ['openai-compat.default@work', { headers: { Authorization: 'Bearer key-work' }, baseURL }],
+    ['openai-compat.default@home', { headers: { Authorization: 'Bearer key-home' }, baseURL }],
+  ]);
+
+  const deps: ProviderDeps = {
+    env: {},
+    async getAuth(key) { return stored.get(key) ?? null; },
+    async hasCredential(key) { return stored.has(key); },
+    async listCredentialKeys() { return [...stored.keys()]; },
+  };
+
+  const registry = createProviderRegistry();
+  registry.register(createOpenAICompatProvider());
+
+  const chain: ChatFallback[] = fallbacks.map((spec) => ({
+    spec,
+    bind: () => ({ model: registry.resolve(spec, deps), provider: 'openai-compat' }),
+  }));
+
+  const events: ChatEvent[] = [];
+
+  try {
+    for await (const event of runChat({
+      model: registry.resolve('openai-compat@work/m', deps), modelContext: { id: 'openai-compat@work/m' }, fallbacks: chain,
+      system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {},
+    })) events.push(event);
+  } finally {
+    await server.stop(true);
+  }
+
+  return { events, served };
+}
+
+const rateLimited = (retryAfterSeconds: number): Response => Response.json(
+  { error: { message: 'rate limited' } },
+  { status: 429, headers: { 'retry-after': String(retryAfterSeconds) } },
+);
+
+describe('an account that hits its limit hands the turn to the next account of its chain', () => {
+  test('a 429 inside a chain hands over at once, says why, and the next account does not wait out the first\'s cooldown', async () => {
+    const { events, served } = await accountTurn(
+      (key) => (key === 'Bearer key-work' ? rateLimited(30) : answer('from home')),
+      ['openai-compat@home/m'],
+    );
+
+    expect(served.map((entry) => entry.key)).toEqual(['Bearer key-work', 'Bearer key-home']);
+    expect(served.some((entry) => entry.handover)).toBe(false);
+    const switched = events.find((event) => event.type === 'model-fallback');
+    expect(switched).toMatchObject({ type: 'model-fallback', from: 'openai-compat@work/m', to: 'openai-compat@home/m' });
+    const reason = switched?.type === 'model-fallback' ? switched.reason : '';
+    expect(reason).toContain('rate-limiting this account (HTTP 429)');
+    expect(reason).toContain('resets in 30s');
+    expect(events.find((event) => event.type === 'done')).toMatchObject({ text: 'from home' });
+  });
+
+  test('a lone model keeps waiting out its limit, and nothing hands over', async () => {
+    const { events, served } = await accountTurn(
+      (_key, seen) => (seen === 1 ? rateLimited(0) : answer('from work')),
+      [],
+    );
+
+    expect(served.map((entry) => entry.key)).toEqual(['Bearer key-work', 'Bearer key-work']);
+    expect(events.some((event) => event.type === 'model-fallback')).toBe(false);
+    expect(events.find((event) => event.type === 'done')).toMatchObject({ text: 'from work' });
   });
 });

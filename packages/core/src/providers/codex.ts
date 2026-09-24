@@ -4,9 +4,9 @@ import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModel } from 'ai';
 import type { AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
 import { MODEL_INPUT_MODALITIES } from './types';
-import { asFetchFunction } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
-import { authCacheKey, cloneModelInfos, copyHeaders, positiveInteger } from './util';
+import { authCacheKey, cloneModelInfos, positiveInteger } from './util';
+import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { nonEmptyString } from '../utils/json';
 import * as v from 'valibot';
 import { OAuthTokenError } from './oauth-token-error';
@@ -97,9 +97,10 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
     },
 
     createModel(modelId, deps): LanguageModel {
-      const baseFetch = withRateLimitRetry(deps.fetch ?? fetch, {
+      const retrying = (lane: string): typeof fetch => withRateLimitRetry(deps.fetch ?? fetch, {
         provider: 'codex',
         modelId,
+        lane,
         ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
       });
 
@@ -151,7 +152,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
 
           for (const [name, value] of Object.entries(headers)) merged.set(name, value);
 
-          return baseFetch(input, { ...requestInit, headers: merged });
+          return retrying(auth.credentialKey ?? CODEX_CRED_KEY)(input, { ...requestInit, headers: merged });
         };
 
         let res = await send(auth.headers);

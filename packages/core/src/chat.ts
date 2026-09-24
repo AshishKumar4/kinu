@@ -39,7 +39,7 @@ import { renderToolResult, synthesizeToolFallback } from './prompts/evidence-win
 import * as v from 'valibot';
 import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from './utils/json';
 import { normalizeUsage, usageReported, type Usage } from './usage';
-import { PROVIDER_SDK_RETRIES } from './providers/rate-limit-retry';
+import { PROVIDER_SDK_RETRIES, RATE_LIMIT_HANDOVER_HEADER } from './providers/rate-limit-retry';
 import { diagnostics, toKinuError } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
@@ -612,6 +612,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // Settled rewrites only (name case, fenced or double-encoded args); otherwise the model retries.
       experimental_repairToolCall: repairToolCall(),
       abortSignal: opts.signal,
+      ...(chain.length > 0 && { headers: { [RATE_LIMIT_HANDOVER_HEADER]: '1' } }),
       // The SDK default console.error dumped raw provider payloads; the rethrow below is the one place failures read.
       onError: ({ error }) => { call.streamError = error; },
       experimental_onToolCallStart: ({ toolCall }) => { call.dispatched(toolCall); },
@@ -717,7 +718,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     const next = chain.shift();
 
     if (next === undefined) throw outcome.failure.error;
-    yield { type: 'model-fallback', from: current.spec, to: next.spec, reason: outcome.failure.error.message };
+    yield { type: 'model-fallback', from: current.spec, to: next.spec, reason: describeProviderError({ cause: outcome.failure.cause }) };
     await opts.persistStep?.(outcome.produced);
 
     const bound = next.bind();

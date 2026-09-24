@@ -14,7 +14,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Added
 
-- **Several accounts per provider.** `kinu provider connect anthropic work` adds an account named `work` beside the provider's first one, `main`, in your Kinu account or with `--local` on this machine; Codex accounts stay on the machine that signs them in. `kinu provider default anthropic work` picks the account a model runs on when it names none, and `kinu provider disconnect anthropic work` removes one. A model names its account as `anthropic@work/<model>`, so a tier or its fallback chain can run one model on two accounts. `/accounts use anthropic work` gives a workspace its own account, and the model picker asks which account when a provider has several.
+- **Several accounts per provider.** `kinu provider connect anthropic work` adds an account named `work` beside the provider's first one, `main`, in your Kinu account or with `--local` on this machine; Codex accounts stay on the machine that signs them in. `kinu provider default anthropic work` picks the account a model runs on when it names none, and `kinu provider disconnect anthropic work` removes one. A model names its account as `anthropic@work/<model>`, so a tier or its fallback chain can run one model on two accounts. Inside a chain, an account that hits its rate limit hands the turn to the next entry at once, and the switch says so; a lone model still waits the limit out. `/accounts use anthropic work` gives a workspace its own account, and the model picker asks which account when a provider has several.
 
 ### Changed
 

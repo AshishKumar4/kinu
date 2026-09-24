@@ -1,4 +1,4 @@
-import { asFetchFunction } from './fetch-shim';
+import { asFetchFunction, copyHeaders } from './fetch-shim';
 import * as v from 'valibot';
 import { diagnostics, KinuError, toKinuError } from '../obs/index';
 import { abortableSleep, providerPacer, type ProviderPacer } from './pacing';
@@ -16,6 +16,9 @@ const DEFAULT_BACKOFF_FACTOR = 2;
 
 const DEFAULT_MAX_DELAY_MS = 60_000;
 
+/** A chain call with a next model hands over on 429; never sent upstream. */
+export const RATE_LIMIT_HANDOVER_HEADER = 'x-kinu-rate-limit-handover';
+
 export interface RateLimitRetryOptions {
   baseDelayMs?: number;
   backoffFactor?: number;
@@ -31,6 +34,7 @@ export interface RateLimitRetryOptions {
   modelId?: string;
   /** Called before each sleep, including joined pacer cooldowns; a throw is reported and ignored. */
   onWait?: (info: ProviderWaitInfo) => void;
+  lane?: string;
 }
 
 /** Pace requests and follow the provider's Retry-After until success, definitive failure,
@@ -52,11 +56,22 @@ export function withRateLimitRetry(
     new KinuError('unavailable', message),
   ));
 
-  return asFetchFunction(async (input, init) => {
+  return asFetchFunction(async (input, requested) => {
+    const headers = copyHeaders(requested?.headers);
+    const handover = headers.has(RATE_LIMIT_HANDOVER_HEADER);
+
+    headers.delete(RATE_LIMIT_HANDOVER_HEADER);
+    const init: RequestInit | undefined = handover ? { ...requested, headers } : requested;
+
     if (!hasReplayableBody(input, init)) return fetchImpl(input, init);
 
     const host = providerHost(input);
+    const lane = opts.lane === undefined ? host : `${host} ${opts.lane}`;
     const signal = init?.signal ?? undefined;
+
+    const handedOver = (status: number | null, resetsInMs: number | null): KinuError => new KinuError('unavailable',
+      `${host} is rate-limiting this account${status === null ? '' : ` (HTTP ${String(status)})`}`
+      + `${resetsInMs === null ? '' : `; it resets in ${formatSeconds(resetsInMs)}s`}`);
 
     const reportWait = (waitMs: number, attempt: number, source: ProviderWaitInfo['source'], status?: number): void => {
       if (opts.onWait === undefined) return;
@@ -86,8 +101,10 @@ export function withRateLimitRetry(
 
     for (let attempt = 1; ; attempt++) {
       // Hold the lane only until headers arrive, and release it before any wait.
-      const release = await pacer.admit(host, signal, {
+      const release = await pacer.admit(lane, signal, {
         onCooldown: (waitMs, untilMs) => {
+          if (handover) throw handedOver(null, waitMs);
+
           if (untilMs === ownedCooldownUntil.ms) return;
 
           reportWait(waitMs, 0, 'cooldown');
@@ -116,7 +133,9 @@ export function withRateLimitRetry(
       const waitMs = retryAfterMs ?? Math.floor(random() * backoffCeilingMs);
 
       const untilMs = now() + waitMs;
-      pacer.declareWait(host, waitMs);
+      pacer.declareWait(lane, waitMs);
+
+      if (handover) throw handedOver(limited, retryAfterMs);
       ownedCooldownUntil.ms = untilMs;
       warn(
         `[kinu] ${host} rate-limited — waiting ${formatSeconds(waitMs)}s `

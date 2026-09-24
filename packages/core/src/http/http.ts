@@ -3,7 +3,7 @@ import { inlineFileType } from '../read-models/file-types';
 import { projectJsonValue } from '../utils/json';
 import { KinuError, toKinuError, tolerateAsync } from '../obs/index';
 import { PRIVATE_NO_STORE } from './security-headers';
-import { copyHeaders } from '../providers/util';
+import { copyHeaders } from '../providers/fetch-shim';
 import * as v from 'valibot';
 
 /** A JSON answer, `no-store` by default because nearly every body is identity-derived.

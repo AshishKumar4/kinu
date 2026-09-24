@@ -1,6 +1,6 @@
 // Shared provider internals: the auth-injecting fetch wrapper and catalog parse helpers.
 import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
-import { asFetchFunction } from './fetch-shim';
+import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
 import { evidenceWindow } from '../prompts/evidence-window';
 import * as v from 'valibot';
@@ -24,49 +24,13 @@ export interface AuthedFetchOptions {
   mutate?: (ctx: { url: string; headers: Headers; auth: AuthResolution }) => string | void;
 }
 
-function isHeaderIterable(value: HeadersInit): value is HeadersInit & Iterable<Iterable<string>> {
-  return Symbol.iterator in Object(value);
-}
-
-/** Copy every web-platform HeadersInit form without passing the DOM iterable
- * union into Bun's narrower constructor overload. */
-export function copyHeaders(init: HeadersInit | undefined): Headers {
-  const headers = new Headers();
-
-  if (init === undefined) return headers;
-
-  if (init instanceof Headers) {
-    for (const [name, value] of init) headers.append(name, value);
-
-    return headers;
-  }
-
-  if (isHeaderIterable(init)) {
-    for (const pair of init) {
-      const [name, value] = pair;
-
-      if (name === undefined || value === undefined) {
-        throw new Error('header pair must contain a name and value');
-      }
-
-      headers.append(name, value);
-    }
-
-    return headers;
-  }
-
-  for (const [name, value] of Object.entries(init)) headers.append(name, value);
-
-  return headers;
-}
-
-
 /** Auth-injecting fetch; auth is re-resolved per request so credential changes apply live. */
 export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions): typeof globalThis.fetch {
   const waitListener = deps.onProviderWait;
 
-  const baseFetch = withRateLimitRetry(deps.fetch ?? fetch, {
+  const retrying = (lane: string): typeof globalThis.fetch => withRateLimitRetry(deps.fetch ?? fetch, {
     provider: opts.provider,
+    lane,
     ...(opts.modelId !== undefined && { modelId: opts.modelId }),
     ...(waitListener !== undefined && { onWait: waitListener }),
   });
@@ -89,7 +53,7 @@ export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions):
     const url = input instanceof Request ? input.url : input.toString();
     const rewritten = opts.mutate?.({ url, headers, auth });
 
-    return baseFetch(rewritten ?? input, { ...init, headers });
+    return retrying(auth.credentialKey ?? opts.credKey)(rewritten ?? input, { ...init, headers });
   });
 }
 

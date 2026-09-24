@@ -379,7 +379,7 @@ describe("a tier's fallback chain", () => {
     expect(requestedModels(machine, true)).toEqual(['alpha-model', 'beta-model']);
     expect(printed).toContain(REPLY);
     expect(printed).toContain('openai-compat/beta-model took over from openai-compat/alpha-model');
-    expect(printed).toContain('the provider refused the request (HTTP 402');
+    expect(printed).toContain('insufficient credits for alpha-model (HTTP 402)');
 
     const timeline = v.parse(v.array(TimelineRowSchema), JSON.parse(mustRun(machine, ['timeline', 'chained', '--json'])));
     expect(timeline.find((row) => row.kind === 'run:model_fallback')?.payload)
