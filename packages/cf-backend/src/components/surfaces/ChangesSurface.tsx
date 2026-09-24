@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   executorLabel, executorSortKey, isActiveExecutionDevice, pickDefaultExecutor,
-  type ChangeSet, type ExecutorDiffResult, type ExecutorInfo, type Rpc,
+  workspacePath, type ChangeSet, type ExecutorDiffResult, type ExecutorInfo, type Rpc,
 } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -136,7 +136,7 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, onOpenFile,
   }
 
   const openInFiles = shown.mode === "vfs-baseline"
-    ? (path: string): void => { setSheet(null); onOpenFile(`/${path}`); }
+    ? (path: string): void => { setSheet(null); onOpenFile(workspacePath(path)); }
     : null;
 
   const now = Date.now();
