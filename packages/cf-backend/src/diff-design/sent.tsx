@@ -2,8 +2,8 @@
 import { ChatCircleTextIcon, ListBulletsIcon, MinusCircleIcon } from "@phosphor-icons/react";
 import { AnnotationType } from "@plannotator/ui/types";
 import type { ChangeSet } from "@kinu.run/core";
-import { sinceLabel } from "./diff";
-import { orderNotes, placeLabel, type ChangeNote } from "./notes";
+import { sinceLabel } from "@/components/surfaces/changes/diff";
+import { orderNotes, placeLabel, type ChangeNote } from "@/components/surfaces/changes/notes";
 
 const TYPE_ICON: Record<AnnotationType, typeof ChatCircleTextIcon> = {
   [AnnotationType.COMMENT]: ChatCircleTextIcon,

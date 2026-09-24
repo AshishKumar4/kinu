@@ -55,7 +55,7 @@ function fmtWhen(mtimeMs: number | undefined): string {
 export interface FilesSurfaceProps {
   rpc: Rpc;
   executors: ExecutorInfo[];
-  jump?: { path: string; nonce: number } | null;
+  jump?: { path: string; file?: string; nonce: number } | null;
   onConnectDevice: () => void;
 }
 
@@ -122,7 +122,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   useEffect(() => {
     if (!jump || jump.nonce === lastJump.current) return;
     lastJump.current = jump.nonce;
-    setPreview(null);
+    setPreview(jump.file ?? null);
     setFilter("");
     setPath(jump.path);
   }, [jump]);

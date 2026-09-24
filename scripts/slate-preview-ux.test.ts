@@ -205,7 +205,7 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         // The workspace-wide read lands once and lists the whole roster —
         // there is no unscanned frontier for a live actor to hide behind.
         await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Courier rollout'));
-        expect(await page.$('[aria-label="Diffs"]')).toBeNull();
+        expect(await page.$('[aria-label="Changes"]')).toBeNull();
 
         for (const title of ['Dashboard', 'Sandbox app', 'Device app']) {
           await page.click(`[aria-label="${title}"]`);
@@ -257,7 +257,7 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await page.click('[data-refresh-preview]');
         expect(await page.$eval('[aria-label="Work"]', el => el.getAttribute('aria-current'))).toBe('true');
         await page.click('[data-add-diff]');
-        await page.waitForSelector('[aria-label="Diffs"]');
+        await page.waitForSelector('[aria-label="Changes"]');
         await page.click('[aria-label="Sandbox app"]');
         await page.click('[aria-label="Work"]');
         // The roster is always in the read: the dismissed actor's card says

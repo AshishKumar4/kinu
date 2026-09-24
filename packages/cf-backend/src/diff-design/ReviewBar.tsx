@@ -4,7 +4,7 @@ import { toggleMode, useTheme } from "@/hooks/use-theme";
 
 interface DesignView {
   readonly id: string;
-  readonly group: "Expanded" | "Notes to the agent" | "On a phone" | "The panel" | "Other machines" | "Large and odd files" | "Today";
+  readonly group: "Expanded" | "Notes to the agent" | "On a phone" | "The panel" | "Other machines" | "Large and odd files";
   readonly label: string;
   readonly query: string;
   readonly width?: "desktop" | "mobile";
@@ -40,11 +40,9 @@ const DESIGN_VIEWS: readonly DesignView[] = [
   { id: "edge-large", group: "Large and odd files", label: "Too large to show", query: "&set=edge&file=packages/checkout/src/generated/schema.ts" },
   { id: "edge-long", group: "Large and odd files", label: "A long new file", query: "&set=edge&file=docs/incident-runbook.md" },
   { id: "edge-capped", group: "Large and odd files", label: "A diff that stops part-way", query: "&set=edge&file=data/seed/coupons.csv" },
-  { id: "today", group: "Today", label: "Today's Diffs tab", query: "&today=1" },
-  { id: "today-open", group: "Today", label: "Today, one file open", query: "&today=1&open=1" },
 ];
 
-const GROUPS = ["Expanded", "Notes to the agent", "On a phone", "The panel", "Other machines", "Large and odd files", "Today"] as const;
+const GROUPS = ["Expanded", "Notes to the agent", "On a phone", "The panel", "Other machines", "Large and odd files"] as const;
 
 /** Review chrome, not product. `scripts/diff-design-shots.ts` photographs the states it links. */
 export function ReviewBar() {

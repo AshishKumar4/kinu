@@ -46,7 +46,7 @@ export const PAGE_ROWS = {
 /** Every pane of the workspace strip. */
 export const STRIP_ROWS = {
   Work: ['approve-clears', 'background-settle', 'background-wake'],
-  Diffs: ['workspace-panes'],
+  Changes: ['workspace-panes'],
   Files: ['files-outside-tree', 'drive', 'every-tool'],
   Releases: ['workspace-panes'],
   Swarms: ['exploration'],

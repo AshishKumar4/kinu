@@ -706,15 +706,11 @@ const FILES_LISTED = `[...document.querySelectorAll('[data-files-entry]')].map((
 /** The workspace's own folder, from the Files tab's root, one row at a time. */
 const HOME_FOLDER = ['home', 'user'] as const;
 
-/** The Diffs tab has read its change-set: a file row or its empty state is drawn. */
-const DIFFS_SETTLED = `(() => {
-  const pane = document.querySelector('#inspector');
-  const text = pane?.textContent ?? '';
-  return /Workspace changes|Uncommitted changes|No diffs yet|Not a git repository/u.test(text);
-})()`;
+/** The Changes tab has read its change-set: its file tree is drawn. */
+const CHANGES_SETTLED = `document.querySelector('#inspector [data-file-tree]') !== null`;
 
-/** The changed paths the Diffs tab lists, as its file rows show them. */
-const DIFF_PATHS = `[...document.querySelectorAll('#inspector .font-mono')].map((cell) => (cell.textContent ?? '').trim())`;
+/** The changed paths the Changes tab lists, as its file rows name them. */
+const CHANGED_PATHS = `[...document.querySelectorAll('#inspector [data-file-row]')].map((row) => row.getAttribute('data-file-row') ?? '')`;
 
 /** A file name no scaffold file can carry. */
 export const FLOW_PROBE = 'flow-probe.txt';
@@ -723,19 +719,19 @@ export interface WrittenFileVerdict {
   readonly workspace: string;
   /** Every entry the Files tab listed once its listing settled. */
   readonly filesListed: readonly string[];
-  /** Whether the strip drew a Diffs tab once the turn had written. */
-  readonly diffsTab: boolean;
-  /** The Diffs tab's changed paths; empty when it drew no Diffs tab. */
-  readonly diffPaths: readonly string[];
+  /** Whether the strip drew a Changes tab once the turn had written. */
+  readonly changesTab: boolean;
+  /** The Changes tab's changed paths; empty when it drew no Changes tab. */
+  readonly changedPaths: readonly string[];
 }
 
 /**
- * Row: a file the agent writes shows in the Files tab and in the Diffs tab.
+ * Row: a file the agent writes shows in the Files tab and in the Changes tab.
  *
  * One turn writes one file; the reader opens the inspector, reads the Files
- * tab's listing, and opens the Diffs tab the write should have raised.
+ * tab's listing, and opens the Changes tab the write should have raised.
  */
-export async function writtenFileShowsInFilesAndDiffs(target: FlowTarget): Promise<WrittenFileVerdict> {
+export async function writtenFileShowsInFilesAndChanges(target: FlowTarget): Promise<WrittenFileVerdict> {
   const workspace = await createFlowWorkspace(target, 'files-diffs');
 
   try {
@@ -757,18 +753,18 @@ export async function writtenFileShowsInFilesAndDiffs(target: FlowTarget): Promi
     }
 
     const filesListed = v.parse(v.array(v.string()), await page.evaluate(FILES_LISTED));
-    const diffsTab = v.parse(v.boolean(), await page.evaluate(stripHas('Diffs')));
-    let diffPaths: readonly string[] = [];
+    const changesTab = v.parse(v.boolean(), await page.evaluate(stripHas('Changes')));
+    let changedPaths: readonly string[] = [];
 
-    if (diffsTab) {
-      await page.evaluate(stripTab('Diffs'));
-      await until(page, "the Diffs tab's change-set", DIFFS_SETTLED);
-      diffPaths = v.parse(v.array(v.string()), await page.evaluate(DIFF_PATHS));
+    if (changesTab) {
+      await page.evaluate(stripTab('Changes'));
+      await until(page, "the Changes tab's change-set", CHANGES_SETTLED);
+      changedPaths = v.parse(v.array(v.string()), await page.evaluate(CHANGED_PATHS));
     }
 
     await page.close();
 
-    return { workspace, filesListed, diffsTab, diffPaths };
+    return { workspace, filesListed, changesTab, changedPaths };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }

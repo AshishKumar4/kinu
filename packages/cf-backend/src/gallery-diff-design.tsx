@@ -2,19 +2,19 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { GaugeIcon } from "@phosphor-icons/react";
-import { diffLines, fileDiff, parseGitDiff, type ChangeSet, type FileDiff, type FileStatus, type Rpc, type TurnLiveness } from "@kinu.run/core";
+import { diffLines, fileDiff, parseGitDiff, type ChangeSet, type FileDiff, type FileStatus, type TurnLiveness } from "@kinu.run/core";
 import Layout from "@/components/layout";
 import { WorkspaceBar } from "@/components/WorkspaceBar";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { MessageView } from "@/components/MessageView";
 import { Composer, type ChatMode } from "@/components/Composer";
 import { ModelPicker } from "@/components/ModelPicker";
-import { DiffsSurface } from "@/components/surfaces/DiffsSurface";
 import { tabCls, tabStripH } from "@/components/ui/form";
-import { ChangesPanel } from "@/diff-design/ChangesPanel";
-import { ReviewSheet } from "@/diff-design/ReviewSheet";
+import { ChangesPanel } from "@/components/surfaces/changes/ChangesPanel";
+import { ReviewSheet } from "@/components/surfaces/changes/ReviewSheet";
 import { ReviewBar } from "@/diff-design/ReviewBar";
-import { NotesProvider, type ChangeAnchor, type ChangeNote, type OpenDraft } from "@/diff-design/notes";
+import type { ChangeAnchor, ChangeNote } from "@/components/surfaces/changes/notes";
+import { NotesProvider, type OpenDraft } from "@/components/surfaces/changes/notes-provider";
 import { FeedbackCard } from "@/diff-design/sent";
 import { AnnotationType } from "@plannotator/ui/types";
 
@@ -521,28 +521,6 @@ function TabStrip({ label, count }: { label: string; count: number | null }) {
   );
 }
 
-function Today({ open }: { open: boolean }) {
-  const rpc: Rpc = <T,>(method: string): Promise<T> => new Response(JSON.stringify(method === "getExecutorDiff"
-    ? { files: COUPON_CHANGES.files, mode: "vfs-baseline", trackedSince: COUPON_CHANGES.trackedSince }
-    : null)).json<T>();
-
-  useEffect(() => {
-    if (!open) return;
-
-    const timer = setInterval(() => {
-      const row = [...document.querySelectorAll<HTMLButtonElement>("[data-today] button")].find((each) => each.textContent?.includes("apply-coupon.ts"));
-
-      if (row === undefined) return;
-      row.click();
-      clearInterval(timer);
-    }, 50);
-
-    return () => clearInterval(timer);
-  }, [open]);
-
-  return <div className="min-h-0 flex-1" data-today><DiffsSurface executors={[]} lastActiveExecutor={null} rpc={rpc} onPresence={() => {}} /></div>;
-}
-
 function useWide(): boolean {
   const query = "(min-width: 768px)";
   const [wide, setWide] = useState(() => window.matchMedia(query).matches);
@@ -651,16 +629,16 @@ function Scene({ params }: { params: URLSearchParams }) {
   const wide = useWide();
   const sets = setsFor(params);
 
-  const [sheet, setSheet] = useState<{ source: string; file: string | null; notes: boolean } | null>(
-    params.get("sheet") === "1" ? { source: sets[0]?.source ?? "workspace", file: params.get("file"), notes: params.get("annotations") === "1" } : null,
+  const [sheet, setSheet] = useState<{ file: string | null; notes: boolean } | null>(
+    params.get("sheet") === "1" ? { file: params.get("file"), notes: params.get("annotations") === "1" } : null,
   );
+
+  const [source, setSource] = useState(params.get("source") ?? sets[0]?.source ?? "workspace");
 
   const [reviewedAt, setReviewedAt] = useState<number | null>(params.get("reviewed") === "1" ? NOW - 60e3 : null);
   const [sent, setSent] = useState<readonly ChangeNote[] | null>(params.get("sent") === "1" ? SENT : null);
   const [chatPane, setChatPane] = useState(params.get("pane") === "chat");
-  const today = params.get("today") === "1";
-  const sheetSet = sets.find((set) => set.source === sheet?.source);
-  const shown = sets.find((set) => set.source === (params.get("source") ?? sets[0]?.source));
+  const shown = sets.find((set) => set.source === source) ?? sets[0];
 
   const send = (notes: readonly ChangeNote[]): void => {
     setSent(notes);
@@ -669,20 +647,19 @@ function Scene({ params }: { params: URLSearchParams }) {
   };
 
   const openNote = (note: ChangeNote): void => {
-    setSheet({ source: "workspace", file: note.anchor?.path ?? null, notes: false });
+    setSource("workspace");
+    setSheet({ file: note.anchor?.path ?? null, notes: false });
   };
 
   const panel = (
     <>
-      <TabStrip label={today ? "Diffs" : "Changes"} count={today || reviewedAt !== null || shown?.error !== undefined ? null : shown?.files.length ?? null} />
-      {today ? <Today open={params.get("open") === "1"} /> : (
-        <div className="min-h-0 flex-1">
-          <ChangesPanel key={reviewedAt ?? "open"} sets={sets} now={NOW} source={params.get("source") ?? undefined} file={sheet === null ? params.get("file") : null}
-            menuOpen={params.get("menu") === "source"} reviewedAt={reviewedAt}
-            onExpand={(source, file) => setSheet({ source, file, notes: false })}
-            onShowNotes={() => setSheet({ source: shown?.source ?? "workspace", file: null, notes: true })} onSend={send} />
-        </div>
-      )}
+      <TabStrip label="Changes" count={reviewedAt !== null || shown?.error !== undefined ? null : shown?.files.length ?? null} />
+      <div className="min-h-0 flex-1">
+          <ChangesPanel sets={sets} source={source} onSource={setSource} now={NOW} file={sheet === null ? params.get("file") : null}
+            menuOpen={params.get("menu") === "source"} reviewedAt={reviewedAt} onReviewed={() => setReviewedAt(NOW)}
+            onExpand={(file) => setSheet({ file, notes: false })} onOpenInFiles={shown?.mode === "vfs-baseline" ? () => {} : null}
+            onShowNotes={() => setSheet({ file: null, notes: true })} onSend={send} />
+      </div>
     </>
   );
 
@@ -691,9 +668,9 @@ function Scene({ params }: { params: URLSearchParams }) {
       initial={params.get("notes") === "1" && sent === null ? NOTES : []} writing={params.get("comment") === "1" ? WRITING : undefined}>
       <Workspace wide={wide} chatPane={chatPane} panel={panel}
         chat={<ChatColumn wide={wide} sent={sent} onOpenNote={openNote} />} />
-      {sheet !== null && sheetSet !== undefined && (
-        <ReviewSheet set={sheetSet} now={NOW} file={sheet.file} phone={!wide} layout={params.get("layout") === "unified" ? "unified" : "split"}
-          annotationsOpen={sheet.notes} pickerOpen={params.get("picker") === "1"}
+      {sheet !== null && shown !== undefined && (
+        <ReviewSheet set={shown} now={NOW} file={sheet.file} layout={params.get("layout") === "unified" ? "unified" : "split"}
+          annotationsOpen={sheet.notes} pickerOpen={params.get("picker") === "1"} onOpenInFiles={shown.mode === "vfs-baseline" ? () => {} : null}
           onClose={() => setSheet(null)} onReviewed={() => { setSheet(null); setReviewedAt(NOW); }} onSend={send} />
       )}
       <DesignSelection kind={params.get("select")} />

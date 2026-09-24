@@ -1,4 +1,4 @@
-/** A change-set as the Changes panel reads it: rows numbered, unchanged lines folded, changed words marked, drawn. */
+/** Draws a file's diff: rows, folds, word marks, syntax colours and notes. */
 import { sideBySide, type ChangeBlock, type ChangeRow, type FileStatus } from "@kinu.run/core";
 import { Fragment, useCallback, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { CaretDownIcon, CaretUpDownIcon } from "@phosphor-icons/react";

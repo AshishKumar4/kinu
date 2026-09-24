@@ -4,7 +4,7 @@ import type { SlateSummary } from "../slates/rpc";
 
 export const SLATE_PREFIX = "slate:";
 
-export const SURFACES = ["Work", "Diffs", "Files", "Releases", "Swarms", "Agent", "Environment"] as const;
+export const SURFACES = ["Work", "Changes", "Files", "Releases", "Swarms", "Agent", "Environment"] as const;
 
 export const ACTIVITY_SURFACE = "Activity";
 
@@ -16,10 +16,10 @@ export interface SurfaceContent {
 	tabPresence: TabPresence | undefined;
 	mctsTrees: ReadonlyMap<string, ForkNode>;
 	slates: readonly SlateSummary[] | undefined;
-	hasDiffs?: boolean;
+	hasChanges?: boolean;
 }
 
-/** Diffs gates on the mounted tree count, not `TabPresence`. */
+/** Changes gates on the change-set the tab has read, not `TabPresence`. */
 export function surfaceHasContent(surface: SurfaceKind, content: SurfaceContent): boolean {
 	if (surface === "Work") return content.tabPresence?.work ?? true;
 
@@ -27,7 +27,7 @@ export function surfaceHasContent(surface: SurfaceKind, content: SurfaceContent)
 
 	if (surface === "Swarms") return (content.tabPresence?.explorations ?? true) || content.mctsTrees.size > 0;
 
-	if (surface === "Diffs") return content.hasDiffs ?? false;
+	if (surface === "Changes") return content.hasChanges ?? false;
 
 	if (surface.startsWith(SLATE_PREFIX)) {
 		const id = surface.slice(SLATE_PREFIX.length);

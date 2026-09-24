@@ -55,7 +55,9 @@ export function Summary({ set }: { set: ChangeSet }) {
 
   return (
     <span className="flex min-w-0 items-baseline gap-2">
-      <span className="truncate p-row-text font-medium p-text">{count(set.files.length)} {set.files.length === 1 ? "file" : "files"} changed</span>
+      <span className="truncate p-row-text font-medium p-text">
+        {set.files.length === 0 ? "No changes" : `${count(set.files.length)} ${set.files.length === 1 ? "file" : "files"} changed`}
+      </span>
       <Counts added={sum.added} removed={sum.removed} />
     </span>
   );
@@ -70,7 +72,7 @@ export function Since({ set, now }: { set: ChangeSet; now: number }) {
 }
 
 function sourceNote(set: ChangeSet): string {
-  if (set.error !== undefined) return "offline";
+  if (set.error !== undefined) return "can't read";
 
   return `${count(set.files.length)} ${set.files.length === 1 ? "file" : "files"}`;
 }

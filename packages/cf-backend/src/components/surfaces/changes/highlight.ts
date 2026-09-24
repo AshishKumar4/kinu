@@ -1,83 +1,49 @@
 import type { ChangeBlock, ChangeRow, ChangeSpan } from "@kinu.run/core";
+import type { CodeToken } from "../code-highlighter";
 import type { NoteSpan } from "./notes";
 
-export interface Tint {
-  readonly text: string;
-  readonly light: string;
-  readonly dark: string;
-}
+export type Tint = CodeToken;
 
 export interface Tints {
   readonly before: ReadonlyMap<number, readonly Tint[]>;
   readonly after: ReadonlyMap<number, readonly Tint[]>;
 }
 
-const THEMES = { light: "github-light", dark: "vesper" } as const;
-
+/** Data, not code: a CSV grammar paints every column a different colour. */
 const PLAIN = new Set(["csv", "tsv", "txt", "log"]);
-
-interface Highlighter {
-  readonly grammarOf: (extension: string) => string | null;
-  readonly tokenize: (code: string, grammar: string) => Promise<Tint[][]>;
-}
-
-let loading: Promise<Highlighter> | null = null;
-
-/** Each side of a file is tokenized as one text, so a line inside a comment keeps the comment's colour. */
-async function highlighter(): Promise<Highlighter> {
-  loading ??= (async () => {
-    const [core, engine, langs, themes] = await Promise.all([
-      import("shiki/core"), import("shiki/engine/javascript"), import("shiki/langs"), import("shiki/themes"),
-    ]);
-
-    const get = core.makeSingletonHighlighter(core.createBundledHighlighter({
-      langs: langs.bundledLanguagesBase, themes: themes.bundledThemes, engine: () => engine.createJavaScriptRegexEngine(),
-    }));
-
-    return {
-      grammarOf: (extension) => (PLAIN.has(extension) ? null : langs.bundledLanguagesInfo.find((entry) => entry.id === extension || entry.aliases?.includes(extension))?.id ?? null),
-      tokenize: async (code, grammar) => {
-        const shiki = await get({ langs: [grammar], themes: Object.values(THEMES) });
-
-        return shiki.codeToTokens(code, { lang: grammar, themes: THEMES }).tokens.map((line) => line.map((token) => ({
-          text: token.content, light: token.htmlStyle?.color ?? "", dark: token.htmlStyle?.["--shiki-dark"] ?? "",
-        })));
-      },
-    };
-  })();
-
-  return loading;
-}
 
 function rowsOf(blocks: readonly ChangeBlock[]): ChangeRow[] {
   return blocks.flatMap((block) => (block.kind === "rest" ? rowsOf(block.blocks) : [...block.rows]));
 }
 
-async function sideOf(rows: readonly ChangeRow[], number: (row: ChangeRow) => number | null, grammar: string, shiki: Highlighter) {
+type Tokenize = (code: string, language: string) => Promise<Tint[][] | null>;
+
+/** A side is tokenized as one text, so a line inside a comment keeps the comment's colour. */
+async function sideOf(rows: readonly ChangeRow[], number: (row: ChangeRow) => number | null, language: string, tokenize: Tokenize) {
   const numbered = rows.flatMap((row) => {
     const at = number(row);
 
     return at === null ? [] : [{ at, text: row.text }];
   }).sort((a, b) => a.at - b.at);
 
-  const tokens = await shiki.tokenize(numbered.map((line) => line.text).join("\n"), grammar);
+  const tokens = await tokenize(numbered.map((line) => line.text).join("\n"), language);
 
-  return new Map(numbered.map((line, index) => [line.at, tokens[index] ?? []]));
+  return tokens === null ? null : new Map(numbered.map((line, index) => [line.at, tokens[index] ?? []]));
 }
 
 export async function tintsOf(path: string, blocks: readonly ChangeBlock[]): Promise<Tints | null> {
-  const shiki = await highlighter();
-  const grammar = shiki.grammarOf(path.slice(path.lastIndexOf(".") + 1).toLowerCase());
+  const language = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
 
-  if (grammar === null) return null;
+  if (PLAIN.has(language)) return null;
+  const { codeTokens } = await import("../code-highlighter");
   const rows = rowsOf(blocks);
 
   const [before, after] = await Promise.all([
-    sideOf(rows, (row) => row.oldNo, grammar, shiki),
-    sideOf(rows, (row) => row.newNo, grammar, shiki),
+    sideOf(rows, (row) => row.oldNo, language, codeTokens),
+    sideOf(rows, (row) => row.newNo, language, codeTokens),
   ]);
 
-  return { before, after };
+  return before === null || after === null ? null : { before, after };
 }
 
 export interface Piece {

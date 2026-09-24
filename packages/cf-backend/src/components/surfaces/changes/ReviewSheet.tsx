@@ -1,14 +1,28 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { CaretDownIcon, CaretUpIcon, ChatCircleDotsIcon, ChatCircleTextIcon, XIcon } from "@phosphor-icons/react";
-import { AnnotationPanel } from "@plannotator/ui/components/AnnotationPanel";
+import * as v from "valibot";
 import { Segmented } from "@/components/ui/Segmented";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { inReadingOrder, vfsBasename, vfsDirname, type ChangeSet, type FileDiff } from "@kinu.run/core";
 import { ChangeMark, Counts, count } from "./diff";
 import { FileBody } from "./ChangesPanel";
 import { FileTree, IconButton, MarkReviewed, Since, Summary, typing } from "./parts";
-import { panelNote, placeLabel, SendFeedback, useNotes, type ChangeNote } from "./notes";
+import { SendFeedback, useNotes, type ChangeNote } from "./notes";
 
-type Layout = "unified" | "split";
+// Lazy: plannotator's panel loads only with the first note.
+const NotesPanel = lazy(() => import("./notes-panel"));
+
+const LAYOUT_KEY = "kinu:changes-layout";
+
+const LayoutSchema = v.picklist(["unified", "split"]);
+
+type Layout = v.InferOutput<typeof LayoutSchema>;
+
+function storedLayout(): Layout {
+  const parsed = v.safeParse(LayoutSchema, localStorage.getItem(LAYOUT_KEY));
+
+  return parsed.success ? parsed.output : "split";
+}
 
 function FileNotes({ path }: { path: string }) {
   const notes = useNotes();
@@ -38,11 +52,12 @@ function FileNotes({ path }: { path: string }) {
   );
 }
 
-function FileCard({ file, git, split, register }: {
+function FileCard({ file, git, split, register, onOpenInFiles }: {
   file: FileDiff;
   git: boolean;
   split: boolean;
   register: (path: string, element: HTMLElement | null) => void;
+  onOpenInFiles: ((path: string) => void) | null;
 }) {
   const [folded, setFolded] = useState(false);
 
@@ -61,7 +76,7 @@ function FileCard({ file, git, split, register }: {
           <FileNotes path={file.path} />
         </span>
       </header>
-      {!folded && <FileBody file={file} git={git} stacked split={split} onOpenInFiles={() => {}} />}
+      {!folded && <FileBody file={file} git={git} stacked split={split} onOpenInFiles={onOpenInFiles === null ? null : () => onOpenInFiles(file.path)} />}
     </section>
   );
 }
@@ -93,56 +108,17 @@ function AnnotationsToggle({ open, onToggle, compact = false }: { open: boolean;
   );
 }
 
-function Notes({ open, onClose, files, onReveal }: {
-  open: boolean;
-  onClose: () => void;
-  files: readonly FileDiff[];
-  onReveal: (note: ChangeNote) => void;
-}) {
-  const notes = useNotes();
-
-  if (notes === null) return null;
-  const byId = new Map(notes.notes.map((note) => [note.id, note]));
-  const hasGlobal = notes.notes.some((note) => note.anchor === undefined);
-
-  const addGlobal = (): void => {
-    const button = document.querySelector<HTMLElement>("[data-annotation-add-global]");
-
-    if (button !== null) notes.write(undefined, "", button);
-  };
-
-  const order = files.map((file) => file.path);
-
-  const annotations = [...notes.notes]
-    .sort((a, b) => order.indexOf(a.anchor?.path ?? "~") - order.indexOf(b.anchor?.path ?? "~") || (a.anchor?.lineStart ?? 0) - (b.anchor?.lineStart ?? 0))
-    .map(panelNote);
-
-  return (
-    <AnnotationPanel isOpen={open} annotations={annotations} selectedId={notes.selected} width="19rem" onClose={onClose}
-      onSelect={(id) => {
-        const note = byId.get(id);
-
-        notes.select(id);
-
-        if (note !== undefined) onReveal(note);
-      }}
-      onDelete={notes.remove} onEdit={(id, updates) => notes.edit(id, updates.text ?? "")}
-      placeOf={(annotation) => placeLabel(byId.get(annotation.id)?.anchor)}
-      onAddGlobal={hasGlobal ? undefined : addGlobal} globalLabel="Note on all the changes" />
-  );
-}
-
 interface SheetProps {
   readonly set: ChangeSet;
   readonly now: number;
   readonly file: string | null;
   readonly layout?: Layout;
-  readonly phone?: boolean;
   readonly annotationsOpen?: boolean;
   readonly pickerOpen?: boolean;
   readonly onClose: () => void;
   readonly onReviewed: () => void;
-  readonly onSend: (notes: readonly ChangeNote[]) => void;
+  readonly onOpenInFiles: ((path: string) => void) | null;
+  readonly onSend?: (notes: readonly ChangeNote[]) => void;
 }
 
 function Picker({ files, current, onPick, onClose }: { files: readonly FileDiff[]; current: string | null; onPick: (path: string) => void; onClose: () => void }) {
@@ -186,27 +162,27 @@ function useSheetKeys({ files, current, show, onClose }: {
   });
 }
 
-function Stack({ files, set, split, register, stack, onScroll, children }: {
+function Stack({ files, set, split, register, stack, onScroll, onOpenInFiles }: {
   files: readonly FileDiff[];
   set: ChangeSet;
   split: boolean;
   register: (path: string, element: HTMLElement | null) => void;
   stack: React.RefObject<HTMLDivElement | null>;
   onScroll: () => void;
-  children?: ReactNode;
+  onOpenInFiles: ((path: string) => void) | null;
 }) {
   return (
     <div ref={stack} onScroll={onScroll} className="min-w-0 flex-1 overflow-y-auto" data-review-stack>
       <div className="space-y-4 px-5 py-4 max-md:px-2.5 max-md:py-3">
-        {files.map((each) => <FileCard key={each.path} file={each} git={set.mode === "git"} split={split} register={register} />)}
-        {children}
+        {files.map((each) => <FileCard key={each.path} file={each} git={set.mode === "git"} split={split} register={register} onOpenInFiles={onOpenInFiles} />)}
       </div>
     </div>
   );
 }
 
-export function ReviewSheet({ set, now, file, layout: initialLayout = "split", phone = false, annotationsOpen = false, pickerOpen = false, onClose, onReviewed, onSend }: SheetProps) {
-  const [layout, setLayout] = useState<Layout>(initialLayout);
+export function ReviewSheet({ set, now, file, layout: pinned, annotationsOpen = false, pickerOpen = false, onClose, onReviewed, onOpenInFiles, onSend }: SheetProps) {
+  const phone = !useMediaQuery("(min-width: 768px)");
+  const [layout, setLayoutState] = useState<Layout>(() => pinned ?? storedLayout());
   const [panelOpen, setPanelOpen] = useState(annotationsOpen);
   const [picking, setPicking] = useState(pickerOpen);
   const files = useMemo(() => inReadingOrder(set.files), [set]);
@@ -215,6 +191,11 @@ export function ReviewSheet({ set, now, file, layout: initialLayout = "split", p
   const stack = useRef<HTMLDivElement>(null);
   const notes = useNotes();
   const noted = (notes?.notes.length ?? 0) > 0;
+
+  const setLayout = (next: Layout): void => {
+    localStorage.setItem(LAYOUT_KEY, next);
+    setLayoutState(next);
+  };
 
   const register = (path: string, element: HTMLElement | null): void => {
     if (element === null) cards.current.delete(path);
@@ -278,15 +259,15 @@ export function ReviewSheet({ set, now, file, layout: initialLayout = "split", p
             <Stepper files={files} current={current} onShow={show} />
           </div>
         </header>
-        <Stack files={files} set={set} split={false} register={register} stack={stack} onScroll={follow} />
-        {noted && (
+        <Stack files={files} set={set} split={false} register={register} stack={stack} onScroll={follow} onOpenInFiles={onOpenInFiles} />
+        {noted && onSend !== undefined && (
           <footer className="flex shrink-0 items-center gap-2 border-t p-border p-sidebar px-3 pb-[max(env(safe-area-inset-bottom),10px)] pt-2.5">
             <span className="min-w-0 flex-1 p-meta p-text-3">{notes?.notes.length} {notes?.notes.length === 1 ? "note" : "notes"} for the agent</span>
             <SendFeedback onSend={onSend} />
           </footer>
         )}
         {picking && <Picker files={files} current={current} onClose={() => setPicking(false)} onPick={(path) => { setPicking(false); show(path); }} />}
-        <Notes open={panelOpen} onClose={() => setPanelOpen(false)} files={files} onReveal={(note) => { setPanelOpen(false); reveal(note); }} />
+        {notes !== null && <Suspense><NotesPanel open={panelOpen} onClose={() => setPanelOpen(false)} files={files} onReveal={(note) => { setPanelOpen(false); reveal(note); }} /></Suspense>}
       </div>
     );
   }
@@ -305,7 +286,7 @@ export function ReviewSheet({ set, now, file, layout: initialLayout = "split", p
             <Segmented label="Layout" value={layout} onChange={setLayout}
               segments={[{ id: "unified", label: "Unified" }, { id: "split", label: "Split" }]} />
             <AnnotationsToggle open={panelOpen} onToggle={() => setPanelOpen((value) => !value)} />
-            {noted ? <SendFeedback onSend={onSend} /> : set.mode === "vfs-baseline" && <MarkReviewed onClick={onReviewed} />}
+            {noted && onSend !== undefined ? <SendFeedback onSend={onSend} /> : set.mode === "vfs-baseline" && <MarkReviewed onClick={onReviewed} />}
             <IconButton label="Close (Esc)" onClick={onClose}><XIcon size={15} /></IconButton>
           </div>
         </header>
@@ -319,8 +300,8 @@ export function ReviewSheet({ set, now, file, layout: initialLayout = "split", p
               <FileTree files={files} current={current} onOpen={show} />
             </div>
           </nav>
-          <Stack files={files} set={set} split={layout === "split"} register={register} stack={stack} onScroll={follow} />
-          <Notes open={panelOpen} onClose={() => setPanelOpen(false)} files={files} onReveal={reveal} />
+          <Stack files={files} set={set} split={layout === "split"} register={register} stack={stack} onScroll={follow} onOpenInFiles={onOpenInFiles} />
+          {notes !== null && <Suspense><NotesPanel open={panelOpen} onClose={() => setPanelOpen(false)} files={files} onReveal={reveal} /></Suspense>}
         </div>
       </div>
     </div>
