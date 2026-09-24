@@ -7,7 +7,7 @@ import {
 import { bootstrappedProfile } from './helpers/bindings';
 import { AuthError, authenticateRequest, type AuthIdentity } from '../src/auth/session';
 import { makeKv, type FakeKv } from './helpers/kv';
-import { DEV_IDENTITY_HEADER, sha256Hex } from '@kinu.run/core';
+import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, sha256Hex } from '@kinu.run/core';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
 import type { UserCaller } from '@kinu.run/core';
 
@@ -276,5 +276,29 @@ describe('the synthetic development identity', () => {
 
     if (!local.granted) throw new Error(`localhost was refused with ${String(local.status)}`);
     expect(local.identity.email).toBe('eval-service@kinu.run');
+  });
+
+  // 2026-09-24: the first-run tier's machines, attached as the dev identity, were in every workspace of the product
+  // flows and trajectory tiers, which ran beside it as that same identity.
+  test('a named eval account is another user, so the machines it attaches are no other account\'s', async () => {
+    const own = await resolve('https://kinu.run/api/user/workspaces', { [DEV_IDENTITY_HEADER]: 'deployment-shared-secret' });
+
+    const devices = await resolve('https://kinu.run/api/user/workspaces', {
+      [DEV_IDENTITY_HEADER]: 'deployment-shared-secret',
+      [DEV_IDENTITY_ACCOUNT_HEADER]: 'devices',
+    });
+
+    if (!own.granted || !devices.granted) throw new Error('the secret was refused');
+    expect(devices.identity).toMatchObject({ email: 'eval-service+devices@kinu.run', provider: 'dev' });
+    expect(devices.identity.userId).not.toBe(own.identity.userId);
+  });
+
+  test('an account name is no authority: without the secret it grants nothing, and an unknown one is refused', async () => {
+    expect(await resolve('https://kinu.run/api/user/workspaces', { [DEV_IDENTITY_ACCOUNT_HEADER]: 'devices' }))
+      .toEqual({ granted: false, status: 401 });
+    expect(await resolve('https://kinu.run/api/user/workspaces', {
+      [DEV_IDENTITY_HEADER]: 'deployment-shared-secret',
+      [DEV_IDENTITY_ACCOUNT_HEADER]: 'owner',
+    })).toEqual({ granted: false, status: 400 });
   });
 });

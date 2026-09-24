@@ -35,9 +35,10 @@
 // precedence over whatever this script resolved. So the endpoint is ruled on
 // here, by the same allowlist, before an origin is printed.
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import {
   EVAL_IDENTITY_ENV,
+  evalAccount,
+  evalSessionPath,
   refusedEvalEndpoint,
   resolveEvalIdentity,
 } from '../packages/test-utils/src/eval-identity';
@@ -48,9 +49,14 @@ const PersistedEvalIdentitySchema = v.object({
   accessToken: v.string(),
 });
 
-const persistedPath = `${homedir()}/.config/kinu/eval-session/config.json`;
+const account = evalAccount();
+
+const persistedPath = evalSessionPath(account);
 
 const identityEnv: NodeJS.ProcessEnv = { ...process.env };
+
+// KINU_EVAL_TOKEN is the eval service's own bearer; a named account's is only the one minted for it.
+if (account !== undefined) delete identityEnv[EVAL_IDENTITY_ENV.token];
 
 if (!identityEnv[EVAL_IDENTITY_ENV.token] && existsSync(persistedPath)) {
   const permissions = statSync(persistedPath).mode & 0o077;

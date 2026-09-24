@@ -88,6 +88,24 @@ if [[ -z "${KINU_EVAL_WEB_IDENTITY:-}" ]]; then
   exit 1
 fi
 
+# THE FLEET PROJECT ACTS AS ANOTHER ACCOUNT. Its cases attach real machines, and
+# a machine sits in every workspace of the account it is on — so on 2026-09-24
+# the product-flows and trajectory tiers, running beside this one as the eval
+# service, found kinu-first-run-alpha and -beta in their agents' device runtime
+# and broke on its refusal to guess between them. The fleet runs as the
+# `devices` eval account (KINU_EVAL_ACCOUNT, `EVAL_ACCOUNTS` in core): the same
+# DEV_IDENTITY_SECRET, another user, with a CLI bearer minted for it.
+FLEET_ACCOUNT=devices
+KINU_EVAL_ACCOUNT=$FLEET_ACCOUNT bun scripts/eval-session-mint.ts || exit 1
+FLEET_OUT="$(KINU_EVAL_ACCOUNT=$FLEET_ACCOUNT bun scripts/eval-credentials.ts)"
+mapfile -t FLEET_RESOLVED <<< "$FLEET_OUT"
+if [[ ${#FLEET_RESOLVED[@]} -ne 2 || "${FLEET_RESOLVED[0]}" != "$KINU_ORIGIN" ]]; then
+  echo "first-run: no CLI bearer for the $FLEET_ACCOUNT eval account at $KINU_ORIGIN, so the fleet cases" >&2
+  echo "  would attach their machines to the account every other tier drives." >&2
+  exit 1
+fi
+FLEET_TOKEN="${FLEET_RESOLVED[1]}"
+
 echo "── first-run tier ────────────────────────────────────────"
 echo "target:   $KINU_ORIGIN"
 echo "declared cases: $(ls tests/first-run/*.first-run.ts | wc -l | tr -d ' ') (executed/skipped cases are listed in JUnit)"
@@ -100,8 +118,8 @@ echo "Operator-only checks need their explicit target and authority; skipped cas
 #
 # TWO PROCESSES, SIDE BY SIDE (vitest.first-run.config.ts states why): the
 # cases that read the account's device fleet run one at a time in
-# `first-run-fleet`, and every other case runs concurrently in
-# `first-run-cases`. Two processes because vitest runs its projects one after
+# `first-run-fleet`, as the `devices` eval account, and every other case runs
+# concurrently in `first-run-cases`. Two processes because vitest runs its projects one after
 # another inside one; each writes its own JUnit, and a red in either is the
 # tier's red.
 #
@@ -121,7 +139,7 @@ run_project() {
     "${EMPTY_SELECTION[@]}" "$@"
 }
 set +e
-run_project first-run-fleet "$@" &
+KINU_EVAL_ACCOUNT=$FLEET_ACCOUNT KINU_TOKEN=$FLEET_TOKEN run_project first-run-fleet "$@" &
 FLEET_PID=$!
 run_project first-run-cases "$@" &
 CASES_PID=$!

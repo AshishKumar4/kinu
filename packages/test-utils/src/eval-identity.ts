@@ -3,7 +3,9 @@
  * {@link EVAL_IDENTITY_ENV.token}, never a person's stored session; no credential means skip. Target: an
  * allowlist of the one deployment plus loopback, failing closed. Pure over its environment.
  */
-import { USER_AI_PROXY_PATH } from '@kinu.run/core';
+import { homedir } from 'node:os';
+import * as v from 'valibot';
+import { EVAL_ACCOUNTS, USER_AI_PROXY_PATH, type EvalAccount } from '@kinu.run/core';
 import { classify, renderThrownChain } from '@kinu.run/core/obs';
 import { ambientByName, LIVE_MODEL_ENV } from './ambient-env';
 
@@ -18,6 +20,30 @@ export const EVAL_SERVICE_ACCOUNT = 'eval-service';
 
 /** The deployment's synthesized identity; pinned to wrangler.jsonc's DEV_USER_EMAIL by this module's tests. */
 export const EVAL_SERVICE_EMAIL = 'eval-service@kinu.run';
+
+/** The named eval account a run acts as instead of the eval service's own: the first-run tier's device cases run
+ *  as `devices`, so the machines they attach never sit in a workspace another tier's agent turns run in. */
+export const EVAL_ACCOUNT_ENV = 'KINU_EVAL_ACCOUNT';
+
+/** The named eval account `env` asks for, if any. A name that is no eval account throws: it must never fall back
+ *  to the eval service's own. */
+export function evalAccount(env: EnvSource = process.env): EvalAccount | undefined {
+  const name = env[EVAL_ACCOUNT_ENV]?.trim();
+
+  if (name === undefined || name === '') return undefined;
+  const named = v.safeParse(v.picklist(EVAL_ACCOUNTS), name);
+
+  if (!named.success) throw new Error(`${EVAL_ACCOUNT_ENV}=${name} names no eval account: one of ${EVAL_ACCOUNTS.join(', ')}`);
+
+  return named.output;
+}
+
+/** Where the CLI bearer minted for `account` is kept: the eval service's own, else its named account's beside it. */
+export function evalSessionPath(account: EvalAccount | undefined): string {
+  const dir = `${homedir()}/.config/kinu/eval-session`;
+
+  return account === undefined ? `${dir}/config.json` : `${dir}/${account}/config.json`;
+}
 
 /** The default eval target, pinned to wrangler.jsonc's CLI_PUBLIC_ORIGIN by tests. `workers_dev` is off,
  *  so no second host is allowed: it would expose the DEV_USER_EMAIL identity on an unwatched name. */
