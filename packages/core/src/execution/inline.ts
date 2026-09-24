@@ -386,29 +386,26 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   const slate = deps.slate;
 
   if (slate !== undefined) {
-    tools.slate = {
+    // Captured and shadowed by `bindSlates`.
+    tools.slates = {
       planAllowed: true,
-      description: 'Manage an authored slate: list, preview, call a POST route, commit source, history, fork a version, or restore source.',
+      description: 'The slate operations behind the workspace.slates members.',
       execute: async (...args: unknown[]): Promise<JsonValue> => {
         const parsed = v.safeParse(SlateOperationSchema, args[0]);
 
-        if (!parsed.success) return { ok: false, ...refusalOf(new KinuError('bad_input',
-          'workspace.slate expects a named op and its declared fields', { cause: new v.ValiError(parsed.issues) })) };
+        if (!parsed.success) return { success: false, ...refusalOf(new KinuError('bad_input',
+          'workspace.slates received an operation outside its members', { cause: new v.ValiError(parsed.issues) })) };
         requireSlateWorkMode(parsed.output, currentWorkMode());
         const result = await slate(parsed.output);
 
-        return result.ok ? { ok: true, value: result.value } : { ok: false, reason: result.reason, error: result.error };
+        return result.ok ? result.value : { success: false, reason: result.reason, error: result.error };
       },
     };
   }
 
-  const types = `declare namespace workspace {
-  /**
-   * A refused call, CLASS first: branch on \`reason\`, never on the prose.
-   * \`empty_anchor\`/\`not_found\`/\`ambiguous\`/\`overlap\`/\`no_change\`/\`unread\`/
-   * \`stale\` are the file plane's verdicts about an anchor or a read;
-   * the remaining reasons are the shared runtime failure codes.
-   */
+  const types = `/** Your workspace: the files the \`file\` tool reads and the \`workspace\` shell. */
+declare namespace workspace {
+  /** A refused call: branch on \`reason\`. The first seven are the file plane's verdicts on an anchor or read. */
   type Refusal = {
     success: false;
     reason: 'empty_anchor' | 'not_found' | 'ambiguous' | 'overlap' | 'no_change'
@@ -418,53 +415,55 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   };
   function readFile(path: string): Promise<string | Refusal>;
   function writeFile(path: string, content: string): Promise<string | Refusal>;
-  /**
-   * Replace exact text inside a file — old_text must occur exactly once,
-   * copied verbatim (indentation and all) from what readFile/writeFile/
-   * editFile last showed you here. Refused, touching nothing, if the file
-   * was never read/written in this scope, has changed since, or old_text is
-   * missing or not unique — the SAME enforcement the native \`file\` tool's
-   * edit action applies, over the same read state (a native \`file\` read or
-   * write of this path counts here too, and vice versa).
-   */
+  /** The \`file\` tool's edit, over the same read state: read the file first; each old_text is copied verbatim and occurs once. */
   function editFile(
     path: string, edits: Array<{ old_text: string; new_text: string }>
   ): Promise<{ ok: boolean; path?: string; applied?: Array<{ line: number; removed_lines: number; added_lines: number }> } | Refusal>;
   function readdir(path: string): Promise<string[] | Refusal>;
   function exists(path: string): Promise<boolean | Refusal>;
-  /**
-   * Run a command in the workspace shell, over the SAME files the calls above
-   * address. A real POSIX shell: ~95 coreutils, pipes, redirects, loops,
-   * variables, and a working directory that persists across calls. Runtime,
-   * process, and port support is declared by this provider's capabilities.
-   */
+  /** The workspace shell; its working directory persists across calls. */
   function exec(command: string): Promise<string | Refusal>;
   function searchMemory(query: string): Promise<string | Refusal>;
   function saveNote(content: string): Promise<string | Refusal>;
-  /** Returns Array<{name, description, qualityScore}> of crafted tools. */
+  /** Your crafted tools. */
   function listTools(): Promise<Array<{ name: string; description: string; qualityScore: number }>>;
-  /**
-   * Create or update a crafted tool. Callable as \`tools.<name>(args)\` on the NEXT
-   * eval call in this turn: the sandbox that created it is already built,
-   * so the new tool is not in it. \`tools\` is the only namespace it is callable
-   * in — the same one the native tools are in.
-   * Name is sanitized to a valid JS identifier; original case preserved.
-   */
+  /** Save a crafted tool, callable as \`tools.<name>(args)\` from the next program. */
   function createTool(
     name: string, description: string, code: string
   ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | Refusal>;
   ${slate === undefined ? '' : `/**
-   * A slate is an authored class with a React client, previewed and called through this operation. Read /skills/slates/SKILL.md before authoring one. Commit freezes source; fork copies a committed version; restore changes source, not history.
+   * Slates in this workspace; read /skills/slates/SKILL.md before authoring one. \`workspace.slates.<id>\`
+   * is the slate's server class: \`await workspace.slates.board.addStroke(stroke)\` runs its \`addStroke\`.
    */
   type SlateValue = null | boolean | number | string | SlateValue[] | { [key: string]: SlateValue };
-  function slate(input: { op: 'preview'; id: string }): Promise<{ ok: true; value: { url: string; port: number; inline: { height: number } } } | Refusal>;
-  function slate(input:
-    | { op: 'list' }
-    | { op: 'commit' | 'history'; id: string }
-    | { op: 'call'; id: string; method: string; args?: SlateValue[] }
-    | { op: 'fork'; version: string }
-    | { op: 'restore'; id: string; version: string }
-  ): Promise<{ ok: true; value: SlateValue } | Refusal>;
+  interface Slate {
+    [method: string]: (...args: SlateValue[]) => Promise<SlateValue | Refusal>;
+    /** Compile and boot it; a compile error is \`bad_input\` naming file and line. */
+    $preview(): Promise<{ url: string; port: number; inline: { height: number } } | Refusal>;
+    $methods(): Promise<string[] | Refusal>;
+    /** Freeze its source as a version. */
+    $commit(): Promise<SlateValue | Refusal>;
+    $history(): Promise<SlateValue | Refusal>;
+    $restore(version: string): Promise<SlateValue | Refusal>;
+    /** End its process, URL, storage and files; committed versions stay. */
+    $remove(): Promise<SlateValue | Refusal>;
+    /** Sharing, workspace root only. */
+    $inspect(version: string, include?: string[]): Promise<SlateValue | Refusal>;
+    $publish(version: string, include?: string[]): Promise<SlateValue | Refusal>;
+    $share(options: { visibility: 'users' | 'public'; approved: Array<{ slate: string; binding: string; member: string }>; fork?: boolean }): Promise<SlateValue | Refusal>;
+    $graph(): Promise<SlateValue | Refusal>;
+  }
+  const slates: { readonly [id: string]: Slate } & {
+    /** Every slate, and why any failed to load. */
+    $list(): Promise<{ slates: Array<{ id: string; title: string; bindings: string[] }>; problems: Array<{ id: string; reason: string; error: string }> } | Refusal>;
+    /** A committed version copied into a new slate. */
+    $fork(version: string): Promise<SlateValue | Refusal>;
+    /** Sharing, workspace root only. */
+    $shares(): Promise<SlateValue | Refusal>;
+    $liveShares(): Promise<SlateValue | Refusal>;
+    $unshare(share: string): Promise<SlateValue | Refusal>;
+    $viewerRequests(share: string): Promise<SlateValue | Refusal>;
+  };
 `}
 }`;
 
@@ -489,7 +488,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         reason:
           `workspace executor runs in the Worker and cannot expose inbound ports. ` +
           `Use an available preview-capable executor for a Node/Vite server (port ${port}). ` +
-          `For an authored Worker slate, use its declared slate preview operation when available.`,
+          `For an authored Worker slate, call workspace.slates.<id>.$preview().`,
       };
     },
     async unexposePort() { /* nothing to do */ },

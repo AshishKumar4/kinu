@@ -301,11 +301,4 @@ describe('tasks action=mode — the agent\'s durable role', () => {
     expect(Object.keys(buildBuiltinTools({ rt, history: storesFor(rt).history }))).not.toContain('submit_plan');
   });
 
-  test('the model can discover durable role switching from the schema', () => {
-    const { rt } = createTestRuntime();
-    const entry = buildBuiltinTools({ rt, roleAuthority: () => PROFILE_ENVELOPE, history: storesFor(rt).history }).tasks;
-    const description = entry?.description ?? '';
-    expect(description).toContain('mode switches your durable role');
-    expect(BUILTIN_TOOL_SPECS.tasks.whenToUse).toContain('mode switches your durable role');
-  });
 });

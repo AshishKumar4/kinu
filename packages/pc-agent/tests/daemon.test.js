@@ -8,7 +8,7 @@
 
 const { scratchDir } = require('../../test-utils/src/scratch');
 
-const { afterAll, describe, expect, spyOn, test } = require('bun:test');
+const { afterAll, afterEach, describe, expect, spyOn, test } = require('bun:test');
 
 const fs = require('node:fs');
 
@@ -44,11 +44,20 @@ const {
   createCheckpoints,
   getConnectTicket,
   handleTokenRotation,
+  inFlight,
   persistRotatedToken,
   readDeviceConfig,
   startConnectLoop,
   supervisionSupported,
 } = require('../src/index.js');
+
+/** The hub ACKs every result it records, and the ACK is what ends a command's supervisor (about 30 MB).
+ *  A test that read an answer and stopped there left 22 supervisors running until the run ended. */
+afterEach(async () => {
+  for (const requestId of fs.readdirSync(INFLIGHT_ROOT)) {
+    if (fs.existsSync(path.join(INFLIGHT_ROOT, requestId, 'result'))) await inFlight.acknowledge(requestId);
+  }
+});
 
 /** The block a hub with the owner's Sandbox switch OFF sends. Every frame that
  *  reaches the machine carries a tier, so an unscoped frame is a refusal. */

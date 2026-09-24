@@ -423,7 +423,7 @@ describe('account panels', () => {
     });
   });
 
-  test('the primary nav, the workspaces page, the plugins page and the blueprints folder render at both widths in both themes', async () => {
+  test('the primary nav, the workspaces page, the plugins page and the Shared tab render at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
       const shots: string[] = [];
 
@@ -514,43 +514,18 @@ describe('account panels', () => {
           const shared = await freshPage(gallery, 'shared', theme, viewport);
 
           try {
+            await shared.waitForSelector('[data-drive-section="Shared with you"]');
             const body = await shared.evaluate(() => document.body.innerText);
 
-            // One grid behind five counted segments — the lists are tabs now,
-            // drawn as the Drive's blueprints folder.
-            expect(body).toContain('Drive');
-            expect(body).toContain('blueprints');
-            expect(await shared.$$eval('[aria-label="Shared lists"] [role="tab"]', (els) => els.length)).toBe(5);
+            // The Drive's second tab: what others shared first, then what the owner shared.
+            expect(await shared.$$eval('[data-drive-tab]', (tabs) => tabs.map((tab) => tab.textContent?.trim()))).toEqual(['My stuff', 'Shared']);
+            expect(body.indexOf('Shared with you')).toBeLessThan(body.indexOf('Shared by you'));
 
-            for (const label of ['All', 'Mine', 'With me', 'Public', 'People I know']) expect(body).toContain(label);
-
+            // The Drive row stays lit on /shared: it is the Drive, not another page.
             if (viewport === 'desktop') expect(await activeNavRow(shared)).toBe('Drive');
-            shots.push(await shoot(shared, `shared-segments-${viewport}-${theme}`));
+            shots.push(await shoot(shared, `shared-${viewport}-${theme}`));
           } finally {
             await shared.close();
-          }
-
-          // Before anything is shared, each segment says its own empty line.
-          const empty = await freshPage(gallery, 'shared-empty', theme, viewport);
-
-          try {
-            const body = await empty.evaluate(() => document.body.innerText);
-
-            expect(body).toContain('Nothing shared yet');
-            expect(await empty.$$eval('[data-open-live]', (buttons) => buttons.length)).toBe(0);
-
-            for (const [segment, line] of [
-              ['received', 'Nothing shared with you'],
-              ['public', 'Nothing public'],
-              ['known', 'Nothing from people you know'],
-            ] as const) {
-              await empty.click(`[data-segment="${segment}"]`);
-              await empty.waitForFunction(
-                (expected) => document.body.innerText.includes(expected), {}, line,
-              );
-            }
-          } finally {
-            await empty.close();
           }
         }
       }

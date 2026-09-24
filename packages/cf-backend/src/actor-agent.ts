@@ -4044,7 +4044,6 @@ export abstract class ActorAgent extends Agent<Env> {
     }));
 
     const runtime = this.rt;
-    this.acc.composition.openTurn({ system: assembled.system, tools: assembled.tools });
 
     return {
       execution: {

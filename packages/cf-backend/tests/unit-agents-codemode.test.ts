@@ -170,25 +170,19 @@ function fullDeps(): AgentsToolDeps {
 // DEFAULT_DESCRIPTION (whose example calls `codemode.searchWeb`, unbound here).
 
 describe('the eval docstring the model receives', () => {
-  test('carries the registry doctrine, not the vendor default', () => {
+  test('carries the registry description, not the vendor default', () => {
     const description = codemodeDescription();
     expect(description).toContain(BUILTIN_TOOL_DESCRIPTIONS.eval);
-    expect(description).toContain('Use when:');
-    expect(description).toContain('Avoid when:');
-    expect(description).toContain('Returns:');
-    expect(description).toContain('canonical durable workspace');
     expect(description).not.toContain('Execute code to achieve a goal.');
     expect(description).not.toContain('codemode.searchWeb');
   });
 
-  test('states what the sandbox is: a Node-like isolate with every tool under tools.*', () => {
+  test('declares its own namespaces, and not the native tools a second time', () => {
+    // Each native tool's schema is already in the request; `tools.<name>` takes that same input.
     const description = codemodeDescription();
-    expect(description).toContain('fresh JavaScript isolate per program, written like a Node script');
-    expect(description).toContain('`require()` resolves the Node builtins');
-    expect(description).toContain('Type annotations do not parse there');
-    expect(description).toContain('export declare const tools: {');
-    expect(description).toContain('file(input: { action: string; path: string }): Promise<unknown>;');
     expect(description).toContain('export declare const state: {');
+    expect(description).not.toContain('export declare const tools');
+    expect(description).not.toContain('file(input:');
   });
 
   test('web.* is declared with its real positional signature', () => {
@@ -199,6 +193,20 @@ describe('the eval docstring the model receives', () => {
     expect(description).toContain('search(query: string, opts?: { limit?: number })');
     expect(description).toContain('fetch(url: string)');
     expect(description).not.toContain('type SearchInput = unknown');
+  });
+
+  test('a declaration reaches the model verbatim, `$` sequences included', () => {
+    // `workspace.slates` names lifecycle members with `$`; a string `.replace` read "$`" as the text before the token.
+    const types = "export declare const probe: {\n  /** Members named with `$` are lifecycle: $' and $& and $$ too. */\n  $preview(): Promise<unknown>;\n};";
+    const { rt, testSql } = createTestRuntime();
+    initCraftedToolsTables(testSql.sql);
+
+    const built = createCodemodeToolFactory({
+      loader: workerLoader(), egress: null, rt, sql: testSql.sql, workspace: 'test-workspace', webSearch: webSearchProvider(),
+      extraProviders: () => [{ name: 'probe', tools: {}, types, positionalArgs: true }],
+    }).toolFor({});
+
+    expect(built.description).toContain(types);
   });
 
   test('the code field is labelled as the script body it actually is', () => {
@@ -235,7 +243,6 @@ describe('agents.* in the cf codemode tool', () => {
     expect(description).toContain('swarm(input');
     expect(description).not.toContain('hire(input');
     expect(description).not.toContain('dismiss(input');
-    expect(description).toContain('NOT resumable from here');
   });
 
   test('an actor with no delegation deps has no agents namespace at all', () => {

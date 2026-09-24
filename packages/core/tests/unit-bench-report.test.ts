@@ -9,7 +9,7 @@ import type {
 } from '../src/index';
 
 const CONFIG: BenchRunConfig = {
-  corpus: 'tests/bench/tasks.jsonl',
+  corpus: 'bench/corpus/tasks.jsonl',
   budget: DEFAULT_ATTEMPT_BUDGET,
   seed: 1,
   variantA: 'baseline',
@@ -54,7 +54,7 @@ describe('benchConfigHash', () => {
   test('is stable for identical config', () => {
     expect(benchConfigHash({ ...CONFIG })).toBe(benchConfigHash(CONFIG));
     // Pinned so a dropped field fails here instead of passing on both sides.
-    expect(benchConfigHash(CONFIG)).toBe('e4bc90bd75b1fb64');
+    expect(benchConfigHash(CONFIG)).toBe('bddddfc730b4706f');
   });
 });
 

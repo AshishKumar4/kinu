@@ -11,11 +11,8 @@ const SHARED_MOUNT = 'shared';
 /** Where user-level skills live on the tenant (the path the Drive UI addresses). */
 export const DRIVE_SKILLS_DIR = '/skills';
 
-/** Where blueprints live on the tenant; the Drive shows the library there. */
-export const DRIVE_BLUEPRINTS_DIR = '/blueprints';
-
 /** The tenant folders the Drive UI never renames or deletes. */
-export const DRIVE_RESERVED_DIRS: readonly string[] = [DRIVE_SKILLS_DIR, DRIVE_BLUEPRINTS_DIR];
+export const DRIVE_RESERVED_DIRS: readonly string[] = [DRIVE_SKILLS_DIR];
 
 /** Where user-level skills live as every workspace sees them. */
 export const SHARED_SKILLS_DIR = `/${SHARED_MOUNT}${DRIVE_SKILLS_DIR}`;

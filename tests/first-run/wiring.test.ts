@@ -5,7 +5,7 @@ import { basename, join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import * as v from 'valibot';
 
-import { assessAdmissibility, outcomeRow, scratchDir, subgoalOutcome, TASK_OUTCOME,
+import { assessAdmissibility, outcomeRow, projectRunEventProvenance, scratchDir, subgoalOutcome, TASK_OUTCOME,
   type EvalObservation } from '@kinu.run/test-utils';
 import { isFirstRunSuite, trackedFiles } from '../../scripts/sources';
 import {
@@ -17,7 +17,7 @@ import firstRunConfig, {
 import {
   FIRST_RUN_ARM, FIRST_RUN_CASES, FIRST_RUN_DEFECTS, FIRST_RUN_FAMILY,
 } from './first-run';
-import { resolvePublicSessionPlan } from '../evals/public-session';
+import { resolvePublicSessionPlan } from '../../evals/src/session';
 import { CAPABILITY_ROWS, ENTRY_ROWS, PAGE_ROWS, STRIP_ROWS } from './surfaces';
 
 /** The deployed tier's package command. */
@@ -87,12 +87,12 @@ describe('the first-run corpus is the set this tier runs', () => {
 
     for (const file of onDisk) expect(file.startsWith('tests/first-run/')).toBe(true);
 
-    // And no case file can be selected by the two runners that must never see
-    // it: `bun test` matches only `.test.`/`.spec.`, and the eval tier's config
-    // includes `tests/evals/**` alone.
+    // And no case file can be selected by the runners that must never see it:
+    // `bun test` matches only `.test.`/`.spec.`, and the eval suite's config
+    // includes `evals/tasks/**` alone.
     for (const file of onDisk) {
       expect(/\.(test|spec)\.[cm]?[jt]sx?$/.test(file)).toBe(false);
-      expect(file.startsWith('tests/evals/')).toBe(false);
+      expect(file.startsWith('evals/')).toBe(false);
     }
   });
 
@@ -200,7 +200,8 @@ describe('a partial first-run tier is not evidence', () => {
     const scored = (id: string): EvalObservation => ({
       taskId: id, repetition: 0, outcome: 'scored',
       scores: [outcomeRow(subgoalOutcome(3, 3, 'every subgoal reached'))],
-      turns: 1, toolCalls: 2, toolNames: ['device.exec'], tokensIn: 10, tokensOut: 5, ms: 1_000,
+      turns: 1, toolCalls: 2, toolNames: ['device.exec'], tokensIn: 10, tokensOut: 5, reasoningOut: 0, ms: 1_000,
+      provenance: projectRunEventProvenance([]),
     });
 
     const declared = [...FIRST_RUN_CASES];
@@ -218,7 +219,8 @@ describe('a partial first-run tier is not evidence', () => {
     // covariates measured activity, not outcome.
     const activityOnly: EvalObservation = {
       taskId: declared[0] ?? '', repetition: 0, outcome: 'scored', scores: [],
-      turns: 1, toolCalls: 2, tokensIn: 10, tokensOut: 5, ms: 1_000,
+      turns: 1, toolCalls: 2, toolNames: ['device.exec'], tokensIn: 10, tokensOut: 5, reasoningOut: 0, ms: 1_000,
+      provenance: projectRunEventProvenance([]),
     };
 
     expect(assessAdmissibility([declared[0] ?? ''], [activityOnly]).failures.join(' '))

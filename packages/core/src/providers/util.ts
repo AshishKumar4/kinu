@@ -1,4 +1,6 @@
 // Shared provider internals: the auth-injecting fetch wrapper and catalog parse helpers.
+import type { LanguageModelV3Message } from '@ai-sdk/provider';
+import type { LanguageModelMiddleware } from 'ai';
 import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
@@ -58,6 +60,33 @@ export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions):
 
     return withCallAccount(await retrying(paid)(rewritten ?? input, { ...init, headers }), opts.provider, paid);
   });
+}
+
+/** As opencode's client: nothing stored, steps sent whole, effort for ids the SDK's allowlist misses. */
+export function statelessResponses(reasoning: boolean): LanguageModelMiddleware {
+  const stateless = reasoning ? { store: false, forceReasoning: true } : { store: false };
+
+  return {
+    specificationVersion: 'v3',
+    transformParams: async ({ params }) => ({
+      ...params,
+      prompt: params.prompt.map(withoutItemIds),
+      providerOptions: { ...params.providerOptions, openai: { ...params.providerOptions?.openai, ...stateless } },
+    }),
+  };
+}
+
+function withoutItemIds(message: LanguageModelV3Message): LanguageModelV3Message {
+  if (message.role !== 'assistant') return message;
+
+  return {
+    ...message,
+    content: message.content.map((part) => {
+      const { itemId, ...openai } = part.providerOptions?.openai ?? {};
+
+      return itemId === undefined ? part : { ...part, providerOptions: { ...part.providerOptions, openai } };
+    }),
+  };
 }
 
 /** Credential identity for keying catalog caches. */

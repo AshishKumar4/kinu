@@ -4,6 +4,7 @@ import { overviewHeadline, shortAge, timeAgo, workspaceDisplayTitle, type Worksp
 import { lastValue } from "@/hooks/use-async-resource";
 import { useWorkspaceOverview } from "@/hooks/use-workspace-overviews";
 import type { WorkspaceEntry } from "@/lib/user-api";
+import { coverBadge, coverLetter, coverWash, hueOf } from "@/components/ui/cover";
 
 interface StatusTone {
   readonly dot: string;
@@ -59,14 +60,6 @@ function missionOf(overview: WorkspaceOverview | null, title: string): string | 
   return task.trim().toLowerCase() === title.trim().toLowerCase() ? null : task;
 }
 
-function hueOf(name: string): number {
-  let hash = 0;
-
-  for (const char of name) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) >>> 0;
-
-  return hash % 360;
-}
-
 /**
  * Rendered at four times the box and scaled down so the slate lays out at a real viewport width.
  * Inert: no pointer events, no tab stop, aria-hidden, sandbox without top-navigation or forms.
@@ -76,7 +69,7 @@ function SlateFrame({ slate, hue }: { slate: NonNullable<WorkspaceOverview["prim
     <span
       data-slate-frame
       className="relative block aspect-[16/10] w-full overflow-hidden"
-      style={{ background: `linear-gradient(180deg, oklch(62% 0.13 ${hue} / 0.28), oklch(62% 0.13 ${hue} / 0.08))` }}
+      style={coverWash(hue)}
     >
       <iframe
         src={slate.url}
@@ -147,14 +140,14 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
         {slate === null && (
           <span
             className="flex h-14 items-end px-4 pb-2"
-            style={{ background: `linear-gradient(180deg, oklch(62% 0.13 ${hue} / 0.28), oklch(62% 0.13 ${hue} / 0.08))` }}
+            style={coverWash(hue)}
           >
             <span
               className="flex size-8 items-center justify-center rounded-lg text-sm font-semibold"
-              style={{ background: `oklch(62% 0.14 ${hue} / 0.35)`, color: `oklch(78% 0.12 ${hue})` }}
+              style={coverBadge(hue)}
               aria-hidden="true"
             >
-              {title.trim().charAt(0).toUpperCase() || "·"}
+              {coverLetter(title)}
             </span>
           </span>
         )}

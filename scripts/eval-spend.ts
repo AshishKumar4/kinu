@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * What the eval tier's run actually cost, summed across suite processes.
+ * What a live tier's run actually cost, summed across suite processes.
  *
  * "State the cost per run" is not answerable with a constant. These suites let
  * the model take up to 500 steps, so the bill is decided by what the model
@@ -94,7 +94,7 @@ export function renderSpend(lines: readonly SpendLine[]): string {
       : ''));
 
   if (total.suites === 0) {
-    return 'eval-tier cost: no suite reported spend — either nothing ran, or a suite '
+    return 'tier cost: no suite reported spend — either nothing ran, or a suite '
       + 'did not call reportLiveModelSpend in its teardown';
   }
 
@@ -113,7 +113,7 @@ export function renderSpend(lines: readonly SpendLine[]): string {
     : '';
 
   return [
-    `eval-tier cost per run, measured over ${String(total.suites)} suite(s):`,
+    `tier cost per run, measured over ${String(total.suites)} suite(s):`,
     ...rows,
     `  TOTAL: ${String(total.calls)} model call(s), ${total.usage.input ?? 'unreported'} input + `
     + `${total.usage.output ?? 'unreported'} output tokens${unreported}${unaccounted}`,
@@ -135,7 +135,7 @@ export function renderSpend(lines: readonly SpendLine[]): string {
  * unsuccessfully when that evidence is absent.
  *
  * `expected` is whether the tier RESOLVED a target, decided by
- * scripts/eval-tier.sh which is the one place that knows. It is not the same
+ * the tier script (scripts/live-tier.sh, scripts/first-run-tier.sh) which is the one place that knows. It is not the same
  * question as "did anything run": with no credential anywhere the tier is
  * deliberately allowed to skip everything and pass, because a tier that cannot
  * run without a secret reproduces nowhere and the skip-ratchet is what keeps
@@ -215,17 +215,17 @@ export function livenessVerdict(
 export function renderLiveness(verdict: LivenessVerdict): string {
   switch (verdict.kind) {
     case 'proven':
-      return `eval-tier liveness: PROVEN — ${verdict.detail}`;
+      return `tier liveness: PROVEN — ${verdict.detail}`;
     case 'unproven':
-      return `eval-tier liveness: UNPROVEN — ${verdict.reason}`;
+      return `tier liveness: UNPROVEN — ${verdict.reason}`;
     case 'unconfigured':
-      return 'eval-tier liveness: not asserted — no live-model target was resolved, so this '
+      return 'tier liveness: not asserted — no live-model target was resolved, so this '
         + 'run had nothing to prove. The skip-ratchet is what holds the skips accountable.';
   }
 }
 
 if (import.meta.main) {
-  // `--expect-live` is scripts/eval-tier.sh saying it resolved a target. Passed
+  // `--expect-live` is the tier script (scripts/live-tier.sh, scripts/first-run-tier.sh) saying it resolved a target. Passed
   // in rather than re-derived from the environment here, because this process
   // does not see the credential the tier borrowed from the signed-in CLI
   // session, and a second resolver would be a second answer to the one question

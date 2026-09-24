@@ -22,7 +22,7 @@ import {
 import { applyCacheBreakpoints, hasCacheMarkers, type CacheBreakpointPlan } from './prompting/cache-breakpoints';
 import type { ResolvedModelWindow } from './prompting/step-prune';
 import type { CacheRetention } from './providers/types';
-import type { TurnContextMeter } from './context-meter';
+import type { ContextComposition, TurnContextMeter } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
 import type { MissionGovernor } from './mission-budget';
 import type { AttachmentPolicy } from './prompting/attachment-sanitizer';
@@ -68,6 +68,9 @@ export type ChatEvent =
      *  (providers/cache-warming.ts). */
     request?: { body?: unknown; sentAt?: number };
     account?: CallAccount;
+    /** The breakdown of the request this step sent, taken when the SDK finished the step and before it
+     *  prepares the next one: a reader that lags the model still records each step's own request. */
+    context?: ContextComposition;
   }
   /** A failure the turn survived. `runChat` never yields this; the scaffold seam (scaffold/chat-transform.ts) does. */
   | { type: 'error'; message: string }
@@ -218,16 +221,7 @@ function toolOutput(raw: ChatToolOutput['output']): { output: JsonValue } | unde
   return raw === undefined ? undefined : { output: projectJsonValue({ value: raw }) };
 }
 
-interface PendingStepEvent {
-  stepIndex: number;
-  responseMessages: readonly ModelMessage[];
-  usage?: Usage;
-  finishReason?: string;
-  text?: string;
-  toolCalls?: ReadonlyArray<{ toolName: string }>;
-  toolResults?: ReadonlyArray<unknown>;
-  request?: { body?: unknown; sentAt?: number };
-}
+type PendingStepEvent = Omit<Extract<ChatEvent, { type: 'step-finish' }>, 'type'>;
 
 interface CallOutcome {
   /** The SDK's steps on a natural finish, the `onAbort` handover on a cut. */
@@ -280,7 +274,7 @@ class ProviderCall {
   }
 
   /** SDK step fields are prototype getters a spread would drop, so they are read off here. */
-  stepFinished(step: StepResult<ToolSet>, stepIndex: number): void {
+  stepFinished(step: StepResult<ToolSet>, stepIndex: number, context: ContextComposition | undefined): void {
     this.finishedSteps.push(step);
     this.responseSoFar = [...step.response.messages];
 
@@ -295,6 +289,7 @@ class ProviderCall {
       request: { body: step.request.body, sentAt: this.stepSentAt },
       ...(usageReported(usage) && { usage }),
       ...(account !== undefined && { account }),
+      ...(context && { context }),
     });
   }
 
@@ -649,7 +644,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       onStepFinish: async (step) => {
         stepCount++;
         await opts.persistStep?.(step.response.messages);
-        call.stepFinished(step, stepCount);
+        call.stepFinished(step, stepCount, opts.meter?.take());
         await opts.onStep?.(step);
       },
     });

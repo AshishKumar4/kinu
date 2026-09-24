@@ -222,7 +222,7 @@ export {
 } from './evolution/behavior-labels';
 
 export {
-  initReplayTables, runReplayEval, listReplayEvals,
+  initReplayTables, runReplayEval, listReplayEvals, DEFAULT_QUALITY_THRESHOLD,
   type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
 } from './evolution/replay';
 
@@ -560,10 +560,7 @@ export {
   type WebToolAction,
   type FileToolAction,
   type TasksToolAction,
-  DELEGATION_FRAME,
-  DELEGATION_INHERITANCE,
-  DELEGATION_RUNGS,
-  DELEGATION_CONVERSE,
+  AGENTS_TOOL_NOTES,
   renderToolSchemaDescription,
   renderCodemodeDescription, CODEMODE_CODE_DESCRIPTION,
   TOOL_REACH,
@@ -580,8 +577,8 @@ export {
 
 export {
   CRAFTED_TOOL_NAMESPACE,
-  craftedToolDescription, jsonSchemaToTs, nativeToolInputSchema, codemodeInputSchema,
-  renderToolsDeclaration, nativeToolFunctions, codemodeFunction, craftedFailureFunctions, slateToolReach, callCodemodeMember,
+  craftedToolDescription, codemodeInputSchema,
+  renderCraftedToolsDeclaration, nativeToolFunctions, codemodeFunction, craftedFailureFunctions, slateToolReach, callCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,
@@ -1211,7 +1208,7 @@ export { ensureDir } from './utils/vfs-helpers';
 export { mossaicVfs, type MossaicClient, type MossaicVfs, type MossaicStat, type MossaicChild } from './vfs/mossaic-vfs';
 
 export {
-  sharedDriveMount, SHARED_SKILLS_DIR, DRIVE_SKILLS_DIR, DRIVE_BLUEPRINTS_DIR, DRIVE_RESERVED_DIRS,
+  sharedDriveMount, SHARED_SKILLS_DIR, DRIVE_SKILLS_DIR, DRIVE_RESERVED_DIRS,
   SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND,
 } from './vfs/shared-drive';
 
@@ -1380,7 +1377,6 @@ export * from './events/ingress/index';
 export * from './strategy/index';
 
 // Eval harness
-export * from './eval/index';
 
 // Bench harness: pure math; the runner lives in scripts/bench.ts.
 export * from './bench/index';
@@ -1938,7 +1934,7 @@ export type {
 } from './read-models/workspace-spend';
 
 export {
-  censusToolFailures, classifyToolFailure, toolFailureKey, toolFailurePartOfKey,
+  censusToolFailures, classifyToolFailure, toolFailureKey,
 } from './read-models/tool-failures';
 
 export type {

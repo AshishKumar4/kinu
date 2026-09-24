@@ -18,7 +18,7 @@ import { tolerate } from '../packages/core/src/obs/index';
 import { ARTIFACT_DIRNAME } from './bench-retention';
 import { workspacePackages } from '../packages/test-utils/src/workspace-resolution';
 
-/** Paths never copied into a sandbox. `tests/bench` is the seal's outermost
+/** Paths never copied into a sandbox. `bench/corpus` is the seal's outermost
  *  ring: an agent that cannot read the corpus cannot read the held-out tasks,
  *  look up its own defect patch, or tune against either. `bench-artifacts` is
  *  the SECOND ring, and it is the one retention created: a retained run holds
@@ -27,7 +27,7 @@ import { workspacePackages } from '../packages/test-utils/src/workspace-resoluti
  *  agent worktrees — checkouts of this same repo, each with its own
  *  node_modules, and none of them are the source under test. */
 const SANDBOX_EXCLUDES = [
-  '.git', 'node_modules', '.claude', ARTIFACT_DIRNAME, join('tests', 'bench'),
+  '.git', 'node_modules', '.claude', ARTIFACT_DIRNAME, join('bench', 'corpus'),
 ] as const;
 
 /** Nested checkouts, excluded at the repo root. Each carries its OWN

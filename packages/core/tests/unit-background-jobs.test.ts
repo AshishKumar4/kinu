@@ -1,5 +1,4 @@
 import { describe, test, expect } from 'bun:test';
-import { DELEGATION_RUNGS } from '../src/tools/registry';
 import { Database } from 'bun:sqlite';
 import {
   BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, withSpawnDetach,
@@ -415,8 +414,6 @@ describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, nev
       expect(out.message.length).toBeLessThan(80);
     }
 
-    const rung = Object.values(DELEGATION_RUNGS).join(' ');
-    expect(rung).toContain('never poll a backgrounded job or spawn it twice');
   });
 });
 

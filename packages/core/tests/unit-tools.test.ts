@@ -243,13 +243,9 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     }
   });
 
-  test('descriptions document the one tools.<name> namespace and the state store', () => {
+  test('descriptions name no retired alias or false shell limit', () => {
     // No `codemode.*`: a refusing alias in the description is a name the model keeps reaching for.
     expect(BUILTIN_TOOL_DESCRIPTIONS.eval).not.toContain('codemode.*');
-    expect(BUILTIN_TOOL_DESCRIPTIONS.eval).toContain('`tools.<name>(input)`');
-    expect(BUILTIN_TOOL_DESCRIPTIONS.eval).toContain('`state.*`');
-    expect(BUILTIN_TOOL_DESCRIPTIONS.eval).toContain('canonical durable workspace');
-    expect(BUILTIN_TOOL_DESCRIPTIONS.shell).toContain('shell over the canonical durable workspace');
     expect(BUILTIN_TOOL_DESCRIPTIONS.shell).not.toContain('small fixed command set');
     expect(BUILTIN_TOOL_DESCRIPTIONS.shell).not.toContain('running programs there fails');
   });

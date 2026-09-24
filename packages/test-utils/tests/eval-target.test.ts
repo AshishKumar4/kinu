@@ -1,23 +1,13 @@
 /**
- * `stepBoundEvidence` is tested both ways on the production signature: ten `step_finish` rows,
- * the last `tool-calls`, and `run_end: 'completed'`. `probeVerifier` is tested both ways on a
- * shell that answers without printing the marker, as the deployed Nimbus `node` shim does.
+ * The backend knob and the ledger reduction every live tier shares.
  */
 import { describe, expect, test } from 'bun:test';
-import type { RunEvent, VFS, WorkspaceSpend } from '@kinu.run/core';
+import type { RunEvent, WorkspaceSpend } from '@kinu.run/core';
 
 import {
-  EVAL_BACKEND_ENV, ledgerTotalsFromEvents, probeVerifier, resolveEvalBackend,
-  RUN_END_FAILURE_PREFIX, stepBoundEvidence, type EvalTargetWorkspace,
+  EVAL_BACKEND_ENV, ledgerTotalsFromEvents, resolveEvalBackend, RUN_END_FAILURE_PREFIX,
 } from '../src/eval-target';
 import { liveModelSpend, recordNoModelEpisode, recordWorkspaceSpend, resetLiveModelSpend } from '../src/live-model';
-
-/** The fake target's observable surface: what the probe wrote, what it ran. */
-interface FakeWorkspace {
-  workspace: EvalTargetWorkspace;
-  written: Map<string, string>;
-  commands: string[];
-}
 
 const RUN = 'run-test';
 
@@ -40,7 +30,7 @@ function event(body: EventBody): RunEvent {
   };
 }
 
-/** The production trail: ten steps, the last still calling tools, run reported completed. */
+/** A trail of ten steps, the last still calling tools, the run reported completed. */
 function cappedTrail(): RunEvent[] {
   nextIndex = 0;
   const events: RunEvent[] = [event({ type: 'turn_start', turnIndex: 0 })];
@@ -55,56 +45,6 @@ function cappedTrail(): RunEvent[] {
 
   return events;
 }
-
-/** A naturally finished run: five steps, last reason `stop`. */
-function naturalTrail(): RunEvent[] {
-  nextIndex = 0;
-  const events: RunEvent[] = [event({ type: 'turn_start', turnIndex: 0 })];
-
-  for (let step = 0; step < 4; step += 1) {
-    events.push(event({ type: 'tool_call_end', name: 'read', toolCallId: `tc-${String(step)}` }));
-    events.push(event({ type: 'step_finish', stepIndex: step, reason: 'tool-calls' }));
-  }
-
-  events.push(event({ type: 'step_finish', stepIndex: 4, reason: 'stop' }));
-  events.push(event({ type: 'turn_end', turnIndex: 0, usage: { input: 100, output: 20 } }));
-  events.push(event({ type: 'run_end', reason: 'completed' }));
-
-  return events;
-}
-
-describe('stepBoundEvidence — the divergence probe', () => {
-  test('the production signature reads as truncated beside a `completed` run_end', () => {
-    const evidence = stepBoundEvidence(cappedTrail());
-    expect(evidence.steps).toBe(10);
-    expect(evidence.lastStepReason).toBe('tool-calls');
-    expect(evidence.runEndReasons).toEqual(['completed']);
-    // `truncated` beside `completed` is the finding; either alone is unremarkable.
-    expect(evidence.truncated).toBe(true);
-  });
-
-  test('a turn that finished on its own is NOT flagged', () => {
-    // Red direction: a probe calling every run truncated would pass the case above.
-    const evidence = stepBoundEvidence(naturalTrail());
-    expect(evidence.steps).toBe(5);
-    expect(evidence.lastStepReason).toBe('stop');
-    expect(evidence.truncated).toBe(false);
-  });
-
-  test('an episode that closed no step says so rather than reporting a reason', () => {
-    nextIndex = 0;
-    const evidence = stepBoundEvidence([event({ type: 'run_end', reason: 'interrupted' })]);
-    expect(evidence.steps).toBe(0);
-    expect(evidence.lastStepReason).toBeNull();
-    expect(evidence.truncated).toBe(false);
-    expect(evidence.runEndReasons).toEqual(['interrupted']);
-  });
-
-  test('a run_end with no reason is named, not dropped', () => {
-    nextIndex = 0;
-    expect(stepBoundEvidence([event({ type: 'run_end' })]).runEndReasons).toEqual(['unstated']);
-  });
-});
 
 describe('ledgerTotalsFromEvents — one reducer, both targets', () => {
   test('it counts turns, tool calls, steps and usage off the canonical union', () => {
@@ -232,98 +172,6 @@ describe('resolveEvalBackend — the one knob', () => {
     if (refused.kind !== 'refused') throw new Error('unreachable');
     expect(refused.reason).toContain(EVAL_BACKEND_ENV);
     expect(refused.reason).toContain('cloud');
-  });
-});
-
-/**
- * Only the members the probe touches are real; the rest throw, so a new read fails instead
- * of passing over a default.
- */
-function fakeWorkspace(reply: { stdout: string; exitCode: number }): FakeWorkspace {
-  const written = new Map<string, string>();
-  const commands: string[] = [];
-
-  const unavailable = (member: string) => (): never => {
-    throw new Error(`the probe read \`${member}\`, which it is not supposed to need`);
-  };
-
-  const vfs: VFS = {
-    writeFile: (path, data) => {
-      written.set(path, String(data));
-
-      return Promise.resolve();
-    },
-    unlink: (path) => {
-      written.delete(path);
-
-      return Promise.resolve();
-    },
-    readFile: unavailable('readFile'),
-    readdir: unavailable('readdir'),
-    stat: unavailable('stat'),
-    mkdir: unavailable('mkdir'),
-    exists: unavailable('exists'),
-  };
-
-  return {
-    written,
-    commands,
-    workspace: {
-      vfs,
-      exec: (command) => {
-        commands.push(command);
-
-        return Promise.resolve(reply);
-      },
-    },
-  };
-}
-
-describe('probeVerifier — the one instrument both arms run', () => {
-  test('a shell that prints the marker RUNS, and the module is cleaned up', async () => {
-    const { workspace, written, commands } = fakeWorkspace({
-      stdout: 'KINU_VERIFIER_PROBE_OK\n', exitCode: 0,
-    });
-
-    const probe = await probeVerifier(workspace);
-    expect(probe.kind).toBe('runs');
-
-    if (probe.kind !== 'runs') throw new Error('unreachable');
-    // The evidence is the shell's output, so a reader sees which shell answered.
-    expect(probe.evidence).toBe('KINU_VERIFIER_PROBE_OK');
-    // `node` on a written module is the smallest instance of `exec-ratio`.
-    expect(commands).toEqual(['node _verifier_probe.mjs']);
-    expect(written.size, 'the probe module must not outlive the probe').toBe(0);
-  });
-
-  test('a shell that answers WITHOUT the marker is unavailable, and says what it said', async () => {
-    // Production shape: the Nimbus `node` shim resolves `esbuild-wasm` to its Node entry, which
-    // rejects `wasmModule`, so no RESULT line prints.
-    const { workspace } = fakeWorkspace({
-      stdout: 'error: Cannot use "wasmModule" outside a browser\n', exitCode: 1,
-    });
-
-    const probe = await probeVerifier(workspace);
-    expect(probe.kind).toBe('unavailable');
-
-    if (probe.kind !== 'unavailable') throw new Error('unreachable');
-    expect(probe.reason).toContain('exited 1');
-    // The shell's own words survive in the refusal.
-    expect(probe.reason).toContain('wasmModule');
-    expect(probe.reason).toContain("score:'verify'");
-  });
-
-  test('a shell that refuses the command outright is unavailable, never a throw', async () => {
-    // No throw: the arm must be able to report why it cannot measure.
-    const probe = await probeVerifier({
-      vfs: fakeWorkspace({ stdout: '', exitCode: 0 }).workspace.vfs,
-      exec: () => Promise.reject(new Error('no executor on this target')),
-    });
-
-    expect(probe.kind).toBe('unavailable');
-
-    if (probe.kind !== 'unavailable') throw new Error('unreachable');
-    expect(probe.reason).toContain('no executor on this target');
   });
 });
 

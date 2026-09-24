@@ -1,7 +1,10 @@
-/** The pty driver's screen model: every pty `wait` reads it, so its blind spots are the gate's. */
+/** The pty driver: every pty `wait` reads its screen model, so the model's blind spots are the gate's. */
 import { describe, expect, test } from 'bun:test';
+import { readFileSync, writeFileSync } from 'node:fs';
 
-import { screenOf } from './helpers/pty-screen';
+import { tolerate } from '@kinu.run/core/obs';
+import { scratchPath } from '@kinu.run/test-utils';
+import { runTuiInPty, screenOf } from './helpers/pty-screen';
 
 const ESC = '\u001B';
 
@@ -56,5 +59,29 @@ describe('the pty screen model', () => {
   test('a control that moves cells and is not modelled refuses the run', () => {
     expect(() => screenOf(`${at(1, 1)}ink${CSI}1S`, SIZE)).toThrow('unmodelled CSI finals: S');
     expect(() => screenOf(`${at(1, 1)}ink${CSI}L${CSI}2@`, SIZE)).toThrow('unmodelled CSI finals: @L');
+  });
+});
+
+describe('the pty driver', () => {
+  test('a run ends every process the program started, not only the program', () => {
+    const pidFile = scratchPath('pty-driver-group', 'child.pid');
+    const program = scratchPath('pty-driver-group', 'program.ts');
+
+    // The child outlives the terminal's hangup, as a child still shutting down does: only the group's end stops it.
+    writeFileSync(program, [
+      "const child = Bun.spawn(['sh', '-c', 'trap \"\" HUP; while :; do sleep 1; done']);",
+      `await Bun.write(${JSON.stringify(pidFile)}, String(child.pid));`,
+      "console.log('ready');",
+      'await child.exited;',
+    ].join('\n'));
+
+    const run = runTuiInPty(program, { steps: [{ wait: 'ready', timeout: 15 }] });
+    const child = Number(readFileSync(pidFile, 'utf8'));
+    const alive = tolerate(() => process.kill(child, 0), 'esrch') !== undefined;
+
+    // A red run must not leave the loop behind for the scratch release to trip over.
+    if (alive) process.kill(child, 'SIGKILL');
+    expect(run.waits.every((wait) => wait.met), run.screen).toBe(true);
+    expect(alive).toBe(false);
   });
 });

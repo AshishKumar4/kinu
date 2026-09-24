@@ -1,9 +1,9 @@
-/** Codemode sandbox contract: namespace names, the `tools.*` declaration text, and crafted-tool labelling. */
+/** Codemode sandbox contract: namespace names, the crafted `tools.*` declaration, and crafted-tool labelling. */
 
 import * as v from 'valibot';
 import type { Schema, ToolSet } from 'ai';
 import { jsonSchema } from 'ai';
-import { JsonObjectSchema, JsonValueSchema, decodeJsonValue, type JsonValue } from '../utils/json';
+import { JsonObjectSchema, decodeJsonValue, type JsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 import { hasPlanPermission, workModeRefusal } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
@@ -23,78 +23,6 @@ export function craftedToolDescription(name: string, description?: string): stri
   return description === undefined || description === '' ? `Crafted tool: ${name}` : description;
 }
 
-function firstSentence(text: string): string {
-  const line = text.trim().split('\n')[0] ?? '';
-  const match = /^(.+?[.!?])(\s|$)/.exec(line);
-
-  return (match?.[1] ?? line).trim();
-}
-
-const SchemaObjectSchema = v.looseObject({
-  type: v.optional(v.union([v.string(), v.array(v.string())])),
-  properties: v.optional(JsonObjectSchema),
-  required: v.optional(v.array(v.string())),
-  items: v.optional(JsonValueSchema),
-  enum: v.optional(v.array(JsonValueSchema)),
-  const: v.optional(JsonValueSchema),
-  anyOf: v.optional(v.array(JsonValueSchema)),
-  oneOf: v.optional(v.array(JsonValueSchema)),
-});
-
-/** Unreadable schemas render as `unknown`, never throw: a failed declaration hides the tool from the model. */
-export function jsonSchemaToTs(schema: JsonValue | undefined, depth = 0): string {
-  if (depth > 6) return 'unknown';
-  const parsed = v.safeParse(SchemaObjectSchema, schema);
-
-  if (!parsed.success) return 'unknown';
-  const node = parsed.output;
-
-  if (node.const !== undefined) return JSON.stringify(node.const);
-
-  if (node.enum !== undefined) return node.enum.map((member) => JSON.stringify(member)).join(' | ');
-  const variants = node.anyOf ?? node.oneOf;
-
-  if (variants !== undefined) return variants.map((member) => jsonSchemaToTs(member, depth + 1)).join(' | ');
-  const type = Array.isArray(node.type) ? node.type : [node.type];
-
-  const rendered = type.map((member) => {
-    switch (member) {
-      case 'string': return 'string';
-      case 'number':
-      case 'integer': return 'number';
-      case 'boolean': return 'boolean';
-      case 'null': return 'null';
-      case 'array': return `${jsonSchemaToTs(node.items, depth + 1)}[]`;
-      case 'object': {
-        const properties = node.properties;
-
-        if (properties === undefined) return 'Record<string, unknown>';
-        const required = new Set(node.required ?? []);
-
-        const fields = Object.entries(properties).map(([key, value]) => {
-          const field = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
-
-          return `${field}${required.has(key) ? '' : '?'}: ${jsonSchemaToTs(value, depth + 1)}`;
-        });
-
-        return fields.length === 0 ? 'Record<string, unknown>' : `{ ${fields.join('; ')} }`;
-      }
-
-      case undefined:
-      default: return 'unknown';
-    }
-  });
-
-  return rendered.length === 0 ? 'unknown' : [...new Set(rendered)].join(' | ');
-}
-
-const NativeToolSchemaCarrier = v.looseObject({ jsonSchema: v.optional(JsonValueSchema) });
-
-export function nativeToolInputSchema(tool: ToolSet[string]): JsonValue | undefined {
-  const parsed = v.safeParse(NativeToolSchemaCarrier, tool.inputSchema);
-
-  return parsed.success ? parsed.output.jsonSchema : undefined;
-}
 
 /** Shared by both backends; CF reassigns it over `createCodeTool`'s own schema. */
 export function codemodeInputSchema(): Schema<{ code: string }> {
@@ -131,25 +59,12 @@ export function craftedToolDeclarations(
   return v.parse(v.array(v.object({ name: v.string(), description: v.string() })), read());
 }
 
-/** Native tools first: they are stable across turns, crafted ones are not. */
-export function renderToolsDeclaration(
-  native: ToolSet,
-  crafted: readonly CraftedDeclaration[],
-): string {
-  const lines: string[] = [];
-
-  for (const [name, tool] of Object.entries(native)) {
-    if (name === SANDBOX_TOOL) continue;
-    const input = jsonSchemaToTs(nativeToolInputSchema(tool));
-    const summary = firstSentence(tool.description ?? name);
-    lines.push(`  /** ${summary.replace(/\*\//g, '* /')} Same input as the native \`${name}\` tool. */`);
-    lines.push(`  ${name}(input: ${input}): Promise<unknown>;`);
-  }
-
-  for (const entry of crafted) {
-    lines.push(`  /** ${craftedToolDescription(entry.name, entry.description).replace(/\*\//g, '* /')} (crafted by you) */`);
-    lines.push(`  ${entry.name}(...args: unknown[]): Promise<unknown>;`);
-  }
+/** The `tools.*` declaration of crafted tools; each native tool is declared by its own schema. */
+export function renderCraftedToolsDeclaration(crafted: readonly CraftedDeclaration[]): string {
+  const lines = crafted.flatMap((entry) => [
+    `  /** ${craftedToolDescription(entry.name, entry.description).replace(/\*\//g, '* /')} */`,
+    `  ${entry.name}(...args: unknown[]): Promise<unknown>;`,
+  ]);
 
   return `export declare const ${CRAFTED_TOOL_NAMESPACE}: {\n${lines.join('\n')}\n};\n`;
 }

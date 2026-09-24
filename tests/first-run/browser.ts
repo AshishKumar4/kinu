@@ -9,7 +9,7 @@
  */
 import puppeteer, { type Browser, type LaunchOptions, type Page } from 'puppeteer';
 
-import { webHeaders, type PublicWebIdentity } from '../evals/public-session';
+import { webHeaders, type PublicWebIdentity } from '../../evals/src/session';
 
 /** Chrome, with the pointer declared. Headless reports no pointing device, so
  *  every `hover:` utility the product emits is dead and a card can render

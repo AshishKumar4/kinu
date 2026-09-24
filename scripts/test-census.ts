@@ -1636,8 +1636,6 @@ function kindOf(file: string, specifiers: readonly string[], runner: string): Ki
 
   if (file.includes('/tests/e2e/') || base.startsWith('e2e') || base.startsWith('smoke')) return 'e2e';
 
-  if (specifiers.some((s) => s.includes('cli-driver') || s.includes('eval-target'))) return 'e2e';
-
   if (base.startsWith('integration') || base.startsWith('contract')
     || base.startsWith('conformance')) return 'integration';
 
@@ -1712,7 +1710,8 @@ export function runnerClaims(tracked: readonly string[]): RunnerClaim[] {
     ['test', 'root `bun run test` — the partly disjoint agent-utils/core/compaction set'],
     ['test:cli', 'the full CLI suite runner'],
     ['test:workerd', 'the workerd layer, both roots'],
-    ['test:eval', 'the eval tier: bun arm plus the vitest eval suites'],
+    ['test:live', 'the live tier: the end-to-end suites under tests/live'],
+    ['evals', 'the eval suite: every task under evals/tasks, on the deployment'],
     ['test:anti-slop', 'the vendored plugin suites, under Node'],
   ];
 

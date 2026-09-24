@@ -9,7 +9,7 @@ import { type Tool, type ToolSet } from 'ai';
 import type { ActorHandle, AgentsToolDeps, DeviceRequestChannel, SqlExecutor, CraftStore, ExecutionRouter } from "@kinu.run/core";
 import {
   createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider,
-  renderCodemodeDescription, renderToolsDeclaration, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE,
+  renderCodemodeDescription, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE,
   type WebSearchProvider, type CodemodeProvider, type WorkMode,
   currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode,
   selectInjectableCraftedTools,
@@ -139,7 +139,8 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
         const toolsProvider: CodemodeProvider = {
           name: CRAFTED_TOOL_NAMESPACE,
           tools: nativeToolFunctions(toolsInWorkMode(mode, reachable)),
-          types: renderToolsDeclaration(reachable, []),
+          // Declared by schemas
+          types: '',
           positionalArgs: true,
         };
 
@@ -149,11 +150,12 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
         if (options.extraProviders) providers.push(...options.extraProviders());
         providers.push(webProvider, ...executorProviders);
-  
+        const bound = providersInWorkMode(mode, options.reach?.narrowProviders(providers) ?? providers);
+
         const built = createCodeTool({
-          // `{{types}}` is the token createCodeTool substitutes namespace declarations into.
-          description: renderCodemodeDescription('{{types}}'),
-          tools: providersInWorkMode(mode, options.reach?.narrowProviders(providers) ?? providers),
+          // Composed here: the vendor's `{{types}}` replace reads `$` as a pattern.
+          description: renderCodemodeDescription(bound.map((provider) => provider.types)),
+          tools: bound,
           executor: {
             // Per call: crafted set and prelude are rebuilt; native fns were frozen at build time.
             execute: (code, resolved) => {

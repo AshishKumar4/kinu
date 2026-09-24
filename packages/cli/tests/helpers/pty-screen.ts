@@ -252,8 +252,17 @@ for step in spec["steps"]:
         alive = pump(step["sleep"])
 
 pump(0.4)
-os.kill(pid, 9)
+# pty.fork made the program a session leader, so every child it started without a session of its own is in
+# its process group. Killing only the program left those running, writing into the run's home after the
+# test's scratch release (the 2026-09-24 deploy's CLI suite). End the group, and return once it is empty.
+os.killpg(pid, signal.SIGKILL)
 os.waitpid(pid, 0)
+while True:
+    try:
+        os.killpg(pid, 0)
+    except ProcessLookupError:
+        break
+    time.sleep(0.01)
 print(json.dumps({
     "output": base64.b64encode(bytes(raw)).decode("ascii"),
     "screen": screen.text(),

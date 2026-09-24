@@ -1,11 +1,11 @@
 // Codex via ChatGPT subscription (chatgpt.com/backend-api/codex/responses).
 // `originator: codex_cli_rs` is the WAF bypass; Cloudflare may still 403 Workers' data-center IPs.
 import { createOpenAI } from '@ai-sdk/openai';
-import type { LanguageModel } from 'ai';
+import { wrapLanguageModel, type LanguageModel } from 'ai';
 import type { AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
 import { MODEL_INPUT_MODALITIES } from './types';
 import { withRateLimitRetry } from './rate-limit-retry';
-import { authCacheKey, cloneModelInfos, positiveInteger } from './util';
+import { authCacheKey, cloneModelInfos, positiveInteger, statelessResponses } from './util';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withCallAccount } from './quota';
 import { nonEmptyString } from '../utils/json';
@@ -207,7 +207,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
 
       const provider = createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: customFetch });
 
-      return provider.responses(modelId);
+      return wrapLanguageModel({ model: provider.responses(modelId), middleware: statelessResponses(true) });
     },
   };
 }
@@ -301,19 +301,14 @@ export function normalizeCodexResponsesRequest(init: RequestInit | undefined): R
   if (!parsedBody.success) return init;
   const body = parsedBody.output;
 
-  if (nonEmptyString({ value: body.instructions })) {
-    return {
-      ...init,
-      body: JSON.stringify({ ...body, store: false }),
-    };
-  }
+  if (nonEmptyString({ value: body.instructions })) return init;
 
   const parsedInput = v.safeParse(JsonArraySchema, body.input);
 
   if (!parsedInput.success) {
     return {
       ...init,
-      body: JSON.stringify({ ...body, instructions: CODEX_DEFAULT_INSTRUCTIONS, store: false }),
+      body: JSON.stringify({ ...body, instructions: CODEX_DEFAULT_INSTRUCTIONS }),
     };
   }
 
@@ -337,12 +332,7 @@ export function normalizeCodexResponsesRequest(init: RequestInit | undefined): R
 
   return {
     ...init,
-    body: JSON.stringify({
-      ...body,
-      instructions,
-      store: false,
-      input: remainingInput,
-    }),
+    body: JSON.stringify({ ...body, instructions, input: remainingInput }),
   };
 }
 

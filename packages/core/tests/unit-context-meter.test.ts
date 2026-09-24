@@ -119,12 +119,4 @@ describe('TurnContextMeter', () => {
     meter.openTurn({ system: 'soul' });
     expect(meter.take()).toBeUndefined();
   });
-
-  test('reset clears the turn constants too', () => {
-    const meter = new TurnContextMeter();
-    meter.openTurn({ system: 'soul', tools: { run: { description: 'x' } } });
-    meter.reset();
-    meter.measure([user('hi')]);
-    expect(meter.take()?.segments.map((s) => s.plane)).toEqual(['messages']);
-  });
 });

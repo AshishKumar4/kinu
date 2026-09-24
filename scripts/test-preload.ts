@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 
 import { SlateVendorSchema, type SlateVendor } from '../packages/cf-backend/slate-vendor';
+import { endChildren } from './deadline';
 import { release, runTemp } from './test-scratch-home';
 
 // No per-test clock. Bun's 5 s default is a wall clock racing the machine: on
@@ -28,7 +29,21 @@ import { release, runTemp } from './test-scratch-home';
 // `gate:test-clocks` refuses per-test durations in the corpus.
 setDefaultTimeout(0);
 
-afterAll(release);
+// A file that ends with a child still running fails, naming it, and the child
+// is ended first, so it holds no memory and writes into no released scratch.
+// Under `--parallel` this runs per file; without it, once for the run. The
+// run's own check (`scripts/deadline.ts`) finds what outlived its parent.
+afterAll(() => {
+  const left = endChildren(process.pid);
+
+  release();
+
+  if (left.length > 0) {
+    // Per file under `--parallel`; without it this runs once, so the file named is only the last one.
+    throw new Error(`test files up to ${Bun.main} left ${String(left.length)} process(es) of their own running, now ended: `
+      + `${left.join('; ')}. A test file ends what it starts and awaits its exit.`);
+  }
+});
 
 // Release this file's plugins, so the runner can collect the file. Under
 // `--parallel` each file runs in a fresh global, and a `Bun.plugin` callback,

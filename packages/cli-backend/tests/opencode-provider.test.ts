@@ -2,13 +2,9 @@ import { describe, test, expect, mock } from 'bun:test';
 import { generateText } from 'ai';
 import { writeFileSync } from 'node:fs';
 import { scratchPath } from '@kinu.run/test-utils';
-import { asFetchFunction, JsonObjectSchema, type JsonObject } from '@kinu.run/core';
+import { asFetchFunction, JsonObjectSchema } from '@kinu.run/core';
 import * as v from 'valibot';
-import {
-  createOpenCodeProvider,
-  OPENCODE_PROVIDER_ID,
-  rewriteOpenCodeResponsesBody,
-} from '../src/opencode-provider';
+import { createOpenCodeProvider, OPENCODE_PROVIDER_ID } from '../src/opencode-provider';
 import type { OpenCodeSpawn, SpawnedOpenCode, OpenCodeProviderOptions } from '../src/opencode-provider';
 
 function makeSpawn(output: string, exitCode = 0): OpenCodeSpawn {
@@ -348,7 +344,7 @@ describe('OpenCode provider', () => {
     expect(modelCalls).toBe(2);
   });
 
-  test('Responses requests disable storage and request encrypted reasoning', async () => {
+  test('a Responses model sends an earlier step whole, with storage off', async () => {
     const { fetchImpl, requestBodies } = makeRoutingFetch();
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
 
@@ -358,97 +354,31 @@ describe('OpenCode provider', () => {
       env: {}, getAuth: async () => null, hasCredential: async () => false,
     });
 
-    await tryCall(model, {
-      openai: {
-        include: [
-          'file_search_call.results',
-          'reasoning.encrypted_content',
-          'reasoning.encrypted_content',
-        ],
-      },
+    // An endpoint with storage off resolves no item id, so a step sent by reference reaches the model as nothing.
+    await generateText({
+      model, maxOutputTokens: 16,
+      messages: [
+        { role: 'user', content: 'What is in notes.md?' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'reasoning', text: '', providerOptions: { openai: { itemId: 'rs_1', reasoningEncryptedContent: 'ENCRYPTED-1' } } },
+            { type: 'text', text: 'Reading notes.md now.', providerOptions: { openai: { itemId: 'msg_1' } } },
+            { type: 'tool-call', toolCallId: 'call_1', toolName: 'file', input: { path: 'notes.md' }, providerOptions: { openai: { itemId: 'fc_1' } } },
+          ],
+        },
+        { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call_1', toolName: 'file', output: { type: 'text', value: 'hello' } }] },
+      ],
     });
 
     const body = v.parse(JsonObjectSchema, JSON.parse(requestBodies[0]));
-    expect(body.store).toBe(false);
-    expect(body.include).toEqual([
-      'file_search_call.results',
-      'reasoning.encrypted_content',
-    ]);
-  });
-
-  test('Responses requests remove persisted references and unsafe reasoning ids', () => {
-    const reasoningWithoutEncryptedContent = {
-      type: 'reasoning',
-      id: 'rs_missing',
-      summary: [{ type: 'summary_text', text: 'summary' }],
-    };
-
-    const reasoningWithEncryptedContent = {
-      type: 'reasoning',
-      id: 'rs_encrypted',
-      encrypted_content: 'encrypted-payload',
-      summary: [],
-    };
-
-    const nonReasoningItem = {
-      type: 'message',
-      id: 'msg_inline',
-      role: 'assistant',
-      content: [],
-    };
-
-    const nonPersistedReference = { type: 'item_reference', id: 'call_local' };
-
-    const body: JsonObject = {
-      model: 'openai/gpt-5.6-sol',
-      input: [
-        reasoningWithoutEncryptedContent,
-        reasoningWithEncryptedContent,
-        { type: 'item_reference', id: 'rs_reference' },
-        { type: 'item_reference', id: 'msg_reference' },
-        nonReasoningItem,
-        nonPersistedReference,
-      ],
-    };
-
-    rewriteOpenCodeResponsesBody(body);
-
-    // With store:false every server-assigned id (rs_, msg_, fc_) must be stripped and items passed by value;
-    // an id-bearing item 404s.
-    expect(body.input).toEqual([
-      {
-        type: 'reasoning',
-        summary: [{ type: 'summary_text', text: 'summary' }],
-      },
-      {
-        type: 'reasoning',
-        encrypted_content: 'encrypted-payload',
-        summary: [],
-      },
-      {
-        type: 'message',
-        role: 'assistant',
-        content: [],
-      },
-      nonPersistedReference,
-    ]);
-  });
-
-  test('Responses requests strip tool-call server ids but keep call_id', () => {
-    const body: JsonObject = {
-      model: 'openai/gpt-5.6-sol',
-      input: [
-        { type: 'function_call', id: 'fc_server', call_id: 'call_abc', name: 'shell', arguments: '{}' },
-        { type: 'function_call_output', call_id: 'call_abc', output: 'ok' },
-      ],
-    };
-
-    rewriteOpenCodeResponsesBody(body);
-
-    expect(body.input).toEqual([
-      { type: 'function_call', call_id: 'call_abc', name: 'shell', arguments: '{}' },
-      { type: 'function_call_output', call_id: 'call_abc', output: 'ok' },
-    ]);
+    expect(body).toMatchObject({ store: false, include: ['reasoning.encrypted_content'] });
+    expect(JSON.stringify(body.input)).not.toContain('item_reference');
+    expect(body.input).toEqual(expect.arrayContaining([
+      { type: 'reasoning', encrypted_content: 'ENCRYPTED-1', summary: [] },
+      { role: 'assistant', content: [{ type: 'output_text', text: 'Reading notes.md now.' }] },
+      { type: 'function_call', call_id: 'call_1', name: 'file', arguments: '{"path":"notes.md"}' },
+    ]));
   });
 
   test('non-reasoning models use the Chat Completions API route', async () => {

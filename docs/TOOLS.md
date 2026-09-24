@@ -72,7 +72,7 @@ ledger.
 | Call | What it makes |
 | --- | --- |
 | `workspace.createTool(name, description, code)` | a reusable crafted tool, callable from the next `eval` call in the same turn |
-| `workspace.slate(operation)` | list or preview authored slates, call a slate method, commit source, read history, fork a version, or restore source |
+| `workspace.slates.<id>.<method>(...args)` | a call to an authored slate's class method; `$`-named members preview, list, commit, fork, restore or remove slates |
 | `workspace.editFile(path, edits)` | an exact-match edit, with the same gate and, where the backend shares a turn ledger, the same read-before-write state as the native `file` tool's `edit` action |
 
 ## Plan authority
@@ -160,8 +160,8 @@ gains concentrate on weak models.
 `team`, and `peers`. There is no `think` group; `think` survives only as a
 stored run-event tool name, which `read-models/timeline.ts` maps to the `mcts`
 timeline kind. `hire`'s `lifetime` decides whether the helper persists. `swarm`
-measures candidates and settles into this turn. `DELEGATION_RUNGS` in
-`registry.ts` holds the rung text the `agents` schema description renders; the
+measures candidates and settles into this turn. `AGENTS_TOOL_NOTES` in
+`registry.ts` holds the notes the `agents` schema description renders; the
 prompt's `## Delegation` section (`prompts/delegation-section.md`) lists the
 actions the actor holds.
 
@@ -317,7 +317,7 @@ through `LOADER` (`@cloudflare/codemode`). The CLI evaluates in-process through
 | `workspace.saveNote` | `(content: string) → "ok"` | Append a note to MEMORY.md with FTS indexing |
 | `workspace.listTools` | `() → Array<{name, description, qualityScore}>` | List crafted tools with their EMA scores |
 | `workspace.createTool` | `(name, description, code) → {ok, name, action}` | Create or update a crafted tool in CraftStore. Callable as `tools.<name>(args)` from the next `eval` call in the same turn, because the sandbox that created it is already built |
-| `workspace.slate` | `(operation) → result` | Present when slates are wired; see below |
+| `workspace.slates` | `.<id>.<method>(...args)`, `.<id>.$preview()`, `.$list()`, … | Present when slates are wired; see below |
 
 `createInlineExecutor` registers `workspace` in `ExecutionRouter`. Native
 `file` and `workspace.*` share its `TurnFileLedger` read-before-write state.
@@ -334,16 +334,18 @@ callable from the client. A `node` runtime instead names a server `slate.port`
 and a `dev` or `start` script. Capabilities are declared in the strict
 `slate.bindings` field and called as `this.env.NAME.member(...args)`. Write the
 files through the ordinary file plane, then call
-`workspace.slate({op:'preview', id})` to boot a live preview. `call` invokes a
-named method with a JSON argument array. `commit` freezes source, `history`
-reads versions, `fork` copies a committed version into a new slate, and
-`restore` restores a version's tree. Running previews live as long as the
-isolate and are not durable records. These operations stay in the `workspace`
-namespace, so the native surface remains eight tools.
+`workspace.slates.<id>.$preview()` to boot a live preview.
+`workspace.slates.<id>.<method>(...args)` calls a class method with JSON
+arguments, as the slate's own client does. `$commit()` freezes source,
+`$history()` reads versions, `workspace.slates.$fork(version)` copies a committed
+version into a new slate, and `$restore(version)` restores a version's tree.
+`$`-named members are lifecycle, which no class method can shadow. Running
+previews live as long as the isolate and are not durable records. These members
+stay in the `workspace` namespace, so the native surface remains eight tools.
 
-Three things in this document are spelled `fork`. This one is a
-`workspace.slate` op: it takes a committed `version` and copies its tree into a
-new slate. The removed `agents` action `fork` ran caller-written briefs (see
+Three things in this document are spelled `fork`. This one is
+`workspace.slates.$fork`: it takes a committed `version` and copies its tree into
+a new slate. The removed `agents` action `fork` ran caller-written briefs (see
 *agents: delegation*). The `forkAgent` RPC clones a whole agent at a message
 and is the UI's fork-chat.
 
@@ -367,8 +369,8 @@ on every backend. There is no second spelling and no alias.
 
 | Backend | How `tools.<name>` becomes callable |
 |---|---|
-| Cloudflare | one `CodemodeProvider` named `tools` (`packages/cf-backend/src/codemode-tool.ts`): native tools are host-dispatched functions, crafted tools are defined by its `prelude`, and `renderToolsDeclaration(native, crafted)` is the declaration the model reads |
-| CLI | the `tools` parameter of the evaluated function (`packages/cli-backend/src/codemode-tool-factory.ts`), beside `workspace` and `console`: native tools through the same `nativeToolFunctions` Cloudflare uses, crafted tools from the per-call set, and the same `renderToolsDeclaration(native, crafted)` block. `buildActorTools` builds the sandbox last, over the finished surface, so the block lists every tool the actor holds |
+| Cloudflare | one `CodemodeProvider` named `tools` (`packages/cf-backend/src/codemode-tool.ts`): native tools are host-dispatched functions, crafted tools are defined by its `prelude`, and each native tool's own schema is its declaration |
+| CLI | the `tools` parameter of the evaluated function (`packages/cli-backend/src/codemode-tool-factory.ts`), beside `workspace` and `console`: native tools through the same `nativeToolFunctions` Cloudflare uses, crafted tools from the per-call set. `buildActorTools` builds the sandbox last, over the finished surface, so `tools` binds every tool the actor holds |
 
 Both re-read the crafted set per call, so a tool saved one program earlier is
 callable now. A native tool used as a bare identifier gets an explanation, not

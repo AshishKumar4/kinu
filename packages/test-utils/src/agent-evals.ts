@@ -343,35 +343,11 @@ export const spillRetrieval: BehaviourScorer = {
 };
 
 
-/**
- * The label the failure mix is written behind; `scripts/eval-triage.ts` matches it to tell a failure
- * mix from a plain usage histogram.
- */
+/** The label the failure mix is written behind in a `tool_outcomes` detail. */
 const FAILURE_MIX_LABEL = 'failed: ';
 
 export function formatFailureMix(byKey: readonly (readonly [string, number])[]): string {
   return FAILURE_MIX_LABEL + byKey.map(([key, n]) => `${key}×${String(n)}`).join(', ');
-}
-
-/**
- * The mix parsed from a `tool_outcomes` detail. Empty means no failing call or a record that predates
- * the mix. A malformed entry throws: this parses what this repository wrote.
- */
-export function parseFailureMix(detail: string): readonly (readonly [string, number])[] {
-  const segment = detail.split('; ').find((part) => part.startsWith(FAILURE_MIX_LABEL));
-
-  if (segment === undefined) return [];
-
-  return segment.slice(FAILURE_MIX_LABEL.length).split(', ').map((entry) => {
-    const separator = entry.lastIndexOf('×');
-    const count = Number.parseInt(entry.slice(separator + 1), 10);
-
-    if (separator <= 0 || !Number.isInteger(count)) {
-      throw new Error(`tool_outcomes failure mix is not "key×N": ${entry}`);
-    }
-
-    return [entry.slice(0, separator), count] as const;
-  });
 }
 
 /** A call fails if its outcome or an inner call failed; a row with no outcome suppresses the rate. */

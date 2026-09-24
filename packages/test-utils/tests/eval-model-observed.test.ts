@@ -6,8 +6,8 @@ import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import type { RunEvent } from '@kinu.run/core';
 import {
-  assessAdmissibility, createObservedModelAccumulator, modelClaimRefuted, modelObservedFromEvents,
-  publishRunRecord, type EvalObservation,
+  assessAdmissibility, createObservedModelAccumulator, modelClaimRefuted,
+  projectRunEventProvenance, publishRunRecord, type EvalObservation,
 } from '../src/eval-run';
 import { TASK_OUTCOME } from '../src/eval-outcome';
 import type { LiveModelSpend } from '../src/live-model';
@@ -43,7 +43,8 @@ function scored(): EvalObservation {
   return {
     taskId: 'case-a', repetition: 0, outcome: 'scored',
     scores: [{ name: TASK_OUTCOME, asserts: 'solved', eligible: 1, passed: 1, rate: 1, detail: 'solved' }],
-    turns: 2, toolCalls: 3, toolNames: ['shell'], tokensIn: 10, tokensOut: 5, ms: 7,
+    turns: 2, toolCalls: 3, toolNames: ['shell'], tokensIn: 10, tokensOut: 5, reasoningOut: 0, ms: 7,
+    provenance: projectRunEventProvenance([]),
   };
 }
 
@@ -52,18 +53,26 @@ const SPEND: LiveModelSpend = {
   episodesUnmeasured: 0, episodesWithoutModel: 0,
 };
 
-describe('modelObservedFromEvents', () => {
+/** What one accumulator observes over `events`. */
+function observed(events: readonly RunEvent[]): string | null {
+  const acc = createObservedModelAccumulator();
+  acc.note(events);
+
+  return acc.observed;
+}
+
+describe('the observed model', () => {
   test('one serving model across the steps is the observed model', () => {
-    expect(modelObservedFromEvents(steps('serving-a', 'serving-a'))).toBe('serving-a');
+    expect(observed(steps('serving-a', 'serving-a'))).toBe('serving-a');
   });
 
   test('steps with no serving id observe nothing, rather than a guess', () => {
-    expect(modelObservedFromEvents(steps(undefined, undefined))).toBeNull();
-    expect(modelObservedFromEvents([])).toBeNull();
+    expect(observed(steps(undefined, undefined))).toBeNull();
+    expect(observed([])).toBeNull();
   });
 
   test('two serving ids observe nothing, rather than picking one', () => {
-    expect(modelObservedFromEvents(steps('serving-a', 'serving-b'))).toBeNull();
+    expect(observed(steps('serving-a', 'serving-b'))).toBeNull();
   });
 
   test('auxiliary lanes do not vote: a judge on another model changes nothing', () => {
@@ -72,7 +81,16 @@ describe('modelObservedFromEvents', () => {
       event({ type: 'model_call', source: 'judge', usage: {}, spec: 'other/judge', modelId: 'judge-model' }),
     ];
 
-    expect(modelObservedFromEvents(events)).toBe('serving-a');
+    expect(observed(events)).toBe('serving-a');
+  });
+
+  test('noted episode by episode, the rule holds across them', () => {
+    const acc = createObservedModelAccumulator();
+    expect(acc.observed).toBeNull();
+    acc.note(steps('serving-a'));
+    expect(acc.observed).toBe('serving-a');
+    acc.note(steps('serving-a', 'serving-b'));
+    expect(acc.observed).toBeNull();
   });
 });
 
@@ -88,17 +106,6 @@ describe('modelClaimRefuted', () => {
 
   test('a respelled spec is agreement, the way the pin check reads it', () => {
     expect(modelClaimRefuted('deepseek-v4-flash-0731', '@cf/deepseek-ai/deepseek-v4-flash-0731')).toBe(false);
-  });
-});
-
-describe('createObservedModelAccumulator', () => {
-  test('notes episode by episode and answers the single-or-null rule', () => {
-    const acc = createObservedModelAccumulator();
-    expect(acc.observed).toBeNull();
-    acc.note(steps('serving-a'));
-    expect(acc.observed).toBe('serving-a');
-    acc.note(steps('serving-a', 'serving-b'));
-    expect(acc.observed).toBeNull();
   });
 });
 
