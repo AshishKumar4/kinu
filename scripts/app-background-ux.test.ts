@@ -47,7 +47,7 @@ declare global {
 }
 
 async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light' | null = 'dark', frozen = false): Promise<Page> {
-  const page = await gallery.browser.newPage();
+  const page = await gallery.newPage();
   // Before the document: a resize after it also switches touch emulation off,
   // which drops the launch's mouse and remounts the picture without a pointer.
   await page.setViewport({ width: 1440, height: 900 });
@@ -66,10 +66,9 @@ async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light
 }
 
 /** The handle the shell leaves on window, once a renderer took the canvas. */
-async function liveBackground(page: Page, timeoutMs = 20_000): Promise<void> {
+async function liveBackground(page: Page): Promise<void> {
   await page.waitForFunction(
     () => window.__kinuAppBackground !== undefined && window.__kinuAppBackground.renderer() !== 'pending',
-    { timeout: timeoutMs },
   );
 }
 
@@ -94,7 +93,7 @@ async function waitForMode(page: Page, mode: string, step = 0): Promise<void> {
 
       return window.__kinuAppBackground?.mode() === wanted;
     },
-    { timeout: 20_000, polling: 100 },
+    { polling: 100 },
     mode, step,
   );
 }
@@ -121,15 +120,30 @@ function holdAfterFrames(page: Page): Promise<number> {
   });
 }
 
-/* The pauses below measure the page's own rAF clock over real wall time —
- *  the thing under test is that Chromium's loop stopped (or resumed) across
- *  an actual interval, and nothing a fake timer could reach lives in this
- *  process: the clock belongs to a real browser driven over CDP. */
-function pause(ms: number): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, ms);
+/** The picture's clock, read once in each of the next `frames` rendered frames:
+ *  the frames are the end condition, never a duration. A running loop's own
+ *  callback runs before this one in every frame, so it reads higher each time. */
+function clockOverFrames(page: Page, frames: number): Promise<number[]> {
+  return page.evaluate((count: number) => {
+    const { promise, resolve } = Promise.withResolvers<number[]>();
+    const seen: number[] = [];
 
-  return promise;
+    const read = (): void => {
+      seen.push(window.__kinuAppBackground?.time() ?? -1);
+
+      if (seen.length === count) resolve(seen);
+      else requestAnimationFrame(read);
+    };
+
+    requestAnimationFrame(read);
+
+    return promise;
+  }, frames);
+}
+
+/** How far the clock moved from each reading to the next. */
+function stepsOf(readings: readonly number[]): number[] {
+  return readings.slice(1).map((time, index) => time - (readings[index] ?? time));
 }
 
 describe('the living background', () => {
@@ -210,7 +224,7 @@ describe('the living background', () => {
         await page.close();
       }
     });
-  }, 60_000);
+  });
 
   test('stops its clock while the tab is hidden', async () => {
     await withGallery(async (gallery) => {
@@ -219,28 +233,22 @@ describe('the living background', () => {
       try {
         await liveBackground(page);
 
-        const before = await page.evaluate(() => window.__kinuAppBackground?.time() ?? -1);
-
         await setTabHidden(page, true);
-        await pause(800);
-
-        const hidden = await page.evaluate(() => window.__kinuAppBackground?.time() ?? -1);
-        expect(hidden - before).toBeLessThanOrEqual(0.1);
+        const hidden = await clockOverFrames(page, 30);
+        expect(stepsOf(hidden).filter((step) => step !== 0)).toEqual([]);
 
         await setTabHidden(page, false);
-        await pause(800);
-
-        const shown = await page.evaluate(() => window.__kinuAppBackground?.time() ?? -1);
-        expect(shown - hidden).toBeGreaterThanOrEqual(0.4);
+        const shown = await clockOverFrames(page, 30);
+        expect(stepsOf([...hidden.slice(-1), ...shown]).filter((step) => step <= 0)).toEqual([]);
       } finally {
         await page.close();
       }
     });
-  }, 60_000);
+  });
 
   test('a reduced-motion visitor gets one still frame', async () => {
     await withGallery(async (gallery) => {
-      const page = await gallery.browser.newPage();
+      const page = await gallery.newPage();
       await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
       await page.evaluateOnNewDocument(() => localStorage.setItem('theme', 'dark'));
 
@@ -257,21 +265,19 @@ describe('the living background', () => {
 
         expect(tagged).toBe('static');
 
-        const before = await page.evaluate(() => window.__kinuAppBackground?.time() ?? -1);
-        await pause(1000);
-        const after = await page.evaluate(() => window.__kinuAppBackground?.time() ?? -1);
-        expect(after).toBe(before);
+        const readings = await clockOverFrames(page, 30);
+        expect(stepsOf(readings).filter((step) => step !== 0)).toEqual([]);
 
         await page.screenshot({ path: join(SHOTS, 'reduced-motion.png'), fullPage: false });
       } finally {
         await page.close();
       }
     });
-  }, 60_000);
+  });
 
   test('a phone gets the same still', async () => {
     await withGallery(async (gallery) => {
-      const page = await gallery.browser.newPage();
+      const page = await gallery.newPage();
       await page.evaluateOnNewDocument(() => localStorage.setItem('theme', 'dark'));
 
       try {
@@ -287,29 +293,23 @@ describe('the living background', () => {
         await page.close();
       }
     });
-  }, 60_000);
+  });
 
   test('never mounts where a transcript would be', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, '&path=/workspace/checkout-fixes');
 
       try {
-        // Let the frame settle: the route's blank element is its content.
-        await page.waitForSelector('[data-gallery-blank]', { timeout: 20_000 });
-        await pause(300);
-
-        const absent = await page.evaluate(() => ({
-          host: document.querySelector('[data-app-background]') === null,
-          handle: window.__kinuAppBackground === undefined,
-        }));
-
-        expect(absent.host).toBe(true);
-        expect(absent.handle).toBe(true);
+        // The route's blank element is its content; a background would have
+        // committed with it, and its handle two frames later at the latest.
+        await page.waitForSelector('[data-gallery-blank]');
+        expect(await page.$('[data-app-background]')).toBeNull();
+        expect(await clockOverFrames(page, 2)).toEqual([-1, -1]);
       } finally {
         await page.close();
       }
     });
-  }, 60_000);
+  });
 
   test('follows the overview read model through idle, working and attention', async () => {
     await withGallery(async (gallery) => {
@@ -353,7 +353,7 @@ describe('the living background', () => {
         await page.close();
       }
     });
-  }, 90_000);
+  });
 
   test('the mouse reaches the mesh across page elements and releases on leaving', async () => {
     await withGallery(async (gallery) => {
@@ -390,7 +390,7 @@ describe('the living background', () => {
     // a settings-portal `color-scheme` answer landing after it turned it false
     // for good (the deploy red at b4b2790c8). So this browser declares no mouse.
     await withGallery(async (gallery) => {
-      const page = await gallery.browser.newPage();
+      const page = await gallery.newPage();
       await page.evaluateOnNewDocument(() => localStorage.setItem('theme', 'light'));
 
       try {
@@ -411,5 +411,5 @@ describe('the living background', () => {
         await page.close();
       }
     }, { mouse: false });
-  }, 120_000);
+  });
 });

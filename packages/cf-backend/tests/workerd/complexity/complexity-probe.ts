@@ -1,22 +1,23 @@
 /**
  * What one hot-path operation costs the database, counted rather than timed: every statement the
  * operation runs goes through a metered `SqlStorage`, and the cursors' own `rowsRead` and
- * `rowsWritten` are summed by the table each statement names, beside the database's size and each
- * table's row count before and after. The subjects are production code over this object's own
- * SQLite: the session store as `createAgentStores` builds it for an actor, the Nimbus workspace and
- * its Diffs baseline, and a slate's versions and forks through `SlateFiles`.
+ * `rowsWritten`, with the rows the caller took back out of each, are summed by the tables each
+ * statement names, beside each table's row count and payload before and after. The subjects are
+ * production code over this object's own SQLite: the session store as `createAgentStores` builds
+ * it for an actor, driven through the calls `ActorSession` makes for a turn; the Nimbus workspace and
+ * its Diffs baseline; and a slate's versions and forks through `SlateFiles`.
  */
 import { DurableObject } from 'cloudflare:workers';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { SlateId } from '@agent-core/core/slates';
 import {
-  MAIN_AGENT, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory,
+  DynamicContextLedger, MAIN_AGENT, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory,
   agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables,
   initAgentConfigTable, initCodemodeStateTable, initWorkspaceActorTable, initWorkspaceBaselineTable, initWorkspaceSchema,
   nimbusSessionFiles, resetWorkspaceBaseline, standardMounts, withMountTable,
   type ActorHandle, type AgentStores, type NimbusSandboxHandle, type SqlExecutor,
-  type SqlValue, type StepContextPlane, type VFS,
+  type SqlValue, type StepContextPlane, type StepPipeline, type VFS,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { SlateFiles, WorkspaceSlateContentStore, slateDirectory } from '@kinu.run/core/slates';
@@ -24,12 +25,17 @@ import { workspaceBoxFiles } from '@kinu.run/core/workspace';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+// The writer `ActorSession` hands a turn's steps to; core keeps it internal.
+import { SessionStream } from '../../../../core/src/orchestrator/session-stream';
 
-/** One table's share of an operation: the rows its statements read and wrote, and how many ran. */
+/** One table's share of an operation: the rows its statements read and wrote, how many ran, and the
+ *  rows they read beyond those they returned. A statement that seeks reads what it returns; one that
+ *  scans reads the rest as well, and that surplus is `rowsScanned`. */
 export interface TableCost {
   readonly rowsRead: number;
   readonly rowsWritten: number;
   readonly statements: number;
+  readonly rowsScanned: number;
 }
 
 /** One figure per table, after minus before, nonzero only. */
@@ -46,7 +52,8 @@ export interface OperationCost {
   readonly requestBytes: number | null;
 }
 
-const NAMED = /\b(?:FROM|JOIN|INTO|UPDATE(?:\s+OR\s+[A-Za-z]+)?)\s+["`[]?([A-Za-z_]\w*)/giu;
+/** A table a statement names; an upsert's `DO UPDATE SET` names none. */
+const NAMED = /\b(?:FROM|JOIN|INTO|UPDATE(?:\s+OR\s+[A-Za-z]+)?)\s+(?!SET\b)["`[]?([A-Za-z_]\w*)/giu;
 
 const SCHEMA = /^\s*(?:CREATE|DROP|ALTER|PRAGMA)\b/iu;
 
@@ -80,6 +87,56 @@ interface CursorCounts {
 interface MeteredStatement {
   readonly table: string;
   readonly cursor: CursorCounts;
+  /** Rows the caller took out of the cursor, by any of its reads. */
+  readonly returned: { rows: number };
+}
+
+/** `cursor`, counting every row its caller takes out of it. */
+function countingCursor<T extends Record<string, SqlStorageValue>>(cursor: SqlStorageCursor<T>, returned: { rows: number }): SqlStorageCursor<T> {
+  const counted = <Row,>(rows: IterableIterator<Row>): IterableIterator<Row> => {
+    const iterator: IterableIterator<Row> = {
+      next: () => {
+        const step = rows.next();
+
+        if (step.done !== true) returned.rows += 1;
+
+        return step;
+      },
+      [Symbol.iterator]: () => iterator,
+    };
+
+    return iterator;
+  };
+
+  return {
+    next: () => {
+      const step = cursor.next();
+
+      if (step.done !== true) returned.rows += 1;
+
+      return step;
+    },
+    toArray: () => {
+      const rows = cursor.toArray();
+
+      returned.rows += rows.length;
+
+      return rows;
+    },
+    one: () => {
+      const row = cursor.one();
+
+      returned.rows += 1;
+
+      return row;
+    },
+    raw: <U extends SqlStorageValue[]>() => counted(cursor.raw<U>()),
+    columnNames: cursor.columnNames,
+    get rowsRead() { return cursor.rowsRead; },
+    get rowsWritten() { return cursor.rowsWritten; },
+    get reusedCachedQueryForTest() { return cursor.reusedCachedQueryForTest; },
+    [Symbol.iterator]: () => counted(cursor[Symbol.iterator]()),
+  };
 }
 
 /** Every statement run through `sql` while an operation is measured, with the cursor that ran it. */
@@ -89,17 +146,19 @@ class SqlMeter {
   readonly sql: SqlStorage;
 
   constructor(private readonly real: SqlStorage) {
-    const record = (query: string, cursor: CursorCounts): void => {
-      this.open?.push({ table: tableOf(query), cursor });
+    const record = (query: string, cursor: CursorCounts) => {
+      const returned = { rows: 0 };
+
+      this.open?.push({ table: tableOf(query), cursor, returned });
+
+      return returned;
     };
 
     this.sql = {
       exec<T extends Record<string, SqlStorageValue>>(query: string, ...bindings: unknown[]): SqlStorageCursor<T> {
         const cursor = real.exec<T>(query, ...bindings);
 
-        record(query, cursor);
-
-        return cursor;
+        return countingCursor(cursor, record(query, cursor));
       },
       prepare: (query) => real.prepare(query),
       ingest: (query) => real.ingest(query),
@@ -157,13 +216,14 @@ class SqlMeter {
       this.open = null;
     }
 
-    const tables: Record<string, { rowsRead: number; rowsWritten: number; statements: number }> = {};
+    const tables: Record<string, { rowsRead: number; rowsWritten: number; statements: number; rowsScanned: number }> = {};
 
-    for (const { table, cursor } of ran) {
-      const entry = tables[table] ??= { rowsRead: 0, rowsWritten: 0, statements: 0 };
+    for (const { table, cursor, returned } of ran) {
+      const entry = tables[table] ??= { rowsRead: 0, rowsWritten: 0, statements: 0, rowsScanned: 0 };
       entry.rowsRead += cursor.rowsRead;
       entry.rowsWritten += cursor.rowsWritten;
       entry.statements += 1;
+      entry.rowsScanned += Math.max(0, cursor.rowsRead - returned.rows);
     }
 
     return {
@@ -188,9 +248,12 @@ function sumCosts(costs: readonly OperationCost[]): OperationCost {
 
   for (const cost of costs) {
     for (const [table, counted] of Object.entries(cost.tables)) {
-      const sum = tables[table] ?? { rowsRead: 0, rowsWritten: 0, statements: 0 };
+      const sum = tables[table] ?? { rowsRead: 0, rowsWritten: 0, statements: 0, rowsScanned: 0 };
 
-      tables[table] = { rowsRead: sum.rowsRead + counted.rowsRead, rowsWritten: sum.rowsWritten + counted.rowsWritten, statements: sum.statements + counted.statements };
+      tables[table] = {
+        rowsRead: sum.rowsRead + counted.rowsRead, rowsWritten: sum.rowsWritten + counted.rowsWritten,
+        statements: sum.statements + counted.statements, rowsScanned: sum.rowsScanned + counted.rowsScanned,
+      };
     }
   }
 
@@ -238,6 +301,18 @@ function toolResult(turn: number): ModelMessage {
 function requestBytes(messages: readonly ModelMessage[] | undefined): number {
   return new TextEncoder().encode(JSON.stringify(messages ?? [])).byteLength;
 }
+
+/** The chat step pipeline a turn bound for Anthropic runs (chat.ts `prepareStep`): replayed tool ids
+ *  normalized for the destination and cache markers on the tail, both of which copy messages, and a
+ *  prune budget. The dynamic block and the step context are the turn's own. */
+const PIPELINE = {
+  prune: { contextWindow: 200_000, modelOutputLimit: 8_000 },
+  destinationProviderId: 'anthropic',
+  cache: { strategy: { kind: 'anthropic' as const } },
+} satisfies StepPipeline;
+
+/** A woven block, as `ActorSession`'s dynamic snapshot supplies one. */
+const DYNAMIC = { recoveries: ['a finding proven by execution'] };
 
 export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly meter = new SqlMeter(this.ctx.storage.sql);
@@ -291,35 +366,59 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     }));
   }
 
-  /** One scripted turn at the store boundary, wired as `ActorSession.runTurn` wires it: the input, the
-   *  admitted context and its claim, a request, the tool call and its result, a second request, the
-   *  answer, and the turn's output read back. Returns the request bytes. */
-  private async turn(actor: ActorHandle, stores: AgentStores, turn: number): Promise<number> {
+  /**
+   * One scripted turn through the store calls `ActorSession` makes (actor-session.ts): `openTurnInput`
+   * admits and activates the input; `runTurn` admits the materialized context under a claim, runs two
+   * requests through {@link PIPELINE} with its dynamic ledger, writes each step's response through a
+   * `SessionStream`, settles it, reads the turn's output back, and the claim settles. The model, the
+   * tools and the program are not run: the first step is a file call and its result, the second the
+   * answer. Returns the bytes of the two requests.
+   */
+  private async turn(actor: ActorHandle, stores: AgentStores, dynamic: DynamicContextLedger, turn: number): Promise<number> {
     const turnId = `turn-${String(turn)}`;
     const assertOwner = (): void => { actor.assertCurrent(); };
 
     const { history, claims } = stores;
 
-    await history.append({ id: `input-${String(turn)}`, message: { role: 'user', content: `question ${String(turn)}` }, origin: 'input', turnId, assertOwner });
+    await history.materialize();
+
+    const input = await history.admitInput({ id: turnId, message: { role: 'user', content: `question ${String(turn)}` }, turnId, assertOwner });
+
+    history.activateInput(input, turnId, assertOwner);
+    await history.materialize();
 
     const admitted = await history.materialize();
 
     const claim = await claims.admit({ runId: `run-${String(turn)}`, turnId, workMode: 'build', program: PROGRAM, context: admitted.selection });
 
-    const steps: StepContextPlane = {
+    const stream = new SessionStream(history, turnId, claim.epoch);
+
+    const context: StepContextPlane = {
       base: () => history.stepBase(() => { history.assertEpoch(claim.turnId, claim.epoch); }, claim.turnId, null),
-      consume: async ({ stepNumber, messages }) => { await claims.consume(claim, { index: stepNumber, messages }); },
+      consume: async ({ stepNumber, messages }) => {
+        const consumed = await claims.consume(claim, { index: stepNumber, messages });
+
+        stream.beginRequest(consumed.requestId, stepNumber);
+      },
     };
 
-    const first = await composePrepareStep({ context: steps }, { stepNumber: 0, messages: [...admitted.messages], steps: [] });
+    const pipeline: StepPipeline = { ...PIPELINE, dynamic: { ledger: dynamic, snapshot: () => DYNAMIC }, context };
 
-    await history.append({ id: `call-${String(turn)}`, message: toolCall(turn), origin: 'output', turnId, assertOwner });
-    await history.append({ id: `result-${String(turn)}`, message: toolResult(turn), origin: 'output', turnId, assertOwner });
-    const second = await composePrepareStep({ context: steps }, { stepNumber: 1, messages: [], steps: [] });
+    const call = toolCall(turn);
+    const result = toolResult(turn);
+    const answer: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: `answer ${String(turn)}` }] };
 
-    await history.append({ id: `answer-${String(turn)}`, message: { role: 'assistant', content: `answer ${String(turn)}` }, origin: 'output', turnId, assertOwner });
-    claims.settle(claim, 'completed');
+    const first = await composePrepareStep(pipeline, { stepNumber: 0, messages: [...admitted.messages], steps: [] });
+
+    await stream.nativeStep([call, result]);
+
+    const second = await composePrepareStep(pipeline, { stepNumber: 1, messages: [], steps: [] });
+
+    await stream.nativeStep([call, result, answer]);
+    await stream.settle();
+    await history.materialize();
     await history.outputForTurn(turnId);
+    claims.settle(claim, 'completed');
 
     return requestBytes(first?.messages) + requestBytes(second?.messages);
   }
@@ -328,10 +427,11 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
   async sessionTurn(history: number): Promise<OperationCost> {
     const actor = this.main();
     const stores = this.stores(actor);
+    const dynamic = new DynamicContextLedger();
 
-    for (let turn = 0; turn < history; turn += 1) await this.turn(actor, stores, turn);
+    for (let turn = 0; turn < history; turn += 1) await this.turn(actor, stores, dynamic, turn);
 
-    return await this.meter.measure(async () => await this.turn(actor, stores, history));
+    return await this.meter.measure(async () => await this.turn(actor, stores, dynamic, history));
   }
 
   /** Subject: one Diffs read of a workspace of `files` files with one edited since its baseline. */

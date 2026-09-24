@@ -935,7 +935,8 @@ interface TurnWatch {
   /** A turn no page sent, such as a workspace's first: the one the root's claim names as open when this is
    *  taken, else the next it admits. It follows that turn's own id through the claim every snapshot and
    *  `turn_claim` frame the page receives carries, closes once a claim no longer names it, and settles as
-   *  `afterTurn` does. A claim does not say how its turn ended, so this never rejects. */
+   *  `afterTurn` does. A claim does not say how its turn ended; the page's own record of the error frames its
+   *  turns sent ({@link RECORD_DEAD_ENDS}) does, so a turn error recorded while this waits rejects it. */
   afterClaimedTurn(): Promise<boolean>;
   stop(): Promise<void>;
 }
@@ -960,6 +961,11 @@ interface ClaimRead {
 
 /** The claim a workspace snapshot answer carries (`getWorkspaceSnapshot`'s `turnClaim`). */
 const SnapshotClaimSchema = v.looseObject({ turnClaim: ClaimStateSchema });
+
+/** The turn errors {@link RECORD_DEAD_ENDS} recorded on this page, oldest first. */
+async function turnErrors(page: Page): Promise<string[]> {
+  return v.parse(v.array(v.string()), await page.evaluate('window.__turnErrors ?? []'));
+}
 
 async function watchTurns(page: Page): Promise<TurnWatch> {
   const cdp = await page.createCDPSession();
@@ -1060,12 +1066,19 @@ async function watchTurns(page: Page): Promise<TurnWatch> {
 
       return settle.promise;
     },
-    afterClaimedTurn: () => {
+    afterClaimedTurn: async () => {
       const settle = Promise.withResolvers<boolean>();
+      const waiter: TurnWaiter = { follows: 'claim', id: claimed.turnId, closedAtAsk: null, settle };
 
-      waiters.push({ follows: 'claim', id: claimed.turnId, closedAtAsk: null, settle });
+      waiters.push(waiter);
 
-      return settle.promise;
+      const before = await turnErrors(page);
+      const presence = await settle.promise;
+      const failures = (await turnErrors(page)).slice(before.length);
+
+      if (failures.length > 0) throw new Error(`the turn ${waiter.id ?? 'the claim named'} failed: ${failures.join('; ')}`);
+
+      return presence;
     },
     stop: async () => { await cdp.detach(); },
   };
