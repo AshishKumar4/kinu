@@ -1,7 +1,7 @@
 /** Command result projection and display formatting. Invocation status never comes from text. */
 
 import * as v from 'valibot';
-import { ERROR_CODES, refusalOf, KinuError, type Refusal } from '../obs/index';
+import { ERROR_CODES, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import { FILE_REFUSAL_REASONS } from '../types/file-edits';
 import type { PreviewRouteCheck } from './types';
@@ -30,16 +30,6 @@ const STDERR_LABEL = '--- stderr ---';
 /** What a command that wrote nothing anywhere reads as. */
 const NO_OUTPUT = '(no output)';
 
-/** Encode a declared refusal-string channel; never use it to classify arbitrary output. */
-export function refusalText(error: KinuError | Refusal): string {
-  if (error instanceof KinuError) return JSON.stringify(refusalOf(error));
-
-  const refusal = { reason: error.reason, error: error.error };
-
-  return JSON.stringify(error.execution === undefined ? refusal : { ...refusal, execution: error.execution });
-}
-
-
 /**
  * The refusal a codemode member answered with, or null for a value. Only two object shapes count: an `ErrorCode`
  * refusal (`refusalOf`) and a file-plane verdict (`bad_input`). Strings are never read: file content may spell a refusal.
@@ -60,9 +50,6 @@ export const CommandResultSchema = v.union([v.string(), RefusalSchema]);
 
 export type CommandResult = v.InferOutput<typeof CommandResultSchema>;
 
-export const COMMAND_RESULT_TYPE = 'string | { reason: '
-  + ERROR_CODES.map((code) => JSON.stringify(code)).join(' | ') + '; error: string; execution?: { exitCode: number } }';
-
 export function commandResult(result: ExecOutcome): CommandResult {
   if (result.refusal !== undefined) return result.refusal;
   const output = formatExecResult(result);
@@ -77,7 +64,7 @@ export function exposedPortText(url: string, port: number, route: PreviewRouteCh
 }
 
 export function formatExecResult(result: ExecOutcome): string {
-  if (result.refusal !== undefined) return refusalText(result.refusal);
+  if (result.refusal !== undefined) return JSON.stringify(result.refusal);
   const stdout = result.stdout ?? '';
   const stderr = result.stderr ?? '';
   const exitCode = result.exitCode ?? 0;

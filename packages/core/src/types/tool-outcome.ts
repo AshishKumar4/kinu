@@ -11,6 +11,13 @@ export const ToolFailureValueSchema = v.object({
   failedIndex: v.optional(v.number()),
 });
 
+/** `ToolFailureValueSchema` as the eval description declares it: once, and every namespace names it. */
+export const REFUSAL_TYPE = [
+  `/** Branch on \`reason\`; the last ${FILE_REFUSAL_REASONS.length} are the file plane's verdicts on an anchor or read. \`execution\` is a command's exit, \`failedIndex\` db.batch's failed operation. */`,
+  `type Refusal = { success: false; reason: ${ToolFailureValueSchema.entries.reason.wrapped.options.map((reason) => JSON.stringify(reason)).join(' | ')} | null; `
+    + 'error: string; execution?: { exitCode: number }; failedIndex?: number };',
+].join('\n');
+
 export const BindingFailureSchema = v.object({
   ...ToolFailureValueSchema.entries,
   tool: v.string(),

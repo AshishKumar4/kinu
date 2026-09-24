@@ -122,6 +122,32 @@ describe('ChatEvent tool success/error fidelity', () => {
       })]),
     })]));
   });
+
+  test('a model call lacking a field its tool requires returns bad_input naming the field, and the tool never runs', async () => {
+    let runs = 0;
+    const { rt } = createTestRuntime();
+
+    // Counted, not recorded: `toEqual([])` would pass on `[undefined]`, the command a call without one passes.
+    const shell = {
+      exec: async () => {
+        runs += 1;
+
+        return { stdout: 'ran', stderr: '', exitCode: 0 };
+      },
+    };
+
+    const model = toolThenTextModel({ toolName: 'shell', input: '{}' });
+    const events = await collect(model, buildBuiltinTools({ rt: { ...rt, shell }, history: storesFor(rt).history }));
+    expect(runs).toBe(0);
+    expect(events.find((event) => event.type === 'tool-result')).toMatchObject({ success: false, reason: 'bad_input', result: expect.stringContaining('`command`') });
+
+    // The model reads the refusal as data it can branch on.
+    expect(model.doStreamCalls[1]?.prompt).toEqual(expect.arrayContaining([expect.objectContaining({
+      role: 'tool', content: expect.arrayContaining([expect.objectContaining({
+        type: 'tool-result', toolCallId: 'tc1', output: { type: 'error-json', value: { reason: 'bad_input', error: expect.stringContaining('`command`') } },
+      })]),
+    })]));
+  });
   test.each([
     { stage: 'resolution', input: { action: 'swarm', preset: 'custom', task: 'inspect', label: 'custom-case' }, reason: 'bad_input', detail: 'config' },
     { stage: 'validity', input: { action: 'swarm', preset: 'ideate', task: 'inspect', depth: 2 }, reason: 'bad_input', detail: 'depth' },

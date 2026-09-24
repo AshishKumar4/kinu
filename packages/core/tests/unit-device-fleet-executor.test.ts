@@ -8,7 +8,6 @@ import {
 } from '../src/execution/device-tunnel-executor';
 import { deviceFleetAsk, type DeviceFleetEntry, type DeviceStatus } from '../src/execution/device-status';
 import { answeredRefusal } from '../src/execution/exec-result';
-import { parseJsonValue } from '../src/utils/json';
 import { getExecutorFiles } from '../src/read-models/files';
 import { withMountTable, standardMounts } from '../src/vfs/mounts';
 import { setDiagnosticsSink } from '../src/obs/log';
@@ -107,9 +106,7 @@ describe('the device fleet at the executor surface', () => {
 
     const offline = answeredRefusal(await provider.tools.exec.execute('ls', { device: 'spare box' }) ?? null);
 
-    const unknown = parseJsonValue(
-      v.parse(v.string(), await provider.tools.readFile.execute('/etc/hosts', { device: 'toaster' })),
-    );
+    const unknown = await provider.tools.readFile.execute('/etc/hosts', { device: 'toaster' });
 
     expect(offline?.reason).toBe('unavailable');
     expect(offline?.error).toContain('"spare box"');

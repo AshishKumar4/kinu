@@ -14,7 +14,6 @@ spend. `AGENTS.md` § Errors and Logs points here. The source of truth is
 | `ErrorCode` / `KinuError` / `toKinuError` | built | `obs/error.ts` |
 | `renderCauseChain` / `renderThrownChain`: the chain for an unnarrowed value | built; the count of chain-dropping copies it replaced is not measured | `obs/error.ts` |
 | `CommandResult` / `commandResult`: command output or a structured refusal | built, used by all five executors | `execution/exec-result.ts` |
-| `refusalText`: a refusal on a declared string channel | built | `execution/exec-result.ts` |
 | `ToolOutcome`: the recorded outcome of a native tool invocation | built | `core/src/types/tool-outcome.ts`, `core/src/tools/outcome.ts` |
 | `Logger` / `ReservedLogField`: the typed logger and its ban | built | `obs/log.ts` |
 | `classifyRunEnd` / `RunEndReason`: the four words a finished run can carry | built, with a tripwire beside `incomplete` | `orchestrator/turn-lifecycle.ts` |
@@ -441,10 +440,10 @@ here are tool failures, not container health.
 
 Commands return a `CommandResult` from `commandResult`: the output text, or a
 refusal with its class. A nonzero exit becomes `io` with the exit code on
-`execution`. Command namespaces return these values so authored code can
-handle them; native tools raise the same typed failures through the SDK.
-`refusalText` encodes a refusal for a namespace channel declared as a string.
-It is never a way to classify arbitrary tool output.
+`execution`. Every codemode member refuses with a `refusalOf` object, never
+with text, so a program receives `{ success: false, reason, error }` from any
+namespace and `eval` records it among the call's failures; native tools raise
+the same typed failures through the SDK.
 
 ### What the classification distinguishes, per tool
 

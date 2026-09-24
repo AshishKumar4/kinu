@@ -4,8 +4,8 @@ import * as v from 'valibot';
 import { isAbortError } from '@kinu.run/agent-utils';
 import type { ExecutorProvider, ExecutorCapability, PortExposureResult, PreviewRouteCheck } from './types';
 import { readExecSignal } from './signal';
-import { commandResult, COMMAND_RESULT_TYPE, exposedPortText, refusalText, type CommandResult } from './exec-result';
-import { diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError } from '../obs/index';
+import { commandResult, exposedPortText, type CommandResult } from './exec-result';
+import { diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { VFS } from '../types/primitives';
 import { isVfsError, makeVfsError, type VfsErrorCode } from '../vfs/errno';
 import type { VfsNativeReads } from '../vfs/mounts';
@@ -129,12 +129,12 @@ export function isSandboxTransientError(error: Error | string): boolean {
   return TRANSIENT_MARKERS.some(m => msg.includes(m));
 }
 
-/** No container binding. `unavailable` (not `unsupported`) matches the shell tool's code for an unprovisioned runtime;
- *  the code, not the prose, is what `isFailingResultText` counts. */
-const NOT_CONFIGURED_REFUSAL = refusalText(new KinuError('unavailable', NOT_CONFIGURED));
+/** No container binding. `unavailable` (not `unsupported`) matches the shell tool's code for an unprovisioned runtime.
+ *  Built per call, as every refusal is: an object shared between calls would carry one caller's edits to the next. */
+const notConfigured = (): Refusal => refusalOf(new KinuError('unavailable', NOT_CONFIGURED));
 
 /** `unsupported`: the container works; no `PREVIEW_HOST_SUFFIX` means no retry can succeed. */
-const PREVIEWS_REFUSAL = refusalText(new KinuError('unsupported', PREVIEWS_NOT_CONFIGURED));
+const previewsUnconfigured = (): Refusal => refusalOf(new KinuError('unsupported', PREVIEWS_NOT_CONFIGURED));
 
 /** Transient markers left after retries are platform admission control, so `unavailable`, not `io`.
  *  A recognised cause keeps its own, more precise code. */
@@ -251,7 +251,7 @@ export function createSandboxExecutor(
         + 'not its regenerable trees (node_modules, .venv, build output): if an import fails after '
         + 'a restore, run one `bun install` before concluding anything is missing.',
       execute: async (...args: unknown[]): Promise<CommandResult> => {
-        if (!handle) return refusalOf(new KinuError('unavailable', NOT_CONFIGURED));
+        if (!handle) return notConfigured();
         const command = parseInput(StringSchema, { value: args[0] });
 
         if (command === undefined) {
@@ -284,12 +284,12 @@ export function createSandboxExecutor(
     readFile: {
       planAllowed: true,
       description: 'Read a file from the sandbox.',
-      execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED_REFUSAL;
+      execute: async (...args: unknown[]): Promise<string | Refusal> => {
+        if (!handle) return notConfigured();
         const path = parseInput(PathSchema, { value: args[0] });
 
         if (path === undefined) {
-          return refusalText(new KinuError('bad_input', 'sandbox readFile: path must be a non-empty string'));
+          return refusalOf(new KinuError('bad_input', 'sandbox readFile: path must be a non-empty string'));
         }
 
         try {
@@ -297,28 +297,28 @@ export function createSandboxExecutor(
 
           // A failed read is only an exit code, so `io`: `missing` would over-claim.
           if (r.exitCode && r.exitCode !== 0) {
-            return refusalText(new KinuError('io', `sandbox readFile ${path}: exit ${r.exitCode}`));
+            return refusalOf(new KinuError('io', `sandbox readFile ${path}: exit ${r.exitCode}`));
           }
 
           return r.content ?? '';
         } catch (err) {
-          return refusalText(sandboxFailure({ doing: `sandbox readFile ${path}`, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `sandbox readFile ${path}`, cause: err }));
         }
       },
     },
     writeFile: {
       description: 'Write content to a file in the sandbox. Creates parent dirs.',
-      execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED_REFUSAL;
+      execute: async (...args: unknown[]): Promise<string | Refusal> => {
+        if (!handle) return notConfigured();
         const path = parseInput(PathSchema, { value: args[0] });
         const content = parseInput(StringSchema, { value: args[1] });
 
         if (path === undefined) {
-          return refusalText(new KinuError('bad_input', 'sandbox writeFile: path must be a non-empty string'));
+          return refusalOf(new KinuError('bad_input', 'sandbox writeFile: path must be a non-empty string'));
         }
 
         if (content === undefined) {
-          return refusalText(new KinuError('bad_input', 'sandbox writeFile: content must be a string'));
+          return refusalOf(new KinuError('bad_input', 'sandbox writeFile: content must be a string'));
         }
 
         try {
@@ -326,19 +326,19 @@ export function createSandboxExecutor(
 
           return `wrote ${path}`;
         } catch (err) {
-          return refusalText(sandboxFailure({ doing: `sandbox writeFile ${path}`, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `sandbox writeFile ${path}`, cause: err }));
         }
       },
     },
     listFiles: {
       planAllowed: true,
       description: 'List files in a directory — the working directory when `path` is omitted or empty. Returns newline-separated entries prefixed "d" or "-".',
-      execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED_REFUSAL;
+      execute: async (...args: unknown[]): Promise<string | Refusal> => {
+        if (!handle) return notConfigured();
         const path = parseInput(OptionalStringSchema, { value: args[0] });
 
         if (args[0] !== undefined && path === undefined) {
-          return refusalText(new KinuError('bad_input', 'sandbox listFiles: path must be a string'));
+          return refusalOf(new KinuError('bad_input', 'sandbox listFiles: path must be a string'));
         }
 
         // Absent path means the executor's working directory.
@@ -358,7 +358,7 @@ export function createSandboxExecutor(
             })
             .join('\n');
         } catch (err) {
-          return refusalText(sandboxFailure({ doing: `sandbox listFiles ${dir}`, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `sandbox listFiles ${dir}`, cause: err }));
         }
       },
     },
@@ -369,12 +369,12 @@ export function createSandboxExecutor(
     },
     deleteFile: {
       description: 'Delete a file or directory.',
-      execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED_REFUSAL;
+      execute: async (...args: unknown[]): Promise<string | Refusal> => {
+        if (!handle) return notConfigured();
         const path = parseInput(PathSchema, { value: args[0] });
 
         if (path === undefined) {
-          return refusalText(new KinuError('bad_input', 'sandbox deleteFile: path must be a non-empty string'));
+          return refusalOf(new KinuError('bad_input', 'sandbox deleteFile: path must be a non-empty string'));
         }
 
         try {
@@ -382,20 +382,20 @@ export function createSandboxExecutor(
 
           return `deleted ${path}`;
         } catch (err) {
-          return refusalText(sandboxFailure({ doing: `sandbox deleteFile ${path}`, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `sandbox deleteFile ${path}`, cause: err }));
         }
       },
     },
     exists: {
       planAllowed: true,
       description: 'Check if a path exists — uses shell test.',
-      execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED_REFUSAL;
+      execute: async (...args: unknown[]): Promise<string | Refusal> => {
+        if (!handle) return notConfigured();
         const path = parseInput(PathSchema, { value: args[0] });
 
         // Answering 'false' would claim absence when the container could not be asked.
         if (path === undefined) {
-          return refusalText(new KinuError('bad_input', 'sandbox exists: path must be a non-empty string'));
+          return refusalOf(new KinuError('bad_input', 'sandbox exists: path must be a non-empty string'));
         }
 
         try {
@@ -404,7 +404,7 @@ export function createSandboxExecutor(
 
           return out.includes('true') ? 'true' : 'false';
         } catch (err) {
-          return refusalText(sandboxFailure({ doing: `sandbox exists ${path}`, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `sandbox exists ${path}`, cause: err }));
         }
       },
     },
@@ -415,15 +415,15 @@ export function createSandboxExecutor(
         'refused; that check never calls your server. PRE-REQUISITE: a SUPERVISED server must already be ' +
         'listening on the port — start it with sandbox.startProcess, never a bare `nohup … &` (unsupervised ' +
         'children die with the container and do not come back). Nothing listening is refused with the fix.',
-      execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED_REFUSAL;
+      execute: async (...args: unknown[]): Promise<string | Refusal> => {
+        if (!handle) return notConfigured();
 
-        if (!previewHostSuffix) return PREVIEWS_REFUSAL;
+        if (!previewHostSuffix) return previewsUnconfigured();
         const p = parseInput(PortSchema, { value: args[0] });
         const name = parseInput(OptionalStringSchema, { value: args[1] });
 
         if (p === undefined) {
-          return refusalText(new KinuError('bad_input', `sandbox exposePort: invalid port ${String(args[0])}`));
+          return refusalOf(new KinuError('bad_input', `sandbox exposePort: invalid port ${String(args[0])}`));
         }
 
         try {
@@ -432,20 +432,20 @@ export function createSandboxExecutor(
           // `bad_input`: the caller must start the server first; `unavailable` or `missing` would misfile it.
           return exposed.supported
             ? exposedPortText(exposed.url, p, exposed.route)
-            : refusalText(new KinuError('bad_input', exposed.reason));
+            : refusalOf(new KinuError('bad_input', exposed.reason));
         } catch (err) {
-          return refusalText(sandboxFailure({ doing: `sandbox exposePort ${p}`, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `sandbox exposePort ${p}`, cause: err }));
         }
       },
     },
     unexposePort: {
       description: 'Stop exposing a port.',
-      execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED_REFUSAL;
+      execute: async (...args: unknown[]): Promise<string | Refusal> => {
+        if (!handle) return notConfigured();
         const port = parseInput(PortSchema, { value: args[0] });
 
         if (port === undefined) {
-          return refusalText(new KinuError('bad_input', `sandbox unexposePort: invalid port ${String(args[0])}`));
+          return refusalOf(new KinuError('bad_input', `sandbox unexposePort: invalid port ${String(args[0])}`));
         }
 
         try {
@@ -454,16 +454,16 @@ export function createSandboxExecutor(
 
           return `unexposed ${port}`;
         } catch (err) {
-          return refusalText(sandboxFailure({ doing: `sandbox unexposePort ${port}`, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `sandbox unexposePort ${port}`, cause: err }));
         }
       },
     },
     listPorts: {
       description: 'List currently exposed ports. Returns JSON array of {port,url,status}.',
-      execute: async (): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED_REFUSAL;
+      execute: async (): Promise<string | Refusal> => {
+        if (!handle) return notConfigured();
 
-        if (!previewHostSuffix) return PREVIEWS_REFUSAL;
+        if (!previewHostSuffix) return previewsUnconfigured();
 
         try {
           // The tool is listPorts, the verb both executors declare.
@@ -471,7 +471,7 @@ export function createSandboxExecutor(
 
           return JSON.stringify((ports ?? []).map(p => ({ port: p.port, status: p.status, url: p.url })));
         } catch (err) {
-          return refusalText(sandboxFailure({ doing: 'sandbox listPorts', cause: err }));
+          return refusalOf(sandboxFailure({ doing: 'sandbox listPorts', cause: err }));
         }
       },
     },
@@ -482,7 +482,7 @@ export function createSandboxExecutor(
         'not and is lost. Returns JSON {processId}. Prefer this over `exec "cmd &"` for any ' +
         'long-running server.',
       execute: async (...args: unknown[]): Promise<CommandResult> => {
-        if (!handle) return refusalOf(new KinuError('unavailable', NOT_CONFIGURED));
+        if (!handle) return notConfigured();
         const command = parseInput(StringSchema, { value: args[0] });
 
         if (command === undefined) {
@@ -515,12 +515,12 @@ export function createSandboxExecutor(
     },
     stopProcess: {
       description: 'Stop a supervised process by id and clear its restart spec.',
-      execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED_REFUSAL;
+      execute: async (...args: unknown[]): Promise<string | Refusal> => {
+        if (!handle) return notConfigured();
         const processId = parseInput(StringSchema, { value: args[0] });
 
         if (processId === undefined) {
-          return refusalText(new KinuError('bad_input', 'sandbox stopProcess: processId must be a string'));
+          return refusalOf(new KinuError('bad_input', 'sandbox stopProcess: processId must be a string'));
         }
 
         try {
@@ -529,7 +529,7 @@ export function createSandboxExecutor(
 
           return JSON.stringify({ processId, ...result });
         } catch (err) {
-          return refusalText(sandboxFailure({ doing: `sandbox stopProcess ${processId}`, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `sandbox stopProcess ${processId}`, cause: err }));
         }
       },
     },
@@ -537,8 +537,8 @@ export function createSandboxExecutor(
       description:
         'List sandbox processes as JSON rows {processId,pid,status,restartable,command}. ' +
         '`restartable:true` rows come back after a container restart.',
-      execute: async (): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED_REFUSAL;
+      execute: async (): Promise<string | Refusal> => {
+        if (!handle) return notConfigured();
 
         try {
           const rows = await withSandboxRetry(() => touch(async () => {
@@ -549,7 +549,7 @@ export function createSandboxExecutor(
 
           return JSON.stringify(rows);
         } catch (err) {
-          return refusalText(sandboxFailure({ doing: 'sandbox listProcesses', cause: err }));
+          return refusalOf(sandboxFailure({ doing: 'sandbox listProcesses', cause: err }));
         }
       },
     },
@@ -559,28 +559,28 @@ export function createSandboxExecutor(
 /**
  * A Linux container of your own (2 vCPU, about 6 GB) with its own files. Relative paths resolve in
  * /workspace. It has no docker, python3, make, gcc, clang or tsc. It refuses past 10 instances (503)
- * or on a burst of starts (429). A refused call resolves to \`{"reason","error"}\`: reason is bad_input,
- * unavailable (no container on this deployment), unsupported, timeout, cancelled, oom or io. A server
+ * or on a burst of starts (429); \`unavailable\` means this deployment has no container. A server
  * started with startProcess comes back when the container restarts; a nohup job does not.
  */
 declare namespace sandbox {
-  function exec(command: string): Promise<${COMMAND_RESULT_TYPE}>;
-  function readFile(path: string): Promise<string>;
+  function exec(command: string): Promise<string | Refusal>;
+  function readFile(path: string): Promise<string | Refusal>;
+  function writeFile(path: string, content: string): Promise<string | Refusal>;
   /** The executor's working directory when path is omitted or empty. */
-  function listFiles(path?: string): Promise<string>;
+  function listFiles(path?: string): Promise<string | Refusal>;
   /** Alias for listFiles. */
-  function readdir(path?: string): Promise<string>;
-  function deleteFile(path: string): Promise<string>;
-  /** "true" or "false" — or a refusal payload, if the container could not be asked. */
-  function exists(path: string): Promise<string>;
+  function readdir(path?: string): Promise<string | Refusal>;
+  function deleteFile(path: string): Promise<string | Refusal>;
+  /** "true" or "false". */
+  function exists(path: string): Promise<string | Refusal>;
   /** Supervised background process: returns JSON {processId,restartable:true}. */
-  function startProcess(command: string, opts?: { cwd?: string }): Promise<${COMMAND_RESULT_TYPE}>;
-  function stopProcess(processId: string): Promise<string>;
+  function startProcess(command: string, opts?: { cwd?: string }): Promise<string | Refusal>;
+  function stopProcess(processId: string): Promise<string | Refusal>;
   /** JSON rows {processId,pid,status,restartable,command}. */
-  function listProcesses(): Promise<string>;
-  function exposePort(port: number, name?: string): Promise<string>;
-  function unexposePort(port: number): Promise<string>;
-  function listPorts(): Promise<string>;
+  function listProcesses(): Promise<string | Refusal>;
+  function exposePort(port: number, name?: string): Promise<string | Refusal>;
+  function unexposePort(port: number): Promise<string | Refusal>;
+  function listPorts(): Promise<string | Refusal>;
 }
 `.trim();
 

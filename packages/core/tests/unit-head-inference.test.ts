@@ -2,7 +2,8 @@
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
 import { createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnOptions } from '@kinu.run/test-utils';
-import { createTestWorkspace } from './helpers';
+import { createTestWorkspace, storesFor } from './helpers';
+import { buildHeadToolSet } from '../src/heads/head-tools';
 import type { LanguageModel, ModelMessage } from 'ai';
 import { hostedSeatsOver } from './helpers-actor-host';
 import {
@@ -150,7 +151,54 @@ describe('buildHeadAccumulatorTools', () => {
     expect(capture.evidence[0].body).toBe('X holds');
     expect(capture.evidence[0].id).toMatch(/^ev-/);
     expect(capture.decisions[0].choice).toBe('c');
-    expect(capture.toolCalls.map((t) => t.name)).toEqual(['record_evidence', 'record_decision']);
+  });
+
+  test('a head records a refused record_evidence as a refused call, and no evidence without a body', async () => {
+    let steps = 0;
+
+    // Step one calls record_evidence without its required `body`, then with it; step two answers.
+    const model = scriptedTurnModel({
+      provider: 'fake', modelId: 'fake-head',
+      doGenerate: () => {
+        const first = steps++ === 0;
+
+        return {
+          content: first
+            ? [
+                { type: 'tool-call', toolCallId: 'no-body', toolName: 'record_evidence', input: JSON.stringify({ kind: 'fact' }) },
+                { type: 'tool-call', toolCallId: 'with-body', toolName: 'record_evidence', input: JSON.stringify({ kind: 'fact', body: 'X holds' }) },
+              ]
+            : [{ type: 'text', text: 'done' }],
+          finishReason: { unified: first ? 'tool-calls' : 'stop', raw: undefined },
+          usage: {
+            inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: 1, text: 1, reasoning: undefined },
+          },
+          warnings: [],
+        };
+      },
+    });
+
+    const capture = new HeadCapture();
+    const { rt } = createTestRuntime();
+    const input = headInput({ allowedTools: ['record_evidence'] });
+
+    // The head's own surface, as both backends build it.
+    const tools = buildHeadToolSet({
+      input, capture, rt, history: storesFor(rt).history, codemodeTool: undefined,
+      webSearch: { search: async (query) => ({ query, results: [], source: 'duckduckgo' }), fetch: async (url) => ({ url, retrievedAt: '', markdown: '' }) },
+      split: async () => { throw new Error('this head cannot split'); },
+    });
+
+    const report = await runHeadInference(input, await deps(model, { tools, capture }));
+    expect(report.toolCalls).toHaveLength(2);
+
+    expect(report.toolCalls).toEqual(expect.arrayContaining([
+      { name: 'record_evidence', toolCallId: 'no-body', args: { kind: 'fact' }, result: expect.stringContaining('`body`'), outcome: expect.objectContaining({ success: false, reason: 'bad_input' }) },
+      { name: 'record_evidence', toolCallId: 'with-body', args: { kind: 'fact', body: 'X holds' }, result: expect.stringContaining('evidence recorded'), outcome: { success: true } },
+    ]));
+
+    expect(report.evidence.map((evidence) => evidence.body)).toEqual(['X holds']);
   });
 });
 

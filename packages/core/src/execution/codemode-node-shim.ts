@@ -29,19 +29,10 @@ export async function loadBuiltins() {
   return { loaded, missing };
 }
 
+/** The error a member refused with, or null for a value. Refusals are objects; text is never read as one. */
 function refusalOf(result) {
-  const refused = (value) => value && typeof value === 'object' && typeof value.error === 'string'
-    && (value.success === false || typeof value.reason === 'string');
-  if (refused(result)) return result.error;
-  if (typeof result === 'string' && result.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(result);
-      if (refused(parsed)) return parsed.error;
-    } catch {
-      return null;
-    }
-  }
-  return null;
+  return result && typeof result === 'object' && typeof result.error === 'string'
+    && (result.success === false || typeof result.reason === 'string') ? result.error : null;
 }
 
 /** A relative path joined onto the working root, as the host would resolve it; an absolute or empty one as given. */
@@ -99,11 +90,16 @@ function asyncOnly(name, rewrite) {
 const EXIT_PREFIX = /^Error \(exit (\d+)\)\n?/;
 const STDERR_LABEL = '\n--- stderr ---\n';
 
-function parseExec(rendered) {
-  const text = typeof rendered === 'string' ? rendered : JSON.stringify(rendered);
-  const refused = refusalOf(text);
-  if (refused) return { exitCode: 126, stdout: '', stderr: refused };
-  const exit = EXIT_PREFIX.exec(text);
+/**
+ * A command's result as Node reports it. A refusal carrying an exit is a command that ran, and its error is the
+ * formatted output; any other refusal ran nothing (126). Output text is never read for an exit.
+ */
+function parseExec(result) {
+  const refused = refusalOf(result);
+  const ran = refused !== null && Boolean(result.execution) && typeof result.execution.exitCode === 'number';
+  if (refused !== null && !ran) return { exitCode: 126, stdout: '', stderr: refused };
+  const text = ran ? refused : typeof result === 'string' ? result : JSON.stringify(result);
+  const exit = ran ? EXIT_PREFIX.exec(text) : null;
   let body = exit ? text.slice(exit[0].length) : text;
   let stdout = body;
   let stderr = '';
@@ -117,7 +113,7 @@ function parseExec(rendered) {
   }
   if (stdout.startsWith('--- stdout ---\n')) stdout = stdout.slice('--- stdout ---\n'.length);
   if (stdout === '(no output)') stdout = '';
-  return { exitCode: exit ? Number(exit[1]) : 0, stdout, stderr };
+  return { exitCode: ran ? result.execution.exitCode : 0, stdout, stderr };
 }
 
 function makeFs(workspace, cwd) {

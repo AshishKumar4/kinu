@@ -14,7 +14,7 @@ export type {
 export { EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS } from './types';
 
 export {
-  commandResult, CommandResultSchema, COMMAND_RESULT_TYPE, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
+  commandResult, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
 } from './exec-result';
 
 export {
@@ -95,12 +95,10 @@ export {
   type TerminalHolder,
 } from './device-terminal';
 
-// Cloudflare composes the Nimbus session as its authoritative workspace; the standalone factory serves other backends.
+// Cloudflare composes the Nimbus session as its authoritative workspace.
 export {
-  createNimbusExecutor,
   createNimbusWorkspaceExecutor,
   nimbusSessionShell,
-  type NimbusExecutorOpts,
   type NimbusWorkspaceExecutorOpts,
   type NimbusSandboxHandle,
   type NimbusExecOptions,

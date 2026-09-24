@@ -12,8 +12,6 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { SessionHistory } from '../session/history';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
 import type { WebSearchProvider } from '../web/index';
-import { renderThrownChain } from '../obs/index';
-import { failedToolOutcome } from '../tools/outcome';
 import { permitInPlan } from '../execution/work-mode';
 
 export interface HeadSplitRequest {
@@ -48,7 +46,7 @@ export interface HeadToolDeps {
 export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
   const { input, capture } = deps;
 
-  // Self-recording accumulators (outside the capture wrap) plus the depth-gated split.
+  // The accumulators plus the depth-gated split; the capture wrap records their calls with the builtins'.
   const extra: ToolSet = { ...buildHeadAccumulatorTools(capture) };
 
   // Depth is fixed for the whole run, so a head with none left is not offered the tool, and the prompt
@@ -77,45 +75,33 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
           merge_strategy: { type: 'string', enum: ['synthesize', 'best_of', 'consensus'] },
         },
       }),
-      execute: async ({ rationale, heads, merge_strategy }, options): Promise<string> => {
-        try {
-          const result = await deps.split({
-            rationale, heads, mergeStrategy: merge_strategy ?? input.mergeStrategy,
-          });
+      execute: async ({ rationale, heads, merge_strategy }): Promise<string> => {
+        const result = await deps.split({
+          rationale, heads, mergeStrategy: merge_strategy ?? input.mergeStrategy,
+        });
 
-          for (const id of result.childHeadIds) capture.childHeadIds.push(id);
-          capture.recordToolCall({
-            name: 'split_subheads', args: { rationale, heads }, result: 'merged ' + result.headCount,
-            outcome: { success: true }, toolCallId: options.toolCallId,
-          });
-          const lines: string[] = [result.narrative];
+        for (const id of result.childHeadIds) capture.childHeadIds.push(id);
+        const lines: string[] = [result.narrative];
 
-          if (result.decisions.length) {
-            lines.push('', "Children's selected decisions:");
+        if (result.decisions.length) {
+          lines.push('', "Children's selected decisions:");
 
-            for (const d of result.decisions) lines.push(`- ${d.question}: ${d.choice}`);
-          }
-
-          if (result.unresolvedQuestions.length) {
-            lines.push('', 'Open questions:');
-
-            for (const q of result.unresolvedQuestions) lines.push(`- ${q}`);
-          }
-
-          if (result.blindSpots.length) {
-            lines.push('', 'Not covered by any child:');
-
-            for (const b of result.blindSpots) lines.push(`- ${b}`);
-          }
-
-          return lines.join('\n');
-        } catch (err) {
-          capture.recordToolCall({
-            name: 'split_subheads', args: { rationale, heads }, result: renderThrownChain({ cause: err }),
-            outcome: failedToolOutcome({ cause: err }), toolCallId: options.toolCallId,
-          });
-          throw err;
+          for (const d of result.decisions) lines.push(`- ${d.question}: ${d.choice}`);
         }
+
+        if (result.unresolvedQuestions.length) {
+          lines.push('', 'Open questions:');
+
+          for (const q of result.unresolvedQuestions) lines.push(`- ${q}`);
+        }
+
+        if (result.blindSpots.length) {
+          lines.push('', 'Not covered by any child:');
+
+          for (const b of result.blindSpots) lines.push(`- ${b}`);
+        }
+
+        return lines.join('\n');
       },
     }));
   }
@@ -126,7 +112,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
     workMode: input.mode,
     webSearch: deps.webSearch,
     admitted: HEAD_BUILTIN_TOOLS,
-    wrapAdmitted: (admitted) => withHeadCaptureRecording(admitted, capture),
+    wrapCalls: (tools) => withHeadCaptureRecording(tools, capture),
     extra,
     allowed: input.allowedTools,
     codemodeTool: deps.codemodeTool,

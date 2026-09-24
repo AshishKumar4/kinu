@@ -1,3 +1,5 @@
+import { REFUSAL_TYPE } from '../types/tool-outcome';
+
 /** Canonical built-in tool names, reach, and descriptions. Renaming one breaks prompts, UI, and MCTS scoring. */
 
 // Reach is not permission: an actor gets reach ∩ the deps its backend wires (conformance/manifest.ts).
@@ -288,7 +290,7 @@ export const BUILTIN_TOOL_SPECS = {
       '`tools.<name>(input)` calls a native tool with the input its schema declares; a tool saved with `workspace.createTool` joins `tools` from the next program, declared in dynamic_context.',
       '`require()` loads Node builtins, plus `fs`, `fs/promises` and `child_process` over your workspace files and shell; `process.cwd()` is the workspace root. Only promise forms work: `execSync`, `spawn` and `fs.*Sync` throw.',
       '`console.log` output comes back with the result. Variables do not survive between programs; `state` does.',
-      'A refused call resolves to `{ success: false, reason, error }` instead of throwing; returning it fails the call with that reason.',
+      'A refused call, in any namespace, resolves to a `Refusal` instead of throwing; returning it fails the call with that reason.',
       'Start with one `//` comment naming the operation and its target; the interface shows it as the call\'s intent.',
     ],
     example: "eval({code:\"// List the newest reports\\nconst fs = require('fs/promises');\\nconst files = await fs.readdir('reports');\\nreturn files.slice(0, 5)\"})",
@@ -373,7 +375,8 @@ const SANDBOX_RUNS = {
 export const CODEMODE_CODE_DESCRIPTION = 'The JavaScript program.';
 
 /**
- * The `eval` docstring: its registry description, the substrate, then every namespace declaration in order.
+ * The `eval` docstring: its registry description, the substrate, the one `Refusal` every namespace names, then
+ * every namespace declaration in order.
  * Both backends compose it here, never through a template token: a `$` in a declaration is text.
  */
 export function renderCodemodeDescription(declarations: readonly (string | undefined)[], substrate: SandboxSubstrate = 'hosted'): string {
@@ -381,6 +384,7 @@ export function renderCodemodeDescription(declarations: readonly (string | undef
     BUILTIN_TOOL_DESCRIPTIONS.eval,
     `- ${SANDBOX_RUNS[substrate]}`,
     'Namespaces:',
+    REFUSAL_TYPE,
     ...declarations.filter((types): types is string => types !== undefined && types !== '').map((types) => types.trimEnd()),
   ].join('\n');
 }

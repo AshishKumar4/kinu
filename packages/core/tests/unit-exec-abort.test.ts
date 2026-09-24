@@ -11,7 +11,7 @@ import {
 } from '../src/execution/device-tunnel';
 import type { JsonValue } from '../src/utils/json';
 import {
-  createNimbusExecutor,
+  createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell,
   type NimbusExecResult,
   type NimbusSandboxHandle,
 } from '../src/execution/nimbus';
@@ -360,7 +360,7 @@ describe('remote executor exec abort', () => {
     expect(calls.map((call) => call.method)).toEqual(['exec', DEVICE_CANCEL_METHOD]);
   });
 
-  test('nimbus exec stops waiting and throws AbortError on abort', async () => {
+  test('the hosted workspace shell stops waiting and throws AbortError on abort', async () => {
     const box: NimbusSandboxHandle = {
       ready: async () => {},
       exec: () => hangingPromise<NimbusExecResult>(),
@@ -370,7 +370,12 @@ describe('remote executor exec abort', () => {
       },
     };
 
-    const provider = createNimbusExecutor({ box });
+    const { rt } = createTestRuntime();
+
+    const provider = createNimbusWorkspaceExecutor({
+      box, inline: { vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
+    });
+
     const controller = new AbortController();
 
     const pending = provider.tools.exec.execute('sleep 9999', { signal: controller.signal });

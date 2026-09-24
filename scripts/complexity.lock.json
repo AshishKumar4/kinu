@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-24",
-  "files": 2637,
-  "functions": 64512,
+  "files": 2654,
+  "functions": 65148,
   "ceiling": 87,
   "line": 32,
   "inventory": [
@@ -102,15 +102,15 @@
       "complexity": 40
     },
     {
-      "key": "packages/core/src/tools/release-tool.ts#runReleaseAction",
-      "complexity": 40
-    },
-    {
       "key": "scripts/bench-devbox-strategies.ts#frozenControlStatus",
       "complexity": 40
     },
     {
       "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
+      "complexity": 39
+    },
+    {
+      "key": "packages/core/src/tools/release-tool.ts#runReleaseAction",
       "complexity": 39
     },
     {

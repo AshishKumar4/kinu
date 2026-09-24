@@ -10,7 +10,7 @@ import { isVfsError, vfsAddressingHint, withVfsErrorHint } from '../vfs/errno';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
 import { commandResult } from './exec-result';
-import { diagnostics, ERROR_CODES, KinuError, refusalOf, toKinuError } from '../obs/index';
+import { diagnostics, KinuError, refusalOf, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
@@ -157,7 +157,6 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       execute: async (...args: unknown[]) => {
         const path = parseInput(StringSchema, { value: args[0] });
 
-        // `refusalOf`, not `refusalText`: the declared result is an object carrying `reason`.
         if (path === undefined) return refusalOf(new KinuError('bad_input', 'workspace.editFile: path must be a string'));
         const list = parseInput(FileEditsSchema, { value: args[1] }) ?? [];
 
@@ -405,14 +404,6 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
   const types = `/** Your workspace: the files the \`file\` tool reads and the \`workspace\` shell. */
 declare namespace workspace {
-  /** A refused call: branch on \`reason\`. The first seven are the file plane's verdicts on an anchor or read. */
-  type Refusal = {
-    success: false;
-    reason: 'empty_anchor' | 'not_found' | 'ambiguous' | 'overlap' | 'no_change'
-      | 'unread' | 'stale' | ${ERROR_CODES.map((code) => JSON.stringify(code)).join(' | ')} | null;
-    error: string;
-    execution?: { exitCode: number };
-  };
   function readFile(path: string): Promise<string | Refusal>;
   function writeFile(path: string, content: string): Promise<string | Refusal>;
   /** The \`file\` tool's edit, over the same read state: read the file first; each old_text is copied verbatim and occurs once. */
@@ -426,7 +417,7 @@ declare namespace workspace {
   function searchMemory(query: string): Promise<string | Refusal>;
   function saveNote(content: string): Promise<string | Refusal>;
   /** Your crafted tools. */
-  function listTools(): Promise<Array<{ name: string; description: string; qualityScore: number }>>;
+  function listTools(): Promise<Array<{ name: string; description: string; qualityScore: number }> | Refusal>;
   /** Save a crafted tool, callable as \`tools.<name>(args)\` from the next program. */
   function createTool(
     name: string, description: string, code: string

@@ -81,9 +81,9 @@ Which native tools also have a codemode namespace is declared in `TOOL_REACH`
 (`core/src/tools/registry.ts`): `shell` and `file` own none and are reached
 inside `eval` through `workspace`.
 
-Namespace command tools (`exec`, `startProcess`, and Nimbus `runCode`)
-return a successful string or a branchable refusal object
-`{ reason, error, execution?: { exitCode } }`. The execution field is present
+Every namespace member returns its value or a branchable refusal object; a
+program receives it as `{ success: false, reason, error, execution?: { exitCode } }`,
+the `Refusal` the eval description declares once. The execution field is present
 only when the producer observed the process exit. A nonzero exit has class
 `io` and keeps both diagnostic streams. An unknown transport outcome gets no
 invented exit code. An executed failure spends its grant. A gate denial keeps
