@@ -20,6 +20,7 @@
  */
 import type { Browser, ElementHandle, Page } from 'puppeteer';
 import * as v from 'valibot';
+import { workspacePath } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -1052,7 +1053,7 @@ async function writeWorkspaceFile(target: FlowTarget, workspace: string, path: s
 
 async function workspaceWithSlate(target: FlowTarget, subject: string): Promise<string> {
   const workspace = await createFlowWorkspace(target, subject);
-  const root = `/home/user/slates/${DRIVE_SLATE.id}`;
+  const root = workspacePath(`slates/${DRIVE_SLATE.id}`);
 
   await writeWorkspaceFile(target, workspace, `${root}/package.json`, JSON.stringify({
     name: DRIVE_SLATE.id, main: 'server.ts', slate: { title: DRIVE_SLATE.title, bindings: {} },
