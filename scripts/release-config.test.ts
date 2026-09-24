@@ -141,6 +141,9 @@ const WranglerSchema = v.object({
   }))),
   assets: v.object({ run_worker_first: v.union([v.boolean(), v.array(v.string())]) }),
   vars: v.object({ PREVIEW_HOST_SUFFIX: v.string(), CLI_PUBLIC_ORIGIN: v.string() }),
+  kv_namespaces: v.array(v.object({ binding: v.string() })),
+  d1_databases: v.optional(v.array(v.object({ binding: v.string() }))),
+  durable_objects: v.object({ bindings: v.array(v.object({ name: v.string(), class_name: v.string() })) }),
 });
 
 const CONFIG = parseJsonc(readFileSync(join(REPO_ROOT, WRANGLER), 'utf8'), WranglerSchema, WRANGLER);
@@ -481,5 +484,20 @@ describe('previews are isolated by host', () => {
 
   test('every request reaches the Worker before the asset router', () => {
     expect(CONFIG.assets.run_worker_first, `${WRANGLER} lets the asset router answer some paths first`).toBe(true);
+  });
+});
+
+/**
+ * A5 SIGN-IN HAS NO SINGLE CHOKEPOINT. Sign-in state is short-lived KV records plus each user's own object,
+ * which answers whether a session is live. A database or a singleton auth object in front of every sign-in
+ * would make one binding the login path of every user at once.
+ */
+describe('sign-in has no single chokepoint', () => {
+  test('auth state is the AUTH_KV namespace and the user objects, and nothing fronts them', () => {
+    const objects = CONFIG.durable_objects.bindings.flatMap((binding) => [binding.name, binding.class_name]);
+
+    expect(CONFIG.kv_namespaces.map((namespace) => namespace.binding)).toContain('AUTH_KV');
+    expect(CONFIG.d1_databases ?? []).toEqual([]);
+    expect(objects.filter((name) => /auth/iu.test(name))).toEqual([]);
   });
 });

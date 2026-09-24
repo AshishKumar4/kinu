@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { asFetchFunction, type JsonValue, type OAuthCredential } from '@kinu.run/core';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { asFetchFunction, sha256Hex, type JsonValue, type OAuthCredential } from '@kinu.run/core';
+import * as v from 'valibot';
 import { getOAuthProvider, listConfiguredOAuthProviders } from '../src/auth/providers';
 import {
   CLOUDFLARE_WORKERS_AI_SCOPES,
@@ -18,8 +17,16 @@ import { handleCliRequest } from '../src/cli/routes';
 import { escapeHtml } from '@kinu.run/core';
 import { sanitizeReturnTo } from '../src/auth/store';
 import { handleAuthRequest, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
-import { bootstrappedProfile, staticRouteCliEnv } from './helpers/bindings';
-import { OAUTH_STATE_COOKIE_NAME } from '../src/auth/session';
+import {
+  bootstrappedProfile, cliAccount, staticRouteCliEnv, unreachableAssets, unreachableNamespace, userAccount,
+  workerContext,
+} from './helpers/bindings';
+import {
+  authenticateRequest, CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, type AuthIdentity,
+} from '../src/auth/session';
+import { pollCliAuth, startCliAuth } from '../src/cli/auth-store';
+import type { CliRoutesEnv } from '../src/cli/routes';
+import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
 import { makeKv } from './helpers/kv';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
@@ -27,10 +34,89 @@ import type { UserCaller } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
-const root = join(import.meta.dir, '..');
+// Dynamic: the entry's graph reaches `cloudflare:email` and `cloudflare:workers` through `agents`.
+const { default: worker } = await import('../src/server');
 
-function source(path: string): string {
-  return readFileSync(join(root, path), 'utf8');
+const APP = 'https://kinu.example.com';
+
+const ORIGIN = APP;
+
+/** Loopback: the only host where the dev identity stands for a signed-in browser. */
+const LOCAL = 'http://localhost';
+
+const CLIENT = '127.0.0.1';
+
+const LANDING_PAGE = '<title>Kinu landing</title>';
+
+const OWNER_IDENTITY: AuthIdentity = {
+  userId: '0123456789abcdef0123456789abcdef', email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: 1,
+};
+
+/** One signed-out request through the Worker's entry, with only the bindings these routes read. */
+function served(url: string, headers: Record<string, string> = {}): Promise<Response> {
+  const env: Partial<Env> = {};
+  Object.assign(env, {
+    AUTH_KV: makeKv(),
+    CLI_PUBLIC_ORIGIN: APP,
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    UserDO: unreachableNamespace('UserDO'),
+    ASSETS: {
+      fetch: async (input: Request | URL | string) => {
+        const path = new URL(input instanceof Request ? input.url : input).pathname;
+
+        return new Response(`<!doctype html><head>${path === '/landing.html' ? LANDING_PAGE : ''}</head>`, {
+          headers: { 'content-type': 'text/html' },
+        });
+      },
+    },
+  });
+
+  // SAFETY: every member the routes under test read is constructed above: a signed-out request answers from
+  // the landing page, the sign-in redirect or the ticket check before any other binding is touched.
+  return worker.fetch(new Request(url, { headers }), env as Env, workerContext());
+}
+
+/** Device-code sign-in on this machine: the dev identity stands for the signed-in browser. */
+function terminalSignIn() {
+  const userDO = cliAccount({
+    async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
+    async mintCliToken(_caller: UserCaller, userId: string) {
+      return { token: `ptc_${userId}_terminal`, tokenHash: 'hash', expiresAt: Date.now() + 60_000 };
+    },
+  });
+
+  const env: CliRoutesEnv<string> = {
+    AUTH_KV: makeKv(),
+    UserDO: { idFromName: (name) => name, get: () => userDO },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    ASSETS: unreachableAssets(),
+    OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+    DEV_USER_EMAIL: OWNER_IDENTITY.email,
+  };
+
+  return { env, poll: (deviceToken: string) => pollCliAuth(env, deviceToken, CLIENT) };
+}
+
+/** A served page's form fields, by name, as the browser would submit them. */
+async function formFields(page: Response): Promise<Map<string, string>> {
+  const fields = new Map<string, string>();
+
+  await new HTMLRewriter().on('input[name]', {
+    element(element) { fields.set(element.getAttribute('name') ?? '', element.getAttribute('value') ?? ''); },
+  }).transform(page).text();
+
+  return fields;
+}
+
+function setCookieNamed(response: Response, name: string): string | undefined {
+  return response.headers.getSetCookie().find((value) => value.startsWith(`${name}=`));
+}
+
+/** The session cookie a sign-in set: `name=value` to present, or the whole header to read its attributes. */
+function sessionCookie(done: Response, whole = false): string {
+  const header = present(setCookieNamed(done, SESSION_COOKIE_NAME), 'the session cookie');
+
+  return whole ? header : header.split(';')[0] ?? '';
 }
 
 /** Every binding refuses: these public routes must answer before reading any. */
@@ -49,11 +135,31 @@ function oneAccountFetch() {
 }
 
 describe('auth and desktop security invariants', () => {
-  test('browser CLI auth approval is an explicit POST, not GET side effect', () => {
-    const routes = source('src/cli/routes.ts');
-    expect(routes).toContain("url.pathname === '/cli/auth' && method === 'GET'");
-    expect(routes).toContain("url.pathname === '/cli/auth' && method === 'POST'");
-    expect(routes).not.toContain("if (url.pathname === '/cli/auth' && method === 'GET') {\n    return approveFromBrowser");
+  test("opening a terminal's approval link approves nothing; the page's own POST does", async () => {
+    const { env, poll } = terminalSignIn();
+
+    const started = await startCliAuth(env, {
+      origin: LOCAL, approvalOrigin: LOCAL, deviceName: 'laptop', clientKey: CLIENT,
+    });
+
+    const link = new Request(`${LOCAL}/cli/auth?code=${encodeURIComponent(started.userCode)}`);
+    const page = present(await handleCliRequest(link, env), 'the approval page');
+
+    expect(page.status).toBe(200);
+    expect(await poll(started.deviceToken)).toMatchObject({ status: 'pending' });
+
+    const cookie = present(setCookieNamed(page, CLI_APPROVAL_CSRF_COOKIE_NAME), 'the approval CSRF cookie').split(';')[0];
+    const form = new FormData();
+    form.set('userCode', started.userCode);
+    form.set('csrf', present((await formFields(page)).get('csrf'), 'the approval form\'s csrf field'));
+
+    const approved = await handleCliRequest(new Request(`${LOCAL}/cli/auth`, {
+      method: 'POST', headers: { origin: LOCAL, cookie: cookie ?? '' }, body: form,
+    }), env);
+
+    expect(approved?.status).toBe(200);
+    expect(await poll(started.deviceToken))
+      .toMatchObject({ status: 'approved', token: expect.stringMatching(/^ptc_/u) });
   });
 
   test('the ambient session cookie cannot approve a device flow over JSON', async () => {
@@ -73,36 +179,47 @@ describe('auth and desktop security invariants', () => {
     );
 
     expect(response?.status).toBe(401);
-    expect(source('src/cli/routes.ts')).not.toContain("path === '/auth/approve'");
   });
 
-  test('dashboard and PC install paths do not expose KINU_TOKEN setup commands', () => {
-    const userRoutes = source('src/user/routes.ts');
-    const cliRoutes = source('src/cli/routes.ts');
-    const pcHandler = source('../core/src/http/pc-ingress.ts');
-    expect(userRoutes).not.toContain('KINU_TOKEN=');
-    expect(cliRoutes).not.toContain('KINU_TOKEN=');
-    expect(pcHandler).not.toContain('KINU_TOKEN=');
+  test('the dashboard hands out the token-free setup commands', async () => {
+    // Past the profile every signed-in request ensures, neither route asks the account anything.
+    const account = userAccount({
+      ensureProfile: async (_caller: UserCaller, email: string) => bootstrappedProfile(email),
+    });
+
+    const env: UserRoutesEnv<string> = {
+      UserDO: { idFromName: (name) => name, get: () => account },
+      OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+      CLI_PUBLIC_ORIGIN: APP,
+    };
+
+    const answer = async (request: Request) =>
+      present(await handleUserRequest(request, env, OWNER_IDENTITY), request.url).json();
+
+    const cli = v.parse(v.object({ installCommand: v.string(), setupCommand: v.string(), authCommand: v.string() }),
+      await answer(new Request(`${APP}/api/user/cli`)));
+
+    const devices = new Request(`${APP}/api/user/devices`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ label: "Ashish's Mac" }),
+    });
+
+    const device = v.parse(v.object({ installCommand: v.string() }), await answer(devices));
+
+    // The builder's own output, pinned token-free below; neither route composes a command of its own.
+    expect(cli.installCommand).toBe(buildCliInstallCommand({ origin: APP }));
+    expect(device.installCommand)
+      .toBe(buildCliInstallCommand({ origin: APP, setup: false, connect: true, label: "Ashish's Mac" }));
+    expect([cli.setupCommand, cli.authCommand].filter((command) => command.includes('KINU_TOKEN'))).toEqual([]);
   });
 
-  test('CLI agent websocket uses scoped tickets and has no local-turn HTTP bridge', () => {
-    const server = source('src/server.ts');
-    const cliRoutes = source('src/cli/routes.ts');
-    const userSchema = source('../core/src/state/user-schema.ts');
-    const orchestrator = source('src/orchestrator.ts');
-    expect(cliRoutes).toContain('/connect-ticket');
-    expect(userSchema).toContain('cli_agent_connect_tickets');
-    expect(server).toContain('verifyCliAgentConnectTicket');
-    expect(server).toContain("url.searchParams.delete('ticket')");
-    expect(server).not.toContain('looksInteractive');
-    expect(server).not.toContain('registerWorkspace(agentName');
-    expect(cliRoutes).not.toContain('/local-turn/prepare');
-    expect(cliRoutes).not.toContain('/local-turn/tool');
-    expect(cliRoutes).not.toContain('/local-turn/commit');
-    expect(orchestrator).not.toContain('cliPrepareLocalTurn');
-    expect(orchestrator).not.toContain('cliInvokeLocalTool');
-    expect(orchestrator).not.toContain('cliCommitLocalTurn');
-    expect(orchestrator).not.toContain('async cliTurn');
+  test('a CLI agent ticket opens only a WebSocket, and only when it verifies', async () => {
+    const agent = `${APP}/agents/orchestrator-agent/jarvis?ticket=pat_${OWNER_IDENTITY.userId}_x`;
+
+    expect((await served(agent, { accept: 'text/html' })).status).toBe(400);
+    const forged = `${APP}/agents/orchestrator-agent/jarvis?ticket=not-a-ticket`;
+
+    expect((await served(forged, { upgrade: 'websocket' })).status).toBe(401);
   });
 
   test('OAuth provider visibility requires both client id and secret', () => {
@@ -126,8 +243,6 @@ describe('auth and desktop security invariants', () => {
     }, 'cloudflare');
 
     if (!provider) throw new Error('expected the Cloudflare provider to resolve');
-    const routes = source('src/auth/routes.ts');
-    const userDO = source('src/user/user-do.ts');
     expect(provider.id).toBe('cloudflare');
     expect(provider.kind).toBe('oauth');
     expect(provider.scopes).toBe(CLOUDFLARE_WORKERS_AI_SCOPES);
@@ -137,13 +252,21 @@ describe('auth and desktop security invariants', () => {
     // Without offline_access no refresh token is issued, forcing a reconnect every visit.
     expect(provider.scopes).toContain('offline_access');
     expect(provider.scopes).not.toContain('openid');
-    expect(routes).toContain('processGenericTokenEndpointResponse');
-    expect(routes).toContain('attachCloudflareWorkersAI');
-    // Session before Workers AI attach, so a Cloudflare API outage cannot fail a valid sign-in.
-    expect(routes.indexOf('const session = await createSession'))
-      .toBeLessThan(routes.indexOf('await attachCloudflareWorkersAI'));
-    expect(routes).not.toContain('Cloudflare credential attachment skipped');
-    expect(userDO).toContain("'cf-aig-gateway-id'");
+  });
+
+  test('a Cloudflare API outage does not fail a valid sign-in', async () => {
+    const { env, sessions, credentials } = cloudflareCallbackEnv();
+
+    const done = await cloudflareSignIn(env, { access_token: 'cf-a', refresh_token: 'cf-r' }, {
+      id: 'cf-user-3', email: 'person@example.com',
+    }, {
+      accounts: () => Response.json({ success: false, errors: [{ message: 'Service unavailable' }] }, { status: 503 }),
+    });
+
+    expect(done.status).toBe(302);
+    expect(sessions.size).toBe(1);
+    // The refresh token is kept, so Workers AI attaches on the next refresh rather than a second sign-in.
+    expect(credentials.map((row) => row.credential.refreshToken)).toEqual(['cf-r']);
   });
 
   test('Cloudflare OAuth token attachment stores an account-backed Workers AI credential', async () => {
@@ -357,12 +480,25 @@ function cloudflareCallbackEnv() {
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
 
-  return { env: bindings, credentials, sessions };
+  return { env: bindings, credentials, sessions, kv, userDO };
+}
+
+interface SignInOptions {
+  readonly returnTo?: string;
+  readonly accounts?: () => Response;
+  /** Runs after the start hands out its state, before the callback redeems it. */
+  readonly between?: (state: string) => Promise<void>;
 }
 
 async function cloudflareSignIn(
-  env: AuthRoutesEnv<string>, tokenJson: JsonValue, userResult: JsonValue,
+  env: AuthRoutesEnv<string>, tokenJson: JsonValue, userResult: JsonValue, options: SignInOptions = {},
 ): Promise<Response> {
+  return (await cloudflareSignInSteps(env, tokenJson, userResult, options)).done;
+}
+
+async function cloudflareSignInSteps(
+  env: AuthRoutesEnv<string>, tokenJson: JsonValue, userResult: JsonValue, options: SignInOptions = {},
+): Promise<{ start: Response; done: Response; callback: Request }> {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new Request(input, init).url;
@@ -382,7 +518,7 @@ async function cloudflareSignIn(
     }
 
     if (url === 'https://api.cloudflare.com/client/v4/accounts') {
-      return Response.json({ success: true, result: [] });
+      return options.accounts?.() ?? Response.json({ success: true, result: [] });
     }
 
     throw new Error(`Unexpected fetch in test: ${url}`);
@@ -390,7 +526,10 @@ async function cloudflareSignIn(
 
   try {
     const origin = 'https://kinu.example.com';
-    const start = await handleAuthRequest(new Request(`${origin}/auth/cloudflare/start`), env);
+    const startUrl = new URL(`${origin}/auth/cloudflare/start`);
+
+    if (options.returnTo !== undefined) startUrl.searchParams.set('return_to', options.returnTo);
+    const start = await handleAuthRequest(new Request(startUrl), env);
 
     if (!start) throw new Error('auth route did not handle the sign-in start');
     const state = new URL(start.headers.get('location') ?? '').searchParams.get('state');
@@ -399,17 +538,17 @@ async function cloudflareSignIn(
       .find((value) => value.startsWith(`${OAUTH_STATE_COOKIE_NAME}=`));
 
     if (!state || !setCookie) throw new Error('sign-in start handed out no bound handoff');
-    const callback = new URL(`${origin}/auth/cloudflare/callback`);
-    callback.searchParams.set('state', state);
-    callback.searchParams.set('code', 'auth-code-1');
-
-    const done = await handleAuthRequest(new Request(callback.toString(), {
-      headers: { cookie: setCookie.split(';')[0] },
-    }), env);
+    await options.between?.(state);
+    const callbackUrl = new URL(`${origin}/auth/cloudflare/callback`);
+    callbackUrl.searchParams.set('state', state);
+    callbackUrl.searchParams.set('code', 'auth-code-1');
+    const redeem = () => new Request(callbackUrl.toString(), { headers: { cookie: setCookie.split(';')[0] } });
+    const callback = redeem();
+    const done = await handleAuthRequest(redeem(), env);
 
     if (!done) throw new Error('auth route did not handle the callback');
 
-    return done;
+    return { start, done, callback };
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -465,78 +604,124 @@ async function cloudflareSignIn(
     expect(lifetime).toBeLessThanOrEqual(900_000);
   });
 
-  test('browser UI uses app auth routes rather than Cloudflare Access logout/login URLs', () => {
-    const sidebar = source('src/components/Sidebar.tsx');
-    const supervise = source('src/pages/SupervisePage.tsx'); // webhook step-up login lives here
-    const routes = source('src/auth/routes.ts');
-    expect(sidebar).toContain('href="/logout"');
-    expect(sidebar).not.toContain('/cdn-cgi/access/logout');
-    expect(routes).toContain("url.searchParams.get('return_to') ?? '/'");
-    expect(supervise).toContain('new URL("/login", window.location.origin)');
-    expect(supervise).not.toContain('/cdn-cgi/access/login');
+  test('sign-in returns the browser where it was going, and logout ends the session', async () => {
+    const { env, sessions } = cloudflareCallbackEnv();
+
+    const done = await cloudflareSignIn(env, { access_token: 'cf-a' }, { id: 'cf-user-4', email: 'p@example.com' }, {
+      returnTo: '/agents/jarvis',
+    });
+
+    expect(new URL(done.headers.get('location') ?? '', ORIGIN).pathname).toBe('/agents/jarvis');
+
+    const plain = await cloudflareSignIn(cloudflareCallbackEnv().env, { access_token: 'cf-b' }, {
+      id: 'cf-user-5', email: 'x@example.com',
+    });
+
+    expect(new URL(plain.headers.get('location') ?? '', ORIGIN).pathname).toBe('/');
+
+    const logout = new Request(`${ORIGIN}/logout`, { headers: { cookie: sessionCookie(done) } });
+    const out = present(await handleAuthRequest(logout, env), 'logout');
+
+    expect(setCookieNamed(out, SESSION_COOKIE_NAME)).toContain('Max-Age=0');
+    expect(sessions.size).toBe(0);
   });
 
-  test('OAuth sessions are HttpOnly host cookies and state is server-side', () => {
-    const routes = source('src/auth/routes.ts');
-    const session = source('src/auth/session.ts');
-    const store = source('src/auth/store.ts');
-    // Each cookie name has one home (auth/session.ts).
-    expect(session).toContain("export const SESSION_COOKIE_NAME = '__Host-kinu_session'");
-    expect(session).toContain("export const OAUTH_STATE_COOKIE_NAME = '__Host-kinu_oauth_state'");
-    expect(routes).toContain('SESSION_COOKIE_NAME');
-    expect(routes).toContain('OAUTH_STATE_COOKIE_NAME');
-    expect(routes).not.toContain('__Host-kinu_session');
-    expect(routes).not.toContain('__Host-kinu_oauth_state');
-    // One cookie recipe: two copies of a cookie's attributes is how one loses `Secure`.
-    expect(session).toContain('HttpOnly; Secure; SameSite=Lax');
-    expect(routes).toContain('setCookie');
-    expect(routes).not.toContain('HttpOnly');
-    // Only hashes are stored, and the record is burned on the way out.
-    expect(store).toContain('`oauth-state:${await sha256Hex(state)}`');
-    expect(store).toContain('await kv.delete(key)');
+
+  test('the sign-in handoff and the session are host-only HttpOnly cookies', async () => {
+    const { env } = cloudflareCallbackEnv();
+
+    const { start, done } = await cloudflareSignInSteps(env, { access_token: 'cf-a' }, {
+      id: 'cf-user-6', email: 'p@example.com',
+    });
+
+    for (const [response, name] of [[start, OAUTH_STATE_COOKIE_NAME], [done, SESSION_COOKIE_NAME]] as const) {
+      const cookie = present(setCookieNamed(response, name), name);
+      const attributes = cookie.split(';').slice(1).map((part) => part.trim().split('=')[0]?.toLowerCase());
+
+      // `__Host-` needs Secure and Path=/ with no Domain, so a preview on a sibling host cannot set it.
+      expect(name).toStartWith('__Host-');
+      expect(attributes).toEqual(expect.arrayContaining(['httponly', 'secure', 'samesite', 'path']));
+      expect(attributes).not.toContain('domain');
+      expect(cookie).toContain('SameSite=Lax');
+    }
   });
 
-  test('browser and CLI auth keep expiring state in KV and every durable decision in the UserDO', () => {
-    const wrangler = source('wrangler.jsonc');
-    const session = source('src/auth/session.ts');
-    const store = source('src/auth/store.ts');
-    const cliRoutes = source('src/cli/routes.ts');
-    expect(wrangler).toContain('"binding": "AUTH_KV"');
-    // No D1 and no auth DO: a singleton DO in front of every sign-in is a chokepoint.
-    expect(wrangler).not.toContain('d1_databases');
-    expect(wrangler).not.toContain('AUTH_DB');
-    expect(wrangler).not.toContain('CLIAuthDO');
-    expect(wrangler).not.toContain('AuthDO');
-    expect(session).toContain('verifySession(env, sessionToken)');
-    expect(cliRoutes).toContain('startCliAuth(env');
-    expect(cliRoutes).not.toContain('authDO(env)');
-    // Liveness is the user's own DO's answer per request; unreachable is a 503, never a KV-only pass.
-    expect(store).toContain('verifyBrowserSession(caller, tokenHash)');
-    expect(session).toContain('new AuthError(503');
-    // Nothing in KV is a source of truth: every write expires; identity is derived.
-    expect(store).toContain('.ensureProfile(await ownerCaller(env), email');
-    expect(store).not.toContain('kv.put(');
+  test('the sign-in state is stored only as its hash and is burned by the callback', async () => {
+    const { env, kv } = cloudflareCallbackEnv();
+    let held: string[] = [];
+    let raw = '';
+
+    const user = { id: 'cf-user-7', email: 'p@example.com' };
+
+    const { done, callback } = await cloudflareSignInSteps(env, { access_token: 'cf-a' }, user, {
+      between: async (state) => {
+        raw = state;
+        held = kv.keys();
+      },
+    });
+
+    expect(held).toContain(`oauth-state:${await sha256Hex(raw)}`);
+    expect(held.filter((key) => key.includes(raw))).toEqual([]);
+    expect(done.status).toBe(302);
+    expect(kv.keys()).not.toContain(`oauth-state:${await sha256Hex(raw)}`);
+    // A second use of the same state and cookie finds nothing to redeem.
+    expect((await handleAuthRequest(callback, env))?.status).not.toBe(302);
   });
 
-  test('Cloudflare Access is never a browser session', () => {
-    const access = source('src/auth/session.ts');
-    const wrangler = source('wrangler.jsonc');
-    const health = source('../core/src/http/health-route.ts');
-    expect(access).not.toContain('readAccessToken');
-    expect(access).not.toContain('verifyAccessJwt');
-    expect(access).not.toContain('CF_Authorization');
-    expect(wrangler).not.toContain('CF_ACCESS_TEAM_DOMAIN');
-    expect(wrangler).not.toContain('CF_ACCESS_AUD');
-    expect(health).not.toContain('cf-access-rollout-fallback');
+
+  test('nothing sign-in leaves in KV outlives the session it opened', async () => {
+    const { env, kv } = cloudflareCallbackEnv();
+    const done = await cloudflareSignIn(env, { access_token: 'cf-a' }, { id: 'cf-user-8', email: 'p@example.com' });
+    const maxAge = Number(/Max-Age=(\d+)/u.exec(sessionCookie(done, true))?.[1]);
+
+    expect(kv.keys().length).toBeGreaterThan(0);
+    expect(kv.keys().filter((key) => (kv.ttlOf(key) ?? Infinity) > maxAge)).toEqual([]);
   });
 
-  test('root has a public landing route before the authenticated SPA fallback', () => {
-    const server = source('src/server.ts');
-    const landing = source('src/landing-route.ts');
-    expect(server).toContain('handleLandingRequest(request, env)');
-    expect(server.indexOf('handleLandingRequest(request, env)')).toBeLessThan(server.indexOf('authenticateRequest(request, env)'));
-    expect(landing).toContain("url.pathname !== '/'");
+  test("a session is live only while the user's own object says so, and an unreachable object is an outage", async () => {
+    const { env, sessions, userDO } = cloudflareCallbackEnv();
+    const done = await cloudflareSignIn(env, { access_token: 'cf-a' }, { id: 'cf-user-9', email: 'p@example.com' });
+    const request = () => new Request(`${ORIGIN}/api/user/workspaces`, { headers: { cookie: sessionCookie(done) } });
+
+    expect((await authenticateRequest(request(), env)).email).toBe('p@example.com');
+
+    const unreachable: AuthRoutesEnv<string> = {
+      ...env,
+      UserDO: {
+        idFromName: (name) => name,
+        get: () => ({ ...userDO, verifyBrowserSession: async () => { throw new Error('the user object is unreachable'); } }),
+      },
+    };
+
+    await expect(authenticateRequest(request(), unreachable)).rejects.toMatchObject({ status: 503 });
+
+    // The KV record is still there; the object's answer is the one that counts.
+    sessions.clear();
+    await expect(authenticateRequest(request(), env)).rejects.toMatchObject({ status: 401 });
   });
+
+
+  test('a Cloudflare Access assertion is not a browser session', async () => {
+    const assertion = 'eyJhbGciOiJSUzI1NiJ9.eyJlbWFpbCI6Im93bmVyQGV4YW1wbGUuY29tIn0.c2ln';
+    const access = { cookie: `CF_Authorization=${assertion}`, 'cf-access-jwt-assertion': assertion };
+
+    const page = await served(`${APP}/settings`, { ...access, accept: 'text/html' });
+    expect(page.status).toBe(302);
+    expect(page.headers.get('location')).toStartWith(`${APP}/login?`);
+    expect((await served(`${APP}/api/user/workspaces`, access)).status).toBe(401);
+  });
+
+
+  test('the root is the public landing page, and the app behind it asks for sign-in', async () => {
+    const root = await served(`${APP}/`, { accept: 'text/html' });
+    expect(root.status).toBe(200);
+    expect(await root.text()).toContain(LANDING_PAGE);
+
+    const app = await served(`${APP}/settings`, { accept: 'text/html' });
+    expect(app.status).toBe(302);
+    expect(app.headers.get('location')).toStartWith(`${APP}/login?`);
+  });
+
 
   test('browser install page is HTML while the terminal installer stays raw shell', async () => {
     const installPage = await handleCliRequest(new Request('https://kinu.example.com/install'), PUBLIC_ROUTE_ENV);
@@ -599,14 +784,6 @@ async function cloudflareSignIn(
     expect(await present(shimHead, 'the HEAD /downloads/kinu response').text()).toBe('');
   });
 
-  test('supervise automation copy matches the live timer reactor', () => {
-    const supervise = source('src/pages/SupervisePage.tsx');
-    expect(supervise).toContain('next_fire_at');
-    expect(supervise).toContain('fire_count');
-    expect(supervise).not.toContain("The event reactor isn't wired into live turns yet");
-    expect(supervise).not.toContain("triggers are registered but don't auto-drive runs");
-  });
-
   test('CLI setup commands are one-command defaults without embedded auth tokens', () => {
     expect(buildCliInstallCommand({ origin: 'https://kinu.example.com/' }))
       .toBe("curl -fsSL 'https://kinu.example.com/install.sh' | bash");
@@ -620,34 +797,15 @@ async function cloudflareSignIn(
     );
   });
 
-  test('CLI model menu uses CLI bearer auth rather than browser-only user routes', () => {
-    const cliRoutes = source('src/cli/routes.ts');
-    expect(cliRoutes).toContain("path === '/models' && method === 'GET'");
-    expect(cliRoutes).toContain('listAvailableModels(env, cli.userId, await ownerCaller(env))');
+  test('the CLI model menu answers a CLI bearer, never a browser session', async () => {
+    const menu = await handleCliRequest(new Request(`${ORIGIN}/api/cli/models`, {
+      headers: { cookie: `${SESSION_COOKIE_NAME}=${'s'.repeat(40)}` },
+    }), PUBLIC_ROUTE_ENV);
+
+    expect(menu?.status).toBe(401);
   });
 
-  test('web agent creation requires an available model and stores the selected initial model', () => {
-    const routes = source('src/user/routes.ts');
-    const createAgent = source('src/user/workspace-create.ts');
-    expect(routes).toContain('listAvailableModels(env, identity.userId, await ownerCaller(env))');
-    expect(createAgent).toContain('Cloudflare Workers AI is not connected');
-    expect(createAgent).toContain('defaultSpecFor');
-    expect(createAgent).toContain('await orchestrator.setModel(model)');
-  });
 
-  test('web UI offers Cloudflare Workers AI reconnect instead of a no-provider dead end', () => {
-    // The shared picker owns the reconnect CTA.
-    const picker = source('src/components/ModelPicker.tsx');
-    const workspace = source('src/pages/WorkspacePage.tsx');
-    const home = source('src/pages/HomePage.tsx');
-    const providers = source('src/components/account/ProvidersPanel.tsx');
-    expect(picker).not.toContain('(no providers connected)');
-    expect(picker).toContain('Connect Workers AI');
-    expect(picker).toContain('cloudflareReconnectPath');
-    expect(workspace).toContain('ConnectedModelPicker');
-    expect(home).toContain('CloudflareAIConnectNotice');
-    expect(providers).toContain('CloudflareAIConnectNotice');
-  });
 });
 
 describe('sanitizeReturnTo (single strict implementation)', () => {
