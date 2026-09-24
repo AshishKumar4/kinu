@@ -661,6 +661,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **An hour-long prompt-cache write is charged what Anthropic bills.** Anthropic bills a cache write kept an hour at
+  twice the input rate. Spend, mission budgets and the Activity totals charged it at the five-minute rate and called
+  the total a floor; they now charge the hour rate, and the floor note names only calls no rate priced.
+
 - **Responses models see their own earlier steps.** On the models.dev catalog
   (Muse on opencode's gateway), the CLI's opencode bridge and Codex, every step
   after the first sent the earlier ones as references to items the endpoint

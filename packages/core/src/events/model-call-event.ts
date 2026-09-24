@@ -31,14 +31,9 @@ export function buildModelCallEvent(report: ModelCallReport, opts: {
     : null;
 
   if (rate) {
-    const price = priceCall(report.usage, rate);
+    const usd = priceCall(report.usage, rate);
 
-    if (price !== undefined) {
-      event.usd = price.usd;
-
-      // The workspace total counts these to mark its dollar figure a floor.
-      if (price.floorTokens !== undefined) event.usdFloorTokens = price.floorTokens;
-    }
+    if (usd !== undefined) event.usd = usd;
   }
 
   return event;

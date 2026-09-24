@@ -99,7 +99,7 @@ function unrunActivity(): ActivitySnapshot {
     },
     spend: {
       producers: [],
-      total: { calls: 0, callsWithoutUsage: 0, usage: {}, unpricedCalls: 0, floorPricedCalls: 0 },
+      total: { calls: 0, callsWithoutUsage: 0, usage: {}, unpricedCalls: 0 },
       coverage: { calls: 0, measured: 0, reported: null, silent: [], partial: [] },
       offTurnShare: null,
       missions: [],

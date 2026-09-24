@@ -15,7 +15,7 @@ export interface AccountUsage {
 
 export const AccountSpendSchema: v.GenericSchema<AccountSpend> = v.object({
   provider: v.nullable(v.string()), account: v.nullable(v.string()), calls: v.number(), callsWithoutUsage: v.number(),
-  usage: UsageSchema, usd: v.optional(v.number()), unpricedCalls: v.number(), floorPricedCalls: v.number(),
+  usage: UsageSchema, usd: v.optional(v.number()), unpricedCalls: v.number(),
   quota: v.optional(QuotaSnapshotSchema),
 });
 
@@ -52,7 +52,6 @@ function addAccountSpend(a: AccountSpend, b: AccountSpend): AccountSpend {
     callsWithoutUsage: a.callsWithoutUsage + b.callsWithoutUsage,
     usage: addUsage(a.usage, b.usage),
     unpricedCalls: a.unpricedCalls + b.unpricedCalls,
-    floorPricedCalls: a.floorPricedCalls + b.floorPricedCalls,
   };
 
   return { ...sum, ...(usd !== undefined && { usd }), ...(quota !== undefined && { quota }) };

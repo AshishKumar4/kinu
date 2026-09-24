@@ -1451,7 +1451,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private priceAt(usage: Usage): number | undefined {
     const pricing = this.modelCatalog.pricing();
 
-    return pricing ? priceCall(usage, pricing)?.usd : undefined;
+    return pricing ? priceCall(usage, pricing) : undefined;
   }
 
   /** Lazy: resolves this actor's handle, whose directory row does not exist until `ensureSchema`

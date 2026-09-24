@@ -82,7 +82,7 @@ describe('/stats reads every workspace this person holds', () => {
 
     const cloud: AccountUsage = {
       accounts: [{
-        provider: 'anthropic', account: 'work', calls: 3, callsWithoutUsage: 0, unpricedCalls: 0, floorPricedCalls: 0,
+        provider: 'anthropic', account: 'work', calls: 3, callsWithoutUsage: 0, unpricedCalls: 0,
         usage: { input: 900, output: 90 }, usd: 1.5,
         quota: { at: 5_000, windows: [{ measure: 'requests', limit: 50, remaining: 3 }] },
       }],

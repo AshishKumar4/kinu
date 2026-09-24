@@ -39,7 +39,7 @@ afterEach(async () => {
 /** `getActivitySnapshot`'s spend as a deployment before d9bb108d9 answers it: no `accounts`. */
 const SPEND_BEFORE_ACCOUNTS = {
   producers: [],
-  total: { calls: 3, callsWithoutUsage: 0, usage: { input: 1200, output: 300 }, usd: 0.01, unpricedCalls: 0, floorPricedCalls: 0 },
+  total: { calls: 3, callsWithoutUsage: 0, usage: { input: 1200, output: 300 }, usd: 0.01, unpricedCalls: 0 },
   coverage: { calls: 3, measured: 3, reported: null, silent: [], partial: [] },
   offTurnShare: null,
   missions: [],

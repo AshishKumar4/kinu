@@ -18,7 +18,7 @@ const WORKSPACES = ['jarvis', 'scout', 'relay', 'gone'].map((name, index) => ({
 }));
 
 const work = ({ calls, input, usd, at, remaining }: { calls: number; input: number; usd: number; at: number; remaining: number }): AccountSpend => ({
-  provider: 'anthropic', account: 'work', calls, callsWithoutUsage: 0, unpricedCalls: 0, floorPricedCalls: 0,
+  provider: 'anthropic', account: 'work', calls, callsWithoutUsage: 0, unpricedCalls: 0,
   usage: { input, output: calls }, usd,
   quota: { at, windows: [{ measure: 'requests', limit: 50, remaining }] },
 });
@@ -28,7 +28,7 @@ const LEDGERS = new Map<string, readonly AccountSpend[]>([
   ['jarvis', [work({ calls: 3, input: 900, usd: 0.5, at: 1_000, remaining: 40 })]],
   ['scout', [
     work({ calls: 1, input: 100, usd: 0.25, at: 3_000, remaining: 12 }),
-    { provider: 'openai', account: 'main', calls: 2, callsWithoutUsage: 0, unpricedCalls: 2, floorPricedCalls: 0, usage: { input: 10 } },
+    { provider: 'openai', account: 'main', calls: 2, callsWithoutUsage: 0, unpricedCalls: 2, usage: { input: 10 } },
   ]],
   ['relay', [work({ calls: 2, input: 1_000, usd: 0.25, at: 2_000, remaining: 30 })]],
 ]);
@@ -51,11 +51,11 @@ const held = (keys: readonly string[]) => keys.map((key) => ({ key, kind: 'beare
 const MERGED = {
   accounts: [
     {
-      provider: 'anthropic', account: 'work', calls: 6, callsWithoutUsage: 0, unpricedCalls: 0, floorPricedCalls: 0,
+      provider: 'anthropic', account: 'work', calls: 6, callsWithoutUsage: 0, unpricedCalls: 0,
       usage: { input: 2_000, output: 6 }, usd: 1,
       quota: { at: 3_000, windows: [{ measure: 'requests', limit: 50, remaining: 12 }] },
     },
-    { provider: 'openai', account: 'main', calls: 2, callsWithoutUsage: 0, unpricedCalls: 2, floorPricedCalls: 0, usage: { input: 10 } },
+    { provider: 'openai', account: 'main', calls: 2, callsWithoutUsage: 0, unpricedCalls: 2, usage: { input: 10 } },
   ],
   workspaces: 3,
   unread: ['gone'],

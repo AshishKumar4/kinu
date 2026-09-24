@@ -107,7 +107,7 @@ export type RunEvent =
   | (RunEventBase & { type: 'tool_call_end'; name: string; toolCallId: string;
       args?: JsonValue; result?: JsonValue; error?: string; durationMs?: number; outcome?: ToolOutcome })
   /** The durable record of one step's output; pairing holds within a row, so a run's rows
-   *  concatenate into a valid request. `usdFloorTokens` is present only when `usd` is a floor. */
+   *  concatenate into a valid request. */
   | (RunEventBase & {
       type: 'step_finish';
       stepIndex: number;
@@ -116,7 +116,6 @@ export type RunEvent =
       messages?: JsonValue[];
       usage?: Usage;
       usd?: number;
-      usdFloorTokens?: number;
       modelId?: string;
       context?: ContextComposition;
       account?: CallAccount | undefined;
@@ -131,7 +130,6 @@ export type RunEvent =
       source: SpendSource;
       usage?: Usage;
       usd?: number;
-      usdFloorTokens?: number;
       spec?: string;
       modelId?: string;
       account?: CallAccount;

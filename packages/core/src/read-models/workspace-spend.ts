@@ -49,25 +49,17 @@ interface Tally {
   usage: Usage;
   usd: number | undefined;
   unpricedCalls: number;
-  floorPricedCalls: number;
 }
 
-/** `usd` stays undefined until a call carries one ("unpriced" is not "$0"). Presence of
- *  `floorTokens` marks a floor price from `priceCall`. */
-function record(
-  tally: Tally, usage: Usage, usd: number | undefined, floorTokens?: number,
-): void {
+/** `usd` stays undefined until a call carries one ("unpriced" is not "$0"). */
+function record(tally: Tally, usage: Usage, usd: number | undefined): void {
   tally.calls++;
 
   if (usageReported(usage)) {
     tally.usage = addUsage(tally.usage, usage);
 
     if (usd === undefined) tally.unpricedCalls++;
-    else {
-      tally.usd = (tally.usd ?? 0) + usd;
-
-      if (floorTokens !== undefined) tally.floorPricedCalls++;
-    }
+    else tally.usd = (tally.usd ?? 0) + usd;
   } else {
     tally.callsWithoutUsage++;
   }
@@ -82,7 +74,7 @@ function tallyFor(tallies: Tallies, source: SpendSource): Tally {
 
   const fresh: Tally = {
     calls: 0, callsWithoutUsage: 0, usage: {}, usd: undefined,
-    unpricedCalls: 0, floorPricedCalls: 0,
+    unpricedCalls: 0,
   };
 
   tallies.set(source, fresh);
@@ -134,14 +126,13 @@ export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend & { rea
 
   const total: Tally = {
     calls: 0, callsWithoutUsage: 0, usage: {}, usd: undefined,
-    unpricedCalls: 0, floorPricedCalls: 0,
+    unpricedCalls: 0,
   };
 
   for (const p of producers) {
     total.calls += p.calls;
     total.callsWithoutUsage += p.callsWithoutUsage;
     total.unpricedCalls += p.unpricedCalls;
-    total.floorPricedCalls += p.floorPricedCalls;
     total.usage = addUsage(total.usage, p.usage);
 
     if (p.usd !== undefined) total.usd = (total.usd ?? 0) + p.usd;
@@ -177,7 +168,6 @@ function finishTotal(tally: Tally): SpendTally {
     callsWithoutUsage: tally.callsWithoutUsage,
     usage: tally.usage,
     unpricedCalls: tally.unpricedCalls,
-    floorPricedCalls: tally.floorPricedCalls,
   };
 
   return tally.usd === undefined ? out : { ...out, usd: tally.usd };

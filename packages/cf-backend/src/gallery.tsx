@@ -4904,7 +4904,7 @@ const AGENT_TOKENS_METERED: Usage = { ...AGENT_TOKENS, neurons: 2_639_183 };
 const ACTIVITY_PRODUCERS: ProducerSpend[] = [
   {
     source: "agent", calls: 344, callsWithoutUsage: 0, usage: AGENT_TOKENS_METERED,
-    usd: 11.98, unpricedCalls: 0, floorPricedCalls: 0,
+    usd: 11.98, unpricedCalls: 0,
   },
   {
     source: "judge", calls: 62, callsWithoutUsage: 0,
@@ -4912,25 +4912,25 @@ const ACTIVITY_PRODUCERS: ProducerSpend[] = [
       input: 1_284_400, output: 96_120, cacheRead: 812_000,
       cacheWrite: 96_400, cacheWrite1h: 71_200,
     },
-    usd: 3.41, unpricedCalls: 0, floorPricedCalls: 18,
+    usd: 3.41, unpricedCalls: 0,
   },
   {
     source: "fast", calls: 210, callsWithoutUsage: 0,
     usage: { input: 402_118, output: 18_440, neurons: 50_467 },
-    usd: 0.0142, unpricedCalls: 44, floorPricedCalls: 0,
+    usd: 0.0142, unpricedCalls: 44,
   },
   {
     source: "head", calls: 12, callsWithoutUsage: 2,
-    usage: { input: 288_004, output: 31_902 }, usd: 0.86, unpricedCalls: 0, floorPricedCalls: 0,
+    usage: { input: 288_004, output: 31_902 }, usd: 0.86, unpricedCalls: 0,
   },
   {
     source: "mcts", calls: 28, callsWithoutUsage: 0,
     usage: { input: 96_210, output: 12_004, neurons: 12_986 },
-    unpricedCalls: 28, floorPricedCalls: 0,
+    unpricedCalls: 28,
   },
   {
     source: "platform", calls: 91, callsWithoutUsage: 91, usage: {},
-    unpricedCalls: 0, floorPricedCalls: 0,
+    unpricedCalls: 0,
   },
 ];
 
@@ -4938,16 +4938,16 @@ const ACTIVITY_PRODUCERS: ProducerSpend[] = [
 const CLEAN_PRODUCERS: ProducerSpend[] = [
   {
     source: "agent", calls: 344, callsWithoutUsage: 0, usage: AGENT_TOKENS,
-    usd: 11.98, unpricedCalls: 0, floorPricedCalls: 0,
+    usd: 11.98, unpricedCalls: 0,
   },
   {
     source: "judge", calls: 62, callsWithoutUsage: 0,
     usage: { input: 1_284_400, output: 96_120, cacheRead: 812_000 },
-    usd: 3.41, unpricedCalls: 0, floorPricedCalls: 0,
+    usd: 3.41, unpricedCalls: 0,
   },
   {
     source: "fast", calls: 210, callsWithoutUsage: 0,
-    usage: { input: 402_118, output: 18_440 }, usd: 0.42, unpricedCalls: 0, floorPricedCalls: 0,
+    usage: { input: 402_118, output: 18_440 }, usd: 0.42, unpricedCalls: 0,
   },
 ];
 
@@ -5023,7 +5023,7 @@ const ACTIVITY_LOG: ActivitySnapshot["log"] = [
 
 const ACTIVITY_ACCOUNTS: readonly AccountSpend[] = [
   {
-    provider: "anthropic", account: "work", calls: 402, callsWithoutUsage: 0, unpricedCalls: 0, floorPricedCalls: 0,
+    provider: "anthropic", account: "work", calls: 402, callsWithoutUsage: 0, unpricedCalls: 0,
     usd: 9.4312, usage: { input: 14_220_118, output: 402_551, cacheRead: 12_880_004 },
     quota: {
       at: NOW - 40e3,
@@ -5034,7 +5034,7 @@ const ACTIVITY_ACCOUNTS: readonly AccountSpend[] = [
     },
   },
   {
-    provider: "codex", account: "main", calls: 214, callsWithoutUsage: 0, unpricedCalls: 0, floorPricedCalls: 0,
+    provider: "codex", account: "main", calls: 214, callsWithoutUsage: 0, unpricedCalls: 0,
     usd: 5.1204, usage: { input: 8_104_220, output: 228_101, cacheRead: 6_874_002 },
     quota: {
       at: NOW - 95e3,
@@ -5045,11 +5045,11 @@ const ACTIVITY_ACCOUNTS: readonly AccountSpend[] = [
     },
   },
   {
-    provider: "anthropic", account: "main", calls: 38, callsWithoutUsage: 0, unpricedCalls: 0, floorPricedCalls: 0,
+    provider: "anthropic", account: "main", calls: 38, callsWithoutUsage: 0, unpricedCalls: 0,
     usd: 1.7126, usage: { input: 1_226_706, output: 40_698 },
   },
   {
-    provider: null, account: null, calls: 93, callsWithoutUsage: 93, unpricedCalls: 0, floorPricedCalls: 0, usage: {},
+    provider: null, account: null, calls: 93, callsWithoutUsage: 93, unpricedCalls: 0, usage: {},
   },
 ];
 
@@ -5064,7 +5064,7 @@ const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
   spend: {
     producers: ACTIVITY_PRODUCERS,
     total: {
-      calls: 747, callsWithoutUsage: 93, unpricedCalls: 72, floorPricedCalls: 18,
+      calls: 747, callsWithoutUsage: 93, unpricedCalls: 72,
       usd: 16.2642,
       usage: {
         input: 23_551_044, output: 671_350, cacheRead: 19_754_006, reasoning: 41_220,
@@ -5092,7 +5092,7 @@ const ACTIVITY_CLEAN: ActivitySnapshot = {
   spend: {
     producers: CLEAN_PRODUCERS,
     total: {
-      calls: 616, callsWithoutUsage: 0, unpricedCalls: 0, floorPricedCalls: 0, usd: 15.81,
+      calls: 616, callsWithoutUsage: 0, unpricedCalls: 0, usd: 15.81,
       usage: {
         input: 23_166_830, output: 627_444, cacheRead: 19_754_006, reasoning: 41_220,
       },
@@ -5116,7 +5116,7 @@ const ACTIVITY_FRESH: ActivitySnapshot = {
   },
   spend: {
     producers: [],
-    total: { calls: 0, callsWithoutUsage: 0, usage: {}, unpricedCalls: 0, floorPricedCalls: 0 },
+    total: { calls: 0, callsWithoutUsage: 0, usage: {}, unpricedCalls: 0 },
     coverage: { calls: 0, measured: 0, reported: null, silent: [], partial: [] },
     offTurnShare: null,
     missions: [],

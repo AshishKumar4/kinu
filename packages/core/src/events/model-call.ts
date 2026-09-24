@@ -88,9 +88,6 @@ export interface SpendTally {
   readonly usd?: number;
   /** Measured in tokens, no catalog rate; one reason `usd` is a floor. */
   readonly unpricedCalls: number;
-  /** Calls priced at a floor (`priceCall`'s `floorTokens`); nonzero means `usd` is under the
-   *  real bill. Zero is a measurement here. */
-  readonly floorPricedCalls: number;
 }
 
 export interface AccountSpend extends SpendTally {

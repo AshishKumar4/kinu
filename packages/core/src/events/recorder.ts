@@ -73,7 +73,6 @@ export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('step_finish'), stepIndex: v.number(),
     reason: v.optional(v.string()), messages: v.optional(v.array(JsonValueSchema)),
     usage: v.optional(UsageSchema), usd: v.optional(v.number()),
-    usdFloorTokens: v.optional(v.number()),
     modelId: v.optional(v.string()), context: v.optional(ContextCompositionSchema),
     account: v.optional(CallAccountSchema) }),
   v.object({ ...BaseFields, type: v.literal('step_partial'), stepIndex: v.number(), text: v.string(),
@@ -81,7 +80,7 @@ export const RunEventSchema = v.variant('type', [
       result: v.optional(v.string()), error: v.optional(v.string()) })) }),
   v.object({ ...BaseFields, type: v.literal('model_call'),
     source: v.picklist(SPEND_SOURCES), usage: v.optional(UsageSchema),
-    usd: v.optional(v.number()), usdFloorTokens: v.optional(v.number()),
+    usd: v.optional(v.number()),
     spec: v.optional(v.string()), modelId: v.optional(v.string()), account: v.optional(CallAccountSchema) }),
   v.object({ ...BaseFields, type: v.literal('model_operation'),
     operationId: v.string(), source: v.picklist(SPEND_SOURCES),
@@ -244,7 +243,6 @@ type SpendAggregateRow = Readonly<Record<keyof Usage, number | null>> & {
   readonly calls: number;
   readonly callsWithoutUsage: number;
   readonly unpricedCalls: number;
-  readonly floorPricedCalls: number;
   readonly usd: number | null;
 };
 
@@ -269,7 +267,6 @@ function spendTallyOf(row: Omit<SpendAggregateRow, 'source'>): SpendTally {
     callsWithoutUsage: row.callsWithoutUsage,
     usage,
     unpricedCalls: row.unpricedCalls,
-    floorPricedCalls: row.floorPricedCalls,
   };
 
   return row.usd === null ? tally : { ...tally, usd: row.usd };
@@ -606,8 +603,7 @@ export class RunEventRecorder {
   /**
    * Whole-log spend per producer, summed in SQL (not a sample). `step_finish` files under `agent`;
    * `model_operation` is excluded to avoid double counting. No run or actor filter: spend is a
-   * workspace question, including hired actors and WORKSPACE_RUN_ID. NULL sums stay absent, and
-   * `floorPricedCalls` counts the producer's `usdFloorTokens` marker rather than re-pricing.
+   * workspace question, including hired actors and WORKSPACE_RUN_ID. NULL sums stay absent.
    */
   spendByProducer(stepSources: readonly StepSpendSource[] = []): ReadonlyMap<SpendSource, SpendTally> {
     this.actor.assertCurrent();
@@ -625,8 +621,6 @@ export class RunEventRecorder {
                END AS source,
                json_extract(payload, '$.usage') AS usage,
                json_extract(payload, '$.usd') AS usd,
-               json_extract(payload, '$.usdFloorTokens') AS usdFloorTokens,
-               run_events.actor_id AS actor_id,
                type = ${'step_finish' satisfies RunEventType}
                  AND step_source.covered_since IS NOT NULL AND ts >= step_source.covered_since AS covered
         FROM run_events LEFT JOIN step_source ON step_source.actor_id = run_events.actor_id
@@ -634,7 +628,7 @@ export class RunEventRecorder {
            OR type = ${'model_call' satisfies RunEventType})
       ),
       field AS (
-        SELECT source, usd, usdFloorTokens, actor_id, covered,
+        SELECT source, usd, covered,
                json_extract(usage, '$.input') AS input,
                json_extract(usage, '$.output') AS output,
                json_extract(usage, '$.cacheRead') AS cacheRead,
@@ -653,9 +647,6 @@ export class RunEventRecorder {
              SUM(CASE WHEN covered THEN 0 ELSE 1 END) AS calls,
              SUM(CASE WHEN NOT covered AND NOT reported THEN 1 ELSE 0 END) AS callsWithoutUsage,
              SUM(CASE WHEN NOT covered AND reported AND usd IS NULL THEN 1 ELSE 0 END) AS unpricedCalls,
-             -- Aggregated from the row, never re-derived here: see the docblock.
-             SUM(CASE WHEN NOT covered AND reported AND usdFloorTokens IS NOT NULL THEN 1 ELSE 0 END)
-               + COUNT(DISTINCT CASE WHEN covered AND reported AND usdFloorTokens IS NOT NULL THEN actor_id END) AS floorPricedCalls,
              SUM(CASE WHEN reported THEN usd END) AS usd,
              SUM(CASE WHEN NOT covered THEN input END) AS input,
              SUM(CASE WHEN NOT covered THEN output END) AS output,
@@ -702,7 +693,6 @@ export class RunEventRecorder {
                json_extract(payload, '$.account.name') AS account,
                json_extract(payload, '$.account.quota') IS NOT NULL AS quoted,
                json_extract(payload, '$.usd') AS usd,
-               json_extract(payload, '$.usdFloorTokens') AS usdFloorTokens,
                json_extract(payload, '$.usage.input') AS input,
                json_extract(payload, '$.usage.output') AS output,
                json_extract(payload, '$.usage.cacheRead') AS cacheRead,
@@ -721,7 +711,6 @@ export class RunEventRecorder {
              COUNT(*) AS calls,
              SUM(CASE WHEN reported THEN 0 ELSE 1 END) AS callsWithoutUsage,
              SUM(CASE WHEN reported AND usd IS NULL THEN 1 ELSE 0 END) AS unpricedCalls,
-             SUM(CASE WHEN reported AND usdFloorTokens IS NOT NULL THEN 1 ELSE 0 END) AS floorPricedCalls,
              SUM(CASE WHEN reported THEN usd END) AS usd,
              SUM(input) AS input, SUM(output) AS output, SUM(cacheRead) AS cacheRead, SUM(cacheWrite) AS cacheWrite,
              SUM(cacheWrite1h) AS cacheWrite1h, SUM(reasoning) AS reasoning, SUM(neurons) AS neurons,

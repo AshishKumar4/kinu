@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-24",
-  "files": 2674,
-  "functions": 65712,
+  "files": 2675,
+  "functions": 65741,
   "ceiling": 87,
   "line": 32,
   "inventory": [
@@ -243,10 +243,6 @@
     },
     {
       "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
-      "complexity": 32
-    },
-    {
-      "key": "packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.recordStep",
       "complexity": 32
     },
     {

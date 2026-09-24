@@ -579,11 +579,6 @@ function spendCaveat(spend: WorkspaceSpend): string | null {
     clauses.push(`${total.unpricedCalls} measured call${total.unpricedCalls === 1 ? "" : "s"} carried no models.dev rate`);
   }
 
-  // The catalog publishes one cache-write rate; these calls used the pricier longer-retention tier.
-  if (total.floorPricedCalls > 0) {
-    clauses.push(`${total.floorPricedCalls} priced call${total.floorPricedCalls === 1 ? "" : "s"} wrote cache at a retention tier the catalog does not rate`);
-  }
-
   return clauses.length === 0 ? null : clauses.join("; ");
 }
 
@@ -662,8 +657,6 @@ function usdNote(row: Omit<ProducerSpend, "source">): string | undefined {
   const gaps: string[] = [];
 
   if (row.unpricedCalls > 0) gaps.push(`${row.unpricedCalls} carried no models.dev rate`);
-
-  if (row.floorPricedCalls > 0) gaps.push(`${row.floorPricedCalls} wrote cache at an unrated retention tier`);
 
   if (row.callsWithoutUsage > 0) gaps.push(`${row.callsWithoutUsage} reported no usage to price`);
 

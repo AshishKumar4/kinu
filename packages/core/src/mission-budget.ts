@@ -23,38 +23,27 @@ export interface MissionSpendProvenance {
   source: 'catalog' | 'blended' | 'mixed';
 }
 
-/** Unexported on purpose: `gate:wired` reports exported names no production module references. */
-interface CallPrice {
-  /** A floor, never an over-charge, when `floorTokens` is present. */
-  readonly usd: number;
-  /**
-   * `cacheWrite1h` tokens billed at models.dev's single (5m) `cache_write` rate; Anthropic prices 1h higher.
-   * Absent on an exact price, never `0`; no second rate, as that would be policy drift.
-   */
-  readonly floorTokens?: number;
-}
+/** Anthropic bills a cache write kept an hour at twice the base input rate; models.dev's `cache_write` is the
+ *  5-minute rate. */
+const HOUR_CACHE_WRITE_INPUT_MULTIPLE = 2;
 
 /** Rates are USD per 1M tokens; undefined means unpriced, never free. Shared with per-step cost telemetry. */
-export function priceCall(usage: Usage, pricing: ModelPricing): CallPrice | undefined {
+export function priceCall(usage: Usage, pricing: ModelPricing): number | undefined {
   if (usageTotal(usage) === undefined) return undefined;
   const prompt = usage.input ?? 0;
   // Parts of a cache-inclusive prompt total, clamped so `fresh` never goes negative.
   const cacheRead = Math.min(Math.max(0, usage.cacheRead ?? 0), prompt);
   const cacheWrite = Math.min(Math.max(0, usage.cacheWrite ?? 0), prompt - cacheRead);
+  const hourWrite = Math.min(Math.max(0, usage.cacheWrite1h ?? 0), cacheWrite);
   const fresh = prompt - cacheRead - cacheWrite;
 
-  // `cacheWrite1h` is a subset of `cacheWrite`, already charged below.
-  const usd = (
+  return (
     fresh * pricing.input
     + cacheRead * (pricing.cacheRead ?? pricing.input)
-    + cacheWrite * (pricing.cacheWrite ?? pricing.input)
+    + (cacheWrite - hourWrite) * (pricing.cacheWrite ?? pricing.input)
+    + hourWrite * pricing.input * HOUR_CACHE_WRITE_INPUT_MULTIPLE
     + (usage.output ?? 0) * pricing.output
   ) / 1_000_000;
-
-  // Counted, not corrected: `cache-breakpoints.ts` emits Anthropic `ttl: '1h'`.
-  const floorTokens = Math.min(Math.max(0, usage.cacheWrite1h ?? 0), cacheWrite);
-
-  return floorTokens > 0 ? { usd, floorTokens } : { usd };
 }
 
 export type MissionSeam = 'model_call' | 'spawn';
@@ -370,7 +359,7 @@ export class MissionGovernor {
 
     const delta: MissionDebit = {
       tokens: total,
-      usd: priced?.usd ?? estimateUsdCost(total),
+      usd: priced ?? estimateUsdCost(total),
       blendedTokens: priced === undefined ? total : 0,
       calls: opts?.calls ?? 0,
       spawns: opts?.spawns ?? 0,

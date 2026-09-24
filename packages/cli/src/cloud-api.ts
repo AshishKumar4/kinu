@@ -238,7 +238,6 @@ const CreatedAccessTokenSchema = v.object({ token: v.string(), name: v.string(),
 const ProducerSpendSchema: v.GenericSchema<ProducerSpend> = v.object({
   source: v.picklist(SPEND_SOURCES), calls: v.number(), callsWithoutUsage: v.number(),
   usage: UsageSchema, usd: v.optional(v.number()), unpricedCalls: v.number(),
-  floorPricedCalls: v.number(),
 });
 
 const MissionBudgetSnapshotSchema: v.GenericSchema<MissionBudgetSnapshot> = v.object({
@@ -257,7 +256,6 @@ const WorkspaceSpendSchema: v.GenericSchema<WorkspaceSpend> = v.object({
   total: v.object({
     calls: v.number(), callsWithoutUsage: v.number(), usage: UsageSchema,
     usd: v.optional(v.number()), unpricedCalls: v.number(),
-    floorPricedCalls: v.number(),
   }),
   coverage: v.object({
     calls: v.number(), measured: v.number(), reported: v.nullable(v.number()),
