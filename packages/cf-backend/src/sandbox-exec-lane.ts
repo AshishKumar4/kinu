@@ -4,23 +4,30 @@
  * and an abort kills the process, not just the wait. See `SandboxHandle.exec`.
  */
 
-import type { Process } from "@cloudflare/sandbox";
-import { decodeJsonValue, WORKSPACE_BACKUP_DIR, type SandboxHandle } from "@kinu.run/core";
+import { getSandbox, type Process, type SandboxOptions } from "@cloudflare/sandbox";
+import { decodeJsonValue, SANDBOX_TRANSPORT, WORKSPACE_BACKUP_DIR, type SandboxHandle } from "@kinu.run/core";
 import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
 import type { KinuSandbox } from "./kinu-sandbox";
 import { sandboxPreviewLabelOf } from "@kinu.run/core";
 import type { SandboxPreviewExposures } from "@kinu.run/core";
 
+/**
+ * The one way product code reaches a sandbox. The SDK persists the transport a sandbox was first reached over
+ * and drops the in-flight requests of a client that names another, so the transport is fixed here and never
+ * a caller's to choose. The route-based clients cannot restore a large workspace (`sandbox.route_client.restore_bytes`).
+ */
+export function openSandbox(
+  namespace: DurableObjectNamespace<KinuSandbox>,
+  id: string,
+  options: Omit<SandboxOptions, 'transport'>,
+): KinuSandbox {
+  return getSandbox(namespace, id, { ...options, transport: SANDBOX_TRANSPORT });
+}
+
 /** Without AUTH_KV the edge cannot verify a preview hostname, so a minted URL would be dead. */
 const PREVIEWS_UNPUBLISHABLE =
   'Port exposure is unavailable: this deployment has no AUTH_KV binding, so a '
   + 'preview URL could not be published for the edge to verify.';
-
-/**
- * Transport every `getSandbox` call site passes, and the one telemetry reports: the SDK persists it
- * per id and drops in-flight requests if it changes. Owner decision; `SANDBOX_TRANSPORT` in wrangler.jsonc matches.
- */
-export const SANDBOX_TRANSPORT = "rpc" as const;
 
 /**
  * capnweb re-materializes unknown error names as plain `Error`, leaving the SDK kind only as the

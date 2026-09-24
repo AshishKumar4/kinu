@@ -8,14 +8,31 @@ import { Agent } from 'agents';
 
 /** Separate, so the test can ask "did recovery run" without the request that would make it run. */
 export class WitnessDO extends DurableObject<Cloudflare.Env> {
+  /** Callers of {@link until}, by the note each waits for; memory only, since they wait in this instance. */
+  private readonly waiting = new Map<string, ((seen: string[]) => void)[]>();
+
   async record(note: string): Promise<void> {
-    const seen = (await this.ctx.storage.get<string[]>('seen')) ?? [];
+    const seen = await this.seen();
     seen.push(note);
     await this.ctx.storage.put('seen', seen);
+
+    for (const resolve of this.waiting.get(note) ?? []) resolve(seen);
+    this.waiting.delete(note);
   }
 
   async seen(): Promise<string[]> {
     return (await this.ctx.storage.get<string[]>('seen')) ?? [];
+  }
+
+  /** Answers once `note` is recorded: the wait ends on the record, never on a clock. */
+  async until(note: string): Promise<string[]> {
+    const seen = await this.seen();
+
+    if (seen.includes(note)) return seen;
+
+    return new Promise((resolve) => {
+      this.waiting.set(note, [...(this.waiting.get(note) ?? []), resolve]);
+    });
   }
 }
 

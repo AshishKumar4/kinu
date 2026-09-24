@@ -62,8 +62,8 @@ export type SharedSurface = { readonly [K in SameCall]: Answer<K> } & {
   getEvolutionChangelog(limit: number): Promise<EvolutionChangelogView>;
   /** The durable request the owner opened; the lane that runs it is each backend's own cadence. */
   requestRefinement(opts?: { turnIds?: string[] }): Promise<RefinementRequestView>;
-  /** The owner's words; cf names each message, the CLI mints the name. */
-  send(text: string): Promise<void>;
+  /** The owner's words under the caller's id, or a fresh one. */
+  send(text: string, id?: string): Promise<void>;
 };
 
 export interface SharedBackend {
@@ -134,7 +134,7 @@ function cloudflare(): SharedBackend {
       decideRefinement: (input) => agent.decideRefinement(input),
       revertConversation: (entryId) => agent.revertConversation(entryId),
       runScaffoldGepaOptimization: (opts) => agent.runScaffoldGepaOptimization(opts),
-      send: (text) => agent.send(text, crypto.randomUUID()),
+      send: (text, id) => agent.send(text, id ?? crypto.randomUUID()),
     },
   };
 }
@@ -231,7 +231,7 @@ function cli(): SharedBackend {
       decideRefinement: (input) => session.decideRefinement(input),
       revertConversation: (entryId) => session.revertConversation(entryId),
       runScaffoldGepaOptimization: (opts) => session.runScaffoldGepaOptimization(opts),
-      send: async (text) => { await session.send(text); },
+      send: async (text, id) => { await session.send(text, id === undefined ? {} : { id }); },
     },
   };
 }

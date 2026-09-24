@@ -857,7 +857,7 @@ export interface SwarmCandidate {
   readonly unmeasurable: string | null;
   /**
    * Why the node never finished (status, steps, clock); distinct from
-   * {@link unmeasurable} so a deadline cut is not reported as a verifier complaint.
+   * {@link unmeasurable} so a cut node is not reported as a verifier complaint.
    */
   readonly incomplete: string | null;
   readonly score: number | null;

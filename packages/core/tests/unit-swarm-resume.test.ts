@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import * as v from 'valibot';
-import { scriptedTurnModel, createTestActorsOver } from '@kinu.run/test-utils';
+import { scriptedTurnModel, createTestActorsOver, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
 import { MissionGovernor } from '../src/mission-budget';
 import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
@@ -781,7 +781,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
 
     const deps: AgentsToolDeps = {
       mode: 'build',
-      swarm: { rt, hostNode: activation(), model: second.model },
+      swarm: { rt, hostNode: activation(), model: second.model, ...unobservedSearchSeams() },
       budget: governor,
     };
 
@@ -934,7 +934,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     const { fiber, settled } = inlineFiber();
 
     const agents = createAgentsTool({
-      mode: 'build', swarm: { rt, hostNode: activation(), model: second.model },
+      mode: 'build', swarm: { rt, hostNode: activation(), model: second.model, ...unobservedSearchSeams() },
     });
 
     const runner = new BackgroundJobRunner({
@@ -1047,7 +1047,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
 
     // A second host: an eviction is what destroys the first one's admitted turns.
     const agents = createAgentsTool({
-      mode: 'build', swarm: { rt, hostNode: activation(), model: second.model },
+      mode: 'build', swarm: { rt, hostNode: activation(), model: second.model, ...unobservedSearchSeams() },
     });
 
     const runner = new BackgroundJobRunner({

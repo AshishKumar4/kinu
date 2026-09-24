@@ -291,20 +291,10 @@ describe('the delta shell against bash', () => {
 
     const hashFiles = deltaHashCandidates(probe);
     expect(hashFiles).toEqual(['short.bin', 'vol/big.bin']);
-    const sizes = new Map(probe.map((entry) => [entry.path, entry.size] as const));
 
-    const files = hashFiles.map((path, index) => ({
-      index, upperPath: `${real.upper}/${path}`, basePath: baseFromBash.get(path)?.kind === 'file' ? `${real.base}/${path}` : null,
-    }));
-
-    const wanted = new Map(hashFiles.map((path, index) => {
-      const inBase = baseFromBash.get(path);
-
-      return [index, {
-        upperBlocks: Math.ceil((sizes.get(path) ?? 0) / DELTA_BLOCK_BYTES),
-        baseBlocks: inBase?.kind === 'file' ? Math.ceil(inBase.size / DELTA_BLOCK_BYTES) : null,
-      }] as const;
-    }));
+    // The fixture's two candidates, each against its base copy, with the block counts their planted sizes make.
+    const files = hashFiles.map((path, index) => ({ index, upperPath: `${real.upper}/${path}`, basePath: `${real.base}/${path}` }));
+    const wanted = new Map([[0, { upperBlocks: 5, baseBlocks: 2 }], [1, { upperBlocks: 11, baseBlocks: 11 }]]);
 
     const hashCommand = deltaBlockHashCommand({ workDir: `${real.stage}/hash`, files });
     const hashedByBash = realShell(hashCommand);
