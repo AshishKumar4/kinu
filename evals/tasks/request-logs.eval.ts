@@ -330,10 +330,9 @@ count anywhere, not as requests and not as skipped lines, and a 429 now counts a
     prompt: `Which route had the highest p95 latency on ${SLOW_SEARCH_DAY}? Reply with just the route, like GET /api/orders/:id.`,
     verify: async (verifier) => {
       await verifier.check('names-the-slowest-route-from-the-logs', async () => {
-        const reply = verifier.replies.at(-1)?.trim() ?? '';
-        const answer = reply.replace(/^[`"'*]+|[`"'*.]+$/g, '').trim();
+        const answer = verifier.bareAnswer(/^((?:GET|POST|PUT|PATCH|DELETE) \/\S*)$/);
 
-        return { pass: answer === SLOWEST_ON_THE_SLOW_DAY, evidence: { reply, expected: SLOWEST_ON_THE_SLOW_DAY } };
+        return { pass: answer === SLOWEST_ON_THE_SLOW_DAY, evidence: { answer, expected: SLOWEST_ON_THE_SLOW_DAY, replies: verifier.recentReplies() } };
       });
 
       await sameAsReference(verifier, 'asking-changes-nothing', {

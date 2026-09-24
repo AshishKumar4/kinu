@@ -39,7 +39,7 @@ const AssertionSchema = v.looseObject({
             evalCommit: v.pipe(v.string(), v.minLength(1)),
             productSha: v.pipe(v.string(), v.minLength(1)),
             arm: v.pipe(v.string(), v.minLength(1)),
-            trial: v.optional(v.number()),
+            trial: v.pipe(v.number(), v.integer(), v.minValue(1)),
           }),
           events: v.optional(v.array(TranscriptEventSchema), []),
         }),

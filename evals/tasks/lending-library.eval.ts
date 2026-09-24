@@ -356,10 +356,9 @@ already out keep their due dates.`,
     verify: async (verifier) => {
       await verifier.check('answers-with-the-count-from-the-library', async () => {
         const expected = (await referenceAfter([TURN_1, TURN_3_RULES, TURN_3, [afterEviction]])).overdueOn(QUESTION_DATE).length;
-        const reply = verifier.replies.at(-1)?.trim() ?? '';
-        const answer = /^`?(\d+)`?\.?$/.exec(reply)?.[1];
+        const answer = verifier.bareAnswer(/^(\d+)$/);
 
-        return { pass: answer !== undefined && Number(answer) === expected, evidence: { reply, expected } };
+        return { pass: answer !== null && Number(answer) === expected, evidence: { answer, expected, replies: verifier.recentReplies() } };
       });
     },
   }],

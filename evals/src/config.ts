@@ -36,17 +36,25 @@ type Env = Record<string, string | undefined>;
 export interface EvalMatrix {
   readonly models: readonly string[];
   readonly arms: readonly string[];
+  /** Trials per cohort in this run, numbered from `firstTrial`. */
   readonly trials: number;
+  /** A run can hold one block of a cohort's trials, so a task's trials can be split across jobs. */
+  readonly firstTrial: number;
+}
+
+/** A positive integer from `env[name]`, or `fallback` when it is unset. */
+function positiveInteger(env: Env, name: string, fallback: number): number {
+  const raw = env[name]?.trim() ?? '';
+  const value = raw === '' ? fallback : Number(raw);
+
+  if (!Number.isInteger(value) || value < 1) throw new Error(`${name} must be a positive integer`);
+
+  return value;
 }
 
 /** How many trials run at once, from `KINU_EVAL_CONCURRENCY`. */
 export function evalConcurrency(env: Env): number {
-  const raw = env.KINU_EVAL_CONCURRENCY?.trim() ?? '';
-  const concurrency = raw === '' ? DEFAULT_CONCURRENCY : Number(raw);
-
-  if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error('KINU_EVAL_CONCURRENCY must be a positive integer');
-
-  return concurrency;
+  return positiveInteger(env, 'KINU_EVAL_CONCURRENCY', DEFAULT_CONCURRENCY);
 }
 
 /** The cohorts one run measures, parsed before any trial spends inference. */
@@ -60,15 +68,11 @@ export function evalMatrix(env: Env, knownArms: readonly string[]): EvalMatrix {
     throw new Error(`KINU_EVAL_ARMS names ${unknown.join(', ')}; the declared arms are ${knownArms.join(', ')}`);
   }
 
-  const raw = env.KINU_EVAL_TRIALS?.trim();
-  const trials = raw === undefined || raw === '' ? DEFAULT_TRIALS : Number(raw);
-
-  if (!Number.isInteger(trials) || trials < 1) throw new Error('KINU_EVAL_TRIALS must be a positive integer');
-
   return {
     models: models.length > 0 ? models : [DEFAULT_MODEL],
     arms: arms.length > 0 ? arms : [DEFAULT_ARM],
-    trials,
+    trials: positiveInteger(env, 'KINU_EVAL_TRIALS', DEFAULT_TRIALS),
+    firstTrial: positiveInteger(env, 'KINU_EVAL_FIRST_TRIAL', 1),
   };
 }
 

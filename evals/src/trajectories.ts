@@ -59,7 +59,7 @@ function trial(assertion: Assertion): string {
   const cost = run.usage.metadata.costUsd;
 
   const lines = [
-    `## ${taskId} \u00b7 ${run.usage.model} \u00b7 ${arm} \u00b7 trial ${String(run.session.metadata.trial ?? '?')} \u2014 ${assertion.status} `
+    `## ${taskId} \u00b7 ${run.usage.model} \u00b7 ${arm} \u00b7 trial ${String(run.session.metadata.trial)} \u2014 ${assertion.status} `
       + `(${(assertion.duration / 60_000).toFixed(1)} min)`,
     '',
     `Model steps ${String(run.output.metrics.modelTurns)} \u00b7 tool calls ${String(run.output.metrics.toolCalls)} \u00b7 `

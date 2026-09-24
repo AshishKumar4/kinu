@@ -30,8 +30,12 @@ concurrency:
 
 env:
   EVAL_TRIALS: '10'
-  # Trials at once per task job, and task jobs at once: together within what the eval account's
-  # Workers AI rate limit sustains (evals/src/config.ts), since more only adds 429 waits.
+  # A task's trials are split across jobs of this many, so no job nears GitHub's 6-hour limit: in
+  # the 2026-09-24 pilot a budget-board trial was still in its second turn after 55 minutes, and
+  # ten trials at three at a time are four such waves.
+  EVAL_TRIALS_PER_JOB: '5'
+  # Trials at once per job, and jobs at once: together within what the eval account's Workers AI
+  # rate limit sustains (evals/src/config.ts), since more only adds 429 waits.
   EVAL_CONCURRENCY: '3'
 
 jobs:
@@ -44,6 +48,7 @@ jobs:
     outputs:
       sha: ${{ steps.build.outputs.sha }}
       tasks: ${{ steps.tasks.outputs.tasks }}
+      jobs: ${{ steps.tasks.outputs.jobs }}
       baseline-sha: ${{ steps.baseline.outputs.sha }}
       baseline-artifact: ${{ steps.baseline.outputs.artifact-id }}
     steps:
@@ -76,11 +81,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # One job per task and block of trials: `first` numbers the block's first trial.
       - name: List the tasks
         id: tasks
         run: |
-          echo "tasks=$(find evals/tasks -name '*.eval.ts' | sort |
-            jq -Rnc '[inputs | {file: ., task: (sub("^evals/tasks/"; "") | sub("\\.eval\\.ts$"; ""))}]')" >> "$GITHUB_OUTPUT"
+          tasks=$(find evals/tasks -name '*.eval.ts' | sort |
+            jq -Rnc '[inputs | {file: ., task: (sub("^evals/tasks/"; "") | sub("\\.eval\\.ts$"; ""))}]')
+          jobs=$(jq -c --argjson trials "$EVAL_TRIALS" --argjson per "$EVAL_TRIALS_PER_JOB" '
+            [range(0; $trials; $per) | {first: (. + 1), last: ([. + $per, $trials] | min)}
+              | . + {count: (.last - .first + 1)}] as $blocks
+            | [.[] as $task | $blocks[] | $task + .]' <<<"$tasks")
+          echo "tasks=$tasks" >> "$GITHUB_OUTPUT"
+          echo "jobs=$jobs" >> "$GITHUB_OUTPUT"
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -99,15 +111,15 @@ jobs:
           stored=$(gh api --paginate "repos/$GH_REPO/actions/artifacts?per_page=100" \
             --jq ".artifacts[] | select(.expired == false) | select(.name | test(\"^kinu-evals-[0-9a-f]+-${EVAL_TRIALS}-per-task$\")) | [.created_at, .id, .name] | @tsv" |
             sort -r)
-          shas=$(cut -f3 <<<"$stored" | sed -E "s/^kinu-evals-([0-9a-f]+)-.*/\1/" | awk 'NF && !seen[$0]++')
+          mapfile -t shas < <(cut -f3 <<<"$stored" | sed -E "s/^kinu-evals-([0-9a-f]+)-.*/\1/" | awk 'NF && !seen[$0]++')
           if [[ -n "$REQUESTED" ]]; then
-            baseline=$(grep -x "$REQUESTED" <<<"$shas" || true)
+            baseline=$(printf '%s\n' "${shas[@]}" | grep -x "$REQUESTED" || true)
             if [[ -z "$baseline" ]]; then
               echo "::error::no complete report is stored for build $REQUESTED"
               exit 1
             fi
           else
-            baseline=$(bun evals/scripts/baseline.ts "$CANDIDATE" $shas)
+            baseline=$(bun evals/scripts/baseline.ts "$CANDIDATE" "${shas[@]}")
           fi
           if [[ -n "$baseline" ]]; then
             artifact=$(awk -F'\t' -v name="kinu-evals-$baseline-${EVAL_TRIALS}-per-task" '$3 == name { print $2; exit }' <<<"$stored")
@@ -119,12 +131,12 @@ jobs:
           fi
 
   evals:
-    name: Eval ${{ matrix.task }}
+    name: Eval ${{ matrix.task }}, trials ${{ matrix.first }} to ${{ matrix.last }}
     needs: plan
     runs-on: ubuntu-latest
     # No timeout-minutes: a trial ends when the deployment says its turns ended, never on a clock
-    # (AGENTS.md). GitHub's own job limit is 6 hours; validate.ts prints each task's slowest trial,
-    # and a task that nears the limit is split across jobs by trial, not cut short.
+    # (AGENTS.md). GitHub's own limit is 6 hours per job, which EVAL_TRIALS_PER_JOB stays under;
+    # validate.ts prints each task's slowest trial, the number to re-size it from.
     environment: eval
     permissions:
       contents: read
@@ -132,7 +144,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        include: ${{ fromJSON(needs.plan.outputs.tasks) }}
+        include: ${{ fromJSON(needs.plan.outputs.jobs) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -153,7 +165,8 @@ jobs:
         continue-on-error: true
         env:
           KINU_EVAL_WEB_IDENTITY: ${{ secrets.KINU_EVAL_WEB_IDENTITY }}
-          KINU_EVAL_TRIALS: ${{ env.EVAL_TRIALS }}
+          KINU_EVAL_TRIALS: ${{ matrix.count }}
+          KINU_EVAL_FIRST_TRIAL: ${{ matrix.first }}
           KINU_EVAL_CONCURRENCY: ${{ env.EVAL_CONCURRENCY }}
           KINU_EVAL_COMMIT: ${{ needs.plan.outputs.sha }}
           EVAL_FILE: ${{ matrix.file }}
@@ -162,7 +175,7 @@ jobs:
       - name: Upload the ${{ matrix.task }} report
         uses: actions/upload-artifact@v4
         with:
-          name: kinu-evals-task-${{ matrix.task }}
+          name: kinu-evals-task-${{ matrix.task }}-${{ matrix.first }}
           path: bench-artifacts/evals/results.json
           if-no-files-found: error
           retention-days: 30
@@ -197,18 +210,18 @@ jobs:
           pattern: kinu-evals-task-*
           path: artifacts/tasks
 
-      # Exactly the planned files, each once: a missing task would otherwise read as removed.
+      # Exactly the planned jobs, each once: a missing task would otherwise read as removed.
       - name: Join the task reports
         env:
-          TASKS: ${{ needs.plan.outputs.tasks }}
+          JOBS: ${{ needs.plan.outputs.jobs }}
         run: |
           mapfile -t reports < <(find artifacts/tasks -name results.json | sort)
-          if [[ ${#reports[@]} -ne $(jq length <<<"$TASKS") ]]; then
-            echo "::error::expected $(jq length <<<"$TASKS") task reports, found ${#reports[@]}"
+          if [[ ${#reports[@]} -ne $(jq length <<<"$JOBS") ]]; then
+            echo "::error::expected $(jq length <<<"$JOBS") job reports, found ${#reports[@]}"
             exit 1
           fi
           jq -s '{testResults: map(.testResults[])}' "${reports[@]}" > artifacts/results.json
-          expected=$(jq -c '[.[].file] | sort' <<<"$TASKS")
+          expected=$(jq -c '[.[].file] | sort' <<<"$JOBS")
           actual=$(jq -c '[.testResults[].name | sub("^.*/evals/tasks/"; "evals/tasks/")] | sort' artifacts/results.json)
           if [[ "$actual" != "$expected" ]]; then
             echo "::error::expected task files $expected, got $actual"
@@ -276,8 +289,8 @@ jobs:
           ARTIFACT_ID: ${{ needs.plan.outputs.baseline-artifact }}
         run: |
           mkdir -p artifacts/baseline
-          gh api "repos/$GH_REPO/actions/artifacts/$ARTIFACT_ID/zip" > /tmp/baseline.zip
-          unzip -q /tmp/baseline.zip -d artifacts/baseline
+          gh api "repos/$GH_REPO/actions/artifacts/$ARTIFACT_ID/zip" > "$RUNNER_TEMP/baseline.zip"
+          unzip -q "$RUNNER_TEMP/baseline.zip" -d artifacts/baseline
 
       - name: Compare with the baseline
         env:
@@ -286,12 +299,13 @@ jobs:
           args=(--candidate artifacts/candidate/results.json --out artifacts/comparison)
           if [[ -f artifacts/baseline/results.json ]]; then args+=(--baseline artifacts/baseline/results.json); fi
           bun evals/scripts/compare.ts "${args[@]}"
+          bun evals/scripts/trajectories.ts artifacts/candidate/results.json artifacts/comparison/trajectories.md
           cat artifacts/comparison/comparison.md >> "$GITHUB_STEP_SUMMARY"
           {
             echo '<!-- kinu-evals-results -->'
             cat artifacts/comparison/comparison.md
             echo
-            echo "[Run]($RUN_URL) · [reports and trajectories](${RUN_URL}#artifacts)"
+            echo "[Run]($RUN_URL) · [comparison and every trial's trajectory](${RUN_URL}#artifacts)"
           } > artifacts/comparison/comment.md
 
       - name: Upload the comparison

@@ -22,6 +22,18 @@ function session(methods: Record<string, (input: JsonValue) => JsonValue>): Veri
   };
 }
 
+/** A slate RPC whose every call is refused with `error`, as the deployment words it. */
+function refusing(error: string): VerifierSession {
+  return { ...session({}), slateOp: () => Promise.resolve({ ok: false, reason: 'io', error }) };
+}
+
+/** A turn of one check that makes one slate call over `connection`. */
+function oneCall(connection: VerifierSession) {
+  return new EvalVerifier(connection, []).collect(async (verifier) => {
+    await verifier.check('builds', async () => ({ pass: (await verifier.call('app', 'total', [])) !== null }));
+  });
+}
+
 type Method = 'add' | 'total';
 
 /** A counter slate that adds `step` per call and answers an extra field the contract does not name. */
@@ -59,17 +71,32 @@ describe('EvalVerifier', () => {
     expect(JSON.stringify(checks[1]?.evidence)).toContain('no method missing');
   });
 
+  test('the answer is the last bare reply: narration and a reply to the product\'s reminder do not replace it', () => {
+    const answered = new EvalVerifier(session({}), [
+      'Let me count the overdue loans in the library first.',
+      '**3**',
+      'Those open tasks are all finished now.',
+    ]);
+
+    expect(answered.bareAnswer(/^(\d+)$/)).toBe('3');
+    expect(new EvalVerifier(session({}), ['I could not reach the library.']).bareAnswer(/^(\d+)$/)).toBeNull();
+  });
+
   test('a call the deployment could not carry fails the trial as infrastructure, not the check', async () => {
     const dropped: VerifierSession = {
       ...session({}),
       slateOp: () => Promise.reject(new Error(`${INFRA_FAILURE_MARKER} — the workspace socket closed (code 1006)`)),
     };
 
-    const collected = new EvalVerifier(dropped, []).collect(async (verifier) => {
-      await verifier.check('builds', async () => ({ pass: (await verifier.call('app', 'total', [])) !== null }));
-    });
+    await expect(oneCall(dropped)).rejects.toThrow(INFRA_FAILURE_MARKER);
+    await expect(oneCall(refusing('slate app.total: Network connection lost.'))).rejects.toThrow(INFRA_FAILURE_MARKER);
+  });
 
-    await expect(collected).rejects.toThrow(INFRA_FAILURE_MARKER);
+  test('a refusal the slate itself gave fails its check with the product\'s words', async () => {
+    const checks = await oneCall(refusing('slate app.total: UNKNOWN_SYMBOL'));
+
+    expect(checks.map((check) => [check.id, check.pass])).toEqual([['builds', false]]);
+    expect(JSON.stringify(checks[0]?.evidence)).toContain('UNKNOWN_SYMBOL');
   });
 });
 
