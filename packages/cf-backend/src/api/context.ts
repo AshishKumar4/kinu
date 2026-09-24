@@ -3,7 +3,7 @@ import { routePath } from 'hono/route';
 import {
   err, ERROR_STATUS, OwnerCapabilityUnavailableError, ownerCaller, type OwnerCapabilityEnv, type UserCaller,
 } from '@kinu.run/core';
-import { diagnostics, renderCauseChain, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../auth/session';
 import type { AccessIdentity } from '../control-plane/access-gate';
 
@@ -81,10 +81,23 @@ export function ownerGate<E extends FamilyEnv<OwnerCapabilityEnv, { owner: UserC
   };
 }
 
-/** An uncaught throw: once the platform's error page, now JSON via `toKinuError`, logged by route pattern (the path is caller text). */
+const UNCAUGHT_MESSAGE: Readonly<Record<ErrorCode, string>> = {
+  bad_input: 'The request is not valid.',
+  denied: 'Not allowed.',
+  missing: 'Not found.',
+  unsupported: 'Not supported.',
+  budget: 'Over a limit.',
+  unavailable: 'Unavailable; try again.',
+  timeout: 'Timed out.',
+  cancelled: 'Cancelled.',
+  oom: 'Out of memory.',
+  io: 'Internal error.',
+};
+
+/** An uncaught throw: the chain goes to `http.api_failed` by route pattern (the path is caller text); the client gets its class. */
 export function apiError(cause: Error, c: Context): Response {
   const error = toKinuError({ doing: 'answering an /api request', cause, otherwise: 'io' });
   diagnostics.failure('http.api_failed', error, { route: routePath(c) });
 
-  return err(ERROR_STATUS[error.code], renderCauseChain(error));
+  return err(ERROR_STATUS[error.code], UNCAUGHT_MESSAGE[error.code]);
 }

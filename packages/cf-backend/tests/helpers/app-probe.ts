@@ -2,6 +2,7 @@
  * The whole `/api` app, driven through `api.fetch` with one live browser session: the bindings its gates
  * read, and recording doubles behind them. Bun-only (its KV and key come from Bun helpers).
  */
+import { present } from '@kinu.run/test-utils';
 import { sha256Hex, type UserCaller } from '@kinu.run/core';
 import { SESSION_COOKIE_NAME } from '../../src/auth/session';
 import { workerContext } from './bindings';
@@ -93,4 +94,23 @@ export async function appProbe(): Promise<AppProbe> {
     accountCalls,
     workspaceCalls,
   };
+}
+
+/** One value per path parameter the /api routes declare; a regex param's sample must satisfy it. */
+const PARAM_SAMPLES = new Map([
+  ['name', 'jarvis'], ['id', 'device-1'], ['key', 'openai.bearer'], ['hash', 'a'.repeat(64)], ['run', 'run-1'],
+  ['userId', 'b'.repeat(32)], ['ref', 'ci'],
+]);
+
+/** A concrete path a route pattern matches: each `:param` (with its `{regex}`) sampled, a trailing wildcard dropped. */
+export function concretePath(pattern: string): string {
+  const filled = pattern.replace(/:(\w+)(?:\{((?:[^{}]|\{[^{}]*\})*)\})?/g, (_whole, name: string, regex: string | undefined) => {
+    const sample = present(PARAM_SAMPLES.get(name), `a sample for :${name} in ${pattern}`);
+
+    if (regex !== undefined && !new RegExp(`^(?:${regex})$`).test(sample)) throw new Error(`${sample} does not match :${name}{${regex}} in ${pattern}`);
+
+    return sample;
+  });
+
+  return filled.replace(/\/?\*$/, '');
 }

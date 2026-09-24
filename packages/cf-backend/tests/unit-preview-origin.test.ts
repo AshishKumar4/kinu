@@ -36,7 +36,7 @@ import { makeKv } from './helpers/kv';
 import { sandboxPreviewExposures } from '@kinu.run/core';
 import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
 import { unreachableNamespace, unreachableObjects, workerContext } from './helpers/bindings';
-import { appProbe, PROBE_ORIGIN } from './helpers/app-probe';
+import { appProbe, concretePath, PROBE_ORIGIN } from './helpers/app-probe';
 import type { NimbusPreviewEnv, WorkspacePreviewHost } from '../src/nimbus-route';
 import type { SandboxPreviewEnv } from '../src/preview-proxy';
 import { PreviewFrame } from '../src/components/PreviewFrame';
@@ -1044,28 +1044,22 @@ describe('worker wiring', () => {
   const ZONE = { PREVIEW_HOST_SUFFIX: SUFFIX };
 
   test('the CSRF gate runs before any authenticated route', async () => {
-    // Hono dispatches in registration order, so the route table IS the gate order: the session gate
-    // is the app's first catch-all, and every route ahead of it is public by design and listed.
-    const gate = api.routes.findIndex((route) => route.method === 'ALL' && route.path === '/api/*');
-    expect(gate).toBeGreaterThan(0);
-
-    for (const { path } of api.routes.slice(0, gate)) {
-      expect(PUBLIC_API.some((prefix) => path.startsWith(prefix)), path).toBe(true);
-    }
-
-    // That catch-all is the session gate with its cross-site check.
+    // Every write route outside the listed public prefixes refuses an anonymous request, and a
+    // cross-site one carrying the session cookie, before it runs.
     const { env, ctx, cookie } = await appProbe();
-    const anonymous = await api.fetch(new Request(`${PROBE_ORIGIN}/api/user/profile`), env, ctx);
-    expect(anonymous.status).toBe(401);
+    const signedIn = api.routes.filter(({ method, path }) => method !== 'GET' && !PUBLIC_API.some((prefix) => path.startsWith(prefix)));
+    expect(signedIn.length).toBeGreaterThan(20);
 
-    const forged = await api.fetch(new Request(`${PROBE_ORIGIN}/api/user/profile`, {
-      method: 'PATCH',
-      headers: { cookie, origin: 'https://evil.example', 'content-type': 'application/json' },
-      body: JSON.stringify({ displayName: 'Mallory' }),
-    }), env, ctx);
+    for (const route of signedIn) {
+      const method = route.method === 'ALL' ? 'POST' : route.method;
+      const url = `${PROBE_ORIGIN}${concretePath(route.path)}`;
+      const anonymous = await api.fetch(new Request(url, { method }), env, ctx);
+      expect(anonymous.status, `${method} ${route.path}`).toBe(401);
 
-    expect(forged.status).toBe(403);
-    expect(v.parse(v.object({ code: v.string() }), await forged.json()).code).toBe('CROSS_SITE');
+      const forged = await api.fetch(new Request(url, { method, headers: { cookie, origin: 'https://evil.example' } }), env, ctx);
+      expect(forged.status, `${method} ${route.path}`).toBe(403);
+      expect(v.parse(v.object({ code: v.string() }), await forged.json()).code).toBe('CROSS_SITE');
+    }
   });
 
   test('an /api path no route answers is the app document, under its policy', async () => {

@@ -2,6 +2,7 @@
 // SDK's abort sentinel reads as success while any other failure reaches the caller.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
+import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { accountRoutes, type AccountRoutesEnv } from '../src/user/account-routes';
 import { serveFamily } from './helpers/api';
 import { unreachableNamespace } from './helpers/bindings';
@@ -106,12 +107,17 @@ describe('DELETE /api/user/account', () => {
     expect(calls).toEqual(['workspaces:list', `account:delete:${USER_ID}`]);
   });
 
-  test('any other failure is answered as a 500 naming it', async () => {
+  test('any other failure is a 500 naming its class; its cause goes to the log alone', async () => {
     const { env } = setup('io');
+    const recording = createRecordingLogger();
+    const restore = setDiagnosticsSink(recording);
     const response = await account(request(JSON.stringify({ confirm: 'owner@example.test' })), env);
+    restore();
 
     expect(response?.status).toBe(500);
-    expect(v.parse(v.object({ error: v.string() }), await response?.json()).error).toContain('storage unavailable');
+    expect(v.parse(v.object({ error: v.string() }), await response?.json())).toEqual({ error: 'Internal error.' });
+    expect(recording.emitted.filter((line) => line.event === 'http.api_failed').map((line) => line.cause))
+      .toEqual([expect.stringContaining('storage unavailable')]);
   });
 
   test('the experience read names its kind and bounds its limit', async () => {

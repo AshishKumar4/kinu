@@ -180,7 +180,28 @@ describe('auth and desktop security invariants', () => {
     );
 
     expect(response?.status).toBe(401);
-    expect(cliRoutes.routes.filter((route) => route.path.includes('/approve'))).toEqual([]);
+
+    // Nor does a verified CLI session find a JSON approval route to call.
+    const bearer = `ptc_${OWNER_IDENTITY.userId}_${'s'.repeat(26)}`;
+
+    const account = cliAccount({
+      verifyCliToken: async (_caller: UserCaller, presented: string) => ({
+        ok: presented === bearer, tokenHash: 'session-hash',
+        user: { id: OWNER_IDENTITY.userId, email: OWNER_IDENTITY.email, displayName: null },
+      }),
+    });
+
+    const signedIn = await serveFamily(cliRoutes)(new Request('https://kinu.example.com/api/cli/auth/approve', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
+      body: JSON.stringify({ userCode: 'ABCD-EFGH' }),
+    }), {
+      ...PUBLIC_ROUTE_ENV,
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+      UserDO: { idFromName: (name) => name, get: () => account },
+    });
+
+    expect(signedIn?.status).toBe(404);
   });
 
   test('the dashboard hands out the token-free setup commands', async () => {

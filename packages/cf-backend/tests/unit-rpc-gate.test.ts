@@ -11,12 +11,6 @@ import {
   AGENT_RPC_ACCESS, extractTicketOrchestratorAgentName, requiredRpcAccess, rpcAccessScope,
 } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
-import { mockAgentsSdk } from './helpers/agents-sdk';
-
-// The /api app's module graph reaches the Agents SDK: mocked before it loads.
-mockAgentsSdk();
-
-const { api } = await import('../src/api/app');
 
 function rpcFrame(method: string, id = 'req-1'): string {
   return JSON.stringify({ type: 'rpc', id, method, args: [] });
@@ -219,22 +213,6 @@ describe('a connect ticket names its workspace', () => {
       '/agents/orchestrator-agent/workspace/sub/subordinate-agent/researcher/sub/subordinate-agent/nested',
     )).toBeNull();
     expect(extractTicketOrchestratorAgentName('/agents/user-d-o/victim')).toBeNull();
-  });
-});
-
-describe('the HTTP transport', () => {
-  test('the HTTP dispatcher consumes THIS table — no second scope policy anywhere', () => {
-    // One route in the whole /api app dispatches agent RPC. Hono dispatches in registration order, so
-    // its place in the table is its policy: after the CLI bearer, ahead of the access-token route
-    // policy (`/api/cli*` then holds [bearer, route policy, not-found]), so this table decides alone.
-    const rpc = api.routes.filter((route) => route.path.endsWith('/rpc'));
-    expect(rpc.map(({ method, path }) => `${method} ${path}`)).toEqual(['POST /api/cli/workspaces/:name/rpc']);
-
-    const cliGates = api.routes.flatMap((route, index) => (route.method === 'ALL' && route.path === '/api/cli*' ? [index] : []));
-    const at = api.routes.indexOf(present(rpc[0], 'the RPC route'));
-    expect(cliGates).toHaveLength(3);
-    expect(present(cliGates[0], 'the CLI bearer')).toBeLessThan(at);
-    expect(at).toBeLessThan(present(cliGates[1], 'the access-token route policy'));
   });
 });
 
