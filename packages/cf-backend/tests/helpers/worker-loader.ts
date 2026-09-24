@@ -37,21 +37,44 @@ const EntrypointModuleSchema = v.object({
 /** A constructed entrypoint; its methods live on its class. */
 type Entrypoint = InstanceType<v.InferOutput<typeof EntrypointModuleSchema>['default']>;
 
+/** The timer a loaded worker's global scope arms: a test's own, to move a worker's time without waiting. */
+export interface WorkerTimers {
+  readonly setTimeout: (run: () => void, ms: number) => void;
+}
+
+/** Each loader's timers, where the worker scope below reads them. */
+const TIMERS = Symbol.for('kinu.test.worker-timers');
+
+const timersByLoader = new Map<string, WorkerTimers>();
+
+Object.assign(globalThis, { [TIMERS]: timersByLoader });
+
 /**
  * What a worker's own global scope holds that it may reassign: the executor module rebinds
- * `console.*` to collect its logs, and its race timer must not hold this process open.
+ * `console.*` to collect its logs, and its race timer must not hold this process open. With
+ * `timers`, the scope arms those instead.
  */
-const WORKER_SCOPE = `const console = Object.create(globalThis.console);
-const setTimeout = (run, ms) => { const timer = globalThis.setTimeout(run, ms); timer.unref?.(); return timer; };
-`;
+function workerScope(timers: WorkerTimers | undefined): string {
+  const console = 'const console = Object.create(globalThis.console);\n';
+
+  if (timers === undefined) {
+    return `${console}const setTimeout = (run, ms) => { const timer = globalThis.setTimeout(run, ms); timer.unref?.(); return timer; };\n`;
+  }
+
+  const id = crypto.randomUUID();
+
+  timersByLoader.set(id, timers);
+
+  return `${console}const { setTimeout } = globalThis[Symbol.for('kinu.test.worker-timers')].get(${JSON.stringify(id)});\n`;
+}
 
 /** One loaded worker: its modules written where an import reads them, its entrypoint constructed. */
-async function instantiate(code: WorkerLoaderWorkerCode): Promise<Entrypoint> {
+async function instantiate(code: WorkerLoaderWorkerCode, timers: WorkerTimers | undefined): Promise<Entrypoint> {
   const worker = v.parse(WorkerCodeSchema, code);
   const dir = scratchDir('worker-loader');
 
   for (const [name, source] of Object.entries(worker.modules)) {
-    writeFileSync(join(dir, name), name.endsWith('.js') ? `${WORKER_SCOPE}${source}` : source);
+    writeFileSync(join(dir, name), name.endsWith('.js') ? `${workerScope(timers)}${source}` : source);
   }
 
   // The module path exists only once the worker is loaded, so no static import can name it.
@@ -84,11 +107,11 @@ function stubOver(entrypoint: Promise<Entrypoint>) {
   return { getEntrypoint: () => methods };
 }
 
-/** `env.LOADER`, with the two ways a binding hands out a worker. */
-export function inProcessWorkerLoader() {
+/** `env.LOADER`, with the two ways a binding hands out a worker; its workers arm `timers` when given. */
+export function inProcessWorkerLoader(timers?: WorkerTimers) {
   return {
     get: (_id: string | null, getCode: () => WorkerLoaderWorkerCode | Promise<WorkerLoaderWorkerCode>) =>
-      stubOver(Promise.resolve().then(getCode).then(instantiate)),
-    load: (code: WorkerLoaderWorkerCode) => stubOver(instantiate(code)),
+      stubOver(Promise.resolve().then(getCode).then((code) => instantiate(code, timers))),
+    load: (code: WorkerLoaderWorkerCode) => stubOver(instantiate(code, timers)),
   };
 }

@@ -3,12 +3,10 @@
 // codemode's default deadline killed `eval` programs awaiting long host tool calls.
 import { describe, test, expect } from "bun:test";
 import type { KinuSandbox } from "../src/kinu-sandbox";
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { scratchDir } from "@kinu.run/test-utils";
 import { adaptCloudflareSandbox } from "../src/sandbox-exec-lane";
 // codemode reaches `cloudflare:workers` at load; the preload's boundary stub serves it.
 import { createRuntimeExecutor, KinuSandboxExecutor } from "../src/codemode-sandbox";
+import { inProcessWorkerLoader } from "./helpers/worker-loader";
 
 interface ProcessDouble {
   id: string;
@@ -257,11 +255,9 @@ function workerClock() {
   return {
     /** Settles once the program has armed a timer, so it is running. */
     armed: armed.promise,
-    setTimeout: (fire: () => void, ms: number): number => {
+    setTimeout: (fire: () => void, ms: number): void => {
       pending.push({ at: now + ms, fire });
       armed.resolve();
-
-      return pending.length;
     },
     advance: (ms: number): void => {
       now += ms;
@@ -274,65 +270,15 @@ function workerClock() {
   };
 }
 
-type WorkerClock = ReturnType<typeof workerClock>;
-
-const ISOLATES = Symbol.for("kinu.test.worker-isolates");
-
-const isolates = new Map<string, WorkerClock>();
-
-Object.assign(globalThis, { [ISOLATES]: isolates });
-
-/** codemode's per-provider dispatchers (`ToolDispatcher`), through which `agent.report()` reaches the host. */
-type ProviderDispatchers = Record<string, { call: (tool: string, args: string) => Promise<string> }>;
-
-/** Worker context, env and connector bindings: these programs use none. */
-type NoBindings = Record<string, never>;
-
-/** The generated module, whose default export is codemode's `CodeExecutor`. */
-interface ExecutorModule {
-  readonly default: new (ctx: NoBindings, env: NoBindings) => {
-    evaluate: (dispatchers: ProviderDispatchers, connectors: NoBindings) => Promise<object>;
-  };
-}
-
-/**
- * A `WorkerLoader` standing in for workerd's: it runs the generated executor module in this process as an isolate
- * whose `setTimeout` is `clock`'s and whose console is its own (the module rebinds console methods).
- * `WorkerLoader` has no constructible form; codemode reaches only `load`.
- */
-function inProcessLoader(clock: WorkerClock): WorkerLoader {
-  const loader = {
-    load: (spec: { modules: Record<string, string> }) => ({
-      getEntrypoint: () => ({
-        evaluate: async (dispatchers: ProviderDispatchers, connectors: NoBindings) => {
-          const token = crypto.randomUUID();
-          const file = join(scratchDir("worker-loader"), "executor.mjs");
-
-          isolates.set(token, clock);
-          writeFileSync(file, [
-            `const { setTimeout } = globalThis[Symbol.for("kinu.test.worker-isolates")].get(${JSON.stringify(token)});`,
-            "const console = {};",
-            spec.modules["executor.js"] ?? "",
-          ].join("\n"));
-
-          const worker: ExecutorModule = await import(file);
-
-          return new worker.default({}, {}).evaluate(dispatchers, connectors);
-        },
-      }),
-    }),
-  };
-
-  return Object.create(loader);
-}
-
 type RunProgram = (code: string, providers: Array<{ name: string; fns: Record<string, () => Promise<string>> }>) => Promise<object>;
 
 /** A program that awaits one host call, which answers only after a minute of the isolate's time has passed. */
 async function reportAfterAMinute(build: (loader: WorkerLoader) => RunProgram): Promise<object> {
   const clock = workerClock();
   const report = Promise.withResolvers<string>();
-  const run = build(inProcessLoader(clock))("async () => await agent.report()", [{ name: "agent", fns: { report: async () => report.promise } }]);
+  // `WorkerLoader` is a workerd binding with no constructible form; codemode reaches only `load`.
+  const loader: WorkerLoader = Object.create(inProcessWorkerLoader(clock));
+  const run = build(loader)("async () => await agent.report()", [{ name: "agent", fns: { report: async () => report.promise } }]);
 
   await clock.armed;
   clock.advance(61_000);
