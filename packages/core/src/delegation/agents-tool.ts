@@ -141,9 +141,9 @@ export interface TeamToolDeps {
   /** The workspace's subordinate roster (dismissed entries excluded). */
   list(): Promise<SubordinateRosterEntry[]>;
   snapshot(): SubordinateRosterEntry[];
-  /** Create an idle durable subordinate on the owner's behalf; it has no task until messaged or assigned.
-   *  Every field is optional (role defaults to `task`, mission to the creator's); the model's `hire` uses
-   *  {@link spawn}. `role` is the catalog id, written to the child's config store at seed time. */
+  /** Create an idle durable subordinate for the owner; it has no task until messaged or assigned. Role defaults
+   *  to `task`, mission to the creator's; the model's `hire` uses {@link spawn}. `role` is the catalog id,
+   *  written to the child's config store at seed time. */
   create(input: {
     name?: string;
     /** A title the owner typed: origin `user`, never auto-retitled. */
@@ -197,8 +197,8 @@ export interface TeamToolDeps {
   }>;
   /**
    * The `lifetime:'task'` half of `hire`: runs one child to completion inside the call and archives its
-   * row on answer. Optional in the type, required wherever a child substrate is wired; unwired, `hire`
-   * has no `lifetime` field and every hire is durable.
+   * row on answer. Required wherever a child substrate is wired; unwired, `hire` has no `lifetime` field
+   * and every hire is durable.
    */
   readonly temporary?: TemporaryAgentPort;
 }
@@ -255,9 +255,9 @@ export interface AgentsSwarmDeps {
   nodeCodemode: NodeCodemode;
   webSearch: WebSearchProvider;
   /**
-   * Turns a resolved tier's model spec into the model a delegated node runs on. Optional in the type,
-   * required wherever {@link AgentsToolDeps.profile} is wired: a run with a profile snapshot and no
-   * resolver refuses (`runSwarm`). Absent with no catalog, nodes run `model`.
+   * Turns a resolved tier's model spec into the model a delegated node runs on. Required wherever
+   * {@link AgentsToolDeps.profile} is wired: a run with a profile snapshot and no resolver refuses
+   * (`runSwarm`). Absent with no catalog, nodes run `model`.
    */
   resolveModel?: (spec: string) => LanguageModel;
   /** Caller conversation at dispatch, frozen into the search ledger so `context:'inherit'` survives re-drive. */
@@ -277,10 +277,7 @@ export interface AgentsSwarmDeps {
   compactShared?: SwarmRunDeps['compactShared'];
 }
 
-/**
- * Inputs for role/tier/preset precedence, wired under {@link AgentsToolDeps.profile}.
- * Absent: a role-targeted hire refuses and swarm needs an explicit preset.
- */
+/** Inputs for role/tier/preset precedence, wired under {@link AgentsToolDeps.profile}. */
 export interface AgentsProfileContext extends ProfileAuthorityInputs {
   readonly roleId: RoleId;
   readonly availableTools: readonly string[];

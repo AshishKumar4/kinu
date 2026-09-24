@@ -1,19 +1,14 @@
 /**
- * The agent's remote-RPC policy: every method a client may invoke on a workspace, and the credential class
- * each needs. Client and server share it. The CLI types its calls by `AgentRpcMethod`, so a call the table
- * lacks does not compile; the server dispatches only listed methods over HTTP
- * (`/api/cli/workspaces/:name/rpc`) and pins scoped `pta_…` sockets to scope rows over WebSocket. An
- * unlisted method is unreachable over HTTP and session-only over WebSocket.
+ * Remote-RPC policy shared by client and server: each workspace method and the credential it needs. A CLI call
+ * off the table does not compile. An unlisted method is unreachable over HTTP (`/api/cli/workspaces/:name/rpc`)
+ * and session-only over WebSocket, where a scoped `pta_…` socket reaches only its scope's rows.
  */
 import * as v from 'valibot';
 import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from './access-tokens';
 
 export type AgentRpcAccess = AccessTokenScope | 'interactive' | 'never';
 
-/**
- * Methods absent from workspace.read that a read-only token must not reach (checkpoint, changelog,
- * mounts, file restore, ...) are 'interactive' on every transport, never approximated as reads.
- */
+/** What a read-only token must not reach is 'interactive' on every transport, never approximated as a read. */
 export const AGENT_RPC_ACCESS = {
   getAgentStatus: 'workspace.read',
   getAlignmentConvergence: 'workspace.read',
@@ -75,19 +70,18 @@ export const AGENT_RPC_ACCESS = {
   createReleaseChange: 'interactive',
   createTimerTrigger: 'interactive',
   decideReleaseApproval: 'interactive',
-  // Approving a stopped command is the approval; a scoped token calling it would bypass the gate.
+  // The call is the approval: a scoped token would bypass the gate.
   decideDeferredApprovals: 'interactive',
-  // Authored code can act through the agent's bindings; interactive callers
-  // share the ordinary side-effect gates, not a second binding policy.
+  // Authored code acts through the agent's bindings, behind the ordinary side-effect gates.
   slate: 'interactive',
   previewSlate: 'interactive',
-  // Instruction trust (KINU-N028): approval grants bytes system placement, so a scoped token must not
-  // let agent-written bytes authorise themselves.
+  // KINU-N028: approval grants bytes system placement, so a scoped token must not let agent-written bytes
+  // authorise themselves.
   approveInstruction: 'interactive',
   revokeInstruction: 'interactive',
   listInstructionApprovals: 'interactive',
   readInstructionApproval: 'interactive',
-  // Opening spends child-agent inference and writes user preferences into memory: owner's decision.
+  // Spends child-agent inference and writes user preferences into memory: the owner's call.
   requestRefinement: 'interactive',
   listRefinements: 'interactive',
   // Grants staged bytes system placement, like `approveInstruction`.
@@ -100,7 +94,7 @@ export const AGENT_RPC_ACCESS = {
   savePlanReviewAnnotations: 'interactive',
   dismissBackgroundJob: 'interactive',
   dismissSubordinate: 'interactive',
-  // A CI token that can run a task must not walk off with the whole database.
+  // A CI token that runs tasks must not take the whole database.
   exportWorkspaceArchive: 'interactive',
   experienceAction: 'interactive',
   forkAgent: 'interactive',
@@ -124,7 +118,7 @@ export const AGENT_RPC_ACCESS = {
   getShellApprovalGrants: 'interactive',
   listAlternateTakes: 'interactive',
   listCurriculumTasks: 'interactive',
-  // An aggregate is only as open as its strictest input (changelog, scaffold archive, curriculum).
+  // An aggregate is as open as its strictest input (changelog, scaffold archive, curriculum).
   listPendingActions: 'interactive',
   // `decisionsWaiting` counts interactive reads, so the aggregate is interactive too.
   getWorkspaceOverview: 'interactive',
