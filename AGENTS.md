@@ -54,7 +54,7 @@ The main agent orchestrates; Opus 5.5 lanes build. Main plans each change in a l
 ## Owner Preferences
 - Short commit subjects; no comment that restates code or narrates an edit.
 - All business logic in core; `cf-backend`, `cli-backend`, `cli` are adapters. When two backends implement one rule differently, the stricter side wins and becomes the shared path, one commit with a pin test.
-- Dump suite and large tool output to `/var/tmp` and read the tail; never `/tmp`, which is a RAM disk on this machine. Conclusion first, plain language, decision-relevant detail only; name contradictions between asks.
+- Tests, builds, scratch and large tool output run off the scratch NVMe: `TMPDIR=/mnt/scratch/kinu/tmp`, with new worktrees and clones under `/mnt/scratch/kinu/`; never `/tmp` (a RAM disk) or the main SSD, which is wearing. Read the tail of large output. Conclusion first, plain language, decision-relevant detail only; name contradictions between asks.
 
 ## Docs
 - `no-ai-slop` standard, ASD-STE100, Zinsser order (simplicity, brevity, clarity, humanity); the reader wins over the letter of STE. Owner's first-person voice for user-facing prose. No AI-edited disclaimer line here (two generators write docs and print none).
