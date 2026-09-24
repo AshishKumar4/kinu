@@ -5,10 +5,15 @@ import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { fakeMossaic } from '@kinu.run/test-utils/mossaic';
+import { SqliteFilesystemAuthority } from '@nimbus-sh/core/runtime/filesystem-authority.js';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { inlineWorkspaceStorage } from '../src/identity/inline-primitives';
 import type { VFS, VfsRevision } from '../src/types/primitives';
 import { isVfsError, makeVfsError } from '../src/vfs/errno';
 import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, type VfsMount } from '../src/vfs/mounts';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
+import { mountedAuthority } from '../src/vfs/shell-mounts';
 import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { observeWrites } from '../src/vfs/observe';
 import { createWorkspaceBundle } from './helpers';
@@ -630,5 +635,19 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		expect(await shell.exec('mv /shared/notes.md /sandbox/workspace/notes.md')).toMatchObject({ exitCode: 0 });
 		expect(await drive.exists('/notes.md')).toBe(false);
 		expect(await container.readFile('/workspace/notes.md', { encoding: 'utf8' })).toBe('from the Drive\n');
+	});
+
+	test('a runtime path anchored at the root resolves beneath it, and one that climbs out of its root is refused', async () => {
+		// The bash runner names every path it opens as `{ root: '/', path }`: its rc, each cd and redirection target.
+		const storage = inlineWorkspaceStorage(new Database(':memory:'));
+		const vfs = new SqliteVFS(storage.sql, storage.transactions);
+		await vfs.as(CRED_KERNEL).mkdir('/home/main', { recursive: true });
+		await vfs.as(CRED_KERNEL).writeFile('/home/main/marker.txt', 'here');
+		const { fs } = mountedAuthority(new SqliteFilesystemAuthority(vfs), () => null).openHost(CRED_KERNEL);
+
+		expect(await fs.stat({ root: '/', path: 'home/main/marker.txt', beneath: true })).toMatchObject({ type: 'file' });
+		expect(await fs.stat({ root: '/', path: 'etc/nimbus.bashrc', beneath: true })).toBeNull();
+		await expect(Promise.resolve().then(() => fs.stat({ root: '/home/main', path: '../../etc', beneath: true })))
+			.rejects.toMatchObject({ code: 'EPERM' });
 	});
 });
