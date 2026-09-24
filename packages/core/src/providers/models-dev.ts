@@ -17,7 +17,6 @@ const DEFAULT_TTL_MS = 5 * 60_000;
 export interface ModelsDevProviderInfo {
   id: string;
   name: string;
-  /** Documentation URL. */
   doc?: string;
   /** Conventional API-key env var names (first is primary). */
   env: string[];
@@ -172,6 +171,7 @@ export async function getModelsDevProvider(
 export interface ModelsDevModelEndpoint {
   readonly baseURL: string;
   readonly protocol: 'responses' | 'chat-completions';
+  readonly reasoning: boolean;
 }
 
 /** A model can override its provider's SDK and endpoint in models.dev. */
@@ -194,7 +194,7 @@ export async function getModelsDevModelEndpoint(
 
   if (baseURL === null) return null;
 
-  return { baseURL, protocol: npm === '@ai-sdk/openai' ? 'responses' : 'chat-completions' };
+  return { baseURL, protocol: npm === '@ai-sdk/openai' ? 'responses' : 'chat-completions', reasoning: model?.reasoning === true };
 }
 
 /** Metadata for every provider; throws when the catalog cannot be read rather than returning an empty list. */

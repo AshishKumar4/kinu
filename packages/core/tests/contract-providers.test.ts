@@ -253,16 +253,43 @@ describe('Codex provider contract', () => {
     expect(body.store).toBe(false);
   });
 
-  test('leaves a non-array input untouched while opting out of storage', () => {
-    const out = normalizeCodexResponsesRequest({
-      method: 'POST',
-      body: JSON.stringify({ model: 'gpt-5.5', instructions: 'Stay sharp.', store: true, input: 'hello' }),
+  test('sends an earlier step whole, since the Codex backend stores nothing to reference', async () => {
+    const mock = createMockFetch([
+      { match: 'chatgpt.com/backend-api/codex', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
+    ]);
+
+    const deps = makeDeps({ [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-token' } } }, mock.fetch);
+    const model = createCodexProvider().createModel('gpt-5.5', deps);
+
+    await generateText({
+      model, maxOutputTokens: 16,
+      messages: [
+        { role: 'user', content: 'What is in notes.md?' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'reasoning', text: '', providerOptions: { openai: { itemId: 'rs_1', reasoningEncryptedContent: 'ENCRYPTED-1' } } },
+            { type: 'text', text: 'Reading notes.md now.', providerOptions: { openai: { itemId: 'msg_1' } } },
+          ],
+        },
+        { role: 'user', content: 'Go on.' },
+      ],
     });
+
+    const body = v.parse(v.object({ store: v.boolean(), input: v.array(v.unknown()) }), JSON.parse(String(mock.requests[0]?.body)));
+    expect(body.store).toBe(false);
+    expect(JSON.stringify(body.input)).not.toContain('item_reference');
+    expect(body.input).toEqual(expect.arrayContaining([
+      { type: 'reasoning', encrypted_content: 'ENCRYPTED-1', summary: [] },
+      { role: 'assistant', content: [{ type: 'output_text', text: 'Reading notes.md now.' }] },
+    ]));
+  });
+
+  test('leaves a non-array input untouched', () => {
+    const out = normalizeCodexResponsesRequest({ method: 'POST', body: JSON.stringify({ model: 'gpt-5.5', input: 'hello' }) });
 
     const sent = present(out, 'the recorded codex request');
     const body = v.parse(CodexStoredBodySchema, JSON.parse(v.parse(v.string(), sent.body)));
-    expect(body.instructions).toBe('Stay sharp.');
-    expect(body.store).toBe(false);
     expect(body.input).toBe('hello');
   });
 

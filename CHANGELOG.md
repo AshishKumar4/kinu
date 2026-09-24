@@ -614,6 +614,12 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Responses models see their own earlier steps.** On the models.dev catalog
+  (Muse on opencode's gateway), the CLI's opencode bridge and Codex, every step
+  after the first sent the earlier ones as references to items the endpoint
+  never stored, or dropped them, so Muse restated its plan at each step. Earlier
+  steps now go out whole with their encrypted reasoning, and a chosen effort
+  (Extra high on Muse) reaches the request.
 - **Creating a workspace from the home screen no longer risks a segfault as it
   opens.** Finishing the home screen unmounts its React tree synchronously
   before the terminal renderer releases its native state. It used to render an
