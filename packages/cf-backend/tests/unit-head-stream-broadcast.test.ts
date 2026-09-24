@@ -8,7 +8,7 @@ import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { catalogTurn, gatewayWorkspace, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import {
-  chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun,
+  chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun,
 } from './helpers/platform-gateway';
 
 const ASK = 'Find a way to speed up the parser.';
@@ -23,9 +23,7 @@ const FrameSchema = v.object({
 });
 
 function fromTheOwner(run: RecordedGatewayRun): boolean {
-  const opening = requestOf(run).messages.find((message) => message.role === 'user');
-
-  return JSON.stringify(opening?.content ?? '').includes(ASK);
+  return openingOf(run).includes(ASK);
 }
 
 function stepOf(run: RecordedGatewayRun): number {

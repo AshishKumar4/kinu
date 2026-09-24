@@ -7,15 +7,13 @@
 import { expect, test } from 'bun:test';
 import { ADVISOR_HEADER } from '@kinu.run/core';
 import { catalogTurn, gatewayWorkspace, relayedReports, workspaceMainActor } from './helpers/actor-harness';
-import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
+import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
 const MISSION = 'Catalogue every file under the home directory.';
 
 /** The hire's requests open with its assignment; the main actor's open with the owner's message. */
 function forTheHire(run: RecordedGatewayRun): boolean {
-  const opening = requestOf(run).messages.find((message) => message.role === 'user');
-
-  return JSON.stringify(opening?.content ?? '').includes(MISSION);
+  return openingOf(run).includes(MISSION);
 }
 
 /** The main actor's model: hire `agent` for the mission, then say so. */

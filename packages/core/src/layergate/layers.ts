@@ -406,7 +406,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'volatile-context',
-    owns: 'the non-cacheable state plane: dynamic-context block, per-step ledger, turn-local tail, facts rendering',
+    owns: 'the non-cacheable state plane: dynamic-context block, per-step ledger, turn-local messages before the input, facts rendering',
     subjects: [
       'renderDynamicContextBlock',
       'turnLocalContextMessage',
@@ -461,6 +461,20 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'volatile-context/turn-local-empty-is-null',
         asserts: 'no notice and no activation reasons ⇒ no turn-local message at all',
         observe: (s) => s.turnLocalContextMessage({ deviceNotice: null, activeSkills: { active: [SKILL], reasons: [] } }),
+      },
+      {
+        id: 'volatile-context/request-ends-the-turn',
+        asserts: 'at a turn\'s first step the block and the turn-local notice ride before the request, which ends it; a later step\'s block rides at the tail',
+        observe: (s) => {
+          const ledger = new s.DynamicContextLedger();
+          const notice = s.turnLocalContextMessage({ deviceNotice: 'Your PC just connected.' });
+          const turnLocal = notice === null ? undefined : { at: 2, messages: [notice] };
+          const texts = (messages: ModelMessage[]) => messages.map((m) => v.parse(v.string(), m.content).slice(0, 16));
+          const first = ledger.weave(shortHistory(), { factsBlock: 'a: 1' }, turnLocal);
+          const later = ledger.weave([...shortHistory(), { role: 'assistant', content: 'working' }], { factsBlock: 'a: 2' }, turnLocal);
+
+          return { first: texts(first), later: texts(later) };
+        },
       },
       {
         id: 'volatile-context/ledger-appends-once-per-change',

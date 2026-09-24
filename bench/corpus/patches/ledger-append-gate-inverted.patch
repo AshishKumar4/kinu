@@ -2,7 +2,7 @@ diff --git a/packages/core/src/prompting/volatile-context.ts b/packages/core/src
 index b4cb6e643..dac9d64ef 100644
 --- a/packages/core/src/prompting/volatile-context.ts
 +++ b/packages/core/src/prompting/volatile-context.ts
-@@ -949,7 +949,7 @@ export class DynamicContextLedger {
+@@ -706,7 +706,7 @@ export class DynamicContextLedger {
      const full = renderDynamicContextBlock(current);
      const previousFull = previous === null ? null : renderDynamicContextBlock(previous);
  
@@ -10,4 +10,4 @@ index b4cb6e643..dac9d64ef 100644
 +    if (full === previousFull) {
        const text = this.blocks.length === 0 ? full : dynamicDelta(previous ?? {}, current);
  
-       if (text !== null) this.blocks.push(this.block(history.length, text));
+       if (text !== null) this.blocks.push(this.block(turnInputStart(history), text));

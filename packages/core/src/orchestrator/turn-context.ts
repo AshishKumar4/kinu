@@ -1,13 +1,15 @@
 /**
  * The one turn-assembly ordering both backends run: sanitize → onTurnStart → transformContext
- * → turn-local tail → pairing invariant → admission. Sanitization never changes message count;
- * the transform sees only durable history. Dynamic context stays out (prompting/prepare-step.ts).
+ * → pairing invariant → admission. Sanitization never changes message count; the transform sees
+ * only durable history. Dynamic context and the turn-local messages stay out: the step pipeline
+ * places them (prompting/prepare-step.ts), and admission measures the turn-local ones with the request.
  */
 
 import type { ModelMessage, ToolSet } from 'ai';
 import { sanitizeAttachmentsForModel, type AttachmentPolicy } from '../prompting/attachment-sanitizer';
 import { settleUnpairedToolCalls } from '../prompting/interrupted-tool-calls';
 import { stepContextLimit, type ResolvedModelWindow } from '../prompting/step-prune';
+import { placeTurnLocal, turnInputStart } from '../prompting/volatile-context';
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
 import type { ExtensionHost } from '../extension';
 import { KinuError, diagnostics } from '../obs/index';
@@ -21,7 +23,6 @@ export interface TurnContextInput {
   /** Omitted = no sanitization pass. */
   attachments?: AttachmentPolicy;
   extensions?: ExtensionHost;
-  turnLocal?: readonly ModelMessage[];
   sessionKey: string;
   contextWindow: number;
   providerReportedTokens?: number;
@@ -38,6 +39,8 @@ export interface TurnAdmission {
   count?(request: CountableRequest): Promise<InputTokenCount>;
   /** Part of what the provider prices, so part of what is measured. */
   tools?: ToolSet | undefined;
+  /** Placed per step right before the turn's input, so measured there. */
+  turnLocal?: readonly ModelMessage[] | undefined;
   limits: ResolvedModelWindow;
 }
 
@@ -67,7 +70,7 @@ export interface MeasuredCompactionTrigger {
 }
 
 /**
- * `durableLength` is measured before the turn-local tail. `takeForceCompaction` consumes the
+ * `durableLength` is measured without the turn-local messages. `takeForceCompaction` consumes the
  * flag, so it runs exactly once per assembly.
  */
 export function measureCompactionTrigger(
@@ -105,7 +108,7 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Mod
       abortSignal: input.abortSignal,
     });
 
-    const assembled = [...(transformed ?? history), ...(input.turnLocal ?? [])];
+    const assembled = [...(transformed ?? history)];
 
     return settleUnpairedToolCalls(assembled) ?? assembled;
   };
@@ -117,7 +120,11 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Mod
 
   const limit = stepContextLimit(admission.limits);
 
-  const measure = async (messages: ModelMessage[]): Promise<number> => {
+  const measure = async (assembledMessages: ModelMessage[]): Promise<number> => {
+    const messages = admission.turnLocal === undefined
+      ? assembledMessages
+      : placeTurnLocal(assembledMessages, { at: turnInputStart(assembledMessages), messages: admission.turnLocal });
+
     if (admission.count) {
       const counted = await admission.count({
         system: input.system,

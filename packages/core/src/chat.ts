@@ -27,6 +27,7 @@ import { composePrepareStep, type StepContextPlane, type StepDynamicContext } fr
 import type { MissionGovernor } from './mission-budget';
 import type { AttachmentPolicy } from './prompting/attachment-sanitizer';
 import { assembleTurnMessages } from './orchestrator/turn-context';
+import { turnInputStart } from './prompting/volatile-context';
 import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
 import { contextWindowForModel } from './context-window';
 import type { CountableRequest, InputTokenCount } from './providers/input-tokens';
@@ -98,7 +99,7 @@ export interface ChatOptions {
   stepContext?: StepContextPlane;
   persistStreamPart?: (part: TextStreamPart<ToolSet>) => Promise<void>;
   persistStep?: (messages: readonly ModelMessage[]) => Promise<void>;
-  /** Spliced at the tail of this turn's initial array only; never seen by a transform or stored. */
+  /** Placed right before the turn's input on every step; never seen by a transform or stored. */
   turnLocal?: readonly ModelMessage[];
   tools: ToolSet;
   /** Unsupported history file/media parts are replaced in place before the transform seam; message count never
@@ -496,7 +497,6 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     history: opts.history,
     attachments: opts.attachments,
     extensions,
-    turnLocal: opts.turnLocal,
     sessionKey: opts.cache?.sessionKey ?? '',
     contextWindow,
     providerReportedTokens: opts.providerReportedTokens,
@@ -508,12 +508,29 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   assembly.admission = {
     count: opts.countInputTokens,
     tools,
+    turnLocal: opts.turnLocal,
     limits: window,
   };
 
   const stepContext = opts.stepContext;
   const initialContext = stepContext === undefined ? null : await stepContext.base();
   const turnMessages = await assembleTurnMessages({ ...assembly, history: initialContext?.messages ?? assembly.history });
+  // The turn-local messages ride right before the turn's input on every step, so the request stays the last
+  // user-role content and each step's prefix is the last one's.
+  const turnStart = turnInputStart(turnMessages);
+  const turnOpening = turnMessages[turnStart];
+  const turnOpeningBytes = turnOpening === undefined ? null : JSON.stringify(turnOpening);
+
+  /** Where the turn's first message sits in a re-read context: found by its bytes, so an edit to earlier history
+   *  cannot move the turn-local messages into the turn. */
+  const turnStartOf = (messages: readonly ModelMessage[]): number => {
+    for (let at = messages.length - 1; turnOpeningBytes !== null && at >= 0; at -= 1) {
+      if (messages[at]?.role === turnOpening?.role && JSON.stringify(messages[at]) === turnOpeningBytes) return at;
+    }
+
+    return turnInputStart(messages);
+  };
+
   let initialContextAvailable = initialContext !== null;
 
   const stepContextPlane: StepContextPlane | undefined = stepContext === undefined ? undefined : {
@@ -521,16 +538,18 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       if (initialContextAvailable) {
         initialContextAvailable = false;
 
-        return { messages: turnMessages, changed: initialContext?.changed ?? false };
+        return { messages: turnMessages, changed: initialContext?.changed ?? false, turnStart };
       }
 
       const base = await stepContext.base();
       const messages = await assembleTurnMessages({ ...assembly, history: base.messages, admission: undefined });
 
-      return { messages, changed: base.changed };
+      return { messages, changed: base.changed, turnStart: turnStartOf(messages) };
     },
     consume: step => stepContext.consume(step),
   };
+
+  const turnLocal = opts.turnLocal !== undefined && opts.turnLocal.length > 0 ? { messages: opts.turnLocal, turnStart } : undefined;
 
   const cache = turnCachePlan(opts, turnMessages);
   const rollTail = hasCacheMarkers(cache.strategy);
@@ -616,6 +635,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           destinationProviderId: opts.cache?.providerId,
           meter,
           context: stepContextPlane,
+          turnLocal,
         }, { stepNumber: stepOffset + stepNumber, messages, steps });
       },
       experimental_transform: () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({

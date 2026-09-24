@@ -1,3 +1,4 @@
+import { isRuntimeContext } from './runtime-context';
 import { scriptedTurnModel, type ScriptedTurnOptions } from './turn-model';
 
 export const HIRE_FORK_PARENT = 'The release ledger uses integer cents. Preserve that constraint.';
@@ -48,11 +49,12 @@ export function hireForkModel(context?: 'fresh' | 'inherit', lifetime: 'durable'
   return { model, childRequests };
 }
 
+/** The conversation a request carries: without the system prompt or Kinu's runtime context. */
 export function hireConversation(request: ScriptedTurnOptions) {
   return request.prompt.filter((message) => message.role !== 'system').map((message) => ({
     role: message.role,
     content: message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''),
-  }));
+  })).filter((message) => message.role !== 'user' || !isRuntimeContext(message.content));
 }
 
 export const HIRE_FORK_FOLLOWUP_REQUEST = 'Send the next audit assignment.';

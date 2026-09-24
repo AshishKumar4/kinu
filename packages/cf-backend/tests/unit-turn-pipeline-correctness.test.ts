@@ -4,7 +4,7 @@ import {
   MERGE_POLICY_BINDING, mergePolicyProfile, scriptedTurnModel, sqlOver, toolExecute,
 } from '@kinu.run/test-utils';
 import {
-  MergeOutputSchema, listQueuedShadowTrials, DEFAULT_WORKERS_AI_MODEL_SPEC,
+  MergeOutputSchema, listQueuedShadowTrials, DEFAULT_WORKERS_AI_MODEL_SPEC, DYNAMIC_CONTEXT_OPEN_TAG,
   type ReasoningEffort, type ResolvedTurnProfile,
 } from '@kinu.run/core';
 import {
@@ -354,8 +354,9 @@ describe('turn-pipeline correctness wiring', () => {
       expect(model.doStreamCalls).toHaveLength(1);
       const request = model.doStreamCalls[0];
       expect(request?.tools?.some((entry) => entry.name === 'submit_plan') ?? false).toBe(available);
-      expect(JSON.stringify(request?.prompt.filter((message) => message.role === 'user').at(-1)))
-        .toContain(`Mode: ${mode}; submit_plan: ${available ? 'available' : 'unavailable'}.`);
+      // The facts ride the turn's dynamic-context block, which sits before the person's request.
+      const block = request?.prompt.find((message) => message.role === 'user' && JSON.stringify(message).includes(DYNAMIC_CONTEXT_OPEN_TAG));
+      expect(JSON.stringify(block)).toContain(`Mode: ${mode}; submit_plan: ${available ? 'available' : 'unavailable'}.`);
     }
   });
 

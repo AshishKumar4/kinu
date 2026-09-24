@@ -465,10 +465,11 @@ interface TurnResult {
   total: Usage;
 }
 
-/** One three-step turn (tool call, tool call, answer) against the provider's mocked cache. */
+/** One three-step turn (tool call, tool call, answer) against the provider's mocked cache. `durable` re-reads the
+ *  stored history at every step, as a claimed turn's context plane does; `turnLocal` rides it. */
 async function driveTurn(
   entry: ProviderCase,
-  opts: { decoy?: boolean; extension?: KinuExtension; dynamic?: () => DynamicContext } = {},
+  opts: { decoy?: boolean; extension?: KinuExtension; dynamic?: () => DynamicContext; durable?: true; turnLocal?: ModelMessage[] } = {},
 ): Promise<TurnResult> {
   const oracle = new PrefixCacheOracle();
 
@@ -492,6 +493,12 @@ async function driveTurn(
   acc.reset(0);
   const steps: Usage[] = [];
   const extensions = opts.extension ? new ExtensionHost().register(opts.extension) : undefined;
+  let stored: ModelMessage[] = [...HISTORY];
+
+  const plane = opts.durable === undefined ? {} : {
+    stepContext: { base: async () => ({ messages: [...stored], changed: false }), consume: async () => {} },
+    persistStep: async (produced: readonly ModelMessage[]) => { stored = [...HISTORY, ...produced]; },
+  };
 
   for await (const event of runChat({
     model: entry.model(deps),
@@ -502,6 +509,8 @@ async function driveTurn(
     extensions,
     dynamicContext: opts.dynamic ? { ledger: new DynamicContextLedger(), snapshot: opts.dynamic } : undefined,
     cache: { providerId: entry.providerId, modelId: entry.modelId, sessionKey: SESSION_KEY },
+    ...(opts.turnLocal !== undefined && { turnLocal: opts.turnLocal }),
+    ...plane,
   })) {
     if (event.type === 'step-finish') {
       steps.push(event.usage ?? {});
@@ -630,6 +639,24 @@ describe('a stable prefix reads back as a nonzero cache hit', () => {
     }
 
     expect(total.cacheRead ?? 0).toBe(0);
+  });
+
+  test('a turn\'s runtime notice rides one position before the request, so every step of a re-read history reads the cache', async () => {
+    const notice: ModelMessage[] = [{ role: 'user', content: "[Turn context]\n## Context update\nYour user's PC just connected." }];
+    const lines: string[] = [];
+
+    for (const entry of CACHING_PROVIDERS) {
+      const { mock, steps } = await driveTurn(entry, { durable: true, turnLocal: notice, dynamic: () => ({ factsBlock: 'The workspace is ready.' }) });
+      const input = steps.reduce((sum, step) => sum + (step.input ?? 0), 0);
+      const read = steps.reduce((sum, step) => sum + (step.cacheRead ?? 0), 0);
+
+      expect(mock.requests.length).toBe(3);
+      expect(steps[1]?.cacheRead ?? 0).toBeGreaterThan(0);
+      expect(steps[2]?.cacheRead ?? 0).toBeGreaterThan(steps[1]?.cacheRead ?? 0);
+      lines.push(`${entry.label}: cached input ${String(read)}/${String(input)} = ${(read / Math.max(1, input)).toFixed(3)}`);
+    }
+
+    console.log(`cached-input share, 3-step turn with a turn-local notice:\n${lines.join('\n')}`);
   });
 
   test('a per-step mutation before the deepest breakpoint drops the hit to 0', async () => {

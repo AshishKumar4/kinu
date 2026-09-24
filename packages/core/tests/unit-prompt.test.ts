@@ -897,7 +897,7 @@ describe('buildSystemPromptSync', () => {
 
         expect(instructions?.content).toContain('In Plan, inspect and research only.');
         expect(instructions?.content).toContain('Implementation waits for an approved Build turn.');
-        const facts = request?.prompt.filter((message) => message.role === 'user').at(-1);
+        const facts = request?.prompt.filter((message) => message.role === 'user' && JSON.stringify(message).includes('<dynamic_context')).at(-1);
         expect(JSON.stringify(facts)).toContain(`Mode: ${mode}; submit_plan: ${phase === 0 ? 'available' : 'unavailable'}.`);
         expect(JSON.stringify(facts)).not.toContain('Do not change project files');
         expect(await subject.storage.vfs.readFile(path), JSON.stringify(model.doStreamCalls[2]?.prompt.filter((message) => message.role === 'tool')))

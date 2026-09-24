@@ -93,6 +93,7 @@ export const LOCKED_BASELINE: Baseline = {
   'volatile-context/ledger-appends-once-per-change': '1a8be5669810ecb8',
   'volatile-context/ledger-resets-on-history-rewrite': '517967a1c92a2374',
   'volatile-context/live-rosters-are-bounded': '7adbf5207787b2c8',
+  'volatile-context/request-ends-the-turn': '7690ba63669d5adf',
   'volatile-context/system-state-block': 'c3baf2de253420a4',
   'volatile-context/turn-local-empty-is-null': '5b9bc4ba528108e4',
   'volatile-context/turn-local-tail': '418c87882c7f75e2',

@@ -865,9 +865,10 @@ describe('LocalAgentSession.send — a user turn', () => {
 
     expect(system).not.toContain('FACT-MARKER');
     const texts = observed.map(messageText);
-    const tail = present(texts.at(-1), 'the last prompt message');
+    // The request ends the prompt; the new facts ride in the newest block, before it.
+    const tail = present(texts.filter(isDynamicBlock).at(-1), 'the newest block');
 
-    expect(isDynamicBlock(tail)).toBe(true);
+    expect(texts.at(-1)).toBe('and now?');
     expect(tail).toContain('World model');
     expect(tail).toContain('FACT-MARKER');
     expect(texts).toContain(turn1Block);
@@ -2101,6 +2102,21 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     await session.send('/focused remember this', { id: crypto.randomUUID() });
     expect(new Set(captured)).toEqual(new Set(['memory']));
+  });
+
+  test('the person\u2019s request is the last user-role message the model reads; this turn\u2019s runtime context rides before it', async () => {
+    // Runtime news after the request reads as the turn itself: a model answered it and ignored the request.
+    let prompt: PromptMessage[] = [];
+    const { rt, session } = setup('ok', historyCapturingModel('ok', (messages) => { prompt = messages; }));
+    await writeFocusedSkill(rt);
+    await session.send('/focused remember this', { id: crypto.randomUUID() });
+
+    const users = prompt.filter((message) => message.role === 'user').map(messageText);
+    const activation = users.findIndex((text) => text.includes('## Skills activated this turn'));
+
+    expect(activation).toBeGreaterThanOrEqual(0);
+    expect(users.at(-1)).toContain('remember this');
+    expect(users.slice(activation + 1).every((text) => text.includes('remember this'))).toBe(true);
   });
 
 
