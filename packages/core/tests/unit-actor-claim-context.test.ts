@@ -56,8 +56,8 @@ for (const withTail of [true, false]) {
         const sent = (model.doStreamCalls[0]?.prompt ?? []).flatMap((m) => m.role === 'system' ? [] : [textOf(m)]);
         const history = actor.session.history.map(textOf);
 
-        // The claim is the first request, tail included when there is one.
-        expect(admitted).toEqual(withTail ? ['What does the file say?', textOf(TURN_LOCAL)] : ['What does the file say?']);
+        // The claim is the first request, the turn-local message right before the request when there is one.
+        expect(admitted).toEqual(withTail ? [textOf(TURN_LOCAL), 'What does the file say?'] : ['What does the file say?']);
         expect(sent).toEqual(admitted);
         // The tail belongs to the request, never the working history.
         expect(history).toEqual(['What does the file say?', 'done']);

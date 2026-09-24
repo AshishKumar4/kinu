@@ -11,6 +11,8 @@ export * from './llm';
 
 export * from './turn-model';
 
+export * from './runtime-context';
+
 export * from './merge-policy';
 
 export * from './network';

@@ -12,7 +12,7 @@ import { describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { catalogTurn, chatSessionTurns, gatewayWorkspace, orchestratorHarness } from './helpers/actor-harness';
-import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
+import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 const METADATA = 'http://169.254.169.254/latest/meta-data/iam/security-credentials/';
 
@@ -72,9 +72,8 @@ describe('the cloud metadata service is out of reach on every path', () => {
     const gateway = stubAiBinding((run) => {
       const messages = requestOf(run).messages;
       const step = messages.filter((message) => message.role === 'tool').length;
-      const opening = messages.find((message) => message.role === 'user');
 
-      if (!JSON.stringify(opening?.content ?? '').includes(mission)) {
+      if (!openingOf(run).includes(mission)) {
         return step === 0
           ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', agent: 'isolation-child', mission } }, 'hire_0')
           : chatCompletion(run, 'Handed off.');

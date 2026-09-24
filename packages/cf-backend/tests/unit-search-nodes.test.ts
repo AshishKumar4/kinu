@@ -6,7 +6,7 @@ import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { catalogTurn, gatewayWorkspace } from './helpers/actor-harness';
 import {
-  chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun,
+  chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun,
 } from './helpers/platform-gateway';
 
 const ASK = 'Find two ways to speed up the parser.';
@@ -16,9 +16,7 @@ const TASK = 'Name one way to make tokenizing faster.';
 
 /** The main actor's requests open with the owner's words; a node's open with its own assignment. */
 function fromTheOwner(run: RecordedGatewayRun): boolean {
-  const opening = requestOf(run).messages.find((message) => message.role === 'user');
-
-  return JSON.stringify(opening?.content ?? '').includes(ASK);
+  return openingOf(run).includes(ASK);
 }
 
 /** How many tool results a request already carries: the step the model is on. */

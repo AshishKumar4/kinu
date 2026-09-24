@@ -2714,7 +2714,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private operationProfile(): OperationProfile | null {
     return currentOperationProfile(this.actorHandle()) ?? (this._inFlight ? this._turnOperation : null);
   }
-  /** Built in beforeTurn; read by the per-step dynamic context and the turn-local tail. */
+  /** Built in beforeTurn; read by the per-step dynamic context and turn-local context. */
   private _turnActiveSkills: ActiveSkillSet | null = null;
   /** Instruction trust (KINU-N028): one store over actor SQL, scoped to this workspace so a forked
    *  or copied root starts unapproved. */
@@ -3933,9 +3933,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /**
    * Unapproved instruction files ride a sealed user message (agent-writable, not system plane).
-   * Never persisted: appended after the transformContext seam, so compaction never sees it.
+   * Never persisted; placed before the turn's input after the transformContext seam.
    */
-  private turnLocalTail(
+  private turnLocalMessages(
     deviceNotice: string | null,
     agentsMd: AgentsMdSources,
     activeSkills: ActiveSkillSet | undefined,
@@ -4229,7 +4229,7 @@ export abstract class ActorAgent extends Agent<Env> {
     );
 
     // The cache prefix changes only on real agent events (soul, model, skills, tools, AGENTS.md);
-    // system and turn-local state ride the dynamic ledger and a trailing message instead.
+    // system and turn-local state ride the dynamic ledger and turn-local messages instead.
     const execs = this.rt.executionRouter?.listExecutors() ?? [];
     const model = this.promptModelContext();
 
@@ -4274,7 +4274,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // The reflection loop assumes the model sees its latest MEMORY.md lessons in-turn; read once
     // here since it is the one dynamic-context input needing an await.
     const memoryTail = await readMemoryTail(this.rt.memory);
-    const turnLocal = this.turnLocalTail(deviceNotice, agentsMd, activeSetForPrompt);
+    const turnLocal = this.turnLocalMessages(deviceNotice, agentsMd, activeSetForPrompt);
 
     const submittedTools = { ...modeTools, ...effectiveTools };
     const providers = this.providerRegistry();

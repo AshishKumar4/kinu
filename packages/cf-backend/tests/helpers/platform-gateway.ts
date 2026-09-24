@@ -3,6 +3,7 @@ import type {
   LanguageModelV3, LanguageModelV3CallOptions, LanguageModelV3FunctionTool, LanguageModelV3Message, LanguageModelV3ToolResultOutput,
 } from '@ai-sdk/provider';
 import { JsonObjectSchema, JsonValueSchema, type GatewayRunRequest, type JsonObject, type ProviderEnv, type WorkersAIBinding } from '@kinu.run/core';
+import { isRuntimeContext } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 /** Shape `AI_GATEWAY_URL` must have: {origin}/v1/{account}/{gateway}/{provider}/... */
@@ -210,6 +211,24 @@ export function requestOf(run: RecordedGatewayRun): GatewayRequest {
   const request = v.parse(ChatRequestSchema, run.query);
 
   return { messages: request.messages ?? [], tools: (request.tools ?? []).map((tool) => tool.function.name) };
+}
+
+/** A user message's words, whether the wire sent them as one string or as text parts. */
+const UserTextSchema = v.union([
+  v.string(),
+  v.pipe(v.array(v.looseObject({ text: v.string() })), v.transform((parts) => parts.map((part) => part.text).join(''))),
+]);
+
+/** The text a request's conversation opens with: its first user message that is not Kinu's runtime context. */
+export function openingOf(run: RecordedGatewayRun): string {
+  for (const message of requestOf(run).messages) {
+    if (message.role !== 'user') continue;
+    const text = v.parse(UserTextSchema, message.content);
+
+    if (!isRuntimeContext(text)) return text;
+  }
+
+  return '';
 }
 
 /**

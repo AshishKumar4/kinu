@@ -284,7 +284,7 @@ describe('exact turn admission', () => {
     expect(failure !== null && 'code' in failure ? failure.code : undefined).toBe('bad_input');
   });
 
-  test('what is counted is the assembled request: system, messages, and the tools that ride it', async () => {
+  test('what is counted is the request sent: system, messages with the turn-local ones before the input, and the tools', async () => {
     const { extensions } = compactionProbe();
     const counter = scriptedCounter([1_000]);
 
@@ -292,17 +292,18 @@ describe('exact turn admission', () => {
       look: tool({ description: 'look', inputSchema: z.object({ q: z.string() }) }),
     };
 
+    const request: ModelMessage = { role: 'user', content: 'the request' };
+
     await assembleTurnMessages({
       ...base(),
+      history: [...HISTORY, request],
       extensions,
       trigger: 'auto',
-      turnLocal: [{ role: 'user', content: 'turn-local tail' }],
-      admission: { count: counter.count, limits: LIMITS, tools },
+      admission: { count: counter.count, limits: LIMITS, tools, turnLocal: [{ role: 'user', content: 'turn-local' }] },
     });
     const counted = counter.seen[0];
     expect(counted?.system).toBe('SYS');
-
-    expect(counted?.messages.at(-1)).toEqual({ role: 'user', content: 'turn-local tail' });
+    expect(counted?.messages.slice(-2)).toEqual([{ role: 'user', content: 'turn-local' }, request]);
     expect(Object.keys(counted?.tools ?? {})).toEqual(['look']);
   });
 });
