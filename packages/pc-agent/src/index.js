@@ -1722,8 +1722,11 @@ function waitForSupervisorState(dir, child) {
 
     const onError = (err) => finish(err);
 
+    // The exit and the state watch are two event sources with no order between them: a supervisor that
+    // renamed its state into place and then died can have its exit dispatched first. The file decides.
     const onExit = (code, signal) => {
-      finish(new Error(`supervisor exited before publishing state (${signal ?? code ?? 0})`));
+      if (fs.existsSync(path.join(dir, 'state'))) finish();
+      else finish(new Error(`supervisor exited before publishing state (${signal ?? code ?? 0})`));
     };
 
     child.once('error', onError);
