@@ -4088,11 +4088,16 @@ describe('LocalAgentSession — the lifetime search', () => {
 
     try {
       const db = new Database(scratchPath('local-session-lifetime', 'agent.db'));
+      // Opened in the mode the CLI opens its database (openWorkspaceCLI): the branch processes open this file too.
+      db.exec('PRAGMA journal_mode = WAL');
       initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
       const rt = createCLIRuntime(db, {
         dbPath: db.filename,
-        llm: { name: 'workers-ai', baseURL: `http://127.0.0.1:${String(server.port)}/v1`, headers: { Authorization: 'Bearer lifetime' }, model: 'test-model' },
+        llm: {
+          name: 'workers-ai', baseURL: `http://127.0.0.1:${String(server.port)}/v1`,
+          headers: { Authorization: 'Bearer lifetime' }, model: 'test-model',
+        },
       });
 
       const events: SessionEvent[] = [];
@@ -4102,6 +4107,10 @@ describe('LocalAgentSession — the lifetime search', () => {
 
       for (let turn = 1; turn <= 5; turn++) await session.send(`turn ${turn}`);
       await waitFor(() => events.some((event) => event.type === 'evolution' && event.event === 'mcts_complete'), 60_000);
+
+      // The search ran to its end rather than failing to start its branches.
+      expect(events.flatMap((event) => event.type === 'evolution' && event.event === 'mcts_complete' ? [event.message] : []))
+        .toEqual([expect.stringMatching(/^Evolution (explored|converged)/u)]);
 
       // The search runs between turns, so its calls are filed under the workspace's own run.
       const billed = session.getRunEvents(WORKSPACE_RUN_ID)
