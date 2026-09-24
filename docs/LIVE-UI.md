@@ -228,6 +228,18 @@ and restore replaces source inside a workspace VFS transaction. All of these
 survive host recreation. None of them checkpoint JavaScript heap state or keep a
 process alive.
 
+Version content is addressed by SHA-256 under `/etc/kinu-slate-content`, so an
+unchanged file is stored once across versions and forks. `slate_file_manifest`
+(`packages/core/src/slates/files.ts`) records each slate file's size, mtime,
+inode and content as of the last capture or restore. A capture reads and hashes
+only files whose row moved, and still checks that the caller can read each one.
+A restore rewrites only files whose bytes or mode differ. Measured in workerd at
+10,000 files on 2026-09-24: a version after a one-file edit takes 52 ms instead
+of 194 ms, and a restore takes 52 ms instead of 942 ms. A fork's first version reads nothing: 47 ms
+instead of 191 ms. The first version of a tree still reads every byte, and a
+fork still writes every byte into the new slate's directory, because Nimbus
+keeps each file's content under its own id.
+
 The hosted source runtime does not supply the optional `WorkspaceSlates` build,
 process or deployment capabilities. Operations that need them refuse as
 unsupported instead of calling stubs. The resident preview path above is

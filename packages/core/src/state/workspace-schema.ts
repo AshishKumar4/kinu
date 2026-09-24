@@ -113,6 +113,16 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
     UNIQUE (invocation_id, attempt)
   )`);
   initSlateStateTable(execRaw);
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_file_manifest (
+    slate_id    TEXT NOT NULL,
+    path        TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    mtime_ms    INTEGER NOT NULL,
+    ino         INTEGER NOT NULL,
+    content     TEXT NOT NULL,
+    recorded_at INTEGER NOT NULL,
+    PRIMARY KEY (slate_id, path)
+  )`);
   initSlateShareTables(execRaw);
   initSlateLiveShareTables(execRaw);
 }

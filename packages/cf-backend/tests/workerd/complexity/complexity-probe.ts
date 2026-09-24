@@ -13,7 +13,7 @@ import { SlateId } from '@agent-core/core/slates';
 import {
   MAIN_AGENT, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory,
   agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables,
-  initAgentConfigTable, initCodemodeStateTable, initWorkspaceActorTable, initWorkspaceBaselineTable,
+  initAgentConfigTable, initCodemodeStateTable, initWorkspaceActorTable, initWorkspaceBaselineTable, initWorkspaceSchema,
   nimbusSessionFiles, resetWorkspaceBaseline, standardMounts, withMountTable,
   type ActorHandle, type AgentStores, type NimbusSandboxHandle, type SqlExecutor,
   type SqlValue, type StepContextPlane, type VFS,
@@ -362,10 +362,13 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     });
   }
 
+  /** The slate file plane as the slate host builds it, over the workspace schema the orchestrator creates. */
   private async slates(): Promise<{ readonly files: SlateFiles; readonly tree: CredentialedVfs }> {
     const vfs = await this.workspace();
     const tree = vfs.as(CRED_SESSION_USER);
-    const files = new SlateFiles(tree, new WorkspaceSlateContentStore(vfs.as(CRED_KERNEL)), (body) => vfs.withTransaction(body));
+
+    initWorkspaceSchema({ execRaw: this.execRaw, sql: this.executor, exec: this.meter.sql });
+    const files = new SlateFiles(tree, new WorkspaceSlateContentStore(vfs.as(CRED_KERNEL)), this.meter.sql, (body) => vfs.withTransaction(body));
 
     return { files, tree };
   }

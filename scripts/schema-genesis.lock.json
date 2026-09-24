@@ -1154,6 +1154,16 @@
     "parent_id TEXT",
     "bytes BLOB NOT NULL"
   ],
+  "slate_file_manifest@packages/core/src/state/workspace-schema.ts": [
+    "slate_id TEXT NOT NULL",
+    "path TEXT NOT NULL",
+    "size INTEGER NOT NULL",
+    "mtime_ms INTEGER NOT NULL",
+    "ino INTEGER NOT NULL",
+    "content TEXT NOT NULL",
+    "recorded_at INTEGER NOT NULL",
+    "PRIMARY KEY (slate_id, path)"
+  ],
   "slate_invocations@packages/core/src/state/workspace-schema.ts": [
     "id TEXT PRIMARY KEY",
     "slate_id TEXT NOT NULL",

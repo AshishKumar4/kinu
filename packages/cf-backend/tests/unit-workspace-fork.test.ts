@@ -17,7 +17,7 @@ async function source(): Promise<CloudForkSource> {
   await new ForkConversation(ws, SOURCE_ARTIFACTS).say({ id: 'm1', role: 'user', text: 'hello' });
 
   return {
-    sql: ws.sql, vfs: ws.vfs, actor, untilMessageId: 'm1', artifactDirectory: SOURCE_ARTIFACTS,
+    sql: ws.sql, vfs: ws.forkSource, actor, untilMessageId: 'm1', artifactDirectory: SOURCE_ARTIFACTS,
   };
 }
 

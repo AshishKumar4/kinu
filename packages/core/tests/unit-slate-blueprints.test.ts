@@ -20,7 +20,7 @@ async function slatePlane(name: string) {
   const content = new WorkspaceSlateContentStore(session.vfs.as(CRED_KERNEL));
 
   const slates = new WorkspaceSlates({
-    workspaceId: new WorkspaceId(name), store, files: new SlateFiles(vfs, content, (body) => session.vfs.withTransaction(body)),
+    workspaceId: new WorkspaceId(name), store, files: new SlateFiles(vfs, content, exec, (body) => session.vfs.withTransaction(body)),
     mutations: { mutate: async (_request, mutation) => session.vfs.withTransaction(mutation) },
   });
 

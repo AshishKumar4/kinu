@@ -608,7 +608,7 @@ export function SteerBubble({ steer, onFork }: {
           <button
             onClick={() => onFork(steer.id)}
             className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
-            title="Fork from here"
+            title="Fork the workspace from here"
           >
             <GitBranchIcon size={12} />
           </button>
@@ -687,7 +687,7 @@ export const MessageView = memo(function MessageView({
             <button
               onClick={() => onFork(message.id)}
               className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
-              title="Fork from here"
+              title="Fork the workspace from here"
             >
               <GitBranchIcon size={12} />
             </button>
@@ -760,7 +760,7 @@ export const MessageView = memo(function MessageView({
                 <button
                   onClick={() => onFork(message.id)}
                   className="absolute -right-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
-                  title="Fork from here"
+                  title="Fork the workspace from here"
                 >
                   <GitBranchIcon size={12} />
                 </button>

@@ -3,6 +3,13 @@ export const WORKSPACE_ROOT = '/home/main';
 
 export const LEGACY_WORKSPACE_ROOT = '/home/user';
 
+/** Platform state, not anyone's work: Nimbus runtimes, bindings and images; Kinu agent state. */
+const SYSTEM_MANAGED_DIRECTORIES: ReadonlySet<string> = new Set(['.nimbus', '.kinu']);
+
+export function isSystemManaged(name: string): boolean {
+  return SYSTEM_MANAGED_DIRECTORIES.has(name);
+}
+
 /** Resolve a path the way a workspace process starting in {@link WORKSPACE_ROOT} would. */
 export function workspacePath(path: string): string {
   if (path.startsWith('/')) return path;

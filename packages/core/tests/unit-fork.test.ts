@@ -2,27 +2,33 @@
  *  session writers, and carried by the production frame stream into the production receiver. */
 
 import { describe, test, expect } from 'bun:test';
-import { readForkLineage, readSoul } from '../src/index';
+import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { forkTransferFrames, readForkLineage, readSoul } from '../src/index';
 import { createTestWorkspace as fresh, type TestWorkspace } from './helpers';
 import {
   ForkConversation, readChain, readWorkingContext, seedForkSource, seedForkTarget,
   SOURCE_ARTIFACTS, SPILLED_BYTES, TARGET_ARTIFACTS,
 } from './helpers/fork-conversation';
 import { streamFork } from './helpers/fork-stream';
-import { forkFilePaths, type ForkFilePath } from '../src/identity/fork';
+import { snapshotForkFiles } from '../src/identity/fork';
 import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../src/config/store';
-import type { VFS } from '../src/types/primitives';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 function forkInto(src: TestWorkspace, tgt: TestWorkspace, opts: {
-  untilMessageId: string; targetWorkspaceId?: string; targetWorkspaceName?: string; now?: number;
+  untilMessageId: string; targetWorkspaceId?: string; targetWorkspaceName?: string; now?: number; frameBytes?: number;
 }) {
   return streamFork(src, tgt, {
     workspaceId: opts.targetWorkspaceId ?? 'TGT',
     workspaceName: opts.targetWorkspaceName ?? 'my-fork',
     artifactDirectory: TARGET_ARTIFACTS,
     now: opts.now ?? Date.now(),
-  }, { untilMessageId: opts.untilMessageId, artifactDirectory: SOURCE_ARTIFACTS });
+  }, { untilMessageId: opts.untilMessageId, artifactDirectory: SOURCE_ARTIFACTS, frameBytes: opts.frameBytes });
+}
+
+/** The workspace's own synchronous plane, as the session user: modes, symlinks and mtimes. */
+async function plane(ws: TestWorkspace) {
+  return (await ws.bundle.session()).vfs.as(CRED_SESSION_USER);
 }
 
 /** Ids of everything the fork authored, so assertions need not spell the marker's generated id. */
@@ -272,6 +278,58 @@ describe('a workspace fork', () => {
     expect(await tgt.vfs.exists('scaffold/agent.js')).toBe(false);
   });
 
+  test('carries the project tree as it stands: files, directories, modes, mtimes and symlinks', async () => {
+    const src = fresh();
+    const tgt = fresh();
+    await seedForkTarget(tgt);
+    const chat = await seedForkSource(src);
+    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    const at = (path: string) => `${WORKSPACE_ROOT}/${path}`;
+    const mtime = Date.parse('2026-01-02T03:04:05.000Z');
+    const binary = Uint8Array.from({ length: 300 }, (_, index) => index % 256);
+    const source = await plane(src);
+    source.mkdir(at('app/src'), { recursive: true });
+    source.writeFile(at('app/src/main.ts'), 'export const answer = 42;\n');
+    source.utimes(at('app/src/main.ts'), mtime, mtime);
+    source.writeFile(at('app/run.sh'), '#!/bin/sh\necho ran\n', { mode: 0o755 });
+    // Larger than a frame here, so it crosses as ranges rather than whole.
+    source.writeFile(at('app/data.bin'), binary);
+    source.symlink('src/main.ts', at('app/entry.ts'));
+    source.mkdir(at('app/empty'));
+    source.mkdir(at('.nimbus/runtimes'), { recursive: true });
+    source.writeFile(at('.nimbus/runtimes/installed'), 'platform state');
+
+    await forkInto(src, tgt, { untilMessageId: 'm1', frameBytes: 128 });
+
+    const target = await plane(tgt);
+    expect(target.readFileString(at('app/src/main.ts'))).toBe('export const answer = 42;\n');
+    expect(target.stat(at('app/src/main.ts')).mtime).toBe(mtime);
+    expect(target.readFileString(at('app/run.sh'))).toBe('#!/bin/sh\necho ran\n');
+    expect(target.stat(at('app/run.sh')).mode & 0o777).toBe(0o755);
+    expect(target.readFile(at('app/data.bin'))).toEqual(binary);
+    expect(target.readlink(at('app/entry.ts'))).toBe('src/main.ts');
+    expect(target.isDirectory(at('app/empty'))).toBe(true);
+    expect(target.exists(at('.nimbus/runtimes/installed'))).toBe(false);
+  });
+
+  test('a file written while the fork copies it refuses the fork and names the file', async () => {
+    const src = fresh();
+    const chat = await seedForkSource(src);
+    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await src.vfs.writeFile('notes.md', 'as the fork began');
+
+    const frames = forkTransferFrames({
+      sql: src.sql, actor: chat.actor, vfs: src.forkSource, artifactDirectory: SOURCE_ARTIFACTS,
+      untilMessageId: 'm1', transferId: 'tx-moving', frameBytes: 1024,
+    });
+
+    // The first frame is produced after the snapshot, so this write lands between snapshot and copy.
+    expect((await frames.next()).value?.kind).toBe('begin');
+    await src.vfs.writeFile('notes.md', 'written while the fork copied');
+
+    await expect(Array.fromAsync(frames)).rejects.toThrow(/"notes\.md" changed while the fork was copying/);
+  });
+
   test('writes one fork_lineage row naming the source and the cut', async () => {
     const src = fresh();
     const tgt = fresh();
@@ -412,83 +470,22 @@ describe('a workspace fork', () => {
 });
 
 describe('the files a fork carries', () => {
-  function fakeVfs(files: string[]): VFS {
-    const children = new Map<string, string[]>();
-    const fileSet = new Set(files);
+  test('SOUL.md first, the tree with each directory after its contents, then payloads once each', async () => {
+    const ws = fresh();
+    await seedForkSource(ws);
+    await ws.vfs.writeFile('b/inner.md', 'inner');
+    await ws.vfs.writeFile('a.md', 'top');
+    await ws.vfs.writeFile(`${SOURCE_ARTIFACTS}/aaa.json`, '{}');
+    await ws.vfs.writeFile(`${SOURCE_ARTIFACTS}/bbb.json`, '{}');
+    const payload = (relative: string) => ({ relative, path: `${SOURCE_ARTIFACTS}/${relative}` });
 
-    for (const path of files) {
-      const parts = path.split('/');
+    const snapshot = snapshotForkFiles(await ws.forkSource.open(), [payload('aaa.json'), payload('aaa.json'), payload('bbb.json')]);
+    const carried = snapshot.entries.map((entry) => `${entry.kind}:${entry.path}${'artifact' in entry && entry.artifact ? ' (payload)' : ''}`);
 
-      for (let i = 1; i < parts.length; i++) {
-        const dir = parts.slice(0, i).join('/');
-        const list = children.get(dir) ?? [];
+    const written = ['file:SOUL.md', 'file:a.md', 'file:b/inner.md', 'directory:b'];
 
-        if (!list.includes(parts[i])) list.push(parts[i]);
-        children.set(dir, list);
-      }
-    }
-
-    const missing = (op: string, path: string) =>
-      Object.assign(new Error(`ENOENT: ${op} ${path}`), { code: 'ENOENT' });
-
-    return {
-      readFile: async (path) => { throw missing('read', path); },
-      writeFile: async () => undefined,
-      readdir: async (path) => {
-        const list = children.get(path);
-
-        if (list === undefined) throw missing('readdir', path);
-
-        return [...list];
-      },
-      stat: async (path) => {
-        if (fileSet.has(path)) return { size: 1, mtimeMs: 0, isDir: false };
-
-        if (children.has(path)) return { size: 0, mtimeMs: 0, isDir: true };
-
-        return null;
-      },
-      unlink: async () => undefined,
-      mkdir: async () => undefined,
-      exists: async (path) => fileSet.has(path) || children.has(path),
-    };
-  }
-
-  async function collect(vfs: VFS, artifacts: readonly string[] = []): Promise<ForkFilePath[]> {
-    const out: ForkFilePath[] = [];
-
-    for await (const file of forkFilePaths(vfs, artifacts)) out.push(file);
-
-    return out;
-  }
-
-  test('a memory tree deeper and wider than the shared walk\'s guards is carried whole', async () => {
-    // Deep and wide enough to pass both of walkRecursive's guards; a fork reusing its bounds would truncate.
-    let deep = 'memory';
-
-    for (let i = 0; i < 40; i++) deep += `/d${i}`;
-    const files = [`${deep}/note.md`];
-
-    for (let d = 0; d < 200; d++) {
-      for (let f = 0; f < 60; f++) files.push(`memory/dir${d}/note${f}.md`);
-    }
-
-    const carried = await collect(fakeVfs(files));
-    expect(carried.length).toBe(files.length);
-    expect(new Set(carried.map((file) => file.path))).toEqual(new Set(files));
-    expect(carried.every((file) => !file.artifact)).toBe(true);
-  });
-
-  test('payload paths follow the workspace files, once each, flagged as artifacts', async () => {
-    const carried = await collect(fakeVfs(['memory/MEMORY.md']), [
-      '.kinu/event-content/aaa.json', '.kinu/event-content/aaa.json', '.kinu/event-content/bbb.json',
-    ]);
-
-    expect(carried).toEqual([
-      { path: 'memory/MEMORY.md', artifact: false },
-      { path: '.kinu/event-content/aaa.json', artifact: true },
-      { path: '.kinu/event-content/bbb.json', artifact: true },
+    expect(carried.filter((entry) => written.includes(entry) || entry.endsWith('(payload)'))).toEqual([
+      'file:SOUL.md', 'file:a.md', 'file:b/inner.md', 'directory:b', 'file:aaa.json (payload)', 'file:bbb.json (payload)',
     ]);
   });
-
 });

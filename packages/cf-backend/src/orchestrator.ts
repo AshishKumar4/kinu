@@ -4780,8 +4780,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const fork = await forkWorkspace({
       sql: this.boundSql,
       actor: this.rt.actor,
-      // Inherited files stream through ranged reads: a fork holds one frame, never a whole file.
-      vfs: createWorkspaceForkSource(this.hostedWorkspace().bundle, this.rt.localVfs),
+      // One snapshot of the workspace files, streamed through ranged reads: a fork holds one frame, never a whole file.
+      vfs: createWorkspaceForkSource(this.hostedWorkspace().bundle),
       artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
       sourceName: this.name,
       busy: () => this._inFlight,
@@ -4847,7 +4847,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   #forkReceiverFor(forkName: string, transferId: string, ownerUserId: string): ForkTransferReceiver {
     if (this.forkReceiver?.transferId === transferId) return this.forkReceiver.receiver;
 
-    const writer = new ForkTargetWriter(this.boundSql, this.rt.storage.vfs, {
+    const writer = new ForkTargetWriter(this.boundSql, {
       workspaceId: this.ctx.id.toString(), workspaceName: forkName, ownerUserId,
       // The target's own payload plane: carried payloads are re-rooted so the fork never reads its source.
       artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
