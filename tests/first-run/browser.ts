@@ -9,19 +9,18 @@
  */
 import puppeteer, { type Browser, type LaunchOptions, type Page } from 'puppeteer';
 
+import { declaredSettings } from '../../scripts/browser-declarations';
 import { webHeaders, type PublicWebIdentity } from '../evals/public-session';
 
-/** Chrome, with the pointer declared. Headless reports no pointing device, so
- *  every `hover:` utility the product emits is dead and a card can render
- *  differently than it does for a person — the gallery harness makes the same
- *  declaration for the same reason. */
+/** Chrome, with the pointer and colour scheme declared (`declaredSettings`), as
+ *  the gallery and live-app harnesses launch it. */
 export async function openBrowser(): Promise<Browser> {
   const options: LaunchOptions = {
     defaultViewport: { width: 1440, height: 900 },
     args: [
       '--no-sandbox',
       '--disable-dev-shm-usage',
-      '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2',
+      declaredSettings({ mouse: true }),
     ],
   };
 
