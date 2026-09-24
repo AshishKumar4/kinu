@@ -161,17 +161,17 @@ function countBy<T>(items: readonly T[], key: (item: T) => string): { item: T; c
   return [...counts.values()].sort((left, right) => right.count - left.count);
 }
 
-/** A harness-level error or a turn the deployment ended in error: the environment failed, not the agent. */
+/** A harness-level error or a turn the deployment ended in error: the environment failed, not the build or the agent. */
 export function hasInfrastructureFailure(assertion: Assertion): boolean {
   const run = assertion.meta.harness.run;
 
   return run.errors.some((error) => HARNESS_ERROR_NAMES.includes(error.name))
-    || run.output.turns.some((turn) => turn.outcome.status !== 'completed');
+    || run.output.turns.some((turn) => turn.outcome.status === 'error');
 }
 
 function infrastructureMessage(assertion: Assertion): string {
   const run = assertion.meta.harness.run;
-  const turn = run.output.turns.find(({ outcome }) => outcome.status !== 'completed');
+  const turn = run.output.turns.find(({ outcome }) => outcome.status === 'error');
 
   return turn?.outcome.message ?? run.errors[0]?.message.split('\n')[0] ?? 'infrastructure failure';
 }
@@ -181,11 +181,14 @@ function stats({ assertions }: Cohort): EvalStats {
   const metrics = runs.map((run) => run.output.metrics);
   const costs = runs.flatMap((run) => run.usage.metadata.costUsd === undefined ? [] : [run.usage.metadata.costUsd]);
 
-  const failedChecks = countBy(runs.flatMap((run) => run.output.turns.flatMap((turn, index) =>
-    turn.checks.filter((check) => !check.pass).map((check) => ({
-      check: `t${String(index + 1)} ${check.id}`,
-      evidence: check.evidence === undefined ? null : JSON.stringify(check.evidence),
-    })))), (failure) => failure.check);
+  // A turn the deployment refused failed on the build, so it is listed with the checks, its answer as the evidence.
+  const failedChecks = countBy(runs.flatMap((run) => run.output.turns.flatMap((turn, index) => [
+    ...turn.outcome.status === 'refused' ? [{ id: 'deployment.refused', evidence: turn.outcome.message }] : [],
+    ...turn.checks.filter((check) => !check.pass),
+  ].map((check) => ({
+    check: `t${String(index + 1)} ${check.id}`,
+    evidence: check.evidence === undefined ? null : JSON.stringify(check.evidence),
+  })))), (failure) => failure.check);
 
   const toolErrors = countBy(runs.flatMap((run) => run.session.events.flatMap((event) =>
     event.type === 'tool_result' && event.error !== undefined

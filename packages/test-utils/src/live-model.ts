@@ -188,11 +188,52 @@ export function liveModelTarget(suite: string): LiveModelTarget | null {
 /** Marker on failures caused by the environment rather than the agent; read by `scripts/skip-ratchet.ts`. */
 export const INFRA_FAILURE_MARKER = 'INFRA FAILURE';
 
-/** Run a deployment-dependent step and label its failure as infrastructure, preserving the cause. */
+/**
+ * Cloudflare's own transient Durable Object failures, verbatim from its error-handling guide
+ * (developers.cloudflare.com/durable-objects/best-practices/error-handling): a request that failed
+ * with one never reached the code under test.
+ */
+export const TRANSIENT_PLATFORM_ERRORS: readonly string[] = [
+  'Network connection lost',
+  'Cannot resolve Durable Object due to transient issue on remote node',
+  'Durable Object reset because its code was updated',
+  "The Durable Object's code has been updated",
+];
+
+/**
+ * The deployment answered, and the answer was a failure (a 5xx, a refused RPC): the build's own
+ * result, which {@link infraBoundary} passes on unmarked. `status` is the HTTP status; a socket
+ * RPC reply has none.
+ */
+export class DeploymentAnswer extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message);
+    this.name = 'DeploymentAnswer';
+  }
+}
+
+/**
+ * Whether a failed answer came from around the build rather than from it: a credential the
+ * deployment did not accept, the account's rate limit, Cloudflare's own 52x, or a transient
+ * Durable Object failure the build's code relayed.
+ */
+function platformAnswer(answer: DeploymentAnswer): boolean {
+  const status = answer.status ?? 0;
+
+  return status === 401 || status === 429 || (status >= 520 && status <= 530)
+    || TRANSIENT_PLATFORM_ERRORS.some((message) => answer.message.includes(message));
+}
+
+/**
+ * Run a deployment-dependent step and label its failure as infrastructure, preserving the cause,
+ * unless the deployment itself answered with the failure: that is the build's result.
+ */
 export async function infraBoundary<T>(boundary: string, op: () => Promise<T>): Promise<T> {
   try {
     return await op();
   } catch (err) {
+    if (err instanceof DeploymentAnswer && !platformAnswer(err)) throw err;
+
     throw new Error(
       `${INFRA_FAILURE_MARKER} — ${boundary} did not answer: ${String(err)}. `
       + "The environment failed here, so nothing about the agent's behaviour was measured; "

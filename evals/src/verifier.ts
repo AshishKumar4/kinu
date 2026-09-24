@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 import { JsonValueSchema, projectJsonValue, type JsonValue } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
+import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
 import { redact, redactJson } from './redact';
 import type { EvalCheck } from './task';
 
@@ -11,17 +11,15 @@ const EVIDENCE_LIMIT = 2_000;
 const THREW = 'verifier.threw';
 
 /**
- * The platform's own transient Durable Object failures, verbatim from Cloudflare's error-handling
- * guide (developers.cloudflare.com/durable-objects/best-practices/error-handling): the call never
- * reached the slate's code, so its refusal says nothing about the build. Seen 2026-09-24 as
- * `io: slate exchange.place: Network connection lost.` mid-check on a correct reference build.
+ * Whether a refused call never reached the slate: the host's `io` refusal naming the call and then
+ * nothing but one of the platform's own transient failures, as it answered `io: slate
+ * exchange.place: Network connection lost.` mid-check on a correct reference build on 2026-09-24.
+ * A slate error that merely mentions one, or a refusal the slate chose, is the slate's.
  */
-const TRANSIENT_PLATFORM = [
-  'Network connection lost',
-  'Cannot resolve Durable Object due to transient issue on remote node',
-  'Durable Object reset because its code was updated',
-  "The Durable Object's code has been updated",
-];
+function lostByThePlatform(call: string, answer: { reason: string; error: string }): boolean {
+  return answer.reason === 'io' && TRANSIENT_PLATFORM_ERRORS.some((message) =>
+    answer.error === `slate ${call}: ${message}` || answer.error === `slate ${call}: ${message}.`);
+}
 
 /** The artifact's own surfaces. Checks read what a person could read; never the agent's ledger. */
 export type VerifierSession = {
@@ -183,7 +181,7 @@ export class EvalVerifier {
 
     if (answer.ok) return answer.value;
 
-    if (TRANSIENT_PLATFORM.some((message) => answer.error.includes(message))) {
+    if (lostByThePlatform(`${id}.${method}`, answer)) {
       throw new Error(`${INFRA_FAILURE_MARKER} — the platform lost a call to ${id}.${method}: ${answer.error}`);
     }
 

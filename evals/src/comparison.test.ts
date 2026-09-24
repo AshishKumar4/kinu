@@ -1,7 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import { compareEvalResults, fisherExact, renderEvalComparison, validateEvalResults } from './comparison';
 
-type Trial = { pass: boolean; infra?: boolean; productSha?: string; taskVersion?: string; failed?: string; trial?: number };
+/** `infra`: the deployment ended the turn in error. `refused`: it answered the turn's request with this failure. */
+type Trial = { pass: boolean; infra?: boolean; refused?: string; productSha?: string; taskVersion?: string; failed?: string; trial?: number };
+
+function outcomeOf(trial: Trial) {
+  if (trial.infra === true) return { status: 'error' };
+
+  return trial.refused === undefined ? { status: 'completed' } : { status: 'refused', message: trial.refused };
+}
 
 /** A vitest JSON report of one task's trials, as the reporter writes it, cut to the fields the comparison reads. */
 function report(taskId: string, trials: readonly Trial[], side: { productSha: string; evalCommit: string }): string {
@@ -22,8 +29,10 @@ function report(taskId: string, trials: readonly Trial[], side: { productSha: st
           output: {
             metrics: { modelTurns: 4, toolCalls: 6, toolErrors: 0, providerWaits: 2, providerWaitMs: 30_000 },
             turns: [{
-              outcome: { status: trial.infra === true ? 'error' : 'completed' },
-              checks: [{ id: trial.failed ?? 'builds', pass: trial.pass, evidence: trial.pass ? { calls: 3 } : { answered: 1 } }],
+              outcome: outcomeOf(trial),
+              checks: trial.refused === undefined
+                ? [{ id: trial.failed ?? 'builds', pass: trial.pass, evidence: trial.pass ? { calls: 3 } : { answered: 1 } }]
+                : [],
             }],
           },
           errors: [],
@@ -79,6 +88,15 @@ describe('compareEvalResults', () => {
     expect(comparison.verdict).toBe('inconclusive');
     expect(markdown).toContain('3/10');
     expect(markdown).toContain('`t1 late-returns-suspend-for-a-week` | \u2014 | 7 |');
+  });
+
+  test('a request the build refused fails its turn on the build: counted, compared and named, never infrastructure', () => {
+    const refused = report('t', [...trialsOf(1, 9), { pass: false, refused: 'could not read the chat history: 500 Internal Server Error' }], NEXT);
+    const comparison = compareEvalResults(report('t', trialsOf(9, 10), BASE), refused);
+
+    expect(validateEvalResults(refused, 10)).toHaveLength(1);
+    expect([comparison.verdict, comparison.rows[0]?.reason]).toEqual(['regressed', null]);
+    expect(renderEvalComparison(comparison)).toContain('`t1 deployment.refused` | 0 | 1 |');
   });
 
   test('a report that mixes two builds is refused rather than compared', () => {

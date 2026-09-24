@@ -47,10 +47,15 @@ export function taskVersion(task: EvalTask): string {
 export type EvalRunInput = { model: string; arm: string; trial: number };
 
 /**
- * How a turn ended. `error` is the deployment reporting the turn failed (a provider outage, a
- * crashed run), which says nothing about the agent's work and is counted apart from it.
+ * How the deployment ended a turn. `completed`: it ran, and its checks grade what the agent built.
+ * `error`: the deployment reported the run failed (a provider outage, a crashed run), which says
+ * nothing about the agent's work and is counted as infrastructure. `refused`: the deployment
+ * answered one of the turn's requests with a failure of its own (a 5xx, a refused RPC), which is
+ * the build's result and counts against it like a failed check.
  */
-export type EvalTurnOutcome = { status: 'completed' | 'error'; message?: string };
+export const TURN_OUTCOMES = ['completed', 'error', 'refused'] as const;
+
+export type EvalTurnOutcome = { status: (typeof TURN_OUTCOMES)[number]; message?: string };
 
 export type EvalTurnResult = {
   outcome: EvalTurnOutcome;

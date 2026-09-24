@@ -23,8 +23,8 @@ function session(methods: Record<string, (input: JsonValue) => JsonValue>): Veri
 }
 
 /** A slate RPC whose every call is refused with `error`, as the deployment words it. */
-function refusing(error: string): VerifierSession {
-  return { ...session({}), slateOp: () => Promise.resolve({ ok: false, reason: 'io', error }) };
+function refusing(error: string, reason = 'io'): VerifierSession {
+  return { ...session({}), slateOp: () => Promise.resolve({ ok: false, reason, error }) };
 }
 
 /** A turn of one check that makes one slate call over `connection`. */
@@ -107,6 +107,14 @@ describe('EvalVerifier', () => {
 
     expect(checks.map((check) => [check.id, check.pass])).toEqual([['builds', false]]);
     expect(JSON.stringify(checks[0]?.evidence)).toContain('UNKNOWN_SYMBOL');
+  });
+
+  test('the slate\'s own words that mention a platform failure are still the slate\'s: only the platform\'s io shape is lost', async () => {
+    const mentioned = await oneCall(refusing('slate app.total: SYNC_FAILED: Network connection lost while syncing'));
+    const chosen = await oneCall(refusing('Network connection lost.', 'unavailable'));
+
+    expect([...mentioned, ...chosen].map((check) => [check.id, check.pass])).toEqual([['builds', false], ['builds', false]]);
+    expect(JSON.stringify(mentioned[0]?.evidence)).toContain('SYNC_FAILED');
   });
 });
 

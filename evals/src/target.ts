@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import { USER_AI_PROXY_PATH } from '@kinu.run/core';
-import { EVAL_DEPLOYMENT_ORIGIN, evalTargetVerdict, evalWorkspaceName, infraBoundary } from '@kinu.run/test-utils';
+import { DeploymentAnswer, EVAL_DEPLOYMENT_ORIGIN, evalTargetVerdict, evalWorkspaceName, infraBoundary } from '@kinu.run/test-utils';
 import {
   openPublicSession, resolveWebIdentity, type KinuPublicSession, type PublicWebIdentity,
 } from './session';
@@ -41,7 +41,7 @@ export function deployedBuild(target: EvalTarget): Promise<string> {
   return infraBoundary(`GET ${target.origin}/api/health`, async () => {
     const response = await fetch(`${target.origin}/api/health`);
 
-    if (!response.ok) throw new Error(`/api/health answered ${String(response.status)}`);
+    if (!response.ok) throw new DeploymentAnswer(`/api/health answered ${String(response.status)}`, response.status);
 
     return v.parse(HealthSchema, await response.json()).build.sha;
   });

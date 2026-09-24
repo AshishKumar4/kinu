@@ -28,6 +28,7 @@ import type { Server, ServerWebSocket } from 'bun';
 import * as v from 'valibot';
 
 import { renderSoulMarkdown, type RunEvent, type JsonValue } from '../../packages/core/src/index';
+import { DeploymentAnswer, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import {
   PUBLIC_IDENTITY_ENV, decodeFrame, encodeChatRequest, encodeRpcRequest,
   recordPublicTurn, resolvePublicSessionPlan, resolveWebIdentity,
@@ -575,9 +576,18 @@ describe('the browser plane names its own credential', () => {
   });
 });
 
-test('an explicitly missing file is an oracle miss; authorization and server failures still throw', async () => {
+test('an explicitly missing file is an oracle miss; a failed answer is the build\'s, a relayed platform failure is not', async () => {
   let status = 404;
-  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response('fixture failure', { status }) });
+  let rpcError = 'the workspace has no snapshot';
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
+    fetch: (request, upgrading) => upgrading.upgrade(request) ? undefined : new Response('fixture failure', { status }),
+    websocket: {
+      message(socket, message) {
+        socket.send(rpcReplyFrame({ requestId: v.parse(RpcRequestFrameSchema, JSON.parse(message.toString())).id, error: rpcError }));
+      },
+    },
+  });
 
   const session = new KinuPublicSession({
     origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'file-read oracle probe',
@@ -586,12 +596,18 @@ test('an explicitly missing file is an oracle miss; authorization and server fai
 
   try {
     await expect(session.readFile('missing.txt', { allowMissing: true })).resolves.toBe('');
-    await expect(session.readFile('missing.txt')).rejects.toThrow('404');
+    await expect(session.readFile('missing.txt')).rejects.toBeInstanceOf(DeploymentAnswer);
     status = 403;
-    await expect(session.readFile('missing.txt', { allowMissing: true })).rejects.toThrow('403');
+    await expect(session.readFile('missing.txt', { allowMissing: true })).rejects.toThrow(/over the files route: 403/);
     status = 503;
-    await expect(session.readFile('missing.txt', { allowMissing: true })).rejects.toThrow('503');
+    await expect(session.readFile('missing.txt', { allowMissing: true })).rejects.toBeInstanceOf(DeploymentAnswer);
+
+    await session.connect();
+    await expect(session.snapshot()).rejects.toBeInstanceOf(DeploymentAnswer);
+    rpcError = 'Network connection lost.';
+    await expect(session.snapshot()).rejects.toThrow(INFRA_FAILURE_MARKER);
   } finally {
+    session.disconnect();
     await server.stop(true);
   }
 });

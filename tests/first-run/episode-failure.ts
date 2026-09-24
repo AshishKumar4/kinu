@@ -150,12 +150,13 @@ export type FailedCaseDisposition =
  * consulted the turn's own provider error and found an outage, and any error
  * raised at a declared boundary — `infraBoundary` puts {@link INFRA_FAILURE_MARKER}
  * in the message of every failure it labels, and it is the code that KNOWS: a
- * socket that closed mid-turn, a run-event route that answered 503, a
- * workspace the deployment could not create. `scripts/skip-ratchet.ts` already
- * counts those as infrastructure off the same marker, and until this read it
- * too the record filed the same failure as `errored` — the harness's fault,
- * settled, never retried — so the tier's summary and the record disagreed
- * about whose failure one outage was.
+ * socket that closed mid-turn, a request that never reached the build, a
+ * transient platform failure the build relayed. `scripts/skip-ratchet.ts`
+ * already counts those as infrastructure off the same marker, and until this
+ * read it too the record filed the same failure as `errored` — the harness's
+ * fault, settled, never retried — so the tier's summary and the record
+ * disagreed about whose failure one outage was. A failed answer of the build's
+ * own (a 5xx, a refused RPC) carries no marker: it is the case's result.
  *
  * Everything else — a harness guard, a schema refusal, a programming error, a
  * subgoal assertion — is the run's own and terminal: retrying it would spend

@@ -1,7 +1,7 @@
 import { attachHarnessRunToError, createHarness, normalizeHarnessRun, type TranscriptEvent } from 'vitest-evals';
 import type { RunEvent } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
+import { DeploymentAnswer, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import type { KinuPublicSession, PublicMessage } from './session';
 import { ARMS, deployedBuild, openWorkspace, type EvalArm, type EvalTarget } from './target';
 import type {
@@ -138,6 +138,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       let costUsd: number | undefined;
       let productSha = 'unknown';
       let attempted: string | undefined;
+      let turnStartedAt = Date.now();
 
       try {
         productSha = await deployedBuild(target);
@@ -150,15 +151,22 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         for (const turn of task.turns) {
           if (signal?.aborted === true) throw new Error('the eval run was cancelled', { cause: signal.reason });
           attempted = turn.prompt;
+          turnStartedAt = Date.now();
           const result = await runTurn(session, turn);
           turns.push(result);
 
           if (result.outcome.status !== 'completed' || result.checks.some((check) => !check.pass)) break;
         }
       } catch (error) {
-        // infraBoundary marks a failure of the deployment's transport; anything else is the harness's own.
         const message = renderThrownChain({ cause: error });
-        errors.push({ name: message.includes(INFRA_FAILURE_MARKER) ? 'InfraError' : 'EvalRunError', message });
+
+        if (error instanceof DeploymentAnswer) {
+          // The build answered one of this turn's requests with a failure of its own: the turn failed on the build.
+          turns.push({ outcome: { status: 'refused', message: redact(message) }, checks: [], turnWallMs: Date.now() - turnStartedAt, verificationWallMs: 0 });
+        } else {
+          // infraBoundary marks a failure of the deployment's transport; anything else is the harness's own.
+          errors.push({ name: message.includes(INFRA_FAILURE_MARKER) ? 'InfraError' : 'EvalRunError', message });
+        }
       }
 
       if (session !== undefined) {

@@ -107,7 +107,7 @@ import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
 import { createUserUiMessage, type AgentSendResult, type AgentTurnResult } from '../../packages/cli/src/agent-client';
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
 import {
-  absorbingRunId, compareRunEventOrder, evalNameSlug, evalTargetVerdict, evalWorkspaceName,
+  absorbingRunId, compareRunEventOrder, DeploymentAnswer, evalNameSlug, evalTargetVerdict, evalWorkspaceName,
   INFRA_FAILURE_MARKER, infraBoundary, liveModelTarget, resolveEvalBackend, workerSession,
   EVAL_BACKEND_ENV,
 } from '@kinu.run/test-utils';
@@ -936,8 +936,8 @@ async function readJson(response: Response, doing: string): Promise<JsonValue> {
   const text = await response.text();
 
   if (!response.ok) {
-    throw new Error(`could not ${doing}: ${String(response.status)} ${response.statusText} `
-      + `— ${text.slice(0, 400)}`);
+    throw new DeploymentAnswer(`could not ${doing}: ${String(response.status)} ${response.statusText} `
+      + `— ${text.slice(0, 400)}`, response.status);
   }
 
   const parsed = tolerate(() => parseJsonValue(text), 'malformed-input');
@@ -1393,7 +1393,9 @@ export class KinuPublicSession {
         { headers: { ...webHeaders(this.input.identity), 'Last-Event-ID': String(cursor) } },
       );
 
-      if (!response.ok || response.body === null) throw new Error(`follow run ${runId}: HTTP ${String(response.status)}`);
+      if (!response.ok) throw new DeploymentAnswer(`follow run ${runId}: HTTP ${String(response.status)}`, response.status);
+
+      if (response.body === null) throw new Error(`follow run ${runId}: the stream answered with no body`);
 
       for await (const message of sseMessages(response.body)) {
         if (message.event === 'error') break;
@@ -1570,8 +1572,8 @@ export class KinuPublicSession {
       if (response.status === 404 && options.allowMissing) return '';
 
       if (!response.ok) {
-        throw new Error(`could not read ${path} over the files route: ${String(response.status)} `
-          + `${response.statusText} — ${text.slice(0, 200)}`);
+        throw new DeploymentAnswer(`could not read ${path} over the files route: ${String(response.status)} `
+          + `${response.statusText} — ${text.slice(0, 200)}`, response.status);
       }
 
       return text;
@@ -1589,8 +1591,8 @@ export class KinuPublicSession {
       });
 
       if (!response.ok) {
-        throw new Error(`could not write ${path} over the files route: ${String(response.status)} `
-          + `${response.statusText} — ${(await response.text()).slice(0, 200)}`);
+        throw new DeploymentAnswer(`could not write ${path} over the files route: ${String(response.status)} `
+          + `${response.statusText} — ${(await response.text()).slice(0, 200)}`, response.status);
       }
     });
   }
@@ -1707,7 +1709,7 @@ export class KinuPublicSession {
       this.rpcs.delete(frame.id);
 
       if (frame.error === null) pending.resolve(frame.result);
-      else pending.reject(new Error(frame.error));
+      else pending.reject(new DeploymentAnswer(frame.error));
 
       return;
     }
@@ -1718,7 +1720,7 @@ export class KinuPublicSession {
       if (!pending || frame.status === 'queued') return;
       this.steerLandings.delete(frame.steerId);
 
-      if (frame.status === 'returned') pending.reject(new Error('the turn was stopped before it read the steer'));
+      if (frame.status === 'returned') pending.reject(new DeploymentAnswer('the turn was stopped before it read the steer'));
       else pending.resolve(frame.status === 'landed' ? 'mid-turn' : 'turn');
 
       return;

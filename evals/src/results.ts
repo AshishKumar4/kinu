@@ -2,6 +2,7 @@
 // renderer read it. Every object is loose: the reporter adds fields freely and only these are relied on.
 import * as v from 'valibot';
 import { JsonValueSchema } from '@kinu.run/core';
+import { TURN_OUTCOMES } from './task';
 
 const JsonRecordSchema = v.record(v.string(), JsonValueSchema);
 
@@ -52,7 +53,7 @@ const AssertionSchema = v.looseObject({
         output: v.looseObject({
           metrics: v.object({ modelTurns: Count, toolCalls: Count, toolErrors: Count, providerWaits: Count, providerWaitMs: v.pipe(v.number(), v.minValue(0)) }),
           turns: v.array(v.looseObject({
-            outcome: v.looseObject({ status: v.string(), message: v.optional(v.string()) }),
+            outcome: v.looseObject({ status: v.picklist(TURN_OUTCOMES), message: v.optional(v.string()) }),
             checks: v.optional(v.array(CheckSchema), []),
           })),
         }),
