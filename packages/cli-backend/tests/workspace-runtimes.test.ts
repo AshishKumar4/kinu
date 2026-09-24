@@ -66,6 +66,25 @@ describe('workspace runtime provisioning', () => {
     expect(await workspace.shell.exec('bash -c "cd /home/main && echo in-home"')).toMatchObject({ exitCode: 0, stdout: 'in-home\n', stderr: '' });
   });
 
+  test('bash starts where the shell stands, runs the coreutils, and carries pipes and redirections', async () => {
+    const workspace = open(dbPath());
+    await workspace.vfs.writeFile('marker.txt', 'here\n');
+
+    // The command rides in the compared object, so a failure names the one that failed.
+    const ran = async (command: string, stdout: string) => expect({ command, ...(await workspace.shell.exec(command)) })
+      .toMatchObject({ command, exitCode: 0, stdout, stderr: '' });
+
+    await ran('bash -c pwd', '/home/main\n');
+    await ran('bash -c "cat marker.txt"', 'here\n');
+    await ran('bash -c "ls marker.txt"', 'marker.txt\n');
+    await ran('bash -c "echo z 2>&1"', 'z\n');
+    await ran('bash -c "printf \'b\\na\\n\' | sort"', 'a\nb\n');
+    await ran('bash -c "echo gone > /dev/null && echo kept"', 'kept\n');
+    await ran('bash -c "echo made > out.txt"', '');
+    expect(await workspace.vfs.readFile('out.txt', { encoding: 'utf8' })).toBe('made\n');
+    await ran('mkdir -p d && cd d && bash -c pwd', '/home/main/d\n');
+  });
+
   test('npm and npx answer without any runtime package, because they need no bytes', async () => {
     const workspace = open(dbPath(), []);
 
