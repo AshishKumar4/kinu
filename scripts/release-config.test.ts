@@ -25,13 +25,14 @@
  *   module's `sourceMappingURL` instead. The flag without the Vite side is a
  *   silent no-op, which is why both halves are asserted here.
  *
- * A3 NO CREDENTIAL-BEARING JOB RUNS UNREVIEWED CODE. `eval.yml`'s benchmark job
- *   can be started by labelling a pull request, and a `pull_request` checkout is
- *   that pull request's code. It therefore installed the branch's lockfile and ran
- *   the branch's `scripts/eval.ts` with the eval-service token and two vendor keys
- *   in the environment. A job holding a secret must check out a revision somebody
- *   reviewed, and must be bound to a GitHub environment so the secret is not
- *   readable by every other workflow in the repository.
+ * A3 NO CREDENTIAL-BEARING JOB RUNS UNREVIEWED CODE. The old `eval.yml`'s
+ *   benchmark job could be started by labelling a pull request, and a
+ *   `pull_request` checkout is that pull request's code: it installed the
+ *   branch's lockfile and ran the branch's scripts with the eval-service token and
+ *   two vendor keys in the environment. So no job holding a secret may be started
+ *   by a pull request at all (`evals.yml` measures the deployed build, dispatched
+ *   after a deploy), and each is bound to a GitHub environment so the secret is
+ *   not readable by every other workflow in the repository.
  *
  * A4 NO WORKFLOW FETCHES ITS TOOLCHAIN FROM A MOVING TARGET. Three workflows
  *   piped `master` of the elan installer into a shell, and in the staging deploy
@@ -219,9 +220,6 @@ describe("the deployed Worker's stack traces are readable", () => {
 const StepSchema = v.looseObject({
   uses: v.optional(v.string()),
   run: v.optional(v.string()),
-  // `ref` is named because one assertion reads it; `looseObject` keeps the rest
-  // of `with` for the secret search.
-  with: v.optional(v.looseObject({ ref: v.optional(v.string()) })),
 });
 
 const JobSchema = v.looseObject({
@@ -290,10 +288,11 @@ const SECRET_JOBS = secretBearingJobs();
 describe('the workflows that publish and measure this product', () => {
   test('every workflow is read, and the credential-bearing jobs are named', () => {
     expect(WORKFLOW_FILES.length, 'the workflow corpus collapsed').toBeGreaterThan(3);
-    // Named, not counted. These two hold every credential in the repository, and
-    // the assertions below are only worth anything if they are still the two.
+    // Named, not counted. These hold every credential in the repository, and
+    // the assertions below are only worth anything if they are still these.
     expect(SECRET_JOBS.map((entry) => entry.label).sort()).toEqual([
-      '.github/workflows/eval.yml#benchmark',
+      '.github/workflows/evals.yml#diagnose',
+      '.github/workflows/evals.yml#evals',
     ]);
   });
 
@@ -311,7 +310,8 @@ describe('the workflows that publish and measure this product', () => {
     // in the repository, including one added by a branch. An environment is the
     // only boundary GitHub offers that a file in the repository can ask for.
     const bound = new Map([
-      ['.github/workflows/eval.yml#benchmark', 'eval'],
+      ['.github/workflows/evals.yml#diagnose', 'eval'],
+      ['.github/workflows/evals.yml#evals', 'eval'],
     ]);
 
     for (const { label, job } of SECRET_JOBS) {
@@ -319,30 +319,17 @@ describe('the workflows that publish and measure this product', () => {
     }
   });
 
-  test('a job that holds a secret checks out no pull-request code', () => {
-    let checked = 0;
+  test('no pull request can start a job that holds a secret', () => {
+    // A `pull_request` checkout is that pull request's code, and a label is all
+    // it takes to start one: the job would run a branch nobody reviewed beside
+    // the credential.
+    const PULL_REQUEST = ['pull_request', 'pull_request_target'];
 
-    for (const { label, job, triggers } of SECRET_JOBS) {
-      if (!triggers.includes('pull_request') && !triggers.includes('pull_request_target')) continue;
-
-      for (const step of job.steps ?? []) {
-        if (step.uses === undefined || !step.uses.includes('actions/checkout')) continue;
-        const ref = step.with?.ref;
-        // The default ref for a `pull_request` event is the pull request merged
-        // into the base, so an absent `ref` IS the defect.
-        expect(ref, `${label} checks out the default (pull request) ref`).toBeDefined();
-        expect(ref ?? '', `${label} checks out the pull request's own head`)
-          .not.toContain('head');
-        expect(ref ?? '', `${label} does not pin the reviewed base revision`)
-          .toContain('base.sha');
-        checked += 1;
-      }
+    for (const { label, triggers } of SECRET_JOBS) {
+      expect(triggers.filter((trigger) => PULL_REQUEST.includes(trigger)), `${label} can be started by a pull request`).toEqual([]);
     }
 
-    // Non-vacuity: a secret-bearing job really is reachable from a pull request,
-    // which is the whole reason this assertion exists.
-    expect(checked, 'no secret-bearing job is triggered by a pull request')
-      .toBeGreaterThan(0);
+    expect(SECRET_JOBS.length, 'no job holds a secret, so nothing here was checked').toBeGreaterThan(0);
   });
 
   test('no run body interpolates event data into a command', () => {

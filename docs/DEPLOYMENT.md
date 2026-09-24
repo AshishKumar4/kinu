@@ -431,14 +431,14 @@ Step 2 asserts downloads exist in `dist/client/downloads/`. Step 3 asserts wrang
 
 ### CI credentials
 
-`.github/workflows/eval.yml` holds credentials, so it asks for the GitHub environment `eval` and read-only repository permissions. Two things only an operator can do:
+`.github/workflows/evals.yml` holds a credential, so its two jobs that read it (`evals`, `diagnose`) ask for the GitHub environment `eval`, and no pull request can start the workflow: it is dispatched after a deploy and measures the deployed build. Two things only an operator can do:
 
 | Operator setup required | Where | Why the repository cannot do it |
 |---|---|---|
-| Create an environment named `eval` and move `EVAL_SERVICE_TOKEN`, `EVAL_ANTHROPIC_API_KEY` and `EVAL_OPENAI_API_KEY` into it. | GitHub → Settings → Environments | The workflow declares `environment: eval`, the only boundary a file in the repository can ask for. Which secrets that environment holds is a dashboard setting. The job can be started by labelling a pull request, so it checks out the reviewed base revision rather than the branch. A branch that changes the eval setup or corpus has to land, or be dispatched from a trusted ref, before it is measured. `validate-corpus` runs the branch's own code and holds no credential. |
+| Create an environment named `eval` holding `KINU_EVAL_WEB_IDENTITY`, the deployment's `DEV_IDENTITY_SECRET`, which lets a trial act as `eval-service`. | GitHub → Settings → Environments | The workflow declares `environment: eval`, the only boundary a file in the repository can ask for. Which secrets that environment holds is a dashboard setting. |
 | For a deploy from CI, mint `CLOUDFLARE_API_TOKEN` with Edit Cloudflare Workers, plus Workers R2 Storage: Edit, Workers KV Storage: Edit and Vectorize: Edit, scoped to the deploy account. | Cloudflare → My Profile → API Tokens | Nothing in a repository can reduce what an account-scoped token may do. `scripts/deploy.sh` prints this list when wrangler is not authenticated, and stops before the build. |
 
-`scripts/release-config.test.ts` (required gate) holds these properties. Every workflow declares its token permissions. Every credential-bearing job names an environment. A credential-bearing job reachable from a pull request pins the base revision. No workflow pipes a download into a shell. No action is used from a moving ref.
+`scripts/release-config.test.ts` (required gate) holds these properties. Every workflow declares its token permissions. Every credential-bearing job names an environment. No pull request can start a credential-bearing job. No workflow pipes a download into a shell. No action is used from a moving ref.
 
 ### Eval preflight
 
