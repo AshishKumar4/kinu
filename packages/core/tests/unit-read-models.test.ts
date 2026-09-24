@@ -537,12 +537,11 @@ describe('executor file plane', () => {
   test('the listed directory comes back absolute and resolved, so the caller can walk up', async () => {
     const { rt, db } = createTestRuntime();
     await rt.storage.vfs.writeFile('/home/main/SOUL.md', 'me');
-    await rt.storage.vfs.writeFile('/home/SHARED', 's');
 
-    // `..` from the agent's home is /home, not the filesystem root.
+    // `..` from the agent's home is /home, not the filesystem root: the old root's link sits beside it.
     const up = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/main/..');
     expect(up.path).toBe('/home');
-    expect(up.entries?.map((e) => e.name)).toContain('SHARED');
+    expect(up.entries?.map((e) => e.name)).toContain('user');
     db.close();
   });
 
