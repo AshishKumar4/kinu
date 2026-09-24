@@ -46,6 +46,7 @@ import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
 import type { MessageReference } from '../session/messages';
 import type { ContextSelection } from '../session/context';
 import { subordinateTurnContext } from '../subordinates/support';
+import { taskTurnEnding, type OwedReport, type TaskTurnEnding } from '../subordinates/temporary';
 import { TURN_END_METADATA_KEY } from '../read-models/background-event';
 import { TaskReminders, TASK_REMINDER_EVENT } from '../tasks/reminder';
 import type { TaskListStore } from '../tasks/store';
@@ -209,11 +210,9 @@ export interface OwedTerminalEffectsInput {
   /** Read off the settling turn itself; undefined for a person's message. */
   readonly event: string | undefined;
   readonly assistantText: string;
-  /** Each step's own words, oldest first: a task child that did not answer reports them. */
-  readonly narration: readonly string[];
+  /** Decided before the commit (`ChatSessionPorts.owedReport`); null when the turn owes its caller none. */
+  readonly owedReport: OwedReport | null;
   readonly completed: boolean;
-  /** A task child's caller distinguishes interrupted from errored. */
-  readonly interrupted: boolean;
   readonly startedAt: number;
   readonly trialContext: readonly ModelMessage[];
   /** A cold replay has no live toolset to ask. */
@@ -232,6 +231,8 @@ export interface ChatSessionPorts {
   /** Runs after the opening row and run are durable; a throw ends the turn as an error with one `turn-end`. */
   prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn>;
   owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
+  /** A child's host decides the report this ending owes its caller, reading the turn's narration only when that report carries it. */
+  owedReport?(ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>): Promise<OwedReport | null>;
   /** Asked per call: the bodies close over stores built after this session. */
   terminal(): TerminalTransitions;
   holdTerminalClose(transition: TerminalTransition, close: () => Promise<void>): void;
@@ -959,18 +960,21 @@ export class ChatSession {
       ...(end.reason === 'incomplete' && { metadata: { [TURN_END_METADATA_KEY]: end.reason } }),
     }) : null;
 
+    const owedReport = await this.ports.owedReport?.(
+      taskTurnEnding(runError === null, interrupted), fullText, () => this.transcript.narration(execution.outputPartReferences),
+    ) ?? null;
+
     // One commit — see {@link commitTurn}.
     const commit = this.commitTurn({
       item,
       event: eventName,
       startedAt,
       assistantText: fullText,
-      narration: await this.transcript.narration(execution.outputPartReferences),
+      owedReport,
       // A turn cut before its first token has no answer row.
       assistantRow: streamed || !interrupted,
       preparedAssistant,
       runError,
-      interrupted,
       end,
       trialContext: execution.admittedMessages,
       reachableTools: Object.keys(prepared.execution.chat.tools ?? {}),
@@ -1062,12 +1066,11 @@ export class ChatSession {
     readonly event: string | undefined;
     readonly startedAt: number;
     readonly assistantText: string;
-    readonly narration: readonly string[];
+    readonly owedReport: OwedReport | null;
     /** False only for a turn interrupted before it streamed anything. */
     readonly assistantRow: boolean;
     readonly preparedAssistant: PreparedConversationEntry | null;
     readonly runError: string | null;
-    readonly interrupted: boolean;
     /** Classified once by the caller — see `closeRun`. */
     readonly end: RunEndClassification;
     readonly trialContext: readonly ModelMessage[];
@@ -1125,9 +1128,8 @@ export class ChatSession {
         userText: item.text,
         event: input.event,
         assistantText: input.assistantText,
-        narration: input.narration,
+        owedReport: input.owedReport,
         completed: runError === null,
-        interrupted: input.interrupted,
         taskReminder,
         startedAt: input.startedAt,
         trialContext: input.trialContext,

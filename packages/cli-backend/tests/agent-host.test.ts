@@ -1022,7 +1022,7 @@ describe('LocalAgentHost', () => {
     const outcome = await temporary.run({ role: 'researcher', roleLabel: 'researcher', task: 'Audit the ledger.', mode: 'build' });
 
     expect(outcome).toMatchObject({ status: 'failed', lifetime: 'task' });
-    expect(v.parse(v.object({ answer: v.string() }), outcome).answer).toStartWith(`${narration.join('\n')}\n\n`);
+    expect(v.parse(v.object({ answer: v.string() }), outcome).answer).toStartWith(`${narration.join('\n\n')}\n\n`);
     await host.close();
   });
 

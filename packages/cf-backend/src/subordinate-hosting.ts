@@ -357,11 +357,10 @@ export async function runHostedTask(
       }), { workspace: actor.record.workspaceId });
     }
 
-    const narration = await actor.stores.history.transcript(CHAT_SESSION_ID).narration(report.canonicalCompletion?.outputPartReferences ?? []);
-
-    const owed = reports.settled
-      ? null
-      : terminalTaskReport({ lifetime: hostedLifetime(actor.record), ending, assistantText: report.summary, narration });
+    const owed = reports.settled ? null : await terminalTaskReport({
+      lifetime: hostedLifetime(actor.record), ending, assistantText: report.summary,
+      narration: () => actor.stores.history.transcript(CHAT_SESSION_ID).narration(report.canonicalCompletion?.outputPartReferences ?? []),
+    });
 
     const relayed = owed ?? (
       ending === 'answered' && subordinateRelaysTurnEnd({

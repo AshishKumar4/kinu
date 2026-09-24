@@ -655,7 +655,7 @@ describe('a child that cannot answer still ends the call', () => {
       const scene = makeScene();
       const run = startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
       await run.ready;
-      const report = present(terminalTaskReport({ lifetime: 'task', ending, assistantText: '', narration: [] }), 'the child\'s terminal report');
+      const report = present(await terminalTaskReport({ lifetime: 'task', ending, assistantText: '', narration: async () => [] }), 'the child\'s terminal report');
       await scene.report({ status: report.status, origin: 'turn_end', content: report.content });
 
       const failed = v.parse(FailedOutcome, await run.settled);
@@ -666,26 +666,34 @@ describe('a child that cannot answer still ends the call', () => {
     });
   }
 
-  test('an answered ending carries the child\'s own words as the answer', () => {
-    expect(terminalTaskReport({ lifetime: 'task', ending: 'answered', assistantText: '  done  ', narration: ['Checking first.', 'done'] }))
+  /** An answer, or a child that owes no such report, never reads its steps' words. */
+  const unread = (): Promise<readonly string[]> => { throw new Error('the narration was read'); };
+
+  test('an answered ending carries the child\'s own words as the answer', async () => {
+    expect(await terminalTaskReport({ lifetime: 'task', ending: 'answered', assistantText: '  done  ', narration: unread }))
       .toEqual({ status: 'completed', content: 'done' });
-    expect(terminalTaskReport({ lifetime: 'task', ending: 'answered', assistantText: '   ', narration: [] }))
+    expect(await terminalTaskReport({ lifetime: 'task', ending: 'answered', assistantText: '   ', narration: unread }))
       .toMatchObject({ status: 'blocked' });
   });
 
-  test('a stopped or failed ending reports every step\'s words, one line each, then why it ended', () => {
-    const narration = ['Step 1: the ledger totals match.', '', 'Step 2: two refunds lack a receipt.'];
+  test('a stopped or failed ending reports each step\'s words apart, a repeat once, then why it ended', async () => {
+    const found = 'Step 2: two refunds lack a receipt:\n- r-17\n- r-22';
+    const steps = ['Step 1: the ledger totals match.', '', 'Let me check the refunds.', 'Let me check the refunds.', found];
+    const stopped = present(await terminalTaskReport({ lifetime: 'task', ending: 'interrupted', assistantText: found, narration: async () => steps }), 'the report');
 
-    expect(terminalTaskReport({ lifetime: 'task', ending: 'interrupted', assistantText: 'Step 2: two refunds lack a receipt.', narration }))
-      .toMatchObject({ status: 'blocked', content: expect.stringMatching(/^Step 1: the ledger totals match\.\nStep 2: two refunds lack a receipt\.\n\n\S/u) });
+    expect(stopped.status).toBe('blocked');
+    expect(stopped.content).toStartWith(`Step 1: the ledger totals match.\n\nLet me check the refunds.\n\n${found}\n\n`);
+    // Three steps and the reason: the repeat is said once, and the closing words that are a step are not said again.
+    expect(stopped.content.split('\n\n')).toHaveLength(4);
     // A runner's own summary that is not one of the steps' words follows them.
-    expect(terminalTaskReport({ lifetime: 'task', ending: 'errored', assistantText: 'Head h1 errored: out of budget', narration })?.content)
-      .toStartWith('Step 1: the ledger totals match.\nStep 2: two refunds lack a receipt.\nHead h1 errored: out of budget\n\n');
+    const failed = present(await terminalTaskReport({ lifetime: 'task', ending: 'errored', assistantText: 'Head h1 errored: out of budget', narration: async () => steps }), 'the report');
+
+    expect(failed.content).toContain(`${found}\n\nHead h1 errored: out of budget\n\n`);
   });
 
-  test('a durable child owes nothing extra — the policy returns null for it', () => {
+  test('a durable child owes nothing extra — the policy returns null for it', async () => {
     for (const ending of TASK_TURN_ENDINGS) {
-      expect(terminalTaskReport({ lifetime: 'durable', ending, assistantText: 'x', narration: [] })).toBeNull();
+      expect(await terminalTaskReport({ lifetime: 'durable', ending, assistantText: 'x', narration: unread })).toBeNull();
     }
   });
 });

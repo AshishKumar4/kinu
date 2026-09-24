@@ -995,13 +995,13 @@ export class LocalAgentHost {
    */
   private parentRelayFor(child: HostEntry): LocalParentRelay {
     return {
-      owed: (ending, assistantText, narration) => {
+      owed: async (ending, assistantText, narration) => {
         const state = child.relay;
 
         // Suppressed only by a run-settling report, never a progress note.
         if (state === null || state.settledRun) return null;
         // A task child always reports its ending, even an empty one: its caller asked.
-        const task = terminalTaskReport({ lifetime: child.actor.record.lifetime, ending, assistantText, narration });
+        const task = await terminalTaskReport({ lifetime: child.actor.record.lifetime, ending, assistantText, narration });
 
         if (task) return task;
 
