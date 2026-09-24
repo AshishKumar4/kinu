@@ -178,12 +178,6 @@ to a configuration before anything spends. The MCTS dispatcher is `runMCTS`,
 called directly by lifetime evolution. An engine with no dispatcher reaches
 only callers that import it.
 
-To A/B two policies offline, implement `ExplorationStrategy`
-(`packages/core/src/eval/strategy.ts`): an `id` plus `explore(ctx)` returning
-`{ strategy, best, all, cost }`. Hand both arms to `runEvalPair`, and respect
-`ctx.signal` for cancellation. That contract belongs to the eval harness alone.
-It governs a measurement, not a production path.
-
 ## Replacing the inference loop
 
 There is no `InferenceLoop` registry. The hook is `scaffoldChatTransform`
@@ -455,11 +449,6 @@ codemode sandbox.
   and frequently used ones. Nothing passes it: a per-turn `query` changes the
   toolset and breaks the byte-stable prompt prefix the cache depends on. No
   config switch or test covers it.
-- Eval harness, `packages/core/src/eval/{strategy,types,runner,judge,corpus,report}.ts`:
-  JSONL corpus loader, A/B runner over two `ExplorationStrategy` arms, Valibot
-  verdicts. Seed corpus: `tests/eval/corpus/seed.jsonl`. `scripts/eval.ts`
-  gates a quality floor. It exits 0 when the aggregate clears the floor and 1
-  on regression or misconfiguration.
 - Voyager curriculum proposer, `packages/core/src/curriculum/proposer.ts`: it reads
   CraftStore plus outcomes, asks for N "barely succeeds" tasks at predicted
   success [0.3, 0.7] by default, and persists `proposed_tasks`. RPCs:

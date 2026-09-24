@@ -367,15 +367,13 @@ harbor run \
   --jobs-dir bench-artifacts/harbor-jobs -n 1 -k 1 -r 0 -y
 ```
 
-Four launcher scripts sit around the harness:
+Three launcher scripts sit around the harness:
 
 - `scripts/tbench-arm.sh`: one Terminal-Bench 2.1 arm.
 - `scripts/tbench-after-deploy.sh`: the same arm, held until the deployed
   worker serves a declared sha.
 - `bun scripts/bench-external.ts compare|gain`: pairs retained Harbor trials
   through this repo's one statistics path, with no credential.
-- `bun scripts/eval-dispersion.ts`: a corpus's own noise, from two runs of the
-  same arm.
 
 The environment variables that matter are `BENCH_RUN_ROOT`, `BENCH_ARTIFACTS`,
 `BENCH_PANEL_SIZE` (default 3, range 2 to 6) and `BENCH_PANEL`. The adapter's

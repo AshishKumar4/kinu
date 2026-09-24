@@ -352,8 +352,8 @@ observed in one place.
 Three tool-using nodes still ran at 1,216,358 / 1,310,061 / 1,336,833 ms across
 22 / 25 / 26 steps when a 1,200,000 ms abort fired. Their mean steps were
 55,289 / 52,403 / 51,417 ms. Each is a lower bound because no node finished.
-Measured 2026-08-19 at `8afd45e8d`, on one credentialed depth-2 width-3
-`tests/evals/swarm.eval.ts` run against the shipped default model.
+Measured 2026-08-19 at `8afd45e8d`, on one credentialed depth-2 width-3 run of
+the swarm eval (retired 2026-09-24) against the shipped default model.
 
 A deadline cannot pre-empt a step. One step held 91% CPU for 26 minutes, and
 neither the deadline nor `AbortSignal` reached it. That run has no recorded
