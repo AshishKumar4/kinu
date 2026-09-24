@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import * as v from "valibot";
 import { present } from "@kinu.run/test-utils";
 import { sandboxHandleLifecycle } from "./helpers/sandbox-handle-lifecycle";
 import {
@@ -200,10 +199,9 @@ describe("executor lifecycle state", () => {
     const handle = sandboxHandle();
     const executor = createSandboxExecutor(handle);
 
-    const toolResult = await executor.tools.exposePort.execute(3000);
-    expect(toolResult).toContain("PREVIEW_HOST_SUFFIX");
-    const listResult = await executor.tools.listPorts.execute();
-    expect(listResult).toContain("PREVIEW_HOST_SUFFIX");
+    const refused = { reason: "unsupported", error: expect.stringContaining("PREVIEW_HOST_SUFFIX") };
+    expect(await executor.tools.exposePort.execute(3000)).toMatchObject(refused);
+    expect(await executor.tools.listPorts.execute()).toMatchObject(refused);
 
     if (!executor.exposePort) throw new Error("the sandbox provider has no exposePort seam");
     const provided = await executor.exposePort(3000);
@@ -227,7 +225,8 @@ describe("executor lifecycle state", () => {
     });
     expect(await executor.tools.exec.execute("echo ok"))
       .toMatchObject({ reason: 'unavailable', error: expect.stringContaining('not configured') });
-    expect(await executor.tools.exposePort.execute(3000)).toContain("not configured");
+    expect(await executor.tools.exposePort.execute(3000))
+      .toMatchObject({ reason: 'unavailable', error: expect.stringContaining('not configured') });
 
     if (!executor.exposePort) throw new Error("the sandbox provider has no exposePort seam");
     const provided = await executor.exposePort(3000);
@@ -275,10 +274,8 @@ describe("executor lifecycle state", () => {
 
     const executor = createSandboxExecutor(handle);
 
-    const out = v.parse(v.string(), await executor.tools.exists.execute("/workspace/a.md"));
-
-    expect(out).toContain("transport down");
-    expect(JSON.parse(out)).toMatchObject({ reason: "io" });
+    expect(await executor.tools.exists.execute("/workspace/a.md"))
+      .toMatchObject({ reason: "io", error: expect.stringContaining("transport down") });
   });
 
   test("sandbox port discovery preserves a real SDK failure", async () => {

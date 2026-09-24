@@ -16,9 +16,8 @@ import {
 } from '../src/index';
 import {
   classifyErrorCode, createRecordingLogger, ERROR_CODES, KinuError,
-  type ErrorCode, type RecordingLogger, renderThrownChain,
+  type ErrorCode, type RecordingLogger, refusalOf, renderThrownChain,
 } from '../src/obs/index';
-import { refusalText } from '../src/execution/exec-result';
 import { JsonObjectSchema } from '../src/utils/json';
 import { createTestRuntime, storesFor } from './helpers';
 import type { RunEvent } from '../src/events/types';
@@ -463,7 +462,7 @@ describe('every error class lands in exactly one part of the census', () => {
     for (const code of ERROR_CODES) {
       const census = censusToolFailures([call({
         name: 'shell', toolCallId: `t-${code}`, args: { command: 'pytest -q' },
-        outcome: { success: false, reason: code }, result: refusalText(new KinuError(code, 'refused: ' + code)),
+        outcome: { success: false, reason: code }, result: JSON.stringify(refusalOf(new KinuError(code, 'refused: ' + code))),
       })]);
 
       expect(census.failures).toHaveLength(1);
@@ -476,7 +475,7 @@ describe('every error class lands in exactly one part of the census', () => {
   test('the parts still sum to the failures, over the whole vocabulary at once', () => {
     const census = censusToolFailures(ERROR_CODES.map((code) => call({
       name: 'shell', toolCallId: `t-${code}`, args: { command: 'pytest -q' },
-      outcome: { success: false, reason: code }, result: refusalText(new KinuError(code, 'refused: ' + code)),
+      outcome: { success: false, reason: code }, result: JSON.stringify(refusalOf(new KinuError(code, 'refused: ' + code))),
     })));
 
     expect(census.failures).toHaveLength(ERROR_CODES.length);

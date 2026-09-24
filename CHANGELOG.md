@@ -23,6 +23,21 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   takes the input that tool's own schema declares. The hosted request's seven
   tool definitions shrink from 66.0 KB to 30.1 KB, the local one's from 52.2 KB
   to 22.8 KB.
+- **A refused call gives a program one shape, in every namespace.** `sandbox`,
+  `device`, `parent` and the workspace's process and port members
+  (`killProcess`, `logs`, `exposePort`, `unexposePort`, `listPorts`,
+  `installRuntime`, `listRuntimes`) returned a refusal as JSON text, which a
+  program could not tell from file content or command output and which `eval`
+  never counted as a failure; `agent.*` and `release.*` returned `{ error }`
+  with no reason. Each now resolves to `{ success: false, reason, error }` and
+  is recorded among the call's failures, so a program that parsed the text
+  (`JSON.parse(out).reason`) reads `out.reason` instead. The eval description
+  declares one `Refusal` type ahead of the namespaces and every member's result
+  names it; `sandbox.writeFile`, which existed undeclared, is declared.
+  `require('child_process').exec` reports a failed command's own exit code, and
+  neither it nor `fs` reads output text as a refusal. The eval description grows
+  from 16.6 KB to 16.9 KB on the hosted request and from 12.5 KB to 12.7 KB on
+  the local one.
 - **The default model lives in the profile's default tier, and nowhere else.** `kinu setup` and the first provider connect set it only while it is unset, a later connect leaves it, and Defaults on the home screen change it; `config.json` keeps no top-level `model` or `reasoningEffort`. `/model`, `/effort`, the TUI model picker, `kinu model`, `kinu effort` and the rpc `model` command set the open workspace's own model or effort, and a new workspace pins a model only when `--model` names one.
 
 ### Added

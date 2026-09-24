@@ -961,27 +961,27 @@ type DbWrite =
 /**
  * Tables in this workspace's database: rows you filter, sort, count and update. No operation takes SQL;
  * each statement is built from these arguments against the table's declared columns. \`scope: 'actor'\`
- * rows are yours alone, \`scope: 'workspace'\` rows are shared with every agent here. A refusal is
- * \`{ reason, error }\`. \`where: {}\` matches every row you can reach; an object with \`op\` is a predicate,
- * so compare a JSON document with \`{ op: '=', value: { … } }\`.
+ * rows are yours alone, \`scope: 'workspace'\` rows are shared with every agent here. \`where: {}\` matches
+ * every row you can reach; an object with \`op\` is a predicate, so compare a JSON document with
+ * \`{ op: '=', value: { … } }\`.
  */
 export declare const db: {
   /** Re-declaring the same shape does nothing; a different shape under an existing name is refused.
    *  \`blob\` columns take and return base64, \`json\` columns any JSON document. */
-  createTable(spec: { name: string; scope: 'actor' | 'workspace'; columns: DbColumn[] }): Promise<DbTable>;
-  listTables(): Promise<DbTable[]>;
-  schema(table: string): Promise<DbTable>;
+  createTable(spec: { name: string; scope: 'actor' | 'workspace'; columns: DbColumn[] }): Promise<DbTable | Refusal>;
+  listTables(): Promise<DbTable[] | Refusal>;
+  schema(table: string): Promise<DbTable | Refusal>;
   /** ${SELECT_LIMIT_DEFAULT} rows unless \`limit\` says otherwise, at most ${SELECT_LIMIT_MAX}; page with \`offset\`. */
-  select(table: string, query?: DbQuery): Promise<{ [column: string]: DbValue }[]>;
-  count(table: string, where?: DbWhere): Promise<number>;
+  select(table: string, query?: DbQuery): Promise<{ [column: string]: DbValue }[] | Refusal>;
+  count(table: string, where?: DbWhere): Promise<number | Refusal>;
   /** Up to ${MAX_ROWS_PER_INSERT} rows per call. */
-  insert(table: string, rows: { [column: string]: DbValue }[]): Promise<{ rowsAffected: number }>;
-  update(table: string, set: { [column: string]: DbValue }, where: DbWhere): Promise<{ rowsAffected: number }>;
-  deleteRows(table: string, where: DbWhere): Promise<{ rowsAffected: number }>;
+  insert(table: string, rows: { [column: string]: DbValue }[]): Promise<{ rowsAffected: number } | Refusal>;
+  update(table: string, set: { [column: string]: DbValue }, where: DbWhere): Promise<{ rowsAffected: number } | Refusal>;
+  deleteRows(table: string, where: DbWhere): Promise<{ rowsAffected: number } | Refusal>;
   /** Up to ${MAX_BATCH_OPS} writes in one transaction: all land or none does; \`failedIndex\` names the one that failed. */
-  batch(ops: DbWrite[]): Promise<{ rowsAffected: number }[] | { reason: string; error: string; failedIndex: number }>;
+  batch(ops: DbWrite[]): Promise<{ rowsAffected: number }[] | Refusal>;
   /** Drop a table you declared, with its rows. Build turns only; an actor-scope table is refused while another agent holds rows in it. */
-  dropTable(table: string): Promise<{ ok: true }>;
+  dropTable(table: string): Promise<{ ok: true } | Refusal>;
 };`;
 
 /** `planAllowed` marks members that can run on Plan; the store decides per call by scope. */

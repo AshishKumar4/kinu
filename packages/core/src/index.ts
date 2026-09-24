@@ -1161,7 +1161,7 @@ export {
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits, type PreviewRouteCheck,
-  commandResult, CommandResultSchema, COMMAND_RESULT_TYPE, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
+  commandResult, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
   BoundedOutput, COMMAND_OUTPUT_LIMITS, type OutputSpill, type SpillOutcome,
   unsandboxedCommandEnvironment,
   TurnEscalationLedger, ESCALATION_OUTCOMES,

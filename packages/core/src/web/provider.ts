@@ -378,8 +378,8 @@ const TYPES = `export declare const web: {
     results: Array<{ title: string; url: string; snippet: string; date?: string; position: number }>;
     answer?: string;
     source: string;
-  }>;
-  fetch(url: string): Promise<{ url: string; title?: string; retrievedAt: string; markdown: string }>;
+  } | Refusal>;
+  fetch(url: string): Promise<{ url: string; title?: string; retrievedAt: string; markdown: string } | Refusal>;
 };
 `;
 

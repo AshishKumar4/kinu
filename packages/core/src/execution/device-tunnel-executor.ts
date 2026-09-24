@@ -9,7 +9,7 @@ import type { VFS, VfsEntryStat } from '../types/primitives';
 import type { VfsNativeReads } from '../vfs/mounts';
 import { makeVfsError } from '../vfs/errno';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { commandResult, COMMAND_RESULT_TYPE, refusalText, type CommandResult } from './exec-result';
+import { commandResult, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import {
@@ -48,8 +48,8 @@ const ASKED_OF_THE_MACHINE: readonly ExecutorCapability[] = [
   ...TOOLCHAIN_UNPROBEABLE.map(([capability]) => capability),
 ];
 
-/** No machine attached. The prose names where the user connects from; keep it verbatim in the refusal. */
-const NOT_CONNECTED_REFUSAL = refusalText(new KinuError('unavailable', NOT_CONNECTED));
+/** No machine attached. The prose names where the user connects from; keep it verbatim in the refusal, built per call. */
+const notConnected = (): Refusal => refusalOf(new KinuError('unavailable', NOT_CONNECTED));
 
 /** Fallback code for an unrecognised failure; a classified cause keeps its more precise code. */
 function deviceFailure(input: { doing: string; cause: unknown }): KinuError {
@@ -302,7 +302,7 @@ export function createDeviceTunnelExecutor(
         } catch (err) {
           if (isAbortError(err)) throw err;
 
-          if (isDeviceNotConnectedError({ cause: err })) return refusalOf(new KinuError('unavailable', NOT_CONNECTED));
+          if (isDeviceNotConnectedError({ cause: err })) return notConnected();
 
           // Tier refusal with a named fix, not a transport fault; not prefixed with the command.
           if (isSandboxUnavailableError({ cause: err })) {
@@ -317,54 +317,54 @@ export function createDeviceTunnelExecutor(
     readFile: {
       planAllowed: true,
       description: 'Read a file from the user\'s local filesystem via the desktop daemon.',
-      execute: async (...args: unknown[]): Promise<string> => {
+      execute: async (...args: unknown[]): Promise<string | Refusal> => {
         const path = parseInput(StringSchema, { value: args[0] });
 
         if (path === undefined) {
-          return refusalText(new KinuError('bad_input', 'device readFile: path must be a string'));
+          return refusalOf(new KinuError('bad_input', 'device readFile: path must be a string'));
         }
 
         try {
           const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
 
-          if (target.kind === 'refusal') return refusalText(target.refusal);
+          if (target.kind === 'refusal') return target.refusal;
           const view = target.view;
 
           return v.parse(v.string(), await view.readFile(path, { encoding: 'utf8' }));
         } catch (err) {
-          if (isDeviceNotConnectedError({ cause: err })) return NOT_CONNECTED_REFUSAL;
+          if (isDeviceNotConnectedError({ cause: err })) return notConnected();
 
-          return refusalText(deviceFailure({ doing: `device readFile ${path}`, cause: err }));
+          return refusalOf(deviceFailure({ doing: `device readFile ${path}`, cause: err }));
         }
       },
     },
 
     writeFile: {
       description: 'Write content to a file on the user\'s local filesystem via the device tunnel.',
-      execute: async (...args: unknown[]): Promise<string> => {
+      execute: async (...args: unknown[]): Promise<string | Refusal> => {
         const path = parseInput(StringSchema, { value: args[0] });
         const content = parseInput(StringSchema, { value: args[1] });
 
         if (path === undefined) {
-          return refusalText(new KinuError('bad_input', 'device writeFile: path must be a string'));
+          return refusalOf(new KinuError('bad_input', 'device writeFile: path must be a string'));
         }
 
         if (content === undefined) {
-          return refusalText(new KinuError('bad_input', 'device writeFile: content must be a string'));
+          return refusalOf(new KinuError('bad_input', 'device writeFile: content must be a string'));
         }
 
         try {
           const target = filesForCall(transport, consent, readDeviceSelection({ context: args[2] }));
 
-          if (target.kind === 'refusal') return refusalText(target.refusal);
+          if (target.kind === 'refusal') return target.refusal;
           const view = target.view;
           await view.writeFile(path, content);
 
           return `Written ${content.length} bytes to ${path}`;
         } catch (err) {
-          if (isDeviceNotConnectedError({ cause: err })) return NOT_CONNECTED_REFUSAL;
+          if (isDeviceNotConnectedError({ cause: err })) return notConnected();
 
-          return refusalText(deviceFailure({ doing: `device writeFile ${path}`, cause: err }));
+          return refusalOf(deviceFailure({ doing: `device writeFile ${path}`, cause: err }));
         }
       },
     },
@@ -372,24 +372,24 @@ export function createDeviceTunnelExecutor(
     readdir: {
       planAllowed: true,
       description: 'List directory contents on the user\'s local machine.',
-      execute: async (...args: unknown[]): Promise<string[] | string> => {
+      execute: async (...args: unknown[]): Promise<string[] | Refusal> => {
         const path = parseInput(OptionalStringSchema, { value: args[0] });
 
         if (args[0] !== undefined && path === undefined) {
-          return refusalText(new KinuError('bad_input', 'device readdir: path must be a string'));
+          return refusalOf(new KinuError('bad_input', 'device readdir: path must be a string'));
         }
 
         try {
           const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
 
-          if (target.kind === 'refusal') return refusalText(target.refusal);
+          if (target.kind === 'refusal') return target.refusal;
           const view = target.view;
 
           return await view.readdir(path ?? await view.homeDir());
         } catch (err) {
-          if (isDeviceNotConnectedError({ cause: err })) return NOT_CONNECTED_REFUSAL;
+          if (isDeviceNotConnectedError({ cause: err })) return notConnected();
 
-          return refusalText(deviceFailure({ doing: `device readdir ${path ?? '/'}`, cause: err }));
+          return refusalOf(deviceFailure({ doing: `device readdir ${path ?? '/'}`, cause: err }));
         }
       },
     },
@@ -397,25 +397,25 @@ export function createDeviceTunnelExecutor(
     exists: {
       planAllowed: true,
       description: 'Check if a path exists on the user\'s local machine.',
-      execute: async (...args: unknown[]): Promise<boolean | string> => {
+      execute: async (...args: unknown[]): Promise<boolean | Refusal> => {
         const path = parseInput(StringSchema, { value: args[0] });
 
         // Never `false` here: that would claim the path is absent on the machine.
         if (path === undefined) {
-          return refusalText(new KinuError('bad_input', 'device exists: path must be a string'));
+          return refusalOf(new KinuError('bad_input', 'device exists: path must be a string'));
         }
 
         try {
           const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
 
-          if (target.kind === 'refusal') return refusalText(target.refusal);
+          if (target.kind === 'refusal') return target.refusal;
           const view = target.view;
 
           return await view.exists(path);
         } catch (err) {
-          if (isDeviceNotConnectedError({ cause: err })) return NOT_CONNECTED_REFUSAL;
+          if (isDeviceNotConnectedError({ cause: err })) return notConnected();
 
-          return refusalText(deviceFailure({ doing: `device exists ${path}`, cause: err }));
+          return refusalOf(deviceFailure({ doing: `device exists ${path}`, cause: err }));
         }
       },
     },
@@ -457,18 +457,15 @@ export function createDeviceTunnelExecutor(
     disconnect: async () => { /* the hub owns the socket lifecycle */ },
     tools,
     types: `/**
- * The user's own machine. A refused call resolves to \`{"reason","error"}\`: reason is bad_input,
- * unavailable (no machine attached; the error says how to attach one), unsupported, timeout,
- * cancelled, oom or io. With several machines connected, name one with \`{ device: "<name>" }\`.
+ * The user's own machine; \`unavailable\` means none is attached, and the error says how to attach one.
+ * With several machines connected, name one with \`{ device: "<name>" }\`.
  */
 declare namespace device {
-  function exec(command: string, opts?: { device?: string }): Promise<${COMMAND_RESULT_TYPE}>;
-  function readFile(path: string, opts?: { device?: string }): Promise<string>;
-  function writeFile(path: string, content: string, opts?: { device?: string }): Promise<string>;
-  /** Entries, or a refusal. */
-  function readdir(path: string, opts?: { device?: string }): Promise<string[] | string>;
-  /** A boolean, or a refusal. */
-  function exists(path: string, opts?: { device?: string }): Promise<boolean | string>;
+  function exec(command: string, opts?: { device?: string }): Promise<string | Refusal>;
+  function readFile(path: string, opts?: { device?: string }): Promise<string | Refusal>;
+  function writeFile(path: string, content: string, opts?: { device?: string }): Promise<string | Refusal>;
+  function readdir(path: string, opts?: { device?: string }): Promise<string[] | Refusal>;
+  function exists(path: string, opts?: { device?: string }): Promise<boolean | Refusal>;
 }`,
     positionalArgs: true,
     // The PC is behind the user's NAT; no inbound ports. Use `sandbox` for previewable URLs.
@@ -519,7 +516,7 @@ function resolveForCall(
     `no connected machine is named "${named}" — connected: ${live.map((d) => d.name).join(', ') || 'none'}`));
 }
 
-/** Per-machine file view for one call; a refusal string is returned as-is. */
+/** Per-machine file view for one call, or the refusal naming why there is none. */
 function filesForCall(
   transport: DeviceTransport,
   consent: DeviceFileConsent,

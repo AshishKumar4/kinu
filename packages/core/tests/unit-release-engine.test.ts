@@ -882,8 +882,8 @@ describe('release dispatcher with an engine wired', () => {
 
   test('refuses manual transitions into engine-owned states; ordinary transitions pass through', async () => {
     const { s, execute } = buildTool();
-    const refused = await execute({ action: 'transition', changeId: s.changeId, status: 'validating' });
-    expect(refused).toMatchObject({ error: expect.stringContaining('earned by execution') });
+    await expect(execute({ action: 'transition', changeId: s.changeId, status: 'validating' }))
+      .rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('earned by execution') });
     expect(s.store.getChange(s.changeId)?.status).toBe('draft');
 
     const moved = await execute({ action: 'transition', changeId: s.changeId, status: 'planning' });
@@ -893,13 +893,12 @@ describe('release dispatcher with an engine wired', () => {
   test('refuses record_deployment — deployment identity comes from action=deploy', async () => {
     const { s, execute } = buildTool();
 
-    const result = await execute({
+    await expect(execute({
       action: 'record_deployment',
       changeId: s.changeId,
       deployment: { environment: 'staging', workerVersionId: 'asserted-fake-id' },
-    });
+    })).rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('action=deploy') });
 
-    expect(result).toMatchObject({ error: expect.stringContaining('action=deploy') });
     expect(s.store.detail(s.changeId).deployments).toEqual([]);
   });
 
@@ -928,10 +927,10 @@ describe('release dispatcher with an engine wired', () => {
     expect(s.store.detail(s.changeId).checks.find((c) => c.name === 'tests')?.status).toBe('failed');
   });
 
-  test('without an engine the execution actions return an honest error and asserted paths stay open', async () => {
+  test('without an engine the execution actions refuse as unsupported and asserted paths stay open', async () => {
     const { s, execute } = buildTool({ engine: false });
-    const result = await execute({ action: 'apply', changeId: s.changeId });
-    expect(result).toMatchObject({ error: expect.stringContaining('execution engine') });
+    await expect(execute({ action: 'apply', changeId: s.changeId }))
+      .rejects.toMatchObject({ code: 'unsupported', message: expect.stringContaining('execution engine') });
     const moved = await execute({ action: 'transition', changeId: s.changeId, status: 'planning' });
     expect(moved).toMatchObject({ status: 'planning' });
   });

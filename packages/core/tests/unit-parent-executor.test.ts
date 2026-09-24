@@ -1,7 +1,5 @@
 import { describe, expect, test } from 'bun:test';
 import { createParentExecutor, type ParentWorkspaceHandle } from '../src/execution/parent';
-import * as v from 'valibot';
-import { parseJsonValue } from '../src/utils/json';
 
 function parentHandle(calls: string[]): ParentWorkspaceHandle {
   return {
@@ -42,24 +40,21 @@ describe('parent executor input validation', () => {
   test('readFile with no path refuses instead of reading "undefined"', async () => {
     const calls: string[] = [];
     const parent = createParentExecutor({ handle: parentHandle(calls) });
-    const out = v.parse(v.string(), await parent.tools.readFile.execute(undefined));
-    expect(parseJsonValue(out)).toMatchObject({ reason: 'bad_input' });
+    expect(await parent.tools.readFile.execute(undefined)).toMatchObject({ reason: 'bad_input' });
     expect(calls).toEqual([]);
   });
 
   test('writeFile with no path refuses instead of writing "undefined"', async () => {
     const calls: string[] = [];
     const parent = createParentExecutor({ handle: parentHandle(calls) });
-    const out = v.parse(v.string(), await parent.tools.writeFile.execute(undefined, 'x'));
-    expect(parseJsonValue(out)).toMatchObject({ reason: 'bad_input' });
+    expect(await parent.tools.writeFile.execute(undefined, 'x')).toMatchObject({ reason: 'bad_input' });
     expect(calls).toEqual([]);
   });
 
   test('exists with no path refuses instead of stating "undefined" is absent', async () => {
     const calls: string[] = [];
     const parent = createParentExecutor({ handle: parentHandle(calls) });
-    const out = v.parse(v.string(), await parent.tools.exists.execute(undefined));
-    expect(parseJsonValue(out)).toMatchObject({ reason: 'bad_input' });
+    expect(await parent.tools.exists.execute(undefined)).toMatchObject({ reason: 'bad_input' });
     expect(calls).toEqual([]);
   });
 
@@ -74,7 +69,7 @@ describe('parent executor input validation', () => {
   test('readdir with a non-string path refuses, while no path still lists the root', async () => {
     const calls: string[] = [];
     const parent = createParentExecutor({ handle: parentHandle(calls) });
-    expect(parseJsonValue(v.parse(v.string(), await parent.tools.readdir.execute(123)))).toMatchObject({ reason: 'bad_input' });
+    expect(await parent.tools.readdir.execute(123)).toMatchObject({ reason: 'bad_input' });
     expect(calls).toEqual([]);
     await parent.tools.readdir.execute(undefined);
     expect(calls).toEqual(['list:.']);

@@ -21,15 +21,15 @@ async function decodeMemoryResult(input: { pending: Promise<unknown> }): Promise
   return decodeJsonValue({ value: await input.pending });
 }
 
-const TYPES_BASE = `  save(content: string): Promise<string>;
+const TYPES_BASE = `  save(content: string): Promise<string | Refusal>;
 `;
 
 /** Without a FactsStore the declaration must not promise fact search. */
 const typesSearch = (hasFacts: boolean) => hasFacts
   ? `  /** Notes, and facts by key or value. */
-  search(query: string): Promise<string>;
+  search(query: string): Promise<string | Refusal>;
 `
-  : `  search(query: string): Promise<string>;
+  : `  search(query: string): Promise<string | Refusal>;
 `;
 
 const TYPES_TAIL = `  /** Your past conversations: \`query\` searches, \`around_message_id\` reads around a message, neither browses. */
@@ -37,9 +37,9 @@ const TYPES_TAIL = `  /** Your past conversations: \`query\` searches, \`around_
 
 const TYPES_FACTS = `
   /** Replaces the value of an existing key. */
-  remember(key: string, value: unknown, confidence?: number): Promise<{ ok: boolean; key: string }>;
-  recall(key: string): Promise<{ found: boolean; key: string; value?: unknown; confidence?: number }>;
-  forget(key: string): Promise<{ ok: boolean; key: string; existed: boolean }>;`;
+  remember(key: string, value: unknown, confidence?: number): Promise<{ ok: boolean; key: string } | Refusal>;
+  recall(key: string): Promise<{ found: boolean; key: string; value?: unknown; confidence?: number } | Refusal>;
+  forget(key: string): Promise<{ ok: boolean; key: string; existed: boolean } | Refusal>;`;
 
 /** `deps` is read per call so rebound stores apply; the facts gate is read once (a FactsStore never changes mid-session). */
 export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): CodemodeProvider {

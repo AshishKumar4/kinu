@@ -1,8 +1,7 @@
 // A non-zero exit must not drop stdout (where pytest/make write diagnostics), on every public exec surface.
 import { describe, test, expect } from 'bun:test';
-import * as v from 'valibot';
 import { toolExecute } from '@kinu.run/test-utils';
-import { answeredRefusal, formatExecResult, refusalText, type CommandResult, type ExecOutcome } from '../src/execution/exec-result';
+import { answeredRefusal, formatExecResult, type CommandResult, type ExecOutcome } from '../src/execution/exec-result';
 import { KinuError, refusalOf } from '../src/obs/index';
 import { parseJsonValue } from '../src/utils/json';
 import { createInlineExecutor } from '../src/execution/inline';
@@ -87,7 +86,7 @@ describe('formatExecResult', () => {
   test('a refusal round-trip keeps the exit the error carried', () => {
     const refusal = refusalOf(new KinuError('unavailable', 'no such command', { execution: { exitCode: 127 } }));
 
-    expect(parseJsonValue(refusalText(refusal))).toMatchObject({
+    expect(parseJsonValue(formatExecResult({ refusal }))).toMatchObject({
       reason: 'unavailable', execution: { exitCode: 127 },
     });
     expect(answeredRefusal(refusal)).toEqual(refusal);
@@ -177,8 +176,7 @@ describe('the surfaces the model reads', () => {
       },
     });
 
-    const out = v.parse(v.string(), await nimbus.tools.readFile.execute('/missing.txt'));
-    expect(parseJsonValue(out)).toMatchObject({ reason: 'missing' });
+    expect(await nimbus.tools.readFile.execute('/missing.txt')).toMatchObject({ reason: 'missing' });
   });
 
   test('nimbus readFile on an empty file stays success — empty content is not a refusal', async () => {

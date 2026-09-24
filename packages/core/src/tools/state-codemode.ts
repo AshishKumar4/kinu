@@ -10,10 +10,10 @@ const PrefixSchema = v.optional(v.string());
 
 export const STATE_TYPES = `type StateValue = null | boolean | number | string | StateValue[] | { [key: string]: StateValue };
 export declare const state: {
-  get(key: string): Promise<StateValue>;
-  set(key: string, value: StateValue): Promise<{ ok: true }>;
-  delete(key: string): Promise<{ ok: true }>;
-  list(prefix?: string): Promise<string[]>;
+  get(key: string): Promise<StateValue | Refusal>;
+  set(key: string, value: StateValue): Promise<{ ok: true } | Refusal>;
+  delete(key: string): Promise<{ ok: true } | Refusal>;
+  list(prefix?: string): Promise<string[] | Refusal>;
 };`;
 
 export function createStateCodemodeProvider(state: ProgramStateStore): CodemodeProvider {
