@@ -4,8 +4,9 @@
  * A clock flakes under load; a row count does not. Each subject drives production code through a
  * scripted workload at two or three sizes inside workerd, on a Durable Object's own SQLite, and
  * `complexity-probe.ts` counts what one operation at each size cost: the rows each table's
- * statements read and wrote (the SQL cursors' own `rowsRead` and `rowsWritten`), each table's
- * stored rows and payload bytes, and the model request's bytes where the operation prepares one.
+ * statements read and wrote (the SQL cursors' own `rowsRead` and `rowsWritten`) and read beyond the
+ * rows they returned (a scan's surplus), each table's stored rows and payload bytes, and the model
+ * request's bytes where the operation prepares one.
  * Each subject declares how each count may grow with its size, and a count that grows one class
  * faster than declared fails, naming the table, the counter and both measurements. The O(n²)
  * render copies the session store once made per turn are the defect this exists to keep out.
@@ -17,7 +18,7 @@ import { judge, steepest, type GrowthClass, type GrowthCounter, type GrowthFindi
 
 type Probe = DurableObjectStub<ComplexityProbeDO>;
 
-type Counted = 'rowsRead' | 'rowsWritten' | 'statements';
+type Counted = 'rowsRead' | 'rowsWritten' | 'statements' | 'rowsScanned';
 
 interface Subject {
   readonly name: string;
@@ -40,7 +41,7 @@ const SUBJECTS: readonly Subject[] = [{
   unit: 'turns of history',
   sizes: [50, 300],
   run: async (probe, size) => await probe.sessionTurn(size),
-  rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)' },
+  rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
   tables: { context_memberships: { rowsRead: 'O(n)' } },
   requestBytes: 'O(n)',
   why: 'a turn writes what it adds (its input, one call and result, its answer, its claim and its two '
@@ -52,7 +53,7 @@ const SUBJECTS: readonly Subject[] = [{
   unit: 'files in the workspace',
   sizes: [10, 1_000, 10_000],
   run: async (probe, size) => await probe.diffRead(size),
-  rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)' },
+  rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
   tables: { vfs_baseline_manifest: { rowsRead: 'O(n)' } },
   why: 'a read compares the tree with the baseline manifest, which it reads whole; it reads the bytes of '
     + 'only the files whose size or mtime moved (file_chunks, vfs_baseline_blob) and writes nothing',
@@ -63,7 +64,7 @@ const SUBJECTS: readonly Subject[] = [{
   // fills with the store, above it the scan is the same bounded page at every size.
   sizes: [256, 1_536],
   run: async (probe, size) => await probe.slateVersion(size),
-  rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)' },
+  rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
   why: 'a version walks the slate\'s own files and stores the changed blob and one manifest; the versions '
     + 'before it are content-addressed blobs it never reads',
 }, {
@@ -71,7 +72,7 @@ const SUBJECTS: readonly Subject[] = [{
   unit: 'files in the slate',
   sizes: [10, 100, 1_000],
   run: async (probe, size) => await probe.slateFork(size),
-  rows: { rowsRead: 'O(n)', rowsWritten: 'O(n)', statements: 'O(n)' },
+  rows: { rowsRead: 'O(n)', rowsWritten: 'O(n)', statements: 'O(n)', rowsScanned: 'O(n)' },
   why: 'a fork writes every file of the version into the new slate once',
 }];
 
@@ -81,7 +82,7 @@ function countersOf(subject: Subject, measured: readonly OperationCost[]): Growt
   const counters: GrowthCounter[] = [];
 
   for (const table of [...tables].sort()) {
-    for (const counted of ['rowsRead', 'rowsWritten', 'statements'] as const) {
+    for (const counted of ['rowsRead', 'rowsWritten', 'statements', 'rowsScanned'] as const) {
       counters.push({
         name: `${table}.${counted}`,
         declared: subject.tables?.[table]?.[counted] ?? subject.rows[counted],
@@ -111,7 +112,26 @@ function describeFinding(subject: Subject, finding: GrowthFinding): string {
     + `${String(finding.to.size)} ${subject.unit} (${String(finding.from.value)} -> ${String(finding.to.value)}); declared ${finding.declared}`;
 }
 
-const report: string[] = [];
+/** Each subject's figures, printed after the file with what the gate is blind to. Under a coding agent vitest
+ *  picks its agent reporter, which shows a file's console only when the file fails; `--reporter=default` shows it always. */
+const reports: string[] = [];
+
+afterAll(() => {
+  console.log([
+    ...reports,
+    'complexity: blind to',
+    '  CPU, memory and wall time: a path that re-parses or copies in memory while its SQL stays flat is invisible;',
+    '  storage outside this object\'s SQLite (KV, R2, D1, another object\'s database, the model provider);',
+    '  growth past the largest size measured, and growth hidden inside the exponent slack of a class;',
+    '  which of the tables a statement names its rows came from: it is charged to all of them jointly, and a',
+    '    trigger\'s rows to the statement that fired it;',
+    '  bytes rewritten in place: a row replaced by one of the same size is one row written and no stored growth;',
+    '  the database\'s page count, printed but not judged: it moves 4 KiB at a time;',
+    '  a step that prunes: the session subject\'s messages are too small to prune, so the render rows a pruned copy',
+    '    stores are not driven (the digest-named rows reverted on their own stay green);',
+    '  operations no subject drives: the list above is the whole of what is judged.',
+  ].join('\n'));
+});
 
 for (const subject of SUBJECTS) {
   test(`${subject.name} grows no faster than declared`, async () => {
@@ -125,8 +145,7 @@ for (const subject of SUBJECTS) {
     }
 
     const counters = countersOf(subject, measured);
-
-    report.push(`\n${subject.name}, by ${subject.unit} (${subject.sizes.join(', ')}):`);
+    const report = [`complexity: ${subject.name}, by ${subject.unit} (${subject.sizes.join(', ')}); the exponent is the steepest between consecutive sizes`];
 
     for (const counter of counters) {
       const { exponent } = steepest(subject.sizes, counter.values);
@@ -135,22 +154,9 @@ for (const subject of SUBJECTS) {
     }
 
     report.push(`  ${'database pages, in bytes (not judged)'.padEnd(60)} ${measured.map((cost) => String(cost.dbBytes).padStart(10)).join('')}`);
+    reports.push(report.join('\n'));
 
     expect(judge(subject.sizes, counters).map((finding) => describeFinding(subject, finding)), subject.why).toEqual([]);
   });
 }
 
-afterAll(() => {
-  console.log(`complexity: counted per operation at each size; the exponent is the steepest between consecutive sizes${report.join('\n')}`);
-  console.log([
-    'complexity: blind to',
-    '  CPU, memory and wall time: a path that re-parses or copies in memory while its SQL stays flat is invisible;',
-    '  storage outside this object\'s SQLite (KV, R2, D1, another object\'s database, the model provider);',
-    '  growth past the largest size measured, and growth hidden inside the exponent slack of a class;',
-    '  which of the tables a statement names its rows came from: it is charged to all of them jointly, and a',
-    '    trigger\'s rows to the statement that fired it;',
-    '  bytes rewritten in place: a row replaced by one of the same size is one row written and no stored growth;',
-    '  the database\'s page count, printed but not judged: it moves 4 KiB at a time;',
-    '  operations no subject drives: the list above is the whole of what is judged.',
-  ].join('\n'));
-});

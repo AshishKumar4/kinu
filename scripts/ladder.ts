@@ -1903,18 +1903,23 @@ export const LADDER: readonly Gate[] = [
     label: 'Storage cost grows no faster than declared, under workerd',
     tier: 'push',
     // 29 to 32 s at load 7 on 2026-09-24 (vitest boot, then four subjects: the 300-turn session and
-    // the 10,000-file workspace are most of it); 59 s at load 16 under gate-cost-measure that night.
+    // the 10,000-file workspace are most of it); 59 s at load 16 under gate-cost-measure that night,
+    // and 28 s at load 9 with the session subject on the full step pipeline.
     seconds: 32,
     catches: 'a storage path whose cost per operation grows faster with its size than it '
-      + 'declares: the rows each table\'s statements read and write, each table\'s stored rows '
-      + 'and payload bytes, and the model request\'s bytes, counted in workerd on a Durable '
-      + 'Object\'s own SQLite at two or three sizes, never timed. Four subjects: the session '
-      + 'store per turn at 50 and 300 turns (red on 2026-09-24 against the request copies and '
-      + 'per-entry validation reads that grew with the history), Diffs per read at 10, 1,000 '
-      + 'and 10,000 files, and a slate\'s versions and its fork.',
+      + 'declares: the rows each table\'s statements read, write and scan past what they return, '
+      + 'each table\'s stored rows and payload bytes, and the model request\'s bytes, counted in '
+      + 'workerd on a Durable Object\'s own SQLite at two or three sizes, never timed. Four '
+      + 'subjects: the session store per turn at 50 and 300 turns, through the step pipeline an '
+      + 'Anthropic-bound turn runs (red on 2026-09-24 with the render-copy fix reverted, 631 -> '
+      + '3,631 session rows written a turn, and with the context_message_members index dropped, '
+      + '612 -> 3,612 membership rows scanned), Diffs per read at 10, 1,000 and 10,000 files, and '
+      + 'a slate\'s versions and its fork.',
     blind: 'CPU, memory and wall time; storage outside the object\'s SQLite; growth past the '
-      + 'largest size measured; which of the tables a statement names its rows came from; and '
-      + 'bytes rewritten in place. The suite prints the whole list on every run.',
+      + 'largest size measured; which of the tables a statement names its rows came from; bytes '
+      + 'rewritten in place; and a step that prunes, which the session subject\'s messages are '
+      + 'too small to make. The suite prints the list with its figures after the file, which '
+      + 'vitest\'s agent reporter shows only when the file fails.',
     inputs: AMBIENT_BY_NAME,
   },
   {
