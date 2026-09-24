@@ -50,6 +50,18 @@ export function turnAuthor(row: { id?: string; metadata?: unknown }): TurnAuthor
   return row.id?.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX) ? 'harness' : 'operator';
 }
 
+/**
+ * The one way to read what a row says: an answer's last text, anything else's text whole. Settlement puts an
+ * answer's recorded text last (`prepareAssistant`) and keeps each step's narration where it streamed, so a reader that
+ * joined an answer's texts would read every step's narration run into it. Projections, pages, drains and
+ * announcements read it through `project`; a client holding a message's parts calls it directly.
+ */
+export function rowText(row: { readonly role: string; readonly parts: readonly { readonly type?: unknown; readonly text?: unknown }[] }): string {
+  const texts = row.parts.flatMap((part) => part.type === 'text' ? [v.parse(v.string(), part.text)] : []);
+
+  return row.role === 'assistant' ? texts.at(-1) ?? '' : texts.join('');
+}
+
 /** Displayed role: harness-authored user rows show as `system`; the stored role sent to the model is unchanged. */
 export function transcriptRole(
   row: { id: string; role: 'user' | 'assistant' | 'system'; metadata?: unknown },

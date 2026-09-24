@@ -1,8 +1,8 @@
-/** The durable assistant row holds exactly the answer `runChat` selects (chat.ts `answerFromSteps`), not narration + answer. */
+/** The durable assistant row reads as the answer `runChat` selects (chat.ts `answerFromSteps`), not narration + answer. */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { readTranscriptRows, scratchPath } from '@kinu.run/test-utils';
-import { initWorkspaceSchema, type LLMProviderConfig } from '@kinu.run/core';
+import { CHAT_SESSION_ID, initWorkspaceSchema, readSessionTranscript, type LLMProviderConfig } from '@kinu.run/core';
 import type { LanguageModelV2Usage } from '@ai-sdk/provider';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
@@ -72,6 +72,17 @@ function parkedModel(delta: string): TestLanguageModelV2 {
   });
 }
 
+/** A step that says `narration` and calls a tool, then one that streams `delta` and waits to be stopped. */
+function narratedThenParked(narration: string, delta: string): TestLanguageModelV2 {
+  const narrated = narratedModel(narration, '');
+  const parked = parkedModel(delta);
+  let calls = 0;
+
+  return new TestLanguageModelV2({
+    provider: 'fake', modelId: 'fake-model', doStream: async (options) => (calls++ === 0 ? narrated : parked).doStream(options),
+  });
+}
+
 interface OpenedSession { readonly db: Database; readonly rt: CLIRuntime }
 
 function openSession(name: string): OpenedSession {
@@ -86,6 +97,14 @@ async function rowsOf(session: OpenedSession, role: 'user' | 'assistant'): Promi
   const rows = await readTranscriptRows(makeSql(session.db), session.rt.actor, session.rt.storage.vfs);
 
   return rows.filter((row) => row.role === role).map((row) => row.content);
+}
+
+/** Each assistant row's texts as the chat pane draws them. */
+async function drawnTexts(session: OpenedSession): Promise<string[][]> {
+  const transcript = readSessionTranscript(makeSql(session.db), session.rt.actor, CHAT_SESSION_ID, () => Promise.resolve(session.rt.storage.vfs));
+
+  return (await transcript.history()).filter((message) => message.role === 'assistant')
+    .map((message) => message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []));
 }
 
 function silentModel(): TestLanguageModelV2 {
@@ -141,6 +160,25 @@ describe('an interrupted turn', () => {
     expect(await rowsOf(cut, 'assistant')).toEqual(['part-']);
     cut.db.close();
   });
+
+  test('stopped after a narrated step, the row keeps the narration in place and answers with the last text', async () => {
+    const opened = openSession('stopped-narrated');
+    const streamed = Promise.withResolvers<void>();
+
+    const session = new LocalAgentSession({
+      rt: opened.rt, db: opened.db, model: narratedThenParked('Checking the fact first.', 'The fact is'), noAutoEvolve: true,
+      onEvent: (event) => { if (event.type === 'text-delta' && event.delta === 'The fact is') streamed.resolve(); },
+    });
+
+    const turn = session.send('What is the fact?', { id: crypto.randomUUID() });
+    await streamed.promise;
+    session.interrupt();
+    await turn;
+    await session.end();
+    expect(await drawnTexts(opened)).toEqual([['Checking the fact first.', 'The fact is']]);
+    expect(await rowsOf(opened, 'assistant')).toEqual(['The fact is']);
+    opened.db.close();
+  });
 });
 
 describe('the assistant row holds the answer', () => {
@@ -158,6 +196,7 @@ describe('the assistant row holds the answer', () => {
 
     const streamed = events.filter((event) => event.type === 'text-delta').map((event) => event.type === 'text-delta' ? event.delta : '');
     expect(streamed).toEqual(['Running the test in the sandbox:', 'FAIL']);
+    expect(await drawnTexts(opened)).toEqual([['Running the test in the sandbox:', 'FAIL']]);
     expect(await rowsOf(opened, 'assistant')).toEqual(['FAIL']);
     db.close();
   });

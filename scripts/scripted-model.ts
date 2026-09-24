@@ -57,6 +57,8 @@ export interface ScriptedRequest {
    *  product sends in that role after the words (a `<dynamic_context>` block, the turn-local context), so
    *  the last entry is the latest ask. */
   readonly userTexts: readonly string[];
+  /** What the agent said, oldest first: every assistant-role message's text. */
+  readonly assistantTexts: readonly string[];
   /** The system messages' text: where a workspace's mission reaches its model. */
   readonly system: string;
   /** Tool names already called in this conversation, in order. */
@@ -123,6 +125,7 @@ export function readScriptedRequest(body: string): ScriptedRequest {
 
       return message.role === 'user' && !isRuntimeState(text) ? [text] : [];
     }),
+    assistantTexts: messages.flatMap((message) => message.role === 'assistant' && message.content ? [message.content] : []),
     system: messages.flatMap((message) => message.role === 'system' ? [message.content ?? ''] : []).join('\n'),
     called: messages.flatMap((message) => (message.tool_calls ?? []).flatMap(
       (call) => call.function?.name === undefined ? [] : [call.function.name],
@@ -343,6 +346,11 @@ export const OBSERVED_TURN_ASK = 'Observer probe: take your steps, then wait.';
 
 export const SLEPT_TURN_ASK = 'Sleep probe: take your steps, then wait.';
 
+export const ANSWERED_TURN_ASK = 'Answer probe: take your steps, then wait.';
+
+/** The ask after an answered turn, whose request carries what that turn said. */
+export const TOLD_BACK_ASK = 'Answer probe: what did you just do?';
+
 /** The folders the reconnect turn lists before its held call, one step each; a new workspace has both. (Listing its
  *  `memory` folder fails, which would leave a row that never reads done.) */
 const RECONNECT_FOLDERS = ['', 'scaffold', ''];
@@ -373,6 +381,14 @@ export function reconnectTurn(request: ScriptedRequest, ask: string, held: HeldC
   }
 
   return { text: 'Done.', pace: { firstTokenMs: 0, lead: '', leadMs: 0, hold: held.hold() } };
+}
+
+/** Answers {@link TOLD_BACK_ASK}, handing `heard` the request that carried it. */
+export function toldBackTurn(request: ScriptedRequest, heard: (request: ScriptedRequest) => void): ScriptedAnswer | null {
+  if (request.userTexts.at(-1)?.includes(TOLD_BACK_ASK) !== true) return null;
+  heard(request);
+
+  return { text: 'I listed the folders.' };
 }
 
 /* ── The plan walkthrough ──────────────────────────────────────────────── */
