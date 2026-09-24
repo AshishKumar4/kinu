@@ -27,7 +27,7 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { makeKv } from './helpers/kv';
 import { sandboxPreviewExposures } from '@kinu.run/core';
 import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
-import { unreachableNamespace, unreachableObjects } from './helpers/bindings';
+import { unreachableNamespace, unreachableObjects, workerContext } from './helpers/bindings';
 import type { NimbusPreviewEnv, WorkspacePreviewHost } from '../src/nimbus-route';
 import type { SandboxPreviewEnv } from '../src/preview-proxy';
 import type { SandboxOptions } from '@cloudflare/sandbox';
@@ -75,6 +75,9 @@ afterAll(() => { setSandboxSdk(null); });
 
 const { servePreviewRequest } =
   await import('../src/preview-proxy');
+
+// Dynamic: the entry's graph reaches `cloudflare:email` and `cloudflare:workers` through `agents`.
+const { default: worker } = await import('../src/server');
 
 const root = join(import.meta.dir, '..');
 
@@ -861,6 +864,27 @@ describe('what the app is willing to frame', () => {
   });
 });
 
+/** A shared blueprint's page as the Worker serves it: public, so the app document renders with no session. */
+async function appDocument(zone: Partial<Env>): Promise<Response> {
+  const env: Partial<Env> = {};
+  Object.assign(env, zone, {
+    AUTH_KV: makeKv(),
+    CLI_PUBLIC_ORIGIN: APP,
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    ASSETS: { fetch: async () => new Response('<!doctype html><head></head>', { headers: { 'content-type': 'text/html' } }) },
+  });
+
+  // SAFETY: a public path reaches the app document before any binding outside these is read.
+  return worker.fetch(new Request(`${APP}/shared/blueprint/b-1`), env as Env, workerContext());
+}
+
+function frameSources(document: Response): string[] {
+  const directive = (document.headers.get('content-security-policy') ?? '').split(';').map((part) => part.trim())
+    .find((part) => part.startsWith('frame-src '));
+
+  return directive?.split(/\s+/u).slice(1) ?? [];
+}
+
 function cspOf(previewOrigin: string | null): string {
   const res = withAppSecurityHeaders(
     new Response('<!doctype html>', { headers: { 'content-type': 'text/html; charset=utf-8' } }),
@@ -893,8 +917,12 @@ describe('the app document policy', () => {
     expect(cspOf(null)).toContain("frame-src 'self'");
   });
 
-  test('the app names the preview wildcard, not a single host', () => {
-    expect(source('src/server.ts')).toContain('`https://*.${suffix}`');
+  test('the app document frames any preview host of the zone, on the zone\'s port', async () => {
+    // The dev zone serves previews on a port of its own; a production zone on 443 names none.
+    expect(frameSources(await appDocument({ PREVIEW_HOST_SUFFIX: SUFFIX, PREVIEW_HOST_PORT: '8788' })))
+      .toEqual(["'self'", `https://*.${SUFFIX}:8788`]);
+    expect(frameSources(await appDocument({ PREVIEW_HOST_SUFFIX: SUFFIX }))).toEqual(["'self'", `https://*.${SUFFIX}`]);
+    expect(frameSources(await appDocument({}))).toEqual(["'self'"]);
   });
 
   test('the chat WebSocket survives the connect-src rule', () => {
