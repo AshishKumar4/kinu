@@ -70,9 +70,9 @@ export function toTranscript(events: readonly RunEvent[]): TranscriptEvent[] {
   return transcript;
 }
 
-/** Model steps, tool calls and failed tool calls, counted off the ledger. */
+/** Model steps, tool calls, failed tool calls and waits on the model provider, counted off the ledger. */
 export function measure(events: readonly RunEvent[]): EvalMetrics & { inputTokens: number; outputTokens: number } {
-  let modelTurns = 0, toolCalls = 0, toolErrors = 0, inputTokens = 0, outputTokens = 0;
+  let modelTurns = 0, toolCalls = 0, toolErrors = 0, providerWaits = 0, providerWaitMs = 0, inputTokens = 0, outputTokens = 0;
 
   for (const event of events) {
     if (event.type === 'step_finish') {
@@ -83,8 +83,11 @@ export function measure(events: readonly RunEvent[]): EvalMetrics & { inputToken
       toolCalls += 1;
 
       if (failed(event)) toolErrors += 1;
+    } else if (event.type === 'provider_wait') {
+      providerWaits += 1;
+      providerWaitMs += event.waitMs;
     }
   }
 
-  return { modelTurns, toolCalls, toolErrors, inputTokens, outputTokens };
+  return { modelTurns, toolCalls, toolErrors, providerWaits, providerWaitMs, inputTokens, outputTokens };
 }

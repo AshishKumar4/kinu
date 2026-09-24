@@ -6,6 +6,7 @@ import { HARNESS_ERRORS } from './task';
 export type EvalStats = {
   trials: number;
   passed: number;
+  /** A trial's wall time less its waits on the model provider, which measure the account's rate limit. */
   meanDurationMs: number;
   /** The slowest trial: trials of a task run at once, so this is the task's wall time. */
   slowestTrialMs: number;
@@ -20,6 +21,9 @@ export type EvalStats = {
   toolErrors: { tool: string; message: string; count: number }[];
   /** Trials that failed for infrastructure reasons rather than the agent's work, by message. */
   infrastructureErrors: { message: string; trials: number }[];
+  /** Waits on the model provider across every trial (429 backoff, retry-after, cooldown): infrastructure. */
+  providerWaits: number;
+  providerWaitMs: number;
 };
 
 type Cohort = { taskId: string; model: string; arm: string; taskVersion: string; assertions: Assertion[] };
@@ -157,7 +161,7 @@ function stats({ assertions }: Cohort): EvalStats {
   return {
     trials: assertions.length,
     passed: assertions.filter((assertion) => assertion.status === 'passed').length,
-    meanDurationMs: mean(assertions.map((assertion) => assertion.duration)),
+    meanDurationMs: mean(assertions.map((assertion) => Math.max(0, assertion.duration - assertion.meta.harness.run.output.metrics.providerWaitMs))),
     slowestTrialMs: Math.max(0, ...assertions.map((assertion) => assertion.duration)),
     meanModelTurns: mean(metrics.map((value) => value.modelTurns)),
     meanToolCalls: mean(metrics.map((value) => value.toolCalls)),
@@ -166,6 +170,8 @@ function stats({ assertions }: Cohort): EvalStats {
     failedChecks: failedChecks.map(({ item, count }) => ({ ...item, trials: count })),
     toolErrors: toolErrors.map(({ item, count }) => ({ ...item, count })),
     infrastructureErrors: infrastructureErrors.map(({ item, count }) => ({ message: item, trials: count })),
+    providerWaits: metrics.reduce((sum, value) => sum + value.providerWaits, 0),
+    providerWaitMs: metrics.reduce((sum, value) => sum + value.providerWaitMs, 0),
   };
 }
 
@@ -407,8 +413,8 @@ export function renderEvalComparison(comparison: EvalComparison): string {
     [builds, ...model === null ? [] : [model], ...arm === null ? [] : [`arm ${arm}`],
       ...trialCounts === null ? [] : [`each task run ${String(trialCounts)} times per build`]].join(' \u00b7 ') + '.',
     '',
-    '| Task | Baseline | Candidate | \u0394 pass | \u0394 duration | \u0394 tool errors | \u0394 cost | Wall |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| Task | Baseline | Candidate | \u0394 pass | \u0394 duration | \u0394 tool errors | \u0394 cost | Wall | 429 waits |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
   ].filter((line, index, all) => line !== '' || all[index - 1] !== '');
 
   for (const row of rows) {
@@ -420,10 +426,12 @@ export function renderEvalComparison(comparison: EvalComparison): string {
     ];
 
     const wall = row.candidate === null ? '\u2014' : minutes(row.candidate.slowestTrialMs);
-    lines.push(`| ${[name(row), bar(row.baseline), bar(row.candidate), ...deltas, wall].join(' | ')} |`);
+    const waits = row.candidate === null ? '\u2014' : `${minutes(row.candidate.providerWaitMs)} (\u00d7${String(row.candidate.providerWaits)})`;
+    lines.push(`| ${[name(row), bar(row.baseline), bar(row.candidate), ...deltas, wall, waits].join(' | ')} |`);
   }
 
-  lines.push('');
+  lines.push('', '_Durations leave out time the product spent waiting on the model provider; 429 waits are the '
+    + 'candidate\u2019s total over all runs: the eval account\u2019s rate limit, infrastructure, never a task failure._', '');
 
   for (const row of rows) {
     const { candidate: side, baseline: before } = row;

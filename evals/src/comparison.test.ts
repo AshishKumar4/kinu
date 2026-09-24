@@ -20,7 +20,7 @@ function report(taskId: string, trials: readonly Trial[], side: { productSha: st
           },
           usage: { model: 'workers-ai/@cf/zai-org/glm-5.3', metadata: {} },
           output: {
-            metrics: { modelTurns: 4, toolCalls: 6, toolErrors: 0 },
+            metrics: { modelTurns: 4, toolCalls: 6, toolErrors: 0, providerWaits: 2, providerWaitMs: 30_000 },
             turns: [{
               outcome: { status: trial.infra === true ? 'error' : 'completed' },
               checks: [{ id: trial.failed ?? 'builds', pass: trial.pass, evidence: trial.pass ? { calls: 3 } : { answered: 1 } }],

@@ -12,6 +12,14 @@ export const DEFAULT_ARM = 'product';
 /** Trials per task, model and arm; a pass rate over fewer cannot separate a regression from noise. */
 export const DEFAULT_TRIALS = 10;
 
+/**
+ * Trials a run holds at once. Every trial shares the eval account's Workers AI rate limit with every
+ * other eval-service run, so trials past what it sustains only add 429 waits: on 2026-09-24, twelve
+ * at once all sat in 429 backoff with no model step done after two minutes. `KINU_EVAL_CONCURRENCY`
+ * overrides it; task files run one at a time.
+ */
+export const DEFAULT_CONCURRENCY = 3;
+
 /** The paths whose changes can move an eval result; a change elsewhere is not named in the report. */
 export const EXERCISED_PATHS: readonly string[] = [
   'packages/core/src/', 'packages/cf-backend/src/', 'packages/agent-core/', 'packages/agent-utils/src/',
@@ -29,6 +37,16 @@ export interface EvalMatrix {
   readonly models: readonly string[];
   readonly arms: readonly string[];
   readonly trials: number;
+}
+
+/** How many trials run at once, from `KINU_EVAL_CONCURRENCY`. */
+export function evalConcurrency(env: Env): number {
+  const raw = env.KINU_EVAL_CONCURRENCY?.trim() ?? '';
+  const concurrency = raw === '' ? DEFAULT_CONCURRENCY : Number(raw);
+
+  if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error('KINU_EVAL_CONCURRENCY must be a positive integer');
+
+  return concurrency;
 }
 
 /** The cohorts one run measures, parsed before any trial spends inference. */

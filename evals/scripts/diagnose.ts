@@ -1,15 +1,17 @@
 // "Why the evals failed": a Kinu workspace, acting as eval-service on the deployment, reads the
 // failed trajectories, the comparison and the product diff, and answers in a fixed shape:
-//   bun evals/scripts/diagnose.ts --results <results.json> --comparison <comparison.json> [--diff <file>] --out <why.md>
+//   bun evals/scripts/diagnose.ts --results <results.json> --comparison <comparison.json> --out <why.md>
 // Writes nothing when every run passed. Advisory: a reply out of shape exits non-zero and posts nothing.
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { DEFAULT_MODEL } from '../src/config';
+import * as v from 'valibot';
+import { DEFAULT_MODEL, EXERCISED_PATHS } from '../src/config';
 import { redact } from '../src/redact';
 import { repliesTo, settle } from '../src/harness';
 import { openWorkspace, resolveEvalTarget } from '../src/target';
 import { renderTrajectories } from '../src/trajectories';
+import { diffBetween } from './git';
 
 const HEADING = '## \u{1F52C} Why the evals failed';
 
@@ -50,12 +52,18 @@ Fix names the file and the change; for a model error, write "none in this repo".
 other headings, tables or code blocks.`;
 
 const { values } = parseArgs({
-  options: { results: { type: 'string' }, comparison: { type: 'string' }, diff: { type: 'string' }, out: { type: 'string' } },
+  options: { results: { type: 'string' }, comparison: { type: 'string' }, out: { type: 'string' } },
 });
 
 if (values.results === undefined || values.comparison === undefined || values.out === undefined) {
-  throw new Error('Usage: bun evals/scripts/diagnose.ts --results <results.json> --comparison <comparison.json> [--diff <file>] --out <why.md>');
+  throw new Error('Usage: bun evals/scripts/diagnose.ts --results <results.json> --comparison <comparison.json> --out <why.md>');
 }
+
+const Build = v.object({ productSha: v.string() });
+
+const comparisonText = readFileSync(values.comparison, 'utf8');
+
+const builds = v.parse(v.object({ baseline: v.nullable(Build), candidate: Build }), JSON.parse(comparisonText));
 
 const failed = renderTrajectories(readFileSync(values.results, 'utf8'), 'failed');
 
@@ -73,10 +81,13 @@ const model = named === '' ? DEFAULT_MODEL : named;
 const session = await openWorkspace(target, { subject: 'diagnose', mission: 'Explains why the evals of a Kinu deployment failed.', model });
 
 try {
-  await session.writeFile(`${REVIEW}/comparison.json`, readFileSync(values.comparison, 'utf8'));
+  await session.writeFile(`${REVIEW}/comparison.json`, comparisonText);
   await session.writeFile(`${REVIEW}/trajectories.md`, failed);
 
-  if (values.diff !== undefined) await session.writeFile(`${REVIEW}/product.diff`, readFileSync(values.diff, 'utf8'));
+  if (builds.baseline !== null) {
+    const diff = diffBetween(builds.baseline.productSha, builds.candidate.productSha, { paths: EXERCISED_PATHS, names: false });
+    await session.writeFile(`${REVIEW}/product.diff`, diff);
+  }
 
   for (const file of readdirSync(TASKS).filter((name) => name.endsWith('.eval.ts'))) {
     await session.writeFile(`${REVIEW}/tasks/${file}`, readFileSync(join(TASKS, file), 'utf8'));

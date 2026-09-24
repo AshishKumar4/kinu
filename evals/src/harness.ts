@@ -185,7 +185,13 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       const scrubbed = errors.map((error) => ({ name: error.name, message: redact(error.message) }));
 
       const result = {
-        output: { success, turns, metrics: { modelTurns: metrics.modelTurns, toolCalls: metrics.toolCalls, toolErrors: metrics.toolErrors } },
+        output: {
+          success, turns,
+          metrics: {
+            modelTurns: metrics.modelTurns, toolCalls: metrics.toolCalls, toolErrors: metrics.toolErrors,
+            providerWaits: metrics.providerWaits, providerWaitMs: metrics.providerWaitMs,
+          },
+        },
         events: transcript,
         usage: {
           provider: input.model.split('/')[0] ?? 'unknown', model: input.model, toolCalls: metrics.toolCalls,

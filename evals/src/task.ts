@@ -59,7 +59,12 @@ export type EvalTurnResult = {
   verificationWallMs: number;
 };
 
-export type EvalMetrics = { modelTurns: number; toolCalls: number; toolErrors: number };
+/**
+ * What a trial cost the agent, off the run ledger. `providerWaits` and `providerWaitMs` are the
+ * product waiting out the model provider (429 backoff, a retry-after, a shared cooldown): the eval
+ * account's rate limit, not the agent's work, reported as infrastructure.
+ */
+export type EvalMetrics = { modelTurns: number; toolCalls: number; toolErrors: number; providerWaits: number; providerWaitMs: number };
 
 export type EvalRunOutput = { success: boolean; turns: EvalTurnResult[]; metrics: EvalMetrics };
 

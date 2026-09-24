@@ -48,7 +48,7 @@ const AssertionSchema = v.looseObject({
           metadata: v.optional(v.looseObject({ costUsd: v.optional(v.pipe(v.number(), v.minValue(0))) }), {}),
         }),
         output: v.looseObject({
-          metrics: v.object({ modelTurns: Count, toolCalls: Count, toolErrors: Count }),
+          metrics: v.object({ modelTurns: Count, toolCalls: Count, toolErrors: Count, providerWaits: Count, providerWaitMs: v.pipe(v.number(), v.minValue(0)) }),
           turns: v.array(v.looseObject({
             outcome: v.looseObject({ status: v.string(), message: v.optional(v.string()) }),
             checks: v.optional(v.array(CheckSchema), []),
