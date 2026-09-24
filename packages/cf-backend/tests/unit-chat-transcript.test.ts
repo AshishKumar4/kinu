@@ -55,7 +55,7 @@ describe('the CF public transcript over canonical references', () => {
     expect(await t.store.lastUserMetadata()).toMatchObject({ [STEER_STEP_METADATA_KEY]: 2 });
   });
 
-  test('the selected final text preserves tool results and UI-only step markers without narration', async () => {
+  test('a settled answer draws its narration, tool results and step markers as they streamed', async () => {
     const t = transcript();
     await t.user('opening', 'build the slate');
 
@@ -76,6 +76,7 @@ describe('the CF public transcript over canonical references', () => {
     const answer = (await t.store.history()).at(-1);
 
     expect(answer?.parts).toEqual([
+      { type: 'text', text: 'I will inspect the files.', state: 'done' },
       { type: 'step-start' },
       { type: 'tool-file', toolCallId: 'call', state: 'output-available', input: {}, output: 'inspected' },
       { type: 'step-start' },

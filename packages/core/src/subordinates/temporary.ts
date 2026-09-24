@@ -60,16 +60,31 @@ const TASK_ENDING_REPORT = {
     + 'produced; its transcript holds what it had done.',
 } as const satisfies Record<TaskTurnEnding, string | null>;
 
+/** The report a child's settled turn owes its caller. */
+export interface OwedReport {
+  readonly status: SubordinateReportStatus;
+  readonly content: string;
+}
+
+/** How a turn ended, as a task child's caller hears it. */
+export function taskTurnEnding(completed: boolean, interrupted: boolean): TaskTurnEnding {
+  if (completed) return 'answered';
+
+  return interrupted ? 'interrupted' : 'errored';
+}
+
 /**
  * The one report a task child owes its caller, for every way a turn can end: always exactly
  * once, `completed` for an answer, `blocked` for any non-answer. Null for a durable child.
  */
-export function terminalTaskReport(input: {
+export async function terminalTaskReport(input: {
   readonly lifetime: SubordinateLifetime;
   readonly ending: TaskTurnEnding;
   /** The child's own closing words, when it had any. */
   readonly assistantText: string;
-}): { readonly status: SubordinateReportStatus; readonly content: string } | null {
+  /** Each step's own words, oldest first (`SessionTranscriptReader.narration`); read only for a task that did not answer. */
+  readonly narration: () => Promise<readonly string[]>;
+}): Promise<OwedReport | null> {
   if (input.lifetime !== TEMPORARY_LIFETIME) return null;
   const text = input.assistantText.trim();
 
@@ -80,11 +95,18 @@ export function terminalTaskReport(input: {
       : { status: 'blocked', content: TASK_ENDING_REPORT.silent };
   }
 
-  const reason = TASK_ENDING_REPORT[input.ending];
+  // A turn that stops or fails often found something on the way: each step's words, apart, and a repeat only once.
+  const said: string[] = [];
 
-  // The child's own words still ride along when it managed any: a failing turn
-  // often says something useful before it fails.
-  return { status: 'blocked', content: text.length > 0 ? `${text}\n\n${reason}` : reason };
+  for (const step of await input.narration()) {
+    const words = step.trim();
+
+    if (words.length > 0 && words !== said.at(-1)) said.push(words);
+  }
+
+  if (text.length > 0 && !said.includes(text)) said.push(text);
+
+  return { status: 'blocked', content: [...said, TASK_ENDING_REPORT[input.ending]].join('\n\n') };
 }
 
 /**

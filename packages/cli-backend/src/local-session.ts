@@ -68,7 +68,7 @@ import { TierIdSchema,
   takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect, overflowRetryTerminalEffect, taskReminderTerminalEffect,
   SUBORDINATE_REPORT_STATUSES,
-  type SubordinateReportStatus, type TaskTurnEnding,
+  type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
   terminalEffect,
   RunEndReasonSchema, WorkModeSchema,
   shadowTrialPlan, trimTrialContext,
@@ -300,8 +300,8 @@ export interface LocalParentRelay {
    * child only for a completed, parent-driven turn with something to say and no `report` call.
    */
   readonly owed: (
-    ending: TaskTurnEnding, assistantText: string,
-  ) => { readonly status: SubordinateReportStatus; readonly content: string } | null;
+    ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>,
+  ) => Promise<OwedReport | null>;
   /** Dedupe key on the parent's rail, so a replay cannot wake it twice. */
   readonly sequenceId: (messageId: string) => string;
   readonly send: (report: {
@@ -317,15 +317,6 @@ export type { SessionEvent } from '@kinu.run/core';
 /** Resolving null leaves the standing approval mode's answer in force. */
 export type ShellApprovalHandler =
   (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
-
-/** A turn that neither completed nor was interrupted failed; the parent is owed that. */
-function taskTurnEnding(completed: boolean, interrupted: boolean): TaskTurnEnding {
-  if (completed) return 'answered';
-
-  if (interrupted) return 'interrupted';
-
-  return 'errored';
-}
 
 export interface LocalAgentSessionOpts {
   rt: CLIRuntime;
@@ -615,6 +606,8 @@ export class LocalAgentSession implements BackendHost {
           ? null
           : 'Plan review belongs to the owner of this workspace; a delegated task reports its result instead.',
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
+        // Only the host knows the child's lifetime and whether the parent drove the turn.
+        owedReport: async (ending, assistantText, narration) => await this.parentRelay?.owed(ending, assistantText, narration) ?? null,
         taskList: () => this.taskList,
         // A running job's settle wakes the session; a reminder would race it.
         hasPendingAsyncWake: () => this.jobs.listRunning(1).total > 0,
@@ -1801,11 +1794,7 @@ export class LocalAgentSession implements BackendHost {
     // Recorded, not re-read on replay: the tool surface, dedupe window and severity floor can change.
     const advisor = this.actorSession.advisorSnapshot(scoped, input.reachableTools);
 
-    // Only the host knows the child's lifetime and whether the parent drove the turn.
-    const ending = taskTurnEnding(input.completed, input.interrupted);
-
     const relay = this.parentRelay;
-    const parentReport = relay?.owed(ending, input.assistantText) ?? null;
 
     const facts: TerminalTurnFacts = {
       messageId: input.messageId,
@@ -1861,10 +1850,10 @@ export class LocalAgentSession implements BackendHost {
     parts.autoTitle = { mission };
 
     // One claimed effect; the sequence id is the parent's dedupe key, so a replay is recognised.
-    if (parentReport !== null && relay !== null) {
+    if (input.owedReport !== null && relay !== null) {
       parts.parentReport = {
-        text: parentReport.content,
-        status: parentReport.status,
+        text: input.owedReport.content,
+        status: input.owedReport.status,
         sequenceId: relay.sequenceId(input.messageId),
       };
     }

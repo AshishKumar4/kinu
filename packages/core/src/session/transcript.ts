@@ -8,7 +8,7 @@ import { KinuError } from '../obs/error';
 import { diagnostics } from '../obs/log';
 import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference, type StoredPart } from './messages';
 import { type SessionPayloads, SessionPayloadReader, type SessionPayload } from './payload';
-import { turnAuthor } from '../utils/ui-message';
+import { rowText, turnAuthor } from '../utils/ui-message';
 import { seekPage, StaleCursorError, type Page, type PageRequest } from './page';
 import type { ContextSelection } from './context';
 
@@ -49,6 +49,28 @@ interface StoredUiMessage {
   readonly role: string;
   readonly parts: JsonObject[];
   metadata?: JsonValue;
+}
+
+/** The trailing text parts `answer` is made of, last first: a final step's text and a cut step it continued. */
+function answeredTexts(parts: readonly JsonObject[], answer: string): number[] {
+  const covered: number[] = [];
+  const whole = answer.trim();
+  let tail = '';
+
+  for (let index = parts.length - 1; index >= 0; index--) {
+    const part = parts[index];
+
+    if (part?.type === 'tool-call' || part?.type === 'tool-result') break;
+
+    if (part?.type !== 'text') continue;
+    const joined = `${v.parse(v.string(), part.text)}${tail}`;
+
+    if (!whole.endsWith(joined.trim())) break;
+    covered.push(index);
+    tail = joined;
+  }
+
+  return covered;
 }
 
 export function readSessionTranscript(sql: SqlExecutor, authority: ActorReadAuthority, sessionId: string, files: (() => Promise<Pick<VFS, 'readFile'>>) | null): SessionTranscriptReader {
@@ -94,15 +116,8 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     }
 
     const parts = await this.parts(entry.parts);
-    const text: string[] = [];
-    const toolCalls: string[] = [];
-
-    for (const part of parts) {
-      if (part.type === 'text') text.push(v.parse(v.string(), part.text));
-      else if (part.type === 'tool-call') toolCalls.push(v.parse(v.string(), part.toolName));
-    }
-
-    const projection: ConversationProjection = { id: entry.id, parentId: entry.parentId, role: entry.role, content: text.join(''), recordedAt: entry.recordedAt, toolCalls };
+    const toolCalls = parts.flatMap((part) => part.type === 'tool-call' ? [v.parse(v.string(), part.toolName)] : []);
+    const projection: ConversationProjection = { id: entry.id, parentId: entry.parentId, role: entry.role, content: rowText({ role: entry.role, parts }), recordedAt: entry.recordedAt, toolCalls };
 
     if (entry.metadata !== null) projection.metadata = v.parse(JsonObjectSchema, await this.payloads.read(entry.metadata));
     this.actor.assertCurrent();
@@ -245,6 +260,11 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     }
 
     return chain.reverse();
+  }
+
+  /** What a turn said on its way, oldest first: each text part among `references`. */
+  async narration(references: readonly ConversationPartReference[]): Promise<string[]> {
+    return (await this.parts(references)).flatMap((part) => (part.type === 'text' ? [v.parse(v.string(), part.text)] : []));
   }
 
   async parts(references: readonly ConversationPartReference[]): Promise<JsonObject[]> {
@@ -470,18 +490,23 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
       parts: parts.map(part => ({ messageId: input.message.messageId, partNo: part.partNo })) };
   }
 
+  /**
+   * The row keeps every part the turn streamed, in order, so a settled answer reads as it streamed. A recorded
+   * answer takes the place of the trailing texts it is made of, or follows the row when it is made of none (the
+   * answer written for a turn that streamed no text, a head's report); one the turn streamed stays where it is.
+   */
   async prepareAssistant(input: { readonly id: string; readonly parentId: string; readonly turnId: string; readonly runId: string; readonly parts: readonly MessagePartReference[]; readonly finalText: MessagePartReference | null; readonly metadata?: JsonObject }): Promise<PreparedConversationEntry> {
-    const values = await this.parts(input.parts);
-    let lastText = -1;
+    const parts = [...input.parts];
+    const finalText = input.finalText;
 
-    for (const [index, value] of values.entries()) if (value.type === 'text') lastText = index;
-    const parts = input.parts.filter((_, index) => values[index]?.type !== 'text' || index === lastText);
+    if (finalText !== null && !parts.some((part) => part.messageId === finalText.messageId && part.partNo === finalText.partNo)) {
+      const covered = answeredTexts(await this.parts(input.parts), rowText({ role: 'assistant', parts: await this.parts([finalText]) }));
+      const [last, ...continued] = covered;
 
-    if (input.finalText !== null) {
-      const position = lastText < 0 ? -1 : parts.findIndex(part => part === input.parts[lastText]);
+      if (last === undefined) parts.push(finalText);
+      else parts[last] = finalText;
 
-      if (position < 0) parts.push(input.finalText);
-      else parts[position] = input.finalText;
+      for (const index of continued) parts.splice(index, 1);
     }
 
     return { id: input.id, parentId: input.parentId, role: 'assistant', turnId: input.turnId, runId: input.runId,

@@ -37,7 +37,8 @@ import {
 import { rowVerdicts } from './row-verdicts';
 import {
   FALLBACK_ANSWER, KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_SILENCE_MS, PACED_TURN_ANSWER,
-  OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SCRIPTED_MODEL_SPEC, SLATE_TITLE, SLEPT_TURN_ASK,
+  ANSWERED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SCRIPTED_MODEL_SPEC, SLATE_TITLE,
+  SLEPT_TURN_ASK, TOLD_BACK_ASK, WATCHED_SLEPT_TURN_ASK, toldBackTurn, type ScriptedRequest,
   heldCall, keptTabProbe, pacedFirstTurn, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
   startScriptedModel, type HeldCall,
 } from './scripted-model';
@@ -237,6 +238,15 @@ interface SleptVerdict {
   readonly stopAfter: boolean;
 }
 
+/** One answered turn's blocks while it ran, once it ended and after a reload; `told` is what the model's next
+ *  request says the agent said. */
+interface AnsweredVerdict {
+  readonly live: readonly string[];
+  readonly ended: readonly string[];
+  readonly reloaded: readonly string[];
+  readonly told: readonly string[];
+}
+
 interface PanelVerdict {
   readonly nodeSurvives: boolean;
   readonly scrollSurvives: boolean;
@@ -313,6 +323,8 @@ interface TierVerdicts {
   reconnect: ReconnectVerdict | null;
   observedReconnect: ReconnectVerdict | null;
   slept: SleptVerdict | null;
+  watchedSlept: SleptVerdict | null;
+  answered: AnsweredVerdict | null;
   panel: PanelVerdict | null;
   planTabs: PlanTabsVerdict | null;
   geometry: GeometryVerdict | null;
@@ -330,7 +342,7 @@ const StripGeometrySchema = v.object({
 });
 
 const observed: TierVerdicts = {
-  liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, slept: null,
+  liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, slept: null, watchedSlept: null, answered: null,
   bootFailure: null, panel: null, planTabs: null, geometry: null,
   controls: null, stamped: null, walkthrough: null, keptTab: null, state: null,
 };
@@ -1351,13 +1363,6 @@ async function measureSlept(newPage: LiveApp['newPage'], origin: string, held: H
     await sleeper.evaluate('window.__asleep = false');
     await until(sleeper, 'the transcript after the page woke', `window.__transcripts > ${String(transcripts)}`);
     await until(sleeper, "the page's next presence read after it woke", `window.__presenceAsks > ${String(asked)}`);
-
-    // Bounded: a page that keeps the part it held never shows the rest, and what it shows is the finding.
-    await sleeper.evaluate(`new Promise((resolve) => {
-      const end = Date.now() + 10000;
-      const check = () => { if ((${TURN_ANSWERED}) || Date.now() > end) resolve(null); else setTimeout(check, 100); };
-      check();
-    })`);
     await painted(sleeper);
     await shoot(sleeper, 'reconnect-slept');
 
@@ -1366,6 +1371,83 @@ async function measureSlept(newPage: LiveApp['newPage'], origin: string, held: H
     held.release();
     await awake.close();
     await sleeper.close();
+  }
+}
+
+/** Row 14 (#30): a page that only watched a turn, asleep from part-way through its final text until the turn ended,
+ *  wakes to the finished answer: the copy it was building had as many parts as the answer, and must not win. */
+async function measureWatchedSlept(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<SleptVerdict> {
+  const workspace = await createWorkspace(
+    origin, { name: `live-row-watched-slept-${RUN_ID}`, purpose: 'watched slept probe', model: SCRIPTED_MODEL_SPEC });
+
+  const watcher = await openRecorded(newPage, origin, workspace);
+  const sender = await openRecorded(newPage, origin, workspace);
+
+  try {
+    await sendInChat(sender, WATCHED_SLEPT_TURN_ASK);
+    // A hidden tab never paints, so the page being read is the one in front.
+    await watcher.bringToFront();
+    await until(watcher, "the final text's first word on the watching page", `(${ANSWER_BLOCKS}).at(-1) === 'P:Do'`);
+    const transcripts = v.parse(v.number(), await watcher.evaluate('window.__transcripts'));
+
+    await watcher.evaluate('window.__asleep = true');
+
+    if (v.parse(v.number(), await watcher.evaluate(DROP_SOCKETS)) === 0) throw new Error('the page held no open socket to drop');
+
+    held.release();
+    await sender.bringToFront();
+    await until(sender, 'the turn to end on the sending page', TURN_ANSWERED);
+    await painted(sender);
+    const truth = await answerOf(sender);
+    const asked = v.parse(v.number(), await watcher.evaluate('window.__presenceAsks'));
+
+    await watcher.bringToFront();
+    await watcher.evaluate('window.__asleep = false');
+    await until(watcher, 'the transcript after the page woke', `window.__transcripts > ${String(transcripts)}`);
+    await until(watcher, "the page's next presence read after it woke", `window.__presenceAsks > ${String(asked)}`);
+    await painted(watcher);
+    await shoot(watcher, 'reconnect-watched-slept');
+
+    return { truth, after: await answerOf(watcher), stopAfter: v.parse(v.boolean(), await watcher.evaluate(STOP_OFFERED)) };
+  } finally {
+    held.release();
+    await sender.close();
+    await watcher.close();
+  }
+}
+
+/** Row 13 (#30): an answer keeps each step's text where it streamed: while it runs, once it ends, after a reload, and
+ *  in the model's next request. */
+async function measureAnswered(
+  newPage: LiveApp['newPage'], origin: string, held: HeldCall, told: Promise<ScriptedRequest>,
+): Promise<AnsweredVerdict> {
+  const workspace = await createWorkspace(
+    origin, { name: `live-row-answered-${RUN_ID}`, purpose: 'answered probe', model: SCRIPTED_MODEL_SPEC });
+
+  const page = await openRecorded(newPage, origin, workspace);
+
+  try {
+    await sendInChat(page, ANSWERED_TURN_ASK);
+    const live = await answerMidTurn(page);
+
+    held.release();
+    await until(page, 'the turn to end', TURN_ANSWERED);
+    await painted(page);
+    const ended = await answerOf(page);
+
+    await page.reload({ waitUntil: 'load' });
+    await until(page, 'the answer after the reload', TURN_ANSWERED);
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await painted(page);
+    const reloaded = await answerOf(page);
+
+    await shoot(page, 'answered-reloaded');
+    await sendInChat(page, TOLD_BACK_ASK);
+
+    return { live, ended, reloaded, told: (await told).assistantTexts };
+  } finally {
+    held.release();
+    await page.close();
   }
 }
 
@@ -1455,10 +1537,15 @@ async function run(): Promise<void> {
   const reconnectHeld = heldCall();
   const observedHeld = heldCall();
   const sleptHeld = heldCall();
+  const answeredHeld = heldCall();
+  const watchedSleptHeld = heldCall();
+  const toldBack = Promise.withResolvers<ScriptedRequest>();
 
-  const model = await startScriptedModel((request) => pacedTurn(request) ?? pacedFirstTurn(request, firstTurn)
+  const model = await startScriptedModel((request) => toldBackTurn(request, toldBack.resolve) ?? pacedTurn(request)
+    ?? pacedFirstTurn(request, firstTurn) ?? reconnectTurn(request, ANSWERED_TURN_ASK, answeredHeld)
     ?? reconnectTurn(request, RECONNECT_TURN_ASK, reconnectHeld) ?? reconnectTurn(request, OBSERVED_TURN_ASK, observedHeld)
-    ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? keptTabProbe(request) ?? planWalkthrough(request));
+    ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
+    ?? keptTabProbe(request) ?? planWalkthrough(request));
 
   await withLiveApp(async (app) => {
     const { newPage, origin } = app;
@@ -1469,6 +1556,8 @@ async function run(): Promise<void> {
     observed.reconnect = await attempt('reconnect', () => measureReconnect(newPage, origin, reconnectHeld));
     observed.observedReconnect = await attempt('observed-reconnect', () => measureObservedReconnect(newPage, origin, observedHeld));
     observed.slept = await attempt('slept', () => measureSlept(newPage, origin, sleptHeld));
+    observed.watchedSlept = await attempt('watched-slept', () => measureWatchedSlept(newPage, origin, watchedSleptHeld));
+    observed.answered = await attempt('answered', () => measureAnswered(newPage, origin, answeredHeld, toldBack.promise));
     observed.panel = await attempt('panel', () => measurePanel(newPage, origin));
     observed.planTabs = await attempt('plan-tabs', () => measurePlanTabs(newPage, origin));
     observed.geometry = await attempt('geometry', () => measureGeometry(newPage, origin));
@@ -1568,8 +1657,30 @@ describe('a page whose socket drops mid-turn keeps its answer in order', () => {
     expect(after).toEqual(before);
   });
 
+  test('an answer keeps each step\'s text where it streamed, once the turn ends and after a reload', () => {
+    const { live, ended, reloaded } = verdictOf(observed.answered, 'answered');
+
+    expect(live.filter((block) => block.startsWith('P:Step'))).toHaveLength(RECONNECT_STEPS);
+    expect({ ended, reloaded }).toEqual({ ended: [...live, 'P:Done.'], reloaded: [...live, 'P:Done.'] });
+  });
+
+  test('the model\'s next request carries each step\'s text and the answer', () => {
+    const { told } = verdictOf(observed.answered, 'answered');
+
+    expect(told.filter((text) => text.startsWith('Step ') || text === 'Done.')).toEqual([
+      'Step 1: listing the workspace.', 'Step 2: listing scaffold.', 'Step 3: listing the workspace.', 'Done.',
+    ]);
+  });
+
   test('a page asleep while its turn ends wakes to the finished answer, with nothing left running', () => {
     const { truth, after, stopAfter } = verdictOf(observed.slept, 'slept');
+
+    expect(truth.at(-1)).toBe('P:Done.');
+    expect({ after, stopAfter }).toEqual({ after: truth, stopAfter: false });
+  });
+
+  test('so does a page that only watched the turn, asleep from part-way through its final text', () => {
+    const { truth, after, stopAfter } = verdictOf(observed.watchedSlept, 'watched-slept');
 
     expect(truth.at(-1)).toBe('P:Done.');
     expect({ after, stopAfter }).toEqual({ after: truth, stopAfter: false });

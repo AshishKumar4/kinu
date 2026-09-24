@@ -13,7 +13,7 @@ index 07ae3e535f77ae29689662228b381b2f03451524..64d1aa70026c06d734682bb321dda031
     * Forcefully abort a running sub-agent. The child stops executing
     * immediately and will be restarted on next {@link subAgent} call.
 diff --git a/dist/chat/react.js b/dist/chat/react.js
-index 6698ed48841e17b1a5c8c59665188b1d8f2f0f03..807989d5a931f91497ebc4c8d104e0225ebe7c7c 100644
+index 6698ed48841e17b1a5c8c59665188b1d8f2f0f03..e828fc19d4cd17c77ab9b9abb9b1095b3ff42467 100644
 --- a/dist/chat/react.js
 +++ b/dist/chat/react.js
 @@ -818,6 +818,10 @@ function useAgentChat(options) {
@@ -27,10 +27,17 @@ index 6698ed48841e17b1a5c8c59665188b1d8f2f0f03..807989d5a931f91497ebc4c8d104e022
  					if (customTransport.handleStreamResuming(data)) return;
  					if (localRequestIdsRef.current.has(data.id)) return;
  					if (fallbackAckedResumeRequestIdsRef.current.has(data.id)) return;
-@@ -964,6 +968,7 @@ function useAgentChat(options) {
+@@ -963,7 +967,14 @@ function useAgentChat(options) {
+ 			socketIsOpen = false;
  			sawClose = true;
  			fallbackAckedResumeRequestIds.clear();
++			const observedStream = streamStateRef.current;
  			if (!resume) clearFallbackObserver();
++			else if (observedStream.status === "observing") streamStateRef.current = transition(observedStream, {
++				type: "resume-fallback",
++				streamId: observedStream.streamId,
++				messageId: observedStream.accumulator.messageId
++			}).state;
 +			restoreProtectedStreamingAssistant();
  		}
  		function onAgentOpen() {

@@ -586,37 +586,42 @@ export class ActorSession {
 
     const output = await this.canonical.outputForTurn(lease.turnId);
     const outputReferences = output.messages;
-    const finalTextReference = await this.matchTranscriptText(text, outputReferences);
+    const said = await this.saidText(outputReferences, text, answer);
 
     return {
-      text, answer, steps, failure, program, claim: active.claim,
+      text: said.text, answer, steps, failure, program, claim: active.claim,
       interrupted: active.abort.signal.aborted || failure?.message === INTERRUPTED_TURN,
       admittedMessages,
-      outputReferences, finalTextReference,
+      outputReferences, finalTextReference: said.reference,
       outputPartReferences: output.parts,
     };
   }
 
-  private async matchTranscriptText(text: string, output: readonly MessageReference[]): Promise<MessagePartReference | null> {
-    if (text === '') return null;
+  /**
+   * What the turn said, and where its output holds it. Without a final answer (a stopped turn, or a last step that
+   * wrote nothing) that is the last text it streamed, not every step's text run together: each of those is narration,
+   * and the row keeps it where it streamed.
+   */
+  private async saidText(output: readonly MessageReference[], text: string, answer: string | null): Promise<{ readonly text: string; readonly reference: MessagePartReference | null }> {
+    const streamed = await this.lastText(output);
+    const said = answer === null && streamed !== null ? streamed.text : text;
 
+    return { text: said, reference: said !== '' && streamed?.text === said ? streamed.reference : null };
+  }
+
+  /** The last text the turn's output holds, and where. */
+  private async lastText(output: readonly MessageReference[]): Promise<{ readonly reference: MessagePartReference; readonly text: string } | null> {
     for (let index = output.length - 1; index >= 0; index--) {
       const reference = output[index];
 
       if (reference === undefined) continue;
       const parts = await this.canonical.messages.materializeParts(reference);
-      let last: (typeof parts)[number] | undefined;
 
       for (let partIndex = parts.length - 1; partIndex >= 0; partIndex--) {
         const part = parts[partIndex];
 
-        if (part?.value.type === 'text') { last = part; break; }
+        if (part?.value.type === 'text') return { reference: { messageId: reference.messageId, partNo: part.partNo }, text: v.parse(v.string(), part.value.text) };
       }
-
-      if (last === undefined) continue;
-
-      if (last.value.text === text) return { messageId: reference.messageId, partNo: last.partNo };
-      break;
     }
 
     return null;
@@ -624,10 +629,10 @@ export class ActorSession {
 
   async recordTranscriptText(claim: ActorTurnClaim, purpose: 'answer' | 'report', text: string, output: readonly MessageReference[]): Promise<MessagePartReference | null> {
     if (text === '') return null;
-    const existing = await this.matchTranscriptText(text, output);
+    const streamed = await this.lastText(output);
     this.canonical.assertClaimEpoch(claim.turnId, claim.epoch);
 
-    if (existing !== null) return existing;
+    if (streamed?.text === text) return streamed.reference;
     const id = `${claim.turnId}:${claim.epoch}:display-${purpose}`;
     const prepared = await this.canonical.messages.prepare({ role: 'assistant', content: text }, id);
 

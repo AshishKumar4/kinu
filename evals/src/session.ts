@@ -98,7 +98,7 @@ import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 import {
   DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema,
-  STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, CommandResultSchema,
+  STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
   type WorkspaceSpend,
 } from '../../packages/core/src/index';
@@ -822,6 +822,7 @@ const HistorySchema = v.array(v.object({
 /** One durable message, as the web pane's seed carries it. */
 export interface PublicMessage {
   readonly role: string;
+  /** What it says: an answer's final text, never the narration its steps streamed before it. */
   readonly text: string;
   /** For a user row that landed mid-turn: the step index of the step it was
    *  spliced into — the product's own statement of where inside the absorbing
@@ -1480,13 +1481,7 @@ export class KinuPublicSession {
     return rows.map((row) => {
       const spliceStep = v.safeParse(v.number(), row.metadata?.[STEER_STEP_METADATA_KEY]);
 
-      const message: PublicMessage = {
-        role: row.role,
-        text: (row.parts ?? [])
-          .filter((part) => part.type === 'text')
-          .map((part) => part.text ?? '')
-          .join(''),
-      };
+      const message: PublicMessage = { role: row.role, text: rowText({ role: row.role, parts: row.parts ?? [] }) };
 
       // SAFETY: `v.number()` above already proved the metadata value is a
       // number — the splice step is a field the row either carries or lacks.

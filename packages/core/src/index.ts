@@ -683,7 +683,9 @@ export {
   TASK_TURN_ENDINGS,
   createTemporaryAgentPort,
   temporaryRunSettles,
+  taskTurnEnding,
   terminalTaskReport,
+  type OwedReport,
   type SubordinateLifetime,
   type TemporaryAgentPort,
   type TemporaryRunOutcome,
@@ -2028,7 +2030,7 @@ export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } fro
 export type { Page, PageRequest, SeekCursor } from './session/page';
 
 export {
-  mergeTranscript, restoredRows, transcriptRole,
+  mergeTranscript, restoredRows, rowText, transcriptRole,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
 
