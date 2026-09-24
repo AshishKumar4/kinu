@@ -84,9 +84,6 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
 
     const forker = orchestratorHarness(undefined, { userDO: forkerUser.userDO, workspace: 'issues-fork', ownerUserId: 'fedcba9876543210fedcba9876543210' });
     await forker.agent.installWorkspaceCapability(await provisionTestWorkspace(forkerUser, 'issues-fork'));
-    // Every slate process starts through `ensure`, armed as a tripwire.
-    const launches: string[] = [];
-    Reflect.set(forker.agent.observeSlateHost(), 'ensure', (_caller: SlateCaller, id: string) => { launches.push(id); throw new Error('a blueprint import started a slate process'); });
     const fork = answered(await forker.agent.admitBlueprint(bundle), BlueprintForkSchema);
     expect(fork.workspace).toBe('issues-fork');
     expect(fork.requirements).toEqual([
@@ -106,7 +103,6 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
 
     for (const secret of [mcpHeader, providerKey, vaultSecret, vault.placeholder]) expect(admittedTree).not.toContain(secret);
 
-    expect(launches).toEqual([]);
     expect((await forker.agent.listSlates()).slates).toEqual([{ id: fork.slate, title: 'Issue triage', bindings: ['GITHUB', 'FILES', 'NOTES', 'PEER'], port: undefined }]);
 
     // Bindings resolve in the forker's workspace, where the owner's MCP connection is absent.

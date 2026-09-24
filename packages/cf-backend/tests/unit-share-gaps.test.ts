@@ -1,19 +1,18 @@
 /**
- * Share-gaps rules end to end: rate bound, consent page, per-share daily spend bound, fork flag, and the public index.
- * Same harness as `unit-slate-live-shares.test.ts`.
+ * Share-gaps rules end to end through the edge route: rate bound, consent page, fork flag, and the public index.
+ * Same harness as `unit-slate-live-shares.test.ts`; the per-share daily spend bound pauses a running slate's
+ * calls, so it is driven in workerd (`tests/workerd/slate-share.test.ts`).
  */
 import { afterEach, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  LiveShareRecordSchema, BlueprintForkSchema,
-  SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel,
+  LiveShareRecordSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE,
   type AgentRuntime, type SlateAnswer,
 } from '@kinu.run/core';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, sqlExec, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
 import { makeKv } from './helpers/kv';
-import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
 import { handleSharedRequest } from '../src/shared/routes';
 import { handleSlateShareHostRequest } from '../src/slate-share-route';
 import type { AuthIdentity } from '../src/auth/session';
@@ -150,43 +149,42 @@ const sharePublic = (world: World, visibility: 'users' | 'public', fork?: boolea
   op: 'share', id: 'issues', visibility, approved: [], fork,
 }).then((result) => answered(result, v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) })));
 
+/** A visit to the share's own URL through the edge route; `ip` is the viewer the edge names by its address. */
+function visit(world: World, url: string, ip: string, init?: { path?: string; cookie?: string }) {
+  const headers = new Headers({ 'cf-connecting-ip': ip });
+
+  if (init?.cookie !== undefined) headers.set('cookie', init.cookie);
+
+  return handleSlateShareHostRequest(new Request(`${url}${init?.path ?? ''}`, { headers }), world.env);
+}
+
+const CONSENT_PATH = '__kinu/viewer?consent=1';
+
 test('S2: the per-viewer request bound refuses past its limit, per viewer and on the exchange', async () => {
   const world = await twoUserWorld();
   cleanups.push(world.close);
 
   const created = await sharePublic(world, 'public');
-  const host = world.owner.agent.observeSlateHost();
-  const claim = { userId: null, source: 's', consented: true };
+  const url = present(created.url, 'the share URL');
 
+  // The bound precedes the consent page, so a viewer who has not consented spends it too.
   for (let n = 0; n < SHARE_VIEWER_REQUESTS_PER_MINUTE; n += 1) {
-    const admission = await host.admitViewerRequest({ handle: created.share.handle, claim, pathname: '/' });
-
-    if (admission instanceof Response) throw new Error(`request ${n + 1} refused: ${admission.status}`);
-    admission.settle('ok');
+    expect((await visit(world, url, '203.0.113.1'))?.status).toBe(200);
   }
 
-  const refused = await host.admitViewerRequest({ handle: created.share.handle, claim, pathname: '/' });
+  const refused = await visit(world, url, '203.0.113.1');
 
-  if (!(refused instanceof Response)) throw new Error('the bound admitted a request past its limit');
-  expect(refused.status).toBe(429);
-  expect(await refused.text()).toBe('Too many requests');
+  expect(refused?.status).toBe(429);
+  expect(await refused?.text()).toBe('Too many requests');
+  expect((await visit(world, url, '203.0.113.2'))?.status).toBe(200);
 
-  const other = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 'other', consented: true }, pathname: '/' });
-
-  if (other instanceof Response) throw new Error(`another viewer was refused: ${other.status}`);
-  other.settle('ok');
-
-  if (created.url === null) throw new Error('the share minted no URL');
-  const exchange = (url: string) => handleSlateShareHostRequest(new Request(`${url}__kinu/viewer?consent=1`), world.env);
-  const minted = await exchange(created.url);
+  const minted = await visit(world, url, '203.0.113.3', { path: CONSENT_PATH });
 
   expect(minted?.status).toBe(303);
   expect(minted?.headers.get('set-cookie')).toContain('__Host-kinu_viewer');
 
-  for (let n = 0; n < SHARE_VIEWER_REQUESTS_PER_MINUTE; n += 1) await exchange(created.url);
-  const denied = await exchange(created.url);
-
-  expect(denied?.status).toBe(429);
+  for (let n = 0; n < SHARE_VIEWER_REQUESTS_PER_MINUTE; n += 1) await visit(world, url, '203.0.113.3', { path: CONSENT_PATH });
+  expect((await visit(world, url, '203.0.113.3', { path: CONSENT_PATH }))?.status).toBe(429);
 });
 
 test('D3: a credentialed share answers its consent page until the consent cookie arrives', async () => {
@@ -194,62 +192,35 @@ test('D3: a credentialed share answers its consent page until the consent cookie
   cleanups.push(world.close);
 
   const created = await sharePublic(world, 'public');
-  const host = world.owner.agent.observeSlateHost();
+  const url = present(created.url, 'the share URL');
 
-  const before = await host.admitViewerRequest({
-    handle: created.share.handle, claim: { userId: null, source: 's', consented: false }, pathname: '/',
-  });
+  const before = await visit(world, url, '203.0.113.4');
 
-  if (!(before instanceof Response)) throw new Error('an unconsented viewer was admitted');
-  expect(before.status).toBe(200);
-  const html = await before.text();
+  expect(before?.status).toBe(200);
+  const html = await before?.text() ?? '';
 
   expect(html).toContain('GITHUB');
   expect(html).toContain('connection-id');
   expect(html).toContain('issues-owner');
-  expect(html).toContain('/__kinu/viewer?consent=1');
+  expect(html).toContain(`/${CONSENT_PATH}`);
 
-  const after = await host.admitViewerRequest({
-    handle: created.share.handle, claim: { userId: null, source: 's', consented: true }, pathname: '/',
-  });
+  const minted = await visit(world, url, '203.0.113.4', { path: CONSENT_PATH });
+  const cookie = present(minted?.headers.get('set-cookie')?.split(';')[0], 'the consent cookie');
+  const after = await visit(world, url, '203.0.113.4', { cookie });
 
-  if (after instanceof Response) throw new Error(`a consented viewer was refused: ${after.status}`);
-  after.settle('ok');
+  // Admitted past the page: the request is audited (no slate process boots here, so it answers no page).
+  expect(await after?.text()).not.toContain(`/${CONSENT_PATH}`);
+  const requests = answered(await world.owner.agent.slate({ op: 'viewerRequests', share: created.share.id }), v.array(v.looseObject({ viewer: v.string() })));
+  expect(requests).toHaveLength(1);
 });
 
-test('S2: the per-share per-day spend bound refuses viewer calls as budget and marks the share paused', async () => {
+test('a users share refuses a viewer it does not name', async () => {
   const world = await twoUserWorld();
   cleanups.push(world.close);
 
-  const created = await sharePublic(world, 'public');
-  const host = world.owner.agent.observeSlateHost();
+  const created = await sharePublic(world, 'users');
 
-  const admission = await host.admitViewerRequest({
-    handle: created.share.handle, claim: { userId: null, source: 's', consented: true }, pathname: '/',
-  });
-
-  if (admission instanceof Response) throw new Error(`admission refused: ${admission.status}`);
-  const viewerCaller: SlateCaller = { ...ROOT_SLATE_CALLER, share: created.share.id };
-
-  const call = () => world.owner.agent.slateBindingCallAs(
-    viewerCaller, 'issues', 'FILES', { member: 'readFile', args: ['/home/user/slates/issues/package.json'], invocation: admission.invocation });
-
-  expect(await call()).toMatchObject({ ok: true });
-
-  world.owner.agent.budget.declare(shareSpendLabel(created.share.id), { usd: SHARE_SPEND_CAP_USD_PER_DAY });
-  world.owner.agent.budget.debit(Math.ceil(SHARE_SPEND_CAP_USD_PER_DAY / 0.003 * 1000) + 1000, { labels: [shareSpendLabel(created.share.id)] });
-
-  expect(await call()).toMatchObject({ ok: false, reason: 'budget', error: expect.stringContaining('paused for today') });
-
-  const rows = answered(await world.owner.agent.slate({ op: 'liveShares' }),
-    v.array(v.looseObject({ id: v.string(), paused: v.optional(v.boolean()) })));
-
-  expect(rows.find((row) => row.id === created.share.id)?.paused).toBe(true);
-
-  const requests = answered(await world.owner.agent.slate({ op: 'viewerRequests', share: created.share.id }),
-    v.array(v.looseObject({ calls: v.array(v.looseObject({ ok: v.boolean() })) })));
-
-  expect(requests[0]?.calls.map((entry) => entry.ok)).toEqual([true, false]);
+  expect((await visit(world, present(created.url, 'the share URL'), '203.0.113.5'))?.status).toBe(404);
 });
 
 test('D1: a live share forks for who it names, refuses who it does not, and honors fork:false', async () => {

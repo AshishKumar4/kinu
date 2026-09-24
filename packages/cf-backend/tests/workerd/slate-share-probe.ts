@@ -6,7 +6,7 @@ import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { newWebSocketRpcSession } from 'capnweb';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
-import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { seedBaseFilesystem } from '@nimbus-sh/core/workspace';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
@@ -15,7 +15,7 @@ import { adoptGeneration, generation } from '@nimbus-sh/fabric/generation.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { probeFacetManager } from './facet-manager';
 import {
-  bindActorHandle, initWorkspaceSchema, MissionGovernor,
+  bindActorHandle, initWorkspaceSchema, MissionGovernor, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel,
   type JsonValue, type ShareViewerClaim, type SlateCallResult, type SqlExec, type SqlExecutor, type SqlValue,
 } from '@kinu.run/core';
 import { initSlateLiveShareTables } from '@kinu.run/core/slates';
@@ -55,6 +55,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly ports = new PortRegistry();
   private readonly host: SlateHost;
   private _budget: MissionGovernor | undefined;
+  private readonly sql: SqlExecutor;
   private readonly gen: Parameters<typeof adoptGeneration>[0];
   private lastCall: string | null = null;
 
@@ -69,6 +70,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const exec: SqlExec = {
       exec: (query, ...bindings) => ctx.storage.sql.exec(query, ...bindings),
     };
+
+    this.sql = sql;
 
     initWorkspaceSchema({ execRaw: (ddl: string) => ctx.storage.sql.exec(ddl), sql, exec });
     initSlateLiveShareTables((ddl: string) => ctx.storage.sql.exec(ddl));
@@ -101,15 +104,21 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       catalog: async () => ({ ...CATALOG, slates: await this.host.projects(ROOT_SLATE_CALLER) }),
       shareUrl: async (handle) => `https://${handle}.share.test/`,
       // No AUTH_KV binding, as on a deployment without it; the spend bound is real.
-      budget: () => this._budget ??= new MissionGovernor({
-        storage: { sql, execRaw: (ddl: string) => ctx.storage.sql.exec(ddl) },
-        actor: bindActorHandle(sql, {
-          actorId: 'main', workspaceId: ctx.id.name ?? ctx.id.toString(),
-          parentActorId: null, name: 'main', storageKey: 'main',
-        }, () => {}),
-      }),
+      budget: () => this.governor(),
       ownerTitle: async () => ctx.id.name ?? ctx.id.toString(),
     });
+  }
+
+  private governor(): MissionGovernor {
+    this._budget ??= new MissionGovernor({
+      storage: { sql: this.sql, execRaw: (ddl: string) => this.ctx.storage.sql.exec(ddl) },
+      actor: bindActorHandle(this.sql, {
+        actorId: 'main', workspaceId: this.ctx.id.name ?? this.ctx.id.toString(),
+        parentActorId: null, name: 'main', storageKey: 'main',
+      }, () => {}),
+    });
+
+    return this._budget;
   }
 
   async start(): Promise<void> {
@@ -118,11 +127,17 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const root = '/home/user/slates/board';
     const files = this.vfs.as(CRED_KERNEL);
     files.mkdir(root, { recursive: true });
+
+    // The user's slates are the user's, as a workspace's home is: an imported blueprint lands beside them.
+    for (const dir of ['/home/user', '/home/user/slates']) files.chown(dir, CRED_SESSION_USER.uid, CRED_SESSION_USER.gid);
     files.writeFile(`${root}/package.json`, JSON.stringify({
       name: SLATE_ID, main: 'server.ts',
       slate: {
         title: 'Board', runtime: 'worker',
-        bindings: { FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile', 'writeFile'] } },
+        bindings: {
+          FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile', 'writeFile'] },
+          PEER: { kind: 'app', id: 'digest' },
+        },
       },
     }));
     files.writeFile(`${root}/server.ts`, [
@@ -130,14 +145,106 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       'export class Slate extends SlateObject {',
       '  async probe() { return await this.env.FILES.readFile("/x"); }',
       '  async mutate() { return await this.env.FILES.writeFile("/x", "y"); }',
+      '  async hop() { return await this.env.PEER.digest(); }',
       '  async fetch() { return new Response("share-ok"); }',
+      '}',
+    ].join('\n'));
+    const digest = '/home/user/slates/digest';
+    files.mkdir(digest, { recursive: true });
+    files.writeFile(`${digest}/package.json`, JSON.stringify({
+      name: 'digest', main: 'server.ts', slate: { title: 'Digest', runtime: 'worker', bindings: {} },
+    }));
+    files.writeFile(`${digest}/server.ts`, [
+      'import { SlateObject } from "kinu:slate";',
+      'export class Slate extends SlateObject {',
+      '  async digest() { return "digest-ok"; }',
       '}',
     ].join('\n'));
     files.writeFile('/x', 'fixture-bytes');
   }
 
-  async share(): Promise<SlateCallResult> {
-    return this.host.operation(ROOT_SLATE_CALLER, { op: 'share', id: SLATE_ID, visibility: 'public', approved: [] });
+  /** `approved` names members granted beyond the graph's read members. */
+  async share(approved: readonly { binding: string; member: string }[] = []): Promise<SlateCallResult> {
+    return this.host.operation(ROOT_SLATE_CALLER, {
+      op: 'share', id: SLATE_ID, visibility: 'public', approved: approved.map((granted) => ({ slate: SLATE_ID, ...granted })),
+    });
+  }
+
+  /** Publishes the board as a blueprint and imports it back as a fork, as a forker's workspace admits one. */
+  async importBlueprint(): Promise<{ fork: string; running: number }> {
+    const committed = await this.host.operation(ROOT_SLATE_CALLER, { op: 'commit', id: SLATE_ID });
+
+    if (!committed.ok) throw new Error(`${committed.reason}: ${committed.error}`);
+    const version = v.parse(v.object({ id: v.string() }), committed.value).id;
+    const published = await this.host.operation(ROOT_SLATE_CALLER, { op: 'publish', id: SLATE_ID, version, include: [] });
+
+    if (!published.ok) throw new Error(`${published.reason}: ${published.error}`);
+    const share = v.parse(v.object({ share: v.object({ id: v.string() }) }), published.value).share.id;
+    const bundle = await this.host.blueprintBundle(share);
+
+    if (!bundle.ok) throw new Error(`${bundle.reason}: ${bundle.error}`);
+    const fork = await this.host.admitBlueprint(bundle.value);
+
+    if (!fork.ok) throw new Error(`${fork.reason}: ${fork.error}`);
+
+    return { fork: fork.value.slate, running: this.processes.getRunning().length };
+  }
+
+  async liveShares(): Promise<SlateCallResult> {
+    return this.host.operation(ROOT_SLATE_CALLER, { op: 'liveShares' });
+  }
+
+  /** The app hop, over one batch. */
+  async viewerHop(handle: string, claim: ShareViewerClaim): Promise<string> {
+    const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue>>>(
+      { request: (request) => this.host.routeShare(handle, claim, request, '/__rpc') }, 'ignored',
+    );
+
+    try {
+      return JSON.stringify(await stub.hop());
+    } catch (cause) {
+      return renderThrownChain({ cause });
+    } finally {
+      stub[Symbol.dispose]();
+    }
+  }
+
+  /**
+   * One socket session whose share changes between its calls: revoked, or spent past its daily cap by other
+   * viewers' calls. `late` is a call carrying the session's invocation that arrives after the change, as one
+   * already in flight from the slate does; JSON, as `slateBindingCallAsWire` answers.
+   */
+  async viewerSocketAcross(
+    handle: string, claim: ShareViewerClaim, share: string, change: 'revoke' | 'spend',
+  ): Promise<{ before: string | null; after: string; late: string }> {
+    const response = await this.host.routeShare(
+      handle, claim, new Request('https://share.invalid/__rpc', { headers: { Upgrade: 'websocket' } }), '/__rpc',
+    );
+
+    const socket = response.webSocket;
+
+    if (socket === null) throw new Error(`upgrade refused: ${response.status}`);
+    socket.accept();
+    const stub = newWebSocketRpcSession<Record<string, (...args: JsonValue[]) => Promise<JsonValue>>>(socket);
+
+    try {
+      const raw = await stub.probe();
+      const before = v.is(v.string(), raw) ? raw : JSON.stringify(raw ?? null);
+
+      if (change === 'revoke') {
+        await this.host.operation(ROOT_SLATE_CALLER, { op: 'unshare', share });
+      } else {
+        const governor = this.governor();
+        governor.declare(shareSpendLabel(share), { usd: SHARE_SPEND_CAP_USD_PER_DAY });
+        governor.debit(Math.ceil(SHARE_SPEND_CAP_USD_PER_DAY / 0.003 * 1000) + 1000, { labels: [shareSpendLabel(share)] });
+      }
+
+      const late = JSON.stringify(await this.replay(share));
+
+      return { before, after: await refusedText(stub.probe()), late };
+    } finally {
+      socket.close();
+    }
   }
 
   async viewerFetch(handle: string, claim: ShareViewerClaim): Promise<{ status: number; body: string }> {

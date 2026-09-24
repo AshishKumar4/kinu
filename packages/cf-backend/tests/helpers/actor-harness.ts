@@ -28,7 +28,6 @@ import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
 } from '@kinu.run/core/obs';
 import type { UserDO } from '../../src/user/user-do';
-import type { SlateHost } from '../../src/slates/host';
 import type { WorkspaceHostTarget } from '../../src/workspace-host';
 import {
   actorReferenceOf,
@@ -183,8 +182,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** The child substrate, for lifecycle verbs without a roster row. */
   observeSubordinateRuntime() { return this.subordinateRuntime(); }
   observeRuntime(): AgentRuntime { return this.rt; }
-  /** The slate host, so a suite can arm its one launch seam (`ensure`) as a tripwire. */
-  observeSlateHost(): SlateHost { return this.slates; }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }
   /** The webhook signing secret, absent from the harness env by default. */
