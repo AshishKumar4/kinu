@@ -1,4 +1,5 @@
 import type { Block, Row, Span } from "./diff";
+import type { NoteSpan } from "./notes";
 
 export interface Tint {
   readonly text: string;
@@ -83,9 +84,10 @@ export interface Piece {
   readonly text: string;
   readonly tint: Tint | null;
   readonly marked: boolean;
+  readonly note: NoteSpan | null;
 }
 
-export function piecesOf(text: string, tints: readonly Tint[] | undefined, marks: readonly Span[] = []): Piece[] {
+export function piecesOf(text: string, tints: readonly Tint[] | undefined, marks: readonly Span[] = [], notes: readonly NoteSpan[] = []): Piece[] {
   const usable = tints !== undefined && tints.map((tint) => tint.text).join("") === text ? tints : [];
   const starts: number[] = [];
   const cuts = new Set<number>([0, text.length]);
@@ -97,7 +99,7 @@ export function piecesOf(text: string, tints: readonly Tint[] | undefined, marks
     at += tint.text.length;
   }
 
-  for (const [start, end] of marks) {
+  for (const [start, end] of [...marks, ...notes.map((note) => [note.start, note.end] as const)]) {
     cuts.add(start);
     cuts.add(end);
   }
@@ -110,7 +112,12 @@ export function piecesOf(text: string, tints: readonly Tint[] | undefined, marks
 
     while (tint + 1 < starts.length && (starts[tint + 1] ?? Infinity) <= start) tint++;
 
-    return { text: text.slice(start, end), tint: usable[tint] ?? null, marked: marks.some(([from, to]) => start >= from && end <= to) };
+    return {
+      text: text.slice(start, end),
+      tint: usable[tint] ?? null,
+      marked: marks.some(([from, to]) => start >= from && end <= to),
+      note: [...notes].reverse().find((note) => start >= note.start && end <= note.end) ?? null,
+    };
   }).filter((piece) => piece.text !== "");
 }
 

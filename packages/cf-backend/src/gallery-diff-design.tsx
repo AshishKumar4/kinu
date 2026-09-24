@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { GaugeIcon } from "@phosphor-icons/react";
@@ -14,11 +14,13 @@ import { tabCls, tabStripH } from "@/components/ui/form";
 import { ChangesPanel } from "@/diff-design/ChangesPanel";
 import { ReviewSheet } from "@/diff-design/ReviewSheet";
 import { ReviewBar } from "@/diff-design/ReviewBar";
+import { NotesProvider, type ChangeAnchor, type ChangeNote, type OpenDraft } from "@/diff-design/notes";
+import { FeedbackCard } from "@/diff-design/sent";
+import { AnnotationType } from "@plannotator/ui/types";
 import type { ChangeSet, ChangedFile } from "@/diff-design/diff";
 
 const WORKSPACE = "checkout-fixes";
 
-/** Built as the product builds them: snapshots through `diffLines`, the laptop through `parseGitDiff`. */
 const NOW = new Date(2026, 8, 23, 16, 5).getTime();
 
 function snapshot(path: string, status: FileStatus, before: string, after: string): ChangedFile {
@@ -306,6 +308,7 @@ const COUPON_FILES: readonly ChangedFile[] = [
 ];
 
 const COUPON_CHANGES: ChangeSet = {
+  baseline: "snapshot 4f1c9a",
   source: "workspace", label: "Workspace", mode: "vfs-baseline", files: COUPON_FILES, trackedSince: NOW - 111 * 60e3,
 };
 
@@ -390,7 +393,7 @@ const DEVICE_PATCH = [
   "+}",
 ].join("\n");
 
-const DEVICE_CHANGES: ChangeSet = { source: "laptop", label: "laptop", mode: "git", files: parseGitDiff(DEVICE_PATCH) };
+const DEVICE_CHANGES: ChangeSet = { source: "laptop", label: "laptop", mode: "git", baseline: "HEAD 3f2a1c0", files: parseGitDiff(DEVICE_PATCH) };
 
 const DEVICE_OFFLINE: ChangeSet = {
   source: "laptop", label: "laptop", mode: "git", files: [], error: "laptop is offline. Its changes come back when it reconnects.",
@@ -424,17 +427,71 @@ const MESSAGES: UIMessage[] = [
   },
 ];
 
-function ChatColumn() {
+const APPLY = "packages/checkout/src/apply-coupon.ts";
+
+const CLAMP = "Math.min(coupon.value, rule.maxPercent)";
+
+const CLAMP_AT = (APPLY_AFTER.split("\n")[26] ?? "").indexOf(CLAMP);
+
+const BASELINE = "snapshot 4f1c9a";
+
+function anchor(fields: Omit<ChangeAnchor, "baseline">): ChangeAnchor {
+  return { ...fields, baseline: BASELINE };
+}
+
+const CLAMP_ANCHOR = anchor({ path: APPLY, scope: "text", side: "new", lineStart: 27, lineEnd: 27, charStart: CLAMP_AT, charEnd: CLAMP_AT + CLAMP.length });
+
+const NOTES: readonly ChangeNote[] = [
+  {
+    id: "clamp", type: AnnotationType.COMMENT, createdA: NOW - 9 * 60e3, anchor: CLAMP_ANCHOR, originalText: CLAMP,
+    text: "Clamp it, but log it too: a 90% coupon is a data error someone should hear about.",
+  },
+  {
+    id: "label-test", type: AnnotationType.DELETION, createdA: NOW - 7 * 60e3,
+    anchor: anchor({ path: "packages/checkout/tests/coupon-kind.test.ts", scope: "lines", side: "new", lineStart: 27, lineEnd: 29 }),
+    originalText: (TEST_AFTER.split("\n").slice(26, 29)).join("\n"),
+  },
+  {
+    id: "legacy", type: AnnotationType.COMMENT, createdA: NOW - 5 * 60e3,
+    anchor: anchor({ path: "packages/checkout/src/legacy-discount.ts", scope: "file", side: "new", lineStart: 0, lineEnd: 0 }),
+    originalText: "packages/checkout/src/legacy-discount.ts",
+    text: "Keep this until the old carts are migrated; they still price through it.",
+  },
+];
+
+const SENT: readonly ChangeNote[] = [
+  ...NOTES,
+  {
+    id: "all", type: AnnotationType.GLOBAL_COMMENT, createdA: NOW - 3 * 60e3, originalText: "",
+    text: "Good fix. After these, run the checkout tests again and tell me what changed.",
+  },
+];
+
+const WRITING: OpenDraft = {
+  anchor: CLAMP_ANCHOR, quote: CLAMP,
+  initialText: "Clamp it, but log it too: a 90% coupon is a data error someone should hear about.",
+};
+
+const REPLY: UIMessage = {
+  id: "a3", role: "assistant",
+  parts: [{ type: "text", text: "On it. I'll log a clamped percentage, drop the label test, and keep `legacy-discount.ts` until the old carts are migrated. Then I'll rerun the checkout tests." }],
+};
+
+function ChatColumn({ wide, sent, onOpenNote }: { wide: boolean; sent: readonly ChangeNote[] | null; onOpenNote: (note: ChangeNote) => void }) {
   const [value, setValue] = useState("");
   const [mode, setMode] = useState<ChatMode>("build");
   const [model, setModel] = useState("anthropic/claude-opus-4");
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col border-r p-border">
-      <SubordinateTabs workspace={WORKSPACE} subordinates={[]} activeName={undefined} onCreate={async () => {}} creating={false}
-        onDismiss={async () => {}} onRename={async (_name, displayName) => displayName} />
-      <div className="flex-1 space-y-5 overflow-y-auto px-6 py-7 lg:px-8 [&>*]:mx-auto [&>*]:max-w-[780px]">
+    <div className={`flex h-full min-w-0 flex-1 flex-col ${wide ? "border-r p-border" : ""}`}>
+      {wide && (
+        <SubordinateTabs workspace={WORKSPACE} subordinates={[]} activeName={undefined} onCreate={async () => {}} creating={false}
+          onDismiss={async () => {}} onRename={async (_name, displayName) => displayName} />
+      )}
+      <div className="flex-1 space-y-5 overflow-y-auto px-4 py-6 lg:px-8 [&>*]:mx-auto [&>*]:max-w-[780px]">
         {MESSAGES.map((message) => <div key={message.id}><MessageView message={message} /></div>)}
+        {sent !== null && <FeedbackCard notes={sent} set={COUPON_CHANGES} sentAt={NOW - 60e3} now={NOW} onOpen={onOpenNote} />}
+        {sent !== null && <div><MessageView message={REPLY} /></div>}
       </div>
       <div className="border-t p-border p-sidebar">
         <Composer value={value} onValueChange={setValue} onSend={() => setValue("")} onStop={() => {}} placeholder="Send a message..."
@@ -466,7 +523,6 @@ function TabStrip({ label, count }: { label: string; count: number | null }) {
 }
 
 function Today({ open }: { open: boolean }) {
-  
   const rpc: Rpc = <T,>(method: string): Promise<T> => new Response(JSON.stringify(method === "getExecutorDiff"
     ? { files: COUPON_CHANGES.files, mode: "vfs-baseline", trackedSince: COUPON_CHANGES.trackedSince }
     : null)).json<T>();
@@ -504,48 +560,145 @@ function useWide(): boolean {
   return wide;
 }
 
-function Scene({ params }: { params: URLSearchParams }) {
-  const wide = useWide();
-  const laptop = params.get("offline") === "1" ? DEVICE_OFFLINE : DEVICE_CHANGES;
-  let sets: readonly ChangeSet[] = [COUPON_CHANGES];
+function clampRow(): HTMLElement | null {
+  const card = document.querySelector(`[data-file-card="${APPLY}"]`);
 
-  if (params.get("set") === "edge") sets = [EDGE_CHANGES];
-  else if (params.has("source") || params.has("menu")) sets = [COUPON_CHANGES, laptop];
+  if (card?.querySelector('[data-diff-tinted="pending"]') !== null) return null;
 
-  const [sheet, setSheet] = useState<{ source: string; file: string | null } | null>(
-    params.get("sheet") === "1" ? { source: sets[0]?.source ?? "workspace", file: params.get("file") } : null,
-  );
+  return card.querySelector<HTMLElement>('[data-note-row][data-side="new"][data-new="27"]');
+}
 
-  const [reviewedAt, setReviewedAt] = useState<number | null>(params.get("reviewed") === "1" ? NOW - 60e3 : null);
-  const today = params.get("today") === "1";
-  const sheetSet = sets.find((set) => set.source === sheet?.source);
-  const shown = sets.find((set) => set.source === (params.get("source") ?? sets[0]?.source));
+function textRange(code: HTMLElement, start: number, end: number): Range {
+  const range = document.createRange();
+  const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+  let at = 0;
 
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    const length = node.textContent?.length ?? 0;
+
+    if (start >= at && start <= at + length) range.setStart(node, start - at);
+
+    if (end >= at && end <= at + length) {
+      range.setEnd(node, end - at);
+      break;
+    }
+
+    at += length;
+  }
+
+  return range;
+}
+
+function useDesignSelection(kind: string | null): void {
+  useEffect(() => {
+    if (kind === null) return;
+
+    const timer = setInterval(() => {
+      const row = clampRow();
+      const code = row?.querySelector<HTMLElement>("[data-code]");
+
+      if (row === null || code === null || code === undefined) return;
+      clearInterval(timer);
+
+      if (kind === "lines") {
+        const gutter = (line: number): Element | null => row.parentElement?.querySelector(`[data-note-row][data-side="new"][data-new="${String(line)}"] > span`) ?? null;
+
+        gutter(25)?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        gutter(27)?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, shiftKey: true }));
+
+        return;
+      }
+
+      window.getSelection()?.removeAllRanges();
+      window.getSelection()?.addRange(textRange(code, CLAMP_AT, CLAMP_AT + CLAMP.length));
+      code.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    }, 60);
+
+    return () => clearInterval(timer);
+  }, [kind]);
+}
+
+function DesignSelection({ kind }: { kind: string | null }) {
+  useDesignSelection(kind);
+
+  return null;
+}
+
+function Workspace({ wide, chatPane, chat, panel }: { wide: boolean; chatPane: boolean; chat: ReactNode; panel: ReactNode }) {
   return (
     <div className="flex h-full flex-col">
       <WorkspaceBar title="Checkout coupon bug" onRename={async (name) => name} connectionStatus="connected" working={false} altitude="run" onAltitude={() => {}} />
       <div className="flex shrink-0 items-center gap-1 border-b p-border p-sidebar px-3 py-2 md:hidden">
-        <button type="button" aria-pressed="false" className="rounded-full px-3 py-1.5 text-xs p-text-3">Chat</button>
-        <button type="button" aria-pressed="true" className="rounded-full px-3 py-1.5 text-xs p-accent-subtle p-accent">Workspace</button>
+        <button type="button" aria-pressed={chatPane} className={`rounded-full px-3 py-1.5 text-xs ${chatPane ? "p-accent-subtle p-accent" : "p-text-3"}`}>Chat</button>
+        <button type="button" aria-pressed={!chatPane} className={`rounded-full px-3 py-1.5 text-xs ${chatPane ? "p-text-3" : "p-accent-subtle p-accent"}`}>Workspace</button>
       </div>
       <div className="flex min-h-0 flex-1">
-        {wide && <ChatColumn />}
-        <div className="flex w-full shrink-0 flex-col p-sidebar md:w-[340px]">
-          <TabStrip label={today ? "Diffs" : "Changes"} count={today || reviewedAt !== null || shown?.error !== undefined ? null : shown?.files.length ?? null} />
-          {today ? <Today open={params.get("open") === "1"} /> : (
-            <div className="min-h-0 flex-1">
-              <ChangesPanel key={reviewedAt ?? "open"} sets={sets} now={NOW} source={params.get("source") ?? undefined} file={sheet === null ? params.get("file") : null}
-                menuOpen={params.get("menu") === "source"} reviewedAt={reviewedAt}
-                onExpand={wide ? (source, file) => setSheet({ source, file }) : null} />
-            </div>
-          )}
-        </div>
+        {(wide || chatPane) && chat}
+        {(wide || !chatPane) && <div className="flex w-full shrink-0 flex-col p-sidebar md:w-[340px]">{panel}</div>}
       </div>
-      {sheet !== null && sheetSet !== undefined && wide && (
-        <ReviewSheet set={sheetSet} now={NOW} file={sheet.file} layout={params.get("layout") === "split" ? "split" : "unified"}
-          onClose={() => setSheet(null)} onReviewed={() => { setSheet(null); setReviewedAt(NOW); }} />
-      )}
     </div>
+  );
+}
+
+function setsFor(params: URLSearchParams): readonly ChangeSet[] {
+  const laptop = params.get("offline") === "1" ? DEVICE_OFFLINE : DEVICE_CHANGES;
+
+  if (params.get("set") === "edge") return [EDGE_CHANGES];
+
+  return params.has("source") || params.has("menu") ? [COUPON_CHANGES, laptop] : [COUPON_CHANGES];
+}
+
+function Scene({ params }: { params: URLSearchParams }) {
+  const wide = useWide();
+  const sets = setsFor(params);
+
+  const [sheet, setSheet] = useState<{ source: string; file: string | null; notes: boolean } | null>(
+    params.get("sheet") === "1" ? { source: sets[0]?.source ?? "workspace", file: params.get("file"), notes: params.get("annotations") === "1" } : null,
+  );
+
+  const [reviewedAt, setReviewedAt] = useState<number | null>(params.get("reviewed") === "1" ? NOW - 60e3 : null);
+  const [sent, setSent] = useState<readonly ChangeNote[] | null>(params.get("sent") === "1" ? SENT : null);
+  const [chatPane, setChatPane] = useState(params.get("pane") === "chat");
+  const today = params.get("today") === "1";
+  const sheetSet = sets.find((set) => set.source === sheet?.source);
+  const shown = sets.find((set) => set.source === (params.get("source") ?? sets[0]?.source));
+
+  const send = (notes: readonly ChangeNote[]): void => {
+    setSent(notes);
+    setSheet(null);
+    setChatPane(true);
+  };
+
+  const openNote = (note: ChangeNote): void => {
+    setSheet({ source: "workspace", file: note.anchor?.path ?? null, notes: false });
+  };
+
+  const panel = (
+    <>
+      <TabStrip label={today ? "Diffs" : "Changes"} count={today || reviewedAt !== null || shown?.error !== undefined ? null : shown?.files.length ?? null} />
+      {today ? <Today open={params.get("open") === "1"} /> : (
+        <div className="min-h-0 flex-1">
+          <ChangesPanel key={reviewedAt ?? "open"} sets={sets} now={NOW} source={params.get("source") ?? undefined} file={sheet === null ? params.get("file") : null}
+            menuOpen={params.get("menu") === "source"} reviewedAt={reviewedAt}
+            onExpand={(source, file) => setSheet({ source, file, notes: false })}
+            onShowNotes={() => setSheet({ source: shown?.source ?? "workspace", file: null, notes: true })} onSend={send} />
+        </div>
+      )}
+    </>
+  );
+
+  return (
+    <NotesProvider key={sent === null ? "open" : "sent"} baseline={shown?.baseline ?? BASELINE} now={() => NOW}
+      initial={params.get("notes") === "1" && sent === null ? NOTES : []} writing={params.get("comment") === "1" ? WRITING : undefined}>
+      <Workspace wide={wide} chatPane={chatPane} panel={panel}
+        chat={<ChatColumn wide={wide} sent={sent} onOpenNote={openNote} />} />
+      {sheet !== null && sheetSet !== undefined && (
+        <ReviewSheet set={sheetSet} now={NOW} file={sheet.file} phone={!wide} layout={params.get("layout") === "unified" ? "unified" : "split"}
+          annotationsOpen={sheet.notes} pickerOpen={params.get("picker") === "1"}
+          onClose={() => setSheet(null)} onReviewed={() => { setSheet(null); setReviewedAt(NOW); }} onSend={send} />
+      )}
+      <DesignSelection kind={params.get("select")} />
+    </NotesProvider>
   );
 }
 

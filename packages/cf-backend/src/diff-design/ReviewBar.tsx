@@ -4,14 +4,28 @@ import { toggleMode, useTheme } from "@/hooks/use-theme";
 
 interface DesignView {
   readonly id: string;
-  readonly group: "The panel" | "Other machines" | "Large and odd files" | "Expanded" | "Today";
+  readonly group: "Expanded" | "Notes to the agent" | "On a phone" | "The panel" | "Other machines" | "Large and odd files" | "Today";
   readonly label: string;
   readonly query: string;
-  
-  readonly wide?: boolean;
+  readonly width?: "desktop" | "mobile";
 }
 
+const APPLY = "&file=packages/checkout/src/apply-coupon.ts";
+
 const DESIGN_VIEWS: readonly DesignView[] = [
+  { id: "sheet", group: "Expanded", label: "Every file, split", query: `&sheet=1${APPLY}`, width: "desktop" },
+  { id: "sheet-unified", group: "Expanded", label: "Every file, unified", query: `&sheet=1&layout=unified${APPLY}`, width: "desktop" },
+  { id: "sheet-edge", group: "Expanded", label: "Large files, expanded", query: "&set=edge&sheet=1", width: "desktop" },
+  { id: "select", group: "Notes to the agent", label: "Selecting words", query: `&sheet=1${APPLY}&select=text`, width: "desktop" },
+  { id: "select-lines", group: "Notes to the agent", label: "Selecting lines by number", query: `&sheet=1${APPLY}&select=lines`, width: "desktop" },
+  { id: "comment", group: "Notes to the agent", label: "Writing a note", query: `&sheet=1${APPLY}&comment=1`, width: "desktop" },
+  { id: "notes", group: "Notes to the agent", label: "Three notes", query: `&sheet=1${APPLY}&notes=1&annotations=1`, width: "desktop" },
+  { id: "panel-notes", group: "Notes to the agent", label: "Notes, from the side panel", query: `&notes=1${APPLY}` },
+  { id: "sent", group: "Notes to the agent", label: "Sent, in the thread", query: "&sent=1&pane=chat" },
+  { id: "phone-sheet", group: "On a phone", label: "Every file, on a phone", query: `&sheet=1&notes=1${APPLY}`, width: "mobile" },
+  { id: "phone-picker", group: "On a phone", label: "Picking a file", query: `&sheet=1&picker=1${APPLY}`, width: "mobile" },
+  { id: "phone-notes", group: "On a phone", label: "The notes, on a phone", query: `&sheet=1&notes=1&annotations=1${APPLY}`, width: "mobile" },
+  { id: "phone-comment", group: "On a phone", label: "Writing a note on a phone", query: `&sheet=1${APPLY}&comment=1`, width: "mobile" },
   { id: "changes", group: "The panel", label: "What changed", query: "" },
   { id: "file", group: "The panel", label: "A file, open", query: "&file=packages/checkout/src/apply-coupon.ts" },
   { id: "file-added", group: "The panel", label: "A new file", query: "&file=packages/checkout/tests/coupon-kind.test.ts" },
@@ -26,14 +40,11 @@ const DESIGN_VIEWS: readonly DesignView[] = [
   { id: "edge-large", group: "Large and odd files", label: "Too large to show", query: "&set=edge&file=packages/checkout/src/generated/schema.ts" },
   { id: "edge-long", group: "Large and odd files", label: "A long new file", query: "&set=edge&file=docs/incident-runbook.md" },
   { id: "edge-capped", group: "Large and odd files", label: "A diff that stops part-way", query: "&set=edge&file=data/seed/coupons.csv" },
-  { id: "sheet", group: "Expanded", label: "Every file, unified", query: "&sheet=1", wide: true },
-  { id: "sheet-split", group: "Expanded", label: "Every file, split", query: "&sheet=1&layout=split&file=packages/checkout/src/apply-coupon.ts", wide: true },
-  { id: "sheet-edge", group: "Expanded", label: "Large files, expanded", query: "&set=edge&sheet=1", wide: true },
   { id: "today", group: "Today", label: "Today's Diffs tab", query: "&today=1" },
   { id: "today-open", group: "Today", label: "Today, one file open", query: "&today=1&open=1" },
 ];
 
-const GROUPS = ["The panel", "Other machines", "Large and odd files", "Expanded", "Today"] as const;
+const GROUPS = ["Expanded", "Notes to the agent", "On a phone", "The panel", "Other machines", "Large and odd files", "Today"] as const;
 
 /** Review chrome, not product. `scripts/diff-design-shots.ts` photographs the states it links. */
 export function ReviewBar() {
@@ -49,7 +60,7 @@ export function ReviewBar() {
               <p className="px-2 pb-1 pt-2 p-eyebrow">{group}</p>
               {DESIGN_VIEWS.filter((view) => view.group === group).map((view) => (
                 <a key={view.id} href={`${location.pathname}?frame=diff-design${view.query}&theme=${mode}`}
-                  data-design-view={view.id} data-design-query={view.query} data-design-wide={view.wide === true ? "1" : "0"}
+                  data-design-view={view.id} data-design-query={view.query} data-design-width={view.width ?? "both"}
                   className="block rounded-md px-2 py-1.5 text-sm p-text-2 transition-colors hover:bg-[var(--c-elevated)] hover:p-text">
                   {view.label}
                 </a>

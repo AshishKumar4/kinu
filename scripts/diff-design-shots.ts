@@ -24,7 +24,8 @@ const THEMES = ['dark', 'light'] as const;
 interface DesignView {
   readonly id: string;
   readonly query: string;
-  readonly wide: boolean;
+  /** "desktop" or "mobile" when only one width shows the state, else "both". */
+  readonly width: string;
 }
 
 interface Shot {
@@ -51,7 +52,7 @@ async function designViews(page: Page, origin: string): Promise<DesignView[]> {
   const views = await page.$$eval('[data-design-view]', (links) => links.map((link) => ({
     id: link.getAttribute('data-design-view') ?? '',
     query: link.getAttribute('data-design-query') ?? '',
-    wide: link.getAttribute('data-design-wide') === '1',
+    width: link.getAttribute('data-design-width') ?? 'both',
   })));
 
   if (views.length === 0) throw new Error('the review bar listed no states');
@@ -88,7 +89,8 @@ async function shootOne(page: Page, origin: string, shot: Shot): Promise<string>
   await page.goto(`${origin}/gallery.html?frame=diff-design${view.query}&theme=${theme}&review=0`, { waitUntil: 'networkidle0' });
   await page.waitForSelector('main');
   await settled(page);
-  const extra = view.wide ? 0 : await overflow(page);
+  // The sheet covers the window, so it is photographed as seen; the panel grows to its content.
+  const extra = view.query.includes('sheet=1') ? 0 : await overflow(page);
 
   if (extra > 0) {
     await page.setViewport({ ...size, height: size.height + extra });
@@ -114,7 +116,7 @@ async function shoot(newPage: () => Promise<Page>, origin: string): Promise<stri
   const views = await designViews(listing, origin).finally(() => listing.close());
 
   const shots: Shot[] = views.filter((view) => kept('only', view.id)).flatMap((view) => VIEWPORTS
-    .filter((viewport) => kept('vp', viewport.name) && (!view.wide || viewport.name === 'desktop'))
+    .filter((viewport) => kept('vp', viewport.name) && (view.width === 'both' || view.width === viewport.name))
     .flatMap((viewport) => THEMES.filter((theme) => kept('theme', theme)).map((theme) => ({ view, viewport, theme }))));
 
   const written: string[] = [];

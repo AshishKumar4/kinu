@@ -7,6 +7,8 @@
    loading its global theme pack or unrelated editor/server UI. */
 @source "../../../node_modules/@plannotator/ui/components/Viewer.tsx";
 @source "../../../node_modules/@plannotator/ui/components/AnnotationPanel.tsx";
+@source "../../../node_modules/@plannotator/ui/components/AnnotationToolbar.tsx";
+@source "../../../node_modules/@plannotator/ui/components/CommentPopover.tsx";
 @import "tailwindcss";
 @import "@cloudflare/kumo/styles/tailwind";
 @import "katex/dist/katex.min.css";
@@ -1039,6 +1041,7 @@ body { background: var(--c-bg); color: var(--c-text); }
    Its semantic contract is confined to this surface and resolves through the
    same Kinu tokens as the rest of Outputs. */
 [data-kinu-plan-review],
+[data-kinu-annotations],
 body > [data-comment-popover="true"],
 body > .annotation-toolbar {
   --background: var(--c-bg);
@@ -1072,6 +1075,13 @@ body > .annotation-toolbar {
   font-family: var(--font-ui);
 }
 
+/* A diff's notes take the tokens above and keep the ground and type of the surface they sit on. */
+[data-kinu-annotations] {
+  background: revert-layer;
+  color: revert-layer;
+  font-family: revert-layer;
+}
+
 [data-kinu-plan-review] {
   --plan-measure: 70ch;
   --plan-rail-width: 20rem;
@@ -1080,24 +1090,24 @@ body > .annotation-toolbar {
 }
 
 @layer components {
-  [data-kinu-plan-review] .annotation-highlight { border-radius: var(--radius-xs); padding: 0 2px; margin: 0 -2px; }
+  :is([data-kinu-plan-review], [data-kinu-annotations]) .annotation-highlight { border-radius: var(--radius-xs); padding: 0 2px; margin: 0 -2px; }
   [data-kinu-plan-review] .annotation-highlight.math-inline-annotation { display: inline-flex; align-items: center; line-height: 1; }
   [data-kinu-plan-review] .annotation-highlight.math-block-annotation { display: block; }
-  [data-kinu-plan-review] .annotation-highlight.deletion {
+  :is([data-kinu-plan-review], [data-kinu-annotations]) .annotation-highlight.deletion {
     background: color-mix(in oklab, var(--destructive) 35%, transparent);
     text-decoration: line-through 2px var(--destructive);
   }
-  [data-kinu-plan-review] .annotation-highlight.comment {
+  :is([data-kinu-plan-review], [data-kinu-annotations]) .annotation-highlight.comment {
     background: color-mix(in oklab, var(--annotation-comment) 22%, transparent);
     border-bottom: 2px solid var(--annotation-comment);
   }
-  [data-kinu-plan-review] .annotation-highlight.focused {
+  :is([data-kinu-plan-review], [data-kinu-annotations]) .annotation-highlight.focused {
     background: color-mix(in oklab, var(--focus-highlight) 32%, transparent) !important;
     border-bottom: 2px solid var(--focus-highlight);
     box-shadow: 0 0 8px color-mix(in oklab, var(--focus-highlight) 40%, transparent);
     filter: none;
   }
-  [data-kinu-plan-review] .annotation-highlight:hover { cursor: pointer; filter: brightness(1.15); }
+  :is([data-kinu-plan-review], [data-kinu-annotations]) .annotation-highlight:hover { cursor: pointer; filter: brightness(1.15); }
 
   [data-kinu-plan-review] .alert-note { border-left-color: var(--c-info); }
   [data-kinu-plan-review] .alert-note .alert-title { color: var(--c-info); }

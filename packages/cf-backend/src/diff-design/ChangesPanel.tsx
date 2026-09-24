@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
-  ArrowRightIcon, ArrowsOutSimpleIcon, CaretDownIcon, CaretLeftIcon, CaretUpIcon, CheckCircleIcon, WarningCircleIcon,
+  ArrowRightIcon, ArrowsOutSimpleIcon, CaretDownIcon, CaretLeftIcon, CaretUpIcon, ChatCircleDotsIcon, CheckCircleIcon, WarningCircleIcon,
 } from "@phosphor-icons/react";
 import { blocksOf, bodyOf, ChangeMark, count, Counts, DiffBody, folderOf, nameOf, reading, sinceLabel, type ChangedFile, type ChangeSet } from "./diff";
 import { FileTree, IconButton, MarkReviewed, Since, SourceMenu, Summary, typing } from "./parts";
+import { SendFeedback, useNotes, type ChangeNote } from "./notes";
 
 function NoLines({ file, onOpenInFiles }: { file: ChangedFile; onOpenInFiles: () => void }) {
   const body = bodyOf(file);
@@ -91,9 +92,61 @@ export interface PanelProps {
   readonly menuOpen?: boolean;
   readonly reviewedAt?: number | null;
   readonly onExpand: ((source: string, file: string | null) => void) | null;
+  readonly onShowNotes: () => void;
+  readonly onSend: (notes: readonly ChangeNote[]) => void;
 }
 
-export function ChangesPanel({ sets, now, source: initialSource, file: initialFile = null, menuOpen = false, reviewedAt: initialReviewed = null, onExpand }: PanelProps) {
+function ListHeader({ sets, set, now, menuOpen, reviewable, onPick, onExpand, onReviewed }: {
+  sets: readonly ChangeSet[];
+  set: ChangeSet;
+  now: number;
+  menuOpen: boolean;
+  reviewable: boolean;
+  onPick: (source: string) => void;
+  onExpand: (() => void) | null;
+  onReviewed: () => void;
+}) {
+  const read = set.error === undefined;
+
+  return (
+    <header className="shrink-0 border-b p-border px-4 pb-3 pt-3.5">
+      <div className="flex items-center gap-2">
+        {read
+          ? <Summary set={set} />
+          : <span className="flex min-w-0 items-center gap-2 p-row-text font-medium p-text"><WarningCircleIcon size={15} className="shrink-0 p-warning" />Can't read {set.label}</span>}
+        {onExpand !== null && read && (
+          <IconButton label="Expand: every file side by side" onClick={onExpand} className="-mr-1.5 ml-auto">
+            <ArrowsOutSimpleIcon size={15} />
+          </IconButton>
+        )}
+      </div>
+      <div className="mt-1.5 flex min-h-7 items-center gap-1.5 p-meta p-text-3">
+        <SourceMenu sets={sets} source={set.source} initiallyOpen={menuOpen} onPick={onPick} />
+        {sets.length > 1 && read && <span aria-hidden="true">·</span>}
+        {read && <Since set={set} now={now} />}
+        {set.mode === "vfs-baseline" && read && reviewable && <MarkReviewed onClick={onReviewed} className="ml-auto" />}
+      </div>
+    </header>
+  );
+}
+
+function NotesBar({ onShowNotes, onSend }: { onShowNotes: () => void; onSend: (notes: readonly ChangeNote[]) => void }) {
+  const notes = useNotes();
+
+  if (notes === null || notes.notes.length === 0) return null;
+
+  return (
+    <footer className="flex shrink-0 items-center gap-2 border-t p-border px-3 py-2.5" data-notes-bar>
+      <button type="button" onClick={onShowNotes} className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 -ml-1.5 p-meta p-text-2 transition-colors hover:bg-[var(--c-elevated)] hover:p-text">
+        <ChatCircleDotsIcon size={14} className="p-info" />
+        {notes.notes.length} {notes.notes.length === 1 ? "note" : "notes"} for the agent
+      </button>
+      <SendFeedback onSend={onSend} className="ml-auto" />
+    </footer>
+  );
+}
+
+export function ChangesPanel({ sets, now, source: initialSource, file: initialFile = null, menuOpen = false, reviewedAt: initialReviewed = null, onExpand, onShowNotes, onSend }: PanelProps) {
   const [source, setSource] = useState(initialSource ?? sets[0]?.source ?? "workspace");
   const [path, setPath] = useState<string | null>(initialFile);
   const [reviewedAt, setReviewedAt] = useState<number | null>(initialReviewed);
@@ -102,6 +155,7 @@ export function ChangesPanel({ sets, now, source: initialSource, file: initialFi
   const at = files.findIndex((file) => file.path === path);
   const open = files[at];
   const root = useRef<HTMLDivElement>(null);
+  const noted = (useNotes()?.notes.length ?? 0) > 0;
   const moved = useRef(false);
   const last = useRef<string | null>(null);
 
@@ -112,7 +166,6 @@ export function ChangesPanel({ sets, now, source: initialSource, file: initialFi
     setPath(next);
   };
 
-  // Focus follows the reader, so j, k and Escape keep working: to the back button in a file, to the file's row on return.
   useEffect(() => {
     if (!moved.current) return;
     moved.current = false;
@@ -161,26 +214,10 @@ export function ChangesPanel({ sets, now, source: initialSource, file: initialFi
   const git = set.mode === "git";
 
   return (
-    <div ref={root} className="flex h-full min-h-0 flex-col" onKeyDown={onKeyDown} data-changes={open === undefined ? "list" : "file"}>
+    <div ref={root} className="flex h-full min-h-0 flex-col" onKeyDown={onKeyDown} data-changes={open === undefined ? "list" : "file"} data-kinu-annotations>
       {open === undefined ? (
-        <header className="shrink-0 border-b p-border px-4 pb-3 pt-3.5">
-          <div className="flex items-center gap-2">
-            {set.error === undefined
-              ? <Summary set={set} />
-              : <span className="flex min-w-0 items-center gap-2 p-row-text font-medium p-text"><WarningCircleIcon size={15} className="shrink-0 p-warning" />Can't read {set.label}</span>}
-            {onExpand !== null && set.error === undefined && (
-              <IconButton label="Expand: every file side by side" onClick={() => onExpand(source, null)} className="-mr-1.5 ml-auto">
-                <ArrowsOutSimpleIcon size={15} />
-              </IconButton>
-            )}
-          </div>
-          <div className="mt-1.5 flex min-h-7 items-center gap-1.5 p-meta p-text-3">
-            <SourceMenu sets={sets} source={source} initiallyOpen={menuOpen} onPick={pick} />
-            {sets.length > 1 && set.error === undefined && <span aria-hidden="true">·</span>}
-            {set.error === undefined && <Since set={set} now={now} />}
-            {set.mode === "vfs-baseline" && set.error === undefined && <MarkReviewed onClick={() => setReviewedAt(now)} className="ml-auto" />}
-          </div>
-        </header>
+        <ListHeader sets={sets} set={set} now={now} menuOpen={menuOpen} reviewable={!noted} onPick={pick}
+          onExpand={onExpand === null ? null : () => onExpand(source, null)} onReviewed={() => setReviewedAt(now)} />
       ) : (
         <header className="shrink-0 border-b p-border px-2 pb-2.5 pt-2">
           <div className="flex items-center gap-1">
@@ -208,10 +245,11 @@ export function ChangesPanel({ sets, now, source: initialSource, file: initialFi
           : (
             <div className="pt-1.5">
               <FileBody file={open} git={git} stacked={false} onOpenInFiles={() => {}} />
-              <NextFile next={files[at + 1]} reviewable={set.mode === "vfs-baseline"} onOpen={go} onReviewed={() => setReviewedAt(now)} onList={() => go(null)} />
+              <NextFile next={files[at + 1]} reviewable={set.mode === "vfs-baseline" && !noted} onOpen={go} onReviewed={() => setReviewedAt(now)} onList={() => go(null)} />
             </div>
           )}
       </div>
+      <NotesBar onShowNotes={onShowNotes} onSend={onSend} />
     </div>
   );
 }

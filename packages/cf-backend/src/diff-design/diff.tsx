@@ -1,10 +1,12 @@
 /** A change-set as the Changes panel reads it: rows numbered, unchanged lines folded, changed words marked, drawn. */
 import { diffLines, type FileDiff, type FileStatus } from "@kinu.run/core";
-import { Fragment, useCallback, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { CaretDownIcon, CaretUpDownIcon } from "@phosphor-icons/react";
 import { useTheme } from "@/hooks/use-theme";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
-import { colorOf, piecesOf, tintsOf, type Tints } from "./highlight";
+import { AnnotationType } from "@plannotator/ui/types";
+import { colorOf, piecesOf, tintsOf, type Piece, type Tints } from "./highlight";
+import { pickSelection, selectLines, spansOn, useNotes, type NoteSide, type NoteSpan } from "./notes";
 
 export type Omitted = "binary" | "large";
 
@@ -18,6 +20,7 @@ export interface ChangeSet {
   readonly mode: "vfs-baseline" | "git";
   readonly files: readonly ChangedFile[];
   readonly trackedSince?: number;
+  readonly baseline?: string;
   readonly error?: string;
 }
 
@@ -28,29 +31,21 @@ export type Span = readonly [number, number];
 export interface Row {
   readonly kind: RowKind;
   readonly text: string;
-  
   readonly oldNo: number | null;
-  
   readonly newNo: number | null;
-  
   readonly marks?: readonly Span[];
 }
 
 export type Block =
   | { readonly kind: "rows"; readonly rows: readonly Row[] }
-  
   | { readonly kind: "gap"; readonly id: string; readonly rows: readonly Row[]; readonly count: number; readonly context: string | null }
-  
   | { readonly kind: "rest"; readonly id: string; readonly blocks: readonly Block[]; readonly count: number; readonly deleted: boolean };
 
 export type Body =
   | { readonly kind: "rows" }
   | { readonly kind: "binary" }
-  
   | { readonly kind: "unread"; readonly why: Omitted | null }
-  
   | { readonly kind: "large" }
-  
   | { readonly kind: "capped"; readonly hidden: number };
 
 const CONTEXT = 3;
@@ -136,7 +131,6 @@ function trimmed(text: string, [start, end]: readonly [number, number]): Span {
   return [start + lead, start + lead + inner.trim().length];
 }
 
-/** Core's line diff run over words; null when most of the line was rewritten, since marking every word says nothing. */
 function wordMarks(before: string, after: string): [Span[], Span[]] | null {
   if (before.length > MARK_MAX || after.length > MARK_MAX) return null;
   const aligned = diffLines((before.match(TOKEN) ?? []).join("\n"), (after.match(TOKEN) ?? []).join("\n"));
@@ -489,63 +483,121 @@ const GUTTER_TONE: Record<Row["kind"], string> = {
 
 const QUIET_ROW = "bg-[color-mix(in_srgb,var(--c-text)_3.5%,transparent)]";
 
-function Code({ row, tints }: { row: Row; tints: Tints | null }) {
-  const { mode } = useTheme();
-  const colours = row.kind === "del" ? tints?.before.get(row.oldNo ?? -1) : tints?.after.get(row.newNo ?? -1);
-  const pieces = piecesOf(row.text, colours, row.marks);
-  const runs: { marked: boolean; pieces: typeof pieces }[] = [];
+interface Run {
+  readonly marked: boolean;
+  readonly note: NoteSpan | null;
+  readonly pieces: Piece[];
+}
+
+function runsOf(pieces: readonly Piece[]): Run[] {
+  const runs: Run[] = [];
 
   for (const piece of pieces) {
     const last = runs.at(-1);
 
-    if (last !== undefined && last.marked === piece.marked) last.pieces.push(piece);
-    else runs.push({ marked: piece.marked, pieces: [piece] });
+    if (last !== undefined && last.marked === piece.marked && last.note?.id === piece.note?.id) last.pieces.push(piece);
+    else runs.push({ marked: piece.marked, note: piece.note, pieces: [piece] });
   }
 
+  return runs;
+}
+
+function noteClass(note: NoteSpan, selected: string | null): string {
+  const kind = note.type === AnnotationType.DELETION ? "deletion" : "comment";
+
+  return `annotation-highlight ${kind}${note.id === "draft" || note.id === selected ? " focused" : ""}`;
+}
+
+function Code({ row, tints, notes }: { row: Row; tints: Tints | null; notes: readonly NoteSpan[] }) {
+  const { mode } = useTheme();
+  const context = useNotes();
+  const colours = row.kind === "del" ? tints?.before.get(row.oldNo ?? -1) : tints?.after.get(row.newNo ?? -1);
+  const runs = runsOf(piecesOf(row.text, colours, row.marks, notes));
+
   return (
-    <code className="min-w-0 flex-1 whitespace-pre-wrap py-px pl-2.5 pr-4 [overflow-wrap:anywhere] [tab-size:2]">
+    <code data-code className="min-w-0 flex-1 whitespace-pre-wrap py-px pl-2.5 pr-4 [overflow-wrap:anywhere] [tab-size:2]">
       {runs.length === 0 && "\u200b"}
       {runs.map((run, index) => {
         const words = run.pieces.map((piece, at) => (
           <span key={at} style={piece.tint === null ? undefined : { color: colorOf(piece.tint, mode) }}>{piece.text}</span>
         ));
 
-        return run.marked
-          ? <span key={index} className={`rounded-[3px] [box-decoration-break:clone] ${WORD_TINT[row.kind]}`}>{words}</span>
-          : <Fragment key={index}>{words}</Fragment>;
+        const marked = run.marked
+          ? <span className={`rounded-[3px] [box-decoration-break:clone] ${WORD_TINT[row.kind]}`}>{words}</span>
+          : <>{words}</>;
+
+        if (run.note === null) return <Fragment key={index}>{marked}</Fragment>;
+
+        const id = run.note.id;
+
+        return (
+          <span key={index} data-note-mark={id} className={`[box-decoration-break:clone] ${noteClass(run.note, context?.selected ?? null)}`}
+            onClick={id === "draft" ? undefined : () => context?.select(id)}>
+            {marked}
+          </span>
+        );
       })}
     </code>
   );
 }
 
-function Gutter({ children, tone, width }: { children?: ReactNode; tone: string; width: string }) {
-  return <span style={{ width }} className={`shrink-0 select-none py-px pr-1 text-right tabular-nums ${tone}`}>{children}</span>;
+function Gutter({ children, tone, width, noted = false, onPick }: {
+  children?: ReactNode;
+  tone: string;
+  width: string;
+  noted?: boolean;
+  onPick?: (event: MouseEvent<HTMLSpanElement>) => void;
+}) {
+  const pickable = onPick === undefined ? "" : "cursor-pointer hover:p-text-2";
+
+  return (
+    <span style={{ width }} onMouseDown={onPick} onDoubleClick={onPick} data-noted={noted ? "" : undefined}
+      className={`shrink-0 select-none py-px pr-1 text-right tabular-nums ${noted ? "font-semibold p-info" : tone} ${pickable}`}>
+      {children}
+    </span>
+  );
 }
 
 interface Draw {
   readonly split: boolean;
   readonly tints: Tints | null;
   readonly gutter: string;
+  readonly path: string;
+  readonly onPick: ((event: MouseEvent<HTMLSpanElement>) => void) | undefined;
+}
+
+function useRowNotes(row: Row, path: string, only?: NoteSide): NoteSpan[] {
+  const notes = useNotes();
+  const length = row.text.length;
+  const old = only === "new" || row.kind === "add" ? [] : spansOn(notes, { path, side: "old", line: row.oldNo, length });
+
+  return only === "old" || row.kind === "del" ? old : [...old, ...spansOn(notes, { path, side: "new", line: row.newNo, length })];
 }
 
 function UnifiedRow({ row, draw }: { row: Row; draw: Draw }) {
+  const notes = useRowNotes(row, draw.path);
+
   return (
-    <div className={`flex ${ROW_TINT[row.kind]}`} data-row={row.kind}>
-      <Gutter tone={GUTTER_TONE[row.kind]} width={draw.gutter}>{row.kind === "del" ? "−" : row.newNo}</Gutter>
-      <Code row={row} tints={draw.tints} />
+    <div className={`flex ${ROW_TINT[row.kind]}`} data-row={row.kind} data-note-row data-kind={row.kind}
+      data-old={row.oldNo ?? undefined} data-new={row.newNo ?? undefined}>
+      <Gutter tone={GUTTER_TONE[row.kind]} width={draw.gutter} noted={notes.length > 0} onPick={draw.onPick}>{row.kind === "del" ? "−" : row.newNo}</Gutter>
+      <Code row={row} tints={draw.tints} notes={notes} />
     </div>
   );
 }
 
-function SplitCell({ row, side, draw }: { row: Row | null; side: "old" | "new"; draw: Draw }) {
+function SplitCell({ row, side, draw }: { row: Row | null; side: NoteSide; draw: Draw }) {
+  const notes = useRowNotes(row ?? { kind: "ctx", text: "", oldNo: null, newNo: null }, draw.path, side);
   const edge = side === "new" ? "border-l p-border" : "";
+  const confine = side === "new" ? "in-data-[picking=old]:select-none" : "in-data-[picking=new]:select-none";
 
   if (row === null) return <div className={`flex min-w-0 ${QUIET_ROW} ${edge}`} />;
 
   return (
-    <div className={`flex min-w-0 ${ROW_TINT[row.kind]} ${edge}`} data-row={row.kind}>
-      <Gutter tone={GUTTER_TONE[row.kind]} width={draw.gutter}>{side === "old" ? row.oldNo : row.newNo}</Gutter>
-      <Code row={row} tints={draw.tints} />
+    <div className={`flex min-w-0 ${ROW_TINT[row.kind]} ${edge} ${confine}`} data-row={row.kind} data-note-row data-kind={row.kind} data-side={side}
+      data-old={side === "old" ? row.oldNo ?? undefined : undefined} data-new={side === "new" ? row.newNo ?? undefined : undefined}>
+      <Gutter tone={GUTTER_TONE[row.kind]} width={draw.gutter} noted={notes.length > 0} onPick={draw.onPick}>{side === "old" ? row.oldNo : row.newNo}</Gutter>
+      <Code row={row} tints={draw.tints} notes={notes} />
     </div>
   );
 }
@@ -633,10 +685,43 @@ export function DiffBody({ path, blocks, split }: { path: string; blocks: readon
   const load = useCallback(() => tintsOf(path, blocks), [path, blocks]);
   const { resource } = useAsyncResource(load, undefined, path);
   const tints = lastValue(resource);
+  const notes = useNotes();
+  const root = useRef<HTMLDivElement>(null);
+  const anchorRow = useRef<HTMLElement | null>(null);
+
+  const offer = (): void => {
+    const picked = notes === null || root.current === null ? null : pickSelection(root.current, path, notes.baseline);
+
+    if (picked !== null) notes?.offer(picked);
+  };
+
+  const onPick = (event: MouseEvent<HTMLSpanElement>): void => {
+    const row = event.currentTarget.closest<HTMLElement>("[data-note-row]");
+
+    if (row === null) return;
+    event.preventDefault();
+    selectLines(row, event.shiftKey ? anchorRow.current : null, event.type === "dblclick");
+
+    if (!event.shiftKey) anchorRow.current = row;
+    offer();
+  };
+
+  const onMouseDown = (event: MouseEvent<HTMLDivElement>): void => {
+    const side = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>("[data-side]")?.dataset.side : undefined;
+
+    if (side !== undefined) root.current?.setAttribute("data-picking", side);
+  };
+
+  const onMouseUp = (): void => {
+    root.current?.removeAttribute("data-picking");
+    offer();
+  };
 
   return (
-    <div className="overflow-hidden font-mono text-[12px] leading-5 [font-variant-ligatures:none]" data-diff-tinted={tintedState(resource.status, tints)}>
-      <Blocks blocks={blocks} draw={{ split, tints, gutter }} open={open} onOpen={(id) => setOpen((prior) => new Set([...prior, id]))} />
+    <div ref={root} data-note-root onMouseDown={notes === null ? undefined : onMouseDown} onMouseUp={notes === null ? undefined : onMouseUp}
+      className="overflow-hidden font-mono text-[12px] leading-5 [font-variant-ligatures:none]" data-diff-tinted={tintedState(resource.status, tints)}>
+      <Blocks blocks={blocks} draw={{ split, tints, gutter, path, onPick: notes === null ? undefined : onPick }} open={open}
+        onOpen={(id) => setOpen((prior) => new Set([...prior, id]))} />
     </div>
   );
 }
