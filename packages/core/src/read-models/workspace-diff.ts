@@ -28,12 +28,10 @@ const SNAPSHOT_IGNORED_DIRECTORIES = new Set([
 
 const NOT_GIT_REPO = '__KINU_NOT_GIT_REPO__';
 
-/** The capture marker's `size`: 1 once binary files are in the manifest (hash null), so a new one can be told apart. */
-const MANIFEST_FORMAT = 1;
-
 /**
- * A body is stored once per hash; `hash` is null for a binary file or one past one row. On the '' marker row, `hash`
- * names the generation this one replaced, which is kept so a Mark reviewed can be undone.
+ * A body is stored once per hash; `hash` is null for a binary file or one past one row. `vfs_baseline_generation`
+ * has a row for each generation captured with binary files listed, naming the one it replaced for Undo; a generation
+ * without one was captured before, and is re-taken.
  */
 export function initWorkspaceBaselineTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline_manifest (
@@ -51,6 +49,12 @@ export function initWorkspaceBaselineTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline_blob (
     hash    TEXT PRIMARY KEY,
     content TEXT NOT NULL
+  )`);
+  execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline_generation (
+    actor_id   TEXT NOT NULL,
+    generation TEXT NOT NULL,
+    replaced   TEXT,
+    PRIMARY KEY (actor_id, generation)
   )`);
 }
 
@@ -135,10 +139,12 @@ async function reviewableText(rt: WorkspaceBaselineRuntime, path: string): Promi
   return text.includes(String.fromCharCode(0)) ? null : text;
 }
 
-/** The '' marker row carries the capture time and format; null means this actor has no baseline yet. */
+/** The '' marker row carries the capture time; null means this actor has no baseline yet. `current`: captured with
+ *  binary files listed. */
 interface BaselineManifest {
   readonly capturedAt: number | null;
-  readonly format: number;
+  readonly generation: string | null;
+  readonly current: boolean;
   readonly entries: Map<string, ManifestEntry>;
 }
 
@@ -146,24 +152,29 @@ interface BaselineManifest {
 function activeManifest(rt: WorkspaceBaselineRuntime): BaselineManifest {
   rt.actor.assertCurrent();
 
-  const rows = rt.storage.sql<{ path: string; size: number; mtime_ms: number; hash: string | null }>`
-    SELECT path, size, mtime_ms, hash FROM vfs_baseline_manifest
-    WHERE actor_id = ${rt.actor.actorId} AND active = 1`;
+  const actorId = rt.actor.actorId;
+
+  const rows = rt.storage.sql<{ generation: string; path: string; size: number; mtime_ms: number; hash: string | null }>`
+    SELECT generation, path, size, mtime_ms, hash FROM vfs_baseline_manifest
+    WHERE actor_id = ${actorId} AND active = 1`;
 
   const entries = new Map<string, ManifestEntry>();
   let capturedAt: number | null = null;
-  let format = 0;
+  let generation: string | null = null;
 
   for (const row of rows) {
     if (row.path === '') {
       capturedAt = row.mtime_ms;
-      format = row.size;
+      generation = row.generation;
     } else {
       entries.set(row.path, { size: row.size, mtimeMs: row.mtime_ms, hash: row.hash });
     }
   }
 
-  return { capturedAt, format, entries };
+  const current = generation !== null && rt.storage.sql`SELECT 1 FROM vfs_baseline_generation
+    WHERE actor_id = ${actorId} AND generation = ${generation} LIMIT 1`.length > 0;
+
+  return { capturedAt, generation, current, entries };
 }
 
 function blobText(rt: WorkspaceBaselineRuntime, hash: string | null): string | null {
@@ -194,10 +205,16 @@ interface Sides {
 
 /** Cumulative change-set since the baseline. A file whose size and mtime match its manifest row is never read. */
 export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime): Promise<WorkspaceDiffResult> {
-  const held = activeManifest(rt);
-  // Without a baseline, tracking starts now: the same capture a new workspace takes at creation.
-  const trackedSince = held.capturedAt ?? (await resetWorkspaceBaseline(rt)).capturedAt;
-  const manifest = held.capturedAt === null ? activeManifest(rt) : held;
+  let manifest = activeManifest(rt);
+  let trackedSince = manifest.capturedAt;
+
+  // Without a baseline, or with one captured before binary files were listed, tracking starts now: the same capture a
+  // new workspace takes at creation, with nothing to go back to.
+  if (trackedSince === null || !manifest.current) {
+    trackedSince = (await capture(rt, new Map(), null)).capturedAt;
+    manifest = activeManifest(rt);
+  }
+
   const baseline = manifest.entries;
   const files: FileDiff[] = [];
   let bodyChars = 0;
@@ -229,10 +246,7 @@ export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime): Promise<Wo
     const after = st.size > BODY_MAX_BYTES ? null : await reviewableText(rt, path);
 
     if (base === undefined) {
-      // A manifest older than binary files held none, so a binary file missing from it may have been there all along.
-      const tracked = after !== null || st.size > BODY_MAX_BYTES || manifest.format >= MANIFEST_FORMAT;
-
-      if (tracked) admit(path, 'added', { before: '', after, omitted: unread(st.size) });
+      admit(path, 'added', { before: '', after, omitted: unread(st.size) });
 
       return;
     }
@@ -249,14 +263,25 @@ export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime): Promise<Wo
   return { files, trackedSince };
 }
 
+/** The generation the active one replaced, kept for Undo. */
+function replacedGeneration(rt: WorkspaceBaselineRuntime): string | null {
+  const actorId = rt.actor.actorId;
+
+  return rt.storage.sql<{ replaced: string | null }>`SELECT g.replaced FROM vfs_baseline_generation g
+    JOIN vfs_baseline_manifest m ON m.actor_id = g.actor_id AND m.generation = g.generation
+    WHERE g.actor_id = ${actorId} AND m.active = 1 AND m.path = '' LIMIT 1`[0]?.replaced ?? null;
+}
+
 /** Drops every generation but the active one and the one it replaced, then the bodies nothing names. */
 function pruneBaselines(rt: WorkspaceBaselineRuntime): void {
   const actorId = rt.actor.actorId;
 
   void rt.storage.sql`DELETE FROM vfs_baseline_manifest WHERE actor_id = ${actorId} AND active = 0
-    AND generation IS NOT (SELECT hash FROM vfs_baseline_manifest WHERE actor_id = ${actorId} AND active = 1 AND path = '')`;
+    AND generation IS NOT ${replacedGeneration(rt)}`;
+  void rt.storage.sql`DELETE FROM vfs_baseline_generation WHERE actor_id = ${actorId}
+    AND generation NOT IN (SELECT generation FROM vfs_baseline_manifest WHERE actor_id = ${actorId})`;
   void rt.storage.sql`DELETE FROM vfs_baseline_blob
-    WHERE hash NOT IN (SELECT hash FROM vfs_baseline_manifest WHERE hash IS NOT NULL AND path <> '')`;
+    WHERE hash NOT IN (SELECT hash FROM vfs_baseline_manifest WHERE hash IS NOT NULL)`;
 }
 
 /**
@@ -266,12 +291,15 @@ function pruneBaselines(rt: WorkspaceBaselineRuntime): void {
 export async function resetWorkspaceBaseline(
   rt: WorkspaceBaselineRuntime,
 ): Promise<{ ok: true; files: number; capturedAt: number }> {
-  const previous = activeManifest(rt).entries;
+  const held = activeManifest(rt);
+
+  return capture(rt, held.entries, held.current ? held.generation : null);
+}
+
+async function capture(
+  rt: WorkspaceBaselineRuntime, previous: ReadonlyMap<string, ManifestEntry>, replaced: string | null,
+): Promise<{ ok: true; files: number; capturedAt: number }> {
   const actorId = rt.actor.actorId;
-
-  const replaced = rt.storage.sql<{ generation: string }>`SELECT generation FROM vfs_baseline_manifest
-    WHERE actor_id = ${actorId} AND active = 1 AND path = '' LIMIT 1`[0]?.generation ?? null;
-
   const generation = nanoid();
   const capturedAt = Date.now();
   let files = 0;
@@ -279,7 +307,7 @@ export async function resetWorkspaceBaseline(
   try {
     // The marker makes an intentionally empty snapshot representable.
     void rt.storage.sql`INSERT INTO vfs_baseline_manifest (actor_id, generation, path, size, mtime_ms, hash, active)
-      VALUES (${actorId}, ${generation}, ${''}, ${MANIFEST_FORMAT}, ${capturedAt}, ${replaced}, ${0})`;
+      VALUES (${actorId}, ${generation}, ${''}, ${0}, ${capturedAt}, ${null}, ${0})`;
     await walkWorkspaceFiles(rt, async (path, st) => {
       const kept = previous.get(path);
       let hash: string | null = null;
@@ -299,6 +327,8 @@ export async function resetWorkspaceBaseline(
         VALUES (${actorId}, ${generation}, ${path}, ${st.size}, ${st.mtimeMs}, ${hash}, ${0})`;
       files++;
     });
+    void rt.storage.sql`INSERT INTO vfs_baseline_generation (actor_id, generation, replaced)
+      VALUES (${actorId}, ${generation}, ${replaced})`;
     void rt.storage.sql`UPDATE vfs_baseline_manifest
       SET active = CASE WHEN generation = ${generation} THEN 1 ELSE 0 END
       WHERE actor_id = ${actorId}`;
@@ -315,8 +345,7 @@ export function restoreWorkspaceBaseline(rt: WorkspaceBaselineRuntime): { ok: tr
   rt.actor.assertCurrent();
   const actorId = rt.actor.actorId;
 
-  const replaced = rt.storage.sql<{ hash: string | null }>`SELECT hash FROM vfs_baseline_manifest
-    WHERE actor_id = ${actorId} AND active = 1 AND path = '' LIMIT 1`[0]?.hash ?? null;
+  const replaced = replacedGeneration(rt);
 
   const marker = replaced === null ? undefined : rt.storage.sql<{ mtime_ms: number }>`SELECT mtime_ms FROM vfs_baseline_manifest
     WHERE actor_id = ${actorId} AND generation = ${replaced} AND path = '' LIMIT 1`[0];

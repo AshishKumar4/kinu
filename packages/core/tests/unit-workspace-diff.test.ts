@@ -127,17 +127,26 @@ describe('workspace diff lifecycle', () => {
     ]);
   });
 
-  test('a baseline captured before binary files were recorded does not list the ones already there', async () => {
-    const { rt } = createTestRuntime();
+  test('a baseline captured before binary files were listed is re-taken: tracking starts over, with no Undo to it', async () => {
+    const { rt, db } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
     await rt.storage.vfs.writeFile('logo.png', PNG);
     await resetWorkspaceBaseline(rt);
-    // What that capture wrote: format 0 on the marker, and no row for a binary file.
-    void rt.storage.sql`UPDATE vfs_baseline_manifest SET size = 0 WHERE path = ''`;
-    void rt.storage.sql`DELETE FROM vfs_baseline_manifest WHERE path = 'logo.png'`;
     await rt.storage.vfs.writeFile('hello.py', 'print(42)\n');
+    await resetWorkspaceBaseline(rt);
+    // What that capture wrote: no generation row, and no row for a binary file.
+    db.exec('DELETE FROM vfs_baseline_generation');
+    db.exec(`DELETE FROM vfs_baseline_manifest WHERE path = 'logo.png'`);
+    await rt.storage.vfs.writeFile('hello.py', 'print(43)\n');
 
-    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['added hello.py']);
+    const active = (): string | undefined => db.query<{ generation: string }, []>(
+      `SELECT generation FROM vfs_baseline_manifest WHERE active = 1 AND path = ''`).get()?.generation;
+
+    const old = active();
+
+    expect((await getWorkspaceDiff(rt)).files).toEqual([]);
+    expect(active()).not.toEqual(old);
+    expect(restoreWorkspaceBaseline(rt)).toMatchObject({ ok: false });
   });
 
   test('a workspace without a baseline starts tracking at its first read, then shows exactly what it writes', async () => {
