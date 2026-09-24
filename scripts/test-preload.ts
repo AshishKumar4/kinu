@@ -34,7 +34,8 @@ afterAll(() => {
   release();
 
   if (left.length > 0) {
-    throw new Error(`${Bun.main} left ${String(left.length)} process(es) of its own running, now ended: `
+    // Per file under `--parallel`; without it this runs once, so the file named is only the last one.
+    throw new Error(`test files up to ${Bun.main} left ${String(left.length)} process(es) of their own running, now ended: `
       + `${left.join('; ')}. A test file ends what it starts and awaits its exit.`);
   }
 });
