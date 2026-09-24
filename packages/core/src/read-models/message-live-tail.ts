@@ -1,51 +1,58 @@
 /**
- * What a live assistant turn is doing at its tail. Read from part state (`streaming`/`done`, tool output
- * landed), never from part order or a timer: an indicator animating while nothing arrives is worse than none.
+ * What a live assistant turn is doing at its tail, read from part state, never part order or a timer. Only
+ * a part the row draws is a live state; an empty one reads as thinking.
  */
 import { isToolUIPart } from "ai";
 import type { UIMessage } from "ai";
+import type { AnyToolPart } from "./tool-call-grouping";
 import type { TurnLiveness } from "./turn-liveness";
 
 type Part = UIMessage["parts"][number];
 
 export type LiveTail =
-  /** The caret rides this block's last line. */
   | { kind: "text"; part: Part }
-  /** The model is reasoning; that block reads live instead of a second row. */
   | { kind: "reasoning"; part: Part }
-  /** Its own row carries the live dot; nothing is added. */
+  /** Its own row carries the live dot. */
   | { kind: "tool" }
-  /** Between parts: the request is open and the next thing has not arrived. */
+  /** Between parts: the next thing has not arrived. */
   | { kind: "thinking" };
 
-/** Only called for the last message of an open stream, so no active part means between steps. A part
- * with no `state` was never closed: it is the one being written. */
+/** What a text or reasoning block draws; null when blank. */
+export function drawnText(part: { readonly text: string }): string | null {
+  return part.text.trim() === "" ? null : part.text;
+}
+
+/** A call its row draws running. */
+export function toolCallRunning(part: AnyToolPart): boolean {
+  return part.state === "input-streaming" || part.state === "input-available";
+}
+
+/** The newest part of the step in flight that draws itself live. A part with no `state` is being written. */
 function liveTail(parts: readonly Part[]): LiveTail {
   for (let i = parts.length - 1; i >= 0; i--) {
     const part = parts[i];
 
     if (part === undefined) continue;
 
+    if (part.type === "step-start") break;
+
     if (isToolUIPart(part)) {
-      const done = part.state === "output-available" || part.state === "output-error";
+      if (toolCallRunning(part)) return { kind: "tool" };
 
-      return done ? { kind: "thinking" } : { kind: "tool" };
+      continue;
     }
 
-    if (part.type === "text") {
-      return part.state === "done" ? { kind: "thinking" } : { kind: "text", part };
-    }
+    if (part.type !== "text" && part.type !== "reasoning") continue;
 
-    if (part.type === "reasoning") {
-      return part.state === "done" ? { kind: "thinking" } : { kind: "reasoning", part };
-    }
+    if (part.state === "done" || drawnText(part) === null) continue;
+
+    return part.type === "text" ? { kind: "text", part } : { kind: "reasoning", part };
   }
 
   return { kind: "thinking" };
 }
 
-/** Decided per conversation, not per last row: before the first assistant row the tail is `thinking`.
- * A live turn always has a tail; a thread that is not live has none. */
+/** Before the first assistant row the tail is `thinking`; a thread that is not live has none. */
 export function threadLiveTail(input: { readonly last: Pick<UIMessage, "role" | "parts"> | undefined; readonly liveness: TurnLiveness }): LiveTail | null {
   if (input.liveness.kind !== "live") return null;
 

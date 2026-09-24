@@ -7,7 +7,7 @@ import {
 import { bootstrappedProfile } from './helpers/bindings';
 import { AuthError, authenticateRequest, type AuthIdentity } from '../src/auth/session';
 import { makeKv, type FakeKv } from './helpers/kv';
-import { sha256Hex } from '@kinu.run/core';
+import { DEV_IDENTITY_HEADER, sha256Hex } from '@kinu.run/core';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
 import type { UserCaller } from '@kinu.run/core';
 
@@ -245,7 +245,7 @@ describe('the synthetic development identity', () => {
 
   test('a published host grants it only to a caller holding the secret', async () => {
     const held = await resolve('https://kinu.run/api/user/workspaces', {
-      'x-kinu-dev-identity': 'deployment-shared-secret',
+      [DEV_IDENTITY_HEADER]: 'deployment-shared-secret',
     });
 
     if (!held.granted) throw new Error(`the secret was refused with ${String(held.status)}`);
@@ -255,8 +255,8 @@ describe('the synthetic development identity', () => {
 
   test.each([
     ['no secret at all', {}],
-    ['a wrong secret', { 'x-kinu-dev-identity': 'guess' }],
-    ['an empty secret', { 'x-kinu-dev-identity': '' }],
+    ['a wrong secret', { [DEV_IDENTITY_HEADER]: 'guess' }],
+    ['an empty secret', { [DEV_IDENTITY_HEADER]: '' }],
   ])('a published host refuses a caller with %s', async (_label, headers) => {
     expect(await resolve('https://kinu.run/api/user/workspaces', headers))
       .toEqual({ granted: false, status: 401 });
@@ -264,7 +264,7 @@ describe('the synthetic development identity', () => {
 
   test('a deployment that configures no secret grants nothing', async () => {
     const request = new Request('https://kinu.run/api/user/workspaces', {
-      headers: { 'x-kinu-dev-identity': 'deployment-shared-secret' },
+      headers: { [DEV_IDENTITY_HEADER]: 'deployment-shared-secret' },
     });
 
     expect(authenticateRequest(request, { AUTH_KV: makeKv(), DEV_USER_EMAIL: 'eval-service@kinu.run' }))

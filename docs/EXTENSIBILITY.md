@@ -342,12 +342,13 @@ truncates useful "when to use" guidance.
   Non-replayable bodies pass through untouched. Do not cap attempts and count
   on the SDK for the rest: `PROVIDER_SDK_RETRIES` is 2, and a cap under a
   real cooldown turns a wait into a failed turn.
-- Request starts are paced per provider host. `ProviderPacer.admit`
-  (`packages/core/src/providers/pacing.ts`) spaces starts and holds callers behind a
-  host cooldown. Without it a swarm level sends N simultaneous first requests
-  on one credential. It holds the lane only through headers. A request
-  sleeping for `Retry-After` frees capacity, and streaming bodies run
-  unthrottled.
+- Requests wait out a provider host's declared cooldown. `ProviderPacer.admit`
+  (`packages/core/src/providers/pacing.ts`) holds a caller until the cooldown a
+  sibling declared has passed, so a `Retry-After` handed to one swarm node holds
+  the rest. Do not add a request count here. Workers bounds connections per
+  invocation and queues the seventh itself; an isolate-wide count made one
+  request wait on another request's release, and workerd cancels that request
+  as hung (HTTP 500 `error code: 1101` on kinu.run, 2026-09-23).
 - OAuth error sanitization. `sanitizeErrorBody`
   (`packages/core/src/providers/codex-oauth.ts`) strips token-shaped text from upstream
   error bodies before they go into thrown errors, in case an OAuth server

@@ -12,6 +12,9 @@
   // (code 10021). If a specific experimental feature is needed, enable it
   // by its real flag name (e.g. `streaming_subrequests`).
   "compatibility_flags": ["nodejs_compat"],
+  // Durable Objects allow up to 300,000 ms of CPU per invocation (DO limits docs); the 30 s default killed
+  // in-workspace commands measured at 32 s of CPU (kinu-logs/nimbus-integration/REPORT.md, 2026-09-23).
+  "limits": { "cpu_ms": 300000 },
   // Wrangler uploads the Worker's source maps with the version, and Cloudflare
   // remaps every uncaught exception's stack against them before it reaches
   // Workers Logs or a tail. Without this, a production stack trace names the one
@@ -285,7 +288,7 @@
     // With one environment the first-run tier and the evals drive THIS worker,
     // so the identity lives here. Two locks keep it from becoming authority:
     // `authenticateRequest()` synthesizes it only for a request presenting the
-    // secret in `x-kinu-dev-identity`, and the admin gate refuses every
+    // secret in core's DEV_IDENTITY_HEADER, and the admin gate refuses every
     // `provider: 'dev'` identity regardless of CONTROL_PLANE_ADMINS
     // (control-plane/admin-caller.ts). Every workspace it creates carries the
     // eval prefix and is torn down by the run that made it, which is what keeps

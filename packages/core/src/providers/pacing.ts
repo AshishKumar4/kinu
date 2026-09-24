@@ -1,13 +1,11 @@
-/** Isolate-scoped pacer: sibling requests to one provider host share its
- *  declared cooldown and connection-lane budget. */
+/** Isolate-scoped pacer: sibling requests to one provider host share its declared cooldown.
+ *
+ *  It counts no requests. Workers bounds connections awaiting headers per invocation and queues past the bound
+ *  itself (`worker.simultaneous_connections`). A count shared by the isolate's requests parked one request on a
+ *  promise only another request's release settled; workerd cancels such a request as hung, and a holder the runtime
+ *  cancelled never released (HTTP 500 1101 on kinu.run, 2026-09-23). */
 
-import { PLATFORM_CATALOG } from '../platform-catalog';
 import { abortCause } from '../utils/abort';
-
-/** Requests per host awaiting response headers; a lane frees when headers arrive,
- *  matching the platform's `worker.simultaneous_connections` budget. */
-const PROVIDER_REQUEST_LANES =
-  PLATFORM_CATALOG['worker.simultaneous_connections'].limit.value;
 
 /** Sleep that an abort ends, rejecting with the signal's reason. */
 export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -29,96 +27,41 @@ export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> 
   return promise;
 }
 
-/** One provider host's share of the pacer. */
-interface HostLane {
-  /** Requests currently holding a lane — out, and awaiting headers. */
-  active: number;
-  /** Woken as a set on release: a hand-off queue loses a wakeup when a woken waiter aborts. */
-  waiting: Array<() => void>;
-  /** The provider's declared cooldown, as a deadline. */
-  coolUntilMs: number;
-}
-
 export interface ProviderPacerOptions {
-  readonly lanes?: number;
   readonly now?: () => number;
   readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
 /** Keyed by host and, where named, account: accounts have their own budgets. */
 export class ProviderPacer {
-  private readonly lanes: number;
   private readonly now: () => number;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
-  private readonly hosts = new Map<string, HostLane>();
+  /** Each host's declared cooldown, as a deadline. */
+  private readonly coolUntilMs = new Map<string, number>();
 
   constructor(opts: ProviderPacerOptions = {}) {
-    this.lanes = opts.lanes ?? PROVIDER_REQUEST_LANES;
     this.now = opts.now ?? Date.now;
     this.sleep = opts.sleep ?? abortableSleep;
   }
 
-  /** Wait out any cooldown, then take a lane (cooldown first, so no lane idles through it).
-   *  The returned release must be called; `onCooldown` gets the deadline to dedupe its own. */
-  async admit(host: string, signal?: AbortSignal, opts?: { onCooldown?: (waitMs: number, untilMs: number) => void }): Promise<() => void> {
-    const lane = this.laneFor(host);
-
+  /** Wait out the host's cooldown on the caller's own timer, re-read after each sleep because a sibling may extend it.
+   *  `onCooldown` gets the deadline so a caller can skip announcing its own. */
+  async admit(host: string, signal?: AbortSignal, opts?: { onCooldown?: (waitMs: number, untilMs: number) => void }): Promise<void> {
     for (;;) {
       if (signal?.aborted) throw abortCause(signal);
-      const cooling = lane.coolUntilMs - this.now();
+      const untilMs = this.coolUntilMs.get(host) ?? 0;
+      const cooling = untilMs - this.now();
 
-      if (cooling > 0) {
-        opts?.onCooldown?.(cooling, lane.coolUntilMs);
-        await this.sleep(cooling, signal);
-        continue;
-      }
-
-      if (lane.active < this.lanes) {
-        lane.active += 1;
-        let released = false;
-
-        return () => {
-          if (released) return;
-          released = true;
-          lane.active -= 1;
-          this.wakeAll(lane);
-        };
-      }
-
-      await this.queueForLane(lane, signal);
+      if (cooling <= 0) return;
+      opts?.onCooldown?.(cooling, untilMs);
+      await this.sleep(cooling, signal);
     }
-  }
-
-  /** Resolves on release or abort; the loop re-checks the signal, so only it throws. */
-  private queueForLane(lane: HostLane, signal?: AbortSignal): Promise<void> {
-    const { promise, resolve } = Promise.withResolvers<void>();
-    lane.waiting.push(resolve);
-    signal?.addEventListener('abort', () => { resolve(); }, { once: true });
-
-    return promise;
   }
 
   /** Record a host cooldown of `ms`; the deadline only moves forward. */
   declareWait(host: string, ms: number): void {
     if (!(ms > 0)) return;
-    const lane = this.laneFor(host);
-    lane.coolUntilMs = Math.max(lane.coolUntilMs, this.now() + ms);
-  }
-
-  private laneFor(host: string): HostLane {
-    const existing = this.hosts.get(host);
-
-    if (existing) return existing;
-    const lane: HostLane = { active: 0, waiting: [], coolUntilMs: 0 };
-    this.hosts.set(host, lane);
-
-    return lane;
-  }
-
-  private wakeAll(lane: HostLane): void {
-    const waiters = lane.waiting.splice(0);
-
-    for (const wake of waiters) wake();
+    this.coolUntilMs.set(host, Math.max(this.coolUntilMs.get(host) ?? 0, this.now() + ms));
   }
 }
 

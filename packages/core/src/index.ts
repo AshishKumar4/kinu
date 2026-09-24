@@ -1453,9 +1453,9 @@ export {
   type SubmitPlanToolDeps,
 } from './plans/index';
 
-// Wire constants shared by the cf-backend Worker and the CLI.
 export {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
+  DEV_IDENTITY_HEADER,
   DEVICE_CONNECT_PATH,
   DEVICE_TERMINAL_PATH,
   ORCHESTRATOR_AGENT_SLUG,
@@ -2265,7 +2265,7 @@ export {
   type HeadDelta, type HeadDeltaKind, type HeadDeltas,
 } from './read-models/head-chat';
 
-export { threadLiveTail, type LiveTail } from './read-models/message-live-tail';
+export { drawnText, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
 
 export { turnLiveness, type TurnClaimState, type TurnLiveness } from './read-models/turn-liveness';
 

@@ -100,8 +100,7 @@ export function withRateLimitRetry(
     const ownedCooldownUntil = { ms: 0 };
 
     for (let attempt = 1; ; attempt++) {
-      // Hold the lane only until headers arrive, and release it before any wait.
-      const release = await pacer.admit(lane, signal, {
+      await pacer.admit(lane, signal, {
         onCooldown: (waitMs, untilMs) => {
           if (handover) throw handedOver(null, waitMs);
 
@@ -111,13 +110,7 @@ export function withRateLimitRetry(
         },
       });
 
-      let response: Response;
-
-      try {
-        response = await fetchImpl(input, init);
-      } finally {
-        release();
-      }
+      const response = await fetchImpl(input, init);
 
       const limited = await rateLimitStatus(response);
 

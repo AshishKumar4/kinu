@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { WorkspaceOverviewSchema } from '@kinu.run/core';
+import { DEV_IDENTITY_HEADER, WorkspaceOverviewSchema } from '@kinu.run/core';
 import type { PresentedCaller } from '@kinu.run/core/control-plane';
 import { makeEnv } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -25,7 +25,7 @@ const DEV_IDENTITY_SECRET = 'overview-dev-identity-secret';
 
 /** `forgedUserId` smuggles the Worker-stamped header; the route must answer for the verified identity. */
 function appRequest(path: string, forgedUserId?: string): Request {
-  const headers = new Headers({ 'x-kinu-dev-identity': DEV_IDENTITY_SECRET });
+  const headers = new Headers({ [DEV_IDENTITY_HEADER]: DEV_IDENTITY_SECRET });
 
   if (forgedUserId !== undefined) headers.set('x-kinu-user-id', forgedUserId);
 
@@ -43,6 +43,7 @@ async function harness(opts: {
   readonly overviewError?: string;
 }) {
   const calls: { method: string; workspace: string; userId?: string }[] = [];
+  const forwarded: Request[] = [];
   const ctx = workerContext();
 
   const controlPlane = {
@@ -78,6 +79,16 @@ async function harness(opts: {
 
         return OVERVIEW;
       },
+      async prepareTerminal(_executor: string) {
+        calls.push({ method: 'prepareTerminal', workspace: name });
+
+        return { ok: true };
+      },
+      async fetch(request: Request) {
+        forwarded.push(request);
+
+        return new Response('attached');
+      },
     }),
   };
 
@@ -98,6 +109,7 @@ async function harness(opts: {
     env,
     ctx,
     calls,
+    forwarded,
     async settle(): Promise<void> { await Promise.allSettled(ctx.retained); },
   };
 }
@@ -170,5 +182,22 @@ describe('the workspace overview route', () => {
 
     expect(body.error).toContain('consent store');
     expect(h.calls.map((c) => c.method)).toEqual(['claimOwner', 'getWorkspaceOverview']);
+  });
+});
+
+describe('the eval credential stops at the Worker', () => {
+  test('a request forwarded to the workspace object carries the verified identity, never the credential', async () => {
+    const h = await harness({ owned: ['jarvis'] });
+
+    const attach = new Request(`https://${APP_HOST}/api/workspaces/jarvis/terminal?executor=workspace`, {
+      headers: { [DEV_IDENTITY_HEADER]: DEV_IDENTITY_SECRET, upgrade: 'websocket' },
+    });
+
+    const res = await worker.fetch(attach, h.env, h.ctx);
+
+    expect(await res.text()).toBe('attached');
+    expect(h.forwarded).toHaveLength(1);
+    expect(h.forwarded[0]?.headers.get(DEV_IDENTITY_HEADER)).toBeNull();
+    expect(h.forwarded[0]?.headers.get('x-kinu-user-id')).toMatch(/^[a-f0-9]{32}$/);
   });
 });

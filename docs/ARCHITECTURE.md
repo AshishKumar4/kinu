@@ -553,10 +553,11 @@ Two policies apply to every provider:
   unreadable 503 propagates. Without `Retry-After` it draws full-jitter waits
   under a ceiling doubling from 2 s to a 60 s cap (both unmeasured). Bodies that
   cannot be replayed pass untouched. Beside the retry, `ProviderPacer`
-  (`pacing.ts`) spaces request starts per host and holds the lane only while
-  awaiting headers, so a request sleeping out a `Retry-After` frees capacity for
-  a sibling, and streaming bodies stay untouched. Waits are declared before they
-  are taken, so siblings join one cooldown. The AI SDK transport retry stays at
+  (`pacing.ts`) holds each request to a host behind the cooldown a sibling
+  declared. Waits are declared before they are taken, so siblings join one
+  cooldown. The pacer counts no requests: Workers bounds connections per
+  invocation, and an isolate-wide count hung the requests queued on it (1101s
+  on kinu.run, 2026-09-23). The AI SDK transport retry stays at
   its default of 2, stated as `PROVIDER_SDK_RETRIES` so a vendor update cannot
   move it silently.
 
