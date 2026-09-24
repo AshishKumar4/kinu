@@ -488,10 +488,16 @@ describe('ChatWireTransport', () => {
     const tab = failed.connection('c1');
     const failing = await failed.open(tab, 'req-2', 'hello');
     await failed.transport.deliver(turnStart('input-req-2', 'msg-2'));
+    await failed.transport.observe(chunks([{ type: 'start' }, { type: 'error', errorText: 'AI_APICallError (HTTP 400)' }]), { index: 0 });
     await failed.transport.deliver({ type: 'error', message: 'the provider refused the request' });
-    expect(failed.responses().at(-1)).toMatchObject({ id: 'req-2', done: false, error: true, body: 'the provider refused the request' });
     await failed.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: '', toolCalls: [], steps: 0, durationMs: 0, feedback: null, hadError: true, origin: 'user' } });
     await failed.land(failing.answered);
+
+    // The sender's chat keeps the first error its stream carries and a watching tab only a terminal one, so the
+    // provider's own words never reach a tab: the classified reason is the one error, and it ends the turn.
+    const errors = failed.responses().filter((frame) => frame.error === true || frame.body?.includes('"type":"error"') === true);
+    expect(errors).toEqual([{ type: 'cf_agent_use_chat_response', id: 'req-2', body: 'the provider refused the request', done: true, error: true }]);
+    expect(failed.responses().at(-1)).toEqual(errors[0]);
   });
 
   test('cancel interrupts the loop; clear resets the store and tells the other tabs', async () => {
