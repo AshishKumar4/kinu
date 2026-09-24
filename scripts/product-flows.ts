@@ -54,7 +54,7 @@ export async function signedInPage(browser: Browser, identity: PublicWebIdentity
 /** Records, on `window`, every turn the workspace's socket reports ended in
  *  error: the frame the chat renders its error from. Installed before each
  *  document's scripts run, so the socket the app opens is the recorded one. */
-const RECORD_TURN_ERRORS = `(() => {
+export const RECORD_TURN_ERRORS = `(() => {
   window.__turnErrors = [];
   const Socket = window.WebSocket;
   window.WebSocket = class extends Socket {
@@ -140,18 +140,19 @@ const DEAD_END = `(() => {
 })()`;
 
 /** Wait until `condition` holds in the page, or fail at once naming the dead end
- *  the page shows instead. Each wait is logged by what it waits for, so a run the
- *  tier's deadline ends still names the step it was in. */
-async function until(page: Page, what: string, condition: string): Promise<void> {
+ *  the page shows instead (a page opened without {@link RECORD_TURN_ERRORS}
+ *  cannot show a failed turn). Each wait is logged by what it waits for, so a
+ *  run the tier's deadline ends still names the step it was in. */
+export async function until(page: Page, what: string, condition: string): Promise<void> {
   const started = performance.now();
 
-  process.stderr.write(`product-flows: waiting for ${what}\n`);
+  process.stderr.write(`  waiting for ${what}\n`);
 
   const outcome = await (await page.waitForFunction(`(${condition}) ? 'reached' : ${DEAD_END}`, { polling: 100 })).jsonValue();
 
   if (outcome !== 'reached') throw new Error(`waiting for ${what}, the page showed ${String(outcome)}`);
 
-  process.stderr.write(`product-flows: ${what} after ${((performance.now() - started) / 1000).toFixed(1)} s\n`);
+  process.stderr.write(`  ${what} after ${((performance.now() - started) / 1000).toFixed(1)} s\n`);
 }
 
 async function openWorkspacePage(target: FlowTarget, path: string): Promise<Page> {
