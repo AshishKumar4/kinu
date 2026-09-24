@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { WorkspacePlanReferenceSchema, JsonValueSchema, type JsonValue, type PlanReview, type SlateSummary } from '@kinu.run/core';
 import * as v from 'valibot';
-import type { Rpc } from '@kinu.run/core';
+import type { ExecutorInfo, Rpc } from '@kinu.run/core';
 import { useKinu, WorkspacePlanUpdatedFrameSchema } from '@/hooks/use-kinu';
 import { galleryServerPush } from '@/gallery-agent-stub';
 import type { SurfaceKind } from '@kinu.run/core';
@@ -41,6 +41,17 @@ const NOTHING = () => {};
 
 type ReplyValue = JsonValue | PlanReview | readonly ReplyValue[] | { readonly [key: string]: ReplyValue };
 
+/** A connected machine, raised by `data-add-machine`; its git diff is one added line. */
+const MACHINE: ExecutorInfo = { name: 'device', kind: 'device', capabilities: [], available: true, configured: true, active: true, status: 'active' };
+
+const MACHINE_DIFF = { mode: 'git', files: [{ path: 'src/device.ts', status: 'added', added: 1, removed: 0,
+  lines: [{ kind: 'hunk', text: '@@ -0,0 +1 @@' }, { kind: 'add', text: 'export const onDevice = true;' }] }] };
+
+const EDITED = [
+  { path: 'src/app.ts', status: 'changed', added: 1, removed: 0, lines: [{ kind: 'add', text: 'export const ready = true;' }] },
+  { path: 'src/ready.ts', status: 'added', added: 1, removed: 0, lines: [{ kind: 'add', text: 'export const shown = true;' }] },
+];
+
 /** Push a server frame through the stubbed `agents/react` socket so `useKinu` parses, gates and de-duplicates it. */
 function notify(reference: JsonValue): void {
   const frame = { type: WorkspacePlanUpdatedFrameSchema.entries.type.literal, reference };
@@ -57,6 +68,7 @@ export function PreviewTabsGallery() {
   const [reload, setReload] = useState(0);
   const [diff, setDiff] = useState(false);
   const [broken, setBroken] = useState(false);
+  const [machine, setMachine] = useState(false);
   const brokenReads = useRef(0);
   const [failHistory, setFailHistory] = useState(false);
   const [workerPlan, setWorkerPlan] = useState<PlanReview>({ ...ROOT_PLAN, revision: 1, content: "# Worker plan", status: "approved", handoffAccepted: true, createdAt: 10 });
@@ -64,7 +76,7 @@ export function PreviewTabsGallery() {
   // Real root connection, for the arrival hint only.
   const { workspacePlanArrival } = useKinu('preview-tabs');
 
-  const rpc: Rpc = useCallback(async <T,>(method: string, _args?: unknown[]): Promise<T> => {
+  const rpc: Rpc = useCallback(async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const reply = (value: ReplyValue): Promise<T> => new Response(JSON.stringify(value)).json<T>();
 
     if (method === 'previewSlate') return reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, inline: { height: 240 } } });
@@ -74,7 +86,8 @@ export function PreviewTabsGallery() {
 
       return reply({ mode: 'vfs-baseline', files: [], error: 'the change-set read failed' });
     }
-    else if (method === 'getExecutorDiff') return reply({ mode: 'vfs-baseline', trackedSince: Date.now() - 36e5, files: diff ? [{ path: 'src/app.ts', status: 'changed', added: 1, removed: 0, lines: [{ kind: 'add', text: 'export const ready = true;' }] }] : [] });
+    else if (method === 'getExecutorDiff' && args?.[0] === MACHINE.name) return reply(MACHINE_DIFF);
+    else if (method === 'getExecutorDiff') return reply({ mode: 'vfs-baseline', trackedSince: Date.now() - 36e5, files: diff ? EDITED : [] });
     else if (method === 'resetWorkspaceBaseline' || method === 'restoreWorkspaceBaseline') {
       setDiff(method === 'restoreWorkspaceBaseline');
 
@@ -146,6 +159,7 @@ export function PreviewTabsGallery() {
       <button data-add-diff onClick={() => setDiff(true)}>Edit file</button>
       <button data-revert-diff onClick={() => setDiff(false)}>Revert file</button>
       <button data-break-diff onClick={() => setBroken(true)}>Break read</button>
+      <button data-add-machine onClick={() => setMachine(true)}>Connect a machine</button>
       <button data-notify-plan onClick={() => notify(ARRIVAL_REFERENCE)}>Notify courier plan</button>
       <button data-notify-stale onClick={() => notify(STALE_REFERENCE)}>Notify stale plan</button>
       <button data-notify-malformed onClick={() => notify(MALFORMED_REFERENCE)}>Notify malformed plan</button>
@@ -157,7 +171,7 @@ export function PreviewTabsGallery() {
         slates={slates} slateReloads={new Map(slates.map(item => [item.id, reload]))}
         previewError={null} onRefreshPorts={NOTHING} plan={owner === "main" ? plan : workerPlan} snapshot={{ status: 'loading' }} onRetryLoad={NOTHING}
         tools={[]} memory={[]} memoryContent="" onSearchMemory={NOTHING} mctsTrees={new Map()} headActivity={new Map()} isStreaming={false}
-        executors={[]} executorOutputs={new Map()} onExecute={async () => ({})} backgroundJobs={[]} onRefreshJobs={NOTHING} pendingActions={[]}
+        executors={machine ? [MACHINE] : []} executorOutputs={new Map()} onExecute={async () => ({})} backgroundJobs={[]} onRefreshJobs={NOTHING} pendingActions={[]}
         tabPresence={{ releases: false, explorations: false, work: true }} rpc={rpc} />
     </div>
   </div>;

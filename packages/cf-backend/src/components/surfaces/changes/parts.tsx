@@ -24,7 +24,7 @@ export function FileTree({ files, current, onOpen }: { files: readonly FileDiff[
 
         if (row.kind === "folder") {
           return (
-            <li key={`d:${String(row.depth)}:${row.name}`} style={inset} className="flex h-7 items-center gap-1.5 pr-3.5 text-[12.5px] p-text-3" data-folder-row>
+            <li key={`d:${row.path}`} style={inset} className="flex h-7 items-center gap-1.5 pr-3.5 text-[12.5px] p-text-3" data-folder-row>
               <FolderSimpleIcon size={13} weight="fill" className="shrink-0 p-text-4 opacity-70" />
               <span className="min-w-0 truncate">{row.name}</span>
             </li>

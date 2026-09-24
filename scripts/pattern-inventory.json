@@ -501,7 +501,7 @@
       "file": "packages/core/src/vfs/diff.ts",
       "kind": "hand-parser",
       "owner": "parseGitDiff",
-      "sourceSha256": "b0931bb863302890d7e6ab8d7bee9a2926abec3edcbed7137df8844b4ba5e035",
+      "sourceSha256": "dc28518b38e748eb5e2601a1885951e0e098da3c2a72932fd4f670f1b07db64e",
       "decision": "framing"
     },
     {

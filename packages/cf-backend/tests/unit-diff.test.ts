@@ -55,7 +55,7 @@ describe("parseGitDiff", () => {
     const out = parseGitDiff(raw);
     expect(out.length).toBe(1);
     expect(out[0]).toMatchObject({ path: "src/app.ts", status: "changed", added: 1, removed: 1 });
-    expect(out[0].lines[0]).toEqual({ kind: "ctx", text: "@@ -1,3 +1,3 @@" });
+    expect(out[0].lines[0]).toEqual({ kind: "hunk", text: "@@ -1,3 +1,3 @@" });
     expect(out[0].lines.some((l) => l.kind === "add" && l.text === "const y = 3;")).toBe(true);
     expect(out[0].lines.some((l) => l.kind === "del" && l.text === "const y = 2;")).toBe(true);
   });

@@ -18,7 +18,7 @@ export interface ChangeSet {
 export type ChangeSpan = readonly [number, number];
 
 export interface ChangeRow {
-  readonly kind: DiffLine['kind'];
+  readonly kind: Exclude<DiffLine['kind'], 'hunk'>;
   readonly text: string;
   readonly oldNo: number | null;
   readonly newNo: number | null;
@@ -40,7 +40,7 @@ export interface ChangePair {
 }
 
 export type ChangeTreeRow =
-  | { readonly kind: 'folder'; readonly name: string; readonly depth: number }
+  | { readonly kind: 'folder'; readonly name: string; readonly path: string; readonly depth: number }
   | { readonly kind: 'file'; readonly file: FileDiff; readonly depth: number };
 
 const CONTEXT = 3;
@@ -68,7 +68,7 @@ export function changeBody(file: FileDiff): ChangeBody {
   if (file.truncated !== true) return { kind: file.lines.length === 0 ? 'empty' : 'rows' };
 
   if (file.lines.length === 0) return { kind: 'counted' };
-  const shown = file.lines.filter((line) => line.kind !== 'ctx').length;
+  const shown = file.lines.filter((line) => line.kind === 'add' || line.kind === 'del').length;
 
   return { kind: 'capped', hidden: Math.max(0, file.added + file.removed - shown) };
 }
@@ -80,18 +80,21 @@ interface Hunk {
 
 type Item = { readonly kind: 'row'; readonly row: ChangeRow } | { readonly kind: 'hunk'; readonly hunk: Hunk };
 
-function numbered(file: FileDiff, git: boolean): Item[] {
+function numbered(file: FileDiff): Item[] {
   const items: Item[] = [];
   let oldNo = 1;
   let newNo = 1;
 
   for (const line of file.lines) {
-    const hunk = git && line.kind === 'ctx' ? HUNK.exec(line.text) : null;
+    if (line.kind === 'hunk') {
+      const hunk = HUNK.exec(line.text);
 
-    if (hunk !== null) {
-      oldNo = Number(hunk[1]);
-      newNo = Number(hunk[2]);
-      items.push({ kind: 'hunk', hunk: { newStart: newNo, context: hunk[3]?.trim() || null } });
+      if (hunk !== null) {
+        oldNo = Number(hunk[1]);
+        newNo = Number(hunk[2]);
+        items.push({ kind: 'hunk', hunk: { newStart: newNo, context: hunk[3]?.trim() || null } });
+      }
+
       continue;
     }
 
@@ -279,8 +282,8 @@ function preview(blocks: readonly ChangeBlock[], limit: number, id: string): Cha
 }
 
 /** `stacked`: one card among many, so previews are shorter and a deleted file starts folded. */
-export function changeBlocks(file: FileDiff, git: boolean, stacked = false): ChangeBlock[] {
-  const items = numbered(file, git);
+export function changeBlocks(file: FileDiff, stacked = false): ChangeBlock[] {
+  const items = numbered(file);
   const limits = stacked ? PREVIEW.stacked : PREVIEW.alone;
 
   if (file.status !== 'changed') {
@@ -340,7 +343,8 @@ function folderIn(parent: Folder, name: string): Folder {
   return made;
 }
 
-function rowsOf(folder: Folder, depth: number): ChangeTreeRow[] {
+/** `within`: the folder's path, '' at the root. */
+function rowsOf(folder: Folder, depth: number, within: string): ChangeTreeRow[] {
   const rows: ChangeTreeRow[] = [];
 
   for (const [name, child] of [...folder.folders].sort(([a], [b]) => a.localeCompare(b))) {
@@ -353,7 +357,9 @@ function rowsOf(folder: Folder, depth: number): ChangeTreeRow[] {
       inner = only;
     }
 
-    rows.push({ kind: 'folder', name: label, depth }, ...rowsOf(inner, depth + 1));
+    const path = within === '' ? label : `${within}/${label}`;
+
+    rows.push({ kind: 'folder', name: label, path, depth }, ...rowsOf(inner, depth + 1, path));
   }
 
   const files = [...folder.files].sort((a, b) => vfsBasename(a.path).localeCompare(vfsBasename(b.path)));
@@ -370,7 +376,25 @@ export function changeTree(files: readonly FileDiff[]): ChangeTreeRow[] {
     parts.reduce(folderIn, root).files.push(file);
   }
 
-  return rowsOf(root, 0);
+  return rowsOf(root, 0, '');
+}
+
+function sameFile(a: FileDiff, b: FileDiff): boolean {
+  return a.status === b.status && a.added === b.added && a.removed === b.removed && a.truncated === b.truncated
+    && a.omitted === b.omitted && a.lines.length === b.lines.length
+    && a.lines.every((line, index) => line.kind === b.lines[index]?.kind && line.text === b.lines[index]?.text);
+}
+
+/** A poll's files, each one whose content is unchanged since `previous` kept as the earlier object, so what is
+ *  worked out from a file (its blocks, word marks and highlighted tokens) is not redone on every poll. */
+export function keepUnchanged(previous: readonly FileDiff[], next: readonly FileDiff[]): FileDiff[] {
+  const held = new Map(previous.map((file) => [file.path, file]));
+
+  return next.map((file) => {
+    const before = held.get(file.path);
+
+    return before !== undefined && sameFile(before, file) ? before : file;
+  });
 }
 
 export function inReadingOrder(files: readonly FileDiff[]): FileDiff[] {

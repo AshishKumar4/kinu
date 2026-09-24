@@ -377,3 +377,60 @@ test('a change-set read that fails raises the Changes tab, which says what faile
     } finally { await page.close(); }
   });
 });
+
+/** Opens the Changes tab of the preview-tabs frame with two edited workspace files, and a machine when asked. */
+async function openChanges(newPage: () => Promise<Page>, origin: string, machine: boolean): Promise<Page> {
+  const page = await newPage();
+
+  await page.setViewport({ width: 1280, height: 850 });
+  await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
+  await page.waitForSelector('[aria-label="Dashboard"]');
+  await page.click('[data-add-diff]');
+
+  if (machine) await page.click('[data-add-machine]');
+  await page.waitForSelector('[aria-label="Changes"]');
+  await page.click('[aria-label="Changes"]');
+
+  return page;
+}
+
+async function pickSource(page: Page, scope: string, label: string): Promise<void> {
+  await page.click(`${scope} [data-source-menu]`);
+  await page.waitForSelector('[role="menuitemradio"]');
+  await page.$$eval('[role="menuitemradio"]', (items, wanted) => {
+    items.find((item) => item.textContent?.includes(wanted))?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  }, label);
+}
+
+test('the review sheet takes the keys while it is open, and Escape returns to the file it was expanded from', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await openChanges(newPage, origin, false);
+
+    try {
+      await page.click('[data-file-row="src/app.ts"]');
+      await page.click('[data-changes="file"] [aria-label="Expand: every file side by side"]');
+      await page.waitForSelector('[data-review-sheet] [data-file-row="src/app.ts"][aria-current="true"]');
+      await page.keyboard.press('j');
+      await page.waitForSelector('[data-review-sheet] [data-file-row="src/ready.ts"][aria-current="true"]');
+      expect(await page.$eval('[data-changes="file"] [data-open-file]', (el) => el.textContent)).toBe('app.ts');
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => document.querySelector('[data-review-sheet]') === null);
+      expect(await page.$eval('[data-changes] [data-open-file]', (el) => el.textContent)).toBe('app.ts');
+    } finally { await page.close(); }
+  });
+});
+
+test('after Mark reviewed, the source menu still reaches a machine\'s changes', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await openChanges(newPage, origin, true);
+
+    try {
+      await page.waitForSelector('[data-file-row="src/device.ts"]');
+      await pickSource(page, '[data-changes]', 'Workspace');
+      await page.click('[data-mark-reviewed]');
+      await page.waitForSelector('[data-changes="reviewed"]');
+      await pickSource(page, '[data-changes="reviewed"]', 'Your PC');
+      await page.waitForSelector('[data-file-row="src/device.ts"]');
+    } finally { await page.close(); }
+  });
+});

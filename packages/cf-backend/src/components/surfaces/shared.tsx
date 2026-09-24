@@ -14,6 +14,7 @@ const DIFF_LINE: Record<DiffLine["kind"], { tone: string; mark: string }> = {
   add: { tone: "p-badge-success px-3", mark: "+" },
   del: { tone: "p-badge-danger px-3", mark: "−" },
   ctx: { tone: "p-text-3 px-3", mark: " " },
+  hunk: { tone: "p-text-3 px-3", mark: " " },
 };
 
 /** An empty truncated body (file too long to align) must read differently from one clipped at {@link MAX_LINES_PER_FILE}. */

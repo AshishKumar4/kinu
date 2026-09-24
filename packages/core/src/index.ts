@@ -1932,7 +1932,7 @@ export {
 export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff';
 
 export {
-  changeBlocks, changeBody, changeTotals, changeTree, inReadingOrder, sideBySide,
+  changeBlocks, changeBody, changeTotals, changeTree, inReadingOrder, keepUnchanged, sideBySide,
 } from './read-models/change-view';
 
 export type {

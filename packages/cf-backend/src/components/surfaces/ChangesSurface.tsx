@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  executorLabel, executorSortKey, isActiveExecutionDevice, pickDefaultExecutor,
+  executorLabel, executorSortKey, isActiveExecutionDevice, keepUnchanged, pickDefaultExecutor,
   workspacePath, type ChangeSet, type ExecutorDiffResult, type ExecutorInfo, type Rpc,
 } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -81,7 +81,17 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, onOpenFile,
     const results = await Promise.all(sourceKey.split("\n").map(async (name) =>
       [name, await rpc<ExecutorDiffResult>("getExecutorDiff", [name])] as const));
 
-    return { sets: results.map(([name, result]) => changeSetOf(name, result)), unreadable: results.some(([, result]) => result.error !== undefined) };
+    const held = live.current.sets;
+
+    return {
+      sets: results.map(([name, result]) => {
+        const set = changeSetOf(name, result);
+        const before = held?.find((each) => each.source === name);
+
+        return before === undefined ? set : { ...set, files: keepUnchanged(before.files, set.files) };
+      }),
+      unreadable: results.some(([, result]) => result.error !== undefined),
+    };
   }, [rpc, sourceKey]);
 
   const revalidate = useCallback(() => 2_000, []);
@@ -93,7 +103,8 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, onOpenFile,
   live.current = { sets, reload };
   const shown = sets?.find((set) => set.source === source) ?? sets?.[0];
   const shownFiles = shown?.files.length ?? 0;
-  const reviewedAt = reviewedAtOf(reviewed, sets, shownFiles);
+  // Mark reviewed moves the workspace's baseline; a machine's changes are measured from its own commit.
+  const reviewedAt = shown?.mode === "vfs-baseline" ? reviewedAtOf(reviewed, sets, shownFiles) : null;
   const count = countOf(read, resource.status === "error", shownFiles);
 
   useEffect(() => { onCount(count); }, [count, onCount]);

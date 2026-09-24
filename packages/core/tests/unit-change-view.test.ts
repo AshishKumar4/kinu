@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  changeBlocks, changeBody, changeTotals, changeTree, inReadingOrder, sideBySide,
+  changeBlocks, changeBody, changeTotals, changeTree, inReadingOrder, keepUnchanged, sideBySide,
   type ChangeBlock, type ChangeRow,
 } from '../src/read-models/change-view';
 import { diffLines, fileDiff, MAX_LINES_PER_FILE, parseGitDiff, type FileDiff } from '../src/vfs/diff';
@@ -35,7 +35,7 @@ describe('change view', () => {
     const before = numbered(40);
     const after = before.map((line, index) => (index === 19 ? 'line 20 changed' : line));
 
-    expect(outline(changeBlocks(changedFile(before, after), false))).toEqual([
+    expect(outline(changeBlocks(changedFile(before, after)))).toEqual([
       'fold 16', '17 18 19 - 20 21 22 23', 'fold 17',
     ]);
   });
@@ -43,8 +43,8 @@ describe('change view', () => {
   test('an unchanged run between two changes folds only when it would hide four lines or more', () => {
     const edit = (lines: string[], at: number): string[] => lines.map((line, index) => (index === at ? `${line} changed` : line));
     // Nine unchanged lines between the changes: three stay after the first, three before the second, three would hide.
-    const nine = changeBlocks(changedFile(numbered(11), edit(edit(numbered(11), 0), 10)), false);
-    const ten = changeBlocks(changedFile(numbered(12), edit(edit(numbered(12), 0), 11)), false);
+    const nine = changeBlocks(changedFile(numbered(11), edit(edit(numbered(11), 0), 10)));
+    const ten = changeBlocks(changedFile(numbered(12), edit(edit(numbered(12), 0), 11)));
 
     expect(outline(nine).some((block) => block.startsWith('fold'))).toBe(false);
     expect(outline(ten)).toContain('fold 4');
@@ -54,7 +54,7 @@ describe('change view', () => {
     const blocks = changeBlocks(changedFile(
       ['const rule = rules[coupon.kind];', 'return a + b;'],
       ['const rule = rules[kindOf(coupon)];', 'throw new Error("unreachable");'],
-    ), false);
+    ));
 
     const [firstOld, secondOld, firstNew, secondNew] = rowsIn(blocks);
 
@@ -80,30 +80,48 @@ describe('change view', () => {
       ' keep 91',
     ].join('\n'));
 
-    const blocks = changeBlocks(file, true);
+    const blocks = changeBlocks(file);
 
     expect(outline(blocks)).toEqual(['fold 39', '40 - 41 42', 'fold 47', '- 90 91']);
     expect(blocks[0]).toMatchObject({ kind: 'gap', rows: [], context: 'function apply(cart) {' });
     expect(blocks[2]).toMatchObject({ kind: 'gap', rows: [], context: 'function total() {' });
   });
 
+  test('a context line that reads like a hunk header is a line of the file, numbered in its place', () => {
+    const [file] = parseGitDiff([
+      'diff --git a/fix.patch b/fix.patch',
+      '--- a/fix.patch',
+      '+++ b/fix.patch',
+      '@@ -10,3 +10,4 @@',
+      ' line 10',
+      ' @@ -40,6 +40,8 @@ function f() {',
+      '+line 12',
+      ' line 13',
+    ].join('\n'));
+
+    const blocks = changeBlocks(file);
+
+    expect(outline(blocks)).toEqual(['fold 9', '10 11 12 13']);
+    expect(rowsIn(blocks)[1]?.text).toBe('@@ -40,6 +40,8 @@ function f() {');
+  });
+
   test('a long diff shows its first rows and counts the rest; in a stack a deleted file starts folded', () => {
     const before = numbered(400);
     const after = before.map((line, index) => (index % 2 === 0 ? `${line} changed` : line));
-    const alone = changeBlocks(changedFile(before, after), false);
-    const stacked = changeBlocks(changedFile(before, after), false, true);
+    const alone = changeBlocks(changedFile(before, after));
+    const stacked = changeBlocks(changedFile(before, after), true);
     const removed = fileDiff('src/old.ts', 'removed', diffLines(numbered(22).join('\n'), ''));
 
     expect(rowsIn(alone)).toHaveLength(120);
     // 200 changed lines, each a removed and an added row, between 200 unchanged ones.
     expect(alone.at(-1)).toMatchObject({ kind: 'rest', count: 600 - 120 });
     expect(rowsIn(stacked)).toHaveLength(60);
-    expect(outline(changeBlocks(removed, false, true))).toEqual(['rest 22 deleted']);
-    expect(outline(changeBlocks(removed, false))).toHaveLength(1);
+    expect(outline(changeBlocks(removed, true))).toEqual(['rest 22 deleted']);
+    expect(outline(changeBlocks(removed))).toHaveLength(1);
   });
 
   test('split view sets each removed row beside the row that replaced it, and an unchanged row beside itself', () => {
-    const blocks = changeBlocks(changedFile(['a', 'b', 'c', 'keep'], ['A', 'keep', 'new']), false);
+    const blocks = changeBlocks(changedFile(['a', 'b', 'c', 'keep'], ['A', 'keep', 'new']));
     const pairs = sideBySide(rowsIn(blocks)).map(({ left, right }) => `${left?.text ?? '·'} | ${right?.text ?? '·'}`);
 
     expect(pairs).toEqual(['a | A', 'b | ·', 'c | ·', 'keep | keep', '· | new']);
@@ -126,6 +144,28 @@ describe('change view', () => {
     ]);
     expect(inReadingOrder(files).map((file) => file.path.split('/').at(-1))).toEqual(['0042.sql', 'apply.ts', 'rules.ts', 'kind.test.ts', 'README.md']);
     expect(changeTotals(files)).toEqual({ added: 5, removed: 5 });
+  });
+
+  test('each folder row names its whole path, so folders with one name at one depth stay apart', () => {
+    const files = ['packages/core/src/a.ts', 'packages/core/tests/a.test.ts', 'packages/cli/src/b.ts', 'packages/cli/tests/b.test.ts']
+      .map((path) => fileDiff(path, 'changed', diffLines('a', 'b')));
+
+    expect(changeTree(files).flatMap((row) => (row.kind === 'folder' ? [row.path] : []))).toEqual([
+      'packages', 'packages/cli', 'packages/cli/src', 'packages/cli/tests', 'packages/core', 'packages/core/src', 'packages/core/tests',
+    ]);
+  });
+
+  test('a poll keeps the object of each file whose content did not change, so nothing worked out from it is redone', () => {
+    const before = [changedFile(['a'], ['b'], 'src/a.ts'), changedFile(['c'], ['d'], 'src/c.ts')];
+
+    const [same, edited, added] = keepUnchanged(before, [
+      changedFile(['a'], ['b'], 'src/a.ts'), changedFile(['c'], ['e'], 'src/c.ts'), changedFile([], ['n'], 'src/n.ts'),
+    ]);
+
+    expect(same).toBe(before[0]);
+    expect(edited).not.toBe(before[1]);
+    expect(edited?.lines.at(-1)?.text).toBe('e');
+    expect(added?.path).toBe('src/n.ts');
   });
 
   test('a file with no rows says why: binary, not compared, too many lines, stopped at the row limit, or empty', () => {

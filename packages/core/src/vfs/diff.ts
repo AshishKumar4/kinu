@@ -4,7 +4,8 @@
  */
 import { PLATFORM_CATALOG } from '../platform-catalog';
 
-export interface DiffLine { kind: 'add' | 'del' | 'ctx'; text: string }
+/** `hunk`: a git hunk header (`@@ -40,6 +40,8 @@ context`), never a line of the file. */
+export interface DiffLine { kind: 'add' | 'del' | 'ctx' | 'hunk'; text: string }
 
 export interface LineDiff {
   lines: DiffLine[]; added: number; removed: number;
@@ -159,7 +160,7 @@ function bodyKind(line: string): DiffLine['kind'] | null {
   return null;
 }
 
-/** Parse `git diff` unified output into FileDiff[]; hunk `@@` headers are kept as context rows. */
+/** Parse `git diff` unified output into FileDiff[]; hunk `@@` headers are kept as `hunk` rows. */
 export function parseGitDiff(unified: string): FileDiff[] {
   const out: FileDiff[] = [];
   const lines = unified.split('\n');
@@ -218,7 +219,7 @@ export function parseGitDiff(unified: string): FileDiff[] {
 
     if (line.startsWith('Binary files')) { cur.omitted = 'binary'; continue; }
 
-    if (line.startsWith('@@')) { carry(cur, { kind: 'ctx', text: line }); continue; }
+    if (line.startsWith('@@')) { carry(cur, { kind: 'hunk', text: line }); continue; }
 
     // Count first, then carry: the row bound must never gate the counts.
     const kind = bodyKind(line);

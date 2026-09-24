@@ -38,15 +38,14 @@ function CappedNote({ file }: { file: FileDiff }) {
   );
 }
 
-export function FileBody({ file, git, stacked, split = false, onOpenInFiles }: {
+export function FileBody({ file, stacked, split = false, onOpenInFiles }: {
   file: FileDiff;
-  git: boolean;
   stacked: boolean;
   split?: boolean;
   onOpenInFiles: (() => void) | null;
 }) {
   const body = changeBody(file);
-  const blocks = useMemo(() => (body.kind === "rows" || body.kind === "capped" ? changeBlocks(file, git, stacked) : []), [body.kind, file, git, stacked]);
+  const blocks = useMemo(() => (body.kind === "rows" || body.kind === "capped" ? changeBlocks(file, stacked) : []), [body.kind, file, stacked]);
 
   if (blocks.length === 0) return <NoLines file={file} onOpenInFiles={onOpenInFiles} />;
 
@@ -222,6 +221,11 @@ export function ChangesPanel({ sets, source, onSource, now, file: initialFile = 
           {onUndo !== null && <button type="button" onClick={onUndo} data-undo-reviewed className="ml-auto p-meta font-normal p-accent-fg hover:underline">Undo</button>}
         </p>
         <p className="mt-1 pl-[23px] p-meta p-text-3">New changes show here as they happen.</p>
+        {sets.length > 1 && (
+          <div className="mt-2.5 flex min-h-7 items-center pl-[23px] p-meta p-text-3">
+            <SourceMenu sets={sets} source={set.source} initiallyOpen={menuOpen} onPick={onSource} />
+          </div>
+        )}
       </div>
     );
   }
@@ -258,7 +262,6 @@ export function ChangesPanel({ sets, source, onSource, now, file: initialFile = 
     go(null);
   };
 
-  const git = set.mode === "git";
 
   return (
     <div ref={root} className="flex h-full min-h-0 flex-col" onKeyDown={onKeyDown} data-changes={open === undefined ? "list" : "file"} data-kinu-annotations>
@@ -278,7 +281,7 @@ export function ChangesPanel({ sets, source, onSource, now, file: initialFile = 
           ? set.error === undefined && <FileTree files={files} current={null} onOpen={go} />
           : (
             <div className="pt-1.5">
-              <FileBody file={open} git={git} stacked={false} onOpenInFiles={opener(open)} />
+              <FileBody file={open} stacked={false} onOpenInFiles={opener(open)} />
               <NextFile next={files[at + 1]} reviewable={set.mode === "vfs-baseline" && !noted} onOpen={go} onReviewed={review} onList={() => go(null)} />
             </div>
           )}

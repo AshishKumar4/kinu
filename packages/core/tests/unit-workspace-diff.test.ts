@@ -127,11 +127,25 @@ describe('workspace diff lifecycle', () => {
     ]);
   });
 
-  test('a baseline captured before binary files were listed is re-taken: tracking starts over, with no Undo to it', async () => {
+  test('a binary file whose bytes are unchanged stays off the list when its mtime moves; one with other bytes is on it', async () => {
     const { rt, db } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
     await rt.storage.vfs.writeFile('logo.png', PNG);
+    await rt.storage.vfs.writeFile('chart.png', PNG);
     await resetWorkspaceBaseline(rt);
+    // Both written again since: the same bytes for the logo, one more byte for the chart.
+    db.exec(`UPDATE vfs_baseline_manifest SET mtime_ms = mtime_ms - 1000 WHERE path <> ''`);
+    await rt.storage.vfs.writeFile('chart.png', new Uint8Array([...PNG, 0]));
+
+    expect((await getWorkspaceDiff(rt)).files).toEqual([
+      { path: 'chart.png', status: 'changed', added: 0, removed: 0, lines: [], omitted: 'binary' },
+    ]);
+  });
+
+  test('a baseline captured before binary files were listed shows them as added until the next review, and loses nothing', async () => {
+    const { rt, db } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await rt.storage.vfs.writeFile('logo.png', PNG);
     await rt.storage.vfs.writeFile('hello.py', 'print(42)\n');
     await resetWorkspaceBaseline(rt);
     // What that capture wrote: no generation row, and no row for a binary file.
@@ -139,14 +153,13 @@ describe('workspace diff lifecycle', () => {
     db.exec(`DELETE FROM vfs_baseline_manifest WHERE path = 'logo.png'`);
     await rt.storage.vfs.writeFile('hello.py', 'print(43)\n');
 
-    const active = (): string | undefined => db.query<{ generation: string }, []>(
-      `SELECT generation FROM vfs_baseline_manifest WHERE active = 1 AND path = ''`).get()?.generation;
+    const listed = async (): Promise<string[]> => (await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`);
 
-    const old = active();
-
-    expect((await getWorkspaceDiff(rt)).files).toEqual([]);
-    expect(active()).not.toEqual(old);
-    expect(restoreWorkspaceBaseline(rt)).toMatchObject({ ok: false });
+    expect(await listed()).toEqual(['changed hello.py', 'added logo.png']);
+    await resetWorkspaceBaseline(rt);
+    expect(await listed()).toEqual([]);
+    expect(restoreWorkspaceBaseline(rt)).toMatchObject({ ok: true });
+    expect(await listed()).toEqual(['changed hello.py', 'added logo.png']);
   });
 
   test('a workspace without a baseline starts tracking at its first read, then shows exactly what it writes', async () => {

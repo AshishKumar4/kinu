@@ -52,9 +52,8 @@ function FileNotes({ path }: { path: string }) {
   );
 }
 
-function FileCard({ file, git, split, register, onOpenInFiles }: {
+function FileCard({ file, split, register, onOpenInFiles }: {
   file: FileDiff;
-  git: boolean;
   split: boolean;
   register: (path: string, element: HTMLElement | null) => void;
   onOpenInFiles: ((path: string) => void) | null;
@@ -76,7 +75,7 @@ function FileCard({ file, git, split, register, onOpenInFiles }: {
           <FileNotes path={file.path} />
         </span>
       </header>
-      {!folded && <FileBody file={file} git={git} stacked split={split} onOpenInFiles={onOpenInFiles === null ? null : () => onOpenInFiles(file.path)} />}
+      {!folded && <FileBody file={file} stacked split={split} onOpenInFiles={onOpenInFiles === null ? null : () => onOpenInFiles(file.path)} />}
     </section>
   );
 }
@@ -136,12 +135,25 @@ function Picker({ files, current, onPick, onClose }: { files: readonly FileDiff[
   );
 }
 
-function useSheetKeys({ files, current, show, onClose }: {
+/** Keys act on the sheet alone: focus moves into it while it is open, so the panel behind never sees them, and goes
+ *  back to where it was (the Expand button) when it closes. */
+function useSheetKeys({ dialog, files, current, show, onClose }: {
+  dialog: React.RefObject<HTMLDivElement | null>;
   files: readonly FileDiff[];
   current: string | null;
   show: (path: string) => void;
   onClose: () => void;
 }): void {
+  useEffect(() => {
+    const before = document.activeElement;
+
+    dialog.current?.focus({ preventScroll: true });
+
+    return () => {
+      if (before instanceof HTMLElement) before.focus({ preventScroll: true });
+    };
+  }, [dialog]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.metaKey || event.ctrlKey || event.altKey || typing(event.target) || document.querySelector("[data-comment-popover]") !== null) return;
@@ -162,9 +174,8 @@ function useSheetKeys({ files, current, show, onClose }: {
   });
 }
 
-function Stack({ files, set, split, register, stack, onScroll, onOpenInFiles }: {
+function Stack({ files, split, register, stack, onScroll, onOpenInFiles }: {
   files: readonly FileDiff[];
-  set: ChangeSet;
   split: boolean;
   register: (path: string, element: HTMLElement | null) => void;
   stack: React.RefObject<HTMLDivElement | null>;
@@ -174,7 +185,7 @@ function Stack({ files, set, split, register, stack, onScroll, onOpenInFiles }: 
   return (
     <div ref={stack} onScroll={onScroll} className="min-w-0 flex-1 overflow-y-auto" data-review-stack>
       <div className="space-y-4 px-5 py-4 max-md:px-2.5 max-md:py-3">
-        {files.map((each) => <FileCard key={each.path} file={each} git={set.mode === "git"} split={split} register={register} onOpenInFiles={onOpenInFiles} />)}
+        {files.map((each) => <FileCard key={each.path} file={each} split={split} register={register} onOpenInFiles={onOpenInFiles} />)}
       </div>
     </div>
   );
@@ -236,13 +247,15 @@ export function ReviewSheet({ set, now, file, layout: pinned, annotationsOpen = 
     setCurrent(reached);
   };
 
-  useSheetKeys({ files, current, show, onClose });
+  const dialog = useRef<HTMLDivElement>(null);
+
+  useSheetKeys({ dialog, files, current, show, onClose });
 
   const openFile = files.find((each) => each.path === current);
 
   if (phone) {
     return (
-      <div className="fixed inset-0 z-50 flex flex-col p-bg animate-fade-in" role="dialog" aria-modal="true" aria-label="Changes" data-review-sheet="phone" data-kinu-annotations>
+      <div ref={dialog} tabIndex={-1} className="fixed inset-0 z-50 flex flex-col p-bg outline-none animate-fade-in" role="dialog" aria-modal="true" aria-label="Changes" data-review-sheet="phone" data-kinu-annotations>
         <header className="shrink-0 border-b p-border p-sidebar px-2 pb-1.5 pt-1.5">
           <div className="flex h-10 items-center gap-1.5">
             <IconButton label="Close" onClick={onClose}><XIcon size={16} /></IconButton>
@@ -259,7 +272,7 @@ export function ReviewSheet({ set, now, file, layout: pinned, annotationsOpen = 
             <Stepper files={files} current={current} onShow={show} />
           </div>
         </header>
-        <Stack files={files} set={set} split={false} register={register} stack={stack} onScroll={follow} onOpenInFiles={onOpenInFiles} />
+        <Stack files={files} split={false} register={register} stack={stack} onScroll={follow} onOpenInFiles={onOpenInFiles} />
         {noted && onSend !== undefined && (
           <footer className="flex shrink-0 items-center gap-2 border-t p-border p-sidebar px-3 pb-[max(env(safe-area-inset-bottom),10px)] pt-2.5">
             <span className="min-w-0 flex-1 p-meta p-text-3">{notes?.notes.length} {notes?.notes.length === 1 ? "note" : "notes"} for the agent</span>
@@ -273,7 +286,7 @@ export function ReviewSheet({ set, now, file, layout: pinned, annotationsOpen = 
   }
 
   return (
-    <div className="fixed inset-0 z-50 animate-fade-in" role="dialog" aria-modal="true" aria-label="Changes" data-review-sheet="wide">
+    <div ref={dialog} tabIndex={-1} className="fixed inset-0 z-50 outline-none animate-fade-in" role="dialog" aria-modal="true" aria-label="Changes" data-review-sheet="wide">
       <div className="p-scrim absolute inset-0" onClick={onClose} aria-hidden="true" />
       <div className="absolute inset-3 flex flex-col overflow-hidden rounded-2xl border p-border p-bg p-shadow-overlay" data-kinu-annotations>
         <header className="flex h-14 shrink-0 items-center gap-3 border-b p-border p-sidebar pl-5 pr-3">
@@ -300,7 +313,7 @@ export function ReviewSheet({ set, now, file, layout: pinned, annotationsOpen = 
               <FileTree files={files} current={current} onOpen={show} />
             </div>
           </nav>
-          <Stack files={files} set={set} split={layout === "split"} register={register} stack={stack} onScroll={follow} onOpenInFiles={onOpenInFiles} />
+          <Stack files={files} split={layout === "split"} register={register} stack={stack} onScroll={follow} onOpenInFiles={onOpenInFiles} />
           {notes !== null && <Suspense><NotesPanel open={panelOpen} onClose={() => setPanelOpen(false)} files={files} onReveal={reveal} /></Suspense>}
         </div>
       </div>
