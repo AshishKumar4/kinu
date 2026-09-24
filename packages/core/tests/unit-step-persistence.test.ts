@@ -11,7 +11,7 @@ import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { decodeModelMessageValues } from '../src/session/message-codec';
 import { TurnAccumulator, type StepLike } from '../src/orchestrator/turn-accumulator';
 import { makeSql, makeExecRaw } from './helpers';
-import { renderThrownChain } from '../src/obs/index';
+import { KinuError, renderThrownChain } from '../src/obs/index';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 
@@ -320,6 +320,35 @@ describe('a completed step is durable at the moment it completes', () => {
     expect(provider.requests()).toBe(1);
     // The unrecorded step reports nothing as finished, and the turn has no answer.
     expect(events.filter((ev) => ev.type === 'step-finish' || ev.type === 'done')).toEqual([]);
+  });
+
+  test('a step hook that throws ends the turn under its own name and class; the step it saw stays recorded', async () => {
+    const provider = scriptedProvider([
+      () => toolStep('call_a', 'git status'),
+      () => textStep('never reached'),
+    ]);
+
+    const persisted: number[] = [];
+    let failed = new KinuError('io', 'the turn finished');
+
+    try {
+      for await (const _ of runChat({
+        model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }], tools, stopWhen: stepCountIs(20),
+        persistStep: async (messages) => { persisted.push(messages.length); },
+        onStep: async () => { throw new KinuError('budget', 'the mission is spent'); },
+      }));
+    } catch (error) {
+      if (!(error instanceof KinuError)) throw error;
+      failed = error;
+    } finally {
+      await provider.stop();
+    }
+
+    expect({ code: failed.code, message: failed.message }).toEqual({ code: 'budget', message: 'run the step hook' });
+    expect(renderThrownChain({ cause: failed })).toContain('the mission is spent');
+    // The hook saw a step that was already recorded.
+    expect(persisted).toHaveLength(1);
+    expect(provider.requests()).toBe(1);
   });
 });
 
