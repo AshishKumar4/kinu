@@ -60,6 +60,12 @@ describe('workspace runtime provisioning', () => {
     expect(loop.stdout).toBe('line-1\nline-2\nline-3\n');
   });
 
+  test('bash reaches an absolute path and says nothing on stderr when its startup file is absent', async () => {
+    const workspace = open(dbPath());
+
+    expect(await workspace.shell.exec('bash -c "cd /home/main && echo in-home"')).toMatchObject({ exitCode: 0, stdout: 'in-home\n', stderr: '' });
+  });
+
   test('npm and npx answer without any runtime package, because they need no bytes', async () => {
     const workspace = open(dbPath(), []);
 
