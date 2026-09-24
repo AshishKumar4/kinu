@@ -39,7 +39,8 @@ export interface WorkspaceSpend {
   /** Spend per mission label from `mission_budget`, dearest first. Not additive with producers: a
    *  call sits in one producer row and every mission label above it. */
   readonly missions: readonly MissionBudgetSnapshot[];
-  readonly accounts: readonly AccountSpend[];
+  /** Absent when an older deployment answered: not reported, not none. */
+  readonly accounts?: readonly AccountSpend[];
 }
 
 interface Tally {
@@ -99,7 +100,7 @@ export interface WorkspaceSpendDeps {
   readonly actor: ActorHandle;
 }
 
-export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
+export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend & { readonly accounts: readonly AccountSpend[] } {
   deps.actor.assertCurrent();
   const tallies: Tallies = new Map();
   const heads = readHeadSpend(deps.sql);

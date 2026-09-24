@@ -97,7 +97,7 @@ import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun,
   FileCheckpointEntry, FileCheckpointListing, ForkRunParams,
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
-  PendingAction, ProducerSpend, RunSummary, SearchNode, Usage, WorkspaceSpend,
+  AccountSpend, PendingAction, ProducerSpend, RunSummary, SearchNode, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
 import type { McpServerSummary, ModelMenuEntry, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import { McpServerSummarySchema } from "@/lib/user-api";
@@ -5036,7 +5036,7 @@ const ACTIVITY_LOG: ActivitySnapshot["log"] = [
   { event: "response_complete", detail: "ok", elapsedMs: 41_602, createdAt: NOW - 90e3 },
 ];
 
-const ACTIVITY_ACCOUNTS: WorkspaceSpend["accounts"] = [
+const ACTIVITY_ACCOUNTS: readonly AccountSpend[] = [
   {
     provider: "anthropic", account: "work", calls: 402, callsWithoutUsage: 0, unpricedCalls: 0, floorPricedCalls: 0,
     usd: 9.4312, usage: { input: 14_220_118, output: 402_551, cacheRead: 12_880_004 },

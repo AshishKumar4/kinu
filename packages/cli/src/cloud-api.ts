@@ -262,7 +262,7 @@ const WorkspaceSpendSchema: v.GenericSchema<WorkspaceSpend> = v.object({
   }),
   offTurnShare: v.nullable(v.number()),
   missions: v.array(MissionBudgetSnapshotSchema),
-  accounts: v.array(AccountSpendSchema),
+  accounts: v.optional(v.array(AccountSpendSchema)),
 });
 
 export const ActivitySpendSchema = v.object({ spend: WorkspaceSpendSchema });

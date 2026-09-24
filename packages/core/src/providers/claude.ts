@@ -1,4 +1,4 @@
-// Claude Pro/Max over its OAuth login, sent as Claude Code's CLI per oh-my-pi (THIRD_PARTY_NOTICES.md).
+// Claude Pro/Max, sent as Claude Code's CLI per oh-my-pi (THIRD_PARTY_NOTICES.md).
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { APICallError, type LanguageModel } from 'ai';
 import * as v from 'valibot';
@@ -174,7 +174,7 @@ function claudeCodeHeaders(input: ClaudeCodeHeaderInput) {
   };
 }
 
-/** The SDK names structured outputs for every tool; only an enforced schema needs it. */
+/** Structured outputs only for a schema the body enforces. */
 function betasTheBodyNeeds(body: SdkBody, sdkBetas: readonly string[]): string[] {
   const enforced = body.output_format !== undefined || (body.tools ?? []).some((declared) => declared.strict === true);
   const needed = sdkBetas.filter((beta) => enforced || !beta.trim().startsWith('structured-outputs-'));
@@ -414,7 +414,7 @@ function spentWindowText(response: Response, message: string | undefined): strin
   return quotaWindowText({ measure: window.measure, usedPercent: (Number.isFinite(used) ? used : 1) * 100, resetsAt: reset * 1_000 }, Date.now());
 }
 
-/** Waiting inside the turn restores neither a spent window nor spent included usage. */
+/** Waiting cannot restore a spent window or spent included usage. */
 async function usageLimitReached(call: ClaudeCall, response: Response, paid: string): Promise<APICallError | null> {
   if (response.status !== 429) return null;
   const text = await response.clone().text();
