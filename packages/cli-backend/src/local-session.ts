@@ -1712,8 +1712,8 @@ export class LocalAgentSession implements BackendHost {
     const systemPrompt = buildSystemPromptSync(this.rt, systemPromptOptions);
     this.recordSystemPromptHash(systemPrompt);
 
-    // Live state rides the dynamic-context ledger, re-read every step; turn-local state rides one trailing
-    // message. Neither enters durable history, so the prefix stays cacheable.
+    // Live state rides the dynamic-context ledger, re-read every step; turn-local state rides right before the
+    // turn's input. Neither enters durable history, so the prefix stays cacheable.
 
     // Provenance flips when a background job lands; in the system prompt it would rewrite the cached
     // prefix (prompting/volatile-context.ts).
@@ -1724,8 +1724,8 @@ export class LocalAgentSession implements BackendHost {
     if (activeSkills) turnLocal.activeSkills = activeSkills;
     const turnLocalMsg = turnLocalContextMessage(turnLocal);
 
-    // Unapproved instruction bytes go in the turn-local tail as sealed reference material, before the
-    // turn-local message so activation reasons stay last.
+    // Unapproved instruction bytes ride as sealed reference material, before the turn-local message so
+    // activation reasons stay nearest the request.
     const unverifiedMsg = unverifiedInstructionsMessage(
       activeSkills ? { agentsMd, activeSkills } : { agentsMd },
     );

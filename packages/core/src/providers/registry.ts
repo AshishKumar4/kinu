@@ -151,8 +151,7 @@ export function createProviderRegistry(): ProviderRegistry {
     return byId.get(providerId) ?? dynamic?.get(providerId);
   }
 
-  /** Probe all providers concurrently, answering in registration order. No deadline:
-   *  a clock would turn "slow" into "absent". */
+  /** Probes concurrently, answering in registration order; no deadline, which would read slow as absent. */
   async function probeEach<T>(
     providers: readonly ModelProvider[],
     probe: (provider: ModelProvider) => Promise<T>,

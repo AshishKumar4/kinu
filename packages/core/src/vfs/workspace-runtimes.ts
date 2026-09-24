@@ -5,7 +5,7 @@
  * reopening rehydrates installed runtimes, which an evicted Durable Object needs to see them again.
  */
 
-import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { BASH_RUNNER, CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { textSink } from '@nimbus-sh/core/_shared/bytes.js';
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { RunnerFactory } from '@nimbus-sh/core/runtime/installed-runtimes.js';
@@ -171,7 +171,7 @@ export async function provisionWorkspaceRuntimes(deps: {
 
   const runners: Record<string, RunnerFactory> = runnerDeps
     ? {
-      'bash-runner': kit.makeBashRunnerFactory(runnerDeps),
+      [BASH_RUNNER]: kit.makeBashRunnerFactory(runnerDeps),
       'cpython-runner': kit.makeCPythonRunnerFactory(runnerDeps),
     }
     : {};

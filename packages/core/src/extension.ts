@@ -49,7 +49,7 @@ interface PrepareStepResumption {
 export interface TransformContext {
   /** The agent/DO name on cf, the session key on cli. */
   readonly sessionKey: string;
-  /** Durable history only: before the turn-local tail and dynamic-context blocks. */
+  /** Durable history only: without the turn-local messages and dynamic-context blocks. */
   readonly messages: readonly ModelMessage[];
   readonly system: string;
   readonly contextWindow: number;

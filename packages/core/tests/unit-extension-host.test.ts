@@ -186,7 +186,7 @@ function userTexts(prompt: PromptMessage[]): string[] {
 }
 
 describe('transformContext through runChat', () => {
-  test('rewrites the durable history; ephemeral context is spliced AFTER (never seen by the transform)', async () => {
+  test('rewrites the durable history; turn-local context joins after it, never seen by the transform', async () => {
     const { model, prompt } = promptCapturingModel();
     let transformSaw: string[] = [];
 
@@ -213,10 +213,10 @@ describe('transformContext through runChat', () => {
       extensions: new ExtensionHost().register(compactor),
     })) { /* drain */ }
 
-    // The transform saw ONLY the durable history — not the ephemeral tail.
+    // The transform saw ONLY the durable history — not the turn-local message.
     expect(transformSaw).toEqual(['old-1', 'old-2', 'old-3']);
-    // The model saw the rewritten history with the ephemeral tail after it.
-    expect(userTexts(prompt())).toEqual(['summary-of-history', 'volatile-tail']);
+    // The model saw the rewritten history, the turn-local message before the turn's input it now holds.
+    expect(userTexts(prompt())).toEqual(['volatile-tail', 'summary-of-history']);
   });
 
   test('providerReportedTokens threads into the transform context, and step-finish reports the priced prompt', async () => {

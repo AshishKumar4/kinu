@@ -55,6 +55,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { tolerate } from '@kinu.run/core/obs';
 import { KILL_AFTER_SECONDS } from './deadline';
+import { procFile } from './process-owner';
 import {
   COST_TABLE, KINU_WORK, QUIET_LOAD, type RowCost, costRssMb, costThreads, holdsCheckoutResource, machineName, readCosts, writeCosts,
 } from './gate-cost';
@@ -153,7 +154,7 @@ function readTree(session: number, dumpMembers = false): Reading {
 
     // A process can exit between the directory listing and this read; that is
     // the sampler's normal case, not a failure.
-    const stat = tolerate(() => readFileSync(`/proc/${entry}/stat`, 'utf8'), 'enoent');
+    const stat = procFile(entry, 'stat');
 
     if (stat === undefined) continue;
     const fields = stat.slice(stat.lastIndexOf(') ') + 2).split(' ');
@@ -210,13 +211,13 @@ function readTree(session: number, dumpMembers = false): Reading {
     // The listing is a snapshot and the process may already be gone — ENOENT
     // or ESRCH (which is what the fs layer reports for a vanished /proc entry),
     // both the expected absence, so the member contributes nothing.
-    const rollup = tolerate(() => tolerate(() => readFileSync(`/proc/${String(pid)}/smaps_rollup`, 'utf8'), 'esrch'), 'enoent');
+    const rollup = procFile(pid, 'smaps_rollup');
     const pss = Number(/^Pss:\s*(\d+) kB$/mu.exec(rollup ?? '')?.[1] ?? 0);
 
     pssKb += pss;
 
     if (dumpMembers) {
-      const comm = tolerate(() => tolerate(() => readFileSync(`/proc/${String(pid)}/comm`, 'utf8'), 'esrch'), 'enoent') ?? '?';
+      const comm = procFile(pid, 'comm') ?? '?';
 
       members.push({ pid, pssKb: pss, comm: comm.trim() });
     }
@@ -237,10 +238,7 @@ function readTree(session: number, dumpMembers = false): Reading {
     const tasks = tolerate(() => tolerate(() => readdirSync(`/proc/${String(pid)}/task`), 'esrch'), 'enoent') ?? [];
 
     for (const task of tasks) {
-      const taskStat = tolerate(
-        () => tolerate(() => readFileSync(`/proc/${String(pid)}/task/${task}/stat`, 'utf8'), 'esrch'),
-        'enoent',
-      );
+      const taskStat = procFile(pid, `task/${task}/stat`);
 
       if (taskStat === undefined) continue;
 
@@ -302,10 +300,10 @@ function contention(own: number): Contention | undefined {
     const first = entry.charCodeAt(0);
 
     if (first < 0x30 || first > 0x39) continue;
-    const stat = tolerate(() => readFileSync(`/proc/${entry}/stat`, 'utf8'), 'enoent');
+    const stat = procFile(entry, 'stat');
 
     if (stat === undefined || Number(stat.slice(stat.lastIndexOf(') ') + 2).split(' ')[3]) === own) continue;
-    const command = tolerate(() => readFileSync(`/proc/${entry}/cmdline`, 'utf8'), 'enoent') ?? '';
+    const command = procFile(entry, 'cmdline') ?? '';
 
     if (!KINU_WORK.test(command)) continue;
     // Another user's working directory is unreadable, and no checkout here is theirs.

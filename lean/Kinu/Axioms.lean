@@ -84,7 +84,6 @@ import Kinu
 #print axioms Kinu.Execution.Capabilities.subsumes_refl
 #print axioms Kinu.Execution.Capabilities.subsumes_trans
 #print axioms Kinu.Execution.Capabilities.a_session_extends_the_workspace
-#print axioms Kinu.Execution.Capabilities.the_sandbox_never_subsumes_a_nimbus_box
 
 /-! ## Kinu/MCTS/Backpropagation.lean -/
 

@@ -67,7 +67,7 @@ const DEAD_LOGIN = 'Your Claude login is no longer valid. Reconnect Claude in Us
 
 const NOT_CONNECTED = 'Claude is not connected. Connect Claude in User settings, or run `kinu provider connect claude`.';
 
-/** Aliases the retired `claude -p` provider offered; api.anthropic.com serves none of them. */
+/** The retired `claude -p` provider's aliases, which api.anthropic.com does not serve. */
 const RETIRED_CLI_MODELS = new Set(['claude-opus-4-x', 'claude-sonnet-4-x', 'claude-haiku-4-x']);
 
 const BlockSchema = v.looseObject({
@@ -415,7 +415,7 @@ function spentWindowText(response: Response, message: string | undefined): strin
   return quotaWindowText({ measure: window.measure, usedPercent: (Number.isFinite(used) ? used : 1) * 100, resetsAt: reset * 1_000 }, Date.now());
 }
 
-/** Waiting cannot restore a spent window or spent included usage. */
+/** Waiting cannot restore a spent window or included usage. */
 async function usageLimitReached(call: ClaudeCall, response: Response, paid: string): Promise<APICallError | null> {
   if (response.status !== 429) return null;
   const text = await response.clone().text();

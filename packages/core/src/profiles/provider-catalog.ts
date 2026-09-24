@@ -28,10 +28,8 @@ export function providerListingOf(menu: ModelMenu): ProviderListing {
   return { models, failures: menu.failures, reasoningEfforts };
 }
 
-/**
- * Both halves are sorted so answer order never changes the revision. Failures are hashed
- * because a degraded listing admits models unverified; `!` and `~` cannot begin a model spec.
- */
+/** Sorted, so answer order never changes the revision; failures are hashed as a degraded listing admits models
+ *  unverified. No model spec begins with `!` or `~`. */
 export function buildProviderCatalogSnapshot(
   models: Iterable<string>,
   failures: readonly ProviderFailure[],

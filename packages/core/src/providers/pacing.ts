@@ -1,8 +1,6 @@
-/** Isolate-scoped pacer: sibling requests to one provider host share its declared cooldown.
- *
- *  It counts no requests: workerd already bounds connections awaiting headers (`worker.simultaneous_connections`),
- *  and cancels a request parked on another's release as hung, so a shared count never released (HTTP 500 1101 on
- *  kinu.run, 2026-09-23). */
+/** Isolate-scoped pacer: sibling requests to one provider host share its declared cooldown. It counts no requests:
+ *  workerd bounds connections awaiting headers and cancels one parked on another's release as hung (HTTP 500 1101
+ *  on kinu.run, 2026-09-23). */
 
 import { abortCause } from '../utils/abort';
 
@@ -43,8 +41,8 @@ export class ProviderPacer {
     this.sleep = opts.sleep ?? abortableSleep;
   }
 
-  /** Wait out the host's cooldown on the caller's own timer, re-read after each sleep because a sibling may extend it.
-   *  `onCooldown` gets the deadline so a caller can skip announcing its own. */
+  /** Waits out the host's cooldown, re-read after each sleep as a sibling may extend it. `onCooldown` gets the
+   *  deadline so a caller can skip announcing its own. */
   async admit(host: string, signal?: AbortSignal, opts?: { onCooldown?: (waitMs: number, untilMs: number) => void }): Promise<void> {
     for (;;) {
       if (signal?.aborted) throw abortCause(signal);

@@ -1,5 +1,6 @@
-// The shared turn-context order (orchestrator/turn-context.ts): sanitize → onTurnStart → transformContext
-// → turn-local tail. No dynamic-context blocks: the ledger's frozen positions index this array.
+// The shared turn-context order (orchestrator/turn-context.ts): sanitize → onTurnStart → transformContext.
+// No dynamic-context blocks or turn-local messages: the step pipeline places them, and the ledger's frozen
+// positions index this array.
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import { Database } from 'bun:sqlite';
@@ -20,7 +21,7 @@ function base() {
 
 describe('assembleTurnMessages', () => {
   test('bare assembly returns the durable history plus nothing', async () => {
-    const out = await assembleTurnMessages(base());
+    const { messages: out } = await assembleTurnMessages(base());
     expect(out).toEqual(HISTORY);
     expect(out).not.toBe(HISTORY);
   });
@@ -40,17 +41,12 @@ describe('assembleTurnMessages', () => {
       },
     });
 
-    await assembleTurnMessages({
-      ...base(),
-      extensions,
-      turnLocal: [{ role: 'user', content: 'turn-local' }],
-    });
+    await assembleTurnMessages({ ...base(), extensions });
     expect(order).toEqual(['turn-start', 'transform']);
-    // The transform never sees the turn-local tail.
     expect(transformSaw).toEqual(HISTORY);
   });
 
-  test('the turn-local tail lands last, on the TRANSFORMED history', async () => {
+  test('the transform\'s result is what the turn assembles', async () => {
     const compacted: ModelMessage[] = [{ role: 'user', content: 'summary' }];
 
     const extensions = new ExtensionHost().register({
@@ -58,23 +54,21 @@ describe('assembleTurnMessages', () => {
       transformContext: async () => compacted,
     });
 
-    const out = await assembleTurnMessages({
-      ...base(),
-      extensions,
-      turnLocal: [{ role: 'user', content: 'turn-local' }],
-    });
-
-    expect(out).toEqual([...compacted, { role: 'user', content: 'turn-local' }]);
+    expect((await assembleTurnMessages({ ...base(), extensions })).messages).toEqual(compacted);
   });
 
-  test('no dynamic-context block is ever assembled here', async () => {
-    // A block here would be double-counted by the ledger's frozen indices.
-    const out = await assembleTurnMessages({
-      ...base(),
-      turnLocal: [{ role: 'user', content: 'turn-local' }],
+  test('the turn\u2019s input is found again past a transform that folded what came before it', async () => {
+    const request: ModelMessage = { role: 'user', content: 'and now?' };
+    const history: ModelMessage[] = [...HISTORY.slice(0, 2), request, { role: 'assistant', content: 'working' }];
+
+    const extensions = new ExtensionHost().register({
+      name: 'test.fold',
+      transformContext: async (ctx) => [{ role: 'user', content: 'summary' }, ...ctx.messages.slice(-2)],
     });
 
-    expect(JSON.stringify(out)).not.toContain('<dynamic_context');
+    const turn = await assembleTurnMessages({ ...base(), history, turnStart: 2, extensions });
+
+    expect(turn.messages[turn.turnStart]).toBe(request);
   });
 
   test('the transform receives sessionKey, window, trigger, and the measured token signal', async () => {
@@ -115,7 +109,7 @@ describe('assembleTurnMessages', () => {
       },
     });
 
-    const out = await assembleTurnMessages({
+    const { messages: out } = await assembleTurnMessages({
       ...base(),
       history: withFile,
       extensions,

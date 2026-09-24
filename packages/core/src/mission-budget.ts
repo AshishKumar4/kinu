@@ -1,6 +1,6 @@
 /**
- * Opt-in durable spend ledger keyed by label: every model call and spawn under a label debits it and all its ancestors.
- * USD is priced at debit time from catalog rates (blended fallback is counted); exhaustion is a structured refusal at the seam.
+ * Durable spend ledger by label: a call or spawn under a label debits it and its ancestors, priced at debit time
+ * (blended fallback counted); exhaustion is a structured refusal at the seam.
  */
 
 import * as v from 'valibot';
@@ -217,10 +217,7 @@ function toRow(row: MissionBudgetColumns): MissionRow {
   };
 }
 
-/**
- * Every label, dearest first; cumulative lifetime figures, as caps are. A pure read (no DDL) for read-only surfaces.
- * A missing table is an unbudgeted workspace, not an error.
- */
+/** Every label, dearest first, in lifetime figures as caps are; no DDL. A missing table is an unbudgeted workspace. */
 export function listMissionSpend(sql: SqlExecutor, actor: ActorHandle): MissionBudgetSnapshot[] {
   actor.assertCurrent();
 
@@ -288,8 +285,7 @@ export interface MissionGovernorDeps {
   actor: ActorHandle;
   /** Once per label, on its first refusal. */
   onExhausted?(refusal: MissionBudgetRefusal): void;
-  /** Read per debit, as the model can change between turns: `spec`'s rate, or the current model's when absent. Null
-   *  means the blended fallback. */
+  /** Per debit: `spec`'s rate, else the current model's. Null: blended. */
   pricing?(spec?: string): ModelPricing | null;
   /** A property, not a method: held unbound. */
   now?: () => number;
@@ -345,8 +341,7 @@ export class MissionGovernor {
     return null;
   }
 
-  /** Pass `usage` only with the `spec` that served the call, or for the actor's current model; anything unpriceable
-   *  is counted as blended. */
+  /** `usage` goes with the `spec` that served the call, else the current model's; unpriceable counts as blended. */
   debit(tokens: number, opts?: {
     labels?: readonly string[]; calls?: number; spawns?: number; usage?: Usage; spec?: string;
   }): void {
@@ -381,10 +376,7 @@ export class MissionGovernor {
     return labels.map((l) => this.ledger.get(l)).filter((r): r is MissionRow => r !== null).map(toSnapshot);
   }
 
-  /**
-   * `stream` is guarded but not metered: turn loops already debit it from provider usage.
-   * `complete` is estimated from chars at the blended rate; the model is often not the actor's.
-   */
+  /** `stream` is guarded, not metered (turn loops debit it); `complete` is estimated from chars at the blended rate. */
   govern(llm: LLM, labels: readonly string[] = this.active): LLM {
     if (labels.length === 0) return llm;
 

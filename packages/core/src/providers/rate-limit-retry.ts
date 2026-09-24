@@ -38,8 +38,7 @@ export interface RateLimitRetryOptions {
   lane?: string;
 }
 
-/** Pace requests and follow the provider's Retry-After until success, definitive failure,
- *  or cancel; every wait is declared to the pacer so siblings share it. */
+/** Follows Retry-After until success, definitive failure or cancel, declaring each wait so siblings share it. */
 export function withRateLimitRetry(
   fetchImpl: typeof globalThis.fetch,
   opts: RateLimitRetryOptions = {},

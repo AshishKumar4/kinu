@@ -488,6 +488,8 @@ export class ActorSession {
       admittedMessages = admitted.messages;
       durableOutput = new SessionStream(this.canonical, lease.turnId, claim.epoch);
       const stream = durableOutput;
+      // Activation names the input's entry after its message; an edit keeps the entry.
+      const turnInput = this.canonical.admittedInput(claim.turnId);
 
       const events = operationProfileStream(startActorTurn({
         runtime: this.runtime, mode: this.mode, task: input.task, loopVersion: input.loopVersion,
@@ -503,8 +505,9 @@ export class ActorSession {
             base: async () => {
               const base = await this.canonical.stepBase(() => this.canonical.assertEpoch(claim.turnId, claim.epoch), claim.turnId, this.options.events ?? null);
               this.messages.splice(0, this.messages.length, ...base.messages);
+              const turnStart = turnInput === null ? -1 : base.entries.findIndex(entry => entry.entryId === turnInput.messageId);
 
-              return base;
+              return { messages: base.messages, changed: base.changed, ...(turnStart >= 0 && { turnStart }) };
             },
             consume: async ({ stepNumber, messages }) => {
               const consumed = await this.options.claims.consume(claim, { index: stepNumber, messages });

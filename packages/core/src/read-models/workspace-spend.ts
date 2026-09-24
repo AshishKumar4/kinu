@@ -1,8 +1,7 @@
 /**
- * Whole-workspace model spend by producer, read from `step_finish` (as `agent`), `model_call`,
- * and `head_journal`; nothing new is stored. Summed in SQL over the whole log, never windowed.
- * A measured head report replaces its attempt's step usage only. Coverage reports unmeasured and
- * unpriced calls. `producers`, `missions` and `accounts` overlap; never sum them.
+ * Workspace model spend by producer from `step_finish` (as `agent`), `model_call` and `head_journal`, summed in SQL
+ * over the whole log. A measured head report replaces its attempt's step usage only. `producers`, `missions` and
+ * `accounts` overlap; never sum them.
  */
 
 import type { RunEventRecorder, StepSpendSource } from '../events/recorder';
@@ -23,8 +22,7 @@ export interface SpendCoverage {
   readonly calls: number;
   readonly measured: number;
   readonly reported: number | null;
-  /** Producers with calls but no reported usage. Workers AI utility bindings (`platform`) are
-   *  permanently here: they return no usage field. */
+  /** Producers with calls and no reported usage, always including Workers AI utility bindings (`platform`). */
   readonly silent: readonly SpendSource[];
   readonly partial: readonly SpendSource[];
 }
@@ -36,8 +34,7 @@ export interface WorkspaceSpend {
   readonly coverage: SpendCoverage;
   /** Share of measured tokens not spent by `agent` turns; null when nothing was measured. */
   readonly offTurnShare: number | null;
-  /** Spend per mission label from `mission_budget`, dearest first. Not additive with producers: a
-   *  call sits in one producer row and every mission label above it. */
+  /** Per mission label, dearest first; a call sits in one producer row and every label above it. */
   readonly missions: readonly MissionBudgetSnapshot[];
   /** Absent when an older deployment answered: not reported, not none. */
   readonly accounts?: readonly AccountSpend[];
@@ -173,8 +170,7 @@ function finishTotal(tally: Tally): SpendTally {
   return tally.usd === undefined ? out : { ...out, usd: tally.usd };
 }
 
-/** One row per head (its steps are already summed into the report). A NULL usage column means
- *  the provider never reported that count; decode via `storedUsage` only. */
+/** One row per head, its steps summed in. A NULL usage column was never reported; decode via `storedUsage`. */
 interface HeadSpendRow extends StoredHeadUsage {
   readonly headActorId: string | null;
   readonly spawnedAt: number;

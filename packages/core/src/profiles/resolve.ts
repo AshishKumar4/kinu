@@ -1,5 +1,5 @@
-// Turns an envelope, a provider snapshot and a role into a turn's profile. A missing tier aliases `default`; a stored
-// tier no complete listing holds runs on the account default, then Kinu's; a pinned model nothing lists is an error.
+// Envelope, provider snapshot and role to a turn's profile. A missing tier aliases `default`; a stored tier no
+// complete listing holds runs on the account default, then Kinu's; an unlisted pin is an error.
 
 import * as v from 'valibot';
 
@@ -22,10 +22,8 @@ import type { ActorReference } from '../identity/actor-handle';
 
 const DEFAULT_TURN_REASONING_EFFORT: ReasoningEffort = REASONING_EFFORT_FOR_STAGE.chat;
 
-/**
- * `availableModels` is positive-only: absence proves nothing unless the listing had no failures.
- * Producers must change `revision` whenever availability changes, failures included.
- */
+/** `availableModels` is positive-only: absence proves nothing unless the listing had no failures. `revision`
+ *  changes with availability, failures included. */
 const ProviderCatalogSnapshotSchema = v.looseObject({
   revision: v.string(),
   availableModels: v.array(v.string()),
@@ -35,7 +33,7 @@ const ProviderCatalogSnapshotSchema = v.looseObject({
     label: v.string(),
     reason: v.string(),
   })), []),
-  /** The levels each listed model declares, by spec; a model absent here declares none. */
+  /** Declared levels by spec; a model absent here declares none. */
   reasoningEfforts: v.optional(v.record(v.string(), v.array(v.picklist(REASONING_EFFORTS))), {}),
 });
 
@@ -240,7 +238,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
 
   if (!defaultAssignment) throw new Error('profile catalog has no default tier assignment');
 
-  /** A stored tier a complete listing holds no model of cannot serve: the account default runs it, then Kinu's. */
+  /** A stored tier no complete listing holds cannot serve: the account default runs it, then Kinu's. */
   const serving = (id: TierId, stored: TierAssignment): TierAssignment => {
     if (servable(stored.model, stored.fallbacks ?? [])) return stored;
 

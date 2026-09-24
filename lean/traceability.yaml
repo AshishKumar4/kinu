@@ -129,7 +129,7 @@ requirements:
       - The TypeScript uses configurable floating-point arithmetic and unbounded observations rather than this fixed scaled-Nat model
       - WP-F4 differential fixtures after the production arithmetic is settled
   PR-EXEC-001:
-    statement: Every shipped executor, over the inputs its constructor reads, either owns or shares its files as its kind says, never claims docker or gpu, and a workspace with a Nimbus session keeps every workspace capability and gains every Nimbus capability but owned files; a fully configured Nimbus box subsumes the sandbox and the sandbox subsumes no Nimbus box.
+    statement: Every shipped executor, over the inputs its constructor reads, either owns or shares its files as its kind says, never claims docker or gpu, and a workspace with a Nimbus session keeps every workspace capability and gains every Nimbus capability but owned files.
     status: proved-in-abstract-model
     theorems:
       - Kinu.Execution.Capabilities.the_kind_says_who_owns_the_files
@@ -137,14 +137,12 @@ requirements:
       - Kinu.Execution.Capabilities.subsumes_refl
       - Kinu.Execution.Capabilities.subsumes_trans
       - Kinu.Execution.Capabilities.a_session_extends_the_workspace
-      - Kinu.Execution.Capabilities.the_sandbox_never_subsumes_a_nimbus_box
     tsRefs:
       - packages/core/src/execution/types.ts#EXECUTOR_CAPABILITIES
       - packages/core/src/execution/types.ts#ExecutorKind
       - packages/core/src/execution/toolchain.ts#TOOLCHAIN_PROBE
       - packages/core/src/vfs/workspace-runtimes.ts#workspaceToolchainCapabilities
       - packages/core/src/execution/inline.ts#createInlineExecutor
-      - packages/core/src/execution/nimbus.ts#createNimbusExecutor
       - packages/core/src/execution/nimbus.ts#createNimbusWorkspaceExecutor
       - packages/core/src/execution/sandbox.ts#createSandboxExecutor
       - packages/core/src/execution/device-tunnel-executor.ts#createDeviceTunnelExecutor

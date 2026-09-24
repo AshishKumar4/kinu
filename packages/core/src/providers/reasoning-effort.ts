@@ -37,7 +37,7 @@ export function offeredReasoningEfforts(
   return offered;
 }
 
-/** What a model is sent for `wanted`: itself when declared, else the highest declared level below it, else the lowest. */
+/** `wanted` if declared, else the highest declared level below it, else the lowest. */
 export function declaredReasoningEffort(
   wanted: ReasoningEffort,
   declared: readonly ReasoningEffort[] | undefined,

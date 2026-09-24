@@ -212,12 +212,12 @@ export class SessionHistory {
       WHERE m.actor_id=${actorId} AND m.context_id=${contextId} AND m.to_revision IS NULL AND r.turn_id=${turnId}`.map(row => row.entry_id));
   }
 
-  async stepBase(assertOwner: () => void, turnId: string | null = null, events: ContextEventRecorder | null = null): Promise<{ readonly messages: ModelMessage[]; readonly changed: boolean }> {
+  async stepBase(assertOwner: () => void, turnId: string | null = null, events: ContextEventRecorder | null = null): Promise<{ readonly messages: ModelMessage[]; readonly entries: readonly ContextEntry[]; readonly changed: boolean }> {
     assertOwner();
     const current = await this.materialize();
     const pending = this.proposals.pending(current.selection.contextId).at(-1);
 
-    if (pending === undefined) return { messages: current.messages, changed: false };
+    if (pending === undefined) return { messages: current.messages, entries: current.entries, changed: false };
     let candidate: readonly ContextEntry[];
 
     try { candidate = this.proposals.preview(pending.proposal_id); } catch (cause) {
@@ -225,7 +225,7 @@ export class SessionHistory {
       assertOwner();
       this.proposals.close(pending.proposal_id, 'history_rewritten');
 
-      return { messages: current.messages, changed: false };
+      return { messages: current.messages, entries: current.entries, changed: false };
     }
 
     const messages = await this.messages.materializeAll(candidate);
@@ -246,7 +246,10 @@ export class SessionHistory {
 
     committed.publication?.publish();
 
-    return { messages: committed.applied === null ? (await this.materialize()).messages : messages, changed: committed.applied !== null };
+    if (committed.applied !== null) return { messages, entries: candidate, changed: true };
+    const settled = await this.materialize();
+
+    return { messages: settled.messages, entries: settled.entries, changed: false };
   }
 
   private editEvent(edit: ContextEditAudit): { publish(): void } | null {

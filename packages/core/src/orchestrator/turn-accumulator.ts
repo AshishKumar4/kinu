@@ -86,8 +86,7 @@ export class TurnAccumulator {
   readonly escalations = new TurnEscalationLedger();
   /** Written by craft-cycle.ts: crafted tools run inside `eval`, never as `toolCalls` names. */
   private readonly craftUsed = new Set<string>();
-  /** Cumulative messages already written durably. A shorter array means a re-drive: resync
-   *  downward and record nothing, since re-recording would duplicate the step. */
+  /** Messages already durable; a shorter array is a re-drive, resynced without recording the step twice. */
   private durableMessages = 0;
 
   constructor(

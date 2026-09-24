@@ -7,15 +7,13 @@
 import { describe, expect, test } from 'bun:test';
 import { catalogTurn, gatewayWorkspace } from './helpers/actor-harness';
 import {
-  chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun,
+  chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun,
 } from './helpers/platform-gateway';
 
 const ASK = 'Find a way to speed up the parser.';
 
 function fromTheOwner(run: RecordedGatewayRun): boolean {
-  const opening = requestOf(run).messages.find((message) => message.role === 'user');
-
-  return JSON.stringify(opening?.content ?? '').includes(ASK);
+  return openingOf(run).includes(ASK);
 }
 
 /** The main actor starts a one-node search, then says so; `node` answers the node. */

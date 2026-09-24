@@ -785,13 +785,13 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const history: ModelMessage[] = [{ role: 'user', content: 'Read the file.' }];
     const initial = { factsBlock: '- unchanged = yes', executors: [workspace, idleSandbox] };
     const first = ledger.weave(history, initial);
-    expect(first.at(-1)?.content).toBe(renderDynamicContextBlock(initial) ?? '');
+    expect(first[0]?.content).toBe(renderDynamicContextBlock(initial) ?? '');
     history.push({ role: 'assistant', content: 'Read.' });
     const current = { ...initial, executors: [workspace, activeSandbox] };
     const second = ledger.weave(history, current);
     const delta = messageText(present(second.at(-1), 'woven tail'));
 
-    expect(second[1]).toBe(first[1]);
+    expect(second[0]).toBe(first[0]);
     expect(delta).toContain('sandbox status went from `ready on demand` to `active`');
     expect(delta).not.toContain('unchanged = yes');
     expect(delta).not.toContain('- workspace:');
@@ -812,9 +812,11 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const result = await composePrepareStep({ dynamic: { ledger, snapshot: () => next } },
       { stepNumber: 0, messages: history, steps: [] });
 
-    expect(result?.messages[1]).toBe(first?.messages[1]);
-    expect(result?.messages.at(-1)?.content).toContain('kind="delta"');
-    expect(result?.messages.at(-1)?.content).not.toContain('## Execution status');
+    expect(result?.messages[0]).toBe(first?.messages[0]);
+    // A turn's first step: the delta rides before the new turn's input, which ends the request.
+    expect(result?.messages.at(-1)?.content).toBe('next turn');
+    expect(result?.messages.at(-2)?.content).toContain('kind="delta"');
+    expect(result?.messages.at(-2)?.content).not.toContain('## Execution status');
     history.push({ role: 'assistant', content: 'working' });
     const delta = ledger.weave(history, { ...next, factsBlock: '- k = final' });
     expect(delta.at(-1)?.content).toContain('kind="delta"');
@@ -908,14 +910,15 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     expect(ledger.weave(history, current).at(-1)?.content).toBe(renderDynamicContextBlock(current) ?? '');
   });
 
-  test('(a) empty ledger + first turn → exactly one block at the tail', () => {
+  test('(a) empty ledger + first turn → exactly one block, right before the turn\'s input', () => {
     const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [{ role: 'user', content: 'hi' }];
     const out = ledger.weave(history, state);
     expect(history).toHaveLength(1);
     expect(out).toHaveLength(2);
-    expect(out[1]).toMatchObject({ role: 'user' });
-    expect(isDynamicBlock(messageText(out[1]))).toBe(true);
+    expect(out[0]).toMatchObject({ role: 'user' });
+    expect(isDynamicBlock(messageText(out[0]))).toBe(true);
+    expect(out[1]).toBe(history[0]);
     expect(ledger.size).toBe(1);
   });
 
@@ -923,7 +926,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [{ role: 'user', content: 'turn-1' }];
     const first = ledger.weave(history, state);
-    const frozen = first[1];
+    const frozen = first[0];
 
     history.push({ role: 'assistant', content: 'answer-1' }, { role: 'user', content: 'turn-2' });
     const second = ledger.weave(history, state);
@@ -931,34 +934,34 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const third = ledger.weave(history, state);
 
     expect(ledger.size).toBe(1);
-    expect(second[1]).toBe(frozen);
-    expect(third[1]).toBe(frozen);
+    expect(second[0]).toBe(frozen);
+    expect(third[0]).toBe(frozen);
     expect(third.map(messageText)).toEqual([
-      'turn-1', messageText(frozen), 'answer-1', 'turn-2', 'answer-2', 'turn-3',
+      messageText(frozen), 'turn-1', 'answer-1', 'turn-2', 'answer-2', 'turn-3',
     ]);
   });
 
-  test('(c) fingerprint change → a SECOND block appends at the new tail; the first stays put', () => {
+  test('(c) fingerprint change → a SECOND block lands before the new turn\'s input; the first stays put', () => {
     const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [{ role: 'user', content: 'turn-1' }];
     const first = ledger.weave(history, state);
-    const frozen = first[1];
+    const frozen = first[0];
 
     history.push({ role: 'assistant', content: 'answer-1' }, { role: 'user', content: 'turn-2' });
     const changed = { ...state, factsBlock: '- k = v\n- new.fact = learned' };
     const out = ledger.weave(history, changed);
 
     expect(ledger.size).toBe(2);
-    expect(out[1]).toBe(frozen);
-    const tail = out[out.length - 1];
-    expect(isDynamicBlock(messageText(tail))).toBe(true);
-    expect(messageText(tail)).toContain('new.fact = learned');
+    expect(out[0]).toBe(frozen);
+    const born = present(out.at(-2), 'the new block');
+    expect(isDynamicBlock(messageText(born))).toBe(true);
+    expect(messageText(born)).toContain('new.fact = learned');
     expect(out.map(messageText)).toEqual([
-      'turn-1', messageText(frozen), 'answer-1', 'turn-2', messageText(tail),
+      messageText(frozen), 'turn-1', 'answer-1', messageText(born), 'turn-2',
     ]);
   });
 
-  test('(d) reset (cold start / compaction) → back to exactly one fresh block at the tail', () => {
+  test('(d) reset (cold start / compaction) → back to exactly one fresh block, before the input', () => {
     const ledger = new DynamicContextLedger();
     ledger.weave([{ role: 'user', content: 'a' }], state);
     ledger.weave(
@@ -973,7 +976,8 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const out = ledger.weave(compacted, state);
     expect(ledger.size).toBe(1);
     expect(out).toHaveLength(3);
-    expect(isDynamicBlock(messageText(out[2]))).toBe(true);
+    expect(isDynamicBlock(messageText(out[1]))).toBe(true);
+    expect(out[2]).toBe(compacted[1]);
   });
 
   test('cross-turn sandbox-only change emits a delta naming only that section', () => {
@@ -992,8 +996,8 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const changed = { factsBlock: '- k = v', executors: [workspace, activeSandbox] };
     const second = ledger.weave(secondTurn, changed);
     expect(ledger.size).toBe(2);
-    expect(second[1]).toBe(first[1]);
-    const text = messageText(present(second.at(-1), 'woven tail'));
+    expect(second[0]).toBe(first[0]);
+    const text = messageText(present(second.at(-2), 'the delta before the second turn'));
     expect(text).toContain('kind="delta"');
     expect(text).toContain('## Execution status');
     expect(text).not.toContain('## World model');
@@ -1008,7 +1012,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const cleared = { executors: [idleSandbox] };
     const out = ledger.weave(history, cleared);
     expect(ledger.size).toBe(2);
-    const text = messageText(present(out.at(-1), 'woven tail'));
+    const text = messageText(present(out.at(-2), 'the delta before the second turn'));
     expect(text).toContain('kind="delta"');
     expect(text).toContain('## World model');
     expect(text).toContain('Cleared: no current entries.');
@@ -1028,7 +1032,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const compacted: ModelMessage[] = [{ role: 'user', content: 'summary' }, { role: 'user', content: 'next' }];
     const out = ledger.weave(compacted, state);
     expect(ledger.size).toBe(1);
-    const text = messageText(present(out.at(-1), 'woven tail'));
+    const text = messageText(present(out[1], 'the block before the input'));
     expect(text).toContain('kind="full"');
     expect(text).toBe(renderDynamicContextBlock(state) ?? '');
   });
@@ -1053,8 +1057,8 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const out = ledger.weave(replacement, freshState);
 
     expect(out).toEqual([
-      { role: 'user', content: 'new-user-1' },
       { role: 'user', content: freshBlock },
+      { role: 'user', content: 'new-user-1' },
     ]);
     expect(ledger.size).toBe(1);
   });
@@ -1063,27 +1067,27 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     // A block born at index === history.length is at the tail, not stale; an off-by-one discards every earlier block.
     const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [{ role: 'user', content: 'turn-1' }];
-    ledger.weave(history, state);                                  // block @ 1
-    history.push({ role: 'assistant', content: 'a1' }, { role: 'user', content: 'turn-2' });
+    ledger.weave(history, state);                                  // block @ 0, before the input
+    history.push({ role: 'assistant', content: 'a1' });
     const changed = { ...state, factsBlock: '- k = v2' };
-    const frozenDelta = present(ledger.weave(history, changed).at(-1), 'woven tail'); // block @ 3 (the tail)
+    const frozenDelta = present(ledger.weave(history, changed).at(-1), 'woven tail'); // block @ 2 (the tail)
     expect(ledger.size).toBe(2);
 
     const out = ledger.weave(history, changed);
     expect(ledger.size).toBe(2);
     expect(out.map(messageText)).toEqual([
-      'turn-1', renderDynamicContextBlock(state) ?? '', 'a1', 'turn-2', messageText(frozenDelta),
+      renderDynamicContextBlock(state) ?? '', 'turn-1', 'a1', messageText(frozenDelta),
     ]);
   });
 
   // streamText throws AI_MissingToolResultsError when a block lands between a tool call and its result.
   test('a frozen index that has become a tool result rides after the pair, not through it', () => {
-    // CLI shape: the turn-start steer freezes the block at 2, which is the tool result on the next turn.
+    // A block born at a step's tail, 2, is where the tool result lands once the history is re-read.
     const ledger = new DynamicContextLedger();
 
     const firstTurn: ModelMessage[] = [
       { role: 'user', content: 'add caching' },
-      { role: 'user', content: 'steer' },
+      { role: 'assistant', content: 'on it' },
     ];
 
     const frozen = ledger.weave(firstTurn, state)[2];
@@ -1114,7 +1118,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
 
     const firstTurn: ModelMessage[] = [
       { role: 'user', content: 'do both' },
-      { role: 'user', content: 'steer' },
+      { role: 'assistant', content: 'on it' },
     ];
 
     const frozen = ledger.weave(firstTurn, state)[2];
@@ -1142,7 +1146,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
   test('a block whose slot is not a tool result stays at exactly its birth index', () => {
     // A moved block would shift the provider cache prefix on every ordinary turn.
     const ledger = new DynamicContextLedger();
-    const history: ModelMessage[] = [{ role: 'user', content: 'q1' }, { role: 'user', content: 'steer' }];
+    const history: ModelMessage[] = [{ role: 'user', content: 'q1' }, { role: 'assistant', content: 'on it' }];
     const frozen = ledger.weave(history, state)[2];
 
     history.push(
@@ -1151,8 +1155,9 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     );
     const out = ledger.weave(history, state);
 
+    expect(isDynamicBlock(messageText(frozen))).toBe(true);
     expect(out.indexOf(frozen)).toBe(2);
-    expect(out.map((m) => m.role)).toEqual(['user', 'user', 'user', 'assistant', 'tool']);
+    expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'tool']);
   });
 
   test('initial empty state costs nothing; later empty state clears without removing the prefix', () => {
@@ -1167,7 +1172,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const after = ledger.weave([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'yo' }], {});
     expect(ledger.size).toBe(2);
     expect(after).toHaveLength(4);
-    expect(isDynamicBlock(messageText(after[1]))).toBe(true);
+    expect(isDynamicBlock(messageText(after[0]))).toBe(true);
     expect(after.at(-1)?.content).toContain('Cleared: no current entries.');
   });
 });
@@ -1183,10 +1188,11 @@ describe('dropSuperseded (the compaction ladder\'s first rung)', () => {
     for (let i = 0; i < blocks; i++) {
       history.push({ role: 'user', content: `turn-${i}` });
       const at = { ...state, factsBlock: `- k = v${i}` };
-      const tail = ledger.weave(history, at).at(-1);
+      // Each block is born before its turn's input.
+      const born = ledger.weave(history, at).at(-2);
 
-      if (tail === undefined) throw new Error('missing ledger block');
-      renders.push(messageText(tail));
+      if (born === undefined) throw new Error('missing ledger block');
+      renders.push(messageText(born));
       history.push({ role: 'assistant', content: `a${i}` });
     }
 
@@ -1201,7 +1207,7 @@ describe('dropSuperseded (the compaction ladder\'s first rung)', () => {
     expect(ledger.size).toBe(3);
     const before = ledger.weave(history, finalState);
     expect(before.map(messageText)).toEqual([
-      'turn-0', renders[0], 'a0', 'turn-1', renders[1], 'a1', 'turn-2', renders[2], 'a2',
+      renders[0], 'turn-0', 'a0', renders[1], 'turn-1', 'a1', renders[2], 'turn-2', 'a2',
     ]);
 
     const freed = ledger.dropSuperseded();
@@ -1211,7 +1217,7 @@ describe('dropSuperseded (the compaction ladder\'s first rung)', () => {
 
     const after = ledger.weave(history, finalState);
     expect(after.map(messageText)).toEqual([
-      'turn-0', 'a0', 'turn-1', 'a1', 'turn-2', full, 'a2',
+      'turn-0', 'a0', 'turn-1', 'a1', full, 'turn-2', 'a2',
     ]);
   });
 
@@ -1239,9 +1245,9 @@ describe('dropSuperseded (the compaction ladder\'s first rung)', () => {
     const changed = { ...state, factsBlock: '- k = later' };
     const out = ledger.weave(history, changed);
     expect(ledger.size).toBe(2);
-    expect(out.at(-1)?.content).toContain('kind="delta"');
-    expect(out.at(-1)?.content).toContain('- k = later');
-    expect(out.at(-1)?.content).not.toContain('## Execution status');
+    expect(out.at(-2)?.content).toContain('kind="delta"');
+    expect(out.at(-2)?.content).toContain('- k = later');
+    expect(out.at(-2)?.content).not.toContain('## Execution status');
   });
 });
 
@@ -1297,7 +1303,7 @@ function promptTexts(prompt: PromptMessage[]): string[] {
 }
 
 describe('the ledger + turn-local split through real runChat turns', () => {
-  test('stable state across turns keeps ONE frozen block; turn-local tail re-renders per turn', async () => {
+  test('stable state across turns keeps ONE frozen block; turn-local context re-renders per turn, before its input', async () => {
     const { model, prompts } = promptCapturingModel();
     const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [];
@@ -1325,19 +1331,21 @@ describe('the ledger + turn-local split through real runChat turns', () => {
     await turn('turn-3', 'PC disconnected.');
 
     const [p1, p2, p3] = prompts.map(promptTexts);
-    // The block is woven per step, so it lands after the turn-local tail.
-    expect(p1[0]).toBe('turn-1');
+    // The block, then the turn-local context, then the person's words: the request is the last user message.
+    expect(isDynamicBlock(p1[0])).toBe(true);
     expect(p1[1]).toStartWith(TURN_CONTEXT_HEADER);
     expect(p1[1]).toContain('PC connected.');
-    expect(isDynamicBlock(p1[2])).toBe(true);
+    expect(p1[2]).toBe('turn-1');
     expect(ledger.size).toBe(1);
-    expect(p2[2]).toBe(p1[2]);
-    expect(p3[2]).toBe(p1[2]);
+    expect(p2[0]).toBe(p1[0]);
+    expect(p3[0]).toBe(p1[0]);
     expect(p2.some((t) => t.startsWith(TURN_CONTEXT_HEADER))).toBe(false);
-    expect(p3.find((t) => t.startsWith(TURN_CONTEXT_HEADER))).toContain('PC disconnected.');
+    expect(p3.at(-2)).toStartWith(TURN_CONTEXT_HEADER);
+    expect(p3.at(-2)).toContain('PC disconnected.');
+    expect(p3.at(-1)).toBe('turn-3');
   });
 
-  test('a state change mid-conversation appends a second block at the new tail', async () => {
+  test('a state change mid-conversation adds a second block before the new turn\'s input', async () => {
     const { model, prompts } = promptCapturingModel();
     const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [];
@@ -1362,8 +1370,9 @@ describe('the ledger + turn-local split through real runChat turns', () => {
 
     const [p1, p2] = prompts.map(promptTexts);
     expect(ledger.size).toBe(2);
-    expect(p2[1]).toBe(p1[1]);
-    expect(p2[p2.length - 1]).toContain('learned = later');
+    expect(p2[0]).toBe(p1[0]);
+    expect(p2.at(-2)).toContain('learned = later');
+    expect(p2.at(-1)).toBe('turn-2');
     expect(history.some((m) => isDynamicBlock(messageText(m)))).toBe(false);
   });
 
@@ -1390,7 +1399,8 @@ describe('the ledger + turn-local split through real runChat turns', () => {
 
     const texts = promptTexts(prompts[0]);
     expect(texts.filter(isDynamicBlock)).toHaveLength(1);
-    expect(isDynamicBlock(texts[texts.length - 1])).toBe(true);
+    expect(isDynamicBlock(present(texts.at(-2), 'the block'))).toBe(true);
+    expect(texts.at(-1)).toBe('wake up');
   });
 });
 
@@ -1457,7 +1467,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
     }
 
     for (const prompt of prompts) {
-      expect(isDynamicBlock(promptTexts(prompt)[1])).toBe(true);
+      expect(isDynamicBlock(promptTexts(prompt)[0])).toBe(true);
     }
   });
 
@@ -1488,8 +1498,9 @@ describe('the per-step weave (the cache-coherence proof)', () => {
     expect(r0.filter(isDynamicBlock)).toHaveLength(1);
     expect(r1.filter(isDynamicBlock)).toHaveLength(2);
     expect(r2.filter(isDynamicBlock)).toHaveLength(2);
-    expect(r1[1]).toBe(r0[1]);
-    expect(r2[1]).toBe(r0[1]);
+    expect(isDynamicBlock(r0[0])).toBe(true);
+    expect(r1[0]).toBe(r0[0]);
+    expect(r2[0]).toBe(r0[0]);
     expect(r1.find((t) => t.includes('job-1'))).toBeDefined();
 
     // Cache markers roll to the tail on purpose and are excluded from the prefix comparison.
@@ -1499,7 +1510,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
     expect(bytes[2].length).toBeGreaterThan(bytes[0].length);
   });
 
-  test('the newest block always ends the request, so the rolling cache breakpoint lands on it', async () => {
+  test('the person\'s input ends a turn\'s first request; after it, the newest block ends each step\'s', async () => {
     const { model, prompts } = threeStepToolModel();
     const ledger = new DynamicContextLedger();
     let step = 0;
@@ -1514,9 +1525,12 @@ describe('the per-step weave (the cache-coherence proof)', () => {
       stopWhen: stepCountIs(5),
     })) { /* drain */ }
 
-    for (const prompt of prompts) {
-      const texts = promptTexts(prompt);
-      expect(isDynamicBlock(texts[texts.length - 1])).toBe(true);
+    const [first, ...later] = prompts.map(promptTexts);
+    expect(first?.at(-1)).toBe('go');
+    expect(isDynamicBlock(present(first?.at(-2), 'the first block'))).toBe(true);
+
+    for (const texts of later) {
+      expect(isDynamicBlock(present(texts.at(-1), 'the newest block'))).toBe(true);
     }
 
     expect(ledger.size).toBe(3);

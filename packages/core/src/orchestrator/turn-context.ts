@@ -1,13 +1,15 @@
 /**
  * The one turn-assembly ordering both backends run: sanitize → onTurnStart → transformContext
- * → turn-local tail → pairing invariant → admission. Sanitization never changes message count;
- * the transform sees only durable history. Dynamic context stays out (prompting/prepare-step.ts).
+ * → pairing invariant → admission. Sanitization never changes message count; the transform sees
+ * only durable history. Dynamic context and the turn-local messages stay out: the step pipeline
+ * places them (prompting/prepare-step.ts), and admission measures the turn-local ones with the request.
  */
 
 import type { ModelMessage, ToolSet } from 'ai';
 import { sanitizeAttachmentsForModel, type AttachmentPolicy } from '../prompting/attachment-sanitizer';
 import { settleUnpairedToolCalls } from '../prompting/interrupted-tool-calls';
 import { stepContextLimit, type ResolvedModelWindow } from '../prompting/step-prune';
+import { placeTurnLocal, turnInputStart } from '../prompting/volatile-context';
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
 import type { ExtensionHost } from '../extension';
 import { KinuError, diagnostics } from '../obs/index';
@@ -18,16 +20,22 @@ export interface TurnContextInput {
   system: string;
   /** Never mutated. */
   history: readonly ModelMessage[];
+  /** The turn's input in `history`, when its identity is known. */
+  turnStart?: number | undefined;
   /** Omitted = no sanitization pass. */
   attachments?: AttachmentPolicy;
   extensions?: ExtensionHost;
-  turnLocal?: readonly ModelMessage[];
   sessionKey: string;
   contextWindow: number;
   providerReportedTokens?: number;
   trigger: 'auto' | 'force';
   abortSignal?: AbortSignal | undefined;
   admission?: TurnAdmission;
+}
+
+export interface AssembledTurn {
+  readonly messages: ModelMessage[];
+  readonly turnStart: number;
 }
 
 /**
@@ -38,6 +46,8 @@ export interface TurnAdmission {
   count?(request: CountableRequest): Promise<InputTokenCount>;
   /** Part of what the provider prices, so part of what is measured. */
   tools?: ToolSet | undefined;
+  /** Placed per step right before the turn's input, so measured there. */
+  turnLocal?: readonly ModelMessage[] | undefined;
   limits: ResolvedModelWindow;
 }
 
@@ -67,7 +77,7 @@ export interface MeasuredCompactionTrigger {
 }
 
 /**
- * `durableLength` is measured before the turn-local tail. `takeForceCompaction` consumes the
+ * `durableLength` is measured without the turn-local messages. `takeForceCompaction` consumes the
  * flag, so it runs exactly once per assembly.
  */
 export function measureCompactionTrigger(
@@ -86,15 +96,24 @@ export function measureCompactionTrigger(
   return measured;
 }
 
-export async function assembleTurnMessages(input: TurnContextInput): Promise<ModelMessage[]> {
+export async function assembleTurnMessages(input: TurnContextInput): Promise<AssembledTurn> {
   const history = input.attachments
     ? await sanitizeAttachmentsForModel(input.history, input.attachments)
     : input.history;
 
+  // Sanitizing keeps indices and a transform keeps untouched messages, so the input is found by reference.
+  const opening = input.turnStart === undefined ? undefined : history[input.turnStart];
+
+  const located = (messages: ModelMessage[]): AssembledTurn => {
+    const at = opening === undefined ? -1 : messages.indexOf(opening);
+
+    return { messages, turnStart: at < 0 ? turnInputStart(messages) : at };
+  };
+
   await input.extensions?.emitTurnStart({ system: input.system, history });
 
   // One closure: admission may re-run it with trigger:'force' and the ordering must match.
-  const assemble = async (trigger: 'auto' | 'force'): Promise<ModelMessage[]> => {
+  const assemble = async (trigger: 'auto' | 'force'): Promise<AssembledTurn> => {
     const transformed = await input.extensions?.runTransformContext({
       sessionKey: input.sessionKey,
       messages: history,
@@ -105,9 +124,9 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Mod
       abortSignal: input.abortSignal,
     });
 
-    const assembled = [...(transformed ?? history), ...(input.turnLocal ?? [])];
+    const assembled = [...(transformed ?? history)];
 
-    return settleUnpairedToolCalls(assembled) ?? assembled;
+    return located(settleUnpairedToolCalls(assembled) ?? assembled);
   };
 
   const assembled = await assemble(input.trigger);
@@ -117,7 +136,11 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Mod
 
   const limit = stepContextLimit(admission.limits);
 
-  const measure = async (messages: ModelMessage[]): Promise<number> => {
+  const measure = async (turn: AssembledTurn): Promise<number> => {
+    const messages = admission.turnLocal === undefined
+      ? turn.messages
+      : placeTurnLocal(turn.messages, { at: turn.turnStart, messages: admission.turnLocal });
+
     if (admission.count) {
       const counted = await admission.count({
         system: input.system,

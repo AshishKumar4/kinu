@@ -33,10 +33,15 @@ function readBootId(): string | undefined {
   return tolerate(() => readFileSync('/proc/sys/kernel/random/boot_id', 'utf8'), 'enoent')?.trim();
 }
 
+/** `/proc/<pid>/<name>`, or undefined once the process is gone: ENOENT after it exits, ESRCH when it exits mid-read. */
+export function procFile(pid: number | string, name: string): string | undefined {
+  return tolerate(() => tolerate(() => readFileSync(`/proc/${String(pid)}/${name}`, 'utf8'), 'esrch'), 'enoent');
+}
+
 /** Field 22 of `/proc/<pid>/stat`, counted after the parenthesised command name, which may hold
  *  spaces; undefined once the process is gone. */
 export function processStartTicks(pid: number): number | undefined {
-  const stat = tolerate(() => readFileSync(`/proc/${String(pid)}/stat`, 'utf8'), 'enoent');
+  const stat = procFile(pid, 'stat');
 
   return stat === undefined ? undefined : Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
 }

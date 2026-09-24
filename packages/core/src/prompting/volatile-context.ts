@@ -4,15 +4,17 @@
  * rides in messages.
  *
  * Dynamic context (DynamicContextLedger): each model step renders live state
- * into one `<dynamic_context fingerprint="…">` block, appended at the tail only
- * when it differs from the newest block. Blocks freeze where born (moving a
- * mid-array message invalidates every later cache breakpoint); only
- * `dropSuperseded`, under measured pressure, removes any.
- * In-memory only. Nothing clock-derived may render: it would append a block
- * per request.
+ * into one `<dynamic_context fingerprint="…">` block, added only when it differs
+ * from the newest block: before the turn's input at a turn's first step, at the
+ * tail after that. Blocks freeze where born (moving a mid-array message
+ * invalidates every later cache breakpoint); only `dropSuperseded`, under
+ * measured pressure, removes any. In-memory only. Nothing clock-derived may
+ * render: it would append a block per request.
  *
  * Turn-local state (skill activation reasons, device notice, provenance) is one
- * trailing user message for this turn only, never fingerprinted.
+ * user message right before the turn's input, for this turn only, never
+ * fingerprinted. The request stays the last user-role content the model reads:
+ * news after it reads as the turn itself.
  */
 
 import type { ModelMessage } from 'ai';
@@ -593,17 +595,36 @@ export function renderTurnLocalContext(ctx: TurnLocalContext): string | null {
   return [TURN_CONTEXT_HEADER, ...sections].join('\n\n');
 }
 
-/** For this turn only: never persisted, and appended after the transformContext seam
- *  so compaction plugins never see it. */
+/** For this turn only: never persisted, and placed after the transformContext seam so compaction plugins never
+ *  see it, right before the turn's input ({@link turnInputStart}). */
 export function turnLocalContextMessage(ctx: TurnLocalContext): ModelMessage | null {
   const text = renderTurnLocalContext(ctx);
 
   return text ? { role: 'user', content: text } : null;
 }
 
+/** Where the turn's input sits: its last message when a person or a parent wrote it, else the end. Only the last:
+ *  a user message before it can be a parent's conversation a hired child inherited, whose prefix stays intact. */
+export function turnInputStart(messages: ReadonlyArray<ModelMessage>): number {
+  return messages.at(-1)?.role === 'user' ? messages.length - 1 : messages.length;
+}
+
+/** Turn-local messages and the un-woven index of the input they ride before. */
+export interface TurnLocalPlacement {
+  readonly at: number;
+  readonly messages: readonly ModelMessage[];
+  readonly firstStep?: boolean | undefined;
+}
+
+export function placeTurnLocal(messages: ReadonlyArray<ModelMessage>, placement: TurnLocalPlacement): ModelMessage[] {
+  const at = Math.min(placement.at, messages.length);
+
+  return [...messages.slice(0, at), ...placement.messages, ...messages.slice(at)];
+}
+
 interface LedgerBlock {
-  /** Un-woven message count at birth; the block renders there forever, except where that
-     *  slot has since become a tool result ({@link insertionPoint}). */
+  /** Un-woven position at birth: before the turn's input at a turn's first step, the tail after that. The block
+     *  renders there forever, except where that slot has since become a tool result ({@link insertionPoint}). */
   readonly index: number;
   readonly text: string;
   /** Chars/4 cost, priced once at birth for the step pruner and `dropSuperseded`. */
@@ -626,9 +647,10 @@ function insertionPoint(history: ReadonlyArray<ModelMessage>, index: number): nu
 }
 
 /**
- * Per-activation ledger of dynamic-context blocks. `weave` appends a block only
+ * Per-activation ledger of dynamic-context blocks. `weave` adds a block only
  * when the render changed and re-inserts every frozen block at its position.
- * `history` must never include this ledger's blocks. Call `reset()` whenever the
+ * `history` must never include this ledger's blocks or the turn-local messages,
+ * so positions stay those of durable history. Call `reset()` whenever the
  * durable stream is rewritten (compaction).
  */
 export class DynamicContextLedger {
@@ -666,7 +688,8 @@ export class DynamicContextLedger {
     return before - this.overheadTokens;
   }
 
-  weave(history: ReadonlyArray<ModelMessage>, state: DynamicContext): ModelMessage[] {
+  /** `turnLocal` rides right before the turn's input, after any block born there. */
+  weave(history: ReadonlyArray<ModelMessage>, state: DynamicContext, turnLocal?: TurnLocalPlacement): ModelMessage[] {
     let previousIndex = -1;
 
     for (const block of this.blocks) {
@@ -686,22 +709,29 @@ export class DynamicContextLedger {
 
     if (full !== previousFull) {
       const text = this.blocks.length === 0 ? full : dynamicDelta(previous ?? {}, current);
+      const birth = turnLocal?.firstStep === true ? Math.min(turnLocal.at, history.length) : turnInputStart(history);
 
-      if (text !== null) this.blocks.push(this.block(history.length, text));
+      if (text !== null) this.blocks.push(this.block(birth, text));
     }
 
     this.currentState = current;
 
     const woven: ModelMessage[] = [];
+    const placeAt = turnLocal === undefined ? -1 : Math.min(turnLocal.at, history.length);
     let cursor = 0;
+    let lead = 0;
 
     for (const block of this.blocks) {
       const at = insertionPoint(history, Math.max(block.index, cursor));
       woven.push(...history.slice(cursor, at), block.message);
       cursor = at;
+
+      if (at <= placeAt) lead += 1;
     }
 
     woven.push(...history.slice(cursor));
+
+    if (turnLocal !== undefined) woven.splice(placeAt + lead, 0, ...turnLocal.messages);
 
     return woven;
   }

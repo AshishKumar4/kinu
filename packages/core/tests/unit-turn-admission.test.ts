@@ -126,7 +126,7 @@ function scriptedCounter(counts: readonly number[]) {
 }
 
 /** The error an assembly refused with, or null when it admitted the request. */
-async function refusalOf(assembly: Promise<readonly ModelMessage[]>): Promise<Error | null> {
+async function refusalOf(assembly: Promise<unknown>): Promise<Error | null> {
   try {
     await assembly;
 
@@ -145,7 +145,7 @@ describe('exact turn admission', () => {
     const { extensions, triggers } = compactionProbe();
     const counter = scriptedCounter([LIMIT]);
 
-    const out = await assembleTurnMessages({
+    const { messages: out } = await assembleTurnMessages({
       ...base(),
       extensions,
       trigger: 'auto',
@@ -161,7 +161,7 @@ describe('exact turn admission', () => {
     const { extensions, triggers } = compactionProbe();
     const counter = scriptedCounter([LIMIT + 1, LIMIT]);
 
-    const out = await assembleTurnMessages({
+    const { messages: out } = await assembleTurnMessages({
       ...base(),
       extensions,
       trigger: 'auto',
@@ -234,7 +234,7 @@ describe('exact turn admission', () => {
     const { extensions, triggers } = compactionProbe();
     let asked = 0;
 
-    const out = await assembleTurnMessages({
+    const { messages: out } = await assembleTurnMessages({
       ...base(),
       extensions,
       trigger: 'auto',
@@ -258,7 +258,7 @@ describe('exact turn admission', () => {
     // The allocation sits between the assembled and compacted estimates, so the estimate forces the compaction.
     const tight = { contextWindow: 48, modelOutputLimit: 20, windowMeasured: true };
 
-    const out = await assembleTurnMessages({
+    const { messages: out } = await assembleTurnMessages({
       ...base(),
       extensions,
       trigger: 'auto',
@@ -284,7 +284,7 @@ describe('exact turn admission', () => {
     expect(failure !== null && 'code' in failure ? failure.code : undefined).toBe('bad_input');
   });
 
-  test('what is counted is the assembled request: system, messages, and the tools that ride it', async () => {
+  test('what is counted is the request sent: system, messages with the turn-local ones before the input, and the tools', async () => {
     const { extensions } = compactionProbe();
     const counter = scriptedCounter([1_000]);
 
@@ -292,17 +292,18 @@ describe('exact turn admission', () => {
       look: tool({ description: 'look', inputSchema: z.object({ q: z.string() }) }),
     };
 
+    const request: ModelMessage = { role: 'user', content: 'the request' };
+
     await assembleTurnMessages({
       ...base(),
+      history: [...HISTORY, request],
       extensions,
       trigger: 'auto',
-      turnLocal: [{ role: 'user', content: 'turn-local tail' }],
-      admission: { count: counter.count, limits: LIMITS, tools },
+      admission: { count: counter.count, limits: LIMITS, tools, turnLocal: [{ role: 'user', content: 'turn-local' }] },
     });
     const counted = counter.seen[0];
     expect(counted?.system).toBe('SYS');
-
-    expect(counted?.messages.at(-1)).toEqual({ role: 'user', content: 'turn-local tail' });
+    expect(counted?.messages.slice(-2)).toEqual([{ role: 'user', content: 'turn-local' }, request]);
     expect(Object.keys(counted?.tools ?? {})).toEqual(['look']);
   });
 });

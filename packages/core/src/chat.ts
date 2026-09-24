@@ -114,7 +114,7 @@ export interface ChatOptions {
   stepContext?: StepContextPlane;
   persistStreamPart?: (part: TextStreamPart<ToolSet>) => Promise<void>;
   persistStep?: (messages: readonly ModelMessage[]) => Promise<void>;
-  /** Spliced at the tail of this turn's initial array only; never seen by a transform or stored. */
+  /** Placed right before the turn's input on every step; never seen by a transform or stored. */
   turnLocal?: readonly ModelMessage[];
   tools: ToolSet;
   /** Unsupported history file/media parts are replaced in place before the transform seam; message count never
@@ -203,10 +203,8 @@ interface AnswerStep {
   readonly toolCalls?: ReadonlyArray<unknown>;
 }
 
-/**
- * The turn's answer: its final step's text, or null to keep what streamed. Earlier steps' prose is narration.
- * A `length`-cut step without tool calls joins its continuation; an interrupted turn has no answer.
- */
+/** The final step's text, or null to keep what streamed; earlier steps' prose is narration. A `length`-cut step
+ *  without tool calls joins its continuation; an interrupted turn has none. */
 function answerFromSteps(
   steps: readonly AnswerStep[],
   interrupted: boolean,
@@ -244,10 +242,8 @@ interface CallOutcome {
   readonly failure: CallFailure | null;
 }
 
-/**
- * The next model takes a failed call only before its step streamed anything, and only for a failure of the provider
- * or account (unavailable, slow, out of allowance, 401, 402). A malformed or too-large request fails the turn.
- */
+/** A fallback takes a failed call only before its step streamed, and only for a provider or account failure
+ *  (unavailable, slow, out of allowance, 401, 402); a malformed or too-large request fails the turn. */
 function handsOver(failure: CallFailure): boolean {
   if (failure.streamed) return false;
   const { status } = providerFailureFacts({ cause: failure.cause });
@@ -276,8 +272,7 @@ class ProviderCall {
   private stepHadOutput = false;
   /** The in-flight step's content: the SDK records only finished steps, so a cut would otherwise lose it. */
   private stepContent: Array<TextPart | ToolCallPart> = [];
-  /** Tool execution can start before `fullStream` publishes the call; kept until its step completes so a cut cannot
-   *  erase admitted work. */
+  /** A call can run before `fullStream` publishes it; kept until its step completes so a cut keeps admitted work. */
   private readonly dispatchedCalls = new Map<string, { readonly call: ToolCallPart; readonly startedAt: number }>();
   private responseSoFar: readonly ModelMessage[] = [];
   readonly finishedSteps: StepResult<ToolSet>[] = [];
@@ -285,8 +280,7 @@ class ProviderCall {
   /** When the in-flight step's request left, stamped in `prepareStep`: a cache warm counts its TTL from the request's
    *  start (docs/research/harness/anthropic-sources.md §2). */
   private stepSentAt = Date.now();
-  /** A finished step whose record or hook failed. The SDK drops a step-callback throw (ai 6.0.214 `notify`), so
-   *  the call stops after that step and the turn fails on this. */
+  /** A finished step whose record or hook failed; the SDK drops a step-callback throw (ai 6.0.214 `notify`). */
   stepFailure: { readonly doing: string; readonly cause: unknown } | null = null;
 
   constructor(private readonly fallback: string | undefined) {}
@@ -422,10 +416,8 @@ class ProviderCall {
     return dispatched === undefined ? undefined : { durationMs: Date.now() - dispatched.startedAt };
   }
 
-  /**
-   * What ends a drained, uncut call, or null when it stands. Provider failures cross classified via `toProviderError`
-   * so callers never see a raw `APICallError` body. A dead final step stays a bare throw: the result is rejected.
-   */
+  /** What ends a drained, uncut call, or null. Provider failures cross as `toProviderError` classifies them, never a
+   *  raw `APICallError` body; a dead final step stays a bare throw. */
   failure(provider: string | undefined): CallFailure | null {
     if (this.interrupted) return null;
 
@@ -543,7 +535,6 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     history: opts.history,
     attachments: opts.attachments,
     extensions,
-    turnLocal: opts.turnLocal,
     sessionKey: opts.cache?.sessionKey ?? '',
     contextWindow,
     providerReportedTokens: opts.providerReportedTokens,
@@ -555,12 +546,19 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   assembly.admission = {
     count: opts.countInputTokens,
     tools,
+    turnLocal: opts.turnLocal,
     limits: window,
   };
 
   const stepContext = opts.stepContext;
   const initialContext = stepContext === undefined ? null : await stepContext.base();
-  const turnMessages = await assembleTurnMessages({ ...assembly, history: initialContext?.messages ?? assembly.history });
+
+  // The turn-local messages ride right before the turn's input on every step, so the request stays the last
+  // user-role content and each step's prefix is the last one's.
+  const { messages: turnMessages, turnStart } = await assembleTurnMessages({
+    ...assembly, history: initialContext?.messages ?? assembly.history, turnStart: initialContext?.turnStart,
+  });
+
   let initialContextAvailable = initialContext !== null;
 
   const stepContextPlane: StepContextPlane | undefined = stepContext === undefined ? undefined : {
@@ -568,16 +566,18 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       if (initialContextAvailable) {
         initialContextAvailable = false;
 
-        return { messages: turnMessages, changed: initialContext?.changed ?? false };
+        return { messages: turnMessages, changed: initialContext?.changed ?? false, turnStart };
       }
 
       const base = await stepContext.base();
-      const messages = await assembleTurnMessages({ ...assembly, history: base.messages, admission: undefined });
+      const assembled = await assembleTurnMessages({ ...assembly, history: base.messages, turnStart: base.turnStart, admission: undefined });
 
-      return { messages, changed: base.changed };
+      return { ...assembled, changed: base.changed };
     },
     consume: step => stepContext.consume(step),
   };
+
+  const turnLocal = opts.turnLocal !== undefined && opts.turnLocal.length > 0 ? opts.turnLocal : undefined;
 
   const cache = turnCachePlan(opts, turnMessages);
   const rollTail = hasCacheMarkers(cache.strategy);
@@ -621,11 +621,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     });
   };
 
-  /**
-   * One provider call. A closure because a continuation or a fallback is another call in the same turn.
-   * `stepOffset` keeps step numbering the turn's, or the injection ledger (prompting/step-injections.ts) would
-   * misplace steer messages.
-   */
+  /** One provider call; a continuation or fallback is another. `stepOffset` keeps the turn's step numbers, which
+   *  the injection ledger (prompting/step-injections.ts) places steers by. */
   const callModel = async function* (
     request: readonly ModelMessage[],
     stepOffset: number,
@@ -674,6 +671,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           destinationProviderId: opts.cache?.providerId,
           meter,
           context: stepContextPlane,
+          turnLocal,
+          turnStart,
         }, { stepNumber: stepOffset + stepNumber, messages, steps });
       },
       experimental_transform: () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({

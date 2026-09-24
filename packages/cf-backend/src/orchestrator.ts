@@ -240,6 +240,7 @@ import {
 import { openSandbox } from "./sandbox-exec-lane";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
+import { SandboxPending, type ExposedPortList } from "@kinu.run/core";
 import {
   terminalEffect, keyedScope, declareTerminalRoster, owesShadowTrial,
   takesTerminalEffect, branchesTerminalEffect,
@@ -4668,10 +4669,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Workspace port registrations live in Nimbus, so they stay authoritative after a restart. */
-  @callable() async getExposedPorts(executorId: string): Promise<{
-    ports: Array<{ port: number; name?: string; url: string }>;
-    error?: string;
-  }> {
+  @callable() async getExposedPorts(executorId: string): Promise<ExposedPortList> {
     const provider = this.rt.executionRouter?.getProvider(executorId);
 
     if (!provider) {
@@ -4695,6 +4693,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       return { ports: ports.map(({ port, name, url }) => ({ port, url, name })) };
     } catch (error) {
+      if (error instanceof SandboxPending) return { ports: [], pending: error.message };
+
       return {
         ports: [],
         error: error instanceof Error && error.message

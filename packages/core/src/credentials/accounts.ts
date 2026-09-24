@@ -19,7 +19,7 @@ export function isProviderScope(provider: string): boolean {
   return PROVIDER_SCOPE_RE.test(provider);
 }
 
-/** The only `@` split of a key or a spec's provider. */
+/** The one `@` split of a key or a provider. */
 export function splitAccount(value: string): { readonly base: string; readonly account: string | null } {
   const at = value.indexOf('@');
 

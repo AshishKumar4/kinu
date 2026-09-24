@@ -31,6 +31,7 @@ import { diagnostics, KinuError, renderThrownChain, toKinuError, tolerate } from
 import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
+  type ExposedPortList,
   type PinnedPreviewPort,
 } from "@kinu.run/core";
 import {
@@ -1488,10 +1489,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
     const results = await Promise.all(["workspace", "sandbox", "device"].map(async (executor) => {
       try {
-        const result = await rpc<{
-          ports: Array<{ port: number; url: string; name?: string }>;
-          error?: string;
-        }>("getExposedPorts", [executor]);
+        const result = await rpc<ExposedPortList>("getExposedPorts", [executor]);
 
         return { executor, result } satisfies ExecutorPortRefresh;
       } catch (cause) {

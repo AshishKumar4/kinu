@@ -287,7 +287,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
       runningJobs: { items: [], total: 0 }, openTasks: { items: [], total: 0 }, liveHeadRuns: w.journal.listLive(), missingCapabilities: [],
     }));
 
-    expect(v.parse(v.string(), before.at(-1)?.content)).toContain(`${HEADS} of ${HEADS} nodes running`);
+    expect(v.parse(v.string(), before[0]?.content)).toContain(`${HEADS} of ${HEADS} nodes running`);
 
     await reconcileInterruptedForks({ journal: w.journal, inbox: idleAgent().inbox });
 
@@ -298,7 +298,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     }));
 
     expect(ledger.size).toBe(2);
-    expect(after[1]).toEqual(present(before.at(-1), 'the last block before the reconcile'));
+    expect(after[0]).toEqual(present(before[0], 'the block before the reconcile'));
     expect(v.parse(v.string(), after.at(-1)?.content)).not.toContain('heads running');
   });
 

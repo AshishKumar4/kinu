@@ -866,9 +866,10 @@ describe('LocalAgentSession.send — a user turn', () => {
 
     expect(system).not.toContain('FACT-MARKER');
     const texts = observed.map(messageText);
-    const tail = present(texts.at(-1), 'the last prompt message');
+    // The request ends the prompt; the new facts ride in the newest block, before it.
+    const tail = present(texts.filter(isDynamicBlock).at(-1), 'the newest block');
 
-    expect(isDynamicBlock(tail)).toBe(true);
+    expect(texts.at(-1)).toBe('and now?');
     expect(tail).toContain('World model');
     expect(tail).toContain('FACT-MARKER');
     expect(texts).toContain(turn1Block);
@@ -2142,6 +2143,21 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(new Set(captured)).toEqual(new Set(['memory']));
   });
 
+  test('the person\u2019s request is the last user-role message the model reads; this turn\u2019s runtime context rides before it', async () => {
+    // Runtime news after the request reads as the turn itself: a model answered it and ignored the request.
+    let prompt: PromptMessage[] = [];
+    const { rt, session } = setup('ok', historyCapturingModel('ok', (messages) => { prompt = messages; }));
+    await writeFocusedSkill(rt);
+    await session.send('/focused remember this', { id: crypto.randomUUID() });
+
+    const users = prompt.filter((message) => message.role === 'user').map(messageText);
+    const activation = users.findIndex((text) => text.includes('## Skills activated this turn'));
+
+    expect(activation).toBeGreaterThanOrEqual(0);
+    expect(users.at(-1)).toContain('remember this');
+    expect(users.slice(activation + 1).every((text) => text.includes('remember this'))).toBe(true);
+  });
+
 
   test('approval refuses bytes changed after the owner reviewed them', async () => {
     const { rt, session } = setup('ok');
@@ -3158,6 +3174,46 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     expect(rows.map((row) => row.role)).toEqual(['user', 'user', 'user', 'assistant']);
     expect(rows[1].content).toBe('also check X');
     expect(rows[2].content).toBe('and Y');
+    await session.end();
+  });
+
+  test('a steer word for word the request lands after it; this turn\u2019s runtime context stays before the request', async () => {
+    const prompts: PromptMessage[][] = [];
+    const gate = Promise.withResolvers<void>();
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
+    // Two tool steps, so the third re-reads the landed steer from durable history, then an answer.
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async (options) => {
+        prompts.push(options.prompt);
+
+        if (prompts.length > 2) return fakeModel('done').doStream(options);
+
+        return { stream: gatedFactCallStream(`call-${String(prompts.length)}`, prompts.length === 1 ? gate.promise : Promise.resolve(), usage), response: { headers: {} } };
+      },
+    });
+
+    const { rt, session, events } = setup('unused', model);
+    await writeFocusedSkill(rt);
+
+    const turn = session.send('/focused remember this', { id: crypto.randomUUID() });
+    await waitFor(() => events.some((e) => e.type === 'tool-call'));
+    const steer = session.send('/focused remember this', { id: crypto.randomUUID() });
+    gate.resolve();
+    await turn;
+    expect(await steer).toBe('mid-turn');
+
+    const third = present(prompts[2], 'the step after the steer landed');
+    const roles = third.map((message) => message.role);
+    const activation = third.findIndex((message) => messageText(message).includes('## Skills activated this turn'));
+    const landed = third.map((message) => message.role === 'user' ? messageText(message) : null).lastIndexOf('/focused remember this');
+
+    expect(landed).toBeGreaterThan(roles.indexOf('tool'));
+    expect(activation).toBeGreaterThanOrEqual(0);
+    expect(activation).toBeLessThan(roles.indexOf('tool'));
+    expect(messageText(present(third[activation + 1], 'the request'))).toBe('/focused remember this');
     await session.end();
   });
 
