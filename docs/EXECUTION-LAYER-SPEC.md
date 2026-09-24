@@ -36,7 +36,11 @@ Cloudflare runtime also mounts `/shared` (`sharedDriveMount`) and `/context`
 stripped, preserving its consent and path boundaries. An absent environment
 is explicit (`ENXIO`, `/pc`, `no device connected`), never an empty
 directory. There is no copy, sync, failover, or second Cloudflare `nimbus.*`
-provider. Name a runtime for commands; cross a mount for files.
+provider. Name a runtime for commands; cross a mount for files. The workspace
+shell crosses the same table (`core/src/vfs/shell-mounts.ts`): `ls /`,
+`cat /shared/x` and `cp /pc/<name>/f .` read what the `file` tool reads. A
+mount is a network hop with no synchronous view, so a wasm program that cannot
+park reaches only the durable tree.
 
 The user's account is a fleet: several machines can be linked and several live
 at once. The mount is always `/pc/<name>`, even for one machine, so a path

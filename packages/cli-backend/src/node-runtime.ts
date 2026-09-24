@@ -46,12 +46,16 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       shell = withApprovalGatedShell(plane.shell, deps.approvalPolicy);
       const ownRouter = new DefaultExecutionRouter(deps.approvalPolicy);
       const files = observer ? observeWrites(plane.vfs, observer) : plane.vfs;
-      vfs = withMountTable(files, [
+
+      const mounted = withMountTable(files, [
         ...standardMounts((name) => ownRouter.getProvider(name)),
         sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
         skillsMount((): VFS => vfs),
         ownContext,
       ]);
+
+      deps.workspace.mountTable(mounted, node.cred);
+      vfs = mounted;
       ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs, shell }));
 
       for (const info of origin.executionRouter?.listExecutors() ?? []) {

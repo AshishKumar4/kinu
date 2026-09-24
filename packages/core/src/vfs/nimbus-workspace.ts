@@ -1,6 +1,6 @@
 /**
  * The Nimbus workspace: one durable POSIX filesystem plus shell over the host's SQLite,
- * sharing its transactions. `vfs` and `shell` address the same paths; no mount table.
+ * sharing its transactions. `vfs` and `shell` address the same paths.
  */
 
 // Type-only: the value import stays inside the lazy boot so Nimbus's wasm graph is not
@@ -26,6 +26,8 @@ import type { VFS, Shell, ShellExecOptions } from '../types/primitives';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 import { diagnostics, KinuError, toKinuError } from '../obs/index';
 import { atVfsPath, isVfsError } from './errno';
+import type { MountedVfs } from './mounts';
+import { mountedAuthority, type ShellMountTable } from './shell-mounts';
 
 export { workspaceToolchainCapabilities } from './workspace-runtimes';
 
@@ -205,6 +207,8 @@ export interface WorkspaceBundle {
   asAgent(agent: WorkspaceAgent): Promise<WorkspaceAgentPlane>;
   session(): Promise<WorkspaceSession>;
   onFilesChanged(listener: (paths: readonly string[]) => void): () => void;
+  /** Shells running as `cred` (default: session user) serve `plane`'s mounts. */
+  mountTable(plane: MountedVfs, cred?: Readonly<VfsCred>): void;
   /** Drops only the workspace tables; the host's own rows stay. */
   destroy(): Promise<void>;
 }
@@ -232,6 +236,8 @@ export interface WorkspaceOptions {
 /** Returns synchronously; the workspace boots lazily on its first operation. */
 export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   const fileListeners = new Set<(paths: readonly string[]) => void>();
+  const mountTables = new Map<number, MountedVfs>();
+  const tableFor: ShellMountTable = (cred) => mountTables.get(cred.uid) ?? null;
   let booting: Promise<NimbusWorkspace> | undefined;
 
   const open = async (): Promise<NimbusWorkspace> => {
@@ -258,6 +264,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           env: { HOME: WORKSPACE_ROOT, TMPDIR: agentTmpRoot(MAIN_AGENT) },
           processes,
           fabric: opts.fabric,
+          filesystem: (authority) => mountedAuthority(authority, tableFor),
         };
 
         if (opts.runtimeSource !== undefined) {
@@ -314,6 +321,9 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
       return () => { fileListeners.delete(listener); };
     },
+    mountTable(plane, cred) {
+      mountTables.set((cred ?? CRED_SESSION_USER).uid, plane);
+    },
     async stats() { return (await open()).stats(); },
     async privileged() {
       const workspace = await open();
@@ -360,6 +370,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
               runAs: origin.shell.getRunAsHost(),
             },
             fabric: opts.fabric,
+            filesystem: (authority) => mountedAuthority(authority, tableFor),
           });
 
           return {

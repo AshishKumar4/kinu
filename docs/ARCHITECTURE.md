@@ -22,9 +22,13 @@ the same bytes. The execution plane is an `ExecutionRouter`
 dispatches to whichever other environment is asked for. Commands run
 target-native, not emulated. Every other environment keeps its own filesystem
 at native paths, reached through its namespace. The workspace view mounts a
-live device under `/pc/<name>` and the container under `/sandbox`
-(`packages/core/src/vfs/mounts.ts`); a mount reads through that executor's own
-files and never copies them into the workspace.
+live device under `/pc/<name>`, the container under `/sandbox`, the owner's
+Drive under `/shared` and the actor's own context under `/context`
+(`packages/core/src/vfs/mounts.ts`); a mount reads through that plane's own
+files and never copies them into the workspace. The workspace shell serves the
+same table: Nimbus binds every process through a filesystem authority that
+routes a mount path there (`packages/core/src/vfs/shell-mounts.ts`), so the
+shell, the `file` tool and the Files tab list and read the same paths.
 
 ```mermaid
 graph TB

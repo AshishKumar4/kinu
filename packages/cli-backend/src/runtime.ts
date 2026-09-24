@@ -438,6 +438,8 @@ export function createCLIRuntime(
     }),
   ]);
 
+  if (cwd === null) workspace.mountTable(agentVfs);
+
   const limits = hostResourceLimits();
 
   const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {

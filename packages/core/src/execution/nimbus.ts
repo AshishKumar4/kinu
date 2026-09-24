@@ -3,7 +3,7 @@
 import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
 import type { Shell, VFS } from '../types/primitives';
-import type { VfsNativeReads } from '../vfs/mounts';
+import type { MountedVfs, VfsNativeReads } from '../vfs/mounts';
 import { createInlineExecutor, type InlineExecutorDeps } from './inline';
 import { atVfsPath, makeVfsError } from '../vfs/errno';
 import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
@@ -161,6 +161,8 @@ export interface NimbusSandboxHandle {
     list?(): Promise<Array<{ port: number; url?: string; unavailable?: string; pid?: number; registeredAt?: number; capability?: string }>>;
     url?(port: number): string | undefined;
   };
+  /** See `WorkspaceBundle.mountTable`; absent on a remote box. */
+  mountTable?(plane: MountedVfs, cred?: VfsCred): void;
 }
 
 export interface NimbusExecutorOpts {
@@ -352,7 +354,6 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
     }
   };
 
-  /** The one exposure path: the provider answers it, the codemode tool renders it. */
   const exposeOn = async (port: number): Promise<PortExposureResult> => {
     const ports = box?.ports;
 

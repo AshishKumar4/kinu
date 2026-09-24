@@ -1,13 +1,18 @@
 // The workspace mount table: /pc and /sandbox extend one view (#36/#142/#143); an absent mount
-// is stated as absent, and device consent is still enforced on mounted paths.
+// is stated as absent, and device consent is still enforced on mounted paths. The workspace shell
+// serves the same table (#22).
+import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
+import { fakeMossaic } from '@kinu.run/test-utils/mossaic';
 import type { VFS, VfsRevision } from '../src/types/primitives';
 import { walkRecursive } from '@kinu.run/agent-utils/vfs';
 import { isVfsError, makeVfsError } from '../src/vfs/errno';
 import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, type VfsMount } from '../src/vfs/mounts';
+import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { observeWrites } from '../src/vfs/observe';
+import { createWorkspaceBundle } from './helpers';
 
 /** readdir returns entry names and stat distinguishes dirs, so walkRecursive crosses it; a miss throws the
  *  VfsError the real backends throw. */
@@ -587,5 +592,47 @@ describe('a live mount point is a directory of this plane', () => {
 	test('an absent mount still stats as nothing', async () => {
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', null, 'no device connected')]);
 		expect(await mounted.stat('/pc')).toBeNull();
+	});
+});
+
+describe('the workspace shell serves the same mount table (#22)', () => {
+	/** A workspace whose session user holds `/shared` (a Drive), `/sandbox` (any ranged tree) and an absent `/pc`. */
+	async function workspaceWithMounts() {
+		const bundle = createWorkspaceBundle(new Database(':memory:'));
+		const store = fakeMossaic();
+		const drive = mossaicVfs(store.tenant('owner'));
+		const container = mossaicVfs(store.tenant('container'));
+		await drive.writeFile('/notes.md', 'from the Drive\n');
+		await container.mkdir('/workspace', { recursive: true });
+		bundle.mountTable(withMountTable(bundle.vfs, [
+			mountOf('shared', drive), mountOf('sandbox', container), mountOf('pc', null, 'no device connected'),
+		]));
+
+		return { shell: bundle.shell, drive, container };
+	}
+
+	test('ls / lists every live mount point, and cat reads a file through one', async () => {
+		const { shell } = await workspaceWithMounts();
+
+		const listed = await shell.exec('ls /');
+		expect(listed.stdout.split(/\s+/)).toEqual(expect.arrayContaining(['home', 'shared', 'sandbox']));
+		expect(listed.stdout).not.toContain('pc');
+		expect(await shell.exec('cat /shared/notes.md')).toMatchObject({ stdout: 'from the Drive\n', exitCode: 0 });
+	});
+
+	test('cd enters a mount, and a redirect lands in the mounted tree', async () => {
+		const { shell, drive } = await workspaceWithMounts();
+
+		expect(await shell.exec('cd /shared && pwd && ls')).toMatchObject({ stdout: '/shared\nnotes.md\n', exitCode: 0 });
+		expect(await shell.exec('echo hello > /shared/new.txt && echo more >> /shared/new.txt')).toMatchObject({ exitCode: 0 });
+		expect(await drive.readFile('/new.txt', { encoding: 'utf8' })).toBe('hello\nmore\n');
+	});
+
+	test('mv between two mounts copies across, since each mount is its own device', async () => {
+		const { shell, drive, container } = await workspaceWithMounts();
+
+		expect(await shell.exec('mv /shared/notes.md /sandbox/workspace/notes.md')).toMatchObject({ exitCode: 0 });
+		expect(await drive.exists('/notes.md')).toBe(false);
+		expect(await container.readFile('/workspace/notes.md', { encoding: 'utf8' })).toBe('from the Drive\n');
 	});
 });

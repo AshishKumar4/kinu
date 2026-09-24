@@ -341,6 +341,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
 
       const built = workspaceBox({
         runtime, ports: portRegistry, ctx: deps.ctx, files, shellId, previewUrl: deps.previewUrl, previewGates,
+        mountTable: (plane, cred) => { bundle.mountTable(plane, cred); },
       });
 
       boxes.set(shellId, built);
@@ -442,6 +443,7 @@ function workspaceBox(deps: {
   shellId: string;
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
   previewGates(port: number, handle: string): Promise<PreviewGates>;
+  mountTable: NonNullable<NimbusSandboxHandle['mountTable']>;
 }): NimbusSandboxHandle {
   const { runtime, shellId } = deps;
 
@@ -497,5 +499,6 @@ function workspaceBox(deps: {
         ),
       ),
     },
+    mountTable: deps.mountTable,
   };
 }

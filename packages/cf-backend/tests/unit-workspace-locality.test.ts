@@ -7,8 +7,8 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
-import { sqlOver } from '@kinu.run/test-utils';
-import type { JsonValue } from '@kinu.run/core';
+import { fakeMossaic, sqlOver } from '@kinu.run/test-utils';
+import { mossaicVfs, sharedDriveMount, withMountTable, type JsonValue } from '@kinu.run/core';
 import type { Refusal } from '@kinu.run/core/obs';
 import type { RouteableFacetTarget, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage, SCRIPT_EXPORTS } from './helpers/programmatic-host';
@@ -153,6 +153,24 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     expect(await box.files.read('/home/main/proof/from-shell.txt')).toBe('from the shell');
     expect(await box.files.exists('/home/main/proof/from-vfs.txt')).toBe(true);
+  });
+
+  test('the shell serves the file plane\'s mount points: /shared lists and reads through the same table', async () => {
+    const actor = actorObject();
+
+    const workspace = createHostedWorkspace({
+      ctx: actor.ctx,
+      env: workspaceBindings(),
+      previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
+    });
+
+    const drive = mossaicVfs(fakeMossaic().tenant('owner'));
+    await drive.writeFile('/notes.md', 'from the Drive\n');
+    const box = workspace.box('agent:main');
+    box.mountTable?.(withMountTable(workspace.bundle.vfs, [sharedDriveMount(() => drive, () => 'no Drive in this test')]));
+
+    expect((await box.exec('ls /')).stdout.split(/\s+/)).toEqual(expect.arrayContaining(['home', 'shared']));
+    expect(await box.exec('cat /shared/notes.md')).toMatchObject({ stdout: 'from the Drive\n', exitCode: 0 });
   });
 
   test('a named durable shell keeps its own cwd, and siblings do not see it', async () => {
