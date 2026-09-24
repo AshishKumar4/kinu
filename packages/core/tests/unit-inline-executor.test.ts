@@ -205,6 +205,19 @@ describe('workspace provider (InlineExecutor)', () => {
     }
   });
 
+  test('createTool refuses statements over args and stores nothing, so no later program can break on them', async () => {
+    const { rt } = createTestRuntime();
+    const exec = buildExec(rt);
+    // The body m905 saved. Spliced into the sandbox as `tools.textStats = (<source>)`, it failed every later
+    // program with "Unexpected token 'const'", `return 42` included.
+    const statements = "const text = String((args && args.text) || '');\nconst words = text.split(' ');\nreturn { words: words.length };";
+
+    const result = await exec.tools.createTool.execute('textStats', 'counts words', statements);
+
+    expect(result).toMatchObject({ ok: false, reason: 'bad_input', error: expect.stringContaining('createTool("textStats")') });
+    expect(rt.craftStore.get('textStats')).toBeUndefined();
+  });
+
   // Same-turn `tools.<name>()` is unsupported by design: createTool, then `tools.<name>` next turn.
 });
 
