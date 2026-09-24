@@ -31,7 +31,7 @@ import { SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
 import { DESKTOP, withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
 import {
   CHAT_COMPOSER_LIVE, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, NEW_AGENT, OPEN_NAMES, RECORD_DEAD_ENDS,
-  openInspector, painted, pressUntil, settled, typeIntoComposer, until,
+  openInspector, pressUntil, settled, typeIntoComposer, until,
   type ControlAttempt,
 } from './product-flows';
 import { rowVerdicts } from './row-verdicts';
@@ -419,7 +419,8 @@ async function measureLiveIndicator(newPage: LiveApp['newPage'], origin: string)
 
     await sendInChat(page, PACED_TURN_ASK);
     await paced;
-    await painted(page);
+    // The turn has closed on the socket; the pane ends it once its stream does.
+    await until(page, 'the pane to end the paced turn', `!(${STOP_OFFERED})`);
 
     if (!v.parse(v.boolean(), await page.evaluate(PACED_ANSWER_SHOWN))) {
       throw new Error(`waiting for the paced answer, its turn closed without it; the chat ends ${JSON.stringify(await page.evaluate(CHAT_TAIL))}`);
@@ -876,11 +877,15 @@ const PresenceAnswerSchema = v.union([
   v.pipe(v.looseObject({ tabPresence: v.looseObject({ work: v.boolean() }) }), v.transform((answer) => answer.tabPresence.work)),
 ]);
 
-/** A turn's frame on the workspace socket, which every page on it gets. A `done` frame closes the turn unless it
- *  answers words a running turn took in (`landed: 'mid-turn'`); an `error` frame is the turn failing
- *  (chat-transport.ts `doneFrame`). */
+/** The chat request a send puts on the socket; its id names the turn's frames. */
+const ChatRequestSchema = v.looseObject({ type: v.literal('cf_agent_use_chat_request'), id: v.string() });
+
+/** A turn's frame on the workspace socket, which every page on it gets, under the id of the request that opened
+ *  it. The request's `done` frame closes the turn, unless it says the words landed in a turn already running
+ *  (`landed: 'mid-turn'`); an `error` frame is the turn failing (chat-transport.ts `doneFrame`). */
 const ChatResponseSchema = v.looseObject({
   type: v.literal('cf_agent_use_chat_response'),
+  id: v.string(),
   done: v.optional(v.boolean()),
   error: v.optional(v.boolean()),
   landed: v.optional(v.string()),
@@ -888,12 +893,15 @@ const ChatResponseSchema = v.looseObject({
 });
 
 /** A page's turns off its own socket, and the Work presence it reads. `afterTurn`,
- *  taken before a send, settles on the answer to the first presence read the
- *  page asks once the next turn has closed, and rejects with the failure of a
- *  turn that fails. The page asks that read from the effect that follows the
- *  turn's last render and every 5 s after (use-kinu `refreshLiveData`), so it
- *  comes whatever the turn did, after the page drew it, and it is final for
- *  that turn: a row waits on it, never on the value it hopes for. */
+ *  taken before a send, follows the chat request that send puts on the socket:
+ *  it settles on the answer to the first presence read the page asks once that
+ *  request's turn has closed, and rejects when the turn fails or the words land
+ *  in a turn already running. Only that request's frames count: the socket also
+ *  carries every other request's, a resent or a probing one included. The page
+ *  asks that read from the effect that follows the turn's last render and every
+ *  5 s after (use-kinu `refreshLiveData`), so it comes whatever the turn did,
+ *  after the page drew it, and it is final for that turn: a row waits on it,
+ *  never on the value it hopes for. */
 interface TurnWatch {
   /** Every Work presence the page was answered, in order. */
   workPresence(): readonly boolean[];
@@ -901,47 +909,72 @@ interface TurnWatch {
   stop(): Promise<void>;
 }
 
+interface TurnWaiter {
+  /** The chat request this waiter follows, once the page has sent one. */
+  requestId: string | null;
+  /** How many presence reads the page had asked when the turn closed; null while it runs. */
+  closedAtAsk: number | null;
+  readonly settle: ReturnType<typeof Promise.withResolvers<boolean>>;
+}
+
 async function watchTurns(page: Page): Promise<TurnWatch> {
   const cdp = await page.createCDPSession();
 
   await cdp.send('Network.enable');
 
-  // Each presence read the page asked, by id, with how many turns had closed when it went.
+  // Each presence read the page asked, by id, with its place among the reads asked.
   const asked = new Map<string, number>();
   const answers: boolean[] = [];
-  let closed = 0;
-  let waiters: { readonly closedBefore: number; readonly settle: ReturnType<typeof Promise.withResolvers<boolean>> }[] = [];
+  let asks = 0;
+  let waiters: TurnWaiter[] = [];
 
   cdp.on('Network.webSocketFrameSent', (event: { response?: { payloadData?: string } }) => {
-    const ask = v.safeParse(RpcAskSchema, tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input'));
+    const frame = tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input');
+    const request = v.safeParse(ChatRequestSchema, frame);
+    const unsent = waiters.find((waiter) => waiter.requestId === null);
 
-    if (ask.success && PRESENCE_READS.has(ask.output.method)) asked.set(ask.output.id, closed);
+    if (request.success && unsent !== undefined) unsent.requestId = request.output.id;
+
+    const ask = v.safeParse(RpcAskSchema, frame);
+
+    if (ask.success && PRESENCE_READS.has(ask.output.method)) {
+      asked.set(ask.output.id, asks);
+      asks += 1;
+    }
   });
   cdp.on('Network.webSocketFrameReceived', (event: { response?: { payloadData?: string } }) => {
-    const received = tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input');
-    const turn = v.safeParse(ChatResponseSchema, received);
+    const frame = tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input');
+    const turn = v.safeParse(ChatResponseSchema, frame);
 
     if (turn.success) {
+      const waiter = waiters.find((candidate) => candidate.requestId === turn.output.id);
+
+      if (waiter === undefined) return;
+
       if (turn.output.error === true) {
-        for (const waiter of waiters.splice(0)) waiter.settle.reject(new Error(`the turn failed: ${turn.output.body ?? ''}`));
-      } else if (turn.output.done === true && turn.output.landed !== 'mid-turn') {
-        closed += 1;
+        waiters = waiters.filter((candidate) => candidate !== waiter);
+        waiter.settle.reject(new Error(`the turn failed: ${turn.output.body ?? ''}`));
+      } else if (turn.output.done === true && turn.output.landed === 'mid-turn') {
+        waiters = waiters.filter((candidate) => candidate !== waiter);
+        waiter.settle.reject(new Error('the words landed in a turn already running, so no turn of their own closed'));
+      } else if (turn.output.done === true) {
+        waiter.closedAtAsk = asks;
       }
 
       return;
     }
 
-    const answer = v.safeParse(RpcAnswerSchema, received);
-    const sentAfter = answer.success ? asked.get(answer.output.id) : undefined;
+    const answer = v.safeParse(RpcAnswerSchema, frame);
+    const place = answer.success ? asked.get(answer.output.id) : undefined;
 
-    if (!answer.success || sentAfter === undefined) return;
+    if (!answer.success || place === undefined) return;
     asked.delete(answer.output.id);
     const presence = v.safeParse(PresenceAnswerSchema, answer.output.result);
 
     if (!presence.success) return;
     answers.push(presence.output);
     waiters = waiters.filter((waiter) => {
-      if (sentAfter <= waiter.closedBefore) return true;
+      if (waiter.closedAtAsk === null || place < waiter.closedAtAsk) return true;
       waiter.settle.resolve(presence.output);
 
       return false;
@@ -953,7 +986,7 @@ async function watchTurns(page: Page): Promise<TurnWatch> {
     afterTurn: () => {
       const settle = Promise.withResolvers<boolean>();
 
-      waiters.push({ closedBefore: closed, settle });
+      waiters.push({ requestId: null, closedAtAsk: null, settle });
 
       return settle.promise;
     },
