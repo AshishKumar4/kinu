@@ -135,14 +135,18 @@ const CHAT_IDLE = `[...document.querySelectorAll('#chat button')].some((el) => e
 /** What stops a row dead: an app script that never loaded, which leaves the
  *  page blank; a turn the socket reported ended in error, which the page may
  *  never show as ended; the welcome page, which stands in front of every route
- *  until the account finishes setup; or a danger notice, the product saying why
+ *  until the account finishes setup, once it offers its next step again (while
+ *  it saves one, Next and Finish setup are disabled, and a save that fails
+ *  enables them beside its error); or a danger notice, the product saying why
  *  the thing asked for will not come. */
 const DEAD_END = `(() => {
   const script = (window.__scriptFailures ?? []).at(-1);
   if (script !== undefined) return 'the app script ' + script + ' failed to load, which leaves the page blank';
   const failed = (window.__turnErrors ?? []).at(-1);
   if (failed !== undefined) return 'a turn that ended in error: ' + failed;
-  if (location.pathname === '/welcome') {
+  const welcomeOffers = [...document.querySelectorAll('button')].some((b) => !b.disabled && b.getClientRects().length > 0
+    && ['Next', 'Finish setup'].includes((b.textContent ?? '').trim()));
+  if (location.pathname === '/welcome' && welcomeOffers) {
     const said = [...document.querySelectorAll('.p-danger')].map((el) => (el.textContent ?? '').trim()).join(' ');
     return 'the welcome page, which the account has not finished' + (said === '' ? '' : ': ' + said);
   }
@@ -590,18 +594,26 @@ export const INSPECTOR_SHUT_PX = 40;
 
 export const OPEN_NAMES = 'show|expand|open';
 
-/** The clockless settle after a press: the measured number, equal on two
- *  consecutive animation frames. A control that does nothing settles at the
- *  number it started with, so no deadline is needed to tell an inert control
- *  from a slow one, and a panel that animates is read after it lands. */
+/** The clockless settle after a press: no finite animation running or waiting
+ *  to start, and the measured number equal on two consecutive animation frames
+ *  with none. `getAnimations()` flushes pending style, so a transition the
+ *  press has just set off is counted before it has moved a pixel: equal frames
+ *  alone read the rail as settled at its open 240 px while its collapse waited
+ *  pending (2026-09-24, 10 of 40 collapses short of the end state at 6x CPU
+ *  throttling). An infinite animation, a pulsing dot, never finishes and is not
+ *  waited on. A control that does nothing settles at the number it started
+ *  with, so no deadline is needed to tell an inert control from a slow one. */
 export async function settled(page: Page, read: string): Promise<void> {
   await page.evaluate('window.__liveSettle = undefined');
   await page.waitForFunction(
     `(() => {
       const value = ${read};
+      const moving = document.getAnimations().some((animation) =>
+        (animation.pending || animation.playState === 'running')
+        && animation.effect?.getComputedTiming().endTime !== Infinity);
       const previous = window.__liveSettle;
-      window.__liveSettle = value;
-      return previous === value;
+      window.__liveSettle = moving ? undefined : value;
+      return !moving && previous === value;
     })()`,
     { polling: 'raf' },
   );
