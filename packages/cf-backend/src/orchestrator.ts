@@ -1487,6 +1487,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         transaction: (body) => { this.ctx.storage.transactionSync(body); },
         // The turn review's model calls debit the reviewed turn's mission; unbudgeted turns never reach it.
         governor: this.budget,
+        reportModelCall: (report) => { this.reportModelCall(report); },
         // Same broadcast sink as agents(action:'swarm') in ActorAgent.
         onMctsProgress: (event) => this.onMctsProgress(event),
         // Replay-eval rollout runs the live scaffold with the real LLM and tool bridges.

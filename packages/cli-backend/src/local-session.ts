@@ -21,7 +21,7 @@ import {
 import type {
   ChatOptions,
   TurnContinuity, FiberCtx,
-  LLM, ModelCallSink, ModelRouteResolution, HeadMergeModelBinding,
+  LLM, ModelCallReport, ModelCallSink, ModelRouteResolution, HeadMergeModelBinding,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions,
   ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
@@ -217,6 +217,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     enabled: input.noAutoEvolve !== true,
     // Review calls debit the reviewed turn's mission.
     governor: budget,
+    reportModelCall: (report) => { input.session().reportModelCall(report); },
     // Local replay runs with tools disabled: re-running tools would re-execute shell work on the
     // user's machine, so CLI replay measures prompt/model config only.
     replayTaskRunner: (task) => input.session().runReplayTask(task),
@@ -2408,6 +2409,10 @@ export class LocalAgentSession implements BackendHost {
   /** Same catalog session as the context window, so estimate and ledger read one rate. */
   modelPricing(): ModelPricing | null {
     return this.modelCatalog.pricing();
+  }
+
+  reportModelCall(report: ModelCallReport): void {
+    this.modelCallSink(report);
   }
 
   reportBudgetRefusal(refusal: Omit<Extract<RunEventInput, { type: 'budget_exhausted' }>, 'type'>): void {

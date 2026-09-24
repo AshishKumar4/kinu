@@ -4,19 +4,15 @@ import { describe, expect, test } from 'bun:test';
 import { createTestActorsOver, createTestRuntime, createTestSql, toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
 import {
-  chatSessionTurns, gatewayWorkspace, hostedExplorationHarness, orchestratorHarness, rpcReachableFrom, workspaceMainActor,
+  chatSessionTurns, gatewayWorkspace, orchestratorHarness, rpcReachableFrom, workspaceMainActor,
 } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
 import { isAgentRpcMethod } from '../src/cli/rpc-gate';
-import { hostBranch } from '../src/exploration-hosting';
 import {
   HeadCapture,
   HeadController,
   HeadJournal,
-  agentHome,
   buildHeadSystemPrompt,
-  headAgentName,
-  parseActorKey,
   initHeadsTables,
   type HeadInput,
   type HeadReport,
@@ -239,43 +235,6 @@ describe('exploration actors write the workspace journal and acquire only their 
     ).all();
 
     expect(rows).toEqual([{ actor_id: root, head_id: workspace.head, text: 'read the parser' }]);
-  });
-
-  test('a rollout branch reasons through the caller\'s model seam and is given no plane to act on', async () => {
-    const workspace = orchestratorHarness();
-    const asked: string[] = [];
-    // `register` is idempotent per creation id, so seat and branch handle bind one actor.
-    const branchRecord = (await hostedExplorationHarness(workspace, 'branch', 'branch-1')).actor.record;
-
-    const branch = await hostBranch(workspace.agent.observeExplorationSeams(), 'branch-1', {
-      explorePrompt: ({ context }) => ({ system: 'score this rollout', user: `context: ${context}` }),
-      reflectionPrompt: (task, traces) => `why did ${task} score badly after ${traces}`,
-      complete: async (request) => {
-        asked.push(request.user);
-
-        return { text: 'the parser branch looks promising' };
-      },
-    });
-
-    const answer = await branch.explore({
-      priorHistory: [{ role: 'user', content: 'probe the parser' }],
-      craftedTools: [],
-      languages: ['typescript'],
-      mode: 'build',
-    });
-
-    expect(answer.text).toBe('the parser branch looks promising');
-    expect(asked).toEqual(['context: user: probe the parser']);
-    // `hostedHomeKind` is null for a branch, while a head gets home and credential; asserted as a pair so
-    // "no directory" cannot hold trivially. Keyed off the storage key the directory issued.
-    const head = await hostedExplorationHarness(workspace, 'head', 'head-2');
-    const headHome = agentHome(headAgentName(parseActorKey(head.actor.record.storageKey).id));
-    const branchHome = agentHome(headAgentName(parseActorKey(branchRecord.storageKey).id));
-    expect(await workspace.agent.statWorkspaceFile(headHome))
-      .toMatchObject({ ok: true, value: expect.objectContaining({ isDir: true }) });
-    expect(await workspace.agent.statWorkspaceFile(branchHome))
-      .toMatchObject({ ok: true, value: null });
-    await branch.release();
   });
 });
 

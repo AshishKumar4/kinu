@@ -56,8 +56,6 @@ import {
   TerminalEffectInterrupt,
   type TerminalEffectFault, type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
-import type { ExplorationHostSeams } from '../../src/exploration-hosting';
-import type { AgentProviderRegistry } from '../../src/providers/agent-registry';
 import { SCRIPT_EXPORTS, serveObject } from './programmatic-host';
 
 mockAgentsSdk();
@@ -452,14 +450,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
 
   observeActorHost(): ActorHost { return this.actorHost(); }
-  /** The seams the production head runtime and node seat factory are built from. */
-  observeExplorationSeams(): ExplorationHostSeams { return this.explorationSeams(); }
-
-  /** Instance-level seam override: under bun the owned model services have no
-   *  provider; everything downstream of resolution is production's. */
-  overrideProviderRegistry(registry: AgentProviderRegistry): void {
-    Object.assign(this.ownedModelServices, { providerRegistry: (): AgentProviderRegistry => registry });
-  }
 
   /** Every programmatic turn the loop was asked to admit through the host. */
   readonly harnessEnqueued: ProgrammaticTurn[] = [];

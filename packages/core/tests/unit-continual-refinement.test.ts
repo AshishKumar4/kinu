@@ -53,7 +53,7 @@ import {
 import {
   decideRefinementRoute, showRefinementRoute,
 } from '../src/evolution/refinement-skill';
-import { createTestSql, present } from '@kinu.run/test-utils';
+import { createTestSql, present, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
 
@@ -1241,7 +1241,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(store.get(opened.id)?.stage).toBe('planning');
 
     // The real recovery caller: an engine built after the nudge started.
-    const recovery = new EvolutionEngine(fx.rt, fx.stores.history, { enabled: false });
+    const recovery = new EvolutionEngine(fx.rt, fx.stores.history, { reportModelCall: unobservedSpend, enabled: false });
     // It recovered its empty review queue and left the live claim alone.
     expect(recovery.sessionWindow.countQueuedReviews()).toBe(0);
     expect(store.get(opened.id)?.stage).toBe('planning');

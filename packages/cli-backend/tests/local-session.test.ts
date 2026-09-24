@@ -4026,6 +4026,58 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
   });
 });
 
+describe('LocalAgentSession — the lifetime search', () => {
+  /** The branch lane's two calls: exploring one approach, and reflecting on the traces. */
+  const isBranchCall = (body: string): boolean =>
+    body.includes('You are an expert agent exploring one approach') || body.includes('Task: Given my purpose');
+
+  test("a lifetime search's branch calls are billed once each", async () => {
+    // Branches run in their own processes against the configured endpoint, so the endpoint is a local server.
+    let branchCalls = 0;
+
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        if (isBranchCall(await request.text())) branchCalls += 1;
+
+        return Response.json({
+          id: 'cmpl-lifetime', object: 'chat.completion', created: 1, model: 'test-model',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'Cache the token table.' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+        });
+      },
+    });
+
+    try {
+      const db = new Database(scratchPath('local-session-lifetime', 'agent.db'));
+      initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+
+      const rt = createCLIRuntime(db, {
+        dbPath: db.filename,
+        llm: { name: 'workers-ai', baseURL: `http://127.0.0.1:${String(server.port)}/v1`, headers: { Authorization: 'Bearer lifetime' }, model: 'test-model' },
+      });
+
+      const events: SessionEvent[] = [];
+      const session = new LocalAgentSession({ rt, db, model: fakeModel('noted'), onEvent: (event) => events.push(event) });
+      // Four windows closed in an earlier life, so this session's first window starts the search.
+      void rt.storage.sql`INSERT INTO actor_config (actor_id, key, value) VALUES (${rt.actor.actorId}, 'closed_turn_windows', '4')`;
+
+      for (let turn = 1; turn <= 5; turn++) await session.send(`turn ${turn}`);
+      await waitFor(() => events.some((event) => event.type === 'evolution' && event.event === 'mcts_complete'), 60_000);
+
+      // The search runs between turns, so its calls are filed under the workspace's own run.
+      const billed = session.getRunEvents(WORKSPACE_RUN_ID)
+        .filter((event) => event.type === 'model_call' && event.source === 'mcts');
+
+      expect(branchCalls).toBeGreaterThan(0);
+      expect(billed).toHaveLength(branchCalls);
+      await session.end();
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
 describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () => {
   const TOKEN = ['ptc_', '0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz'].join('');
 

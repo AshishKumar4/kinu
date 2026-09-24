@@ -3,7 +3,7 @@
 // only their own rows, through the production binder and directory.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { sqlOver, createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
+import { sqlOver, createMemoryVfs, createTestRuntime, unobservedSpend } from '@kinu.run/test-utils';
 import { makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
@@ -83,7 +83,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false): F
       // Nothing here arms a drain, so an armed timer is a fault to surface.
       setTimer: () => { throw new Error(`${bound.record.name} armed a drain timer outside a turn`); },
     },
-    engine: new EvolutionEngine(bound.runtime, bound.stores.history, { enabled: automatic }),
+    engine: new EvolutionEngine(bound.runtime, bound.stores.history, { reportModelCall: unobservedSpend, enabled: automatic }),
     eventLog: new EventLog(exec, bound.handle),
   });
 

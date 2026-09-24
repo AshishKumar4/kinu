@@ -4,7 +4,7 @@
  */
 import type {
   AgentRuntime, LLM, Memory, Executor, Schedule, Identity, ExecutionRouter,
-  CraftStore, AgentStores, AgentsSwarmDeps,
+  CraftStore, AgentStores, AgentsSwarmDeps, ModelCallSink,
 } from '@kinu.run/core';
 import { tool } from 'ai';
 import { codemodeInputSchema } from '@kinu.run/core';
@@ -44,13 +44,16 @@ const refuse = (capability: string, option: string): never => {
   throw new UnsupportedTestCapability(capability, option);
 };
 
+/** A spend sink for a suite that observes no spend: each report is dropped. */
+export const unobservedSpend: ModelCallSink = () => undefined;
+
 /**
  * A search backend's seams for a suite that observes none of them: spend is dropped, and a node's code or
  * web call refuses by name.
  */
 export function unobservedSearchSeams(): Pick<AgentsSwarmDeps, 'reportModelCall' | 'nodeCodemode' | 'webSearch'> {
   return {
-    reportModelCall: () => undefined,
+    reportModelCall: unobservedSpend,
     nodeCodemode: () => () => tool<{ code: string }, string>({
       description: 'Runs no code in this suite.',
       inputSchema: codemodeInputSchema(),

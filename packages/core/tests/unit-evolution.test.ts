@@ -3,7 +3,7 @@
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
-import { createTestActors } from '@kinu.run/test-utils';
+import { createTestActors, unobservedSpend } from '@kinu.run/test-utils';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { EvolutionEvent, CompletedTurn, CompletedSession } from '../src/evolution/types';
 import { DELEGATION_RUBRIC } from '../src/evolution/delegation-features';
@@ -50,7 +50,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
       return complete(prompt);
     };
 
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
 
@@ -86,7 +86,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
       }),
     });
 
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
 
@@ -106,7 +106,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const { rt, stores } = createTestRuntime({ llmResponses: classifierResponses('corrected') });
     void rt.storage.sql`INSERT INTO crafted_tools (name, score, uses, last_used_at)
         VALUES ('my_crafted_tool', 0.5, 1, ${Date.now()})`;
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
 
     const turn = makeTurn({
       toolCalls: [{ name: 'eval', args: {}, result: 'x' }],
@@ -126,7 +126,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
     void rt2.storage.sql`INSERT INTO crafted_tools (name, score, uses, last_used_at)
         VALUES ('my_crafted_tool', 0.5, 1, ${Date.now()})`;
-    const engine2 = new EvolutionEngine(rt2, stores2.history);
+    const engine2 = new EvolutionEngine(rt2, stores2.history, { reportModelCall: unobservedSpend });
     await engine2.reviewTurn(makeTurn({
       toolCalls: [{ name: 'eval', args: {}, result: 'x' }],
       craftedToolsUsed: ['my_crafted_tool'],
@@ -141,7 +141,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
   test('an MCP tool call is not a crafted-tool use and scores nothing', async () => {
     // Crafted tools are codemode-only, so the EMA must come from the turn record.
     const { rt, stores } = createTestRuntime({ llmResponses: classifierResponses('corrected') });
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
     await engine.reviewTurn(makeTurn({
       toolCalls: [{ name: 'mcp__github__create_issue', args: {}, result: 'x' }],
       craftedToolsUsed: [],
@@ -159,7 +159,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
       return realComplete(prompt);
     };
 
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
 
@@ -171,7 +171,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
   test('no follow-up: no outcome row at all — an absent verdict is not a neutral one', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
 
@@ -192,7 +192,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
   test('no follow-up but real tool work: the ENVIRONMENT grades it, and says so', async () => {
     const { rt, stores } = createTestRuntime({ llmResponses: { 'Extract a reusable pattern': 'not json' } });
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
 
     const turn = makeTurn({
       turnId: 'exec-1',
@@ -223,7 +223,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     };
 
     const headless = createTestRuntime({ llmResponses: { 'Extract a reusable pattern': pattern } });
-    await new EvolutionEngine(headless.rt, headless.stores.history).reviewTurn(makeTurn({ turnId: 'exec-promote', ...acted }), null);
+    await new EvolutionEngine(headless.rt, headless.stores.history, { reportModelCall: unobservedSpend }).reviewTurn(makeTurn({ turnId: 'exec-promote', ...acted }), null);
     const [graded] = listTurnOutcomes(headless.rt.storage.sql, headless.rt.actor);
     expect(graded.source).toBe('execution');
     expect(graded.outcome).toBe('accepted');
@@ -235,7 +235,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
       llmResponses: classifierResponses('accepted', { 'Extract a reusable pattern': pattern }),
     });
 
-    await new EvolutionEngine(asked.rt, asked.stores.history).reviewTurn(
+    await new EvolutionEngine(asked.rt, asked.stores.history, { reportModelCall: unobservedSpend }).reviewTurn(
       makeTurn({ turnId: 'graded-promote', ...acted }), 'perfect, thanks',
     );
     const [byUser] = listTurnOutcomes(asked.rt.storage.sql, asked.rt.actor);
@@ -246,7 +246,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
   test('a headless turn that errored is graded corrected — but does NOT corroborate lessons', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
     recordLesson(rt.storage.sql, rt.actor, {
       turnIds: ['exec-2'], text: 'earlier provisional lesson',
       source: 'turn_reflection', status: 'provisional',
@@ -268,7 +268,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
   test('K_align stays a USER-correction rate — execution rows are counted apart', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
     await engine.reviewTurn(makeTurn({
       turnId: 'exec-3', hadError: true,
       toolCalls: [{ name: 'shell', args: {}, result: { error: 'boom' } }],
@@ -281,7 +281,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
   });
   test('ungraded turn with an error: reflects, but the lesson stays provisional and OUT of the derived view', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
 
     await engine.reviewTurn(makeTurn({ hadError: true, turnId: 'err-turn' }), null);
     const lessons = listLessons(rt.storage.sql, rt.actor);
@@ -292,7 +292,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
   test('classifier failure records nothing rather than guessing', async () => {
     const { rt, stores } = createTestRuntime({ llmResponses: { [CLASSIFY]: 'absolutely not json' } });
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
     const turn = makeTurn();
     await engine.reviewTurn(turn, 'hmm, interesting');
     expect(turn.feedback).toBeNull();
@@ -319,7 +319,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     )`);
     void rt.storage.sql`INSERT INTO turn_feedback (actor_id, message_id, feedback, created_at)
       VALUES (${rt.actor.actorId}, 'msg-1', 'positive', 1)`;
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
 
     const turn = makeTurn();
     await engine.reviewTurn(turn, 'whatever text — the thumbs already decided');
@@ -361,7 +361,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
       VALUES (${rt.actor.actorId}, 'msg-1', 'positive', 2)`;
 
     const turn = makeTurn();
-    await new EvolutionEngine(rt, stores.history).reviewTurn(turn, 'whatever text — the thumbs already decided');
+    await new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend }).reviewTurn(turn, 'whatever text — the thumbs already decided');
 
     // This actor's own verdict, and the ledger row derived from it.
     expect(turn.feedback).toBe('positive');
@@ -379,7 +379,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
   test('an Alternate Takes pick beats the classifier and its ledger row survives the review', async () => {
     let llmCalls = 0;
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
     rt.llm.complete = async () => {
       llmCalls++;
 
@@ -402,7 +402,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
   test('programmatic turn without errors: no outcome row, no evolution side effects', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
 
@@ -414,7 +414,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
   test('a later negative outcome corroborates a provisional lesson into the derived view', async () => {
     const { rt, stores } = createTestRuntime({ llmResponses: classifierResponses('frustrated') });
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
     recordLesson(rt.storage.sql, rt.actor, {
       turnIds: ['msg-1'], text: 'verify cluster names before acting',
       source: 'turn_reflection', status: 'provisional',
@@ -430,7 +430,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
   });
   test('applyExplicitFeedback (late thumbs) upserts the ledger and corroborates lessons', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
     await stores.history.record('default', { id: 'u1', parentId: null, message: { role: 'user', content: 'the task' }, origin: 'input' });
     await stores.history.record('default', { id: 'a1', parentId: 'u1', message: { role: 'assistant', content: 'the answer' }, origin: 'output' });
     recordLesson(rt.storage.sql, rt.actor, {
@@ -447,7 +447,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
   });
   test('respects enabled=false config', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history, { enabled: false });
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend, enabled: false });
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
 
@@ -464,7 +464,7 @@ describe('EvolutionEngine — Session-level', () => {
 
   test('reflects on a ≥3-turn window carrying negative signal (a corroborated session lesson)', async () => {
     const { rt, stores } = createTestRuntime({ llmResponses: classifierResponses('corrected') });
-    const engine = new EvolutionEngine(rt, stores.history, { lifetimeEvolutionInterval: 100 });
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend, lifetimeEvolutionInterval: 100 });
     recordLesson(rt.storage.sql, rt.actor, {
       turnIds: ['w1'], text: 'Previous lesson content',
       source: 'turn_reflection', status: 'corroborated',
@@ -484,7 +484,7 @@ describe('EvolutionEngine — Session-level', () => {
 
   test('accepted streak lowers the cadence: an all-good window skips reflection', async () => {
     const { rt, stores } = createTestRuntime({ llmResponses: classifierResponses('accepted') });
-    const engine = new EvolutionEngine(rt, stores.history, { lifetimeEvolutionInterval: 100 });
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend, lifetimeEvolutionInterval: 100 });
 
     const turns = [makeTurn({ turnId: 's1' }), makeTurn({ turnId: 's2' }), makeTurn({ turnId: 's3' })];
 
@@ -496,7 +496,7 @@ describe('EvolutionEngine — Session-level', () => {
 
   test('an errored window still reflects, but the self-scored lesson stays provisional', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history, { lifetimeEvolutionInterval: 100 });
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend, lifetimeEvolutionInterval: 100 });
     recordLesson(rt.storage.sql, rt.actor, {
       turnIds: ['seed'], text: 'Previous lesson content',
       source: 'turn_reflection', status: 'corroborated',
@@ -522,7 +522,7 @@ describe('EvolutionEngine — Session-level', () => {
     const events: EvolutionEvent[] = [];
 
     for (let i = 0; i < 5; i++) {
-      const engine = new EvolutionEngine(rt, stores.history, { lifetimeEvolutionInterval: 5, lifetimeMCTSBudget: 1, lifetimeMCTSBranches: 1 });
+      const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend, lifetimeEvolutionInterval: 5, lifetimeMCTSBudget: 1, lifetimeMCTSBranches: 1 });
       engine.onEvent(e => events.push(e));
       await engine.onSessionComplete(window);
     }
@@ -538,7 +538,7 @@ describe('EvolutionEngine — Lifetime-level', () => {
     initSearchTables(rt.storage.execRaw);
     initScaffoldTables(rt.storage.execRaw);
 
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
 
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
@@ -565,7 +565,7 @@ describe('the turn-reflection prompt', () => {
       return complete(prompt);
     };
 
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
     await engine.reviewTurn(
       makeTurn({ steps: 41, durationMs: 372_000 }),
       'No — that rotates production keys. I said STAGING.',

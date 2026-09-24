@@ -1,5 +1,5 @@
 {
-  "measured": "45949647b: 1148 test files, 1006 runnable suites, 12951 tests, 40 runners, 36 non-public product members",
+  "measured": "0c9c00b20: 1149 test files, 1007 runnable suites, 12940 tests, 40 runners, 35 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-codemode-sandbox.test.ts :: (file scope) :: declared mirror",
@@ -99,10 +99,6 @@
     },
     {
       "key": "mirror :: scripts/test-census.test.ts :: RED: the author s own declaration of the mirror :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-device-turn-stop.test.ts :: (file scope) :: harness bridge to a non-public member",
       "count": 1
     },
     {
