@@ -3,9 +3,9 @@
 import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
-import type { CodemodeProvider, CraftedToolSet, JsonValue } from '@kinu.run/core';
-import { CODEMODE_CODE_DESCRIPTION, WORKSPACE_ROOT } from '@kinu.run/core';
-import { toolExecute, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import type { CodemodeProvider, CraftedToolSet, JsonValue, SlateOperation } from '@kinu.run/core';
+import { CODEMODE_CODE_DESCRIPTION, SlateOperationSchema, WORKSPACE_ROOT, createInlineExecutor } from '@kinu.run/core';
+import { toolExecute, scriptedTurnModel, createTestRuntime, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { inWorkMode, successfulToolOutcome, renderDynamicContextBlock, runChat, DynamicContextLedger, craftedToolDeclarations } from '@kinu.run/core';
 import { existsSync, rmSync } from 'node:fs';
@@ -213,13 +213,6 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
     ] });
   });
 
-  test('the tool description tells the model what workspace.* actually is', async () => {
-    const factory = createNodeCodemodeToolFactory();
-    const built = factory({ native: {}, craftedTools: () => ({}), providers: [] });
-    expect(built.description).toContain('canonical durable workspace');
-    expect(built.description).toContain('`shell` with runtime "workspace"');
-  });
-
   test('every wired namespace is DECLARED to the model, not just bound', async () => {
     // Each provider's `types` must reach the description, or its callables are reachable but undiscoverable.
     // Capability and executor providers arrive by different routes.
@@ -244,8 +237,6 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
     expect(built.description).toContain('export declare const memory: {');
     expect(built.description).toContain('save(content: string)');
     expect(built.description).toContain('export declare const workspace: {');
-    expect(built.description).toContain('Namespaces bound in this sandbox:');
-    expect(built.description).toContain('canonical durable workspace');
   });
 });
 
@@ -344,15 +335,14 @@ describe('createNodeCodemodeToolFactory — native tools under tools.<name>', ()
     expect(seen).toEqual(['ls']);
   });
 
-  test('native declarations stay in the tool and crafted declarations ride the live ledger', () => {
+  test('native tools are declared by their own schemas and crafted declarations ride the live ledger', () => {
     const built = createNodeCodemodeToolFactory()({
       native: surfaceWith(async () => ''),
       craftedTools: () => ({ double: { description: 'Doubles a number', execute: async () => 2 } }),
       providers: [],
     });
 
-    expect(built.description).toContain('export declare const tools: {');
-    expect(built.description).toContain('shell(input: { command: string }): Promise<unknown>;');
+    expect(built.description).not.toContain('shell(input:');
     expect(built.description).not.toContain('double(...args: unknown[]): Promise<unknown>;');
     expect(renderDynamicContextBlock({ craftedTools: [{ name: 'double', description: 'Doubles a number' }] }))
       .toContain('double(...args: unknown[]): Promise<unknown>;');
@@ -482,4 +472,77 @@ test('a synchronous call fails naming the awaited call that replaces it, and tha
   }
 
   expect(commands).toEqual(['pwd; ls -la']);
+});
+
+test('each workspace.slates member reaches the slate host as one operation, and no envelope is left', async () => {
+  const { rt } = createTestRuntime();
+  const operations: SlateOperation[] = [];
+
+  const workspace = createInlineExecutor({
+    vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
+    shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
+    slate: async (operation) => {
+      operations.push(operation);
+
+      return operation.op === 'remove' ? { ok: false, reason: 'denied', error: 'not yours' } : { ok: true, value: operation.op };
+    },
+  });
+
+  const execute = toolExecute<{ code: string }, ExecuteToolResult>(
+    createNodeCodemodeToolFactory({ extraProviders: [workspace] })({ native: {}, craftedTools: () => ({}), providers: [] }),
+  );
+
+  // Issue #28: a slate is its class, so the class's own `remove` is a call and the lifecycle is `$remove`.
+  // Every lifecycle member runs once, with distinct arguments wherever its operation takes them.
+  const program = [
+    '// Drive the whiteboard slate through every kind of member',
+    'const board = workspace.slates.whiteboard;',
+    'const slates = workspace.slates;',
+    "const answers = [await board.addStroke({ id: 'roof' }), await board.remove(3)];",
+    'answers.push(await board.$preview(), await board.$methods(), await board.$commit(), await board.$history(), await board.$graph());',
+    "answers.push(await board.$restore('v1'), await board.$inspect('v1', ['client.tsx']), await board.$publish('v2', ['server.ts']));",
+    "answers.push(await board.$share({ visibility: 'public', approved: [], op: 'remove', id: 'other' }));",
+    "answers.push(await slates.$list(), await slates.$fork('v1'), await slates.$shares(), await slates.$liveShares());",
+    "answers.push(await slates.$unshare('s1'), await slates.$viewerRequests('s2'));",
+    'const refused = await board.$remove();',
+    "const envelope = [typeof workspace.slate, await Promise.resolve().then(() => workspace.slates({ op: 'list' })).then(() => 'called', () => 'not callable')];",
+    'return { answers, refused, envelope, awaited: (await board) === board };',
+  ].join('\n');
+
+  const out = await execute({ code: program });
+
+  expect(out.result).toMatchObject({
+    answers: [
+      'call', 'call', 'preview', 'methods', 'commit', 'history', 'graph', 'restore', 'inspect', 'publish', 'share',
+      'list', 'fork', 'shares', 'liveShares', 'unshare', 'viewerRequests',
+    ],
+    refused: { success: false, reason: 'denied', error: 'not yours' },
+    envelope: ['undefined', 'not callable'],
+    awaited: true,
+  });
+
+  expect(operations).toEqual([
+    { op: 'call', id: 'whiteboard', method: 'addStroke', args: [{ id: 'roof' }] },
+    { op: 'call', id: 'whiteboard', method: 'remove', args: [3] },
+    { op: 'preview', id: 'whiteboard' },
+    { op: 'methods', id: 'whiteboard' },
+    { op: 'commit', id: 'whiteboard' },
+    { op: 'history', id: 'whiteboard' },
+    { op: 'graph', id: 'whiteboard' },
+    { op: 'restore', id: 'whiteboard', version: 'v1' },
+    { op: 'inspect', id: 'whiteboard', version: 'v1', include: ['client.tsx'] },
+    { op: 'publish', id: 'whiteboard', version: 'v2', include: ['server.ts'] },
+    { op: 'share', id: 'whiteboard', visibility: 'public', approved: [] },
+    { op: 'list' },
+    { op: 'fork', version: 'v1' },
+    { op: 'shares' },
+    { op: 'liveShares' },
+    { op: 'unshare', share: 's1' },
+    { op: 'viewerRequests', share: 's2' },
+    { op: 'remove', id: 'whiteboard' },
+  ]);
+
+  // Every operation the host defines was reached, so a member added without a row here fails.
+  expect(new Set(operations.map((operation) => operation.op)))
+    .toEqual(new Set(SlateOperationSchema.options.map((option) => option.entries.op.literal)));
 });

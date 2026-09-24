@@ -10,12 +10,14 @@ import { newWebSocketRpcSession } from 'capnweb';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { handleNimbusPreviewHostRequest } from '../../src/nimbus-route';
-import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema } from '@kinu.run/core';
+import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, createDefaultWebSearchProvider, toolsInWorkMode } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller } from '@kinu.run/core';
 import { workspaceOwner } from '../../src/workspace-owner-rpc';
+import { createCodemodeToolFactory } from '../../src/codemode-tool';
+import { codemodeEgress } from '../../src/codemode-egress';
 import type { JsonValue } from '@kinu.run/core';
 import type {
   DurabilityReservation,
@@ -44,8 +46,9 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     super(ctx, env);
     // The production constructor already sealed these subclass methods away as own properties.
     Reflect.deleteProperty(this, 'portReservations');
+    Reflect.deleteProperty(this, 'runProgram');
     Reflect.deleteProperty(this, 'forgetActivation');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'forgetActivation']);
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation']);
   }
 
   async portReservations(): Promise<DurabilityReservation[]> {
@@ -56,6 +59,20 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       owner: reservation.owner,
       capability: reservation.capability,
     }));
+  }
+
+  /** One program through this workspace's production `eval` tool, in Build mode; its answer as JSON. */
+  async runProgram(code: string): Promise<string> {
+    const factory = createCodemodeToolFactory({
+      loader: this.env.LOADER, egress: codemodeEgress(), rt: this.rt, sql: this.rt.storage.sql,
+      workspace: this.name, webSearch: createDefaultWebSearchProvider({ fetch }),
+    });
+
+    const execute = toolsInWorkMode('build', { eval: factory.toolFor({}) }).eval?.execute;
+
+    if (execute === undefined) throw new Error('No callable eval tool');
+
+    return JSON.stringify(await execute({ code }, { toolCallId: 'slate-program', messages: [] }) ?? null);
   }
 
   /**
@@ -79,7 +96,7 @@ export { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 /** `slateAs` is absent on purpose: `Rpc.Result` over its recursive `JsonValue` is TS2589; the probe
  *  reaches it through `workspaceOwner()`, as production's actor does. */
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor'> & Pick<ObservedOrchestrator, 'portReservations' | 'forgetActivation'>;
+  'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor'> & Pick<ObservedOrchestrator, 'portReservations' | 'runProgram' | 'forgetActivation'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
  *  the fixture read. */
@@ -181,6 +198,30 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
       capability: held.capability,
       reservations: await target.portReservations(),
     };
+  }
+
+  /** Authors a whiteboard slate whose class stores strokes, then runs `program` through the workspace's `eval`. */
+  async programOnWhiteboard(input: { workspace: string; owner: string; program: string }): Promise<string> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    const root = '/home/main/slates/whiteboard';
+
+    await this.writeSlateFile(target, `${root}/package.json`, JSON.stringify({ main: 'server.ts', slate: { title: 'Whiteboard' } }));
+    await this.writeSlateFile(target, `${root}/server.ts`, [
+      'import { SlateObject } from "kinu:slate";',
+      'export class Slate extends SlateObject {',
+      '  async addStroke(stroke) {',
+      '    const strokes = (await this.storage.get("strokes")) ?? [];',
+      '    strokes.push(stroke);',
+      '    await this.storage.put("strokes", strokes);',
+      '    return { count: strokes.length };',
+      '  }',
+      '  async strokes() { return (await this.storage.get("strokes")) ?? []; }',
+      '}',
+    ].join('\n'));
+
+    return target.runProgram(input.program);
   }
 
   async portReservations(workspace: string): Promise<DurabilityReservation[]> {

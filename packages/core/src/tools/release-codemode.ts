@@ -14,16 +14,16 @@ const MEMBER_TYPES = {
   board: '  /** Every bound source and its changes. */\n  board(): Promise<unknown>;',
   bind_source: '  /** Bind a source repo (local checkout or GitHub) this workspace can change. */\n  bindSource(input: { kind: "local" | "github"; label: string; repoUrl?: string; defaultBranch?: string; localDeviceId?: string; localRoot?: string; deployTarget?: string }): Promise<unknown>;',
   create: '  /** Start a change against a bound source. */\n  create(input: { bindingId: string; userPrompt: string; plan?: string }): Promise<unknown>;',
-  update: '  /** Store the plan/summary/unified-diff patch for a change. */\n  update(changeId: string, patch: { plan?: string; summary?: string; patch?: string; previewUrl?: string }): Promise<unknown>;',
-  transition: `  /** Move to a new status; engine-owned targets are refused (earned by apply/runChecks/deploy instead). */\n  transition(changeId: string, status: ${RELEASE_STATUSES.map((s) => `"${s}"`).join(' | ')}): Promise<unknown>;`,
+  update: '  /** `patch` is a unified diff. */\n  update(changeId: string, patch: { plan?: string; summary?: string; patch?: string; previewUrl?: string }): Promise<unknown>;',
+  transition: `  /** Statuses that apply, runChecks and deploy earn are refused here. */\n  transition(changeId: string, status: ${RELEASE_STATUSES.map((s) => `"${s}"`).join(' | ')}): Promise<unknown>;`,
   request_approval: '  /** Ask the owner to approve a change. */\n  requestApproval(changeId: string, approvalType: "apply" | "deploy_staging" | "deploy_production" | "rollback"): Promise<unknown>;',
-  record_check: '  /** Record a check YOU ran — the ledger has no other way to learn it happened. */\n  recordCheck(changeId: string, check: { name: string; status: "pending" | "running" | "passed" | "failed" | "skipped"; stdout?: string; stderr?: string; durationMs?: number }): Promise<unknown>;',
-  record_deployment: '  /** Record a deployment YOU ran. */\n  recordDeployment(changeId: string, deployment: { environment: "local" | "staging" | "production"; workerVersionId?: string; deploymentId?: string; rollbackTarget?: string }): Promise<unknown>;',
-  apply: '  /** Apply the stored patch for real — commit sha earned from the working copy. */\n  apply(changeId: string): Promise<unknown>;',
-  run_checks: '  /** Run build/test/lint commands for real; pass/fail from real exit codes. */\n  runChecks(changeId: string, checks: Array<{ name: string; command: string }>): Promise<unknown>;',
-  preview: '  /** Expose a live preview URL for the port your server listens on. */\n  preview(changeId: string, opts: { port: number; startCommand?: string }): Promise<unknown>;',
-  deploy: '  /** Deploy for real; verified against actual command output. */\n  deploy(changeId: string, deployment: { environment: "local" | "staging" | "production"; command?: string }): Promise<unknown>;',
-  rollback: '  /** Revert a bad deploy for real. */\n  rollback(changeId: string, opts?: { command?: string }): Promise<unknown>;',
+  record_check: '  /** Record a check you ran yourself. */\n  recordCheck(changeId: string, check: { name: string; status: "pending" | "running" | "passed" | "failed" | "skipped"; stdout?: string; stderr?: string; durationMs?: number }): Promise<unknown>;',
+  record_deployment: '  /** Record a deployment you ran yourself. */\n  recordDeployment(changeId: string, deployment: { environment: "local" | "staging" | "production"; workerVersionId?: string; deploymentId?: string; rollbackTarget?: string }): Promise<unknown>;',
+  apply: '  /** Apply the stored patch to the working copy and commit it. */\n  apply(changeId: string): Promise<unknown>;',
+  run_checks: '  /** Run the commands; each passes or fails by its exit code. */\n  runChecks(changeId: string, checks: Array<{ name: string; command: string }>): Promise<unknown>;',
+  preview: '  /** A live preview URL for the port your server listens on. */\n  preview(changeId: string, opts: { port: number; startCommand?: string }): Promise<unknown>;',
+  deploy: '  /** Deploy, verified against the command output. */\n  deploy(changeId: string, deployment: { environment: "local" | "staging" | "production"; command?: string }): Promise<unknown>;',
+  rollback: '  /** Revert a deploy. */\n  rollback(changeId: string, opts?: { command?: string }): Promise<unknown>;',
 } satisfies Record<ReleaseToolAction, string>;
 
 const MEMBER_DESCRIPTIONS = {
@@ -61,6 +61,7 @@ const MEMBER_NAMES = {
 
 function renderTypes(actions: readonly ReleaseToolAction[]): string {
   return [
+    '/** Changes to bound source repos, from plan to deploy. */',
     'export declare const release: {',
     ...actions.map((action) => MEMBER_TYPES[action]),
     '};',

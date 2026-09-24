@@ -413,11 +413,10 @@ One `model_call` builder gives the spend census one row shape. One
 `agents({action:'hire', lifetime:'task', role, mission})` adds a lifetime to the
 delegation ladder. It adds no action, no table, no loop, and no actor builder.
 
-1. Declare the rung once. `DELEGATION_RUNGS.hire`
-   (`packages/core/src/tools/registry.ts`) is the selection doctrine every
-   surface renders, and it describes the default roster lifetime.
-   `DELEGATION_TASK_LIFETIME` adds the `task` lifetime only where the actor
-   wires a substrate that can run one. `HIRE_CREATE_FIELDS`,
+1. Declare the note once. `AGENTS_TOOL_NOTES.hire`
+   (`packages/core/src/tools/registry.ts`) describes the default roster
+   lifetime, and `AGENTS_TOOL_NOTES.task` adds the `task` lifetime only where
+   the actor wires a substrate that can run one. `HIRE_CREATE_FIELDS`,
    `HIRE_EXISTING_FIELDS` and `AgentsActionInputVariant.excludes`
    (`packages/core/src/delegation/agents-tool.ts`) separate creating an agent from handing the
    work to one that exists, in the advertised JSON Schema, the sandbox

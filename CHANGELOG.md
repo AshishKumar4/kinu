@@ -15,6 +15,14 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 ### Changed
 
 - Hosted actors now use the Agents platform directly, without Think's duplicate session, workspace, inference queue or recovery boot. The shared Kinu chat loop retains the existing browser/CLI protocol and initializes the root transcript through the public session provider. Accepted sends and unfinished workspace work keep the sandbox protected across eviction.
+- **Tool descriptions carry only what a call needs.** Each built-in tool's
+  description is now a one-line summary plus the facts its schema cannot
+  state; the when-to-use and avoid-when prose is gone, and `eval` no longer
+  tells a model to prefer `shell` or `file` for single steps, so the model
+  chooses. `eval` stops declaring every native tool a second time: `tools.<name>`
+  takes the input that tool's own schema declares. The hosted request's seven
+  tool definitions shrink from 66.0 KB to 30.1 KB, the local one's from 52.2 KB
+  to 22.8 KB.
 - **The default model lives in the profile's default tier, and nowhere else.** `kinu setup` and the first provider connect set it only while it is unset, a later connect leaves it, and Defaults on the home screen change it; `config.json` keeps no top-level `model` or `reasoningEffort`. `/model`, `/effort`, the TUI model picker, `kinu model`, `kinu effort` and the rpc `model` command set the open workspace's own model or effort, and a new workspace pins a model only when `--model` names one.
 
 ### Added
@@ -615,6 +623,12 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Responses models see their own earlier steps.** On the models.dev catalog
+  (Muse on opencode's gateway), the CLI's opencode bridge and Codex, every step
+  after the first sent the earlier ones as references to items the endpoint
+  never stored, or dropped them, so Muse restated its plan at each step. Earlier
+  steps now go out whole with their encrypted reasoning, and a chosen effort
+  (Extra high on Muse) reaches the request.
 - **Creating a workspace from the home screen no longer risks a segfault as it
   opens.** Finishing the home screen unmounts its React tree synchronously
   before the terminal renderer releases its native state. It used to render an

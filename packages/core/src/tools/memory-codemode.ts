@@ -21,33 +21,24 @@ async function decodeMemoryResult(input: { pending: Promise<unknown> }): Promise
   return decodeJsonValue({ value: await input.pending });
 }
 
-const TYPES_BASE = `  /** Save a prose note or lesson too long to be a keyed value. */
-  save(content: string): Promise<string>;
+const TYPES_BASE = `  save(content: string): Promise<string>;
 `;
 
 /** Without a FactsStore the declaration must not promise fact search. */
 const typesSearch = (hasFacts: boolean) => hasFacts
-  ? `  /** Search memory notes and remembered facts (matched on key or value) —
-   *  hybrid FTS5 + Vectorize (RRF) over the notes when a vector store is wired
-   *  and available, FTS5 + facts otherwise. */
+  ? `  /** Notes, and facts by key or value. */
   search(query: string): Promise<string>;
 `
-  : `  /** Search memory notes — hybrid FTS5 + Vectorize (RRF) when a vector store
-   *  is wired and available, FTS5-only otherwise. */
-  search(query: string): Promise<string>;
+  : `  search(query: string): Promise<string>;
 `;
 
-const TYPES_TAIL = `  /** Read this agent's past conversation: pass query to search, an
-   *  around_message_id to scroll a window, or neither to browse archived roots. */
+const TYPES_TAIL = `  /** Your past conversations: \`query\` searches, \`around_message_id\` reads around a message, neither browses. */
   conversations(opts?: { query?: string; around_message_id?: string; window?: number; limit?: number; max_chars?: number }): Promise<unknown>;`;
 
 const TYPES_FACTS = `
-  /** Upsert a keyed fact you look up by name later — preferences, project
-   *  state, URLs, configuration, dates, decisions. */
+  /** Replaces the value of an existing key. */
   remember(key: string, value: unknown, confidence?: number): Promise<{ ok: boolean; key: string }>;
-  /** Recall a keyed fact by name. */
   recall(key: string): Promise<{ found: boolean; key: string; value?: unknown; confidence?: number }>;
-  /** Forget a keyed fact by name. */
   forget(key: string): Promise<{ ok: boolean; key: string; existed: boolean }>;`;
 
 /** `deps` is read per call so rebound stores apply; the facts gate is read once (a FactsStore never changes mid-session). */

@@ -5,14 +5,13 @@ import { hostedSeatsOver } from './helpers-actor-host';
 
 import * as v from 'valibot';
 import { AGENTS_ACTION_FIELDS } from '../src/delegation/agents-tool';
-import { DELEGATION_CONTEXT_DESCRIPTION } from '../src/tools/registry';
+import { AGENTS_TOOL_NOTES } from '../src/tools/registry';
 import { SWARM_PRESETS } from '../src/strategy/swarm';
 import {
   agentsActionsFor, buildBuiltinTools, createAgentsTool, parseAgentsToolInput,
   renderAgentsToolDescription, resumableAgentsInput,
-  AGENTS_TOOL_ACTIONS, BUILTIN_TOOL_DESCRIPTIONS, DELEGATION_INHERITANCE, DELEGATION_RUNGS,
+  AGENTS_TOOL_ACTIONS, BUILTIN_TOOL_DESCRIPTIONS,
   delegationBudgetAtDepth, ROOT_DELEGATION_BUDGET,
-  SWARM_PRESET_DOCTRINE,
   PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION,
   classifyToolFailure, JsonObjectSchema, failedToolOutcome,
   type AgentsToolInput,
@@ -287,9 +286,9 @@ describe('agents tool — registration and dep-gating', () => {
     expect(agentsActionsFor(deps)).toEqual(['swarm']);
     const t = agentsTool(deps);
     expect(actionEnum({ value: t.inputSchema })).toEqual(['swarm']);
-    expect(t.description).toContain(DELEGATION_RUNGS.swarm);
-    expect(t.description).not.toContain(DELEGATION_RUNGS.hire);
-    expect(t.description).not.toContain('msg says something');
+    expect(t.description).toContain(AGENTS_TOOL_NOTES.swarm);
+    expect(t.description).not.toContain(AGENTS_TOOL_NOTES.hire);
+    expect(t.description).not.toContain(AGENTS_TOOL_NOTES.converse);
   });
 
   test('full deps (the workspace orchestrator) expose every action and the registry docstring verbatim', () => {
@@ -308,12 +307,9 @@ describe('agents tool — registration and dep-gating', () => {
     const said = (deps: Parameters<typeof renderAgentsToolDescription>[0]): string =>
       renderAgentsToolDescription(deps);
 
-    expect(said(temporaryCapable)).toContain('lifetime:"task"');
-    expect(said(durableOnly)).not.toContain('lifetime:"task"');
-    // `task` is deliberately not refused: it is ordinary English the rung may use.
-    expect(said(durableOnly)).not.toMatch(/lifetime|default|durable/i);
-    expect(said(durableOnly)).toContain('Hire a helper (action=hire)');
-    expect(said(durableOnly)).toContain('stays in your roster');
+    expect(said(temporaryCapable)).toContain(AGENTS_TOOL_NOTES.task);
+    expect(said(durableOnly)).not.toMatch(/lifetime|durable/i);
+    expect(said(durableOnly)).toContain(AGENTS_TOOL_NOTES.hire);
 
     const props = (deps: Parameters<typeof agentsTool>[0]): string[] => Object.keys(
       v.parse(v.object({ jsonSchema: v.object({ properties: v.record(v.string(), v.unknown()) }) }), agentsTool(deps).inputSchema).jsonSchema.properties,
@@ -329,7 +325,7 @@ describe('agents tool — registration and dep-gating', () => {
     const t = agentsTool(deps);
     expect(actionEnum({ value: t.inputSchema })).not.toContain('swarm');
     expect(Object.keys(v.parse(v.object({ jsonSchema: v.object({ properties: v.record(v.string(), v.unknown()) }) }), t.inputSchema).jsonSchema.properties)).not.toContain('event_id');
-    expect(renderAgentsToolDescription(deps)).not.toContain('scope=workspace');
+    expect(renderAgentsToolDescription(deps)).not.toMatch(/scope|event_id/);
   });
 
   test('an unavailable action is a sharp error, not a deps call', async () => {
@@ -382,48 +378,32 @@ describe('agents tool — the field contract', () => {
 
   function propertyDescription(input: { value: unknown }, field: string): string {
     const properties = v.parse(v.object({
-      jsonSchema: v.object({ properties: v.record(v.string(), v.object({ description: v.string() })) }),
+      jsonSchema: v.object({ properties: v.record(v.string(), v.object({ description: v.optional(v.string()) })) }),
     }), input.value).jsonSchema.properties;
 
     const property = properties[field];
 
     if (!property) throw new Error(`the swarm surface advertises no \`${field}\``);
 
-    return property.description;
+    return property.description ?? '';
   }
 
-  test('hire context and swarm config describe inheritance from one source', () => {
-    const tool = agentsTool({ team: makeTeam().deps, swarm: swarmDeps(), profile: testProfile });
-    expect(propertyDescription({ value: tool.inputSchema }, 'context')).toContain(DELEGATION_CONTEXT_DESCRIPTION);
-    expect(propertyDescription({ value: tool.inputSchema }, 'config')).toContain(DELEGATION_CONTEXT_DESCRIPTION);
+  test('a hire takes `context`; a swarm refuses it', () => {
     expect(parseAgentsToolInput({ input: { action: 'hire', role: 'researcher', mission: 'Read' } }))
       .not.toHaveProperty('context');
     expect(() => parseAgentsToolInput({ input: { action: 'swarm', task: 'Read', context: 'inherit' } })).toThrow('hire');
   });
 
-  test('the preset list reaches the model where `preset` is filled, from the one constant', () => {
-    // One constant rendered everywhere the preset list appears, so copies cannot drift.
-    const t = agentsTool({ swarm: swarmDeps() });
-    const preset = propertyDescription({ value: t.inputSchema }, 'preset');
-    expect(preset).toContain(SWARM_PRESET_DOCTRINE.join(' '));
+  test('the `preset` description names every preset', () => {
+    const preset = propertyDescription({ value: agentsTool({ swarm: swarmDeps() }).inputSchema }, 'preset');
 
     for (const name of SWARM_PRESETS) expect(preset).toContain(name);
   });
 
-  test('the missing-`preset` refusal names the same presets the property does', async () => {
-    await expect(agentsTool({ swarm: swarmDeps() }).execute({ action: 'swarm', task: 'explore' }))
-      .rejects.toThrow(SWARM_PRESET_DOCTRINE.join(' '));
-  });
+  test('the missing-`preset` refusal names every preset', async () => {
+    const pending = agentsTool({ swarm: swarmDeps() }).execute({ action: 'swarm', task: 'explore' });
 
-  test('the front objective kinds are advertised as pareto-only, not refused', () => {
-    // The description must offer the pareto contract, not a blanket refusal of front kinds.
-    const objective = propertyDescription({ value: agentsTool({ swarm: swarmDeps() }).inputSchema }, 'objective');
-    expect(objective).toContain('run only with advance:"pareto"');
-    expect(objective).toContain('{kind:"instanced", metric, unit, direction, scale, target, instances}');
-    expect(objective).toContain('{kind:"vector", components:[...]}');
-    expect(objective).not.toContain('both are refused today');
-    expect(objective).toContain('{kind:"scalar"');
-    expect(objective).toContain('kind:"witness" is a checkable certificate');
+    for (const name of SWARM_PRESETS) await expect(pending).rejects.toThrow(name);
   });
 
   test('a cap on an action that cannot spend it is refused, not accepted and ignored', async () => {
@@ -504,7 +484,7 @@ describe('agents tool — delegation depth', () => {
     expect(agentsTool(depthDeps(0).deps).description).toBeTruthy();
     const enumDescription = (depth: number) => actionDescription({ value: agentsTool(depthDeps(depth).deps).inputSchema });
     expect(enumDescription(0)).toContain('3 level(s) further');
-    expect(enumDescription(3)).toContain('lands on the depth cap and cannot hire its own');
+    expect(enumDescription(3)).not.toContain('level(s) further');
   });
 });
 
@@ -543,16 +523,6 @@ describe('agents tool — the swarm refusal seam', () => {
     });
   });
 
-  test('the task field states what it is for, and what a node can lean on', () => {
-    const schema = v.parse(v.object({ jsonSchema: v.object({ properties: v.object({
-      task: v.object({ description: v.string() }),
-    }) }) }), agentsTool({ swarm: swarmDeps() }).inputSchema);
-
-    const { task } = schema.jsonSchema.properties;
-    expect(task.description).toMatch(/what the search is for, in prose/);
-    expect(task.description).toMatch(/never the measured quantity/);
-    expect(task.description).toContain(DELEGATION_INHERITANCE.swarm.brief);
-  });
 });
 
 describe('agents tool — subordinate actions', () => {

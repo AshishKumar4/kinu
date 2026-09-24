@@ -462,6 +462,7 @@ export class SlateHost {
         }
 
         case 'preview': return await this.preview(caller, operation.id);
+        case 'methods': return { ok: true, value: [...(await this.ensure(caller, operation.id)).methods] };
         case 'call': return await this.call({ caller, id: operation.id, method: operation.method, args: operation.args ?? [] });
         case 'remove': return await this.remove(caller, operation.id);
         case 'history': {

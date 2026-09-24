@@ -12,14 +12,9 @@ import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
 import {
   AGENTS_TOOL_ACTIONS,
+  AGENTS_TOOL_NOTES,
   BUILTIN_TOOL_SPECS,
-  DELEGATION_CONVERSE,
-  DELEGATION_FRAME,
-  DELEGATION_INHERITANCE,
-  DELEGATION_CONTEXT_DESCRIPTION,
-  DELEGATION_RUNGS,
-  DELEGATION_TASK_LIFETIME,
-  AGENTS_RESULT_PARTS,
+  renderToolSchemaDescription,
   type AgentsToolAction,
 } from '../tools/registry';
 import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from '../tools/swarm-input';
@@ -47,7 +42,7 @@ import {
 } from '../strategy/swarm';
 import {
   TIER_IDS, TierIdSchema, tierIdsOf,
-  deriveRoleLabel, effectiveRoleCatalog,
+  effectiveRoleCatalog,
   resolveTurnProfile,
   type ProfileAuthorityInputs, type ProfileProvenance,
   type ResolvedTurnProfile, type RoleId, type TierId,
@@ -342,37 +337,19 @@ export function agentsActionsFor(deps: { swarm?: object; team?: object; peers?: 
   return AGENTS_TOOL_ACTIONS.filter((action) => present[action]);
 }
 
-function converseRung(deps: AgentsToolDeps): string[] {
-  if (deps.peers) return [DELEGATION_CONVERSE];
-
-  if (deps.team) {
-    return ['msg says something to a subordinate by name without handing it a workstream; list shows the roster.'];
-  }
-
-  return [];
-}
-
+/** The spec's notes an actor's wiring can act on: a description never promises an unwired action. */
 export function renderAgentsToolDescription(deps: AgentsToolDeps): string {
-  const spec = BUILTIN_TOOL_SPECS.agents;
+  const converse = deps.team !== undefined || deps.peers !== undefined;
 
-  const use = [
-    DELEGATION_FRAME,
-    ...(deps.swarm ? [DELEGATION_RUNGS.swarm] : []),
-    ...(deps.team || deps.peers ? [DELEGATION_RUNGS.hire] : []),
-    ...(deps.team?.temporary ? [DELEGATION_TASK_LIFETIME] : []),
-    ...converseRung(deps),
-  ].join(' ');
+  const notes = [
+    ...(deps.swarm ? [AGENTS_TOOL_NOTES.swarm] : []),
+    ...(converse ? [AGENTS_TOOL_NOTES.hire] : []),
+    ...(deps.team?.temporary ? [AGENTS_TOOL_NOTES.task] : []),
+    ...(converse ? [AGENTS_TOOL_NOTES.converse] : []),
+    ...(deps.peers ? [AGENTS_TOOL_NOTES.peers] : []),
+  ];
 
-  const returns = AGENTS_RESULT_PARTS.roster
-    + (deps.team?.temporary ? AGENTS_RESULT_PARTS.taskHire : '')
-    + AGENTS_RESULT_PARTS.rest;
-
-  return [
-    spec.summary,
-    `Use when: ${use}`,
-    `Avoid when: ${spec.whenNotToUse}`,
-    `Returns: ${returns}`,
-  ].join('\n');
+  return renderToolSchemaDescription({ ...BUILTIN_TOOL_SPECS.agents, notes });
 }
 
 export interface AgentsToolInput {
@@ -1154,8 +1131,7 @@ type SchemaPropertiesFor<Action extends AgentsToolAction> =
 
 type SwarmSchemaProperties = SchemaPropertiesFor<'swarm'>;
 
-/** The catalog's roles, one line each, for the `role` descriptions of the native schema and codemode
- *  declaration. Empty with no catalog. */
+/** The roles this actor may name, `id: description`; empty with no catalog. */
 function roleSummaries(deps: AgentsToolDeps): string {
   const ctx = deps.profile?.();
 
@@ -1173,11 +1149,7 @@ function roleSummaries(deps: AgentsToolDeps): string {
 
   return Object.entries(roles)
     .filter(([id]) => allowed(id))
-    .map(([id, role]) => {
-      const label = role.label ?? deriveRoleLabel(id);
-
-      return `${id} (${label}, preset ${role.preset}): ${role.description}`;
-    })
+    .map(([id, role]) => `${id}: ${role.description}`)
     .join('; ');
 }
 
@@ -1187,77 +1159,70 @@ function tierIds(deps: AgentsToolDeps): TierId[] {
   return ctx ? tierIdsOf(ctx.envelope.catalog) : [...TIER_IDS];
 }
 
-function roleSummaryText(deps: AgentsToolDeps): string {
-  const summaries = roleSummaries(deps);
-
-  return summaries ? ` Available roles: ${summaries}.` : '';
+/** Registered instruments with their `spec` keys, from `VERIFIER_KIND_DOC`, so the schema matches `swarmValidity`. */
+function verifierKinds(): string {
+  return VERIFIER_KINDS.map((kind) => `${kind} (spec {${VERIFIER_KIND_DOC[kind].specFields.join(', ')}})`).join(', ');
 }
 
-/** Registered instruments with every `spec` key, rendered from `VERIFIER_KIND_DOC` so the schema
- *  matches what `swarmValidity` accepts. */
-function verifierKindSummary(): string {
-  return VERIFIER_KINDS
-    .map((kind) => {
-      const doc = VERIFIER_KIND_DOC[kind];
+/** `role` and `tier` serve swarm and hire under one key each, so one description states both. */
+function roleProperties(deps: AgentsToolDeps): Pick<SchemaPropertiesFor<'swarm'>, 'role' | 'tier'> {
+  const uses = [
+    ...(deps.team ? ['for hire, the one to create the helper under'] : []),
+    ...(deps.swarm ? ['for swarm, the one every node runs under (default: yours)'] : []),
+  ].join('; ');
 
-      return `${kind} — ${doc.summary}; its spec needs {${doc.specFields.join(', ')}}`;
-    })
-    .join('. ');
+  const roles = roleSummaries(deps);
+
+  return {
+    role: { type: 'string', maxLength: 64, description: `Catalog role id: ${uses}.${roles ? ` Roles: ${roles}.` : ''}` },
+    tier: { type: 'string', enum: tierIds(deps), description: 'Inference tier; default: the role\'s. A lifetime:"task" hire refuses it.' },
+  };
 }
 
 function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
   if (!deps.swarm) return {};
 
   return {
-    // The shared background every candidate is read against, stated once. The inheritance sentence
-    // comes from DELEGATION_INHERITANCE.swarm.brief so field and rung agree.
-    task: { type: 'string', description: `For action=swarm: what the search is for, in prose — never the measured quantity, which belongs in \`objective\`. ${DELEGATION_INHERITANCE.swarm.brief}` },
-    preset: {
-      type: 'string',
-      enum: [...SWARM_PRESETS],
-      description: `For action=swarm: the shape of the search. ${SWARM_PRESET_DOCTRINE.join(' ')}`,
-    },
+    task: { type: 'string', description: 'For swarm: what the search is for, stated once for every node. The measured quantity goes in `objective`.' },
+    preset: { type: 'string', enum: [...SWARM_PRESETS], description: `For swarm: the search's shape. ${SWARM_PRESET_DOCTRINE.join(' ')}` },
     objective: {
       type: 'object',
-      description: 'For action=swarm: OPTIONAL, and the upgrade from a judged sweep to a MEASURED search — omit it and the preset runs its own judged sweep, which is already a complete call. Supply it as {kind:"scalar", metric, unit, direction:"minimise"|"maximise", scale:"linear"|"log", target, verify:{kind, spec}} with an optional floor:{value, kind:"certificate", proof, best_known_honest}. verify names a REGISTERED instrument and hands it its WHOLE spec in ONE call — the fields are checked together, so sending them one at a time costs a round trip each. '
-        + `Registered: ${verifierKindSummary()}. `
-        + 'A metric nothing can execute is not an objective, and a script path invented here is refused rather than run — if the thing you want cannot be measured by running code, leave this out. kind:"witness" is a checkable certificate and needs a scalar `proxy` to be searchable. kind:"instanced" and kind:"vector" declare a FRONT and run only with advance:"pareto": instanced measures ONE metric on every declared instance (at least two, {kind:"instanced", metric, unit, direction, scale, target, instances}); vector measures at least two scalar components that each keep their own metric/unit/direction ({kind:"vector", components:[...]}). Every declared axis must come back finite from the verifier or the run refuses, and expand:"aggregate" is refused with pareto because a merged node has no scalar re-grade. Field names are snake_case, like every field on this tool.',
+      description: 'For swarm, optional: what a verifier measures, which turns the judged sweep into a measured search. '
+        + '{kind:"scalar", metric, unit, direction:"minimise"|"maximise", scale:"linear"|"log", target, verify:{kind, spec}}, '
+        + 'optionally floor:{value, kind:"certificate", proof, best_known_honest}. '
+        + `verify.kind is a registered instrument: ${verifierKinds()}. `
+        + 'kind "instanced" (one metric over `instances`) and "vector" (several `components`) need advance:"pareto"; kind "witness" needs a scalar `proxy`.',
     },
-    key: { type: 'string', description: 'For action=swarm with advance:"archive": the coverage descriptor elites are binned into, required there and refused under every other advance. It must name a quantity the objective\'s own verifier REPORTS beside its value, because the cell a candidate lands in is witnessed by the measurement rather than claimed by the candidate — a key naming nothing that instrument reports is refused before any candidate is expanded, and a key that can only say "distinct idea" means the task wants preset:"ideate".' },
-    config: { type: 'object', description: 'For action=swarm with preset:"custom" only: the axes — unit, context, expand, score, advance, carry — as the OVERRIDE on `from`\'s shape, or all six when there is no `from`. Prohibited on a named preset, which is a tested path and cannot be refused. ' + DELEGATION_CONTEXT_DESCRIPTION },
-    from: {
-      type: 'string',
-      enum: [...NAMED_SWARM_PRESETS],
-      description: 'For action=swarm with preset:"custom": a named preset to start from, so you state only what differs. It does NOT make this a preset run — the record still says custom, which is the point of having both fields.',
-    },
-    label: { type: 'string', maxLength: 120, description: 'For action=swarm with preset:"custom": required provenance. A composed shape recorded repeatedly under one label is the evidence for a new preset.' },
-    name: { type: 'string', maxLength: 60, description: 'For action=swarm: a SHORT name for this search — two to four words, what you would call it in a sentence ("repo audit", "coupon 500 hunt"). It is what the exploration surface labels the tree and its row with, so a reader tells two searches apart without reading either task. Omit and the surface derives one from `task`, which is a paragraph and reads like one.' },
-    branches: { type: 'integer', minimum: 1, description: 'For action=swarm: candidates per expansion, when you want the engine to vary the angle for you. Omit to take the preset\'s own width. Mutually exclusive with `nodes`.' },
+    key: { type: 'string', description: 'For swarm with advance:"archive", where it is required: the quantity elites are binned by, one the objective\'s verifier reports.' },
+    config: { type: 'object', description: 'For swarm with preset:"custom" only: the axes unit, context, expand, score, advance and carry, overriding `from`\'s or all six without it.' },
+    from: { type: 'string', enum: [...NAMED_SWARM_PRESETS], description: 'For swarm with preset:"custom": the named preset whose axes `config` overrides.' },
+    label: { type: 'string', maxLength: 120, description: 'For swarm with preset:"custom", required: a name for the composed shape.' },
+    name: { type: 'string', maxLength: 60, description: 'For swarm: a two-to-four-word name for the search; default: derived from `task`.' },
+    branches: { type: 'integer', minimum: 1, description: 'For swarm: candidates per expansion; default: the preset\'s. Not with `nodes`.' },
     nodes: {
       type: 'array',
       minItems: 1,
       items: {
         type: 'object',
         properties: {
-          task: { type: 'string', minLength: 1, description: 'What THIS node is asked — its own question, distinct from every other node\'s.' },
-          prompt: { type: 'string', minLength: 1, description: 'The brief THIS node works under: the angle, the constraint, what to start from.' },
+          task: { type: 'string', minLength: 1, description: 'This node\'s own question, distinct from the others\'.' },
+          prompt: { type: 'string', minLength: 1, description: 'The brief this node works under.' },
         },
         required: ['task', 'prompt'],
       },
-      description: 'For action=swarm: assign the first level node by node instead of giving a count. Its length IS the branch count, so do not send `branches` as well. Every `task` must be distinct — two nodes asked the same question pay twice for one answer. Use this when you know what each node should do; use `branches` when you want N takes on one task and will let the engine hand out distinct angles.',
+      description: 'For swarm: the first level, one entry per node; its length is the branch count. Not with `branches`.',
     },
     models: {
       type: 'array',
       minItems: 1,
       items: { type: 'string', minLength: 1 },
-      description: 'For action=swarm: per-node model routing, for capability and cost — a cheap model for recon, a strong one for synthesis. Each expansion child runs models[i % models.length] by its slot in the wave, deterministically, so a re-drive routes the same nodes the same way. NOT for diversity: a mixed model ensemble measured WORSE than repeated sampling from one good model when the purpose is variety (Self-MoA, 65.7 vs 59.1) — reach for it when different nodes need different capability or cost, never to vary answers to one question. Omit and every node runs the one model this call resolved to. Mutually exclusive with `tier`. Each spec resolves through the same resolver as a tier\'s model, and one this session cannot build is refused naming it before any node runs.',
+      description: 'For swarm: model specs, node i runs models[i % length]. Route for capability or cost, not for variety. Not with `tier`.',
     },
-    depth: { type: 'integer', minimum: 1, description: 'For action=swarm: how deep the search may go. Omit to take the preset\'s own depth. depth:1 is one measured expansion; deeper selects down a tree with `advance`, scoring each node against your own `objective`. The literature runs 3-7 (ToT <=3, LATS 7, Koh 5). advance:"none" has no selection step, so it fixes depth at 1 and a deeper cap is refused rather than silently flattened.' },
-    role: { type: 'string', description: `For action=swarm: the role every node runs under. Omit and the nodes ride your own active role. One swarm is role-homogeneous — there is no per-node role.${roleSummaryText(deps)}` },
-    tier: { type: 'string', enum: tierIds(deps), description: `For action=swarm: the inference tier the nodes run at, one of ${tierIds(deps).join('|')}. Omit to take the role's default tier.` },
-    budget_usd: { type: 'number', minimum: 0, description: 'For action=swarm: cumulative USD cap for the whole search, including its measurements. Omit for no cap.' },
-    budget_tokens: { type: 'integer', minimum: 1, description: 'For action=swarm: cumulative token cap, same scope as budget_usd.' },
-    budget_label: { type: 'string', maxLength: 120, description: 'For action=swarm: name the sub-ledger so several calls share one cumulative budget.' },
+    depth: { type: 'integer', minimum: 1, description: 'For swarm: maximum tree depth; default: the preset\'s. advance:"none" fixes it at 1.' },
+    ...roleProperties(deps),
+    budget_usd: { type: 'number', minimum: 0, description: 'For swarm: USD cap on everything the search spawns; default: none.' },
+    budget_tokens: { type: 'integer', minimum: 1, description: 'For swarm: token cap, same scope as budget_usd.' },
+    budget_label: { type: 'string', maxLength: 120, description: 'For swarm: a ledger name, so several calls share one budget.' },
   };
 }
 
@@ -1265,7 +1230,7 @@ type ConverseSchemaProperties = SchemaPropertiesFor<Exclude<AgentsToolAction, 's
 
 function converseTargets(deps: AgentsToolDeps): string {
   if (deps.team && deps.peers) {
-    return 'a subordinate here or a peer workspace agent (subordinate names win a collision)';
+    return 'a subordinate here or a peer workspace agent (a subordinate wins a name collision)';
   }
 
   if (deps.team) return 'a subordinate';
@@ -1275,57 +1240,35 @@ function converseTargets(deps: AgentsToolDeps): string {
 
 function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
   if (!deps.team && !deps.peers) return {};
-  const targets = converseTargets(deps);
 
   const properties: ConverseSchemaProperties = {
     agent: {
       type: 'string',
-      description: `Agent name: ${targets}. On hire, WITHOUT \`role\` it names an agent that already exists and hands it the workstream; WITH \`role\` it is the optional name to create the helper under (auto-generated from the role when omitted). Also the target for msg/dismiss and the detail filter for list.`,
+      description: `Agent name, ${converseTargets(deps)}. On hire without \`role\`, the existing agent that takes the workstream; with \`role\`, an optional name for the new one. The target of msg and dismiss; filters list.`,
     },
-    mission: { type: 'string', maxLength: 20000, description: `For action=hire with \`role\`: the helper's mission — it seeds its identity and runs as its first turn, and at lifetime:"task" it IS the question. ${DELEGATION_INHERITANCE.hire.brief}` },
-    message: {
-      type: 'string', maxLength: 20000,
-      description: 'The workstream for a hire naming an `agent` that already exists, the note or answer for msg, or the first delegated task for hire scope=workspace.',
-    },
+    mission: { type: 'string', maxLength: 20000, description: 'For hire with `role`: the brief, run as the new agent\'s first turn; for lifetime:"task", the whole question.' },
+    message: { type: 'string', maxLength: 20000, description: 'The work for a hire of an existing `agent`, the text of a msg, or the first task of a scope:"workspace" hire.' },
   };
 
   if (deps.peers) {
     Object.assign(properties, {
-      scope: {
-        type: 'string',
-        enum: ['subordinate', 'workspace'],
-        description: 'For action=hire: subordinate (default) hires into THIS workspace; workspace creates (or reuses by name) a specialist workspace of its own, sends `message` to it, and awaits the result.',
-      },
-      topic: { type: 'string', maxLength: 80, description: 'Optional short label for a message to a peer workspace agent (default "message").' },
-      event_id: { type: 'string', description: 'For action=msg: the agent message event id you were given, to answer that question instead of naming an `agent`. Exclusive with `agent`.' },
+      scope: { type: 'string', enum: ['subordinate', 'workspace'], description: 'For hire: subordinate (default) hires into this workspace; workspace creates or reuses a specialist workspace, sends it `message` and waits for the result.' },
+      topic: { type: 'string', maxLength: 80, description: 'A short label for a message to a peer workspace agent; default: "message".' },
+      event_id: { type: 'string', description: 'For msg: the incoming agent message you are answering. Not with `agent`.' },
     });
   }
 
   if (deps.team) {
-    const temporary = deps.team.temporary !== undefined;
     Object.assign(properties, {
-      context: { type: 'string', enum: [...SWARM_CONTEXTS], description: 'For action=hire with `role`: fresh (default) or inherit, for either lifetime. ' + DELEGATION_CONTEXT_DESCRIPTION },
-      role: {
-        type: 'string', maxLength: 64,
-        description: 'For action=hire: the catalog role to create the helper under. `role` is what makes a hire CREATE; `agent` beside it is the optional name to create the durable helper under, and `agent` WITHOUT `role` hands the workstream to one that already exists. One of the ids listed below.'
-          + roleSummaryText(deps),
-      },
-      tier: { type: 'string', enum: tierIds(deps), description: `For action=hire with \`role\` at the default durable lifetime: optional inference tier override, one of ${tierIds(deps).join('|')}. Omit to take the role's default tier. A lifetime:"task" hire runs at its role's tier and refuses this field.` },
-      deliverable: { type: 'string', maxLength: 2000, description: 'For a hire handing work to a subordinate that already exists: what the finished result should be (optional).' },
-      keep_history: { type: 'boolean', description: 'For action=dismiss: keep the subordinate archived with its context (default true). Set false ONLY to permanently wipe its storage.' },
+      context: { type: 'string', enum: [...SWARM_CONTEXTS], description: 'For hire with `role`: fresh (default) starts from the mission and a digest of your recent messages; inherit also carries your recent turns.' },
+      ...roleProperties(deps),
+      deliverable: { type: 'string', maxLength: 2000, description: 'For a hire of an existing subordinate: what the finished result is.' },
+      keep_history: { type: 'boolean', description: 'For dismiss: false deletes its storage for good; default true archives it with its context.' },
     });
 
-    if (temporary) {
+    if (deps.team.temporary !== undefined) {
       Object.assign(properties, {
-        lifetime: {
-          type: 'string',
-          enum: [...SUBORDINATE_LIFETIMES],
-          description: 'For action=hire with `role`: how long the helper lives. '
-            + '"durable" (the default) stays in your roster across turns. '
-            + '"task" is created for this one question — the call waits for its answer, returns it '
-            + 'here and archives the row, and there is no follow-up, so put the whole question in '
-            + '`mission` and name any bulk material by workspace path so that agent reads it itself.',
-        },
+        lifetime: { type: 'string', enum: [...SUBORDINATE_LIFETIMES], description: 'For hire with `role`: durable (default) stays in your roster; task answers one question and is archived.' },
       });
     }
   }
@@ -1775,17 +1718,14 @@ export async function dispatchAgentsAction(
 
 /** Build the `agents` tool; callers ensure at least one deps group is present. */
 function nestingRoom(delegation: DelegationBudget): string {
-  if (delegation.maxDepth > 1) {
-    return ` A subordinate you hire can hire its own, ${delegation.maxDepth - 1} level(s) further.`;
-  }
+  if (delegation.maxDepth > 1) return `A subordinate you hire can hire its own, ${delegation.maxDepth - 1} level(s) further.`;
 
-  return ' A subordinate you hire lands on the depth cap and cannot hire its own.';
+  return 'A subordinate you hire cannot hire its own.';
 }
 
 export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
   const actions = agentsActionsFor(deps);
   const team = deps.team;
-  const peers = deps.peers;
 
   return permitInPlan(tool({
     description: renderAgentsToolDescription(deps),
@@ -1793,26 +1733,7 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
       type: 'object',
       required: ['action'],
       properties: {
-        action: {
-          type: 'string',
-          enum: actions,
-          description: [
-            ...(deps.swarm ? [
-              'swarm = run a configured search over ephemeral nodes of yourself — `preset` and `task` are the whole call, and naming an `objective` upgrades its judged sweep to a search measured by your own verifier.',
-            ] : []),
-            ...(team || peers ? [
-              'hire = put one workstream in front of one agent'
-              + (team?.temporary
-                ? ' — `role` creates it and `lifetime` says how long it lives (durable stays in your roster, task answers this one question here and retires), or `agent` hands it to one that already exists.'
-                : ' — `role` creates a persistent named helper, or `agent` hands it to one that already exists.')
-              + ' msg = say something to an agent without handing it a workstream. list = the unified roster.'
-              // Depth room, phrased like head-tools; `maxDepth` is the room below this actor and the hire spends one.
-              + (team ? nestingRoom(team.delegation) : ''),
-            ] : []),
-            ...(peers ? ['On msg, `event_id` answers an incoming agent message event instead of naming an `agent`.'] : []),
-            ...(team ? ['dismiss = retire a subordinate (archived by default — its context is kept).'] : []),
-          ].join(' '),
-        },
+        action: team === undefined ? { type: 'string', enum: actions } : { type: 'string', enum: actions, description: nestingRoom(team.delegation) },
         ...agentsInputProperties(deps),
       },
       oneOf: agentsJsonSchemaVariants(deps, actions),
