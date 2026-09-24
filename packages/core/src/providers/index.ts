@@ -45,6 +45,8 @@ export * from './cloudflare-oauth';
 
 export * from './anthropic';
 
+export { CLAUDE_CRED_KEY, createClaudeProvider } from './claude';
+
 export * from './fetch-shim';
 
 export * from './gateway-binding-fetch';

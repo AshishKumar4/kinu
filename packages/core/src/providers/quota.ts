@@ -85,6 +85,20 @@ function anthropicWindows(read: HeaderRead): QuotaWindow[] {
   });
 }
 
+const CLAUDE_WINDOWS = [{ window: '5h', measure: '300m' }, { window: '7d', measure: '10080m' }] as const;
+
+function claudeWindows(read: HeaderRead): QuotaWindow[] {
+  return CLAUDE_WINDOWS.flatMap(({ window, measure }) => {
+    const used = count(read(`anthropic-ratelimit-unified-${window}-utilization`));
+    const reset = count(read(`anthropic-ratelimit-unified-${window}-reset`));
+
+    return quotaWindow(measure, {
+      usedPercent: used === undefined ? undefined : used * 100,
+      resetsAt: reset === undefined ? undefined : reset * 1_000,
+    });
+  });
+}
+
 function openaiWindows(read: HeaderRead, at: number): QuotaWindow[] {
   return ['requests', 'tokens'].flatMap((measure) => {
     const resetIn = durationMs(read(`x-ratelimit-reset-${measure}`));
@@ -117,7 +131,7 @@ export function callAccountOf(response: { readonly headers?: Readonly<Record<str
   if (stamped.account === null) return undefined;
   const served = Date.parse(read('date') ?? '');
   const at = Number.isNaN(served) ? Date.now() : served;
-  const windows = [...anthropicWindows(read), ...openaiWindows(read, at), ...codexWindows(read)];
+  const windows = [...anthropicWindows(read), ...claudeWindows(read), ...openaiWindows(read, at), ...codexWindows(read)];
 
   return windows.length === 0
     ? { provider: stamped.base, name: stamped.account }

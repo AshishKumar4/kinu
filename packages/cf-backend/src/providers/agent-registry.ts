@@ -2,7 +2,7 @@
 // Registration order is the model picker's listing order. Auth goes through the UserDO stub; no credential material here.
 import {
   createProviderRegistry, createCodexProvider, createOpenAIProvider,
-  createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider,
+  createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider, createClaudeProvider,
   createModelsDevCatalogSource,
   type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver,
   type ProviderWaitInfo,
@@ -100,6 +100,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   registry.register(createMyGatewayProvider());
   registry.register(createAIGatewayProvider());
   registry.register(createCodexProvider());
+  registry.register(createClaudeProvider());
   registry.register(createOpenAIProvider());
   registry.register(createAnthropicProvider());
   registry.register(createOpenRouterProvider({

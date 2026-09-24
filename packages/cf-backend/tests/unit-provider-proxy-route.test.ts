@@ -289,7 +289,7 @@ describe('POST /forward', () => {
     expect(await handled(res).text()).toContain('attacker.example');
   });
 
-  test('refuses the Cloudflare login and every account of Codex outright', async () => {
+  test('refuses the Cloudflare login and every account of Codex and Claude outright', async () => {
     for (const denied of [
       {
         key: 'cloudflare.oauth',
@@ -297,6 +297,7 @@ describe('POST /forward', () => {
         target: 'https://api.cloudflare.com/client/v4/accounts/a/ai/v1/chat/completions',
       },
       { key: 'codex.oauth@x', target: 'https://chatgpt.com/backend-api/codex/responses' },
+      { key: 'claude.oauth@x', target: 'https://api.anthropic.com/v1/messages' },
     ]) {
       const env = setupEnv([{ ...denied, headers: { authorization: 'Bearer denied' } }]);
       const seen = captureUpstream(() => new Response('should not happen'));

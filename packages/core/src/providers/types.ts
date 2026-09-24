@@ -23,7 +23,7 @@ export interface ModelPricing {
 /**
  * How long a provider should keep the prefix a request writes.
  *   none   no breakpoints or cache key at all.
- *   short  the provider's default TTL; sends nothing extra.
+ *   short  the provider's default TTL.
  *   long   the extended TTL; costlier writes.
  */
 export type CacheRetention = 'none' | 'short' | 'long';

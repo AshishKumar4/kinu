@@ -22,7 +22,6 @@ export const CODEX_CRED_KEY = 'codex.oauth';
 
 export const CODEX_DEFAULT_MODEL = 'gpt-5.5';
 
-/** The small tier the evolution engine's mechanical calls run on. */
 export const CODEX_FAST_MODEL = 'gpt-5.4-mini';
 
 /** The remedy for a ChatGPT login refused after the forced-refresh retry: web settings or CLI device-code. */
@@ -199,14 +198,12 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         }
 
         if (res.status === 401) {
-          // Still 401 after the forced refresh: the stored login is dead upstream.
           return refusedLoginResponse();
         }
 
         return withCallAccount(res, 'codex', paid);
       });
 
-      // apiKey is unused (customFetch sets Authorization) but the SDK requires a non-empty value.
       const provider = createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: customFetch });
 
       return provider.responses(modelId);
@@ -247,7 +244,6 @@ function parseCodexModels(input: { body: unknown }): ModelInfo[] {
     if (!id) continue;
     const capabilities: NonNullable<ModelInfo['capabilities']> = ['tools', 'streaming'];
 
-    // Each row is a bare level or `{effort, description}`.
     const reasoningEfforts = knownReasoningEfforts((row.supported_reasoning_levels ?? []).map((level) => {
       const named = v.safeParse(CodexReasoningLevelSchema, level);
 

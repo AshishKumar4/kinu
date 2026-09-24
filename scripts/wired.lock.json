@@ -287,7 +287,6 @@
   "packages/core/src/prompting/volatile-context.ts#renderTurnLocalContext (unreached-export)",
   "packages/core/src/prompting/volatile-context.ts#searchDelegates (unreached-export)",
   "packages/core/src/protocol/branch.ts#BRANCH_METHODS (unreached-export)",
-  "packages/core/src/providers/anthropic.ts#ANTHROPIC_FAST_MODEL (unreached-export)",
   "packages/core/src/providers/codex-oauth.ts#CODEX_CLIENT_ID (unreached-export)",
   "packages/core/src/providers/codex-oauth.ts#CODEX_DEVICE_PORTAL (unreached-export)",
   "packages/core/src/providers/codex-oauth.ts#CODEX_ISSUER (unreached-export)",

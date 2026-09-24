@@ -395,9 +395,9 @@ const CACHING_PROVIDERS: readonly ProviderCase[] = [
 
 /** A provider id the strategy map resolves to `none`: unaddressed request, plain usage. */
 const UNADDRESSED_PROVIDER: ProviderCase = {
-  label: 'unaddressed', providerId: 'claude', modelId: 'claude-sonnet-4-x', dialect: 'compat',
+  label: 'unaddressed', providerId: 'opencode', modelId: 'claude-sonnet-4-x', dialect: 'compat',
   unaddressed: true,
-  credentials: { 'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: 'https://claude.example/v1' } },
+  credentials: { 'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: 'https://opencode.example/v1' } },
   model: (deps) => createOpenAICompatProvider().createModel('claude-sonnet-4-x', deps),
 };
 

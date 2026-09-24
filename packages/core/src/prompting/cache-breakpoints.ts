@@ -17,7 +17,7 @@ type ProviderOptions = NonNullable<ModelMessage['providerOptions']>;
 /** Unknown provider ids are `none`. `ttl` is the provider's extended-retention wire value,
  *  present only for `long` so default requests stay byte-identical. */
 export type PromptCacheStrategy =
-  /** workers-ai uses affinity headers; claude-cli owns its context; unknown providers. */
+  /** workers-ai uses affinity headers; unknown providers. */
   | { kind: 'none' }
   | { kind: 'anthropic'; ttl?: '1h' }
   /** Typed `promptCacheKey`, serialized as `prompt_cache_key`. */
@@ -73,6 +73,10 @@ export function resolvePromptCacheStrategy(
 
       return strategy;
     }
+
+    // Claude Code's retention.
+    case 'claude':
+      return { kind: 'anthropic', ttl: '1h' };
 
     case 'openai':
     case 'codex': {

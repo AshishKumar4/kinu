@@ -16,10 +16,8 @@ export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
 
 export const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-4-7';
 
-/** The small tier the evolution engine's mechanical calls run on. */
 export const ANTHROPIC_FAST_MODEL = 'claude-haiku-4-5';
 
-/** Offline effort levels per model; the live list reads models.dev. */
 const FIVE: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 const FOUR: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'max'];
@@ -38,6 +36,10 @@ const PREFERRED_MODEL_IDS = [
   'claude-haiku-4-5',
 ];
 
+export function listAnthropicModels(deps: Pick<ProviderDeps, 'fetch'>): Promise<ModelInfo[]> {
+  return listModelsDevProviderModels('anthropic', deps, { fallback: FALLBACK_MODELS, preferredIds: PREFERRED_MODEL_IDS });
+}
+
 export function createAnthropicProvider(): ModelProvider {
   return {
     id: 'anthropic',
@@ -47,10 +49,7 @@ export function createAnthropicProvider(): ModelProvider {
     fastModel: ANTHROPIC_FAST_MODEL,
     async isAvailable(deps) { return deps.hasCredential(ANTHROPIC_CRED_KEY); },
     unavailableReason() { return 'No Anthropic API key (cred key: `anthropic.bearer`).'; },
-    listModels: (deps) => listModelsDevProviderModels('anthropic', deps, {
-      fallback: FALLBACK_MODELS,
-      preferredIds: PREFERRED_MODEL_IDS,
-    }),
+    listModels: (deps) => listAnthropicModels(deps),
     createModel(modelId, deps): LanguageModel {
       const customFetch = createAuthedFetch(deps, {
         provider: 'anthropic',

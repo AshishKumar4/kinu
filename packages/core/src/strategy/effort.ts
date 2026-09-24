@@ -63,6 +63,7 @@ export function reasoningEffortOptions(
     case 'openrouter':
       return { openrouter: { reasoningEffort: effort } };
     case 'anthropic':
+    case 'claude':
       return ANTHROPIC_EFFORTS.includes(effort) ? { anthropic: { effort } } : undefined;
     default:
       return undefined;

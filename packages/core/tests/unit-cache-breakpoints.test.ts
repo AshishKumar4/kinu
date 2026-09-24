@@ -59,6 +59,7 @@ function anthropicMarkerCount(messages: ReadonlyArray<ModelMessage>): number {
 describe('resolvePromptCacheStrategy', () => {
   test('closed provider map', () => {
     expect(resolvePromptCacheStrategy('anthropic')).toEqual({ kind: 'anthropic' });
+    expect(resolvePromptCacheStrategy('claude', 'claude-opus-4-7')).toEqual({ kind: 'anthropic', ttl: '1h' });
     expect(resolvePromptCacheStrategy('openai', 'gpt-5.5')).toEqual({ kind: 'openai-cache-key' });
     expect(resolvePromptCacheStrategy('codex', 'gpt-5.5')).toEqual({ kind: 'openai-cache-key' });
     expect(resolvePromptCacheStrategy('openai-compat')).toEqual({ kind: 'openai-compat', bodyNamespace: 'openai-compat', markers: false });
@@ -76,7 +77,6 @@ describe('resolvePromptCacheStrategy', () => {
 
   test('no-cache-concept providers resolve to none', () => {
     expect(resolvePromptCacheStrategy('workers-ai', '@cf/moonshotai/kimi-k2.6')).toEqual({ kind: 'none' });
-    expect(resolvePromptCacheStrategy('claude-cli', 'claude-opus-4-7')).toEqual({ kind: 'none' });
     expect(resolvePromptCacheStrategy('something-new')).toEqual({ kind: 'none' });
     expect(resolvePromptCacheStrategy(undefined)).toEqual({ kind: 'none' });
   });

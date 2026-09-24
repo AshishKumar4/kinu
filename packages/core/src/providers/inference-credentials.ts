@@ -1,5 +1,6 @@
 // Credential keys that carry model-inference authority.
 import { baseCredentialKey } from '../credentials/accounts';
+import { CLAUDE_CRED_KEY } from './claude';
 import { CODEX_CRED_KEY } from './codex';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from './cloudflare-oauth';
 
@@ -11,7 +12,7 @@ import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from './clo
 const MODEL_CREDENTIAL_KEY_RE = /^([a-z0-9][a-z0-9._-]*\.bearer|openai-compat\..+)$/;
 
 const MODEL_CREDENTIAL_KEYS: readonly string[] = [
-  CODEX_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CLOUDFLARE_AI_GATEWAY_CRED_KEY,
+  CODEX_CRED_KEY, CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CLOUDFLARE_AI_GATEWAY_CRED_KEY,
 ];
 
 export function isModelInferenceCredentialKey(key: string): boolean {

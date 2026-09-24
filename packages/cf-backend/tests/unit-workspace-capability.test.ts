@@ -191,7 +191,7 @@ describe('the attenuation matrix', () => {
 describe('model-inference credential keys', () => {
   test('accepts every provider key shape the model picker derives from', () => {
     for (const key of [
-      'codex.oauth', 'cloudflare.oauth', 'cloudflare.ai-gateway',
+      'codex.oauth', 'claude.oauth', 'cloudflare.oauth', 'cloudflare.ai-gateway',
       'openai.bearer', 'anthropic.bearer', 'openrouter.bearer', 'deepseek-v3.bearer',
       'openai-compat.mybox',
     ]) {

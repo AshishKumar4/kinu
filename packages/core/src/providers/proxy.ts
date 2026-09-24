@@ -41,9 +41,9 @@ export const CLOUD_PROXY_PROVIDER_IDS = ['workers-ai', 'my-gateway'] as const;
 export type CloudProxyProviderId = typeof CLOUD_PROXY_PROVIDER_IDS[number];
 
 /** Cloudflare keys also drive the AI Gateway management API, so only pinned endpoints
- *  get them; Codex rejects Workers egress as bot traffic (403). */
+ *  get them; Codex rejects Workers egress as bot traffic (403); Claude's is Claude Code's alone. */
 const PROXY_DENIED_CRED_KEYS: readonly string[] = [
-  'cloudflare.oauth', 'cloudflare.ai-gateway', 'codex.oauth',
+  'cloudflare.oauth', 'cloudflare.ai-gateway', 'codex.oauth', 'claude.oauth',
 ];
 
 export function isProxyDeniedCredentialKey(key: string): boolean {

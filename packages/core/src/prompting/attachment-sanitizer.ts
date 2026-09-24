@@ -22,7 +22,7 @@ export interface AttachmentPolicy {
 }
 
 /** Other providers use the OpenAI-compatible schema, where a `type:"file"` part is a guaranteed 400. */
-const PDF_CAPABLE_PROVIDERS: ReadonlySet<string> = new Set(['anthropic', 'openai', 'codex']);
+const PDF_CAPABLE_PROVIDERS: ReadonlySet<string> = new Set(['anthropic', 'claude', 'openai', 'codex']);
 
 /** Transport ceiling ∩ catalog input modalities; the ceiling alone when the catalog has no entry. */
 export function acceptedMediaForModel(opts: {
