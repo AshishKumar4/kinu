@@ -26,6 +26,8 @@ const PtyResultSchema = v.object({
   exited: v.boolean(),
   /** CSI final bytes the screen model does not follow; must be empty for waits and screens to be trusted. */
   unmodelled: v.string(),
+  /** Members of the program's process group still alive after SIGKILL (pid, state, name); must be empty. */
+  survivors: v.array(v.string()),
 });
 
 const DRIVER = String.raw`
@@ -252,14 +254,43 @@ for step in spec["steps"]:
         alive = pump(step["sleep"])
 
 pump(0.4)
-os.kill(pid, 9)
+# pty.fork made the program a session leader, so every child it started without a session of its own is in
+# its process group. Killing only the program left those running, writing into the run's home after the
+# test's scratch release (the 2026-09-24 deploy's CLI suite). End the group, and wait for its members to die.
+os.killpg(pid, signal.SIGKILL)
 os.waitpid(pid, 0)
+
+def living(group):
+    # A zombie counts as dead: it runs nothing and holds no file. Waiting for it to be reaped instead hung a
+    # deploy's CLI suite for 392 s (2026-09-24), because reaping depends on the process that adopted it.
+    found = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open("/proc/" + entry + "/stat") as handle:
+                stat = handle.read()
+        except OSError:
+            continue
+        fields = stat[stat.rindex(")") + 2:].split()
+        if int(fields[2]) == group and fields[0] != "Z":
+            found.append(entry + " " + fields[0] + " " + stat[stat.index("(") + 1:stat.rindex(")")])
+    return found
+
+# SIGKILL ends a process the next time the kernel schedules it. One alive seconds later is stuck in the
+# kernel, and the run names it rather than waiting on it.
+survivors = living(pid)
+ends = time.time() + 5
+while survivors and time.time() < ends:
+    time.sleep(0.01)
+    survivors = living(pid)
 print(json.dumps({
     "output": base64.b64encode(bytes(raw)).decode("ascii"),
     "screen": screen.text(),
     "waits": waits,
     "exited": not alive,
     "unmodelled": "".join(sorted(screen.unmodelled)),
+    "survivors": survivors,
 }))
 `;
 
@@ -337,6 +368,11 @@ export function runTuiInPty(entry: string, options: {
     // A grid the terminal never showed proves nothing, so the run is refused.
     throw new Error(`the pty screen model met CSI controls it does not follow (final bytes `
       + `${JSON.stringify(result.unmodelled)}), so no wait over this run can be trusted`);
+  }
+
+  if (result.survivors.length > 0) {
+    throw new Error(`the program's process group still had live members 5 s after SIGKILL, so nothing vouches `
+      + `that the run's home is quiet: ${result.survivors.join('; ')}`);
   }
 
   const raw = Buffer.from(result.output, 'base64').toString('utf8');

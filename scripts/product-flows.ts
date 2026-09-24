@@ -26,6 +26,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
 import { webHeaders, type PublicWebIdentity } from '../evals/src/session';
+import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
 
 /** Where a row runs and who it runs as. */
@@ -156,21 +157,54 @@ const DEAD_END = `(() => {
   return notice === undefined ? null : 'a notice: ' + notice;
 })()`;
 
-/** Wait until `condition` holds in the page, or fail at once naming the dead end
- *  the page shows instead (a page opened without {@link RECORD_DEAD_ENDS}
- *  cannot show a failed turn or a script that never loaded). Each wait is
- *  logged by what it waits for, so a run the tier's deadline ends still names
- *  the step it was in. */
-export async function until(page: Page, what: string, condition: string): Promise<void> {
+/** The waits open now, by what they wait for. No wait has a clock: one whose condition never comes is ended by
+ *  the row's deadline, whose SIGTERM runs the hold below, so the run ends naming the wait and not only the row. */
+const openWaits = new Set<{ readonly what: string }>();
+
+let dropWaitsHold: (() => void) | null = null;
+
+/** `wait`, logged by what it waits for when it opens and when it is reached, and named while it is open. */
+async function named<Value>(what: string, wait: () => Promise<Value>): Promise<Value> {
+  const open = { what };
   const started = performance.now();
 
+  openWaits.add(open);
+  dropWaitsHold ??= holdForRelease('the open waits', () => {
+    process.stderr.write(`ended while waiting for ${[...openWaits].map((pending) => pending.what).join('; ')}\n`);
+  });
   process.stderr.write(`  waiting for ${what}\n`);
 
-  const outcome = await (await page.waitForFunction(`(${condition}) ? 'reached' : ${DEAD_END}`, { polling: 100 })).jsonValue();
+  try {
+    const value = await wait();
 
-  if (outcome !== 'reached') throw new Error(`waiting for ${what}, the page showed ${String(outcome)}`);
+    process.stderr.write(`  ${what} after ${((performance.now() - started) / 1000).toFixed(1)} s\n`);
 
-  process.stderr.write(`  ${what} after ${((performance.now() - started) / 1000).toFixed(1)} s\n`);
+    return value;
+  } finally {
+    openWaits.delete(open);
+
+    if (openWaits.size === 0) {
+      dropWaitsHold();
+      dropWaitsHold = null;
+    }
+  }
+}
+
+/** Wait until `condition` holds in the page, or fail at once naming the dead end
+ *  the page shows instead (a page opened without {@link RECORD_DEAD_ENDS}
+ *  cannot show a failed turn or a script that never loaded). */
+export async function until(page: Page, what: string, condition: string): Promise<void> {
+  await named(what, async () => {
+    const outcome = await (await page.waitForFunction(`(${condition}) ? 'reached' : ${DEAD_END}`, { polling: 100 })).jsonValue();
+
+    if (outcome !== 'reached') throw new Error(`waiting for ${what}, the page showed ${String(outcome)}`);
+  });
+}
+
+/** Wait on a promise the page cannot be polled for, such as a turn closing on its socket, named as {@link until}
+ *  names its waits. */
+export async function waitOn<Value>(what: string, promise: Promise<Value>): Promise<Value> {
+  return named(what, () => promise);
 }
 
 async function openWorkspacePage(target: FlowTarget, path: string): Promise<Page> {

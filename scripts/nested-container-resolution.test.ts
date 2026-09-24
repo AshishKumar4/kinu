@@ -40,8 +40,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import { dirname, extname, isAbsolute, join, relative, sep } from 'node:path';
 
-import { transformSync, build, type Loader, type PluginBuild } from 'esbuild';
-import { describe, expect, test } from 'bun:test';
+import { build, stop, transformSync, type Loader, type PluginBuild } from 'esbuild';
+import { afterAll, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 
 import { assertMeasured, finding } from './gate-ratchet';
@@ -582,6 +582,12 @@ console.log(`nested-container-resolution: ${assertMeasured('nested-container-res
 for (const copy of COPIES) console.log(`  binds ${describeCopy(copy)}`);
 
 for (const row of LOCKED) console.log(`  ${LOCK} records ${row.key} at ${row.version}`);
+
+// transformSync and build start an esbuild service child that lives until stop(); the run's leftover-process
+// check ends and fails a file that leaves one behind.
+afterAll(async () => {
+  await stop();
+});
 
 describe('the Containers runtime the deployed artifact binds', () => {
   test('the graph measurement has no holes', () => {
