@@ -54,6 +54,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 
+import { isPreviewHostRequest, previewHostSuffix } from '../packages/core/src/preview/preview-origin';
 import { parseJsonc } from './jsonc';
 import { readRepositoryFile, trackedFiles } from './sources';
 // The config module itself, not its text: the failure being guarded is a hook
@@ -138,6 +139,8 @@ const WranglerSchema = v.object({
     class_name: v.string(),
     image: v.string(),
   }))),
+  assets: v.object({ run_worker_first: v.union([v.boolean(), v.array(v.string())]) }),
+  vars: v.object({ PREVIEW_HOST_SUFFIX: v.string(), CLI_PUBLIC_ORIGIN: v.string() }),
 });
 
 const CONFIG = parseJsonc(readFileSync(join(REPO_ROOT, WRANGLER), 'utf8'), WranglerSchema, WRANGLER);
@@ -457,5 +460,26 @@ describe('the workflows that publish and measure this product', () => {
     }
 
     expect(pinned, 'no workflow uses an action').toBeGreaterThan(0);
+  });
+});
+
+/**
+ * A4 PREVIEWS ARE ISOLATED BY HOST. Agent-written apps are served on subdomains of the preview zone, and the
+ * Worker tells a preview host from the app host before any route runs. That holds only if the Worker sees
+ * every request: asset routing is path-only, so a path the asset router answered first (`/assets/*` on a
+ * preview host included) would reach the app's files without the host check.
+ */
+describe('previews are isolated by host', () => {
+  test("the production preview zone is the app host's own subdomains", () => {
+    const vars = CONFIG.vars;
+    const appHost = new URL(vars.CLI_PUBLIC_ORIGIN).hostname;
+
+    expect(previewHostSuffix(vars)).toBe(appHost);
+    expect(isPreviewHostRequest(new URL(vars.CLI_PUBLIC_ORIGIN), vars)).toBe(false);
+    expect(isPreviewHostRequest(new URL(`https://probe.${appHost}`), vars)).toBe(true);
+  });
+
+  test('every request reaches the Worker before the asset router', () => {
+    expect(CONFIG.assets.run_worker_first, `${WRANGLER} lets the asset router answer some paths first`).toBe(true);
   });
 });
