@@ -38,7 +38,7 @@ import {
 import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
 import type { AgentModelMenu, AgentRpcMethod } from '@kinu.run/core';
-import { pageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
+import { hostedWindowCalls, pageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
   createUserUiMessage,
@@ -267,6 +267,14 @@ const SearchNodeProjectionSchema = v.object({
 
 const ModelSpecSchema = v.object({ spec: v.nullable(v.string()) });
 
+const ActorSnapshotSchema = v.object({
+  displayName: v.string(),
+  role: v.string(),
+  mission: v.string(),
+  model: v.object({ model: v.string() }),
+  reasoningEffort: v.nullable(ReasoningEffortSchema),
+});
+
 const SetModelResultSchema = v.object({ ok: v.literal(true), spec: v.string() });
 
 const ReasoningEffortResultSchema = v.object({ effort: v.nullable(ReasoningEffortSchema) });
@@ -322,8 +330,8 @@ export class CloudAgentClient implements AgentClient {
   readonly agentName: string;
   readonly consents: DeviceConsentSurface;
   readonly localControls = null;
-  readonly checkpoints: FileCheckpointSurface;
-  readonly plans: PlanReviewSurface;
+  readonly checkpoints: FileCheckpointSurface | null;
+  readonly plans: PlanReviewSurface | null;
   readonly inlineAttachmentLimitBytes = CLOUD_MAX_INLINE_ATTACHMENT_BYTES;
   readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;
 
@@ -369,7 +377,7 @@ export class CloudAgentClient implements AgentClient {
         'resolveDeviceConsent', ResolveDeviceConsentSchema, [consentId, decision],
       ),
     };
-    this.checkpoints = {
+    this.checkpoints = subordinateName ? null : {
       list: async (limit, turnId) => v.parse(
         FileCheckpointListingSchema,
         await this.callRpc('listFileCheckpoints', [limit ?? 50, turnId ?? null]),
@@ -380,7 +388,7 @@ export class CloudAgentClient implements AgentClient {
       ),
     };
     // The sealed plan RPCs (`agent-rpc-access.ts`).
-    this.plans = {
+    this.plans = subordinateName ? null : {
       active: async () => v.parse(CloudPlanReviewSchema, await this.callRpc('getActivePlanReview', [])),
       saveAnnotations: async (id, revision, annotations) => v.parse(
         CloudPlanReviewResultSchema,
@@ -412,7 +420,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   branch(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
-    if (this.activeTurns.size === 0) return false;
+    if (this.activeTurns.size === 0 || !this.mayCall('branchTurn')) return false;
     const text = promptText(prompt).trim();
 
     if (!text) return false;
@@ -523,11 +531,16 @@ export class CloudAgentClient implements AgentClient {
     return this.callParentHttp(method, schema, args);
   }
 
+  private mayCall(method: AgentRpcMethod): boolean {
+    return this.subordinateName === null || hostedWindowCalls(method);
+  }
+
   private callParentHttp<Input, T = Input>(method: AgentRpcMethod, schema: v.GenericSchema<Input, T>, args: JsonValue[] = []): Promise<T> {
     return callAgentRpc({ origin: this.origin, token: this.token, name: this.cloudName, method, schema, args });
   }
 
   private async callRpc(method: AgentRpcMethod, args: JsonValue[]): Promise<JsonValue> {
+    if (!this.mayCall(method)) throw new Error(`${method} is not available in an additional agent's session.`);
     await this.ensureOpen();
     const ws = this.ws;
 
@@ -604,13 +617,35 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async history(): Promise<AgentTranscriptMessage[]> {
+    const name = this.subordinateName;
+
+    if (name !== null) {
+      return readConversation(async (page) => {
+        const read = await this.inspectSubordinate({ path: [name], view: 'history', page });
+
+        if (read.view !== 'history') throw new Error(read.view === 'missing' ? read.error : `the conversation read answered "${read.view}"`);
+
+        return read.page;
+      });
+    }
+
     return readConversation((request) => this.callHttp(
       'getChatHistoryPage', CloudChatPageSchema,
       [request.cursor === undefined ? {} : { cursor: { after: request.cursor.after } }],
     ));
   }
 
+  private async ownSnapshot(name: string): Promise<v.InferOutput<typeof ActorSnapshotSchema>> {
+    return v.parse(ActorSnapshotSchema, await this.callRpc('getActorSnapshot', [name]));
+  }
+
   async status(): Promise<AgentClientStatus> {
+    if (this.subordinateName !== null) {
+      const own = await this.ownSnapshot(this.subordinateName);
+
+      return { name: own.displayName, purpose: own.mission, model: own.model.model, reasoningEffort: own.reasoningEffort, roleId: own.role };
+    }
+
     const status = await this.callHttp('getAgentStatus', CloudAgentStatusSchema);
 
     return {
@@ -703,6 +738,8 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async latestTakes(): Promise<AlternateTakeSet | null> {
+    if (!this.mayCall('latestAlternateTakes')) return null;
+
     return v.parse(v.nullable(AlternateTakeSetSchema), await this.callRpc('latestAlternateTakes', []));
   }
 
@@ -758,26 +795,37 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async listJobs(limit = 20): Promise<AgentJobSummary[]> {
-    const jobs = await this.callHttp('listBackgroundJobs', v.array(CloudBackgroundJobSchema), [limit]);
+    const args: JsonValue[] = this.subordinateName === null ? [limit] : [limit, this.subordinateName];
+    const jobs = await this.callHttp('listBackgroundJobs', v.array(CloudBackgroundJobSchema), args);
 
     return jobs.map((job) => ({ id: job.id, kind: job.kind, status: job.status }));
   }
 
   async getModelSpec(): Promise<string | null> {
+    if (this.subordinateName !== null) return (await this.ownSnapshot(this.subordinateName)).model.model;
+
     return (await this.callHttp('getStoredModelSpec', ModelSpecSchema)).spec;
   }
 
   async setModel(spec: string): Promise<{ spec: string }> {
+    const name = this.subordinateName;
+
+    if (name !== null) return { spec: v.parse(SetModelResultSchema, await this.callRpc('setActorModel', [name, spec])).spec };
+
     return { spec: (await this.callHttp('setModel', SetModelResultSchema, [spec])).spec };
   }
 
   async getReasoningEffort(): Promise<ReasoningEffort | null> {
+    if (this.subordinateName !== null) return (await this.ownSnapshot(this.subordinateName)).reasoningEffort;
+
     return (await this.callHttp('getReasoningEffort', ReasoningEffortResultSchema)).effort;
   }
 
   async setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
+    const args: JsonValue[] = this.subordinateName === null ? [effort] : [effort, this.subordinateName];
+
     return {
-      effort: (await this.callHttp('setReasoningEffort', SetReasoningEffortResultSchema, [effort])).effort,
+      effort: (await this.callHttp('setReasoningEffort', SetReasoningEffortResultSchema, args)).effort,
     };
   }
 

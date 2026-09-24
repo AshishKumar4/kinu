@@ -81,7 +81,7 @@ function broadcastChannels(): Map<string, string[]> {
     for (const file of sourceFiles(root, ['.ts'])) {
       const text = readFileSync(file, 'utf8');
 
-      for (const m of text.matchAll(/\bbroadcast\s*\(/g)) {
+      for (const m of text.matchAll(/\bbroadcast(?:ToActor)?\s*\(/g)) {
         recordProducers(channels, callArgument(text, m.index + m[0].length - 1), file);
       }
     }

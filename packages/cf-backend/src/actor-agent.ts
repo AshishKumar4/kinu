@@ -4,7 +4,7 @@
  */
 
 import {
-  Agent, callable,
+  Agent, callable, getCurrentAgent,
   type AgentContext, type Connection, type ConnectionContext,
   type FiberRecoveryContext, type FiberRecoveryResult,
   type Schedule, type WSMessage,
@@ -31,9 +31,11 @@ import {
   sessionBearerConnectionTag,
   sessionBearerFromTags,
   rejectOutOfScopeRpc,
+  rpcFrameOf,
   type CliSocketBearer,
+  type RpcFrame,
 } from "./cli/rpc-gate";
-import { requiredRpcAccess } from "@kinu.run/core";
+import { hostedWindowMay, requiredRpcAccess } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
@@ -225,11 +227,6 @@ import {
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
 
-interface ClientRpcFrame {
-  id: string;
-  method: string;
-}
-
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
 interface ModelDimensions {
   readonly provider: string;
@@ -290,20 +287,6 @@ interface AsyncTaskOwner {
 
 /** Only RPC methods rpc-surface.ts declares reachable; any other is a compile error. */
 type UserHubClient = Pick<UserDO, UserDoRpcMethod>;
-
-const ClientRpcFrameSchema = v.object({
-  type: v.literal('rpc'), id: v.string(), method: v.string(), args: v.array(JsonValueSchema),
-});
-
-function parseClientRpcFrame(message: WSMessage): ClientRpcFrame | null {
-  if (!v.is(v.string(), message)) return null;
-  const json = tolerate<unknown>(() => JSON.parse(message), 'malformed-input');
-
-  if (json === undefined) return null;
-  const frame = v.safeParse(ClientRpcFrameSchema, json);
-
-  return frame.success ? { id: frame.output.id, method: frame.output.method } : null;
-}
 
 /** The agents SDK treats this close code as terminal (`isTerminalCloseEvent`), so a
  * client whose authority is gone stops reconnecting. */
@@ -629,6 +612,26 @@ export abstract class ActorAgent extends Agent<Env> {
    *  methods denied to client sockets. */
   protected isClientRpcMethodDenied(_method: string): boolean { return false; }
 
+  private clientRpcRefusal(connection: Connection, rpc: RpcFrame): string | null {
+    if (this.isClientRpcMethodDenied(rpc.method)) return `${rpc.method} is not available from client connections.`;
+    const name = actorFromConnectionTags(connection.tags);
+
+    if (name === null) return null;
+    // The SDK runs any array of arguments; a window's must be JSON values.
+    const args = v.safeParse(v.array(JsonValueSchema), rpc.args);
+
+    if (!args.success) return `${rpc.method} from ${name}'s window carries arguments that are not JSON values.`;
+    const id = this.hostedActorId(name);
+
+    return id !== null && hostedWindowMay(rpc.method, args.output, { name, id }) ? null : `${rpc.method} from ${name}'s window may act only on ${name}.`;
+  }
+
+  private addressedActor(): string | null {
+    const { connection } = getCurrentAgent();
+
+    return connection === undefined ? null : actorFromConnectionTags(connection.tags);
+  }
+
   // The concrete profile decides whether this turn may submit plan reviews: an owner-driven agent
   // does; a task delegated by its parent keeps the report lane instead.
 
@@ -781,7 +784,7 @@ export abstract class ActorAgent extends Agent<Env> {
         while (this._subordinateRosterBroadcastPending) {
           this._subordinateRosterBroadcastPending = false;
           const subordinates = await this.subordinateViews();
-          this.broadcast(JSON.stringify({ type: 'subordinates_changed', subordinates }));
+          this.broadcastToActor(null, JSON.stringify({ type: 'subordinates_changed', subordinates }));
         }
       } catch (cause) {
         diagnostics.failure('subordinate.roster_broadcast_failed', toKinuError({
@@ -802,7 +805,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected broadcastSubordinateEvent(
     event: Omit<SubordinateActivityEvent, 'type' | 'id'> & { id?: string },
   ): void {
-    this.broadcast(JSON.stringify({
+    this.broadcastToActor(null, JSON.stringify({
       type: 'subordinate_event',
       id: event.id ?? nanoid(),
       kind: event.kind,
@@ -1006,15 +1009,11 @@ export abstract class ActorAgent extends Agent<Env> {
         return;
       }
 
-      const rpc = parseClientRpcFrame(message);
+      const rpc = rpcFrameOf(message);
+      const refusal = rpc === null ? null : this.clientRpcRefusal(connection, rpc);
 
-      if (rpc && this.isClientRpcMethodDenied(rpc.method)) {
-        connection.send(JSON.stringify({
-          type: 'rpc',
-          id: rpc.id,
-          success: false,
-          error: `${rpc.method} is not available from client connections.`,
-        }));
+      if (rpc && refusal !== null) {
+        connection.send(JSON.stringify({ type: 'rpc', id: rpc.id, success: false, error: refusal }));
 
         return;
       }
@@ -1581,7 +1580,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const denial = await this.socketAuthorityDenial(connection);
 
     if (denial === null) return false;
-    const rpc = parseClientRpcFrame(message);
+    const rpc = rpcFrameOf(message);
 
     // The rpc reply carries the authority's reason so a pending call fails instead of hanging;
     // the close reason is the user-facing instruction for the token kind.
@@ -1755,8 +1754,8 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * Send only to the sockets addressing one actor; for the root, connections with no actor tag,
-   * which `getConnections(tag)` cannot express. Uses `broadcast` since only it reaches hibernated sockets.
+   * One actor's windows; `null` is the workspace's, which alone get the root's own frames, while one every window may
+   * read (device consents, device availability) goes to all. Built on `broadcast`, the only send that reaches hibernated sockets.
    */
   protected broadcastToActor(actor: string | null, message: string, exclude?: readonly string[]): void {
     const elsewhere: string[] = [];
@@ -1813,6 +1812,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Null when this workspace hosts no such actor; only the workspace root knows its directory. */
   protected abstract hostedChatWire(name: string): ChatWire | null;
+
+  protected abstract hostedActorId(name: string): string | null;
 
   /** Fires for any actor's connection; the root's sleep-time closed-tab trigger overrides both hooks. */
   protected connectionOpened(): void {}
@@ -3518,8 +3519,19 @@ export abstract class ActorAgent extends Agent<Env> {
   async send(text: string, id: string, files: readonly PromptFile[] = [], mode?: WorkMode): Promise<void> {
     this.ensureSchema();
     const attachments = v.parse(v.array(PromptFileSchema), files);
+    const workMode = isWorkMode(mode) ? mode : 'build';
+    const window = this.addressedActor();
 
-    await this.chatLoop.admit({ text, files: attachments }, { id, mode: isWorkMode(mode) ? mode : 'build' });
+    if (window !== null) {
+      const wire = this.hostedChatWire(window);
+
+      if (wire === null) throw new KinuError('missing', `${window} is not an agent of this workspace`);
+      await wire.send({ text, files: attachments, id, mode: workMode });
+
+      return;
+    }
+
+    await this.chatLoop.admit({ text, files: attachments }, { id, mode: workMode });
   }
 
   /** Aborts the in-flight LLM request first so stop works even if the cancel frame is lost.
@@ -3527,12 +3539,20 @@ export abstract class ActorAgent extends Agent<Env> {
   @callable()
   async cancelCurrentWork(): Promise<CancelWorkOutcome> {
     this.ensureSchema();
+    const window = this.addressedActor();
+
+    if (window !== null) {
+      this.hostedChatWire(window)?.interrupt();
+
+      return { ok: true, abortedTools: 0, deviceCommands: [] };
+    }
+
     const turnId = this.durableTurnId();
 
     return await cancelCurrentWork({
       cancelChats: () => { this.chatLoop.stop(); },
       activeToolControllers: this._activeToolControllers,
-      broadcast: (payload) => this.broadcast(payload),
+      broadcast: (payload) => { this.broadcastToActor(null, payload); },
       stopDeviceCommands: turnId === null ? undefined : async () => {
         try {
           const { stub, caller } = await this.userHub();

@@ -4,7 +4,6 @@
  * tag so the restriction survives DO hibernation (`websocket.hibernation_state`; an in-memory allowlist
  * would widen to full access on wake).
  */
-import { JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, tolerate } from '@kinu.run/core/obs';
 import type { WSMessage } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator';
@@ -153,13 +152,26 @@ function cliScopesFromTags(tags: Iterable<string>): AccessTokenScope[] | null {
   return null;
 }
 
-/** Returns an rpc-error frame for an out-of-scope `{type:'rpc'}` on an access-token connection; else null. */
+/** The SDK's own `isRPCRequest`: every socket gate reads exactly the frames the SDK will run. */
 const RpcFrameSchema = v.object({
   type: v.literal('rpc'),
   id: v.string(),
   method: v.string(),
-  args: v.array(JsonValueSchema),
+  args: v.array(v.unknown()),
 });
+
+export interface RpcFrame {
+  readonly id: string;
+  readonly method: string;
+  readonly args: readonly unknown[];
+}
+
+export function rpcFrameOf(message: WSMessage): RpcFrame | null {
+  if (!v.is(v.string(), message)) return null;
+  const frame = v.safeParse(RpcFrameSchema, tolerate(() => JSON.parse(message), 'malformed-input'));
+
+  return frame.success ? { id: frame.output.id, method: frame.output.method, args: frame.output.args } : null;
+}
 
 interface RpcDenial {
   error: string;
@@ -184,16 +196,15 @@ function rpcDenial(method: string, access: AgentRpcAccess | null, required: Acce
   };
 }
 
+/** Returns an rpc-error frame for an out-of-scope call on an access-token connection; else null. */
 export function rejectOutOfScopeRpc(tags: Iterable<string>, message: WSMessage): string | null {
-  if (!v.is(v.string(), message)) return null;
   const scopes = cliScopesFromTags(tags);
 
   if (scopes === null) return null;
+  const rpc = rpcFrameOf(message);
 
-  const parsed = v.safeParse(RpcFrameSchema, tolerate(() => JSON.parse(message), 'malformed-input'));
-
-  if (!parsed.success) return null;
-  const { id, method } = parsed.output;
+  if (rpc === null) return null;
+  const { id, method } = rpc;
 
   const access = requiredRpcAccess(method);
   const required = rpcAccessScope(access);
