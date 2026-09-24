@@ -330,6 +330,7 @@ describe('account panels', () => {
         expect(text).toContain('41% of the 5h window used');
         expect(text).toContain('No account recorded');
         expect(text).toContain('could not be read: old-bot');
+        expect(text).toContain('$4.12 of $10.00 left, resets monthly');
         await shoot(usage, 'settings-usage-mobile-dark');
       } finally {
         await usage.close();

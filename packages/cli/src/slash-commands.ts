@@ -7,7 +7,7 @@ import type { InstructionSourceRow } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { loadActiveProfile, updateDefaultAccount } from './default-model';
 import { readAllAccountUsage } from './account-usage';
-import { plural, renderAccountSpendLines, renderSearchTreeLines } from './display';
+import { plural, renderAccountSpendLines, renderCreditLines, renderSearchTreeLines } from './display';
 
 export interface SlashCommandInfo {
   name: string;
@@ -233,7 +233,10 @@ async function statsCommand({ client }: SlashContext): Promise<SlashOutcome> {
 
   return {
     kind: 'text',
-    text: [`Across your ${plural(usage.workspaces, 'workspace')}`, ...renderAccountSpendLines(usage.accounts, Date.now()), ...unread, here].join('\n'),
+    text: [
+      `Across your ${plural(usage.workspaces, 'workspace')}`, ...renderAccountSpendLines(usage.accounts, Date.now()),
+      ...renderCreditLines(usage.credits ?? []), ...unread, here,
+    ].join('\n'),
   };
 }
 

@@ -317,7 +317,15 @@ async function settingsSectionsFixture(path: string): Promise<Response | null> {
   }
 
   if (path === "/api/user/usage") {
-    return fixtureJson({ accounts: ACTIVITY_ACCOUNTS, workspaces: 4, unread: ["old-bot"] });
+    return fixtureJson({
+      accounts: ACTIVITY_ACCOUNTS,
+      workspaces: 4,
+      unread: ["old-bot"],
+      credits: [{
+        provider: "openrouter", account: "main", at: NOW - 5e3,
+        limit: 10, remaining: 4.12, reset: "monthly", usedToday: 1.03, usedThisMonth: 5.88,
+      }],
+    });
   }
 
   if (path === "/api/user/codex") {

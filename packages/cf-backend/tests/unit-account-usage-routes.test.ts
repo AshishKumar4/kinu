@@ -6,6 +6,7 @@ import { AccountUsageSchema, type AccessTokenScope, type AccountSpend, type User
 import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
 import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
 import type { AuthIdentity } from '../src/auth/session';
+import { asFetchFunction } from '@kinu.run/core';
 import { bootstrappedProfile, cliAccount, unreachableAssets, unreachableKv, userAccount, workspaceObject } from './helpers/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
@@ -44,6 +45,8 @@ const workspaces = {
   }),
 };
 
+const held = (keys: readonly string[]) => keys.map((key) => ({ key, kind: 'bearer' as const, createdAt: 1, updatedAt: 1 }));
+
 const MERGED = {
   accounts: [
     {
@@ -58,13 +61,28 @@ const MERGED = {
 };
 
 describe('the owner\'s usage per account, across workspaces', () => {
-  test('the web route sums each account over the workspaces, keeps its newest quota, and names the one it could not read', async () => {
+  test('the web route sums each account over the workspaces, keeps its newest quota, reads each OpenRouter key\'s credit, and names what it could not read', async () => {
     const identity: AuthIdentity = { userId: USER_ID, email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now() };
 
     const stub = userAccount({
       async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
       async userMcp_warmConnections() { return { servers: 0 }; },
       async listActiveWorkspaces() { return WORKSPACES; },
+      async listCredentials() { return held(['anthropic.bearer@work', 'openrouter.bearer', 'openrouter.bearer@team']); },
+      async getAuthHeaders(_caller: UserCaller, key: string) { return { Authorization: `Bearer ${key}` }; },
+    });
+
+    const keysRead: string[] = [];
+    const realFetch = globalThis.fetch;
+
+    // The documented `GET /api/v1/key` answer; the `team` key is refused.
+    globalThis.fetch = asFetchFunction(async (input, init) => {
+      const authorization = new Headers(init?.headers).get('authorization') ?? '';
+      keysRead.push(`${input instanceof Request ? input.url : input.toString()} ${authorization}`);
+
+      return authorization.endsWith('@team')
+        ? new Response('no', { status: 500 })
+        : Response.json({ data: { limit: 10, limit_remaining: 4.12, limit_reset: 'monthly', usage: 30, usage_daily: 1.03, usage_monthly: 5.88 } });
     });
 
     const env: UserRoutesEnv<string> = {
@@ -73,12 +91,29 @@ describe('the owner\'s usage per account, across workspaces', () => {
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     };
 
-    const response = await handleUserRequest(new Request('https://kinu.example.com/api/user/usage'), env, identity, {
-      waitUntil() {},
-    });
+    try {
+      const response = await handleUserRequest(new Request('https://kinu.example.com/api/user/usage'), env, identity, {
+        waitUntil() {},
+      });
 
-    expect(response?.status).toBe(200);
-    expect(v.parse(AccountUsageSchema, await response?.json())).toEqual(MERGED);
+      expect(response?.status).toBe(200);
+
+      expect(v.parse(AccountUsageSchema, await response?.json())).toEqual({
+        ...MERGED,
+        unread: ['gone', 'openrouter · team credit'],
+        credits: [{
+          provider: 'openrouter', account: 'main', at: expect.any(Number),
+          limit: 10, remaining: 4.12, reset: 'monthly', usedToday: 1.03, usedThisMonth: 5.88,
+        }],
+      });
+
+      expect(keysRead.sort()).toEqual([
+        'https://openrouter.ai/api/v1/key Bearer openrouter.bearer',
+        'https://openrouter.ai/api/v1/key Bearer openrouter.bearer@team',
+      ]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   test('the CLI route answers a workspace.read token and refuses one without it', async () => {
@@ -96,6 +131,7 @@ describe('the owner\'s usage per account, across workspaces', () => {
           : { ok: true, tokenHash: token.slice(-8), scopes, user: { id: USER_ID, email: 'owner@example.com', displayName: 'Owner' } };
       },
       async listActiveWorkspaces() { return WORKSPACES; },
+      async listCredentials() { return held([]); },
     });
 
     const env: CliRoutesEnv<string> = {

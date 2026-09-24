@@ -1,6 +1,7 @@
 import * as v from 'valibot';
 import type { AccountSpend } from '../events/model-call';
 import { QuotaSnapshotSchema, type QuotaSnapshot } from '../providers/quota';
+import { AccountCreditSchema, type AccountCredit } from '../providers/openrouter-credit';
 import { diagnostics, toKinuError } from '../obs/index';
 import { addUsage, usageTotal, UsageSchema } from '../usage';
 
@@ -9,6 +10,7 @@ export interface AccountUsage {
   readonly workspaces: number;
   /** Never counted as zero spend. */
   readonly unread: readonly string[];
+  readonly credits?: readonly AccountCredit[];
 }
 
 export const AccountSpendSchema: v.GenericSchema<AccountSpend> = v.object({
@@ -19,6 +21,7 @@ export const AccountSpendSchema: v.GenericSchema<AccountSpend> = v.object({
 
 export const AccountUsageSchema: v.GenericSchema<AccountUsage> = v.object({
   accounts: v.array(AccountSpendSchema), workspaces: v.number(), unread: v.array(v.string()),
+  credits: v.optional(v.array(AccountCreditSchema)),
 });
 
 export function sortAccountSpend(rows: readonly AccountSpend[]): AccountSpend[] {
@@ -94,4 +97,36 @@ export async function readAccountUsage(sources: readonly AccountLedgerSource[]):
   }
 
   return { accounts: mergeAccountSpend(ledgers), workspaces: ledgers.length, unread };
+}
+
+export interface AccountCreditSource {
+  readonly provider: string;
+  readonly account: string;
+  read(): Promise<AccountCredit>;
+}
+
+export async function readAccountCredits(
+  sources: readonly AccountCreditSource[],
+): Promise<{ credits: AccountCredit[]; unread: string[] }> {
+  const settled = await Promise.allSettled(sources.map((source) => source.read()));
+  const credits: AccountCredit[] = [];
+  const unread: string[] = [];
+
+  for (const [index, outcome] of settled.entries()) {
+    const name = `${sources[index]?.provider ?? ''} · ${sources[index]?.account ?? ''} credit`;
+
+    if (outcome.status === 'fulfilled') {
+      credits.push(outcome.value);
+      continue;
+    }
+
+    unread.push(name);
+    diagnostics.failure('spend.account_credit_unread', toKinuError({
+      doing: 'reading what a provider account has left',
+      cause: outcome.reason,
+      otherwise: 'unavailable',
+    }), { account: name });
+  }
+
+  return { credits, unread };
 }

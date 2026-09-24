@@ -53,6 +53,8 @@ export * from './pacing';
 
 export * from './rate-limit-retry';
 
+export { creditText, readOpenRouterCredit, type AccountCredit } from './openrouter-credit';
+
 export {
   callAccountOf, CallAccountSchema, QuotaSnapshotSchema, quotaWindowText,
   type CallAccount, type QuotaSnapshot, type QuotaWindow,

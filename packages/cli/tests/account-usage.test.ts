@@ -44,7 +44,7 @@ async function readUsage(home: string, env: Record<string, string> = {}): Promis
   const proc = Bun.spawn([process.execPath, '-e', `
     const { readAllAccountUsage } = await import('./packages/cli/src/account-usage.ts');
     console.log(JSON.stringify(await readAllAccountUsage()));
-  `], { cwd: repoRoot, env: { ...process.env, KINU_HOME: home, KINU_TOKEN: '', ...env }, stdout: 'pipe', stderr: 'pipe' });
+  `], { cwd: repoRoot, env: { ...process.env, KINU_HOME: home, KINU_TOKEN: '', OPENROUTER_API_KEY: '', ...env }, stdout: 'pipe', stderr: 'pipe' });
 
   const [stdout, stderr, exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
   expect(exitCode, stderr).toBe(0);
@@ -88,6 +88,9 @@ describe('/stats reads every workspace this person holds', () => {
       }],
       workspaces: 2,
       unread: ['cloud-gone'],
+      credits: [{
+        provider: 'openrouter', account: 'team', at: 5_000, limit: 10, remaining: 4, reset: 'monthly', usedToday: 1, usedThisMonth: 6,
+      }],
     };
 
     const seen: string[] = [];
@@ -109,6 +112,7 @@ describe('/stats reads every workspace this person holds', () => {
       expect(usage.unread).toEqual(['cloud-gone']);
       expect(usage.accounts.map((row) => [row.provider, row.account, row.calls, row.usd])).toEqual([['anthropic', 'work', 4, 2]]);
       expect(usage.accounts[0]?.quota?.windows[0]?.remaining).toBe(3);
+      expect(usage.credits).toEqual(cloud.credits);
     } finally {
       await server.stop(true);
     }

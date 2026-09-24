@@ -1,5 +1,7 @@
 import { ChartBarIcon } from "@phosphor-icons/react";
-import { fmtTokens, fmtUsd, quotaWindowText, timeAgo, usageTotal, type AccountSpend, type AccountUsage } from "@kinu.run/core";
+import {
+  creditText, fmtTokens, fmtUsd, quotaWindowText, timeAgo, usageTotal, type AccountSpend, type AccountUsage,
+} from "@kinu.run/core";
 import { getAccountUsage } from "@/lib/user-api";
 import { Card } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
@@ -39,6 +41,17 @@ function UsageTable({ usage }: { usage: AccountUsage }) {
         Across {usage.workspaces} workspace{usage.workspaces === 1 ? "" : "s"}, at API rates from the models.dev catalog;
         a subscription is billed by its plan instead.
       </p>
+      {(usage.credits ?? []).length > 0 && (
+        <div className="space-y-1">
+          <p className="p-meta p-text-3 uppercase tracking-wide">Credit left, read from the provider now</p>
+          {(usage.credits ?? []).map((credit) => (
+            <p key={`${credit.provider}@${credit.account}`} className="p-row-text p-text">
+              <span className="font-medium">{credit.provider} · {credit.account}</span>{" "}
+              <span className="p-text-2">{creditText(credit)}</span>
+            </p>
+          ))}
+        </div>
+      )}
       {usage.unread.length > 0 && (
         <p className="p-meta p-danger">Not counted, could not be read: {usage.unread.join(", ")}.</p>
       )}
