@@ -5,8 +5,8 @@
  */
 
 import { getSandbox, type Process, type SandboxOptions } from "@cloudflare/sandbox";
-import { decodeJsonValue, SANDBOX_TRANSPORT, WORKSPACE_BACKUP_DIR, type SandboxHandle } from "@kinu.run/core";
-import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
+import { decodeJsonValue, SANDBOX_TRANSPORT, SandboxPending, WORKSPACE_BACKUP_DIR, type SandboxHandle } from "@kinu.run/core";
+import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import type { KinuSandbox } from "./kinu-sandbox";
 import { sandboxPreviewLabelOf } from "@kinu.run/core";
 import type { SandboxPreviewExposures } from "@kinu.run/core";
@@ -171,7 +171,7 @@ export function adaptCloudflareSandbox(
     // Readiness arrives as data: a thrown refusal's name does not survive the DO RPC.
     const readiness = await handle.resolveReadiness();
 
-    if (readiness.kind === 'pending') throw new KinuError('unavailable', readiness.reason);
+    if (readiness.kind === 'pending') throw new SandboxPending(readiness.reason);
 
     return await run();
   };

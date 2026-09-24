@@ -1118,7 +1118,7 @@ export {
   DefaultExecutionRouter,
   createInlineExecutor,
   withApprovalGatedShell, gateProviderExec,
-  createSandboxExecutor, type SandboxHandle, isSandboxTransientError,
+  createSandboxExecutor, type SandboxHandle, isSandboxTransientError, SandboxPending,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
   explainNativeToolReferenceError,
