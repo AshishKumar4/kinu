@@ -22,7 +22,7 @@ import {
 import { applyCacheBreakpoints, hasCacheMarkers, type CacheBreakpointPlan } from './prompting/cache-breakpoints';
 import type { ResolvedModelWindow } from './prompting/step-prune';
 import type { CacheRetention } from './providers/types';
-import type { ContextComposition, TurnContextMeter } from './context-meter';
+import { TurnContextMeter, type ContextComposition } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
 import type { MissionGovernor } from './mission-budget';
 import type { AttachmentPolicy } from './prompting/attachment-sanitizer';
@@ -92,7 +92,8 @@ export interface ChatOptions {
   history: ModelMessage[];
   /** Re-read and re-woven at every step, never at turn assembly, so a compaction plugin never sees or persists it. */
   dynamicContext?: StepDynamicContext;
-  meter?: TurnContextMeter;
+  /** Measure each request, delivered as its `step-finish` event's `context`. */
+  measureContext?: boolean;
   /** Durable context plane; absent for unclaimed work (a head's own inference, a shadow-eval replay). */
   stepContext?: StepContextPlane;
   persistStreamPart?: (part: TextStreamPart<ToolSet>) => Promise<void>;
@@ -535,7 +536,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const rollTail = hasCacheMarkers(cache.strategy);
   const providerOptions = mergeProviderOptions(cache.providerOptions, opts.providerOptions);
 
-  opts.meter?.openTurn({ system: cache.system, tools });
+  const meter = opts.measureContext === true ? new TurnContextMeter({ system: cache.system, tools }) : undefined;
 
   /** What the turn streamed across all its calls; the answer is narrower. */
   let allText = '';
@@ -613,7 +614,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           budget: opts.budget,
           dynamic: opts.dynamicContext,
           destinationProviderId: opts.cache?.providerId,
-          meter: opts.meter,
+          meter,
           context: stepContextPlane,
         }, { stepNumber: stepOffset + stepNumber, messages, steps });
       },
@@ -626,7 +627,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       onStepFinish: async (step) => {
         stepCount++;
         await opts.persistStep?.(step.response.messages);
-        call.stepFinished(step, stepCount, opts.meter?.take());
+        call.stepFinished(step, stepCount, meter?.take());
         await opts.onStep?.(step);
       },
     });

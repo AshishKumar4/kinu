@@ -92,8 +92,7 @@ describe('measureContext', () => {
 
 describe('TurnContextMeter', () => {
   test('carries the turn constants into every step measurement', () => {
-    const meter = new TurnContextMeter();
-    meter.openTurn({ system: '## Delegation\nrungs', tools: { run: { description: 'x' } } });
+    const meter = new TurnContextMeter({ system: '## Delegation\nrungs', tools: { run: { description: 'x' } } });
     meter.measure([user('one')]);
     const first = meter.take();
     meter.measure([user('one'), assistant('two')]);
@@ -107,16 +106,14 @@ describe('TurnContextMeter', () => {
   });
 
   test('take() drains, so a step never reports the previous step\'s request', () => {
-    const meter = new TurnContextMeter();
-    meter.openTurn({ system: 'soul' });
+    const meter = new TurnContextMeter({ system: 'soul' });
     meter.measure([user('hi')]);
     expect(meter.take()?.measuredChars).toBe(6);
     expect(meter.take()).toBeUndefined();
   });
 
   test('a turn that never measured reports nothing rather than an empty request', () => {
-    const meter = new TurnContextMeter();
-    meter.openTurn({ system: 'soul' });
+    const meter = new TurnContextMeter({ system: 'soul' });
     expect(meter.take()).toBeUndefined();
   });
 });
