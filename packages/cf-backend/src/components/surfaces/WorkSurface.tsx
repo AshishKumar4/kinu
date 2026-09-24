@@ -36,8 +36,8 @@ import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
 const slateSurface = (id: string): SlateSurfaceKind => `${SLATE_PREFIX}${id}`;
 
-const slateId = (surface: SurfaceKind): string | null =>
-  surface.startsWith(SLATE_PREFIX) ? surface.slice(SLATE_PREFIX.length) : null;
+const slateId = (surface: SurfaceKind | null): string | null =>
+  surface?.startsWith(SLATE_PREFIX) === true ? surface.slice(SLATE_PREFIX.length) : null;
 
 const SURFACE_LABEL = {
   Diffs: "Diffs",
@@ -90,6 +90,8 @@ export interface WorkSurfaceProps {
   slateReloads?: ReadonlyMap<string, number>;
   /** Absent in fixture frames, which keeps every tab visible: unknown is not empty. */
   tabPresence?: TabPresence;
+  /** The workspace's presence read has not answered: no tab is marked until it has or the reader picks one. */
+  presencePending?: boolean;
   rpc: Rpc;
   slateBody?: (slate: SlateSummary) => ReactNode;
   workspace?: string;
@@ -99,7 +101,7 @@ export interface WorkSurfaceProps {
 }
 
 /** A surface can be selected without a click (deep link, restored tab); keep its tab in view. */
-function useSelectedTabInView(strip: RefObject<HTMLDivElement | null>, surface: SurfaceKind): void {
+function useSelectedTabInView(strip: RefObject<HTMLDivElement | null>, surface: SurfaceKind | null): void {
   useEffect(() => {
     const container = strip.current;
     const selected = container?.querySelector('[aria-current="true"]');
@@ -134,12 +136,12 @@ export function WorkSurface(props: WorkSurfaceProps) {
   const [hasDiffs, setHasDiffs] = useState(false);
   const content = { tabPresence: props.tabPresence, mctsTrees: props.mctsTrees, slates: props.slates, hasDiffs };
   const ports = props.pinnedPorts.filter(port => !props.slates?.some(slate => port.executor === "workspace" && slate.port === port.port));
-  // Settled once this workspace's presence has picked the first tab; from then
-  // on the tab asked for is the tab shown.
+  // Settled once this workspace's presence has picked the first tab, or the
+  // reader has; from then on the tab asked for is the tab shown.
   const [settledFor, setSettledFor] = useState<string | null>(null);
   const workspaceKey = props.workspace ?? "";
   const settled = settledFor === workspaceKey;
-  const surface = landedSurface(requested, content, ports, settled);
+  const surface = settled || props.presencePending !== true ? landedSurface(requested, content, ports, settled) : null;
 
   const focus = useSurfaceFocus({
     surface,
@@ -156,16 +158,22 @@ export function WorkSurface(props: WorkSurfaceProps) {
     if (props.planFocus && workAvailable) focus.navigate("Work");
   }, [props.planFocus, workAvailable, focus.navigate]);
 
+  // A tab the reader picks lands, presence known or not.
+  const choose = useCallback((next: SurfaceKind) => {
+    setSettledFor(workspaceKey);
+    focus.navigate(next);
+  }, [workspaceKey, focus.navigate]);
+
   useEffect(() => {
-    if (surface !== requested) focus.navigate(surface);
+    if (surface !== null && surface !== requested) focus.navigate(surface);
   }, [surface, requested, focus.navigate]);
 
   useEffect(() => {
     if (!settled && props.tabPresence !== undefined) setSettledFor(workspaceKey);
   }, [settled, props.tabPresence, workspaceKey]);
 
-  const openPort = openPortOf(surface, ports);
-  const previewSelected = surface.startsWith(SLATE_PREFIX) || surface.startsWith("preview:");
+  const openPort = surface === null ? undefined : openPortOf(surface, ports);
+  const previewSelected = surface?.startsWith(SLATE_PREFIX) === true || surface?.startsWith("preview:") === true;
   // One-shot intent: an Environment card's Files action opens that environment's root.
   const [filesJump, setFilesJump] = useState<{ path: string; nonce: number } | null>(null);
 
@@ -199,7 +207,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           {props.slates?.map(slate => {
             const kind = slateSurface(slate.id);
 
-            return <button key={kind} onClick={() => focus.navigate(kind)} title={slate.title} aria-label={slate.title}
+            return <button key={kind} onClick={() => choose(kind)} title={slate.title} aria-label={slate.title}
               aria-current={surface === kind ? "true" : undefined}
               className={`${tabCls} text-left shrink-0 ${surface === kind ? "p-tab-active" : ""}`}>
               <SparkleIcon size={14} /><span>{slate.title}</span>
@@ -209,12 +217,12 @@ export function WorkSurface(props: WorkSurfaceProps) {
             const kind: SurfaceKind = `preview:${port.executor}:${port.port}`;
             const title = port.name === undefined || port.name === "" ? `${port.executor} :${port.port}` : port.name;
 
-            return <button key={kind} onClick={() => focus.navigate(kind)} title={title} aria-label={title}
+            return <button key={kind} onClick={() => choose(kind)} title={title} aria-label={title}
               aria-current={surface === kind ? "true" : undefined}
               className={`${tabCls} text-left shrink-0 ${surface === kind ? "p-tab-active" : ""}`}>{title}</button>;
           })}
           {SURFACES.filter(s => s === surface || surfaceHasContent(s, content)).map(s => (
-            <button key={s} onClick={() => focus.navigate(s)} title={s} aria-label={s}
+            <button key={s} onClick={() => choose(s)} title={s} aria-label={s}
               aria-current={surface === s ? "true" : undefined}
               className={`${tabCls} ${surface === s ? "p-tab-active p-accent" : ""}`}>
               <span>{SURFACE_LABEL[s]}</span>
@@ -228,7 +236,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
         {chip !== null && (
           <button
             type="button"
-            onClick={() => focus.navigate(chip.surface)}
+            onClick={() => choose(chip.surface)}
             data-preview-ready
             title={chip.title}
             aria-label={`Preview ready: ${chip.title}`}
@@ -239,7 +247,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           </button>
         )}
         <button
-          onClick={() => focus.navigate(ACTIVITY_SURFACE)}
+          onClick={() => choose(ACTIVITY_SURFACE)}
           aria-label="Activity"
           title="Context, cost, and cache"
           className={`${tabCls} mr-2 px-2.5 ${surface === ACTIVITY_SURFACE ? "p-tab-active" : ""}`}>
@@ -270,7 +278,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             />
           </ErrorBoundary>
         </div>
-        <ErrorBoundary key={surface} label={surface}>
+        <ErrorBoundary key={surface} label={surface ?? undefined}>
           {surface === "Files" && (
             <FilesSurface rpc={props.rpc} executors={props.executors} jump={filesJump} onConnectDevice={openConnect} />
           )}

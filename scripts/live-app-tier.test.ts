@@ -626,6 +626,7 @@ async function measureGeometry(newPage: LiveApp['newPage'], origin: string): Pro
   const page = await openWorkspace(newPage, origin, workspace);
 
   await openInspector(page);
+  await until(page, 'a marked tab in the inspector strip', `${MARKED_TAB} !== null`);
 
   const dark = v.parse(StripGeometrySchema, await page.evaluate(readStripGeometry));
 
@@ -634,6 +635,7 @@ async function measureGeometry(newPage: LiveApp['newPage'], origin: string): Pro
   await page.reload({ waitUntil: 'load' });
   await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
   await openInspector(page);
+  await until(page, 'a marked tab in the inspector strip', `${MARKED_TAB} !== null`);
 
   const light = v.parse(StripGeometrySchema, await page.evaluate(readStripGeometry));
 
