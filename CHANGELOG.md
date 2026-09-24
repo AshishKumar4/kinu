@@ -44,7 +44,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   field (``shell requires `command`, a string``); a model's `shell({})` used to
   run the shell with no command. A value outside a declared enum still reaches
   the tool, which resolves it (a device runtime goes by nickname), and rules
-  that span fields stay with each tool's own parse.
+  that span fields stay with each tool's own parse. A head's journal records a
+  refused call of its own tools (`record_evidence`, `record_decision`,
+  `split_subheads`) like any other, and no longer stores evidence or a decision
+  from a call that lacked a required field.
 - **The default model lives in the profile's default tier, and nowhere else.** `kinu setup` and the first provider connect set it only while it is unset, a later connect leaves it, and Defaults on the home screen change it; `config.json` keeps no top-level `model` or `reasoningEffort`. `/model`, `/effort`, the TUI model picker, `kinu model`, `kinu effort` and the rpc `model` command set the open workspace's own model or effort, and a new workspace pins a model only when `--model` names one.
 
 ### Added

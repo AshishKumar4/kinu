@@ -83,15 +83,9 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
           confidence: { type: 'number', minimum: 0, maximum: 1 },
         },
       }),
-      execute: async ({ kind, body, ref, confidence }, options) => {
+      execute: async ({ kind, body, ref, confidence }) => {
         const ev: Evidence = { id: `ev-${nanoid(6)}`, kind, body, ref, confidence };
         capture.recordEvidence(ev);
-        const args: JsonObject = { kind, body };
-
-        if (ref !== undefined) args.ref = ref;
-
-        if (confidence !== undefined) args.confidence = confidence;
-        capture.recordToolCall({ name: 'record_evidence', args, result: 'ok', outcome: { success: true }, toolCallId: options.toolCallId });
 
         return `evidence recorded (id=${ev.id})`;
       },
@@ -105,13 +99,9 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
           supportingEvidence: { type: 'array', items: { type: 'string' } },
         },
       }),
-      execute: async ({ question, choice, rationale, supportingEvidence }, options) => {
+      execute: async ({ question, choice, rationale, supportingEvidence }) => {
         const d: Decision = { question, choice, rationale, supportingEvidence };
         capture.recordDecision(d);
-        capture.recordToolCall({
-          name: 'record_decision', args: { question, choice, rationale },
-          result: 'ok', outcome: { success: true }, toolCallId: options.toolCallId,
-        });
 
         return 'decision recorded';
       },
@@ -119,10 +109,7 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
   };
 }
 
-/**
- * Records every call of a shared builtin toolset (`shell`, `eval`, `web`) into the HeadCapture.
- * Do not apply to a self-recording builder: the call would be recorded twice.
- */
+/** Records every call of `tools` into the HeadCapture, a refused one included when this wraps the input check. */
 export function withHeadCaptureRecording(tools: ToolSet, capture: HeadCapture): ToolSet {
   const out: ToolSet = {};
 

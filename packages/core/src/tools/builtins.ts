@@ -632,8 +632,9 @@ export function installCodemode(
 /** The one tool assembly: builtins, admitted narrow, kind tools, allowed narrow, then `eval`. */
 export interface ToolSurfaceDeps extends BuiltinToolDeps {
   admitted?: readonly string[];
-  wrapAdmitted?: (admitted: ToolSet) => ToolSet;
   extra?: ToolSet;
+  /** Wraps the admitted builtins and `extra` outside their input check, so it sees a refused call too. */
+  wrapCalls?: (tools: ToolSet) => ToolSet;
   allowed?: readonly string[];
   /** Wins over `codemodeTool`. */
   codemode?: CodemodeBuilder;
@@ -655,13 +656,13 @@ export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
 
   const built = buildBuiltinTools(builtin.workMode === 'plan' ? { ...builtin, workMode: 'build' } : builtin);
   const narrowed = deps.admitted === undefined ? built : keepBuiltins(built, deps.admitted);
-  const recorded = deps.wrapAdmitted === undefined ? narrowed : deps.wrapAdmitted(narrowed);
-  const merged = deps.extra === undefined ? recorded : { ...recorded, ...withCheckedInputs(deps.extra) };
+  const merged = deps.extra === undefined ? narrowed : { ...narrowed, ...withCheckedInputs(deps.extra) };
+  const wrapped = deps.wrapCalls === undefined ? merged : deps.wrapCalls(merged);
   const allow = deps.allowed === undefined ? undefined : new Set(deps.allowed);
 
   const surface = allow === undefined
-    ? merged
-    : Object.fromEntries(Object.entries(merged).filter(([name]) => allow.has(name)));
+    ? wrapped
+    : Object.fromEntries(Object.entries(wrapped).filter(([name]) => allow.has(name)));
 
   if (deps.codemode !== undefined) {
     installCodemode(surface, deps.codemode, deps);
