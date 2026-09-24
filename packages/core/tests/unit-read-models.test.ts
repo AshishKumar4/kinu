@@ -44,7 +44,7 @@ function workspace() {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   const exec = makeSqlExec(db);
-  initWorkspaceSchema({ execRaw, sql, exec });
+  initWorkspaceSchema({ execRaw, sql, exec, transactionSync: (write) => db.transaction(write)() });
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'read-model-test');
 
   return { db, sql, execRaw, actor, vfs: createWorkspaceBundle(db).vfs, config: actor.config };

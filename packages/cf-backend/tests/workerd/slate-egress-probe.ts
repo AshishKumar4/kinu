@@ -58,6 +58,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
       // The SDK's tagged handle omits blob parameters from its type; schema init binds scalars only.
       sql: <Row>(query: TemplateStringsArray, ...values: SqlValue[]): Row[] => this.sql<Row>(query,
         ...v.parse(v.array(v.union([v.string(), v.number(), v.boolean(), v.null()])), values)),
+      transactionSync: (write) => this.ctx.storage.transactionSync(write),
     });
     seedBaseFilesystem(this.vfs, ['home', 'etc']);
     const files = this.vfs.as(CRED_KERNEL);

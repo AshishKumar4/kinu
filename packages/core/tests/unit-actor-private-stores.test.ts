@@ -32,7 +32,7 @@ function world(): World {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
-  initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db) });
+  initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db), transactionSync: (write) => db.transaction(write)() });
   const actors = createTestActors(sql, execRaw);
 
   return {

@@ -1,7 +1,7 @@
-// The one table list every composition root creates. Root-only tables are declared in
-// `conformance/manifest.ts`, which checks `sqlite_master` against this. All DDL is idempotent.
+// The one table list every composition root creates, in one idempotent transaction. Root-only tables are
+// declared in `conformance/manifest.ts`, which checks `sqlite_master` against this.
 
-import type { RawSqlExec, SqlExec, SqlExecutor } from '../types/primitives';
+import type { RawSqlExec, SqlExec, SqlExecutor, Storage } from '../types/primitives';
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
 import { initActorTables, initWorkspaceOwnershipTables } from '../identity/schema';
 import { initSlateShareTables } from '../slates/shares';
@@ -42,6 +42,7 @@ export interface WorkspaceSchemaSql {
   readonly execRaw: RawSqlExec;
   readonly sql: SqlExecutor;
   readonly exec: SqlExec;
+  readonly transactionSync: Storage['transactionSync'];
 }
 
 // Read by `@kinu.run/compaction`. Actor-keyed: two actors can present the same session key.
@@ -74,6 +75,10 @@ function initCompactionStateTables(execRaw: RawSqlExec): void {
 }
 
 export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
+  db.transactionSync(() => { createWorkspaceTables(db); });
+}
+
+function createWorkspaceTables(db: WorkspaceSchemaSql): void {
   const { execRaw } = db;
   initWorkspaceOwnershipTables(execRaw);
   initWorkspaceActorTable(execRaw);
@@ -130,8 +135,7 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
 export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   const { execRaw, sql, exec } = db;
   initActorTables(execRaw, sql);
-  // Tables are created on every root, not lazily by their first writer, so a missing table
-  // is a fault rather than an empty read.
+  // On every root, not lazily by a first writer: a missing table is a fault, not an empty read.
   initAlternateTakesTable(execRaw);
   initExplorationRecordsTable(execRaw);
   initSwarmNodeRecords(execRaw);

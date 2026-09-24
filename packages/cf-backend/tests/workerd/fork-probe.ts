@@ -278,6 +278,7 @@ abstract class ForkProbeDO extends DurableObject<Cloudflare.Env> {
       execRaw: (ddl: string) => { this.ctx.storage.sql.exec(ddl); },
       sql: this.sql,
       exec: this.ctx.storage.sql,
+      transactionSync: (write) => this.ctx.storage.transactionSync(write),
     });
     this.ctx.storage.sql.exec(ProbeFilePlane.DDL);
     this.schemaReady = true;

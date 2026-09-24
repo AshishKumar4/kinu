@@ -73,7 +73,9 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
     this.sql = sql;
 
-    initWorkspaceSchema({ execRaw: (ddl: string) => ctx.storage.sql.exec(ddl), sql, exec });
+    initWorkspaceSchema({
+      execRaw: (ddl: string) => ctx.storage.sql.exec(ddl), sql, exec, transactionSync: (write) => ctx.storage.transactionSync(write),
+    });
     initSlateLiveShareTables((ddl: string) => ctx.storage.sql.exec(ddl));
     seedBaseFilesystem(this.vfs, ['home', 'etc']);
     // Pids are generation-scoped per boot so a re-spawned process never gets a pid with a live append writer.

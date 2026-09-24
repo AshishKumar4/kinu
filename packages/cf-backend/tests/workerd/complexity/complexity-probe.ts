@@ -467,7 +467,10 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     const vfs = await this.workspace();
     const tree = vfs.as(CRED_SESSION_USER);
 
-    initWorkspaceSchema({ execRaw: this.execRaw, sql: this.executor, exec: this.meter.sql });
+    initWorkspaceSchema({
+      execRaw: this.execRaw, sql: this.executor, exec: this.meter.sql,
+      transactionSync: (write) => this.ctx.storage.transactionSync(write),
+    });
     const files = new SlateFiles(tree, new WorkspaceSlateContentStore(vfs.as(CRED_KERNEL)), this.meter.sql, (body) => vfs.withTransaction(body));
 
     return { files, tree };

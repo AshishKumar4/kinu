@@ -86,7 +86,7 @@ import { TierIdSchema,
   AdvisorRecoverySnapshotSchema,
   ADVISOR_LANE_FIBER, reviewRecordedTurn,
   advisorWorkspaceGuidance,
-  createDefaultWebSearchProvider, createWebCodemodeProvider, REAL_CLOCK, type WebSearchProvider,
+  createDefaultWebSearchProvider, createWebCodemodeProvider, REAL_CLOCK, type Clock, type WebSearchProvider,
   createAgentsCodemodeProvider, createReleaseCodemodeProvider, createStateCodemodeProvider,
   type CodemodeProvider,
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
@@ -350,6 +350,8 @@ export interface LocalAgentSessionOpts {
   workspaceTitle?: () => string | null;
   /** Background cutoff and teardown wait (BACKGROUND_POLICY). Default: interactive. */
   backgroundPolicy?: BackgroundPolicy;
+  /** Times the teardown grace. Default: the wall clock. */
+  clock?: Clock;
   /** The actor as the root's {@link LocalAgentHost} bound it; absent when this session owns it. */
   hosted?: LocalHostedSession;
 }
@@ -405,6 +407,7 @@ export class LocalAgentSession implements BackendHost {
   private readonly jobs: BackgroundJobStore;
   private readonly taskList: TaskListStore;
   private readonly jobRunner: BackgroundJobRunner;
+  private readonly clock: Clock;
   /** Durable MCTS checkpoint, so an interrupted think(mcts) resumes instead of losing its budget. */
   private readonly mctsSearchStore: MctsSearchStore;
   private readonly factsStore: FactsStore;
@@ -478,6 +481,7 @@ export class LocalAgentSession implements BackendHost {
   constructor(opts: LocalAgentSessionOpts) {
     this.db = opts.db;
     this.rt = opts.rt;
+    this.clock = opts.clock ?? REAL_CLOCK;
     this.oneShot = opts.oneShot === true;
     this.cwd = opts.cwd ?? this.rt.cwd ?? process.cwd();
     this.workspaceTitleSource = opts.workspaceTitle ?? null;
@@ -493,7 +497,9 @@ export class LocalAgentSession implements BackendHost {
 
     // Ensure every workspace table exists: the database may be untouched (benchmark harness, fresh clone).
     const hubSql = makeSqlExec(opts.db);
-    initWorkspaceSchema({ execRaw: this.rt.storage.execRaw, sql: this.rt.storage.sql, exec: hubSql });
+    initWorkspaceSchema({
+      execRaw: this.rt.storage.execRaw, sql: this.rt.storage.sql, exec: hubSql, transactionSync: (write) => this.rt.storage.transactionSync(write),
+    });
 
     // One engine, governor and event rail per logical actor: hosted, the root's host built them.
     const own = opts.hosted ? null : createLocalOrchestration({
@@ -1225,7 +1231,7 @@ export class LocalAgentSession implements BackendHost {
   /** One shared grace deadline, so a one-shot run calling settleBackgroundWork() then end() pays it once. */
   private settleDeadline: number | null = null;
   private drainDeadline(): number {
-    return this.settleDeadline ??= Date.now() + this.jobRunner.policy.settleGraceMs;
+    return this.settleDeadline ??= this.clock.now() + this.jobRunner.policy.settleGraceMs;
   }
   /** Hold one settlement in the join set; it resolves only after removal so joiners terminate. */
   private tracked(settle: () => Promise<void>): void {
@@ -1279,7 +1285,7 @@ export class LocalAgentSession implements BackendHost {
     });
 
     while (this.backgroundFibers.size > 0) {
-      const remaining = deadline - Date.now();
+      const remaining = deadline - this.clock.now();
 
       if (remaining <= 0) {
         this.announceAbandonedJobs();
@@ -1287,7 +1293,7 @@ export class LocalAgentSession implements BackendHost {
         return false;
       }
 
-      await raceDeadline(Promise.allSettled(this.backgroundFibers), remaining);
+      await raceDeadline(this.clock, Promise.allSettled(this.backgroundFibers), remaining);
     }
 
     return true;
@@ -2994,12 +3000,13 @@ export class LocalAgentSession implements BackendHost {
 
 export { serializeContentForHeads } from '@kinu.run/core';
 
-/** Resolve when `work` settles or `ms` elapses; the timer is always cleared. */
-async function raceDeadline(work: Promise<unknown>, ms: number): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expiry = new Promise<void>((expire) => { timer = setTimeout(expire, ms); });
+/** Resolve when `work` settles or `ms` elapses on `clock`; the timer is always disarmed. */
+async function raceDeadline(clock: Clock, work: Promise<unknown>, ms: number): Promise<void> {
+  let disarm = (): void => {};
+
+  const expiry = new Promise<void>((expire) => { disarm = clock.after(ms, expire); });
 
   try { await Promise.race([work, expiry]); }
-  finally { if (timer) clearTimeout(timer); }
+  finally { disarm(); }
 }
 

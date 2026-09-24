@@ -7,7 +7,7 @@ import { chunkMarkdown, initMemoryChunkTables } from '@kinu.run/agent-utils/memo
 import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils/stores';
 import type { CraftStore } from '../types/agent-runtime';
 import type {
-  Executor, FiberCtx, Memory, RawSqlExec, Schedule, SqlExec, SqlExecutor, SqlValue, VFS,
+  Executor, FiberCtx, Memory, RawSqlExec, Schedule, SqlExec, SqlExecutor, SqlValue, Storage, VFS,
 } from '../types/primitives';
 import type { ActorHandle } from './actor-handle';
 import { nanoid } from '../utils/nanoid';
@@ -61,8 +61,9 @@ export function wrapDatabase(db: AgentDatabase) {
     exec<T>(strings.join('?'), ...values);
 
   const execRaw: RawSqlExec = (ddl: string) => db.exec(ddl);
+  const transactionSync: Storage['transactionSync'] = (write) => db.transaction(write)();
 
-  return { sql, execRaw };
+  return { sql, execRaw, transactionSync };
 }
 
 export function inlineWorkspaceStorage(db: AgentDatabase): Pick<WorkspaceOptions, 'sql' | 'transactions'> {
