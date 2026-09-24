@@ -8,6 +8,8 @@ import { diagnostics, renderCauseChain, toKinuError, tolerate } from '../obs/ind
 import * as v from 'valibot';
 import { errorResponse } from './cloudflare-ai-fetch';
 import { createCachedUsageRepair } from './stream-usage-repair';
+import { watchSseTerminal } from './sse-terminal';
+import { REAL_CLOCK } from '../types/clock';
 
 /** Only the fields this adapter reads; everything else travels through untouched. */
 const ChatCompletionRequestSchema = v.looseObject({
@@ -171,7 +173,8 @@ async function streamedResponse(
   return unstreamable(model, 'a JSON completion');
 }
 
-/** The first read is awaited before responding so an empty or JSON head is refused with a status code, not a dying stream. */
+/** The first read is awaited before responding so an empty or JSON head is refused with a status code, not a dying stream.
+ *  The producer may never close after `data: [DONE]`; the terminal watcher ends the stream there. */
 async function sseResponse(
   body: ReadableStream<Uint8Array>,
   model: string,
@@ -212,48 +215,17 @@ async function sseResponse(
     bytes: first.value.byteLength,
   });
 
-  let pending: Uint8Array | undefined = first.value;
-
-  const source = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (pending) {
-        controller.enqueue(pending);
-        pending = undefined;
-
-        return;
-      }
-
-      const next = await reader.read();
-
-      if (next.done) controller.close();
-      else controller.enqueue(next.value);
-    },
-    // Cancelling the reader stops the upstream request; release in `finally` so the binding body is never left locked.
-    async cancel(reason) {
-      try {
-        await reader.cancel(reason);
-      } finally {
-        reader.releaseLock();
-      }
-    },
-  });
+  reader.releaseLock();
 
   return new Response(
-    // After the terminal frame, stop upstream so the turn ends at [DONE] even if the producer never closes.
-    source.pipeThrough(openAIChunkTransform(model, async () => {
-      try {
-        await reader.cancel();
-      } finally {
-        reader.releaseLock();
-      }
-    })),
+    watchSseTerminal(body, REAL_CLOCK, first.value).pipeThrough(openAIChunkTransform(model)),
     { headers: { 'content-type': 'text/event-stream' } },
   );
 }
 
 /** Upstream event-stream frames in, OpenAI chunk frames out. A frame with a live choice is forwarded verbatim;
  *  native payloads and choice-less usage reports are translated, with usage leaving once with the finish state. */
-function openAIChunkTransform(model: string, onTerminal?: () => Promise<void>): TransformStream<Uint8Array, Uint8Array> {
+function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const id = `chatcmpl-${crypto.randomUUID()}`;
@@ -278,7 +250,7 @@ function openAIChunkTransform(model: string, onTerminal?: () => Promise<void>): 
     return encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`);
   };
 
-  const finalize = async (controller: TransformStreamDefaultController<Uint8Array>): Promise<void> => {
+  const finalize = (controller: TransformStreamDefaultController<Uint8Array>): void => {
     if (closed) return;
 
     // The final state leaves in one frame; if upstream already sent a finish reason, usage goes on a choice-less chunk.
@@ -295,7 +267,6 @@ function openAIChunkTransform(model: string, onTerminal?: () => Promise<void>): 
     owedUsage = undefined;
     controller.enqueue(encoder.encode('data: [DONE]\n\n'));
     closed = true;
-    await onTerminal?.();
   };
 
   const translate = (
@@ -340,12 +311,12 @@ function openAIChunkTransform(model: string, onTerminal?: () => Promise<void>): 
     }
   };
 
-  const onData = async (
+  const onData = (
     payload: string,
     controller: TransformStreamDefaultController<Uint8Array>,
-  ): Promise<void> => {
+  ): void => {
     if (payload === '[DONE]') {
-      await finalize(controller);
+      finalize(controller);
 
       return;
     }
@@ -357,7 +328,6 @@ function openAIChunkTransform(model: string, onTerminal?: () => Promise<void>): 
     if (!object.success) {
       failed = true;
       controller.error(new Error(`Workers AI ${model} streamed a data frame that is not a JSON object`));
-      await onTerminal?.();
 
       return;
     }
@@ -367,8 +337,6 @@ function openAIChunkTransform(model: string, onTerminal?: () => Promise<void>): 
 
     if (!chunk.success || chunk.output.choices.length === 0) {
       translate(object.output, controller);
-
-      if (failed) await onTerminal?.();
 
       return;
     }
@@ -385,30 +353,31 @@ function openAIChunkTransform(model: string, onTerminal?: () => Promise<void>): 
     controller.enqueue(encoder.encode(`data: ${outgoing}\n\n`));
   };
 
-  const drain = async (
+  const drain = (
     line: string,
     controller: TransformStreamDefaultController<Uint8Array>,
-  ): Promise<void> => {
+  ): void => {
     if (failed) return;
     const field = line.trimEnd();
 
     if (!field.startsWith('data:')) return;
-    await onData(field.slice('data:'.length).trim(), controller);
+    onData(field.slice('data:'.length).trim(), controller);
   };
 
+  // An error here reaches the watcher through the pipe, which cancels the producer.
   return new TransformStream({
-    async transform(bytes, controller) {
+    transform(bytes, controller) {
       buffer += decoder.decode(bytes, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
 
-      for (const line of lines) await drain(line, controller);
+      for (const line of lines) drain(line, controller);
     },
-    async flush(controller) {
+    flush(controller) {
       buffer += decoder.decode();
-      await drain(buffer, controller);
+      drain(buffer, controller);
 
-      if (!failed) await finalize(controller);
+      if (!failed) finalize(controller);
     },
   });
 }

@@ -9,13 +9,15 @@ const SSE_CONTENT_IDLE_MS = 10 * 60_000;
 /** A symbol so no producer value can be mistaken for the stall. */
 const STALLED: unique symbol = Symbol('sse-terminal: no content');
 
-/** End an SSE stream at its `data: [DONE]` message (producers may never close after it),
- *  forwarding original bytes; a silent producer is bounded by {@link SSE_CONTENT_IDLE_MS}. */
-function watchSseTerminal(body: ReadableStream<Uint8Array>, clock: Clock): ReadableStream<Uint8Array> {
+/** End an SSE stream at its `data: [DONE]` message (producers may never close after it), forwarding original bytes;
+ *  a silent producer is bounded by {@link SSE_CONTENT_IDLE_MS}. `read` is bytes already taken from `body`. The
+ *  watcher must be the body's only reader: it cancels between its own reads, and a workerd body rejects a read that is
+ *  pending at cancel ("Stream was cancelled.") where a spec stream resolves it as done. */
+export function watchSseTerminal(body: ReadableStream<Uint8Array>, clock: Clock, read?: Uint8Array): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
-  const chunks: Uint8Array[] = [];
-  let buffered = 0;
+  const chunks: Uint8Array[] = read === undefined ? [] : [read];
+  let buffered = read?.length ?? 0;
   let data: string[] = [];
   // Separate flags: the lock must be released on every terminal path, even after settling.
   let settled = false;
