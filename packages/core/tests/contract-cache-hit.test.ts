@@ -466,7 +466,8 @@ interface TurnResult {
 }
 
 /** One three-step turn (tool call, tool call, answer) against the provider's mocked cache. `durable` re-reads the
- *  stored history at every step, as a claimed turn's context plane does; `turnLocal` rides it. */
+ *  stored history at every step and names where the turn's input sits, as a claimed turn's context plane does;
+ *  `turnLocal` rides it. */
 async function driveTurn(
   entry: ProviderCase,
   opts: { decoy?: boolean; extension?: KinuExtension; dynamic?: () => DynamicContext; durable?: true; turnLocal?: ModelMessage[] } = {},
@@ -496,7 +497,7 @@ async function driveTurn(
   let stored: ModelMessage[] = [...HISTORY];
 
   const plane = opts.durable === undefined ? {} : {
-    stepContext: { base: async () => ({ messages: [...stored], changed: false }), consume: async () => {} },
+    stepContext: { base: async () => ({ messages: [...stored], changed: false, turnStart: HISTORY.length - 1 }), consume: async () => {} },
     persistStep: async (produced: readonly ModelMessage[]) => { stored = [...HISTORY, ...produced]; },
   };
 

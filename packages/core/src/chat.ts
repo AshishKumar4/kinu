@@ -27,7 +27,6 @@ import { composePrepareStep, type StepContextPlane, type StepDynamicContext } fr
 import type { MissionGovernor } from './mission-budget';
 import type { AttachmentPolicy } from './prompting/attachment-sanitizer';
 import { assembleTurnMessages } from './orchestrator/turn-context';
-import { turnInputStart } from './prompting/volatile-context';
 import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
 import { contextWindowForModel } from './context-window';
 import type { CountableRequest, InputTokenCount } from './providers/input-tokens';
@@ -514,22 +513,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   const stepContext = opts.stepContext;
   const initialContext = stepContext === undefined ? null : await stepContext.base();
-  const turnMessages = await assembleTurnMessages({ ...assembly, history: initialContext?.messages ?? assembly.history });
+
   // The turn-local messages ride right before the turn's input on every step, so the request stays the last
   // user-role content and each step's prefix is the last one's.
-  const turnStart = turnInputStart(turnMessages);
-  const turnOpening = turnMessages[turnStart];
-  const turnOpeningBytes = turnOpening === undefined ? null : JSON.stringify(turnOpening);
-
-  /** Where the turn's first message sits in a re-read context: found by its bytes, so an edit to earlier history
-   *  cannot move the turn-local messages into the turn. */
-  const turnStartOf = (messages: readonly ModelMessage[]): number => {
-    for (let at = messages.length - 1; turnOpeningBytes !== null && at >= 0; at -= 1) {
-      if (messages[at]?.role === turnOpening?.role && JSON.stringify(messages[at]) === turnOpeningBytes) return at;
-    }
-
-    return turnInputStart(messages);
-  };
+  const { messages: turnMessages, turnStart } = await assembleTurnMessages({
+    ...assembly, history: initialContext?.messages ?? assembly.history, turnStart: initialContext?.turnStart,
+  });
 
   let initialContextAvailable = initialContext !== null;
 
@@ -542,14 +531,14 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       }
 
       const base = await stepContext.base();
-      const messages = await assembleTurnMessages({ ...assembly, history: base.messages, admission: undefined });
+      const assembled = await assembleTurnMessages({ ...assembly, history: base.messages, turnStart: base.turnStart, admission: undefined });
 
-      return { messages, changed: base.changed, turnStart: turnStartOf(messages) };
+      return { ...assembled, changed: base.changed };
     },
     consume: step => stepContext.consume(step),
   };
 
-  const turnLocal = opts.turnLocal !== undefined && opts.turnLocal.length > 0 ? { messages: opts.turnLocal, turnStart } : undefined;
+  const turnLocal = opts.turnLocal !== undefined && opts.turnLocal.length > 0 ? opts.turnLocal : undefined;
 
   const cache = turnCachePlan(opts, turnMessages);
   const rollTail = hasCacheMarkers(cache.strategy);
@@ -636,6 +625,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           meter,
           context: stepContextPlane,
           turnLocal,
+          turnStart,
         }, { stepNumber: stepOffset + stepNumber, messages, steps });
       },
       experimental_transform: () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({

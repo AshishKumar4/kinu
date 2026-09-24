@@ -3138,6 +3138,46 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     await session.end();
   });
 
+  test('a steer word for word the request lands after it; this turn\u2019s runtime context stays before the request', async () => {
+    const prompts: PromptMessage[][] = [];
+    const gate = Promise.withResolvers<void>();
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
+    // Two tool steps, so the third re-reads the landed steer from durable history, then an answer.
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async (options) => {
+        prompts.push(options.prompt);
+
+        if (prompts.length > 2) return fakeModel('done').doStream(options);
+
+        return { stream: gatedFactCallStream(`call-${String(prompts.length)}`, prompts.length === 1 ? gate.promise : Promise.resolve(), usage), response: { headers: {} } };
+      },
+    });
+
+    const { rt, session, events } = setup('unused', model);
+    await writeFocusedSkill(rt);
+
+    const turn = session.send('/focused remember this', { id: crypto.randomUUID() });
+    await waitFor(() => events.some((e) => e.type === 'tool-call'));
+    const steer = session.send('/focused remember this', { id: crypto.randomUUID() });
+    gate.resolve();
+    await turn;
+    expect(await steer).toBe('mid-turn');
+
+    const third = present(prompts[2], 'the step after the steer landed');
+    const roles = third.map((message) => message.role);
+    const activation = third.findIndex((message) => messageText(message).includes('## Skills activated this turn'));
+    const landed = third.map((message) => message.role === 'user' ? messageText(message) : null).lastIndexOf('/focused remember this');
+
+    expect(landed).toBeGreaterThan(roles.indexOf('tool'));
+    expect(activation).toBeGreaterThanOrEqual(0);
+    expect(activation).toBeLessThan(roles.indexOf('tool'));
+    expect(messageText(present(third[activation + 1], 'the request'))).toBe('/focused remember this');
+    await session.end();
+  });
+
   test('a background event reaches the LIVE turn at its next step, alongside a user steer', async () => {
     // A platform wake and a user steer land at the same next step: the wake is model-visible only, the steer is durable.
     const { model, prompts, release } = toolThenAnswerModel('handled both');

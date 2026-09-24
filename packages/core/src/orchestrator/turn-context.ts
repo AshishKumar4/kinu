@@ -20,6 +20,8 @@ export interface TurnContextInput {
   system: string;
   /** Never mutated. */
   history: readonly ModelMessage[];
+  /** The turn's input in `history`, when its identity is known. */
+  turnStart?: number | undefined;
   /** Omitted = no sanitization pass. */
   attachments?: AttachmentPolicy;
   extensions?: ExtensionHost;
@@ -29,6 +31,11 @@ export interface TurnContextInput {
   trigger: 'auto' | 'force';
   abortSignal?: AbortSignal | undefined;
   admission?: TurnAdmission;
+}
+
+export interface AssembledTurn {
+  readonly messages: ModelMessage[];
+  readonly turnStart: number;
 }
 
 /**
@@ -89,15 +96,24 @@ export function measureCompactionTrigger(
   return measured;
 }
 
-export async function assembleTurnMessages(input: TurnContextInput): Promise<ModelMessage[]> {
+export async function assembleTurnMessages(input: TurnContextInput): Promise<AssembledTurn> {
   const history = input.attachments
     ? await sanitizeAttachmentsForModel(input.history, input.attachments)
     : input.history;
 
+  // Sanitizing keeps indices and a transform keeps untouched messages, so the input is found by reference.
+  const opening = input.turnStart === undefined ? undefined : history[input.turnStart];
+
+  const located = (messages: ModelMessage[]): AssembledTurn => {
+    const at = opening === undefined ? -1 : messages.indexOf(opening);
+
+    return { messages, turnStart: at < 0 ? turnInputStart(messages) : at };
+  };
+
   await input.extensions?.emitTurnStart({ system: input.system, history });
 
   // One closure: admission may re-run it with trigger:'force' and the ordering must match.
-  const assemble = async (trigger: 'auto' | 'force'): Promise<ModelMessage[]> => {
+  const assemble = async (trigger: 'auto' | 'force'): Promise<AssembledTurn> => {
     const transformed = await input.extensions?.runTransformContext({
       sessionKey: input.sessionKey,
       messages: history,
@@ -110,7 +126,7 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Mod
 
     const assembled = [...(transformed ?? history)];
 
-    return settleUnpairedToolCalls(assembled) ?? assembled;
+    return located(settleUnpairedToolCalls(assembled) ?? assembled);
   };
 
   const assembled = await assemble(input.trigger);
@@ -120,10 +136,10 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Mod
 
   const limit = stepContextLimit(admission.limits);
 
-  const measure = async (assembledMessages: ModelMessage[]): Promise<number> => {
+  const measure = async (turn: AssembledTurn): Promise<number> => {
     const messages = admission.turnLocal === undefined
-      ? assembledMessages
-      : placeTurnLocal(assembledMessages, { at: turnInputStart(assembledMessages), messages: admission.turnLocal });
+      ? turn.messages
+      : placeTurnLocal(turn.messages, { at: turn.turnStart, messages: admission.turnLocal });
 
     if (admission.count) {
       const counted = await admission.count({

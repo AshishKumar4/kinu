@@ -658,7 +658,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - **The request is the last thing the agent reads in a turn.** Runtime news for the turn (a device that just
   connected, skills it activated, a background job it resumes) and changed live state used to follow the request, and
   a model read that news as the turn: asked to read a file back, it acknowledged the device instead. They now ride
-  right before the request, in one place for every step of the turn, so the steps of a turn also read the cache.
+  right before the request, in one place for every step of the turn, so the steps of a turn also read the cache. This
+  also holds for a turn picked up after a restart, and when a later message repeats the request word for word.
 
 - **Responses models see their own earlier steps.** On the models.dev catalog
   (Muse on opencode's gateway), the CLI's opencode bridge and Codex, every step

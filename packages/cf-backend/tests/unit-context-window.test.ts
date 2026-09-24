@@ -135,7 +135,7 @@ describe("admission on an unmeasured window", () => {
   /** The turn of #20, already force-compacted so its one compaction is spent. */
   async function admit(windowMeasured: boolean): Promise<ModelMessage[] | Error> {
     try {
-      return await assembleTurnMessages({
+      return (await assembleTurnMessages({
         system: "SYS",
         history: HISTORY,
         sessionKey: "k",
@@ -145,7 +145,7 @@ describe("admission on an unmeasured window", () => {
           count: async () => ({ kind: "counted", tokens: 124_644 }),
           limits: { contextWindow: 128_000, modelOutputLimit: 128_000, windowMeasured },
         },
-      });
+      })).messages;
     } catch (caught) {
       return caught instanceof Error ? caught : new Error(String(caught));
     }

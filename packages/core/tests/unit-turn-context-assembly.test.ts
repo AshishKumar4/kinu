@@ -21,7 +21,7 @@ function base() {
 
 describe('assembleTurnMessages', () => {
   test('bare assembly returns the durable history plus nothing', async () => {
-    const out = await assembleTurnMessages(base());
+    const { messages: out } = await assembleTurnMessages(base());
     expect(out).toEqual(HISTORY);
     expect(out).not.toBe(HISTORY);
   });
@@ -54,7 +54,21 @@ describe('assembleTurnMessages', () => {
       transformContext: async () => compacted,
     });
 
-    expect(await assembleTurnMessages({ ...base(), extensions })).toEqual(compacted);
+    expect((await assembleTurnMessages({ ...base(), extensions })).messages).toEqual(compacted);
+  });
+
+  test('the turn\u2019s input is found again past a transform that folded what came before it', async () => {
+    const request: ModelMessage = { role: 'user', content: 'and now?' };
+    const history: ModelMessage[] = [...HISTORY.slice(0, 2), request, { role: 'assistant', content: 'working' }];
+
+    const extensions = new ExtensionHost().register({
+      name: 'test.fold',
+      transformContext: async (ctx) => [{ role: 'user', content: 'summary' }, ...ctx.messages.slice(-2)],
+    });
+
+    const turn = await assembleTurnMessages({ ...base(), history, turnStart: 2, extensions });
+
+    expect(turn.messages[turn.turnStart]).toBe(request);
   });
 
   test('the transform receives sessionKey, window, trigger, and the measured token signal', async () => {
@@ -95,7 +109,7 @@ describe('assembleTurnMessages', () => {
       },
     });
 
-    const out = await assembleTurnMessages({
+    const { messages: out } = await assembleTurnMessages({
       ...base(),
       history: withFile,
       extensions,
