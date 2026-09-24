@@ -4,9 +4,9 @@
 
   One function per executor constructor, over the inputs that constructor reads:
   `packages/core/src/execution/inline.ts#createInlineExecutor` (the workspace,
-  plus its host toolchain), `nimbus.ts#createNimbusExecutor` (ports and a runtime
-  catalog), `nimbus.ts#createNimbusWorkspaceExecutor` (the workspace with a Nimbus
-  session attached), `sandbox.ts#createSandboxExecutor`,
+  plus its host toolchain), `nimbus.ts#createNimbusWorkspaceExecutor` (the
+  workspace with a Nimbus session attached, whose inputs are ports and a runtime
+  catalog), `sandbox.ts#createSandboxExecutor`,
   `device-tunnel-executor.ts#createDeviceTunnelExecutor` (what the device's
   toolchain probe found) and `parent.ts#createParentExecutor`. `Capability` and
   `ExecutorKind` are state mirrors of `EXECUTOR_CAPABILITIES` and `ExecutorKind`.
@@ -20,9 +20,7 @@
   - no executor claims `docker` or `gpu`, although both are in the vocabulary
     (`no_executor_claims_docker_or_gpu`), so a requirement for either is never met;
   - attaching a Nimbus session keeps every workspace capability and adds every
-    Nimbus capability except owned files (`a_session_extends_the_workspace`);
-  - a Nimbus box with ports and a runtime catalog subsumes the sandbox, and the
-    sandbox subsumes no Nimbus box (`the_sandbox_never_subsumes_a_nimbus_box`).
+    Nimbus capability except owned files (`a_session_extends_the_workspace`).
 
   The router lists available executors; it does not choose one by required
   capability, so no routing function is modelled.
@@ -50,8 +48,8 @@ def probed : List Capability := [.javascript, .typescript, .python, .npm, .git]
 /-- A toolchain as its producers make it: drawn from `probed`. -/
 def FromProbe (cs : List Capability) : Prop := ∀ c ∈ cs, c ∈ probed
 
-/-- `createNimbusExecutor`'s inputs: ports it may expose inbound, and a runtime
-    catalog for `python` and native binaries. -/
+/-- A Nimbus session's inputs (`createNimbusWorkspaceExecutor`'s options): ports it
+    may expose inbound, and a runtime catalog for `python` and native binaries. -/
 structure NimbusConfig where
   inbound : Bool
   catalog : Bool
@@ -60,7 +58,6 @@ structure NimbusConfig where
 /-- A shipped executor and the inputs its constructor reads. -/
 inductive Executor where
   | inline (toolchain : List Capability)
-  | nimbus (config : NimbusConfig)
   | nimbusWorkspace (toolchain : List Capability) (config : NimbusConfig)
   | sandbox
   | device (present : List Capability)
@@ -68,7 +65,6 @@ inductive Executor where
 
 def Executor.kind : Executor → ExecutorKind
   | .inline _ => .workspace
-  | .nimbus _ => .nimbus
   | .nimbusWorkspace _ _ => .workspace
   | .sandbox => .sandbox
   | .device _ => .device
@@ -93,7 +89,6 @@ def deviceCaps (present : List Capability) : List Capability :=
 
 def Executor.caps : Executor → List Capability
   | .inline toolchain => inlineCaps toolchain
-  | .nimbus config => nimbusCaps config
   | .nimbusWorkspace toolchain config =>
     inlineCaps toolchain ++ (nimbusCaps config).filter (· != .fsOwned) ++ [.fsShared]
   | .sandbox => sandboxCaps
@@ -116,8 +111,8 @@ private theorem not_probed_of (cs : List Capability) (h : FromProbe cs) (c : Cap
     (hc : c ∉ probed) : c ∉ cs := fun hm => hc (h c hm)
 
 /-- **The kind says who owns the files.** A workspace or parent executor claims
-    shared files and not owned ones; a Nimbus, sandbox or device executor claims
-    owned files and not shared ones. -/
+    shared files and not owned ones; a sandbox or device executor claims owned
+    files and not shared ones. -/
 theorem the_kind_says_who_owns_the_files (e : Executor) (h : e.Probed) :
     (Capability.fsShared ∈ e.caps ↔ e.kind.sharesFiles = true) ∧
     (Capability.fsOwned ∈ e.caps ↔ e.kind.sharesFiles = false) := by
@@ -129,9 +124,6 @@ theorem the_kind_says_who_owns_the_files (e : Executor) (h : e.Probed) :
   | inline t =>
     have := ho t h
     simp [Executor.caps, Executor.kind, ExecutorKind.sharesFiles, inlineCaps, this]
-  | nimbus n =>
-    cases n with
-    | mk i c => cases i <;> cases c <;> decide
   | nimbusWorkspace t n =>
     have := ho t h
     simp [Executor.caps, Executor.kind, ExecutorKind.sharesFiles, inlineCaps, this, List.mem_filter]
@@ -154,7 +146,6 @@ theorem no_executor_claims_docker_or_gpu (e : Executor) (h : e.Probed) :
     | mk i c => cases i <;> cases c <;> decide
   cases e with
   | inline t => simp [Executor.caps, inlineCaps, hd t h, hg t h]
-  | nimbus n => exact hn n
   | nimbusWorkspace t n =>
     simp [Executor.caps, inlineCaps, hd t h, hg t h, List.mem_filter, (hn n).1, (hn n).2]
   | sandbox => decide
@@ -181,16 +172,5 @@ theorem a_session_extends_the_workspace (t : List Capability) (n : NimbusConfig)
   · simp only [Executor.caps]
     exact List.mem_append_left _ (List.mem_append_right _
       (List.mem_filter.mpr ⟨hc, by simpa using hne⟩))
-
-/-- **A fully configured Nimbus box subsumes the sandbox, and the sandbox subsumes
-    no Nimbus box**: every Nimbus box can signal processes and the sandbox cannot. -/
-theorem the_sandbox_never_subsumes_a_nimbus_box (n : NimbusConfig) :
-    Subsumes (.nimbus ⟨true, true⟩) .sandbox ∧ ¬ Subsumes .sandbox (.nimbus n) := by
-  refine ⟨fun c hc => ?_, fun h => ?_⟩
-  · revert c; decide
-  · have hsig : Capability.processSignal ∈ (Executor.nimbus n).caps := by
-      cases n with
-      | mk i c => cases i <;> cases c <;> decide
-    exact absurd (h _ hsig) (by decide)
 
 end Kinu.Execution.Capabilities
