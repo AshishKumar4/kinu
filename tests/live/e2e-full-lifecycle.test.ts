@@ -174,8 +174,6 @@ describe('E2E Full Lifecycle', () => {
       workspace: 'lifecycle-test',
       purpose: 'A coding assistant that helps write and test JavaScript code.',
       llm: LLM_CONFIG,
-      model: liveChatModel(LLM_CONFIG),
-      evolution: true,
     });
 
     db = target.db;

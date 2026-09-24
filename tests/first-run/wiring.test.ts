@@ -5,7 +5,7 @@ import { basename, join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import * as v from 'valibot';
 
-import { assessAdmissibility, outcomeRow, scratchDir, subgoalOutcome, TASK_OUTCOME,
+import { assessAdmissibility, outcomeRow, projectRunEventProvenance, scratchDir, subgoalOutcome, TASK_OUTCOME,
   type EvalObservation } from '@kinu.run/test-utils';
 import { isFirstRunSuite, trackedFiles } from '../../scripts/sources';
 import {
@@ -200,7 +200,8 @@ describe('a partial first-run tier is not evidence', () => {
     const scored = (id: string): EvalObservation => ({
       taskId: id, repetition: 0, outcome: 'scored',
       scores: [outcomeRow(subgoalOutcome(3, 3, 'every subgoal reached'))],
-      turns: 1, toolCalls: 2, toolNames: ['device.exec'], tokensIn: 10, tokensOut: 5, ms: 1_000,
+      turns: 1, toolCalls: 2, toolNames: ['device.exec'], tokensIn: 10, tokensOut: 5, reasoningOut: 0, ms: 1_000,
+      provenance: projectRunEventProvenance([]),
     });
 
     const declared = [...FIRST_RUN_CASES];
@@ -218,7 +219,8 @@ describe('a partial first-run tier is not evidence', () => {
     // covariates measured activity, not outcome.
     const activityOnly: EvalObservation = {
       taskId: declared[0] ?? '', repetition: 0, outcome: 'scored', scores: [],
-      turns: 1, toolCalls: 2, tokensIn: 10, tokensOut: 5, ms: 1_000,
+      turns: 1, toolCalls: 2, toolNames: ['device.exec'], tokensIn: 10, tokensOut: 5, reasoningOut: 0, ms: 1_000,
+      provenance: projectRunEventProvenance([]),
     };
 
     expect(assessAdmissibility([declared[0] ?? ''], [activityOnly]).failures.join(' '))

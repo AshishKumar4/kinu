@@ -1,22 +1,13 @@
 /**
- * `probeVerifier` is tested both ways on a shell that answers without printing the marker, as the
- * deployed Nimbus `node` shim does.
+ * The backend knob and the ledger reduction every live tier shares.
  */
 import { describe, expect, test } from 'bun:test';
-import type { RunEvent, VFS, WorkspaceSpend } from '@kinu.run/core';
+import type { RunEvent, WorkspaceSpend } from '@kinu.run/core';
 
 import {
-  EVAL_BACKEND_ENV, ledgerTotalsFromEvents, probeVerifier, resolveEvalBackend,
-  RUN_END_FAILURE_PREFIX, type EvalTargetWorkspace,
+  EVAL_BACKEND_ENV, ledgerTotalsFromEvents, resolveEvalBackend, RUN_END_FAILURE_PREFIX,
 } from '../src/eval-target';
 import { liveModelSpend, recordNoModelEpisode, recordWorkspaceSpend, resetLiveModelSpend } from '../src/live-model';
-
-/** The fake target's observable surface: what the probe wrote, what it ran. */
-interface FakeWorkspace {
-  workspace: EvalTargetWorkspace;
-  written: Map<string, string>;
-  commands: string[];
-}
 
 const RUN = 'run-test';
 
@@ -180,98 +171,6 @@ describe('resolveEvalBackend — the one knob', () => {
     if (refused.kind !== 'refused') throw new Error('unreachable');
     expect(refused.reason).toContain(EVAL_BACKEND_ENV);
     expect(refused.reason).toContain('cloud');
-  });
-});
-
-/**
- * Only the members the probe touches are real; the rest throw, so a new read fails instead
- * of passing over a default.
- */
-function fakeWorkspace(reply: { stdout: string; exitCode: number }): FakeWorkspace {
-  const written = new Map<string, string>();
-  const commands: string[] = [];
-
-  const unavailable = (member: string) => (): never => {
-    throw new Error(`the probe read \`${member}\`, which it is not supposed to need`);
-  };
-
-  const vfs: VFS = {
-    writeFile: (path, data) => {
-      written.set(path, String(data));
-
-      return Promise.resolve();
-    },
-    unlink: (path) => {
-      written.delete(path);
-
-      return Promise.resolve();
-    },
-    readFile: unavailable('readFile'),
-    readdir: unavailable('readdir'),
-    stat: unavailable('stat'),
-    mkdir: unavailable('mkdir'),
-    exists: unavailable('exists'),
-  };
-
-  return {
-    written,
-    commands,
-    workspace: {
-      vfs,
-      exec: (command) => {
-        commands.push(command);
-
-        return Promise.resolve(reply);
-      },
-    },
-  };
-}
-
-describe('probeVerifier — the one instrument both arms run', () => {
-  test('a shell that prints the marker RUNS, and the module is cleaned up', async () => {
-    const { workspace, written, commands } = fakeWorkspace({
-      stdout: 'KINU_VERIFIER_PROBE_OK\n', exitCode: 0,
-    });
-
-    const probe = await probeVerifier(workspace);
-    expect(probe.kind).toBe('runs');
-
-    if (probe.kind !== 'runs') throw new Error('unreachable');
-    // The evidence is the shell's output, so a reader sees which shell answered.
-    expect(probe.evidence).toBe('KINU_VERIFIER_PROBE_OK');
-    // `node` on a written module is the smallest instance of `exec-ratio`.
-    expect(commands).toEqual(['node _verifier_probe.mjs']);
-    expect(written.size, 'the probe module must not outlive the probe').toBe(0);
-  });
-
-  test('a shell that answers WITHOUT the marker is unavailable, and says what it said', async () => {
-    // Production shape: the Nimbus `node` shim resolves `esbuild-wasm` to its Node entry, which
-    // rejects `wasmModule`, so no RESULT line prints.
-    const { workspace } = fakeWorkspace({
-      stdout: 'error: Cannot use "wasmModule" outside a browser\n', exitCode: 1,
-    });
-
-    const probe = await probeVerifier(workspace);
-    expect(probe.kind).toBe('unavailable');
-
-    if (probe.kind !== 'unavailable') throw new Error('unreachable');
-    expect(probe.reason).toContain('exited 1');
-    // The shell's own words survive in the refusal.
-    expect(probe.reason).toContain('wasmModule');
-    expect(probe.reason).toContain("score:'verify'");
-  });
-
-  test('a shell that refuses the command outright is unavailable, never a throw', async () => {
-    // No throw: the arm must be able to report why it cannot measure.
-    const probe = await probeVerifier({
-      vfs: fakeWorkspace({ stdout: '', exitCode: 0 }).workspace.vfs,
-      exec: () => Promise.reject(new Error('no executor on this target')),
-    });
-
-    expect(probe.kind).toBe('unavailable');
-
-    if (probe.kind !== 'unavailable') throw new Error('unreachable');
-    expect(probe.reason).toContain('no executor on this target');
   });
 });
 

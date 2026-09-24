@@ -37,7 +37,7 @@ import {
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import type { CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { buildEvalAgentSurface, createStepToolCallLog, makeSessionWriter } from './harness';
-import { provisionLocalTarget, type LocalAgentEvalTarget } from './target-local';
+import { provisionLocalTarget, type LocalTarget } from './target-local';
 import {
   EVAL_BACKEND_ENV, liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode,
   recordLiveModelSpend, reportLiveModelSpend, resolveEvalBackend, UNCONFIGURED_LLM,
@@ -174,7 +174,7 @@ describe('E2E Lifecycle', () => {
   let events: EvolutionEvent[];
   let turns: CompletedTurn[];
   let model: LanguageModel;
-  let target: LocalAgentEvalTarget;
+  let target: LocalTarget;
 
   beforeAll(async () => {
     // Nothing is provisioned on the cloud knob: a local workspace opened here
@@ -197,8 +197,6 @@ describe('E2E Lifecycle', () => {
       workspace: 'e2e-test',
       purpose: 'A coding assistant that helps write TypeScript.',
       llm: LLM_CONFIG,
-      model: liveChatModel(LLM_CONFIG),
-      evolution: true,
     });
     rt = target.runtime;
     db = target.db;
@@ -225,9 +223,8 @@ describe('E2E Lifecycle', () => {
     // announcing it drove work whose cost it could not account for, when it had
     // driven none. An honest meter must not fire on a run that spent nothing.
     reportLiveModelSpend('E2E Lifecycle');
-    // Teardown owns the store and the directory. On a cloud target the same call
-    // DELETES the workspace, which is why it belongs to the target.
-    await target?.teardown();
+    // Teardown owns the store and the directory.
+    target?.teardown();
   });
 
   inProcessTest('agent created with correct tables', async () => {

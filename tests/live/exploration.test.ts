@@ -43,7 +43,7 @@ import {
   buildEvalAgentSurface, makeSessionWriter, recordRequestSurface,
   type EvalAgentSurface,
 } from './harness';
-import { provisionLocalTarget, type LocalAgentEvalTarget } from './target-local';
+import { provisionLocalTarget, type LocalTarget } from './target-local';
 import {
   liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode, recordLiveModelSpend,
   reportLiveModelSpend, scoreExploration, scoreSettleVisibility, UNCONFIGURED_LLM,
@@ -94,7 +94,7 @@ const EVAL_SEARCH_BRANCHES = 3;
 
 describe('Exploration evals — MCTS reached, ranked, and readable', () => {
   let rt: CLIRuntime;
-  let target: LocalAgentEvalTarget;
+  let target: LocalTarget;
   let model: LanguageModel;
 
   /** The eval agent's surface from the PRODUCTION actor root. Assembling
@@ -122,8 +122,6 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
       workspace: 'exploration-eval',
       purpose: 'An architecture advisor that compares competing designs before recommending one.',
       llm: LLM_CONFIG,
-      model: liveChatModel(LLM_CONFIG),
-      evolution: true,
     });
     rt = target.runtime;
     // The model first, then the surface through the shared production
@@ -146,9 +144,8 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
 
   afterAll(async () => {
     reportLiveModelSpend('Exploration Evals');
-    // Teardown owns the store and the directory. On a cloud target the same
-    // call DELETES the workspace, which is why it belongs to the target.
-    await target?.teardown();
+    // Teardown owns the store and the directory.
+    target?.teardown();
   });
 
   test('the agent is actually offered the delegation tool', () => {

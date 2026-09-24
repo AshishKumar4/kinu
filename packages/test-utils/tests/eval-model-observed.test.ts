@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import type { RunEvent } from '@kinu.run/core';
 import {
   assessAdmissibility, createObservedModelAccumulator, modelClaimRefuted,
-  publishRunRecord, type EvalObservation,
+  projectRunEventProvenance, publishRunRecord, type EvalObservation,
 } from '../src/eval-run';
 import { TASK_OUTCOME } from '../src/eval-outcome';
 import type { LiveModelSpend } from '../src/live-model';
@@ -43,7 +43,8 @@ function scored(): EvalObservation {
   return {
     taskId: 'case-a', repetition: 0, outcome: 'scored',
     scores: [{ name: TASK_OUTCOME, asserts: 'solved', eligible: 1, passed: 1, rate: 1, detail: 'solved' }],
-    turns: 2, toolCalls: 3, toolNames: ['shell'], tokensIn: 10, tokensOut: 5, ms: 7,
+    turns: 2, toolCalls: 3, toolNames: ['shell'], tokensIn: 10, tokensOut: 5, reasoningOut: 0, ms: 7,
+    provenance: projectRunEventProvenance([]),
   };
 }
 

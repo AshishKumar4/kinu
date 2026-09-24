@@ -49,8 +49,7 @@
  *               :104). WALKED, both ways: runs are cursored and the events read
  *               is closed at `RUN_EVENT_LIMIT_MAX` = 500 rows
  *               (core/src/events/recorder.ts:203, :220), so a multi-turn episode
- *               read in one call is a truncated denominator — the exact defect
- *               `walkRunEvents` exists for on the local target.
+ *               read in one call is a truncated denominator.
  *   files       `GET|PUT /api/workspaces/<name>/files?executor=&path=`
  *               (files-routes.ts:65-90) — the plane the web file manager writes
  *               through, which is why it is the one this harness seeds and

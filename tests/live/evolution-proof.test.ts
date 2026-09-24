@@ -35,7 +35,7 @@ import {
   buildEvalAgentSurface, createStepToolCallLog, recordRequestSurface,
   type EvalAgentSurface, type RequestSurfaceEvidence,
 } from './harness';
-import { provisionLocalTarget, type LocalAgentEvalTarget } from './target-local';
+import { provisionLocalTarget, type LocalTarget } from './target-local';
 import {
   finalIntegerAnswer, letterKey,
   liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,
@@ -401,7 +401,7 @@ const CIPHER_ANSWER = atbash(CIPHER.ciphertext);
 
 describe('Evolution Proof', () => {
   let rt: CLIRuntime;
-  let target: LocalAgentEvalTarget;
+  let target: LocalTarget;
   let engine: EvolutionEngine;
   let model: LanguageModel;
   /** Built ONCE, in setup, from the production actor root. It was rebuilt per
@@ -425,8 +425,6 @@ describe('Evolution Proof', () => {
       workspace: 'evolution-proof',
       purpose: 'A crypto and algorithm expert that solves CTF-style challenges using code execution.',
       llm: LLM_CONFIG,
-      model: liveChatModel(LLM_CONFIG),
-      evolution: true,
     });
     rt = target.runtime;
     // The wiring `LocalAgentSession` does for every turn-driving surface. Every
@@ -442,9 +440,8 @@ describe('Evolution Proof', () => {
 
   afterAll(async () => {
     reportLiveModelSpend('Evolution Proof');
-    // Teardown owns the store and the directory. On a cloud target the same
-    // call DELETES the workspace, which is why it belongs to the target.
-    await target?.teardown();
+    // Teardown owns the store and the directory.
+    target?.teardown();
   });
 
   // ── SESSION 1: Solve challenges, build patterns ──────────────

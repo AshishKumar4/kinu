@@ -1636,8 +1636,6 @@ function kindOf(file: string, specifiers: readonly string[], runner: string): Ki
 
   if (file.includes('/tests/e2e/') || base.startsWith('e2e') || base.startsWith('smoke')) return 'e2e';
 
-  if (specifiers.some((s) => s.includes('cli-driver') || s.includes('eval-target'))) return 'e2e';
-
   if (base.startsWith('integration') || base.startsWith('contract')
     || base.startsWith('conformance')) return 'integration';
 

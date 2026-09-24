@@ -21,7 +21,7 @@ import { type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import {
   buildEvalAgentSurface, createStepToolCallLog,
 } from './harness';
-import { provisionLocalTarget, type LocalAgentEvalTarget } from './target-local';
+import { provisionLocalTarget, type LocalTarget } from './target-local';
 import {
   finalIntegerAnswer,
   liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
@@ -109,7 +109,7 @@ async function solveProblem(
 
 describe('Deep Evolution — 8 Algorithmic Challenges', () => {
   let rt: CLIRuntime;
-  let target: LocalAgentEvalTarget;
+  let target: LocalTarget;
   let tools: ToolSet;
   let engine: EvolutionEngine;
   let events: EvolutionEvent[];
@@ -132,8 +132,6 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
       workspace: 'algo-solver',
       purpose: 'An algorithmic problem solver. Always use eval to compute answers. Never guess.',
       llm: LLM_CONFIG,
-      model: liveChatModel(LLM_CONFIG),
-      evolution: true,
     });
     rt = target.runtime;
 
@@ -153,9 +151,8 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
 
   afterAll(async () => {
     reportLiveModelSpend('Deep Evolution');
-    // Teardown owns the store and the directory. On a cloud target the same
-    // call DELETES the workspace, which is why it belongs to the target.
-    await target?.teardown();
+    // Teardown owns the store and the directory.
+    target?.teardown();
   });
 
   liveTest('solve 8 algorithmic problems with native tool calling', async () => {

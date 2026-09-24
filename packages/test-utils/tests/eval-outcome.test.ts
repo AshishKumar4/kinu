@@ -4,7 +4,7 @@ import {
   TASK_OUTCOME, isCovariateRow, outcomeRow, subgoalOutcome,
 } from '../src/eval-outcome';
 import { BEHAVIOUR_SCORERS } from '../src/agent-evals';
-import { assessAdmissibility, type EvalObservation } from '../src/eval-run';
+import { assessAdmissibility, projectRunEventProvenance, type EvalObservation } from '../src/eval-run';
 
 describe('subgoalOutcome — partial credit from a count', () => {
   test('three of five checks is a rate of 0.6, with the counts preserved', () => {
@@ -65,7 +65,8 @@ describe('the bar against promotion is mechanical', () => {
 
 describe('admissibility rests on the outcome, not on mechanism coverage', () => {
   const behaved = {
-    turns: 3, toolCalls: 9, toolNames: ['shell', 'file'], tokensIn: 100, tokensOut: 10, ms: 1,
+    turns: 3, toolCalls: 9, toolNames: ['shell', 'file'], tokensIn: 100, tokensOut: 10, reasoningOut: 0, ms: 1,
+    provenance: projectRunEventProvenance([]),
   };
 
   const row = (name: string, eligible: number, passed: number) =>

@@ -99,7 +99,7 @@ The live swarm grade (`tests/evals/swarm.eval.ts`: one `agents({action:'swarm'})
 
 ### Which agent it runs against (`--backend local | cloud`)
 
-Targets are typed in `packages/test-utils/src/eval-target.ts`.
+`--backend` sets `KINU_EVAL_BACKEND` (`packages/test-utils/src/eval-target.ts`). `tests/live/target-local.ts` provisions the local runtime.
 
 ```bash
 bun run test:live                        # local target: the in-process cli-backend runtime
@@ -107,9 +107,9 @@ bun run test:live:cloud                  # cloud target: a real workspace on the
 bun run deploy:preflight                 # does the deployment run this branch? (the cloud arm's gate)
 ```
 
-The seam exists because the two backends once ran different turn loops. The hosted actor ran `@cloudflare/think`, which capped a turn at ten model steps: four of four capped production runs across two workspaces reported `run_end: 'completed'` while the model still called tools, and no local suite could reach that loop. Think was removed from the hosted adapter on 2026-09-20 (`9220b6c05`). Both backends now drive core `ChatSession` (`packages/core/src/orchestrator/chat-session.ts`).
+The two backends once ran different turn loops. The hosted actor ran `@cloudflare/think`, which capped a turn at ten model steps: four of four capped production runs across two workspaces reported `run_end: 'completed'` while the model still called tools, and no local suite could reach that loop. Think was removed from the hosted adapter on 2026-09-20 (`9220b6c05`). Both backends now drive core `ChatSession` (`packages/core/src/orchestrator/chat-session.ts`), and every eval turn checks for that cut (see Evals).
 
-The executors still differ. The local target has the CLI shell with a real `node`. The deployment has the Nimbus `node` shim; per `packages/test-utils/src/eval-target.ts`, it rejects esbuild-wasm's `wasmModule` option, so `exec-ratio`, the only registered verifier kind, returns `unavailable` there.
+The executors still differ. The local target has the CLI shell with a real `node`. The deployment has the Nimbus `node` shim, which rejects esbuild-wasm's `wasmModule` option, so `exec-ratio`, the only registered verifier kind, cannot run there.
 
 Both targets compute spend as `getActivitySnapshot().spend` through `workspaceSpend({ events, sql })` inside the Durable Object (`packages/cf-backend/src/orchestrator.ts`). `recordWorkspaceSpend` is the one accumulator. An episode with no accounting is unmeasured, never zero.
 

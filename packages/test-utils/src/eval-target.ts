@@ -1,17 +1,12 @@
 /**
- * Where a suite's agent runs: local `cli-backend` or a deployed Worker workspace, as configuration rather
- * than a second harness. `@cloudflare/think` caps cloud turns at ten model steps and core `runChat` does not,
- * so a suite names its target. Depends only on `@kinu.run/core` (core devDepends on this package); the
- * local implementation lives in `tests/live/target-local.ts`. No `sql` member: a Durable Object's SQLite is reachable only
- * as read models over RPC.
+ * Which backend a live tier runs against, and the ledger reads every tier shares: an episode's
+ * totals, time order over a ledger, and the run a mid-turn landing is answered by. Depends only on
+ * `@kinu.run/core` (core devDepends on this package).
  */
-import { classifyToolFailure, listRuns, RunEventRecorder } from '@kinu.run/core';
-import type {
-  LLMProviderConfig, RunEvent, SeekCursor, VFS, WorkspaceSpend,
-} from '@kinu.run/core';
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { classifyToolFailure } from '@kinu.run/core';
+import type { RunEvent } from '@kinu.run/core';
 
-/** `local`: in-process `cli-backend` (core `chat.ts` loop). `cloud`: a deployed Worker workspace, the only way to reach `@cloudflare/think`. */
+/** `local`: the in-process `cli-backend` runtime. `cloud`: a workspace on the deployment. */
 export type EvalBackend = 'local' | 'cloud';
 
 /** Read once and reported; never inferred from credentials. */
@@ -39,111 +34,7 @@ export function resolveEvalBackend(
   };
 }
 
-/** Whether the verifier instrument can actually run here (a present shell is not enough). */
-export type VerifierProbe =
-  /** `evidence` shows which shell answered. */
-  | { readonly kind: 'runs'; readonly evidence: string }
-  /** `reason` is the executor's own words; a skipping eval must print it. */
-  | { readonly kind: 'unavailable'; readonly reason: string };
-
-/** One execution plane from `listExecutors()`; `kind`, not the name, says which machine runs commands. */
-export interface EvalExecutor {
-  readonly name: string;
-  readonly kind: string;
-}
-
-/** What this target can actually do, established before anything is spent. */
-export interface EvalTargetProbe {
-  readonly executors: readonly EvalExecutor[];
-  readonly verifier: VerifierProbe;
-}
-
-/** Workspace filesystem; `exec` runs on the same plane `files` writes to. */
-export interface EvalTargetWorkspace {
-  readonly vfs: VFS;
-  exec(command: string): Promise<{ readonly stdout: string; readonly exitCode: number }>;
-}
-
-/** Smallest `exec-ratio` instance: write a `.mjs`, run `node`, expect the RESULT line; fails where the Nimbus `node` shim does. */
-const PROBE_MODULE = '_verifier_probe.mjs';
-
-const PROBE_MARKER = 'KINU_VERIFIER_PROBE_OK';
-
-/** Run that probe on `workspace`; one shared instrument for both targets. Callers check their own preconditions first. */
-export async function probeVerifier(workspace: EvalTargetWorkspace): Promise<VerifierProbe> {
-  try {
-    await workspace.vfs.writeFile(PROBE_MODULE, `console.log('${PROBE_MARKER}');\n`);
-    const run = await workspace.exec(`node ${PROBE_MODULE}`);
-
-    if (run.stdout.includes(PROBE_MARKER)) {
-      return { kind: 'runs', evidence: run.stdout.trim() };
-    }
-
-    return {
-      kind: 'unavailable',
-      reason: `\`node ${PROBE_MODULE}\` exited ${String(run.exitCode)} without the probe's own `
-        + 'marker, so this target cannot run an exec-ratio measurement harness and every '
-        + `score:'verify' search here is dead on arrival. It said: `
-        + `${run.stdout.trim() || '(nothing)'}`,
-    };
-  } catch (error) {
-    return {
-      kind: 'unavailable',
-      reason: `the workspace shell refused the probe outright: ${renderThrownChain({ cause: error })}`,
-    };
-  } finally {
-    try {
-      await workspace.vfs.unlink(PROBE_MODULE);
-    } catch (error) {
-      // Cleanup failure is recorded, never rethrown: it must not mask the probe verdict.
-      diagnostics.failure('eval.probe_cleanup_failed', toKinuError({
-        doing: 'removing the verifier probe module',
-        cause: error,
-        otherwise: 'io',
-      }));
-    }
-  }
-}
-
-/** Rows proving a search really spawned nodes, readable on both targets. */
-export interface EvalSearchLedger {
-  readonly searchRuns: number;
-  readonly forkRuns: number;
-  readonly canvasNodes: number;
-  readonly recordObjectives: number;
-  readonly backgroundJobs: number;
-}
-
-/** The seam. `tests/live/target-local.ts` returns a provisioned target or throws; `teardown` pairs with construction. */
-export interface AgentEvalTarget {
-  readonly backend: EvalBackend;
-  /** Banner line naming backend, workspace and origin. */
-  readonly describe: string;
-  /** Cloud targets carry the `eval-` prefix so leftovers are attributable. */
-  readonly workspace: string;
-  /** Read off the target so a record cannot name a model the run did not use. */
-  readonly llm: LLMProviderConfig;
-
-  /** Submit one user turn and wait until it settles, including detached background work. */
-  sendTurn(text: string): Promise<void>;
-
-  /** The whole run-event log, oldest first; never windowed. */
-  runEvents(): Promise<readonly RunEvent[]>;
-
-  /** Workspace spend over the whole log; publish via `recordWorkspaceSpend`. */
-  spend(): Promise<WorkspaceSpend>;
-
-  probe(): Promise<EvalTargetProbe>;
-  workspaceFiles(): EvalTargetWorkspace;
-  searchLedger(): Promise<EvalSearchLedger>;
-
-  roster(): Promise<readonly string[]>;
-
-  /** Release provisioning; on cloud this deletes the workspace, so call it in `finally`. */
-  teardown(): Promise<void>;
-}
-
-/** What the ledger says one episode did; local harness delegates to {@link ledgerTotalsFromEvents}. */
+/** What the ledger says one episode did. */
 export interface LedgerTotals {
   turns: number;
   toolCalls: number;
@@ -160,7 +51,7 @@ export interface LedgerTotals {
 /** Prefix marking a turn's own provider error in {@link LedgerTotals.failures}; `environmentFailure` matches on it. */
 export const RUN_END_FAILURE_PREFIX = 'run_end: ';
 
-/** Episode totals reduced from `RunEvent[]`, so both targets share one reduction. */
+/** Episode totals reduced from `RunEvent[]`. */
 export function ledgerTotalsFromEvents(events: readonly RunEvent[]): LedgerTotals {
   let turns = 0, toolCalls = 0, tokensIn = 0, tokensOut = 0, reasoningOut = 0, steps = 0;
   const toolNames: string[] = [];
@@ -250,21 +141,4 @@ export function absorbingRunId(
     .sort((a, b) => b[1].localeCompare(a[1]) || b[0].localeCompare(a[0]));
 
   return closed[0]?.[0] ?? null;
-}
-
-/** Every run event in a workspace store, walked to `status: 'end'`; `listRuns` pages 50 runs and the recorder 200 events. */
-export function walkRunEvents(recorder: RunEventRecorder): RunEvent[] {
-  const events: RunEvent[] = [];
-  let cursor: SeekCursor | null = null;
-
-  for (;;) {
-    const page = listRuns(recorder, cursor);
-
-    for (const run of page.items) events.push(...recorder.read(run.runId, { limit: 100_000 }));
-
-    if (page.status === 'end') break;
-    cursor = page.next;
-  }
-
-  return events;
 }

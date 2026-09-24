@@ -360,15 +360,15 @@ export type EvalObservation =
     readonly scores: readonly EvalScoreRow[];
     readonly turns: number;
     readonly toolCalls: number;
-    /** The tools this attempt called, in order. Optional: flash-a/b records predate it; read with `?? []`. */
-    readonly toolNames?: readonly string[];
+    /** The tools this attempt called, in order. */
+    readonly toolNames: readonly string[];
     readonly tokensIn: number;
     readonly tokensOut: number;
-    /** Reasoning tokens, when the provider reported them. Optional: flash-a/b predate it. */
-    readonly reasoningOut?: number;
+    /** Reasoning tokens, zero when the provider reported none. */
+    readonly reasoningOut: number;
     readonly ms: number;
-    /** Bounded run-event provenance; see {@link EvalRunProvenance}. Optional so older records stay readable. */
-    readonly provenance?: EvalRunProvenance;
+    /** Bounded run-event provenance; see {@link EvalRunProvenance}. */
+    readonly provenance: EvalRunProvenance;
   }
   | {
     readonly taskId: string;
@@ -402,18 +402,16 @@ export interface EvalRunRecord {
   readonly schema: 1;
   readonly runId: string;
   readonly createdAt: string;
-  /** The eval family (`behaviour`, `research`, `optimization`); `scripts/eval-report.ts` groups on it.
-   *  Optional: flash-a/b predate it, and absence reads as pre-family. */
-  readonly family?: string;
+  /** The tier that wrote the record (`first-run`). */
+  readonly family: string;
   /** The commit under test and whether the tree was dirty; a dirty tree makes a run unreproducible. */
   readonly gitSha: string;
   readonly gitDirty: boolean;
   readonly tier: EvalTier;
   readonly modelId: string;
   /** The single model the ledger observed serving turns ({@link createObservedModelAccumulator}), else null.
-   *  `assessAdmissibility` refuses a record whose non-null observed model differs from `modelId`.
-   *  Optional so older records stay readable; absence is not agreement. */
-  readonly modelObserved?: string | null;
+   *  `assessAdmissibility` refuses a record whose non-null observed model differs from `modelId`. */
+  readonly modelObserved: string | null;
   readonly repeats: number;
   readonly seed: number;
   readonly arm: EvalArmState;
@@ -644,7 +642,7 @@ export function formatRunRecord(record: EvalRunRecord): string {
   const a = record.admissibility;
 
   const lines = [
-    `run ${record.runId} — ${record.family ?? '(pre-family record)'}, `
+    `run ${record.runId} — ${record.family}, `
       + `${record.tier} (${record.modelId})`,
     `  ledger observed: ${record.modelObserved ?? 'no serving model — the record carries no ledger check'}`,
     `  commit ${record.gitSha.slice(0, 9)}${record.gitDirty ? ' [DIRTY — unreproducible]' : ''}`,
