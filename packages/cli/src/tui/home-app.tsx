@@ -312,7 +312,8 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   }, [busy, cloudReady, defaultModel, deviceConnect.offerIfUnconnected, draft, localReady, mode, opts, reasoningEffort, setupRequired]);
 
   useKeyboard((key) => {
-    if (deviceConnect.handleKey(key) || busy) return;
+    // The setup steps render first and claim what they answer: Esc on a question is not an exit.
+    if (key.defaultPrevented || deviceConnect.handleKey(key) || busy) return;
 
     if (overlayNavigation) return;
     const result = dispatcher.feed(key, keyScopes(modelPicker !== null, focusArea));
@@ -720,7 +721,9 @@ function createDefaultOnboarding(
         skippedSteps: current.skippedOnboardingSteps,
       };
     },
-    chooseLocation() {},
+    chooseLocation(location) {
+      preferences.write({ ...preferences.read(), onboardingLocation: location });
+    },
     async listProviders() {
       return (await readProviderConnections()).states;
     },
