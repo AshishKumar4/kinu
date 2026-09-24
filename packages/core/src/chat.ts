@@ -262,6 +262,9 @@ class ProviderCall {
   /** When the in-flight step's request left, stamped in `prepareStep`: a cache warm counts its TTL from the request's
    *  start (docs/research/harness/anthropic-sources.md §2). */
   private stepSentAt = Date.now();
+  /** A finished step whose record failed. The SDK drops a throw from its step callback (ai 6.0.214 `notify`), so
+   *  the call stops after that step and the turn fails on this. */
+  recordFailure: { readonly cause: unknown } | null = null;
 
   constructor(private readonly fallback: string | undefined) {}
 
@@ -618,7 +621,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       messages: [...request],
       tools,
       ...offeredTools,
-      stopWhen: opts.stopWhen ?? UNBOUNDED_STEPS,
+      stopWhen: [opts.stopWhen ?? UNBOUNDED_STEPS, () => call.recordFailure !== null],
       // Settled rewrites only (name case, fenced or double-encoded args); otherwise the model retries.
       experimental_repairToolCall: repairToolCall(),
       abortSignal: opts.signal,
@@ -653,10 +656,14 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         },
       }),
       onStepFinish: async (step) => {
-        stepCount++;
-        await opts.persistStep?.(step.response.messages);
-        call.stepFinished(step, stepCount, opts.meter?.take());
-        await opts.onStep?.(step);
+        try {
+          stepCount++;
+          await opts.persistStep?.(step.response.messages);
+          call.stepFinished(step, stepCount, opts.meter?.take());
+          await opts.onStep?.(step);
+        } catch (cause) {
+          call.recordFailure ??= { cause };
+        }
       },
     });
 
@@ -689,6 +696,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     } finally {
       // Drained to its end before the turn settles, so the persisted answer is not short of what the client saw.
       await observed;
+    }
+
+    if (call.recordFailure !== null) {
+      const unrecorded = toKinuError({ doing: 'recording a finished model step', cause: call.recordFailure.cause, otherwise: 'io' });
+      operation.failed({ cause: unrecorded });
+      throw unrecorded;
     }
 
     const failure = call.failure(current.provider);
