@@ -493,14 +493,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
             <WorkbenchPanels
               scope={kind}
               workspace={undefined}
-              contents={{
-                pendingActions: isMovie ? [] : work.pending(),
-                pendingConsents: [],
-                slates,
-                previewFocus: null,
-                pinnedPorts: [],
-                activePlan: plan,
-              }}
+              contents={{ pendingActions: isMovie ? [] : work.pending(), pendingConsents: [], activePlan: plan }}
               chat={(inspectorControl) => <>
                 <SubordinateTabs
                   workspace={LANDING_WORKSPACE}

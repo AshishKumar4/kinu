@@ -18,6 +18,7 @@
  * `.wrangler/state` (`statePath` below).
  */
 
+import { X509Certificate, createHash, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { git } from '@kinu.run/test-utils';
@@ -27,6 +28,7 @@ import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '@kinu.run/core';
 import { holdForRelease, releaseScratch, scratchDir } from '../packages/test-utils/src/scratch';
 import { signalGroup } from './process-group';
+import { devPreviewTlsDir } from '../packages/cf-backend/vite-preview-zone';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -272,6 +274,12 @@ function liveAppEnv() {
   // .dev.vars into the worktree.
   env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'true';
 
+  // The Drive signs its listing cursors with JWT_SECRET and is unbound without
+  // one (drive/tenant.ts `driveBound`: every Drive route answers 503). .dev.vars
+  // carries none, and nothing durable is sealed with it (infra-manifest.ts), so
+  // a boot on its own state gets its own.
+  env.JWT_SECRET ??= randomBytes(32).toString('base64');
+
   return env;
 }
 
@@ -290,12 +298,37 @@ export interface DevServer {
   readonly origin: string;
   /** See {@link LiveApp.statePath}. */
   readonly statePath: string;
+  /** The https port its preview zone answers on (vite-preview-zone.ts). */
+  readonly previewPort: number;
 }
 
 /** The desktop viewport every browser row reads at: the inspector column, its
  *  separator and the rail lane exist above 900px (`INSPECTOR_WIDE_QUERY`), and
  *  puppeteer's own default page is 800x600, where the column is a mobile pane. */
 export const DESKTOP = { width: 1440, height: 900 } as const;
+
+/** The one certificate a browser row trusts beyond the system's: the local
+ *  dev preview zone's (vite-preview-zone.ts), pinned by its public key, and
+ *  none when this checkout has never served the zone. */
+function devPreviewTrust(): string[] {
+  const cert = join(devPreviewTlsDir(CF), 'cert.pem');
+
+  if (!existsSync(cert)) return [];
+
+  const key = new X509Certificate(readFileSync(cert)).publicKey.export({ type: 'spki', format: 'der' });
+
+  return [`--ignore-certificate-errors-spki-list=${createHash('sha256').update(key).digest('base64')}`];
+}
+
+/** A free loopback port: listen on :0, take the kernel's pick, let it go. */
+function freePort(): number {
+  const probe = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {}, close() {}, error() {} } });
+  const { port } = probe;
+
+  probe.stop(true);
+
+  return port;
+}
 
 /** Chrome for a browser row: the box's own build when one is installed, a
  *  desktop pointer declared, and no protocol clock. */
@@ -305,6 +338,7 @@ async function openBrowser(extraArgs: readonly string[]): Promise<Browser> {
       '--no-sandbox',
       '--disable-dev-shm-usage',
       '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2',
+      ...devPreviewTrust(),
       ...extraArgs,
     ],
     protocolTimeout: 0,
@@ -321,18 +355,8 @@ async function openBrowser(extraArgs: readonly string[]): Promise<Browser> {
 export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, options: LiveAppOptions = {}): Promise<T> {
   if (options.port === 3000) throw new Error('withDevServer: port 3000 is reserved');
 
-  const requested = options.port ?? 0;
-
-  let port = requested;
-
-  if (requested === 0) {
-    // Listen on :0, take the kernel's pick, let it go — the chosen number is
-    // then handed to vite's own --strictPort bind a beat later.
-    const probe = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {}, close() {}, error() {} } });
-
-    port = probe.port;
-    probe.stop(true);
-  }
+  // 0 or unset: the kernel's pick, handed to vite's own --strictPort bind a beat later.
+  const port = options.port === undefined || options.port === 0 ? freePort() : options.port;
 
   const output: string[] = [];
 
@@ -346,6 +370,7 @@ export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, 
   // green from a fresh worktree). A tier reads the product, never the box's
   // leftovers. Released with the rest of this run's scratch.
   const statePath = scratchDir('live-app-state');
+  const previewPort = freePort();
 
   const child = Bun.spawn(
     ['bun', 'x', 'vite', 'dev', '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
@@ -362,6 +387,8 @@ export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, 
         // Its own dependency-optimizer cache too: the default is one directory
         // every worktree shares (packages/cf-backend/vite.config.ts).
         KINU_DEV_CACHE_DIR: scratchDir('live-app-vite-cache'),
+        // The preview zone's own https port, so boots side by side never share one.
+        KINU_DEV_PREVIEW_PORT: String(previewPort),
       },
       // setsid, so vite leads its own process group: teardown can signal the
       // workerd children with it rather than orphaning them to systemd
@@ -386,7 +413,7 @@ export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, 
     devServerOutput.set(origin, output);
 
     try {
-      return await body({ origin, statePath });
+      return await body({ origin, statePath, previewPort });
     } finally {
       devServerOutput.delete(origin);
     }

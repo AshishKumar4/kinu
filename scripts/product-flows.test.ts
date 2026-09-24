@@ -12,13 +12,15 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { resolveWebIdentity } from '../tests/evals/public-session';
 import { withBrowser } from './live-app-harness';
 import {
-  FLOW_PROBE, FLOW_SLATE,
-  agentIsThereOnReturn, driveKeepsWhatIsDone, slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndDiffs,
-  type AgentReturnVerdict, type DriveVerdict, type FirstAnswerVerdict, type FlowTarget, type SlatePreviewVerdict,
-  type WrittenFileVerdict,
+  FLOW_PROBE, FLOW_SLATE, INSPECTOR_SHUT_PX,
+  agentIsThereOnReturn, driveKeepsWhatIsDone, reachesHome, slateShowsItsPreview, workspaceGetsFirstAnswer,
+  writtenFileShowsInFilesAndDiffs,
+  type AgentReturnVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict, type FlowTarget,
+  type SlatePreviewVerdict, type WrittenFileVerdict,
 } from './product-flows';
 
 interface FlowVerdicts {
+  welcome: WelcomeVerdict | null;
   firstAnswer: FirstAnswerVerdict | null;
   agentReturn: AgentReturnVerdict | null;
   writtenFile: WrittenFileVerdict | null;
@@ -26,7 +28,9 @@ interface FlowVerdicts {
   drive: DriveVerdict | null;
 }
 
-const observed: FlowVerdicts = { firstAnswer: null, agentReturn: null, writtenFile: null, slate: null, drive: null };
+const observed: FlowVerdicts = {
+  welcome: null, firstAnswer: null, agentReturn: null, writtenFile: null, slate: null, drive: null,
+};
 
 /** Why no row could start: no origin, or no identity for it. */
 let setup: string | null = null;
@@ -44,6 +48,7 @@ async function attempt<Value>(row: string, flow: () => Promise<Value>): Promise<
     return await flow();
   } catch (cause) {
     broke.set(row, renderThrownChain({ cause }));
+    process.stderr.write(`product-flows: ${row} broke: ${broke.get(row) ?? ''}\n`);
 
     return null;
   } finally {
@@ -72,6 +77,8 @@ beforeAll(async () => {
   await withBrowser(async (browser) => {
     const target: FlowTarget = { browser, origin, identity: resolution.identity };
 
+    // Setup stands in front of every route until it is finished, so it goes first.
+    observed.welcome = await attempt('welcome', () => reachesHome(target));
     observed.firstAnswer = await attempt('first-answer', () => workspaceGetsFirstAnswer(target));
     observed.agentReturn = await attempt('agent-return', () => agentIsThereOnReturn(target));
     observed.writtenFile = await attempt('written-file', () => writtenFileShowsInFilesAndDiffs(target));
@@ -93,9 +100,20 @@ function verdictOf<Value>(value: Value | null, row: string): Value {
   return value;
 }
 
+describe('the product reaches its home page', () => {
+  test('through setup when the account has not done it, and straight there when it has', () => {
+    expect(verdictOf(observed.welcome, 'welcome').landedAt).toBe('/');
+  });
+});
+
 describe('a workspace made from the home page answers its mission', () => {
-  test('its first turn ends with a reply on screen', () => {
+  test('its first turn draws a reply on screen', () => {
     expect(verdictOf(observed.firstAnswer, 'first-answer').answers.length).toBeGreaterThan(0);
+  });
+
+  test('and leaves the inspector shut: nothing it did asks the person for anything', () => {
+    // #21: the panel opened by itself once a "hello" turn ended.
+    expect(verdictOf(observed.firstAnswer, 'first-answer').inspectorWidth).toBeLessThanOrEqual(INSPECTOR_SHUT_PX);
   });
 });
 
@@ -129,7 +147,6 @@ describe('a file the agent wrote shows where a reader looks for it', () => {
   });
 });
 
-
 describe('a slate the agent built shows its running preview', () => {
   test('its tab appears under its title and its frame shows the page it serves', () => {
     const slate = verdictOf(observed.slate, 'slate-preview');
@@ -138,7 +155,6 @@ describe('a slate the agent built shows its running preview', () => {
     expect(slate.frameText).toContain(FLOW_SLATE.page);
   });
 });
-
 
 describe('what a person does in the Drive page is kept', () => {
   test('a folder made and a file uploaded are listed', () => {

@@ -850,14 +850,7 @@ export default function WorkspacePage() {
       ) : (
       <WorkbenchPanels
         workspace={agentId}
-        contents={{
-          pendingActions: state.pendingActions,
-          pendingConsents: state.pendingConsents,
-          slates: state.slates,
-          previewFocus: state.previewFocus,
-          pinnedPorts: state.pinnedPorts,
-          activePlan: state.activePlan,
-        }}
+        contents={state}
         chat={(inspectorControl) => <>
             <SubordinateTabs
               workspace={agentId}

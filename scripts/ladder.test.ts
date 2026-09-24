@@ -269,6 +269,7 @@ describe('the ladder measures something', () => {
       'Chat infinite scroll',
       'Gate self-tests: secrets, corpus, preflight',
       'Live app in a browser',
+      'Product flows in a browser, on the local dev server',
       'Public pages render',
       'React runtime identity',
       'Root end-to-end lifecycle suites',

@@ -1,7 +1,7 @@
 /** Credential-free checks for the first-run corpus, gating, and record admission. */
 import { describe, expect, test } from 'bun:test';
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import * as v from 'valibot';
 
@@ -18,6 +18,7 @@ import {
   FIRST_RUN_ARM, FIRST_RUN_CASES, FIRST_RUN_DEFECTS, FIRST_RUN_FAMILY,
 } from './first-run';
 import { resolvePublicSessionPlan } from '../evals/public-session';
+import { CAPABILITY_ROWS, ENTRY_ROWS, PAGE_ROWS, STRIP_ROWS } from './surfaces';
 
 /** The deployed tier's package command. */
 const GATE = 'bun run gate:first-run';
@@ -110,6 +111,16 @@ describe('the first-run corpus is the set this tier runs', () => {
       'tests/first-run/direct.first-run.ts', 'tests/first-run/indirect.first-run.ts',
       'tests/first-run/reader.first-run.ts', 'tests/first-run/tui.first-run.ts',
     ]);
+  });
+
+  test('every case on disk drives a surface of the census', () => {
+    // The census maps each surface to its rows; a row mapped to none is
+    // misfiled or proves nothing a surface needs.
+    const mapped = new Set([PAGE_ROWS, STRIP_ROWS, ENTRY_ROWS, CAPABILITY_ROWS]
+      .flatMap((census) => Object.values(census))
+      .flatMap((rows) => ('unreachable' in rows ? [] : rows)));
+
+    expect(onDisk.map((file) => basename(file, '.first-run.ts')).filter((id) => !mapped.has(id))).toEqual([]);
   });
 
   test('every declared executor reader is a case on disk', () => {

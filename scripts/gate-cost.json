@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-09-22",
+  "measuredAt": "2026-09-23",
   "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
   "method": "each row alone under `setsid timeout --signal=TERM --kill-after=5s <deadline> /usr/bin/time -v bash -c <run>`; the row's whole process tree \u2014 its session plus every descendant by ppid, so a setsid'd dev server or browser counts \u2014 sampled every 0.05s for its first 3s and every 0.25s after \u2014 summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, \u0394(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN)",
   "rows": {
@@ -848,6 +848,17 @@
       "meanThreads": 0.44,
       "samples": 13,
       "loadAtStart": 70.66,
+      "exit": 0
+    },
+    "bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts": {
+      "wallSeconds": 209,
+      "cpuSeconds": 193.66,
+      "peakRssMb": 5271.07,
+      "peakRunnable": 10,
+      "peakCpuThreads": 9.33,
+      "meanThreads": 0.93,
+      "samples": 783,
+      "loadAtStart": 3.38,
       "exit": 0
     }
   }

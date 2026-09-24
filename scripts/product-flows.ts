@@ -46,8 +46,30 @@ export async function signedInPage(browser: Browser, identity: PublicWebIdentity
 
   if (Object.keys(headers).length > 0) await page.setExtraHTTPHeaders(headers);
 
+  await page.evaluateOnNewDocument(RECORD_TURN_ERRORS);
+
   return page;
 }
+
+/** Records, on `window`, every turn the workspace's socket reports ended in
+ *  error: the frame the chat renders its error from. Installed before each
+ *  document's scripts run, so the socket the app opens is the recorded one. */
+const RECORD_TURN_ERRORS = `(() => {
+  window.__turnErrors = [];
+  const Socket = window.WebSocket;
+  window.WebSocket = class extends Socket {
+    constructor(url, protocols) {
+      super(url, protocols);
+      this.addEventListener('message', (event) => {
+        if (typeof event.data !== 'string' || !event.data.includes('"error":true')) return;
+        try {
+          const frame = JSON.parse(event.data);
+          if (frame.type === 'cf_agent_use_chat_response' && frame.error === true) window.__turnErrors.push(String(frame.body).slice(0, 300));
+        } catch {}
+      });
+    }
+  };
+})()`;
 
 const CreatedSchema = v.object({ name: v.string() });
 
@@ -101,13 +123,44 @@ export const NEW_AGENT = `(() => {
 const CHAT_IDLE = `[...document.querySelectorAll('#chat button')].some((el) => el.getClientRects().length > 0
   && /send$/iu.test((el.getAttribute('aria-label') ?? '').trim()))`;
 
+/** What stops a row dead: a turn the socket reported ended in error, which
+ *  the page may never show as ended; the welcome page, which stands in front of
+ *  every route until the account finishes setup; or a danger notice, the
+ *  product saying why the thing asked for will not come. */
+const DEAD_END = `(() => {
+  const failed = (window.__turnErrors ?? []).at(-1);
+  if (failed !== undefined) return 'a turn that ended in error: ' + failed;
+  if (location.pathname === '/welcome') {
+    const said = [...document.querySelectorAll('.p-danger')].map((el) => (el.textContent ?? '').trim()).join(' ');
+    return 'the welcome page, which the account has not finished' + (said === '' ? '' : ': ' + said);
+  }
+  const notice = [...document.querySelectorAll('.p-notice-danger')].map((el) => (el.textContent ?? '').trim())
+    .find((text) => text !== '');
+  return notice === undefined ? null : 'a notice: ' + notice;
+})()`;
+
+/** Wait until `condition` holds in the page, or fail at once naming the dead end
+ *  the page shows instead. Each wait is logged by what it waits for, so a run the
+ *  tier's deadline ends still names the step it was in. */
+async function until(page: Page, what: string, condition: string): Promise<void> {
+  const started = performance.now();
+
+  process.stderr.write(`product-flows: waiting for ${what}\n`);
+
+  const outcome = await (await page.waitForFunction(`(${condition}) ? 'reached' : ${DEAD_END}`, { polling: 100 })).jsonValue();
+
+  if (outcome !== 'reached') throw new Error(`waiting for ${what}, the page showed ${String(outcome)}`);
+
+  process.stderr.write(`product-flows: ${what} after ${((performance.now() - started) / 1000).toFixed(1)} s\n`);
+}
+
 async function openWorkspacePage(target: FlowTarget, path: string): Promise<Page> {
   const page = await signedInPage(target.browser, target.identity);
 
   // 'load', not 'networkidle0': the app holds its event socket open from
   // first paint, so there is never a zero-connection window to wait for.
   await page.goto(`${target.origin}${path}`, { waitUntil: 'load' });
-  await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+  await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
 
   return page;
 }
@@ -115,16 +168,27 @@ async function openWorkspacePage(target: FlowTarget, path: string): Promise<Page
 /** Type into the chat column's live composer and press its Send; resolves once
  *  the pane shows the words and the turn they started has ended. */
 async function sendAndSettle(page: Page, text: string): Promise<void> {
-  await page.evaluate(`(() => {
-    const box = document.querySelector('#chat textarea:not([disabled])');
-    if (box === null) throw new Error('no live composer in the chat column');
-    box.focus();
-  })()`);
-  await page.keyboard.type(text);
-  await page.keyboard.press('Enter');
-  await page.waitForFunction(
-    `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(text)})`, { polling: 100 });
-  await page.waitForFunction(CHAT_IDLE, { polling: 250 });
+  await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+
+  const composer = await page.$('#chat textarea:not([disabled])');
+
+  if (composer === null) throw new Error('no live composer in the chat column');
+
+  // One insertion, the way a paste lands: typed key by key at machine speed,
+  // the live composer dropped characters on 41494531d ("flow-pobe.txt").
+  await composer.focus();
+  await page.keyboard.sendCharacter(text);
+
+  // Keys the page sent elsewhere never arrive, and a send of nothing never
+  // shows: read the composer back before pressing Enter.
+  const typed = v.parse(v.string(), await composer.evaluate((box) => (box instanceof HTMLTextAreaElement ? box.value : '')));
+
+  if (typed !== text) throw new Error(`the composer holds ${JSON.stringify(typed)}, not the words typed into it`);
+
+  await composer.press('Enter');
+  await until(page, 'the sent words in the chat column',
+    `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(text)})`);
+  await until(page, "the turn's end, Send offered again", CHAT_IDLE);
 }
 
 const FrameSchema = v.object({
@@ -143,6 +207,9 @@ interface FrameLedger {
   quiet(): boolean;
   /** Resolves once a frame of `type` has arrived. */
   received(type: string): Promise<void>;
+  /** Resolves once the workspace has closed a turn: its chat response's last
+   *  frame, which every socket gets, the pages that sent none included. */
+  turnClosed(): Promise<void>;
   restart(): void;
   stop(): Promise<void>;
 }
@@ -155,6 +222,7 @@ async function frameLedger(page: Page): Promise<FrameLedger> {
   const asked = new Map<string, string>();
   const answered = new Set<string>();
   const arrived = new Set<string>();
+  let closed = false;
   let waiters: { readonly ready: () => boolean; readonly resolve: () => void }[] = [];
 
   const frame = (payload: string | undefined): v.InferOutput<typeof FrameSchema> | null => {
@@ -191,6 +259,7 @@ async function frameLedger(page: Page): Promise<FrameLedger> {
 
     if (received === null) return;
     arrived.add(received.type);
+    closed ||= received.type === 'cf_agent_use_chat_response' && received.done === true;
 
     // A streamed answer's chunks carry `done: false`; only its last frame, or
     // a plain answer, ends the ask.
@@ -203,6 +272,7 @@ async function frameLedger(page: Page): Promise<FrameLedger> {
       && [...asked.keys()].every((id) => answered.has(id))),
     quiet: () => [...asked.keys()].every((id) => answered.has(id)),
     received: (type) => wait(() => arrived.has(type)),
+    turnClosed: () => wait(() => closed),
     restart() {
       asked.clear();
       answered.clear();
@@ -287,8 +357,8 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
 
     const agentPath = `/workspace/${encodeURIComponent(workspace)}/agents/`;
 
-    await page.waitForFunction(`location.pathname.startsWith(${JSON.stringify(agentPath)})`, { polling: 100 });
-    await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+    await until(page, "the new agent's page", `location.pathname.startsWith(${JSON.stringify(agentPath)})`);
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
 
     const agent = v.parse(v.string(), await page.evaluate(`decodeURIComponent(location.pathname.slice(${String(agentPath.length)}))`));
     const said = `Reply with one word: ${agent}.`;
@@ -299,28 +369,39 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
     // Rename through the tab: its title button opens the name field with the
     // current name selected, so typing replaces it.
     await page.click(`[data-agent-tab="${agent}"] button[title="Rename agent"]`);
-    await page.waitForSelector('input[aria-label="Agent name"]');
+    await until(page, "the agent's name field", `document.querySelector('input[aria-label="Agent name"]') !== null`);
     await page.keyboard.type(renamed);
     await page.keyboard.press('Enter');
-    await page.waitForFunction(`document.querySelector('input[aria-label="Agent name"]') === null`, { polling: 100 });
-    await page.waitForFunction(
-      `(document.querySelector(${JSON.stringify(`[data-agent-tab="${agent}"]`)})?.textContent ?? '').includes(${JSON.stringify(renamed)})`,
-      { polling: 100 });
+    await until(page, 'the name field to close', `document.querySelector('input[aria-label="Agent name"]') === null`);
+    await until(page, 'the tab under its new name',
+      `(document.querySelector(${JSON.stringify(`[data-agent-tab="${agent}"]`)})?.textContent ?? '').includes(${JSON.stringify(renamed)})`);
 
     const before = await agentPresence(page, workspace, agent);
 
     await page.goto(`${target.origin}/workspace/${encodeURIComponent(elsewhere)}`, { waitUntil: 'load' });
-    await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
     await page.close();
 
     const back = await signedInPage(target.browser, target.identity);
     const ledger = await frameLedger(back);
 
-    await back.goto(`${target.origin}${agentPath}${encodeURIComponent(agent)}`, { waitUntil: 'load' });
+    // Back to the workspace, the way a person returns: its own page, not the agent's.
+    await back.goto(`${target.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'load' });
     await settledAfter(back, ledger, 'getWorkspaceSnapshot', 'getChatHistoryPage');
 
     const after = await agentPresence(back, workspace, agent);
-    const conversation = v.parse(v.string(), await back.evaluate(`document.querySelector('#chat')?.textContent ?? ''`));
+
+    // Its conversation, through its tab, when the tab is there to press.
+    let conversation = '';
+
+    if (after.tab !== null) {
+      ledger.restart();
+      await back.click(`nav[aria-label="Workspace agents"] [data-agent-tab="${agent}"] a`);
+      await until(back, "the agent's page", `location.pathname === ${JSON.stringify(`${agentPath}${encodeURIComponent(agent)}`)}`);
+      await until(back, "the agent's live composer", CHAT_COMPOSER_LIVE);
+      await settledAfter(back, ledger, 'getChatHistoryPage');
+      conversation = v.parse(v.string(), await back.evaluate(`document.querySelector('#chat')?.textContent ?? ''`));
+    }
 
     await ledger.stop();
     await back.close();
@@ -332,14 +413,65 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
   }
 }
 
+/** Press the welcome page's forward control: Next through its steps, then
+ *  Finish setup. Answers which it pressed, or 'none' when neither is offered. */
+const WELCOME_FORWARD = `(() => {
+  const offered = [...document.querySelectorAll('button')].filter((b) => !b.disabled && b.getClientRects().length > 0);
+  const finish = offered.find((b) => (b.textContent ?? '').trim() === 'Finish setup');
+  if (finish !== undefined) { finish.click(); return 'finish'; }
+  const next = offered.find((b) => (b.textContent ?? '').trim() === 'Next');
+  if (next !== undefined) { next.click(); return 'next'; }
+  return 'none';
+})()`;
+
+export interface WelcomeVerdict {
+  /** Whether the product first showed its setup. */
+  readonly welcomed: boolean;
+  /** Where the reader stood once the home page's mission field was there. */
+  readonly landedAt: string;
+}
+
+/**
+ * Row: the product reaches its home page, through setup when the account has
+ * not done it. Setup stands in front of every route until it is finished, so
+ * this row runs first; an account that finished it long ago goes straight home.
+ */
+export async function reachesHome(target: FlowTarget): Promise<WelcomeVerdict> {
+  const page = await signedInPage(target.browser, target.identity);
+
+  try {
+    await page.goto(`${target.origin}/`, { waitUntil: 'load' });
+    await until(page, 'the home page or its setup',
+      `location.pathname === '/welcome' || document.querySelector('#workspace-mission') !== null`);
+
+    const welcomed = v.parse(v.boolean(), await page.evaluate(`location.pathname === '/welcome'`));
+
+    for (let pressed = 'next'; welcomed && pressed === 'next'; await painted(page)) {
+      pressed = v.parse(v.picklist(['next', 'finish', 'none']), await page.evaluate(WELCOME_FORWARD));
+
+      if (pressed === 'none') throw new Error('the welcome page offers neither Next nor Finish setup');
+    }
+
+    await until(page, "the home page's mission field", `document.querySelector('#workspace-mission') !== null`);
+
+    return { welcomed, landedAt: v.parse(v.string(), await page.evaluate('location.pathname')) };
+  } finally {
+    await page.close();
+  }
+}
+
 /** The answers the chat column has drawn: every rendered reply block's text. */
 const ANSWERS = `[...document.querySelectorAll('#chat .prose-chat')]
   .filter((block) => block.getClientRects().length > 0)
   .map((block) => (block.textContent ?? '').trim())
   .filter((text) => text.length > 0)`;
 
-/** The mission the first-answer row creates its workspace with. */
-const MISSION = 'Say hello to a first-time user in one short sentence.';
+/** The text of the warnings the page shows. */
+const SHOWN_WARNINGS = `[...document.querySelectorAll('.p-notice-warning')]
+  .map((notice) => (notice.textContent ?? '').trim()).filter((text) => text !== '').join(' | ')`;
+
+/** The mission the first-answer row creates its workspace with: #21's own. */
+const MISSION = 'hello';
 
 export interface FirstAnswerVerdict {
   readonly workspace: string;
@@ -347,6 +479,9 @@ export interface FirstAnswerVerdict {
   readonly landedAt: string;
   /** The replies on screen once the workspace's first turn ended. */
   readonly answers: readonly string[];
+  /** The inspector column's width once the turn had closed and the page had
+   *  re-read what waits on the person. */
+  readonly inspectorWidth: number;
 }
 
 /**
@@ -358,36 +493,62 @@ export interface FirstAnswerVerdict {
  */
 export async function workspaceGetsFirstAnswer(target: FlowTarget): Promise<FirstAnswerVerdict> {
   const page = await signedInPage(target.browser, target.identity);
+  const ledger = await frameLedger(page);
   let workspace: string | null = null;
 
   try {
     await page.goto(`${target.origin}/`, { waitUntil: 'load' });
-    await page.waitForFunction(`document.querySelector('#workspace-mission:not([disabled])') !== null`, { polling: 100 });
-    await page.focus('#workspace-mission');
-    await page.keyboard.type(MISSION);
+    await until(page, "the home page's mission field", `document.querySelector('#workspace-mission:not([disabled])') !== null`);
+
+    // A home page asking to connect a model cannot create: say so rather than press.
+    const warned = v.parse(v.string(), await page.evaluate(SHOWN_WARNINGS));
+
+    if (warned !== '') throw new Error(`the home page shows a warning before any create: ${warned}`);
+
+    const mission = await page.$('#workspace-mission');
+
+    if (mission === null) throw new Error('the home page has no mission field');
+
+    await mission.focus();
+    await page.keyboard.sendCharacter(MISSION);
+
+    const typed = v.parse(v.string(), await mission.evaluate((box) => (box instanceof HTMLTextAreaElement ? box.value : '')));
+
+    if (typed !== MISSION) throw new Error(`the mission field holds ${JSON.stringify(typed)}, not the words typed into it`);
     await page.evaluate(`(() => {
       const create = [...document.querySelectorAll('button[type="submit"]')]
         .find((b) => (b.textContent ?? '').trim() === 'Create workspace');
       if (create === undefined) throw new Error('no Create workspace control');
       create.click();
     })()`);
-    await page.waitForFunction(`location.pathname.startsWith('/workspace/')`, { polling: 100 });
+    await until(page, "the new workspace's page", `location.pathname.startsWith('/workspace/')`);
 
     const landedAt = v.parse(v.string(), await page.evaluate('location.pathname'));
 
     workspace = decodeURIComponent(landedAt.slice('/workspace/'.length).split('/')[0] ?? '');
-    await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
     // The mission's turn has ended once the pane shows the mission and its
     // Send control is back, answered or not: the row reads what was drawn.
-    await page.waitForFunction(`(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(MISSION)})`,
-      { polling: 100 });
-    await page.waitForFunction(CHAT_IDLE, { polling: 250 });
+    await until(page, 'the mission in the chat column', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(MISSION)})`);
+    // The answer, not Send: this turn is the workspace's own, so the page never
+    // sent it and returns to Send only when its turn claim refreshes.
+    await until(page, "the mission's answer in the chat column", `${ANSWERS}.length > 0`);
 
     const answers = v.parse(v.array(v.string()), await page.evaluate(ANSWERS));
 
+    // #21: the inspector opened once a "hello" turn ended, with nothing asking
+    // the person for anything. Read it after the turn has closed and the page
+    // has re-read what waits on the person (every 5 s while connected).
+    await ledger.turnClosed();
+    ledger.restart();
+    await settledAfter(page, ledger, 'listPendingActions');
+
+    const inspectorWidth = v.parse(v.number(), await page.evaluate(INSPECTOR_WIDTH));
+
+    await ledger.stop();
     await page.close();
 
-    return { workspace, landedAt, answers };
+    return { workspace, landedAt, answers, inspectorWidth };
   } finally {
     if (workspace !== null && workspace !== '') await removeFlowWorkspace(target, workspace);
   }
@@ -542,6 +703,9 @@ const FILES_SETTLED = `(() => {
 /** The names the Files tab lists, as its rows show them. */
 const FILES_LISTED = `[...document.querySelectorAll('[data-files-entry]')].map((row) => row.getAttribute('title') ?? '')`;
 
+/** The workspace's own folder, from the Files tab's root, one row at a time. */
+const HOME_FOLDER = ['home', 'user'] as const;
+
 /** The Diffs tab has read its change-set: a file row or its empty state is drawn. */
 const DIFFS_SETTLED = `(() => {
   const pane = document.querySelector('#inspector');
@@ -581,7 +745,16 @@ export async function writtenFileShowsInFilesAndDiffs(target: FlowTarget): Promi
       + 'containing exactly the words browser flow probe. Then reply with one line: DONE.');
     await openInspector(page);
     await page.evaluate(stripTab('Files'));
-    await page.waitForFunction(FILES_SETTLED, { polling: 100 });
+    await until(page, "the Files tab's listing", FILES_SETTLED);
+
+    for (const folder of HOME_FOLDER) {
+      const row = `[data-files-entry][title="${folder}"]`;
+
+      await until(page, `the ${folder} folder in the listing`, `document.querySelector(${JSON.stringify(row)}) !== null`);
+      await page.click(row);
+      await until(page, `the ${folder} folder's listing`,
+        `${FILES_SETTLED} && document.querySelector(${JSON.stringify(row)}) === null`);
+    }
 
     const filesListed = v.parse(v.array(v.string()), await page.evaluate(FILES_LISTED));
     const diffsTab = v.parse(v.boolean(), await page.evaluate(stripHas('Diffs')));
@@ -589,7 +762,7 @@ export async function writtenFileShowsInFilesAndDiffs(target: FlowTarget): Promi
 
     if (diffsTab) {
       await page.evaluate(stripTab('Diffs'));
-      await page.waitForFunction(DIFFS_SETTLED, { polling: 100 });
+      await until(page, "the Diffs tab's change-set", DIFFS_SETTLED);
       diffPaths = v.parse(v.array(v.string()), await page.evaluate(DIFF_PATHS));
     }
 
@@ -618,7 +791,9 @@ export interface SlatePreviewVerdict {
  *
  * One turn builds a slate that serves a page and starts its preview; once the
  * page has re-listed the workspace's slates, the reader presses the slate's tab
- * and reads the page its frame loaded.
+ * and reads the page its frame loaded. The frame is a preview host of its own,
+ * on the deployed zone after the publish and on `vite dev`'s zone before it
+ * (packages/cf-backend/vite-preview-zone.ts).
  */
 export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePreviewVerdict> {
   const workspace = await createFlowWorkspace(target, 'slate-preview');
@@ -630,19 +805,21 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
     await sendAndSettle(page, `Use the file tool to create a slate at /home/user/slates/${FLOW_SLATE.id}/. `
       + `Write package.json with main "server.ts" and slate {"title":"${FLOW_SLATE.title}","port":8788,"bindings":{}}. `
       + `Write server.ts so the slate answers GET / with an HTML page whose body is <h1>${FLOW_SLATE.page}</h1>. `
-      + 'Start its preview yourself and check that it answers. Reply with the preview URL.');
+      + 'Start its preview. Reply with the preview URL.');
     await settledAfter(page, ledger);
     await openInspector(page);
 
-    const tab = `#inspector button[aria-label="${FLOW_SLATE.title}"]`;
-    const slateTab = v.parse(v.boolean(), await page.evaluate(`document.querySelector(${JSON.stringify(tab)}) !== null`));
+    const slateTab = v.parse(v.boolean(), await page.evaluate(stripHas(FLOW_SLATE.title)));
     let frameText: string | null = null;
 
     if (slateTab) {
-      await page.click(tab);
+      await page.evaluate(stripTab(FLOW_SLATE.title));
 
-      const holder = await page.waitForSelector(`#inspector iframe[title="${FLOW_SLATE.id}"]`);
-      const frame = await holder?.contentFrame();
+      const frameSelector = `#inspector iframe[title="${FLOW_SLATE.id}"]`;
+
+      await until(page, "the slate's preview frame", `document.querySelector(${JSON.stringify(frameSelector)}) !== null`);
+
+      const frame = await (await page.$(frameSelector))?.contentFrame();
 
       if (frame !== null && frame !== undefined) {
         await frame.waitForFunction('document.readyState === "complete"', { polling: 100 });
@@ -662,14 +839,34 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
 /** The entry names the Drive list shows. */
 const DRIVE_LISTED = `[...document.querySelectorAll('[data-drive-entry]')].map((row) => row.getAttribute('data-drive-entry') ?? '')`;
 
+/** Counts, on `window`, every Drive listing the page's own fetch has had
+ *  answered, body and all (or ended short of it); installed before each
+ *  document's scripts run. A count at the headers is a count of nothing yet:
+ *  from the edge the listing itself came 50 ms behind them (2026-09-23), and a
+ *  snapshot two frames after the headers read the Drive one step late. */
+const COUNT_DRIVE_LISTINGS = `(() => {
+  window.__driveListings = 0;
+  const real = window.fetch.bind(window);
+  window.fetch = async (input, init) => {
+    const response = await real(input, init);
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.href);
+    const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    if (method === 'GET' && url.pathname === '/api/drive') {
+      const settled = () => { window.__driveListings += 1; };
+      response.clone().arrayBuffer().then(settled, settled);
+    }
+    return response;
+  };
+})()`;
+
 /** Run `act`, then resolve once the Drive listing it causes has been answered
- *  and painted: every change the page makes ends in a fresh listing. */
-async function relisted(page: Page, act: () => Promise<void>): Promise<readonly string[]> {
-  const listing = page.waitForResponse((response) => response.request().method() === 'GET'
-    && new URL(response.url()).pathname === '/api/drive');
+ *  and painted: every change the page makes ends in a fresh listing. A step that
+ *  loads a new document starts that document's count at zero. */
+async function relisted(page: Page, act: () => Promise<void>, loadsDocument = false): Promise<readonly string[]> {
+  const before = loadsDocument ? 0 : v.parse(v.number(), await page.evaluate('window.__driveListings'));
 
   await act();
-  await listing;
+  await until(page, 'the Drive listing the step causes', `(window.__driveListings ?? 0) > ${String(before)}`);
   await painted(page);
 
   return v.parse(v.array(v.string()), await page.evaluate(DRIVE_LISTED));
@@ -678,7 +875,7 @@ async function relisted(page: Page, act: () => Promise<void>): Promise<readonly 
 /** Name a Drive entry through the page's name dialog: the field opens with
  *  its current value selected, so typing replaces it. */
 async function nameInDialog(page: Page, name: string): Promise<void> {
-  await page.waitForSelector('#drive-name');
+  await until(page, 'the name dialog', `document.querySelector('#drive-name') !== null`);
   await page.focus('#drive-name');
   await page.keyboard.type(name);
   await page.click('[data-drive-dialog-commit]');
@@ -714,7 +911,8 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
   writeFileSync(upload, 'browser flow upload\n');
 
   try {
-    await relisted(page, async () => { await page.goto(`${target.origin}/drive`, { waitUntil: 'load' }); });
+    await page.evaluateOnNewDocument(COUNT_DRIVE_LISTINGS);
+    await relisted(page, async () => { await page.goto(`${target.origin}/drive`, { waitUntil: 'load' }); }, true);
     await relisted(page, async () => {
       await page.click('[data-drive-new-folder]');
       await nameInDialog(page, folder);
@@ -731,12 +929,14 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
       await nameInDialog(page, renamed);
     });
 
-    const afterRename = await relisted(page, async () => { await page.reload({ waitUntil: 'load' }); });
+    const afterRename = await relisted(page, async () => { await page.reload({ waitUntil: 'load' }); }, true);
 
-    for (const entry of [renamed, file]) {
+    // Deleted through the page only where the page lists it; a missed rename is
+    // the verdict's finding, and the `finally` below removes what is left.
+    for (const entry of [renamed, file].filter((listed) => afterRename.includes(listed))) {
       await relisted(page, async () => {
         await page.click(`[data-drive-entry="${entry}"] [data-drive-delete]`);
-        await page.waitForSelector('[data-drive-delete-confirm]');
+        await until(page, 'the delete confirmation', `document.querySelector('[data-drive-delete-confirm]') !== null`);
         await page.click('[data-drive-delete-confirm]');
       });
     }

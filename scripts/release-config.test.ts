@@ -58,7 +58,7 @@ import { parseJsonc } from './jsonc';
 import { readRepositoryFile, trackedFiles } from './sources';
 // The config module itself, not its text: the failure being guarded is a hook
 // that exists and decides the wrong thing, which no source-text assertion sees.
-import viteConfig from '../packages/cf-backend/vite.config';
+import viteConfigFor from '../packages/cf-backend/vite.config';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
@@ -190,7 +190,8 @@ describe("the deployed Worker's stack traces are readable", () => {
   // assertion here would pass over a hook that returns the wrong thing, and the
   // whole failure being guarded is a flag whose other half is missing.
   test('the vite build emits worker source maps and leaves the client without', () => {
-    const plugins = (viteConfig.plugins ?? []).flatMap((plugin) => {
+    // As `vite build` resolves it: the release is a build.
+    const plugins = (viteConfigFor({ command: 'build', mode: 'production' }).plugins ?? []).flatMap((plugin) => {
       const parsed = v.safeParse(EnvironmentScopedPluginSchema, plugin);
 
       return parsed.success ? [parsed.output] : [];
