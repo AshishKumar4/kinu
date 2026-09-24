@@ -166,7 +166,7 @@ function cached(accountId: string, catalog: ProfileCatalog, version: number): st
         ? Response.json(served)
         : network(input, init);
       try {
-        const { loadActiveProfile } = await import('./packages/cli/src/profiles.ts');
+        const { loadActiveProfile } = await import('./packages/cli/src/default-model.ts');
         await loadActiveProfile();
       } finally {
         globalThis.fetch = network;
@@ -174,6 +174,9 @@ function cached(accountId: string, catalog: ProfileCatalog, version: number): st
     }
   `;
 }
+
+/** An endpoint in the environment whose own model is a bare id; nothing listens there. */
+const ENDPOINT_ENV = { KINU_MODEL: 'test/model', KINU_BASE_URL: 'http://127.0.0.1:65534/v1', KINU_AUTH: 'Bearer profile-test' };
 
 describe('local profile authority', () => {
   function seededCatalog(model: string): ProfileCatalog {
@@ -183,8 +186,8 @@ describe('local profile authority', () => {
   test('the first tier edit seeds version 1 under local authority and persists into config.json', () => {
     const steps = runScenario(`
       await step('seeded', async () => {
-        const { updateDefaultTier } = await import('./packages/cli/src/profiles.ts');
-        return updateDefaultTier({ model: 'deepseek' });
+        const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
+        return updateDefaultTier({ model: 'openai/deepseek' });
       });
       await step('reload', async () => {
         const { loadLocalProfileAuthority } = await import('./packages/cli/src/profiles.ts');
@@ -199,7 +202,7 @@ describe('local profile authority', () => {
     const seeded = v.parse(ParsedEnvelope, expectOk(steps.seeded));
     expect(seeded.authority).toEqual({ kind: 'local' });
     expect(seeded.version).toBe(1);
-    expect(seeded.digest).toBe(profileCatalogDigest(validateProfileCatalog({ value: seededCatalog('deepseek') })));
+    expect(seeded.digest).toBe(profileCatalogDigest(validateProfileCatalog({ value: seededCatalog('openai/deepseek') })));
     expect(v.parse(ParsedEnvelope, expectOk(steps.reload))).toEqual(seeded);
     const onDisk = expectText(steps.configOnDisk);
     expect(onDisk).toContain('"localProfile"');
@@ -209,27 +212,33 @@ describe('local profile authority', () => {
   test('fresh authority uses the same environment model that workspace creation accepts', () => {
     const steps = runScenario(`
       await step('load', async () => {
-        const { loadActiveProfile } = await import('./packages/cli/src/profiles.ts');
+        const { loadActiveProfile } = await import('./packages/cli/src/default-model.ts');
         return loadActiveProfile();
       });
-    `, {
-      env: {
-        KINU_MODEL: 'test/model',
-        KINU_BASE_URL: 'http://127.0.0.1:65534/v1',
-        KINU_AUTH: 'Bearer profile-test',
-      },
-    });
+    `, { env: ENDPOINT_ENV });
 
     const loaded = v.parse(ParsedEnvelope, expectOk(steps.load));
-    expect(loaded.catalog.tiers.default.model).toBe('test/model');
+    // A full spec: the tier is what an unpinned workspace runs, so a bare id would name no provider.
+    expect(loaded.catalog.tiers.default.model).toBe('openai-compat/test/model');
+  });
+
+  test('every writer stores a model spelled as the provider listing names it', () => {
+    const steps = runScenario(`
+      const { adoptDefaultModel, updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
+      await step('adopted', async () => adoptDefaultModel('picked/model'));
+      await step('edited', async () => (await updateDefaultTier({ model: 'other/model' })).catalog.tiers.default);
+    `, { env: ENDPOINT_ENV });
+
+    expect(expectOk(steps.adopted)).toEqual({ model: 'openai-compat/picked/model' });
+    expect(expectOk(steps.edited)).toEqual({ model: 'openai-compat/other/model' });
   });
 
   test('a later edit supersedes the envelope wholesale and bumps its version', () => {
     const steps = runScenario(`
-      const { loadLocalProfileAuthority, updateDefaultTier } =
-        await import('./packages/cli/src/profiles.ts');
-      await step('first', async () => updateDefaultTier({ model: 'deepseek' }));
-      await step('second', async () => updateDefaultTier({ model: 'other-model' }));
+      const { loadLocalProfileAuthority } = await import('./packages/cli/src/profiles.ts');
+      const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
+      await step('first', async () => updateDefaultTier({ model: 'openai/deepseek' }));
+      await step('second', async () => updateDefaultTier({ model: 'openai/other-model' }));
       await step('reloaded', async () => loadLocalProfileAuthority());
       await step('configOnDisk', async () => {
         const { readFileSync } = await import('node:fs');
@@ -240,9 +249,9 @@ describe('local profile authority', () => {
     expect(v.parse(ParsedEnvelope, expectOk(steps.first)).version).toBe(1);
     expect(v.parse(ParsedEnvelope, expectOk(steps.second)).version).toBe(2);
     const reloaded = v.parse(ParsedEnvelope, expectOk(steps.reloaded));
-    expect(reloaded.catalog.tiers.default.model).toBe('other-model');
+    expect(reloaded.catalog.tiers.default.model).toBe('openai/other-model');
     expect(reloaded.digest)
-      .toBe(profileCatalogDigest(validateProfileCatalog({ value: seededCatalog('other-model') })));
+      .toBe(profileCatalogDigest(validateProfileCatalog({ value: seededCatalog('openai/other-model') })));
     expect(expectText(steps.configOnDisk)).not.toContain('deepseek');
   });
 });
@@ -258,18 +267,6 @@ describe('account cache isolation', () => {
   test('entries are keyed by account, live outside KinuConfig, and never bleed across', () => {
     const steps = runScenario(`
       ${SEED_ACCOUNTS}
-      await step('readA', async () => {
-        const { loadCachedAccountProfile } = await import('./packages/cli/src/profiles.ts');
-        return loadCachedAccountProfile('acc-a');
-      });
-      await step('readB', async () => {
-        const { loadCachedAccountProfile } = await import('./packages/cli/src/profiles.ts');
-        return loadCachedAccountProfile('acc-b');
-      });
-      await step('readUnknown', async () => {
-        const { loadCachedAccountProfile } = await import('./packages/cli/src/profiles.ts');
-        return loadCachedAccountProfile('acc-other');
-      });
       await step('configText', async () => {
         const { existsSync, readFileSync } = await import('node:fs');
         if (!existsSync(process.env.KINU_HOME + '/config.json')) return '(no config.json)';
@@ -279,15 +276,13 @@ describe('account cache isolation', () => {
         const { readFileSync } = await import('node:fs');
         return readFileSync(process.env.KINU_HOME + '/profile-cache.json', 'utf-8');
       });
+      ${tierAs('acc-a', 'readA')}
+      ${tierAs('acc-b', 'readB')}
+      ${tierAs('acc-other', 'readUnknown')}
     `);
 
-    const a = v.parse(ParsedEnvelope, expectOk(steps.readA));
-    expect(a.authority).toEqual({ kind: 'account', accountId: 'acc-a' });
-    expect(a.version).toBe(3);
-    expect(Object.keys(a.catalog.roles)).toContain('task');
-    const b = v.parse(ParsedEnvelope, expectOk(steps.readB));
-    expect(b.authority).toEqual({ kind: 'account', accountId: 'acc-b' });
-    expect(Object.keys(b.catalog.roles)).toEqual(['auditor']);
+    expect(expectOk(steps.readA)).toEqual({ model: 'deepseek' });
+    expect(expectOk(steps.readB)).toEqual({ model: 'other-model' });
     expect(expectOk(steps.readUnknown)).toBeNull();
     expect(expectText(steps.configText)).not.toContain('acc-a');
     const cacheText = expectText(steps.cacheText);
@@ -321,6 +316,21 @@ describe('account cache isolation', () => {
     `;
   }
 
+  /** Signs in as `accountId` and answers the default tier this machine holds for it, read without the network. */
+  function tierAs(accountId: string, name: string): string {
+    return `
+      await step(${JSON.stringify(name)}, async () => {
+        ${sessionPatch({
+          accessToken: 'ptc_session',
+          tokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
+          user: { id: accountId, email: 'a@example.com' },
+        })}
+        const { readDefaultTier } = await import('./packages/cli/src/profiles.ts');
+        return readDefaultTier();
+      });
+    `;
+  }
+
   test('logout and account switching flip resolution without promoting or merging anything', () => {
     const steps = runScenario(`
       ${SEED_ACCOUNTS}
@@ -339,21 +349,16 @@ describe('account cache isolation', () => {
       });
       await step('switchToB', async () => {
         ${sessionPatch({ accessToken: 'ptc_session_b', user: { id: 'acc-b', email: 'b@example.com' } })}
-        const { resolveProfileAuthority, loadCachedAccountProfile, loadLocalProfileAuthority } = await import('./packages/cli/src/profiles.ts');
-        const source = resolveProfileAuthority();
-        const cachedForB = loadCachedAccountProfile(source.kind === 'account' ? source.accountId : '');
-        return { source, cachedRoles: Object.keys(cachedForB?.catalog.roles ?? {}), local: loadLocalProfileAuthority() };
+        const { resolveProfileAuthority, readDefaultTier, loadLocalProfileAuthority } = await import('./packages/cli/src/profiles.ts');
+        return { source: resolveProfileAuthority(), tier: readDefaultTier(), local: loadLocalProfileAuthority() };
       });
       await step('logout', async () => {
         ${SIGNED_OUT}
-        const { resolveProfileAuthority, loadLocalProfileAuthority, loadCachedAccountProfile } = await import('./packages/cli/src/profiles.ts');
-        return {
-          source: resolveProfileAuthority(),
-          local: loadLocalProfileAuthority(),
-          cacheStillHoldsA: loadCachedAccountProfile('acc-a') !== null,
-          cacheStillHoldsB: loadCachedAccountProfile('acc-b') !== null,
-        };
+        const { resolveProfileAuthority, loadLocalProfileAuthority } = await import('./packages/cli/src/profiles.ts');
+        return { source: resolveProfileAuthority(), local: loadLocalProfileAuthority() };
       });
+      ${tierAs('acc-a', 'backAsA')}
+      ${tierAs('acc-b', 'backAsB')}
     `);
 
     expect(expectOk(steps.signedOutSource)).toEqual({ kind: 'local' });
@@ -368,25 +373,21 @@ describe('account cache isolation', () => {
 
     const switched = v.parse(v.object({
       source: ParsedAuthoritySource,
-      cachedRoles: v.array(v.string()),
+      tier: v.looseObject({ model: v.string() }),
       local: v.null(),
     }), expectOk(steps.switchToB));
 
     expect(switched.source).toEqual({ kind: 'account', accountId: 'acc-b' });
-    expect(switched.cachedRoles).toEqual(['auditor']);
+    expect(switched.tier).toEqual({ model: 'other-model' });
     expect(switched.local).toBeNull();
 
-    const loggedOut = v.parse(v.object({
-      source: ParsedAuthoritySource,
-      local: v.null(),
-      cacheStillHoldsA: v.boolean(),
-      cacheStillHoldsB: v.boolean(),
-    }), expectOk(steps.logout));
+    const loggedOut = v.parse(v.object({ source: ParsedAuthoritySource, local: v.null() }), expectOk(steps.logout));
 
     expect(loggedOut.source).toEqual({ kind: 'local' });
     expect(loggedOut.local).toBeNull();
-    expect(loggedOut.cacheStillHoldsA).toBe(true);
-    expect(loggedOut.cacheStillHoldsB).toBe(true);
+    // Logout keeps the cache: signing back in finds each account's own.
+    expect(expectOk(steps.backAsA)).toEqual({ model: 'deepseek' });
+    expect(expectOk(steps.backAsB)).toEqual({ model: 'other-model' });
   });
 
   test('an expired session resolves local even with a bare KINU_TOKEN present', () => {
@@ -470,8 +471,8 @@ describe('the turn profile authority reader', () => {
         fetches += 1;
         return Response.json(served);
       };
-      const { createProfileAuthorityReader, loadActiveProfile } =
-        await import('./packages/cli/src/profiles.ts');
+      const { createProfileAuthorityReader } = await import('./packages/cli/src/profiles.ts');
+      const { loadActiveProfile } = await import('./packages/cli/src/default-model.ts');
       // ONE reader, the way a live session builds it once at construction.
       const read = createProfileAuthorityReader();
       await step('firstThenRepeat', async () => {
@@ -520,21 +521,17 @@ describe('the turn profile authority reader', () => {
         return await createProfileAuthorityReader()();
       });
       await step('leaked', async () => {
-        const { loadCachedAccountProfile } = await import('./packages/cli/src/profiles.ts');
-        return {
-          holdsA: loadCachedAccountProfile('acc-a') !== null,
-          holdsB: loadCachedAccountProfile('acc-b') !== null,
-          reported: recorder.emitted.length,
-        };
+        const { readDefaultTier } = await import('./packages/cli/src/profiles.ts');
+        const tierForB = readDefaultTier();
+        const reported = recorder.emitted.length;
+        ${signedIn('acc-a', DEAD_ORIGIN)}
+        return { tierForB, tierForA: readDefaultTier(), reported };
       });
     `);
 
     // A cache is keyed to its account: an unrelated entry is a miss, not a fallback.
     expectError(steps.resolved, 'Unable to connect');
-    expect(v.parse(
-      v.object({ holdsA: v.boolean(), holdsB: v.boolean(), reported: v.number() }),
-      expectOk(steps.leaked),
-    )).toEqual({ holdsA: true, holdsB: false, reported: 0 });
+    expect(expectOk(steps.leaked)).toEqual({ tierForB: null, tierForA: { model: 'deepseek' }, reported: 0 });
   });
 
   test('no cache for this account rethrows rather than inventing a catalog', () => {
@@ -562,17 +559,17 @@ describe('the turn profile authority reader', () => {
   });
 
   // A reader built before the edit must still see it.
-  test('signed out, a reader built over an existing authority still sees a later /model and /effort', () => {
+  test('signed out, a reader built over an existing authority still sees a later default model and effort', () => {
     const steps = runScenario(`
-      const { createProfileAuthorityReader, updateDefaultTier } =
-        await import('./packages/cli/src/profiles.ts');
-      await updateDefaultTier({ model: 'model-at-startup' });
+      const { createProfileAuthorityReader } = await import('./packages/cli/src/profiles.ts');
+      const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
+      await updateDefaultTier({ model: 'openai/model-at-startup' });
       // Built ONCE, AFTER an authority exists — the way a live session builds
       // it at construction.
       const read = createProfileAuthorityReader();
       await step('atStartup', async () => await read());
       await step('afterModel', async () => {
-        await updateDefaultTier({ model: 'model-chosen-later' });
+        await updateDefaultTier({ model: 'openai/model-chosen-later' });
         return await read();
       });
       await step('afterEffort', async () => {
@@ -582,30 +579,30 @@ describe('the turn profile authority reader', () => {
     `);
 
     const startup = v.parse(ParsedDefaultTier, expectOk(steps.atStartup));
-    expect(startup.catalog.tiers.default.model).toBe('model-at-startup');
+    expect(startup.catalog.tiers.default.model).toBe('openai/model-at-startup');
     const afterModel = v.parse(ParsedDefaultTier, expectOk(steps.afterModel));
-    expect(afterModel.catalog.tiers.default.model).toBe('model-chosen-later');
+    expect(afterModel.catalog.tiers.default.model).toBe('openai/model-chosen-later');
     expect(afterModel.version).toBeGreaterThan(startup.version);
     const afterEffort = v.parse(ParsedDefaultTier, expectOk(steps.afterEffort));
     expect(afterEffort.catalog.tiers.default.reasoningEffort).toBe('high');
-    expect(afterEffort.catalog.tiers.default.model).toBe('model-chosen-later');
+    expect(afterEffort.catalog.tiers.default.model).toBe('openai/model-chosen-later');
   });
 
-  test('signed out with no authority yet, the first /model becomes the next turn\u2019s tier', () => {
+  test('signed out with no authority yet, the first default model becomes the next turn\u2019s tier', () => {
     const steps = runScenario(`
-      const { createProfileAuthorityReader, updateDefaultTier } =
-        await import('./packages/cli/src/profiles.ts');
+      const { createProfileAuthorityReader } = await import('./packages/cli/src/profiles.ts');
+      const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
       const read = createProfileAuthorityReader();
       await step('beforeAnyAuthority', async () => await read());
       await step('afterModel', async () => {
-        await updateDefaultTier({ model: 'first-model' });
+        await updateDefaultTier({ model: 'openai/first-model' });
         return await read();
       });
     `);
 
     expect(expectOk(steps.beforeAnyAuthority)).toBeNull();
     expect(v.parse(ParsedDefaultTier, expectOk(steps.afterModel)).catalog.tiers.default.model)
-      .toBe('first-model');
+      .toBe('openai/first-model');
   });
 });
 
@@ -627,9 +624,10 @@ describe('malformed profile data fails loudly', () => {
   }
 
   const LOAD_CACHE = `
+    ${signedIn('acc-a', 'https://kinu.test')}
     await step('load', async () => {
-      const { loadCachedAccountProfile } = await import('./packages/cli/src/profiles.ts');
-      return loadCachedAccountProfile('acc-a');
+      const { readDefaultTier } = await import('./packages/cli/src/profiles.ts');
+      return readDefaultTier();
     });
   `;
 
@@ -668,7 +666,7 @@ describe('malformed profile data fails loudly', () => {
         return Response.json(served);
       };
       await step('misKeyed', async () => {
-        const { loadActiveProfile } = await import('./packages/cli/src/profiles.ts');
+        const { loadActiveProfile } = await import('./packages/cli/src/default-model.ts');
         await loadActiveProfile();
         return 'written';
       });
@@ -858,162 +856,3 @@ describe('cloud-api profile methods', () => {
     }
   });
 });
-
-/** Whichever store is canonical for the session receives the `kinu model` / `kinu effort` write. */
-describe('control commands route model/effort by session state', () => {
-  /** An existing database and no configured ref: enough for `resolveAgentTarget` to answer local. */
-  const SEED_LOCAL_AGENT = `
-    {
-      process.env.OPENAI_API_KEY = 'profile-scenario-credential';
-      const realFetch = globalThis.fetch;
-      globalThis.fetch = (input, init) => {
-        const url = new URL(input instanceof Request ? input.url : input);
-        if (url.href === 'https://models.dev/api.json') {
-          return Promise.resolve(Response.json({
-            openai: { models: { 'gpt-4o-mini': { id: 'gpt-4o-mini', tool_call: true } } },
-            'account-gateway': {
-              npm: '@ai-sdk/openai-compatible', api: 'https://account-gateway.test/v1',
-              models: { 'custom-model': { id: 'custom-model', tool_call: true } },
-            },
-          }));
-        }
-        return realFetch(input, init);
-      };
-      const { mkdirSync, writeFileSync } = await import('node:fs');
-      mkdirSync(process.env.KINU_HOME + '/probe-agent', { recursive: true });
-      writeFileSync(process.env.KINU_HOME + '/probe-agent/agent.db', '');
-    }
-  `;
-
-  /** Command output is muted so a scenario's stdout is one JSON document. */
-  const QUIET = `
-    async function quiet(fn) {
-      const log = console.log;
-      console.log = () => {};
-      try { return await fn(); } finally { console.log = log; }
-    }
-  `;
-
-  const ParsedControlTier = v.object({
-    version: v.number(),
-    catalog: v.object({
-      tiers: v.object({
-        default: v.looseObject({ model: v.string(), reasoningEffort: v.optional(v.string()) }),
-      }),
-    }),
-  });
-
-  test('signed out, kinu model and kinu effort land in the local authority and the next turn reads them', async () => {
-    const steps = runScenario(`
-      ${SEED_LOCAL_AGENT}
-      ${QUIET}
-      await step('model', async () => {
-        const { modelCommand } = await import('./packages/cli/src/commands/control.ts');
-        await quiet(() => modelCommand('probe-agent', 'openai/gpt-4o-mini', {}));
-        return 'set';
-      });
-      await step('effort', async () => {
-        const { effortCommand } = await import('./packages/cli/src/commands/control.ts');
-        await quiet(() => effortCommand('probe-agent', 'high'));
-        return 'set';
-      });
-      await step('nextTurn', async () => {
-        const { createProfileAuthorityReader } = await import('./packages/cli/src/profiles.ts');
-        return await createProfileAuthorityReader()();
-      });
-      await step('localSlot', async () => {
-        const { loadConfigFile } = await import('./packages/cli/src/config.ts');
-        return loadConfigFile().localProfile?.catalog.tiers.default ?? null;
-      });
-    `);
-
-    expect(expectOk(steps.model)).toBe('set');
-    expect(expectOk(steps.effort)).toBe('set');
-    const tier = v.parse(ParsedControlTier, expectOk(steps.nextTurn)).catalog.tiers.default;
-    expect(tier.model).toBe('openai/gpt-4o-mini');
-    expect(tier.reasoningEffort).toBe('high');
-    expect(expectOk(steps.localSlot)).toEqual({ model: 'openai/gpt-4o-mini', reasoningEffort: 'high' });
-  });
-
-  test('signed in, kinu model goes to the account store, never into config.json; the next turn revalidates it', async () => {
-    const steps = runScenario(`
-      ${SEED_LOCAL_AGENT}
-      ${QUIET}
-      let accountServer = null;
-      {
-        const { mkdirSync, writeFileSync } = await import('node:fs');
-        const { profileCatalogDigest, BUILTIN_PROFILE_CATALOG } = await import('@kinu.run/core');
-        let version = 3;
-        let current = {
-          roles: BUILTIN_PROFILE_CATALOG.roles,
-          tiers: { default: { model: 'server-model-v3' } },
-        };
-        const envelope = (catalog) => ({
-          authority: { kind: 'account', accountId: 'acc-a' },
-          version, digest: profileCatalogDigest(catalog), catalog,
-        });
-        // A stand-in account server: GET answers the current catalog, PUT
-        // applies the whole-catalog edit and bumps the version.
-        accountServer = Bun.serve({ port: 0, fetch: async (req) => {
-          if (new URL(req.url).pathname === '/api/user/ai/proxy/credentials') {
-            return Response.json({ credentials: [{ key: 'account-gateway.bearer' }] });
-          }
-          if (new URL(req.url).pathname === '/api/cli/models') {
-            return Response.json({
-              models: [{ provider: 'account-gateway', spec: 'account-gateway/custom-model', label: 'Account model' }],
-              failures: [],
-            });
-          }
-          if (req.method === 'PUT') {
-            const body = await req.json();
-            if (body.expectedVersion !== version) {
-              return Response.json({ error: 'profile catalog changed underneath you', currentVersion: version, currentDigest: profileCatalogDigest(current) }, { status: 409 });
-            }
-            current = body.catalog;
-            version += 1;
-            return Response.json(envelope(current));
-          }
-          return Response.json(envelope(current));
-        }});
-        mkdirSync(process.env.KINU_HOME, { recursive: true });
-        writeFileSync(process.env.KINU_HOME + '/config.json', JSON.stringify({
-          origin: 'http://127.0.0.1:' + accountServer.port,
-          accessToken: 'ptc_session',
-          tokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
-          user: { id: 'acc-a', email: 'a@example.com' },
-        }), { mode: 0o600 });
-      }
-      await step('model', async () => {
-        // The CAS write itself proves the account round trip: it only lands
-        // when the server answered a GET first (expectedVersion) and accepted
-        // the PUT after.
-        const { modelCommand } = await import('./packages/cli/src/commands/control.ts');
-        await quiet(() => modelCommand('probe-agent', 'account-gateway/custom-model', {}));
-        return 'set';
-      });
-      await step('nextTurn', async () => {
-        const { createProfileAuthorityReader } = await import('./packages/cli/src/profiles.ts');
-        return await createProfileAuthorityReader()();
-      });
-      await step('localSlot', async () => {
-        const { loadConfigFile } = await import('./packages/cli/src/config.ts');
-        return loadConfigFile().localProfile ?? null;
-      });
-      await step('cacheSlot', async () => {
-        const { loadCachedAccountProfile } = await import('./packages/cli/src/profiles.ts');
-        return loadCachedAccountProfile('acc-a')?.catalog.tiers.default ?? null;
-      });
-      await step('done', async () => {
-        accountServer.stop(true);
-        return 'stopped';
-      });
-    `);
-
-    expect(expectOk(steps.model)).toBe('set');
-    const tier = v.parse(ParsedControlTier, expectOk(steps.nextTurn)).catalog.tiers.default;
-    expect(tier.model).toBe('account-gateway/custom-model');
-    expect(expectOk(steps.localSlot)).toBeNull();
-    expect(expectOk(steps.cacheSlot)).toMatchObject({ model: 'account-gateway/custom-model' });
-  });
-});
-

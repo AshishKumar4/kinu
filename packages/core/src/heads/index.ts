@@ -48,7 +48,7 @@ export {
 } from './head-stream';
 
 export {
-  reconcileInterruptedForks, forkInterruptedWake, jobRedriveResumeGate, resumableForkRoots,
+  reconcileInterruptedForks, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
   type RunEventLedger,
 } from './reconcile';

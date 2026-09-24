@@ -14,7 +14,7 @@ import { buildNodeDeps } from '../../core/src/strategy/swarm-setup';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { scriptedTurnModel, sqlOver } from '@kinu.run/test-utils';
 import { hostNodeSeat } from '../src/exploration-hosting';
-import { orchestratorHarness } from './helpers/actor-harness';
+import { orchestratorHarness, workspaceMainActor } from './helpers/actor-harness';
 
 const NODE_ID = 'node-1';
 
@@ -42,7 +42,7 @@ async function hostedSearch(signal?: AbortSignal) {
   const seams = workspace.agent.observeExplorationSeams();
 
   const journal: HeadJournal = new HeadJournal(
-    sqlOver(workspace.db), workspace.agent.observeRuntime().actor,
+    sqlOver(workspace.db), workspaceMainActor(workspace.db),
   );
 
   return { workspace, seams, journal, signal };
@@ -94,7 +94,7 @@ describe('cancelling a search reaches its hosted nodes', () => {
     const seat = await hostNodeSeat(search.seams, { nodeId: NODE_ID, rootId: 'root-1', depth: 1 });
     // The run is bridged onto this actor's session, so the seating (kind, store scoping, loop) is load-bearing.
     expect(seat.actor.record.kind).toBe('head');
-    expect(seat.actor.record.parentActorId).toBe(search.workspace.agent.observeRuntime().actor.actorId);
+    expect(seat.actor.record.parentActorId).toBe(workspaceMainActor(search.workspace.db).actorId);
   });
 
   test('a search already cancelled runs nothing and reports aborted', async () => {

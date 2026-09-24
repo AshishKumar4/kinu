@@ -1,10 +1,9 @@
 /**
- * Node-side `eval` builder: the CLI's counterpart to the CF codemode tool, run
- * in-process via `new Function`. Never imported by the CF backend, keeping
- * codegen outside the Durable Object isolate.
+ * Node-side `eval` builder, run in-process via `new Function`. `require` and `process` are the
+ * hosted sandbox's `kinu-node.js`, so a program's files and cwd are its workspace, never the machine.
  */
 
-import { requireBuild } from '@kinu.run/core';
+import { KINU_NODE_MODULE_SOURCE, requireBuild, WORKSPACE_ROOT } from '@kinu.run/core';
 import type {
   CodemodeProvider,
   CraftedToolSet,
@@ -21,7 +20,6 @@ import {
   codemodeFunction, withCodemodeProgram,
 } from '@kinu.run/core';
 import { tool } from 'ai';
-import { createRequire } from 'node:module';
 import { normalizeCode } from '@cloudflare/codemode/normalize';
 import * as v from 'valibot';
 
@@ -29,14 +27,31 @@ export interface NodeExecuteToolFactoryDeps {
   extraProviders?: CodemodeProvider[];
 }
 
-/** Always-bound sandbox parameters; a provider may not take them. `require` is
- *  bound explicitly: a `new Function` body sees no module scope and Bun has no
- *  `require` global, yet SANDBOX_FACTS.local promises it. */
+/** Always-bound sandbox parameters; a provider may not take them. */
 const FIXED_NAMESPACES: readonly string[] = [
-  'workspace', CRAFTED_TOOL_NAMESPACE, 'console', 'require',
+  'workspace', CRAFTED_TOOL_NAMESPACE, 'console', 'require', 'process',
 ];
 
-const machineRequire = createRequire(import.meta.url);
+const KinuNodeSchema = v.object({ createRequire: v.function(), createProcess: v.function(), loadBuiltins: v.function() });
+
+const BuiltinsSchema = v.object({ loaded: v.looseObject({}) });
+
+type KinuNode = v.InferOutput<typeof KinuNodeSchema> & { readonly builtins: v.InferOutput<typeof BuiltinsSchema>['loaded'] };
+
+/** A data URL: the module exists only as the source the hosted sandbox loads. */
+async function importKinuNode(): Promise<KinuNode> {
+  const node = v.parse(KinuNodeSchema, await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`));
+
+  return { ...node, builtins: v.parse(BuiltinsSchema, await node.loadBuiltins()).loaded };
+}
+
+let kinuNode: Promise<KinuNode> | undefined;
+
+function loadKinuNode(): Promise<KinuNode> {
+  kinuNode ??= importKinuNode();
+
+  return kinuNode;
+}
 
 const abortOptionsSchema = v.object({ abortSignal: v.optional(v.instance(AbortSignal)) });
 
@@ -112,13 +127,16 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
           }
 
           const workspace = providerBindings['workspace'] ?? {};
+          const node = await loadKinuNode();
 
           // Fixed names excluded: a duplicate `new Function` parameter crashes.
           const extraNamespaces = Object.keys(providerBindings).filter(n => !FIXED_NAMESPACES.includes(n));
           const argNames = [...FIXED_NAMESPACES, ...extraNamespaces];
 
-          const argValues: object[] = [
-            workspace, toolBindings, sandboxConsole, machineRequire,
+          const argValues: unknown[] = [
+            workspace, toolBindings, sandboxConsole,
+            node.createRequire({ workspace, builtins: node.builtins, cwd: WORKSPACE_ROOT }),
+            node.createProcess(WORKSPACE_ROOT),
             ...extraNamespaces.map(n => providerBindings[n]),
           ];
 

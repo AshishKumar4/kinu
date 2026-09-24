@@ -115,7 +115,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   async start(): Promise<void> {
     await adoptGeneration(this.gen);
     this.processes.setPidBase(generation(this.gen) * PID_GEN_STRIDE);
-    const root = '/home/user/slates/board';
+    const root = '/home/main/slates/board';
     const files = this.vfs.as(CRED_KERNEL);
     files.mkdir(root, { recursive: true });
     files.writeFile(`${root}/package.json`, JSON.stringify({

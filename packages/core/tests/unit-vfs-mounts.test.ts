@@ -1,15 +1,21 @@
 // The workspace mount table: /pc and /sandbox extend one view (#36/#142/#143); an absent mount
-// is stated as absent, and device consent is still enforced on mounted paths.
+// is stated as absent, and device consent is still enforced on mounted paths. The workspace shell
+// serves the same table (#22).
+import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
+import { fakeMossaic } from '@kinu.run/test-utils/mossaic';
 import type { VFS, VfsRevision } from '../src/types/primitives';
 import { walkRecursive } from '@kinu.run/agent-utils/vfs';
-import { isVfsError } from '../src/vfs/errno';
+import { isVfsError, makeVfsError } from '../src/vfs/errno';
 import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, type VfsMount } from '../src/vfs/mounts';
-import { deviceFiles, type DeviceTransport } from '../src/execution/device-tunnel-executor';
+import { mossaicVfs } from '../src/vfs/mossaic-vfs';
+import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { observeWrites } from '../src/vfs/observe';
+import { createWorkspaceBundle } from './helpers';
 
-/** readdir returns entry names and stat distinguishes dirs, so walkRecursive crosses it. */
+/** readdir returns entry names and stat distinguishes dirs, so walkRecursive crosses it; a miss throws the
+ *  VfsError the real backends throw. */
 function fakeTree(entries: Record<string, string>): VFS {
 	const files = new Map<string, string>(Object.entries(entries));
 	const dirs = new Set<string>();
@@ -24,13 +30,13 @@ function fakeTree(entries: Record<string, string>): VFS {
 		readFile: async (path) => {
 			const content = files.get(path);
 
-			if (content === undefined) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+			if (content === undefined) throw makeVfsError('ENOENT', 'no such file or directory', path);
 
 			return content;
 		},
 		writeFile: async (path, data) => { files.set(path, data instanceof Uint8Array ? new TextDecoder().decode(data) : data); },
 		readdir: async (path) => {
-			if (path !== '/' && !dirs.has(path)) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+			if (path !== '/' && !dirs.has(path)) throw makeVfsError('ENOENT', 'no such directory', path);
 			const names = new Set<string>();
 			const prefix = path === '/' ? '/' : `${path}/`;
 
@@ -190,24 +196,22 @@ describe('the workspace plane mount table', () => {
 		const machine = {
 			'/home/dev/notes.txt': 'consented',
 			'/etc/secrets.key': 'outside',
+			'/tmp/kinu-tool-output/device-rpc-1.stdout.log': 'spilled',
 		};
 
-		let unconfined = false;
+		let scope: DeviceFileScope = 'root';
 
 		const transport: DeviceTransport = {
 			status: () => ({ connected: true, registered: true, toolchain: null }),
 			refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
 			rpc: async (method, params) => {
 				const path = v.parse(v.string(), params[0]);
-				let content: string | undefined;
+				const content = Object.entries(machine).find(([file]) => file === path)?.[1];
 
-				if (path === '/home/dev/notes.txt') content = machine['/home/dev/notes.txt'];
-				else if (path === '/etc/secrets.key') content = machine['/etc/secrets.key'];
-
-				if (method === 'readFile') {
+				if (method === 'readRange') {
 					if (content === undefined) throw new Error(`ENOENT: ${path}`);
 
-					return content;
+					return { encoding: 'base64', content: Buffer.from(content).toString('base64') };
 				}
 
 				if (method === 'listFiles') return Object.keys(machine).filter((p) => p.startsWith(`${path}/`));
@@ -220,21 +224,29 @@ describe('the workspace plane mount table', () => {
 		const view = deviceFiles(transport, {
 			consentedRoot: async () => '/home/dev',
 			deviceHome: async () => '/home/dev',
-			unconfined: async () => unconfined,
+			scope: async () => scope,
 		});
 
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', view)]);
+		const spill = '/pc/tmp/kinu-tool-output/device-rpc-1.stdout.log';
 
 		expect(await mounted.readFile('/pc/home/dev/notes.txt', { encoding: 'utf8' })).toBe('consented');
 		await expect(mounted.readFile('/pc/etc/secrets.key')).rejects.toMatchObject({
 			code: 'EACCES',
 			path: '/etc/secrets.key',
 		});
+		await expect(mounted.readFile(spill)).rejects.toMatchObject({ code: 'EACCES' });
 
-		unconfined = true;
+		// Sandboxed, the daemon maps /tmp to the agent's own temp directory, where a long command's
+		// whole output is saved, so the view reaches it too; nothing else outside the folder.
+		scope = 'sandboxed';
+		expect(await mounted.readFile(spill, { encoding: 'utf8' })).toBe('spilled');
+		await expect(mounted.readFile('/pc/etc/secrets.key')).rejects.toThrow(/outside the consented device directory/);
+
+		scope = 'unconfined';
 		expect(await mounted.readFile('/pc/etc/secrets.key', { encoding: 'utf8' })).toBe('outside');
 
-		unconfined = false;
+		scope = 'root';
 		await expect(mounted.readFile('/pc/etc/secrets.key')).rejects.toThrow(
 			/outside the consented device directory/,
 		);
@@ -580,5 +592,47 @@ describe('a live mount point is a directory of this plane', () => {
 	test('an absent mount still stats as nothing', async () => {
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', null, 'no device connected')]);
 		expect(await mounted.stat('/pc')).toBeNull();
+	});
+});
+
+describe('the workspace shell serves the same mount table (#22)', () => {
+	/** A workspace whose session user holds `/shared` (a Drive), `/sandbox` (any ranged tree) and an absent `/pc`. */
+	async function workspaceWithMounts() {
+		const bundle = createWorkspaceBundle(new Database(':memory:'));
+		const store = fakeMossaic();
+		const drive = mossaicVfs(store.tenant('owner'));
+		const container = mossaicVfs(store.tenant('container'));
+		await drive.writeFile('/notes.md', 'from the Drive\n');
+		await container.mkdir('/workspace', { recursive: true });
+		bundle.mountTable(withMountTable(bundle.vfs, [
+			mountOf('shared', drive), mountOf('sandbox', container), mountOf('pc', null, 'no device connected'),
+		]));
+
+		return { shell: bundle.shell, drive, container };
+	}
+
+	test('ls / lists every live mount point, and cat reads a file through one', async () => {
+		const { shell } = await workspaceWithMounts();
+
+		const listed = await shell.exec('ls /');
+		expect(listed.stdout.split(/\s+/)).toEqual(expect.arrayContaining(['home', 'shared', 'sandbox']));
+		expect(listed.stdout).not.toContain('pc');
+		expect(await shell.exec('cat /shared/notes.md')).toMatchObject({ stdout: 'from the Drive\n', exitCode: 0 });
+	});
+
+	test('cd enters a mount, and a redirect lands in the mounted tree', async () => {
+		const { shell, drive } = await workspaceWithMounts();
+
+		expect(await shell.exec('cd /shared && pwd && ls')).toMatchObject({ stdout: '/shared\nnotes.md\n', exitCode: 0 });
+		expect(await shell.exec('echo hello > /shared/new.txt && echo more >> /shared/new.txt')).toMatchObject({ exitCode: 0 });
+		expect(await drive.readFile('/new.txt', { encoding: 'utf8' })).toBe('hello\nmore\n');
+	});
+
+	test('mv between two mounts copies across, since each mount is its own device', async () => {
+		const { shell, drive, container } = await workspaceWithMounts();
+
+		expect(await shell.exec('mv /shared/notes.md /sandbox/workspace/notes.md')).toMatchObject({ exitCode: 0 });
+		expect(await drive.exists('/notes.md')).toBe(false);
+		expect(await container.readFile('/workspace/notes.md', { encoding: 'utf8' })).toBe('from the Drive\n');
 	});
 });

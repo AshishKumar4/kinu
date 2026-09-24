@@ -1,81 +1,85 @@
 /**
  * Root arm only: non-root kinds are covered in `tests/unit-loop-contract.test.ts`. The root drives Think's
  * own loop, and this is the only proof the selected program actually ran; do not delete as a duplicate.
+ * The program runs on the Worker Loader binding (in this process, through `helpers/worker-loader.ts`).
  */
 import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
-import { orchestratorHarness, chatSessionTurns } from './helpers/actor-harness';
-import { createSandboxedExecutor } from '../../cli-backend/src/executor';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { actorScaffoldPath, MAIN_AGENT } from '@kinu.run/core';
+import {
+  orchestratorHarness, chatSessionTurns, workspaceFiles, workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent,
+} from './helpers/actor-harness';
 
-function oneTextTurn(text: string) {
-  return scriptedTurnModel({ doGenerate: () => ({
-    content: [{ type: 'text', text }], finishReason: { unified: 'stop', raw: undefined },
-    usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-      outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
-  }) });
+const TURN_USAGE = {
+  inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+  outputTokens: { total: 1, text: 1, reasoning: undefined },
+};
+
+function oneTextTurn(text: string, before?: () => Promise<void>) {
+  return scriptedTurnModel({ doGenerate: async () => {
+    await before?.();
+
+    return { content: [{ type: 'text', text }], finishReason: { unified: 'stop', raw: undefined }, usage: TURN_USAGE, warnings: [] };
+  } });
+}
+
+const SCAFFOLD = actorScaffoldPath({ kind: 'main', storageKey: MAIN_AGENT });
+
+/** Version 1 of the root's program on disk and selected as current, as a promotion leaves it. */
+async function selectProgram(harness: ActorHarness<HarnessOrchestratorAgent>, source: string, rationale: string): Promise<void> {
+  const { db } = harness;
+  await workspaceFiles(harness.agent).writeFile(`${SCAFFOLD}.v1`, source);
+  const actorId = workspaceMainActor(db).actorId;
+  db.query("UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND status = 'current'").run(actorId);
+  db.query("INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (?, 1, 1, ?, 'current')")
+    .run(actorId, rationale);
 }
 
 test('the real Think turn uses preselected versioned source, not the live alias', async () => {
   const harness = orchestratorHarness();
-  const { agent, db } = harness;
+  const { agent } = harness;
   agent.modelFactory = () => oneTextTurn('default inference');
   await agent.onStart();
-  const rt = agent.observeRuntime();
-  rt.executor = createSandboxedExecutor();
-  const files = rt.agentStateVfs ?? rt.storage.vfs;
-  await files.mkdir('scaffold', { recursive: true });
-  await files.writeFile(rt.identity.scaffold.path + '.v1', 'async function run() { await host.emit({ type: "text_delta", text: "selected-root-v1" }); }');
-  db.query("UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND status = 'current'")
-    .run(rt.actor.actorId);
-  db.query("INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (?, 1, 1, 'selected program proof', 'current')")
-    .run(rt.actor.actorId);
-  rt.identity.scaffold.read = async () => 'async function run() { await host.emit({ type: "text_delta", text: "wrong-live-alias" }); }';
+  await selectProgram(harness,
+    'async function run() { await host.emit({ type: "text_delta", text: "selected-root-v1" }); }', 'selected program proof');
+  // The live alias names a different program; the turn must not run it.
+  await workspaceFiles(agent).writeFile(SCAFFOLD,
+    'async function run() { await host.emit({ type: "text_delta", text: "wrong-live-alias" }); }');
+
   const result = await chatSessionTurns(agent).run('Run the selected program.');
   expect(result.status).toBe('completed');
   expect(JSON.stringify(result.message)).toContain('selected-root-v1');
   expect(JSON.stringify(result.message)).not.toContain('wrong-live-alias');
 });
 
-test('the loop\'s stop halts new selected-program effects and preserves its cause', async () => {
-  const { agent, db } = orchestratorHarness();
-  agent.modelFactory = () => oneTextTurn('unused default');
-  await agent.onStart();
-  const rt = agent.observeRuntime();
-  const executor = createSandboxedExecutor();
-  const errors: string[] = [];
-  rt.executor = { ...executor, execute: async (code, providers, options) => {
-    const result = await executor.execute(code, providers, options);
-
-    if (result.error) errors.push(result.error);
-
-    return result;
-  } };
-  // What a Stop aborts, and what the program's failure names.
-  const signals: AbortSignal[] = [];
-  agent.harnessObserveLease((lease) => { signals.push(lease.signal); });
-
-  const files = rt.agentStateVfs ?? rt.storage.vfs;
-  await files.mkdir('scaffold', { recursive: true });
-  await files.writeFile(rt.identity.scaffold.path + '.v1', 'async function run() { await host.appendMemory("probe", "first"); await host.appendMemory("probe", "second"); }');
-  db.query("UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND status = 'current'")
-    .run(rt.actor.actorId);
-  db.query("INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (?, 1, 1, 'cancel selected program', 'current')")
-    .run(rt.actor.actorId);
+test('the loop\'s stop halts new selected-program effects', async () => {
+  const harness = orchestratorHarness();
+  const { agent } = harness;
+  // The program's model call is where it waits while the owner presses Stop.
   const started = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const effects: string[] = [];
-  rt.memory.append = async (_path, content) => { effects.push(content); started.resolve(); await release.promise; };
+  agent.modelFactory = () => oneTextTurn('thinking', async () => {
+    started.resolve();
+    await release.promise;
+  });
+  await agent.onStart();
+  await selectProgram(harness, `async function run() {
+    await host.emit({ type: "text_delta", text: "effect-first" });
+    await host.llmStream({ system: "Think.", messages: [{ role: "user", content: "think" }] });
+    await host.emit({ type: "text_delta", text: "effect-second" });
+  }`, 'cancel selected program');
 
   const running = chatSessionTurns(agent).run('Run until stopped.');
-  await started.promise;
+  // A turn that ends first never reached its model call, so there is nothing to stop.
+  await Promise.race([started.promise, running.then(() => { throw new Error('the program finished before its model call'); })]);
   await agent.cancelCurrentWork();
   release.resolve();
-  await running;
-  expect(effects).toEqual(['first']);
-  const signal = signals.at(-1);
+  const result = await running;
 
-  if (signal === undefined) throw new Error('the loop did not hand the preparation its turn signal');
-  expect(signal.aborted).toBe(true);
-  expect(errors.join('\n')).toContain(renderThrownChain({ cause: signal.reason }));
+  expect(JSON.stringify(result.message)).toContain('effect-first');
+  expect(JSON.stringify(result.message)).not.toContain('effect-second');
+  const [run] = (await agent.listRuns()).items;
+
+  if (run === undefined) throw new Error('the stopped turn left no run');
+  expect((await agent.getRunEvents(run.runId)).find((event) => event.type === 'run_end')).toMatchObject({ reason: 'aborted' });
 });

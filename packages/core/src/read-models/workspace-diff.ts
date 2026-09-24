@@ -1,6 +1,7 @@
 /**
  * Change-set read model per executor: read-only git diff where a repo exists, else a snapshot
- * baseline in `vfs_baseline`. Reads never mutate the baseline; "mark reviewed" re-baselines.
+ * baseline manifest (`vfs_baseline_manifest`, bodies by hash in `vfs_baseline_blob`). Reads never mutate the
+ * baseline; "mark reviewed" re-baselines.
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -11,65 +12,67 @@ import { nanoid } from '../utils/nanoid';
 import * as v from 'valibot';
 import { CommandResultSchema } from '../execution/exec-result';
 import { KinuError, renderThrownChain } from '../obs/index';
+import { sha256Hex } from '../safety/argument-digest';
+import { isSystemManaged } from './files-plane';
 
-/**
- * These two bound the response, not residency: their product is 100 MiB, near
- * `worker.isolate.memory` (128 MB) and `do.isolate.reset_silent`. `walkWorkspaceTextFiles` bounds
- * residency by holding one body at a time.
- */
-const MAX_SNAPSHOT_FILE_BYTES = 256 * 1024;
-
-const MAX_SNAPSHOT_FILES = 400;
+/** `do.sqlite.row_bytes` caps a body's row, which also holds its 64-hex key. */
+const BODY_MAX_BYTES = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value - 64;
 
 /** Quarter of the facet RPC ceiling: the reply is UTF-16 in the isolate plus per-line overhead.
  *  Files past it are listed with +/- counts and no body. */
 const MAX_CHANGESET_BODY_CHARS = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
 
 const SNAPSHOT_IGNORED_DIRECTORIES = new Set([
-  '.git', '.kinu', '.cache', '.mypy_cache', '.pnpm-store', '.pytest_cache', '.venv',
-  '__pycache__', 'node_modules', 'venv',
+  '.git', '.cache', '.mypy_cache', '.pnpm-store', '.pytest_cache', '.venv', '__pycache__', 'node_modules', 'venv',
 ]);
 
 const NOT_GIT_REPO = '__KINU_NOT_GIT_REPO__';
 
+/** A body is stored once per hash; `hash` is null for a file past one row. */
 export function initWorkspaceBaselineTable(execRaw: RawSqlExec): void {
-  execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline (
+  execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline_manifest (
     actor_id   TEXT NOT NULL,
     generation TEXT NOT NULL,
     path       TEXT NOT NULL,
-    content    TEXT NOT NULL,
+    size       INTEGER NOT NULL,
+    mtime_ms   INTEGER NOT NULL,
+    hash       TEXT,
     active     INTEGER NOT NULL CHECK (active IN (0, 1)),
     PRIMARY KEY (actor_id, generation, path)
   )`);
-  // Active generation is per owner: a subordinate re-baselines its own tree independently.
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_vfs_baseline_active
-    ON vfs_baseline(actor_id, active)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_vfs_baseline_manifest_active
+    ON vfs_baseline_manifest(actor_id, active)`);
+  execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline_blob (
+    hash    TEXT PRIMARY KEY,
+    content TEXT NOT NULL
+  )`);
 }
 
 export interface WorkspaceDiffResult {
   files: FileDiff[];
-  baselineJustCaptured: boolean;
+  /** When the baseline these changes are measured against was captured. */
+  trackedSince: number;
 }
 
 export interface ExecutorDiffResult {
   files: FileDiff[];
   mode: 'git' | 'vfs-baseline';
-  baselineJustCaptured?: boolean;
+  trackedSince?: number;
   notGitRepo?: boolean;
   error?: string;
 }
 
-/**
- * Visit workspace text files one body at a time, bounding residency under
- * `PLATFORM_CATALOG['do.isolate.reset_silent']`. Binary and oversized files are skipped before the
- * file cap is counted.
- */
-export async function walkWorkspaceTextFiles(
+interface ManifestEntry {
+  readonly size: number;
+  readonly mtimeMs: number;
+  readonly hash: string | null;
+}
+
+/** Every regular file the change-set reviews, breadth-first so root files come first, by stat alone. */
+async function walkWorkspaceFiles(
   rt: AgentRuntime,
-  visit: (path: string, content: string) => void | Promise<void>,
+  visit: (path: string, stat: VfsEntryStat) => void | Promise<void>,
 ): Promise<void> {
-  let admitted = 0;
-  // Breadth-first, direct files before child directories, so root files are never starved.
   const directories = [''];
 
   for (let next = 0; next < directories.length; next++) {
@@ -84,7 +87,7 @@ export async function walkWorkspaceTextFiles(
     }
 
     for (const name of names) {
-      if (SNAPSHOT_IGNORED_DIRECTORIES.has(name)) continue;
+      if (isSystemManaged(name) || SNAPSHOT_IGNORED_DIRECTORIES.has(name)) continue;
       const full = dir === '' ? name : `${dir}/${name}`;
       let st: VfsEntryStat | null;
 
@@ -101,76 +104,83 @@ export async function walkWorkspaceTextFiles(
         continue;
       }
 
-      if (st.size > MAX_SNAPSHOT_FILE_BYTES) continue;
-      let content: string | Uint8Array;
-
-      try {
-        content = await rt.storage.vfs.readFile(full, { encoding: 'utf8' });
-      } catch (error) {
-        throw new Error(`Workspace snapshot could not read ${JSON.stringify(full)}`, { cause: error });
-      }
-
-      const fileText = content instanceof Uint8Array ? new TextDecoder().decode(content) : content;
-
-      if (fileText.includes(String.fromCharCode(0))) continue;
-
-      if (admitted === MAX_SNAPSHOT_FILES) {
-        throw new Error(`Workspace snapshot exceeds the ${MAX_SNAPSHOT_FILES}-file Output limit`);
-      }
-
-      admitted++;
-      await visit(full, fileText);
+      await visit(full, st);
     }
 
     directories.push(...children);
   }
 }
 
-/** Pinned once so per-path reads cannot straddle a concurrent re-baseline. */
-function activeBaselineGeneration(rt: AgentRuntime): string | null {
-  rt.actor.assertCurrent();
+/** The body a line diff shows, or null for a binary (NUL-bearing) file. */
+async function reviewableText(rt: AgentRuntime, path: string): Promise<string | null> {
+  let content: string | Uint8Array;
 
-  return rt.storage.sql<{ generation: string }>`
-    SELECT generation FROM vfs_baseline
-    WHERE actor_id = ${rt.actor.actorId} AND active = 1 LIMIT 1`[0]?.generation ?? null;
+  try {
+    content = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
+  } catch (error) {
+    throw new Error(`Workspace snapshot could not read ${JSON.stringify(path)}`, { cause: error });
+  }
+
+  const text = content instanceof Uint8Array ? new TextDecoder().decode(content) : content;
+
+  return text.includes(String.fromCharCode(0)) ? null : text;
 }
 
-/** One baseline body by primary key, keeping the whole baseline out of the isolate. */
-function baselineContent(rt: AgentRuntime, generation: string, path: string): string {
+/** The '' marker row carries the capture time; null means this actor has no baseline yet. */
+interface BaselineManifest {
+  readonly capturedAt: number | null;
+  readonly entries: Map<string, ManifestEntry>;
+}
+
+/** Read in one query, so a diff never straddles a concurrent re-baseline. */
+function activeManifest(rt: AgentRuntime): BaselineManifest {
   rt.actor.assertCurrent();
 
-  const row = rt.storage.sql<{ content: string }>`
-    SELECT content FROM vfs_baseline
-    WHERE actor_id = ${rt.actor.actorId} AND generation = ${generation}
-      AND path = ${path} LIMIT 1`[0];
+  const rows = rt.storage.sql<{ path: string; size: number; mtime_ms: number; hash: string | null }>`
+    SELECT path, size, mtime_ms, hash FROM vfs_baseline_manifest
+    WHERE actor_id = ${rt.actor.actorId} AND active = 1`;
+
+  const entries = new Map<string, ManifestEntry>();
+  let capturedAt: number | null = null;
+
+  for (const row of rows) {
+    if (row.path === '') capturedAt = row.mtime_ms;
+    else entries.set(row.path, { size: row.size, mtimeMs: row.mtime_ms, hash: row.hash });
+  }
+
+  return { capturedAt, entries };
+}
+
+function blobText(rt: AgentRuntime, hash: string | null): string | null {
+  if (hash === null) return null;
+  const row = rt.storage.sql<{ content: string }>`SELECT content FROM vfs_baseline_blob WHERE hash = ${hash} LIMIT 1`[0];
 
   // A missing body means a re-baseline landed mid-read; assuming empty would report the file as added.
-  if (!row) {
-    throw new Error(
-      `Workspace baseline changed while reading the change-set (generation ${generation}, path ${JSON.stringify(path)})`,
-    );
-  }
+  if (!row) throw new Error(`Workspace baseline changed while reading the change-set (body ${hash})`);
 
   return row.content;
 }
 
-/** Cumulative change-set since the baseline; streams one current and one baseline body at a time. */
+function unmoved(entry: ManifestEntry, st: VfsEntryStat): boolean {
+  return entry.size === st.size && entry.mtimeMs === st.mtimeMs;
+}
+
+/** Cumulative change-set since the baseline. A file whose size and mtime match its manifest row is never read. */
 export async function getWorkspaceDiff(rt: AgentRuntime): Promise<WorkspaceDiffResult> {
-  const generation = activeBaselineGeneration(rt);
-
-  const unseenBaselinePaths = new Set(
-    generation === null
-      ? []
-      : rt.storage.sql<{ path: string }>`
-          SELECT path FROM vfs_baseline
-          WHERE actor_id = ${rt.actor.actorId} AND generation = ${generation}
-            AND path <> ''`.map((r) => r.path),
-  );
-
+  const held = activeManifest(rt);
+  // Without a baseline, tracking starts now: the same capture a new workspace takes at creation.
+  const trackedSince = held.capturedAt ?? (await resetWorkspaceBaseline(rt)).capturedAt;
+  const baseline = held.capturedAt === null ? activeManifest(rt).entries : held.entries;
   const files: FileDiff[] = [];
   let bodyChars = 0;
 
-  const admit = (path: string, status: FileStatus, before: string, after: string): void => {
+  const admit = (path: string, status: FileStatus, before: string | null, after: string | null): void => {
+    if (before === null || after === null) {
+      files.push(fileDiff(path, status, { lines: [], added: 0, removed: 0, truncated: true }));
+
+      return;
+    }
+
     const d = diffLines(before, after);
 
     if (bodyChars >= MAX_CHANGESET_BODY_CHARS) {
@@ -183,56 +193,78 @@ export async function getWorkspaceDiff(rt: AgentRuntime): Promise<WorkspaceDiffR
     files.push(fileDiff(path, status, d));
   };
 
-  await walkWorkspaceTextFiles(rt, (path, after) => {
-    if (generation !== null && unseenBaselinePaths.delete(path)) {
-      const before = baselineContent(rt, generation, path);
+  await walkWorkspaceFiles(rt, async (path, st) => {
+    const base = baseline.get(path);
+    baseline.delete(path);
 
-      if (before !== after) admit(path, 'changed', before, after);
+    if (base !== undefined && unmoved(base, st)) return;
+    const after = st.size > BODY_MAX_BYTES ? null : await reviewableText(rt, path);
+
+    if (base === undefined) {
+      // A binary file the baseline never held is not a reviewable change.
+      if (after !== null || st.size > BODY_MAX_BYTES) admit(path, 'added', '', after);
 
       return;
     }
 
-    admit(path, 'added', '', after);
+    if (after !== null && base.hash !== null && base.hash === sha256Hex(after)) return;
+    admit(path, 'changed', blobText(rt, base.hash), after);
   });
 
   // Whatever the baseline still holds was not found in the workspace.
-  if (generation !== null) {
-    for (const path of unseenBaselinePaths) admit(path, 'removed', baselineContent(rt, generation, path), '');
-  }
+  for (const [path, base] of baseline) admit(path, 'removed', blobText(rt, base.hash), '');
 
   files.sort((a, b) => a.path.localeCompare(b.path));
 
-  return { files, baselineJustCaptured: false };
+  return { files, trackedSince };
 }
 
 /**
- * Mark the current workspace as the baseline. Rows go under an inactive generation, then one
- * statement flips it active, so no read sees a partial replacement.
+ * Mark the current workspace as the baseline. Rows go under an inactive generation, then one statement flips it
+ * active, so no read sees a partial replacement. An unmoved file keeps its hash without being read.
  */
-export async function resetWorkspaceBaseline(rt: AgentRuntime): Promise<{ ok: true; files: number }> {
-  rt.actor.assertCurrent();
+export async function resetWorkspaceBaseline(
+  rt: AgentRuntime,
+): Promise<{ ok: true; files: number; capturedAt: number }> {
+  const previous = activeManifest(rt).entries;
   const actorId = rt.actor.actorId;
   const generation = nanoid();
+  const capturedAt = Date.now();
   let files = 0;
 
   try {
     // The marker makes an intentionally empty snapshot representable.
-    void rt.storage.sql`INSERT INTO vfs_baseline (actor_id, generation, path, content, active)
-      VALUES (${actorId}, ${generation}, ${''}, ${''}, ${0})`;
-    await walkWorkspaceTextFiles(rt, (path, content) => {
-      void rt.storage.sql`INSERT INTO vfs_baseline (actor_id, generation, path, content, active)
-        VALUES (${actorId}, ${generation}, ${path}, ${content}, ${0})`;
+    void rt.storage.sql`INSERT INTO vfs_baseline_manifest (actor_id, generation, path, size, mtime_ms, hash, active)
+      VALUES (${actorId}, ${generation}, ${''}, ${0}, ${capturedAt}, ${null}, ${0})`;
+    await walkWorkspaceFiles(rt, async (path, st) => {
+      const kept = previous.get(path);
+      let hash: string | null = null;
+
+      if (kept !== undefined && unmoved(kept, st)) {
+        hash = kept.hash;
+      } else if (st.size <= BODY_MAX_BYTES) {
+        const text = await reviewableText(rt, path);
+
+        if (text === null) return;
+        hash = sha256Hex(text);
+        void rt.storage.sql`INSERT OR IGNORE INTO vfs_baseline_blob (hash, content) VALUES (${hash}, ${text})`;
+      }
+
+      void rt.storage.sql`INSERT INTO vfs_baseline_manifest (actor_id, generation, path, size, mtime_ms, hash, active)
+        VALUES (${actorId}, ${generation}, ${path}, ${st.size}, ${st.mtimeMs}, ${hash}, ${0})`;
       files++;
     });
-    void rt.storage.sql`UPDATE vfs_baseline
+    void rt.storage.sql`UPDATE vfs_baseline_manifest
       SET active = CASE WHEN generation = ${generation} THEN 1 ELSE 0 END
       WHERE actor_id = ${actorId}`;
   } finally {
     // Inactive rows are either replaced generations or this failed partial write; the error propagates.
-    void rt.storage.sql`DELETE FROM vfs_baseline WHERE actor_id = ${actorId} AND active = 0`;
+    void rt.storage.sql`DELETE FROM vfs_baseline_manifest WHERE actor_id = ${actorId} AND active = 0`;
+    void rt.storage.sql`DELETE FROM vfs_baseline_blob
+      WHERE hash NOT IN (SELECT hash FROM vfs_baseline_manifest WHERE hash IS NOT NULL)`;
   }
 
-  return { ok: true, files };
+  return { ok: true, files, capturedAt };
 }
 
 /** Tracked, staged and untracked changes without writing the index: `git diff --no-index` avoids
@@ -301,7 +333,7 @@ export async function getExecutorDiff(rt: AgentRuntime, executorId: string): Pro
 
     const r = await getWorkspaceDiff(rt);
 
-    return { files: r.files, mode: 'vfs-baseline', baselineJustCaptured: r.baselineJustCaptured };
+    return { files: r.files, mode: 'vfs-baseline', trackedSince: r.trackedSince };
   }
 
   return getGitDiff(rt, executorId);

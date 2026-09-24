@@ -52,7 +52,7 @@ import { join } from 'node:path';
 
 import { REAL_CLOCK } from '../../packages/core/src/index';
 import {
-  createObservedModelAccumulator, EVAL_MODELS, ledgerTotalsFromEvents, outcomeRow,
+  createObservedModelAccumulator, EVAL_MODELS, ledgerTotalsFromEvents, outcomeRow, scoreToolOutcomes, toolOutcomes,
   projectRunEventProvenance, publishRunRecord,
   reportLiveModelSpend, retainEpisodeTranscript, subgoalsOutcome, withEpisodeEvidence,
   type EpisodeEvidenceReader, type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalSubgoal, type EvalTier,
@@ -98,7 +98,17 @@ export const FIRST_RUN_CASES = [
   'delegation',
   'agent-tab',
   'agent-chats-persist',
+  'agent-dismissed-chat',
+  'agent-confined',
+  'web-search',
+  'account-settings',
+  'workspace-settings',
+  'machine-consent',
+  'workspace-panes',
+  'delegation-tree',
+  'exploration',
   'deploy-door',
+  'capability-isolation',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -224,7 +234,9 @@ export const FIRST_RUN_DEFECTS = {
     found: 'A public live share under a cut admitting one read member answered the read, refused the mutation with the grant code, left no owner-side effect, and refused an agent-namespace call outright.',
     missedBecause: 'Unit and harness proofs cover the grant cut and the agent refusal in isolation; nothing drove the share origin signed out and read the owner tree plus the audit row for the same episode.',
     provedRedAt: null,
-    redDirection: 'Green requires the share op to answer a URL a signed-out fetch serves, probe() to answer, mutate() to refuse denied with no mark file on the owner side, ctrl() on an agents-namespace slate to refuse denied, and the audit to record the admitted read and the refused mutation.',
+    redDirection: 'Green requires the share op to answer a URL a signed-out fetch serves, probe() to answer, mutate() to refuse denied with no mark file on the owner side, ctrl() on an agents-namespace slate to refuse denied, and the audit to record the admitted read and the refused mutation. '
+      + 'No deployed build carried a hole and there is no staging, so the red direction is proved at the grant itself: '
+      + '`grantAdmits` admitting every member lets the viewer\'s mutate() run in packages/cf-backend/tests/workerd/slate-share.test.ts.',
   },
   'blueprint-fork': {
     id: 'blueprint-fork',
@@ -272,7 +284,9 @@ export const FIRST_RUN_DEFECTS = {
       + 'return a string; `memory-saved-and-found` when a save or the search that should find it '
       + 'errors or comes back empty; `tasks-written` when `tasks` refuses an add; `web-fetched` '
       + 'when `web` cannot reach the health route; `every-tool-answered` names any call that '
-      + 'closed with an error or a refusal; `reported` when the agent never says DONE.',
+      + 'closed with an error or a refusal; `no-unexpected-tool-failure` names any failure the '
+      + 'census calls unexpected, a codemode call inside `eval` included; `reported` when the '
+      + 'agent never says DONE.',
   },
   'sandbox-mount-write': {
     id: 'sandbox-mount-write',
@@ -397,6 +411,115 @@ export const FIRST_RUN_DEFECTS = {
       + 'build a39effc66, measured 2026-09-23: roster-survives and chats-reachable green, and with '
       + 'every read the page sent answered its strip and sidebar drew no agent at all.',
   },
+  'agent-dismissed-chat': {
+    id: 'agent-dismissed-chat',
+    found: 'A subagent dismissed with its conversation kept, the Dismiss dialog\'s default, kept '
+      + 'its tab but its chat never loaded: the pager refused the dismissed agent with "The actor '
+      + 'is not registered in this workspace.", while the dialog promises "Its conversation is '
+      + 'kept, not deleted".',
+    missedBecause: '`agent-chats-persist` proves EMPLOYED agents keep their chats and never '
+      + 'dismisses one, so it passes with the fix (e29da7f01) reverted. The pre-deploy half '
+      + 'arrived with the fix, in packages/cf-backend/tests/workerd/public-surface.test.ts; no '
+      + 'deployed row read a dismissed agent\'s kept chat the way its pane reads it.',
+    provedRedAt: '5e53b4248',
+    redDirection: 'Run against 5e53b4248, the parent of e29da7f01, served by `vite dev` on '
+      + 'loopback (the Worker the deploy ships, with local state): `kept-chat-reads` misses on '
+      + 'the refusal above. Green on e29da7f01 served the same way.',
+  },
+  'agent-confined': {
+    id: 'agent-confined',
+    found: 'Subagents were meant to be "other agents confined to the workspace itself" (the owner, '
+      + '2026-07-13), and no deployed row asked any workspace but the one that made an agent about it.',
+    missedBecause: 'every subagent row reads the agent from the workspace that made it, so a roster, '
+      + 'a pager or a hosted room that answered another workspace\'s agent passes all of them.',
+    provedRedAt: null,
+    redDirection: 'Planted on a loopback `vite dev` build of this tree: a pager that falls back to '
+      + 'the calling workspace\'s own chat for an actor id it never issued answers the other '
+      + 'workspace, and `unreadable-elsewhere` misses. Not re-run against a deployed build: '
+      + 'confinement has held on every deployed build this row could name.',
+  },
+  'web-search': {
+    id: 'web-search',
+    found: 'The owner asked for an end-to-end pass of the web search capability, and no deployed row '
+      + 'ever asked the agent to search: `every-tool` fetches the product\'s own health route.',
+    missedBecause: 'the search provider (Tavily with a key, DuckDuckGo without) is unit-tested over '
+      + 'fixture pages, so a provider the deployment cannot reach, or a layout it no longer parses, '
+      + 'is invisible until a user asks the agent to look something up.',
+    provedRedAt: '41494531d',
+    redDirection: 'RED on the deployed build: DuckDuckGo answers the Worker 522 or rate-limits it, so every '
+      + 'search fails; it stays red until the search provider serves Worker egress. Also planted on '
+      + 'loopback `vite dev`: an endpoint that does not answer leaves `searched` and `results-returned` missed.',
+  },
+  'account-settings': {
+    id: 'account-settings',
+    found: 'The welcome flow and the account settings page read and write the account itself, and no '
+      + 'deployed row read or wrote it: every row opens a workspace.',
+    missedBecause: 'a profile route that stopped answering, a rename that did not persist or an onboarding '
+      + 'stamp that did not stick strands a person on /welcome or shows a stale name, and passed '
+      + 'every workspace row.',
+    provedRedAt: null,
+    redDirection: 'Planted on a loopback `vite dev` build of this tree: a rename the account object '
+      + 'acknowledges and does not write leaves `rename-persisted` missed.',
+  },
+  'workspace-settings': {
+    id: 'workspace-settings',
+    found: 'A workspace\'s settings page writes its name, SOUL.md, shell approval mode and advisor '
+      + 'setting and exports the workspace, and no deployed row wrote a setting.',
+    missedBecause: 'the chat rows read what a turn left, so a write the workspace acknowledged and then '
+      + 'dropped, or a snapshot that stopped carrying the soul the page shows, passed them all.',
+    provedRedAt: null,
+    redDirection: 'Planted on a loopback `vite dev` build of this tree: a soul write that is acknowledged '
+      + 'and never stored leaves `soul-persisted` missed.',
+  },
+  'machine-consent': {
+    id: 'machine-consent',
+    found: 'MA-041 asked for both consent branches of a cloud workspace\'s first use of the owner\'s '
+      + 'machine, and no deployed row let the agent reach for a machine that was not connected, '
+      + 'or let its own call raise the consent card.',
+    missedBecause: 'device-link drives the Environment pane\'s RPC against a machine already attached, and '
+      + 'approve-clears and two-machines grant consent before their first command, so a card that '
+      + 'never showed, or a connect prompt that never came, passed them all.',
+    provedRedAt: null,
+    redDirection: 'Planted on a loopback `vite dev` build of this tree: a device call that skips the '
+      + 'owner\'s consent leaves `consent-requested` missed.',
+  },
+  'workspace-panes': {
+    id: 'workspace-panes',
+    found: 'The Diffs, Supervise and Releases panes read a workspace\'s review baseline, run list, '
+      + 'triggers and release board, and no deployed row asked any of them anything.',
+    missedBecause: 'the rows that write files read them back through the Files pane and the ledger, so a '
+      + 'baseline that stopped seeing a write, a run list that lost a settled turn or a board '
+      + 'that stopped answering passed them all.',
+    provedRedAt: null,
+    redDirection: 'Planted on a loopback `vite dev` build of this tree: a review diff that reports no files '
+      + 'leaves `diff-shows-the-write` missed.',
+  },
+  'delegation-tree': {
+    id: 'delegation-tree',
+    found: 'Hosted subordinates that delegate in turn, settling a tree whose branches end at '
+      + 'different depths, had no deployed row: `delegation` hires at one level only.',
+    missedBecause: 'a nested hire runs in a subordinate the same workspace object hosts, one delegation '
+      + 'level down, and its answer reaches the root only through the middle helper\'s settlement, '
+      + 'none of which a one-level hire exercises.',
+    provedRedAt: '41494531d',
+    redDirection: 'RED on the deployed build: a task hire settles at its helper\'s first turn end, so a helper '
+      + 'that hires its own and waits for the wake reports "has been hired" upward and the nested answer never '
+      + 'climbs; it stays red until a task hire waits for its helper\'s own delegated work. Also planted on '
+      + 'loopback `vite dev`: a delegation budget that refuses the nested hire leaves `nested-hire-settled` missed.',
+  },
+  'exploration': {
+    id: 'exploration',
+    found: 'Exploration on the deployed product had no row that read the Swarms pane or asked '
+      + 'whether a swarm\'s nodes, which run as agents of the workspace, settled.',
+    missedBecause: 'the eval tier\'s swarm arm asserts a search row exists on the cloud target and reads '
+      + 'neither the pane nor the nodes\' settlement, so a canvas that lost the node transcripts, '
+      + 'or a node left running, passed it.',
+    provedRedAt: '41494531d',
+    redDirection: 'RED on the deployed build: every node errored at its 60 s budget while waiting out the '
+      + 'provider\'s rate-limit backoff, which the budget counts; it stays red until a node\'s budget '
+      + 'stops counting provider-mandated waits. Also planted on loopback `vite dev`: a canvas read that '
+      + 'drops the node transcripts leaves `pane-shows-the-run` and `every-node-an-agent-that-settled` missed.',
+  },
   'deploy-door': {
     id: 'deploy-door',
     found: 'The Cloudflare door is new surface, so no owner has driven it by hand yet. What the '
@@ -413,6 +536,21 @@ export const FIRST_RUN_DEFECTS = {
       + '`authorizeUrl`, or leave `CLOUDFLARE_DEPLOY_CLIENT_ID` set to a blank string, and the '
       + 'row fails on the shape while the page still renders. The first deployed run of this '
       + 'tier is what turns that into a measurement.',
+  },
+  'capability-isolation': {
+    id: 'capability-isolation',
+    found: 'The owner asked for an object-capability model and a security verdict on it: one forbidden '
+      + 'operation, tried through native tools, codemode, a child agent and a slate, refused on all four '
+      + 'paths. No run had tried the same operation through all four on the product.',
+    missedBecause: 'each path is proved on its own tier: bun drives the web tool and a hired child\'s, '
+      + 'workerd drives `eval` and a slate\'s global fetch. A deployment whose eval sandbox or slate '
+      + 'loader was composed without the egress binding would pass every one of them.',
+    provedRedAt: null,
+    redDirection: 'A planted hole cannot be deployed, and there is no staging. The red direction is '
+      + 'proved at each enforcement point on the tier that hosts it: `assertSafeUrl` skipped in '
+      + '`web/provider.ts` turns packages/cf-backend/tests/unit-capability-isolation.test.ts red on '
+      + 'both web paths, and `refusedHostname` skipped in `codemode-egress.ts` turns the workerd '
+      + 'codemode-sandbox and slate-egress rows red.',
   },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
@@ -525,7 +663,17 @@ const SHORT_SUBJECT = {
   'delegation': 'deleg',
   'agent-tab': 'tab',
   'agent-chats-persist': 'chats',
+  'agent-dismissed-chat': 'kept',
+  'agent-confined': 'confined',
+  'web-search': 'search',
+  'account-settings': 'account',
+  'workspace-settings': 'settings',
+  'machine-consent': 'consent',
+  'workspace-panes': 'panes',
+  'delegation-tree': 'tree',
+  'exploration': 'swarm',
   'deploy-door': 'door',
+  'capability-isolation': 'isolation',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */
@@ -596,7 +744,7 @@ export interface FirstRunCaseSpec<Session extends FirstRunSession = KinuPublicSe
  *      the record with what the case actually saw. A record that only
  *      accumulates successes is not evidence.
  *   6. EVERY subgoal asserted, each in its own failure message.
- *   7. TEARDOWN in a `finally` — this DELETES the workspace, so a case that
+ *   7. TEARDOWN on every path — this DELETES the workspace, so a case that
  *      threw must not leave a row on the account.
  */
 export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
@@ -606,6 +754,7 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
 ): Promise<void> {
   const startedAt = Date.now();
   let opened: Session | undefined;
+  let failure: Error | null = null;
 
   const episode = spec.episode ?? spec.id;
 
@@ -624,7 +773,9 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
     const retained = retainEpisodeTranscript(TRANSCRIPTS, episode, { events, history, subgoals });
 
     const outcome = subgoalsOutcome(subgoals, { turns: totals.turns, toolCalls: totals.toolCalls });
-    const scores: EvalScoreRow[] = [outcomeRow(outcome)];
+    // The census every other family records, off the same ledger: a subgoal met over a broken call stays visible.
+    const tools = { ...scoreToolOutcomes(events), name: toolOutcomes.name, asserts: toolOutcomes.asserts };
+    const scores: EvalScoreRow[] = [outcomeRow(outcome), tools];
     observations.push({
       taskId: spec.id, repetition: 0, outcome: 'scored', scores,
       turns: totals.turns, toolCalls: totals.toolCalls + (spec.calls?.() ?? 0),
@@ -668,10 +819,20 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
       });
     }
 
-    throw error;
-  } finally {
-    await opened?.teardown();
+    failure = thrown;
   }
+
+  // A teardown that fails is reported beside the case's own failure, never in
+  // its place: on 2026-09-23 a DELETE the host never delivered replaced the
+  // turn's own verdict, and the run printed only the teardown.
+  try {
+    await opened?.teardown();
+  } catch (teardown) {
+    if (failure === null) throw teardown;
+    throw new AggregateError([failure, teardown], failure.message, { cause: teardown });
+  }
+
+  if (failure !== null) throw failure;
 }
 
 /**

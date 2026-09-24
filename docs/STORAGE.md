@@ -311,7 +311,7 @@ Three properties follow:
   table. A snapshot of the plane copies the small inode index and no blobs.
 - POSIX semantics: one filesystem, addressed the same way by
   `vfs.readFile('/etc/passwd')` and by `run "cat /etc/passwd"`. Relative paths
-  resolve at `WORKSPACE_ROOT` (`/home/user`). Ownership is uid/gid/mode on
+  resolve at `WORKSPACE_ROOT` (`/home/main`; `/home/user` links to it). Ownership is uid/gid/mode on
   inodes. That makes a swarm node's `/home/<node>` and its private `/tmp` an
   enforced boundary, not a convention (`core/src/vfs/agent-home.ts`).
 - Chunked blobs: `SqliteVFS` splits file content into `file_chunks` rows of

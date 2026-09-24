@@ -6,7 +6,9 @@ export { MemoryStore, initMemoryChunkTables } from "./memory/store";
 
 export type { MemoryConfig } from "./memory/store";
 
-export { CraftStore, initCraftedToolsTables } from "./stores/craft";
+export {
+	CraftStore, craftStoreView, initCraftedToolsTables, type CraftStoreView,
+} from "./stores/craft";
 
 export { readKvJson, writeKvJson, type KvStore } from "./stores/kv";
 

@@ -120,6 +120,11 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + 'point is to see what git never will.',
   ],
   [
+    'scripts/test-scratch-home.ts',
+    'reads the OS temp directory for scratch roots whose recorded owner process has ended. Not a '
+    + 'repository path: the roots are the test runs\' own, minted outside the tree.',
+  ],
+  [
     'scripts/bench-sandbox.ts',
     'copies the tree into a solver sandbox and re-points `node_modules/@kinu.run/*` symlinks. '
     + '`git ls-files` does not list `node_modules`, so the set it needs is exactly the set no '
@@ -157,6 +162,13 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + 'be mistaken for it). The cache lives outside the repository, its entry names are bun\'s to '
     + 'choose, and `git ls-files` has never listed one — so the set is exactly what no repository '
     + 'enumerator can produce.',
+  ],
+  [
+    'scripts/refuse-linked-install.ts',
+    'enumerates the top level of the checkout\'s own `node_modules` for links that resolve '
+    + 'outside it, the layout `setup-worktree.sh` makes, so an install that would write through '
+    + 'them into the primary is refused before it writes. `git ls-files` has never listed '
+    + '`node_modules`, so that set is exactly the one no repository enumerator can produce.',
   ],
   [
     'scripts/fixtures/storage-matrix/cleanup.ts',

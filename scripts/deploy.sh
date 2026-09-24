@@ -382,7 +382,8 @@ flush_gates() {
   local -A gate_of_pid=()
   local -A resource_held=()
   local pick finished status threads rss resource wall
-  local running=0 load=0 held=0 settled=0 failures=0
+  local running=0 load=0 held=0 settled=0 failures=0 cached=0
+  local wave_started=$SECONDS
   for ((index = 0; index < total; index++)); do launched[index]=0; statuses[index]=-1; done
 
   if [ "$KINU_GATES_ALL" = "1" ]; then
@@ -478,7 +479,14 @@ flush_gates() {
     # is otherwise unanswerable once the gate dir is gone.
     wall=$((SECONDS - started[index]))
     if [ "$status" -eq 0 ]; then
-      echo -e "${GREEN}✅ ${GATE_LABELS[index]}${NC} ${wall}s"
+      # scripts/ladder.ts prints `skip  <run>  hit …` when its cache proves the
+      # gate's inputs unchanged since a green run: a reused verdict reads as one.
+      if grep -q '^skip  ' "$dir/$index.log" 2>/dev/null; then
+        cached=$((cached + 1))
+        echo -e "${GREEN}✅ ${GATE_LABELS[index]}${NC} ${wall}s (cached)"
+      else
+        echo -e "${GREEN}✅ ${GATE_LABELS[index]}${NC} ${wall}s"
+      fi
     else
       failures=$((failures + 1))
       echo -e "${RED}❌ ${GATE_LABELS[index]} failed (exit $status)${NC} ${wall}s"
@@ -507,6 +515,7 @@ flush_gates() {
     exit 1
   fi
 
+  echo "Wave done: $total gate(s), $cached cached, in $((SECONDS - wave_started))s"
   rm -rf "$dir"
 }
 
@@ -879,12 +888,12 @@ fi
 # did the deploy land at all. Running this against an origin that is not serving
 # would report six product failures for one deployment failure.
 #
-# ONE WAVE, both gates the plan marks `post-publish`: their rows say why each
-# stays clear of the source wave (both drive the account as the same identity
+# ONE WAVE, every gate the plan marks `post-publish`: their rows say why each
+# stays clear of the source wave (all drive the account as the same identity
 # `gate:infra` authenticates with — real machines, a real browser, live model
 # turns). They share a wave because they measure the same thing — the build
-# that just shipped — and neither perturbs what the other asserts. A red here
-# is a red on what users have NOW, and the runner says so.
+# that just shipped — and none perturbs what another asserts. A red here is a
+# red on what users have NOW, and the runner says so.
 run_phase post-publish
 
 # ── Step 5: Post-deploy infrastructure verification ──────────────

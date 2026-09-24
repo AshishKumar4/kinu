@@ -8,7 +8,6 @@ import type {
   VFS as CoreVFS, Executor, LLM, Schedule, Identity,
   SqlExecutor, SqlValue, RawSqlExec,
   ExecuteResult, ResolvedProvider,
-  CraftStore as CoreCraftStore, CraftedTool as CoreCraftedTool,
   FiberCtx, ExecutionRouter,
   TurnAccumulator,
   DeferredApprovalChannel,
@@ -22,7 +21,7 @@ import {
   observeWrites,
   type WorkspaceVFS,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
-  withMountTable, standardMounts, contextMount,
+  withMountTable, standardMounts, contextMount, skillsMount,
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
   withApprovalGatedShell, createInheritedApprovalPolicy, holdsGrant,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
@@ -37,7 +36,7 @@ import {
   type FixedTierSource,
   type VectorStore,
 } from "@kinu.run/core";
-import type { SandboxHandle } from "@kinu.run/core";
+import type { DeviceFileScope, SandboxHandle } from "@kinu.run/core";
 import { withHostedNodeExecution, REAL_CLOCK } from '@kinu.run/core';
 import type { HostedNodeHome } from '@kinu.run/core';
 
@@ -52,7 +51,7 @@ import { previewHostSuffix } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
-import { CraftStore as AgentUtilsCraftStore } from "@kinu.run/agent-utils/stores";
+import { CraftStore as AgentUtilsCraftStore, craftStoreView } from "@kinu.run/agent-utils/stores";
 import { generateText, type LanguageModelUsage } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
@@ -120,7 +119,7 @@ export interface ActorRuntimeIdentity {
 }
 
 interface RuntimeUserDOClient extends UserCredentialClient, DeviceHubClient {
-  getDeviceFileView(caller: UserCaller, agentName: string, device?: string): Promise<{ unconfined: boolean }>;
+  getDeviceFileView(caller: UserCaller, agentName: string, device?: string): Promise<{ scope: DeviceFileScope }>;
 }
 
 interface RuntimeUserDONamespace {
@@ -280,7 +279,7 @@ export function createCFRuntime(
 
   const memory = adaptMemory(memoryStore, originVfs, vectorStore, memoryConfig);
 
-  const craftStore = adaptCraftStore(craftStoreImpl);
+  const craftStore = craftStoreView(craftStoreImpl);
 
   const envForExec = env;
 
@@ -322,12 +321,11 @@ export function createCFRuntime(
       ownGrants: () => memoryConfig.getShellApprovalGrants(),
     });
 
-  // Never receives the VFS-only `/pc` or `/sandbox` mounts.
   const shell = withApprovalGatedShell(nimbusSessionShell(executionBox), approvalPolicy);
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
   // State services keep `baseWorkspaceVfs` and never index foreign bytes. The context mount is last:
   // the only per-actor entry.
-  const mounts = [...standardMounts((name) => executionRouter.getProvider(name))];
+  const mounts = [...standardMounts((name) => executionRouter.getProvider(name)), skillsMount((): CoreVFS => agentFileVfs)];
 
   // `/shared`: the owner's Drive, resolved at every call, never captured, so a later claim mounts it.
   let drive: { tenant: string; files: MossaicVfs } | null = null;
@@ -360,6 +358,8 @@ export function createCFRuntime(
   }
 
   const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
+  // The shell this actor runs as serves its file tool's mount points.
+  workspaceBox.mountTable?.(agentFileVfs, hooks.workspaceExecution?.cred);
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
     // Declared exactly when NIMBUS_RUNTIME_CACHE is bound: without it there is nothing to install.
@@ -491,13 +491,13 @@ export function createCFRuntime(
   executionRouter.register(createDeviceTunnelExecutor(deviceTransport, {
     consentedRoot: async (deviceId) => cliCwdForDevice() ?? await deviceScope('consentedRoot', deviceId),
     deviceHome: async (deviceId) => cliCwdForDevice() ?? await deviceScope('deviceHome', deviceId),
-    unconfined: async (deviceId) => {
+    scope: async (deviceId) => {
       const hub = userDOStubFor(env, actor);
 
-      if (!hub) return false;
+      if (!hub) return 'root';
 
       try {
-        return (await hub.getDeviceFileView(await userCallerFor(actor), actor.workspaceName, deviceId)).unconfined;
+        return (await hub.getDeviceFileView(await userCallerFor(actor), actor.workspaceName, deviceId)).scope;
       } catch (cause) {
         throw toKinuError({
           doing: "reading the device's file-view scope",
@@ -512,6 +512,7 @@ export function createCFRuntime(
     actor: actor.actor,
     storage: { vfs: agentFileVfs, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
     agentStateVfs: originVfs,
+    workspaceIsMachine: false,
     startupWork,
     memory, executor, llm, schedule, identity, craftStore,
     get judgeModel() { return profileLane('judge'); },
@@ -569,41 +570,6 @@ function buildVectorStore(
 
     return createNoopVectorStore();
   }
-}
-
-function adaptCraftStore(impl: AgentUtilsCraftStore): CoreCraftStore {
-  return {
-    create(t) {
-      impl.create({
-        name: t.name, description: t.description,
-        params: t.params ?? undefined,
-        code: t.code, scope: t.scope ?? "local",
-      });
-    },
-    update(name, patch) {
-      impl.update(name, patch);
-    },
-    get(name) {
-      const tool = impl.get(name);
-
-      return tool ? adaptCraftedTool(tool) : undefined;
-    },
-    delete(name) { impl.delete(name); },
-    list() { return impl.list().map(adaptCraftedTool); },
-    search(query, limit) { return impl.search(query, limit).map(adaptCraftedTool); },
-  };
-}
-
-function adaptCraftedTool(t: ReturnType<AgentUtilsCraftStore['list']>[number]): CoreCraftedTool {
-  return {
-    name: t.name,
-    description: t.description,
-    params: t.params,
-    code: t.code,
-    scope: t.scope,
-    createdAt: t.createdAt,
-    updatedAt: t.updatedAt,
-  };
 }
 
 function createExecutor(loader: WorkerLoader): Executor {

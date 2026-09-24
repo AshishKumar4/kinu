@@ -610,7 +610,7 @@ describe('route-shaped run events score through the production instruments', () 
     const outcomes = byName.get('tool_outcomes');
     expect(outcomes?.eligible).toBe(4);
     expect(outcomes?.passed).toBe(3);
-    expect(outcomes?.measured).toEqual({ succeeded: 3, failed: 1, unmeasured: 0 });
+    expect(outcomes?.measured).toEqual({ succeeded: 3, failed: 1, unmeasured: 0, refused: 0, workFailed: 1, runtimeAbsent: 0, broke: 0 });
     // `edit_landing` reports attempts against applied, so its rate is below 1
     // here rather than a vacuous 1/1.
     expect(byName.get('edit_landing')?.eligible).toBe(2);
@@ -804,6 +804,63 @@ describe('route-shaped run events score through the production instruments', () 
     }
   });
 
+  test('a spent budget names what the turn was waiting on, off its own ledger', async () => {
+    resetLiveModelSpend();
+    const root = scratchDir('budget-waited-on');
+
+    // A turn held by the model provider: rate-limited twice and not yet ended
+    // when the case's budget ran out. The verdict names that, rather than only
+    // that time ran out.
+    const ledger: readonly RunEvent[] = [
+      { eventIndex: 0, runId: 'run-held', type: 'run_start', timestamp: '2026-09-23T14:16:15.415Z', agentId: 'orchestrator' },
+      { eventIndex: 1, runId: 'run-held', type: 'provider_wait', timestamp: '2026-09-23T14:16:17.341Z',
+        provider: 'workers-ai', waitMs: 1983, attempt: 1, status: 429, source: 'backoff' },
+      { eventIndex: 2, runId: 'run-held', type: 'provider_wait', timestamp: '2026-09-23T14:16:21.000Z',
+        provider: 'workers-ai', waitMs: 4017, attempt: 2, status: 429, source: 'backoff' },
+    ];
+
+    const reader = {
+      async runEvents() { return ledger; },
+      async history() { return []; },
+      async spend(): Promise<WorkspaceSpend> {
+        return {
+          total: { calls: 1, callsWithoutUsage: 0, unpricedCalls: 1, floorPricedCalls: 0, usage: { input: 1, output: 1 } },
+          producers: [], missions: [], offTurnShare: null,
+          coverage: { calls: 1, measured: 1, reported: 1, silent: [], partial: [] },
+        };
+      },
+    };
+
+    try {
+      const clock = handClock();
+
+      const episode = withEpisodeEvidence(async () => reader,
+        { transcripts: root, taskId: 'held', modelCalls: 'expected', clock, budgetMs: 20 },
+        async (_reader, _collect, budget) => {
+          const stopped = Promise.withResolvers<void>();
+
+          budget.addEventListener('abort', () => { stopped.resolve(); }, { once: true });
+          await stopped.promise;
+
+          return 'never';
+        });
+
+      await clock.whenArmed(1);
+      clock.advance(20);
+
+      const [outcome] = await Promise.allSettled([episode]);
+      const failure = outcome?.status === 'rejected' ? v.parse(v.instance(Error), outcome.reason).message : 'the episode ended';
+
+      for (const fact of ['provider_wait', 'had not ended', '2 provider wait(s) on workers-ai', '429', '6.0 s']) {
+        expect(failure).toContain(fact);
+      }
+
+      expect(JSON.parse(readFileSync(join(root, 'held/failure.json'), 'utf8'))).toEqual({ name: 'Error', message: failure, phase: 'budget' });
+    } finally {
+      resetLiveModelSpend();
+    }
+  });
+
   test('a ledger the wedged product never answers ends at the grace, keeping what did answer', async () => {
     resetLiveModelSpend();
     const root = scratchDir('wedged-episode-evidence');
@@ -849,6 +906,43 @@ describe('route-shaped run events score through the production instruments', () 
       expect(collection.filter((row) => row.status === 'retained').map((row) => row.channel)).toEqual(['history', 'spend']);
       expect(readFileSync(join(root, 'wedged/history.json'), 'utf8')).toContain('still waiting');
       expect(JSON.parse(readFileSync(join(root, 'wedged/spend.json'), 'utf8'))).toEqual(spend);
+    } finally {
+      resetLiveModelSpend();
+    }
+  });
+
+  test('an unbudgeted episode whose socket read never answers ends at the grace, keeping what did answer', async () => {
+    resetLiveModelSpend();
+    const root = scratchDir('silent-socket-evidence');
+
+    // THE SILENT-SOCKET SHAPE, as device-link-holds met it on 2026-09-23: the
+    // runtime replaced the workspace's object mid-case and closed its socket
+    // (1006, "this Durable Object instance is no longer active"), so the spend
+    // read, the one channel that rides the socket, never answered while both
+    // REST channels did. The case set no budget, and the read had no end of its
+    // own until the tier's deadline killed the run with no verdict.
+    const reader = {
+      async runEvents() { return LEDGER_EVENTS; },
+      async history() { return [{ role: 'assistant', text: 'held' }]; },
+      spend(): Promise<WorkspaceSpend> { return Promise.withResolvers<WorkspaceSpend>().promise; },
+    };
+
+    try {
+      const clock = handClock();
+
+      const episode = withEpisodeEvidence(async () => reader,
+        { transcripts: root, taskId: 'silent', modelCalls: 'none', clock },
+        async () => 'finished');
+
+      await clock.whenArmed(1);
+      clock.advance(EVIDENCE_GRACE_MS);
+
+      await expect(episode).rejects.toThrow('the spend channel had not answered');
+
+      const collection = v.parse(CollectionSchema, JSON.parse(readFileSync(join(root, 'silent/collection.json'), 'utf8')));
+
+      expect(collection.find((row) => row.channel === 'spend')?.status).toBe('failed');
+      expect(collection.filter((row) => row.status === 'retained').map((row) => row.channel)).toEqual(['events', 'history']);
     } finally {
       resetLiveModelSpend();
     }

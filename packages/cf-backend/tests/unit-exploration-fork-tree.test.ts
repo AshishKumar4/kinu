@@ -14,15 +14,16 @@ const ROOT = 'root-1';
 /** Until a node reports, a swarm's only search row. */
 function rootRow(): MctsRow {
   return {
-    id: ROOT, parent_id: null, depth: 0, visits: 0, value: 0,
+    id: ROOT, parent_id: null, depth: 0, visits: 0, value: 0, own_score: 0,
     status: 'open', action: '', task: 'optimise the tokenizer',
     root_id: ROOT, created_at: 1_000,
   };
 }
 
-function settledRow(id: string, value: number): MctsRow {
+/** One rollout reached it, so its mean is its own score. */
+function settledRow(id: string, score: number): MctsRow {
   return {
-    id, parent_id: ROOT, depth: 1, visits: 1, value,
+    id, parent_id: ROOT, depth: 1, visits: 1, value: score, own_score: score,
     status: 'open', action: '', root_id: ROOT, created_at: 2_000,
   };
 }
@@ -208,7 +209,7 @@ describe('a node nothing has been backpropagated through has no score', () => {
 
   test('a visited node keeps the score it earned, including a genuine zero', () => {
     const scored: MctsRow = {
-      ...rootRow(), id: 'n1', parent_id: ROOT, depth: 1, visits: 3, value: 0,
+      ...rootRow(), id: 'n1', parent_id: ROOT, depth: 1, visits: 3, value: 0, own_score: 0,
     };
 
     const tree = explorationForkTree({ tree: [rootRow(), scored], head: null });
@@ -221,7 +222,7 @@ describe('a node nothing has been backpropagated through has no score', () => {
   test('an unvisited row that somehow carries a value keeps it', () => {
     // Should not happen; if it does, the number is the only evidence.
     const odd: MctsRow = {
-      ...rootRow(), id: 'n2', parent_id: ROOT, depth: 1, visits: 0, value: 0.7,
+      ...rootRow(), id: 'n2', parent_id: ROOT, depth: 1, visits: 0, value: 0.7, own_score: 0.7,
     };
 
     const tree = explorationForkTree({ tree: [rootRow(), odd], head: null });

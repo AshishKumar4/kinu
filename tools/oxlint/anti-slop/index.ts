@@ -12,6 +12,12 @@ import { noManufacturedSqlColumnRule } from "./rules/no-manufactured-sql-column.
 import { noModuleMockingRule } from "./rules/no-module-mocking.ts";
 import { noNearDuplicateFunctionsRule } from "./rules/no-near-duplicate-functions.ts";
 import { noObjectParametersRule } from "./rules/no-object-parameters.ts";
+import { noOutputTokenCapRule } from "./rules/no-output-token-cap.ts";
+import { requireRpcSealRule } from "./rules/require-rpc-seal.ts";
+import { requireSuperAlarmRule } from "./rules/require-super-alarm.ts";
+import { noTuiColourLiteralRule } from "./rules/no-tui-colour-literal.ts";
+import { requireVariantUtilityRule } from "./rules/require-variant-utility.ts";
+import { noCliCredentialFlagRule } from "./rules/no-cli-credential-flag.ts";
 import { noReduceAccumulatorCopyRule } from "./rules/no-reduce-accumulator-copy.ts";
 import { noReflectApplyRule } from "./rules/no-reflect-apply.ts";
 import { noReflectGetRule } from "./rules/no-reflect-get.ts";
@@ -52,6 +58,12 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"no-known-value-widening": noKnownValueWideningRule,
 		"no-module-mocking": noModuleMockingRule,
 		"no-object-parameters": noObjectParametersRule,
+		"no-output-token-cap": noOutputTokenCapRule,
+		"require-rpc-seal": requireRpcSealRule,
+		"require-super-alarm": requireSuperAlarmRule,
+		"no-tui-colour-literal": noTuiColourLiteralRule,
+		"require-variant-utility": requireVariantUtilityRule,
+		"no-cli-credential-flag": noCliCredentialFlagRule,
 		"no-reduce-accumulator-copy": noReduceAccumulatorCopyRule,
 		"no-reflect-apply": noReflectApplyRule,
 		"no-reflect-get": noReflectGetRule,

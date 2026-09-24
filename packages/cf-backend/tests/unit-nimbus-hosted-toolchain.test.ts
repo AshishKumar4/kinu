@@ -51,7 +51,7 @@ async function hostedWorkspace(): Promise<NimbusWorkspace> {
     sql,
     transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
     generation: 1,
-    cwd: '/home/user',
+    cwd: '/home/main',
   });
 
   // The DO ctx/env arguments are reached only by network subcommands (clone/fetch/pull/push); local history needs neither.
@@ -65,7 +65,7 @@ describe('hosted Nimbus session toolchain', () => {
     const workspace = await hostedWorkspace();
 
     // A registry command over a SQLite filesystem: no child process, nothing reaches the host's git.
-    const repo = '/home/user/repo';
+    const repo = '/home/main/repo';
     await workspace.fs.mkdir(repo, { recursive: true });
     await workspace.fs.writeFile(`${repo}/a.txt`, 'first');
 

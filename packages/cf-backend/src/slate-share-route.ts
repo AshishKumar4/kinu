@@ -5,7 +5,7 @@
  */
 
 import {
-  buildSlateShareHost, parseSlateShareLabel, previewHostSuffix, workspaceAddressRefusal,
+  buildSlateShareHost, parseSlateShareLabel, previewHostSuffix, previewPortSuffix, workspaceAddressRefusal,
   ingressAdmitted, labelSigner, reoriginateRequest, SHARE_VIEWER_REQUESTS_PER_MINUTE, type ShareViewerClaim, VIEWER_EXCHANGE_PATH,
 } from '@kinu.run/core';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
@@ -55,7 +55,7 @@ export async function slateShareUrl(env: Env, workspace: string, handle: string)
   const token = await shareSigner.token(secret, shareMessage(workspace, handle));
   const host = buildSlateShareHost({ handle, token, workspace, suffix });
 
-  return host === null ? null : `https://${host}/`;
+  return host === null ? null : `https://${host}${previewPortSuffix(env)}/`;
 }
 
 async function mintViewerTicket(env: Env, workspace: string, handle: string, userId: string): Promise<string | null> {

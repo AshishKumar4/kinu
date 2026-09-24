@@ -13,7 +13,6 @@ import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from
 import { classify } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { AGENT_HOME } from './config';
-import type { AgentTranscriptMessage } from './agent-client';
 
 /** JSONL files are diagnostic artifacts, never conversations to reopen. */
 export interface CliSessionOptions {
@@ -65,11 +64,6 @@ export interface CliSessionInfo {
   firstUserText?: string;
 }
 
-export interface CliSessionTranscript {
-  info: CliSessionInfo;
-  entries: CliSessionEntry[];
-}
-
 
 const CliSessionHeaderSchema = v.object({
   type: v.literal('session'),
@@ -90,7 +84,6 @@ const CliSessionEntrySchema = v.objectWithRest({
 
 interface ParsedSession {
   header: CliSessionHeader | null;
-  entries: CliSessionEntry[];
   entryCount: number;
   firstUserText?: string;
 }
@@ -156,24 +149,6 @@ export function findTranscriptPath(
   return existsSync(byId) ? byId : null;
 }
 
-export function readCliSessionTranscript(
-  agent: string,
-  ref: string,
-  opts: Pick<CliSessionOptions, 'transcriptDir'> = {},
-): CliSessionTranscript {
-  const path = findTranscriptPath(agent, ref, opts);
-
-  if (!path) throw new Error(`Transcript not found: ${ref}`);
-  const parsed = readSessionRaw(path);
-
-  if (!parsed.header) throw new Error(`Invalid transcript file: ${path}`);
-
-  return {
-    info: sessionInfoFromParsed(path, parsed.header, parsed.entryCount, parsed.firstUserText),
-    entries: parsed.entries,
-  };
-}
-
 function inMemorySession(agent: string): CliSession {
   const id = `ephemeral-${Date.now()}`;
 
@@ -225,7 +200,6 @@ function readSessionInfo(path: string): CliSessionInfo | null {
 
 function readSessionRaw(path: string): ParsedSession {
   let header: CliSessionHeader | null = null;
-  const entries: CliSessionEntry[] = [];
   let entryCount = 0;
   let firstUserText: string | undefined;
   const content = readFileSync(path, 'utf-8');
@@ -250,7 +224,6 @@ function readSessionRaw(path: string): ParsedSession {
 
     if (!parsedEntry.success) continue;
     const entry = parsedEntry.output;
-    entries.push(entry);
     entryCount += 1;
     const text = v.safeParse(v.string(), entry.text);
 
@@ -259,107 +232,7 @@ function readSessionRaw(path: string): ParsedSession {
     }
   }
 
-  return { header, entries, entryCount, firstUserText };
-}
-
-export function transcriptMessages(entries: CliSessionEntry[], maxEntries = 40): AgentTranscriptMessage[] {
-  return entries
-    .filter(isRenderableEntry)
-    .slice(-maxEntries)
-    .flatMap((entry) => {
-      const message = entryToMessage(entry);
-
-      return message ? [message] : [];
-    });
-}
-
-function isRenderableEntry(entry: CliSessionEntry): boolean {
-  return entry.type === 'user'
-    || entry.type === 'assistant'
-    || entry.type === 'tool_call'
-    || entry.type === 'tool_result'
-    || entry.type === 'error';
-}
-
-function entryToMessage(entry: CliSessionEntry): AgentTranscriptMessage | null {
-  switch (entry.type) {
-    case 'user':
-      return textEntry(entry, 'user');
-    case 'assistant':
-      return textEntry(entry, 'assistant');
-    case 'tool_call':
-      {
-        const toolName = v.safeParse(v.string(), entry.toolName);
-        const toolCallId = v.safeParse(v.string(), entry.toolCallId);
-
-        const message: AgentTranscriptMessage = {
-          id: entry.id,
-          role: 'tool_call',
-          content: '',
-          toolName: toolName.success ? toolName.output : 'tool',
-          args: safeJson(entry.args),
-        };
-
-        if (toolCallId.success) message.toolCallId = toolCallId.output;
-
-        return message;
-      }
-
-    case 'tool_result':
-      {
-        const result = v.safeParse(v.string(), entry.result);
-        const success = v.safeParse(v.boolean(), entry.success);
-        const toolName = v.safeParse(v.string(), entry.toolName);
-        const toolCallId = v.safeParse(v.string(), entry.toolCallId);
-
-        const message: AgentTranscriptMessage = {
-          id: entry.id,
-          role: 'tool_result',
-          content: result.success ? result.output : safeJson(entry.result),
-        };
-
-        if (success.success) message.success = success.output;
-
-        if (toolName.success) message.toolName = toolName.output;
-
-        if (toolCallId.success) message.toolCallId = toolCallId.output;
-
-        return message;
-      }
-
-    case 'error':
-      {
-        const message = v.safeParse(v.string(), entry.message);
-
-        return {
-          id: entry.id,
-          role: 'system',
-          content: `Error: ${message.success ? message.output : safeJson(entry.message)}`,
-        };
-      }
-
-    default:
-      return null;
-  }
-}
-
-function textEntry(entry: CliSessionEntry, role: 'user' | 'assistant'): AgentTranscriptMessage | null {
-  const parsedText = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), entry.text);
-
-  if (!parsedText.success) return null;
-  const message: AgentTranscriptMessage = { id: entry.id, role, content: parsedText.output };
-
-  if (entry.steered === true) message.steered = true;
-
-  if (entry.branched === true) message.branched = true;
-
-  return message;
-}
-
-function safeJson(value: JsonValue): string {
-  const parsedString = v.safeParse(v.string(), value);
-
-  return parsedString.success ? parsedString.output : JSON.stringify(value);
+  return { header, entryCount, firstUserText };
 }
 
 function createSessionId(): string {

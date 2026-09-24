@@ -9,7 +9,7 @@ export const BRANCH_REFLECT = 'reflect' as const;
 /** Sent before any call is answered. */
 export const BRANCH_READY = 'ready' as const;
 
-export const BRANCH_METHODS = [BRANCH_EXPLORE, BRANCH_REFLECT] as const;
+const BRANCH_METHODS = [BRANCH_EXPLORE, BRANCH_REFLECT] as const;
 
 /** Replies echo the call id so overlapping same-method calls settle correctly.
  *  Explore args carry no tools: the worker reads crafted tools from the parent DB. */

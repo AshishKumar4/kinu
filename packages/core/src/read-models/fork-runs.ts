@@ -30,7 +30,8 @@ export interface ForkRunSummary {
   /** The tree's branch count where there is a tree (every branch gets a row there); else the
    *  journalled count. */
   readonly branches: number;
-  /** Best terminal score in [0,1]; null without a tree or without a terminal node. */
+  /** The terminal node's own score in [0,1], the `winnerValue` `converge` reported; null without a
+   *  tree, a terminal node or a score. */
   readonly winnerScore: number | null;
 }
 
@@ -227,8 +228,8 @@ function queryTreeHalves(
                                       WHERE c.actor_id = n.actor_id AND c.parent_id = n.id)
                     THEN 1 ELSE 0 END)                              AS frontier,
            SUM(CASE WHEN n.status = 'terminal' THEN 1 ELSE 0 END)   AS terminal,
-           MAX(CASE WHEN n.status = 'terminal' THEN n.value END)    AS best_terminal
-    FROM search_nodes n
+           MAX(CASE WHEN n.status = 'terminal' THEN n.own_score END) AS best_terminal
+    FROM search_node_scores n
     LEFT JOIN mcts_search_runs r ON r.actor_id = ${actorId} AND r.root_id = n.root_id
     WHERE n.actor_id = ${actorId}
       AND (${rootId} IS NULL OR n.root_id = ${rootId})

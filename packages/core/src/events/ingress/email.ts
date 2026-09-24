@@ -86,7 +86,7 @@ export interface EmailThreadAddr {
 }
 
 /** One builder for reply channel, event payload and receipt, so the bounds cannot drift. */
-export function emailThreadAddr(msg: IncomingEmail): EmailThreadAddr {
+function emailThreadAddr(msg: IncomingEmail): EmailThreadAddr {
   return {
     to: msg.from,
     from: msg.to,

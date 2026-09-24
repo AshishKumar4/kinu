@@ -6,10 +6,10 @@ import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
-  orchestratorHarness,
-  type ActorHarness,
-  type HarnessOrchestratorAgent,
+  historyOver, ledgerOver, orchestratorHarness, until, workspaceMainActor,
+  type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
+import { joinHarnessFibers } from './helpers/agents-sdk';
 import type { FiberRecoveryContext } from 'agents';
 import { CHAT_SESSION_ID } from '@kinu.run/core';
 import {
@@ -75,7 +75,7 @@ function boundDelivery(
              'authenticated', 'normal', 'full',
              '{"webhook_id":"w1","http_method":"POST","http_headers":{},"body":{"x":1},"delivery_id":"d1"}',
              1, 1, NULL, ?)`,
-  ).run(harness.agent.observeRuntime().actor.actorId, eventId, drainTurnId, consumedAt);
+  ).run(workspaceMainActor(harness.db).actorId, eventId, drainTurnId, consumedAt);
 }
 
 /** The transcript pair a resumed reply reads: the drain turn's user entry and its assistant answer. */
@@ -84,13 +84,31 @@ async function persistedDrainTurn(
   drainTurnId: string,
   answer: string | null,
 ): Promise<void> {
-  const history = harness.agent.harnessHistory;
+  const history = historyOver(harness);
   await history.record(CHAT_SESSION_ID, { id: `u-${drainTurnId}`, parentId: history.transcript(CHAT_SESSION_ID).newestId(), origin: 'input',
     message: { role: 'user', content: '1 event arrived while you were idle.' }, metadata: { kinuEvent: 'event_drain', drainTurnId } });
 
   if (answer === null) return;
   await history.record(CHAT_SESSION_ID, { id: `a-${drainTurnId}`, parentId: `u-${drainTurnId}`, origin: 'output',
     message: { role: 'assistant', content: answer } });
+}
+
+/** A prior activation's open claim for `turnId`'s answer, as core writes it. */
+function openTransition(harness: ActorHarness<HarnessOrchestratorAgent>, turnId: string): string {
+  return ledgerOver(harness.db).begin({ turnId, messageId: 'a-1' });
+}
+
+/** `done` once the object closed the sequence; a still-open one answers `resumed`. */
+function transitionState(harness: ActorHarness<HarnessOrchestratorAgent>, turnId: string): string {
+  return ledgerOver(harness.db).begin({ turnId, messageId: 'a-1' });
+}
+
+/** Activation classifies owed work by arming the retry wake and dispatching nothing. */
+async function activateAndClassify(harness: ActorHarness<HarnessOrchestratorAgent>): Promise<void> {
+  await harness.agent.activateActor();
+  await until(() => harness.db.query<{ n: number }, [string]>(
+    'SELECT COUNT(*) AS n FROM cf_agents_schedules WHERE callback = ?',
+  ).get(TERMINAL_RETRY_CALLBACK)?.n === 1, 'the activation armed the terminal retry wake');
 }
 
 /** Inside the sweep's grace, so the sweep leaves it alone and only the resume is under test. */
@@ -111,15 +129,15 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     const harness = orchestratorHarness();
     boundDelivery(harness, 'ev-owed', 'evt-owed', 5);
     await persistedDrainTurn(harness, 'evt-owed', 'the build passed');
-    expect(harness.agent.harnessBeginTerminalTransition('u-owed')).toBe('first');
+    expect(openTransition(harness, 'u-owed')).toBe('first');
 
     // Classification arms the wake and dispatches nothing; the alarm frame sends the reply.
-    expect(harness.agent.harnessOwedWorkExists()).toBe(true);
+    await activateAndClassify(harness);
     expect(lease(harness, 'ev-owed')).toEqual({ turn_id: 'evt-owed', consumed_at: 5 });
     await harness.agent.terminalRetryPass();
 
     expect(lease(harness, 'ev-owed')).toEqual({ turn_id: 'evt-owed', consumed_at: null });
-    expect(harness.agent.harnessBeginTerminalTransition('u-owed')).toBe('done');
+    expect(transitionState(harness, 'u-owed')).toBe('done');
   });
 
   /** Negative control: a lease whose turn produced no answer must stay open to be re-asked. */
@@ -127,9 +145,9 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     const harness = orchestratorHarness();
     boundDelivery(harness, 'ev-silent', 'evt-silent', RECENT);
     await persistedDrainTurn(harness, 'evt-silent', null);
-    harness.agent.harnessBeginTerminalTransition('u-silent');
+    openTransition(harness, 'u-silent');
     // Without this, a row filed under another actor would read as no row and the case would pass vacuously.
-    expect(harness.agent.harnessOwedWorkExists()).toBe(true);
+    await activateAndClassify(harness);
 
     // The full wake frame (stale-lease sweep, then replay), not `resumeAll()` alone.
     await harness.agent.terminalRetryPass();
@@ -141,8 +159,8 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     const harness = orchestratorHarness();
     boundDelivery(harness, 'ev-blank', 'evt-blank', RECENT);
     await persistedDrainTurn(harness, 'evt-blank', '   ');
-    harness.agent.harnessBeginTerminalTransition('u-blank');
-    expect(harness.agent.harnessOwedWorkExists()).toBe(true);
+    openTransition(harness, 'u-blank');
+    await activateAndClassify(harness);
 
     await harness.agent.terminalRetryPass();
 
@@ -151,11 +169,11 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
 
   test('an unfinished transition with nothing to resume stops being re-offered', async () => {
     const harness = orchestratorHarness();
-    harness.agent.harnessBeginTerminalTransition('u-nothing');
+    openTransition(harness, 'u-nothing');
 
-    await harness.agent.harnessResumeTerminalTransitions();
+    await harness.agent.terminalRetryPass();
 
-    expect(harness.agent.harnessBeginTerminalTransition('u-nothing')).toBe('done');
+    expect(transitionState(harness, 'u-nothing')).toBe('done');
   });
 
   test('activation finishes what was answered and re-asks only what was not', async () => {
@@ -165,9 +183,8 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     await persistedDrainTurn(harness, 'evt-answered', 'the build passed');
     await persistedDrainTurn(harness, 'evt-unanswered', null);
 
-    await harness.agent.activateActor();
-    // The reconcile is detached from `onStart`; the activation's own join settles it.
-    await harness.agent.harnessSettleBackgroundTasks();
+    // The reconcile is detached from `onStart`; the wake it arms is its record that it ran.
+    await activateAndClassify(harness);
 
     // Activation only proves existence and arms the wake; the wake frame does the work.
     expect(lease(harness, 'ev-answered')).toEqual({ turn_id: 'evt-answered', consumed_at: 5 });
@@ -194,19 +211,21 @@ describe('an interrupted terminal fiber arms the durable wake rather than replay
   test('the hook classifies and arms; the replay happens off the gate', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
-    expect(agent.harnessBeginTerminalTransition('u-owed')).toBe('first');
+    expect(openTransition(harness, 'u-owed')).toBe('first');
     expect((await agent.listSchedules()).map((row) => row.callback))
       .not.toContain(TERMINAL_RETRY_CALLBACK);
 
-    const result = await agent.harnessRecoverFiber(interruptedTerminalFiber);
+    const result = await agent.onFiberRecovered(interruptedTerminalFiber);
 
     // The claim is still open when the hook returns: no replay ran inside the gate.
-    expect(agent.harnessTerminalClaims().map((row) => row.result_json)).toEqual([null]);
+    expect(harness.db.query<{ result_json: string | null }, []>(
+      "SELECT result_json FROM tool_effect_claims WHERE normalized_call_id LIKE 'terminal:response:%'",
+    ).all().map((row) => row.result_json)).toEqual([null]);
     expect(result).toEqual({
       status: 'completed', snapshot: { lane: TERMINAL_LANE_FIBER, redrive: 'terminal-wake' },
     });
 
-    await agent.harnessJoinDetachedFibers();
+    await joinHarnessFibers();
     // The ledger's own retry row: the carrier the stale-schedule sweep spares.
     expect((await agent.listSchedules()).map((row) => row.callback))
       .toContain(TERMINAL_RETRY_CALLBACK);
@@ -214,15 +233,15 @@ describe('an interrupted terminal fiber arms the durable wake rather than replay
     // The claim join keeps the wake and the detached reconcile from both replaying one row.
     await agent.terminalRetryPass();
 
-    expect(agent.harnessBeginTerminalTransition('u-owed')).toBe('done');
+    expect(transitionState(harness, 'u-owed')).toBe('done');
   });
 
   test('a workspace with no incomplete sequence arms no wake', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
 
-    await agent.harnessRecoverFiber(interruptedTerminalFiber);
-    await agent.harnessJoinDetachedFibers();
+    await agent.onFiberRecovered(interruptedTerminalFiber);
+    await joinHarnessFibers();
 
     expect((await agent.listSchedules()).map((row) => row.callback))
       .not.toContain(TERMINAL_RETRY_CALLBACK);

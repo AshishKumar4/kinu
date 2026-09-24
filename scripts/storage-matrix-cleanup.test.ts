@@ -3,12 +3,13 @@ import { present } from '@kinu.run/test-utils';
 import { describe, expect, test } from 'bun:test';
 import { readdirSync, writeFileSync } from 'node:fs';
 
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   checkCleanup, createManifest, loadManifest, manifestPath, reconcileCounters,
   recoverAbandonedRuns, replayTeardown, scanUnfinishedManifests, writeManifest,
   type CleanupProbes, type TeardownEntry, type TeardownManifest,
 } from './fixtures/storage-matrix/cleanup';
+import type { ProcessOwner } from './process-owner';
 import { R2_OP_VOCABULARY } from './fixtures/storage-matrix/admission';
 
 function probes(overrides: Partial<CleanupProbes> = {}): CleanupProbes {
@@ -109,6 +110,9 @@ describe('durable teardown manifest', () => {
 // read again, so every interrupted run added a permanent set of resources to
 // the account.
 
+/** A driver from before the machine last booted: no process of this boot is it. */
+const EARLIER_BOOT: ProcessOwner = { bootId: 'a-boot-before-this-one', pid: 1, startTicks: 0 };
+
 /** A run killed after its deploy: every resource real, nothing deleted. */
 function killedAfterDeploy(runId: string): TeardownManifest {
   return createManifest(runId, [
@@ -117,7 +121,7 @@ function killedAfterDeploy(runId: string): TeardownManifest {
     { kind: 'r2-bucket', name: `kinu-devbox-bench-${runId}-snapshot-chain` },
     { kind: 'do-state', name: `ab-snapshot-chain-${runId}` },
     { kind: 'local-path', name: `bench-artifacts/config/${runId}` },
-  ]);
+  ], EARLIER_BOOT);
 }
 
 describe('a fresh driver finishes what a killed one started', () => {
@@ -253,7 +257,93 @@ describe('a fresh driver finishes what a killed one started', () => {
   test('a directory that never held a manifest scans clean instead of throwing', () => {
     const root = scratchDir("storage-matrix");
 
-    expect(scanUnfinishedManifests(root, 'any')).toEqual({ unfinished: [], unreadable: [] });
+    expect(scanUnfinishedManifests(root, 'any')).toEqual({ unfinished: [], inFlight: [], unreadable: [] });
+  });
+});
+
+// ── a second bench beside a running one ─────────────────────────────────────
+//
+// The startup sweep read every unfinished manifest but its own as abandoned, so
+// a bench started while another measured deleted that run's Worker, container
+// application and bucket under it.
+
+/** A bench holding run `runId` from its own process until released, as a measuring driver does. */
+async function holdRun(root: string, runId: string): Promise<() => Promise<void>> {
+  const cleanup = join(import.meta.dir, 'fixtures/storage-matrix/cleanup.ts');
+
+  const child = Bun.spawn([process.execPath, '-e', `
+    const { createManifest, writeManifest } = await import(${JSON.stringify(cleanup)});
+    writeManifest(${JSON.stringify(root)}, createManifest(${JSON.stringify(runId)}, [
+      { kind: 'worker', name: 'worker-of-the-running-bench' },
+    ]));
+    process.stdout.write('holding\\n');
+    await Bun.sleep(600_000);
+  `], { stdout: 'pipe', stderr: 'pipe' });
+
+  let said = '';
+
+  for await (const chunk of child.stdout) {
+    said += new TextDecoder().decode(chunk);
+
+    if (said.includes('holding')) break;
+  }
+
+  if (!said.includes('holding')) throw new Error(`the running bench never held its run: ${await new Response(child.stderr).text()}`);
+
+  return async () => {
+    child.kill();
+    await child.exited;
+  };
+}
+
+describe('a bench started while another runs', () => {
+  test('leaves the running bench\'s resources alone, and says why', async () => {
+    const root = scratchDir('storage-matrix');
+    const release = await holdRun(root, '20260923090000');
+
+    try {
+      const deleted: string[] = [];
+      const reported: string[] = [];
+
+      await recoverAbandonedRuns(root, '20260923090001', async (entry) => {
+        deleted.push(entry.name);
+
+        return { ok: true };
+      }, (line) => reported.push(line));
+
+      expect(deleted).toEqual([]);
+      expect(loadManifest(root, '20260923090000')?.entries.every((entry) => !entry.done)).toBe(true);
+      expect(reported.join('\n')).toContain('run 20260923090000 is still running');
+    } finally {
+      await release();
+    }
+  });
+
+  test('cannot take over the run id the running bench holds', async () => {
+    const root = scratchDir('storage-matrix');
+    const release = await holdRun(root, '20260923090000');
+
+    try {
+      expect(() => writeManifest(root, createManifest('20260923090000', [{ kind: 'worker', name: 'worker-of-the-second-bench' }])))
+        .toThrow(/held by a running bench/);
+      expect(loadManifest(root, '20260923090000')?.entries.map((entry) => entry.name)).toEqual(['worker-of-the-running-bench']);
+    } finally {
+      await release();
+    }
+  });
+
+  test('once that bench has exited, the next sweep deletes what it left', async () => {
+    const root = scratchDir('storage-matrix');
+    await (await holdRun(root, '20260923090000'))();
+    const deleted: string[] = [];
+
+    await recoverAbandonedRuns(root, '20260923090001', async (entry) => {
+      deleted.push(entry.name);
+
+      return { ok: true };
+    }, () => undefined);
+
+    expect(deleted).toEqual(['worker-of-the-running-bench']);
   });
 });
 

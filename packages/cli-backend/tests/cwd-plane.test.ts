@@ -4,17 +4,30 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
+import * as v from 'valibot';
 import type { AgentRuntime, LLMProviderConfig, WriteEvent, WriteObserver } from '@kinu.run/core';
-import { buildBuiltinTools, initWorkspaceSchema, isVfsError, WORKSPACE_ROOT, subordinateAgentName } from '@kinu.run/core';
+import {
+  buildBuiltinTools, discoverSkills, initWorkspaceSchema, isVfsError, WORKSPACE_ROOT, subordinateAgentName,
+} from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/identity';
 import { scratchDir, toolExecute } from '@kinu.run/test-utils';
 import {
-  createCLIRuntime, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
+  createCLIRuntime, createHostShell, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
   type CLIRuntime,
 } from '../src/runtime';
 import { createHeadRuntime } from './actor-fixture';
 import { registerLocalActor } from '../src/actor-identity';
 import { openWorkspaceCLI } from '../src/open';
+import { BRANCH_CREDENTIAL_ENV } from '../src/branch-process';
+import { PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV } from '../src/model-resolver';
+
+/** Every name the harness reads a credential from, as the declaring modules name them. */
+const HARNESS_CREDENTIAL_NAMES: readonly string[] = [
+  ...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV, ...BRANCH_CREDENTIAL_ENV,
+];
+
+const DevicePlanSchema = v.object({ env: v.record(v.string(), v.string()) });
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -228,6 +241,17 @@ describe('addressing the bound directory', () => {
     await rt.storage.vfs.writeFile('..hidden/file.txt', 'still inside');
     expect(readFileSync(join(project, '..hidden/file.txt'), 'utf8')).toBe('still inside');
   });
+
+  test('a skill in the bound directory is discovered: the shared Drive this runtime lacks is absent, not an escape', async () => {
+    const { state, project } = roots('cwd-plane-skills');
+    mkdirSync(join(project, 'skills'), { recursive: true });
+    writeFileSync(join(project, 'skills', 'review.md'), '---\nname: review\ndescription: Review a change\n---\nName every risk.\n');
+    const rt = agentRuntime(state, 'solo', project);
+
+    const found = await discoverSkills(rt.storage.vfs, { admissionTokens: 100_000 });
+
+    expect(found.skills.find((skill) => skill.name === 'review')?.source).toBe('vfs');
+  });
 });
 
 describe('the shell over the bound directory', () => {
@@ -253,6 +277,47 @@ describe('the shell over the bound directory', () => {
     expect(await readText(rt, 'shell-wrote.txt')).toBe('from-the-shell\n');
   });
 
+  test('no tier passes on a planted credential; the host shell keeps the user\'s own settings', async () => {
+    const { project } = roots('cwd-plane-env-backends');
+    const [home, agentHome, agentTmp] = ['home', 'agents/ws/home', 'agents/ws/tmp'].map((dir) => join(project, dir));
+
+    for (const dir of [home, agentHome, agentTmp]) mkdirSync(dir ?? project, { recursive: true });
+
+    const daemon = v.parse(
+      v.object({ ENV_ALLOWLIST: v.array(v.string()), plan: v.function() }),
+      createRequire(import.meta.url)(join(import.meta.dir, '../../pc-agent/src/sandbox.js')),
+    );
+
+    // Candidates from both backends and the live environment, each derived credential carrying a canary. Every
+    // tier is handed this source; this process's env is never written, since a planted proxy reroutes other tests.
+    const candidates = new Set([...HARNESS_CREDENTIAL_NAMES, ...daemon.ENV_ALLOWLIST, ...Object.keys(process.env)]);
+    const userSettings = { SSH_AUTH_SOCK: `/run/agent-${crypto.randomUUID()}.sock`, HTTPS_PROXY: 'http://proxy.test:3128' };
+
+    const source = {
+      ...Object.fromEntries([...candidates].map((name) => [
+        name, HARNESS_CREDENTIAL_NAMES.includes(name) ? `planted:${name}` : process.env[name] ?? `probe:${name}`,
+      ])),
+      ...userSettings,
+    };
+
+    const hostShell = await createHostShell(project, source).exec('env');
+    const rawDevice = v.parse(DevicePlanSchema, daemon.plan({ tier: 'raw', deviceHome: project, command: 'env', cwd: project, source })).env;
+
+    expect(hostShell.stdout.split('\n').filter((line) => line.includes('planted:'))).toEqual([]);
+    expect(Object.entries(rawDevice).filter(([, value]) => value.startsWith('planted:'))).toEqual([]);
+    expect(Object.entries(userSettings).filter(([name, value]) => !hostShell.stdout.includes(`${name}=${value}\n`))).toEqual([]);
+
+    // The sandboxed device tier passes named variables only, so a secret no rule names stays out as well.
+    const secret = `npm_${crypto.randomUUID().replaceAll('-', '')}`;
+
+    const sandboxed = JSON.stringify(daemon.plan({
+      tier: 'sandboxed', platform: 'linux', home, agentHome, agentTmp, deviceHome: project, roots: [project], cwd: project,
+      command: 'env', source: { ...source, NPM_TOKEN: secret }, statusFd: 3,
+    }));
+
+    expect({ secret: sandboxed.includes(secret), planted: sandboxed.includes('planted:') }).toEqual({ secret: false, planted: false });
+  });
+
   test('what a command may have changed is snapshotted, and the snapshot names that directory', async () => {
     const { state, project } = roots('cwd-plane-checkpoints');
     writeFileSync(join(project, 'before.txt'), 'the state to restore\n');
@@ -268,6 +333,23 @@ describe('the shell over the bound directory', () => {
     await rt.shell?.exec('echo mutated > before.txt');
 
     // The dedup is per directory, so one entry naming the bound directory.
+    const entries = await checkpoints.list({ limit: 10 });
+    expect(entries.map((entry) => entry.dir)).toEqual([resolve(project)]);
+  });
+
+  test('a file write snapshots the bound directory, never a marked directory above it', async () => {
+    const { state, project } = roots('cwd-plane-file-checkpoint');
+    // A marker above the workspace: snapshotting there would stage every file beside the workspace too.
+    writeFileSync(join(dirname(project), 'package.json'), '{}\n');
+    const rt = agentRuntime(state, `file-checkpointer-${basename(dirname(state))}`, project);
+    const checkpoints = rt.checkpoints;
+
+    if (!checkpoints) throw new Error('a bound runtime must have a checkpoint engine');
+
+    if (!(await checkpoints.status()).available) return; // no git on this box
+
+    await rt.storage.vfs.writeFile('notes/plan.md', 'ship it\n');
+
     const entries = await checkpoints.list({ limit: 10 });
     expect(entries.map((entry) => entry.dir)).toEqual([resolve(project)]);
   });
@@ -348,4 +430,20 @@ test('local Plan file inspection remains useful without granting native project 
   await build({ action: 'read', path: 'inspect.txt' });
   expect(await build({ action: 'write', path: 'inspect.txt', content: 'built' })).toMatchObject({ ok: true });
   expect(readFileSync(join(project, 'inspect.txt'), 'utf8')).toBe('built');
+});
+
+test('a file the agent writes is named local:// when the directory is the workspace, vfs:// when it is not', async () => {
+  const { state, project } = roots('cwd-plane-reference');
+
+  const write = (rt: CLIRuntime) => {
+    const file = buildBuiltinTools({ rt, workMode: 'build', history: rt.stores.history }).file;
+
+    if (file === undefined) throw new Error('No Build file tool');
+
+    return toolExecute(file)({ action: 'write', path: 'notes/plan.md', content: 'ship it' });
+  };
+
+  expect(await write(agentRuntime(state, 'bound', project))).toMatchObject({ ok: true, reference: 'local://notes/plan.md' });
+  expect(readFileSync(join(project, 'notes/plan.md'), 'utf8')).toBe('ship it');
+  expect(await write(agentRuntime(state, 'unbound'))).toMatchObject({ ok: true, reference: 'vfs://notes/plan.md' });
 });

@@ -8,8 +8,6 @@
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { LLM } from '../types/primitives';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import * as v from 'valibot';
 import {
@@ -21,7 +19,7 @@ import { runScaffold, scaffoldEventText, type ScaffoldRunResult } from './execut
 import { diagnostics, KinuError, toKinuError } from '../obs/index';
 
 /** One judge call's output. The judge sees two unlabelled responses in random order. */
-export const JudgeOutputSchema = v.object({
+const JudgeOutputSchema = v.object({
   winner: v.picklist(['a', 'b', 'tie']),
   rationale: v.pipe(v.string(), v.minLength(1)),
   scoreA: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
@@ -32,12 +30,6 @@ export type JudgeOutput = v.InferOutput<typeof JudgeOutputSchema>;
 
 /** Host-supplied judge, called twice per trial (see judgeTrialOrderSwapped). */
 export type StructuredJudgeFn = (prompt: string, schema: typeof JudgeOutputSchema) => Promise<JudgeOutput>;
-
-/** Default judge: JSON-object structured output over any `LLM`. */
-export function createStructuredJudge(llm: LLM): StructuredJudgeFn {
-  return async (prompt, schema) =>
-    v.parse(schema, extractJsonObject(await llm.complete(`${prompt}\n\n${jsonObjectOnlyInstruction()}`)));
-}
 
 export interface AutoJudgeConfig {
   /** Apply conclusive decisions. Engine default false; backends pass actor_config auto_promote_scaffold. */

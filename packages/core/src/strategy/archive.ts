@@ -10,7 +10,9 @@
  * Spec: docs/EXPLORATION.md "The archive".
  */
 import { admitsPublication, type ExplorationRecord, type PublicationState } from './objective';
-import { cellOccupants, recordExploration, type ExplorationWrite, type RecordVerdict } from './records';
+import {
+  cellOccupants, publicationOf, recordExploration, type ExplorationWrite, type RecordVerdict,
+} from './records';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 
@@ -93,6 +95,12 @@ export function admitToArchive(
   const { write, novelty } = input;
 
   if (admitsPublication(input.publication, 'records').kind === 'refused') {
+    return { kind: 'refused', cause: 'sealed' };
+  }
+
+  actor.assertCurrent();
+
+  if (admitsPublication(publicationOf(sql, actor, input.publication, write), 'records').kind === 'refused') {
     return { kind: 'refused', cause: 'sealed' };
   }
 

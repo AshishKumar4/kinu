@@ -1461,7 +1461,6 @@ async function hireCreate({ deps, team, input, mode, lifetime, toolOptions }: Cr
     : undefined;
 
   if (lifetime === 'task') {
-    // A task agent is archived when it answers, so a name would never be addressable.
     if (input.agent !== undefined) {
       return badInput('field "agent" is not available on a lifetime:"task" hire — it is archived the '
         + 'moment it answers, so a name you chose is never addressable. Omit it, or hire `durable`.');

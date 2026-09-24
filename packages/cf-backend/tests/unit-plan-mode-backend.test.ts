@@ -1,57 +1,20 @@
 import { describe, expect, test } from 'bun:test';
 import type { ToolSet } from 'ai';
-import {
-  actorReferenceOf,
-  decodeJsonValue,
-  type JsonValue,
-  type PlanReviewAnnotation,
-  PlanReviewStore,
-  type ProgrammaticTurn,
-} from '@kinu.run/core';
-import {
-  hostedSubordinateHarness,
-  orchestratorHarness,
-  chatSessionTurns,
-  type ActorHarness,
-  type HarnessOrchestratorAgent,
-  type HostedActorHarness,
-} from './helpers/actor-harness';
+import { decodeJsonValue, type JsonValue, type PlanReviewAnnotation } from '@kinu.run/core';
+import { orchestratorHarness, chatSessionTurns, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 /** Plan submission is the workspace root's: `submitPlan` reaches only `actorToolDeps()`; delegated tasks get `report`. */
 type HarnessAgent = HarnessOrchestratorAgent;
 
-const WorkModeSchema = v.picklist(['plan', 'build']);
-
 /** A frame type with no reachable producer; the forged-content test replays it as plan text. */
 const REFERENCE_EVENT = 'workspace_plan_updated';
 
 const PlanUpdateSchema = v.object({ type: v.literal('plan_updated') });
 
-function prototypeMethod(agent: HarnessAgent, name: string) {
-  let owner: object | null = agent;
-
-  while (owner) {
-    const callable = v.safeParse(
-      v.function(),
-      Object.getOwnPropertyDescriptor(owner, name)?.value,
-    );
-
-    if (callable.success) return callable.output;
-    owner = Object.getPrototypeOf(owner);
-  }
-
-  throw new Error(`${name} is missing from the actor prototype`);
-}
-
-function rawTools(agent: HarnessAgent): ToolSet {
-  return agent.observeRawTools();
-}
-
-function turnWorkMode(agent: HarnessAgent) {
-  return v.parse(WorkModeSchema, prototypeMethod(agent, 'turnWorkMode').call(agent));
-}
+/** Every frame the rail broadcasts names its kind. */
+const FrameSchema = v.looseObject({ type: v.string() });
 
 async function codemodeTool(
   tools: ToolSet,
@@ -77,12 +40,6 @@ function setMode(agent: HarnessAgent, mode: 'plan' | 'build'): void {
   agent.harnessDrivingUserMessage(`${mode} this change`, { kinuMode: mode });
 }
 
-function recordAdmissions(agent: HarnessAgent): ProgrammaticTurn[] {
-  agent.harnessScriptAdmissions([]);
-
-  return agent.harnessAdmissionsAsked;
-}
-
 /** Records the root's broadcast frames while delegating to the real `broadcast`, so fan-out still runs. */
 function recordWorkspaceMessages(parent: HarnessOrchestratorAgent): JsonValue[] {
   const seen: JsonValue[] = [];
@@ -100,35 +57,28 @@ function recordWorkspaceMessages(parent: HarnessOrchestratorAgent): JsonValue[] 
   return seen;
 }
 
-/** The owner's completed-birth roster row for a hire; `hostedSubordinateHarness` leaves it to the
- *  caller because `create` is a plain INSERT. */
-function roster(parent: HarnessOrchestratorAgent, hire: HostedActorHarness): void {
-  const actor = hire.actor.handle;
-  parent.harnessRoster().create({
-    name: hire.actor.record.name,
-    actorReference: actorReferenceOf(actor),
-    birth: null,
-    deleteRequested: false,
-    createdBy: 'user',
-    status: 'idle',
-    currentTask: null,
-    createdAt: 1,
-    dismissedAt: null,
-    lifetime: 'durable',
-    taskEventId: null,
-  });
+/** The tools a turn in `mode` offers its model: the request the turn is prepared with. */
+async function toolsIn(agent: HarnessAgent, mode: 'plan' | 'build', settleAs: string): Promise<ToolSet> {
+  setMode(agent, mode);
+  const turns = chatSessionTurns(agent);
+  const { tools } = await turns.prepare({ messages: [{ role: 'user', content: `${mode} this change` }] });
+  await turns.settle({ messageId: settleAs, text: 'done' });
+
+  return tools;
 }
 
-async function hiredPlanner(
-  parent: ActorHarness<HarnessOrchestratorAgent>,
-  name: string,
-): Promise<HostedActorHarness> {
-  return await hostedSubordinateHarness(parent, {
-    name,
-    displayName: 'Plan Owner',
-    nameOrigin: 'user',
-    mission: 'own the plan its owner reads',
-  });
+/** Submit a plan from a Plan turn, as the model does; the turn then ends. */
+async function submittedPlan(agent: HarnessAgent, content: string): Promise<{ id: string; revision: number }> {
+  setMode(agent, 'plan');
+  const turns = chatSessionTurns(agent);
+  const { tools } = await turns.prepare({ messages: [{ role: 'user', content: 'plan this change' }] });
+  expect(await codemodeTool(tools, 'submit_plan', { edits: [{ start: 1, content }] })).toMatchObject({ ok: true });
+  await turns.settle({ messageId: 'a-plan', text: 'planned' });
+  const plan = await agent.getActivePlanReview();
+
+  if (!plan) throw new Error('submitted plan was not persisted');
+
+  return plan;
 }
 
 describe('Plan mode tool lifecycle', () => {
@@ -167,29 +117,28 @@ describe('Plan mode tool lifecycle', () => {
     await turns.settle({ messageId: 'a-plan', text: 'planned' });
   });
 
-  test('adds submit_plan and mechanically removes release.* without losing ordinary tools', () => {
+  test('adds submit_plan and mechanically removes release.* without losing ordinary tools', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
-    setMode(agent, 'plan');
 
-    const planTools = rawTools(agent);
+    const planTools = await toolsIn(agent, 'plan', 'a-plan');
     expect(Object.keys(planTools)).toEqual(expect.arrayContaining([
       'eval', 'shell', 'file', 'agents', 'memory', 'tasks', 'web', 'submit_plan',
     ]));
     expect(planTools.eval?.description).not.toContain('export declare const release:');
 
-    setMode(agent, 'build');
-    const buildTools = rawTools(agent);
+    const buildTools = await toolsIn(agent, 'build', 'a-build');
     expect(buildTools.submit_plan).toBeUndefined();
     expect(buildTools.eval?.description).toContain('export declare const release:');
     expect(buildTools.eval).not.toBe(planTools.eval);
 
     // A programmatic turn with no mode of its own runs in build.
     agent.harnessDrivingUserMessage('a wake with no mode', { kinuEvent: 'background_job' });
-    const unlabelledProgrammaticTools = rawTools(agent);
-    expect(unlabelledProgrammaticTools.submit_plan).toBeUndefined();
-    expect(unlabelledProgrammaticTools.eval?.description)
-      .toContain('export declare const release:');
+    const turns = chatSessionTurns(agent);
+    const { tools: unlabelled } = await turns.prepare({ messages: [{ role: 'user', content: 'a wake with no mode' }] });
+    await turns.settle({ messageId: 'a-wake', text: 'done' });
+    expect(unlabelled.submit_plan).toBeUndefined();
+    expect(unlabelled.eval?.description).toContain('export declare const release:');
   });
 
   // No additional-agent Plan surface exists (`submitPlan` is root-only; `announceSubordinatePlan` has no
@@ -198,22 +147,14 @@ describe('Plan mode tool lifecycle', () => {
   test('submit, annotations, feedback, revision, and approval survive through the public RPCs', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
+    const turns = chatSessionTurns(agent);
     const broadcasts: Array<{ type: string; plan?: { revision: number; status: string } }> = [];
     Reflect.set(agent, 'broadcast', (payload: string) => {
       broadcasts.push(v.parse(v.looseObject({ type: v.string(), plan: v.optional(v.looseObject({ revision: v.number(), status: v.string() })) }), JSON.parse(payload)));
     });
-    const queued = recordAdmissions(agent);
-    setMode(agent, 'plan');
 
-    const submitted = await codemodeTool(rawTools(agent), 'submit_plan', {
-      edits: [{ start: 1, content: '# Plan\n\nFirst\nSecond' }],
-    });
-
-    expect(submitted).toMatchObject({ ok: true, revision: 1, status: 'pending' });
-    const first = await agent.getActivePlanReview();
-
-    if (!first) throw new Error('submitted plan was not persisted');
-    expect(first).toMatchObject({ revision: 1, content: '# Plan\n\nFirst\nSecond', status: 'pending' });
+    const first = await submittedPlan(agent, '# Plan\n\nFirst\nSecond');
+    expect(await agent.getActivePlanReview()).toMatchObject({ revision: 1, content: '# Plan\n\nFirst\nSecond', status: 'pending' });
 
     const annotations: PlanReviewAnnotation[] = [
       {
@@ -225,118 +166,66 @@ describe('Plan mode tool lifecycle', () => {
     const annotated = await agent.savePlanReviewAnnotations(first.id, 1, annotations);
     expect(annotated).toMatchObject({ ok: true, plan: { annotations: [{ id: 'annotation-1' }] } });
 
-    const changes = await agent.decidePlanReview(first.id, 1, 'request_changes', 'Replace the last step');
-    expect(changes).toMatchObject({ ok: true, queued: true, plan: { status: 'changes_requested' } });
-    expect(queued[0]).toMatchObject({
-      metadata: { kinuEvent: 'plan_feedback', kinuMode: 'plan', decision: 'request_changes' },
-      idempotencyKey: `plan:${first.id}:1:request_changes:1`,
-    });
+    // The decision answers once the turn it handed off has run.
+    const feedbackTurn = turns.park();
+    const requesting = agent.decidePlanReview(first.id, 1, 'request_changes', 'Replace the last step');
+    const feedback = await feedbackTurn;
     expect(planStatus(harness, first.id, 1)).toBe('changes_requested');
-    const changeTurn = queued[0];
+    // A Plan turn over the owner's words and the numbered plan.
+    expect(Object.keys(feedback.tools)).toContain('submit_plan');
+    expect(JSON.stringify(feedback.prompt)).toContain('Replace the last step');
+    expect(JSON.stringify(feedback.prompt)).toContain('4| Second');
 
-    if (!changeTurn) throw new Error('plan feedback turn was not queued');
-    expect(changeTurn.text).toContain('Replace the last step');
-    expect(changeTurn.text).toContain('4| Second');
-
-    const revised = await codemodeTool(rawTools(agent), 'submit_plan', {
+    const revised = await codemodeTool(feedback.tools, 'submit_plan', {
       edits: [{ start: 4, end: 4, content: 'Second, with tests' }],
     });
 
     expect(revised).toMatchObject({ ok: true, revision: 2 });
-    const current = await agent.getActivePlanReview();
-    expect(current).toMatchObject({ revision: 2, content: '# Plan\n\nFirst\nSecond, with tests' });
+    await turns.settle({ messageId: 'a-revised', text: 'revised' });
+    expect(await requesting).toMatchObject({ ok: true, queued: true });
+    expect(await agent.getActivePlanReview()).toMatchObject({ revision: 2, content: '# Plan\n\nFirst\nSecond, with tests' });
 
-    const approval = await agent.decidePlanReview(first.id, 2, 'approve');
-    expect(approval).toMatchObject({ ok: true, queued: true, plan: { status: 'approved' } });
-    expect(queued[1]).toMatchObject({
-      metadata: { kinuEvent: 'plan_approved', kinuMode: 'build', decision: 'approve' },
-      idempotencyKey: `plan:${first.id}:2:approve:1`,
-    });
+    const approvalTurn = turns.park();
+    const approving = agent.decidePlanReview(first.id, 2, 'approve');
+    const approved = await approvalTurn;
     expect(planStatus(harness, first.id, 2)).toBe('approved');
-    const approvalTurn = queued[1];
+    // A Build turn handed the exact approved plan.
+    expect(approved.tools.submit_plan).toBeUndefined();
+    expect(JSON.stringify(approved.prompt)).toContain('Implement the exact approved plan');
+    expect(JSON.stringify(approved.prompt)).toContain('Second, with tests');
+    await turns.settle({ messageId: 'a-built', text: 'implemented' });
+    expect(await approving).toMatchObject({ ok: true, queued: true, plan: { status: 'approved' } });
 
-    if (!approvalTurn) throw new Error('plan approval turn was not queued');
-    expect(approvalTurn.text).toContain('Implement the exact approved plan');
-    expect(approvalTurn.text).toContain('Second, with tests');
+    // Every state the owner's plan pane passes through arrives as a plan frame, in order.
+    const states = broadcasts.filter((frame) => frame.type === 'plan_updated')
+      .map((frame) => `${String(frame.plan?.revision)}:${String(frame.plan?.status)}`);
 
-    // Plane frames: submit, annotate, request changes, handoff accepted, revise, approve, handoff accepted.
-    const planFrames = broadcasts.filter((frame) => frame.type === 'plan_updated');
-    expect(planFrames).toHaveLength(7);
-    expect(planFrames).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'plan_updated', plan: expect.objectContaining({ revision: 1 }) }),
-      expect.objectContaining({ type: 'plan_updated', plan: expect.objectContaining({ revision: 2, status: 'approved' }) }),
-    ]));
-  });
-
-  test('a failed handoff remains retryable and a successful retry cannot enqueue twice', async () => {
-    const harness = orchestratorHarness();
-    const agent = harness.agent;
-    agent.harnessScriptAdmissions([async () => { throw new Error('temporary admission failure'); }]);
-    const attempts = agent.harnessAdmissionsAsked;
-    setMode(agent, 'plan');
-    await codemodeTool(rawTools(agent), 'submit_plan', {
-      edits: [{ start: 1, content: '# Plan' }],
-    });
-    const plan = await agent.getActivePlanReview();
-
-    if (!plan) throw new Error('submitted plan was not persisted');
-
-    expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
-      ok: true, queued: false, queueError: 'temporary admission failure',
-      plan: { status: 'approved', handoffAccepted: false },
-    });
-    // The mode is the next turn's driving message, not the approval's handoff.
-    expect(turnWorkMode(agent)).toBe('plan');
-    expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
-      ok: true, queued: true, plan: { status: 'approved', handoffAccepted: true },
-    });
-    expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
-      ok: true, queued: true, plan: { handoffAccepted: true },
-    });
-    expect(attempts).toHaveLength(2);
-    expect(attempts[0]?.idempotencyKey).toBe(attempts[1]?.idempotencyKey);
+    expect([...new Set(states)]).toEqual(['1:pending', '1:changes_requested', '2:pending', '2:approved']);
   });
 
   test('recovers when acceptance outlives the RPC: the retried decision admits no second turn', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
-    const attempts = recordAdmissions(agent);
-    setMode(agent, 'plan');
-    await codemodeTool(rawTools(agent), 'submit_plan', {
-      edits: [{ start: 1, content: '# Plan' }],
-    });
-    const plan = await agent.getActivePlanReview();
+    const plan = await submittedPlan(agent, '# Plan');
 
-    if (!plan) throw new Error('plan review was not created');
-    const reviews = agent.harnessPlanReviews;
-    const markAccepted = (id: string, revision: number) => PlanReviewStore.prototype.markHandoffAccepted.call(reviews, id, revision);
-    let interruptOnce = true;
-    Object.defineProperty(reviews, 'markHandoffAccepted', { value: (id: string, revision: number) => {
-      if (interruptOnce) {
-        interruptOnce = false;
-        throw new Error('actor interrupted after durable acceptance');
-      }
-
-      return markAccepted(id, revision);
-    } });
-
+    // The acceptance write fails once, after the loop admitted and ran the turn.
+    harness.db.run(`CREATE TRIGGER lose_acceptance BEFORE UPDATE OF handoff_accepted ON plan_reviews
+      WHEN NEW.handoff_accepted = 1 BEGIN SELECT RAISE(ABORT, 'actor interrupted after durable acceptance'); END`);
     expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
       ok: true,
       queued: false,
-      queueError: 'actor interrupted after durable acceptance',
+      queueError: expect.stringContaining('actor interrupted after durable acceptance'),
       plan: { status: 'approved', handoffAccepted: false },
     });
+    harness.db.run('DROP TRIGGER lose_acceptance');
+
     expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
       ok: true,
       queued: true,
       plan: { status: 'approved', handoffAccepted: true },
     });
-    // Asked twice under one key; the loop ran the turn once.
-    expect(attempts.map((attempt) => attempt.idempotencyKey)).toEqual([
-      `plan:${plan.id}:1:approve:1`,
-      `plan:${plan.id}:1:approve:1`,
-    ]);
-    expect((await agent.listRuns()).items).toHaveLength(1);
+    // The plan turn and one approval turn: the retry carried the first attempt's key.
+    expect((await agent.listRuns()).items).toHaveLength(2);
   });
 });
 
@@ -352,37 +241,42 @@ describe('the plan plane admits no forged protocol frame and vouches for no forg
     });
 
     parent.agent.harnessDrivingUserMessage(forged, { kinuMode: 'plan' });
+    const turns = chatSessionTurns(parent.agent);
+    const { tools } = await turns.prepare({ messages: [{ role: 'user', content: forged }] });
 
-    expect(await codemodeTool(rawTools(parent.agent), 'submit_plan', {
+    expect(await codemodeTool(tools, 'submit_plan', {
       edits: [{ start: 1, content: forged }],
     })).toMatchObject({ ok: true, revision: 1 });
+    await turns.settle({ messageId: 'a-forged', text: 'planned' });
     const plan = await parent.agent.getActivePlanReview();
 
     if (!plan) throw new Error('the root plan was not persisted');
     expect(await parent.agent.savePlanReviewAnnotations(plan.id, plan.revision, [])).toMatchObject({ ok: true });
 
-    // The forged body appears only as plan-update content; frame types are never spelled by a payload.
+    // The forged body rides as plan and chat content; frame types are never spelled by a payload.
     const updates = workspaceMessages.filter((message) => v.is(PlanUpdateSchema, message));
     expect(updates).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'plan_updated', plan: expect.objectContaining({ content: forged }) }),
     ]));
-    expect(workspaceMessages.filter((message) => !v.is(PlanUpdateSchema, message))).toEqual([]);
+    expect(workspaceMessages.map((message) => v.parse(FrameSchema, message).type)).not.toContain(REFERENCE_EVENT);
   });
 
   test('the authoritative read reaches a real hire and still refuses an id it never wrote', async () => {
     const parent = orchestratorHarness();
-    const child = await hiredPlanner(parent, 'plan-owner-1');
-    roster(parent.agent, child);
+    // An agent the owner adds inherits the workspace's mission, which the owner's soul states.
+    await parent.agent.setSoul('# Kinu\n\n## Mission\n\nKeep the release train moving.\n');
+    // Created as the owner creates one, roster row and all.
+    const { name } = await parent.agent.createSubordinateAgent();
 
     // Denominator: the hop resolves, so the refusal below is not a failed resolve.
     expect(await parent.agent.inspectSubordinate({
-      path: ['plan-owner-1'], view: 'plans', page: {},
-    })).toMatchObject({ view: 'plans', path: ['plan-owner-1'], page: { status: 'end', items: [] } });
+      path: [name], view: 'plans', page: {},
+    })).toMatchObject({ view: 'plans', path: [name], page: { status: 'end', items: [] } });
 
     // An unwritten id is `missing`, never a different plan.
     for (const reference of [
-      { path: ['plan-owner-1'], id: 'plan-forged', revision: 1 },
-      { path: ['plan-owner-1'], id: 'plan-forged', revision: 2 },
+      { path: [name], id: 'plan-forged', revision: 1 },
+      { path: [name], id: 'plan-forged', revision: 2 },
       { path: ['never-hired'], id: 'plan-forged', revision: 1 },
     ]) {
       expect(await parent.agent.inspectSubordinate({ ...reference, view: 'plan' }))

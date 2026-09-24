@@ -171,18 +171,13 @@ function TuiPreview(): ReactElement {
               <span className="p-accent">{TUI_MARKS.userGutter}</span>
               <p className="p-text">{agent.prompt}</p>
             </div>
-            <div className="mt-6 grid grid-cols-[1ch_minmax(0,1fr)] gap-1">
-              <span aria-hidden="true" className="border-l p-border" />
-              <div className="min-w-0">
-                <p className="p-text-3">Agent activity · {agent.tools.length} calls</p>
-                {agent.tools.map(([tool, args, result], index) => (
-                  <div key={`${tool}-${args}`}>
-                    {index > 0 && <p aria-hidden="true" className="overflow-hidden whitespace-nowrap p-text-4">{'┄'.repeat(160)}</p>}
-                    <p className="truncate"><span className="p-accent">{TUI_MARKS.toolCall}</span> <span className="p-text">{tool}</span> <span className="p-text-4">{args}</span></p>
-                    <p className="pl-[2ch] p-text-4">{TUI_MARKS.toolResult} <span className="p-success">{result}</span></p>
-                  </div>
-                ))}
-              </div>
+            <div className="mt-6 min-w-0">
+              {agent.tools.map(([tool, args, result]) => (
+                <div key={`${tool}-${args}`}>
+                  <p className="truncate"><span className="p-accent">{TUI_MARKS.toolCall}</span> <span className="p-text">{tool}</span> <span className="p-text-4">{args}</span></p>
+                  <p className="pl-[2ch] p-text-4">{TUI_MARKS.toolResult} <span className="p-success">{result}</span></p>
+                </div>
+              ))}
             </div>
             <div data-tui-role="assistant" className="mt-6">
               <p className="p-text">{agent.answer}</p>

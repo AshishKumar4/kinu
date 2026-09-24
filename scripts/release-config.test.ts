@@ -59,7 +59,7 @@ import { parseJsonc } from './jsonc';
 import { readRepositoryFile, trackedFiles } from './sources';
 // The config module itself, not its text: the failure being guarded is a hook
 // that exists and decides the wrong thing, which no source-text assertion sees.
-import viteConfig from '../packages/cf-backend/vite.config';
+import viteConfigFor from '../packages/cf-backend/vite.config';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
@@ -82,7 +82,7 @@ const LEAN_VERIFY = '.github/workflows/lean-verify.yml';
  * held below against the dependency that actually ships. The image itself is the
  * block layer built on that upstream base: `packages/devbox/block-lower/Dockerfile`
  * compiles `devbox-block-lower` and `devbox-squashfuse` into the upstream
- * `docker.io/cloudflare/sandbox@sha256:822501de…` base and the result is pushed
+ * `docker.io/cloudflare/sandbox@sha256:4a56a37a…` base and the result is pushed
  * to this account's registry, so `digest` is the pushed manifest's digest — the
  * same sha256 both wrangler blocks carry — rather than a tag resolution.
  *
@@ -92,8 +92,8 @@ const LEAN_VERIFY = '.github/workflows/lean-verify.yml';
  */
 const SANDBOX_IMAGE = {
   repository: 'registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer',
-  version: '0.12.8',
-  digest: 'sha256:3b11f7bf756af01664663f05fd1f3c1721dababc6a4fcf2bfa047d341d9b6a9e',
+  version: '0.12.9',
+  digest: 'sha256:c2c03bdf3b46d22633ffdeab545953d7c0caa0fb562d36e70ebdd4618898c718',
 } as const;
 
 const PINNED_IMAGE = `${SANDBOX_IMAGE.repository}@${SANDBOX_IMAGE.digest}`;
@@ -191,7 +191,8 @@ describe("the deployed Worker's stack traces are readable", () => {
   // assertion here would pass over a hook that returns the wrong thing, and the
   // whole failure being guarded is a flag whose other half is missing.
   test('the vite build emits worker source maps and leaves the client without', () => {
-    const plugins = (viteConfig.plugins ?? []).flatMap((plugin) => {
+    // As `vite build` resolves it: the release is a build.
+    const plugins = (viteConfigFor({ command: 'build', mode: 'production' }).plugins ?? []).flatMap((plugin) => {
       const parsed = v.safeParse(EnvironmentScopedPluginSchema, plugin);
 
       return parsed.success ? [parsed.output] : [];

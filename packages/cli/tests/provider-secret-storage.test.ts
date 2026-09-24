@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { parseJsonObject, type JsonObject } from '@kinu.run/core';
+import * as v from 'valibot';
 
 function kinuHome(config: JsonObject): string {
   const home = scratchDir('secret-home');
@@ -12,6 +13,10 @@ function kinuHome(config: JsonObject): string {
 
   return home;
 }
+
+const DefaultTierSchema = v.object({
+  localProfile: v.object({ catalog: v.object({ tiers: v.object({ default: v.object({ model: v.string() }) }) }) }),
+});
 
 function storedConfig(home: string): JsonObject {
   return parseJsonObject(readFileSync(join(home, 'config.json'), 'utf8'));
@@ -21,16 +26,19 @@ function storedConfig(home: string): JsonObject {
 async function runStore(home: string, opts: { local: boolean; origin?: string; endpoint?: string }) {
   const provider = opts.endpoint === undefined ? 'openrouter' : 'openai-compatible';
 
+  // An endpoint's model is named up front: these endpoints are unreachable on purpose, so nothing may probe them.
   const answers = opts.endpoint === undefined
     ? ['sk-or-secret', 'anthropic/claude-x']
-    : [opts.endpoint, 'sk-or-secret', 'gpt-oss:20b'];
+    : [opts.endpoint, 'sk-or-secret'];
+
+  const model = opts.endpoint === undefined ? {} : { model: 'gpt-oss:20b' };
 
   const runner = `
     const { connectProvider } = await import('./packages/cli/src/commands/provider-connect.ts');
     const answers = ${JSON.stringify(answers)};
     const port = { report: () => {}, ask: async () => answers.shift() ?? '' };
     try {
-      const outcome = await connectProvider(${JSON.stringify(provider)}, port, { local: ${opts.local} });
+      const outcome = await connectProvider(${JSON.stringify(provider)}, port, { ...${JSON.stringify(model)}, local: ${opts.local} });
       console.log('WHERE:' + (outcome.summary.includes('your Kinu account') ? 'account' : 'local'));
     } catch (e) {
       console.log('THREW:' + e.message);
@@ -91,7 +99,8 @@ describe('where a provider secret is written', () => {
 
       const config = storedConfig(home);
       expect(JSON.stringify(config)).not.toContain('sk-or-secret');
-      expect(config.model).toBe('openrouter/anthropic/claude-x');
+      // The first connect on a machine names its default.
+      expect(v.parse(DefaultTierSchema, config).localProfile.catalog.tiers.default.model).toBe('openrouter/anthropic/claude-x');
     } finally {
       await server.stop(true);
     }

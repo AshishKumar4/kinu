@@ -5,17 +5,18 @@
 
 import { describe, test, expect } from 'bun:test';
 import {
-  snapshotWorkspaceForFork, writeForkSnapshot, readForkLineage, summarizeSoul, SOUL_PATH,
+  readForkLineage, SOUL_PATH,
   ForkTargetWriter, ForkTransferReceiver, NativeSinkPlan, forkTransferFrames, sealForkFrame,
   FORK_TRANSFER_VERSION, FORK_STREAM_SEED, FORK_FRAME_BYTES, foldForkStream,
   type ForkFileSink, type ForkNativeFilePort,
   type ForkFileSource,
-  type ForkSectionCounts, type ForkSnapshot, type ForkFrame, type ForkWriteTarget, type UnsealedForkFrame,
+  type ForkSectionCounts, type ForkFrame, type ForkWriteTarget, type UnsealedForkFrame,
 } from '../src/index';
 import { createTestWorkspace as fresh, type TestWorkspace } from './helpers';
 import {
   seedForkSource, SOURCE_ARTIFACTS, SPILLED_BYTES, TARGET_ARTIFACTS,
 } from './helpers/fork-conversation';
+import { deliver, reassemble, sinkFor, sourceFrames, type ForkContent } from './helpers/fork-stream';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 
 const OWNER: ForkWriteTarget = {
@@ -79,17 +80,16 @@ async function source(opts: { files?: Array<{ path: string; content: string }>; 
   return src;
 }
 
-function snapshotOf(src: TestWorkspace, untilMessageId: string): Promise<ForkSnapshot> {
-  return snapshotWorkspaceForFork({
-    sql: src.sql, vfs: src.vfs, untilMessageId, artifactDirectory: SOURCE_ARTIFACTS,
-  });
+/** What the source's own stream carries for a cut, section by section. */
+async function snapshotOf(src: TestWorkspace, untilMessageId: string): Promise<ForkContent> {
+  return reassemble(await sourceFrames(src, untilMessageId));
 }
 
 /**
  * Hand-build the frame stream for a snapshot. Row batches are cut by count, not bytes, so
  * "drop frame 4" and "reorder two sections" stay expressible.
  */
-function framesFor(snapshot: ForkSnapshot, opts: {
+function framesFor(snapshot: ForkContent, opts: {
   transferId?: string; rowsPerFrame?: number; fileBytes?: number;
 } = {}): ForkFrame[] {
   const transferId = opts.transferId ?? 'tx-1';
@@ -180,49 +180,6 @@ function framesFor(snapshot: ForkSnapshot, opts: {
   return out;
 }
 
-/** A sink that reassembles each file in memory and publishes it to the target's plane. */
-function sinkFor(tgt: TestWorkspace): ForkFileSink {
-  const ranges = new Map<string, Uint8Array[]>();
-
-  return {
-    async beginFile(path, staged) {
-      // Nothing here persists or evicts, so an adopting call would be a test defect.
-      if (staged !== 0) throw new Error(`test sink cannot adopt ${staged} staged bytes of ${path}`);
-      ranges.set(path, []);
-    },
-    async writeRange(path, _offset, bytes) { ranges.get(path)?.push(bytes.slice()); },
-    async stagedDigest(path, bytes) {
-      const parts = ranges.get(path) ?? [];
-      const size = parts.reduce((n, part) => n + part.byteLength, 0);
-
-      if (size !== bytes) throw new Error(`test sink staged ${size} bytes of ${path}, not ${bytes}`);
-      const hash = new Bun.CryptoHasher('sha256');
-
-      for (const part of parts) hash.update(part);
-
-      return hash.digest('hex');
-    },
-    async commitFile(path) {
-      const parts = ranges.get(path) ?? [];
-      const size = parts.reduce((n, part) => n + part.byteLength, 0);
-      const bytes = new Uint8Array(size);
-      let at = 0;
-
-      for (const part of parts) { bytes.set(part, at); at += part.byteLength; }
-
-      const content = new TextDecoder().decode(bytes);
-      const directory = path.slice(0, path.lastIndexOf('/'));
-
-      if (directory) await tgt.vfs.mkdir(directory, { recursive: true });
-      await tgt.vfs.writeFile(path, content);
-      ranges.delete(path);
-
-      return path === SOUL_PATH ? { mission: summarizeSoul(content) } : {};
-    },
-    async abortFile(path) { ranges.delete(path); },
-  };
-}
-
 function receiverFor(tgt: TestWorkspace, opts: Partial<ForkWriteTarget> = {}): ForkTransferReceiver {
   return new ForkTransferReceiver(new ForkTargetWriter(tgt.sql, tgt.vfs, { ...OWNER, ...opts }), sinkFor(tgt));
 }
@@ -277,19 +234,18 @@ function stagingNativePort(
 }
 
 describe('fork transfer receiver', () => {
-  test('a streamed transfer lands exactly what the in-process write lands', async () => {
+  test('how frames are batched never changes what lands', async () => {
     const src = await source();
-    const streamed = fresh();
-    const direct = fresh();
-    const snapshot = await snapshotOf(src, 'm2');
+    const rebatched = fresh();
+    const native = fresh();
 
-    const outcomes = await drain(receiverFor(streamed), framesFor(snapshot));
+    const outcomes = await drain(receiverFor(rebatched), framesFor(await snapshotOf(src, 'm2')));
     const final = outcomes[outcomes.length - 1];
 
     if (final?.status !== 'published') throw new Error(`expected published, got ${final?.status ?? 'nothing'}`);
     expect(outcomes.slice(0, -1).every((outcome) => outcome.status === 'staged')).toBe(true);
 
-    await writeForkSnapshot(direct.sql, direct.vfs, snapshot, OWNER);
+    await deliver(receiverFor(native), await sourceFrames(src, 'm2'));
 
     const rowsOf = (ws: TestWorkspace) => ({
       entries: ws.sql<{ id: string; parent_id: string | null; role: string }>`
@@ -306,9 +262,9 @@ describe('fork transfer receiver', () => {
       lineage: readForkLineage(ws.sql),
     });
 
-    expect(rowsOf(streamed)).toEqual(rowsOf(direct));
-    expect(await streamed.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toBe('key insight');
-    expect(rowsOf(streamed).entries.map((row) => row.id)).not.toContain('m3');
+    expect(rowsOf(rebatched)).toEqual(rowsOf(native));
+    expect(await rebatched.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toBe('key insight');
+    expect(rowsOf(rebatched).entries.map((row) => row.id)).not.toContain('m3');
   });
 
   test('the counts the source declared are the counts the target staged', async () => {
@@ -1052,7 +1008,7 @@ describe('fork target writer', () => {
     const src = await source();
     const tgt = fresh();
     const snapshot = await snapshotOf(src, 'm1');
-    await writeForkSnapshot(tgt.sql, tgt.vfs, { ...snapshot, contextMembers: [] }, OWNER);
+    await drain(receiverFor(tgt), framesFor({ ...snapshot, contextMembers: [] }));
 
     const selected = tgt.sql<{ context_id: string }>`SELECT context_id FROM actor_context_selection`;
     expect(selected).toHaveLength(1);

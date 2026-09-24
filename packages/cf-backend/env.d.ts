@@ -59,6 +59,8 @@ declare global {
     AI_GATEWAY_URL: string;
     /** Zone for per-port preview hostnames; empty disables previews. */
     PREVIEW_HOST_SUFFIX: string;
+    /** The zone's port when it is not 443; only `vite dev` sets it (vite-preview-zone.ts). */
+    PREVIEW_HOST_PORT?: string;
     /** Static assets; needed for SPA fallback under `run_worker_first`. */
     ASSETS: Fetcher;
     /** Google OAuth client settings. Client secret must be a Wrangler secret. */

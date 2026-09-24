@@ -406,124 +406,156 @@ function minutes(ms: number): string {
   return `${(ms / 60_000).toFixed(0)} min`;
 }
 
-/**
- * The results comment: the verdict and the changed files the evals exercise, one table of every
- * task's scores and deltas, then what failed and why, for the person who has to fix it. What every
- * row shares (the model, the arm, the trial count) is said once.
- */
-export function renderEvalComparison(comparison: EvalComparison): string {
-  const { rows } = comparison;
-  const model = uniform(rows.map((row) => row.model));
-  const arm = uniform(rows.map((row) => row.arm));
-  const trialCounts = uniform(rows.flatMap((row) => [row.baseline?.trials, row.candidate?.trials].filter((count) => count !== undefined)));
+/** What every row shares, said once above the table rather than on every row; null when rows differ. */
+type Shared = { model: string | null; arm: string | null; trials: number | null };
 
-  const name = (row: EvalComparisonRow) => [row.taskId, ...model === null ? [row.model] : [], ...arm === null ? [row.arm] : []].join(' \u00b7 ');
+function sharedBy(rows: readonly EvalComparisonRow[]): Shared {
+  return {
+    model: uniform(rows.map((row) => row.model)),
+    arm: uniform(rows.map((row) => row.arm)),
+    trials: uniform(rows.flatMap((row) => [row.baseline?.trials, row.candidate?.trials].filter((count) => count !== undefined))),
+  };
+}
 
-  const moved = rows.flatMap((row) => row.reason === null && row.pValue < SIGNIFICANCE ? [row] : []);
+function rowName(row: EvalComparisonRow, shared: Shared): string {
+  return [row.taskId, ...shared.model === null ? [row.model] : [], ...shared.arm === null ? [row.arm] : []].join(' \u00b7 ');
+}
 
-  const change = (row: ComparedRow) => `${name(row)} ${String(row.baseline.passed)}/${String(row.baseline.trials)} \u2192 `
+/** The verdict's reason in one sentence: what could not be compared, or which tasks moved. */
+function verdictReason(comparison: EvalComparison, shared: Shared): string {
+  const moved = comparison.rows.flatMap((row) => row.reason === null && row.pValue < SIGNIFICANCE ? [row] : []);
+
+  const change = (row: ComparedRow) => `${rowName(row, shared)} ${String(row.baseline.passed)}/${String(row.baseline.trials)} \u2192 `
     + `${String(row.candidate.passed)}/${String(row.candidate.trials)} (p = ${row.pValue.toFixed(2)})`;
 
-  const falls = moved.filter((row) => passRate(row.candidate) < passRate(row.baseline));
-  const rises = moved.filter((row) => passRate(row.candidate) > passRate(row.baseline));
+  const falls = moved.filter((row) => passRate(row.candidate) < passRate(row.baseline)).map(change);
+  const rises = moved.filter((row) => passRate(row.candidate) > passRate(row.baseline)).map(change);
 
-  const why: Record<EvalVerdict, string> = {
-    inconclusive: `No task can be compared: ${[...new Set(rows.flatMap((row) => row.reason ?? []))].join(', ')}.`,
-    unchanged: `No task moved beyond what ${trialCounts === null ? 'these' : String(trialCounts)} runs can tell apart from noise.`,
-    regressed: [falls.length > 0 ? `Fell: ${falls.map(change).join(', ')}.` : '', rises.length > 0 ? `Rose: ${rises.map(change).join(', ')}.` : ''].join(' ').trim(),
-    improved: `Rose: ${rises.map(change).join(', ')}.`,
-  };
-
-  const files = comparison.changedFiles;
-  const { baseline, candidate } = comparison;
-  let exercised = '';
-
-  if (baseline !== null && files.length === 0) exercised = '**Evals exercise no file this change touches.**';
-
-  if (baseline !== null && files.length > 0) {
-    exercised = `**Evals exercise these changed files:** ${files.slice(0, 8).map((file) => `\`${basename(file)}\``).join(', ')}`
-      + (files.length > 8 ? `, and ${String(files.length - 8)} more` : '');
+  switch (comparison.verdict) {
+    case 'inconclusive': return `No task can be compared: ${[...new Set(comparison.rows.flatMap((row) => row.reason ?? []))].join(', ')}.`;
+    case 'unchanged': return `No task moved beyond what ${shared.trials === null ? 'these' : String(shared.trials)} runs can tell apart from noise.`;
+    case 'improved': return `Rose: ${rises.join(', ')}.`;
+    case 'regressed': return [`Fell: ${falls.join(', ')}.`, ...rises.length > 0 ? [`Rose: ${rises.join(', ')}.`] : []].join(' ');
   }
+}
 
+/** Which changed product files the evals exercise; nothing to say without a baseline. */
+function exercisedLine({ baseline, changedFiles: files }: EvalComparison): string {
+  if (baseline === null) return '';
+
+  if (files.length === 0) return '**Evals exercise no file this change touches.**';
+
+  return `**Evals exercise these changed files:** ${files.slice(0, 8).map((file) => `\`${basename(file)}\``).join(', ')}`
+    + (files.length > 8 ? `, and ${String(files.length - 8)} more` : '');
+}
+
+function buildsLine({ baseline, candidate }: EvalComparison, shared: Shared): string {
   const builds = baseline === null
     ? `Build \`${candidate.productSha.slice(0, 9)}\` on kinu.run, no earlier build to compare against`
     : `Baseline build \`${baseline.productSha.slice(0, 9)}\` vs candidate build \`${candidate.productSha.slice(0, 9)}\`, both on kinu.run`;
 
-  const lines = [
-    '# Eval results', '',
-    `**Verdict: ${VERDICT[comparison.verdict]}.** ${why[comparison.verdict]}`, '',
-    exercised, '',
-    [builds, ...model === null ? [] : [model], ...arm === null ? [] : [`arm ${arm}`],
-      ...trialCounts === null ? [] : [`each task run ${String(trialCounts)} times per build`]].join(' \u00b7 ') + '.',
-    '',
-    '| Task | Baseline | Candidate | \u0394 pass | \u0394 duration | \u0394 tool errors | \u0394 cost | Wall | 429 waits |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
-  ].filter((line, index, all) => line !== '' || all[index - 1] !== '');
+  return [builds, ...shared.model === null ? [] : [shared.model], ...shared.arm === null ? [] : [`arm ${shared.arm}`],
+    ...shared.trials === null ? [] : [`each task run ${String(shared.trials)} times per build`]].join(' \u00b7 ') + '.';
+}
 
-  for (const row of rows) {
-    const deltas = row.reason !== null ? [`_not compared: ${row.reason}_`, '\u2014', '\u2014', '\u2014'] : [
-      passChange(row),
-      signed((row.candidate.meanDurationMs - row.baseline.meanDurationMs) / 1000, 1, ' s'),
-      signed(row.candidate.meanToolErrors - row.baseline.meanToolErrors, 1),
-      costDelta(row.baseline, row.candidate),
-    ];
+const SCORE_TABLE = [
+  '| Task | Baseline | Candidate | \u0394 pass | \u0394 duration | \u0394 tool errors | \u0394 cost | Wall | 429 waits |',
+  '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+];
 
-    const wall = row.candidate === null ? '\u2014' : minutes(row.candidate.slowestTrialMs);
-    const waits = row.candidate === null ? '\u2014' : `${minutes(row.candidate.providerWaitMs)} (\u00d7${String(row.candidate.providerWaits)})`;
-    lines.push(`| ${[name(row), bar(row.baseline), bar(row.candidate), ...deltas, wall, waits].join(' | ')} |`);
-  }
+function scoreRow(row: EvalComparisonRow, shared: Shared): string {
+  const deltas = row.reason !== null ? [`_not compared: ${row.reason}_`, '\u2014', '\u2014', '\u2014'] : [
+    passChange(row),
+    signed((row.candidate.meanDurationMs - row.baseline.meanDurationMs) / 1000, 1, ' s'),
+    signed(row.candidate.meanToolErrors - row.baseline.meanToolErrors, 1),
+    costDelta(row.baseline, row.candidate),
+  ];
 
-  lines.push('', '_Durations leave out time the product spent waiting on the model provider; 429 waits are the '
-    + 'candidate\u2019s total over all runs: the eval account\u2019s rate limit, infrastructure, never a task failure._', '');
+  const wall = row.candidate === null ? '\u2014' : minutes(row.candidate.slowestTrialMs);
+  const waits = row.candidate === null ? '\u2014' : `${minutes(row.candidate.providerWaitMs)} (\u00d7${String(row.candidate.providerWaits)})`;
 
-  lines.push('How the agent worked, per run over every task (information, not scored; the baseline in parentheses):', '',
-    '| Model | Runs | Model steps | Input tokens | Output tokens | `eval` share of tool calls |', '| --- | --- | --- | --- | --- | --- |');
+  return `| ${[rowName(row, shared), bar(row.baseline), bar(row.candidate), ...deltas, wall, waits].join(' | ')} |`;
+}
 
-  for (const { model: profiled, baseline: before, candidate: after } of comparison.profiles) {
+const WAITS_NOTE = '_Durations leave out time the product spent waiting on the model provider; 429 waits are the '
+  + 'candidate\u2019s total over all runs: the eval account\u2019s rate limit, infrastructure, never a task failure._';
+
+/** How the agent worked per model, the baseline in parentheses: information for a prompt or tool change. */
+function profileTable(profiled: EvalComparison['profiles']): string[] {
+  const lines = ['How the agent worked, per run over every task (information, not scored; the baseline in parentheses):', '',
+    '| Model | Runs | Model steps | Input tokens | Output tokens | `eval` share of tool calls |', '| --- | --- | --- | --- | --- | --- |'];
+
+  for (const { model, baseline: before, candidate: after } of profiled) {
     const cell = (value: (side: AgentProfile) => string) => `${value(after)}${before === null ? '' : ` (${value(before)})`}`;
     const share = (side: AgentProfile) => side.evalCallShare === null ? '\u2014' : `${(side.evalCallShare * 100).toFixed(0)}%`;
 
-    lines.push(`| ${[profiled, String(after.runs), cell((side) => side.meanModelTurns.toFixed(1)),
+    lines.push(`| ${[model, String(after.runs), cell((side) => side.meanModelTurns.toFixed(1)),
       cell((side) => tokens(side.meanInputTokens)), cell((side) => tokens(side.meanOutputTokens)), cell(share)].join(' | ')} |`);
   }
 
-  lines.push('');
+  return lines;
+}
 
-  for (const row of rows) {
-    const { candidate: side, baseline: before } = row;
+/** What failed in one task and why, for the person who has to fix it; nothing when every run passed cleanly. */
+function failureSection(row: EvalComparisonRow, shared: Shared): string[] {
+  const { candidate: side, baseline: before } = row;
 
-    if (side === null) continue;
-    const failed = side.trials - side.passed;
+  if (side === null) return [];
+  const failed = side.trials - side.passed;
 
-    if (failed === 0 && side.toolErrors.length === 0) continue;
+  if (failed === 0 && side.toolErrors.length === 0) return [];
+  const outcome = failed === 0 ? `all ${String(side.trials)} runs passed` : `${String(failed)} of ${String(side.trials)} runs failed`;
+  const lines = [`### ${rowName(row, shared)}: ${outcome}`, ''];
 
-    lines.push(`### ${name(row)}: ${failed === 0 ? `all ${String(side.trials)} runs passed` : `${String(failed)} of ${String(side.trials)} runs failed`}`, '');
+  if (side.failedChecks.length > 0) {
+    lines.push('| Check | Baseline failed | Candidate failed |', '| --- | --- | --- |');
 
-    if (side.failedChecks.length > 0) {
-      lines.push('| Check | Baseline failed | Candidate failed |', '| --- | --- | --- |');
-
-      for (const { check, trials: count } of side.failedChecks.slice(0, 8)) {
-        const earlier = before?.failedChecks.find((failure) => failure.check === check)?.trials ?? 0;
-        lines.push(`| \`${check}\` | ${before === null ? '\u2014' : String(earlier)} | ${String(count)} |`);
-      }
-
-      if (side.failedChecks.length > 8) lines.push(`| _${String(side.failedChecks.length - 8)} more checks_ | | |`);
-      lines.push('');
+    for (const { check, trials: count } of side.failedChecks.slice(0, 8)) {
+      const earlier = before?.failedChecks.find((failure) => failure.check === check)?.trials ?? 0;
+      lines.push(`| \`${check}\` | ${before === null ? '\u2014' : String(earlier)} | ${String(count)} |`);
     }
 
-    const [top] = side.toolErrors;
-
-    if (top !== undefined) {
-      const others = side.toolErrors.length - 1;
-      lines.push(`Most common tool error: \`${top.tool}\` ${quoted(top.message, 100)} \u00d7${String(top.count)}`
-        + (others > 0 ? `, and ${String(others)} other kind${others === 1 ? '' : 's'}` : ''), '');
-    }
-
-    if (side.infrastructureErrors.length > 0) {
-      lines.push(`Infrastructure errors, not the agent's work: ${side.infrastructureErrors
-        .map((error) => `${quoted(error.message, 100)} \u00d7${String(error.trials)}`).join(' \u00b7 ')}`, '');
-    }
+    if (side.failedChecks.length > 8) lines.push(`| _${String(side.failedChecks.length - 8)} more checks_ | | |`);
+    lines.push('');
   }
 
-  return lines.join('\n');
+  const [top] = side.toolErrors;
+
+  if (top !== undefined) {
+    const others = side.toolErrors.length - 1;
+    lines.push(`Most common tool error: \`${top.tool}\` ${quoted(top.message, 100)} \u00d7${String(top.count)}`
+      + (others > 0 ? `, and ${String(others)} other kind${others === 1 ? '' : 's'}` : ''), '');
+  }
+
+  if (side.infrastructureErrors.length > 0) {
+    lines.push(`Infrastructure errors, not the agent's work: ${side.infrastructureErrors
+      .map((error) => `${quoted(error.message, 100)} \u00d7${String(error.trials)}`).join(' \u00b7 ')}`, '');
+  }
+
+  return lines;
+}
+
+/**
+ * The results comment: the verdict and the changed files the evals exercise, one table of every
+ * task's scores and deltas, how the agent worked per model, then what failed and why, for the
+ * person who has to fix it. What every row shares (the model, the arm, the trial count) is said once.
+ */
+export function renderEvalComparison(comparison: EvalComparison): string {
+  const shared = sharedBy(comparison.rows);
+
+  const header = [
+    '# Eval results', '',
+    `**Verdict: ${VERDICT[comparison.verdict]}.** ${verdictReason(comparison, shared)}`, '',
+    exercisedLine(comparison), '',
+    buildsLine(comparison, shared), '',
+  ].filter((line, index, all) => line !== '' || all[index - 1] !== '');
+
+  return [
+    ...header,
+    ...SCORE_TABLE,
+    ...comparison.rows.map((row) => scoreRow(row, shared)), '',
+    WAITS_NOTE, '',
+    ...profileTable(comparison.profiles), '',
+    ...comparison.rows.flatMap((row) => failureSection(row, shared)),
+  ].join('\n');
 }

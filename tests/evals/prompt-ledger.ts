@@ -145,6 +145,29 @@ export function textOf(value: JsonValue | undefined): string {
   return text.success ? text.output : JSON.stringify(value);
 }
 
+/** A task hire's own answer, off its settled result; null when it never settled with one. */
+export function hireAnswer(call: ToolCallEnd): string | null {
+  const settled = v.safeParse(SettledHireSchema, call.result);
+
+  return settled.success ? settled.output.answer : null;
+}
+
+const SettledHireSchema = v.looseObject({ status: v.literal('completed'), answer: v.string() });
+
+/** Whether `line` relays what a helper `said`, and what it said is `fact`. Words compare without case or
+ *  punctuation: a helper answers "Three." as often as "three", and the lead that wrote the fact into the
+ *  mission can state it unaided, so only the helper's own recorded words prove a relay. */
+export function relaysAnswer(line: string, said: string | null, fact: string): boolean {
+  if (said === null || !line.includes('RELAYED')) return false;
+  const heard = wordsOf(said);
+
+  return heard.join(' ') === wordsOf(fact).join(' ') && ` ${wordsOf(line).join(' ')} `.includes(` ${heard.join(' ')} `);
+}
+
+function wordsOf(text: string): readonly string[] {
+  return text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
 /** The last thing the agent SAID — the durable transcript's final assistant
  *  row, which is what a person reads in the pane. */
 export function reply(history: readonly PublicMessage[]): string {

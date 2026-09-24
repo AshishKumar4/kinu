@@ -27,13 +27,13 @@ export interface SearchNode {
   code_used: string | null;
   code_language: string | null;
   visits: number;
-  /** Mean return in [0, 1], initialized to 0. */
+  /** Subtree mean in [0, 1], initialized to 0. */
   value: number;
   depth: number;
   status: NodeStatus;
   msg_id: string | null;
   branch_agent_key: string | null;
-  /** Null for a node never evaluated (the root; a swarm node). */
+  /** Null for the root, a failed evaluation and a swarm node. */
   evaluation_json: string | null;
   created_at: number;
 }

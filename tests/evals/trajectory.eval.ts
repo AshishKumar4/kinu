@@ -109,8 +109,8 @@ import {
 } from './public-session';
 import { tolerate } from '../../packages/core/src/obs/index';
 import {
-  awaitDetachedJobWakes, fileActionOn, isToolCallEnd, promptToolCalls,
-  requireMeasuredToolOutcomes, toolActionOn,
+  awaitDetachedJobWakes, fileActionOn, hireAnswer, isToolCallEnd, promptToolCalls,
+  relaysAnswer, reply, requireMeasuredToolOutcomes, toolActionOn,
 } from './prompt-ledger';
 import { DEGENERATE_EVENTS, LEDGER_EVENTS } from './fixtures/public-session-frames';
 
@@ -572,8 +572,8 @@ const CASES: readonly TrajectoryCase[] = [
 
       requireMeasuredToolOutcomes(hires);
 
-      const answers = history.filter((row) => row.role === 'assistant');
-      const lastAnswer = answers.at(-1)?.text ?? '';
+      const lastAnswer = reply(history);
+      const said = hires.map(hireAnswer).find((answer) => answer !== null) ?? null;
 
       return [
         {
@@ -583,8 +583,8 @@ const CASES: readonly TrajectoryCase[] = [
         },
         {
           what: 'relayed-second-turn',
-          reached: lastAnswer.includes('RELAYED') && lastAnswer.includes('three'),
-          detail: `the second answer: ${JSON.stringify(lastAnswer.slice(0, 160))}`,
+          reached: relaysAnswer(lastAnswer, said, 'three'),
+          detail: `the helper said ${JSON.stringify(said)}; the second answer: ${JSON.stringify(lastAnswer.slice(0, 160))}`,
         },
       ];
     },

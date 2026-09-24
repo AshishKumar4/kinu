@@ -16,10 +16,7 @@ export interface SanitizeOptions {
 	stopWords?: boolean;
 }
 
-/**
- * Terms an FTS query reduces to (operators and, unless disabled, stop words removed). Exported so
- * non-SQL lexical matchers share the same query normalization.
- */
+/** Terms an FTS query reduces to (operators and, unless disabled, stop words removed). */
 export function ftsQueryTerms(query: string, options?: SanitizeOptions): string[] {
 	const useStopWords = options?.stopWords ?? true;
 

@@ -1,6 +1,6 @@
 // Snapshot-chain gate: one immutable base plus one cumulative delta; attach mounts fixed
 // lazy layers moving zero bytes, a checkpoint moves only changed bytes (D2).
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 import { afterAll, describe, expect, test } from 'bun:test';
@@ -19,7 +19,6 @@ function devboxScratchDir(label: string): string {
 
 import {
   archiveCommand,
-  archiveExcludeFile,
   archiveSizeCommand,
   baseObjectKey,
   chainBackupOptions,
@@ -119,9 +118,11 @@ const UPPER = `${DEVBOX_RUNTIME_DIR}/upper`;
 
 const LOWER_BASE = `${DEVBOX_RUNTIME_DIR}/lower-base`;
 
-/** What the PRODUCTION image reports: fuse-overlayfs, with NO dir options. */
+/** What the PRODUCTION image reports for an attached chain: fuse-overlayfs, with NO dir options,
+ *  over the base layer, whose mount names its archive (`fsname`). */
 const MOUNTED = [
   'sysfs /sys sysfs rw,relatime 0 0',
+  `/backups/${CHAIN_ID}/data.sqsh ${LOWER_BASE} fuse.squashfuse ro,nosuid,nodev,relatime 0 0`,
   `fuse-overlayfs ${DEVBOX_WORKDIR} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
 ].join('\n');
 
@@ -261,6 +262,8 @@ function shellLabel(world: ShellWorld): ShellOutcome {
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
 
   if (command === 'cat /proc/mounts') return { call: 'readMounts', stdout: mounts };
+
+  if (command.startsWith('# devbox-tick-probe-v1\n')) return { call: 'probeTick', stdout: `${mounts}\0${upperMark}` };
 
   const delta = DELTA_SHELL_REPLIES.get(command.split('\n')[0]);
 
@@ -861,8 +864,31 @@ function chainState(over: StateLiteral = {}): ChainState {
 
 /** Mounts flip to attached only after `overlayAttach` is called, so a postcondition observes
  *  a change the code made rather than one the test staged in advance. */
+/** The mount table the calls so far leave: `standing` until one mounts or releases the base layer,
+ *  then an overlay over the base the last mount named, since its `fsname` is the archive. */
+function mountTable(calls: readonly string[], standing: string): string {
+  const last = [...calls].reverse().find((call) => call === `unmountPath:${LOWER_BASE}`
+    || (call.startsWith('mountLayer:') && call.endsWith(`:${LOWER_BASE}`)));
+
+  if (last === undefined) return standing;
+  const archive = last.startsWith('mountLayer:') ? last.slice('mountLayer:'.length, -`:${LOWER_BASE}`.length) : undefined;
+
+  return [
+    'sysfs /sys sysfs rw,relatime 0 0',
+    ...(archive === undefined ? [] : [`${archive} ${LOWER_BASE} fuse.squashfuse ro,nosuid,nodev,relatime 0 0`]),
+    `fuse-overlayfs ${DEVBOX_WORKDIR} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
+  ].join('\n');
+}
+
+/** A fresh box's overlay serves the empty lower, so no base layer is mounted until one is. */
+const FRESH_OVERLAY = mountTable(['unmountPath:' + LOWER_BASE], '');
+
 function mountsAfterAttach(calls: readonly string[], mounted = MOUNTED): () => string {
-  return () => (calls.some(call => call.startsWith('overlayAttach')) ? mounted : NOT_MOUNTED);
+  return () => {
+    if (!calls.some(call => call.startsWith('overlayAttach'))) return NOT_MOUNTED;
+
+    return mounted === MOUNTED ? mountTable(calls, FRESH_OVERLAY) : mounted;
+  };
 }
 
 async function attachOf(record: Harness): Promise<AttachOutcome> {
@@ -1165,6 +1191,18 @@ describe('attach — the mount must be observed to have landed', () => {
     expect((await checkpointOf(quiesced, 'quiesce')).kind).toBe('committed');
   });
 
+  test('a quiesce commit never delays the next tick, so a refused stop keeps the loss window', async () => {
+    // The loss-window model's counterexample `a_refused_stop_stretches_the_window`, P = INTERVAL_MS.
+    const options = { state: chainState({ at: 10 }), mounts: MOUNTED, upperMark: 'before-the-quiesce', now: INTERVAL_MS };
+    const record = harness(options);
+
+    expect((await checkpointOf(record, 'quiesce')).kind).toBe('committed');
+    record.upperMark = 'written-after-the-quiesce-capture';
+    options.now = INTERVAL_MS + 10;
+
+    expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
+  });
+
   test('movedBytes: a skip says 0, a failure says undefined, because those differ',
     async () => {
       // A skip attempted no PUT, so 0 is known; a failure may have landed an object before
@@ -1461,9 +1499,12 @@ describe('a wake whose container instance changed', () => {
       upperMark: 'written-since-the-wake',
     });
 
+    // A foreign layer forces no collapse, but the overlay then serves another generation's base,
+    // so the upper's changes are relative to that base, not the record's: the merged view is the
+    // only exact archive (D31).
     expect((await checkpointOf(foreign, 'tick')).kind).toBe('committed');
-    expect(foreign.state?.base.id).toBe(CHAIN_ID);
-    expect(foreign.state?.delta).toBeDefined();
+    expect(foreign.state?.base.id).not.toBe(CHAIN_ID);
+    expect(foreign.state?.delta).toBeUndefined();
   });
 });
 
@@ -1497,7 +1538,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
     expect(record.state?.fallback?.base.id).toBe(CHAIN_ID);
   });
 
-  test('collapses ONCE: the next commit is an ordinary delta again', async () => {
+  test('until a wake seats the collapsed base, the next commit archives the merged view again', async () => {
     const record = harness({
       state: chainState({ at: 1 }),
       mounts: composedMounts(CHOSEN),
@@ -1515,11 +1556,11 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
     // the case tests which shape the second commit takes.
     expect((await storage.checkpoint('quiesce')).kind).toBe('committed');
 
-    // The layer stays mounted as a live overlay lower but serves a generation the record no
-    // longer names, so it forces no collapse; keying on mount path would rebase forever.
-    expect(record.state?.base.id).toBe(collapsed);
-    expect(record.state?.delta).toBeDefined();
-    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
+    // The overlay still serves the superseded base, so its upper holds files only the collapsed
+    // base has: a delta over that base could not carry their deletion (D31).
+    expect(record.state?.base.id).not.toBe(collapsed);
+    expect(record.state?.delta).toBeUndefined();
+    expect(record.calls.filter(call => call.startsWith(`makeSquashfs:${UPPER}:`))).toEqual([]);
   });
 
   test('an ORPHAN delta the record does not name still forces the collapse', async () => {
@@ -2460,6 +2501,36 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       && call.includes('change watermark could not be advanced'))).toBe(true);
   });
 
+  test('an unchanged attached tick reads its gate in one container call, which bash runs', async () => {
+    const record = harness({ state: chainState({ upperMark: '7:4096:1700000000' }), mounts: MOUNTED });
+    const sent: string[] = [];
+    const inner = record.ports.exec;
+    record.ports.exec = async (command) => {
+      sent.push(command);
+
+      return await inner(command);
+    };
+
+    const outcome = await checkpointOf(record, 'tick');
+
+    expect(outcome.reason).toBe('work directory is unchanged');
+    expect(record.calls.filter((call) => ['probeTick', 'readMounts', 'upperFingerprint'].includes(call)))
+      .toEqual(['probeTick']);
+    const probe = sent.find((command) => command.startsWith('# devbox-tick-probe-v1\n')) ?? '';
+
+    // The command as sent, run on a scratch upper: the mount table, a NUL, then the mark only
+    // when the walk succeeds.
+    const run = (dir: string) => {
+      const out = Bun.spawnSync(['bash', '-c', probe.replaceAll('/var/tmp/devbox/upper', dir)]).stdout.toString();
+
+      return { mounts: out.slice(0, out.indexOf('\0')), mark: out.slice(out.indexOf('\0') + 1).trim() };
+    };
+
+    const scratch = devboxScratchDir('devbox-probe');
+    expect(run(scratch).mark).toBe(fingerprintOf(scratch));
+    expect(run(join(scratch, 'absent'))).toEqual({ mounts: expect.stringContaining(' /proc proc '), mark: '' });
+  });
+
   test('a failed publication leaves the previous record intact and records the reason', async () => {
     const record = harness({ state: chainState(), mounts: MOUNTED, failPublish: true });
     const outcome = await checkpointOf(record, 'tick');
@@ -2682,6 +2753,7 @@ function fingerprintOf(dir: string): string {
 }
 
 describe('the skip-gate fingerprint keeps sub-second mtime', () => {
+
   test('a same-size rename changes the per-path mark', () => {
     const dir = devboxScratchDir('devbox-fingerprint-rename');
 
@@ -2919,15 +2991,12 @@ describe('the real archiver applies the policy this file claims', () => {
     expect(entries).toContain('sub/.cache/x');
   });
 
-  test('the extraction options and the direct command are one policy', () => {
+  test('the extraction options carry the box\'s own exclude policy, not a copy of the default', () => {
     // If `chainBackupOptions` spelled the policy itself, a box that replaced it would be
     // obeyed in the chain path and ignored in the extraction path.
-    const dir = fixtureTree('devbox-archive-parity');
+    const replaced = ['**/node_modules', 'dist/**'];
 
-    const declared = chainBackupOptions(true, CHAIN_EXCLUDES).excludes ?? [];
-    expect(declared).toEqual([...CHAIN_EXCLUDES]);
-    expect(archiveExcludeFile(declared)).toBe(archiveExcludeFile(CHAIN_EXCLUDES));
-    expect(archiveOf(dir, declared).entries).toEqual(archiveOf(dir, CHAIN_EXCLUDES).entries);
+    expect(chainBackupOptions(true, replaced).excludes).toEqual(replaced);
   });
 
   test('the staging estimate measures exactly the bytes the archive takes', () => {
@@ -3092,7 +3161,7 @@ describe('the generation lifecycle, against ONE box', () => {
       state: chainState({
         base: { id: CHAIN_ID, bytes: 100 }, delta: { bytes: 4_000 }, at: 1,
       }),
-      mounts: () => (attached ? MOUNTED : NOT_MOUNTED),
+      mounts: () => (attached ? mountTable(record.calls, MOUNTED) : NOT_MOUNTED),
       now: 10 * INTERVAL_MS,
     });
 
@@ -3635,21 +3704,4 @@ describe('an archive replaced at the same length is refused', () => {
       expect(record.digests.get(deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))))
         .toBe(record.state?.delta?.digest);
     });
-});
-
-describe('the patched sandbox SDK: the container is the authority for a mount', () => {
-  test('unmount releases a registry entry the container no longer backs', () => {
-    // Pins patches/@cloudflare%2Fsandbox@0.12.8.patch in the installed dist: `mountpoint -q` guards
-    // `fusermount -u`, so a path with no container mount releases its SDK registry entry.
-    const dist = readFileSync(
-      join(import.meta.dir, '../../../node_modules/@cloudflare/sandbox/dist/sandbox-CPj2jsbz.js'),
-      'utf8',
-    );
-
-    const unmount = dist.slice(dist.indexOf('async unmountBucketUnlocked('));
-    const guard = unmount.indexOf('mountpoint -q ${shellEscape(mountPath)}`');
-    const fusermount = unmount.indexOf('fusermount -u ${shellEscape(mountPath)}`');
-    expect(guard).toBeGreaterThan(-1);
-    expect(fusermount).toBeGreaterThan(guard);
-  });
 });

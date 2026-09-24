@@ -1,13 +1,14 @@
-/** Unit tests for forkWorkspaceStorage over two in-memory bun:sqlite handles, seeded through the
- *  production schema, filesystem and session writers. */
+/** A fork over two in-memory bun:sqlite handles, seeded through the production schema, filesystem and
+ *  session writers, and carried by the production frame stream into the production receiver. */
 
 import { describe, test, expect } from 'bun:test';
-import { forkWorkspaceStorage, readForkLineage, readSoul } from '../src/index';
+import { readForkLineage, readSoul } from '../src/index';
 import { createTestWorkspace as fresh, type TestWorkspace } from './helpers';
 import {
   ForkConversation, readChain, readWorkingContext, seedForkSource, seedForkTarget,
   SOURCE_ARTIFACTS, SPILLED_BYTES, TARGET_ARTIFACTS,
 } from './helpers/fork-conversation';
+import { streamFork } from './helpers/fork-stream';
 import { forkFilePaths, type ForkFilePath } from '../src/identity/fork';
 import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../src/config/store';
 import type { VFS } from '../src/types/primitives';
@@ -16,20 +17,18 @@ import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 function forkInto(src: TestWorkspace, tgt: TestWorkspace, opts: {
   untilMessageId: string; targetWorkspaceId?: string; targetWorkspaceName?: string; now?: number;
 }) {
-  return forkWorkspaceStorage(src, tgt, {
-    untilMessageId: opts.untilMessageId,
-    targetWorkspaceId: opts.targetWorkspaceId ?? 'TGT',
-    targetWorkspaceName: opts.targetWorkspaceName ?? 'my-fork',
-    sourceArtifactDirectory: SOURCE_ARTIFACTS,
-    targetArtifactDirectory: TARGET_ARTIFACTS,
+  return streamFork(src, tgt, {
+    workspaceId: opts.targetWorkspaceId ?? 'TGT',
+    workspaceName: opts.targetWorkspaceName ?? 'my-fork',
+    artifactDirectory: TARGET_ARTIFACTS,
     now: opts.now ?? Date.now(),
-  });
+  }, { untilMessageId: opts.untilMessageId, artifactDirectory: SOURCE_ARTIFACTS });
 }
 
 /** Ids of everything the fork authored, so assertions need not spell the marker's generated id. */
 const inherited = (ids: readonly string[]): string[] => ids.filter((id) => !id.startsWith('fork-marker-'));
 
-describe('forkWorkspaceStorage', () => {
+describe('a workspace fork', () => {
   test('carries the cut point\'s ancestry and nothing past it', async () => {
     const src = fresh();
     const tgt = fresh();
@@ -306,10 +305,9 @@ describe('forkWorkspaceStorage', () => {
     await inB.say({ id: 'b3', role: 'user', text: 'in B' });
     await inB.say({ id: 'b4', role: 'assistant', text: 'from B' });
 
-    await forkWorkspaceStorage(b, c, {
-      untilMessageId: 'b4', targetWorkspaceId: 'C-ID', targetWorkspaceName: 'agent-C', now: 7000,
-      sourceArtifactDirectory: TARGET_ARTIFACTS, targetArtifactDirectory: TARGET_ARTIFACTS,
-    });
+    await streamFork(b, c, {
+      workspaceId: 'C-ID', workspaceName: 'agent-C', artifactDirectory: TARGET_ARTIFACTS, now: 7000,
+    }, { untilMessageId: 'b4', artifactDirectory: TARGET_ARTIFACTS });
 
     expect(inherited((await readChain(c)).ids)).toEqual(['a1', 'a2', 'b3', 'b4']);
     const lineage = readForkLineage(c.sql);

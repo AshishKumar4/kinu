@@ -9,7 +9,8 @@ import {
 } from '@kinu.run/core';
 import { createTestActors, toolExecute, type TestActors } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
-import { localTransactions, makeWorkspaceSchemaSql } from '../src/runtime';
+import { makeWorkspaceSchemaSql } from '../src/runtime';
+import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
 
 interface ExecuteToolResult {
   result: JsonValue | undefined;
@@ -29,8 +30,8 @@ function sandbox(): Sandbox {
   const db = new Database(':memory:');
   // Production adapters: `makeSql` decides whether a `RETURNING` write executes on this backend.
   const schemaSql = makeWorkspaceSchemaSql(db);
-  // The workspace's own `localTransactions`: a copied primitive would agree with production by construction.
-  const transactions = localTransactions(db).storage;
+  // The workspace's own transactions: a copied primitive would agree with production by construction.
+  const transactions = inlineWorkspaceStorage(db).transactions.storage;
 
   if (transactions === undefined) {
     throw new Error('the local workspace exposes no synchronous transaction, so batch atomicity cannot be measured');

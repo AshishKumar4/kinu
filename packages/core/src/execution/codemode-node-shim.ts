@@ -1,7 +1,8 @@
 /**
  * Source of the Node-convenience module loaded beside an `eval` program; plain JS because it runs inside the
- * sandbox isolate. `fs`/`child_process` are shimmed over `workspace`; `createFetch` turns the egress entrypoint's
- * marked 502 back into a rejection; `defineCrafted` isolates each crafted tool (`[crafted:<name>]` marker).
+ * sandbox isolate. `fs`/`child_process` are shimmed over `workspace`, and `process.cwd()` answers the working
+ * root the host resolves relative paths against; `createFetch` turns the egress entrypoint's marked 502 back
+ * into a rejection; `defineCrafted` isolates each crafted tool (`[crafted:<name>]` marker).
  */
 
 export const KINU_NODE_MODULE_NAME = 'kinu-node.js';
@@ -28,13 +29,13 @@ export async function loadBuiltins() {
 }
 
 function refusalOf(result) {
-  if (result && typeof result === 'object' && typeof result.error === 'string' && typeof result.reason === 'string') {
-    return result.error;
-  }
+  const refused = (value) => value && typeof value === 'object' && typeof value.error === 'string'
+    && (value.success === false || typeof value.reason === 'string');
+  if (refused(result)) return result.error;
   if (typeof result === 'string' && result.startsWith('{')) {
     try {
       const parsed = JSON.parse(result);
-      if (parsed && typeof parsed.error === 'string' && typeof parsed.reason === 'string') return parsed.error;
+      if (refused(parsed)) return parsed.error;
     } catch {
       return null;
     }
@@ -42,8 +43,31 @@ function refusalOf(result) {
   return null;
 }
 
-function fsError(code, message, path, syscall) {
-  const error = new Error(code + ': ' + message + (path === undefined ? '' : ", '" + path + "'"));
+/** A relative path joined onto the working root, as the host would resolve it; an absolute or empty one as given. */
+function resolveAt(cwd, path) {
+  const text = String(path);
+  if (text === '' || text.startsWith('/')) return text;
+  const segments = [];
+  for (const segment of (cwd + '/' + text).split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') segments.pop();
+    else segments.push(segment);
+  }
+  return '/' + segments.join('/');
+}
+
+/** The platform's process object plus a working directory: the root relative paths resolve against. */
+export function createProcess(cwd) {
+  const own = { cwd: () => cwd };
+  return globalThis.process ? Object.setPrototypeOf(own, globalThis.process) : own;
+}
+
+/** A Node-shaped error from a host refusal: the errno code the refusal names (else the fallback), and the path. */
+function fsError(fallback, refusal, path, syscall) {
+  const named = /^(E[A-Z]+): /.exec(refusal);
+  const code = named ? named[1] : fallback;
+  const text = named ? refusal.slice(named[0].length) : refusal;
+  const error = new Error(code + ': ' + text + (path === undefined || text.includes("'" + path + "'") ? '' : ", '" + path + "'"));
   error.code = code;
   error.errno = -1;
   error.syscall = syscall;
@@ -53,6 +77,22 @@ function fsError(code, message, path, syscall) {
 
 function shellQuote(value) {
   return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
+
+/** An argument as a suggestion can repeat it: short JSON, else an ellipsis. */
+function shownArg(value) {
+  const json = typeof value === 'function' ? undefined : JSON.stringify(value);
+  return json !== undefined && json.length <= 80 ? json : '…';
+}
+
+/**
+ * A synchronous or streaming Node call. Nothing in the sandbox can block on the workspace (workerd,
+ * 2026-09-23: "Atomics.wait cannot be called in this context"), so it names the awaited replacement.
+ */
+function asyncOnly(name, rewrite) {
+  return (...args) => {
+    throw new Error(name + ' cannot run here: this sandbox reaches your workspace only asynchronously. Write instead: ' + rewrite(args));
+  };
 }
 
 const EXIT_PREFIX = /^Error \(exit (\d+)\)\n?/;
@@ -79,23 +119,25 @@ function parseExec(rendered) {
   return { exitCode: exit ? Number(exit[1]) : 0, stdout, stderr };
 }
 
-function makeFs(workspace) {
+function makeFs(workspace, cwd) {
   const toText = (data) => typeof data === 'string' ? data : new TextDecoder().decode(data);
   const encodingOf = (options) => typeof options === 'string' ? options : options && options.encoding;
 
   async function readFile(path, options) {
-    const raw = await workspace.readFile(String(path));
+    const target = resolveAt(cwd, path);
+    const raw = await workspace.readFile(target);
     const refused = refusalOf(raw);
-    if (refused) throw fsError('ENOENT', refused, String(path), 'open');
+    if (refused) throw fsError('ENOENT', refused, target, 'open');
     const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
     const encoding = encodingOf(options);
     if (encoding === undefined || encoding === null) return new TextEncoder().encode(text);
     return text;
   }
   async function writeFile(path, data) {
-    const result = await workspace.writeFile(String(path), toText(data));
+    const target = resolveAt(cwd, path);
+    const result = await workspace.writeFile(target, toText(data));
     const refused = refusalOf(result);
-    if (refused) throw fsError('EACCES', refused, String(path), 'open');
+    if (refused) throw fsError('EACCES', refused, target, 'open');
   }
   async function appendFile(path, data) {
     let current = '';
@@ -107,19 +149,20 @@ function makeFs(workspace) {
     await writeFile(path, current + toText(data));
   }
   async function readdir(path, options) {
-    const entries = await workspace.readdir(String(path));
+    const target = resolveAt(cwd, path);
+    const entries = await workspace.readdir(target);
     const refused = refusalOf(entries);
-    if (refused) throw fsError('ENOENT', refused, String(path), 'scandir');
+    if (refused) throw fsError('ENOENT', refused, target, 'scandir');
     const names = Array.isArray(entries) ? entries.map(String) : [];
     if (!(options && options.withFileTypes)) return names;
-    const base = String(path).replace(/\/+$/, '');
+    const base = target.replace(/\/+$/, '');
     return await Promise.all(names.map(async (name) => {
       const info = await stat(base + '/' + name);
       return { name, isFile: () => info.isFile(), isDirectory: () => info.isDirectory() };
     }));
   }
   async function stat(path) {
-    const target = String(path);
+    const target = resolveAt(cwd, path);
     let directory = false;
     let size = 0;
     try {
@@ -145,23 +188,29 @@ function makeFs(workspace) {
     const outcome = parseExec(await workspace.exec(command));
     if (outcome.exitCode !== 0) throw fsError('EIO', outcome.stderr.trim() || outcome.stdout.trim() || ('exit ' + outcome.exitCode), path, syscall);
   }
-  const mkdir = (path, options) => run('mkdir ' + (options && options.recursive ? '-p ' : '') + '-- ' + shellQuote(path), String(path), 'mkdir');
-  const rm = (path, options) => run('rm ' + (options && options.recursive ? '-r ' : '') + (options && options.force ? '-f ' : '') + '-- ' + shellQuote(path), String(path), 'rm');
-  const unlink = (path) => run('rm -- ' + shellQuote(path), String(path), 'unlink');
-  const rmdir = (path) => run('rmdir -- ' + shellQuote(path), String(path), 'rmdir');
-  const copyFile = (from, to) => run('cp -- ' + shellQuote(from) + ' ' + shellQuote(to), String(from), 'copyfile');
-  const rename = (from, to) => run('mv -- ' + shellQuote(from) + ' ' + shellQuote(to), String(from), 'rename');
+  const onPath = (path, command, syscall) => {
+    const target = resolveAt(cwd, path);
+    return run(command + shellQuote(target), target, syscall);
+  };
+  const mkdir = (path, options) => onPath(path, 'mkdir ' + (options && options.recursive ? '-p ' : '') + '-- ', 'mkdir');
+  const rm = (path, options) => onPath(path, 'rm ' + (options && options.recursive ? '-r ' : '') + (options && options.force ? '-f ' : '') + '-- ', 'rm');
+  const unlink = (path) => onPath(path, 'rm -- ', 'unlink');
+  const rmdir = (path) => onPath(path, 'rmdir -- ', 'rmdir');
+  const carry = (from, to, command, syscall) => {
+    const source = resolveAt(cwd, from);
+    return run(command + shellQuote(source) + ' ' + shellQuote(resolveAt(cwd, to)), source, syscall);
+  };
+  const copyFile = (from, to) => carry(from, to, 'cp -- ', 'copyfile');
+  const rename = (from, to) => carry(from, to, 'mv -- ', 'rename');
   async function access(path) {
-    const present = await workspace.exists(String(path));
-    if (present !== true) throw fsError('ENOENT', 'no such file or directory', String(path), 'access');
+    const target = resolveAt(cwd, path);
+    const present = await workspace.exists(target);
+    if (present !== true) throw fsError('ENOENT', 'no such file or directory', target, 'access');
   }
   const promises = {
     readFile, writeFile, appendFile, readdir, stat, lstat: stat, mkdir, rm, unlink, rmdir,
     copyFile, rename, access,
-    exists: async (path) => (await workspace.exists(String(path))) === true,
-  };
-  const unavailable = (name) => () => {
-    throw new Error('fs.' + name + ' is not available in this sandbox: use await require("fs/promises").' + name.replace(/Sync$/, '') + '(...)');
+    exists: async (path) => (await workspace.exists(resolveAt(cwd, path))) === true,
   };
   const callbackForm = (fn) => (...args) => {
     const callback = typeof args[args.length - 1] === 'function' ? args.pop() : null;
@@ -171,9 +220,9 @@ function makeFs(workspace) {
     return undefined;
   };
   const fs = { promises };
-  for (const [name, fn] of Object.entries(promises)) fs[name] = callbackForm(fn);
-  for (const name of ['readFileSync', 'writeFileSync', 'readdirSync', 'statSync', 'existsSync', 'mkdirSync', 'rmSync', 'unlinkSync']) {
-    fs[name] = unavailable(name);
+  for (const [name, fn] of Object.entries(promises)) {
+    fs[name] = callbackForm(fn);
+    fs[name + 'Sync'] = asyncOnly('fs.' + name + 'Sync', (args) => 'await require("fs/promises").' + name + '(' + args.slice(0, 2).map(shownArg).join(', ') + ')');
   }
   return { fs, promises };
 }
@@ -201,14 +250,20 @@ function makeChildProcess(workspace) {
     const callback = typeof args === 'function' ? args : (typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback);
     return exec([file, ...argv].map(shellQuote).join(' '), callback);
   }
-  const unavailable = (name) => () => {
-    throw new Error('child_process.' + name + ' is not available in this sandbox: use await require("child_process").exec(command) or workspace.exec(command)');
+  const viaExec = (args) => 'const { stdout } = await require("child_process").exec(' + JSON.stringify(String(args[0])) + ')';
+  const viaExecFile = (args) => 'const { stdout } = await require("child_process").execFile(' + JSON.stringify(String(args[0])) + ', ' + JSON.stringify(Array.isArray(args[1]) ? args[1].map(String) : []) + ')';
+  return {
+    exec, execFile,
+    execSync: asyncOnly('child_process.execSync', viaExec),
+    execFileSync: asyncOnly('child_process.execFileSync', viaExecFile),
+    spawn: asyncOnly('child_process.spawn', viaExecFile),
+    spawnSync: asyncOnly('child_process.spawnSync', viaExecFile),
+    fork: asyncOnly('child_process.fork', (args) => viaExec(['node ' + String(args[0])])),
   };
-  return { exec, execFile, spawn: unavailable('spawn'), execSync: unavailable('execSync'), spawnSync: unavailable('spawnSync'), fork: unavailable('fork') };
 }
 
-export function createRequire({ workspace, builtins }) {
-  const { fs, promises } = makeFs(workspace);
+export function createRequire({ workspace, builtins, cwd }) {
+  const { fs, promises } = makeFs(workspace, cwd);
   const childProcess = makeChildProcess(workspace);
   const table = {
     fs, 'fs/promises': promises, child_process: childProcess,

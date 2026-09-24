@@ -72,23 +72,10 @@ export function parseSkillFile(
   }
 
   const allowed_tools = asStringArray(fm['allowed-tools'] ?? fm.allowed_tools ?? []);
-  const keywords = asStringArray(fm.keywords ?? []).map(k => k.toLowerCase());
-
-  // Only a real boolean opts in or out: a quoted "false" is truthy.
-  const disable_model_invocation =
-    (fm['disable-model-invocation'] ?? fm.disable_model_invocation ?? false) === true;
-
   const user_invocable = userInvocable(fm);
 
-  // `disable_model_invocation` forces `auto_activate` off.
-  const auto_activate_raw = (fm.auto_activate ?? fm.autoActivate ?? false) === true;
-  const auto_activate = disable_model_invocation ? false : auto_activate_raw;
-
   const known = new Set([
-    'name', 'description', 'allowed-tools', 'allowed_tools',
-    'keywords', 'auto_activate', 'autoActivate',
-    'disable-model-invocation', 'disable_model_invocation',
-    'user-invocable', 'user_invocable',
+    'name', 'description', 'allowed-tools', 'allowed_tools', 'user-invocable', 'user_invocable',
   ]);
 
   const ext: JsonObject = {};
@@ -97,11 +84,7 @@ export function parseSkillFile(
 
   return {
     ok: true,
-    skill: {
-      name, description, allowed_tools, keywords, auto_activate,
-      disable_model_invocation, user_invocable,
-      body: doc.body, ext, source,
-    },
+    skill: { name, description, allowed_tools, user_invocable, body: doc.body, ext, source },
   };
 }
 
@@ -112,12 +95,6 @@ export function stringifySkillFile(skill: ParsedSkill): string {
   };
 
   if (skill.allowed_tools.length > 0) fm['allowed-tools'] = skill.allowed_tools;
-
-  if (skill.keywords.length > 0) fm.keywords = skill.keywords;
-
-  if (skill.auto_activate) fm.auto_activate = true;
-
-  if (skill.disable_model_invocation) fm['disable-model-invocation'] = true;
 
   if (!skill.user_invocable) fm['user-invocable'] = false;
 

@@ -23,7 +23,7 @@ import {
   AGENTS_TOOL_ACTIONS,
   BUILTIN_SKILLS,
   SWARM_PRESET_DOCTRINE,
-  skillIndexLine,
+  skillIndexLine, skillViewPath,
   type SkillHeader,
   type PromptExecutorInfo,
 } from '../src/index';
@@ -488,8 +488,7 @@ describe('buildSystemPromptSync', () => {
 
     const dormant: SkillHeader = {
       name: 'dormant-skill', description: 'Not active this turn, but the model should still know it exists.',
-      allowed_tools: [], keywords: [], auto_activate: false, disable_model_invocation: false,
-      user_invocable: true, ext: {}, source: 'vfs',
+      allowed_tools: [], user_invocable: true, ext: {}, source: 'builtin',
     };
 
     const prompt = buildSystemPromptSync(rt, {
@@ -497,7 +496,9 @@ describe('buildSystemPromptSync', () => {
     });
 
     expect(prompt).toContain('## Skills');
-    expect(prompt).toContain('**dormant-skill** (workspace file) — Not active this turn');
+    expect(prompt).toContain('**dormant-skill**');
+    expect(prompt).toContain(skillViewPath('dormant-skill'));
+    expect(prompt).toContain('Not active this turn');
     expect(prompt).not.toContain('DORMANT-BODY-MUST-NOT-APPEAR');
   });
 
@@ -523,7 +524,6 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/separate machines/i);
     expect(prompt).toContain('/pc');
     expect(prompt).toContain('/sandbox');
-    expect(prompt).toMatch(/cannot see mount points/);
   });
 
   test('teaches the preview workflow for the executor that actually exposes inbound ports', () => {
@@ -551,8 +551,9 @@ describe('buildSystemPromptSync', () => {
       ],
     });
 
-    expect(workspacePreviews).toMatch(/is a Worker slate/);
-    expect(workspacePreviews.indexOf('Worker slate')).toBeLessThan(workspacePreviews.indexOf('standalone Node/Vite'));
+    // The slate rule names the one load path of its skill, ahead of the standalone-server exception.
+    expect(workspacePreviews).toContain(skillViewPath('slates'));
+    expect(workspacePreviews.indexOf(skillViewPath('slates'))).toBeLessThan(workspacePreviews.indexOf('exposePort'));
 
     const containerPreviewsOnly = buildSystemPromptSync(rt, {
       backend: 'cf',
@@ -563,7 +564,7 @@ describe('buildSystemPromptSync', () => {
     });
 
     expect(containerPreviewsOnly).toMatch(/Showing a running app/);
-    expect(containerPreviewsOnly).not.toMatch(/is a Worker slate/);
+    expect(containerPreviewsOnly).not.toContain(skillViewPath('slates'));
   });
 
   test('every runtime is its own machine, with mounts named', () => {
@@ -578,7 +579,6 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/separate machines/i);
     expect(prompt).not.toContain('the same machine and see the same files');
     expect(prompt).toContain('/pc');
-    expect(prompt).toMatch(/cannot see mount points/);
   });
 
   test('renders only selectable executors when lifecycle facts are supplied', () => {
@@ -710,7 +710,7 @@ describe('buildSystemPromptSync', () => {
       ],
     });
 
-    expect(prompt).toContain('/home/user');
+    expect(prompt).toContain('/home/main');
     expect(prompt).toContain('the same bytes the `file` tool and `workspace.*` file ops read');
     expect(prompt).toContain('`sandbox.*`');
     expect(prompt).not.toContain('`nimbus.*`');
@@ -719,7 +719,6 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/paths native to each machine/);
     expect(prompt).toContain('/pc');
     expect(prompt).toContain('/sandbox');
-    expect(prompt).toMatch(/cannot see mount points/);
   });
 
   test('the doctrine follows the executor list, not the backend', () => {

@@ -2,7 +2,7 @@
  * Scaffold modification — 4-gate validation pipeline.
  *
  * Formal spec: Evolution/Scaffold.lean — append_increases_length (version history
- * only grows); Safety/CapabilitySafety.lean — scaffoldwrite_not_grantable.
+ * only grows).
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';

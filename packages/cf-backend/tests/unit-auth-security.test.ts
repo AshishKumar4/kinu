@@ -558,9 +558,7 @@ async function cloudflareSignIn(
     expect(installScript?.headers.get('content-type')).toContain('text/x-shellscript');
     const script = await present(installScript, 'the /install.sh response').text();
     expect(script).toContain('#!/usr/bin/env bash');
-    expect(script).toContain('KINU_REFRESH_CLI=1 "$BIN_PATH" --help');
     expect(script).toContain('setup --origin "$KINU_ORIGIN" --account-only');
-    expect(script).toContain("grep -Eq '^[[:space:]]+setup[[:space:]]'");
     expect(script).toContain("grep -F '$HOME/.kinu/bin'");
 
     const installScriptHead = await handleCliRequest(

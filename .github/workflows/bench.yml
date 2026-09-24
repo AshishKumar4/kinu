@@ -2,8 +2,9 @@ name: Bench corpus
 
 # The measurement instrument's own integrity check: every bench task's defect must break this
 # repository's checks, and reversing it must restore them. It needs no credential and no model,
-# so it runs nightly and on demand; the per-push half (every defect patch still applies) is the
-# CI workflow's bench step. A pull request's own corpus change is exercised here, with no secret.
+# so it runs nightly, on demand, and on a pull request labelled `run-bench`, whose own corpus
+# change it exercises. The per-push half (every defect patch still applies) is the CI ladder's
+# `gate:bench-corpus`.
 
 permissions:
   contents: read
@@ -12,13 +13,25 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 6 * * *'
+  pull_request:
+    types: [labeled]
 
 jobs:
   validate-corpus:
+    # Every task costs two core-suite runs, so the corpus is cut into shards, one runner each, by
+    # the one partition in `bench.ts validate --shard k/n`: the shards are disjoint and together are
+    # the whole corpus. Measured 2026-09-23 on the development box, one task took 130 s; a shard of
+    # 8 fits the 60-minute cap with room for retries.
+    if: github.event_name != 'pull_request' || github.event.label.name == 'run-bench'
     runs-on: ubuntu-latest
-    # Runs the repository suite once per task, about 160 times.
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     steps:
+      # The pull request's own code, deliberately: this job is what exercises a branch's corpus
+      # change, and it has no credential to spend.
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -31,5 +44,19 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Validate bench corpus
-        run: bun scripts/bench.ts validate --run-root "$RUNNER_TEMP/bench"
+      # The run root is a fresh directory under /tmp. `$RUNNER_TEMP` is /home/runner/work/_temp,
+      # inside $HOME, and `assertScratchRoot` refuses any root there: every scheduled run from
+      # 2026-09-12 died on exactly that. k and n come from the matrix itself, so every shard runs.
+      - name: Validate bench corpus shard ${{ matrix.shard }}
+        run: >-
+          bun scripts/bench.ts validate
+          --run-root "$(mktemp -d /tmp/kinu-bench-XXXXXX)"
+          --shard "$(( ${{ strategy.job-index }} + 1 ))/${{ strategy.job-total }}"
+
+      - name: Upload validation evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validate-shard-${{ matrix.shard }}
+          path: bench-artifacts/validate-*
+          if-no-files-found: ignore

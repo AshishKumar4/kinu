@@ -7,14 +7,15 @@ import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
   DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_CANCEL_VERSION_REFUSAL, DEVICE_EXEC_ACK_METHOD,
   DEVICE_PTY_CLOSE, DEVICE_PTY_EXIT, DEVICE_PTY_INPUT, DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_OUTPUT, DEVICE_PTY_RESIZE,
-  DeviceCancelResultSchema, DeviceTunnel, JsonValueSchema, createDeviceTunnelExecutor,
+  DEVICE_UNKNOWN_METHOD, DeviceCancelResultSchema, DeviceTunnel, JsonValueSchema, createDeviceTunnelExecutor,
   type DeviceStatus, type DeviceTransport, type TunnelSocket,
 } from '@kinu.run/core';
 
@@ -77,8 +78,9 @@ const SupervisorRegistrySchema = v.object({
 
 const pcAgent = v.parse(PcAgentModuleSchema, require_(join(import.meta.dir, '../../pc-agent/src/index.js')));
 
+/** As the hub sends it: with the owner's Sandbox switch, here off. */
 function handle(message: DaemonMessage, socket: ReplySocket): void {
-  pcAgent.handle(message, socket);
+  pcAgent.handle({ ...message, sandbox: { tier: 'raw', agentHome: '', roots: [] } }, socket);
 }
 
 const ExecResultSchema = v.object({ stdout: v.string(), stderr: v.string(), exitCode: v.number() });
@@ -457,16 +459,25 @@ describe('pc-agent command cancellation', () => {
 });
 
 describe('pc-agent durable supervisor', () => {
-  test('bounds captured output and includes the truncation marker', async () => {
+  test('bounds captured output, keeps its head and tail, and saves the whole of it', async () => {
     const ws = recorder();
     const id = rpcId(300);
     const requestDir = join(pcAgent.INFLIGHT_ROOT, id);
-    handle({ id, method: 'exec', params: [`${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(600000))"`] }, ws.socket);
+    const spill = join(tmpdir(), 'kinu-tool-output', `device-${id}.stdout.log`);
+    handle({ id, method: 'exec', params: [`${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(600000) + 'END')"`] }, ws.socket);
     const answer = await settled(() => ws.of(id)[0], 'the bounded output result');
     const result = v.parse(ExecResultSchema, answer.result);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('[output truncated at 524288 bytes]');
-    expect(statSync(join(requestDir, 'stdout')).size).toBeLessThan(525_000);
+
+    try {
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`END\n[stdout: 600003 bytes, `);
+      expect(result.stdout).toContain(`the full stdout is at ${spill}]`);
+      expect(statSync(join(requestDir, 'stdout')).size).toBeLessThan(530_000);
+      expect(statSync(spill).size).toBe(600_003);
+    } finally {
+      rmSync(spill, { force: true });
+    }
+
     acknowledge(rpcId(301), id, ws.socket);
     await settled(() => ws.of(rpcId(301))[0], 'the bounded output ACK');
   });
@@ -580,33 +591,43 @@ describe('pc-agent supervisor guards', () => {
   });
 });
 
+/** Executor → tunnel → daemon, as the hub wires them. The binding is declared before the socket: the two reference
+ *  each other, and nothing reads it before the first frame. */
+function deviceChain() {
+  let tunnel: DeviceTunnel;
+
+  const socket: TunnelSocket = {
+    readyState: 1,
+    send: (data: string) => {
+      handle(v.parse(DaemonFrameSchema, JSON.parse(data)), {
+        send: (reply: string) => { tunnel.handleMessage(reply); },
+      });
+    },
+  };
+
+  tunnel = new DeviceTunnel(socket);
+  const connected: DeviceStatus = { connected: true, registered: true, toolchain: null };
+
+  const transport: DeviceTransport = {
+    rpc: (method, params, opts) => tunnel.rpc(method, params, opts),
+    status: () => connected,
+    refreshStatus: async () => connected,
+  };
+
+  return { provider: createDeviceTunnelExecutor(transport), tunnel };
+}
+
+describe('the daemon answers in the words the hub reads', () => {
+  test('a method this daemon does not know reaches the hub as unknown, the way a newer frame meets an older daemon', async () => {
+    const { tunnel } = deviceChain();
+
+    await expect(tunnel.rpc('methodFromALaterHub', [])).rejects.toThrow(DEVICE_UNKNOWN_METHOD);
+    tunnel.dispose();
+  });
+});
+
 /** The whole chain, executor → tunnel → daemon → real process, aborted the way a stopped turn does. */
 describe('stopping a turn reaches the process on the user\'s machine', () => {
-  /** The binding is declared before the socket: the two reference each other, and nothing reads it before the first frame. */
-  function deviceChain() {
-    let tunnel: DeviceTunnel;
-
-    const socket: TunnelSocket = {
-      readyState: 1,
-      send: (data: string) => {
-        handle(v.parse(DaemonFrameSchema, JSON.parse(data)), {
-          send: (reply: string) => { tunnel.handleMessage(reply); },
-        });
-      },
-    };
-
-    tunnel = new DeviceTunnel(socket);
-    const connected: DeviceStatus = { connected: true, registered: true, toolchain: null };
-
-    const transport: DeviceTransport = {
-      rpc: (method, params, opts) => tunnel.rpc(method, params, opts),
-      status: () => connected,
-      refreshStatus: async () => connected,
-    };
-
-    return { provider: createDeviceTunnelExecutor(transport), tunnel };
-  }
-
   test('the tool\'s abort kills the command and its child, and says it did', async () => {
     const dir = scratchDir('pc-agent-e2e');
     const { command, pidOf } = commandWithDescendant(dir, 'e2e');

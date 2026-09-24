@@ -2,7 +2,7 @@
 import { tierIdsOf, TIER_IDS, type TierId } from '@kinu.run/core';
 import type { KeyEvent, ScrollBoxRenderable } from '@opentui/core';
 import type { TuiActionId } from './actions';
-import type { TuiHubData, TuiHubView } from './hubs';
+import type { TuiAgentHubEntry, TuiHubData, TuiHubView } from './hubs';
 import type { ActiveSurface } from './chat-app';
 
 function historyScroll(
@@ -10,12 +10,15 @@ function historyScroll(
   history: ScrollBoxRenderable | null,
 ): boolean {
   const page = actionId === 'history.page-up' || actionId === 'history.page-down';
-
-  if (history === null) return false;
   const direction = actionId === 'history.page-up' || actionId === 'history.line-up' ? -1 : 1;
-  const viewportFraction = page ? 0.5 : 0.2;
-  const delta = Math.max(1, Math.floor(history.viewport.height * viewportFraction));
-  history.scrollTo(history.scrollTop + direction * delta);
+
+  return scrolled(history, direction, page ? 0.5 : 0.2);
+}
+
+function scrolled(box: ScrollBoxRenderable | null, direction: 1 | -1, viewportFraction: number): boolean {
+  if (box === null) return false;
+  const delta = Math.max(1, Math.floor(box.viewport.height * viewportFraction));
+  box.scrollTo(box.scrollTop + direction * delta);
 
   return true;
 }
@@ -50,6 +53,11 @@ export interface SurfaceKeyDeps {
   createNewAgent?: () => Promise<void>;
   /** The model overlay re-reads on close, so it asks for another open. */
   bumpModelRequest(): void;
+  hubAgents: readonly TuiAgentHubEntry[];
+  hubSelectedId(): string | null;
+  setHubSelectedId(id: string | null): void;
+  openSubagent(entry: TuiAgentHubEntry): void;
+  subagentHistory(): ScrollBoxRenderable | null;
 }
 
 /** Wraps; an unknown current starts from the first. */
@@ -80,6 +88,22 @@ const scrollTranscript = (deps: SurfaceKeyDeps, actionId: TuiActionId) => (key: 
     key.preventDefault();
     deps.rememberScroll();
   }
+};
+
+const moveInModal = (deps: SurfaceKeyDeps, direction: 1 | -1, page: boolean) => (key: KeyEvent): void => {
+  if (deps.activeSurface?.kind === 'subagent') {
+    if (scrolled(deps.subagentHistory(), direction, page ? 0.5 : 0.2)) key.preventDefault();
+
+    return;
+  }
+
+  if (page || deps.activeSurface?.kind !== 'hub' || deps.activeSurface.view !== 'agents' || deps.hubAgents.length === 0) return;
+  key.preventDefault();
+  const index = deps.hubAgents.findIndex((agent) => agent.id === deps.hubSelectedId());
+  const last = deps.hubAgents.length - 1;
+  // Unchosen: up starts at the bottom.
+  const from = index === -1 && direction === -1 ? last + 1 : index;
+  deps.setHubSelectedId(deps.hubAgents[Math.min(last, Math.max(0, from + direction))]?.id ?? null);
 };
 
 export function sceneKeyHandlers(deps: SurfaceKeyDeps): Partial<Record<TuiActionId, SceneKeyHandler>> {
@@ -145,11 +169,24 @@ export function modalKeyHandlers(deps: SurfaceKeyDeps): Partial<Record<TuiAction
 
       return deps.createNewAgent();
     },
+    'modal.previous': moveInModal(deps, -1, false),
+    'modal.next': moveInModal(deps, 1, false),
+    'modal.page-previous': moveInModal(deps, -1, true),
+    'modal.page-next': moveInModal(deps, 1, true),
+    'modal.activate': (key) => {
+      if (deps.activeSurface?.kind !== 'hub' || deps.activeSurface.view !== 'agents') return;
+      const entry = deps.hubAgents.find((agent) => agent.id === deps.hubSelectedId());
+
+      if (entry?.path === undefined) return;
+      key.preventDefault();
+      deps.openSubagent(entry);
+    },
     'modal.close': (key) => {
       key.preventDefault();
 
       if (deps.activeSurface?.kind === 'model') deps.bumpModelRequest();
-      deps.setActiveSurface(null);
+      // Back to the Agent Hub.
+      deps.setActiveSurface(deps.activeSurface?.kind === 'subagent' ? { kind: 'hub', view: 'agents' } : null);
 
       if (deps.walkbackOpen) deps.closeWalkback();
     },

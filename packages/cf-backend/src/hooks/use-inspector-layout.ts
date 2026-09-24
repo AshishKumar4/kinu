@@ -99,9 +99,9 @@ export function useInspectorLayout(input: {
   readonly workspace: string | undefined;
   readonly scope: string | undefined;
   /** Only consulted while this workspace carries no stored open/close choice. */
-  readonly worthShowing: boolean;
+  readonly needsUser: boolean;
 }): InspectorLayout {
-  const { desktopPanels, mobileDefault, workspace, scope, worthShowing } = input;
+  const { desktopPanels, mobileDefault, workspace, scope, needsUser } = input;
   const chatPanelId = panelId("chat", scope);
   const inspectorPanelId = panelId("inspector", scope);
 
@@ -150,7 +150,7 @@ export function useInspectorLayout(input: {
   // key, so the first decision would read as a user choice and nothing would open.
   const identity = workspace ?? `sample:${scope ?? ""}`;
 
-  const mountDecision = desktopPanels && widePanels ? decideInspector(readLayout(), worthShowing) : null;
+  const mountDecision = desktopPanels && widePanels ? decideInspector(readLayout(), needsUser) : null;
 
   // State lives in a ref so commit reports and control actions read the latest step, not a
   // render behind; render-facing fields are mirrored into React state.
@@ -195,9 +195,9 @@ export function useInspectorLayout(input: {
     if (!desktopPanels || !widePanels) return;
 
     apply(applyInspectorDecision(machineRef.current, {
-      workspace: identity, stored: readLayout(), worthShowing, panelPresent: panelRef.current !== null,
+      workspace: identity, stored: readLayout(), needsUser, panelPresent: panelRef.current !== null,
     }));
-  }, [readLayout, identity, worthShowing, desktopPanels, widePanels, panelRef, apply]);
+  }, [readLayout, identity, needsUser, desktopPanels, widePanels, panelRef, apply]);
 
   const claim = useCallback((target: InspectorTarget) => {
     apply(claimInspectorTarget(machineRef.current, target, identity));

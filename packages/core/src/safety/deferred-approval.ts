@@ -236,13 +236,13 @@ function clip(text: string): string {
 
 /** The one-line result for a parked action: nothing ran, which rule, which machine, and the id.
  *  Standing doctrine lives in the system prompt. Still returned through `denyResult`. */
-export function queuedActionMessage(action: DeferredApproval): string {
+function queuedActionMessage(action: DeferredApproval): string {
   return `NOT RUN — queued for owner approval (${action.id}): ${ruleNames(action)} on ${action.executor}. `
     + 'A decision will wake you.';
 }
 
 /** Result for re-issuing a refused command; mirrors safety/device-consent.ts. */
-export function deniedActionMessage(action: DeferredApproval): string {
+function deniedActionMessage(action: DeferredApproval): string {
   return `NOT RUN — the owner refused this (${action.id}). Not a timeout; find another way.`;
 }
 
@@ -254,7 +254,7 @@ function ruleNames(action: DeferredApproval): string {
 }
 
 /** The message on the turn a decision wakes: one for the whole batch. */
-export function decisionWakeMessage(decided: readonly DeferredApproval[]): string {
+function decisionWakeMessage(decided: readonly DeferredApproval[]): string {
   const lines: string[] = [];
   const approved = decided.filter((a) => a.status === 'approved');
   const denied = decided.filter((a) => a.status === 'denied');

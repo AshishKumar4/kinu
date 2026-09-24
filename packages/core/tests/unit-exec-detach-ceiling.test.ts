@@ -54,7 +54,7 @@ function fakeContainer(): FakeContainer {
       writeFile: async () => undefined,
       listFiles: async () => ({ files: [] }),
       deleteFile: async () => undefined,
-      exposePort: async (port) => ({ url: `https://p/${port}`, port }),
+      exposePort: async (port) => ({ url: `https://p/${port}`, port, route: { reached: true } }),
       unexposePort: async () => undefined,
       getExposedPorts: async () => [],
       ...sandboxHandleLifecycle,

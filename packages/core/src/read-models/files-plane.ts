@@ -11,6 +11,13 @@ import { VfsRevisionSchema, type VfsRevision } from '../types/primitives';
 /** The composite plane (workspace tree plus mount table); the drive always browses through it. */
 export const PLANE = "workspace";
 
+/** Platform state, not anyone's work: Nimbus runtimes, bindings and images; Kinu agent state. */
+const SYSTEM_MANAGED_DIRECTORIES: ReadonlySet<string> = new Set(['.nimbus', '.kinu']);
+
+export function isSystemManaged(name: string): boolean {
+  return SYSTEM_MANAGED_DIRECTORIES.has(name);
+}
+
 /** `revision` is the backend's exact compare-and-write token; size/mtime never authorize an edit. */
 export interface FileText {
   content?: string;

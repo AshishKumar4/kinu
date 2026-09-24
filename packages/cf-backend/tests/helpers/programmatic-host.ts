@@ -9,7 +9,7 @@ import type { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
-import { composeFabric } from '@nimbus-sh/fabric/composition.js';
+import { adoptCtxExports, composeFabric, type CtxExports } from '@nimbus-sh/fabric/composition.js';
 import {
   composeHostedRuntime, SupervisorRPC, type ComposedFacetManager, type HostedRuntime, type HostedRuntimeTask,
 } from '@nimbus-sh/worker/workspace-host';
@@ -17,6 +17,8 @@ import type { PortReservationTransaction } from '@nimbus-sh/worker/port-capabili
 import * as v from 'valibot';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { NimbusSandboxHandle } from '@kinu.run/core';
+import type { WorkspaceHostTarget } from '../../src/workspace-host';
+import { workerContext } from './bindings';
 
 export type DurableState = Map<string, unknown>;
 
@@ -210,10 +212,64 @@ export function durableObjectStorage(built: StandInFor<DurableObjectStorage>): D
 }
 
 /** The `ctx.exports` bag (not in workers-types): the supervisor entrypoint the fabric mints each facet's
- *  `env.SUPERVISOR` from. Absent when the object exports none, which a host refuses to compose over. */
+ *  `env.SUPERVISOR` from. A script exporting none gives an object without it, which a host refuses to compose over. */
 export interface ActorObjectState<Exports = unknown> extends DurableObjectState {
   readonly exports?: Exports;
 }
+
+/** The props the fabric mints a facet's supervisor binding with. */
+interface SupervisorProps {
+  readonly doId: string;
+  readonly pid: number;
+  readonly writerId?: string;
+  readonly mutationOwner?: string;
+}
+
+/** This script's objects by id. One id names one live object, so the latest to be served under it wins. */
+const liveObjects = new Map<string, WorkspaceHostTarget>();
+
+/** Make `target` the object `id` names, as the script's `OrchestratorAgent` namespace resolves it. */
+export function serveObject(id: string, target: WorkspaceHostTarget): void {
+  liveObjects.set(id, target);
+}
+
+/** This script's `OrchestratorAgent` namespace: an id resolves to the object live under it. */
+export const OBJECT_NAMESPACE = {
+  idFromName: (name: string): string => name,
+  idFromString: (id: string): string => id,
+  get(id: string): WorkspaceHostTarget {
+    const target = liveObjects.get(id);
+
+    if (target === undefined) throw new Error(`no object of this script is live under ${id}`);
+
+    return target;
+  },
+};
+
+/**
+ * This script's `ctx.exports`: workerd builds one per isolate and hands it to every object, and `@nimbus-sh/platform`
+ * holds the first one it is shown for the whole isolate. Every stand-in ctx carries this object, so a bun process that
+ * runs many files holds the same exports whichever fixture composes first. `SupervisorRPC({ props })` is the loopback
+ * binding: the entrypoint over the script's env, which finds its host by `props.doId`. Its throwing members assert the
+ * supervisor schedules no background work and swallows no exception.
+ */
+export const SCRIPT_EXPORTS = {
+  SupervisorRPC: ({ props }: { readonly props: SupervisorProps }) => new SupervisorRPC(Object.assign(workerContext(), {
+    props,
+    waitUntil: () => { throw new Error('unexpected supervisor background work'); },
+    passThroughOnException: () => { throw new Error('unexpected supervisor pass-through'); },
+  }), { OrchestratorAgent: OBJECT_NAMESPACE }),
+};
+
+/** The platform's view of a script's exports: a loopback factory per entrypoint name. */
+const CtxExportsSchema = v.custom<CtxExports>(
+  (value) => v.is(v.record(v.string(), v.function()), value),
+  'a script exports entrypoint factories by name',
+);
+
+// Held before any fixture composes, as a script's exports exist before its first object: a ctx whose exports lack the
+// entrypoint is refused on its own exports, never adopted as the isolate's.
+adoptCtxExports(v.parse(CtxExportsSchema, SCRIPT_EXPORTS));
 
 /** A Durable Object's `ctx`, unbuilt members refusing by name; same assignment rule as {@link durableObjectStorage}. */
 export function actorObjectState(built: StandInFor<ActorObjectState>): ActorObjectState {
@@ -263,7 +319,7 @@ export function programmaticHostOver(workspace: NimbusWorkspace, seams: Programm
     storage: durableObjectStorage({ ...durableStorage(durable), sql: durableSqlStorage(new Database(':memory:')) }),
     waitUntil: (promise: Promise<unknown>) => void promise,
     getWebSockets: () => [],
-    exports: { SupervisorRPC },
+    exports: SCRIPT_EXPORTS,
   });
 
   const portRegistry = new PortRegistry();

@@ -9,6 +9,7 @@ import { wgslVitePlugin } from "@vgpu/wgsl/loader-vite";
 import { defineConfig } from "vite";
 import { promptText } from './vite-prompt-text';
 import { slateVendor } from './slate-vendor';
+import { DEV_PREVIEW_SUFFIX, devPreviewPort, devPreviewTlsDir, devPreviewZone } from './vite-preview-zone';
 
 /** Nimbus loads its runtime artifacts from `env.ASSETS` `/_assets/*`; symlink the pinned package's tree
  *  into `public/` so dev and build carry it and a version bump re-points it. */
@@ -81,12 +82,28 @@ const wgslClientOnly = {
  */
 const devStateDir = process.env.KINU_DEV_STATE_DIR;
 
-export default defineConfig({
+const previewPort = devPreviewPort(__dirname);
+
+export default defineConfig(({ command }) => ({
+  // The dependency optimizer's cache for one harness boot; unset leaves vite's default, `node_modules/.vite`.
+  // Every worktree's `.vite` is the primary checkout's (setup-worktree.sh), so two dev servers booting at once on
+  // different lockfiles re-optimize into one directory and delete each other's deps: "The file does not exist at
+  // .../.vite/deps_kinu/..." (2026-09-23).
+  cacheDir: process.env.KINU_DEV_CACHE_DIR,
   plugins: [
     promptText(), slateVendor(), stubClientNodeBuiltins, workerSourceMaps, wgslClientOnly, agents(), react(),
-    cloudflare(devStateDir === undefined ? {} : { persistState: { path: devStateDir } }),
+    cloudflare({
+      persistState: devStateDir === undefined ? true : { path: devStateDir },
+      // `vite dev` serves its own preview zone (vite-preview-zone.ts); a build keeps the deployed zone.
+      config: command === "serve"
+        ? (worker) => ({ vars: { ...worker.vars, PREVIEW_HOST_SUFFIX: DEV_PREVIEW_SUFFIX, PREVIEW_HOST_PORT: String(previewPort) } })
+        : undefined,
+    }),
+    devPreviewZone(devPreviewTlsDir(__dirname), previewPort),
     tailwindcss(),
   ],
+  // The zone's requests reach vite with their preview host.
+  server: { allowedHosts: [`.${DEV_PREVIEW_SUFFIX}`] },
   // The fabric outbox imports a stubbed builtin, so it is served as source; the UMD-only highlighter
   // has no `default` export as source, so it is prebundled.
   optimizeDeps: {
@@ -110,4 +127,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

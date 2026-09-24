@@ -30,9 +30,9 @@ import { ChatLiveTail, DeviceOfflineRow, MessageView, ProgrammaticTurnCard, Stee
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@kinu.run/core";
 import { classifyProgrammaticTurn, messageSignalId, threadLiveTail } from "@kinu.run/core";
-import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
+import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { SlateInlineContext } from "@/components/slates/context";
-import { SLATE_PREFIX } from "@/components/surfaces/presence";
+import { SLATE_PREFIX, type SurfaceKind } from "@kinu.run/core";
 import { ConversationStartBoundary, HistoryBoundary } from "@/components/surfaces/shared";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { SupervisePage } from "./SupervisePage";
@@ -850,14 +850,7 @@ export default function WorkspacePage() {
       ) : (
       <WorkbenchPanels
         workspace={agentId}
-        contents={{
-          pendingActions: state.pendingActions,
-          pendingConsents: state.pendingConsents,
-          slates: state.slates,
-          previewFocus: state.previewFocus,
-          pinnedPorts: state.pinnedPorts,
-          activePlan: state.activePlan,
-        }}
+        contents={state}
         chat={(inspectorControl) => <>
             <SubordinateTabs
               workspace={agentId}

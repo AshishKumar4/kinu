@@ -34,13 +34,11 @@ const CLEAR_LABEL_UNUSED = "Clear selection (unused)";
 /** Empty clears the workspace override; the tier's effort applies. */
 const DEFAULT_EFFORT = "";
 
-const effortLabel = (effort: ReasoningEffort | typeof DEFAULT_EFFORT): string => {
-  if (effort === DEFAULT_EFFORT) return "Default";
+export const reasoningEffortLabel = (effort: ReasoningEffort): string =>
+  effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1);
 
-  if (effort === "xhigh") return "Extra high";
-
-  return effort[0].toUpperCase() + effort.slice(1);
-};
+const effortLabel = (effort: ReasoningEffort | typeof DEFAULT_EFFORT): string =>
+  effort === DEFAULT_EFFORT ? "Default" : reasoningEffortLabel(effort);
 
 /** Shows no control when the model declares no levels. */
 function EffortPicker({ options, value, onChange, disabled }: {

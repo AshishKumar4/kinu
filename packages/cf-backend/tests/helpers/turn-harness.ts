@@ -75,6 +75,7 @@ export interface TurnHarness {
   settle(answer: ScriptedAnswer): Promise<SettledTurn>;
   /** Name the durable turn the next settle belongs to. */
   open(turnId: string): void;
-  /** Admit under this id and park at its model call, so sends route into its next step. */
-  openInFlight(turnId: string): Promise<void>;
+  /** Admit under this id and park at its model call, so sends route into its next step; the answer
+   *  settles under `messageId` when one is named. */
+  openInFlight(turnId: string, messageId?: string): Promise<void>;
 }

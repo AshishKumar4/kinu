@@ -9,7 +9,7 @@ import {
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel,
   type AgentRuntime, type SlateAnswer,
 } from '@kinu.run/core';
-import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, sqlExec, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
 import { makeKv } from './helpers/kv';
@@ -34,15 +34,15 @@ const OWNER_ID = '0123456789abcdef0123456789abcdef';
 const VIEWER_ID = 'fedcba9876543210fedcba9876543210';
 
 async function authorIssuesSlate(files: AgentRuntime['storage']['vfs']) {
-  await files.mkdir('/home/user/slates/issues', { recursive: true });
-  await files.writeFile('/home/user/slates/issues/package.json', JSON.stringify({
+  await files.mkdir('/home/main/slates/issues', { recursive: true });
+  await files.writeFile('/home/main/slates/issues/package.json', JSON.stringify({
     name: 'issues', description: 'Triage the open issues', main: 'src/server.ts',
     slate: { title: 'Issue triage', bindings: {
       GITHUB: { kind: 'mcp', server: 'connection-id', tools: ['read_issue', 'create_issue'] },
       FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile', 'writeFile'] },
     } },
   }));
-  await files.writeFile('/home/user/slates/issues/src/server.ts', 'export default {};');
+  await files.writeFile('/home/main/slates/issues/src/server.ts', 'export default {};');
 }
 
 const post = (path: string, body: Record<string, string | boolean | readonly string[] | undefined>) => new Request(`https://app.test${path}`, {
@@ -128,7 +128,7 @@ async function twoUserWorld(): Promise<World> {
     { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
     { name: 'create_issue', inputSchema: { type: 'object' } },
   ]);
-  await authorIssuesSlate(ownerSide.agent.agent.observeRuntime().storage.vfs);
+  await authorIssuesSlate(workspaceFiles(ownerSide.agent.agent));
 
   return {
     env, owner: ownerSide.agent, viewer: viewerSide.agent, ownerUser: ownerSide.user,
@@ -232,7 +232,7 @@ test('S2: the per-share per-day spend bound refuses viewer calls as budget and m
   const viewerCaller: SlateCaller = { ...ROOT_SLATE_CALLER, share: created.share.id };
 
   const call = () => world.owner.agent.slateBindingCallAs(
-    viewerCaller, 'issues', 'FILES', { member: 'readFile', args: ['/home/user/slates/issues/package.json'], invocation: admission.invocation });
+    viewerCaller, 'issues', 'FILES', { member: 'readFile', args: ['/home/main/slates/issues/package.json'], invocation: admission.invocation });
 
   expect(await call()).toMatchObject({ ok: true });
 
@@ -278,8 +278,8 @@ test('D1: a live share forks for who it names, refuses who it does not, and hono
   world.ownerUser.sql.exec(`UPDATE user_mcp_servers SET headers = ? WHERE id = 'connection-id'`, JSON.stringify({ authorization: mcpHeader }));
   const providerKey = ['sk-ant-', 'owner-provider-key-0123456789'].join('');
   await world.ownerUser.userDO.setCredential(await testOwner(), 'anthropic', { kind: 'bearer', token: providerKey });
-  const viewerFiles = world.viewer.agent.observeRuntime().storage.vfs;
-  const landed = '/home/user/slates/' + result.slate;
+  const viewerFiles = workspaceFiles(world.viewer.agent);
+  const landed = '/home/main/slates/' + result.slate;
 
   const admittedTree = JSON.stringify(await viewerFiles.readFile(landed + '/package.json', { encoding: 'utf8' }))
     + JSON.stringify(await viewerFiles.readFile(landed + '/src/server.ts', { encoding: 'utf8' }));

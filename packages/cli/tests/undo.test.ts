@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 
 import { join } from 'node:path';
 import { createHostCheckpoints } from '@kinu.run/cli-backend';
-import { DEFAULT_ADVISOR_MIN_SEVERITY } from '@kinu.run/core';
+import { DEFAULT_ADVISOR_MIN_SEVERITY, missingSubordinateHistory } from '@kinu.run/core';
 import type { EvolutionConfigView, FileCheckpointEntry, FileRestoreChange } from '@kinu.run/core';
 import { commandsForClient, executeSlashCommand, filterCommands, performUndo } from '../src/slash-commands';
 import type { AgentClient, FileCheckpointSurface } from '../src/agent-client';
@@ -42,6 +42,7 @@ function slashClient(checkpoints: FileCheckpointSurface | null): AgentClient {
     setRole: async (role) => ({ role }),
     getReasoningEffort: async () => null, setReasoningEffort: async (effort) => ({ effort }),
     listModels: async () => ({ models: [], failures: [] }),
+    inspectSubordinate: async (request) => missingSubordinateHistory(request.path),
     getEvolutionConfig: async () => { throw new Error('not used'); },
     setEvolutionConfig: async () => { throw new Error('not used'); },
   };

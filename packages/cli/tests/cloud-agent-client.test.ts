@@ -4,7 +4,7 @@ import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
   JsonArraySchema, JsonObjectSchema, parseJsonObject, hostedActorSocketPath,
   ChatHistoryEntrySchema, restoredRows,
-  type JsonObject, type JsonValue,
+  type JsonObject, type JsonValue, type ReasoningEffort,
 } from '@kinu.run/core';
 import { CloudAgentClient } from '../src/cloud-agent-client';
 import type { AgentClientEvent } from '../src/agent-client';
@@ -25,6 +25,11 @@ interface MockAgentServer {
 }
 
 const servers: MockAgentServer[] = [];
+
+const MENU_EFFORTS: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh'];
+
+/** A model declaring its own reasoning levels, as the hub's menu lists it. */
+const MENU_MODEL = { spec: 'openai/gpt-5.5', label: 'GPT-5.5', provider: 'openai', reasoningEfforts: MENU_EFFORTS };
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((mock) => mock.close()));
@@ -60,6 +65,10 @@ function startMockAgentServer(options: {
         }
 
         return Response.json({ ticket: 'pat_test', expiresAt: Date.now() + 60_000 });
+      }
+
+      if (url.pathname === '/api/cli/models' && req.method === 'GET') {
+        return Response.json({ models: [MENU_MODEL], failures: [] });
       }
 
       if (/^\/api\/cli\/workspaces\/[^/]+\/rpc$/.test(url.pathname) && req.method === 'POST') {
@@ -244,6 +253,18 @@ describe('CloudAgentClient protocol', () => {
 
     try {
       await expect(client.history()).rejects.toThrow('Invalid length: Expected !0 but received 0');
+    } finally {
+      await client.close();
+    }
+  });
+
+  test('the model menu keeps the reasoning levels each model declares', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+
+    try {
+      const { models } = await client.listModels();
+      expect(models.map((model) => [model.spec, model.reasoningEfforts])).toEqual([[MENU_MODEL.spec, MENU_MODEL.reasoningEfforts]]);
     } finally {
       await client.close();
     }
