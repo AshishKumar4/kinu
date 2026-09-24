@@ -315,6 +315,7 @@ function SubordinateChatColumn({
   title: string;
 }) {
   const state = useKinu({ workspace, subordinate: subName });
+  const live = state.liveness.kind === "live";
 
   // No model write from an agent pane: only the workspace pin is honoured, and the
   // snapshot carries the actor's effective model, rendered read-only.
@@ -386,7 +387,7 @@ function SubordinateChatColumn({
           )}
           <ConversationStartBoundary
             hasEntries={thread.entries.length > 0}
-            streaming={state.isStreaming}
+            streaming={live}
             error={history.error}
             exhausted={history.exhausted}
             onRetry={history.loadMore}
@@ -412,7 +413,7 @@ function SubordinateChatColumn({
             <ChatErrorCard
               message={state.chatError.body}
               replayed={state.chatError.replayed}
-              streaming={state.isStreaming}
+              streaming={live}
               onRetry={state.retryLastMessage}
               onDismiss={state.clearChatError}
             />
@@ -426,7 +427,7 @@ function SubordinateChatColumn({
           value={input}
           onValueChange={setInput}
           onSend={send}
-          placeholder={state.isStreaming
+          placeholder={live
             ? `Steer ${title}…`
             : `Message ${title}…`}
           disabled={state.connectionStatus !== "connected"}
@@ -480,6 +481,7 @@ export default function WorkspacePage() {
   const location = useLocation();
   const navigate = useNavigate();
   const state = useKinu(agentId);
+  const live = state.liveness.kind === "live";
   const { entries: workspaceEntries } = useWorkspaceRoster();
 
   const [creatingAgent, setCreatingAgent] = useState(false);
@@ -615,7 +617,7 @@ export default function WorkspacePage() {
   // workspaces visited this session.
   useEffect(() => {
     if (!agentId) return;
-    const running = state.isStreaming || state.backgroundJobs.some((j) => j.status === "running");
+    const running = live || state.backgroundJobs.some((j) => j.status === "running");
     window.dispatchEvent(new CustomEvent("kinu:workspace-activity", {
       detail: {
         name: agentId,
@@ -627,7 +629,7 @@ export default function WorkspacePage() {
         })),
       },
     }));
-  }, [agentId, state.isStreaming, state.backgroundJobs, state.changelogUnseen, state.subordinates]);
+  }, [agentId, live, state.backgroundJobs, state.changelogUnseen, state.subordinates]);
 
   // The sidebar has no socket; clear its snapshot on unmount so no stale "working" dot remains.
   useEffect(() => {
@@ -647,7 +649,7 @@ export default function WorkspacePage() {
   const handleBranch = useCallback(() => {
     const t = chatInput.trim();
 
-    if (!t || !state.isStreaming || effectiveChatMode === "plan") return;
+    if (!t || !live || effectiveChatMode === "plan") return;
     setBranchNotice(null);
     // Clear the draft only once the branch is accepted, and only if it was not edited meanwhile.
     startTransition(async () => {
@@ -660,7 +662,7 @@ export default function WorkspacePage() {
         setBranchNotice(renderThrownChain({ cause }));
       }
     });
-  }, [chatInput, effectiveChatMode, state]);
+  }, [chatInput, effectiveChatMode, live, state]);
 
   const { notice: steerNotice, send: handleSend, stop: handleStop } = useSteerActions({
     sendChat: (text, files) => state.sendChat(text, [...files], effectiveChatMode),
@@ -715,7 +717,7 @@ export default function WorkspacePage() {
 
   const settledBranchCount = state.branchRuns.filter((b) => b.status === "settled").length;
   useEffect(() => {
-    if (state.connectionStatus !== "connected" || state.isStreaming) return;
+    if (state.connectionStatus !== "connected" || live) return;
     startTransition(async () => {
       try {
         const loaded = await state.rpc<Record<string, AlternateTakeSet>>('listAlternateTakes');
@@ -726,7 +728,7 @@ export default function WorkspacePage() {
       }
     });
     // settledBranchCount: a branch settling after the turn ended persists a fresh set.
-  }, [state.connectionStatus, state.isStreaming, state.rpc, settledBranchCount, reportSide]);
+  }, [state.connectionStatus, live, state.rpc, settledBranchCount, reportSide]);
 
   const onPickTake = useCallback(async (takeId: string, nodeId: string): Promise<TakePickOutcome> => {
     const result = await state.rpc<TakePickOutcome>('pickAlternateTake', [takeId, nodeId]);
@@ -826,7 +828,7 @@ export default function WorkspacePage() {
         editValue={workspaceTitleDraft({ name: agentId, displayName: storedTitle })}
         onRename={state.setDisplayName}
         connectionStatus={state.connectionStatus}
-        working={state.isStreaming}
+        working={live}
         providerWait={state.providerWait}
         waitingOnYou={state.pendingActions.length > 0 || state.pendingConsents.length > 0}
         model={as?.model}
@@ -905,7 +907,7 @@ export default function WorkspacePage() {
             <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column py-7 space-y-5">
               <ConversationStartBoundary
                 hasEntries={thread.entries.length > 0}
-                streaming={state.isStreaming}
+                streaming={live}
                 error={history.error}
                 exhausted={history.exhausted}
                 onRetry={history.loadMore}
@@ -963,7 +965,7 @@ export default function WorkspacePage() {
                 <ChatErrorCard
                   message={state.chatError.body}
                   replayed={state.chatError.replayed}
-                  streaming={state.isStreaming}
+                  streaming={live}
                   onRetry={state.retryLastMessage}
                   onDismiss={state.clearChatError}
                 />
@@ -985,7 +987,7 @@ export default function WorkspacePage() {
                 value={chatInput}
                 onValueChange={setChatInput}
                 onSend={handleSend}
-                placeholder={state.isStreaming ? "Steer the running turn…" : "Send a message..."}
+                placeholder={live ? "Steer the running turn…" : "Send a message..."}
                 disabled={state.connectionStatus !== "connected"}
                 liveness={state.liveness}
                 onRecover={state.recoverTurn}
@@ -1050,7 +1052,7 @@ export default function WorkspacePage() {
             mctsTrees={state.mctsTrees}
             headActivity={state.headActivity}
             headDeltas={state.headDeltas}
-            isStreaming={state.isStreaming}
+            isStreaming={live}
             executors={state.executors}
             executorOutputs={state.executorOutputs}
             lastActiveExecutor={state.lastActiveExecutor}

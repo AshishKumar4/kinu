@@ -15,7 +15,6 @@ import type { PromptModelContext } from '../prompting/model-profile';
 import {
   type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
   type Evidence, type Decision, type ArtifactRef,
-  budgetExhausted,
 } from './types';
 import type { ToolCallRecord } from '../evolution/types';
 import { MissionBudgetExhausted, type MissionBudgetRefusal, type MissionScope } from '../mission-budget';
@@ -299,9 +298,7 @@ export function buildHeadSystemPrompt(
     ...renderHeadToolConventions(input, workspaceLayout, availableToolNames),
     ``,
     // At depth 0 split_subheads is not on the surface (head-tools.ts), so the clause is dropped.
-    (input.budget.maxWallClockMs === undefined
-      ? 'Take the time the task needs — there is no time or token limit on this run.'
-      : `Deadline: ${input.budget.maxWallClockMs}ms wall-clock (the caller asked for one).`)
+    'Take the time the task needs — there is no time or token limit on this run.'
     + (input.budget.maxDepth > 0 ? ` You may split ${input.budget.maxDepth} more level(s) deep.` : ''),
   ].join('\n');
 }
@@ -439,31 +436,22 @@ interface HeadOutcome {
 }
 
 /**
- * `status` and `stopReason` must name the same cut, so both come from one reading of the gates.
- * A throw the abort or deadline explains is not a failure; a real failure keeps its cause chain.
+ * `status` and `stopReason` must name the same cut, so both come from one reading of the abort.
+ * A throw the abort explains is not a failure; a real failure keeps its cause chain.
  */
 function classifyHeadOutcome(
-  budget: HeadInput['budget'],
   deps: Pick<HeadInferenceDeps, 'isAborted' | 'abortReason'>,
   failure: KinuError | undefined,
 ): HeadOutcome {
-  const budgetGate = budgetExhausted(budget);
   const aborted = deps.isAborted();
 
-  if (failure !== undefined && !aborted && !budgetGate.exhausted) {
+  if (failure !== undefined && !aborted) {
     return { status: 'errored', stopReason: renderThrownChain({ cause: failure }) };
   }
 
-  const stopReason = deps.abortReason?.()
-    ?? (budgetGate.exhausted
-      ? `${budgetGate.reason} budget exhausted`
-      : null);
+  const stopReason = deps.abortReason?.() ?? null;
 
-  if (aborted) return { status: 'aborted', stopReason };
-
-  if (budgetGate.exhausted) return { status: 'budget_exceeded', stopReason };
-
-  return { status: 'completed', stopReason };
+  return { status: aborted ? 'aborted' : 'completed', stopReason };
 }
 
 /** Parsed, not type-narrowed: a model that reports no identity still runs on the default window. */
@@ -602,7 +590,7 @@ function streamRelay(deps: HeadInferenceDeps): { observeStream?: HeadInferenceDe
 
 /**
  * Runs one reporting agent over as many turns as {@link HeadInferenceDeps.resume} grants and assembles its report.
- * Never throws: a failure becomes an `errored` report, because the controller reads a thrown run() as budget_exceeded.
+ * Never throws: a failure becomes an `errored` report that keeps the run's steps and usage, which a thrown run() loses.
  * No turn reaches `AgentOrchestrator.recordTurn`; tests/unit-headless-learning.test.ts guards that.
  */
 export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
@@ -620,12 +608,9 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
 
   const assertActive = (): void => {
     if (deps.isAborted()) throw new DOMException(deps.abortReason?.() ?? 'head was aborted', 'AbortError');
-    const gate = budgetExhausted(input.budget);
-
-    if (gate.exhausted) throw new Error(gate.reason + ' budget exhausted');
   };
 
-  // Only the mission ledger is asked here; cancel and budget are cut by the turn's signal and `assertActive`.
+  // Only the mission ledger is asked here; a cancel is cut by the turn's signal and `assertActive`.
   const prepareModelStep = async () => {
     if (deps.isAborted()) return undefined;
     await outOfBudget();
@@ -722,8 +707,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         const stopWhen = async (): Promise<boolean> => {
           if (deps.isAborted()) return true;
 
-          if (budgetExhausted(input.budget).exhausted) return true;
-
           return await outOfBudget();
         };
 
@@ -789,7 +772,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         session.finishTurn(lease);
       }
 
-      if (failure !== undefined || deps.isAborted() || budgetExhausted(input.budget).exhausted) break;
+      if (failure !== undefined || deps.isAborted()) break;
 
       if (advice.length > 0) {
         await appendNextTurnInput({ session, deps, conversation, turnId: `${turnId}#${index + 1}`, kind: 'advice', messages: advice });
@@ -814,7 +797,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     return exhaustedMissionReport({ input, capture, refusal, wallClockMs: clock.now() - startedAt, stepCount: recorded });
   }
 
-  const outcome = classifyHeadOutcome(input.budget, deps, failure);
+  const outcome = classifyHeadOutcome(deps, failure);
   const { status, stopReason } = outcome;
   const summary = headSummary({ input, capture, outcome, final: { text: lastText, reasoningText: lastReasoning } });
 

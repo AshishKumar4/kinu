@@ -75,7 +75,7 @@ export interface Expansion {
   /**
    * Non-null means do not measure: an unfinished node's summary is still a string
    * the instrument would score. The status is kept apart from the detail so the barrier
-   * can tell an all-broken level (refuse) from a deadline-cut one.
+   * can tell an all-broken level (refuse) from one cut by an abort or a spent budget.
    */
   readonly incomplete: NodeStop | null;
   /** Output as written, fences intact, for judges; {@link artifact} is the extracted program. */

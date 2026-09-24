@@ -11,6 +11,7 @@ import { MissionGovernor } from '../src/mission-budget';
 import type { CompletedTurn } from '../src/evolution/types';
 import { listTurnOutcomes } from '../src/evolution/outcomes';
 import type { AgentRuntime } from '../src/types/agent-runtime';
+import { unobservedSpend } from '@kinu.run/test-utils';
 
 const CLASSIFY = 'Classify what the follow-up reveals';
 
@@ -55,7 +56,7 @@ function workspace() {
   return {
     rt: counted,
     governor,
-    engine: new EvolutionEngine(counted, stores.history, { governor }),
+    engine: new EvolutionEngine(counted, stores.history, { reportModelCall: unobservedSpend, governor }),
     calls: () => completions,
   };
 }

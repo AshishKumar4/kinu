@@ -7,17 +7,21 @@
  * produces (geometry, per-frame holds, frame count), the shipped film against
  * the README that displays it, and the scripted model's branch table, which
  * decides what the recorded agent does and must never answer a request with a
- * tool the request never offered.
+ * tool the request never offered, nor take the live state the product sends
+ * after an ask for the ask.
  */
 import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { DYNAMIC_CONTEXT_OPEN_TAG, TURN_CONTEXT_HEADER } from '@kinu.run/core';
 
 import { scratchDir } from '../packages/test-utils/src/scratch';
 
 import { GIF_WIDTH, VIEWPORT, OPENING_LINE, concatManifest, filmScript, muxGif, probeGif } from './plan-demo-film';
-import { FALLBACK_ANSWER, PLAN_MISSION, SLATE_TITLE, planWalkthrough, readScriptedRequest } from './scripted-model';
+import {
+  FALLBACK_ANSWER, KEPT_TAB_NOTE, PLAN_MISSION, SLATE_TITLE, keptTabProbe, planWalkthrough, readScriptedRequest,
+} from './scripted-model';
 
 const REPO = resolve(import.meta.dir, '..');
 
@@ -233,5 +237,22 @@ describe('the recorded agent follows the walkthrough', () => {
     expect(String(JSON.stringify(manifest.toolCall?.arguments))).toContain(SLATE_TITLE);
     expect(settled.toolCall).toBeUndefined();
     expect(settled.text).toContain(SLATE_TITLE);
+  });
+});
+
+describe('a script reads what was asked, not the live state sent after it', () => {
+  test('an ask the dynamic context and the turn context follow is still the ask', () => {
+    // integration/0924: every request ended in the product's `<dynamic_context>` block, so the kept-tab script,
+    // taking the last user message for the ask, answered the save with prose and the row waited out its tier.
+    const asked = request({
+      messages: [
+        { role: 'user', content: KEPT_TAB_NOTE },
+        { role: 'user', content: `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="1" kind="delta">\n## Work mode\nMode: build\n</dynamic_context>` },
+        { role: 'user', content: `${TURN_CONTEXT_HEADER}\n\n## Skills activated this turn\n- review (named in the ask)` },
+      ],
+      available: ['file', 'memory'],
+    });
+
+    expect(keptTabProbe(asked)?.toolCall?.name).toBe('memory');
   });
 });

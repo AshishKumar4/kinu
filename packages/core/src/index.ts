@@ -1520,6 +1520,7 @@ export {
   type EgressPlan,
   type ScrubReplacement,
   DeferredApprovalQueue,
+  decideDeferredApprovals,
   DeferredApprovalStore,
   initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL,
@@ -1632,7 +1633,7 @@ export type {
 
 export {
   DEFAULT_MERGE_STRATEGY,
-  deriveChildBudget, budgetExhausted,
+  deriveChildBudget,
   headStatusUnsettled, storedHeadReportStatus,
   initHeadsTables,
   HeadJournal, type HeadJournalRow, type LiveHeadRun, type AbandonedHeadRun,
@@ -1641,7 +1642,7 @@ export {
   type ReportHeadDelta, type PublishHeadStream,
   reconcileInterruptedForks, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
-  HeadController, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
+  HeadController, runHeadSplit, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
   type SplitPhaseEvent,
   type HeadJournalPort,
   MergeOutputSchema, DecisionSchema, type MergeOutput,
@@ -2245,7 +2246,9 @@ export {
 
 export { drawnText, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
 
-export { turnLiveness, type TurnClaimState, type TurnLiveness } from './read-models/turn-liveness';
+export {
+  turnLiveness, TURN_CLAIM_FRAME, TurnClaimFrameSchema, type TurnClaimState, type TurnLiveness,
+} from './read-models/turn-liveness';
 
 export {
   breakdownView, shareOfMeasured,
@@ -2359,6 +2362,15 @@ export {
 } from './cli/access-tokens';
 
 export {
+  AGENT_RPC_ACCESS,
+  isAgentRpcMethod,
+  requiredRpcAccess,
+  rpcAccessScope,
+  type AgentRpcAccess,
+  type AgentRpcMethod,
+} from './cli/agent-rpc-access';
+
+export {
   bunResolutionShell,
   cliPlatformShell,
 } from './cli/bun-runtime';
@@ -2435,6 +2447,7 @@ export {
 export {
   sandboxIdForWorkspace,
   isKinuSandboxId,
+  SANDBOX_TRANSPORT,
 } from './preview/sandbox-id';
 
 export {

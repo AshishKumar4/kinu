@@ -7,6 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
 import { createTestRuntime } from './helpers';
+import { unobservedSpend } from '@kinu.run/test-utils';
 
 const CLASSIFY = 'Classify what the follow-up reveals';
 
@@ -31,11 +32,11 @@ describe('a replayed turn review', () => {
       lessons: rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM lessons`[0]?.n,
     });
 
-    await new EvolutionEngine(rt, stores.history).reviewTurn(reviewedTurn(), FOLLOWUP);
+    await new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend }).reviewTurn(reviewedTurn(), FOLLOWUP);
     expect(counts()).toEqual({ outcomes: 1, lessons: 1 });
 
     // A second engine over the same rows: what the next activation replaying the lane is.
-    await new EvolutionEngine(rt, stores.history).reviewTurn(reviewedTurn(), FOLLOWUP);
+    await new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend }).reviewTurn(reviewedTurn(), FOLLOWUP);
     expect(counts()).toEqual({ outcomes: 1, lessons: 1 });
   });
 });

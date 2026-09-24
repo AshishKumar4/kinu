@@ -15,6 +15,7 @@
 
 import type { AssistantModelMessage, ModelMessage, ToolModelMessage, ToolResultPart } from 'ai';
 import { renderThrownChain } from '../obs/index';
+import { StableCopies } from './stable-copies';
 
 /**
  * `modelOutputLimit` is the catalog maximum only (no caller sets an output cap),
@@ -143,34 +144,34 @@ function toolResultPartsOf(message: ModelMessage): ToolResultPart[] {
   return [];
 }
 
+/** The copy's key: which parts `doomed` cuts; null for none. */
+function cutOf(content: readonly (AssistantPart | ToolPart)[], doomed: ReadonlySet<ToolResultPart>): string | null {
+  const cut = content.map((part) => part.type === 'tool-result' && doomed.has(part) ? '1' : '0').join('');
+
+  return cut.includes('1') ? cut : null;
+}
+
 function prunedContent<Part extends AssistantPart | ToolPart>(
   content: readonly Part[], doomed: ReadonlySet<ToolResultPart>,
-): (Part | ToolResultPart)[] | null {
-  let changed = false;
-
-  const next = content.map((part): Part | ToolResultPart => {
-    if (part.type !== 'tool-result' || !doomed.has(part)) return part;
-    const truncated = truncateResultPart(part);
-
-    if (truncated !== part) changed = true;
-
-    return truncated;
-  });
-
-  return changed ? next : null;
+): (Part | ToolResultPart)[] {
+  return content.map((part): Part | ToolResultPart => part.type === 'tool-result' && doomed.has(part) ? truncateResultPart(part) : part);
 }
+
+const pruned = new StableCopies();
 
 function pruneMessage(message: ModelMessage, doomed: ReadonlySet<ToolResultPart>): ModelMessage {
   if (message.role === 'tool') {
-    const content = prunedContent(message.content, doomed);
+    const { content } = message;
+    const cut = cutOf(content, doomed);
 
-    return content === null ? message : { ...message, content };
+    return cut === null ? message : pruned.of(message, cut, () => ({ ...message, content: prunedContent(content, doomed) }));
   }
 
   if (message.role === 'assistant' && Array.isArray(message.content)) {
-    const content = prunedContent(message.content, doomed);
+    const content = message.content;
+    const cut = cutOf(content, doomed);
 
-    return content === null ? message : { ...message, content };
+    return cut === null ? message : pruned.of(message, cut, () => ({ ...message, content: prunedContent(content, doomed) }));
   }
 
   return message;

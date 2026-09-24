@@ -51,7 +51,7 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
     task: 'analyze the parser', rationale: 'cover the lexer angle',
     mode: 'build',
     inheritedContext: [{ id: 'm1', role: 'user', content: 'the prior user message', createdAt: 1 }],
-    budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: 2_000_000_000_000 },
+    budget: { maxDepth: 2, spawnedAt: 2_000_000_000_000 },
     mergeStrategy: 'synthesize',
     loop: defaultLoopOrigin('head'),
     ...overrides,
@@ -108,12 +108,6 @@ describe('runHeadInference — report assembly', () => {
     expect(report.status).toBe('completed');
     expect(calls).toBe(2);
     expect(report.summary).toBe('The lexer handles UTF-8 correctly.');
-  });
-
-  test('budget already exhausted → status budget_exceeded', async () => {
-    const input = headInput({ budget: { maxDepth: 2, maxWallClockMs: 1, spawnedAt: 1 } });
-    const report = await runHeadInference(input, await deps(fakeHeadModel('partial')));
-    expect(report.status).toBe('budget_exceeded');
   });
 
   test('aborted → status aborted + errorMessage from abortReason', async () => {

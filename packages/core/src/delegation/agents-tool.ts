@@ -36,6 +36,8 @@ import { freezeInheritedContext } from '../orchestrator/heads-support';
 import { SWARM_CONTEXTS } from '../types/swarm';
 import type { PublishHeadStream } from '../heads/head-stream';
 import type { AnnounceHeadActivity } from '../heads/live-journal';
+import type { ModelCallSink } from '../events/model-call';
+import type { WebSearchProvider } from '../web/index';
 import { readStartedSwarmProfile } from '../strategy/swarm-resume';
 import {
   NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_DOCTRINE,
@@ -58,7 +60,7 @@ import {
   type MissionGovernor, type MissionScope,
 } from '../mission-budget';
 import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from '../strategy/node-workspace';
-import type { HostedNodeSeat } from '../strategy/node-agent';
+import type { HostedNodeSeat, NodeCodemode } from '../strategy/node-agent';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../types/turn';
@@ -139,9 +141,9 @@ export interface TeamToolDeps {
   /** The workspace's subordinate roster (dismissed entries excluded). */
   list(): Promise<SubordinateRosterEntry[]>;
   snapshot(): SubordinateRosterEntry[];
-  /** Create an idle durable subordinate on the owner's behalf; it has no task until messaged or assigned.
-   *  Every field is optional (role defaults to `task`, mission to the creator's); the model's `hire` uses
-   *  {@link spawn}. `role` is the catalog id, written to the child's config store at seed time. */
+  /** Create an idle durable subordinate for the owner; it has no task until messaged or assigned. Role defaults
+   *  to `task`, mission to the creator's; the model's `hire` uses {@link spawn}. `role` is the catalog id,
+   *  written to the child's config store at seed time. */
   create(input: {
     name?: string;
     /** A title the owner typed: origin `user`, never auto-retitled. */
@@ -195,8 +197,8 @@ export interface TeamToolDeps {
   }>;
   /**
    * The `lifetime:'task'` half of `hire`: runs one child to completion inside the call and archives its
-   * row on answer. Optional in the type, required wherever a child substrate is wired; unwired, `hire`
-   * has no `lifetime` field and every hire is durable.
+   * row on answer. Required wherever a child substrate is wired; unwired, `hire` has no `lifetime` field
+   * and every hire is durable.
    */
   readonly temporary?: TemporaryAgentPort;
 }
@@ -248,10 +250,14 @@ export interface AgentsSwarmDeps {
   rt: AgentRuntime;
   hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
   model: LanguageModel;
+  /** Every model call a search makes bills here. */
+  reportModelCall: ModelCallSink;
+  nodeCodemode: NodeCodemode;
+  webSearch: WebSearchProvider;
   /**
-   * Turns a resolved tier's model spec into the model a delegated node runs on. Optional in the type,
-   * required wherever {@link AgentsToolDeps.profile} is wired: a run with a profile snapshot and no
-   * resolver refuses (`runSwarm`). Absent with no catalog, nodes run `model`.
+   * Turns a resolved tier's model spec into the model a delegated node runs on. Required wherever
+   * {@link AgentsToolDeps.profile} is wired: a run with a profile snapshot and no resolver refuses
+   * (`runSwarm`). Absent with no catalog, nodes run `model`.
    */
   resolveModel?: (spec: string) => LanguageModel;
   /** Caller conversation at dispatch, frozen into the search ledger so `context:'inherit'` survives re-drive. */
@@ -271,10 +277,7 @@ export interface AgentsSwarmDeps {
   compactShared?: SwarmRunDeps['compactShared'];
 }
 
-/**
- * Inputs for role/tier/preset precedence, wired under {@link AgentsToolDeps.profile}.
- * Absent: a role-targeted hire refuses and swarm needs an explicit preset.
- */
+/** Inputs for role/tier/preset precedence, wired under {@link AgentsToolDeps.profile}. */
 export interface AgentsProfileContext extends ProfileAuthorityInputs {
   readonly roleId: RoleId;
   readonly availableTools: readonly string[];
@@ -1112,6 +1115,9 @@ async function runSwarmAction({ deps, input, mode, toolOptions, budget }: SwarmA
     signal,
     // Real time on every node's ledger (D19); a test can inject its own clock.
     clock: REAL_CLOCK,
+    reportModelCall: swarm.reportModelCall,
+    nodeCodemode: swarm.nodeCodemode,
+    webSearch: swarm.webSearch,
     publishHeadStream,
     announceHeadActivity,
     provisionHome,

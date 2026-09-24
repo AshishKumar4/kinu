@@ -374,6 +374,18 @@ record which messages the model reads at each revision, and
 `context_proposals` holds edits staged against it. The owner or the actor reads
 and edits them through the `/context` mount (`vfs/context-plane.ts`).
 
+Every model request leaves evidence in `actor_requests`: one row for a turn's
+admission, then one row per step. An admission's messages are the working
+context revision it was admitted at. A step's messages are a revision of the
+actor's `requests` context, which nobody selects and which is stored in the
+same interval rows (`context_memberships`); `request_renders` names that
+revision. So a step writes only the positions that changed since the previous
+request. A message the step pipeline made or rewrote (a woven block, replayed
+tool-call ids, cache markers) is one `render` row, named by the SHA-256 of its
+stored bytes, however many requests carry it. `SessionRequests`
+(`session/requests.ts`) owns this; a step without its list is an `io`
+integrity error.
+
 Readers answer from the entries: the chat pane's page walk
 (`getChatHistoryPage` in `read-models/status.ts`, over `session/page.ts`),
 `memory/conversation-search.ts` (`scroll`, `browse`, and the FTS index keyed

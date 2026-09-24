@@ -17,6 +17,7 @@ import type {
 } from './deploy-fake';
 import type { DeployInputs, DeployRunPhase, DeploySnapshot } from '@kinu.run/core/deploy';
 import type { FilesEioProbeDO } from './files-eio-probe';
+import type { ComplexityProbeDO } from './complexity/complexity-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
@@ -157,7 +158,13 @@ type ProbeAnswer = { ok: true; value: unknown } | { ok: false; reason: string; e
 
 interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   start(): Promise<void>;
-  share(): Promise<ProbeAnswer>;
+  share(approved?: readonly { binding: string; member: string }[]): Promise<ProbeAnswer>;
+  liveShares(): Promise<ProbeAnswer>;
+  importBlueprint(): Promise<{ fork: string; running: number }>;
+  viewerHop(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<string>;
+  viewerSocketAcross(
+    handle: string, claim: { userId: string | null; source: string; consented: boolean }, share: string, change: 'revoke' | 'spend',
+  ): Promise<{ before: string | null; after: string; late: string }>;
   viewerFetch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ status: number; body: string }>;
   viewerBatch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
   viewerSocket(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
@@ -180,7 +187,7 @@ interface DeployRunProbeRpc extends Rpc.DurableObjectBranded {
   snapshot(): Promise<DeploySnapshot>;
   start(inputs: DeployInputs): Promise<DeploySnapshot>;
   retry(stepId: string): Promise<DeploySnapshot>;
-  heldSecretNames(): Promise<readonly string[]>;
+  heldCredentials(): Promise<readonly string[]>;
   forget(): Promise<void>;
   alarmAt(): Promise<number>;
   armedAt(): Promise<number>;
@@ -250,6 +257,7 @@ declare global {
       STREAM_LIFECYCLE: DurableObjectNamespace<StreamLifecycleDO>;
       DEVICE_LEDGER_PROBE: DurableObjectNamespace<DeviceLedgerProbeDO>;
       FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
+      COMPLEXITY_PROBE: DurableObjectNamespace<ComplexityProbeDO>;
       PREVIEW_PORT_PROBE: DurableObjectNamespace<PreviewPortProbeDO>;
       SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeRpc>;
       SLATE_SHARE_PROBE: DurableObjectNamespace<SlateShareProbeRpc>;

@@ -1,5 +1,5 @@
 /**
- * Evolved prompt sections: propose, trial, promote (the scaffold discipline).
+ * Evolved prompt sections: propose, trial, promote, as scaffolds are.
  * `buildSystemPromptSync` reads {@link activePromptSectionOverrides} once per
  * activation, so the live prompt moves only on a promotion.
  *

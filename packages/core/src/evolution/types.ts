@@ -4,6 +4,7 @@ import type { MCTSProgressEvent } from '../types/mcts';
 import type { Usage } from '../usage';
 import type { JsonObject, JsonValue } from '../utils/json';
 import type { MissionGovernor } from '../mission-budget';
+import type { ModelCallSink } from '../events/model-call';
 import type { ToolOutcome } from '../tools/outcome';
 
 export interface ToolCallRecord {
@@ -92,9 +93,11 @@ export interface EvolutionConfig {
   shadowTrialRunner?: () => Promise<ShadowTrialDrain>;
   /** Reached only for turns carrying {@link CompletedTurn.missionLabels}. Absent = every review is ungoverned. */
   governor?: MissionGovernor;
+  /** Bills the lifetime search's branch calls; the engine reports each from the usage its branch returns. */
+  reportModelCall: ModelCallSink;
 }
 
-export const DEFAULT_EVOLUTION_CONFIG: EvolutionConfig = {
+export const DEFAULT_EVOLUTION_CONFIG: Omit<EvolutionConfig, 'reportModelCall'> = {
   enabled: true,
   lifetimeEvolutionInterval: 5,
   lifetimeMCTSBudget: 2,

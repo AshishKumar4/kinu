@@ -400,7 +400,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     context_proposal_entries: EVERYWHERE,
     context_proposal_sources: EVERYWHERE,
     actor_requests: EVERYWHERE,
-    request_messages: EVERYWHERE,
+    request_renders: EVERYWHERE,
     conversation_entries: EVERYWHERE,
     conversation_heads: EVERYWHERE,
     conversation_entry_parts: EVERYWHERE,

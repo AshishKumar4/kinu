@@ -62,6 +62,9 @@ export interface ExecutorDiffResult {
   error?: string;
 }
 
+/** The baseline read model reads the workspace's files and its own tables, as the actor it serves. */
+type WorkspaceBaselineRuntime = Pick<AgentRuntime, 'storage' | 'actor'>;
+
 interface ManifestEntry {
   readonly size: number;
   readonly mtimeMs: number;
@@ -70,7 +73,7 @@ interface ManifestEntry {
 
 /** Every regular file the change-set reviews, breadth-first so root files come first, by stat alone. */
 async function walkWorkspaceFiles(
-  rt: AgentRuntime,
+  rt: WorkspaceBaselineRuntime,
   visit: (path: string, stat: VfsEntryStat) => void | Promise<void>,
 ): Promise<void> {
   const directories = [''];
@@ -112,7 +115,7 @@ async function walkWorkspaceFiles(
 }
 
 /** The body a line diff shows, or null for a binary (NUL-bearing) file. */
-async function reviewableText(rt: AgentRuntime, path: string): Promise<string | null> {
+async function reviewableText(rt: WorkspaceBaselineRuntime, path: string): Promise<string | null> {
   let content: string | Uint8Array;
 
   try {
@@ -133,7 +136,7 @@ interface BaselineManifest {
 }
 
 /** Read in one query, so a diff never straddles a concurrent re-baseline. */
-function activeManifest(rt: AgentRuntime): BaselineManifest {
+function activeManifest(rt: WorkspaceBaselineRuntime): BaselineManifest {
   rt.actor.assertCurrent();
 
   const rows = rt.storage.sql<{ path: string; size: number; mtime_ms: number; hash: string | null }>`
@@ -151,7 +154,7 @@ function activeManifest(rt: AgentRuntime): BaselineManifest {
   return { capturedAt, entries };
 }
 
-function blobText(rt: AgentRuntime, hash: string | null): string | null {
+function blobText(rt: WorkspaceBaselineRuntime, hash: string | null): string | null {
   if (hash === null) return null;
   const row = rt.storage.sql<{ content: string }>`SELECT content FROM vfs_baseline_blob WHERE hash = ${hash} LIMIT 1`[0];
 
@@ -166,7 +169,7 @@ function unmoved(entry: ManifestEntry, st: VfsEntryStat): boolean {
 }
 
 /** Cumulative change-set since the baseline. A file whose size and mtime match its manifest row is never read. */
-export async function getWorkspaceDiff(rt: AgentRuntime): Promise<WorkspaceDiffResult> {
+export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime): Promise<WorkspaceDiffResult> {
   const held = activeManifest(rt);
   // Without a baseline, tracking starts now: the same capture a new workspace takes at creation.
   const trackedSince = held.capturedAt ?? (await resetWorkspaceBaseline(rt)).capturedAt;
@@ -224,7 +227,7 @@ export async function getWorkspaceDiff(rt: AgentRuntime): Promise<WorkspaceDiffR
  * active, so no read sees a partial replacement. An unmoved file keeps its hash without being read.
  */
 export async function resetWorkspaceBaseline(
-  rt: AgentRuntime,
+  rt: WorkspaceBaselineRuntime,
 ): Promise<{ ok: true; files: number; capturedAt: number }> {
   const previous = activeManifest(rt).entries;
   const actorId = rt.actor.actorId;
