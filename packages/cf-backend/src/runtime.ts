@@ -5,9 +5,8 @@
 
 import type {
   AgentRuntime, ActorHandle, BranchHandle,
-  VFS as CoreVFS, Executor, LLM, Schedule, Identity,
+  VFS as CoreVFS, LLM, Schedule, Identity,
   SqlExecutor, SqlValue, RawSqlExec,
-  ExecuteResult, ResolvedProvider,
   FiberCtx, ExecutionRouter,
   TurnAccumulator,
   DeferredApprovalChannel,
@@ -42,7 +41,7 @@ import type { HostedNodeHome } from '@kinu.run/core';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
-import { diagnostics, KinuError, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
 import { kinuEgressParams } from "./egress/configure";
 import { driveBound, tenantDrive } from "./drive/tenant";
 import { adaptCloudflareSandbox, openSandbox } from "./sandbox-exec-lane";
@@ -52,7 +51,7 @@ import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore, craftStoreView } from "@kinu.run/agent-utils/stores";
 import { generateText, type LanguageModelUsage } from "ai";
-import { DynamicWorkerExecutor } from "@cloudflare/codemode";
+import { createRuntimeExecutor } from "./codemode-sandbox";
 import type { Agent } from "agents";
 import {
   createHubDeviceTransport,
@@ -286,7 +285,7 @@ export function createCFRuntime(
     throw new Error("CF runtime requires env.LOADER binding (worker_loaders in wrangler.jsonc)");
   }
 
-  const executor = createExecutor(envForExec.LOADER);
+  const executor = createRuntimeExecutor(envForExec.LOADER);
 
   const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM({
     agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall,
@@ -566,40 +565,6 @@ function buildVectorStore(
   }
 }
 
-function createExecutor(loader: WorkerLoader): Executor {
-  const dwe = new DynamicWorkerExecutor({ loader });
-
-  return {
-    languages: ['javascript'],
-    async execute(code: string, providers: ResolvedProvider[]): Promise<ExecuteResult> {
-      try {
-        const normalized = Array.isArray(providers)
-          ? providers
-          : [{ name: 'codemode', fns: providers }];
-
-        const bridged = normalized.map((provider) => ({
-          name: provider.name,
-          fns: Object.fromEntries(Object.entries(provider.fns).map(([name, fn]) => [
-            name,
-            async (...args: unknown[]) => fn(...args.map((value) => decodeJsonValue({ value }))),
-          ])),
-        }));
-
-        const res = await dwe.execute(code, bridged);
-        const result = res.result === undefined ? undefined : decodeJsonValue({ value: res.result });
-        const output: ExecuteResult = { result };
-
-        if (res.error !== undefined) output.error = res.error;
-
-        if (res.logs !== undefined) output.logs = res.logs;
-
-        return output;
-      } catch (e) {
-        return { result: undefined, error: renderThrownChain({ cause: e }) };
-      }
-    },
-  };
-}
 
 
 /** Resolved at call time so a newly connected provider applies without redeploy; not via
