@@ -188,13 +188,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   declareWebhookRouteSecret(secret: string): void {
     Object.assign(this.env, { WEBHOOK_ROUTE_SECRET: secret });
   }
-  /**
-   * The container binding, absent by default: `createCFRuntime` gates `sandboxHandle` on it.
-   * Declare before the actor is acquired: `ActorHostDeps.runtimeFor` memoizes one runtime per handle.
-   */
-  declareContainerBinding(): void {
-    Object.assign(this.env, { Sandbox: { idFromName: (name: string) => name, get: () => ({}) } });
-  }
   /** Deployment bindings declared after construction (AUTH_KV, preview suffix).
    *  Declare before the read: `slates` memoizes its deps on first use. */
   harnessDeclareEnv(bindings: { AUTH_KV?: KvStore; PREVIEW_HOST_SUFFIX?: string; CREDENTIAL_ENCRYPTION_KEY?: string }): void {
@@ -1254,6 +1247,9 @@ export interface HarnessActorWorld {
   aiGateway?: StubbedAiBinding;
   /** The `send_email` binding at `env.EMAIL`; unset, the workspace has no mail route. */
   email?: SendEmail;
+  /** The container binding at `env.Sandbox`: the runtime registers the sandbox executor over the Sandbox SDK,
+   *  whose `getSandbox` a suite doubles. Unset, the workspace has no container. */
+  container?: boolean;
   /** Every method this object served over its own namespace's stub, in call order. */
   rpcServed?: string[];
   /** This activation's isolate stops once in its terminal sequence, at that effect, before or after
@@ -1293,6 +1289,7 @@ export function makeEnv(
     // The platform gateway is the harness's model provider, over a recording AI binding.
     ...platformGatewayEnv(world?.aiGateway),
     ...(world?.email !== undefined && { EMAIL: world.email }),
+    ...(world?.container === true && { Sandbox: { idFromName: (name: string) => name, get: () => ({}) } }),
     UserDO: {
       idFromName: (n: string) => ({ toString: () => n }),
       // Recording when asked, refusing otherwise, so an unannounced user-plane path fails

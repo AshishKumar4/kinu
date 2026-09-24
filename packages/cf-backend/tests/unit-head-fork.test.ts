@@ -69,11 +69,9 @@ function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
   return 'localVfs' in runtime && 'sandboxHandle' in runtime;
 }
 
-/** Declare the container binding before acquiring the head: `runtimeFor` memoizes one runtime per handle and gates the sandbox on `env.Sandbox`. */
-
+/** The workspace has a container, so the head's runtime registers a sandbox executor over it. */
 async function hostedHead(files: Record<string, string> = {}, id = 'head-1', userPlane?: RecordedUserPlaneCalls) {
-  const workspace = orchestratorHarness(userPlane);
-  workspace.agent.declareContainerBinding();
+  const workspace = orchestratorHarness(userPlane, { container: true });
   workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
 
   for (const [path, content] of Object.entries(files)) {

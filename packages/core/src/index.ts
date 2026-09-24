@@ -2436,6 +2436,7 @@ export {
 export {
   sandboxIdForWorkspace,
   isKinuSandboxId,
+  SANDBOX_TRANSPORT,
 } from './preview/sandbox-id';
 
 export {

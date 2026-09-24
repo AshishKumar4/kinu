@@ -56,7 +56,6 @@ import type { ToolSet } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "@kinu.run/core";
-import { getSandbox } from "@cloudflare/sandbox";
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import type { ActivitySnapshot, TabPresence, TurnClaimState } from "@kinu.run/core";
@@ -239,7 +238,7 @@ import {
   acceptSandboxLifecycleFailure, initSandboxLifecycleTable,
   type SandboxLifecycleFailureResult,
 } from "./sandbox-lifecycle";
-import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
+import { openSandbox } from "./sandbox-exec-lane";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import {
@@ -3695,10 +3694,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     if (this.env.Sandbox) {
-      // {@link SANDBOX_TRANSPORT}: the SDK drops in-flight requests if the transport changes between calls.
-      const sb = getSandbox(this.env.Sandbox, sandboxIdForWorkspace(this.name), {
-        normalizeId: true, transport: SANDBOX_TRANSPORT,
-      });
+      const sb = openSandbox(this.env.Sandbox, sandboxIdForWorkspace(this.name), { normalizeId: true });
 
       // Before destroy(): the container object owns its /workspace snapshot, and
       // once its storage is gone nothing knows which R2 objects were its.
