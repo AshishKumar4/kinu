@@ -45,6 +45,8 @@ const AssertionSchema = v.looseObject({
         }),
         usage: v.looseObject({
           model: v.pipe(v.string(), v.minLength(1)),
+          inputTokens: v.optional(Count, 0),
+          outputTokens: v.optional(Count, 0),
           metadata: v.optional(v.looseObject({ costUsd: v.optional(v.pipe(v.number(), v.minValue(0))) }), {}),
         }),
         output: v.looseObject({

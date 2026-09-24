@@ -46,6 +46,16 @@ export type EvalVerdict = 'improved' | 'regressed' | 'unchanged' | 'inconclusive
 /** What one report measured: the deployed build, and the commit whose task definitions it ran. */
 export type EvalSide = { productSha: string; evalCommit: string };
 
+/** How the agent worked on one model across every task of one report: information, not a verdict. */
+export type AgentProfile = {
+  runs: number;
+  meanModelTurns: number;
+  meanInputTokens: number;
+  meanOutputTokens: number;
+  /** The share of tool calls that were `eval` (code mode) rather than a native tool; null with no calls. */
+  evalCallShare: number | null;
+};
+
 export type EvalComparison = {
   baseline: EvalSide | null;
   candidate: EvalSide;
@@ -53,6 +63,8 @@ export type EvalComparison = {
   /** Files changed between the two deployed builds that the evals exercise. */
   changedFiles: string[];
   rows: EvalComparisonRow[];
+  /** Per model, both sides pooled over every task. */
+  profiles: { model: string; baseline: AgentProfile | null; candidate: AgentProfile }[];
 };
 
 /** Questions about two commits that only the caller, holding the repository, can answer. */
@@ -89,6 +101,30 @@ function group(assertions: readonly Assertion[]): Map<string, Cohort> {
   }
 
   return cohorts;
+}
+
+function profile(assertions: readonly Assertion[]): AgentProfile {
+  const runs = assertions.map((assertion) => assertion.meta.harness.run);
+  const calls = runs.flatMap((run) => run.session.events.flatMap((event) => event.type === 'tool_call' ? [event.name] : []));
+
+  return {
+    runs: runs.length,
+    meanModelTurns: mean(runs.map((run) => run.output.metrics.modelTurns)),
+    meanInputTokens: mean(runs.map((run) => run.usage.inputTokens)),
+    meanOutputTokens: mean(runs.map((run) => run.usage.outputTokens)),
+    evalCallShare: calls.length === 0 ? null : calls.filter((name) => name === 'eval').length / calls.length,
+  };
+}
+
+function profiles(baseline: readonly Assertion[], candidate: readonly Assertion[]): EvalComparison['profiles'] {
+  const models = [...new Set(candidate.map((assertion) => assertion.meta.harness.run.usage.model))].sort();
+  const on = (assertions: readonly Assertion[], model: string) => assertions.filter((assertion) => assertion.meta.harness.run.usage.model === model);
+
+  return models.map((model) => {
+    const before = on(baseline, model);
+
+    return { model, baseline: before.length === 0 ? null : profile(before), candidate: profile(on(candidate, model)) };
+  });
 }
 
 /** A report measures one build with one set of definitions, or it is two reports. */
@@ -296,6 +332,7 @@ export function compareEvalResults(baselineText: string | null, candidateText: s
     baseline, candidate, verdict: verdictOf(rows),
     changedFiles: baseline === null ? [] : questions.changedFiles?.(baseline.productSha, candidate.productSha) ?? [],
     rows,
+    profiles: profiles(baselineAssertions, candidateAssertions),
   };
 }
 
@@ -357,6 +394,12 @@ function passChange(row: ComparedRow): string {
   if (row.pValue >= SIGNIFICANCE) return `\u26AA ${signed(delta, 0, ' pp')}`;
 
   return `${delta > 0 ? '\u{1F7E2}' : '\u{1F534}'} ${signed(delta, 0, ' pp')} (p = ${row.pValue.toFixed(2)})`;
+}
+
+function tokens(count: number): string {
+  if (count >= 1e6) return `${(count / 1e6).toFixed(1)}M`;
+
+  return count >= 1e3 ? `${(count / 1e3).toFixed(0)}k` : count.toFixed(0);
 }
 
 function minutes(ms: number): string {
@@ -432,6 +475,19 @@ export function renderEvalComparison(comparison: EvalComparison): string {
 
   lines.push('', '_Durations leave out time the product spent waiting on the model provider; 429 waits are the '
     + 'candidate\u2019s total over all runs: the eval account\u2019s rate limit, infrastructure, never a task failure._', '');
+
+  lines.push('How the agent worked, per run over every task (information, not scored; the baseline in parentheses):', '',
+    '| Model | Runs | Model steps | Input tokens | Output tokens | `eval` share of tool calls |', '| --- | --- | --- | --- | --- | --- |');
+
+  for (const { model: profiled, baseline: before, candidate: after } of comparison.profiles) {
+    const cell = (value: (side: AgentProfile) => string) => `${value(after)}${before === null ? '' : ` (${value(before)})`}`;
+    const share = (side: AgentProfile) => side.evalCallShare === null ? '\u2014' : `${(side.evalCallShare * 100).toFixed(0)}%`;
+
+    lines.push(`| ${[profiled, String(after.runs), cell((side) => side.meanModelTurns.toFixed(1)),
+      cell((side) => tokens(side.meanInputTokens)), cell((side) => tokens(side.meanOutputTokens)), cell(share)].join(' | ')} |`);
+  }
+
+  lines.push('');
 
   for (const row of rows) {
     const { candidate: side, baseline: before } = row;
