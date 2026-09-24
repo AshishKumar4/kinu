@@ -1,7 +1,7 @@
 {
   "date": "2026-09-23",
-  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:5391d6b4126419644de6900edb5c253caa76e85b87be9562a77ab7aedb151108",
-  "digest": "sha256:5391d6b4126419644de6900edb5c253caa76e85b87be9562a77ab7aedb151108",
+  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:c2c03bdf3b46d22633ffdeab545953d7c0caa0fb562d36e70ebdd4618898c718",
+  "digest": "sha256:c2c03bdf3b46d22633ffdeab545953d7c0caa0fb562d36e70ebdd4618898c718",
   "sandboxVersion": "0.12.9",
   "sandbox": "docker.io/cloudflare/sandbox@sha256:4a56a37a3cfd9b38d65bb4b5d0b341e6490a3a4c0226274ae4c1cca4948e85fe",
   "rust": "docker.io/library/rust@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d",
@@ -13,7 +13,7 @@
   "binaries": {
     "devbox-block-lower": "ad76e1563916b158ba9f43a73bb784937fdb669893c84bac6bd86ffe79e41b9c",
     "devbox-squashfuse": "7a3e37d78e4357c8b79fb443fec8267b99d0624410c180b9b7a1d46130bad33e",
-    "sync.js": "9f89cd2ade32323f8ee3c47a84f678e521da855b51353bf18c5a797d147106c9"
+    "sync.js": "b982beb4cc990141f2f2bbc77be2dd73d60c2d792f2525638e14629677e46420"
   },
   "files": {
     "Cargo.toml": "e1a269141da13953785f1fbaa6a18edb10cf644fdc9a710858ac02f31e426f83",

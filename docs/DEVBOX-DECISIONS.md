@@ -1221,7 +1221,7 @@ and the sync's log go to the container's stdout, which Workers Logs carries
 is `bash --norc` (read from the 0.12.9 container server), so the tests' parse
 gate now models bash where it modelled POSIX `sh`. The image and the box move
 together: `block-lower/upstream.json` pins the bundle's sha256
-(`9f89cd2a…`, image `kinu-devbox-block-layer@sha256:5391d6b4…`), and
+(`b982beb4…`, image `kinu-devbox-block-layer@sha256:c2c03bdf…`), and
 `tests/block-image.test.ts` bundles the tree again and fails on any other
 bytes, so a change to the sync's code fails until the image is rebuilt and
 re-pinned. The flush's own session left the default session's shell on the
