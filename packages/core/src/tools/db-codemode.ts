@@ -980,7 +980,7 @@ export declare const db: {
   deleteRows(table: string, where: DbWhere): Promise<{ rowsAffected: number }>;
   /** Up to ${MAX_BATCH_OPS} writes in one transaction: all land or none does; \`failedIndex\` names the one that failed. */
   batch(ops: DbWrite[]): Promise<{ rowsAffected: number }[] | { reason: string; error: string; failedIndex: number }>;
-  /** Drop a table you declared, with its rows. */
+  /** Drop a table you declared, with its rows. Build turns only; an actor-scope table is refused while another agent holds rows in it. */
   dropTable(table: string): Promise<{ ok: true }>;
 };`;
 

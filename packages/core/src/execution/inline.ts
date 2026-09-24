@@ -415,7 +415,7 @@ declare namespace workspace {
   };
   function readFile(path: string): Promise<string | Refusal>;
   function writeFile(path: string, content: string): Promise<string | Refusal>;
-  /** The \`file\` tool's edit, over the same read state. */
+  /** The \`file\` tool's edit, over the same read state: read the file first; each old_text is copied verbatim and occurs once. */
   function editFile(
     path: string, edits: Array<{ old_text: string; new_text: string }>
   ): Promise<{ ok: boolean; path?: string; applied?: Array<{ line: number; removed_lines: number; added_lines: number }> } | Refusal>;

@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
 import type { CodemodeProvider, CraftedToolSet, JsonValue, SlateOperation } from '@kinu.run/core';
-import { CODEMODE_CODE_DESCRIPTION, WORKSPACE_ROOT, createInlineExecutor } from '@kinu.run/core';
+import { CODEMODE_CODE_DESCRIPTION, SlateOperationSchema, WORKSPACE_ROOT, createInlineExecutor } from '@kinu.run/core';
 import { toolExecute, scriptedTurnModel, createTestRuntime, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { inWorkMode, successfulToolOutcome, renderDynamicContextBlock, runChat, DynamicContextLedger, craftedToolDeclarations } from '@kinu.run/core';
@@ -493,12 +493,17 @@ test('each workspace.slates member reaches the slate host as one operation, and 
   );
 
   // Issue #28: a slate is its class, so the class's own `remove` is a call and the lifecycle is `$remove`.
+  // Every lifecycle member runs once, with distinct arguments wherever its operation takes them.
   const program = [
     '// Drive the whiteboard slate through every kind of member',
     'const board = workspace.slates.whiteboard;',
-    "const answers = [await board.addStroke({ id: 'roof' }), await board.remove(3), await board.$preview(), await board.$restore('v1')];",
-    "answers.push(await workspace.slates.$list(), await workspace.slates.$fork('v1'), await board.$inspect('v1'));",
+    'const slates = workspace.slates;',
+    "const answers = [await board.addStroke({ id: 'roof' }), await board.remove(3)];",
+    'answers.push(await board.$preview(), await board.$methods(), await board.$commit(), await board.$history(), await board.$graph());',
+    "answers.push(await board.$restore('v1'), await board.$inspect('v1', ['client.tsx']), await board.$publish('v2', ['server.ts']));",
     "answers.push(await board.$share({ visibility: 'public', approved: [], op: 'remove', id: 'other' }));",
+    "answers.push(await slates.$list(), await slates.$fork('v1'), await slates.$shares(), await slates.$liveShares());",
+    "answers.push(await slates.$unshare('s1'), await slates.$viewerRequests('s2'));",
     'const refused = await board.$remove();',
     "const envelope = [typeof workspace.slate, await Promise.resolve().then(() => workspace.slates({ op: 'list' })).then(() => 'called', () => 'not callable')];",
     'return { answers, refused, envelope, awaited: (await board) === board };',
@@ -507,7 +512,10 @@ test('each workspace.slates member reaches the slate host as one operation, and 
   const out = await execute({ code: program });
 
   expect(out.result).toMatchObject({
-    answers: ['call', 'call', 'preview', 'restore', 'list', 'fork', 'inspect', 'share'],
+    answers: [
+      'call', 'call', 'preview', 'methods', 'commit', 'history', 'graph', 'restore', 'inspect', 'publish', 'share',
+      'list', 'fork', 'shares', 'liveShares', 'unshare', 'viewerRequests',
+    ],
     refused: { success: false, reason: 'denied', error: 'not yours' },
     envelope: ['undefined', 'not callable'],
     awaited: true,
@@ -517,11 +525,24 @@ test('each workspace.slates member reaches the slate host as one operation, and 
     { op: 'call', id: 'whiteboard', method: 'addStroke', args: [{ id: 'roof' }] },
     { op: 'call', id: 'whiteboard', method: 'remove', args: [3] },
     { op: 'preview', id: 'whiteboard' },
+    { op: 'methods', id: 'whiteboard' },
+    { op: 'commit', id: 'whiteboard' },
+    { op: 'history', id: 'whiteboard' },
+    { op: 'graph', id: 'whiteboard' },
     { op: 'restore', id: 'whiteboard', version: 'v1' },
+    { op: 'inspect', id: 'whiteboard', version: 'v1', include: ['client.tsx'] },
+    { op: 'publish', id: 'whiteboard', version: 'v2', include: ['server.ts'] },
+    { op: 'share', id: 'whiteboard', visibility: 'public', approved: [] },
     { op: 'list' },
     { op: 'fork', version: 'v1' },
-    { op: 'inspect', id: 'whiteboard', version: 'v1' },
-    { op: 'share', id: 'whiteboard', visibility: 'public', approved: [] },
+    { op: 'shares' },
+    { op: 'liveShares' },
+    { op: 'unshare', share: 's1' },
+    { op: 'viewerRequests', share: 's2' },
     { op: 'remove', id: 'whiteboard' },
   ]);
+
+  // Every operation the host defines was reached, so a member added without a row here fails.
+  expect(new Set(operations.map((operation) => operation.op)))
+    .toEqual(new Set(SlateOperationSchema.options.map((option) => option.entries.op.literal)));
 });
