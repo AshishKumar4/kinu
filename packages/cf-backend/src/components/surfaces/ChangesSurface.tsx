@@ -23,11 +23,19 @@ function sourcesOf(executors: readonly ExecutorInfo[]): string[] {
   return Array.from(new Set(["workspace", ...devices]));
 }
 
-/** Null keeps the tab away; 0 keeps it without a number, for a failed read. */
-function countOf(sets: readonly ChangeSet[] | null, failed: boolean, shown: number): number | null {
-  if (sets === null) return failed ? 0 : null;
+/** A folder outside git is not `unreadable`. */
+interface Read {
+  readonly sets: readonly ChangeSet[];
+  readonly unreadable: boolean;
+}
 
-  return sets.some((set) => set.files.length > 0) ? shown : null;
+/** Null hides the tab; 0 shows it unnumbered. */
+function countOf(read: Read | null, failed: boolean, shown: number): number | null {
+  if (read === null) return failed ? 0 : null;
+
+  if (read.sets.some((set) => set.files.length > 0)) return shown;
+
+  return read.unreadable ? 0 : null;
 }
 
 /** `on`: the listing reviewed over (null while the reset runs); `undone`: the listing Undo left. */
@@ -69,19 +77,24 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, onOpenFile,
     if (!picked.current && sources.includes(defaultSource)) setSource(defaultSource);
   }, [defaultSource, sourceKey]);
 
-  const load = useCallback(() => Promise.all(sourceKey.split("\n").map(async (name) =>
-    changeSetOf(name, await rpc<ExecutorDiffResult>("getExecutorDiff", [name])))), [rpc, sourceKey]);
+  const load = useCallback(async (): Promise<Read> => {
+    const results = await Promise.all(sourceKey.split("\n").map(async (name) =>
+      [name, await rpc<ExecutorDiffResult>("getExecutorDiff", [name])] as const));
+
+    return { sets: results.map(([name, result]) => changeSetOf(name, result)), unreadable: results.some(([, result]) => result.error !== undefined) };
+  }, [rpc, sourceKey]);
 
   const revalidate = useCallback(() => 2_000, []);
   const { resource, reload } = useAsyncResource(load, revalidate);
-  const sets = lastValue(resource);
+  const read = lastValue(resource);
+  const sets = read?.sets ?? null;
   // Read after an await: the listing and reload of now, not of the click.
   const live = useRef({ sets, reload });
   live.current = { sets, reload };
   const shown = sets?.find((set) => set.source === source) ?? sets?.[0];
   const shownFiles = shown?.files.length ?? 0;
   const reviewedAt = reviewedAtOf(reviewed, sets, shownFiles);
-  const count = countOf(sets, resource.status === "error", shownFiles);
+  const count = countOf(read, resource.status === "error", shownFiles);
 
   useEffect(() => { onCount(count); }, [count, onCount]);
 

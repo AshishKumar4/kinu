@@ -114,6 +114,7 @@ function ListHeader({ sets, set, now, menuOpen, reviewable, onPick, onExpand, on
   onReviewed: () => void;
 }) {
   const read = set.error === undefined;
+  const changed = read && set.files.length > 0;
 
   return (
     <header className="shrink-0 border-b p-border px-4 pb-3 pt-3.5">
@@ -121,18 +122,20 @@ function ListHeader({ sets, set, now, menuOpen, reviewable, onPick, onExpand, on
         {read
           ? <Summary set={set} />
           : <span className="flex min-w-0 items-center gap-2 p-row-text font-medium p-text"><WarningCircleIcon size={15} className="shrink-0 p-warning" />Can't read {set.label}</span>}
-        {onExpand !== null && read && (
+        {onExpand !== null && changed && (
           <IconButton label="Expand: every file side by side" onClick={onExpand} className="-mr-1.5 ml-auto">
             <ArrowsOutSimpleIcon size={15} />
           </IconButton>
         )}
       </div>
-      <div className="mt-1.5 flex min-h-7 items-center gap-1.5 p-meta p-text-3">
-        <SourceMenu sets={sets} source={set.source} initiallyOpen={menuOpen} onPick={onPick} />
-        {sets.length > 1 && read && <span aria-hidden="true">·</span>}
-        {read && <Since set={set} now={now} />}
-        {set.mode === "vfs-baseline" && read && reviewable && <MarkReviewed onClick={onReviewed} className="ml-auto" />}
-      </div>
+      {(sets.length > 1 || read) && (
+        <div className="mt-1.5 flex min-h-7 items-center gap-1.5 p-meta p-text-3">
+          <SourceMenu sets={sets} source={set.source} initiallyOpen={menuOpen} onPick={onPick} />
+          {sets.length > 1 && read && <span aria-hidden="true">·</span>}
+          {read && <Since set={set} now={now} />}
+          {set.mode === "vfs-baseline" && changed && reviewable && <MarkReviewed onClick={onReviewed} className="ml-auto" />}
+        </div>
+      )}
     </header>
   );
 }
@@ -231,6 +234,11 @@ export function ChangesPanel({ sets, source, onSource, now, file: initialFile = 
 
   const opener = (file: FileDiff): (() => void) | null => (onOpenInFiles === null ? null : () => onOpenInFiles(file.path));
 
+  const review = (): void => {
+    setPath(null);
+    onReviewed();
+  };
+
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (typing(event.target) || event.metaKey || event.ctrlKey || event.altKey) return;
 
@@ -256,19 +264,22 @@ export function ChangesPanel({ sets, source, onSource, now, file: initialFile = 
     <div ref={root} className="flex h-full min-h-0 flex-col" onKeyDown={onKeyDown} data-changes={open === undefined ? "list" : "file"} data-kinu-annotations>
       {open === undefined ? (
         <ListHeader sets={sets} set={set} now={now} menuOpen={menuOpen} reviewable={!noted} onPick={pick}
-          onExpand={onExpand === null ? null : () => onExpand(null)} onReviewed={onReviewed} />
+          onExpand={onExpand === null ? null : () => onExpand(null)} onReviewed={review} />
       ) : (
         <FileHeader files={files} at={at} onGo={go} onExpand={onExpand === null ? null : () => onExpand(open.path)} />
       )}
 
       <div key={open?.path ?? "list"} className="min-h-0 flex-1 overflow-y-auto">
         {open === undefined && set.error !== undefined && <p className="px-4 py-3.5 p-row-text p-text-2" data-changes-error>{set.error}</p>}
+        {open === undefined && set.error === undefined && path !== null && (
+          <p className="px-4 pt-3 p-meta p-text-3" data-changes-gone>{vfsBasename(path)} has no changes now.</p>
+        )}
         {open === undefined
           ? set.error === undefined && <FileTree files={files} current={null} onOpen={go} />
           : (
             <div className="pt-1.5">
               <FileBody file={open} git={git} stacked={false} onOpenInFiles={opener(open)} />
-              <NextFile next={files[at + 1]} reviewable={set.mode === "vfs-baseline" && !noted} onOpen={go} onReviewed={onReviewed} onList={() => go(null)} />
+              <NextFile next={files[at + 1]} reviewable={set.mode === "vfs-baseline" && !noted} onOpen={go} onReviewed={review} onList={() => go(null)} />
             </div>
           )}
       </div>

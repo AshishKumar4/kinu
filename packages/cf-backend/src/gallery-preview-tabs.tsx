@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { WorkspacePlanReferenceSchema, JsonValueSchema, type JsonValue, type PlanReview, type SlateSummary } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { Rpc } from '@kinu.run/core';
@@ -56,6 +56,8 @@ export function PreviewTabsGallery() {
   const [plan, setPlan] = useState<PlanReview | null>(null);
   const [reload, setReload] = useState(0);
   const [diff, setDiff] = useState(false);
+  const [broken, setBroken] = useState(false);
+  const brokenReads = useRef(0);
   const [failHistory, setFailHistory] = useState(false);
   const [workerPlan, setWorkerPlan] = useState<PlanReview>({ ...ROOT_PLAN, revision: 1, content: "# Worker plan", status: "approved", handoffAccepted: true, createdAt: 10 });
   const [owner, setOwner] = useState("main");
@@ -66,7 +68,13 @@ export function PreviewTabsGallery() {
     const reply = (value: ReplyValue): Promise<T> => new Response(JSON.stringify(value)).json<T>();
 
     if (method === 'previewSlate') return reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, inline: { height: 240 } } });
-    else if (method === 'getExecutorDiff') return reply({ mode: 'vfs-baseline', files: diff ? [{ path: 'src/app.ts', status: 'changed', added: 1, removed: 0, lines: [{ kind: 'add', text: 'export const ready = true;' }] }] : [] });
+    else if (method === 'getExecutorDiff' && broken) {
+      brokenReads.current += 1;
+      document.querySelector('[data-break-diff]')?.setAttribute('data-reads', String(brokenReads.current));
+
+      return reply({ mode: 'vfs-baseline', files: [], error: 'the change-set read failed' });
+    }
+    else if (method === 'getExecutorDiff') return reply({ mode: 'vfs-baseline', trackedSince: Date.now() - 36e5, files: diff ? [{ path: 'src/app.ts', status: 'changed', added: 1, removed: 0, lines: [{ kind: 'add', text: 'export const ready = true;' }] }] : [] });
     else if (method === 'resetWorkspaceBaseline' || method === 'restoreWorkspaceBaseline') {
       setDiff(method === 'restoreWorkspaceBaseline');
 
@@ -112,7 +120,7 @@ export function PreviewTabsGallery() {
     else if (method === 'markChangelogSeen') return reply({ seenAt: 0 });
 
     throw new Error('Unexpected preview gallery RPC: ' + method);
-  }, [plan, diff, failHistory, workerPlan]);
+  }, [plan, diff, broken, failHistory, workerPlan]);
 
   const workerRpc: Rpc = useCallback(async <T,>(method: string, args?: unknown[]): Promise<T> => {
     if (method === 'decidePlanReview') {
@@ -136,6 +144,8 @@ export function PreviewTabsGallery() {
       <button data-new-plan onClick={() => { setPlan(ROOT_PLAN); setPlanFocus('plan-dashboard:2'); }}>Submit plan</button>
       <button data-refresh-preview onClick={() => setReload(n => n + 1)}>Refresh source</button>
       <button data-add-diff onClick={() => setDiff(true)}>Edit file</button>
+      <button data-revert-diff onClick={() => setDiff(false)}>Revert file</button>
+      <button data-break-diff onClick={() => setBroken(true)}>Break read</button>
       <button data-notify-plan onClick={() => notify(ARRIVAL_REFERENCE)}>Notify courier plan</button>
       <button data-notify-stale onClick={() => notify(STALE_REFERENCE)}>Notify stale plan</button>
       <button data-notify-malformed onClick={() => notify(MALFORMED_REFERENCE)}>Notify malformed plan</button>

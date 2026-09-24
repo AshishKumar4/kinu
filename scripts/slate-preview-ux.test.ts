@@ -355,3 +355,25 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
     } finally { await page.close(); }
   });
 });
+
+test('a change-set read that fails raises the Changes tab, which says what failed', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+
+    try {
+      await page.setViewport({ width: 1100, height: 850 });
+      await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Dashboard"]');
+      expect(await page.$('[aria-label="Changes"]')).toBeNull();
+      // Nothing changed anywhere, so only the failure can raise the tab. The tab polls every
+      // 2 s, so by the second failed read the first one's answer has rendered.
+      await page.click('[data-break-diff]');
+      await page.waitForFunction(() => Number(document.querySelector('[data-break-diff]')?.getAttribute('data-reads')) >= 2);
+      expect(await page.$('[aria-label="Changes"]')).not.toBeNull();
+      await page.click('[aria-label="Changes"]');
+      await page.waitForSelector('[data-changes-error]');
+      expect(await page.$eval('[data-changes] header', el => el.textContent?.trim())).toBe("Can't read Workspace");
+      expect(await page.$eval('[data-changes-error]', el => el.textContent)).toBe('the change-set read failed');
+    } finally { await page.close(); }
+  });
+});
