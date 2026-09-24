@@ -94,9 +94,16 @@ export default defineConfig(({ command }) => ({
     promptText(), slateVendor(), stubClientNodeBuiltins, workerSourceMaps, wgslClientOnly, agents(), react(),
     cloudflare({
       persistState: devStateDir === undefined ? true : { path: devStateDir },
-      // `vite dev` serves its own preview zone (vite-preview-zone.ts); a build keeps the deployed zone.
+      // `vite dev` serves its own preview zone (vite-preview-zone.ts); a build keeps the deployed zone. A harness
+      // boot binds the Drive's JWT_SECRET here, as a var: wrangler reads secrets from packages/cf-backend/.dev.vars
+      // alone when the checkout has one, and a .dev.vars JWT_SECRET still overrides this.
       config: command === "serve"
-        ? (worker) => ({ vars: { ...worker.vars, PREVIEW_HOST_SUFFIX: DEV_PREVIEW_SUFFIX, PREVIEW_HOST_PORT: String(previewPort) } })
+        ? (worker) => {
+          const vars = { ...worker.vars, PREVIEW_HOST_SUFFIX: DEV_PREVIEW_SUFFIX, PREVIEW_HOST_PORT: String(previewPort) };
+          const jwtSecret = process.env.KINU_DEV_JWT_SECRET;
+
+          return { vars: jwtSecret === undefined ? vars : { ...vars, JWT_SECRET: jwtSecret } };
+        }
         : undefined,
     }),
     devPreviewZone(devPreviewTlsDir(__dirname), previewPort),
