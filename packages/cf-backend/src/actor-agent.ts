@@ -784,7 +784,7 @@ export abstract class ActorAgent extends Agent<Env> {
         while (this._subordinateRosterBroadcastPending) {
           this._subordinateRosterBroadcastPending = false;
           const subordinates = await this.subordinateViews();
-          this.broadcast(JSON.stringify({ type: 'subordinates_changed', subordinates }));
+          this.broadcastToActor(null, JSON.stringify({ type: 'subordinates_changed', subordinates }));
         }
       } catch (cause) {
         diagnostics.failure('subordinate.roster_broadcast_failed', toKinuError({
@@ -805,7 +805,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected broadcastSubordinateEvent(
     event: Omit<SubordinateActivityEvent, 'type' | 'id'> & { id?: string },
   ): void {
-    this.broadcast(JSON.stringify({
+    this.broadcastToActor(null, JSON.stringify({
       type: 'subordinate_event',
       id: event.id ?? nanoid(),
       kind: event.kind,
@@ -1754,8 +1754,8 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * Send only to the sockets addressing one actor; for the root, connections with no actor tag,
-   * which `getConnections(tag)` cannot express. Uses `broadcast` since only it reaches hibernated sockets.
+   * One actor's windows; `null` is the workspace's, which alone get the root's own frames, while one every window may
+   * read (device consents, device availability) goes to all. Built on `broadcast`, the only send that reaches hibernated sockets.
    */
   protected broadcastToActor(actor: string | null, message: string, exclude?: readonly string[]): void {
     const elsewhere: string[] = [];
@@ -3552,7 +3552,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return await cancelCurrentWork({
       cancelChats: () => { this.chatLoop.stop(); },
       activeToolControllers: this._activeToolControllers,
-      broadcast: (payload) => this.broadcast(payload),
+      broadcast: (payload) => { this.broadcastToActor(null, payload); },
       stopDeviceCommands: turnId === null ? undefined : async () => {
         try {
           const { stub, caller } = await this.userHub();

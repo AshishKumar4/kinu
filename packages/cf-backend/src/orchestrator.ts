@@ -378,7 +378,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       onFilesChanged: (paths) => {
         const ids = this.slates.filesChanged(paths);
 
-        if (ids.length !== 0) this.broadcast(JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
+        if (ids.length !== 0) this.broadcastToActor(null, JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
       },
       ensureSlate: (owner) => this.slates.ensureDurable(owner),
       slateInvocation: (port, socket) => this.slates.slateInvocation(port, socket),
@@ -2586,7 +2586,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     // The needs-you queue is polled, not pushed; this frame tells clients to re-read it.
-    this.broadcast(JSON.stringify({ type: 'pending_actions_changed' }));
+    this.broadcastToActor(null, JSON.stringify({ type: 'pending_actions_changed' }));
   }
 
   /** Read by the needs-you queue; also callable alone so a surface can render just this. */
@@ -3820,7 +3820,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       throw new KinuError('denied', 'This workspace has no such plan actor.');
     }
 
-    this.broadcast(JSON.stringify({ type: 'workspace_plan_updated', reference: parsed }));
+    this.broadcastToActor(null, JSON.stringify({ type: 'workspace_plan_updated', reference: parsed }));
   }
 
   @callable()

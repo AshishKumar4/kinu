@@ -13,7 +13,7 @@ import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from '
 import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, SpendSource, BackendHost } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { Refusal } from '@kinu.run/core/obs';
-import type { SessionTranscript } from '@kinu.run/core';
+import type { DeferredApprovalQueue, SessionTranscript } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
 import type { ChatTurnInput, ActorTurnLease, PreparedTurn } from '@kinu.run/core';
 import type { ChatWireTransport } from '../../src/chat-transport';
@@ -440,6 +440,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
 
   observeActorHost(): ActorHost { return this.actorHost(); }
+  observeDeferrals(): DeferredApprovalQueue { return this.deferrals; }
 
   /** Every programmatic turn the loop was asked to admit through the host. */
   readonly harnessEnqueued: ProgrammaticTurn[] = [];

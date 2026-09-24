@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-24",
-  "files": 2654,
-  "functions": 65148,
+  "files": 2658,
+  "functions": 65253,
   "ceiling": 87,
   "line": 32,
   "inventory": [
@@ -142,10 +142,6 @@
       "complexity": 37
     },
     {
-      "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>useEffect#7>handler",
-      "complexity": 36
-    },
-    {
       "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
       "complexity": 36
     },
@@ -227,6 +223,10 @@
     },
     {
       "key": "packages/cf-backend/src/components/Composer.tsx#Composer",
+      "complexity": 32
+    },
+    {
+      "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>useEffect#7>handler",
       "complexity": 32
     },
     {
