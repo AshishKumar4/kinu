@@ -851,14 +851,14 @@
       "exit": 0
     },
     "bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts": {
-      "wallSeconds": 133.26,
-      "cpuSeconds": 160.87,
-      "peakRssMb": 5218.09,
-      "peakRunnable": 28,
-      "peakCpuThreads": 9.96,
-      "meanThreads": 1.21,
-      "samples": 510,
-      "loadAtStart": 1.13,
+      "wallSeconds": 209,
+      "cpuSeconds": 193.66,
+      "peakRssMb": 5271.07,
+      "peakRunnable": 10,
+      "peakCpuThreads": 9.33,
+      "meanThreads": 0.93,
+      "samples": 783,
+      "loadAtStart": 3.38,
       "exit": 0
     }
   }

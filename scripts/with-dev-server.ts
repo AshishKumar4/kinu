@@ -27,11 +27,11 @@ if (command.length === 0) {
   process.exit(2);
 }
 
-const status = await withDevServer(async ({ origin }) => {
+const status = await withDevServer(async ({ origin, previewPort }) => {
   console.error(`with-dev-server: ${origin} is up; running ${command.join(' ')}`);
 
   const child = Bun.spawn(command, {
-    env: { ...process.env, KINU_ORIGIN: origin, KINU_EVAL_LIVE: '1' },
+    env: { ...process.env, KINU_ORIGIN: origin, KINU_DEV_PREVIEW_PORT: String(previewPort), KINU_EVAL_LIVE: '1' },
     stdin: 'inherit', stdout: 'inherit', stderr: 'inherit',
   });
 

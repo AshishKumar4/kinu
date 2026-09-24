@@ -657,6 +657,12 @@ export const SUPPLY = new Map<string, Supply>([
     absent: 'nothing — CLOUDFLARE_WORKERS_AI_SCOPES in core/src/providers/cloudflare-oauth.ts is the one source '
       + 'of truth and this only overrides it.',
   }],
+  ['PREVIEW_HOST_PORT', {
+    handling: 'config-var',
+    required: false,
+    absent: 'previews and shares are addressed on 443, where a deployed zone serves them. Only '
+      + '`vite dev` sets it, for its own loopback zone (packages/cf-backend/vite-preview-zone.ts).',
+  }],
   ['CLOUDFLARE_DEPLOY_CLIENT_ID', {
     handling: 'config-var',
     required: false,

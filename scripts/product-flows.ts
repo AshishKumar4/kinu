@@ -2,7 +2,7 @@
  * THE PRODUCT'S OWN FLOWS, IN A BROWSER, AS A USER SEES THEM.
  *
  * Every row here drives real Chrome against a real product origin and asserts
- * only what the page shows: a tab, a link, an answer, a listing. The same rows
+ * only what the page shows: a tab, a link, an answer, a preview. The same rows
  * run twice with nothing but the origin changed (`KINU_ORIGIN`): before the
  * deploy against the local dev server (`scripts/with-dev-server.ts`, the real
  * Worker and Durable Objects in workerd) and after it against the deployment
@@ -769,6 +769,68 @@ export async function writtenFileShowsInFilesAndDiffs(target: FlowTarget): Promi
     await page.close();
 
     return { workspace, filesListed, diffsTab, diffPaths };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+/** The slate the slate row asks for: its manifest title, its directory, and
+ *  words its page serves that no scaffold carries. */
+export const FLOW_SLATE = { title: 'Flow probe', id: 'flow', page: 'browser flow slate' } as const;
+
+export interface SlatePreviewVerdict {
+  readonly workspace: string;
+  /** Whether the strip drew a tab under the slate's title once the turn ended. */
+  readonly slateTab: boolean;
+  /** The slate's preview frame's page text once it loaded; null when no frame drew. */
+  readonly frameText: string | null;
+}
+
+/**
+ * Row: a slate the agent builds shows its running preview in its own tab.
+ *
+ * One turn builds a slate that serves a page and starts its preview; once the
+ * page has re-listed the workspace's slates, the reader presses the slate's tab
+ * and reads the page its frame loaded. The frame is a preview host of its own,
+ * on the deployed zone after the publish and on `vite dev`'s zone before it
+ * (packages/cf-backend/vite-preview-zone.ts).
+ */
+export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePreviewVerdict> {
+  const workspace = await createFlowWorkspace(target, 'slate-preview');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+    const ledger = await frameLedger(page);
+
+    await sendAndSettle(page, `Use the file tool to create a slate at /home/user/slates/${FLOW_SLATE.id}/. `
+      + `Write package.json with main "server.ts" and slate {"title":"${FLOW_SLATE.title}","port":8788,"bindings":{}}. `
+      + `Write server.ts so the slate answers GET / with an HTML page whose body is <h1>${FLOW_SLATE.page}</h1>. `
+      + 'Start its preview. Reply with the preview URL.');
+    await settledAfter(page, ledger);
+    await openInspector(page);
+
+    const slateTab = v.parse(v.boolean(), await page.evaluate(stripHas(FLOW_SLATE.title)));
+    let frameText: string | null = null;
+
+    if (slateTab) {
+      await page.evaluate(stripTab(FLOW_SLATE.title));
+
+      const frameSelector = `#inspector iframe[title="${FLOW_SLATE.id}"]`;
+
+      await until(page, "the slate's preview frame", `document.querySelector(${JSON.stringify(frameSelector)}) !== null`);
+
+      const frame = await (await page.$(frameSelector))?.contentFrame();
+
+      if (frame !== null && frame !== undefined) {
+        await frame.waitForFunction('document.readyState === "complete"', { polling: 100 });
+        frameText = v.parse(v.string(), await frame.evaluate('(document.body?.textContent ?? "").trim()'));
+      }
+    }
+
+    await ledger.stop();
+    await page.close();
+
+    return { workspace, slateTab, frameText };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }
