@@ -15,12 +15,15 @@ import { SessionTranscript, readSessionTranscript } from '../../src/session/tran
 import { writeSoul } from '../../src/identity/soul';
 import type { JsonObject } from '../../src/utils/json';
 import { PLATFORM_CATALOG } from '../../src/platform-catalog';
+import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '../../src/vfs/agent-home';
+import { WORKSPACE_ROOT } from '../../src/vfs/workspace-path';
 
-/** The hosted main actor's payload directory shape. */
-export const SOURCE_ARTIFACTS = '/home/agent/.kinu/context';
+/** The hosted main actor's payload directory, as `forkAgent` passes it: under the root its session plane writes. */
+export const SOURCE_ARTIFACTS = agentArtifactDirectory(agentHome(MAIN_AGENT));
 
-/** Differs from the source's, so an un-re-rooted payload reference reads a missing file. */
-export const TARGET_ARTIFACTS = '/home/fork/.kinu/context';
+/** Differs from the source's, so an un-re-rooted payload reference reads a missing file. It is under the target's
+ *  own root: the fork sink writes as the session user, and only the kernel makes a home under `/home`. */
+export const TARGET_ARTIFACTS = `${WORKSPACE_ROOT}/.kinu/fork-context`;
 
 /** Above the inline ceiling (half of `do.sqlite.row_bytes`), so it spills to a file. */
 export const SPILLED_BYTES = 1_100_000;

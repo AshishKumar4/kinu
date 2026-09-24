@@ -14,6 +14,7 @@ import { CommandResultSchema } from '../execution/exec-result';
 import { KinuError, renderThrownChain } from '../obs/index';
 import { sha256Hex } from '../safety/argument-digest';
 import { isSystemManaged } from '../vfs/workspace-path';
+import { unmovedSince } from '../vfs/unmoved';
 
 /** `do.sqlite.row_bytes` caps a body's row, which also holds its 64-hex key. */
 const BODY_MAX_BYTES = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value - 64;
@@ -186,10 +187,6 @@ function blobText(rt: WorkspaceBaselineRuntime, entry: ManifestEntry, generation
   return null;
 }
 
-function unmoved(entry: ManifestEntry, st: VfsEntryStat): boolean {
-  return entry.size === st.size && entry.mtimeMs === st.mtimeMs;
-}
-
 /** Why a side of this size has no text: past one row, or binary. */
 function unread(size: number): Omitted {
   return size > BODY_MAX_BYTES ? 'large' : 'binary';
@@ -202,10 +199,10 @@ interface Sides {
   readonly omitted: Omitted;
 }
 
-/** Cumulative change-set since the baseline. A file whose size and mtime match its manifest row is never read. */
+/** Cumulative change-set since the baseline. A file whose manifest row still holds by {@link unmovedSince} is never read. */
 export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime): Promise<WorkspaceDiffResult> {
   // Without a baseline, tracking starts now: the same capture a new workspace takes at creation.
-  const manifest = activeManifest(rt) ?? await capture(rt, new Map(), null);
+  const manifest = activeManifest(rt) ?? await capture(rt, null);
   const baseline = manifest.entries;
   const files: FileDiff[] = [];
   let bodyChars = 0;
@@ -233,7 +230,7 @@ export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime): Promise<Wo
     const base = baseline.get(path);
     baseline.delete(path);
 
-    if (base !== undefined && unmoved(base, st)) return;
+    if (base !== undefined && unmovedSince(base, manifest.capturedAt, st)) return;
     const now = st.size > BODY_MAX_BYTES ? null : await contentsOf(rt, path);
     const after = now?.text ?? null;
 
@@ -283,15 +280,12 @@ function pruneBaselines(rt: WorkspaceBaselineRuntime): void {
 export async function resetWorkspaceBaseline(
   rt: WorkspaceBaselineRuntime,
 ): Promise<{ ok: true; files: number; capturedAt: number }> {
-  const held = activeManifest(rt);
-  const taken = await capture(rt, held?.entries ?? new Map(), held?.generation ?? null);
+  const taken = await capture(rt, activeManifest(rt));
 
   return { ok: true, files: taken.entries.size, capturedAt: taken.capturedAt };
 }
 
-async function capture(
-  rt: WorkspaceBaselineRuntime, previous: ReadonlyMap<string, ManifestEntry>, replaced: string | null,
-): Promise<BaselineManifest> {
+async function capture(rt: WorkspaceBaselineRuntime, held: BaselineManifest | null): Promise<BaselineManifest> {
   const actorId = rt.actor.actorId;
   const generation = nanoid();
   const capturedAt = Date.now();
@@ -302,10 +296,10 @@ async function capture(
     void rt.storage.sql`INSERT INTO vfs_baseline_manifest (actor_id, generation, path, size, mtime_ms, hash, active)
       VALUES (${actorId}, ${generation}, ${''}, ${0}, ${capturedAt}, ${null}, ${0})`;
     await walkWorkspaceFiles(rt, async (path, st) => {
-      const kept = previous.get(path);
+      const kept = held?.entries.get(path);
       let entry: ManifestEntry = { size: st.size, mtimeMs: st.mtimeMs, hash: null };
 
-      if (kept !== undefined && unmoved(kept, st)) {
+      if (kept !== undefined && held !== null && unmovedSince(kept, held.capturedAt, st)) {
         entry = kept;
       } else if (st.size <= BODY_MAX_BYTES) {
         const { digest, text } = await contentsOf(rt, path);
@@ -320,7 +314,7 @@ async function capture(
       entries.set(path, entry);
     });
     void rt.storage.sql`INSERT INTO vfs_baseline_generation (actor_id, generation, replaced)
-      VALUES (${actorId}, ${generation}, ${replaced})`;
+      VALUES (${actorId}, ${generation}, ${held?.generation ?? null})`;
     void rt.storage.sql`UPDATE vfs_baseline_manifest
       SET active = CASE WHEN generation = ${generation} THEN 1 ELSE 0 END
       WHERE actor_id = ${actorId}`;
