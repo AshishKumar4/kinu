@@ -205,17 +205,23 @@ describe('workspace provider (InlineExecutor)', () => {
     }
   });
 
-  test('createTool refuses statements over args and stores nothing, so no later program can break on them', async () => {
+  test('createTool refuses statements over args, names the form a tool takes, and stores nothing', async () => {
     const { rt } = createTestRuntime();
     const exec = buildExec(rt);
-    // The body m905 saved. Spliced into the sandbox as `tools.textStats = (<source>)`, it failed every later
-    // program with "Unexpected token 'const'", `return 42` included.
-    const statements = "const text = String((args && args.text) || '');\nconst words = text.split(' ');\nreturn { words: words.length };";
 
-    const result = await exec.tools.createTool.execute('textStats', 'counts words', statements);
+    // The first is the body m905 saved. Spliced into the sandbox as `tools.textStats = (<source>)`, it failed every
+    // later program with "Unexpected token 'const'", `return 42` included. The second parses and declares nothing.
+    const statements = [
+      "const text = String((args && args.text) || '');\nconst words = text.split(' ');\nreturn { words: words.length };",
+      'for (const word of args.words) console.log(word);',
+    ];
 
-    expect(result).toMatchObject({ ok: false, reason: 'bad_input', error: expect.stringContaining('createTool("textStats")') });
-    expect(rt.craftStore.get('textStats')).toBeUndefined();
+    for (const code of statements) {
+      const result = await exec.tools.createTool.execute('textStats', 'counts words', code);
+
+      expect(result).toMatchObject({ ok: false, reason: 'bad_input', error: expect.stringContaining('async (args) => {') });
+      expect(rt.craftStore.get('textStats')).toBeUndefined();
+    }
   });
 
   // Same-turn `tools.<name>()` is unsupported by design: createTool, then `tools.<name>` next turn.
