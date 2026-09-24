@@ -30,8 +30,8 @@ import { SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
 
 import { DESKTOP, withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
 import {
-  CHAT_COMPOSER_LIVE, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, NEW_AGENT, OPEN_NAMES, RECORD_TURN_ERRORS,
-  openInspector, pressUntil, settled, until,
+  CHAT_COMPOSER_LIVE, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, NEW_AGENT, OPEN_NAMES, RECORD_DEAD_ENDS,
+  openInspector, painted, pressUntil, settled, typeIntoComposer, until,
   type ControlAttempt,
 } from './product-flows';
 import { rowVerdicts } from './row-verdicts';
@@ -66,7 +66,7 @@ async function openWorkspace(newPage: LiveApp['newPage'], origin: string, worksp
   const page = await newPage();
 
   await page.setViewport(DESKTOP);
-  await page.evaluateOnNewDocument(RECORD_TURN_ERRORS);
+  await page.evaluateOnNewDocument(RECORD_DEAD_ENDS);
 
   // 'load', not 'networkidle0': the app holds its event socket open from
   // first paint, so there is never a zero-connection window to wait for.
@@ -336,12 +336,7 @@ const SendSiteSchema = v.object({ path: v.string(), tabIndex: v.number(), compos
  *  reaches whatever else is mounted, so the site returned is the honest answer
  *  to which pane the words went into. */
 async function sendInChat(page: Page, text: string): Promise<SendSite> {
-  await page.evaluate(`(() => {
-    const box = document.querySelector('#chat textarea:not([disabled])');
-    if (box === null) throw new Error('no live composer in the chat column');
-    box.focus();
-  })()`);
-  await page.keyboard.type(text);
+  await typeIntoComposer(page, text);
 
   const site = v.parse(SendSiteSchema, await page.evaluate(`(() => {
     const send = [...document.querySelectorAll('#chat button')]
@@ -400,6 +395,11 @@ const STOP_OFFERED = `document.querySelector('#chat button[aria-label="Stop this
  *  steered into it instead of opening a turn of their own. */
 const FIRST_TURN_ENDED = `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FALLBACK_ANSWER)}) && !(${STOP_OFFERED})`;
 
+const PACED_ANSWER_SHOWN = `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(PACED_TURN_ANSWER)}) && !(${STOP_OFFERED})`;
+
+/** The chat column's last words, for a row that has to say what the page showed instead. */
+const CHAT_TAIL = `(document.querySelector('#chat')?.textContent ?? '').slice(-240)`;
+
 /** Row 0: a running turn draws exactly one live state, through the silences a thinking model leaves in its
  *  stream (`pacedTurn`). */
 async function measureLiveIndicator(newPage: LiveApp['newPage'], origin: string): Promise<LiveIndicatorVerdict> {
@@ -407,18 +407,30 @@ async function measureLiveIndicator(newPage: LiveApp['newPage'], origin: string)
     origin, { name: `live-row-indicator-${RUN_ID}`, purpose: 'live indicator probe', model: SCRIPTED_MODEL_SPEC });
 
   const page = await openWorkspace(newPage, origin, workspace);
+  const turns = await watchTurns(page);
+  let samples: v.InferOutput<typeof LiveSampleSchema>[];
 
-  await until(page, "the workspace's first turn to end", FIRST_TURN_ENDED);
-  await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
-  await page.evaluate(INSTALL_LIVE_SAMPLER);
-  await sendInChat(page, PACED_TURN_ASK);
-  await until(page, 'the paced answer, its turn ended',
-    `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(PACED_TURN_ANSWER)}) && !(${STOP_OFFERED})`);
+  try {
+    await until(page, "the workspace's first turn to end", FIRST_TURN_ENDED);
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await page.evaluate(INSTALL_LIVE_SAMPLER);
 
-  const samples = v.parse(v.array(LiveSampleSchema), await page.evaluate(READ_LIVE_SAMPLES));
+    const paced = turns.afterTurn();
 
-  await shoot(page, 'live-indicator-settled');
-  await page.close();
+    await sendInChat(page, PACED_TURN_ASK);
+    await paced;
+    await painted(page);
+
+    if (!v.parse(v.boolean(), await page.evaluate(PACED_ANSWER_SHOWN))) {
+      throw new Error(`waiting for the paced answer, its turn closed without it; the chat ends ${JSON.stringify(await page.evaluate(CHAT_TAIL))}`);
+    }
+
+    samples = v.parse(v.array(LiveSampleSchema), await page.evaluate(READ_LIVE_SAMPLES));
+    await shoot(page, 'live-indicator-settled');
+  } finally {
+    await turns.stop();
+    await page.close();
+  }
 
   const running = samples.filter((sample) => sample.stop);
   let longestBlankMs = 0;
@@ -875,20 +887,21 @@ const ChatResponseSchema = v.looseObject({
   body: v.optional(v.string()),
 });
 
-/** Work's presence as the page reads it off its own socket. `afterTurn`, taken
- *  before a send, settles on the answer to the first presence read the page
- *  asks once the next turn has closed, and rejects with the failure of a turn
- *  that fails. The page asks that read as the stream ends and every 5 s after
- *  (use-kinu `refreshLiveData`), so it comes whatever the turn did, and it is
- *  final for that turn: a row waits on it, never on the value it hopes for. */
-interface PresenceWatch {
+/** A page's turns off its own socket, and the Work presence it reads. `afterTurn`,
+ *  taken before a send, settles on the answer to the first presence read the
+ *  page asks once the next turn has closed, and rejects with the failure of a
+ *  turn that fails. The page asks that read from the effect that follows the
+ *  turn's last render and every 5 s after (use-kinu `refreshLiveData`), so it
+ *  comes whatever the turn did, after the page drew it, and it is final for
+ *  that turn: a row waits on it, never on the value it hopes for. */
+interface TurnWatch {
   /** Every Work presence the page was answered, in order. */
-  answers(): readonly boolean[];
+  workPresence(): readonly boolean[];
   afterTurn(): Promise<boolean>;
   stop(): Promise<void>;
 }
 
-async function watchWorkPresence(page: Page): Promise<PresenceWatch> {
+async function watchTurns(page: Page): Promise<TurnWatch> {
   const cdp = await page.createCDPSession();
 
   await cdp.send('Network.enable');
@@ -936,7 +949,7 @@ async function watchWorkPresence(page: Page): Promise<PresenceWatch> {
   });
 
   return {
-    answers: () => [...answers],
+    workPresence: () => [...answers],
     afterTurn: () => {
       const settle = Promise.withResolvers<boolean>();
 
@@ -951,9 +964,6 @@ async function watchWorkPresence(page: Page): Promise<PresenceWatch> {
 /** The inspector strip's Work tab. */
 const WORK_TAB = `document.querySelector('#inspector .p-tabstrip [aria-label="Work"]')`;
 
-/** The chat column's last words, for a row that has to say what the page showed instead. */
-const CHAT_TAIL = `(document.querySelector('#chat')?.textContent ?? '').slice(-240)`;
-
 /** Row 8: the inspector never moves its selection on its own. In a new
  *  workspace the panel resolves to its first tab; the first turn saves a note,
  *  which gives Work content; the reader opens Work; the next turn forgets the
@@ -966,7 +976,7 @@ async function measureKeptTab(newPage: LiveApp['newPage'], origin: string): Prom
     origin, { name: `live-row-kept-tab-${RUN_ID}`, purpose: 'kept tab probe', model: SCRIPTED_MODEL_SPEC });
 
   const page = await openWorkspace(newPage, origin, workspace);
-  const presence = await watchWorkPresence(page);
+  const turns = await watchTurns(page);
 
   try {
     await until(page, "the workspace's first turn to end", FIRST_TURN_ENDED);
@@ -975,7 +985,7 @@ async function measureKeptTab(newPage: LiveApp['newPage'], origin: string): Prom
     await until(page, 'a marked tab in the inspector strip', `${MARKED_TAB} !== null`);
     await page.evaluate(RECORD_MARKS);
 
-    const noted = presence.afterTurn();
+    const noted = turns.afterTurn();
 
     await sendInChat(page, KEPT_TAB_NOTE);
 
@@ -988,7 +998,7 @@ async function measureKeptTab(newPage: LiveApp['newPage'], origin: string): Prom
     await page.evaluate(`${WORK_TAB}.click()`);
     await until(page, 'Work marked current', `${MARKED_TAB} === 'Work'`);
 
-    const forgotten = presence.afterTurn();
+    const forgotten = turns.afterTurn();
 
     await sendInChat(page, KEPT_TAB_FORGET);
 
@@ -997,16 +1007,16 @@ async function measureKeptTab(newPage: LiveApp['newPage'], origin: string): Prom
         + `the chat ends ${JSON.stringify(await page.evaluate(CHAT_TAIL))}`);
     }
 
-    const fenced = presence.afterTurn();
+    const fenced = turns.afterTurn();
 
     await sendInChat(page, 'Kept-tab probe: the fence.');
     await fenced;
 
     const marks = v.parse(v.array(v.nullable(v.string())), await page.evaluate('window.__keptTabMarks'));
 
-    return { marks: marks.map((mark) => mark ?? '(none)'), workPresence: presence.answers() };
+    return { marks: marks.map((mark) => mark ?? '(none)'), workPresence: turns.workPresence() };
   } finally {
-    await presence.stop();
+    await turns.stop();
     await page.close();
   }
 }
