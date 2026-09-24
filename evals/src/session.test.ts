@@ -1,7 +1,7 @@
 /**
  * THE PUBLIC SESSION'S WIRING, credential-free.
  *
- * Everything in `public-session.ts` that is a property of the HARNESS rather
+ * Everything in `session.ts` that is a property of the HARNESS rather
  * than of an agent is checkable without a deployment, and this is where it is
  * checked: the frame codec against recorded fixtures, the skip remedies, the
  * cloud-only gate, and the bridge that puts route-shaped run events under the
@@ -53,9 +53,9 @@ import {
 
 const DEPLOYMENT = 'https://kinu.run';
 
-/** The suite name the gating probes resolve under. NOT the trajectory suite's own
- *  name: `liveModelTarget` prints `[skip] <suite>` when it refuses, and a probe
- *  borrowing the real name would put a skip line for a suite this file does not
+/** The suite name the gating probes resolve under. NOT a real suite's name:
+ *  `liveModelTarget` prints `[skip] <suite>` when it refuses, and a probe
+ *  borrowing one would put a skip line for a suite this file does not
  *  run into every credential-free tier's log. */
 const PROBE_SUITE = 'Public Session Gate Probe';
 

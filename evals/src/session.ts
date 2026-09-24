@@ -2,8 +2,8 @@
  * THE PUBLIC-API SESSION: one reusable session over the surfaces the WEB CLIENT
  * speaks, against a DEPLOYED workspace.
  *
- * WHY THIS EXISTS BESIDE `target-cloud.ts`, which already reaches the deployment. That
- * target drives the OPERATOR plane: `CloudAgentClient` over a connect ticket,
+ * WHY THIS EXISTS BESIDE `tests/first-run/operator-session.ts`, which also reaches the
+ * deployment. That session drives the OPERATOR plane: a socket over a connect ticket,
  * and every read a named method over `POST /api/cli/workspaces/:name/rpc` whose
  * `AGENT_RPC_ACCESS` table is its allowlist. So it measures what a credentialed
  * CLI operator can reach. Nothing in this tree measured what the PRODUCT'S OWN
