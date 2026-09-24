@@ -4953,7 +4953,7 @@ const CLEAN_PRODUCERS: ProducerSpend[] = [
 const ACTIVITY_CONTEXT: ContextComposition = {
   segments: [
     { plane: "system", label: "Core instructions", chars: 18_400, items: 1 },
-    { plane: "system", label: "Workspace brief", chars: 3_120, items: 1 },
+    { plane: "system", label: "Code execution and learned capabilities", chars: 3_120, items: 1 },
     { plane: "tools", label: "shell", chars: 2_840, items: 1 },
     { plane: "tools", label: "edit", chars: 3_610, items: 1 },
     { plane: "tools", label: "read", chars: 2_180, items: 1 },
