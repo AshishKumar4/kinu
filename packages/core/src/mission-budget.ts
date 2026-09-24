@@ -449,7 +449,7 @@ export class MissionGovernor {
 export interface MissionBudgetPort {
   guard(seam: MissionSeam, labels: readonly string[]): Promise<MissionBudgetRefusal | null>;
   debit(tokens: number, opts: {
-    labels: readonly string[]; calls?: number; spawns?: number; usage?: Usage;
+    labels: readonly string[]; calls?: number; spawns?: number; usage?: Usage; spec?: string;
   }): Promise<void>;
 }
 

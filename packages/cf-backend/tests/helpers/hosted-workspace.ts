@@ -137,6 +137,7 @@ export async function hostedWorkspace(
     reportModelCall: () => undefined,
     modelOperations: () => undefined,
     pricing: () => null,
+    hostedModel: () => undefined,
     broadcast: () => undefined,
     enqueueTurn: () => Promise.resolve({ status: 'queued' }),
     turnInFlight: () => false,

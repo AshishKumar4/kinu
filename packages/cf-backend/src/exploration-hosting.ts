@@ -79,6 +79,7 @@ export interface ExplorationHostSeams {
     readonly workMode: WorkMode;
   }): Promise<ExplorationProfile>;
   resolveModel(spec: string): LanguageModel;
+  priceAs(actor: HostedActor, spec: string): Promise<void>;
   webSearch(): WebSearchProvider;
   /** The same provisioner the host uses, so the home a node is told about is the one it has. */
   nodeHome(actor: HostedActor): Promise<NodeWorkspace>;
@@ -172,6 +173,7 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
 
           const webSearch = seams.webSearch();
           const spec = await explorationModelSpec(seams, actor, 'head', input.model);
+          await seams.priceAs(actor, spec);
 
           const deps: HeadInferenceDeps = {
             actor,
@@ -196,7 +198,9 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
 
           const mission = seams.mission(input);
 
-          if (mission !== null) deps.mission = mission;
+          if (mission !== null) {
+            deps.mission = { ...mission, port: { ...mission.port, debit: (tokens, opts) => mission.port.debit(tokens, { ...opts, spec }) } };
+          }
 
           return await runHeadInference(input, deps);
         });

@@ -63,6 +63,7 @@ export interface WorkspaceHostSeams {
   reportModelCall(report: ModelCallReport): void;
   readonly modelOperations: ModelOperationSink;
   pricing(spec?: string): ModelPricing | null;
+  hostedModel(actor: ActorHandle): string | undefined;
   /** Client fan-out, stamped with the actor so panes never share one stream. */
   broadcast(actorId: string, event: BroadcastEvent): void;
   enqueueTurn(actor: BoundActor, input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
@@ -283,7 +284,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         // Per actor: mission labels are caller prose, so a shared ledger row would let
         // one actor's spend exhaust another's cap.
         actor: handle,
-        pricing: (spec) => seams.pricing(spec),
+        pricing: (spec) => seams.pricing(spec ?? seams.hostedModel(handle)),
       });
 
       const engine = new EvolutionEngine(runtime, stores.history, {

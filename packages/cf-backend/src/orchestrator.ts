@@ -495,6 +495,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       reportModelCall: (report) => { this.reportModelCall(report); },
       modelOperations: this.modelOperations,
       pricing: (spec) => this.modelCatalog.pricing(spec),
+      hostedModel: (actor) => this.hostedModelOf(actor),
       broadcast: (actorId, event) => {
         // Stamped with the actor for the pane, and addressed to it so a subordinate's cards
         // stay off other sockets. An actor the directory no longer names has no pane.
@@ -559,6 +560,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // head unrestricted.
       profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
+      priceAs: (actor, spec) => this.priceHostedModel(actor.handle, spec),
       webSearch: () => this.ownedModelServices.getWebSearchProvider(),
       // The host's own provisioner, the one every hosted runtime is built over, so the node's
       // disclosed boundary and its real credential are the same fact.
@@ -609,6 +611,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // surface are framed from it.
       profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
+      priceAs: (actor, spec) => this.priceHostedModel(actor.handle, spec),
       suggestTitle: (mission) => this.suggestTitle(mission),
       taskProfile: (turn) => this.hostedTaskProfile(turn),
       dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),

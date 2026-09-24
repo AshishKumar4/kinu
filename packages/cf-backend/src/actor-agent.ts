@@ -145,7 +145,7 @@ import {
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
   accountDeps, callAccountOf, parseModelSpec, catalogModelInfo, countRequestInputTokens,
-  ModelCatalogSession, resolveEffectiveModelSpec,
+  ModelCatalogSession, resolveEffectiveModelSpec, type ModelInfo,
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
   measureCompactionTrigger,
   // AGENTS.md discovery, and the trust authority deciding whether discovered bytes earn system placement.
@@ -1928,7 +1928,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   async missionDebit(tokens: number, opts: {
-    labels: readonly string[]; calls?: number; spawns?: number; usage?: Usage;
+    labels: readonly string[]; calls?: number; spawns?: number; usage?: Usage; spec?: string;
   }): Promise<void> {
     this.budget.debit(tokens, opts);
   }
@@ -3921,19 +3921,31 @@ export abstract class ActorAgent extends Agent<Env> {
     }
   }
 
-  /** Cached, non-blocking lookup per spec; static fallbacks answer until it lands. */
-  /** Protected: the workspace's mission ledger prices every hosted actor's spend off this catalog,
-   *  so a search's estimate and the ledger read one rate. */
+  /** Cached, non-blocking lookup per spec; static fallbacks answer until it lands. Every hosted actor's spend
+   *  is priced off it, so a search's estimate and the ledger read one rate. */
   protected readonly modelCatalog = new ModelCatalogSession({
     effectiveSpec: () => this.effectiveModelSpec(),
-    lookup: async (spec) => {
-      if (!spec) return null;
-      const { provider, modelId, account } = parseModelSpec(spec);
-      const reg = this.providerRegistry();
-
-      return catalogModelInfo(reg.registry.get(provider), accountDeps(reg.deps, provider, account), modelId);
-    },
+    lookup: async (spec) => (spec ? this.catalogEntry(spec) : null),
   });
+
+  protected async catalogEntry(spec: string): Promise<ModelInfo | null> {
+    const { provider, modelId, account } = parseModelSpec(spec);
+    const reg = this.providerRegistry();
+
+    return catalogModelInfo(reg.registry.get(provider), accountDeps(reg.deps, provider, account), modelId);
+  }
+
+  private readonly hostedModels = new Map<string, string>();
+
+  /** Before the task's first call. */
+  protected async priceHostedModel(actor: ActorHandle, spec: string): Promise<void> {
+    this.hostedModels.set(actor.actorId, spec);
+    await this.modelCatalog.warm([spec]);
+  }
+
+  protected hostedModelOf(actor: ActorHandle): string | undefined {
+    return this.hostedModels.get(actor.actorId);
+  }
 
   /**
    * Unapproved instruction files ride a sealed user message (agent-writable, not system plane).

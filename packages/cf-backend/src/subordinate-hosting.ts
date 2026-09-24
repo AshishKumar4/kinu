@@ -77,6 +77,7 @@ export interface SubordinateHostSeams {
     readonly workMode: WorkMode;
   }): Promise<ExplorationProfile>;
   resolveModel(spec: string): LanguageModel;
+  priceAs(actor: HostedActor, spec: string): Promise<void>;
   /** The root's own auto-title round-trip, asked on the hosted actor's behalf. */
   suggestTitle(mission: string): Promise<string | null>;
   taskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile>;
@@ -270,6 +271,7 @@ export async function runHostedTask(
 
     const reports: HostedReportLedger = { spoke: false, settled: false };
     const resolved = await seams.profile({ actor, availableTools: [], workMode: task.mode });
+    await seams.priceAs(actor, resolved.profile.tier.model);
     const mission = seams.mission(actor);
     // Built once for both runner and tools: recovery verifies the claim against it.
     const input = delegatedHeadInput(actor.record, task);
