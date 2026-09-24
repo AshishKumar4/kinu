@@ -34,6 +34,7 @@ import {
 import { advisorWorkspaceGuidance } from '../prompting/agents-md';
 import { resolveModelRoute } from '../profiles/model-route';
 import { contextWindowForModel } from '../context-window';
+import { TurnContextMeter } from '../context-meter';
 import { SessionHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
@@ -495,7 +496,7 @@ export class ActorSession {
         assertActive: input.assertActive,
         scaffoldStreamOptions: input.scaffoldStreamOptions,
         chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions,
-          meter: this.orchestrator.acc.composition,
+          meter: new TurnContextMeter(),
           persistStreamPart: part => stream.nativePart(part),
           persistStep: messages => stream.nativeStep(messages),
           dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools) },
@@ -535,6 +536,7 @@ export class ActorSession {
             this.orchestrator.acc.recordStep({
               text: event.text, finishReason: event.finishReason, toolCalls: event.toolCalls, toolResults: event.toolResults,
               response: { messages: event.responseMessages }, usage: event.usage, request: event.request,
+              context: event.context,
             });
             break;
           case 'error': {

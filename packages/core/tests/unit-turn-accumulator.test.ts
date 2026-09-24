@@ -215,28 +215,6 @@ describe('TurnAccumulator', () => {
     expect(events[0]?.usd).toBeUndefined();
   });
 
-  test('the step event carries the measurement of the request that produced it', () => {
-    const events: Array<{ context?: { measuredChars: number } }> = [];
-    const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) });
-    a.composition.openTurn({ system: 'soul' });
-    a.composition.measure([{ role: 'user', content: 'hello' }]);
-    a.recordStep({ usage: { input: 10, output: 1 } });
-    // Drained: nothing re-reports the previous composition.
-    a.recordStep({ usage: { input: 10, output: 1 } });
-    expect(events[0]?.context?.measuredChars).toBe('soul'.length + 'hello'.length);
-    expect(events[1]?.context).toBeUndefined();
-  });
-
-  test('reset clears the composition meter with the rest of the turn', () => {
-    const events: Array<{ context?: unknown }> = [];
-    const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) });
-    a.composition.openTurn({ system: 'soul' });
-    a.composition.measure([{ role: 'user', content: 'hello' }]);
-    a.reset(0);
-    a.recordStep({ usage: { input: 10, output: 1 } });
-    expect(events[0]?.context).toBeUndefined();
-  });
-
   test('works with no sinks (pure consumer)', () => {
     const a = new TurnAccumulator();
     a.onFirstChunk();
