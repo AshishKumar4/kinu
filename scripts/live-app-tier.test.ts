@@ -38,7 +38,8 @@ import { rowVerdicts } from './row-verdicts';
 import {
   FALLBACK_ANSWER, KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_SILENCE_MS, PACED_TURN_ANSWER,
   PACED_TURN_ASK, SCRIPTED_MODEL_SPEC, SLATE_TITLE,
-  keptTabProbe, pacedFirstTurn, pacedTurn, planWalkthrough, registerScriptedModel, startScriptedModel,
+  heldCall, keptTabProbe, pacedFirstTurn, pacedTurn, planWalkthrough, registerScriptedModel, startScriptedModel,
+  type HeldCall,
 } from './scripted-model';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
 
@@ -211,7 +212,7 @@ interface LiveIndicatorVerdict {
 interface OpenedMidTurnVerdict {
   /** Stop was offered while the turn ran: the page did open during it. */
   readonly openedLive: boolean;
-  /** The last sample, taken at the page's next presence read after the turn closed. */
+  /** The last sample, taken at the page's first presence read after the turn's close was answered. */
   readonly stop: boolean;
   readonly states: number;
   /** Samples where the header and the composer disagreed on whether a turn runs: Stop beside an idle header, or a
@@ -991,10 +992,12 @@ const COUNT_PRESENCE_ASKS = `(() => {
 const disagrees = (sample: v.InferOutput<typeof LiveSampleSchema>): boolean =>
   (sample.stop && sample.task === 'idle') || (!sample.stop && sample.task === 'working');
 
-/** Row 9 (#29): a workspace created with a mission starts its first turn before its page opens, so the page
- *  loads a claim that is admitted. Once the turn has closed and the page has asked for its live data again (its
- *  own refresh), nothing on that page may still say a turn runs. */
-async function measureOpenedMidTurn(newPage: LiveApp['newPage'], origin: string): Promise<OpenedMidTurnVerdict> {
+/** Row 9 (#29): a new workspace's page opens on its first turn, so it loads a claim that is admitted. The turn is
+ *  held at its model (`pacedFirstTurn`) while the page loads again and reads its state, then answers. Once the turn
+ *  has closed and the page has asked for its live data again, nothing on that page may still say a turn runs. */
+async function measureOpenedMidTurn(
+  newPage: LiveApp['newPage'], origin: string, firstTurn: HeldCall,
+): Promise<OpenedMidTurnVerdict> {
   const workspace = await createWorkspace(
     origin, { name: `live-row-mid-turn-${RUN_ID}`, purpose: PACED_FIRST_TURN_MISSION, model: SCRIPTED_MODEL_SPEC });
 
@@ -1002,23 +1005,29 @@ async function measureOpenedMidTurn(newPage: LiveApp['newPage'], origin: string)
   const turns = await watchTurns(page);
 
   try {
-    // Taken before the page opens, so the close it settles on is the first turn's.
-    const closed = turns.afterTurn();
-
     await page.setViewport(DESKTOP);
     await page.evaluateOnNewDocument(RECORD_DEAD_ENDS);
     await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
     await until(page, 'the workspace page', `document.querySelector('textarea') !== null`);
+
+    // Settles on the first turn's close; a turn that closes before its model call has nothing to hold.
+    const closed = turns.afterTurn();
+    const beforeModel = closed.then(() => 'closed' as const, () => 'failed' as const);
+    const outcome = await Promise.race([firstTurn.arrived.then(() => 'held' as const), beforeModel]);
+
+    // A failed turn rethrows its own failure.
+    if (outcome === 'failed') await closed;
+
+    if (outcome !== 'held') throw new Error("the workspace's first turn closed before it reached its model");
+
+    // Loaded again now that the turn is admitted and waiting on its model: the page a new workspace opens on.
+    await page.reload({ waitUntil: 'load' });
+    await until(page, 'the workspace page, reloaded', `document.querySelector('textarea') !== null`);
     await page.evaluate(INSTALL_LIVE_SAMPLER);
     await page.evaluate(COUNT_PRESENCE_ASKS);
-    // A page that opened after the turn ended hears no closing frame, so the row checks its premise first.
-    await until(page, 'the first turn running on the page, or its answer',
-      `window.__liveSamples.some((sample) => sample.stop) || (${PACED_ANSWER_SHOWN})`);
-
-    if (!v.parse(v.boolean(), await page.evaluate('window.__liveSamples.some((sample) => sample.stop)'))) {
-      throw new Error('the first turn had ended before its page opened, so the page never saw it run');
-    }
-
+    await until(page, "the reloaded page's first presence read", 'window.__presenceAsks > 0');
+    await painted(page);
+    firstTurn.release();
     await closed;
 
     const asked = v.parse(v.number(), await page.evaluate('window.__presenceAsks'));
@@ -1038,6 +1047,7 @@ async function measureOpenedMidTurn(newPage: LiveApp['newPage'], origin: string)
       disagreed: samples.filter(disagrees).length,
     };
   } finally {
+    firstTurn.release();
     await turns.stop();
     await page.close();
   }
@@ -1125,7 +1135,9 @@ async function run(): Promise<void> {
   // turn of the mid-turn row, the kept-tab row's two asks, every row's
   // throwaway turn with prose and the walkthrough's turns with the plan and
   // the slate — one server, decided per request.
-  const model = await startScriptedModel((request) => pacedTurn(request) ?? pacedFirstTurn(request)
+  const firstTurn = heldCall();
+
+  const model = await startScriptedModel((request) => pacedTurn(request) ?? pacedFirstTurn(request, firstTurn)
     ?? keptTabProbe(request) ?? planWalkthrough(request));
 
   await withLiveApp(async (app) => {
@@ -1133,7 +1145,7 @@ async function run(): Promise<void> {
 
     await registerScriptedModel(origin, model.port);
     observed.liveIndicator = await attempt('live-indicator', () => measureLiveIndicator(newPage, origin));
-    observed.openedMidTurn = await attempt('opened-mid-turn', () => measureOpenedMidTurn(newPage, origin));
+    observed.openedMidTurn = await attempt('opened-mid-turn', () => measureOpenedMidTurn(newPage, origin, firstTurn));
     observed.panel = await attempt('panel', () => measurePanel(newPage, origin));
     observed.planTabs = await attempt('plan-tabs', () => measurePlanTabs(newPage, origin));
     observed.geometry = await attempt('geometry', () => measureGeometry(newPage, origin));

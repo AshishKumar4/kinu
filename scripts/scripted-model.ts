@@ -38,6 +38,8 @@ export interface ScriptedPace {
   readonly firstTokenMs: number;
   readonly lead: string;
   readonly leadMs: number;
+  /** A first silence of unknown length, ended by the row that holds it ({@link heldCall}). */
+  readonly hold?: Promise<void>;
 }
 
 /** One answer: prose, or a tool call with its complete arguments. Unpaced, it is written in one piece. */
@@ -170,10 +172,13 @@ function writePaced(response: ServerResponse, answer: ScriptedAnswer, pace: Scri
     `data: ${JSON.stringify({ ...CHUNK, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`;
 
   response.write(frame({ role: 'assistant' }));
-  setTimeout(() => {
-    response.write(frame({ content: pace.lead }));
-    setTimeout(() => { response.end(streamOf(answer)); }, pace.leadMs);
-  }, pace.firstTokenMs);
+  // A hold that fails cuts the call, as a provider that drops the socket does.
+  (pace.hold ?? Promise.resolve()).then(() => {
+    setTimeout(() => {
+      response.write(frame({ content: pace.lead }));
+      setTimeout(() => { response.end(streamOf(answer)); }, pace.leadMs);
+    }, pace.firstTokenMs);
+  }, () => { response.destroy(); });
 }
 
 export interface ScriptedModelServer {
@@ -288,12 +293,44 @@ export function pacedTurn(request: ScriptedRequest): ScriptedAnswer | null {
   return request.userTexts.some((text) => text.includes(PACED_TURN_ASK)) ? pacedSteps(request) : null;
 }
 
-/** A workspace created with this mission takes its first turn paced, long enough for its page to open during it. */
+/** A model call a row holds open: its turn is admitted and its model silent until the row lets it answer. */
+export interface HeldCall {
+  /** Settles once the held call has reached the scripted server. */
+  readonly arrived: Promise<void>;
+  /** Lets the call answer. The row releases on every path, or the server's `stop()` waits on the open response. */
+  release(): void;
+  /** The script's side: marks the call arrived and returns what its first silence waits on. */
+  hold(): Promise<void>;
+}
+
+export function heldCall(): HeldCall {
+  const arrived = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
+
+  return {
+    arrived: arrived.promise,
+    release: () => { released.resolve(); },
+    hold: () => {
+      arrived.resolve();
+
+      return released.promise;
+    },
+  };
+}
+
+/** A workspace created with this mission takes its first turn paced, its first call held until its page is open. */
 export const PACED_FIRST_TURN_MISSION = 'Take the first turn slowly: a page opens while it runs.';
 
-/** The paced steps for every turn of a workspace made with {@link PACED_FIRST_TURN_MISSION}; its row runs only the first. */
-export function pacedFirstTurn(request: ScriptedRequest): ScriptedAnswer | null {
-  return request.system.includes(PACED_FIRST_TURN_MISSION) ? pacedSteps(request) : null;
+/** The paced steps for every turn of a workspace made with {@link PACED_FIRST_TURN_MISSION}; the call that opens
+ *  them waits on `held`. Its row runs only the first turn. */
+export function pacedFirstTurn(request: ScriptedRequest, held: HeldCall): ScriptedAnswer | null {
+  if (!request.system.includes(PACED_FIRST_TURN_MISSION)) return null;
+
+  const answer = pacedSteps(request);
+
+  return answer.pace === undefined || request.called.includes('file')
+    ? answer
+    : { ...answer, pace: { ...answer.pace, hold: held.hold() } };
 }
 
 /* ── The plan walkthrough ──────────────────────────────────────────────── */
