@@ -6150,6 +6150,11 @@ async function mount() {
     ["settings", settingsFrame],
     ["control", controlFrame],
     ["home", homeFrame],
+    ["diff-design", async () => {
+      const { default: diffDesignFrame } = await import("@/gallery-diff-design");
+
+      return diffDesignFrame();
+    }],
   ]);
 
   const dynamicFixture = dynamicFrames.get(frame);
