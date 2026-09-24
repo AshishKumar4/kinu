@@ -152,7 +152,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
       mine.push({
         id: share.id, kind: 'live', share: share.id, title: reading.value.title, description: reading.value.description,
         createdAt: share.createdAt, bindings: share.grant.members.length, visibility: share.visibility,
-        workspace, users: share.users,
+        workspace, users: share.users, fork: share.grant.fork !== false,
       });
     }
 

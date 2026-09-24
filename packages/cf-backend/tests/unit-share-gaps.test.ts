@@ -6,7 +6,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  LiveShareRecordSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE,
+  LiveShareRecordSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
   type AgentRuntime, type SlateAnswer,
 } from '@kinu.run/core';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
@@ -209,7 +209,7 @@ test('a users share refuses a viewer it does not name', async () => {
   expect((await visit(world, present(created.url, 'the share URL'), '203.0.113.5'))?.status).toBe(404);
 });
 
-test('D1: a live share forks for who it names, refuses who it does not, and honors fork:false', async () => {
+test('D1: a live share forks for who it names, refuses who it does not, honors fork:false, and its owner forks it too', async () => {
   const world = await twoUserWorld();
   cleanups.push(world.close);
 
@@ -253,6 +253,14 @@ test('D1: a live share forks for who it names, refuses who it does not, and hono
     post('/api/shared/fork', { live: created.share.id, ownerWorkspace: 'issues-owner', workspace: 'issues-owner' }));
 
   expect(ownerFork?.status).toBe(201);
+
+  // The owner's Drive row carries the switch, so it offers Fork… on the open share and not on the closed one.
+  const library = await jsonBody(present(await sharedRequest(world.env, identityOf(OWNER_ID, 'owner@example.test'),
+    new Request('https://app.test/api/shared')), 'the owner\'s library'), SharedLibrarySchema);
+
+  const forks = new Map(library.mine.map((row) => [row.id, row.fork]));
+
+  expect([forks.get(created.share.id), forks.get(closed.share.id)]).toEqual([true, false]);
 });
 
 test('D2: one revoke route ends a public live share and a blueprint link', async () => {

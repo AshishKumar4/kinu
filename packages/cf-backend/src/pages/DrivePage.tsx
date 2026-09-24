@@ -475,10 +475,12 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
       menu.push({ label: "Copy link", icon: <CopyIcon size={15} />, onSelect: () => copier.copy(new URL(blueprintPagePath(row.id), window.location.origin).toString()) });
     }
 
+    if (row.kind === "blueprint" || (row.workspace !== undefined && row.fork === true)) {
+      menu.push({ label: "Fork…", icon: <GitForkIcon size={15} />, onSelect: () => setDialog({ kind: "fork", row }) });
+    }
+
     if (mine) {
       menu.push({ label: "Stop sharing", icon: <ProhibitIcon size={15} />, marker: "data-drive-stop-sharing", danger: true, apart: true, onSelect: () => setDialog({ kind: "stop", row }) });
-    } else if (row.kind === "blueprint" || (row.workspace !== undefined && row.fork === true)) {
-      menu.push({ label: "Fork…", icon: <GitForkIcon size={15} />, onSelect: () => setDialog({ kind: "fork", row }) });
     }
 
     const meta = mine ? whoCanOpen(row) : [row.kind === "live" ? "Live" : "Blueprint", row.owner, shortAge(row.createdAt)].filter(Boolean).join(" · ");

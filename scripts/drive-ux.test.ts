@@ -203,9 +203,9 @@ describe('the Drive', () => {
           { title: 'Shared with you', tiles: ['Inbox digest', 'Deploy status board'] },
           { title: 'Shared by you', tiles: ['Issue triage', 'Issue triage'] },
         ]);
-        // What others shared forks; what the owner shared stops.
+        // Both forks where the sharer allows it; what the owner shared also stops.
         expect((await menuOf(shared, '[data-drive-share="live-mail-9"]')).map((item) => item.label)).toEqual(['Open', 'Fork…']);
-        expect((await menuOf(shared, '[data-drive-share="live-board-1"]')).map((item) => item.label)).toEqual(['Open', 'Stop sharing']);
+        expect((await menuOf(shared, '[data-drive-share="live-board-1"]')).map((item) => item.label)).toEqual(['Open', 'Fork…', 'Stop sharing']);
         await shared.click('[data-drive-share="live-board-1"] [data-drive-stop-sharing]');
         await shared.waitForSelector('[role="dialog"]');
         expect(await shared.$eval('[role="dialog"]', (element) => element.textContent ?? '')).toContain('Everyone with the link loses access right away');
