@@ -166,4 +166,26 @@ describe('scaffold host callTool ids', () => {
       Date.now = realNow;
     }
   });
+
+  test('a call that lacks or mistypes a field the tool declares is refused before the tool runs', async () => {
+    const calls: string[] = [];
+
+    const entry = tool({
+      description: 'send the invoice',
+      inputSchema: jsonSchema<{ to: string }>({
+        type: 'object', properties: { to: { type: 'string' } }, required: ['to'],
+      }),
+      execute: async (input: { to: string }) => {
+        calls.push(input.to);
+
+        return { sent: input.to };
+      },
+    });
+
+    const host = createScaffoldCallTool(() => ({ shell: entry }));
+
+    await expect(host('shell', {})).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(host('shell', { to: 7 })).rejects.toMatchObject({ code: 'bad_input' });
+    expect(calls).toEqual([]);
+  });
 });

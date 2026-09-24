@@ -38,6 +38,13 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   neither it nor `fs` reads output text as a refusal. The eval description grows
   from 16.6 KB to 16.9 KB on the hosted request and from 12.5 KB to 12.7 KB on
   the local one.
+- **A native tool called from a program or a scaffold runs only on input that
+  has the fields its schema requires, each of its declared type.** Anything
+  else refuses as `bad_input`, naming the field, before the tool runs;
+  `tools.shell({})` used to run with no command and fail as `io` on a
+  TypeError. A value outside a declared enum still reaches the tool, which
+  resolves it (a device runtime goes by nickname), and rules that span fields
+  stay with each tool's own parse.
 - **The default model lives in the profile's default tier, and nowhere else.** `kinu setup` and the first provider connect set it only while it is unset, a later connect leaves it, and Defaults on the home screen change it; `config.json` keeps no top-level `model` or `reasoningEffort`. `/model`, `/effort`, the TUI model picker, `kinu model`, `kinu effort` and the rpc `model` command set the open workspace's own model or effort, and a new workspace pins a model only when `--model` names one.
 
 ### Added

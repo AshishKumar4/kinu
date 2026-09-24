@@ -4,6 +4,8 @@
  */
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
+import { asSchema } from 'ai';
+import { present } from '@kinu.run/test-utils';
 import { explainNativeToolReferenceError } from '../src/execution/sandbox-errors';
 import { BUILTIN_TOOLS, renderCodemodeDescription, TOOL_REACH } from '../src/tools/registry';
 import { branchableToolCall, failedToolOutcome, successfulToolOutcome, withCodemodeProgram } from '../src/tools/outcome';
@@ -109,6 +111,38 @@ test('throwing the failure value propagates its native reason and a malformed pr
 
   expect(failedToolOutcome({ cause: error })).toMatchObject({ success: false, reason: 'denied', failures: [{ tool: 'file', action: 'write', reason: 'denied' }] });
   await expect(withCodemodeProgram(async () => { throw new ReferenceError('run is not defined'); })).rejects.toBeInstanceOf(ReferenceError);
+});
+
+test('a native tool a program calls runs only on input its own schema admits', async () => {
+  const commands: unknown[] = [];
+  const { rt } = createTestRuntime();
+
+  const shell = {
+    exec: async (command: string) => {
+      commands.push(command);
+
+      return { stdout: 'ran', stderr: '', exitCode: 0 };
+    },
+  };
+
+  const native = buildBuiltinTools({ rt: { ...rt, shell }, history: storesFor(rt).history });
+  const admitted: string[] = [];
+
+  // Every native tool whose schema requires a field is called without it.
+  for (const [name, entry] of Object.entries(nativeToolFunctions(native))) {
+    const declared = await asSchema(present(native[name], name).inputSchema).jsonSchema;
+
+    if (!declared.required?.length) continue;
+    const received = await codemodeFunction('tools', name, entry.execute)({});
+
+    if (!v.is(v.object({ success: v.literal(false), reason: v.literal('bad_input') }), received)) admitted.push(`${name}: ${JSON.stringify(received)}`);
+  }
+
+  expect(admitted).toEqual([]);
+  expect(await codemodeFunction('tools', 'shell', present(nativeToolFunctions(native).shell, 'shell').execute)({ command: 42 }))
+    .toMatchObject({ success: false, reason: 'bad_input', error: expect.stringContaining('command') });
+  // Neither call reached the shell.
+  expect(commands).toEqual([]);
 });
 
 test('every member of every namespace refuses with the one declared Refusal, and the program records it', async () => {

@@ -1,6 +1,5 @@
 /** Host bridges (llmStream, callTool, history) an evolved scaffold uses from the codemode sandbox. */
 
-import { safeValidateTypes } from '@ai-sdk/provider-utils';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import { runChat, type ChatOptions } from '../chat';
 import { ExtensionHost, type KinuExtension } from '../extension';
@@ -12,6 +11,7 @@ import { boundedInt } from '../utils/bounds';
 import { nanoid } from '../utils/nanoid';
 import { renderThrownChain, KinuError } from '../obs/index';
 import { assertScaffoldActive, type ScaffoldRunControl, type ScaffoldToolOutput } from '../scaffold/executor';
+import { toolInputViolation } from '../tools/tool-schema';
 import type {
   ScaffoldHistoryEntry,
   ScaffoldHistoryPage,
@@ -240,11 +240,11 @@ export function createScaffoldCallTool(
     };
 
     if (signal !== undefined) options.abortSignal = signal;
-    const input = await safeValidateTypes({ value: args, schema: t.inputSchema });
+    const violation = await toolInputViolation(t, args);
 
-    if (!input.success) throw new KinuError('bad_input', 'invalid scaffold tool arguments', { cause: input.error });
+    if (violation !== null) throw new KinuError('bad_input', `invalid scaffold tool arguments: ${violation}`);
     assertScaffoldActive(control);
-    const result = await t.execute(input.value, options);
+    const result = await t.execute(args, options);
 
     return result === undefined ? undefined : decodeJsonValue({ value: result });
   };

@@ -1,6 +1,7 @@
 import * as v from 'valibot';
+import { Validator } from '@cfworker/json-schema';
 import { asSchema, jsonSchema, type ToolSet } from 'ai';
-import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
+import { isJsonObject, JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { isMcpToolKey } from './mcp-naming';
 
 export type ToolSchemaDialect = 'openai' | 'anthropic' | 'gemini';
@@ -183,4 +184,40 @@ export function withToolSchemaDialect(tools: ToolSet, dialect: ToolSchemaDialect
 
     return [name, normalized];
   }));
+}
+
+/** One validator per declared schema: building one walks it. */
+const inputValidators = new WeakMap<object, Validator>();
+
+const RequiredFieldsSchema = v.array(v.string());
+
+const FieldSchemasSchema = v.record(v.string(), JsonValueSchema);
+
+/** The part of a tool schema every call must meet: its required fields, and each declared field's type. */
+function presenceAndTypes(schema: JsonObject): JsonObject {
+  const required = v.safeParse(RequiredFieldsSchema, schema.required);
+  const fields = v.safeParse(FieldSchemasSchema, schema.properties ?? {});
+  const properties: JsonObject = {};
+
+  for (const [name, field] of Object.entries(fields.success ? fields.output : {})) {
+    properties[name] = isJsonObject(field) && field.type !== undefined ? { type: field.type } : {};
+  }
+
+  return { type: 'object', properties, required: required.success ? required.output : [] };
+}
+
+/**
+ * What `input` lacks or mistypes among the fields `tool` declares, or null. Nothing upstream checks it: every tool
+ * schema is `jsonSchema()` without a validator, which the SDK passes through. Only presence and type bind: an enum
+ * lists options a tool resolves itself (a device runtime goes by nickname), and a rule across fields stays with the
+ * tool's own parse, whose message names what an action needs.
+ */
+export async function toolInputViolation(tool: ToolSet[string], input: JsonObject): Promise<string | null> {
+  const declared = await asSchema(tool.inputSchema).jsonSchema;
+  const validator = inputValidators.get(declared) ?? new Validator(presenceAndTypes(v.parse(JsonObjectSchema, declared)), '7');
+
+  inputValidators.set(declared, validator);
+  const { valid, errors } = validator.validate(input);
+
+  return valid ? null : errors.map((error) => `${error.instanceLocation}: ${error.error}`).join('; ');
 }
