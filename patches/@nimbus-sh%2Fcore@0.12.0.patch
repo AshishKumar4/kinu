@@ -19,7 +19,7 @@ index ab583395295c780d5b86dfba29fca3fb4593f322..0d71413ba779217bb1a7828374b4dc24
                  fileEntries.push({
                      name: arg,
 diff --git a/dist/vfs/sqlite-vfs.js b/dist/vfs/sqlite-vfs.js
-index 363e3db45eb7fad69b4b24b53a016aecac84b80f..148bbc85a605cef3941368cb17b6c28eb55b385f 100644
+index 363e3db45eb7fad69b4b24b53a016aecac84b80f..62b0822591dc73d19062422d6fcff217a4eff4fd 100644
 --- a/dist/vfs/sqlite-vfs.js
 +++ b/dist/vfs/sqlite-vfs.js
 @@ -1416,6 +1416,21 @@ export class SqliteVFS {
@@ -44,7 +44,7 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..148bbc85a605cef3941368cb17b6c28e
      /**
       * POSIX sticky-bit restriction on a shared directory.
       *
-@@ -1481,11 +1496,20 @@ export class SqliteVFS {
+@@ -1481,11 +1496,28 @@ export class SqliteVFS {
              return this._revision;
          // A credentialed caller asks about its own view; a confined one asking
          // after /tmp/x means its own file, so the counter must be that file's.
@@ -54,19 +54,27 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..148bbc85a605cef3941368cb17b6c28e
              return this._revision;
          return this._pathRevisions.get(p) ?? 0;
      }
-+    /** Kinu patch, Nimbus ask N22: mutations stamp the path a link resolves to, so that is the path read. */
++    /**
++     * Kinu patch, Nimbus ask N22: mutations stamp the path a link resolves to, so that is the path read.
++     * A missing entry resolves without an error. A path no entry can sit at (a file mid-path, a link loop)
++     * or one the caller may not search reads the counter at the path as given, as every path did before:
++     * a counter read throws for nothing else.
++     */
 +    revisionKey(path, cred) {
 +        try {
 +            return this.resolvePath(path, cred, true, true).path;
 +        }
-+        catch {
++        catch (error) {
++            const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
++            if (code !== 'ENOTDIR' && code !== 'ELOOP' && code !== 'EACCES')
++                throw error;
 +            return this.storageKey(path, cred);
 +        }
 +    }
      /**
       * Advance the clock once, stamp every path + its ancestors, and record
       * the mutation in the invalidation log.
-@@ -1675,10 +1699,13 @@ export class SqliteVFS {
+@@ -1675,10 +1707,13 @@ export class SqliteVFS {
          }
      }
      mkdir(path, options, cred) {
@@ -83,7 +91,7 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..148bbc85a605cef3941368cb17b6c28e
          if (options?.recursive) {
              const parts = normalized.split('/').filter(Boolean);
              let current = '';
-@@ -1781,7 +1808,8 @@ export class SqliteVFS {
+@@ -1781,7 +1816,8 @@ export class SqliteVFS {
      }
      symlink(target, path, cred) {
          this.assertMutationsAllowed([path]);
@@ -93,7 +101,7 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..148bbc85a605cef3941368cb17b6c28e
          const prior = this.checkAccess(normalized, 0, cred, { followLeaf: false, allowMissingLeaf: true });
          if (prior.inode)
              throw vfsError('EEXIST', normalized);
-@@ -2656,7 +2684,10 @@ export class SqliteVFS {
+@@ -2656,7 +2692,10 @@ export class SqliteVFS {
          const inode = resolved.inode;
          if (inode && inode.kind !== 'directory')
              throw vfsError('ENOTDIR', path);
@@ -105,7 +113,7 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..148bbc85a605cef3941368cb17b6c28e
          if (!kids) {
              // W2.5b diagnostic: empty children-set for a directory we expected
              // to be populated.
-@@ -2714,18 +2745,19 @@ export class SqliteVFS {
+@@ -2714,18 +2753,19 @@ export class SqliteVFS {
          const np = this.storageKey(path, cred);
          const resolved = this.checkAccess(np, 0, cred, { followLeaf: false });
          this.checkParentAccess(resolved.path, cred);
@@ -128,7 +136,7 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..148bbc85a605cef3941368cb17b6c28e
      }
      /**
       * Remove a path and everything beneath it, in bounded transactions.
-@@ -3038,14 +3070,15 @@ export class SqliteVFS {
+@@ -3038,14 +3078,15 @@ export class SqliteVFS {
      }
      // ── Batch write (npm install fast path) ───────────────────────────────
      normalizeBatchInode(entry, cred) {
@@ -146,7 +154,7 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..148bbc85a605cef3941368cb17b6c28e
              mode: prior
                  ? prior.mode
                  : inodeKind(entry) === 'symlink'
-@@ -3080,7 +3113,7 @@ export class SqliteVFS {
+@@ -3080,7 +3121,7 @@ export class SqliteVFS {
              }
          };
          for (const path of payload.deletePaths ?? []) {
@@ -155,7 +163,7 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..148bbc85a605cef3941368cb17b6c28e
              const existing = this.checkAccess(normalized, 0, cred, {
                  followLeaf: false,
                  allowMissingLeaf: true,
-@@ -3095,15 +3128,17 @@ export class SqliteVFS {
+@@ -3095,15 +3136,17 @@ export class SqliteVFS {
              else
                  checkParent(entry.path);
          }
@@ -178,7 +186,7 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..148bbc85a605cef3941368cb17b6c28e
          };
      }
      /**
-@@ -3470,7 +3505,7 @@ export class SqliteVFS {
+@@ -3470,7 +3513,7 @@ export class SqliteVFS {
                          // Close the group before the file that would overflow it, so a
                          // file either fits whole or begins a group of its own. The
                          // estimate only picks the boundary — the flush asserts the bound.
@@ -187,7 +195,7 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..148bbc85a605cef3941368cb17b6c28e
                          const overflows = group.wouldExceedFile(record.inode.size, record.inode.chunkCount, prior !== undefined && !prior.isDir);
                          if (overflows !== null)
                              flushGroup();
-@@ -4377,7 +4412,8 @@ export class SqliteVFS {
+@@ -4377,7 +4420,8 @@ export class SqliteVFS {
          const toCreate = [];
          const seen = new Set();
          for (const path of paths) {
@@ -218,7 +226,7 @@ index 15de09dcb7e88641427a9b5053457ce961c08f18..83776ce2b07ef80e6ea3efe39c1561e1
          fileEntries.push({
            name: arg,
 diff --git a/src/vfs/sqlite-vfs.ts b/src/vfs/sqlite-vfs.ts
-index 336f9918ac93fd50b60331d544474a0ed9998fcd..ce718518e320ea2b78162c2913c514c1e048170d 100644
+index 336f9918ac93fd50b60331d544474a0ed9998fcd..ef40a5b66793bf8b6b7022fa14ea4783e0910e08 100644
 --- a/src/vfs/sqlite-vfs.ts
 +++ b/src/vfs/sqlite-vfs.ts
 @@ -1836,6 +1836,21 @@ export class SqliteVFS {
@@ -243,7 +251,7 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ce718518e320ea2b78162c2913c514c1
    /**
     * POSIX sticky-bit restriction on a shared directory.
     *
-@@ -1901,12 +1916,21 @@ export class SqliteVFS {
+@@ -1901,12 +1916,28 @@ export class SqliteVFS {
      if (path === undefined) return this._revision;
      // A credentialed caller asks about its own view; a confined one asking
      // after /tmp/x means its own file, so the counter must be that file's.
@@ -254,11 +262,18 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ce718518e320ea2b78162c2913c514c1
    }
  
  
-+  /** Kinu patch, Nimbus ask N22: mutations stamp the path a link resolves to, so that is the path read. */
++  /**
++   * Kinu patch, Nimbus ask N22: mutations stamp the path a link resolves to, so that is the path read.
++   * A missing entry resolves without an error. A path no entry can sit at (a file mid-path, a link loop)
++   * or one the caller may not search reads the counter at the path as given, as every path did before:
++   * a counter read throws for nothing else.
++   */
 +  private revisionKey(path: string, cred: VfsCred): string {
 +    try {
 +      return this.resolvePath(path, cred, true, true).path;
-+    } catch {
++    } catch (error) {
++      const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
++      if (code !== 'ENOTDIR' && code !== 'ELOOP' && code !== 'EACCES') throw error;
 +      return this.storageKey(path, cred);
 +    }
 +  }
@@ -266,7 +281,7 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ce718518e320ea2b78162c2913c514c1
    /**
     * Advance the clock once, stamp every path + its ancestors, and record
     * the mutation in the invalidation log.
-@@ -2100,9 +2124,12 @@ export class SqliteVFS {
+@@ -2100,9 +2131,12 @@ export class SqliteVFS {
    }
  
    private mkdir(path: string, options: { recursive?: boolean; mode?: number } | undefined, cred: VfsCred): void {
@@ -281,7 +296,7 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ce718518e320ea2b78162c2913c514c1
  
      if (options?.recursive) {
        const parts = normalized.split('/').filter(Boolean);
-@@ -2211,7 +2238,8 @@ export class SqliteVFS {
+@@ -2211,7 +2245,8 @@ export class SqliteVFS {
  
    private symlink(target: string, path: string, cred: VfsCred): void {
      this.assertMutationsAllowed([path]);
@@ -291,7 +306,7 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ce718518e320ea2b78162c2913c514c1
      const prior = this.checkAccess(normalized, 0, cred, { followLeaf: false, allowMissingLeaf: true });
      if (prior.inode) throw vfsError('EEXIST', normalized);
      this.checkParentAccess(normalized, cred);
-@@ -3381,7 +3409,10 @@ export class SqliteVFS {
+@@ -3381,7 +3416,10 @@ export class SqliteVFS {
      const resolved = np ? this.checkAccess(np, 0o4, cred) : { path: '', inode: undefined };
      const inode = resolved.inode;
      if (inode && inode.kind !== 'directory') throw vfsError('ENOTDIR', path);
@@ -303,7 +318,7 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ce718518e320ea2b78162c2913c514c1
      if (!kids) {
        // W2.5b diagnostic: empty children-set for a directory we expected
        // to be populated.
-@@ -3445,16 +3476,17 @@ export class SqliteVFS {
+@@ -3445,16 +3483,17 @@ export class SqliteVFS {
      const np = this.storageKey(path, cred);
      const resolved = this.checkAccess(np, 0, cred, { followLeaf: false });
      this.checkParentAccess(resolved.path, cred);
@@ -324,7 +339,7 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ce718518e320ea2b78162c2913c514c1
    }
  
    /**
-@@ -3754,14 +3786,15 @@ export class SqliteVFS {
+@@ -3754,14 +3793,15 @@ export class SqliteVFS {
    // ── Batch write (npm install fast path) ───────────────────────────────
  
    private normalizeBatchInode(entry: BatchInodeEntry, cred: VfsCred): NormalizedBatchInodeEntry {
@@ -342,7 +357,7 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ce718518e320ea2b78162c2913c514c1
        mode: prior
          ? prior.mode
          : inodeKind(entry) === 'symlink'
-@@ -3795,7 +3828,7 @@ export class SqliteVFS {
+@@ -3795,7 +3835,7 @@ export class SqliteVFS {
      };
  
      for (const path of payload.deletePaths ?? []) {
@@ -351,7 +366,7 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ce718518e320ea2b78162c2913c514c1
        const existing = this.checkAccess(normalized, 0, cred, {
          followLeaf: false,
          allowMissingLeaf: true,
-@@ -3807,14 +3840,16 @@ export class SqliteVFS {
+@@ -3807,14 +3847,16 @@ export class SqliteVFS {
        if (prior) this.checkAccess(entry.path, 0o2, cred, { followLeaf: false });
        else checkParent(entry.path);
      }
@@ -372,7 +387,7 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ce718518e320ea2b78162c2913c514c1
      };
    }
  
-@@ -4235,7 +4270,7 @@ export class SqliteVFS {
+@@ -4235,7 +4277,7 @@ export class SqliteVFS {
              // Close the group before the file that would overflow it, so a
              // file either fits whole or begins a group of its own. The
              // estimate only picks the boundary — the flush asserts the bound.
@@ -381,7 +396,7 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ce718518e320ea2b78162c2913c514c1
              const overflows = group.wouldExceedFile(
                record.inode.size,
                record.inode.chunkCount,
-@@ -5276,7 +5311,8 @@ export class SqliteVFS {
+@@ -5276,7 +5318,8 @@ export class SqliteVFS {
      const seen = new Set<string>();
  
      for (const path of paths) {

@@ -221,6 +221,22 @@ describe('installed Nimbus dependency integrity', () => {
       db.close();
     });
 
+    test('a directory the user may not write stays shut through the link', async () => {
+      const db = new Database(':memory:');
+      const workspace = await linkedWorkspace(db);
+      const kernel = workspace.vfs.as(CRED_KERNEL);
+      const vfs = workspace.vfs.as(CRED_SESSION_USER);
+
+      kernel.mkdir(`${WORKSPACE_ROOT}/locked`);
+      kernel.chmod(`${WORKSPACE_ROOT}/locked`, 0o555);
+
+      expect(() => vfs.mkdir(`${LEGACY_WORKSPACE_ROOT}/locked/made`)).toThrow('EACCES');
+      expect(() => vfs.mkdirBatch([`${LEGACY_WORKSPACE_ROOT}/locked/batch/deep`])).toThrow('EACCES');
+      expect(() => vfs.writeFile(`${LEGACY_WORKSPACE_ROOT}/locked/written.txt`, 'x')).toThrow('EACCES');
+      expect(namesIn(kernel, `${WORKSPACE_ROOT}/locked`)).toEqual([]);
+      db.close();
+    });
+
     test('a revision read through the link moves when the file does', async () => {
       const db = new Database(':memory:');
       const vfs = (await linkedWorkspace(db)).vfs.as(CRED_SESSION_USER);

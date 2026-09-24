@@ -186,26 +186,34 @@ export function provisionAgentHome(root: HomeRootVfs, agentName: string, identit
 }
 
 export type RootMoveVfs = Pick<CredentialedVfs,
-  'exists' | 'isDirectory' | 'isSymlink' | 'readlink' | 'readdir' | 'rename' | 'removeRecursive' | 'symlink' | 'unlink'>;
+  'exists' | 'isDirectory' | 'isSymlink' | 'readlink' | 'readdir' | 'rename' | 'removeRecursive' | 'symlink' | 'unlink'
+  | 'stat' | 'chown' | 'chmod'>;
 
 /** The old root moves to {@link WORKSPACE_ROOT}; its name is a link. */
 export function settleWorkspaceRoot(kernel: RootMoveVfs): void {
   const legacy = LEGACY_WORKSPACE_ROOT;
 
-  if (kernel.isSymlink(legacy) && kernel.readlink(legacy) === WORKSPACE_ROOT) return;
-
-  if (kernel.isDirectory(legacy)) {
-    if (kernel.exists(WORKSPACE_ROOT)) {
-      moveMissing(kernel, legacy, WORKSPACE_ROOT);
-      kernel.removeRecursive(legacy);
-    } else {
-      kernel.rename(normalizeVfsPath(legacy), normalizeVfsPath(WORKSPACE_ROOT));
+  if (!kernel.isSymlink(legacy) || kernel.readlink(legacy) !== WORKSPACE_ROOT) {
+    if (kernel.isDirectory(legacy)) {
+      if (kernel.exists(WORKSPACE_ROOT)) {
+        moveMissing(kernel, legacy, WORKSPACE_ROOT);
+        kernel.removeRecursive(legacy);
+      } else {
+        kernel.rename(normalizeVfsPath(legacy), normalizeVfsPath(WORKSPACE_ROOT));
+      }
+    } else if (kernel.exists(legacy)) {
+      kernel.unlink(legacy);
     }
-  } else if (kernel.exists(legacy)) {
-    kernel.unlink(legacy);
+
+    kernel.symlink(WORKSPACE_ROOT, legacy);
   }
 
-  kernel.symlink(WORKSPACE_ROOT, legacy);
+  const homes = kernel.stat('/home');
+
+  if (homes.uid !== 0 || homes.gid !== 0 || (homes.mode & 0o7777) !== 0o755) {
+    kernel.chown('/home', 0, 0);
+    kernel.chmod('/home', 0o755);
+  }
 }
 
 function moveMissing(kernel: RootMoveVfs, from: string, to: string): void {
