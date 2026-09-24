@@ -393,6 +393,8 @@ export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, 
         KINU_DEV_CACHE_DIR: scratchDir('live-app-vite-cache'),
         // The preview zone's own https port, so boots side by side never share one.
         KINU_DEV_PREVIEW_PORT: String(previewPort),
+        // And no Workers inspector, whose default port every boot would race for (vite.config.ts).
+        KINU_DEV_INSPECTOR: 'off',
       },
       // setsid, so vite leads its own process group: teardown can signal the
       // workerd children with it rather than orphaning them to systemd
