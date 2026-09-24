@@ -38,7 +38,7 @@ import { resolve } from 'node:path';
 import { cpus } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
-import { DEADLINE_EXIT_CODE, runUnderDeadline } from './deadline';
+import { DEADLINE_EXIT_CODE, LEFTOVER_BLIND_SPOTS, runUnderDeadline } from './deadline';
 import {
   CACHE_BLIND_SPOTS, defaultStoreDirectory, gateEnvironment, gateEnvNames, planGate, recordGreen, storeAt, toolVersions,
 } from './ladder-cache';
@@ -2918,6 +2918,13 @@ export function claims(command: string, tracked: readonly string[]): string[] {
       && !ignored.some((glob) => glob.match(path)));
 }
 
+/** What a red row that ran to its end found: its exit code, or the processes it left (named above). */
+function ranRed(leftovers: readonly string[]): string {
+  return leftovers.length === 0
+    ? 'the command exited non-zero; its own output is immediately above'
+    : `the run left ${String(leftovers.length)} process(es) running after it exited; the LEFT line above names them`;
+}
+
 /**
  * The argv to spawn for a gate. `Bun.spawnSync` runs no shell, so a
  * glob-spelled gate reaches `bun test` as a literal FILTER and matches nothing
@@ -3556,7 +3563,7 @@ if (import.meta.main) {
       invariant: gate.catches,
       found: outcome.exitCode === DEADLINE_EXIT_CODE
         ? `the run hung and was killed at the row's ${String(gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS)}s deadline; its own output is immediately above`
-        : 'the command exited non-zero; its own output is immediately above',
+        : ranRed(outcome.leftovers),
       silently: `every later tier assumes this held. What this gate does NOT cover: ${gate.blind}`,
       fix: `${gate.run}   # reproduce exactly this, nothing else`,
     }));
@@ -3575,6 +3582,8 @@ if (import.meta.main) {
 
     for (const spot of CACHE_BLIND_SPOTS) console.log(`  blind: ${spot}`);
   }
+
+  for (const spot of LEFTOVER_BLIND_SPOTS) console.log(`  blind: ${spot}`);
 
   console.log(
     `\nladder --tier=${tier}: ok — ${measured}, ${((performance.now() - started) / 1000).toFixed(1)}s`,
