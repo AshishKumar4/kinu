@@ -18,7 +18,7 @@ const STATUS_TONE = {
 interface DiffResult {
   files: FileDiff[];
   mode: "git" | "vfs-baseline";
-  baselineJustCaptured?: boolean;
+  trackedSince?: number;
   notGitRepo?: boolean;
   error?: string;
 }
@@ -100,7 +100,11 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
   } else if (result.notGitRepo === true) {
     notice = <EmptyState icon={<GitDiffIcon size={28} />} title="Not a git repository" />;
   } else if (files.length === 0) {
-    notice = <EmptyState icon={<GitDiffIcon size={28} />} title="No diffs yet" />;
+    const title = result.trackedSince === undefined
+      ? "No diffs yet"
+      : `Changes tracked since ${new Date(result.trackedSince).toLocaleString()}`;
+
+    notice = <EmptyState icon={<GitDiffIcon size={28} />} title={title} />;
   }
 
   return (

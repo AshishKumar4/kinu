@@ -359,9 +359,9 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
 
       return { owner: resolved.stores.claims, writable: false, version: token([resolved.stores.claims.actorId, request.id]), modified: view.modified,
         chunks: async function* () {
+          const messages = history.requests.messagesOf(request);
           const metadata = await history.messages.payloads.read(request.metadata);
-          const { messages, ...header } = request;
-          yield `{"request":${JSON.stringify({ ...header, metadata })},"messages":[`;
+          yield `{"request":${JSON.stringify({ ...request, metadata })},"messages":[`;
 
           for (const [index, reference] of messages.entries()) yield `${index === 0 ? '' : ','}${JSON.stringify(await history.messages.projection(reference))}`;
           yield ']}\n';

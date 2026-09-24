@@ -50,16 +50,16 @@ const PID_PATH = path.join(DEVICE_HOME, 'pc-agent.pid');
  *  one. `packages/cli/tests/device-connect.test.ts` pins the number. */
 const ALREADY_RUNNING_EXIT = 3;
 
-/** The hub's token-rotation frame type. Pinned against core's
- *  DEVICE_TOKEN_ROTATION in cf-backend's device-hub test: this daemon ships as
- *  one dependency-free file and cannot import the constant. */
+/** The hub's token-rotation frame type, core's DEVICE_TOKEN_ROTATION: this
+ *  daemon ships as one dependency-free file and cannot import the constant, so
+ *  packages/cli/tests/daemon-update.test.ts drives it with core's frames. */
 const TOKEN_ROTATION = 'ROTATE';
 
-/** This daemon's answer once the rotated token is on disk. The hub keeps the
- *  superseded token valid until this frame arrives and drops it then, so the
- *  grace covers exactly the failure it exists for — a rotation lost with its
- *  socket — and not the indefinite window a copy of device.json could spend.
- *  Pinned against core's DEVICE_TOKEN_ROTATION_ACK in the device-hub test. */
+/** This daemon's answer once the rotated token is on disk, core's
+ *  DEVICE_TOKEN_ROTATION_ACK. The hub keeps the superseded token valid until
+ *  this frame arrives and drops it then, so the grace covers exactly the
+ *  failure it exists for — a rotation lost with its socket — and not the
+ *  indefinite window a copy of device.json could spend. */
 const TOKEN_ROTATION_ACK = 'ROTATE_ACK';
 
 /** The hub's close code for a token it will not accept again, and the message
@@ -76,6 +76,13 @@ const SOCKET_REPLACED_REASON = 'replaced by a new connection';
 
 const CREDENTIALS_REJECTED = 'device credentials were rejected; re-run: kinu connect';
 
+/** The shape the hub mints a device token in (`pdt_` and 32 url-safe characters). */
+const DEVICE_TOKEN = /^pdt_[A-Za-z0-9_-]{32,}$/;
+
+/** Hosts a development hub may serve over plain http from the owner's own
+ *  machine; the token never crosses a network there. */
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
 const REJECTED_EXIT = 4;
 
 /** The hub answers this text frame with `pong` (its socket auto-response), so
@@ -91,40 +98,13 @@ const PONG_DEADLINE_MS = 10_000;
 
 const { KINU_INFLIGHT_ROOT } = process.env;
 
-/** The environment a command runs with, built by ALLOW-LIST out of this
- *  daemon's own. The list lives in sandbox.js, shared with the sandbox tiers.
- *  One edit reaches both paths, so the two cannot drift.
- *
- *  The daemon inherits the shell that ran `kinu connect`, so its environment
- *  can hold the CLI bearer (KINU_TOKEN), SSH_AUTH_SOCK, cloud keys and a
- *  GitHub PAT. A command that runs `env` reads all of them, which made a
- *  full-tier grant a credential read as well as a shell. Only the names a
- *  POSIX command needs to find its tools, its home and its locale cross.
- *
- *  An allow-list rather than a deny-list, because the dangerous set is open:
- *  NODE_OPTIONS and BUN_INSPECT load code into the next process this daemon
- *  starts, and nobody can enumerate the rest. LC_* is a family, so it is
- *  matched; the others are named.
- */
-function commandEnvironment(source = process.env) {
-  const env = {};
+/** The supervisor's own environment: the sandboxed tier's allow-list, so no
+ *  NODE_OPTIONS or BUN_INSPECT loads code into it. The command it starts runs
+ *  with its plan's environment (sandbox.js), never this one. */
+const COMMAND_ENV = sandbox.sandboxEnvironment(process.env, {});
 
-  for (const name of sandbox.ENV_ALLOWLIST) {
-    const value = source[name];
-
-    if (value !== undefined) env[name] = value;
-  }
-
-  for (const name of Object.keys(source)) {
-    if (sandbox.ENV_ALLOWLIST_FAMILY.test(name) && source[name] !== undefined) env[name] = source[name];
-  }
-
-  return env;
-}
-
-/** One construction for both processes: the supervisor is started with this,
- *  and hands its own `process.env` to `/bin/sh`. */
-const COMMAND_ENV = commandEnvironment();
+/** What the dotenv files in this daemon's launch directory put into its environment; no command inherits it. */
+const LAUNCH_DOTENV = sandbox.launchDotenv(process.cwd(), process.env.NODE_ENV);
 
 /** The method that terminates one in-flight command's process group, and the
  *  cancellation protocol this daemon speaks. Both mirror core's
@@ -141,6 +121,10 @@ const CANCEL_PROTOCOL = 1;
  * receive ceiling even after worst-case JSON escaping. The daemon drains bytes
  * past the cap without retaining them, so a noisy process cannot grow its heap. */
 const EXEC_STREAM_MAX_BYTES = 512 * 1024;
+
+/** How much a range read allocates at a time, so memory follows the bytes the
+ *  file actually has rather than the length a caller asked for. */
+const READ_CHUNK_BYTES = 1024 * 1024;
 
 /**
  * The terminal protocol, which is the one thing on this socket that is not a
@@ -690,7 +674,10 @@ function createCheckpoints(opts = {}) {
       return { dir: abs, id, files, preRestoreId };
     },
 
-    workdirForPath(p) {
+    /** The project directory holding `p`, climbing only through directories
+     *  `covers` admits, so a marker above what the frame may write never widens
+     *  a checkpoint past it. */
+    workdirForPath(p, covers = () => true) {
       const abs = path.resolve(p);
       let candidate = abs;
 
@@ -700,7 +687,7 @@ function createCheckpoints(opts = {}) {
       const home = path.resolve(os.homedir());
       let probeDir = candidate;
 
-      while (probeDir !== path.dirname(probeDir) && probeDir !== home) {
+      while (probeDir !== path.dirname(probeDir) && probeDir !== home && covers(probeDir)) {
         if (PROJECT_MARKERS.some((m) => fs.existsSync(path.join(probeDir, m)))) return probeDir;
         probeDir = path.dirname(probeDir);
       }
@@ -870,9 +857,9 @@ const REQUEST_ID = /^rpc-[A-Za-z0-9_-]{10}-[1-9]\d*$/;
 
 const EXEC_ACK_METHOD = 'execAck';
 
-const EXEC_STREAM_TRUNCATION_MARKER = `[output truncated at ${EXEC_STREAM_MAX_BYTES} bytes]\n`;
-
-const EXEC_CAPTURE_MAX_BYTES = EXEC_STREAM_MAX_BYTES + Buffer.byteLength(EXEC_STREAM_TRUNCATION_MARKER);
+/** Room for what the supervisor writes around the kept bytes: the seam, and the closing line that names
+ *  the spill path or why it was not saved. */
+const EXEC_CAPTURE_MAX_BYTES = EXEC_STREAM_MAX_BYTES + 16 * 1024;
 
 function supervisionSupported(platform = process.platform) {
   return platform === 'linux' || platform === 'darwin';
@@ -976,10 +963,10 @@ function readSupervisorState(dir) {
   return { pid, start, group, groupStart };
 }
 
-function supervisorStartMatches(entry) {
+/** Whether `pid` still runs as the process that started at `start`; false once it is gone. */
+function startedAs(pid, start) {
   try {
-    return processStartIdentity(entry.pid) === entry.start &&
-      processStartIdentity(entry.group) === entry.groupStart;
+    return processStartIdentity(pid) === start;
   } catch (err) {
     if (err && (err.code === 'ENOENT' || (process.platform === 'darwin' && err.status === 1))) {
       return false;
@@ -987,6 +974,10 @@ function supervisorStartMatches(entry) {
 
     throw err;
   }
+}
+
+function supervisorStartMatches(entry) {
+  return startedAs(entry.pid, entry.start) && startedAs(entry.group, entry.groupStart);
 }
 
 function processGroupHasLiveProcess(group) {
@@ -1017,29 +1008,31 @@ function processGroupHasLiveProcess(group) {
   });
 }
 
+/** A signal name the supervisor recorded: `SIG` and the platform's name for it. */
+const SIGNAL_NAME = /^SIG[A-Z0-9]+$/;
+
 function readTerminalResult(dir) {
   const fields = readFieldFile(path.join(dir, 'result'));
   const kind = fields.get('kind');
   const exitCode = Number(fields.get('exitCode'));
+  const signal = fields.get('signal') ?? null;
 
-  if ((kind !== 'exited' && kind !== 'cancelled') || !Number.isSafeInteger(exitCode)) {
+  if ((kind !== 'exited' && kind !== 'cancelled') || !Number.isSafeInteger(exitCode)
+    || (signal !== null && !SIGNAL_NAME.test(signal))) {
     throw new Error(`invalid terminal result in ${dir}`);
   }
 
-  return { kind, exitCode };
+  return { kind, exitCode, signal };
 }
 
+/** The supervisor bounds the file as it writes it; the read bound only keeps a damaged file off the heap. */
 function readCapturedOutput(file) {
   const descriptor = fs.openSync(file, 'r');
 
   try {
-    const size = fs.fstatSync(descriptor).size;
-    const retained = Math.min(size, size > EXEC_CAPTURE_MAX_BYTES ? EXEC_STREAM_MAX_BYTES : EXEC_CAPTURE_MAX_BYTES);
-    const bytes = Buffer.allocUnsafe(retained);
+    const bytes = Buffer.allocUnsafe(Math.min(fs.fstatSync(descriptor).size, EXEC_CAPTURE_MAX_BYTES));
     const read = fs.readSync(descriptor, bytes, 0, bytes.length, 0);
     const output = bytes.subarray(0, read).toString();
-
-    if (size > EXEC_CAPTURE_MAX_BYTES) return output + EXEC_STREAM_TRUNCATION_MARKER;
 
     return fs.existsSync(file + '.after-exit') ? output + '\n[background output after command exit is not captured]\n' : output;
   } finally {
@@ -1047,14 +1040,17 @@ function readCapturedOutput(file) {
   }
 }
 
+/** A command a signal ended says so, in the words the CLI's own shell uses (cli-backend runtime.ts exitStatus). */
 function readExecResult(dir) {
   const terminal = readTerminalResult(dir);
+  const stderr = readCapturedOutput(path.join(dir, 'stderr'));
+  const note = terminal.signal === null ? '' : `Command terminated by ${terminal.signal}.`;
 
   return {
     terminal,
     result: {
       stdout: readCapturedOutput(path.join(dir, 'stdout')),
-      stderr: readCapturedOutput(path.join(dir, 'stderr')),
+      stderr: note === '' ? stderr : `${stderr}${stderr === '' || stderr.endsWith('\n') ? '' : '\n'}${note}`,
       exitCode: terminal.exitCode,
     },
   };
@@ -1078,7 +1074,9 @@ const { execFileSync, spawn } = require('node:child_process');
 
 const [commandFile, stateFile, resultFile, stdoutFile, stderrFile, ackFile, maxText, planFile] = process.argv.slice(1);
 const maxOutput = Number(maxText);
-const marker = '[output truncated at ' + maxOutput + ' bytes]\\n';
+// Half kept from the start, half from the end, as core's BoundedOutput keeps them (COMMAND_OUTPUT_LIMITS).
+const HEAD = Math.floor(maxOutput / 2);
+const TAIL = maxOutput - HEAD;
 
 /** The daemon that started this supervisor, by IDENTITY rather than liveness:
  * the kernel reparents an orphan, so a changed ppid is exactly "the parent is
@@ -1098,9 +1096,10 @@ function startIdentity(pid) {
   return start;
 }
 
-function writeTerminalResult(kind, exitCode) {
+function writeTerminalResult(kind, exitCode, signal) {
   const temporary = resultFile + '.tmp.' + process.pid;
-  fs.writeFileSync(temporary, 'kind=' + kind + '\\nexitCode=' + exitCode + '\\n', { mode: 0o600 });
+  const named = signal ? 'signal=' + signal + '\\n' : '';
+  fs.writeFileSync(temporary, 'kind=' + kind + '\\nexitCode=' + exitCode + '\\n' + named, { mode: 0o600 });
   fs.renameSync(temporary, resultFile);
 }
 
@@ -1123,26 +1122,123 @@ function processGroupHasLiveProcess(group) {
   });
 }
 
+/** One stream: the first HEAD bytes go to its file as they arrive, the last TAIL stay in a ring, every
+ *  byte is counted, and once the stream outgrows both the whole of it goes to the spill file. close()
+ *  writes what core's BoundedOutput.finish writes, byte for byte, so every executor reads the same.
+ *  The spill is written at its host path and named by the path the command's own view gives it. */
 class Capture {
-  constructor(file) {
-    this.fd = fs.openSync(file, 'w', 0o600);
-    this.remaining = maxOutput;
-    this.truncated = false;
+  constructor(file, spill, stream) {
+    this.fd = fs.openSync(file, 'w+', 0o600);
+    this.spillTarget = spill || null;
+    this.stream = stream;
+    this.head = 0;
+    this.ring = null;
+    this.ringEnd = 0;
+    this.ringLength = 0;
+    this.total = 0;
+    this.spill = null;
+    this.spillFailure = null;
   }
 
   write(chunk) {
-    if (this.remaining === 0) {
-      this.truncated = true;
+    this.total += chunk.length;
+    // Nothing is dropped before this chunk, so the head and ring hold everything seen so far.
+    if (this.spill === null && this.spillFailure === null && this.total > HEAD + TAIL) this.openSpill();
+    if (this.spill !== null) this.spillWrite(chunk);
+    let rest = chunk;
+    if (this.head < HEAD) {
+      const taken = rest.subarray(0, HEAD - this.head);
+      fs.writeSync(this.fd, taken, 0, taken.length, this.head);
+      this.head += taken.length;
+      rest = rest.subarray(taken.length);
+    }
+    if (rest.length > 0 && TAIL > 0) this.keep(rest);
+  }
+
+  openSpill() {
+    if (this.spillTarget === null) {
+      this.spillFailure = 'no directory to save it in';
       return;
     }
-    const retained = chunk.subarray(0, this.remaining);
-    fs.writeSync(this.fd, retained);
-    this.remaining -= retained.length;
-    if (retained.length !== chunk.length) this.truncated = true;
+    try {
+      fs.mkdirSync(require('node:path').dirname(this.spillTarget.file), { recursive: true, mode: 0o700 });
+      this.spill = fs.openSync(this.spillTarget.file, 'w', 0o600);
+      const head = Buffer.alloc(this.head);
+      fs.readSync(this.fd, head, 0, this.head, 0);
+      this.spillWrite(head);
+      this.spillWrite(this.keptTail());
+    } catch (err) {
+      this.fail(err);
+    }
+  }
+
+  spillWrite(bytes) {
+    if (this.spill === null) return;
+    try {
+      for (let offset = 0; offset < bytes.length;) offset += fs.writeSync(this.spill, bytes, offset);
+    } catch (err) {
+      this.fail(err);
+    }
+  }
+
+  fail(err) {
+    this.spillFailure = 'saving ' + this.spillTarget.shown + ' failed: ' + (err && err.message ? err.message : String(err));
+    if (this.spill !== null) fs.closeSync(this.spill);
+    this.spill = null;
+  }
+
+  keep(rest) {
+    this.ring = this.ring || Buffer.alloc(TAIL);
+    if (rest.length >= TAIL) {
+      rest.copy(this.ring, 0, rest.length - TAIL);
+      this.ringEnd = 0;
+      this.ringLength = TAIL;
+      return;
+    }
+    const first = Math.min(rest.length, TAIL - this.ringEnd);
+    rest.copy(this.ring, this.ringEnd, 0, first);
+    rest.copy(this.ring, 0, first);
+    this.ringEnd = (this.ringEnd + rest.length) % TAIL;
+    this.ringLength = Math.min(TAIL, this.ringLength + rest.length);
+  }
+
+  keptTail() {
+    if (this.ring === null) return Buffer.alloc(0);
+    if (this.ringLength < TAIL) return this.ring.subarray(0, this.ringLength);
+    return Buffer.concat([this.ring.subarray(this.ringEnd), this.ring.subarray(0, this.ringEnd)]);
   }
 
   close() {
-    if (this.truncated) fs.writeSync(this.fd, marker);
+    const tail = this.keptTail();
+    if (this.total === this.head + tail.length) {
+      fs.writeSync(this.fd, tail, 0, tail.length, this.head);
+      fs.closeSync(this.fd);
+      return;
+    }
+    // A character cut at either seam is dropped whole rather than decoded as a replacement.
+    const last = Buffer.alloc(Math.min(4, this.head));
+    fs.readSync(this.fd, last, 0, last.length, this.head - last.length);
+    let headEnd = this.head;
+    for (let lead = last.length - 1; lead >= 0; lead--) {
+      const byte = last[lead];
+      if ((byte & 0xC0) === 0x80) continue;
+      const size = byte >= 0xF0 ? 4 : byte >= 0xE0 ? 3 : byte >= 0xC0 ? 2 : 1;
+      if (lead + size > last.length) headEnd = this.head - last.length + lead;
+      break;
+    }
+    let tailStart = 0;
+    while (tailStart < Math.min(3, tail.length) && (tail[tailStart] & 0xC0) === 0x80) tailStart++;
+    const omitted = this.total - headEnd - (tail.length - tailStart);
+    if (this.spill !== null) fs.closeSync(this.spill);
+    let where = 'the full ' + this.stream + ' was not saved: ' + this.spillFailure;
+    if (this.spill !== null) where = 'the full ' + this.stream + ' is at ' + this.spillTarget.shown;
+    const closing = Buffer.concat([
+      Buffer.from('\\n[\\u2026 ' + omitted + ' bytes omitted \\u2026]\\n'),
+      tail.subarray(tailStart),
+      Buffer.from('\\n[' + this.stream + ': ' + this.total + ' bytes, ' + omitted + ' omitted from the middle; ' + where + ']\\n'),
+    ]);
+    fs.writeSync(this.fd, closing, 0, closing.length, headEnd);
+    fs.ftruncateSync(this.fd, headEnd + closing.length);
     fs.closeSync(this.fd);
   }
 }
@@ -1155,7 +1251,7 @@ let cancellationRequested = false;
 let cancellationSignalDelivered = false;
 let completed = false;
 
-function finish(kind, exitCode) {
+function finish(kind, exitCode, signal) {
   if (completed) return;
   completed = true;
   stdout.close();
@@ -1168,7 +1264,7 @@ function finish(kind, exitCode) {
   // The cloud may ACK as soon as result appears. Publish an open FIFO before
   // that result, otherwise its writer can create a regular file in the race.
   execFileSync('mkfifo', [ackFile]);
-  writeTerminalResult(kind, exitCode);
+  writeTerminalResult(kind, exitCode, signal);
   const acknowledgement = fs.createReadStream(ackFile);
   // The daemon is the only writer of this FIFO, so once it is gone the wait can
   // never end and this process would hold the request directory on the machine
@@ -1203,11 +1299,13 @@ try {
   // on disk rather than two, and a sentinel the daemon would have to
   // interpolate into this script is not needed.
   const argv = [...plan.argv, command];
-  stdout = new Capture(stdoutFile);
-  stderr = new Capture(stderrFile);
+  const spill = plan.spill || {};
+  stdout = new Capture(stdoutFile, spill.stdout, 'stdout');
+  stderr = new Capture(stderrFile, spill.stderr, 'stderr');
   child = spawn(argv[0], argv.slice(1), {
     detached: true,
     env: plan.env,
+    cwd: plan.cwd,
     // A fourth pipe when the plan asked for one: bwrap writes its
     // --json-status-fd there, and the first line carries the host pid of the
     // sandbox's pid 1. Killing THAT is deterministic — the kernel reaps every
@@ -1278,7 +1376,12 @@ child.once('exit', (code, signal) => {
       }
       return;
     }
-    finish('exited', typeof code === 'number' ? code : (signal ? 128 + 9 : 125));
+    // A signal death is 128 plus that signal's number on this platform (SIGBUS
+    // is 7 on Linux and 10 on macOS). Node reports exactly one of code and
+    // signal; an end with neither is this supervisor's own failure.
+    if (typeof code === 'number') finish('exited', code);
+    else if (signal) finish('exited', 128 + (require('node:os').constants.signals[signal] || 0), signal);
+    else finish('exited', 125);
   };
   setTimeout(() => {
     // A background descendant can retain the inherited pipes forever. At this
@@ -1476,8 +1579,10 @@ function createInFlight(root = INFLIGHT_ROOT) {
     // so writing to it when it has exited blocks that writer forever — the
     // same leak, moved into this daemon. A supervisor whose start identity no
     // longer matches is gone (its daemon died and it left the result behind),
-    // and this daemon owns the directory instead.
-    if (terminal.kind === 'exited' && supervisorStartMatches(entry)) {
+    // and this daemon owns the directory instead. The supervisor alone is
+    // asked: a finished command's group leader has exited, so the group half
+    // of the identity never matches here.
+    if (terminal.kind === 'exited' && startedAs(entry.pid, entry.start)) {
       await writeAcknowledgement(entry.dir);
       await waitForDirectoryRemoval(entry.dir);
     } else {
@@ -1562,7 +1667,10 @@ function startSupervisor(requestId, command, plan) {
   // it from `command`, which it unlinks before the command runs.
   fs.writeFileSync(
     planFile,
-    JSON.stringify({ argv: plan.argv.slice(0, -1), env: plan.env, statusFd: plan.statusFd }),
+    JSON.stringify({
+      argv: plan.argv.slice(0, -1), env: plan.env, statusFd: plan.statusFd, cwd: plan.spawnCwd,
+      spill: outputSpill(plan, requestId),
+    }),
     { encoding: 'utf8', mode: 0o600, flag: 'wx' },
   );
 
@@ -1576,6 +1684,24 @@ function startSupervisor(requestId, command, plan) {
   child.unref();
 
   return { child, dir };
+}
+
+/**
+ * Where a command's whole output goes once it outgrows the bound, as `{ file, shown }`: the host path,
+ * and the path the command's own view names it by. A sandboxed command spills into the agent's own
+ * tmp, which its shell reaches as /tmp and the file methods serve; an unsandboxed one into this
+ * machine's tmp. Never Kinu's own directory, which neither serves.
+ */
+function outputSpill(plan, requestId) {
+  const dir = path.join(plan.view.raw ? os.tmpdir() : plan.view.agentTmp, 'kinu-tool-output');
+
+  const at = (stream) => {
+    const file = path.join(dir, `device-${requestId}.${stream}.log`);
+
+    return { file, shown: plan.view.raw ? file : plan.view.insidePath(file) };
+  };
+
+  return { stdout: at('stdout'), stderr: at('stderr') };
 }
 
 function waitForSupervisorState(dir, child) {
@@ -1617,6 +1743,75 @@ function waitForSupervisorState(dir, child) {
 
 // ── RPC dispatch ───────────────────────────────────────────────────────
 
+const UNTIERED = 'this device refuses a frame that names no sandbox tier: '
+  + 'the hub decides one for every call that runs a command or touches a file';
+
+/** One workspace's segment under the agent root: the characters a workspace
+ *  name may carry, and never `.` or `..`. */
+const AGENT_SEGMENT = /^[A-Za-z0-9._-]{1,64}$/;
+
+/**
+ * The agent home a sandboxed frame names: exactly `<agentRoot>/<workspace>/home`
+ * for ONE workspace. A name carrying `a/../b` composes a path that resolves
+ * under the root and is workspace b's home.
+ */
+function frameAgentHome(value) {
+  const spelled = parseString(value, 'device sandbox options must name an agent home');
+  const segments = spelled.startsWith(`${AGENT_ROOT}/`) ? spelled.slice(AGENT_ROOT.length + 1).split('/') : [];
+  const [workspace = '', home = ''] = segments;
+
+  if (segments.length !== 2 || home !== 'home' || !AGENT_SEGMENT.test(workspace) || workspace === '.' || workspace === '..') {
+    throw new Error(`device sandbox agent home must be ${AGENT_ROOT}/<workspace>/home, for one workspace`);
+  }
+
+  return spelled;
+}
+
+/**
+ * The sandbox block of a frame that reaches this machine: the tier, the
+ * consented roots, and a sandboxed frame's one agent home. The hub composes it
+ * from the owner's Sandbox switch for every method that runs something or
+ * touches a file, so a frame without a tier did not come from a hub that
+ * decided one: it is refused, never read as unconfined. A consented root of
+ * `/` is the whole machine, which is what the switch off means, so that frame
+ * runs raw. `agentHome()` checks the agent home a sandboxed frame names.
+ */
+function frameSandbox(msg) {
+  const block = parseRecord(msg.sandbox ?? null, UNTIERED);
+
+  if (block.tier !== 'raw' && block.tier !== 'sandboxed') throw new Error(UNTIERED);
+
+  const roots = Array.isArray(block.roots)
+    ? block.roots.map((root) => path.resolve(parseString(root, 'device sandbox roots must be paths')))
+    : [];
+
+  return {
+    tier: block.tier === 'raw' || roots.includes('/') ? 'raw' : 'sandboxed',
+    roots,
+    agentHome: () => frameAgentHome(block.agentHome),
+  };
+}
+
+function isDirectory(candidate) {
+  try {
+    return fs.statSync(candidate).isDirectory();
+  } catch (err) {
+    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR' || err.code === 'EACCES')) return false;
+    throw err;
+  }
+}
+
+/**
+ * Where an unsandboxed command runs when the frame names no directory: the
+ * directory the owner shared, else their home. Never this daemon's own working
+ * directory, which is Kinu's directory once the daemon has updated itself.
+ */
+function rawWorkingDirectory(msg, roots) {
+  const named = msg.cwd === undefined ? null : path.resolve(parseString(msg.cwd, 'exec cwd must be a path'));
+
+  return [named, ...roots].find((dir) => dir !== null && isDirectory(dir)) ?? os.homedir();
+}
+
 /**
  * The sandbox the hub asked for, as this daemon will enforce it.
  *
@@ -1632,35 +1827,22 @@ function waitForSupervisorState(dir, child) {
  * the terminal it was just given, which is the only difference between them.
  */
 function planFromFrame(msg, command, source = process.env) {
-  const requested = parseRecord(msg.sandbox ?? {}, 'exec sandbox options must be an object');
-  // Only an EXPLICIT 'sandboxed' enters the sandbox. The hub decides the tier
-  // and its default is on, but the hub and this daemon ship separately: a
-  // frame with no sandbox field comes from a hub that has not been told about
-  // the switch yet, and a daemon that read that as "sandbox it" would refuse
-  // every command on the machine for want of an agent home it was never sent.
-  const tier = requested.tier === 'sandboxed' ? 'sandboxed' : 'raw';
+  const frame = frameSandbox(msg);
 
-  if (tier === 'sandboxed' && SANDBOX_CAPABILITY.status !== sandbox.SANDBOX_STATUS.OK) {
+  if (frame.tier === 'raw') {
+    return sandbox.plan({
+      tier: 'raw', deviceHome: DEVICE_HOME, command, cwd: rawWorkingDirectory(msg, frame.roots), source, dotenv: LAUNCH_DOTENV,
+    });
+  }
+
+  if (SANDBOX_CAPABILITY.status !== sandbox.SANDBOX_STATUS.OK) {
     const error = new Error(`sandbox_unavailable (${SANDBOX_CAPABILITY.status}): ${SANDBOX_CAPABILITY.detail}`);
     error.code = 'sandbox_unavailable';
     error.reason = SANDBOX_CAPABILITY.status;
     throw error;
   }
 
-  if (tier === 'raw') {
-    return sandbox.plan({ tier: 'raw', deviceHome: DEVICE_HOME, command, cwd: process.cwd(), source });
-  }
-
-  const agentHome = path.resolve(parseString(requested.agentHome, 'exec sandbox options must name an agent home'));
-
-  if (!agentHome.startsWith(`${AGENT_ROOT}/`)) {
-    throw new Error(`exec sandbox agent home must sit under ${AGENT_ROOT}`);
-  }
-
-  const roots = Array.isArray(requested.roots)
-    ? requested.roots.map((root) => path.resolve(parseString(root, 'exec sandbox roots must be paths')))
-    : [];
-
+  const agentHome = frame.agentHome();
   const agentTmp = path.join(path.dirname(agentHome), 'tmp');
 
   // Created on first use, 0700: the hub computes the path per (device,
@@ -1674,39 +1856,29 @@ function planFromFrame(msg, command, source = process.env) {
     agentHome,
     agentTmp,
     deviceHome: DEVICE_HOME,
-    roots,
+    roots: frame.roots,
     cwd: msg.cwd === undefined ? agentHome : path.resolve(parseString(msg.cwd, 'exec cwd must be a path')),
     command,
     source,
+    dotenv: LAUNCH_DOTENV,
     statusFd: 3,
   });
 }
 
 /**
- * The view this FRAME's file methods are confined to.
+ * The view this FRAME's file methods are confined to: the same block an exec
+ * frame carries, so both enforcers read one policy — the kernel for the shell,
+ * this view for the file methods.
  *
- * A file frame carries the same `sandbox` block an exec frame does, so both
- * enforcers read one policy: the kernel for the shell, this view for the file
- * methods. A frame with no block is raw — exactly as an exec frame with no
- * block is — which keeps a hub that has not been told about the switch working
- * and keeps ~/.kinu refused either way.
+ * NO capability check here, deliberately. A machine that cannot sandbox is
+ * `files_only`, and that state exists so its file methods keep working: this
+ * enforcer is JavaScript in the daemon and needs no kernel to be correct.
  */
 function viewFromFrame(msg) {
-  const requested = parseRecord(msg.sandbox ?? {}, 'device sandbox options must be an object');
+  const frame = frameSandbox(msg);
 
-  if (requested.tier !== 'sandboxed') {
-    return sandbox.rawViewFor({ platform: os.platform(), deviceHome: DEVICE_HOME });
-  }
-
-  // NO capability check here, deliberately. A machine that cannot sandbox is
-  // `files_only`, and that state exists so its file methods keep working: this
-  // enforcer is JavaScript in the daemon and needs no kernel to be correct.
-  // Only `exec` refuses, because only `exec` needs the kernel.
-  const agentHome = path.resolve(parseString(requested.agentHome, 'device sandbox options must name an agent home'));
-
-  if (!agentHome.startsWith(`${AGENT_ROOT}/`)) {
-    throw new Error(`device sandbox agent home must sit under ${AGENT_ROOT}`);
-  }
+  if (frame.tier === 'raw') return sandbox.rawViewFor({ platform: os.platform(), deviceHome: DEVICE_HOME });
+  const agentHome = frame.agentHome();
 
   return sandbox.viewFor({
     platform: os.platform(),
@@ -1714,16 +1886,116 @@ function viewFromFrame(msg) {
     agentHome,
     agentTmp: path.join(path.dirname(agentHome), 'tmp'),
     deviceHome: DEVICE_HOME,
-    roots: Array.isArray(requested.roots)
-      ? requested.roots.map((root) => path.resolve(parseString(root, 'device sandbox roots must be paths')))
-      : [],
+    roots: frame.roots,
   });
 }
 
 /** One file method's path, through the frame's view. `mode` is what the method
  *  does to the path, and the view refuses exactly what the kernel would. */
-function confinedDeviceViewPath(msg, requested, mode) {
-  return viewFromFrame(msg).resolvePath(parseString(requested, 'device paths must be strings'), mode);
+function confinedDeviceViewPath(view, requested, mode) {
+  return view.resolvePath(parseString(requested, 'device paths must be strings'), mode);
+}
+
+/**
+ * The directory a checkpoint hint covers through this frame's view, or null
+ * when the frame may not write it; the mutation it precedes still runs.
+ */
+function checkpointDirOf(view, dir) {
+  const verdict = view.checkpointDirectory(dir);
+
+  if (verdict.why === null) return verdict.path;
+  log('device.checkpoint_skipped', dir, verdict.why);
+
+  return null;
+}
+
+/** A checkpoint RPC's directory, through the frame's view; a refusal names why. */
+function checkpointDirFor(view, requested) {
+  const dir = parseString(requested, 'checkpoint directories must be paths');
+  const verdict = view.checkpointDirectory(dir);
+
+  if (verdict.why !== null) throw new Error(`device path '${dir}' is ${verdict.why}`);
+
+  return verdict.path;
+}
+
+/**
+ * Up to `length` bytes of `file` from `offset`, fewer at its end. The hub asks
+ * for a large file a range at a time, each answer under the socket's 32 MiB
+ * receive ceiling, so the whole file crosses whatever its size.
+ */
+function readRangeBytes(file, offset, length) {
+  const descriptor = fs.openSync(file, 'r');
+
+  try {
+    const chunks = [];
+    let total = 0;
+
+    while (total < length) {
+      const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, length - total));
+      const read = fs.readSync(descriptor, chunk, 0, chunk.length, offset + total);
+
+      if (read === 0) break;
+      chunks.push(chunk.subarray(0, read));
+      total += read;
+    }
+
+    return Buffer.concat(chunks, total);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function listEntry(entry) {
+  return { name: entry.name, type: entry.isDirectory() ? 'dir' : 'file' };
+}
+
+/**
+ * A `listFiles` frame's answer. The home DEFAULTS to the agent's when the
+ * frame carries one, which is the directory the model is told `~` is, not the
+ * owner's. A hub from before paging names no page and reads every entry in
+ * one answer.
+ */
+function listFilesAnswer(msg) {
+  const { params } = msg;
+  const frame = frameSandbox(msg);
+  const requested = params[0] ?? (frame.tier === 'sandboxed' ? frame.agentHome() : os.homedir());
+  const dir = confinedDeviceViewPath(viewFromFrame(msg), requested, 'read');
+  const page = parseRecord(params[1] ?? {}, 'listFiles options must be an object');
+
+  if (page.limit === undefined) return fs.readdirSync(dir, { withFileTypes: true }).map(listEntry);
+  const offset = page.offset ?? 0;
+
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(page.limit) || page.limit <= 0) {
+    throw new Error('listFiles pages by a non-negative offset and a positive limit');
+  }
+
+  return listPage(dir, offset, page.limit);
+}
+
+/**
+ * One page of a directory, in the order the filesystem yields it: `next` is
+ * the offset of the page after, or null past the last entry. The hub pages a
+ * large directory so each answer stays under the socket's receive ceiling.
+ */
+function listPage(dir, offset, limit) {
+  const opened = fs.opendirSync(dir);
+  const entries = [];
+
+  try {
+    let index = 0;
+
+    for (let entry = opened.readSync(); entry !== null; entry = opened.readSync(), index += 1) {
+      if (index < offset) continue;
+
+      if (entries.length === limit) return { entries, next: index };
+      entries.push(listEntry(entry));
+    }
+  } finally {
+    opened.closeSync();
+  }
+
+  return { entries, next: null };
 }
 
 /**
@@ -1851,9 +2123,14 @@ function execCommand(msg, ws, ctx) {
   const checkpoints = ctx && ctx.checkpoints;
   assertSupervisionSupported();
   assertCommandShellPresent();
-
-  if (checkpoints && msg.checkpoint) checkpoints.ensure(msg.checkpoint, process.cwd());
   const dir = requestDirectory(INFLIGHT_ROOT, id);
+  const plan = fs.existsSync(dir) ? null : planFromFrame(msg, cmd);
+
+  if (plan !== null && checkpoints && msg.checkpoint) {
+    const covered = checkpointDirOf(plan.view, hintedDir(msg.checkpoint) ?? plan.cwd);
+
+    if (covered !== null) checkpoints.ensure({ ...msg.checkpoint, dir: covered }, covered);
+  }
 
   /** @param {unknown} error */
   function reportExecReplyFailure(error) {
@@ -1862,10 +2139,10 @@ function execCommand(msg, ws, ctx) {
 
   (async () => {
     try {
-      if (fs.existsSync(dir)) {
+      if (plan === null) {
         await waitForFile(path.join(dir, 'state'));
       } else {
-        const supervisor = startSupervisor(id, cmd, planFromFrame(msg, cmd));
+        const supervisor = startSupervisor(id, cmd, plan);
         await waitForSupervisorState(supervisor.dir, supervisor.child);
         inFlight.register(id, supervisor.dir);
       }
@@ -1916,7 +2193,7 @@ function handle(msg, ws, ctx) {
       );
     } else if (method === 'readFile') {
       const options = params[1] ?? {};
-      const confined = confinedDeviceViewPath(msg, params[0], 'read');
+      const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
 
       if (options.encoding === 'base64') rpc(ws, id, { content: fs.readFileSync(confined).toString('base64'), encoding: 'base64' });
       else rpc(ws, id, fs.readFileSync(confined, 'utf8'));
@@ -1927,39 +2204,28 @@ function handle(msg, ws, ctx) {
         return rpc(ws, id, null, 'readRange expects a positive safe offset and length');
       }
 
-      const file = fs.openSync(confinedDeviceViewPath(msg, params[0], 'read'), 'r');
-
-      try {
-        const bytes = Buffer.allocUnsafe(length);
-        const read = fs.readSync(file, bytes, 0, length, offset);
-        rpc(ws, id, { encoding: 'base64', content: bytes.subarray(0, read).toString('base64') });
-      } finally { fs.closeSync(file); }
+      const bytes = readRangeBytes(confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read'), offset, length);
+      rpc(ws, id, { encoding: 'base64', content: bytes.toString('base64') });
     } else if (method === 'writeFile') {
       const options = params[2] ?? {};
-      const confined = confinedDeviceViewPath(msg, params[0], 'write');
+      const view = viewFromFrame(msg);
+      const confined = confinedDeviceViewPath(view, params[0], 'write');
 
       if (checkpoints && msg.checkpoint) {
         const hint = msg.checkpoint;
-        checkpoints.ensure(hint, hintedDir(hint) ?? checkpoints.workdirForPath(confined));
+        const covers = (candidate) => view.checkpointDirectory(candidate).why === null;
+        const covered = checkpointDirOf(view, hintedDir(hint) ?? checkpoints.workdirForPath(confined, covers));
+
+        if (covered !== null) checkpoints.ensure({ ...hint, dir: covered }, covered);
       }
 
       fs.mkdirSync(path.dirname(confined), { recursive: true });
       fs.writeFileSync(confined, options.encoding === 'base64' ? Buffer.from(String(params[1]), 'base64') : params[1]);
       rpc(ws, id, { success: true });
     } else if (method === 'listFiles') {
-      // The home DEFAULTS to the agent's when the frame carries one, which is
-      // the directory the model is told `~` is, not the owner's.
-      const frame = parseRecord(msg.sandbox ?? {}, 'device sandbox options must be an object');
-
-      const requested = params[0] ?? (frame.tier === 'sandboxed'
-        ? parseString(frame.agentHome, 'device sandbox options must name an agent home')
-        : os.homedir());
-
-      const confined = confinedDeviceViewPath(msg, requested, 'read');
-      const entries = fs.readdirSync(confined, { withFileTypes: true });
-      rpc(ws, id, entries.map((e) => ({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' })));
+      rpc(ws, id, listFilesAnswer(msg));
     } else if (method === 'statPath') {
-      const confined = confinedDeviceViewPath(msg, params[0], 'read');
+      const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
 
       if (!fs.existsSync(confined)) return rpc(ws, id, null);
       const stat = fs.statSync(confined);
@@ -1973,12 +2239,12 @@ function handle(msg, ws, ctx) {
       rpc(ws, id, { success: true });
     } else if (method === 'mkdirPath') {
       const options = params[1] ?? {};
-      fs.mkdirSync(confinedDeviceViewPath(msg, params[0], 'write'), {
+      fs.mkdirSync(confinedDeviceViewPath(viewFromFrame(msg), params[0], 'write'), {
         recursive: options.recursive === true,
       });
       rpc(ws, id, { success: true });
     } else if (method === 'exists') {
-      const confined = confinedDeviceViewPath(msg, params[0], 'read');
+      const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
       rpc(ws, id, fs.existsSync(confined));
     } else if (method === 'listPorts') {
       rpc(ws, id, listListeningPorts());
@@ -1991,10 +2257,10 @@ function handle(msg, ws, ctx) {
       rpc(ws, id, checkpoints.list(params[0], params[1], params[2]));
     } else if (method === 'checkpointPlan') {
       if (!checkpoints) return rpc(ws, id, null, 'checkpoints are not configured');
-      rpc(ws, id, checkpoints.plan(params[0], params[1], params[2]));
+      rpc(ws, id, checkpoints.plan(params[0], checkpointDirFor(viewFromFrame(msg), params[1]), params[2]));
     } else if (method === 'checkpointRestore') {
       if (!checkpoints) return rpc(ws, id, null, 'checkpoints are not configured');
-      rpc(ws, id, checkpoints.restore(params[0], params[1], params[2]));
+      rpc(ws, id, checkpoints.restore(params[0], checkpointDirFor(viewFromFrame(msg), params[1]), params[2]));
     } else {
       rpc(ws, id, null, 'unknown method: ' + method);
     }
@@ -2038,7 +2304,7 @@ function readDeviceConfig(configPath = CONFIG_PATH) {
   const cfg = parseRecord(parsed, expectation);
   const user = parseString(cfg.user, expectation);
   const token = parseString(cfg.token, expectation);
-  const origin = cfg.origin === undefined ? undefined : parseString(cfg.origin, expectation);
+  const origin = cfg.origin === undefined ? undefined : trustedOrigin(parseString(cfg.origin, expectation), configPath);
   // The directory `kinu connect` ran in, parsed HERE with everything else so
   // the dial site sends a domain value rather than branching on a
   // representation. Absent on a config written before it existed, and absent
@@ -2053,6 +2319,26 @@ function readDeviceConfig(configPath = CONFIG_PATH) {
   if (root !== undefined) config.root = root;
 
   return config;
+}
+
+/**
+ * The origin this daemon POSTs its long-lived token to: https, or plain http to
+ * this machine. Any other scheme hands the token to whatever the network path
+ * is, so the daemon refuses to start rather than send it.
+ */
+function trustedOrigin(text, configPath) {
+  let url;
+
+  try {
+    url = new URL(text);
+  } catch (cause) {
+    throw new Error(`device config at ${configPath} names an origin that is not a URL; it must be an https origin`, { cause });
+  }
+
+  if (url.protocol === 'https:' || (url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname))) return text;
+
+  throw new Error(`device config at ${configPath} names ${url.protocol}//${url.host}; this daemon sends its token `
+    + 'only to an https origin, or over plain http to this machine');
 }
 
 function redactConnectSecrets(value, secrets) {
@@ -2334,7 +2620,16 @@ function handleTokenRotation(
   configPath = CONFIG_PATH,
   logger = log,
 ) {
-  if (!msg || msg.type !== TOKEN_ROTATION || msg.token == null || msg.token === '') return false;
+  if (!msg || msg.type !== TOKEN_ROTATION) return false;
+
+  // The daemon acknowledges only when the token it holds equals the frame's,
+  // so a token it refuses to store is also one it never acknowledges, and the
+  // hub keeps honouring the one on disk.
+  if (!(Object(msg.token) instanceof String) || !DEVICE_TOKEN.test(String(msg.token))) {
+    logger('Device token rotation refused:', 'the frame carries no device token; the one on disk stays');
+
+    return true;
+  }
 
   try {
     persistRotatedToken(cfg, msg.token, configPath);

@@ -5,7 +5,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   initAlternateTakesTable, initHeadsTables, initMctsSearchTable, initRunEventTables,
-  initSearchTables, listForkRuns, type ActorHandle, type JsonObject, type SqlExecutor,
+  initSearchTables, initSwarmNodeRecords, listForkRuns, type ActorHandle, type JsonObject, type SqlExecutor,
 } from '@kinu.run/core';
 import { createTestSql, testActorHandle, type TestSql } from '../src/sql';
 import { createTestActors } from '../src/actors';
@@ -26,6 +26,7 @@ interface ForkStore extends TestSql {
 function forkStore(): ForkStore {
   const store = createTestSql();
   initSearchTables(store.execRaw);
+  initSwarmNodeRecords(store.execRaw);
   initMctsSearchTable(store.execRaw);
   initAlternateTakesTable(store.execRaw);
   initHeadsTables(store.execRaw);
@@ -56,11 +57,13 @@ function seedSearch(store: ForkStore, opts: {
   for (let i = 0; i < branches; i++) {
     const id = `${root}-n${String(i)}`;
     const terminal = winner === i;
+    // A leaf's mean is its own score: one reward reached it.
+    const score = terminal ? (opts.value ?? 0.8) : 0.2;
     void sql`INSERT INTO search_nodes
-      (actor_id, id, parent_id, root_id, task, depth, status, value, visits, created_at)
+      (actor_id, id, parent_id, root_id, task, depth, status, value, visits, created_at, evaluation_json)
       VALUES (${actorId}, ${id}, ${root}, ${root}, ${'task ' + root}, ${1},
               ${branchStatus(terminal, winner)},
-              ${terminal ? (opts.value ?? 0.8) : 0.2}, ${1}, ${1_001 + i})`;
+              ${score}, ${1}, ${1_001 + i}, ${JSON.stringify({ score })})`;
   }
 
   if (winner !== null) {
@@ -576,7 +579,7 @@ describe('toolOutcomes — structural attribution with an observed denominator',
     expect(result.eligible).toBe(3);
     expect(result.passed).toBe(2);
     expect(result.rate).toBeCloseTo(2 / 3);
-    expect(result.measured).toEqual({ succeeded: 2, failed: 1, unmeasured: 0 });
+    expect(result.measured).toEqual({ succeeded: 2, failed: 1, unmeasured: 0, refused: 0, workFailed: 1, runtimeAbsent: 0, broke: 0 });
     store.close();
   });
 
@@ -589,7 +592,7 @@ describe('toolOutcomes — structural attribution with an observed denominator',
     expect(result.eligible).toBe(3);
     expect(result.passed).toBe(0);
     expect(result.rate).toBeNull();
-    expect(result.measured).toEqual({ succeeded: 0, failed: 1, unmeasured: 2 });
+    expect(result.measured).toEqual({ succeeded: 0, failed: 1, unmeasured: 2, refused: 0, workFailed: 0, runtimeAbsent: 0, broke: 1 });
     store.close();
   });
 
@@ -607,6 +610,23 @@ describe('toolOutcomes — structural attribution with an observed denominator',
     expect(result.passed).toBe(0);
     expect(result.rate).toBe(0);
     expect(parseFailureMix(result.detail)).toEqual([['file·edit·not_found', 2], ['shell·exit_1', 1]]);
+    store.close();
+  });
+
+  test('an eval whose inner call broke is a failed call, and the break is counted as unexpected', () => {
+    const store = eventStore();
+    // The owner's 2048 transcript: the program recovered, but `fs.readdir('skills')` failed inside it.
+    emit(store, 'run-a', 'tool_call_end', {
+      name: 'eval', toolCallId: 't1', outcome: {
+        success: true,
+        failures: [{ success: false, tool: 'file', action: null, reason: 'missing', error: 'ENOENT: no such directory, home/user/skills' }],
+      },
+    });
+    emit(store, 'run-a', 'tool_call_end', { name: 'shell', toolCallId: 't2', outcome: { success: true } });
+    const result = toolOutcomes.score(store.sql, store.actor);
+    expect(result.rate).toBe(0.5);
+    expect(result.measured).toEqual({ succeeded: 1, failed: 1, unmeasured: 0, refused: 0, workFailed: 0, runtimeAbsent: 0, broke: 1 });
+    expect(parseFailureMix(result.detail)).toEqual([['file·missing', 1]]);
     store.close();
   });
 });

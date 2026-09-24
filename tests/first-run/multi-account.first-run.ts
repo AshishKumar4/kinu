@@ -99,6 +99,27 @@ function providersPanel(origin: string, identity: PublicWebIdentity, signal?: Ab
   };
 }
 
+/** This row's own keys in a listing, so the detail never prints the account's other credentials. */
+const ours = (keys: readonly string[]) => JSON.stringify(keys.filter((key) => key.startsWith(BASE_KEY)));
+
+/** Removes one account through the panel and reads the listing back: that key gone, `kept` still listed. */
+async function removeAccount(
+  panel: ReturnType<typeof providersPanel>, held: Set<string>, key: string, kept: string | null,
+): Promise<Omit<EvalSubgoal, 'what'>> {
+  const removed = await panel.remove(key);
+
+  if (removed.ok) held.delete(key);
+  const after = await panel.keys();
+
+  return {
+    reached: removed.ok && after.ok && !after.value.includes(key) && (kept === null || after.value.includes(kept)),
+    detail: detailOf(
+      [[`DELETE ${key}`, removed], ['GET /api/user/credentials', after]],
+      () => (after.ok ? `after removing ${key} the panel lists ${ours(after.value)}` : ''),
+    ),
+  };
+}
+
 describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
@@ -116,7 +137,6 @@ describe(SUITE, () => {
         const room = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(session.workspace)}`;
         const socket = openPublicSocket(plan.origin, plan.identity, room, budget);
         const held = new Set<string>();
-        const ours = (keys: readonly string[]) => JSON.stringify(keys.filter((key) => key.startsWith(BASE_KEY)));
 
         try {
           const refusals: string[] = [];
@@ -182,33 +202,8 @@ describe(SUITE, () => {
             }),
           });
 
-          const removedFirst = await panel.remove(firstKey);
-
-          if (removedFirst.ok) held.delete(firstKey);
-          const afterFirst = await panel.keys();
-
-          goals.push({
-            what: 'removing-one-keeps-the-other',
-            reached: removedFirst.ok && afterFirst.ok && !afterFirst.value.includes(firstKey) && afterFirst.value.includes(secondKey),
-            detail: detailOf(
-              [[`DELETE ${firstKey}`, removedFirst], ['GET /api/user/credentials', afterFirst]],
-              () => (afterFirst.ok ? `after removing ${first} the panel lists ${ours(afterFirst.value)}` : ''),
-            ),
-          });
-
-          const removedSecond = await panel.remove(secondKey);
-
-          if (removedSecond.ok) held.delete(secondKey);
-          const afterSecond = await panel.keys();
-
-          goals.push({
-            what: 'last-account-removed',
-            reached: removedSecond.ok && afterSecond.ok && !afterSecond.value.includes(secondKey),
-            detail: detailOf(
-              [[`DELETE ${secondKey}`, removedSecond], ['GET /api/user/credentials', afterSecond]],
-              () => (afterSecond.ok ? `after removing ${second} the panel lists ${ours(afterSecond.value)}` : ''),
-            ),
-          });
+          goals.push({ what: 'removing-one-keeps-the-other', ...await removeAccount(panel, held, firstKey, secondKey) });
+          goals.push({ what: 'last-account-removed', ...await removeAccount(panel, held, secondKey, null) });
 
           return goals;
         } finally {

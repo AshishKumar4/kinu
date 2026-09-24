@@ -106,14 +106,9 @@ export type ExecutionVerdict = 'succeeded' | 'failed';
 
 /**
  * The environment's verdict on a turn, for turns no user will grade (`kinu exec`,
- * reactor or job wakes). Deterministic; nothing the model wrote is read.
- *
- *   • no non-lookup tool call → null (ungraded, not a success).
- *   • `hadError` → 'failed'.
- *   • the last acting call failed → 'failed'.
- *   • otherwise → 'succeeded'.
- *
- * The last call decides so a failure the turn went on to fix is not punished.
+ * reactor or job wakes). Deterministic; nothing the model wrote is read. A turn with
+ * no acting call is ungraded, not a success; `hadError` fails it; otherwise its last
+ * acting call decides, so a failure the turn went on to fix is not punished.
  * Neither stdout nor returned JSON counts as evidence. It remains a proxy, priced
  * by EXECUTION_QUALITY and sourced as `execution`.
  */
@@ -454,7 +449,7 @@ function toOutcomeRow(r: RawOutcomeRow): TurnOutcomeRow {
 }
 
 /** One effective verdict per turn, newest first, by
- *  {@link TURN_OUTCOME_SOURCE_PRECEDENCE} with recency breaking ties. Turns without
+ *  {@link TURN_OUTCOME_SOURCE_PRECEDENCE} with recency, then insertion order, breaking ties. Turns without
  *  `turn_id` each stand alone. The filter applies to effective verdicts before
  *  `limit`; a negative `limit` is unbounded. `turnIds` narrows to a named trajectory. */
 export function listTurnOutcomes(
@@ -499,7 +494,7 @@ function selectEffectiveTurnOutcomes(
         PARTITION BY turn_id
         ORDER BY CASE source WHEN ${p0} THEN 0 WHEN ${p1} THEN 1
                  WHEN ${p2} THEN 2 WHEN ${p3} THEN 3 ELSE 4 END ASC,
-                 created_at DESC, id DESC
+                 created_at DESC, rowid DESC
       ) AS eff_rn
       FROM turn_outcomes
       WHERE actor_id = ${actorId} AND turn_id IS NOT NULL
@@ -545,7 +540,7 @@ export function recordedTurnVerdict(
     WHERE actor_id = ${actor.actorId} AND turn_id = ${turnId}
     ORDER BY CASE source WHEN ${p0} THEN 0 WHEN ${p1} THEN 1
              WHEN ${p2} THEN 2 WHEN ${p3} THEN 3 ELSE 4 END ASC,
-             created_at DESC, id DESC
+             created_at DESC, rowid DESC
     LIMIT 1`;
 
   return rows[0] ?? null;

@@ -296,19 +296,6 @@ export class WorkspaceActorDirectory {
     return row ? this.row(row.actor_id) : null;
   }
 
-  resolvePath(path: readonly string[]): ActorHandle {
-    let actor = this.main();
-
-    for (const name of path) {
-      const child = this.resolveChild(actor, name);
-
-      if (!child) throw new KinuError('missing', 'The actor path is not registered.');
-      actor = child;
-    }
-
-    return actor;
-  }
-
   storagePath(reference: ActorReference): string[] {
     this.requireOwnership();
     const path: string[] = [];

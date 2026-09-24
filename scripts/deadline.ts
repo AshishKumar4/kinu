@@ -35,7 +35,10 @@ export interface DeadlineRun {
   readonly cwd?: string;
   /** Where the child's output goes; the tier runner inherits, a test pipes. */
   readonly stdio?: 'inherit' | 'pipe';
-  readonly env?: Record<string, string | undefined>;
+  /** The child's WHOLE environment. Absent, the child inherits this
+   *  process's; the ladder passes a derived gate exactly the names its cache
+   *  key hashes (`gateEnvironment` in `ladder-cache.ts`). */
+  readonly env?: Record<string, string>;
 }
 
 export interface DeadlineOutcome {
@@ -74,7 +77,7 @@ export async function runUnderDeadline(run: DeadlineRun): Promise<DeadlineOutcom
     cwd: run.cwd,
     stdout: stdio,
     stderr: stdio,
-    env: run.env === undefined ? process.env : { ...process.env, ...run.env },
+    env: run.env ?? process.env,
   });
 
   let killed = false;

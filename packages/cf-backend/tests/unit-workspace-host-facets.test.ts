@@ -1,7 +1,8 @@
 /**
  * A hosted workspace's `git clone` reaches its facet and `npm install` streams, through the production `createHostedWorkspace`.
- * Order matters: `@nimbus-sh/platform` holds first-write-wins singletons with no reset, so `../src/server` loads before any
- * workspace (defends a `NIMBUS_SESSION` composition beating `HOST_FABRIC_COMPOSITION`), and the refusal test runs first.
+ * `@nimbus-sh/platform` holds one composition and one `ctx.exports` per isolate, first write wins, so `../src/server`
+ * loads before any workspace (defends a `NIMBUS_SESSION` composition beating `HOST_FABRIC_COMPOSITION`), and every ctx
+ * here carries the script's one exports object (`SCRIPT_EXPORTS`), as workerd gives every object of a script.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -11,8 +12,9 @@ import { pathToFileURL } from 'node:url';
 import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
 import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
-import { actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage } from './helpers/programmatic-host';
-import { workerContext } from './helpers/bindings';
+import {
+  actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage, OBJECT_NAMESPACE, SCRIPT_EXPORTS, serveObject,
+} from './helpers/programmatic-host';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -22,13 +24,8 @@ mockAgentsSdk();
 
 await import('../src/server');
 
-type SupervisorProps = { doId: string; pid: number; writerId?: string; mutationOwner?: string };
-
-type SupervisorBinding = InstanceType<typeof SupervisorRPC>;
-
-interface ActorExports {
-  readonly SupervisorRPC: (binding: { readonly props: SupervisorProps }) => SupervisorBinding;
-}
+/** A script's exports: this script's, or one whose Worker exports no supervisor entrypoint. */
+type ScriptExports = Partial<typeof SCRIPT_EXPORTS>;
 
 type ActorBindings = HostedWorkspaceEnv<string>;
 
@@ -52,8 +49,8 @@ afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
 
-/** `exports` is present for the actor under test, absent for the red direction. */
-function actorCtx(exports?: ActorExports): DurableObjectState {
+/** A Durable Object's ctx carrying its script's `exports`. */
+function actorCtx(exports: ScriptExports): DurableObjectState {
   const database = new Database(':memory:');
   databases.push(database);
 
@@ -70,22 +67,19 @@ function actorCtx(exports?: ActorExports): DurableObjectState {
     getWebSockets: () => [],
   };
 
-  return exports === undefined ? actorObjectState(base) : actorObjectState({ ...base, exports });
+  return actorObjectState({ ...base, exports });
 }
 
 interface Actor {
   readonly hosted: HostedWorkspace;
   readonly facetLoads: { readonly supervisorBound: boolean }[];
-  readonly supervisorBindings: SupervisorProps[];
   readonly dispatched: DispatchedOp[];
 }
 
 /** The host namespace is the deployment's `OrchestratorAgent` binding, never `NIMBUS_SESSION`. */
 function hostActor(): Actor {
   const facetLoads: { supervisorBound: boolean }[] = [];
-  const supervisorBindings: SupervisorProps[] = [];
   const dispatched: DispatchedOp[] = [];
-  let hosted: HostedWorkspace | undefined;
 
   const loader = {
     load(code: WorkerLoaderWorkerCode) {
@@ -115,52 +109,25 @@ function hostActor(): Actor {
   // Unchecked: `WorkerLoader` is a workerd binding with no constructible form, and the fabric reaches only `load`.
   const LOADER: WorkerLoader = Object.create(loader);
 
-  const actorEnv: ActorBindings = {
-    LOADER,
-    OrchestratorAgent: {
-      idFromName: (name) => name,
-      idFromString: (id) => id,
-      get: (id) => {
-        if (id !== ACTOR_ID) throw new Error('supervisor resolved the wrong host');
+  const actorEnv: ActorBindings = { LOADER, OrchestratorAgent: OBJECT_NAMESPACE };
 
-        return {
-          supervisorOp: (envelope) => {
-            if (hosted === undefined) throw new Error('facet arrived before the workspace');
-            dispatched.push({ op: envelope.op, pid: envelope.pid, mutationOwner: envelope.mutationOwner });
-
-            return hosted.supervisorOp(envelope);
-          },
-        };
-      },
-    },
-  };
-
-  const exports: ActorExports = {
-    SupervisorRPC: ({ props }: { props: SupervisorProps }) => {
-      supervisorBindings.push(props);
-
-      // The throwing members assert the supervisor schedules no background work and swallows no exception.
-      const bindingCtx: ExecutionContext<SupervisorProps> = Object.assign(workerContext(), {
-        props,
-        waitUntil: () => { throw new Error('unexpected supervisor background work'); },
-        passThroughOnException: () => { throw new Error('unexpected supervisor pass-through'); },
-      });
-
-      return new SupervisorRPC(bindingCtx, actorEnv);
-    },
-  };
-
-  // In a Durable Object the workspace's ctx and the one carrying `.exports` are the same object.
-  hosted = createHostedWorkspace({
-    ctx: actorCtx(exports),
+  const hosted = createHostedWorkspace({
+    ctx: actorCtx(SCRIPT_EXPORTS),
     env: actorEnv,
     previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
   });
 
-  return { hosted, facetLoads, supervisorBindings, dispatched };
+  // What the namespace resolves this object's id to: a facet's supervisor reaches the workspace only through here.
+  serveObject(ACTOR_ID, {
+    supervisorOp: (envelope) => {
+      dispatched.push({ op: envelope.op, pid: envelope.pid, mutationOwner: envelope.mutationOwner });
+
+      return hosted.supervisorOp(envelope);
+    },
+  });
+
+  return { hosted, facetLoads, dispatched };
 }
-
-
 
 /** Deterministic stand-in for isomorphic-git's network half, writing through the facet's buffered fs adapter. */
 const GIT_BUNDLE_STUB = `
@@ -208,33 +175,27 @@ function refusingBindings(): ActorBindings {
 }
 
 describe('hosted workspace facets', () => {
-  test('a ctx without exports composes no runtime: the first command names the missing entrypoint', async () => {
+  test('a script that exports no supervisor entrypoint composes no runtime: the first command names it', async () => {
     const hosted = createHostedWorkspace({
-      ctx: actorCtx(),
+      ctx: actorCtx({}),
       env: refusingBindings(),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
-    await expect(hosted.box('red').exec('git clone https://example.invalid/hello.git /home/user/hello'))
+    await expect(hosted.box('red').exec('git clone https://example.invalid/hello.git /home/main/hello'))
       .rejects.toThrow('supervisor entrypoint');
   });
 
   test('git clone spawns one facet and lands bytes through supervisorOp', async () => {
     const actor = hostActor();
-    const clone = await actor.hosted.box('green').exec('git clone https://example.invalid/hello.git /home/user/hello');
+    const clone = await actor.hosted.box('green').exec('git clone https://example.invalid/hello.git /home/main/hello');
     const output = `${clone.stdout}${clone.stderr}`;
     expect(output).not.toContain(REFUSAL);
     expect(clone.exitCode).toBe(0);
 
     expect(actor.facetLoads.length).toBe(1);
     expect(actor.facetLoads[0]?.supervisorBound).toBe(true);
-    expect(actor.supervisorBindings.length).toBeGreaterThan(0);
-
-    for (const props of actor.supervisorBindings) {
-      expect(props.doId).toBe(ACTOR_ID);
-      expect(Number.isInteger(props.pid) && props.pid > 0).toBe(true);
-    }
-
+    // Ops land here only if the facet's binding named this object's id: the namespace resolves hosts by id.
     expect(actor.dispatched.length).toBeGreaterThan(0);
 
     for (const call of actor.dispatched) {
@@ -255,8 +216,8 @@ describe('hosted workspace facets', () => {
 
     const session = await actor.hosted.bundle.session();
     const vfs = session.vfs.as(CRED_SESSION_USER);
-    expect(vfs.readFile('home/user/hello/.git/HEAD')).toEqual(new TextEncoder().encode('ref: refs/heads/main\n'));
-    expect(vfs.readFile('home/user/hello/README.md')).toEqual(new TextEncoder().encode('# hello from the facet\n'));
+    expect(vfs.readFile('home/main/hello/.git/HEAD')).toEqual(new TextEncoder().encode('ref: refs/heads/main\n'));
+    expect(vfs.readFile('home/main/hello/README.md')).toEqual(new TextEncoder().encode('# hello from the facet\n'));
   });
 });
 

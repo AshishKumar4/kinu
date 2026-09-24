@@ -1,6 +1,6 @@
 {
   "measuredAt": "2026-09-24",
-  "total": 205,
+  "total": 203,
   "files": {
     "packages/cf-backend/tests/helpers/kv.ts": {
       "clock-compare": 1
@@ -33,10 +33,6 @@
     "packages/cf-backend/tests/workerd/do-alarm.test.ts": {
       "clock-compare": 1,
       "sleep": 2
-    },
-    "packages/cf-backend/tests/workerd/do-eviction-recovery.test.ts": {
-      "clock-compare": 1,
-      "sleep": 1
     },
     "packages/cf-backend/tests/workerd/do-init-gate.test.ts": {
       "clock-compare": 3

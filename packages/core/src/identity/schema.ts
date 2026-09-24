@@ -72,7 +72,7 @@ const ACTOR_DDL = [
      ON activity_log(actor_id, created_at DESC, id DESC)`,
 ];
 
-// Single row, present only on a fork; written once by forkWorkspaceStorage.
+// Single row, present only on a fork; written once, when the fork's transfer publishes.
 const FORK_LINEAGE_DDL = `CREATE TABLE IF NOT EXISTS fork_lineage (
     id                            INTEGER PRIMARY KEY,
     source_workspace_id           TEXT    NOT NULL,

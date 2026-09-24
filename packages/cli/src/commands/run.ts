@@ -4,7 +4,7 @@ import { listConfiguredAgentRefs, requireAuthConfig } from '../config';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
 import { createAgentClient, type AgentClientFlags } from '../client-factory';
 import type { AgentClient, AgentClientEvent } from '../agent-client';
-import { decodeJsonValue, JsonValueSchema, parseJsonObject, projectJsonValue, usageReported, ToolOutcomeSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
+import { decodeJsonValue, JsonValueSchema, parseJsonObject, projectJsonValue, usageReported, ToolOutcomeSchema, type AgentRpcMethod, type JsonObject, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { CliSessionOptions } from '../session';
 import { chatCommand } from './chat';
@@ -351,7 +351,7 @@ async function runRpc(
 const commandType = (cmd: JsonObject): string => stringField(cmd, 'type') ?? '';
 
 async function runCloudRpcCommand(origin: string, token: string, name: string, cmd: JsonObject): Promise<JsonValue> {
-  const rpc = async (method: string, args: JsonValue[] = []): Promise<JsonValue> =>
+  const rpc = async (method: AgentRpcMethod, args: JsonValue[] = []): Promise<JsonValue> =>
     callAgentRpc({ origin, token, name, method, schema: JsonValueSchema, args });
 
   const type = commandType(cmd);

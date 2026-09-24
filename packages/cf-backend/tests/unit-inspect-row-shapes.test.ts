@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { JsonArraySchema } from '@kinu.run/core';
-import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { eventsOver, orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 /** Pinned, so an empty inventory and an agreeing one do not look alike. */
 const ROW_READS = [
@@ -27,14 +27,14 @@ const SEEDED_AT = 1_700_000_000_000;
 
 /** Populated, so the projection is proven too. */
 function orchestratorWithOneEvent(): HarnessOrchestratorAgent {
-  const { agent } = orchestratorHarness();
-  agent.publishHarnessEvent({
+  const { agent, db } = orchestratorHarness();
+  eventsOver(db).publish({ descriptor: {
     ingress: 'chat_ws',
     variant: 'chat',
     payload: { text: 'a row to render' },
     operator_user_id: 'harness-owner',
     session_id: 'harness-session',
-  }, SEEDED_AT);
+  }, now: SEEDED_AT });
 
   return agent;
 }

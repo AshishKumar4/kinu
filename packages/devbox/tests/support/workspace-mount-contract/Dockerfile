@@ -6,7 +6,7 @@
 # The tag MUST equal the @cloudflare/sandbox version in packages/devbox/package.json
 # and bench/wrangler.jsonc; a drift makes this suite assert the contract of an
 # image the product does not run.
-FROM docker.io/cloudflare/sandbox:0.12.8
+FROM docker.io/cloudflare/sandbox@sha256:4a56a37a3cfd9b38d65bb4b5d0b341e6490a3a4c0226274ae4c1cca4948e85fe
 
 RUN apt-get update -qq \
  && apt-get install -y -qq --no-install-recommends gcc libc6-dev libfuse3-dev \

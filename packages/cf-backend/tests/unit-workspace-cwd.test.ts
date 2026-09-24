@@ -89,7 +89,7 @@ function sdkBox({ host, portRegistry, durable }: TestProgrammaticHost) {
     get: () => stub,
   };
 
-  return Nimbus.fromEnv({ NIMBUS_SESSION: namespace }).sandbox('workspace', { root: '/home/user' });
+  return Nimbus.fromEnv({ NIMBUS_SESSION: namespace }).sandbox('workspace', { root: '/home/main' });
 }
 
 const shell = (shellId: string): NimbusExecOptions => ({ shellId });
@@ -104,20 +104,20 @@ describe('hosted workspace actor shell state', () => {
       generation: 1,
     });
 
-    await workspace.fs.mkdir('/home/user/repo', { recursive: true });
-    await workspace.fs.writeFile('/home/user/repo/proof.txt', 'same bytes');
+    await workspace.fs.mkdir('/home/main/repo', { recursive: true });
+    await workspace.fs.writeFile('/home/main/repo/proof.txt', 'same bytes');
 
     const box = sdkBox(workerHost(workspace, new Map()));
     expect(await box.exec('cd repo', shell('agent:main'))).toMatchObject({ exitCode: 0 });
     expect(await box.exec('pwd', shell('agent:main'))).toMatchObject({
-      stdout: '/home/user/repo\n',
+      stdout: '/home/main/repo\n',
       exitCode: 0,
     });
     expect(await box.exec('cat proof.txt', shell('agent:main'))).toMatchObject({
       stdout: 'same bytes',
       exitCode: 0,
     });
-    expect(await workspace.fs.readFile('/home/user/repo/proof.txt')).toBe('same bytes');
+    expect(await workspace.fs.readFile('/home/main/repo/proof.txt')).toBe('same bytes');
   });
 
   test('concurrent actor shells serialize their own calls without cwd or env leakage', async () => {
@@ -129,22 +129,22 @@ describe('hosted workspace actor shell state', () => {
       generation: 1,
     });
 
-    await workspace.fs.mkdir('/home/user/alpha', { recursive: true });
-    await workspace.fs.mkdir('/home/user/beta', { recursive: true });
+    await workspace.fs.mkdir('/home/main/alpha', { recursive: true });
+    await workspace.fs.mkdir('/home/main/beta', { recursive: true });
     const box = sdkBox(workerHost(workspace, new Map()));
 
     const alpha = shell('subordinate:alpha');
     const beta = shell('head:beta');
 
     const [, alphaPwd] = await Promise.all([
-      box.exec('cd /home/user/alpha; export ACTOR=alpha', alpha),
+      box.exec('cd /home/main/alpha; export ACTOR=alpha', alpha),
       box.exec('pwd; echo $ACTOR', alpha),
-      box.exec('cd /home/user/beta; export ACTOR=beta', beta),
+      box.exec('cd /home/main/beta; export ACTOR=beta', beta),
     ]);
 
-    expect(alphaPwd).toMatchObject({ stdout: '/home/user/alpha\nalpha\n', exitCode: 0 });
+    expect(alphaPwd).toMatchObject({ stdout: '/home/main/alpha\nalpha\n', exitCode: 0 });
     expect(await box.exec('pwd; echo $ACTOR', beta)).toMatchObject({
-      stdout: '/home/user/beta\nbeta\n',
+      stdout: '/home/main/beta\nbeta\n',
       exitCode: 0,
     });
   });
@@ -158,14 +158,14 @@ describe('hosted workspace actor shell state', () => {
 
     const durableState: DurableShellState = new Map();
     const firstWorkspace = await NimbusWorkspace.create({ sql, transactions, generation: 1 });
-    await firstWorkspace.fs.mkdir('/home/user/repo', { recursive: true });
+    await firstWorkspace.fs.mkdir('/home/main/repo', { recursive: true });
     const firstBox = sdkBox(workerHost(firstWorkspace, durableState));
-    await firstBox.exec('cd /home/user/repo; export RECONSTRUCTED=yes', shell('agent:main'));
+    await firstBox.exec('cd /home/main/repo; export RECONSTRUCTED=yes', shell('agent:main'));
 
     const reconstructedWorkspace = await NimbusWorkspace.create({ sql, transactions, generation: 2 });
     const reconstructedBox = sdkBox(workerHost(reconstructedWorkspace, durableState));
     expect(await reconstructedBox.exec('pwd; echo $RECONSTRUCTED', shell('agent:main'))).toMatchObject({
-      stdout: '/home/user/repo\nyes\n',
+      stdout: '/home/main/repo\nyes\n',
       exitCode: 0,
     });
   });
@@ -200,7 +200,7 @@ describe('hosted workspace preview capabilities', () => {
     };
 
     // An application's owner is derived from the process serving its port.
-    const server = workspace.processes.spawn('node', ['node', 'server.js'], '/home/user');
+    const server = workspace.processes.spawn('node', ['node', 'server.js'], '/home/main');
     host.portRegistry.bindFacetStub(server.pid, guest);
     host.portRegistry.register(4321, server.pid);
 

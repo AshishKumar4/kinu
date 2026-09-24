@@ -74,7 +74,7 @@ const routed = parseSlateProject({
       INBOX: { kind: 'agent' },
       MODEL: { kind: 'ai' },
       TUNED: { kind: 'ai', tier: 'fast' },
-      FILES: { kind: 'namespace', namespace: 'workspace', paths: ['/home/user/notes', '/home/user/shared/'] },
+      FILES: { kind: 'namespace', namespace: 'workspace', paths: ['/home/main/notes', '/home/main/shared/'] },
     },
   },
 });
@@ -109,17 +109,17 @@ test('an ai binding routes one model call, and a declared tier pins it', () => {
 });
 
 test('a path-scoped workspace binding offers only file members inside its prefixes', () => {
-  expect(route('FILES', 'readFile', ['/home/user/notes/a.md'])).toEqual({
-    kind: 'namespace', namespace: 'workspace', member: 'readFile', args: ['/home/user/notes/a.md'],
+  expect(route('FILES', 'readFile', ['/home/main/notes/a.md'])).toEqual({
+    kind: 'namespace', namespace: 'workspace', member: 'readFile', args: ['/home/main/notes/a.md'],
   });
-  expect(route('FILES', 'readdir', ['/home/user/notes'])).toMatchObject({ kind: 'namespace', member: 'readdir' });
-  expect(route('FILES', 'exists', ['/home/user/shared/x'])).toMatchObject({ kind: 'namespace', member: 'exists' });
+  expect(route('FILES', 'readdir', ['/home/main/notes'])).toMatchObject({ kind: 'namespace', member: 'readdir' });
+  expect(route('FILES', 'exists', ['/home/main/shared/x'])).toMatchObject({ kind: 'namespace', member: 'exists' });
 
-  expect(() => route('FILES', 'exec', ['/home/user/notes/a.md'])).toThrow('a path-scoped workspace binding offers only file members');
-  expect(() => route('FILES', 'readFile', ['/etc/passwd'])).toThrow('outside its prefixes: /home/user/notes, /home/user/shared/');
+  expect(() => route('FILES', 'exec', ['/home/main/notes/a.md'])).toThrow('a path-scoped workspace binding offers only file members');
+  expect(() => route('FILES', 'readFile', ['/etc/passwd'])).toThrow('outside its prefixes: /home/main/notes, /home/main/shared/');
   // A sibling sharing the prefix string is not inside it.
-  expect(() => route('FILES', 'readFile', ['/home/user/notes2/x'])).toThrow('outside its prefixes');
-  expect(() => route('FILES', 'readFile', ['/home/user/notes/../other'])).toThrow('outside its prefixes');
+  expect(() => route('FILES', 'readFile', ['/home/main/notes2/x'])).toThrow('outside its prefixes');
+  expect(() => route('FILES', 'readFile', ['/home/main/notes/../other'])).toThrow('outside its prefixes');
   expect(() => route('FILES', 'readFile', ['relative/path'])).toThrow('outside its prefixes');
   expect(() => route('FILES', 'readFile', [42])).toThrow('outside its prefixes');
   expect(() => route('FILES', 'readFile', [])).toThrow('outside its prefixes');

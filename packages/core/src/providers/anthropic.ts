@@ -16,6 +16,7 @@ export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
 
 export const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-4-7';
 
+/** Evolution's mechanical-call tier. */
 export const ANTHROPIC_FAST_MODEL = 'claude-haiku-4-5';
 
 const FIVE: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];

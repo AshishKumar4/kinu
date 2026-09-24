@@ -21,10 +21,10 @@ import {
   inspectCliAuth, pollCliAuth, startCliAuth, tokenAllows,
   type CliAuthAuthority, type CliTokenIdentity,
 } from './auth-store';
-import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from '@kinu.run/core';
 import {
-  isAgentRpcMethod, requiredRpcAccess, rpcAccessScope, type AgentRpcDispatch,
-} from './rpc-gate';
+  ACCESS_TOKEN_SCOPES, isAgentRpcMethod, requiredRpcAccess, rpcAccessScope, type AccessTokenScope,
+} from '@kinu.run/core';
+import type { AgentRpcDispatch } from './rpc-gate';
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell, cliPlatformShell } from '@kinu.run/core';
 import { listAvailableModels } from '../user/available-models';
@@ -43,7 +43,7 @@ import { OwnerCapabilityUnavailableError, ownerCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import { classify, renderThrownChain } from '@kinu.run/core/obs';
 
-const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
+const DeviceRegistrationRequestSchema = v.object({ label: v.optional(v.string()), replaces: v.optional(v.string()) });
 
 const WebhookRequestSchema = v.object({
   label: v.optional(v.string()),
@@ -383,8 +383,8 @@ export async function handleCliRequest<Id>(
   }
 
   if (path === '/devices' && method === 'POST') {
-    const body = await safeJson(request, OptionalLabelSchema);
-    const { deviceId, token } = await cli.userDO.registerDevice(await ownerCaller(env), body?.label);
+    const registration = await safeJson(request, DeviceRegistrationRequestSchema) ?? {};
+    const { deviceId, token } = await cli.userDO.registerDevice(await ownerCaller(env), registration.label, registration.replaces);
 
     return json({ body: { deviceId, token, userId: cli.userId, origin: url.origin } }, { status: 201 });
   }

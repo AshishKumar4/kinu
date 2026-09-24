@@ -66,7 +66,7 @@ export const FORK_ROW_SECTIONS = [
 export type ForkRowSection = (typeof FORK_ROW_SECTIONS)[number];
 
 /** Per-section row counts and file count, declared by the source and checked at `commit`. */
-export const ForkSectionCountsSchema = v.object({
+const ForkSectionCountsSchema = v.object({
   agentConfig: v.number(),
   craftedTools: v.number(),
   memoryChunks: v.number(),
@@ -87,7 +87,7 @@ const FRAME_ENVELOPE = {
 } as const;
 
 /** One frame of one fork transfer; the canonical wire authority every type on both sides is inferred from. */
-export const ForkFrameSchema = v.variant('kind', [
+const ForkFrameSchema = v.variant('kind', [
   v.object({
     ...FRAME_ENVELOPE,
     kind: v.literal('begin'),
@@ -149,7 +149,7 @@ type UnsealedForkSectionFrame =
 /** Canonical preimage of one frame (all but its digest); file bytes are hashed as bytes, not JSON. */
 type ForkFrameSealInput = (UnsealedForkFrame | UnsealedForkSectionFrame) & { digest?: string };
 
-export function forkFramePreimage(frame: ForkFrameSealInput): string {
+function forkFramePreimage(frame: ForkFrameSealInput): string {
   if (frame.kind === 'file') {
     const { bytes, digest: _digest, ...meta } = frame;
 

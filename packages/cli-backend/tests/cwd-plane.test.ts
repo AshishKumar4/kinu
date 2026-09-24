@@ -4,17 +4,30 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
+import * as v from 'valibot';
 import type { AgentRuntime, LLMProviderConfig, WriteEvent, WriteObserver } from '@kinu.run/core';
-import { buildBuiltinTools, discoverSkills, initWorkspaceSchema, isVfsError, WORKSPACE_ROOT, subordinateAgentName } from '@kinu.run/core';
+import {
+  buildBuiltinTools, discoverSkills, initWorkspaceSchema, isVfsError, WORKSPACE_ROOT, subordinateAgentName,
+} from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/identity';
 import { scratchDir, toolExecute } from '@kinu.run/test-utils';
 import {
-  createCLIRuntime, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
+  createCLIRuntime, createHostShell, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
   type CLIRuntime,
 } from '../src/runtime';
 import { createHeadRuntime } from './actor-fixture';
 import { registerLocalActor } from '../src/actor-identity';
 import { openWorkspaceCLI } from '../src/open';
+import { BRANCH_CREDENTIAL_ENV } from '../src/branch-process';
+import { PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV } from '../src/model-resolver';
+
+/** Every name the harness reads a credential from, as the declaring modules name them. */
+const HARNESS_CREDENTIAL_NAMES: readonly string[] = [
+  ...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV, ...BRANCH_CREDENTIAL_ENV,
+];
+
+const DevicePlanSchema = v.object({ env: v.record(v.string(), v.string()) });
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -262,6 +275,47 @@ describe('the shell over the bound directory', () => {
 
     await shell.exec('echo from-the-shell > shell-wrote.txt');
     expect(await readText(rt, 'shell-wrote.txt')).toBe('from-the-shell\n');
+  });
+
+  test('no tier passes on a planted credential; the host shell keeps the user\'s own settings', async () => {
+    const { project } = roots('cwd-plane-env-backends');
+    const [home, agentHome, agentTmp] = ['home', 'agents/ws/home', 'agents/ws/tmp'].map((dir) => join(project, dir));
+
+    for (const dir of [home, agentHome, agentTmp]) mkdirSync(dir ?? project, { recursive: true });
+
+    const daemon = v.parse(
+      v.object({ ENV_ALLOWLIST: v.array(v.string()), plan: v.function() }),
+      createRequire(import.meta.url)(join(import.meta.dir, '../../pc-agent/src/sandbox.js')),
+    );
+
+    // Candidates from both backends and the live environment, each derived credential carrying a canary. Every
+    // tier is handed this source; this process's env is never written, since a planted proxy reroutes other tests.
+    const candidates = new Set([...HARNESS_CREDENTIAL_NAMES, ...daemon.ENV_ALLOWLIST, ...Object.keys(process.env)]);
+    const userSettings = { SSH_AUTH_SOCK: `/run/agent-${crypto.randomUUID()}.sock`, HTTPS_PROXY: 'http://proxy.test:3128' };
+
+    const source = {
+      ...Object.fromEntries([...candidates].map((name) => [
+        name, HARNESS_CREDENTIAL_NAMES.includes(name) ? `planted:${name}` : process.env[name] ?? `probe:${name}`,
+      ])),
+      ...userSettings,
+    };
+
+    const hostShell = await createHostShell(project, source).exec('env');
+    const rawDevice = v.parse(DevicePlanSchema, daemon.plan({ tier: 'raw', deviceHome: project, command: 'env', cwd: project, source })).env;
+
+    expect(hostShell.stdout.split('\n').filter((line) => line.includes('planted:'))).toEqual([]);
+    expect(Object.entries(rawDevice).filter(([, value]) => value.startsWith('planted:'))).toEqual([]);
+    expect(Object.entries(userSettings).filter(([name, value]) => !hostShell.stdout.includes(`${name}=${value}\n`))).toEqual([]);
+
+    // The sandboxed device tier passes named variables only, so a secret no rule names stays out as well.
+    const secret = `npm_${crypto.randomUUID().replaceAll('-', '')}`;
+
+    const sandboxed = JSON.stringify(daemon.plan({
+      tier: 'sandboxed', platform: 'linux', home, agentHome, agentTmp, deviceHome: project, roots: [project], cwd: project,
+      command: 'env', source: { ...source, NPM_TOKEN: secret }, statusFd: 3,
+    }));
+
+    expect({ secret: sandboxed.includes(secret), planted: sandboxed.includes('planted:') }).toEqual({ secret: false, planted: false });
   });
 
   test('what a command may have changed is snapshotted, and the snapshot names that directory', async () => {

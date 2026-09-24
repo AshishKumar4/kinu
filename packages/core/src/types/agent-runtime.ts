@@ -11,6 +11,7 @@ import type {
   Shell,
   VFS,
 } from './primitives';
+import type { CraftStoreView } from '@kinu.run/agent-utils';
 import type { CraftedTool } from './craft';
 import type { Usage } from '../usage';
 import type { ExecutionRouter } from '../execution/types';
@@ -24,14 +25,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 /** Live channel for 'gate'-tier shell approvals (ACP `session/request_permission`). */
 export type RequestShellApproval = (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
 
-export interface CraftStore {
-  create(tool: Omit<CraftedTool, 'createdAt' | 'updatedAt'>): void;
-  update(name: string, patch: Partial<CraftedTool>): void;
-  get(name: string): CraftedTool | undefined;
-  delete(name: string): void;
-  list(): CraftedTool[];
-  search(query: string, limit?: number): CraftedTool[];
-}
+export type CraftStore = CraftStoreView;
 
 /** One rollout and its cost. A branch runs outside the mission ledger, so `usage` travels back
  *  for the engine to debit; a backend that cannot measure omits it rather than guessing. */

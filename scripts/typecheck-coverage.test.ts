@@ -116,6 +116,7 @@ describe('this tree', () => {
       'packages/pc-agent/tests/daemon.test.js',
       'packages/pc-agent/tests/pty-protocol.test.js',
       'packages/pc-agent/tests/pty.test.js',
+      'packages/pc-agent/tests/refinement-device-view.test.js',
       'packages/pc-agent/tests/sandbox.test.js',
       'scripts/eval.test.ts',
     ]);

@@ -5,8 +5,8 @@
 
 import type { SqlExecutor } from './types/primitives';
 import type { HeadInput, HeadReport, HeadRunHeadView, SerializedMessage } from './heads/types';
-import { headStatusUnsettled, storedHeadReportStatus } from './heads/types';
-import { raceWithTimeout, type HeadRuntime } from './heads/controller';
+import { forkMission, headStatusUnsettled, storedHeadReportStatus } from './heads/types';
+import type { HeadRuntime } from './heads/controller';
 import type { HeadJournal } from './heads/journal';
 import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes';
 import { nanoid } from './utils/nanoid';
@@ -47,6 +47,8 @@ export interface BranchStartInput {
   task: string;
   /** Already capped by the backend's readInheritedContext. */
   inheritedContext: SerializedMessage[];
+  /** The live turn's mission scope (`MissionGovernor.scope`), read when the owner branches. */
+  missionLabels: readonly string[];
   id?: string;
   model?: string;
 }
@@ -81,6 +83,7 @@ export async function startBranchHead(
     model: input.model,
     mergeStrategy: 'best_of',
     loop: defaultLoopOrigin('head'),
+    ...forkMission(input.missionLabels),
   };
 
   journal.recordSplit(rootId, BRANCH_RATIONALE, spawnedAt);
@@ -91,7 +94,7 @@ export async function startBranchHead(
     let report: HeadReport;
 
     try {
-      report = await raceWithTimeout(spawned, undefined);
+      report = await spawned.run();
     } catch (cause) {
       report = {
         id: headInput.id,

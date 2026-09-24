@@ -98,12 +98,12 @@ describe('createDeviceTunnelExecutor', () => {
   });
 
   test('base consent cannot escape its subtree through native file tools', async () => {
-    const t = transport(() => 'contents');
+    const t = transport(() => ({ encoding: 'base64', content: Buffer.from('contents').toString('base64') }));
 
     const provider = createDeviceTunnelExecutor(t, {
       consentedRoot: async () => '/home/dev/project',
       deviceHome: async () => '/home/dev',
-      unconfined: async () => false,
+      scope: async () => 'root',
     });
 
     const read = await provider.tools.readFile.execute('/etc/passwd');
@@ -118,11 +118,8 @@ describe('createDeviceTunnelExecutor', () => {
     expect(t.calls).toEqual([]);
     expect(await provider.tools.readFile.execute('/home/dev/project/readme.md')).toBe('contents');
     expect(t.calls).toEqual([{
-      method: 'readFile',
-      params: ['/home/dev/project/readme.md', {
-        encoding: 'base64',
-        root: '/home/dev/project',
-      }],
+      method: 'readRange',
+      params: ['/home/dev/project/readme.md', 0, 8 * 1024 * 1024, { root: '/home/dev/project' }],
     }]);
   });
 
@@ -136,7 +133,7 @@ describe('createDeviceTunnelExecutor', () => {
     const provider = createDeviceTunnelExecutor(t, {
       consentedRoot: async () => null,
       deviceHome: async () => '/home/dev',
-      unconfined: async () => false,
+      scope: async () => 'root',
     });
 
     // Every file tool refuses without asking the machine anything, above all no `exec`.
@@ -166,7 +163,7 @@ describe('createDeviceTunnelExecutor', () => {
     const full = createDeviceTunnelExecutor(described, {
       consentedRoot: async () => null,
       deviceHome: async () => '/home/dev',
-      unconfined: async () => true,
+      scope: async () => 'unconfined',
     });
 
     expect(await full.homeDir()).toBe('/');
@@ -212,8 +209,8 @@ describe('createDeviceTunnelExecutor', () => {
   });
 
   test('file helpers use structured daemon RPCs instead of shell interpolation', async () => {
-    const t = transport((method) => {
-      if (method === 'readFile') return 'contents';
+    const t = transport((method): JsonValue => {
+      if (method === 'readRange') return { encoding: 'base64', content: Buffer.from('contents').toString('base64') };
 
       if (method === 'writeFile') return { success: true };
 
@@ -232,9 +229,9 @@ describe('createDeviceTunnelExecutor', () => {
     await provider.tools.exists.execute(path);
 
     expect(t.calls).toEqual([
-      { method: 'readFile', params: [path, { encoding: 'base64', root: null }] },
+      { method: 'readRange', params: [path, 0, 8 * 1024 * 1024, { root: null }] },
       { method: 'writeFile', params: [path, 'hello', { root: null }] },
-      { method: 'listFiles', params: [path, { root: null }] },
+      { method: 'listFiles', params: [path, { root: null, offset: 0, limit: 10_000 }] },
       { method: 'exists', params: [path, { root: null }] },
     ]);
   });

@@ -8,7 +8,7 @@ import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import type { WorkspaceBundle } from '@kinu.run/core/workspace';
-import { nimbusSql, localTransactions } from '../src/runtime';
+import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
 
 const RUNTIMES: readonly RuntimePackage[] = [bashRuntime, cpythonRuntime];
 
@@ -21,12 +21,11 @@ afterEach(() => {
 function open(path: string, runtimes: readonly RuntimePackage[] = RUNTIMES): WorkspaceBundle {
   const database = new Database(path);
   databases.push(database);
-  const sql = nimbusSql(database);
+  const storage = inlineWorkspaceStorage(database);
 
   return createWorkspace({
-    sql,
-    transactions: localTransactions(database),
-    generation: workspaceGenerationStorage(sql),
+    ...storage,
+    generation: workspaceGenerationStorage(storage.sql),
     runtimes,
     runtimeFacets: localFacetHost(),
   });
@@ -74,10 +73,10 @@ describe('workspace runtime provisioning', () => {
     const workspace = open(dbPath());
 
     // Present before any command runs: provisioning happens on the workspace-open path.
-    expect(await workspace.vfs.exists('/home/user/.nimbus/runtimes')).toBe(false);
+    expect(await workspace.vfs.exists('/home/main/.nimbus/runtimes')).toBe(false);
     expect(await workspace.shell.exec('python3 --version')).toMatchObject({ exitCode: 0 });
-    expect(await workspace.vfs.exists('/home/user/.nimbus/runtimes/cpython/3.13.14/manifest.json')).toBe(true);
-    expect(await workspace.vfs.exists('/home/user/.nimbus/runtimes/bash')).toBe(false);
+    expect(await workspace.vfs.exists('/home/main/.nimbus/runtimes/cpython/3.13.14/manifest.json')).toBe(true);
+    expect(await workspace.vfs.exists('/home/main/.nimbus/runtimes/bash')).toBe(false);
   });
 
   test('a runtime a previous session installed survives a reopen', async () => {

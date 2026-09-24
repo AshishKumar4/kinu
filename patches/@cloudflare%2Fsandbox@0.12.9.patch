@@ -1,0 +1,129 @@
+diff --git a/dist/sandbox-D0rNqxlr.js b/dist/sandbox-D0rNqxlr.js
+index 63771b5..8700e86 100644
+--- a/dist/sandbox-D0rNqxlr.js
++++ b/dist/sandbox-D0rNqxlr.js
+@@ -4188,6 +4188,20 @@ var ContainerControlClient = class {
+ 			this.idleTimer = null;
+ 		}
+ 	}
++	/**
++	* Clears both timers while a start block holds the input gate: a timer set
++	* outside the block that falls due inside it would hold every timer the
++	* start hook sets until the block ends.
++	*/
++	suspendTimers() {
++		this.stopBusyPoll();
++		this.clearIdleTimer();
++	}
++	resumeTimers() {
++		if (!this.conn) return;
++		this.startBusyPoll();
++		this.maybeTransitionIdle();
++	}
+ 	destroyConnection(cause) {
+ 		this.stopBusyPoll();
+ 		this.clearIdleTimer();
+@@ -7650,7 +7664,7 @@ var Sandbox = class Sandbox extends Container {
+ 	* `rpc` currently selects the primary container-control client. `http` and
+ 	* `websocket` select the route-based compatibility client.
+ 	*/
+-	createClientForTransport(transport) {
++	createClientForTransport(transport, startContainer = () => this.startContainerForRPC()) {
+ 		if (transport === "rpc") {
+ 			const self = this;
+ 			return new ContainerControlClient({
+@@ -7662,7 +7676,7 @@ var Sandbox = class Sandbox extends Container {
+ 					id: this.ctx.id.toString(),
+ 					name: this.sandboxName ?? void 0
+ 				}),
+-				startContainer: () => this.startContainerForRPC(),
++				startContainer,
+ 				localMain: this.controlCallback,
+ 				onActivity: () => {
+ 					this.renewActivityTimeout();
+@@ -8299,10 +8313,13 @@ var Sandbox = class Sandbox extends Container {
+ 			} else {
+ 				let unmounted = false;
+ 				try {
+-					const result = await this.execInternal(`fusermount -u ${shellEscape(mountPath)}`);
+-					if (result.exitCode !== 0) {
+-						const stderr = result.stderr || "unknown error";
+-						throw new BucketUnmountError(`fusermount -u failed (exit ${result.exitCode}): ${stderr}`);
++					const standing = await this.execInternal(`mountpoint -q ${shellEscape(mountPath)}`);
++					if (standing.exitCode === 0) {
++						const result = await this.execInternal(`fusermount -u ${shellEscape(mountPath)}`);
++						if (result.exitCode !== 0) {
++							const stderr = result.stderr || "unknown error";
++							throw new BucketUnmountError(`fusermount -u failed (exit ${result.exitCode}): ${stderr}`);
++						}
+ 					}
+ 					unmounted = true;
+ 					mountInfo.mounted = false;
+@@ -8580,6 +8597,32 @@ var Sandbox = class Sandbox extends Container {
+ 			});
+ 		}
+ 	}
++	/**
++	* The start hook runs inside the start block, which holds this object's input
++	* gate. A WebSocket delivers its messages under the critical section it was
++	* accepted in, so a control connection opened before the block cannot answer
++	* a call the hook makes inside it, and the block waits on itself until the
++	* platform resets the object. The hook therefore gets a client whose
++	* connection opens inside the block. It never starts a container: the one it
++	* serves has just proven its port, and a nested start would reopen the hook
++	* inside itself. The client that was in place keeps its in-flight calls,
++	* which answer once the block releases the gate.
++	*/
++	async callOnStart() {
++		const outer = this.client;
++		outer.suspendTimers?.();
++		const hook = this.createClientForTransport(this.transport, async () => {
++			if (this.ctx.container?.running !== true) throw new Error("The container stopped during its start hook.");
++		});
++		this.client = hook;
++		try {
++			await super.callOnStart();
++		} finally {
++			if (this.client === hook) this.client = outer;
++			hook.disconnect(this.buildDisconnectCause("start_hook_settled", "The container start hook returned while the operation was pending."));
++			outer.resumeTimers?.();
++		}
++	}
+ 	async onStart() {
+ 		this.logger.debug("Sandbox started");
+ 		await this.currentRuntime.markStarted();
+@@ -8838,7 +8881,15 @@ var Sandbox = class Sandbox extends Container {
+ 	*/
+ 	async startContainerForRPC() {
+ 		try {
+-			await this.startAndWaitForPorts({
++			// An RPC (re)connect on a container that is already running AND already
++			// marked healthy needs no start at all. `containerFetch` uses exactly
++			// this conjunction to route directly to the container, and running the
++			// wait again would re-enter `onStart` inside a nested
++			// `blockConcurrencyWhile` — once per reconnect, on a container that
++			// never restarted. A fresh container, a stopped one, or one whose
++			// status has not reached healthy still takes the full path below.
++			const state = await this.getState();
++			if (this.ctx.container?.running !== true || state.status !== "healthy") await this.startAndWaitForPorts({
+ 				ports: 3e3,
+ 				cancellationOptions: {
+ 					instanceGetTimeoutMS: RPC_START_INSTANCE_GET_TIMEOUT_MS,
+@@ -11503,7 +11554,7 @@ var Sandbox = class Sandbox extends Container {
+ 		const ctx = this.ctx;
+ 		if (!ctx.container?.interceptOutboundHttp) throw new InvalidMountConfigError("R2 binding mounts require container outbound interception support");
+ 		if (!ctx.exports?.ContainerProxy) throw new InvalidMountConfigError("R2 binding mounts require exporting ContainerProxy from the Worker entrypoint");
+-		this.constructor.outboundHandlers = { r2EgressMount: r2EgressHandler };
++		this.constructor.outboundHandlers = { ...this.constructor.outboundHandlers, r2EgressMount: r2EgressHandler };
+ 		if (Object.keys(params.buckets).length > 0) await this.setOutboundByHost("r2.internal", "r2EgressMount", params);
+ 		else await this.removeOutboundByHost("r2.internal");
+ 		this.logger.debug("r2 egress: registering host interception", {
+@@ -11528,7 +11579,7 @@ var Sandbox = class Sandbox extends Container {
+ 		if (!ctx.container?.interceptOutboundHttp) throw new InvalidMountConfigError("Credential proxy bucket mounts require container outbound interception support");
+ 		if (!ctx.exports?.ContainerProxy) throw new InvalidMountConfigError("Credential proxy bucket mounts require exporting ContainerProxy from the Worker entrypoint");
+ 		const hosts = [S3_CREDENTIAL_PROXY_HOST, S3_CREDENTIAL_PROXY_DIAGNOSTIC_HOST];
+-		this.constructor.outboundHandlers = { s3CredentialProxyMount: s3CredentialProxyHandler };
++		this.constructor.outboundHandlers = { ...this.constructor.outboundHandlers, s3CredentialProxyMount: s3CredentialProxyHandler };
+ 		if (Object.keys(params.mounts).length > 0) for (const host of hosts) await this.setOutboundByHost(host, "s3CredentialProxyMount", params);
+ 		else for (const host of hosts) await this.removeOutboundByHost(host);
+ 		const hostOverrides = {};

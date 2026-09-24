@@ -199,15 +199,8 @@ export function meterLLM(llm: LLM): MeteredLLM {
 }
 
 /**
- * Collect text from a generateText result.
- *
- * Some models (e.g. Kimi K2.5) end on a tool-call step with no trailing text.
- * AI SDK v6 only puts text from the final step into result.text, so it's empty.
- *
- * Strategy:
- * 1. Use result.text if non-empty (happy path)
- * 2. Gather text fragments from all steps
- * 3. If still empty, synthesize a summary from tool call results
+ * Collect text from a generateText result. Some models (e.g. Kimi K2.5) end on a tool-call step with no trailing
+ * text, and AI SDK v6 puts only the final step's text in `result.text`.
  */
 export function collectStepText(result: {
   text: string;
@@ -232,15 +225,10 @@ export function collectStepText(result: {
   return fallback ? fallback : '(no response)';
 }
 
-/**
- * Unified chat-model factory for the CLI's endpoint-configured models.
- * Returns a Vercel AI SDK LanguageModel suitable for passing to generateText /
- * streamText / Think. For an LLM primitive (with .stream/.complete), use
- * createVercelAILLM.
- */
-// NOTE: the live Workers AI path is `createWorkersAIProvider` (cf-backend),
-// which correctly types sessionAffinity as a string. The CLI is the only
-// `createChatModel` caller and uses `openai-compat` / `anthropic`.
+/** Chat-model factory for the CLI's endpoint-configured models; for an `LLM` (`.stream`/`.complete`), use
+ *  createVercelAILLM. */
+// The CLI is the only caller (`openai-compat`, `anthropic`); live Workers AI is cf-backend's
+// `createWorkersAIProvider`, which types sessionAffinity as a string.
 export type ChatModelConfig =
   | {
       kind: 'openai-compat';

@@ -275,9 +275,10 @@ Effort is the cheapness lever on most paths, not an output-token cap.
 native and codemode-only capabilities and their namespaces. `BUILTIN_TOOLS`
 holds its 8 native tools: `eval`, `shell`, `file`, `agents`, `memory`, `tasks`,
 `web`, `report`. `actorActiveTools()` narrows them per actor. `release`,
-`agent`, `db` and `slate` are codemode-only. `skills` is neither: a SKILL.md is
-an ordinary `/workspace/skills/` path on the VFS that `workspace.*` already
-addresses, and a dedicated surface would be a third path to the same bytes.
+`agent`, `db` and `slate` are codemode-only. `skills` is neither: every skill is
+an ordinary file at `/skills/<name>/SKILL.md`, a read-only view the `file` tool
+and `workspace.*` already address, and a dedicated surface would be a second
+path to the same bytes.
 See [TOOLS.md](./TOOLS.md) for the full list and the owner-facing `experience`
 RPC.
 

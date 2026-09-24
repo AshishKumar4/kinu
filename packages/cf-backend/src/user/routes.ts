@@ -226,7 +226,7 @@ async function handleDeviceRoutes<Id>(route: UserRouteContext<Id>): Promise<Resp
     try {
       const result = await stub.acknowledgeUnstoppedDevice(await ownerCaller(env), decodeURIComponent(deviceAcknowledgeMatch[1]));
 
-      if (!result.ok) return err(404, 'No unconfirmed command incident matched this revoked device');
+      if (!result.ok) return err(404, 'No incident matched this revoked device');
 
       return json({ body: { ok: true } });
     } catch (e) {

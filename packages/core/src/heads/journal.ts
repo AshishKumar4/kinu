@@ -585,19 +585,6 @@ export class HeadJournal {
     return row ? headViewOf(row) : null;
   }
 
-  /** Newest step, or spawn when none; null for a head never opened (absent, not zero). Same `MAX(created_at)` as {@link readHeadView}. */
-  lastActivityAt(headId: HeadId): number | null {
-    this.actor.assertCurrent();
-
-    const row = this.sql<{ spawned_at: number; last_step_at: number | null }>`
-      SELECT j.spawned_at, MAX(s.created_at) AS last_step_at
-      FROM head_journal j LEFT JOIN head_steps s ON s.actor_id = j.actor_id AND s.head_id = j.id
-      WHERE j.actor_id = ${this.actorId} AND j.id = ${headId}
-      GROUP BY j.id`[0];
-
-    return row ? row.last_step_at ?? row.spawned_at : null;
-  }
-
   private assembleRun(rootId: HeadId, spawnedAt: number): HeadRunView {
     const rows = this.sql<HeadViewRow>`
       SELECT j.id, j.parent_id, j.depth, j.task, j.rationale, j.status, j.summary, j.error_message,

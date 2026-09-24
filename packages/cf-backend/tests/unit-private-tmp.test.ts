@@ -95,7 +95,7 @@ async function openFixture(): Promise<Fixture> {
       root.chmod(`tmp/${name}`, 0o700);
       workspace.vfs.confinePrincipal(cred.uid, `tmp/${name}`);
     },
-    pidFor: (cred) => processes.spawn('agent', ['agent'], '/home/user', { cred }).pid,
+    pidFor: (cred) => processes.spawn('agent', ['agent'], '/home/main', { cred }).pid,
   };
 }
 
@@ -345,9 +345,9 @@ describe('a confined principal may move its own bits and no others', () => {
 
   test('an UNCONFINED principal keeps full chmod — this rule is for guests only', async () => {
     const f = await openFixture();
-    await rpcExec(f.host, 'echo hi > /home/user/own.sh');
+    await rpcExec(f.host, 'echo hi > /home/main/own.sh');
 
-    expect(await rpcExec(f.host, 'chmod 755 /home/user/own.sh')).toMatchObject({ exitCode: 0 });
-    expect(f.workspace.vfs.as(ROOT).stat('/home/user/own.sh').mode & 0o777).toBe(0o755);
+    expect(await rpcExec(f.host, 'chmod 755 /home/main/own.sh')).toMatchObject({ exitCode: 0 });
+    expect(f.workspace.vfs.as(ROOT).stat('/home/main/own.sh').mode & 0o777).toBe(0o755);
   });
 });

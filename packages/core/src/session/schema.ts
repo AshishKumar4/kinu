@@ -18,6 +18,8 @@ export function initSessionContextTables(exec: RawSqlExec): void {
       OR (sealed_at IS NOT NULL AND ((content_json IS NOT NULL AND content_path IS NULL AND content_digest IS NULL)
         OR (content_json IS NULL AND content_path IS NOT NULL AND content_digest IS NOT NULL)))))`);
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS session_message_ingress ON session_messages(actor_id,ingress_id) WHERE ingress_id IS NOT NULL`);
+  // `sealAbandoned` names the literal `sealed_at IS NULL` at every admission.
+  exec(`CREATE INDEX IF NOT EXISTS session_open_messages ON session_messages(actor_id) WHERE sealed_at IS NULL`);
   // An open message's parts while its answer streams, deleted when it seals into `content_*`. Long text
   // continues in the next segment so no row reaches the platform row limit.
   exec(`CREATE TABLE IF NOT EXISTS stream_parts (
@@ -56,6 +58,7 @@ export function initSessionContextTables(exec: RawSqlExec): void {
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS context_live_entry ON context_memberships(actor_id,context_id,entry_id) WHERE to_revision IS NULL`);
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS context_live_position ON context_memberships(actor_id,context_id,position) WHERE to_revision IS NULL`);
   exec(`CREATE INDEX IF NOT EXISTS context_history_members ON context_memberships(actor_id,context_id,from_revision,to_revision,position)`);
+  exec(`CREATE INDEX IF NOT EXISTS context_message_members ON context_memberships(actor_id,message_id)`);
   exec(`CREATE TABLE IF NOT EXISTS context_proposals (
     actor_id TEXT NOT NULL, proposal_id TEXT NOT NULL, context_id TEXT NOT NULL, base_revision INTEGER NOT NULL,
     author TEXT NOT NULL, via TEXT NOT NULL, cause TEXT NOT NULL, turn_id TEXT, build_identity TEXT,
@@ -89,11 +92,10 @@ export function initSessionContextTables(exec: RawSqlExec): void {
     FOREIGN KEY(actor_id,context_id,context_revision) REFERENCES context_revisions(actor_id,context_id,revision),
     CHECK((metadata_json IS NOT NULL AND metadata_path IS NULL AND metadata_digest IS NULL)
       OR (metadata_json IS NULL AND metadata_path IS NOT NULL AND metadata_digest IS NOT NULL)))`);
-  exec(`CREATE TABLE IF NOT EXISTS request_messages (
-    actor_id TEXT NOT NULL, request_id TEXT NOT NULL, position INTEGER NOT NULL,
-    message_id TEXT NOT NULL,
-    PRIMARY KEY(actor_id,request_id,position),
-    CHECK(position >= 0),
+  // A step's list is a revision of the actor's unselected `requests` context.
+  exec(`CREATE TABLE IF NOT EXISTS request_renders (
+    actor_id TEXT NOT NULL, request_id TEXT NOT NULL, context_id TEXT NOT NULL, revision INTEGER NOT NULL,
+    PRIMARY KEY(actor_id,request_id),
     FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id),
-    FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id))`);
+    FOREIGN KEY(actor_id,context_id,revision) REFERENCES context_revisions(actor_id,context_id,revision))`);
 }

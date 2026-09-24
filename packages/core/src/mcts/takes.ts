@@ -106,25 +106,43 @@ function ancestorPath(byId: ReadonlyMap<string, SearchNode>, nodeId: string): Se
   return path;
 }
 
+export interface ScoredSearchNode extends SearchNode {
+  readonly ownScore: number;
+}
+
+/** One MCTS search's rows, best own score first, then deepest.
+ *  `MCTS/Convergence.lean — the_winner_carries_the_best_reward`. */
+export function searchTree(sql: SqlExecutor, actor: ActorHandle, rootId: string): ScoredSearchNode[] {
+  return sql<SearchNode & { own_score: number }>`
+    SELECT * FROM search_node_scores
+    WHERE actor_id = ${actor.actorId} AND root_id = ${rootId}
+    ORDER BY own_score DESC, depth DESC`
+    .map(({ own_score: ownScore, ...node }) => ({ ...node, ownScore }));
+}
+
+export function inPopulation(node: SearchNode): boolean {
+  return node.status === 'open' || node.status === 'terminal';
+}
+
 /**
- * The winner's near-tied rivals, highest value first: within `epsilon`, not the root, off the
- * winner's own path, not textual duplicates; capped at MAX_TAKE_CANDIDATES-1. Shared by takes
- * capture and the convergence tie-break so both use one near-tie population.
+ * The winner's near-tied rivals, best own score first: within `epsilon`, in the population, not the
+ * root, off the winner's whole lineage (`MCTS/Convergence.lean — an_ancestor_is_never_a_rival`), not
+ * textual duplicates.
  */
 export function findNearTiedRivals(
-  nodes: readonly SearchNode[],
-  winner: SearchNode,
+  tree: readonly ScoredSearchNode[],
+  winner: ScoredSearchNode,
   epsilon: number,
-): SearchNode[] {
-  const byId = new Map(nodes.map((n) => [n.id, n]));
+): ScoredSearchNode[] {
+  const byId = new Map(tree.map((n) => [n.id, n]));
   const winnerPath = ancestorPath(byId, winner.id);
   const seenTexts = new Set([winner.observation.trim()]);
 
-  return nodes
+  return tree
     .filter((n) => {
-      if (n.id === winner.id || n.depth === 0) return false;
+      if (n.id === winner.id || n.depth === 0 || !inPopulation(n)) return false;
 
-      if (n.value < winner.value - epsilon) return false;
+      if (n.ownScore < winner.ownScore - epsilon) return false;
 
       if (winnerPath.has(n.id) || ancestorPath(byId, n.id).has(winner.id)) return false;
       const text = n.observation.trim();
@@ -134,7 +152,7 @@ export function findNearTiedRivals(
 
       return true;
     })
-    .sort((a, b) => b.value - a.value || b.depth - a.depth)
+    .sort((a, b) => b.ownScore - a.ownScore || b.depth - a.depth)
     .slice(0, MAX_TAKE_CANDIDATES - 1);
 }
 
@@ -146,21 +164,17 @@ export function captureAlternateTakes(
 ): string | null {
   actor.assertCurrent();
 
-  const nodes = sql<SearchNode>`
-    SELECT * FROM search_nodes
-    WHERE actor_id = ${actor.actorId} AND root_id = ${input.rootId}
-      AND status IN ('terminal', 'open')`;
-
-  const winner = nodes.find((n) => n.id === input.winnerId);
+  const tree = searchTree(sql, actor, input.rootId);
+  const winner = tree.find((n) => n.id === input.winnerId && inPopulation(n));
 
   if (!winner) return null;
 
-  const rivals = findNearTiedRivals(nodes, winner, input.epsilon);
+  const rivals = findNearTiedRivals(tree, winner, input.epsilon);
 
   if (rivals.length === 0) return null;
 
-  const toCandidate = (n: SearchNode): AlternateTakeCandidate => ({
-    nodeId: n.id, text: n.observation, score: n.value, visits: n.visits, depth: n.depth,
+  const toCandidate = (n: ScoredSearchNode): AlternateTakeCandidate => ({
+    nodeId: n.id, text: n.observation, score: n.ownScore, visits: n.visits, depth: n.depth,
   });
 
   const id = `take-${nanoid()}`;

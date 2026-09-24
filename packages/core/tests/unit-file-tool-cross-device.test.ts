@@ -54,7 +54,7 @@ function fileToolOverTheFleet() {
   const router = new DefaultExecutionRouter();
 
   router.register(createDeviceTunnelExecutor(transport, {
-    consentedRoot: async () => '/', deviceHome: async () => '/home', unconfined: async () => true,
+    consentedRoot: async () => '/', deviceHome: async () => '/home', scope: async () => 'unconfined',
   }));
 
   const plane = withMountTable(rt.storage.vfs, standardMounts((name) => router.getProvider(name)));

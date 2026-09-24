@@ -1,14 +1,16 @@
 /**
- * Live slate shares end to end through `orchestratorHarness` and a real owner UserDO: the S-rules
- * (graph from the catalog, grant on the share row, host-admitted viewer calls) unmocked.
+ * Live slate shares through `orchestratorHarness` and a real owner UserDO: the graph from the catalog and the
+ * grant on the share row. A viewer's calls need the running slate that carries its invocation, so they are
+ * driven in workerd (`tests/workerd/slate-share.test.ts`).
  */
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  LiveShareRecordSchema, SlateCapabilityGraphSchema, ViewerRequestRecordSchema,
-  type AgentRuntime, type JsonValue, type SlateAnswer,
+  LiveShareRecordSchema, SlateCapabilityGraphSchema, type AgentRuntime, type SlateAnswer,
 } from '@kinu.run/core';
-import { orchestratorHarness, hostedSubordinateHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import {
+  orchestratorHarness, hostedSubordinateHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles,
+} from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
@@ -22,8 +24,8 @@ function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, 
 /** The fixture slate: every grant-relevant binding kind, plus the `digest`
  *  slate the PEER app hop walks into (which hops back, proving the cycle guard). */
 async function authorIssuesSlate(files: AgentRuntime['storage']['vfs']) {
-  await files.mkdir('/home/user/slates/issues', { recursive: true });
-  await files.writeFile('/home/user/slates/issues/package.json', JSON.stringify({
+  await files.mkdir('/home/main/slates/issues', { recursive: true });
+  await files.writeFile('/home/main/slates/issues/package.json', JSON.stringify({
     name: 'issues', description: 'Triage the open issues', main: 'src/server.ts',
     slate: { title: 'Issue triage', bindings: {
       GITHUB: { kind: 'mcp', server: 'connection-id', tools: ['read_issue', 'create_issue'] },
@@ -33,16 +35,16 @@ async function authorIssuesSlate(files: AgentRuntime['storage']['vfs']) {
       PEER: { kind: 'app', id: 'digest' },
     } },
   }));
-  await files.writeFile('/home/user/slates/issues/src/server.ts', 'export default {};');
-  await files.mkdir('/home/user/slates/digest', { recursive: true });
-  await files.writeFile('/home/user/slates/digest/package.json', JSON.stringify({
+  await files.writeFile('/home/main/slates/issues/src/server.ts', 'export default {};');
+  await files.mkdir('/home/main/slates/digest', { recursive: true });
+  await files.writeFile('/home/main/slates/digest/package.json', JSON.stringify({
     name: 'digest', main: 'server.ts',
     slate: { title: 'Digest', bindings: {
       DIGEST_FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile'] },
       BACK: { kind: 'app', id: 'issues' },
     } },
   }));
-  await files.writeFile('/home/user/slates/digest/server.ts', 'export default {};');
+  await files.writeFile('/home/main/slates/digest/server.ts', 'export default {};');
 }
 
 interface World {
@@ -65,7 +67,7 @@ async function ownerWorld(): Promise<World> {
     { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
     { name: 'create_issue', inputSchema: { type: 'object' } },
   ]);
-  await authorIssuesSlate(owner.agent.observeRuntime().storage.vfs);
+  await authorIssuesSlate(workspaceFiles(owner.agent));
 
   return { owner, close: () => { user.close(); resetRecordedMcp(); } };
 }
@@ -106,17 +108,10 @@ test('graph walks every binding, classifies members, and follows the app hop', a
   } finally { world.close(); }
 });
 
-test('S3/S1: no share row means a 404 admission; a share caller must name its invocation', async () => {
+test('S1: a share caller must name its invocation', async () => {
   const world = await ownerWorld();
 
   try {
-    const admission = await world.owner.agent.observeSlateHost().admitViewerRequest({ handle: '0123456789', claim: { userId: null, source: 's', consented: true }, pathname: '/' });
-
-    expect(admission).toBeInstanceOf(Response);
-
-    if (!(admission instanceof Response)) throw new Error('expected a refused admission');
-    expect(admission.status).toBe(404);
-
     const created = answered(await world.owner.agent.slate({ op: 'share', id: 'issues', visibility: 'public', approved: [] }),
       v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) }));
 
@@ -127,7 +122,7 @@ test('S3/S1: no share row means a 404 admission; a share caller must name its in
   } finally { world.close(); }
 });
 
-test('a public share admits read members, refuses mutating ones, and audits every call', async () => {
+test("a public share's default grant is exactly the graph's read members, across the app hop", async () => {
   const world = await ownerWorld();
 
   try {
@@ -135,49 +130,14 @@ test('a public share admits read members, refuses mutating ones, and audits ever
       v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) }));
 
     expect(created.share.handle).toMatch(/^[0-9a-f]{10}$/);
-    // The default grant is exactly the graph's read members.
     expect(created.share.grant.members.every((m) => m.effect === 'read')).toBe(true);
     expect(created.share.grant.members.map((m) => `${m.binding}.${m.member}`).sort()).toEqual(
       ['DIGEST_FILES.readFile', 'FILES.readFile', 'GITHUB.read_issue', 'NOTES.recall'].sort());
     expect(created.share.grant.slates).toEqual(['issues', 'digest']);
-
-    const host = world.owner.agent.observeSlateHost();
-    const admission = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 'deadbeef', consented: true }, pathname: '/' });
-
-    if (admission instanceof Response) throw new Error(`admission refused: ${admission.status}`);
-    const viewerCaller: SlateCaller = { ...ROOT_SLATE_CALLER, share: created.share.id };
-
-    const call = (binding: string, member: string, args: JsonValue[] = []) =>
-      world.owner.agent.slateBindingCallAs(viewerCaller, 'issues', binding, { member, args, invocation: admission.invocation });
-
-    expect(await call('FILES', 'readFile', ['/home/user/slates/issues/package.json'])).toMatchObject({ ok: true });
-    const refused = await call('FILES', 'writeFile', ['/tmp/x', 'y']);
-
-    expect(refused).toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('does not grant') });
-    // Same shape as a binding that was never declared.
-    expect(await call('NOPE', 'readFile')).toMatchObject({ ok: false, reason: 'denied' });
-    expect(await call('GITHUB', 'create_issue', [{}])).toMatchObject({ ok: false, reason: 'denied' });
-    expect(await call('GITHUB', 'read_issue', [{}])).toMatchObject({ ok: true });
-    expect(await call('ASK', 'send', [{ text: 'hi' }])).toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('does not grant') });
-
-    admission.settle('ok');
-
-    const rows = answered(await world.owner.agent.slate({ op: 'viewerRequests', share: created.share.id }), v.array(ViewerRequestRecordSchema));
-
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ viewer: 'source:deadbeef', slate: 'issues', path: '/', outcome: 'ok' });
-    expect(rows[0].calls.map((c) => [c.binding, c.member, c.effect, c.ok])).toEqual([
-      ['FILES', 'readFile', 'read', true],
-      ['FILES', 'writeFile', 'mutate', false],
-      ['NOPE', 'readFile', 'mutate', false],
-      ['GITHUB', 'create_issue', 'mutate', false],
-      ['GITHUB', 'read_issue', 'read', true],
-      ['ASK', 'send', 'mutate', false],
-    ]);
   } finally { world.close(); }
 });
 
-test('a mutating member is granted by approval only, on public and users shares alike', async () => {
+test('an approved mutating member joins the grant, on a users share too', async () => {
   const world = await ownerWorld();
 
   try {
@@ -186,54 +146,6 @@ test('a mutating member is granted by approval only, on public and users shares 
     }), v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) }));
 
     expect(created.share.grant.members.map((m) => `${m.binding}.${m.member}`)).toContain('ASK.send');
-    const host = world.owner.agent.observeSlateHost();
-    // An unnamed viewer is refused before any audit row exists.
-
-    for (const claim of [{ userId: null, source: 's', consented: true }, { userId: 'f'.repeat(32), source: 's', consented: true }]) {
-      const refused = await host.admitViewerRequest({ handle: created.share.handle, claim, pathname: '/' });
-
-      if (!(refused instanceof Response)) throw new Error('expected a refused admission');
-      expect(refused.status).toBe(404);
-    }
-
-    const named = 'a'.repeat(32);
-    await world.owner.agent.shareLiveWith(created.share.id, [{ userId: named, email: 'pat@example.test' }]);
-    const admission = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: named, source: 's', consented: true }, pathname: '/' });
-
-    if (admission instanceof Response) throw new Error(`admission refused: ${admission.status}`);
-    const viewerCaller: SlateCaller = { ...ROOT_SLATE_CALLER, share: created.share.id };
-
-    expect(await world.owner.agent.slateBindingCallAs(viewerCaller, 'issues', 'ASK', { member: 'send', args: [{ text: 'hi' }], invocation: admission.invocation }))
-      .toMatchObject({ ok: true });
-    expect(await world.owner.agent.slateBindingCallAs(viewerCaller, 'issues', 'FILES', { member: 'writeFile', args: ['/x', 'y'], invocation: admission.invocation }))
-      .toMatchObject({ ok: false, reason: 'denied' });
-    admission.settle('ok');
-  } finally { world.close(); }
-});
-
-test('S6: revoking between two calls refuses the second and stops new admissions', async () => {
-  const world = await ownerWorld();
-
-  try {
-    const created = answered(await world.owner.agent.slate({ op: 'share', id: 'issues', visibility: 'public', approved: [] }),
-      v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) }));
-
-    const host = world.owner.agent.observeSlateHost();
-    const admission = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 's', consented: true }, pathname: '/' });
-
-    if (admission instanceof Response) throw new Error(`admission refused: ${admission.status}`);
-    const viewerCaller: SlateCaller = { ...ROOT_SLATE_CALLER, share: created.share.id };
-
-    expect(await world.owner.agent.slateBindingCallAs(viewerCaller, 'issues', 'FILES', { member: 'readFile', args: ['/home/user/slates/issues/package.json'], invocation: admission.invocation }))
-      .toMatchObject({ ok: true });
-
-    answered(await world.owner.agent.slate({ op: 'unshare', share: created.share.id }), LiveShareRecordSchema);
-    expect(await world.owner.agent.slateBindingCallAs(viewerCaller, 'issues', 'FILES', { member: 'readFile', args: ['/x'], invocation: admission.invocation }))
-      .toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('no longer shared') });
-    const postRevoke = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 's', consented: true }, pathname: '/' });
-
-    if (!(postRevoke instanceof Response)) throw new Error('expected a refused admission');
-    expect(postRevoke.status).toBe(404);
   } finally { world.close(); }
 });
 
@@ -241,8 +153,8 @@ test('S1: agent-control and eval bindings surface as problems and admit no membe
   const world = await ownerWorld();
 
   try {
-    const files = world.owner.agent.observeRuntime().storage.vfs;
-    await files.writeFile('/home/user/slates/issues/package.json', JSON.stringify({
+    const files = workspaceFiles(world.owner.agent);
+    await files.writeFile('/home/main/slates/issues/package.json', JSON.stringify({
       name: 'issues', main: 'src/server.ts',
       slate: { title: 'Issue triage', bindings: {
         CONTROL: { kind: 'namespace', namespace: 'agents' },
@@ -263,40 +175,6 @@ test('S1: agent-control and eval bindings surface as problems and admit no membe
       v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) }));
 
     expect(created.share.grant.members).toEqual([]);
-    const host = world.owner.agent.observeSlateHost();
-    const admission = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 's', consented: true }, pathname: '/' });
-
-    if (admission instanceof Response) throw new Error(`admission refused: ${admission.status}`);
-    const viewerCaller: SlateCaller = { ...ROOT_SLATE_CALLER, share: created.share.id };
-
-    expect(await world.owner.agent.slateBindingCallAs(viewerCaller, 'issues', 'CONTROL', { member: 'msg', args: ['x'], invocation: admission.invocation }))
-      .toMatchObject({ ok: false, reason: 'denied' });
-    admission.settle('ok');
-  } finally { world.close(); }
-});
-
-test('an app hop under a share is admitted by grant.slates and audited under its effect', async () => {
-  const world = await ownerWorld();
-
-  try {
-    const created = answered(await world.owner.agent.slate({ op: 'share', id: 'issues', visibility: 'public', approved: [] }),
-      v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) }));
-
-    expect(created.share.grant.slates).toContain('digest');
-    const host = world.owner.agent.observeSlateHost();
-    const admission = await host.admitViewerRequest({ handle: created.share.handle, claim: { userId: null, source: 's', consented: true }, pathname: '/' });
-
-    if (admission instanceof Response) throw new Error(`admission refused: ${admission.status}`);
-    const viewerCaller: SlateCaller = { ...ROOT_SLATE_CALLER, share: created.share.id };
-    // Fails because the harness cannot boot the digest process, never for 'does not grant'.
-    const hop = await world.owner.agent.slateBindingCallAs(viewerCaller, 'issues', 'PEER', { member: 'probe', args: [], invocation: admission.invocation });
-
-    expect(hop).toMatchObject({ ok: false });
-    expect(hop.ok ? '' : hop.error).not.toContain('does not grant');
-    admission.settle('ok');
-    const rows = answered(await world.owner.agent.slate({ op: 'viewerRequests', share: created.share.id }), v.array(ViewerRequestRecordSchema));
-
-    expect(rows[0]?.calls[0]).toMatchObject({ binding: 'PEER', member: 'probe', effect: 'read' });
   } finally { world.close(); }
 });
 

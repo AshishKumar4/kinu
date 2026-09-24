@@ -1,8 +1,5 @@
-/**
- * The scaffold evolution control plane: backend-neutral drivers over the evolution
- * primitives. A backend supplies only a {@link ScaffoldSurface}; everything else is
- * policy and lives here.
- */
+/** The scaffold evolution control plane: backend-neutral drivers over the evolution primitives. A backend
+ *  supplies only a {@link ScaffoldSurface}. */
 
 import { generateText, type LanguageModel, type ModelMessage } from 'ai';
 import * as v from 'valibot';

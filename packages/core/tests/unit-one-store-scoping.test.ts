@@ -34,7 +34,7 @@ import {
 } from '../src/identity/effect-tombstones';
 import { initTerminalEffectTable, TerminalEffectLedger } from '../src/orchestrator/terminal-effects';
 import {
-  initToolEffectClaimTable, claimToolEffect, settleToolEffect, releaseTurnEffectClaims,
+  initToolEffectClaimTable, claimToolEffect, settleToolEffect,
 } from '../src/tools/effect-claim';
 import { initDeferredApprovalsTable, DeferredApprovalStore } from '../src/safety/deferred-approval';
 import {
@@ -481,10 +481,6 @@ describe('two actors, one database: tool_effect_claims', () => {
     const a = claimToolEffect(w.sql, w.a, key);
     expect(a.kind === 'settled' ? a.result : null).toBe('done-by-a');
     // B's own attempt is unsettled, not settled by A's result.
-    expect(claimToolEffect(w.sql, w.b, key).kind).toBe('indeterminate');
-
-    releaseTurnEffectClaims(w.sql, w.a, 'turn-1');
-    expect(w.count('tool_effect_claims')).toBe(1);
     expect(claimToolEffect(w.sql, w.b, key).kind).toBe('indeterminate');
     w.close();
   });
@@ -1045,7 +1041,7 @@ describe('two actors, one database: triggers', () => {
   });
 });
 
-describe('two actors, one database: vfs_baseline', () => {
+describe('two actors, one database: vfs_baseline_manifest', () => {
   test('one actor re-baselining does not deactivate the other\'s generation', async () => {
     const w = world();
     initWorkspaceBaselineTable(w.execRaw);
@@ -1056,7 +1052,7 @@ describe('two actors, one database: vfs_baseline', () => {
 
     await resetWorkspaceBaseline(rtA);
 
-    const activeA = w.sql<{ generation: string }>`SELECT generation FROM vfs_baseline
+    const activeA = w.sql<{ generation: string }>`SELECT generation FROM vfs_baseline_manifest
       WHERE actor_id = ${w.a.actorId} AND active = 1 LIMIT 1`[0]?.generation;
 
     if (activeA === undefined) throw new Error('A captured a baseline generation');
@@ -1064,7 +1060,7 @@ describe('two actors, one database: vfs_baseline', () => {
     // Without the owner on the flip, B would deactivate A's baseline.
     await resetWorkspaceBaseline(rtB);
 
-    const stillActiveA = w.sql<{ generation: string }>`SELECT generation FROM vfs_baseline
+    const stillActiveA = w.sql<{ generation: string }>`SELECT generation FROM vfs_baseline_manifest
       WHERE actor_id = ${w.a.actorId} AND active = 1 LIMIT 1`[0]?.generation;
 
     expect(stillActiveA).toBe(activeA);

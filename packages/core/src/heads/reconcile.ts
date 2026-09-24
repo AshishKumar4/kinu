@@ -101,7 +101,7 @@ function describeRun(run: AbandonedHeadRun): string {
   return `${run.rootId}${why}: ${run.abandoned} of ${run.total} heads`;
 }
 
-export function forkInterruptedWake(runs: readonly AbandonedHeadRun[]): string {
+function forkInterruptedWake(runs: readonly AbandonedHeadRun[]): string {
   const named = runs.slice(0, MAX_NAMED_RUNS).map(describeRun);
   const rest = runs.length - named.length;
   const roster = rest > 0 ? [...named, `and ${rest} more`] : named;

@@ -1,110 +1,128 @@
-// Minimal AgentRuntime for unit tests; override fields via the options bag.
+/**
+ * A small AgentRuntime fixture over a fresh in-memory database. Work it cannot perform faithfully
+ * refuses by name until a test supplies it, so no test passes on work nothing performed.
+ */
 import type {
   AgentRuntime, LLM, Memory, Executor, Schedule, Identity, ExecutionRouter,
-  CraftStore, BranchHandle, FiberCtx, AgentStores,
+  CraftStore, AgentStores, AgentsSwarmDeps, ModelCallSink,
 } from '@kinu.run/core';
+import { tool } from 'ai';
+import { codemodeInputSchema } from '@kinu.run/core';
 import { createTestSql, type TestSql } from './sql';
-import { WORKSPACE_IDENTITY_DDL, initWorkspaceActorTable, WorkspaceActorDirectory, initAgentConfigTable, initCodemodeStateTable, createAgentStores } from '@kinu.run/core';
-import { createEchoLLM } from './llm';
+import {
+  WORKSPACE_IDENTITY_DDL, initWorkspaceActorTable, WorkspaceActorDirectory, initAgentConfigTable,
+  initCodemodeStateTable, createAgentStores, DefaultExecutionRouter,
+} from '@kinu.run/core';
 import { createMemoryVfs } from './vfs';
 
 export interface TestRuntimeOptions {
-  /** Default: echo LLM. */
   llm?: LLM;
-  /** Default: throwing no-op. */
   executor?: Executor;
-  /** Default: empty in-memory store. */
   memory?: Memory;
-  /** Default: empty. */
   craftStore?: CraftStore;
-  /** Default: empty router. */
   executionRouter?: ExecutionRouter;
+  schedule?: Schedule;
 }
 
 export interface TestRuntime {
   rt: AgentRuntime;
   testSql: TestSql;
-  /** Returns the recorded LLM (when default scripted/echo) for assertions. */
-  llm: LLM;
   /** The same store bundle both backends build, over this runtime's database. */
   stores: AgentStores;
 }
 
+/** Work the test runtime does not perform, named with the option that supplies it. */
+export class UnsupportedTestCapability extends Error {
+  constructor(readonly capability: string, readonly option: string) {
+    super(`createTestRuntime does not perform ${capability}; pass ${option} with a real adapter or `
+      + 'an explicit fake');
+    this.name = 'UnsupportedTestCapability';
+  }
+}
+
+const refuse = (capability: string, option: string): never => {
+  throw new UnsupportedTestCapability(capability, option);
+};
+
+/** A spend sink for a suite that observes no spend: each report is dropped. */
+export const unobservedSpend: ModelCallSink = () => undefined;
+
+/**
+ * A search backend's seams for a suite that observes none of them: spend is dropped, and a node's code or
+ * web call refuses by name.
+ */
+export function unobservedSearchSeams(): Pick<AgentsSwarmDeps, 'reportModelCall' | 'nodeCodemode' | 'webSearch'> {
+  return {
+    reportModelCall: unobservedSpend,
+    nodeCodemode: () => () => tool<{ code: string }, string>({
+      description: 'Runs no code in this suite.',
+      inputSchema: codemodeInputSchema(),
+      execute: async () => refuse("a node's code", 'nodeCodemode'),
+    }),
+    webSearch: {
+      search: async () => refuse('a web search', 'webSearch'),
+      fetch: async () => refuse('a web fetch', 'webSearch'),
+    },
+  };
+}
+
+function unscriptedLLM(): LLM {
+  return {
+    stream: () => refuse('a model call (stream)', 'opts.llm'),
+    complete: async () => refuse('a model call (complete)', 'opts.llm'),
+  };
+}
+
 function emptyMemory(): Memory {
   return {
-    async write() { /* no-op */ },
-    async append() { /* no-op */ },
-    async index() { /* no-op */ },
-    async search() { return []; },
-    async read() { return null; },
-    async tail() { return null; },
+    write: async () => refuse('a memory write', 'opts.memory'),
+    append: async () => refuse('a memory append', 'opts.memory'),
+    index: async () => refuse('memory indexing', 'opts.memory'),
+    search: async () => [],
+    read: async () => null,
+    tail: async () => null,
   };
 }
 
 function emptyCraftStore(): CraftStore {
   return {
-    create: () => {},
-    update: () => {},
+    create: () => refuse('a crafted-tool write', 'opts.craftStore'),
+    update: () => refuse('a crafted-tool write', 'opts.craftStore'),
+    delete: () => refuse('a crafted-tool write', 'opts.craftStore'),
     list: () => [],
     get: () => undefined,
-    delete: () => {},
     search: () => [],
   };
 }
 
-function emptyExecutor(): Executor {
+function noExecutor(): Executor {
   return {
     languages: ['javascript'],
-    async execute() { return { result: undefined }; },
+    execute: async () => refuse('code execution', 'opts.executor'),
   };
 }
 
-function emptyRouter(): ExecutionRouter {
+function noSchedule(): Schedule {
   return {
-    register: () => {},
-    unregister: () => {},
-    listExecutors: () => [],
-    getProvider: () => undefined,
-    getProviders: () => [],
+    after: async () => refuse('a delayed callback', 'opts.schedule'),
+    cron: async () => refuse('a cron schedule', 'opts.schedule'),
+    fiber: async () => refuse('a durable fiber', 'opts.schedule'),
   };
 }
 
-function syntheticSchedule(): Schedule {
+function noScaffold(): Identity['scaffold'] {
   return {
-    after: async (_ms: number, fn: () => void | Promise<void>) => { await fn(); },
-    cron: async () => {},
-    fiber: async <T>(_name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> => {
-      return fn({ stash: () => {}, snapshot: null });
-    },
-  };
-}
-
-function syntheticIdentity(): Identity {
-  return {
-    id: 'test-agent',
-    name: 'test',
-    scaffold: {
-      path: 'scaffold/agent.js',
-      exists: async () => false,
-      read: async () => '',
-      write: async () => {},
-      version: async () => 0,
-    },
-  };
-}
-
-function emptyBranchHandle(): BranchHandle {
-  return {
-    explore: async () => ({ text: '' }),
-    generateReflection: async () => ({ text: '' }),
-    release: async () => {},
+    path: 'scaffold/agent.js',
+    exists: async () => false,
+    version: async () => 0,
+    read: async () => refuse('a scaffold read', 'a runtime with a scaffold surface'),
+    write: async () => refuse('a scaffold write', 'a runtime with a scaffold surface'),
   };
 }
 
 /** A minimal AgentRuntime with a fresh in-memory database. */
 export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
   const testSql = createTestSql();
-  const llm = opts.llm ?? createEchoLLM();
   const workspace = createMemoryVfs();
   const workspaceId = crypto.randomUUID();
   testSql.execRaw(WORKSPACE_IDENTITY_DDL);
@@ -124,14 +142,14 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
       transactionSync: write => testSql.db.transaction(write)(),
     },
     memory: opts.memory ?? emptyMemory(),
-    executor: opts.executor ?? emptyExecutor(),
-    llm,
-    schedule: syntheticSchedule(),
-    identity: syntheticIdentity(),
+    executor: opts.executor ?? noExecutor(),
+    llm: opts.llm ?? unscriptedLLM(),
+    schedule: opts.schedule ?? noSchedule(),
+    identity: { id: workspaceId, name: 'test', scaffold: noScaffold() },
     craftStore: opts.craftStore ?? emptyCraftStore(),
-    spawnBranch: async () => emptyBranchHandle(),
-    abortBranch: async () => {},
-    executionRouter: opts.executionRouter ?? emptyRouter(),
+    spawnBranch: async () => refuse('a branch exploration', 'a runtime that spawns branches'),
+    abortBranch: async () => refuse('a branch abort', 'a runtime that spawns branches'),
+    executionRouter: opts.executionRouter ?? new DefaultExecutionRouter(),
   };
 
   const stores = createAgentStores(
@@ -141,7 +159,7 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
     async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' }),
   );
 
-  return { rt, testSql, llm, stores };
+  return { rt, testSql, stores };
 }
 
 /**

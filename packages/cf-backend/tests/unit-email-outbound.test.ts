@@ -9,7 +9,7 @@ import {
   type BackendHost,
   type SqlExec,
 } from '@kinu.run/core';
-import { createMemoryVfs, createTestActorsOver, createTestRuntime } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestActorsOver, createTestRuntime, unobservedSpend } from '@kinu.run/test-utils';
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn,
   sendInboundEmailReceipt, sendOwnerEmail,
@@ -164,7 +164,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     const { rt, stores } = createTestRuntime();
 
     const orch = new AgentOrchestrator({
-      host, eventLog: log, engine: new EvolutionEngine(rt, stores.history, { enabled: false }),
+      host, eventLog: log, engine: new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend, enabled: false }),
     });
 
     await orch.drainPendingEvents();

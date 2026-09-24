@@ -35,13 +35,14 @@ on every call.
    records an incident and arms the `devboxStartup` row to try again.
 2. `onStart` adopts the running instance when it is already restored, or
    restores it (attach, workload restart, port exposure) under one raced
-   budget. It then arms the container schedule rows and retires the startup
-   row. Public operations join that restore, and status cannot report ready
-   while it is pending.
+   budget. The SDK runs it inside its start block, so nothing else reaches the
+   object until it settles. It then arms the container schedule rows, starts
+   the container's own sync, and retires the startup row.
 3. Operations wait on attachment. A failed attach refuses with its reason and
    walks one bounded recovery ladder instead of resetting the object.
 4. A heartbeat holds the lease. Three gates must agree before a stop.
-5. A graceful stop checkpoints, disables keep-alive, then sends `SIGTERM`.
+5. A graceful stop takes a final checkpoint through the container's sync, ends
+   the sync, disables keep-alive, then sends `SIGTERM`.
 6. A lifecycle failure is stored before delivery retries until the host accepts
    it.
 
@@ -80,6 +81,16 @@ The atomic `PUT` lets a reader see the old delta or the new one. Devbox writes
 the state record before cleanup. A crash between them leaves a complete unnamed
 delta that the next attach adopts. Squashfs checks its superblock, so the mount
 validates the object.
+
+Writes land on the overlay's local upper. The container syncs it in the
+background (D30): the image's `sync.js` runs the chain checkpoint every
+`checkpointIntervalMs` (5 min) on the container's own shell, gated on the
+upper's fingerprint, so an idle box costs one local walk per period. It asks
+its Durable Object only for what a container cannot reach: the record, the
+store binding, and the SDK's store mount, over `http://devbox.internal`, which
+each concrete class routes to its box with `devboxSyncHandlers`. The box holds
+every such request to its own record, prefix and restored container, and the
+record write stays fenced. Payload bytes never cross the box (D29).
 
 Keys are `boxes/<box>/backups/<uuid>/data.sqsh` and `…/delta.sqsh`: one chain
 root per box, every generation beneath it. Key builders require a UUID, so no
@@ -154,13 +165,17 @@ refuses it, to prove the test can go red.
 
 ## Platform constraints
 
-Restore runs once per fresh container, in the awaited `onStart` hook, after
-admission. The patched SDK keeps only storage work inside its
-`blockConcurrencyWhile` input blocks, so the restore's container calls are not
-held behind a closed input gate (D8 in the decision log). `scripts/do-init-
-gate.ts` holds the hook to that shape by name.
+Restore runs once per fresh container, in `onStart`, after admission and
+inside the SDK's `blockConcurrencyWhile` start block (D26 in the decision
+log). Two platform facts shape the patched SDK. A WebSocket delivers its
+messages under the input gate it was accepted under, so the hook gets a
+control connection opened inside the block (P4). Timers fire in due order,
+each under the gate it was set under, so a timer set before the block that
+falls due inside it holds every timer the hook sets (P5); the SDK clears its
+own such timers at block entry, and Devbox sets none that outlive into the
+block. `scripts/do-init-gate.ts` holds the SDK and the hook to that shape.
 
-The earlier shape put the restore inside the input block. On a deployed Worker
+Before admission waited for the control listener, the in-block restore failed. On a deployed Worker
 the first operation after a stop answered 500:
 `A call to blockConcurrencyWhile() in a Durable Object waited for too long.
 The call was canceled and the Durable Object was reset.` Six fresh container
@@ -168,7 +183,7 @@ starts of that shape (2026-09-10,
 `bench/measure-first/DECISIVE-2026-09-05.md`): one admitted at 3,270 ms, five
 reset by the platform at 30.0 s with no phase stamped. The first command on a
 fresh container opens the SDK's control connection, whose connect abort
-(`@cloudflare/sandbox` `dist/sandbox-CPj2jsbz.js:3563`, 30 s) and retry backoff
+(`@cloudflare/sandbox` `dist/sandbox-D0rNqxlr.js:3563`, 30 s) and retry backoff
 (`:812`, 3 s) both run on the Durable Object. Admission now waits for that
 control listener, never for an app port the restore has not started yet.
 
@@ -346,9 +361,17 @@ Devbox declares three dependencies, `@cloudflare/sandbox`,
 reads the forbidden scope from a sibling manifest, so a rename cannot leave a
 dead guard.
 
-`patches/@cloudflare%2Fsandbox@0.12.8.patch` makes the SDK merge
+`patches/@cloudflare%2Fsandbox@0.12.9.patch` makes the SDK merge
 `outboundHandlers` rather than assign them. A bucket mount cannot then unbind a
 host handler.
+
+`example/worker.ts` uses Devbox with no Kinu code: one class, its outbound
+sync handler, and a router over the public entry. Kinu's `KinuSandbox`
+(`packages/cf-backend/src/kinu-sandbox.ts`) is the same shape plus the
+product's egress, preview and incident wiring.
+`bun scripts/bench-devbox-standalone.ts` deploys the example on its own Worker,
+bucket and container application, drives one box through start, write,
+delete, stop, wake and discard, and deletes everything it made.
 
 Every rule above has a unit test. Two deployed production-workerd runs of
 `bun scripts/sandbox-durability-probe.ts --run` passed all six phases on

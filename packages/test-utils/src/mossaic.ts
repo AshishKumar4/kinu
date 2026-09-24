@@ -158,6 +158,13 @@ export function fakeMossaic(): FakeMossaic {
         return target;
       },
       async listChildren(p) { return { entries: children(p) }; },
+      async createReadStream(p, opts) {
+        const bytes = files.get(p);
+
+        if (bytes === undefined) throw new FakeMossaicError(isDir(p) ? 'EISDIR' : 'ENOENT', p);
+
+        return new Response(bytes.slice(opts?.start ?? 0, opts?.end ?? bytes.length)).body ?? new ReadableStream();
+      },
     };
   };
 

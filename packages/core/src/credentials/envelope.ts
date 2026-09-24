@@ -1,5 +1,6 @@
 /** Sealed envelope `pce1.<keyId>.<iv>.<ciphertext>` (AES-GCM, AAD binds DO id + record key) around `user_credentials.value`.
  *  No default key or plaintext fallback. Rotation: move current to `_PREVIOUS`, set new, drop old once every UserDO rewraps. */
+import { KinuError } from '../obs/error';
 import { hmacSha256Hex } from '../utils/crypto';
 
 const ENVELOPE_PREFIX = 'pce1.';
@@ -26,7 +27,7 @@ export interface CredentialCipher {
   readonly keyId: string;
   /** The same `aad` (store identity + record key) must be presented to open it again. */
   seal(aad: string, plaintext: string): Promise<string>;
-  /** Passes a pre-encryption plaintext row through unchanged. */
+  /** Refuses a value that is not a sealed envelope. */
   open(aad: string, stored: string): Promise<string>;
 }
 
@@ -70,7 +71,10 @@ export async function createCredentialCipher(env: CredentialEncryptionEnv): Prom
     },
 
     async open(aad, stored) {
-      if (!isSealedCredential(stored)) return stored;
+      if (!isSealedCredential(stored)) {
+        throw new KinuError('bad_input', `Record "${aad}" is not a sealed envelope, and no secret is kept in the clear.`);
+      }
+
       const [keyId, ivPart, ctPart] = stored.slice(ENVELOPE_PREFIX.length).split('.');
 
       if (!keyId || !ivPart || !ctPart) {
@@ -106,7 +110,7 @@ export async function createCredentialCipher(env: CredentialEncryptionEnv): Prom
   };
 }
 
-function isSealedCredential(stored: string): boolean {
+export function isSealedCredential(stored: string): boolean {
   return stored.startsWith(ENVELOPE_PREFIX);
 }
 

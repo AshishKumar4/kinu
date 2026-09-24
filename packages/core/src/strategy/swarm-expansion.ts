@@ -305,7 +305,7 @@ export async function sharedPrefix(input: {
  * The *Inherited context* seed, assembled by the engine, never by the parent, so a parent
  * cannot supply the number its child is told to beat. Uncomputed fields are absent.
  */
-export function branchSeed(input: {
+function branchSeed(input: {
   readonly parent: TreeNode;
   readonly measured: MeasuredObjective | null;
   readonly baseline: number | null;
@@ -360,7 +360,7 @@ export function branchSeed(input: {
 }
 
 /** The inherited prefix as the journal's `SerializedMessage` records it. */
-export function inheritedAsSerialized(prefix: readonly ModelMessage[]): SerializedMessage[] {
+function inheritedAsSerialized(prefix: readonly ModelMessage[]): SerializedMessage[] {
   return prefix.map((message, index) => ({
     id: `p${String(index)}`,
     role: message.role,

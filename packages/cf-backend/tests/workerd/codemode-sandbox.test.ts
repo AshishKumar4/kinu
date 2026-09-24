@@ -5,7 +5,7 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, test } from 'vitest';
 import * as v from 'valibot';
-import { admitCraftedSource, decodeJsonValue, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, craftedFailureFunctions, nativeToolFunctions, type ToolOutcome, type JsonValue } from '@kinu.run/core';
+import { admitCraftedSource, decodeJsonValue, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, craftedFailureFunctions, nativeToolFunctions, WORKSPACE_ROOT, type ToolOutcome, type JsonValue } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { createCodeTool } from '@cloudflare/codemode/ai';
 import { generateText, stepCountIs, tool, jsonSchema } from 'ai';
@@ -13,10 +13,20 @@ import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { KinuSandboxExecutor, renderToolsPrelude } from '../../src/codemode-sandbox';
 import { codemodeEgress } from '../../src/codemode-egress';
 
-const files = new Map<string, string>([['notes.md', 'hello from the workspace']]);
+const files = new Map<string, string>([[`${WORKSPACE_ROOT}/notes.md`, 'hello from the workspace']]);
 
 /** Arguments arrive positionally over the sandbox RPC, as every production provider parses them. */
 const text = (args: unknown[], at: number): string => v.parse(v.string(), args[at]);
+
+/** Immediate children of `dir` by name, as the workspace VFS lists them; a directory with nothing under it is absent. */
+function children(dir: string): string[] {
+  const prefix = `${dir.replace(/\/+$/, '')}/`;
+  const names = [...files.keys()].filter((key) => key.startsWith(prefix)).map((key) => key.slice(prefix.length).split('/')[0]);
+
+  if (names.length === 0) throw new Error('no such directory');
+
+  return [...new Set(names)];
+}
 
 const workspace = {
   name: 'workspace',
@@ -34,7 +44,7 @@ const workspace = {
 
       return 'ok';
     },
-    readdir: async () => [...files.keys()],
+    readdir: async (...args: unknown[]) => children(text(args, 0)),
     exists: async (...args: unknown[]) => files.has(text(args, 0)),
     exec: async (...args: unknown[]) => `ran: ${text(args, 0)}`,
   },
@@ -110,19 +120,39 @@ describe('the eval sandbox under workerd', () => {
       "const path = require('node:path');",
       "const text = await fs.readFile('notes.md', 'utf8');",
       "await fs.writeFile(path.join('out', 'copy.md'), text.toUpperCase());",
+      "await fs.appendFile('./out/copy.md', '!');",
       "console.log('read', text.length, 'bytes');",
-      "return { text, listing: await fs.readdir('.'), workspace: env.workspace };",
+      "const kinds = [(await fs.stat('notes.md')).isFile(), (await fs.stat('out')).isDirectory()];",
+      "return { text, kinds, listing: await fs.readdir('.'), workspace: env.workspace };",
     ].join('\n');
 
     const result = await executor.execute(program, [toolsProvider([]), stateProvider, workspace]);
     expect(result.error).toBeUndefined();
     expect(result.result).toEqual({
       text: 'hello from the workspace',
-      listing: ['notes.md', 'out/copy.md'],
+      kinds: [true, true],
+      listing: ['notes.md', 'out'],
       workspace: 'probe',
     });
     expect(result.logs).toEqual(['read 24 bytes']);
-    expect(files.get('out/copy.md')).toBe('HELLO FROM THE WORKSPACE');
+    expect(files.get(`${WORKSPACE_ROOT}/out/copy.md`)).toBe('HELLO FROM THE WORKSPACE!');
+  });
+
+  test('process.cwd() is the working root, where fs resolves a relative path and names it in its errors', async () => {
+    const program = [
+      '// Probe the working directory and a relative directory that is not there',
+      "const fs = require('fs/promises');",
+      "const missing = await fs.readdir('skills').then(() => 'listed', (error) => error.message);",
+      'return { cwd: process.cwd(), nextTick: typeof process.nextTick, missing };',
+    ].join('\n');
+
+    const result = await executor.execute(program, [toolsProvider([]), stateProvider, workspace]);
+    expect(result.error).toBeUndefined();
+    expect(result.result).toEqual({
+      cwd: WORKSPACE_ROOT,
+      nextTick: 'function',
+      missing: `ENOENT: no such directory, '${WORKSPACE_ROOT}/skills'`,
+    });
   });
 
   test('a native tool is tools.<name>(input), a crafted tool is defined by the prelude and sees its siblings', async () => {

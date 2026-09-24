@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import { createElement, useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { useSurfaceFocus, type SurfaceFocus } from '../src/components/surfaces/use-surface-focus';
-import type { SurfaceKind } from '../src/components/surfaces/WorkSurface';
+import type { SurfaceKind } from '@kinu.run/core';
 import type { SlateSummary } from '@kinu.run/core';
 import type { PinnedPreviewPort as PinnedPort } from '@kinu.run/core';
 

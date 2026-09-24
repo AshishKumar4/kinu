@@ -2,7 +2,7 @@
 // are append-only and readers resolve one effective verdict per turn by source
 // precedence, keeping the classifier row the calibration set labels by id.
 import { describe, test, expect } from 'bun:test';
-import { present } from '@kinu.run/test-utils';
+import { present, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
@@ -40,7 +40,7 @@ describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () =
       },
     });
 
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
 
     // A lesson graded by the user's reply is born corroborated, as a ledger row.
     await engine.reviewTurn(makeTurn(), 'no — you rotated production, not staging');

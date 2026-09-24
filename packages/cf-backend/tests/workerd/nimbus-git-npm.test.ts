@@ -26,16 +26,16 @@ it('git makes a repository in the workspace and -C reads it from outside', async
 
   await probe.openWorkspace(workspace, 'nimbus-git-owner');
 
-  const seeded = await probe.runInWorkspace(workspace, seedRepo('/home/user/seed'));
+  const seeded = await probe.runInWorkspace(workspace, seedRepo('/home/main/seed'));
 
   expect(seeded.exitCode, seeded.stdout).toBe(0);
 
-  const log = await probe.runInWorkspace(workspace, 'git -C /home/user/seed log --oneline');
+  const log = await probe.runInWorkspace(workspace, 'git -C /home/main/seed log --oneline');
 
   expect(log.exitCode, log.stdout).toBe(0);
   expect(log.stdout).toContain('seed commit');
 
-  const branch = await probe.runInWorkspace(workspace, 'git -C /home/user/seed branch --show-current');
+  const branch = await probe.runInWorkspace(workspace, 'git -C /home/main/seed branch --show-current');
 
   expect(branch.exitCode, branch.stdout).toBe(0);
   expect(branch.stdout.trim()).not.toBe('');
@@ -47,11 +47,11 @@ it('git clone of a workspace path is refused for what it is, never for a missing
 
   await probe.openWorkspace(workspace, 'nimbus-git-owner');
 
-  const seeded = await probe.runInWorkspace(workspace, seedRepo('/home/user/seed'));
+  const seeded = await probe.runInWorkspace(workspace, seedRepo('/home/main/seed'));
 
   expect(seeded.exitCode, seeded.stdout).toBe(0);
 
-  const cloned = await probe.runInWorkspace(workspace, 'cd /home/user && git clone -q seed copy');
+  const cloned = await probe.runInWorkspace(workspace, 'cd /home/main && git clone -q seed copy');
 
   // A host the facet could not reach answers `SupervisorRPC: env.* must be the Durable Object
   // namespace ...` or refuses a host op; this workspace must never say that.
@@ -67,19 +67,19 @@ it('git clone lands the commit, and -C reads the clone from outside it', async (
   await probe.openWorkspace(workspace, 'nimbus-git-owner');
 
   const cloned = await probe.runInWorkspace(workspace,
-    `cd /home/user && git clone -q http://${REGISTRY_HOST}${GIT_REPO_PATH} repo`);
+    `cd /home/main && git clone -q http://${REGISTRY_HOST}${GIT_REPO_PATH} repo`);
 
   expect(cloned.exitCode, cloned.stdout).toBe(0);
 
-  const log = await probe.runInWorkspace(workspace, 'git -C /home/user/repo log --oneline');
+  const log = await probe.runInWorkspace(workspace, 'git -C /home/main/repo log --oneline');
 
   expect(log.exitCode, log.stdout).toBe(0);
   expect(log.stdout).toContain(GIT_COMMIT_MESSAGE);
 
-  const branch = await probe.runInWorkspace(workspace, 'git -C /home/user/repo branch --show-current');
+  const branch = await probe.runInWorkspace(workspace, 'git -C /home/main/repo branch --show-current');
 
   expect(branch.stdout.trim()).toBe(GIT_BRANCH);
-  expect(await probe.readWorkspaceFile(workspace, `/home/user/repo/${GIT_FILE}`)).toBe(GIT_FILE_CONTENT);
+  expect(await probe.readWorkspaceFile(workspace, `/home/main/repo/${GIT_FILE}`)).toBe(GIT_FILE_CONTENT);
 });
 
 it('npm install resolves a wide layer through sibling objects', async () => {
@@ -88,20 +88,20 @@ it('npm install resolves a wide layer through sibling objects', async () => {
 
   await probe.openWorkspace(workspace, 'nimbus-npm-owner');
 
-  const made = await probe.runInWorkspace(workspace, 'mkdir -p /home/user/fanout');
+  const made = await probe.runInWorkspace(workspace, 'mkdir -p /home/main/fanout');
 
   expect(made.exitCode, made.stdout).toBe(0);
 
   // Six roots: one layer wider than the coordinator resolves alone, so siblings are opened.
   const install = await probe.runInWorkspace(workspace,
-    `cd /home/user/fanout && NPM_REGISTRY=http://${REGISTRY_HOST} npm install ${REGISTRY_FANOUT_PKGS.join(' ')}`);
+    `cd /home/main/fanout && NPM_REGISTRY=http://${REGISTRY_HOST} npm install ${REGISTRY_FANOUT_PKGS.join(' ')}`);
 
   expect(install.exitCode, install.stdout).toBe(0);
-  expect(await probe.readWorkspaceFile(workspace, `/home/user/fanout/node_modules/${REGISTRY_PKG}/package.json`))
+  expect(await probe.readWorkspaceFile(workspace, `/home/main/fanout/node_modules/${REGISTRY_PKG}/package.json`))
     .toBe(REGISTRY_MANIFEST);
 
   for (const name of REGISTRY_FANOUT_PKGS) {
-    expect(await probe.readWorkspaceFile(workspace, `/home/user/fanout/node_modules/${name}/lib/index.js`))
+    expect(await probe.readWorkspaceFile(workspace, `/home/main/fanout/node_modules/${name}/lib/index.js`))
       .toBe(REGISTRY_ENTRY);
   }
 });

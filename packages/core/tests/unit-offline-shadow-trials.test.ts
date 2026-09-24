@@ -18,7 +18,7 @@ import type { Executor, ResolvedProvider } from '../src/types/primitives';
 import { decodeJsonValue } from '../src/utils/json';
 import type { ModelMessage } from 'ai';
 import { createTestRuntime, storesFor } from './helpers';
-import { createTestSql, present, testActorHandle } from '@kinu.run/test-utils';
+import { createTestSql, present, testActorHandle, unobservedSpend } from '@kinu.run/test-utils';
 import { RunEventRecorder } from '../src/events/recorder';
 
 const TASK = 'what did we decide about the codename?';
@@ -320,7 +320,7 @@ describe('the offline drain is what executes trials', () => {
 
 describe('auto-evolution off runs no trial and leaves no trial to run', () => {
   function hostEngine(rt: AgentRuntime, control: ScaffoldControl, enabled: boolean): EvolutionEngine {
-    return new EvolutionEngine(rt, storesFor(rt).history, {
+    return new EvolutionEngine(rt, storesFor(rt).history, { reportModelCall: unobservedSpend,
       enabled,
       shadowTrialQueue: (turn, opts) => queueTurnShadowTrial(control, turn, opts),
       shadowTrialRunner: () => runQueuedShadowTrials(control),

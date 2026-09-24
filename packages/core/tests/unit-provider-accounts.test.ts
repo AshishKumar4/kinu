@@ -2,6 +2,8 @@
 import { describe, expect, test } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import {
+  accountCredentialKey,
+  ANTHROPIC_BASE_URL,
   asFetchFunction,
   catalogProviderOfKey,
   creditText,
@@ -19,6 +21,7 @@ import {
   openAICompatNameOf,
   parseModelSpec,
   providerProxyBaseURL,
+  storedAccounts,
   specWithoutAccount,
   validateCredentialKey,
   type AuthResolution,
@@ -53,8 +56,13 @@ describe('account specs', () => {
 
 describe('account credential keys', () => {
   test('an account is its base key plus a name', () => {
-    for (const key of ['anthropic.bearer@work', 'codex.oauth@home', 'openai-compat.box@lab-2', 'groq.bearer']) {
-      expect(() => validateCredentialKey(key)).not.toThrow();
+    for (const [base, name] of [['anthropic.bearer', 'work'], ['codex.oauth', 'home'], ['openai-compat.box', 'lab-2']] as const) {
+      const key = accountCredentialKey(base, name);
+
+      expect(key).toBe(`${base}@${name}`);
+      validateCredentialKey(key);
+      // The store reads it back as that base key's named account, beside the bare key's `main`.
+      expect(storedAccounts(base, [base, key, 'groq.bearer'])).toEqual(['main', name]);
     }
   });
 
@@ -85,8 +93,7 @@ describe('account credential keys', () => {
   test('an account is spent the way its base key is', async () => {
     expect(credentialToHeaders('anthropic.bearer@work', { kind: 'bearer', token: 'sk-ant' }))
       .toEqual({ 'x-api-key': 'sk-ant', 'anthropic-version': '2023-06-01' });
-    expect(await providerProxyBaseURL('anthropic.bearer@work', { fetch }))
-      .toBe(await providerProxyBaseURL('anthropic.bearer', { fetch }));
+    expect(await providerProxyBaseURL('anthropic.bearer@work', { fetch })).toBe(ANTHROPIC_BASE_URL);
     expect(catalogProviderOfKey('groq.bearer@work')).toBe('groq');
     expect(catalogProviderOfKey('github@work')).toBeNull();
     expect(openAICompatNameOf('openai-compat.box@work')).toBe('box');

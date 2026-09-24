@@ -14,7 +14,7 @@ import { isVfsError, type VfsErrorCode } from '../vfs/errno';
 import type { MossaicVfs } from '../vfs/mossaic-vfs';
 import type { VfsListedEntry } from '../vfs/mounts';
 import { looksLikeZip, packZip, unpackZip, type ZipEntry } from '../utils/zip';
-import { SKILL_FOLDER_FILE } from './discover';
+import { SKILL_FOLDER_FILE } from './types';
 import { parseSkillFile, skillNameProblem } from './parse';
 
 export interface DriveEntry {

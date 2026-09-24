@@ -37,7 +37,6 @@ export * from './agent-evals';
 
 export * from './facts';
 
-export * from './source';
 
 export * from './git';
 

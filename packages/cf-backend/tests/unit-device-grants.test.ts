@@ -3,7 +3,6 @@
  * driven over a real UserDO whose device socket answers, so a grant that did nothing is visible.
  */
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
 import * as v from 'valibot';
 import {
   createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO,
@@ -20,6 +19,7 @@ import {
   DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, JsonValueSchema, nextDeviceRequestId,
   NO_DEVICE_CONNECTED, type JsonValue,
 } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 
 
 const DeviceRpcFrameSchema = v.object({
@@ -739,8 +739,8 @@ describe('durable device request ownership', () => {
       .toEqual({ ok: true, unstoppedCommands: 0 });
     expect(seenAtFrame).toHaveLength(1);
     expect(seenAtFrame[0]).toBeNumber();
-    expect(harness.db.prepare(`SELECT unstopped_at FROM user_devices WHERE id = ?`)
-      .all(harness.deviceId)).toEqual([{ unstopped_at: null }]);
+    // Every kill confirmed: nothing is left to warn about, so the revoked device leaves the roster.
+    expect(await harness.userDO.listDevices(await testOwner())).toEqual([]);
     await harness.closeDeviceHarness();
   });
 });
@@ -1162,7 +1162,12 @@ describe('a copied device.json goes stale', () => {
     )[0].prev_token_hash;
   }
 
-  test('the token rotates on every accepted connect, and the old copy dies', async () => {
+  /** The account's row for one device, as Settings → Devices reads it; undefined once it is gone. */
+  async function deviceRow(harness: TestUserDO, deviceId: string) {
+    return (await harness.userDO.listDevices(await testOwner())).find((device) => device.id === deviceId);
+  }
+
+  test('the token rotates on every accepted connect, and the current one keeps working', async () => {
     const harness = createTestUserDO({ deviceResponder: daemon });
     const { deviceId, token: first } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
 
@@ -1175,8 +1180,6 @@ describe('a copied device.json goes stale', () => {
     const third = await connectDaemon(harness, second ?? '');
     expect(third).toBeTruthy();
 
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), first)).toEqual({ ok: false });
-    expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), first)).toEqual({ ok: false });
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), third ?? ''))
       .toEqual({ ok: true, deviceId, current: true });
     await harness.joinFibers();
@@ -1207,14 +1210,13 @@ describe('a copied device.json goes stale', () => {
     await acknowledgeRotation(harness);
 
     expect(graceHash(harness, deviceId)).toBeNull();
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), first)).toEqual({ ok: false });
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), second ?? ''))
       .toEqual({ ok: true, deviceId, current: true });
     await harness.joinFibers();
     harness.close();
   });
 
-  test('the grace is one-shot, so two claimants cannot alternate on it forever', async () => {
+  test('the grace is one-shot: the secret the recovery dropped names a second copy', async () => {
     const harness = createTestUserDO({ deviceResponder: daemon });
     const { deviceId, token: stolen } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
 
@@ -1226,12 +1228,105 @@ describe('a copied device.json goes stale', () => {
     const real = await connectDaemon(harness, stolen);
     expect(real).toBeTruthy();
     expect(real).not.toBe(thief);
-
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), thief ?? '')).toEqual({ ok: false });
-    expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), thief ?? ''))
-      .toEqual({ ok: false });
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), real ?? ''))
       .toEqual({ ok: true, deviceId, current: true });
+    const live = harness.acceptedSockets.at(-1);
+
+    // Two parties hold this device's secrets and the hub cannot tell which is the owner's, so the
+    // thief's next try revokes the device rather than being merely refused.
+    expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), thief ?? '')).toEqual({ ok: false });
+    expect(live?.ws.readyState).toBe(WebSocket.CLOSED);
+    expect(await harness.userDO.verifyDeviceToken(await testOwner(), real ?? '')).toEqual({ ok: false });
+    expect(await deviceRow(harness, deviceId)).toMatchObject({ revokedAt: expect.any(Number), reuseDetectedAt: expect.any(Number) });
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('a grace that bought a ticket is spent: the machine is refused next time, and not revoked', async () => {
+    const harness = createTestUserDO({ deviceResponder: daemon });
+    const { deviceId, token: first } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+
+    // The rotation is lost with its socket, so the machine still holds `first`, now the grace.
+    expect(await connectDaemon(harness, first)).toBeTruthy();
+    harness.acceptedSockets.at(-1)?.drop();
+
+    // The grace buys a ticket, and the upgrade never arrives.
+    expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), first)).toMatchObject({ ok: true });
+
+    expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), first)).toEqual({ ok: false });
+    expect(await deviceRow(harness, deviceId)).toMatchObject({ revokedAt: null, reuseDetectedAt: null });
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('a retired key presented again revokes the device, closes its socket, and waits for the owner', async () => {
+    // SECURITY-devices C3. Whichever copy of device.json acknowledged first holds the only valid
+    // secret; the other copy's return is the only evidence there are two. The live socket may be
+    // the thief's, so it closes too.
+    const harness = createTestUserDO({ deviceResponder: daemon });
+    const { deviceId, token: copied } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+    const current = await connectDaemon(harness, copied);
+    await acknowledgeRotation(harness);
+    const live = harness.acceptedSockets.at(-1);
+    expect(live?.ws.readyState).toBe(WebSocket.OPEN);
+
+    expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), copied)).toEqual({ ok: false });
+
+    expect(live?.ws.readyState).toBe(WebSocket.CLOSED);
+    expect(await harness.userDO.verifyDeviceToken(await testOwner(), current ?? '')).toEqual({ ok: false });
+    expect(await deviceRow(harness, deviceId)).toMatchObject({
+      connected: false, revokedAt: expect.any(Number), unstoppedAt: null, reuseDetectedAt: expect.any(Number),
+    });
+
+    // The incident stays until the owner has read it; acknowledging removes the device.
+    expect(await harness.userDO.acknowledgeUnstoppedDevice(await testOwner(), deviceId)).toEqual({ ok: true });
+    expect(await deviceRow(harness, deviceId)).toBeUndefined();
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('a machine that keeps its secret current never reads as a copy', async () => {
+    const harness = createTestUserDO({ deviceResponder: daemon });
+    const { deviceId, token: first } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+    let held = first;
+
+    for (let round = 1; round <= 3; round += 1) {
+      held = present(await connectDaemon(harness, held), `rotation ${String(round)}`);
+      await acknowledgeRotation(harness);
+    }
+
+    // One rotation lost with its socket: the machine never saw it and recovers on the grace.
+    present(await connectDaemon(harness, held), 'the lost rotation');
+    held = present(await connectDaemon(harness, held), 'the recovery');
+    await acknowledgeRotation(harness);
+    held = present(await connectDaemon(harness, held), 'the next connect');
+    await acknowledgeRotation(harness);
+
+    expect(await harness.userDO.verifyDeviceToken(await testOwner(), held)).toEqual({ ok: true, deviceId, current: true });
+    expect(await deviceRow(harness, deviceId)).toMatchObject({ revokedAt: null, reuseDetectedAt: null, connected: true });
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('a retired key is remembered for the token lifetime, then forgotten', async () => {
+    const harness = createTestUserDO({ deviceResponder: daemon });
+    const { deviceId, token: first } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+    const second = present(await connectDaemon(harness, first), 'the first rotation');
+    await acknowledgeRotation(harness);
+    // Retired longer ago than a device token lives (180 days): it would have expired unrotated.
+    harness.sql.exec(`UPDATE user_device_retired_tokens SET retired_at = ?`, Date.now() - 181 * 24 * 60 * 60 * 1000);
+
+    const third = present(await connectDaemon(harness, second), 'the second rotation');
+    await acknowledgeRotation(harness);
+
+    // Retiring the second secret forgot the first, so the store holds one row per live window.
+    expect(v.parse(
+      v.array(v.object({ n: v.number() })),
+      harness.sql.exec(`SELECT COUNT(*) AS n FROM user_device_retired_tokens`).toArray(),
+    )[0].n).toBe(1);
+    // Forgotten is refused, not reported: that secret expired on its own long ago.
+    expect(await harness.userDO.verifyDeviceToken(await testOwner(), first)).toEqual({ ok: false });
+    expect(await harness.userDO.verifyDeviceToken(await testOwner(), third)).toEqual({ ok: true, deviceId, current: true });
     await harness.joinFibers();
     harness.close();
   });
@@ -1285,11 +1380,81 @@ describe('a copied device.json goes stale', () => {
   });
 });
 
-describe('device RPC stays unreachable from owner HTTP routes', () => {
-  test('no /api/user route forwards an arbitrary method to deviceRpc', () => {
-    const source = readFileSync(new URL('../src/user/routes.ts', import.meta.url).pathname, 'utf8');
-    // Checkpoint reads are the only consent-free methods; an HTTP pass-through would widen the
-    // device RPC surface.
-    expect(source).not.toContain('deviceRpc');
+describe('the account keeps one row per linked machine', () => {
+  test('a revoked device with nothing left to report is removed, not kept', async () => {
+    const harness = createTestUserDO({ deviceResponder: daemon });
+    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+
+    expect(await harness.userDO.revokeDevice(await testOwner(), deviceId)).toEqual({ ok: true, unstoppedCommands: 0 });
+
+    expect(harness.sql.exec(`SELECT id FROM user_devices WHERE id = ?`, deviceId).toArray()).toEqual([]);
+    expect(await harness.userDO.verifyDeviceToken(await testOwner(), token)).toEqual({ ok: false });
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('linking a machine again replaces its old registration instead of adding a row', async () => {
+    const harness = createTestUserDO({ deviceResponder: daemon });
+    const owner = await testOwner();
+    const first = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+
+    // `kinu connect` run again sends the token its device.json held.
+    const again = await harness.userDO.registerDevice(owner, 'ashish@studio', first.token);
+
+    expect((await harness.userDO.listDevices(owner)).map((device) => device.id)).toEqual([again.deviceId]);
+    expect(await harness.userDO.verifyDeviceToken(owner, first.token)).toEqual({ ok: false });
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('a reported host name or path no machine can have is not stored', async () => {
+    const harness = await deviceHarness('ashish@studio', daemon, {
+      hello: { ...CAPABLE_HELLO, hostname: 'h'.repeat(256), root: `/${'d'.repeat(4096)}` },
+    });
+
+    // RFC 1035 bounds a name at 255 octets and PATH_MAX a path at 4096 bytes.
+    const [row] = await harness.userDO.listDevices(await testOwner());
+    expect(row.hostname).toBeNull();
+    const runtime = await harness.userDO.deviceRuntimeStatus(harness.workspace);
+    expect(JSON.stringify(runtime)).not.toContain('d'.repeat(4096));
+
+    await harness.sendDeviceHello({ ...CAPABLE_HELLO, hostname: 'h'.repeat(255) });
+    expect((await harness.userDO.listDevices(await testOwner()))[0].hostname).toBe('h'.repeat(255));
+    await harness.closeDeviceHarness();
+  });
+});
+
+describe('a workspace\'s device checkpoints are its own', () => {
+  test('another workspace\'s store is refused by name, before any frame leaves', async () => {
+    const harness = await deviceHarness();
+    harness.consentDecision = 'always';
+
+    for (const [method, params] of [
+      ['checkpointList', [OTHER_WORKSPACE, 50, null]],
+      ['checkpointPlan', [OTHER_WORKSPACE, '/home/ashish/work', 'c0ffee1']],
+      ['checkpointRestore', [OTHER_WORKSPACE, '/home/ashish/work', 'c0ffee1']],
+    ] satisfies Array<[string, JsonValue[]]>) {
+      await expect(harness.userDO.deviceRpc(harness.workspace, method, params))
+        .rejects.toThrow('reads and restores only its own device checkpoints');
+    }
+
+    expect(harness.deviceFrames).toEqual([]);
+    await harness.userDO.deviceRpc(harness.workspace, 'checkpointList', [WORKSPACE, 50, null]);
+    expect(harness.deviceFrames.map((frame) => frame.method)).toEqual(['checkpointList']);
+    await harness.closeDeviceHarness();
+  });
+
+  test('a snapshot hint lands in the calling workspace\'s store, whatever store it names', async () => {
+    const harness = await deviceHarness();
+    harness.consentDecision = 'always';
+
+    await harness.userDO.deviceRpc(harness.workspace, 'writeFile', ['/home/ashish/work/a.txt', 'x'], {
+      agentName: WORKSPACE, checkpoint: { agent: OTHER_WORKSPACE, turnId: 'turn-1', sessionId: 's', dir: null },
+    });
+
+    expect(harness.deviceFrames.map((frame) => frame.checkpoint)).toEqual([
+      { agent: WORKSPACE, turnId: 'turn-1', sessionId: 's', dir: null },
+    ]);
+    await harness.closeDeviceHarness();
   });
 });

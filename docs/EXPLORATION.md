@@ -242,9 +242,16 @@ cross-workspace library called "separate and unchanged".
 it. Callers name a surface, so a writer chooses an enumerated member. A missing
 publication surface is a specification violation.
 
-Only recorded re-derivation clears a seal. Retry and later success are not
-evidence about the breached guarantee. Suppression is disclosed over
-`PUBLISHING_CARRIES`, since other carries write nothing later runs read.
+A breach seals the objective and floor, not only the run that measured it: the
+floor and the verifier it impugns are shared by every run there. `sealRecords`
+writes the seal to `exploration_seals`, and every records write reads it in the
+same synchronous step (`publicationOf`), so a concurrent run on the same
+objective and floor stops recording too.
+
+A seal lifts only under a new key: a re-derived floor or a replaced verifier.
+Retry and later success are not evidence about the breached guarantee.
+Suppression is disclosed over `PUBLISHING_CARRIES`, since other carries write
+nothing later runs read.
 
 Implemented by `PublicationState`, `PUBLICATION_SURFACES`, `admitsPublication`,
 and `carrySuppression`; `packages/core/tests/contract-publication-seal.test.ts` holds writer
@@ -327,16 +334,15 @@ Implemented by `strategy/node-agent.ts`, `heads/head-inference.ts`, `chat.ts`,
 
 ## What bounds a node
 
-A swarm node has no step cap and no default wall clock (owner ruling,
+A swarm node has no step cap and no wall clock (owner ruling,
 2026-08-21). `runChat` has no cap: its default stop condition, `UNBOUNDED_STEPS`
 in `chat.ts`, never fires, and a caller's condition only adds a stop reason.
 The arbiter owns swarm node depth. A head with no split depth left still
 finishes its own work, but its tool surface no longer offers a split.
 
 A swarm node ends when the model stops calling tools and it holds nothing, when
-the search aborts it, when its mission governor declines the next request, or
-when an opt-in `maxWallClockMs` deadline passes. Shipped dispatch sets no
-deadline. The last three are read between steps, so none interrupts a step. A
+the search aborts it, or when its mission governor declines the next request.
+The last two are read between steps, so neither interrupts a step. A
 swarm node runs in the isolate that ran the search, as its own logical actor of
 the one workspace, and the search records the cut on the swarm node's own
 report under the cancel reason. The loop runs in one place, so the cut is
@@ -348,14 +354,14 @@ Three tool-using nodes still ran at 1,216,358 / 1,310,061 / 1,336,833 ms across
 Measured 2026-08-19 at `8afd45e8d`, on one credentialed depth-2 width-3
 `tests/evals/swarm.eval.ts` run against the shipped default model.
 
-A deadline cannot pre-empt a step. One step held 91% CPU for 26 minutes, and
-neither the deadline nor `AbortSignal` reached it. That run has no recorded
+Nothing pre-empts a step. One step held 91% CPU for 26 minutes, and
+`AbortSignal` did not reach it. That run has no recorded
 date, so it is an anecdote, not a result. This limit is open: no measurement
 yet sets a bound on one step's request.
 
-Implemented by `runNodeAgent`, `runNodeLoop`, `budgetExhausted`, and
-`UNBOUNDED_STEPS`. `packages/core/tests/unit-swarm-node-envelope.test.ts` holds
-the contract and figures in both directions.
+Implemented by `runNodeAgent`, `runNodeLoop`, and `UNBOUNDED_STEPS`.
+`packages/core/tests/unit-swarm-node-envelope.test.ts` holds the contract: a
+node whose one step takes 26 minutes still finishes.
 
 An aborted, exhausted or errored swarm node returns an unscored status, step
 count and clock, and the engine skips instrument and ensemble. This differs
@@ -516,7 +522,7 @@ refusal, shared reads, binary transfer, and reset recovery.
 0 failures. It covers local dispatch, absent-host behavior, and a runtime
 reset that retains the node home and private temporary files.
 
-The main agent keeps `HOME=/home/user` and uses `TMPDIR=/tmp/main`.
+The main agent keeps `HOME=/home/main` and uses `TMPDIR=/tmp/main`.
 Workspace boot provisions its temporary directory before commands run.
 A bare `/tmp` resolves to each agent's own temporary directory on both
 backends. Hosted actors ask the workspace owner to register their mappings.
@@ -612,9 +618,9 @@ The machine-checked contracts live in `lean/Kinu/Exploration/`:
 | module | contract | theorems |
 | --- | --- | ---: |
 | `Objective.lean` | direction, verifier fallibility, declaration-time floor checks | 13 |
-| `Publication.lean` | the publication seal, and that a breach makes it unreachable | 65 |
+| `Publication.lean` | the publication seal, and that a breach makes it unreachable | 60 |
 | `Records.lean` | monotone displacement over a cell's best | 36 |
-| `RecordsStore.lean` | a cell's best never falls over any finite write sequence | 22 |
+| `RecordsStore.lean` | a cell's best never falls over any finite write sequence | 21 |
 | `Archive.lean` | the descriptor partition | 13 |
 | `ArchiveAdmission.lean` | separation is invariant, and a cell's population is not bounded | 22 |
 | `FanIn.lean` | the derived merge order respects every dependency edge | 30 |
@@ -622,8 +628,11 @@ The machine-checked contracts live in `lean/Kinu/Exploration/`:
 | `Settle.lean` | `settle` is a total function of (score, advance) | 11 |
 | `Arbitration.lean` | a proposal cannot exceed the arbiter; depth stays bounded | 11 |
 | `Isolation.lean` | why the existing proof does not reach an agent node | 4 |
+| `Concurrent.lean` | under any interleaving of runs the best never falls; a breach stops every run | 5 |
+| `Counterfactual.lean` | B1 witnesses that a deterministic verifier could have failed | 4 |
+| `Improvement.lean` | rounds without gain become improbable under a discrimination floor | 4 |
 
-Counted 2026-09-22 at `ad61dea6c` as top-level `theorem` declarations per module.
+Counted 2026-09-23 as top-level `theorem` declarations per module.
 `lean/traceability.yaml` is canonical.
 
 The descriptor property depends on an unspecified descriptor producer. Isolation

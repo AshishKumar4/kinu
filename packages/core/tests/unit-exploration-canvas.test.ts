@@ -228,7 +228,8 @@ describe('readExplorationCanvas', () => {
       config: { budget: 12, branches: 3, maxDepth: 4, judgeSamples: 5, mode: 'build' },
       realised: 2,
     });
-    db.exec(`UPDATE search_nodes SET status = 'terminal', value = 0.71 WHERE id = 'swarm-1-b0'`);
+    db.exec(`UPDATE search_nodes SET status = 'terminal', value = 0.71, evaluation_json = '{"score":0.71}'
+      WHERE id = 'swarm-1-b0'`);
     seedSplit(db, actorId, {
       rootId: 'swarm-1', task: 'cut p99 latency', at: 1_400, heads: 3,
       strategy: 'best_of', rationale: 'optimise',

@@ -32,7 +32,6 @@ export {
   BackgroundJobRunner,
   BACKGROUND_FIBER_PREFIX,
   JobNotResumable,
-  EVICTION_INTERRUPT_ERROR,
   backgroundJobWakeTrigger,
   MAX_CONCURRENT_DETACHED_JOBS,
   type BackgroundJobRunnerDeps,

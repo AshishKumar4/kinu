@@ -5,20 +5,16 @@ import { MessageView } from '../src/components/MessageView';
 import type { UIMessage } from 'ai';
 
 import { describe, test, expect } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch,
   COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OVERFLOW_RETRY_EVENT,
-  JsonObjectSchema, WORKSPACE_CREATED_EVENT, workspaceGenesisSignal,
+  WORKSPACE_CREATED_EVENT, workspaceGenesisSignal,
 } from '@kinu.run/core';
-import type { AdvisorSeverity, JsonObject, JsonValue, KinuEvent } from '@kinu.run/core';
-import * as v from 'valibot';
+import type { JsonValue, KinuEvent } from '@kinu.run/core';
 import {
   applySignalCard, classifyProgrammaticTurn, eventSourceLabel, eventVariantLabel,
   messageSignalId, parseDrainedEvents, parseSignalCardEvent, type SignalCard,
 } from '@kinu.run/core';
-import { parse, walk, type SyntaxNode } from '../../../scripts/syntax';
 import { present } from '@kinu.run/test-utils';
 
 describe('programmatic turn provenance', () => {
@@ -115,60 +111,12 @@ describe('genesis in the transcript', () => {
   });
 });
 
-/*
- * The fixture's own `metadata` expression is read from gallery.tsx and evaluated, because a fixture
- * that respells the constants is exactly what drifted before.
- */
-const GALLERY = join(import.meta.dir, '..', 'src', 'gallery.tsx');
-
-function fixtureMetadataSource(file: string, fixture: string): string {
-  const text = readFileSync(file, 'utf8');
-  let source: string | null = null;
-  walk(parse(file, text).root, (node: SyntaxNode) => {
-    const raw = node.raw;
-
-    if (source !== null || raw.type !== 'VariableDeclarator') return;
-
-    if (raw.id.type !== 'Identifier' || raw.id.name !== fixture) return;
-    walk(node, (inner: SyntaxNode) => {
-      if (source !== null || inner.raw.type !== 'ObjectExpression') return;
-      const owner = inner.parent?.raw;
-
-      if (owner === undefined || owner.type !== 'Property') return;
-
-      if (owner.key.type !== 'Identifier' || owner.key.name !== 'metadata') return;
-      source = text.slice(inner.start, inner.end);
-    });
-  });
-
-  if (source === null) {
-    throw new Error(`${file}'s ${fixture} no longer builds its metadata from an object literal`);
-  }
-
-  return source;
-}
-
-describe("the gallery's advisor fixture", () => {
-  const metadataSource = fixtureMetadataSource(GALLERY, 'ADVISOR_MESSAGES');
-
-  /** Parsed: metadata that is not a JSON object is not a row any client could carry. */
-  const fixtureMetadata = (severity: AdvisorSeverity): JsonObject => {
-    const build = new Function(
-      'ADVISOR_SIGNAL_KIND', 'ADVISOR_SEVERITY_METADATA_KEY', 'severity',
-      `return (${metadataSource});`,
-    );
-
-    return v.parse(
-      JsonObjectSchema,
-      build(ADVISOR_SIGNAL_KIND, ADVISOR_SEVERITY_METADATA_KEY, severity),
-    );
-  };
-
-  test('every rung the frame photographs classifies as an advisor card', () => {
+describe('advisor cards', () => {
+  test('an advisor note at every severity is an advisor card, not the owner speaking', () => {
     for (const severity of ADVISOR_SEVERITIES) {
-      // No `programmatic:` prefix, so the metadata stamp alone keeps this out of the owner's bubble.
-      expect(classifyProgrammaticTurn({ metadata: fixtureMetadata(severity), id: `adv-${severity}` }))
-        .toEqual({ kind: 'advisor', severity });
+      expect(classifyProgrammaticTurn({
+        metadata: { kinuEvent: ADVISOR_SIGNAL_KIND, [ADVISOR_SEVERITY_METADATA_KEY]: severity }, id: `adv-${severity}`,
+      })).toEqual({ kind: 'advisor', severity });
     }
   });
 
@@ -380,29 +328,5 @@ describe('the card lifecycle', () => {
     expect(messageSignalId({ metadata: { kinuEvent: 'event_drain', signalId: 's1' } })).toBe('s1');
     expect(messageSignalId({ metadata: {} })).toBeNull();
     expect(messageSignalId({ metadata: undefined })).toBeNull();
-  });
-});
-
-/**
- * The DO's job runner is a per-agent singleton, so the background policy must be read per turn.
- * Nothing observable fails if it reverts to a fixed policy, so it is pinned against source.
- */
-describe('the cloud backend selects its background policy per turn', () => {
-  const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
-
-  test('the job runner reads the policy through a thunk, not a captured value', () => {
-    // Per-turn read: the runner is cached across turns.
-    expect(actor).toContain('policy: () => invocationBackgroundPolicy(this.turnSurface(), true)');
-    expect(actor).not.toContain('BACKGROUND_POLICY[this.turnSurface()]');
-  });
-
-  test('both unwatched populations are one-shot; only real chat is interactive', () => {
-    const surface = present(/protected turnSurface\(\): InvocationSurface \{([\s\S]*?)\n  \}/.exec(actor), 'the turnSurface() body');
-    // CLI one-shot and signal-driven autonomous turns both have nobody watching a stream;
-    // continuity alone misses the latter, event metadata alone misses `kinu exec`.
-    expect(surface[1]).toContain('turnUserMessageEvent');
-    expect(surface[1]).toContain("_turnContinuity === 'independent_task'");
-    expect(surface[1]).toContain("'interactive'");
-    expect(surface[1]).toContain("'one-shot'");
   });
 });

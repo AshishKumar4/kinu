@@ -37,7 +37,7 @@ import {
 } from './session';
 import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
-import type { AgentModelMenu } from '@kinu.run/core';
+import type { AgentModelMenu, AgentRpcMethod } from '@kinu.run/core';
 import { pageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
@@ -345,7 +345,7 @@ export class CloudAgentClient implements AgentClient {
         FileRestoreResultSchema, await this.callRpc('restoreFileCheckpoint', [dir, id]),
       ),
     };
-    // The sealed plan RPCs (`rpc-gate.ts`).
+    // The sealed plan RPCs (`agent-rpc-access.ts`).
     this.plans = {
       active: async () => v.parse(CloudPlanReviewSchema, await this.callRpc('getActivePlanReview', [])),
       saveAnnotations: async (id, revision, annotations) => v.parse(
@@ -481,7 +481,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   /** For surfaces that must not force a websocket open; live-session ops use callRpc. */
-  private callHttp<T>(method: string, schema: v.GenericSchema<T>, args: JsonValue[] = []): Promise<T> {
+  private callHttp<T>(method: AgentRpcMethod, schema: v.GenericSchema<T>, args: JsonValue[] = []): Promise<T> {
     if (this.subordinateName) {
       return this.callRpc(method, args).then((result) => v.parse(schema, result));
     }
@@ -489,11 +489,11 @@ export class CloudAgentClient implements AgentClient {
     return this.callParentHttp(method, schema, args);
   }
 
-  private callParentHttp<Input, T = Input>(method: string, schema: v.GenericSchema<Input, T>, args: JsonValue[] = []): Promise<T> {
+  private callParentHttp<Input, T = Input>(method: AgentRpcMethod, schema: v.GenericSchema<Input, T>, args: JsonValue[] = []): Promise<T> {
     return callAgentRpc({ origin: this.origin, token: this.token, name: this.cloudName, method, schema, args });
   }
 
-  private async callRpc(method: string, args: JsonValue[]): Promise<JsonValue> {
+  private async callRpc(method: AgentRpcMethod, args: JsonValue[]): Promise<JsonValue> {
     await this.ensureOpen();
     const ws = this.ws;
 

@@ -17,6 +17,8 @@ const DUMMY_LLM: LLMProviderConfig = {
 
 const fixtureServer = new URL('./fixtures/echo-mcp-server.mjs', import.meta.url).pathname;
 
+const badRootServer = new URL('./fixtures/bad-root-mcp-server.mjs', import.meta.url).pathname;
+
 function mcpServers() {
   return {
     echo: {
@@ -145,6 +147,21 @@ describe('connectMcpServers', () => {
       await expect(conn.call('echo', 'echo', { text: 'hello' })).resolves.toBe('echo: hello');
       await conn.close();
       await expect(conn.call('echo', 'echo', { text: 'after disconnect' })).rejects.toBeInstanceOf(Error);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('a listed tool that breaks the spec is refused alone and named; the rest of its server still works', async () => {
+    const logs: string[] = [];
+    const conn = await connectMcpServers({ bad: { command: 'node', args: [badRootServer] } }, (msg) => logs.push(msg));
+
+    try {
+      expect(conn.descriptors.map((d) => d.toolKey)).toEqual(['mcp_bad_good']);
+      expect(conn.refused.map((r) => [r.server, r.reason.includes('"scalar_root"')])).toEqual([['bad', true]]);
+      expect(conn.diagnostics.map((d) => d.status)).toEqual(['connected']);
+      expect(logs.filter((m) => m.includes('"scalar_root" is not offered'))).toHaveLength(1);
+      await expect(conn.call('bad', 'good', { q: 'x' })).resolves.toBe('ran good');
     } finally {
       await conn.close();
     }

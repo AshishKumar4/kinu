@@ -1,14 +1,18 @@
 import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { asFetchFunction, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, type ProfileCatalogEnvelope } from '@kinu.run/core';
+import {
+  actorScaffoldPath, asFetchFunction, BUILTIN_PROFILE_CATALOG, MAIN_AGENT, profileCatalogDigest, type ProfileCatalogEnvelope,
+} from '@kinu.run/core';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { testOwner } from './helpers/user-do';
 import { handleUserRequest } from '../src/user/routes';
 import { handleCreateWorkspaceRequest } from '../src/user/workspace-access';
 import { createCloudWorkspaceForUser, type CloudWorkspaceRegistry } from '../src/user/workspace-create';
 import { claimOwnedWorkspace } from '../src/user/workspace-ownership';
-import { halfBornOrchestratorHarness, HarnessOrchestratorAgent, orchestratorHarness } from './helpers/actor-harness';
+import {
+  halfBornOrchestratorHarness, orchestratorHarness, reactivateOrchestratorHarness, workspaceFiles,
+} from './helpers/actor-harness';
 import type { UserCaller } from '@kinu.run/core';
 import type { NameOrigin } from '@kinu.run/core';
 import type { WorkspaceRegistrationSource } from '../src/user/user-do';
@@ -711,43 +715,56 @@ describe('cloud agent ownership safety', () => {
   describe('claimOwner — the scaffold probe and the connect path', () => {
     // #222: the claimOwner latency tail was ensureOwnedScaffold's `vfs.exists` probe on every cold
     // activation; the owned branch must not probe (beforeTurn awaits the same latch).
-    function spyScaffoldExists(agent: HarnessOrchestratorAgent) {
-      const scaffold = agent.observeRuntime().identity.scaffold;
-      let seen = 0;
-      const real = scaffold.exists.bind(scaffold);
-      scaffold.exists = async () => {
-        seen += 1;
 
-        return real();
-      };
+    /** Every statement the storage engine ran while `during` ran. */
+    async function statementsDuring(db: Database, during: () => Promise<void>): Promise<string[]> {
+      const seen: string[] = [];
+      const query = db.query.bind(db);
+      const prepare = db.prepare.bind(db);
+      Object.assign(db, {
+        query: (sql: string) => { seen.push(sql);
 
-      return { calls: () => seen };
+ return query(sql); },
+        prepare: (sql: string) => { seen.push(sql);
+
+ return prepare(sql); },
+      });
+
+      try {
+        await during();
+      } finally {
+        Object.assign(db, { query, prepare });
+      }
+
+      return seen;
     }
 
+    /** A statement against the Nimbus filesystem's own inode table. */
+    const touchesFilesystem = (sql: string): boolean => /\binodes\b/u.test(sql);
+
     test('an already-owned claim does not touch the Nimbus filesystem', async () => {
-      const harness = orchestratorHarness();
-      harness.agent.forgetActivationLatches();
-      const probe = spyScaffoldExists(harness.agent);
+      const { db } = orchestratorHarness();
+      // A cold activation over the same rows: no latch of the last one survives.
+      const cold = await reactivateOrchestratorHarness(db, undefined, { world: { freshScaffold: true } });
 
-      const claim = await harness.agent.claimOwner('harness-owner');
+      let owner: string | undefined;
+      const statements = await statementsDuring(db, async () => { owner = (await cold.agent.claimOwner('harness-owner')).owner; });
 
-      expect(claim.owner).toBe('harness-owner');
-      expect(probe.calls()).toBe(0);
+      expect(owner).toBe('harness-owner');
+      expect(statements.filter(touchesFilesystem)).toEqual([]);
     });
 
     test('the first claim still bootstraps the scaffold through Nimbus', async () => {
-      const harness = orchestratorHarness();
-      harness.db.prepare(
-        "UPDATE workspace_identity SET owner_user_id = '' WHERE id = 'harness-actor'",
-      ).run();
-      harness.agent.forgetActivationLatches();
-      const probe = spyScaffoldExists(harness.agent);
+      const { db } = orchestratorHarness();
+      db.prepare("UPDATE workspace_identity SET owner_user_id = '' WHERE id = 'harness-actor'").run();
+      const cold = await reactivateOrchestratorHarness(db, undefined, { world: { freshScaffold: true } });
 
-      const claim = await harness.agent.claimOwner('first-claim-user');
+      let owner: string | undefined;
+      const statements = await statementsDuring(db, async () => { owner = (await cold.agent.claimOwner('first-claim-user')).owner; });
 
-      expect(claim.owner).toBe('first-claim-user');
-      expect(probe.calls()).toBeGreaterThan(0);
-      expect(await harness.agent.observeRuntime().identity.scaffold.exists()).toBe(true);
+      expect(owner).toBe('first-claim-user');
+      expect(statements.filter(touchesFilesystem).length).toBeGreaterThan(0);
+      expect(await workspaceFiles(cold.agent).stat(actorScaffoldPath({ kind: 'main', storageKey: MAIN_AGENT }))).not.toBeNull();
     });
   });
 

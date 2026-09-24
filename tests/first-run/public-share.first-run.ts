@@ -41,15 +41,15 @@ describe(SUITE, () => {
     await runFirstRunCase(PLAN, {
       id: CASE, modelCalls: 'none', purpose: 'Disposable public live-share probe; no model task.',
       async run({ session }) {
-        const setup = v.parse(Exec, await session.rpcAt(session.workspace, 'executeInExecutor', ['workspace', `mkdir -p /home/user/slates/${SLATE}
-cat > /home/user/slates/${SLATE}/package.json <<'END'
+        const setup = v.parse(Exec, await session.rpcAt(session.workspace, 'executeInExecutor', ['workspace', `mkdir -p /home/main/slates/${SLATE}
+cat > /home/main/slates/${SLATE}/package.json <<'END'
 {"main":"server.ts","slate":{"title":"Public share probe","bindings":{"FILES":{"kind":"namespace","namespace":"workspace","members":["exists","writeFile"]}}}}
 END
-cat > /home/user/slates/${SLATE}/server.ts <<'END'
+cat > /home/main/slates/${SLATE}/server.ts <<'END'
 import { SlateObject } from "kinu:slate";
 export class Slate extends SlateObject {
-  async probe() { return { exists: await this.env.FILES.exists("/home/user/slates") }; }
-  async mutate() { return await this.env.FILES.writeFile("/home/user/slates/${SLATE}/mark", "x"); }
+  async probe() { return { exists: await this.env.FILES.exists("/home/main/slates") }; }
+  async mutate() { return await this.env.FILES.writeFile("/home/main/slates/${SLATE}/mark", "x"); }
   async fetch() { return new Response("public-share-probe-ok"); }
 }
 END`]));

@@ -71,7 +71,7 @@ function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
   );
 }
 
-// No stopped state: the runtime sends no stopped event, so not-working is only idle.
+// No stopped state: a turn nobody executes offers Recover in the composer, and nothing here says it runs.
 function TaskIndicator({ working, providerWait, waitingOnYou }: { working: boolean; providerWait: { provider: string; waitMs: number } | null; waitingOnYou: boolean }) {
   let tone = { cls: "p-text-3 p-border p-fill", dot: "p-dot-neutral", word: "idle" };
 
@@ -85,6 +85,8 @@ function TaskIndicator({ working, providerWait, waitingOnYou }: { working: boole
 
   return (
     <span
+      role="status"
+      aria-label="Task state"
       className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-[3px] text-[11.5px] font-medium ${tone.cls}`}
       title={providerWait ? `Retry in ${Math.ceil(providerWait.waitMs / 1000)}s` : undefined}
     >

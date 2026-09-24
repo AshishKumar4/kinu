@@ -4,7 +4,9 @@ import {
   DEFAULT_AUTO_GEPA_EVERY_N_TURNS, DEFAULT_GEPA_EVAL_BUDGET,
   canonicalConversationId, setReasoningEffort,
 } from '../src/index';
+import { Database } from 'bun:sqlite';
 import { createTestSql } from '@kinu.run/test-utils';
+import { wrapDatabase } from '../src/identity/create';
 import { createTestActor } from './helpers';
 
 function setup() {
@@ -316,6 +318,13 @@ describe('AgentConfigStore — lifetime counters', () => {
     expect(c.countClosedTurnWindow()).toBe(2);
     expect(c.countClosedTurnWindow()).toBe(3);
     expect(c.get(AGENT_CONFIG_KEYS.closedTurnWindows)).toBe('3');
+  });
+
+  test('counts on over the inline runtime, whose writes answer their RETURNING rows as DO storage.sql does', () => {
+    const { sql, execRaw } = wrapDatabase(new Database(':memory:'));
+    const c = createTestActor(sql, execRaw, crypto.randomUUID(), 'inline-config').config;
+
+    expect([c.countClosedTurnWindow(), c.countClosedTurnWindow(), c.countIsolateGeneration()]).toEqual([1, 2, 1]);
   });
 
   test('an unreadable counter row resumes from one rather than throwing', () => {

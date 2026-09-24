@@ -1,7 +1,7 @@
 // The `agents.*` codemode namespace: the delegation tool projected into the sandbox, gated by agentsActionsFor.
 // Real sandbox execution is covered in the two backend suites.
 import { describe, expect, test } from 'bun:test';
-import { createTestRuntime, present } from '@kinu.run/test-utils';
+import { createTestRuntime, present, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { hostedSeatsOver, refuseHostNode } from './helpers-actor-host';
 import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
@@ -126,6 +126,7 @@ function swarmDeps(overrides: Partial<AgentsSwarmDeps> = {}): AgentsSwarmDeps {
     rt, model, resolveModel: () => model,
     // One hosted actor per node id, all over the one workspace database.
     hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
+    ...unobservedSearchSeams(),
     ...overrides,
   };
 }
@@ -385,6 +386,7 @@ describe('agents.* codemode namespace — dispatch', () => {
         swarm: {
           rt, model: new MockLanguageModelV3(),
           hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
+          ...unobservedSearchSeams(),
         },
       };
     });
@@ -575,6 +577,7 @@ describe('agents.* codemode namespace — declared types', () => {
         rt: createTestRuntime().rt, model: new MockLanguageModelV3(),
         // Reads the declaration and runs nothing, so no seat is asked for.
         hostNode: refuseHostNode('this case renders declarations and runs no node'),
+        ...unobservedSearchSeams(),
       },
     })).types;
 

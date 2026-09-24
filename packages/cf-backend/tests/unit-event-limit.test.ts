@@ -9,7 +9,7 @@ const DEFAULT_PAGE = boundEventQuery().limit;
 
 const UNTRUSTED_CEILING = boundEventQuery({ limit: Number.MAX_SAFE_INTEGER }).limit;
 
-import { orchestratorHarness } from './helpers/actor-harness';
+import { eventsOver, orchestratorHarness } from './helpers/actor-harness';
 import type { HubEnv, HubResolver } from '../src/events/routes';
 
 // Dynamic: the route module resolves the Agent SDK at import time, so it loads after `actor-harness`
@@ -33,7 +33,7 @@ function seededWorkspace() {
   const harness = orchestratorHarness();
 
   for (let i = 0; i < SEEDED_EVENTS; i++) {
-    harness.agent.publishHarnessEvent(chatDescriptor(`event ${i}`), 1000 + i);
+    eventsOver(harness.db).publish({ descriptor: chatDescriptor(`event ${i}`), now: 1000 + i });
   }
 
   return { resolveAgent: () => Promise.resolve(harness.agent), harness };

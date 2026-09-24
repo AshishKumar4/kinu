@@ -6,11 +6,10 @@
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { SearchNode } from '../types/mcts';
 import type { ConvergenceResult } from '../types/evaluation';
 import type { SessionWriter } from './record-node';
 import { isCraftable, maybeStoreCraftedTool } from '../craft/discovery';
-import { captureAlternateTakes, findNearTiedRivals } from './takes';
+import { captureAlternateTakes, findNearTiedRivals, inPopulation, searchTree } from './takes';
 import { selectWinnerByTest } from './test-selection';
 import { DEFAULT_CONFIG } from '../config';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
@@ -33,11 +32,8 @@ export async function converge(
   const takesEpsilon = opts.takesEpsilon ?? DEFAULT_CONFIG.mcts.takesEpsilon;
   const mode = opts.mode ?? 'build';
 
-  const population = rt.storage.sql<SearchNode>`
-    SELECT * FROM search_nodes
-    WHERE actor_id = ${rt.actor.actorId} AND root_id = ${rootId}
-      AND status IN ('terminal', 'open')
-    ORDER BY value DESC, depth DESC`;
+  const tree = searchTree(rt.storage.sql, rt.actor, rootId);
+  const population = tree.filter(inPopulation);
 
   const argmaxWinner = population[0];
 
@@ -45,22 +41,17 @@ export async function converge(
     throw new Error('No viable nodes — all branches failed or were pruned');
   }
 
-  // Near-tie within takesEpsilon: break it with an execution test over the candidates' code.
-  const selectedId = mode === 'plan'
-    ? argmaxWinner.id
-    : await selectWinnerByTest(population, argmaxWinner, takesEpsilon, {
+  const winner = mode === 'plan'
+    ? argmaxWinner
+    : await selectWinnerByTest(tree, argmaxWinner, takesEpsilon, {
         executor: rt.executor,
         judge: rt.judgeModel ?? rt.llm,
       });
 
-  const winner = selectedId === argmaxWinner.id
-    ? argmaxWinner
-    : population.find((n) => n.id === selectedId) ?? argmaxWinner;
-
   // Distinct approaches scoring exactly equal mean the scorer carries no signal: not converged.
   // Only exact ties count; findNearTiedRivals' epsilon window also keeps rivals above the winner.
-  const indistinguishable = findNearTiedRivals(population, winner, 0)
-    .filter((rival) => rival.value === winner.value);
+  const indistinguishable = findNearTiedRivals(tree, winner, 0)
+    .filter((rival) => rival.ownScore === winner.ownScore);
 
   if (indistinguishable.length > 0) {
     if (mode === 'build') {
@@ -68,7 +59,7 @@ export async function converge(
         'memory/MEMORY.md',
         `\n### Undifferentiated search (${isoDate()})\n` +
         `Task: ${winner.task.slice(0, 200)}\n` +
-        `${indistinguishable.length + 1} distinct approaches all scored ${winner.value.toFixed(2)}; ` +
+        `${indistinguishable.length + 1} distinct approaches all scored ${winner.ownScore.toFixed(2)}; ` +
         `nothing in this search could tell them apart, so no winner was earned.\n`,
       );
       await rt.memory.index('memory/MEMORY.md');
@@ -78,29 +69,29 @@ export async function converge(
 
     return {
       winnerId: winner.id,
-      winnerValue: winner.value,
+      winnerValue: winner.ownScore,
       converged: false,
       reason: 'undifferentiated',
       trajectory: [],
     };
   }
 
-  if (winner.value < minAcceptable) {
+  if (winner.ownScore < minAcceptable) {
     if (mode === 'build') {
       await rt.memory.append(
         'memory/MEMORY.md',
-        `\n### Failed task (${isoDate()}, best score ${winner.value.toFixed(2)})\n` +
+        `\n### Failed task (${isoDate()}, best score ${winner.ownScore.toFixed(2)})\n` +
         `Task: ${winner.task.slice(0, 200)}\nAll approaches scored below ${minAcceptable}.\n`,
       );
       await rt.memory.index('memory/MEMORY.md');
-      await recordTaskOutcome(rt, winner.task, 'error', winner.value);
+      await recordTaskOutcome(rt, winner.task, 'error', winner.ownScore);
     }
 
     abandonSearchTree(rt.storage.sql, rt.actor, rootId);
 
     return {
       winnerId: winner.id,
-      winnerValue: winner.value,
+      winnerValue: winner.ownScore,
       converged: false,
       reason: 'no_acceptable_candidate',
       trajectory: [],
@@ -113,31 +104,25 @@ export async function converge(
 
   if (mode === 'build') {
     const summary = await rt.llm.complete(
-      `Task: ${winner.task}\nResult: ${evidenceWindow(winner.observation, EVIDENCE_BUDGETS.convergenceObservation)}\nScore: ${winner.value.toFixed(2)}\n\n` +
+      `Task: ${winner.task}\nResult: ${evidenceWindow(winner.observation, EVIDENCE_BUDGETS.convergenceObservation)}\nScore: ${winner.ownScore.toFixed(2)}\n\n` +
       `Summarize in ≤3 bullet points what approach worked:`,
     );
 
     await rt.memory.append(
       'memory/MEMORY.md',
-      `\n## Successful approach (${isoDate()}, score ${winner.value.toFixed(2)})\n${summary}\n`,
+      `\n## Successful approach (${isoDate()}, score ${winner.ownScore.toFixed(2)})\n${summary}\n`,
     );
     await rt.memory.index('memory/MEMORY.md');
 
-    const winnerCode = rt.storage.sql<{ code_used: string | null; code_language: string | null }>`
-      SELECT code_used, code_language FROM search_nodes
-      WHERE actor_id = ${rt.actor.actorId} AND id = ${winner.id}
-    `[0];
-
-    if (winnerCode?.code_used && isCraftable(winnerCode.code_language)
-        && winner.value > DEFAULT_CONFIG.mcts.craftExtractionThreshold) {
-      await maybeStoreCraftedTool(rt, winnerCode.code_used, winner.value);
+    if (winner.code_used && isCraftable(winner.code_language)
+        && winner.ownScore > DEFAULT_CONFIG.mcts.craftExtractionThreshold) {
+      await maybeStoreCraftedTool(rt, winner.code_used, winner.ownScore);
     }
 
     // Rivals are the turn's only preference signal, so a capture failure must surface.
     captureAlternateTakes(rt.storage.sql, rt.actor, { rootId, task: winner.task, winnerId: winner.id, epsilon: takesEpsilon });
   }
 
-  // Close the tree: winner terminal, every other open node pruned.
   void rt.storage.sql`
     UPDATE search_nodes
     SET status = 'pruned'
@@ -149,11 +134,11 @@ export async function converge(
     WHERE actor_id = ${rt.actor.actorId} AND id = ${winner.id}
   `;
 
-  if (mode === 'build') await recordTaskOutcome(rt, winner.task, 'success', winner.value);
+  if (mode === 'build') await recordTaskOutcome(rt, winner.task, 'success', winner.ownScore);
 
   return {
     winnerId: winner.id,
-    winnerValue: winner.value,
+    winnerValue: winner.ownScore,
     converged: true,
     trajectory,
   };

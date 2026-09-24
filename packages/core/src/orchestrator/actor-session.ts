@@ -91,7 +91,7 @@ export interface ActorExecutionResult {
   readonly program: ActorTurnProgram | null;
   /** Written before the first effect; null only when preparation failed before admission. */
   readonly claim: ActorTurnClaim | null;
-  /** Admission evidence from the claim ledger; empty when no claim was admitted. */
+  /** What the first request sent, else the admitted context; empty without a claim. */
   readonly admittedMessages: readonly ModelMessage[];
   readonly outputReferences: readonly MessageReference[];
   readonly outputPartReferences: readonly MessagePartReference[];
@@ -464,6 +464,7 @@ export class ActorSession {
     let program: ActorTurnProgram | null = null;
     let failure: Error | null = null;
     let durableOutput: SessionStream | null = null;
+    let admittedMessages: readonly ModelMessage[] = [];
 
     try {
       active.phase = 'running';
@@ -484,6 +485,7 @@ export class ActorSession {
       });
 
       active.claim = claim;
+      admittedMessages = admitted.messages;
       durableOutput = new SessionStream(this.canonical, lease.turnId, claim.epoch);
       const stream = durableOutput;
 
@@ -506,6 +508,8 @@ export class ActorSession {
             },
             consume: async ({ stepNumber, messages }) => {
               const consumed = await this.options.claims.consume(claim, { index: stepNumber, messages });
+
+              if (stepNumber === 0) admittedMessages = [...messages];
               stream.beginRequest(consumed.requestId, stepNumber);
             },
           } } satisfies ChatOptions,
@@ -581,10 +585,6 @@ export class ActorSession {
     const output = await this.canonical.outputForTurn(lease.turnId);
     const outputReferences = output.messages;
     const finalTextReference = await this.matchTranscriptText(text, outputReferences);
-
-    const admittedMessages = active.claim === null
-      ? []
-      : ((await this.options.claims.consumedContext(lease.turnId, 0)) ?? (await this.options.claims.admittedFor(active.claim))).messages;
 
     return {
       text, answer, steps, failure, program, claim: active.claim,

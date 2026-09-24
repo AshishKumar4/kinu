@@ -131,8 +131,20 @@ export function releaseScratch(): number {
   return removed;
 }
 
+/** Release on SIGTERM, SIGINT and SIGHUP, then re-raise so a killed run reads as killed. */
+export function releaseOnSignals(): void {
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+    process.on(signal, () => {
+      releaseScratch();
+      process.removeAllListeners(signal);
+      process.kill(process.pid, signal);
+    });
+  }
+}
+
 /**
  * A fresh temp directory named by `label`, removed when the run ends; `parent` lets repo-local fixtures resolve deps.
+ * The OS temp directory, not disk: L10 in docs/ARCHITECTURE-DECISIONS.md measured both.
  * Release is registered by the preload's `afterAll`: under `bun test` 1.3.14 `process.on('exit')`/`beforeExit` never fire.
  */
 export function scratchDir(label: string, parent = tmpdir()): string {

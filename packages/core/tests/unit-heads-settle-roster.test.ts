@@ -7,6 +7,7 @@ import { present } from '@kinu.run/test-utils';
 import { HeadJournal, UNREPORTED_AT_MERGE_REASON } from '../src/heads/journal';
 import { initHeadsTables } from '../src/heads/schema';
 import { initSearchTables } from '../src/mcts/schemas';
+import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
 import { initMctsSearchTable } from '../src/mcts/search-store';
 import { listForkRuns } from '../src/read-models/fork-runs';
 import { makeSql, makeExecRaw, createTestActor } from './helpers';
@@ -50,6 +51,7 @@ function seeded() {
   const sql = makeSql(db);
   initHeadsTables(execRaw);
   initSearchTables(execRaw);
+  initSwarmNodeRecords(execRaw);
   initMctsSearchTable(execRaw);
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'settle-test');
   const journal = new HeadJournal(sql, actor);

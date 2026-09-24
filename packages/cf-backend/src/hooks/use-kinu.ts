@@ -42,9 +42,9 @@ import {
 } from "@kinu.run/core";
 import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "@kinu.run/core";
 import { terminalChatError, type ChatTurnError } from "@kinu.run/core";
-import { turnLiveness, type TurnClaimState } from "@kinu.run/core";
+import { turnLiveness, TURN_CLAIM_FRAME, TurnClaimFrameSchema, type TurnClaimState } from "@kinu.run/core";
 import type { AsyncResource } from "./use-async-resource";
-import { pruneSlateReloads } from "../components/surfaces/presence";
+import { pruneSlateReloads } from "@kinu.run/core";
 
 export type { ExecutorInfo };
 
@@ -199,6 +199,7 @@ const MctsRowSchema = v.object({
   depth: v.number(),
   visits: v.number(),
   value: v.number(),
+  own_score: v.nullable(v.number()),
   status: v.picklist(["open", "pruned", "terminal", "failed", "running"]),
   action: v.string(),
   task: v.string(),
@@ -361,6 +362,7 @@ const SocketMessageSchema = v.variant("type", [
   v.object({ type: v.literal("plan_updated"), plan: PlanReviewSchema }),
   WorkspacePlanUpdatedFrameSchema,
   v.object({ type: v.literal("subordinates_changed"), subordinates: v.array(SubordinateRosterEntrySchema) }),
+  TurnClaimFrameSchema,
   SubordinateActivityEventSchema,
   v.object({
     type: v.literal("executor-output"), executor: v.string(), command: v.string(),
@@ -398,6 +400,13 @@ function admitsActorFrame(
   if (msg.actorId === undefined) return true;
 
   return pane.isSubordinate && pane.ownActorId === msg.actorId;
+}
+
+/** A branch as the pane draws it: settled, failed, or still running. */
+function branchRunStatus(status: string | undefined): "settled" | "error" | "running" {
+  if (status === "settled") return "settled";
+
+  return status === "error" ? "error" : "running";
 }
 
 function paneFrame(
@@ -864,7 +873,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   // Only for the sidebar roster's dot; the tab badge is the queue's length.
   const [changelogUnseen, setChangelogUnseen] = useState(0);
   const [branchRuns, setBranchRuns] = useState<BranchRun[]>([]);
-  /** `settled` until a snapshot loads; the socket's own streaming flag covers that window. */
+  /** Seeded by the snapshot each (re)connect loads, then replaced by every `turn_claim` frame. */
   const [turnClaim, setTurnClaim] = useState<TurnClaimState>({ kind: "settled" });
   // Counts, not timestamps: a transcript only needs to notice its branch moved, without a shared clock.
   const [headActivity, setHeadActivity] = useState<ReadonlyMap<string, number>>(new Map());
@@ -1014,8 +1023,8 @@ export function useKinu(target?: string | KinuActorAddress) {
    *  the composer from admitting a second press in that window. */
   const isStreaming = streamingTokens || chatStatus === "submitted";
 
-  /** The one answer to "is a turn live", folded over the durable claim and the socket. The claim
-   *  is snapshot-paced, so a client seeing its own tokens is live regardless. */
+  /** The one answer to "is a turn live", folded over the durable claim and the socket. The claim covers a turn
+   *  that began before this tab loaded; the socket, one that begins while it is open. */
   const liveness = useMemo(
     () => turnLiveness({ claim: turnClaim, streaming: isStreaming }),
     [turnClaim, isStreaming],
@@ -1381,8 +1390,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
           await reread('slates', refreshSlates);
         } else if (msg.type === "branch_status") {
-          const settledOrRunning = msg.status === "error" ? "error" : "running";
-          const status = msg.status === "settled" ? "settled" : settledOrRunning;
+          const status = branchRunStatus(msg.status);
 
           // The head id derives from the run id, so retire without waiting for a journal write a
           // failed branch never makes.
@@ -1437,6 +1445,8 @@ export function useKinu(target?: string | KinuActorAddress) {
             knownWorkspacePlans.current.add(key);
             setArrivedReference(msg.reference);
           }
+        } else if (!isSubordinate && msg.type === TURN_CLAIM_FRAME) {
+          setTurnClaim(msg.claim);
         } else if (!isSubordinate && msg.type === "subordinates_changed") {
           const roster = parseSubordinateRoster({ value: msg.subordinates });
 
@@ -1574,7 +1584,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (!isSubordinate) refreshLiveData();
   }, [isSubordinate, refreshLiveData, sessionRecovery, setSourceError]);
 
-  /** Never edits the claim locally: the server's next snapshot retires the button, so a refused
+  /** Never edits the claim locally: the server's `turn_claim` frame retires the button, so a refused
    *  recovery still shows as stuck. Resolves the failure reason (also the workspace notice) or null. */
   const recoverTurn = useCallback(async (): Promise<string | null> => {
     setSourceError("recover", null);
@@ -1968,7 +1978,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     messages,
     /** Null when nothing is being waited on: "working" vs "waiting on {provider}". */
     providerWait,
-    isStreaming,
     liveness,
     recoverTurn,
     /** Until true, empty `messages` means "not delivered", not "there is nothing". */

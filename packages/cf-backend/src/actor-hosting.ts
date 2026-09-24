@@ -290,6 +290,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         transaction: (body) => { seams.ctx.storage.transactionSync(body); },
         // Review model calls debit the mission the reviewed turn ran under.
         governor: budget,
+        reportModelCall: (report) => { seams.reportModelCall(report); },
       });
 
       const backendHost: BackendHost = {

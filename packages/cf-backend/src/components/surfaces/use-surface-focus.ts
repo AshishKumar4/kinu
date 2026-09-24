@@ -3,8 +3,7 @@
 import { useCallback, useState } from "react";
 import type { SlateSummary } from "@kinu.run/core";
 import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
-import { SLATE_PREFIX } from "./presence";
-import type { SurfaceKind } from "./WorkSurface";
+import { SLATE_PREFIX, type SurfaceKind } from "@kinu.run/core";
 
 /**
  * SAFETY: use-kinu builds previewFocus as `slate:${id}` / `preview:${executor}:${port}`, so re-adding

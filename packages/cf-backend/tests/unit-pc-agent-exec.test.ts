@@ -7,14 +7,15 @@ import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
   DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_CANCEL_VERSION_REFUSAL, DEVICE_EXEC_ACK_METHOD,
   DEVICE_PTY_CLOSE, DEVICE_PTY_EXIT, DEVICE_PTY_INPUT, DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_OUTPUT, DEVICE_PTY_RESIZE,
-  DeviceCancelResultSchema, DeviceTunnel, JsonValueSchema, createDeviceTunnelExecutor,
+  DEVICE_UNKNOWN_METHOD, DeviceCancelResultSchema, DeviceTunnel, JsonValueSchema, createDeviceTunnelExecutor,
   type DeviceStatus, type DeviceTransport, type TunnelSocket,
 } from '@kinu.run/core';
 
@@ -77,8 +78,9 @@ const SupervisorRegistrySchema = v.object({
 
 const pcAgent = v.parse(PcAgentModuleSchema, require_(join(import.meta.dir, '../../pc-agent/src/index.js')));
 
+/** As the hub sends it: with the owner's Sandbox switch, here off. */
 function handle(message: DaemonMessage, socket: ReplySocket): void {
-  pcAgent.handle(message, socket);
+  pcAgent.handle({ ...message, sandbox: { tier: 'raw', agentHome: '', roots: [] } }, socket);
 }
 
 const ExecResultSchema = v.object({ stdout: v.string(), stderr: v.string(), exitCode: v.number() });
@@ -105,24 +107,24 @@ function rpcId(sequence: number): string {
   return `rpc-testepoch0-${sequence}`;
 }
 
-function exec(command: string): Promise<{ reply: ExecReply; elapsed: number }> {
-  const { promise, resolve } = Promise.withResolvers<{ reply: ExecReply; elapsed: number }>();
-  const started = Date.now();
+/** Run `command` as the hub does: answered, then ACKed, so its supervisor exits with the test. */
+async function exec(command: string): Promise<ExecReply> {
+  const ws = recorder();
+  const id = rpcId(++execSequence);
 
-  const ws = {
-    send(data: string) {
-      resolve({ reply: v.parse(ExecReplySchema, JSON.parse(data)), elapsed: Date.now() - started });
-    },
-  };
+  handle({ id, method: 'exec', params: [command] }, ws.socket);
+  const reply = v.parse(ExecReplySchema, await ws.answerTo(id));
+  const ackId = rpcId(++execSequence);
 
-  handle({ id: rpcId(++execSequence), method: 'exec', params: [command] }, ws);
+  acknowledge(ackId, id, ws.socket);
+  await ws.answerTo(ackId);
 
-  return promise;
+  return reply;
 }
 
 describe('pc-agent exec RPC', () => {
   test('answers with stdout, stderr and the exit code', async () => {
-    const { reply } = await exec('echo out; echo err 1>&2; exit 4');
+    const reply = await exec('echo out; echo err 1>&2; exit 4');
 
     expect(reply.id).toStartWith('rpc-testepoch0-');
     expect(reply.error).toBeUndefined();
@@ -132,27 +134,35 @@ describe('pc-agent exec RPC', () => {
   });
 
   test('answers when the COMMAND finishes, not when a backgrounded server does', async () => {
-    const { reply, elapsed } = await exec('sleep 20 & echo started');
+    const pidFile = join(scratchDir('pc-agent-background'), 'server.pid');
+    const reply = await exec(`sleep 20 & echo $! > ${pidFile}; echo started`);
+    const server = Number(readFileSync(pidFile, 'utf8').trim());
+    // Still running: an answer that waited for the server would have come after it ended.
+    const running = alive(server);
+
+    if (running) process.kill(server, 'SIGKILL');
 
     expect(reply.result?.stdout).toContain('started');
     expect(reply.result?.exitCode).toBe(0);
-    expect(elapsed).toBeLessThan(3_000);
+    expect(running).toBe(true);
   });
 
   test('output the command wrote is complete, not cut short by the early answer', async () => {
-    const { reply } = await exec('seq 1 20000');
+    const reply = await exec('seq 1 20000');
 
     expect(reply.result?.exitCode).toBe(0);
     expect(reply.result?.stdout.trimEnd().split('\n')).toHaveLength(20_000);
   });
 
   test('answers exactly once', async () => {
-    const sends: string[] = [];
+    const ws = recorder();
     const id = rpcId(100);
-    handle({ id, method: 'exec', params: ['echo hi'] }, { send: (d) => sends.push(d) });
-    await settled(() => (sends.length === 1 ? true : undefined), 'the sole exec reply');
+    handle({ id, method: 'exec', params: ['echo hi'] }, ws.socket);
+    await ws.answerTo(id);
+    acknowledge(rpcId(101), id, ws.socket);
+    await ws.answerTo(rpcId(101));
 
-    expect(sends).toHaveLength(1);
+    expect(ws.of(id)).toHaveLength(1);
   });
 });
 
@@ -347,6 +357,7 @@ describe('pc-agent command cancellation', () => {
 
     handle({ id: runId, method: 'exec', params: [`sleep 30 & echo $! > ${pidFile}; echo started`] }, ws.socket);
     const answer = await settled(() => ws.of(runId)[0], 'the exec answer');
+    const { pid: supervisor } = await supervisorState(runId);
     expect(v.parse(ExecResultSchema, answer.result).stdout).toContain('started');
     expect(existsSync(join(requestDir, 'result'))).toBe(true);
     expect(pcAgent.inFlight.size()).toBe(sizeBefore + 1);
@@ -357,6 +368,8 @@ describe('pc-agent command cancellation', () => {
       .toEqual({ requestId: runId, acknowledged: true });
     expect(await settled(() => (!existsSync(requestDir) ? true : undefined), 'supervisor cleanup')).toBe(true);
     expect(pcAgent.inFlight.size()).toBe(sizeBefore);
+    // The command's group leader has exited; the ACK must still reach the supervisor, which then ends.
+    expect(await gone(supervisor)).toBe(true);
 
     const server = Number(readFileSync(pidFile, 'utf8').trim());
 
@@ -457,16 +470,25 @@ describe('pc-agent command cancellation', () => {
 });
 
 describe('pc-agent durable supervisor', () => {
-  test('bounds captured output and includes the truncation marker', async () => {
+  test('bounds captured output, keeps its head and tail, and saves the whole of it', async () => {
     const ws = recorder();
     const id = rpcId(300);
     const requestDir = join(pcAgent.INFLIGHT_ROOT, id);
-    handle({ id, method: 'exec', params: [`${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(600000))"`] }, ws.socket);
+    const spill = join(tmpdir(), 'kinu-tool-output', `device-${id}.stdout.log`);
+    handle({ id, method: 'exec', params: [`${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(600000) + 'END')"`] }, ws.socket);
     const answer = await settled(() => ws.of(id)[0], 'the bounded output result');
     const result = v.parse(ExecResultSchema, answer.result);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('[output truncated at 524288 bytes]');
-    expect(statSync(join(requestDir, 'stdout')).size).toBeLessThan(525_000);
+
+    try {
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`END\n[stdout: 600003 bytes, `);
+      expect(result.stdout).toContain(`the full stdout is at ${spill}]`);
+      expect(statSync(join(requestDir, 'stdout')).size).toBeLessThan(530_000);
+      expect(statSync(spill).size).toBe(600_003);
+    } finally {
+      rmSync(spill, { force: true });
+    }
+
     acknowledge(rpcId(301), id, ws.socket);
     await settled(() => ws.of(rpcId(301))[0], 'the bounded output ACK');
   });
@@ -580,33 +602,43 @@ describe('pc-agent supervisor guards', () => {
   });
 });
 
+/** Executor → tunnel → daemon, as the hub wires them. The binding is declared before the socket: the two reference
+ *  each other, and nothing reads it before the first frame. */
+function deviceChain() {
+  let tunnel: DeviceTunnel;
+
+  const socket: TunnelSocket = {
+    readyState: 1,
+    send: (data: string) => {
+      handle(v.parse(DaemonFrameSchema, JSON.parse(data)), {
+        send: (reply: string) => { tunnel.handleMessage(reply); },
+      });
+    },
+  };
+
+  tunnel = new DeviceTunnel(socket);
+  const connected: DeviceStatus = { connected: true, registered: true, toolchain: null };
+
+  const transport: DeviceTransport = {
+    rpc: (method, params, opts) => tunnel.rpc(method, params, opts),
+    status: () => connected,
+    refreshStatus: async () => connected,
+  };
+
+  return { provider: createDeviceTunnelExecutor(transport), tunnel };
+}
+
+describe('the daemon answers in the words the hub reads', () => {
+  test('a method this daemon does not know reaches the hub as unknown, the way a newer frame meets an older daemon', async () => {
+    const { tunnel } = deviceChain();
+
+    await expect(tunnel.rpc('methodFromALaterHub', [])).rejects.toThrow(DEVICE_UNKNOWN_METHOD);
+    tunnel.dispose();
+  });
+});
+
 /** The whole chain, executor → tunnel → daemon → real process, aborted the way a stopped turn does. */
 describe('stopping a turn reaches the process on the user\'s machine', () => {
-  /** The binding is declared before the socket: the two reference each other, and nothing reads it before the first frame. */
-  function deviceChain() {
-    let tunnel: DeviceTunnel;
-
-    const socket: TunnelSocket = {
-      readyState: 1,
-      send: (data: string) => {
-        handle(v.parse(DaemonFrameSchema, JSON.parse(data)), {
-          send: (reply: string) => { tunnel.handleMessage(reply); },
-        });
-      },
-    };
-
-    tunnel = new DeviceTunnel(socket);
-    const connected: DeviceStatus = { connected: true, registered: true, toolchain: null };
-
-    const transport: DeviceTransport = {
-      rpc: (method, params, opts) => tunnel.rpc(method, params, opts),
-      status: () => connected,
-      refreshStatus: async () => connected,
-    };
-
-    return { provider: createDeviceTunnelExecutor(transport), tunnel };
-  }
-
   test('the tool\'s abort kills the command and its child, and says it did', async () => {
     const dir = scratchDir('pc-agent-e2e');
     const { command, pidOf } = commandWithDescendant(dir, 'e2e');

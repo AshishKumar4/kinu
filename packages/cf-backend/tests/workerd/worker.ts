@@ -21,6 +21,8 @@ export { DbCapabilityProbeDO } from './db-capability-probe';
 
 export { FilesEioProbeDO } from './files-eio-probe';
 
+export { ComplexityProbeDO } from './complexity/complexity-probe';
+
 export { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';
 
 // Exported exactly as `src/server.ts` does, for the `exports` loopback under our compatibility date.
@@ -142,7 +144,7 @@ export class GatedDO extends DurableObject<Cloudflare.Env> {
 }
 
 /**
- * `ctx.storage.transactionSync` atomicity, which `receiveSubordinateEvent` and `writeForkSnapshot`
+ * `ctx.storage.transactionSync` atomicity, which `receiveSubordinateEvent` and a fork's publication
  * rely on. The bun arm runs the body directly with no atomicity; `runDirectly` is that control.
  */
 export class TransactionDO extends DurableObject<Cloudflare.Env> {

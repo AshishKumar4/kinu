@@ -1,5 +1,6 @@
 /** TOOL_REACH is declared; a table row with nothing built for it must fail here. */
 
+import { unobservedSearchSeams } from '@kinu.run/test-utils';
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import { createTestRuntime, storesFor } from './helpers';
@@ -99,6 +100,7 @@ describe('the reach declaration', () => {
         swarm: {
           rt, model: new MockLanguageModelV3(),
           hostNode: refuseHostNode('the tool-reach suite builds providers and runs no node'),
+          ...unobservedSearchSeams(),
         },
       })),
       memory: () => createMemoryCodemodeProvider(() => ({

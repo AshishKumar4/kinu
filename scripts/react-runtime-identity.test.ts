@@ -57,11 +57,13 @@ import {
   build, type BuildEnvironmentOptions, type InlineConfig, type Plugin,
 } from 'vite';
 
-// The build under test, from the config the deploy path uses. Imported rather
-// than named by path: see `buildClient`.
-import clientConfig from '../packages/cf-backend/vite.config';
+// The build under test, from the config the deploy path uses, resolved as
+// `vite build` resolves it. Imported rather than named by path: see `buildClient`.
+import clientConfigFor from '../packages/cf-backend/vite.config';
 
 const REPO = join(import.meta.dir, '..');
+
+const clientConfig = clientConfigFor({ command: 'build', mode: 'production' });
 
 const CF = join(REPO, 'packages', 'cf-backend');
 

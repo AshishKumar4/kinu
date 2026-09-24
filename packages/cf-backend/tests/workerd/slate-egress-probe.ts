@@ -61,7 +61,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
     });
     seedBaseFilesystem(this.vfs, ['home', 'etc']);
     const files = this.vfs.as(CRED_KERNEL);
-    const root = '/home/user/slates/network';
+    const root = '/home/main/slates/network';
 
     if (!files.exists(root)) {
       files.mkdir(root, { recursive: true });

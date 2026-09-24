@@ -9,8 +9,7 @@ function isHeaderIterable(value: HeadersInit): value is HeadersInit & Iterable<I
   return Symbol.iterator in Object(value);
 }
 
-/** Copy every web-platform HeadersInit form without passing the DOM iterable
- * union into Bun's narrower constructor overload. */
+/** Every HeadersInit form, past Bun's narrower `Headers` constructor. */
 export function copyHeaders(init: HeadersInit | undefined): Headers {
   const headers = new Headers();
 

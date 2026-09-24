@@ -78,8 +78,8 @@ export type ChatEvent =
 
 export type ChatToolOutput = Extract<TextStreamPart<ToolSet>, { type: 'tool-result' }>;
 
-/** Which provider call of a turn a relayed stream belongs to: a continuation or a fallback is another SDK stream,
- *  so a relay must renew per-stream state while the answer stays one message. */
+/** Which provider call of a turn a relayed stream belongs to: a continuation or a fallback is another SDK
+ *  stream, whose state a relay renews while the answer stays one message. */
 export interface ObservedCall {
   readonly index: number;
 }

@@ -5,11 +5,15 @@
 import { describe, expect, test } from 'bun:test';
 import type { Connection } from 'agents';
 import * as v from 'valibot';
-import type { SessionMessage } from 'agents/experimental/memory/session';
 import type { LanguageModel } from 'ai';
 import { AwaitedList, scriptedTurnModel } from '@kinu.run/test-utils';
 import { fleetEnvForTest } from './helpers/analytics-plane';
-import { makeEnv, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns } from './helpers/actor-harness';
+import {
+  makeEnv, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, storedChat, workspaceMainActor,
+  type ActorHarness, type HarnessOrchestratorAgent,
+} from './helpers/actor-harness';
+import { RunEventRecorder } from '@kinu.run/core';
+import { sqlOver } from '@kinu.run/test-utils';
 import { socketConnection } from './helpers/bindings';
 
 function scriptedAnswer(text: string): LanguageModel {
@@ -89,15 +93,16 @@ function fleetRowKinds(agent: { harnessFleetTurnRows(): object[] }): string[] {
   });
 }
 
-async function userRows(agent: { harnessTranscript: { history(): Promise<SessionMessage[]> } }): Promise<string[]> {
-  return (await agent.harnessTranscript.history())
+async function userRows(harness: ActorHarness<HarnessOrchestratorAgent>): Promise<string[]> {
+  return (await storedChat(harness))
     .filter((message) => message.role === 'user')
     .map((message) => message.id);
 }
 
 describe('a chat request through the production gate', () => {
   test('an idle send leaves exactly one row, under the id the client rendered', async () => {
-    const { agent, tableNames } = orchestratorHarness();
+    const harness = orchestratorHarness();
+    const { agent, tableNames } = harness;
     const { wire, sent, frame } = connection(agent);
     await agent.activateActor();
     const gate = agent.harnessChatGate();
@@ -109,7 +114,7 @@ describe('a chat request through the production gate', () => {
     // The gate returns on admission; the request closes at turn-end, so wait for the done frame.
     await frame((frames) => doneFrames(frames).length > 0);
 
-    expect((await userRows(agent))).toEqual(['input-req-idle']);
+    expect((await userRows(harness))).toEqual(['input-req-idle']);
     expect(doneFrames(sent)).toEqual([{ id: 'req-idle' }]);
     // No submission ledger or input receipt table exists for the loop to write.
     expect(tableNames()).not.toContain('cf_think_submissions');
@@ -117,23 +122,24 @@ describe('a chat request through the production gate', () => {
   });
 
   test('a mid-turn send that lands leaves exactly one row, stamped where it landed', async () => {
-    const { agent } = orchestratorHarness();
+    const harness = orchestratorHarness();
+    const { agent } = harness;
     const { wire, sent, frame } = connection(agent);
     await agent.activateActor();
     const gate = agent.harnessChatGate();
     // Prepare opens the turn production-style, so the inbox reads busy and the splice takes the mid-turn arm.
     await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
-    const [liveRow] = (await userRows(agent));
+    const [liveRow] = (await userRows(harness));
 
     // The drain at the step boundary commits the row and answers the request, not the admission.
     const request = gate(wire, chatRequest('req-steer', 'check staging'));
     await frame(queuedOnWire('input-req-steer'));
-    const stepped = await agent.harnessStepInto(0, [{ role: 'user', content: 'the long job' }]);
+    const stepped = await chatSessionTurns(agent).step(0, [{ role: 'user', content: 'the long job' }]);
     await request;
     const carried = stepped.flatMap((m) => m.role === 'user' && v.is(v.string(), m.content) ? [m.content] : []);
     expect(carried.some((content) => content.includes('check staging'))).toBe(true);
-    expect((await userRows(agent))).toEqual([liveRow, 'input-req-steer']);
-    const appended = (await agent.harnessTranscript.history()).find((m) => m.id === 'input-req-steer');
+    expect((await userRows(harness))).toEqual([liveRow, 'input-req-steer']);
+    const appended = (await storedChat(harness)).find((m) => m.id === 'input-req-steer');
     expect(v.is(v.object({ metadata: v.object({ kinuSteer: v.literal(true) }) }), appended)).toBe(true);
     expect(JSON.parse(JSON.stringify(appended))).toMatchObject({ metadata: { kinuSteer: true, kinuSteerAtStep: 0 } });
     expect(doneFrames(sent)).toEqual([{ id: 'req-steer', landed: 'mid-turn' }]);
@@ -155,13 +161,14 @@ describe('a chat request through the production gate', () => {
     const bodies = agent.harnessEnqueued.map((turn) => turn.text);
     expect(bodies.filter((text) => text.includes('check staging'))).toHaveLength(0);
 
-    await agent.harnessStepInto(0, [{ role: 'user', content: 'the long job' }]);
+    await chatSessionTurns(agent).step(0, [{ role: 'user', content: 'the long job' }]);
     await request;
     expect(doneFrames(sent)).toEqual([{ id: 'req-steer' }, { id: 'req-steer', landed: 'mid-turn' }]);
   });
 
   test('a second connection mid-turn is told what is resuming and reads the fresh transcript', async () => {
-    const { agent } = orchestratorHarness();
+    const harness = orchestratorHarness();
+    const { agent } = harness;
     const { wire, frame } = connection(agent);
     await agent.activateActor();
     const gate = agent.harnessChatGate();
@@ -170,7 +177,7 @@ describe('a chat request through the production gate', () => {
     await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
     const request = gate(wire, chatRequest('req-live', 'the long job'));
     await frame(queuedOnWire('input-req-live'));
-    const [liveRow] = (await agent.harnessTranscript.history()).filter((m) => m.role === 'user').map((m) => m.id);
+    const [liveRow] = (await storedChat(harness)).filter((m) => m.role === 'user').map((m) => m.id);
 
     const second = connection(agent);
     await agent.onConnect(second.wire, { request: new Request('https://agent/connect') });
@@ -183,7 +190,7 @@ describe('a chat request through the production gate', () => {
 
     // A resuming socket that closes releases the resume the handshake held.
     await agent.onClose(second.wire, 1000, 'gone', true);
-    await agent.harnessStepInto(0, [{ role: 'user', content: 'the long job' }]);
+    await chatSessionTurns(agent).step(0, [{ role: 'user', content: 'the long job' }]);
     await request;
   });
 
@@ -208,7 +215,7 @@ describe('a chat request through the production gate', () => {
     await dead.agent.activateActor();
 
     // A run_start with no run_end from the dying activation; the reconcile on wake seals it.
-    dead.agent.harnessEventRecorder.emit('run-dead-activation', {
+    new RunEventRecorder(sqlOver(dead.db), workspaceMainActor(dead.db)).emit('run-dead-activation', {
       type: 'run_start', agentId: 'harness-actor', caused_by: 'chat',
       userMessage: 'the turn the last process died inside',
     });
@@ -224,12 +231,13 @@ describe('a chat request through the production gate', () => {
     agent.harnessOpenFleetWindow();
     await agent.terminalRetryPass();
 
-    expect(agent.harnessEventRecorder.unterminatedRuns()).toEqual([]);
+    expect(new RunEventRecorder(sqlOver(dead.db), workspaceMainActor(dead.db)).unterminatedRuns()).toEqual([]);
     expect(fleetRowKinds(agent)).not.toContain('turn');
   });
 
   test('a refused send closes the request with the refusal and leaves nothing', async () => {
-    const { agent } = orchestratorHarness();
+    const harness = orchestratorHarness();
+    const { agent } = harness;
     const { wire, sent } = connection(agent);
     await agent.activateActor();
     agent.harnessRefuseDriving({ reason: 'unavailable', error: 'another session is driving this workspace' });
@@ -239,6 +247,6 @@ describe('a chat request through the production gate', () => {
     const [done] = doneFrames(sent);
     expect(done?.id).toBe('req-no');
     expect(done?.error).toMatch(/another session is driving/);
-    expect((await userRows(agent))).toEqual([]);
+    expect(await userRows(harness)).toEqual([]);
   });
 });

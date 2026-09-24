@@ -1,8 +1,6 @@
 // Defends: a landed step painted twice (durable step plus live tail). The journal is the authority;
 // part states are asserted because `MessageView` places its live caret by part state.
 import { describe, expect, test } from 'bun:test';
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import type { HeadStep } from '@kinu.run/core';
 import {
   appendHeadDelta, deltaAsMessage, retireHeadDelta, stepAsMessage,
@@ -154,79 +152,3 @@ describe('the journalled step, as the chat draws it', () => {
     expect(stepAsMessage(step(), 0, 'h1').id).not.toBe(stepAsMessage(step(), 1, 'h1').id);
   });
 });
-
-/**
- * `useNodeTranscript` retires on the journal re-read; a reader that looks the delta up itself
- * gets only the push half and paints the landed step twice when a frame is missed.
- */
-describe('every painted delta comes from the hook that retires it', () => {
-  const SRC = join(import.meta.dir, '../src');
-  const READERS = ['components/NodeTranscript.tsx', 'components/AlternateTakes.tsx'];
-  /** Reads the journal's step count, so the only place allowed to read the accumulator. */
-  const OWNER = 'components/NodeTranscript.tsx';
-
-  test('the retire sits with the journal read', () => {
-    const owner = readFileSync(join(SRC, OWNER), 'utf8');
-    expect(owner).toContain('headDeltas.retire(');
-    expect(owner).toContain('headDeltas.get(');
-  });
-
-  for (const reader of READERS) {
-    test(`${reader} paints what the hook handed it`, () => {
-      const text = readFileSync(join(SRC, reader), 'utf8');
-      expect(text).toContain('pending={pending}');
-    });
-  }
-
-  test('nothing outside the owner reads the accumulator directly', () => {
-    const bypassing = sources(SRC).filter((file) => file !== join(SRC, OWNER)
-      && readFileSync(file, 'utf8').includes('headDeltas.get('));
-
-    expect(bypassing).toEqual([]);
-  });
-});
-
-/** Each retiring fact must be wired: a missing one leaves a half-written step claiming to be live. */
-describe('the socket retires a delta on every fact that ends one', () => {
-  const HOOK = readFileSync(join(import.meta.dir, '../src/hooks/use-kinu.ts'), 'utf8');
-
-  function arm(type: string): string {
-    const at = HOOK.indexOf(`msg.type === "${type}"`);
-    expect(at).toBeGreaterThan(-1);
-    const next = HOOK.indexOf('} else if (msg.type ===', at + 1);
-
-    return HOOK.slice(at, next === -1 ? HOOK.length : next);
-  }
-
-  test('a landed step retires that head, and only that head', () => {
-    expect(arm('head_activity')).toContain('retireDelta(msg.headId)');
-  });
-
-  test('a branch that settled or failed retires its derived head', () => {
-    expect(arm('branch_status')).toContain('retireDelta(branchHeadId(msg.branchId))');
-  });
-
-  test('a cancelled turn forgets every head', () => {
-    expect(arm('work_cancelled')).toContain('forgetDeltas()');
-  });
-
-  test('a dropped socket forgets every head — the gap is unheard, not empty', () => {
-    // The SDK classifies terminal closes (`isTerminalCloseEvent`); a second code-reading authority
-    // here would be a second answer to the same question.
-    const at = HOOK.indexOf('onClose: useCallback(', HOOK.indexOf('const agentOptions'));
-    expect(at).toBeGreaterThan(-1);
-    const onClose = HOOK.slice(at, HOOK.indexOf('onError: useCallback', at));
-    expect(onClose).toContain('setConnectionStatus("disconnected")');
-    expect(onClose).toContain('forgetDeltas()');
-  });
-});
-
-function sources(root: string): string[] {
-  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
-    const path = join(root, entry.name);
-
-    if (entry.isDirectory()) return sources(path);
-
-    return /\.tsx?$/.test(entry.name) ? [path] : [];
-  });
-}

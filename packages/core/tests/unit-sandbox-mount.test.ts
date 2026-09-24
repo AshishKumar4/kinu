@@ -151,7 +151,7 @@ function container(fs: ContainerFs): SandboxHandle {
 
 			return { exitCode: 0, stdout: '' };
 		},
-		async exposePort(port) { return { url: `https://preview.invalid/${port}`, port }; },
+		async exposePort(port) { return { url: `https://preview.invalid/${port}`, port, route: { reached: true } }; },
 		async unexposePort() {},
 		async getExposedPorts() { return []; },
 		...sandboxHandleLifecycle,

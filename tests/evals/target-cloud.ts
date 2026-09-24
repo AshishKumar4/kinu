@@ -41,6 +41,7 @@ import * as v from 'valibot';
 
 import {
   RunEventSchema,
+  type AgentRpcMethod,
   type JsonValue,
   type LLMProviderConfig, type RunEvent, type WorkspaceSpend,
 } from '../../packages/core/src/index';
@@ -416,7 +417,7 @@ class CloudEvalTarget implements AgentEvalTarget {
 
   /** One RPC, labelled as the deployment's boundary. Every read in this class
    *  goes through it, so no call site can forget the classification. */
-  private rpc<T>(method: string, schema: v.GenericSchema<T>, args: JsonValue[] = []): Promise<T> {
+  private rpc<T>(method: AgentRpcMethod, schema: v.GenericSchema<T>, args: JsonValue[] = []): Promise<T> {
     return infraBoundary(`${method} on ${this.origin}/${this.workspace}`, () =>
       callAgentRpc({ origin: this.origin, token: this.opts.token, name: this.workspace, method, schema, args }));
   }

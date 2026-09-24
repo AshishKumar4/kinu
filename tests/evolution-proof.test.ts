@@ -38,7 +38,7 @@ import {
 import { provisionLocalTarget, type LocalAgentEvalTarget } from './evals/target-local';
 import {
   finalIntegerAnswer, letterKey,
-  liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,
+  liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,
   UNCONFIGURED_LLM,
 } from '@kinu.run/test-utils';
 
@@ -433,7 +433,9 @@ describe('Evolution Proof', () => {
     // `reviewTurn` in this proof routes a reflection lane, so without it the
     // whole cross-session comparison dies on the second turn.
     model = liveChatModel(LLM_CONFIG);
-    engine = new EvolutionEngine(rt, rt.stores.history, { enabled: true });
+    engine = new EvolutionEngine(rt, rt.stores.history, {
+      enabled: true, reportModelCall: liveModelCallSink(rt.storage.sql, rt.actor),
+    });
     surface = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG });
     engine.onEvent(e => console.log(`    [evolution] ${e.type}: ${e.message.slice(0, 80)}`));
   });

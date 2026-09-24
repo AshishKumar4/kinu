@@ -4,7 +4,11 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { buildPendingActions, type PendingActionInputs } from '../src/read-models/pending-actions';
+import {
+  buildPendingActions, needsTheUser, type PendingAction, type PendingActionInputs, type PersonAsks,
+} from '../src/read-models/pending-actions';
+import type { PendingConsent } from '../src/protocol';
+import type { PlanReview } from '../src/types/plans';
 import { SLATE_READ_MODELS } from '../src/slates/read-models';
 import type { DeferredApproval } from '../src/safety/deferred-approval';
 
@@ -204,5 +208,47 @@ describe('the needs-you queue stays host-owned', () => {
     // Same doctrine as listPendingConsents.
     const readModels = new Set<string>(SLATE_READ_MODELS);
     expect(readModels.has('listPendingActions')).toBe(false);
+  });
+});
+
+describe('what the inspector opens for on its own', () => {
+  // #21: a "hello" turn's self-change note opened the inspector.
+  const nothing: PersonAsks = { pendingActions: [], pendingConsents: [], activePlan: null };
+
+  const plan = (status: PlanReview['status']): PlanReview => ({
+    id: 'plan-1', sessionId: 's', revision: 1, content: '# Plan', status, annotations: [], feedback: null,
+    handoffAccepted: false, createdAt: 1, updatedAt: 1, decidedAt: null,
+  });
+
+  const action: PendingAction = { id: 'a-1', kind: 'deferred_action', title: 'Run rm -rf build', detail: null, at: 1 };
+  const consent: PendingConsent = { consentId: 'c-1', deviceLabel: 'laptop', method: 'exec', command: 'ls', createdAt: 1 };
+
+  test('an action or a consent to approve, or a plan to review, opens it', () => {
+    for (const kind of ['deferred_action', 'release_approval', 'plan_review'] as const) {
+      expect(needsTheUser({ ...nothing, pendingActions: [{ ...action, kind }] })).toBe(true);
+    }
+
+    expect(needsTheUser({ ...nothing, pendingConsents: [consent] })).toBe(true);
+    expect(needsTheUser({ ...nothing, activePlan: plan('pending') })).toBe(true);
+  });
+
+  test('what the agent made, and a plan already decided, leave it where it is', () => {
+    const made = { ...nothing, slates: [{ id: 'app' }], previewFocus: 'preview:workspace:8788', pinnedPorts: [{ port: 8788 }] };
+
+    expect(needsTheUser(made)).toBe(false);
+
+    // Recorded after a "hello" turn on the dev server, 2026-09-23.
+    const note: PendingAction = {
+      id: 'unseen-changes', kind: 'unseen_changes', title: '1 self-change you have not seen',
+      detail: 'Read them in the journal below.', at: 1790199280964,
+    };
+
+    for (const kind of ['unseen_changes', 'scaffold_version', 'curriculum_task'] as const) {
+      expect(needsTheUser({ ...nothing, pendingActions: [{ ...note, kind }] })).toBe(false);
+    }
+
+    for (const status of ['changes_requested', 'approved', 'superseded'] as const) {
+      expect(needsTheUser({ ...nothing, activePlan: plan(status) })).toBe(false);
+    }
   });
 });

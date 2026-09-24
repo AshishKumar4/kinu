@@ -119,7 +119,7 @@ const IS_BETTER =
 
 const PARETO_WEAKER = "if (axis.direction === 'maximise' ? l < r : l > r) return false;";
 
-const SEAL_CLEARED = "if (state.clearedBy !== null) return { kind: 'admitted' };";
+const SEAL_OPEN = "if (state.kind === 'open') return { kind: 'admitted' };";
 
 const POLICY_BEST = "case 'best': return 'apply-winner';";
 
@@ -133,7 +133,7 @@ const SNIPPETS: readonly (readonly [src: string, snippet: string])[] = [
   ['strategy/archive.ts', NOVELTY_FLOOR],
   ['strategy/archive.ts', NEAREST_SEARCH],
   ['strategy/objective.ts', IS_BETTER],
-  ['strategy/objective.ts', SEAL_CLEARED],
+  ['strategy/objective.ts', SEAL_OPEN],
   ['strategy/objective.ts', PARETO_WEAKER],
   ['strategy/merge-back.ts', POLICY_BEST],
   ['strategy/merge-back.ts', CYCLE_SCAN],
@@ -259,7 +259,7 @@ const BREACH: FloorBreach = {
   hypotheses: ['floor_wrong', 'verifier_gameable'],
 };
 
-const SEALED: PublicationState = { kind: 'sealed', breach: BREACH, clearedBy: null };
+const SEALED: PublicationState = { kind: 'sealed', breach: BREACH };
 
 const CELL = 'candOps=23';
 
@@ -625,10 +625,10 @@ describe('the publication seal is load-bearing', () => {
     await sealWritesNothing(pristineRecords);
   });
 
-  // Reading the cleared field inverted publishes exactly the run the seal withholds.
-  test(`RED: reading the cleared seal inverted turns "${SEAL_WRITES_NOTHING.name}" red`, async () => {
+  // Reading the state inverted publishes exactly the run the seal withholds.
+  test(`RED: reading the seal inverted turns "${SEAL_WRITES_NOTHING.name}" red`, async () => {
     const mutant: RecordsModule = await mutantThrough('strategy/objective.ts', 'strategy/records.ts', 'seal-inverted', [
-      [SEAL_CLEARED, "if (state.clearedBy === null) return { kind: 'admitted' };"],
+      [SEAL_OPEN, "if (state.kind !== 'open') return { kind: 'admitted' };"],
     ]);
 
     await expect(sealWritesNothing(mutant)).rejects.toThrow(ASSERTION_FAILED);

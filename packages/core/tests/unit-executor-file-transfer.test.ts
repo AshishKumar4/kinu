@@ -51,7 +51,7 @@ function makePlane(seed: Record<string, Uint8Array> = {}) {
 
   const router = {
     getProvider: (id: string) =>
-      id === "workspace" ? { files: vfs, homeDir: async () => "/home/user" } : undefined,
+      id === "workspace" ? { files: vfs, homeDir: async () => "/home/main" } : undefined,
   };
 
   return { router, files, revisions, reads, vfs };
@@ -68,7 +68,7 @@ function patternBytes(length: number): Uint8Array {
 describe("ExecutorFileUpload", () => {
   test("ordered chunks assemble byte-exactly, including a partial tail", async () => {
     const plane = makePlane();
-    const upload = new ExecutorFileUpload(plane.router, "workspace", "/home/user/big.bin");
+    const upload = new ExecutorFileUpload(plane.router, "workspace", "/home/main/big.bin");
     const whole = patternBytes(2 * FILE_CHUNK_BYTES + 7);
 
     for (let at = 0; at < whole.byteLength; at += FILE_CHUNK_BYTES) {
@@ -78,7 +78,7 @@ describe("ExecutorFileUpload", () => {
     }
 
     expect(upload.done).toBe(true);
-    expect([...present(plane.files.get("/home/user/big.bin"), "the transferred big.bin")]).toEqual([...whole]);
+    expect([...present(plane.files.get("/home/main/big.bin"), "the transferred big.bin")]).toEqual([...whole]);
   });
 
   test("an out-of-order chunk is refused with the expected offset, and the stream recovers", async () => {

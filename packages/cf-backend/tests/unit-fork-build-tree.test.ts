@@ -5,7 +5,7 @@ import { buildTree, type MctsRow } from '@kinu.run/core';
 
 function row(partial: Partial<MctsRow> & { id: string; created_at: number }): MctsRow {
   return {
-    parent_id: null, depth: 0, visits: 1, value: 0.5, status: 'open', action: 'act',
+    parent_id: null, depth: 0, visits: 1, value: 0.5, own_score: 0.5, status: 'open', action: 'act',
     ...partial,
   };
 }

@@ -14,21 +14,19 @@ import {
   imageMismatchVerdict, isAuthorized,
   packDirent, packEntryOut, packGetattrOut, packInitOut, packOpenHow, packOutHeader, sha256Hex, verifyChunk,
 } from './fixtures/fuse-probe/core';
-import { destroyProbeRuntime, parseProbeRequest } from './fixtures/fuse-probe/worker-contract';
+import { destroyProbeRuntime, parseProbeRequest, serveProbeRequest } from './fixtures/fuse-probe/worker-contract';
 import type { ProbeBox, RunIdentity, Stage1Report, Stage2Report, Stage3Report } from './fixtures/fuse-probe/core';
-import type { Deployment, TeardownHooks } from './bench-fuse-probe';
+import type { Deployment, ExecResponse, FetchLike, ProbeFixture, TeardownHooks } from './bench-fuse-probe';
 import {
   awaitContainerAppAbsent, awaitWritableMmapResult, bundleFuseProbeSource, composeFuseProbeArtifact,
   deleteWorkerBothRoutes, deriveFixtureConfig, destroyRuntime,
-  fuseProbeArtifactPath, parseProbeOutput, parseWritableMmapEvidence, parseWritableMmapOutput,
+  fuseProbeArtifactPath, liveFixture, measure, parseProbeOutput, parseWritableMmapEvidence, parseWritableMmapOutput,
   persistFuseProbeArtifact, planText,
-  releaseResources, requireWritableProbeImage, stripWholeLineComments, teardown, writableProbeCommand,
-  writableProbeOperationId,
+  releaseResources, requireWritableProbeImage, RESULT_MARKER, stripWholeLineComments, teardown, WRITABLE_MMAP_MUTATIONS,
+  writableProbeCommand, writableProbeOperationId,
 } from './bench-fuse-probe';
 
 const attemptId = 'fuse-attempt';
-
-const DRIVER_SOURCE = readFileSync(new URL('./bench-fuse-probe.ts', import.meta.url), 'utf8');
 
 function stage1(overrides: Partial<Stage1Report> = {}) {
   const base = {
@@ -293,26 +291,87 @@ test('classifier rejects an event stream that contradicts closed admission', () 
   }
 });
 
-test('driver persists every live mutation exit/report pair before stage one', () => {
-  const controlsDeclared = DRIVER_SOURCE.indexOf('const writableControls: WritableMmapControl[] = []');
-  const loop = DRIVER_SOURCE.indexOf('for (const mutation of [');
-  const firstStage = DRIVER_SOURCE.indexOf("probe.mjs stage1");
-  expect(controlsDeclared).toBeGreaterThanOrEqual(0);
-  expect(loop).toBeGreaterThan(controlsDeclared);
-  expect(firstStage).toBeGreaterThan(loop);
+/** The digest the scripted writable reports carry (`stage3()`'s default). */
+const REVIEWED_SOURCE = 'c'.repeat(64);
 
-  for (const mutation of [
-    'reply-before-log',
-    'fence-closes-request-loop',
-    'omit-msync',
-    'post-fence-contamination',
-    'intent-fsync-failure',
-    'result-fsync-failure',
-    'skip-recovery',
-    'restart-truncation',
+const PROVEN_IDENTITY = {
+  configuredImage: SANDBOX_IMAGE, expectedVersion: SANDBOX_IMAGE_VERSION, actualVersion: SANDBOX_IMAGE_VERSION,
+  actualVersionDigest: 'd'.repeat(64), bunVersion: '1.3.0',
+};
 
-  ]) expect(DRIVER_SOURCE).toContain(`'${mutation}'`);
-  expect(DRIVER_SOURCE.indexOf('writableControls.push', loop)).toBeGreaterThan(loop);
+/** A healthy fixture that records every step it is asked for; `answers` replaces one step's answer. */
+function scriptedFixture(answers: { readonly stage1?: ExecResponse; readonly identity?: RunIdentity } = {}) {
+  const steps: string[] = [];
+  const reported = (report: Stage1Report | Stage2Report): ExecResponse => ({ exitCode: 0, stdout: `mounting\n${RESULT_MARKER}\n${JSON.stringify(report)}\n`, stderr: '' });
+  const refusals = new Map(controls().map((control) => [control.mutation, control.report]));
+
+  const fixture: ProbeFixture = {
+    ready: async () => { steps.push('ready'); },
+    setup: async () => { steps.push('setup'); },
+    prepare: async () => {
+      steps.push('prepare');
+
+      return answers.identity ?? PROVEN_IDENTITY;
+    },
+    upload: async () => { steps.push('upload'); },
+    stage: async (stage) => {
+      steps.push(stage);
+
+      return stage === 'stage1' ? answers.stage1 ?? reported(stage1()) : reported(stage2());
+    },
+    restart: async () => { steps.push('restart'); },
+    writable: async (_operationId, mutation) => {
+      steps.push(mutation === undefined ? 'writable' : `writable:${mutation}`);
+
+      if (mutation === undefined) return { exitCode: 0, report: stage3() };
+      const report = refusals.get(mutation);
+
+      if (report === undefined) throw new Error(`no refusal is scripted for ${mutation}`);
+
+      return { exitCode: 86, report };
+    },
+  };
+
+  return { fixture, steps };
+}
+
+test('a run proves the image, drives every refusal, and reinstalls the probe after the restart', async () => {
+  const { fixture, steps } = scriptedFixture();
+  const measured = await measure('run-order', fixture, REVIEWED_SOURCE);
+
+  expect(measured.failure).toBeUndefined();
+  expect(steps).toEqual([
+    'ready', 'setup', 'prepare',
+    'writable', ...WRITABLE_MMAP_MUTATIONS.map((mutation) => `writable:${mutation}`),
+    'upload', 'stage1',
+    // The restart wipes /tmp, so stage two needs the probe installed again.
+    'restart', 'setup', 'prepare', 'upload', 'stage2',
+  ]);
+  expect(measured.writableControls.map((control) => control.mutation)).toEqual(controls().map((control) => control.mutation));
+  expect(measured.stage2).toEqual(stage2());
+});
+
+test('every refusal is on record before stage one, so a stage-one failure keeps them all', async () => {
+  const stderr = `${'x'.repeat(900)}the probe's last words`;
+  const { fixture } = scriptedFixture({ stage1: { exitCode: 1, stdout: '', stderr } });
+  const measured = await measure('run-cut', fixture, REVIEWED_SOURCE);
+
+  // The tail of stderr, where the probe's failure is, not its head.
+  expect(measured.failure).toBe(`stage1 exited 1: ${stderr.slice(-800)}`);
+  expect(measured.writableControls.map((control) => control.mutation)).toEqual(controls().map((control) => control.mutation));
+  expect(measured.stage3?.linearizable).toBe(true);
+});
+
+test('a container on another image, or a writable probe from another source, stops the run before it measures', async () => {
+  const wrongImage = scriptedFixture({ identity: { ...PROVEN_IDENTITY, actualVersion: '0.0.1' } });
+  const imageRun = await measure('run-image', wrongImage.fixture, REVIEWED_SOURCE);
+  expect(imageRun.failure).toBe(`container identity mismatch: reports SANDBOX_VERSION 0.0.1, configured ${SANDBOX_IMAGE_VERSION}`);
+  expect(wrongImage.steps).toEqual(['ready', 'setup', 'prepare']);
+
+  const wrongSource = scriptedFixture();
+  const sourceRun = await measure('run-source', wrongSource.fixture, 'e'.repeat(64));
+  expect(sourceRun.failure).toBe('custom writable probe source digest does not match the reviewed fixture source');
+  expect(wrongSource.steps).toEqual(['ready', 'setup', 'prepare', 'writable']);
 });
 
 test('writable process is watchdog-bounded while driver polling has no elapsed deadline', () => {
@@ -436,63 +495,87 @@ const unitDeployment: Deployment = {
   writableImage: `registry.example/fuse-mmap@sha256:${'a'.repeat(64)}`,
 };
 
-/** The DO class itself runs only under workerd (@cloudflare/sandbox imports
- *  cloudflare:workers), so its lifecycle wiring is pinned by these ordered
- *  source assertions plus the fixture workers-types tsc; route behaviour is
- *  exercised through the pure contract fakes below. */
-test('FuseProbeBox wiring: super-first onStart proof, typed mismatch, process-owning destroy', () => {
-  const source = readFileSync(join(import.meta.dir, 'fixtures', 'fuse-probe', 'worker.ts'), 'utf8');
+/** The path of a fixture request, however the driver spelled it. */
+function pathOf(input: URL | RequestInfo): string {
+  return (input instanceof Request ? new URL(input.url) : new URL(input)).pathname;
+}
 
-  const indexOf = (needle: string): number => {
-    const at = source.indexOf(needle);
-    expect(at, `worker.ts must contain ${JSON.stringify(needle)}`).toBeGreaterThanOrEqual(0);
+test('the driver sets the container up only once the fixture accepts its token', async () => {
+  const seen: string[] = [];
+  let healthChecks = 0;
 
-    return at;
+  const doFetch: FetchLike = async (input) => {
+    seen.push(pathOf(input));
+
+    if (pathOf(input) === '/health') return new Response(null, { status: ++healthChecks < 3 ? 401 : 200 });
+
+    return Response.json({ exitCode: 0, stdout: '', stderr: '' });
   };
 
-  indexOf('class FuseProbeBox extends Sandbox');
-  // onStart: super first, then version proof that throws the typed error.
-  const superOnStart = indexOf('await super.onStart();');
-  const versionCheck = indexOf('this.containerVersion()');
-  const typedThrow = indexOf('throw new ImageIdentityError(SANDBOX_IMAGE');
-  expect(superOnStart).toBeLessThan(versionCheck);
-  expect(versionCheck).toBeLessThan(typedThrow);
-  // destroy delegates process termination, SDK teardown and storage clearance
-  // to the tested shared runtime teardown contract.
-  const destroy = indexOf('await destroyProbeRuntime(');
-  const processList = indexOf('this.listProcesses()');
-  const storageClear = indexOf('storage.deleteAll()');
-  expect(destroy).toBeLessThan(processList);
-  expect(processList).toBeLessThan(storageClear);
-  // The token and health gates answer before body parsing or sandbox dispatch.
-  const tokenGuard = indexOf('isAuthorized(env.FUSE_PROBE_TOKEN');
-  const health = indexOf("pathname === '/health'");
+  const fixture = liveFixture(unitDeployment, doFetch, async () => undefined);
 
-  const bodyParse = indexOf('await request.json()');
-  const dispatch = indexOf('handleProbeOp(pathname');
-  expect(tokenGuard).toBeLessThan(health);
-  expect(health).toBeLessThan(bodyParse);
-  expect(bodyParse).toBeLessThan(dispatch);
+  await fixture.ready();
+  await fixture.setup();
+
+  expect(seen).toEqual(['/health', '/health', '/health', '/exec']);
 });
 
-test('container restart reinstalls the immutable probe before stage two', () => {
-  const restart = DRIVER_SOURCE.indexOf('await stopAndProveRestart');
-  const reupload = DRIVER_SOURCE.indexOf('await uploadProbeBundle', restart);
-  const stage2Exec = DRIVER_SOURCE.indexOf('probe.mjs stage2', restart);
-  expect(restart).toBeGreaterThan(-1);
-  expect(reupload).toBeGreaterThan(restart);
-  expect(stage2Exec).toBeGreaterThan(reupload);
+test('a fixture answer that is not JSON names the route, the status and the body', async () => {
+  const gateway: FetchLike = async () => new Response('<html>502 Bad Gateway</html>', { status: 502 });
+
+  await expect(liveFixture(unitDeployment, gateway, async () => undefined).prepare())
+    .rejects.toThrow('/prepare (502) did not return JSON: <html>502 Bad Gateway</html>');
 });
 
-test('driver waits for authenticated propagation before container setup', () => {
-  const readiness = DRIVER_SOURCE.indexOf('await awaitFixtureReady(deployment.origin, token)');
-  const setup = DRIVER_SOURCE.indexOf("await setupExec(deployment.origin, token, 'mkdir -p /tmp/fuse-probe')");
-  const identity = DRIVER_SOURCE.indexOf("'/prepare'");
-  expect(readiness).toBeGreaterThan(-1);
-  expect(setup).toBeGreaterThan(readiness);
-  expect(identity).toBeGreaterThan(setup);
-  expect(DRIVER_SOURCE).toContain('did not return JSON: ${raw.text.slice(0, 300)}');
-  expect(DRIVER_SOURCE).toContain("stderr ?? '').slice(-800)");
+test('the fixture refuses a wrong token before reading the body, and answers health without the container', async () => {
+  let boxes = 0;
+
+  const unreached = (): ProbeBox => {
+    boxes += 1;
+    throw new Error('the container is not reached');
+  };
+
+  const call = (path: string, token: string | null, body?: string): Request => new Request(`https://probe.test${path}`, {
+    method: body === undefined ? 'GET' : 'POST', ...(body !== undefined && { body }),
+    headers: token === null ? {} : { 'x-fuse-probe-token': token },
+  });
+
+  expect((await serveProbeRequest(call('/exec', 'wrong', '{not json'), 'right', unreached)).status).toBe(401);
+  expect((await serveProbeRequest(call('/health', 'right'), undefined, unreached)).status).toBe(401);
+  const health = await serveProbeRequest(call('/health', 'right'), 'right', unreached);
+  expect([health.status, await health.json()]).toEqual([200, { ok: true }]);
+  // A body its route does not accept is a 400 before any container call.
+  expect((await serveProbeRequest(call('/exec', 'right', '{not json'), 'right', unreached)).status).toBe(400);
+  expect(boxes).toBe(0);
+});
+
+test('an accepted body reaches the container, and a container failure is a 500 naming it', async () => {
+  const commands: string[] = [];
+
+  const box: ProbeBox = {
+    exec: async (command) => {
+      commands.push(command);
+
+      if (command === 'false') throw new Error('the container went away');
+
+      return { exitCode: 0, stdout: 'ok', stderr: '' };
+    },
+    writeFile: async () => undefined,
+    stop: async () => undefined,
+    destroy: async () => undefined,
+    prepare: async () => PROVEN_IDENTITY,
+    startProcess: unstartedProcess,
+    getProcess: async () => null,
+  };
+
+  const exec = (command: string): Request => new Request('https://probe.test/exec', {
+    method: 'POST', body: JSON.stringify({ command }), headers: { 'x-fuse-probe-token': 'right' },
+  });
+
+  expect((await serveProbeRequest(exec('true'), 'right', () => box)).status).toBe(200);
+  const failed = await serveProbeRequest(exec('false'), 'right', () => box);
+  expect([failed.status, await failed.json()]).toEqual([500, { error: 'Error: the container went away' }]);
+  expect(commands).toEqual(['true', 'false']);
 });
 
 test('the pure token gate refuses an unset secret or any other header value', () => {

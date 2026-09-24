@@ -97,9 +97,21 @@ describe('exposing a port publishes the preview the edge will be asked about', (
 
     expect(exposed).toEqual([PORT]);
     expect(result.url).toBe(`https://${String(PORT)}-${SANDBOX_ID}-${TOKEN}.${SUFFIX}/`);
+    expect(result.route).toEqual({ reached: true });
     expect(await sandboxPreviewExposed(kv, {
       sandboxId: SANDBOX_ID, port: PORT, token: TOKEN,
     })).toBe(true);
+  });
+
+  test('a URL the container no longer serves is reported not reached, naming the gate', async () => {
+    const { box } = portBox();
+    const stale: KinuSandbox = Object.create(box, { getExposedPorts: { value: async () => [] } });
+
+    const result = await lane(makeKv(), stale).exposePort(PORT, { hostname: SUFFIX });
+
+    expect(result.route).toEqual({
+      reached: false, gate: 'exposed', detail: `the container holds no live exposure of port ${String(PORT)} for this URL`,
+    });
   });
 
   test('the token PUBLISHED is the one the URL carries, not the one asked for', async () => {

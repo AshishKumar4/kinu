@@ -1,12 +1,10 @@
 /**
- * Counters for delegation cross-talk: messages sent/received, sender wait, and
- * same-path writes by different agents. Counts only; never restricts or delays.
- * Message bodies are never recorded (`ReservedLogField` enforces it); sizes,
- * names, topics and paths are. `message_id` joins sent to received lines.
+ * Delegation cross-talk counters: messages sent/received, sender wait, and same-path writes by different agents.
+ * Counts only; never restricts or delays. Bodies are never recorded (`ReservedLogField` enforces it); sizes, names,
+ * topics and paths are. `message_id` joins sent to received lines.
  *
- * Limits: a collision is a path and a clock, not a proven overwrite; the author
- * ledger is keyed on path spelling per process, so agents on private homes
- * sharing a spelling are miscounted; shell writes are invisible; sent and
+ * Limits: a collision is a path and a clock, not a proven overwrite; the author ledger keys on path spelling per
+ * process, so agents on private homes sharing a spelling are miscounted; shell writes are invisible; sent and
  * received totals live in different processes and do not subtract.
  */
 

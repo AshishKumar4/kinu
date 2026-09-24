@@ -4,7 +4,8 @@ import * as v from 'valibot';
 import type { Rpc } from '@kinu.run/core';
 import { useKinu, WorkspacePlanUpdatedFrameSchema } from '@/hooks/use-kinu';
 import { galleryServerPush } from '@/gallery-agent-stub';
-import { WorkSurface, type SurfaceKind } from '@/components/surfaces/WorkSurface';
+import type { SurfaceKind } from '@kinu.run/core';
+import { WorkSurface } from '@/components/surfaces/WorkSurface';
 import { PreviewFrame } from '@/components/PreviewFrame';
 import { SLATE_GALLERY_URL } from '@/gallery-slate-fallback';
 

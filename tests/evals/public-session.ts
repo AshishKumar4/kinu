@@ -110,7 +110,7 @@ import { createUserUiMessage, type AgentSendResult, type AgentTurnResult } from 
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
 import {
   absorbingRunId, compareRunEventOrder, createTestSql, evalNameSlug, evalTargetVerdict, evalWorkspaceName,
-  infraBoundary, resolveEvalBackend, scoreTrajectory, testActorHandle, workerSession,
+  INFRA_FAILURE_MARKER, infraBoundary, resolveEvalBackend, scoreTrajectory, testActorHandle, workerSession,
   EVAL_BACKEND_ENV,
   type EvalScoreRow,
 } from '@kinu.run/test-utils';
@@ -1046,10 +1046,15 @@ async function readJson(response: Response, doing: string): Promise<JsonValue> {
  */
 export class KinuPublicSession {
   private socket: WebSocket | null = null;
+
+  private opening: Promise<void> | null = null;
+
   private readonly turns = new Map<string, {
     readonly recorder: PublicTurnRecorder;
     readonly resolve: (turn: PublicTurn) => void;
     readonly reject: (error: Error) => void;
+    /** When it was sent: the run open at this instant is the turn's own, read back after a redial. */
+    readonly sentAt: string;
   }>();
 
   /** Callers waiting on one response chunk of a request: settled by the
@@ -1107,8 +1112,12 @@ export class KinuPublicSession {
    * layer does.
    */
   async connect(): Promise<void> {
-    if (this.socket !== null) return;
+    // Concurrent sends during a redial share the one handshake instead of racing a CONNECTING socket.
+    this.opening ??= this.socket === null ? this.dial().finally(() => { this.opening = null; }) : null;
+    await this.opening;
+  }
 
+  private async dial(): Promise<void> {
     const url = new URL(
       `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.workspace)}`,
       this.input.origin,
@@ -1124,7 +1133,15 @@ export class KinuPublicSession {
     socket.addEventListener('message', (event: MessageEvent) => {
       this.handleFrame(event.data);
     });
-    socket.addEventListener('close', () => { this.failInFlight('the workspace socket closed'); });
+    // The platform closes an idle socket when it deactivates the instance (1006, "no longer active,
+    // reconnect"); the next send redials rather than writing into a CLOSED socket, which discards the
+    // frame without an error and leaves its caller waiting forever.
+    socket.addEventListener('close', (event: CloseEvent) => {
+      if (this.socket === socket) this.socket = null;
+      const reason = `the workspace socket closed (code ${String(event.code)}${event.reason ? `, ${event.reason}` : ''})`;
+
+      this.survive(reason).catch(this.unrecoverable);
+    });
     await infraBoundary(`ws ${url.host}${url.pathname}`, () => new Promise<void>((resolve, reject) => {
       socket.addEventListener('open', () => resolve(), { once: true });
       socket.addEventListener('error', () => {
@@ -1175,13 +1192,12 @@ export class KinuPublicSession {
    *  when the run that ANSWERS the prompt closes — the prompt's own turn, or
    *  the run it spliced into when the done frame answers `mid-turn`. */
   submit(text: string): PublicSubmission {
-    const socket = this.requireSocket();
     const requestId = this.mintId('turn');
     const recorder = recordPublicTurn();
 
     const admitted = new Promise<PublicTurn>((resolve, reject) => {
-      this.turns.set(requestId, { recorder, resolve, reject });
-      socket.send(encodeChatRequest({ requestId, text }));
+      this.turns.set(requestId, { recorder, resolve, reject, sentAt: new Date().toISOString() });
+      this.send(encodeChatRequest({ requestId, text })).catch(reject);
     });
 
     // The observation window IS the absorbing run: a mid-turn landing is
@@ -1883,24 +1899,26 @@ export class KinuPublicSession {
   }
 
   private rpc(method: string, args: readonly JsonValue[]): Promise<JsonValue> {
-    const socket = this.requireSocket();
     const requestId = this.mintId('rpc');
 
     return new Promise<JsonValue>((resolve, reject) => {
       this.rpcs.set(requestId, { resolve, reject });
-      socket.send(encodeRpcRequest({ requestId, method, args }));
+      this.send(encodeRpcRequest({ requestId, method, args })).catch(reject);
     });
   }
 
-  private requireSocket(): WebSocket {
+  /** The one send path: redial a socket the platform closed, as the browser's PartySocket does, then
+   *  send on an OPEN socket only. */
+  private async send(frame: string): Promise<void> {
+    await this.connect();
     const socket = this.socket;
 
-    if (socket === null) {
-      throw new Error('this public session has no socket: `connect()` was not called, or the '
-        + 'session was already torn down');
+    if (socket?.readyState !== WebSocket.OPEN) {
+      throw new Error(`the workspace socket is not open (readyState ${String(socket?.readyState ?? 'none')}); `
+        + 'this session cannot send');
     }
 
-    return socket;
+    socket.send(frame);
   }
 
   private mintId(kind: string): string {
@@ -1998,6 +2016,51 @@ export class KinuPublicSession {
       if (this.programmaticTurns > watcher.after) watcher.resolve();
       else this.programmaticWatchers.push(watcher);
     }
+  }
+
+  /**
+   * A dropped socket, survived as the browser survives it: rpcs in flight are lost with it and fail
+   * now, but a turn is durable up there, so the socket is redialled at once and the DO's
+   * stream-resume frames finish it (`resuming` in handleFrame). A turn whose run ended while no
+   * socket was open has no stream left to resume; the run ledger says when that run ended, and a turn
+   * still unsettled then fails under the infrastructure marker, not as the agent's.
+   */
+  private async survive(reason: string): Promise<void> {
+    this.failRequests(reason);
+
+    if (this.turns.size === 0) return;
+
+    try {
+      await this.connect();
+    } catch (error) {
+      this.failInFlight(`${reason}; redialling failed: ${error instanceof Error ? error.message : String(error)}`);
+
+      return;
+    }
+
+    await Promise.all([...this.turns].map(async ([requestId, turn]) => {
+      await this.awaitAbsorbingRunEnd(turn.sentAt);
+      // One more round trip: a resumed stream's last frames may still be in flight behind the run's end.
+      await this.runEvents();
+
+      if (this.turns.get(requestId) !== turn) return;
+      this.turns.delete(requestId);
+      turn.reject(new Error(`${INFRA_FAILURE_MARKER} — ${reason}, and the turn's run ended before its stream `
+        + 'could be resumed, so its answer was never observed'));
+    }));
+  }
+
+  /** A drop the session could not survive: the ledger read that settles a turn failed too. */
+  private readonly unrecoverable = (error: Error): void => {
+    this.failInFlight(`the workspace socket closed and could not be recovered: ${error.message}`);
+  };
+
+  /** Fail what a dropped socket cannot carry over: rpc replies. Turns survive it. */
+  private failRequests(reason: string): void {
+    const rpcs = [...this.rpcs.values()];
+    this.rpcs.clear();
+
+    for (const rpc of rpcs) rpc.reject(new Error(reason));
   }
 
   /** Reject what the dead socket was carrying. A turn is durable up there and
