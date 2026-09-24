@@ -2,11 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import { compareEvalResults, fisherExact, renderEvalComparison, validateEvalResults } from './comparison';
 import { redact } from './redact';
 
-type Trial = { pass: boolean; infra?: boolean; productSha?: string; taskVersion?: string; failed?: string };
+type Trial = { pass: boolean; infra?: boolean; productSha?: string; taskVersion?: string; failed?: string; trial?: number };
 
 /** A vitest JSON report of one task's trials, as the reporter writes it, cut to the fields the comparison reads. */
 function report(taskId: string, trials: readonly Trial[], side: { productSha: string; evalCommit: string }): string {
-  const assertionResults = trials.map((trial) => ({
+  const assertionResults = trials.map((trial, index) => ({
     status: trial.pass ? 'passed' : 'failed',
     duration: 60_000,
     meta: {
@@ -15,6 +15,7 @@ function report(taskId: string, trials: readonly Trial[], side: { productSha: st
           session: {
             metadata: {
               taskId, taskVersion: trial.taskVersion ?? 'v1', evalCommit: side.evalCommit, productSha: trial.productSha ?? side.productSha, arm: 'product',
+              trial: trial.trial ?? index + 1,
             },
             events: [],
           },
@@ -91,8 +92,15 @@ describe('compareEvalResults', () => {
 describe('validateEvalResults', () => {
   test('a baseline needs every trial and no infrastructure failure, and reports its wall time', () => {
     expect(validateEvalResults(report('t', trialsOf(4, 10), BASE), 10)).toEqual([{ taskId: 't', slowestTrialMs: 60_000 }]);
-    expect(() => validateEvalResults(report('t', trialsOf(4, 9), BASE), 10)).toThrow(/9 trials, expected 10/);
+    expect(() => validateEvalResults(report('t', trialsOf(4, 9), BASE), 10)).toThrow(/holds trials \[1, 2, 3, 4, 5, 6, 7, 8, 9\], expected 1 to 10/);
     expect(() => validateEvalResults(report('t', [...trialsOf(4, 9), { pass: false, infra: true }], BASE), 10)).toThrow(/infrastructure/);
+  });
+
+  test('a report joined from two jobs that ran the same block of trials is refused, though its count is right', () => {
+    const block = (first: number) => Array.from({ length: 5 }, (_unused, index) => ({ pass: true, trial: first + index }));
+
+    expect(validateEvalResults(report('t', [...block(1), ...block(6)], BASE), 10)).toHaveLength(1);
+    expect(() => validateEvalResults(report('t', [...block(1), ...block(1)], BASE), 10)).toThrow(/expected 1 to 10 once each/);
   });
 });
 

@@ -213,9 +213,10 @@ function stats({ assertions }: Cohort): EvalStats {
 
 /**
  * Refuse a report that cannot serve as a baseline: every task file must have run, every cohort
- * must hold exactly `expectedTrials` trials, one build and one definition commit throughout, and
- * no trial may have failed for infrastructure reasons. Agent failures are baseline data and pass.
- * Returns each task's wall time, which the report records.
+ * must hold trials 1 to `expectedTrials` once each (a report joined from jobs that ran the same
+ * block twice has the right count and half the trials), one build and one definition commit
+ * throughout, and no trial may have failed for infrastructure reasons. Agent failures are
+ * baseline data and pass. Returns each task's wall time, which the report records.
  */
 export function validateEvalResults(text: string, expectedTrials: number): { taskId: string; slowestTrialMs: number }[] {
   const files = parseResults('baseline', text);
@@ -230,8 +231,11 @@ export function validateEvalResults(text: string, expectedTrials: number): { tas
   sideOf('baseline', assertions);
 
   return [...group(assertions).values()].map((cohort) => {
-    if (cohort.assertions.length !== expectedTrials) {
-      throw new Error(`${cohort.taskId} on ${cohort.model} (${cohort.arm}) has ${String(cohort.assertions.length)} trials, expected ${String(expectedTrials)}`);
+    const numbers = cohort.assertions.map((assertion) => assertion.meta.harness.run.session.metadata.trial).sort((left, right) => left - right);
+
+    if (numbers.length !== expectedTrials || numbers.some((number, index) => number !== index + 1)) {
+      throw new Error(`${cohort.taskId} on ${cohort.model} (${cohort.arm}) holds trials [${numbers.join(', ')}], `
+        + `expected 1 to ${String(expectedTrials)} once each`);
     }
 
     const broken = cohort.assertions.filter(hasInfrastructureFailure);
