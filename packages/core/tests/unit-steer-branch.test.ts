@@ -96,6 +96,37 @@ describe('startBranchHead — one budgeted head over the HeadRuntime seam', () =
     expect(journal.readTree(handle.id)).toHaveLength(1);
   });
 
+  test('a head whose run throws is recorded errored with its cause, as a split records it', async () => {
+    const { sql, actor } = setup();
+    const journal = new HeadJournal(sql, actor);
+    const { runtime, spawns } = fakeRuntime(async () => { throw new Error('the workspace restarted mid-run'); });
+
+    const handle = await startBranchHead(runtime, journal, { task: 'x', inheritedContext: [], missionLabels: [] });
+    const report = await handle.result;
+
+    // Not budget_exceeded: that status is a mission-ledger refusal, and nothing here was refused.
+    expect(report.status).toBe('errored');
+    expect(report.errorMessage).toContain('the workspace restarted mid-run');
+    expect(present(journal.readHead(spawns[0].id), 'the journaled head row').status).toBe('errored');
+  });
+
+  test('a run the branch\'s own abort ended is recorded aborted', async () => {
+    const { sql, actor } = setup();
+    const journal = new HeadJournal(sql, actor);
+    const stopped = Promise.withResolvers<never>();
+
+    const { runtime, spawns } = fakeRuntime(async () => await stopped.promise);
+    const handle = await startBranchHead(runtime, journal, { task: 'x', inheritedContext: [], missionLabels: [] });
+
+    await handle.abort('the owner stopped the turn');
+    stopped.reject(new Error('the head was cancelled'));
+    const report = await handle.result;
+
+    expect(report.status).toBe('aborted');
+    expect(report.summary).toContain('the owner stopped the turn');
+    expect(present(journal.readHead(spawns[0].id), 'the journaled head row').status).toBe('aborted');
+  });
+
   test('abort delegates to the spawned head', async () => {
     const { sql, actor } = setup();
     const journal = new HeadJournal(sql, actor);

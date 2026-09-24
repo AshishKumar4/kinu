@@ -171,7 +171,7 @@ describe('a workspace is named by its first prompt, and that name is what a pers
       // The first prompt must not claim a name: seeding SOUL.md's heading with the slug would.
       const session = await host.acquire(SLUG);
       const renamed = titled(host);
-      await session.send(FIRST_PROMPT);
+      await session.send(FIRST_PROMPT, { id: crypto.randomUUID() });
       expect(log.systems()[0]).not.toContain(SLUG);
 
       expect(await renamed).toBe(TITLE);
@@ -179,7 +179,7 @@ describe('a workspace is named by its first prompt, and that name is what a pers
       const row = listKnownAgents().find((agent) => agent.name === SLUG);
       expect(row?.label).toBe(TITLE);
 
-      await session.send('and now the token exchange');
+      await session.send('and now the token exchange', { id: crypto.randomUUID() });
       const latest = log.systems().at(-1) ?? '';
       expect(latest).toContain(`You work in the workspace "${TITLE}".`);
       expect(latest).not.toContain(SLUG);
@@ -197,7 +197,7 @@ describe('a workspace is named by its first prompt, and that name is what a pers
     try {
       const session = await host.acquire(SLUG);
       const renamed = titled(host);
-      await session.send(FIRST_PROMPT);
+      await session.send(FIRST_PROMPT, { id: crypto.randomUUID() });
       expect(await renamed).toBe(TITLE);
 
       const team = await host.team(SLUG);

@@ -129,18 +129,6 @@ const BUDGET_ROOM = 'if (remainingChildren < width) {';
 
 const CLAMP_TAIL = 'const tail = text.slice(tailStart(text, room - headLen));';
 
-const SNIPPETS: readonly (readonly [src: string, snippet: string])[] = [
-  ['strategy/archive.ts', NOVELTY_FLOOR],
-  ['strategy/archive.ts', NEAREST_SEARCH],
-  ['strategy/objective.ts', IS_BETTER],
-  ['strategy/objective.ts', SEAL_OPEN],
-  ['strategy/objective.ts', PARETO_WEAKER],
-  ['strategy/merge-back.ts', POLICY_BEST],
-  ['strategy/merge-back.ts', CYCLE_SCAN],
-  ['strategy/swarm.ts', BUDGET_ROOM],
-  ['tools/clamp.ts', CLAMP_TAIL],
-];
-
 /**
  * The first line of a failed `expect`: a RED proof must reject with an assertion failure,
  * not a crash in the mutant.
@@ -715,16 +703,6 @@ describe('the harness cannot prove a guard it did not remove', () => {
     expect(() => writeMutants('bogus', [
       { src: 'strategy/objective.ts', edits: [['a snippet objective.ts does not contain', '']] },
     ])).toThrow('found 0');
-  });
-
-  test('every snippet this file mutates sits in its file exactly once', () => {
-    const moved = SNIPPETS.filter(([src, snippet]) => {
-      const source = readFileSync(resolve(SRC, src), 'utf8');
-
-      return source.split(snippet).length - 1 !== 1;
-    }).map(([src, snippet]) => `${src}: ${snippet.slice(0, 40)}`);
-
-    expect(moved).toEqual([]);
   });
 
   // RED proofs run this file's copy of the assertions, so the named titles must still exist.

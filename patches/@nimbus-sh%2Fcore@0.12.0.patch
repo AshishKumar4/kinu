@@ -1,0 +1,72 @@
+diff --git a/dist/shell/unix-commands.js b/dist/shell/unix-commands.js
+index ab583395295c780d5b86dfba29fca3fb4593f322..0d71413ba779217bb1a7828374b4dc24c4bd5406 100644
+--- a/dist/shell/unix-commands.js
++++ b/dist/shell/unix-commands.js
+@@ -3233,6 +3233,15 @@ function mkLs(vfs) {
+             // Symlink check: a symlink-arg is displayed as the link itself
+             // (without -L which we don't implement).
+             const target = (await readSymlinkTarget(vfs, fp));
++            // Kinu patch, Nimbus ask N21: as GNU ls does unless -l or -d asks for the link itself, a link
++            // named on the command line to a directory lists that directory.
++            if (target !== null && !flagLong && !flagDirectory) {
++                const followed = await (kvfs && typeof kvfs.stat === 'function' ? kvfs.stat(fp) : vfs.stat(fp)).catch(() => null);
++                if (followed?.type === 'directory') {
++                    dirArgs.push(arg);
++                    continue;
++                }
++            }
+             if (target !== null) {
+                 fileEntries.push({
+                     name: arg,
+diff --git a/dist/vfs/sqlite-vfs.js b/dist/vfs/sqlite-vfs.js
+index 363e3db45eb7fad69b4b24b53a016aecac84b80f..521f73c16330f21a739944906d17c13826876c56 100644
+--- a/dist/vfs/sqlite-vfs.js
++++ b/dist/vfs/sqlite-vfs.js
+@@ -2656,7 +2656,10 @@ export class SqliteVFS {
+         const inode = resolved.inode;
+         if (inode && inode.kind !== 'directory')
+             throw vfsError('ENOTDIR', path);
+-        const kids = this.children.get(np);
++        // Kinu patch, Nimbus ask N21: a directory reached through a symlink lists the directory the link
++        // resolves to. Keyed on the path as given, readdir('/home/user') answered [] once /home/user linked
++        // to /home/main, while readFile through the same link answered.
++        const kids = this.children.get(resolved.path);
+         if (!kids) {
+             // W2.5b diagnostic: empty children-set for a directory we expected
+             // to be populated.
+diff --git a/src/shell/unix-commands.ts b/src/shell/unix-commands.ts
+index 15de09dcb7e88641427a9b5053457ce961c08f18..83776ce2b07ef80e6ea3efe39c1561e1f5fde3d5 100644
+--- a/src/shell/unix-commands.ts
++++ b/src/shell/unix-commands.ts
+@@ -3040,6 +3040,15 @@ function mkLs(vfs: UnixVfs): CmdFn {
+       // Symlink check: a symlink-arg is displayed as the link itself
+       // (without -L which we don't implement).
+       const target = (await readSymlinkTarget(vfs, fp));
++      // Kinu patch, Nimbus ask N21: as GNU ls does unless -l or -d asks for the link itself, a link
++      // named on the command line to a directory lists that directory.
++      if (target !== null && !flagLong && !flagDirectory) {
++        const followed = await (kvfs && typeof kvfs.stat === 'function' ? kvfs.stat(fp) : vfs.stat(fp)).catch(() => null);
++        if (followed?.type === 'directory') {
++          dirArgs.push(arg);
++          continue;
++        }
++      }
+       if (target !== null) {
+         fileEntries.push({
+           name: arg,
+diff --git a/src/vfs/sqlite-vfs.ts b/src/vfs/sqlite-vfs.ts
+index 336f9918ac93fd50b60331d544474a0ed9998fcd..c5ff264818ef67c2b24a981d54ef1cc7da6afff4 100644
+--- a/src/vfs/sqlite-vfs.ts
++++ b/src/vfs/sqlite-vfs.ts
+@@ -3381,7 +3381,10 @@ export class SqliteVFS {
+     const resolved = np ? this.checkAccess(np, 0o4, cred) : { path: '', inode: undefined };
+     const inode = resolved.inode;
+     if (inode && inode.kind !== 'directory') throw vfsError('ENOTDIR', path);
+-    const kids = this.children.get(np);
++    // Kinu patch, Nimbus ask N21: a directory reached through a symlink lists the directory the link
++    // resolves to. Keyed on the path as given, readdir('/home/user') answered [] once /home/user linked
++    // to /home/main, while readFile through the same link answered.
++    const kids = this.children.get(resolved.path);
+     if (!kids) {
+       // W2.5b diagnostic: empty children-set for a directory we expected
+       // to be populated.

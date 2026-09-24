@@ -539,7 +539,7 @@ describe('Live Smoke — one real turn per backend', () => {
       });
 
       const startedAt = Date.now();
-      await session.send(SMOKE_PROMPT);
+      await session.send(SMOKE_PROMPT, { id: crypto.randomUUID() });
       const elapsedMs = Date.now() - startedAt;
 
       console.log(`    cli turn: ${String(elapsedMs)}ms, tools [${toolNames.join(', ')}]`);

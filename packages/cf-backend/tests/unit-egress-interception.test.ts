@@ -1,11 +1,10 @@
-// Defends: the secret reaches the upstream and nothing the container reads carries it; a method
-// missing from the RPC surface is a silent no-op, so reachability is derived from handler source.
+// Defends: the secret reaches the upstream and nothing the container reads carries it. The class-level
+// posture (no raw internet, HTTPS intercepted, ContainerProxy exported) is gate:egress-interception's.
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
-  EGRESS_PLACEHOLDER_PREFIX, refusedHostname, type EgressSecretBinding,
+  EGRESS_PLACEHOLDER_PREFIX, refusedHostname, type EgressSecretBinding, type JsonValue,
 } from '@kinu.run/core';
 import type { KinuSandbox } from '../src/kinu-sandbox';
 // Static: neither module reaches `cloudflare:email`, so neither needs the mock below.
@@ -22,32 +21,21 @@ import {
 import { KINU_USER_AGENT, kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
-// The gate's own resolver, so gate and test read one of the two installed Containers copies.
-// `require`: the gate's `.ts` import paths need `allowImportingTsExtensions` (TS5097 otherwise).
-const egressGate = v.parse(
-  v.object({ boundContainers: v.function() }),
-  createRequire(import.meta.url)('../../../scripts/egress-interception'),
-);
-
-const BoundContainers = v.object({ module: v.string(), version: v.string() });
-
 // `agents` reaches `cloudflare:email`: mock first, then dynamic imports.
 mockAgentsSdk();
-
-const { ORCHESTRATOR_RPC_SURFACE } = await import('../src/rpc-surface');
 
 const {
   CONTAINER_EVENT_HOST,
   handleContainerEgress, handleContainerEvent, parseEgressParams,
 } = await import('../src/egress/outbound');
 
-const root = new URL('../', import.meta.url).pathname;
+const {
+  eventsOver, makeCtx, nextTurn, orchestratorHarness, stubOf,
+} = await import('./helpers/actor-harness');
 
 function ctx(params: OutboundHandlerContext['params']): OutboundHandlerContext {
   return { containerId: 'container-1', className: 'KinuSandbox', params };
 }
-
-const read = (path: string): string => readFileSync(`${root}${path}`, 'utf8');
 
 const SECRET = ['sk_live_', 'abcdefghij0123456789'].join('');
 
@@ -218,16 +206,6 @@ describe('what the container is configured with', () => {
     expect(params.bindings).toEqual([]);
   });
 
-  test('the event host is bound BEFORE the catch-all, by the object that owns the container',
-    () => {
-      // Catch-all first leaves a window where a container event is forwarded to an unresolvable
-      // `.internal` name. Read from the one writer's source.
-      const sandbox = read('src/kinu-sandbox.ts');
-      const body = sandbox.slice(sandbox.indexOf('async configureEgress('));
-      expect(body.indexOf('setOutboundByHost')).toBeLessThan(body.indexOf('setOutboundHandler'));
-      expect(body.indexOf('WORKSPACE_NAME_KEY')).toBeLessThan(body.indexOf('setOutboundByHost'));
-    });
-
   test('params are parsed, so a malformed configuration reads as unconfigured', () => {
     expect(parseEgressParams(ctx(PARAMS))).toEqual(PARAMS);
     expect(parseEgressParams(ctx({ workspaceName: 'w' }))).toBeUndefined();
@@ -323,12 +301,20 @@ describe('configuration is awaited before the container runs', () => {
 });
 
 describe('reachability of the container event channel', () => {
-  // Derived from handler source so a new call without allowlisting fails.
-  test('every OrchestratorAgent method the egress layer calls is on the RPC surface', () => {
-    const handler = read('src/egress/outbound.ts');
-    const called = [...handler.matchAll(/\bagent\.(\w+)\(/g)].map(([, name]) => name);
-    expect(called.length).toBeGreaterThan(0);
-    expect([...new Set(called)].filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name))).toEqual([]);
+  test('a container event reaches its workspace through the object\'s RPC surface', async () => {
+    const workspace = orchestratorHarness();
+    const change = { kind: 'file_changed', path: '/workspace/notes.md', change: 'modified' } as const;
+
+    // The resolver hands out the stub a binding would: a method the object's seal hides is refused.
+    const response = await handleContainerEvent(
+      new Request(`https://${CONTAINER_EVENT_HOST}/v1/events`, { method: 'POST', body: JSON.stringify(change) }),
+      async () => stubOf(workspace.agent),
+      PARAMS,
+    );
+
+    expect(response.status, await response.clone().text()).toBe(202);
+    expect(eventsOver(workspace.db).query({ variant: 'file_changed' }).map((event) => event.payload))
+      .toEqual([{ path: change.path, change: change.change }]);
   });
 
   test('the method the channel calls actually exists on the orchestrator', async () => {
@@ -344,23 +330,95 @@ describe('reachability of the container event channel', () => {
   });
 });
 
-describe('the posture the whole design rests on', () => {
-  test('ContainerProxy is exported from the Worker entry', () => {
-    // Without it `applyOutboundInterception` throws and nothing is intercepted.
-    expect(read('src/server.ts')).toMatch(/export\s*\{[^}]*\bContainerProxy\b[^}]*\}/);
+/** One interception configuration the Containers base applied, as the ContainerProxy it builds receives it. */
+interface AppliedInterception {
+  readonly internet: boolean;
+  readonly byHost: readonly string[];
+  readonly catchAll: boolean;
+}
+
+/** A handler the base names by method; its params are the egress configuration it was given. */
+const HandlerOverride = v.looseObject({ method: v.string() });
+
+/** The props the Containers base hands its `ContainerProxy`, narrowed to what these tests read. */
+const ProxyOptions = v.object({
+  props: v.object({
+    enableInternet: v.boolean(),
+    outboundByHostOverrides: v.optional(v.record(v.string(), HandlerOverride), {}),
+    outboundHandlerOverride: v.optional(HandlerOverride),
+  }),
+});
+
+/**
+ * A Durable Object context the Containers base runs on: storage over SQLite, a container that records the
+ * interception calls it receives, and the `ctx.exports.ContainerProxy` loopback the base binds handlers through.
+ */
+function containerHost() {
+  const effects: string[] = [];
+  const applied: AppliedInterception[] = [];
+  const synchronous = new Map<string, JsonValue>();
+  const base = makeCtx(new Database(':memory:'), 'box-1');
+
+  const storage = {
+    ...base.storage,
+    sync: async () => {},
+    // The synchronous KV API the base keeps its outbound configuration in.
+    kv: {
+      get: (key: string) => synchronous.get(key),
+      put: (key: string, value: JsonValue) => { synchronous.set(key, value); },
+      delete: (key: string) => synchronous.delete(key),
+    },
+    put: async (key: string, value: JsonValue) => {
+      effects.push(`stored ${key}`);
+      await base.storage.put(key, value);
+    },
+  };
+
+  const container = new Proxy({ running: false }, {
+    get: (target, member) => {
+      if (member === 'running') return target.running;
+
+      return async (host?: string) => { effects.push(`${String(member)}(${host ?? ''})`); };
+    },
   });
 
-  test('the container class denies non-HTTP egress and intercepts HTTPS', () => {
-    const source = read('src/kinu-sandbox.ts');
-    expect(source).toContain('enableInternet = false');
-    // The SDK does not default this on, whatever its docs say.
-    expect(source).toContain('interceptHttps = true');
-  });
+  const ContainerProxy = (options: JsonValue) => {
+    const { props } = v.parse(ProxyOptions, options);
 
-  test('the SDK still leaves HTTPS interception off by default', () => {
-    // Re-measured on the copy the artifact binds, so the comments asserting it cannot rot.
-    const shipped = v.parse(BoundContainers, egressGate.boundContainers());
-    expect(readFileSync(shipped.module, 'utf8')).toContain('interceptHttps = false');
+    applied.push({
+      internet: props.enableInternet,
+      byHost: Object.keys(props.outboundByHostOverrides),
+      catchAll: props.outboundHandlerOverride !== undefined,
+    });
+    effects.push('intercepted');
+
+    return { fetch: async () => new Response(null, { status: 204 }) };
+  };
+
+  return { ctx: { ...base, storage, container, exports: { ContainerProxy } }, effects, applied };
+}
+
+describe('a configured container has no way out but the handlers', () => {
+  test('raw internet stays denied, HTTPS is intercepted, and events are routed before the catch-all', async () => {
+    const { KinuSandbox } = await import('../src/kinu-sandbox');
+    const host = containerHost();
+    // SAFETY: the context above carries every member the Containers base and Devbox read while configuring.
+    const box = new KinuSandbox(host.ctx as never, {} as Env);
+
+    // The base finishes its own activation inside `blockConcurrencyWhile` before the first request.
+    await nextTurn();
+    await box.configureEgress(PARAMS);
+
+    // Catch-all first would forward a container event to the unresolvable `.internal` name.
+    expect(host.applied).toEqual([
+      { internet: false, byHost: [CONTAINER_EVENT_HOST], catchAll: false },
+      { internet: false, byHost: [CONTAINER_EVENT_HOST], catchAll: true },
+    ]);
+    // The event handler resolves the workspace from storage, so it is there before any event can arrive.
+    expect(host.effects[0]).toBe('stored kinu:workspace-name');
+    expect(host.effects.filter((effect) => effect.startsWith('interceptOutboundHttps'))).toEqual([
+      'interceptOutboundHttps(*)', 'interceptOutboundHttps(*)',
+    ]);
   });
 });
 

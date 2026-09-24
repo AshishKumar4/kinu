@@ -33,8 +33,8 @@ export async function writeKvJson(
   kv: KvStore,
   key: string,
   value: KvRecord,
-  expiresAtMs: number,
+  lifetimeMs: number,
 ): Promise<void> {
-  const ttl = Math.max(MIN_TTL_SECONDS, Math.ceil((expiresAtMs - Date.now()) / 1000));
+  const ttl = Math.max(MIN_TTL_SECONDS, Math.ceil(lifetimeMs / 1000));
   await kv.put(key, JSON.stringify(value), { expirationTtl: ttl });
 }

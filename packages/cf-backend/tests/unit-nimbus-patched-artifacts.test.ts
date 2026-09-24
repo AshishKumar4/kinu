@@ -6,10 +6,19 @@ import type {
   SqlDatabase,
   SqlValue,
 } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import * as v from 'valibot';
+import {
+  LEGACY_WORKSPACE_ROOT, TurnContextBudget, WORKSPACE_ROOT, createFileDispatcher, nimbusSessionFiles, settleWorkspaceRoot,
+} from '@kinu.run/core';
+import { workspaceBoxFiles } from '@kinu.run/core/workspace';
+import { TurnFileLedger } from '../../core/src/tools/file-ledger';
+import { mockAgentsSdk } from './helpers/agents-sdk';
 
-const repositoryRoot = join(import.meta.dir, '../../..');
+// `agents` reaches `cloudflare:email`: mock first, then the harness.
+mockAgentsSdk();
+
+const { orchestratorHarness } = await import('./helpers/actor-harness');
 
 type NativeSqlValue = string | number | bigint | null | Uint8Array;
 
@@ -74,43 +83,69 @@ describe('installed Nimbus dependency integrity', () => {
     db.close();
   });
 
-  // These read the installed dependency, not a patch file: Nimbus packages come from the registry with the
-  // patch set upstreamed, so assert the property, whoever put it there.
-  test('the installed core and worker preserve the owner-only file boundary', () => {
-    const coreInstalled = readFileSync(join(
-      repositoryRoot,
-      'node_modules/@nimbus-sh/core/src/vfs/sqlite-vfs.ts',
-    ), 'utf8');
+  // patches/@nimbus-sh%2Fcore@0.12.0.patch (Nimbus ask N21) until a release carries it: SqliteVFS.readdir keyed
+  // its children on the path as given, so a directory reached through a link listed nothing.
+  test('the workspace root, reached through its legacy link, lists what the root holds', async () => {
+    const db = new Database(':memory:');
 
-    const workerInstalled = readFileSync(join(
-      repositoryRoot,
-      'node_modules/@nimbus-sh/worker/dist/session/rpc.js',
-    ), 'utf8');
+    const workspace = await NimbusWorkspace.create({
+      sql: workspaceSql(db),
+      transactions: { storage: { transactionSync: <T,>(fn: () => T): T => db.transaction(fn)() } },
+      generation: 1,
+      cwd: WORKSPACE_ROOT,
+      env: { HOME: WORKSPACE_ROOT },
+    });
 
-    expect(coreInstalled).toContain('checkStickyParentMutation');
-    expect(coreInstalled).toContain('(parentInode.mode & 0o1000)');
-    expect(workerInstalled).toContain('_rpcWriteProtectedRootFile');
-    expect(workerInstalled).toContain('fs.chmod(root, 0o1777)');
-    expect(workerInstalled).toContain('fs.chmod(protectedPath, 0o444)');
+    // Kinu's boot: the root at /home/main, /home/user a link to it.
+    settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
+    workspace.vfs.as(CRED_SESSION_USER).writeFile(`${WORKSPACE_ROOT}/flow-probe.txt`, new TextEncoder().encode('probe'));
+
+    const listed = workspace.vfs.as(CRED_SESSION_USER).readdir(LEGACY_WORKSPACE_ROOT).map((entry) => entry.name);
+
+    const shell = await workspace.exec(`ls ${LEGACY_WORKSPACE_ROOT}`);
+
+    const file = createFileDispatcher({
+      vfs: nimbusSessionFiles({
+        files: workspaceBoxFiles(async () => workspace.vfs),
+        ready: async () => undefined,
+        exec: async () => { throw new Error('the file tool runs no commands'); },
+      }),
+      ledger: new TurnFileLedger(),
+      budget: new TurnContextBudget(),
+    });
+
+    const tool = v.parse(v.object({ entries: v.array(v.string()) }), await file({ action: 'list', path: LEGACY_WORKSPACE_ROOT }));
+
+    expect(listed).toContain('flow-probe.txt');
+    expect(shell).toMatchObject({ exitCode: 0 });
+    expect(shell.stdout.split(/\s+/u)).toContain('flow-probe.txt');
+    expect(tool.entries).toContain('flow-probe.txt');
+    db.close();
   });
 
-  test('the installed packages carry capability WebSocket routing', () => {
-    // Routing spans three packages by dependency direction: fabric holds `process-host` and the header constant,
-    // the worker's session router reads the header, its rpc and routes dispatch. `loaders/process-host` carries none of it.
-    const installed = [
-      'node_modules/@nimbus-sh/fabric/dist/process-host.js',
-      'node_modules/@nimbus-sh/worker/dist/_shared/session-router.js',
-      'node_modules/@nimbus-sh/worker/dist/session/routes.js',
-      'node_modules/@nimbus-sh/worker/dist/session/rpc.js',
-    ].map((path) => readFileSync(join(repositoryRoot, path), 'utf8')).join('\n');
+  // `writeWorkspaceSoul` rests on the installed filesystem: a sticky 1777 root owned by the kernel, SOUL.md kernel-owned 444.
+  test('the agent cannot remove, rename or rewrite the SOUL.md its owner wrote', async () => {
+    const { agent } = orchestratorHarness();
+    const soul = '# Checkout\n\n## Mission\n\nAudit the checkout flow.';
 
-    // Both halves, so neither drifts alone: the constant holds the wire name and the route reads it.
-    expect(installed).toContain("PREVIEW_CAPABILITY_HEADER = 'x-nimbus-preview-capability'");
-    expect(installed).toContain('request.headers.get(PREVIEW_CAPABILITY_HEADER)');
-    expect(installed).toContain('routeHostedWebSocket');
-    expect(installed).toContain('HOSTED_WEBSOCKET_CAPABILITY_HEADER');
-    expect(installed).toContain('webSocketCapability = crypto.randomUUID()');
-    expect(installed).toContain('record.webSocketCapability !== capability');
-    expect(installed).not.toContain('Generic guest WebSocket previews are not supported');
+    await agent.setSoul(soul);
+
+    const attempts = await Promise.all([
+      'rm -f /home/main/SOUL.md',
+      'mv /home/main/SOUL.md /home/main/renamed.md',
+      'echo rewritten > /home/main/SOUL.md',
+    ].map(async (command) => {
+      const ran = await agent.execWorkspaceCommand(`${command}; echo "exit=$?"`);
+
+      return ran.ok ? ran.value.stdout.trim() : ran.error.message;
+    }));
+
+    expect(attempts).toEqual(['exit=1', 'exit=1', 'exit=1']);
+    expect((await agent.deleteWorkspaceFile('SOUL.md')).ok).toBe(false);
+    expect((await agent.writeWorkspaceFile({ kind: 'file', path: 'SOUL.md', data: 'rewritten' })).ok).toBe(false);
+
+    const kept = await agent.execWorkspaceCommand('cat /home/main/SOUL.md');
+
+    expect(kept.ok ? kept.value.stdout : kept.error.message).toBe(soul);
   });
 });

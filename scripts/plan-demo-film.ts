@@ -178,10 +178,8 @@ const STRIP_LABELS = `[...document.querySelectorAll('#inspector .p-tabstrip butt
 /**
  * Tool cards standing in the transcript — what a turn that ran tools leaves.
  *
- * `data-tool-state` is on EVERY call's card; `data-tool-group` is only on the
- * header a run of two or more shares (core's `MIN_GROUP`), so counting groups
- * read zero for the plan turn's single `submit_plan` and missed the whole
- * point of the count.
+ * `data-tool-state` is on every call's row, and the only tool marker the
+ * transcript renders since the group header went (9e9d2ab10).
  */
 const TOOL_CARDS = `document.querySelectorAll('#chat [data-tool-state]').length`;
 
@@ -334,7 +332,7 @@ const BEAT_PATIENCE_MS = 90_000;
 const WHERE = `JSON.stringify({
   mode: [...document.querySelectorAll('[aria-label="Turn mode"] button')].map((b) => b.textContent + '=' + String(b.getAttribute('aria-pressed'))),
   planStatus: document.querySelector('#inspector [data-plan-status]')?.textContent ?? null,
-  toolCards: document.querySelectorAll('#chat [data-tool-group]').length,
+  toolCards: document.querySelectorAll('#chat [data-tool-state]').length,
   strip: [...document.querySelectorAll('#inspector .p-tabstrip button')].map((b) => (b.textContent ?? '').trim()),
   notices: [...document.querySelectorAll('[role="alert"], [role="status"]')].map((n) => (n.textContent ?? '').trim()).slice(0, 4),
   chatTail: (document.querySelector('#chat')?.textContent ?? '').slice(-400),
@@ -425,7 +423,7 @@ export async function drivePlanReview(
   await pressAt(page, send, onFrame, 'send');
 
   const inspectorBeforePlan = Number(await page.evaluate(INSPECTOR_WIDTH));
-  await until(page, `document.querySelector('#chat [data-tool-group]') !== null
+  await until(page, `document.querySelector('#chat [data-tool-state]') !== null
     || document.querySelector('#inspector [data-plan-status]') !== null`, onFrame, 'turn');
   await until(page, `[...document.querySelectorAll('#inspector [data-plan-decisions] button:not([disabled])')]
     .some(button => button.getClientRects().length > 0)`, onFrame, 'turn');
