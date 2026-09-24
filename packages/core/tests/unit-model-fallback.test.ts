@@ -29,6 +29,12 @@ const toolStep = (): Response => new Response(sse([
 
 const refused = (status: number): Response => Response.json({ error: { message: `refused with ${String(status)}` } }, { status });
 
+/** Part of an answer, then the provider's stream fails. */
+const partThenFail = (text: string): Response => new Response(sse([
+  JSON.stringify({ choices: [{ delta: { content: text } }] }),
+  JSON.stringify({ error: { message: 'upstream overloaded', code: 503 } }),
+]), { headers: SSE_HEADERS });
+
 const RequestSchema = v.looseObject({ model: v.string(), messages: v.array(v.unknown()) });
 
 interface Served {
@@ -146,6 +152,22 @@ describe('a failed call hands the turn down its fallback chain', () => {
     expect(threw?.message ?? '').toContain('HTTP 401');
     expect(events.some((event) => event.type === 'done')).toBe(false);
   });
+
+  test('a model that fails after streaming part of its answer fails the turn, as the person already saw that part', async () => {
+    const { events, threw, served } = await turn((model) => (model === 'primary' ? partThenFail('The answer is') : answer('from backup')), ['backup']);
+
+    expect(served.map((entry) => entry.model)).toEqual(['primary']);
+    expect(events.some((event) => event.type === 'model-fallback' || event.type === 'done')).toBe(false);
+    expect(threw).not.toBeNull();
+  });
+
+  test('a request refused as malformed fails the turn instead of trying the next model, which would refuse it too', async () => {
+    const { events, threw, served } = await turn((model) => (model === 'primary' ? refused(400) : answer('from backup')), ['backup']);
+
+    expect(served.map((entry) => entry.model)).toEqual(['primary']);
+    expect(events.some((event) => event.type === 'model-fallback')).toBe(false);
+    expect(threw?.message ?? '').toContain('HTTP 400');
+  });
 });
 
 /** Two accounts of one OpenAI-compatible provider on one endpoint; `answerFor` decides by the key each request carries. */
@@ -218,6 +240,9 @@ describe('an account that hits its limit hands the turn to the next account of i
     expect(reason).toContain('rate-limiting this account (HTTP 429)');
     expect(reason).toContain('resets in 30s');
     expect(events.find((event) => event.type === 'done')).toMatchObject({ text: 'from home' });
+    // The step the second account answered is charged to it, under the fallback that served it.
+    expect(events.flatMap((event) => (event.type === 'step-finish' ? [{ account: event.account?.name, fallback: event.fallback }] : [])))
+      .toEqual([{ account: 'home', fallback: 'openai-compat@home/m' }]);
   });
 
   test('a lone model keeps waiting out its limit, and nothing hands over', async () => {

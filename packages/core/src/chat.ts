@@ -33,7 +33,7 @@ import type { CountableRequest, InputTokenCount } from './providers/input-tokens
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { ExtensionHost } from './extension';
 import { mergeProviderOptions } from './strategy/effort';
-import { describeProviderError, toProviderError } from './providers/util';
+import { describeProviderError, providerFailureFacts, toProviderError } from './providers/util';
 import { repairToolCall } from './tools/repair-tool-call';
 import { renderToolResult, synthesizeToolFallback } from './prompts/evidence-window';
 import * as v from 'valibot';
@@ -41,7 +41,7 @@ import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } f
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_SDK_RETRIES, RATE_LIMIT_HANDOVER_HEADER } from './providers/rate-limit-retry';
 import { callAccountOf, type CallAccount } from './providers/quota';
-import { diagnostics, toKinuError } from './obs/index';
+import { classifyErrorCode, diagnostics, toKinuError } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
 import { ToolOutcomeSchema } from './types/tool-outcome';
@@ -227,6 +227,13 @@ function toolOutput(raw: ChatToolOutput['output']): { output: JsonValue } | unde
 
 type PendingStepEvent = Omit<Extract<ChatEvent, { type: 'step-finish' }>, 'type'>;
 
+interface CallFailure {
+  readonly cause: unknown;
+  readonly error: Error;
+  /** The failing step had already streamed text or started a tool: the person saw it, and a tool may have run. */
+  readonly streamed: boolean;
+}
+
 interface CallOutcome {
   /** The SDK's steps on a natural finish, the `onAbort` handover on a cut. */
   readonly steps: readonly StepResult<ToolSet>[];
@@ -234,7 +241,22 @@ interface CallOutcome {
   readonly produced: ModelMessage[];
   readonly finishReason: string | undefined;
   readonly interrupted: boolean;
-  readonly failure: { readonly cause: unknown; readonly error: Error } | null;
+  readonly failure: CallFailure | null;
+}
+
+/**
+ * The next model of a chain takes a failed call only before the failing step streamed anything, and only for a
+ * failure of the provider or the account: unavailable, slow, out of allowance, or this account refused (401, 402).
+ * A request refused as malformed, missing or too large fails the turn, as every model after would refuse it too.
+ */
+function handsOver(failure: CallFailure): boolean {
+  if (failure.streamed) return false;
+  const { status } = providerFailureFacts({ cause: failure.cause });
+
+  if (status !== undefined) return status === 401 || status === 402 || status === 408 || status === 429 || status >= 500;
+  const code = classifyErrorCode({ cause: failure.error });
+
+  return code === null || code === 'unavailable' || code === 'timeout';
 }
 
 const DEAD_STREAM = 'Model stream ended without output: the provider stream terminated prematurely '
@@ -247,6 +269,8 @@ class ProviderCall {
   /** An aborted run never settles `result.steps`, so this is a cut call's only record of its steps. */
   recordedSteps: readonly StepResult<ToolSet>[] = [];
   streamError: unknown;
+  /** Whether the step the error cut had streamed anything, read when the error arrives: its end clears the step. */
+  private streamedBeforeError = false;
   lastFinishReason: string | undefined;
   /** No finish reason and no output: a provider stream that died, which the SDK would record as a normal stop. */
   private deadFinalStep = false;
@@ -365,6 +389,7 @@ class ProviderCall {
 
       case 'error':
         this.streamError = chunk.error;
+        this.streamedBeforeError = this.stepContent.length > 0 || this.dispatchedCalls.size > 0;
 
         return null;
 
@@ -402,14 +427,17 @@ class ProviderCall {
    * What ends a drained, uncut call, or null when it stands. Provider failures cross classified via `toProviderError`
    * so callers never see a raw `APICallError` body. A dead final step stays a bare throw: the result is rejected.
    */
-  failure(provider: string | undefined): { readonly cause: unknown; readonly error: Error } | null {
+  failure(provider: string | undefined): CallFailure | null {
     if (this.interrupted) return null;
 
     if (this.streamError !== undefined) {
-      return { cause: this.streamError, error: toProviderError({ doing: 'calling the model', cause: this.streamError, provider }) };
+      return {
+        cause: this.streamError, streamed: this.streamedBeforeError,
+        error: toProviderError({ doing: 'calling the model', cause: this.streamError, provider }),
+      };
     }
 
-    if (this.deadFinalStep) return { cause: new Error('model stream ended without output'), error: new Error(DEAD_STREAM) };
+    if (this.deadFinalStep) return { cause: new Error('model stream ended without output'), error: new Error(DEAD_STREAM), streamed: false };
 
     return null;
   }
@@ -738,7 +766,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     const outcome = yield* callModel(request, stepOffset);
 
     if (outcome.failure === null) return outcome;
-    const next = chain.shift();
+    const next = handsOver(outcome.failure) ? chain.shift() : undefined;
 
     if (next === undefined) throw outcome.failure.error;
     yield { type: 'model-fallback', from: current.spec, to: next.spec, reason: describeProviderError({ cause: outcome.failure.cause }) };
