@@ -10,7 +10,7 @@ import type { ForkFileSource } from '../identity/fork-transfer';
 import type { ForkTreeReader } from '../identity/fork';
 import type { ArchiveFileSource } from '../identity/archive';
 import { SOUL_PATH, summarizeSoulBytes } from '../identity/soul';
-import { isVfsError } from './errno';
+import { tolerate } from '../obs/index';
 import { workspacePath, WORKSPACE_ROOT } from './workspace-path';
 import type { WorkspaceBundle } from './nimbus-workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -143,13 +143,7 @@ export function createWorkspaceForkSource(bundle: WorkspaceBundle): ForkFileSour
 }
 
 function lstatOrNull(plane: CredentialedVfs, path: string): VfsStat | null {
-  try {
-    return plane.lstat(path);
-  } catch (error) {
-    if (isVfsError(error) && error.code === 'ENOENT') return null;
-
-    throw error;
-  }
+  return tolerate(() => plane.lstat(path), 'enoent') ?? null;
 }
 
 /** Unsupported node kinds fail the backup rather than producing an incomplete one. */

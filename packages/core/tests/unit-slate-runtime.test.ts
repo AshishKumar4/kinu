@@ -29,7 +29,7 @@ test('Slate source operations require Nimbus atomic-embedding rollback coherence
 
         if (failWrite && args[0].endsWith('/server.js')) throw sourceWriteFailure;
       },
-    }, content, (body) => session.vfs.withTransaction(body));
+    }, content, makeSqlExec(ws.db), (body) => session.vfs.withTransaction(body));
 
     const slates = new WorkspaceSlates({
       workspaceId: new WorkspaceId('workspace'), store, files,
@@ -67,7 +67,7 @@ test('Slate source operations require Nimbus atomic-embedding rollback coherence
       const restoredSession = await createWorkspaceBundle(restored).session();
       const restoredContent = new WorkspaceSlateContentStore(restoredSession.vfs.as(CRED_KERNEL));
 
-      const restoredFiles = new SlateFiles(restoredSession.vfs.as(CRED_SESSION_USER), restoredContent,
+      const restoredFiles = new SlateFiles(restoredSession.vfs.as(CRED_SESSION_USER), restoredContent, makeSqlExec(restored),
         (body) => restoredSession.vfs.withTransaction(body));
 
       restoredSession.vfs.withTransaction(() => restoredFiles.restore(id, second.source));
