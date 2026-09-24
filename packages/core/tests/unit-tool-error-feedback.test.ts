@@ -4,7 +4,6 @@ import { z } from 'zod';
 import type { LanguageModelV3ToolResultOutput } from '@ai-sdk/provider';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { runChat, type ChatEvent } from '../src/chat';
-import { TurnContextMeter, type ContextComposition } from '../src/context-meter';
 import { KinuError } from '../src/obs/error';
 import { FileRefusalError } from '../src/tools/file-edit';
 import { McpToolError } from '../src/tools/mcp-error';
@@ -33,20 +32,11 @@ async function drive(results: readonly (Error | JsonValue)[], history: ModelMess
     return result;
   } });
 
-  const meter = new TurnContextMeter();
-  meter.openTurn({ system: 'sys' });
-  const measured: ContextComposition[] = [];
   const events: ChatEvent[] = [];
 
   for await (const event of runChat({ model, system: 'sys', tools: { probe },
-    history: [...history, { role: 'user', content: 'go' }], meter,
-    onStep: () => {
-      const composition = meter.take();
-
-      if (composition === undefined) throw new Error('the request was not measured');
-      measured.push(composition);
-    },
-  })) events.push(event);
+    history: [...history, { role: 'user', content: 'go' }], measureContext: true })) events.push(event);
+  const measured = events.flatMap(event => event.type === 'step-finish' ? [event.context] : []);
   const prompt = model.doStreamCalls.at(-1)?.prompt ?? [];
   const toolMessages = prompt.filter(message => message.role === 'tool');
 

@@ -4,7 +4,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 import {
-  CapabilityDeniedError, DRIVE_SKILLS_DIR, mossaicVfs, packZip, unpackZip, type DriveUploadOutcome, type UserCaller,
+  CapabilityDeniedError, DRIVE_RESERVED_DIRS, DRIVE_SKILLS_DIR, mossaicVfs, packZip, unpackZip, type DriveListing,
+  type DriveUploadOutcome, type UserCaller,
 } from '@kinu.run/core';
 import type { DriveAnswer } from '../src/user/user-do';
 import { fakeMossaic, type FakeMossaic } from '@kinu.run/test-utils';
@@ -16,6 +17,13 @@ import { driveBound, tenantDrive, type MossaicObject } from '../src/drive/tenant
 const SKILL = (name: string): string => `---\nname: ${name}\ndescription: ${name} does things\n---\nSteps.`;
 
 const bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
+
+const RESERVED = new Set(DRIVE_RESERVED_DIRS.map((dir) => dir.slice(1)));
+
+/** A root listing without the folders every Drive lists (unit-drive-skills owns those): what this user wrote. */
+function written(listed: DriveAnswer<DriveListing>): Array<[string, string]> | null {
+  return listed.ok ? listed.value.entries.filter((entry) => !RESERVED.has(entry.name)).map((entry) => [entry.name, entry.kind]) : null;
+}
 
 async function signedIn(mossaic: FakeMossaic, email: string, id: string): Promise<TestUserDO> {
   const harness = createTestUserDO({ durableObjectId: id, drive: (tenant) => mossaicVfs(mossaic.tenant(tenant)) });
@@ -67,11 +75,9 @@ describe('the Drive on the UserDO', () => {
     expect(await upload(alice, owner, '/notes.txt', [bytes('alice '), bytes('only')])).toEqual({ ok: true, value: { ok: true } });
     expect(await alice.userDO.drive_mkdir(owner, '/projects')).toEqual({ ok: true, value: undefined });
 
-    const listed = await alice.userDO.drive_list(owner, '/');
+    const mine: Array<[string, string]> = [['projects', 'folder'], ['notes.txt', 'file']];
 
-    expect(listed.ok && listed.value.entries.map((entry) => [entry.name, entry.kind])).toEqual([
-      ['blueprints', 'folder'], ['projects', 'folder'], ['skills', 'folder'], ['notes.txt', 'file'],
-    ]);
+    expect(written(await alice.userDO.drive_list(owner, '/'))).toEqual(mine);
 
     // Keyed by the id the edge derives from the email, so the workspace mount reads the same store.
     expect([...mossaic.stores.keys()]).toEqual([await deriveUserId('alice@example.com')]);
@@ -81,15 +87,13 @@ describe('the Drive on the UserDO', () => {
 
     expect([...mossaic.stores.keys()]).toEqual([await deriveUserId('alice@example.com'), await deriveUserId('bob@example.com')]);
 
-    expect(bobs.ok && bobs.value.entries.map((entry) => entry.name)).toEqual(['blueprints', 'skills']);
+    expect(written(bobs)).toEqual([]);
     expect(await bob.userDO.drive_startDownload(owner, '/notes.txt', 't1')).toMatchObject({ ok: false, code: 'missing' });
     expect(await bob.userDO.drive_delete(owner, '/notes.txt')).toMatchObject({ ok: false, code: 'missing' });
     expect(await bob.userDO.drive_rename(owner, '/projects', '/mine')).toMatchObject({ ok: false, code: 'missing' });
     expect(await bob.userDO.drive_markAsSkill(owner, '/projects')).toMatchObject({ ok: false, code: 'bad_input' });
 
-    const again = await alice.userDO.drive_list(owner, '/');
-
-    expect(again.ok && again.value.entries.map((entry) => entry.name)).toEqual(['blueprints', 'projects', 'skills', 'notes.txt']);
+    expect(written(await alice.userDO.drive_list(owner, '/'))).toEqual(mine);
     alice.close();
     bob.close();
   });
