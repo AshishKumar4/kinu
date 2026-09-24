@@ -63,7 +63,6 @@ function emptyTree(): VFS {
 interface Workspace {
   readonly bind: (actorId: string) => Bound;
   readonly files: VFS;
-  readonly sql: SqlExecutor;
   /** Every row of every table. */
   readonly rows: () => number;
   /** SQL statements the stores ran so far. */
@@ -100,7 +99,6 @@ function workspace(): Workspace {
       return { handle, claims, history, stores: { claims, events: null } };
     },
     files: vfs,
-    sql,
     rows: () => testSql.db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table'").all()
       .reduce((sum, { name }) => sum + (testSql.db.query<{ n: number }, []>(`SELECT count(*) AS n FROM "${name}"`).get()?.n ?? 0), 0),
     statements: () => statements,
@@ -315,25 +313,6 @@ test('evidence under /context is readable and not writable, and the plane invent
   await expect(vfs.unlink('/context/working.jsonl')).rejects.toMatchObject({ code: 'EACCES' });
   await expect(vfs.mkdir('/context/whatever')).rejects.toMatchObject({ code: 'EACCES' });
   expect(await vfs.exists('/context/nothing-here.json')).toBe(false);
-  ws.close();
-});
-
-test('a step recorded before request lists were kept reads as a note, not an error', async () => {
-  const ws = workspace();
-  const actor = ws.bind('actor-unkept');
-  const vfs = planeFor(actor);
-  await hydrate(actor, [{ role: 'user', content: 'q' }]);
-  const claim = await admitOn(actor, { runId: 'run-1', turnId: 'turn-1' });
-  // What the code before the request lineage left of a step: its row, its list in a table nothing reads now.
-  void ws.sql`INSERT INTO actor_requests(actor_id,request_id,turn_id,run_id,epoch,step_index,revision,context_id,context_revision,metadata_json,recorded_at)
-    VALUES(${claim.actorId},'old-step',${claim.turnId},${claim.runId},${claim.epoch},0,1,${claim.workingContextId},${claim.workingRevision},'{}',0)`;
-
-  const document = v.parse(v.object({ request: v.object({ id: v.string() }), messages: v.null(), note: v.string() }),
-    JSON.parse(await readText(vfs, '/context/requests/turn-1/1-1.json')));
-
-  expect(document.request.id).toBe('old-step');
-  expect(document.note).toMatch(/^Request details were not kept before \d{4}-\d\d-\d\d \d\d:\d\d UTC\.$/u);
-  expect((await actor.claims.consumedContext('turn-1', 0))?.messages).toBeNull();
   ws.close();
 });
 

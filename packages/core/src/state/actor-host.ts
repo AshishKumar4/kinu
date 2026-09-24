@@ -9,7 +9,7 @@ import type { SqlExec, SqlExecutor, Storage } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
 import { ActorSession } from '../orchestrator/actor-session';
 import type { AgentOrchestratorDeps } from '../orchestrator/agent-orchestrator';
-import type { StoredActorClaim } from '../orchestrator/actor-claims';
+import type { ContextRevision, StoredActorClaim } from '../orchestrator/actor-claims';
 import type { SessionFilePlane } from '../session/payload';
 import { actorReferenceOf, sameActorReference, type ActorHandle, type ActorReference } from '../identity/actor-handle';
 import { createAgentStores, type AgentStores } from './agent-stores';
@@ -21,8 +21,6 @@ import { verifyClaimedProgram } from '../orchestrator/actor-claims';
 import { readVersionedScaffoldSource } from '../scaffold/shadow';
 import { sha256Hex } from '../safety/argument-digest';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
-import { CHAT_SESSION_ID } from '../session/transcript-schema';
-import { requestDetailsNotKept } from '../session/requests';
 
 /** The runtime must be built over this same handle, never a second binding. */
 export interface BoundActor {
@@ -438,19 +436,18 @@ export function childContextResolver(deps: {
   };
 }
 
-/** Once: the entry id is the claim's. */
-async function noteInterrupted(stores: AgentStores, claim: StoredActorClaim): Promise<void> {
-  const transcript = stores.history.transcript(CHAT_SESSION_ID);
-  const id = `${claim.turnId}:${String(claim.epoch)}:interrupted`;
-
-  if (transcript.has(id)) return;
-  await stores.history.record(CHAT_SESSION_ID, { id, parentId: transcript.newestId(), origin: 'render',
-    message: { role: 'system', content: `This turn was interrupted by an update. ${requestDetailsNotKept(stores.history.requests.keptSince())}` } });
+/** The claim's consumed request, or why its own rows cannot be read: a failure no later sweep reads differently. */
+async function consumedEvidence(stores: AgentStores, claim: StoredActorClaim): Promise<{ readonly context: ContextRevision | null } | { readonly failure: KinuError }> {
+  try {
+    return { context: await stores.claims.consumedContext(claim.turnId) };
+  } catch (cause) {
+    return { failure: toKinuError({ doing: 'reading the request record of an interrupted turn', cause, otherwise: 'io' }) };
+  }
 }
 
 /**
- * Call only with recovery authority. Verified claims stay owed: bytes alone do not prove the turn finished. A turn whose
- * consumed step predates kept request lists settles `aborted` and says so.
+ * Call only with recovery authority. Verified claims stay owed: bytes alone do not prove the turn finished. A claim whose
+ * record fails to read settles `error` once; an actor that cannot be opened stays owed.
  */
 export async function recoverActorTurns(
   host: Pick<ActorHost, 'resumable'> & {
@@ -462,13 +459,13 @@ export async function recoverActorTurns(
 ): Promise<{
   readonly verified: readonly string[];
   readonly refused: readonly string[];
-  readonly interrupted: readonly string[];
+  readonly failed: readonly string[];
   readonly unreadable: readonly string[];
   readonly active: readonly string[];
 }> {
   const verified: string[] = [];
   const refused: string[] = [];
-  const interrupted: string[] = [];
+  const failed: string[] = [];
   const unreadable: string[] = [];
   const active: string[] = [];
 
@@ -481,11 +478,25 @@ export async function recoverActorTurns(
         continue;
       }
 
+      const evidence = await consumedEvidence(actor.stores, turn.claim);
+
+      if (actor.session.inFlight) {
+        active.push(turn.claim.turnId);
+        continue;
+      }
+
+      if ('failure' in evidence) {
+        actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'error');
+        failed.push(turn.claim.turnId);
+        diagnostics.failure('actor.turn_record_unreadable', evidence.failure, { actor: turn.record.name, turn: turn.claim.turnId });
+        continue;
+      }
+
       const verdict = await verifyClaimedProgram(
         turn.claim,
         (version) => readVersionedScaffoldSource(actor.runtime, version),
         (source) => sha256Hex(source),
-        () => actor.stores.claims.consumedContext(turn.claim.turnId),
+        evidence.context,
       );
 
       if (actor.session.inFlight) {
@@ -495,13 +506,6 @@ export async function recoverActorTurns(
 
       if (verdict.kind === 'verified') {
         verified.push(turn.claim.turnId);
-        continue;
-      }
-
-      if (verdict.kind === 'not_kept') {
-        await noteInterrupted(actor.stores, turn.claim);
-        actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'aborted');
-        interrupted.push(turn.claim.turnId);
         continue;
       }
 
@@ -517,5 +521,5 @@ export async function recoverActorTurns(
     }
   }
 
-  return { verified, refused, interrupted, unreadable, active };
+  return { verified, refused, failed, unreadable, active };
 }
