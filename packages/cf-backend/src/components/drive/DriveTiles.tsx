@@ -1,5 +1,5 @@
 /** One tile for every kind of thing in the Drive; folders are the one exception, a short chip in the same columns. */
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useCallback, useId, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import {
   AppWindowIcon, BookOpenIcon, BroadcastIcon, DotsThreeIcon, FileCodeIcon, FileCsvIcon, FileIcon, FileImageIcon,
@@ -19,7 +19,7 @@ export interface MenuItem {
   readonly danger?: boolean;
   /** A rule above the item: the destructive end of the menu. */
   readonly apart?: boolean;
-  /** Offered but refused, with the reason on hover. */
+  /** Offered but refused: it stays reachable, with the reason under its label. */
   readonly refused?: string;
   readonly marker?: `data-${string}`;
 }
@@ -32,6 +32,7 @@ export function TileMenu({ name, items, initiallyOpen = false, className }: {
 }) {
   const [open, setOpen] = useState(initiallyOpen);
   const menu = useRef<HTMLDivElement>(null);
+  const id = useId();
   const close = useCallback(() => setOpen(false), []);
   useCloseOnOutsideClick(open, menu, close);
 
@@ -50,18 +51,28 @@ export function TileMenu({ name, items, initiallyOpen = false, className }: {
           <div role="menu" aria-label={name}
             className="fixed inset-x-3 bottom-3 z-50 p-card border p-border p-1.5 p-shadow-overlay animate-fade-in sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:z-20 sm:mt-1 sm:w-52">
             <p className="truncate px-2.5 pb-1.5 pt-1 p-meta font-medium p-text-3 sm:hidden">{name}</p>
-            {items.map((item) => (
-              <div key={item.label}>
-                {item.apart === true && <div className="mx-1 my-1.5 border-t p-border" />}
-                <button type="button" role="menuitem" disabled={item.refused !== undefined} title={item.refused}
-                  {...(item.marker === undefined ? {} : { [item.marker]: "" })}
-                  onClick={() => { setOpen(false); item.onSelect(); }}
-                  className={`flex w-full items-center gap-3 rounded-md px-2.5 py-2.5 text-left text-[15px] transition-colors enabled:hover:bg-[var(--c-elevated)] disabled:opacity-45 sm:gap-2.5 sm:px-2 sm:py-1.5 sm:text-sm ${item.danger === true ? "p-danger" : "p-text"}`}>
-                  <span className={`flex shrink-0 ${item.danger === true ? "" : "p-text-3"}`}>{item.icon}</span>
-                  {item.label}
-                </button>
-              </div>
-            ))}
+            {items.map((item, index) => {
+              const refused = item.refused === undefined ? null : { label: `${id}-${String(index)}-label`, reason: `${id}-${String(index)}-reason` };
+
+              return (
+                <div key={item.label}>
+                  {item.apart === true && <div className="mx-1 my-1.5 border-t p-border" />}
+                  <button type="button" role="menuitem" aria-disabled={refused === null ? undefined : true}
+                    aria-labelledby={refused?.label} aria-describedby={refused?.reason}
+                    {...(item.marker === undefined ? {} : { [item.marker]: "" })}
+                    onClick={() => { if (refused !== null) return; setOpen(false); item.onSelect(); }}
+                    className={`flex w-full gap-3 rounded-md px-2.5 py-2.5 text-left text-[15px] transition-colors sm:gap-2.5 sm:px-2 sm:py-1.5 sm:text-sm ${refused === null ? "items-center hover:bg-[var(--c-elevated)]" : "cursor-default items-start"} ${item.danger === true ? "p-danger" : "p-text"}`}>
+                    <span className={`flex shrink-0 ${item.danger === true ? "" : "p-text-3"} ${refused === null ? "" : "mt-0.5 opacity-45"}`}>{item.icon}</span>
+                    {refused === null ? item.label : (
+                      <span className="min-w-0">
+                        <span id={refused.label} className="block opacity-45">{item.label}</span>
+                        <span id={refused.reason} className="mt-0.5 block p-meta p-text-3">{item.refused}</span>
+                      </span>
+                    )}
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </>
       )}

@@ -69,15 +69,39 @@ async function waitForEntry(page: Page, name: string): Promise<void> {
 
 const crumbs = (page: Page) => page.$$eval('nav[aria-label="Folder"] a', (anchors) => anchors.map((a) => a.textContent?.trim() ?? ''));
 
-/** Open a tile's menu; the items as drawn, with whether each is refused and why. */
+/** Open a tile's menu; each item by its accessible name, with the reason a refused one gives. */
 async function menuOf(page: Page, tile: string): Promise<{ label: string; refused: string | null }[]> {
   await page.click(`${tile} [data-drive-menu]`);
   await page.waitForSelector(`${tile} [role="menu"]`);
 
-  return page.$$eval(`${tile} [role="menuitem"]`, (items) => items.map((item) => ({
-    label: item.textContent?.trim() ?? '',
-    refused: item instanceof HTMLButtonElement && item.disabled ? item.title : null,
-  })));
+  return page.$$eval(`${tile} [role="menuitem"]`, (items) => items.map((item) => {
+    const text = (id: string | null): string | null => (id === null ? null : document.getElementById(id)?.textContent?.trim() ?? null);
+
+    return {
+      label: text(item.getAttribute('aria-labelledby')) ?? item.textContent?.trim() ?? '',
+      refused: item.getAttribute('aria-disabled') === 'true' ? text(item.getAttribute('aria-describedby')) : null,
+    };
+  }));
+}
+
+/** Tab from the focus until an element named `label` has it: whether it says it is disabled, and why. */
+async function tabTo(page: Page, label: string): Promise<{ disabled: string | null; reason: string | null } | null> {
+  for (let press = 0; press < 12; press += 1) {
+    await page.keyboard.press('Tab');
+
+    const reached = await page.evaluate((wanted) => {
+      const element = document.activeElement;
+      const text = (id: string | null): string | null => (id === null ? null : document.getElementById(id)?.textContent?.trim() ?? null);
+
+      if (element === null || (text(element.getAttribute('aria-labelledby')) ?? element.textContent?.trim()) !== wanted) return null;
+
+      return { disabled: element.getAttribute('aria-disabled'), reason: text(element.getAttribute('aria-describedby')) };
+    }, label);
+
+    if (reached !== null) return reached;
+  }
+
+  return null;
 }
 
 async function pressNew(page: Page, item: string): Promise<void> {
@@ -131,6 +155,8 @@ describe('the Drive', () => {
         await waitForEntry(page, 'staging');
         expect(await page.$('[role="dialog"]')).toBeNull();
         expect(await menuOf(page, '[data-drive-entry="staging"]')).toContainEqual({ label: 'Mark as skill', refused: 'no SKILL.md in /projects/ops/staging' });
+        // The keyboard reaches the refused item too, and hears why.
+        expect(await tabTo(page, 'Mark as skill')).toEqual({ disabled: 'true', reason: 'no SKILL.md in /projects/ops/staging' });
         await shoot(page, 'drive-folder-dark');
       } finally {
         await page.close();
