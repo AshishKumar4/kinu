@@ -80,6 +80,8 @@ chmod 600 ~/.config/kinu/eval-session/config.json
 
 The deployment synthesizes `eval-service@kinu.run` (`DEV_USER_EMAIL`). That session can create and remove throwaway workspaces. A scoped `ai.proxy` token cannot, so it cannot cover the hosted arm.
 
+`KINU_EVAL_ACCOUNT` names one of its eval accounts instead (`EVAL_ACCOUNTS` in core): the same `DEV_IDENTITY_SECRET`, another user. `scripts/eval-session-mint.ts` mints that account's CLI bearer, stamps its setup, and keeps it in `~/.config/kinu/eval-session/<account>/config.json`, where `scripts/eval-credentials.ts` reads it. The first-run tier runs its fleet project as `devices`, the account that holds the machines its cases attach, so no other tier's agent finds them.
+
 This is a terminal tier, never a commit, push, CI, or deploy gate. The tier prints target and cost basis before spending. With a target resolved, a run that reports no model call exits non-zero; before that check existed, a run reported `TOTAL: 0 model call(s)` with every live test skipped and passed a deploy gate.
 
 ### What it runs
