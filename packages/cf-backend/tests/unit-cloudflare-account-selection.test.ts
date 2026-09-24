@@ -1,10 +1,11 @@
 // Defends: account switching must drive the inference base URL, drop the old
 // account's AI Gateway, refuse unseen accounts, and notify live workspaces.
 import { describe, expect, test } from 'bun:test';
+import { serveFamily } from './helpers/api';
 import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, testOwner } from './helpers/user-do';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
-import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
+import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
 import type { AuthIdentity } from '../src/auth/session';
 import type { UserCaller } from '@kinu.run/core';
@@ -184,11 +185,11 @@ function routeHarness(selectFails = false) {
   };
 
   const call = (path: string, method: string, body?: { id: string }) =>
-    handleUserRequest(new Request(`https://kinu.example.com/api/user${path}`, {
+    serveFamily(userRoutes, { identity: IDENTITY, ctx })(new Request(`https://kinu.example.com/api/user${path}`, {
       method,
       headers: { 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
-    }), env, IDENTITY, ctx);
+    }), env);
 
   return { call, notified, selected, pending };
 }

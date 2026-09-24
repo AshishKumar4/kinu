@@ -1,6 +1,6 @@
 /**
  * `POST /api/feedback`: one authenticated multipart submission becomes one R2 object plus one
- * control-plane row. Auth and CSRF run upstream in server.ts; the 401 here is this module's own boundary.
+ * control-plane row. Auth and CSRF run upstream; the 401 here is this module's own boundary.
  * Refusal order is the design: length, counted body, part type, bytes, then storage. The workspace is
  * proven against the reporter's registry before anything is stored. The row is the commit point: a
  * failed row write deletes the orphan object. Nothing is retried; the client offers an explicit retry.
@@ -16,7 +16,6 @@ import {
   type FeedbackRejectReason,
 } from '@kinu.run/core/analytics';
 import {
-  FEEDBACK_ENDPOINT,
   FEEDBACK_FIELDS,
   FEEDBACK_MAX_NOTE_CHARS,
   FEEDBACK_MAX_REQUEST_BYTES,
@@ -149,7 +148,7 @@ async function parseMultipart(
   }
 }
 
-/** The whole submission policy over injected effects; `routeFeedback` is its one entry, tests included. */
+/** The whole submission policy over injected effects; `answerFeedback` is its one entry, tests included. */
 async function handleFeedbackSubmission(
   request: Request,
   identity: AuthIdentity | null,
@@ -360,13 +359,12 @@ async function handleFeedbackSubmission(
   return json({ body: { id: written.id } satisfies FeedbackAccepted }, { status: 201 });
 }
 
-export async function routeFeedback(
+/** A submission is a POST. */
+export async function answerFeedback(
   request: Request,
   identity: AuthIdentity | null,
   deps: FeedbackDeps,
-): Promise<Response | null> {
-  if (new URL(request.url).pathname !== FEEDBACK_ENDPOINT) return null;
-
+): Promise<Response> {
   if (request.method !== 'POST') return err(405, 'use POST');
 
   return handleFeedbackSubmission(request, identity, deps);

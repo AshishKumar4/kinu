@@ -13,7 +13,8 @@ import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, 
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
 import { makeKv } from './helpers/kv';
-import { handleSharedPublicRequest, handleSharedRequest } from '../src/shared/routes';
+import { sharedPublicRoutes, sharedRoutes } from '../src/shared/routes';
+import { serveFamily } from './helpers/api';
 import { handleSlateShareHostRequest } from '../src/slate-share-route';
 import type { AuthIdentity } from '../src/auth/session';
 import { present } from '@kinu.run/test-utils';
@@ -122,7 +123,7 @@ async function twoUserWorld(): Promise<World> {
 }
 
 const sharedRequest = (env: Env, identity: AuthIdentity, request: Request) =>
-  handleSharedRequest(request, env, identity);
+  serveFamily(sharedRoutes, { identity })(request, env);
 
 const jsonBody = async <Schema extends v.GenericSchema>(res: Response, schema: Schema): Promise<v.InferOutput<Schema>> =>
   v.parse(schema, await res.json());
@@ -292,7 +293,7 @@ test('D2: one revoke route ends a public live share and a blueprint link', async
 
   expect(publishResp.status).toBe(201);
   const blueprint = await jsonBody(publishResp, v.object({ id: v.string(), share: v.string() }));
-  const page = () => handleSharedPublicRequest(new Request(`https://app.test/api/shared/blueprint/${encodeURIComponent(blueprint.id)}`), world.env);
+  const page = () => serveFamily(sharedPublicRoutes)(new Request(`https://app.test/api/shared/blueprint/${encodeURIComponent(blueprint.id)}`), world.env);
 
   expect((await page())?.status).toBe(200);
   expect((await revoke(blueprint.share))?.status).toBe(200);

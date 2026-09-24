@@ -14,8 +14,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- The Worker's `/api` routes are served by one Hono app whose route order is the old dispatch order, gate for gate. An error no route catches is now answered as JSON with its class's status and a message naming only that class (the cause goes to the log), never cached, instead of the platform's error page; the run-event routes read the workspace whose ownership was just proven, even when the request spells its name with escapes.
 - **The Drive is one tiled place for your stuff.** Two tabs: My stuff (slates, blueprints, folders and files, with the Skills folder first) and Shared (what others shared with you, then what you shared), each a grid of one tile. Nothing empty is drawn: a section with no tiles is absent, the Shared tab appears once something is shared, and a first visit lands on the tab that holds something. A file opens in the viewer beside the grid; a slate opens in its workspace. The share dialog (#25) says one sentence per mode, then people, who else can open it, the fork choice, the members it reaches folded behind one row, its limits, and the shares already made with Stop sharing. The Drive's `/blueprints` folder and its Public and People I know lists are gone, and one `/api/shared/revoke` route ends a live share or a blueprint link.
-
 - Hosted actors now use the Agents platform directly, without Think's duplicate session, workspace, inference queue or recovery boot. The shared Kinu chat loop retains the existing browser/CLI protocol and initializes the root transcript through the public session provider. Accepted sends and unfinished workspace work keep the sandbox protected across eviction.
 - **Tool descriptions carry only what a call needs.** Each built-in tool's
   description is now a one-line summary plus the facts its schema cannot

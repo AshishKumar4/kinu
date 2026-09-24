@@ -45,7 +45,7 @@ function isControlPlaneUiPath(pathname: string): boolean {
 }
 
 /** Must agree with the prefix test in `routes.ts`, which reads this. */
-export function isControlPlaneApiPath(pathname: string): boolean {
+function isControlPlaneApiPath(pathname: string): boolean {
   return pathname === '/api/control' || pathname.startsWith('/api/control/');
 }
 

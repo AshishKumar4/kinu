@@ -4,6 +4,7 @@
  * The container PTY is the sandbox SDK's (`/ws/pty`); the workspace shell is the runtime's (workspace-terminal.ts).
  */
 
+import { Hono, type Context } from "hono";
 import type { PtyOptions } from "@cloudflare/sandbox";
 import { getAgentByName } from "agents";
 import { diagnostics, renderCauseChain, toKinuError } from "@kinu.run/core/obs";
@@ -14,6 +15,8 @@ import { DEVICE_PTY_MAX_AXIS, DEVICE_TERMINAL_PATH } from "@kinu.run/core";
 import { terminalLane } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { WORKSPACE_TERMINAL_PATH } from "@kinu.run/core";
+import type { FamilyEnv } from "./api/context";
+import { LITERAL_WORKSPACE, type WorkspaceVariables } from "./api/workspace";
 import { openSandbox } from "./sandbox-exec-lane";
 
 /**
@@ -116,18 +119,6 @@ function clientGone(signal: AbortSignal): Promise<typeof CLIENT_GONE> {
 
 function abandonedAttach(): Response {
   return err(503, "terminal attach abandoned: the client disconnected before the shell opened");
-}
-
-function terminalVerb(pathname: string, agentName: string): "attach" | "keepalive" | "reset" | null {
-  const base = `/api/workspaces/${agentName}/terminal`;
-
-  if (pathname === base) return "attach";
-
-  if (pathname === `${base}/keepalive`) return "keepalive";
-
-  if (pathname === `${base}/reset`) return "reset";
-
-  return null;
 }
 
 interface TerminalCall {
@@ -242,7 +233,7 @@ async function workspaceTerminal(call: TerminalCall): Promise<Response> {
     }
 
     if (request.signal.aborted) return abandonedAttach();
-    // server.ts identity headers ride along, so the socket is closed by the same revocation as chat.
+    // The gate's identity headers ride along: one revocation closes chat and socket.
     const socketUrl = new URL(request.url);
     socketUrl.pathname = WORKSPACE_TERMINAL_PATH;
 
@@ -431,37 +422,41 @@ async function sandboxTerminal(call: TerminalCall, ctx: Pick<ExecutionContext, '
   return sandboxAttach(sandbox, call, ctx);
 }
 
-/** Auth, CSRF and ownership are settled by server.ts before this route. */
-export async function handleTerminalRequest(
-  request: Request,
-  deps: TerminalRouteDeps,
-  agentName: string,
-  ctx: Pick<ExecutionContext, 'waitUntil'>,
-): Promise<Response | null> {
-  const url = new URL(request.url);
-  const verb = terminalVerb(url.pathname, agentName);
+/** One route per verb; the query names the executor. */
+export function terminalRoutes<Bindings extends object>(
+  depsFor: (env: Bindings) => TerminalRouteDeps,
+): Hono<FamilyEnv<Bindings, WorkspaceVariables>> {
+  const routes = new Hono<FamilyEnv<Bindings, WorkspaceVariables>>();
 
-  if (verb === null) return null;
+  const terminal = (verb: TerminalCall['verb']) => async (c: Context<FamilyEnv<Bindings, WorkspaceVariables>>): Promise<Response> => {
+    const { name: agentName, request } = c.get('workspace');
+    const url = new URL(request.url);
+    const executor = url.searchParams.get("executor");
 
-  const executor = url.searchParams.get("executor");
+    if (!executor) return err(400, "executor query parameter required");
 
-  if (!executor) return err(400, "executor query parameter required");
+    // One scope for every failure below, including readiness refusals.
+    const scope = { workspace: agentName, executor };
 
-  // One scope for every failure below, including readiness refusals.
-  const scope = { workspace: agentName, executor };
+    const lane = terminalLane(executor);
 
-  const lane = terminalLane(executor);
+    // Rendered as a labelled mode, not a failure.
+    if (lane.mode === "line") {
+      return json({ body: { error: `${executor} has no terminal`, lane: "line" } }, { status: 409 });
+    }
 
-  // Rendered as a labelled mode, not a failure.
-  if (lane.mode === "line") {
-    return json({ body: { error: `${executor} has no terminal`, lane: "line" } }, { status: 409 });
-  }
+    const call: TerminalCall = { request, url, deps: depsFor(c.env), agentName, executor, verb, scope };
 
-  const call: TerminalCall = { request, url, deps, agentName, executor, verb, scope };
+    if (executor === DEVICE_EXECUTOR) return deviceTerminal(call);
 
-  if (executor === DEVICE_EXECUTOR) return deviceTerminal(call);
+    if (executor === WORKSPACE_EXECUTOR) return workspaceTerminal(call);
 
-  if (executor === WORKSPACE_EXECUTOR) return workspaceTerminal(call);
+    return sandboxTerminal(call, c.executionCtx);
+  };
 
-  return sandboxTerminal(call, ctx);
+  routes.all(`${LITERAL_WORKSPACE}/terminal`, terminal("attach"));
+  routes.all(`${LITERAL_WORKSPACE}/terminal/keepalive`, terminal("keepalive"));
+  routes.all(`${LITERAL_WORKSPACE}/terminal/reset`, terminal("reset"));
+
+  return routes;
 }

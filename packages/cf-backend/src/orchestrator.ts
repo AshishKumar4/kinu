@@ -5101,7 +5101,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return listRefinements(this.refinementDeps, limit);
   }
 
-  /** Called by `handleHubRequest` so publish + dedupe + reply channel open run atomically in this DO. */
+  /** Called by `webhookDeliveryRoutes` so publish + dedupe + reply channel open run atomically in this DO. */
   async acceptWebhookDelivery(opts: WebhookDelivery): Promise<WebhookDeliveryResult> {
     return acceptWebhookDelivery({
       triggers: this.triggerRegistry,

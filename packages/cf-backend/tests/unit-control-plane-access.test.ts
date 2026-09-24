@@ -7,7 +7,7 @@ import { beforeAll, afterAll, describe, expect, test } from 'bun:test';
 import { SignJWT, exportJWK, generateKeyPair, type JWK } from 'jose';
 import { isPublicPath, type AuthIdentity } from '../src/auth/session';
 import {
-  isControlPlaneApiPath, isControlPlaneSurface, verifyControlPlaneAccess,
+  isControlPlaneSurface, verifyControlPlaneAccess,
   type ControlPlaneAccessEnv,
 } from '../src/control-plane/access-gate';
 import {
@@ -518,14 +518,11 @@ describe('Access is scoped to the control plane and to nothing else', () => {
   test('the UI entry and everything under it need an assertion', () => {
     for (const path of ['/control', '/control/', '/control/users', '/control/workspaces/alpha']) {
       expect(isControlPlaneSurface(path)).toBe(true);
-      // The UI document isn't the admin API: `routes.ts` declines it for the SPA fallback, the gate still applies.
-      expect(isControlPlaneApiPath(path)).toBe(false);
     }
   });
 
   test('the admin API and everything under it need an assertion', () => {
     for (const path of ['/api/control', '/api/control/overview', '/api/control/users/abc']) {
-      expect(isControlPlaneApiPath(path)).toBe(true);
       expect(isControlPlaneSurface(path)).toBe(true);
     }
   });
@@ -554,7 +551,6 @@ describe('Access is scoped to the control plane and to nothing else', () => {
 
     for (const path of outside) {
       expect(isControlPlaneSurface(path)).toBe(false);
-      expect(isControlPlaneApiPath(path)).toBe(false);
     }
   });
 

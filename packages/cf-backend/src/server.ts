@@ -1,11 +1,10 @@
 /**
- * Worker entry point: exports every DO class and routes requests. Order matters:
- * HTTPS upgrade, preview hosts, /pc, the Cloudflare Access gate (/control*,
- * /api/control* only), public routes, the auth gate, CSRF, then signed-in routes.
+ * Worker entry: exports every DO class and routes, in order: HTTPS upgrade, preview hosts, `/api/`
+ * (api/app.ts), /pc, Access (/control*), public routes, auth, CSRF, agent sockets.
  */
 
 import { routeAgentRequest } from "agents";
-import { DEV_IDENTITY_HEADER, ORCHESTRATOR_AGENT_SLUG, REAL_CLOCK } from "@kinu.run/core";
+import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
@@ -14,26 +13,12 @@ import {
 } from "@kinu.run/core";
 import { firstResponse, handlePcRequest } from "@kinu.run/core";
 import { servePreviewRequest } from "./preview-proxy";
-import { handleRunEventsRequest, handleWorkspaceOverviewRequest, runEventsResolver } from "./run-events-routes";
-import { handleEvalAbortRequest } from "./eval/abort-route";
 import { handleMcpRequest, mcpAgentResolver } from "./mcp-server";
-import { handleHealthRequest } from "@kinu.run/core";
-import { handleClientErrorRequest } from "./client-error/route";
-import { handleUserRequest } from "./user/routes";
-import { handleAccountRequest } from "./user/account-routes";
 import { handleCliRequest } from "./cli/routes";
 import { handleReleaseArtifactRequest } from "@kinu.run/core";
-import { handleDeployRequest } from "./deploy/routes";
-import { handleUpdatesRequest } from "./updates/routes";
+import { handleDeployCallback } from "./deploy/routes";
 import { handleAuthRequest } from "./auth/routes";
 import { handleLandingRequest } from "./landing-route";
-import { handleSharedPublicRequest, handleSharedRequest } from "./shared/routes";
-import { handleDriveRequest } from "./drive/routes";
-import {
-  handleHubRequest, handleWebhookDeliveryRequest, hubAgentResolver, webhookDeliveryResolver,
-} from "./events/routes";
-import { handleFilesRequest } from "./files-routes";
-import { handleTerminalRequest, terminalRouteDeps } from "./terminal-route";
 import { handleInboundEmail } from "./email/handler";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do";
 import { handleSlateShareHostRequest } from "./slate-share-route";
@@ -42,25 +27,19 @@ import {
   authenticateRequest, AuthError, crossSiteRejection, isPublicPath,
   type AuthIdentity,
 } from "./auth/session";
-import {
-  containPreviewResponse, hostOf, isPreviewHostRequest, previewHostSuffix, previewPortSuffix, previewSuffixMetaName,
-} from "@kinu.run/core";
-import { withAppSecurityHeaders } from "@kinu.run/core";
+import { containPreviewResponse, hostOf, isPreviewHostRequest, serveApp } from "@kinu.run/core";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do";
 import { ownerCaller } from "@kinu.run/core";
-import { AUTH_TIME_HEADER, CLI_BEARER_HEADER, CLI_SCOPES_HEADER, SESSION_BEARER_HEADER, USER_ID_HEADER } from "./cli/rpc-gate";
+import { appendIdentityHeaders } from "./cli/rpc-gate";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
 import { err } from "@kinu.run/core";
-import { handleFeedbackRequest } from "./feedback/routes";
-import { handleControlRequest } from "./control-plane/routes";
-import {
-  isControlPlaneSurface, verifyControlPlaneAccess, type AccessIdentity,
-} from "./control-plane/access-gate";
+import { isControlPlaneSurface, verifyControlPlaneAccess } from "./control-plane/access-gate";
 import {
   adminDenialMessage, adminDenialStatus, reportAdminDenial,
 } from "./control-plane/admin-caller";
 import { observeIdentity, observeWorkspaceUse } from "./control-plane/index-feed";
 import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
+import { api } from "./api/app";
 
 // The one actor-bearing DO class: every actor in a workspace shares its SQLite.
 export { OrchestratorAgent } from "./orchestrator";
@@ -93,25 +72,6 @@ export { DeployRunDO } from "./deploy/deploy-do";
 // whose root composes a hosted fabric first (first-write-wins per isolate).
 export { SupervisorRPC } from "@nimbus-sh/worker/workspace-host";
 
-async function serveApp(request: Request, env: Env): Promise<Response> {
-  const suffix = previewHostSuffix(env);
-  const asset = await env.ASSETS.fetch(request);
-
-  const configured = suffix && asset.headers.get('content-type')?.includes('text/html')
-    ? new HTMLRewriter().on('head', {
-        element(element) {
-          element.append(`<meta name="${previewSuffixMetaName()}" content="${suffix}">`, { html: true });
-        },
-      }).transform(asset)
-    : asset;
-
-  return withAppSecurityHeaders(
-    configured,
-    new URL(request.url),
-    suffix ? `https://*.${suffix}${previewPortSuffix(env)}` : null,
-  );
-}
-
 function authError(request: Request, e: AuthError): Response {
   if (e.status === 401 && wantsHtml(request)) {
     const url = new URL(request.url);
@@ -128,17 +88,6 @@ function authError(request: Request, e: AuthError): Response {
     status: e.status,
     headers: { 'content-type': 'application/json' },
   });
-}
-
-function extractAgentName(pathname: string): string | null {
-  let m = pathname.match(/^\/api\/workspaces\/([^/]+)/);
-
-  if (m) return decodeURIComponent(m[1]);
-  const orchestratorName = extractOrchestratorAgentName(pathname);
-
-  if (orchestratorName) return orchestratorName;
-
-  return null;
 }
 
 async function authenticateCliAgentTicketRequest(
@@ -260,33 +209,6 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Headers {
-  const next = new Headers(h);
-  // The object reads the identity below, never the credential.
-  next.delete(DEV_IDENTITY_HEADER);
-  next.set(USER_ID_HEADER, identity.userId);
-
-  if (identity.authTime) next.set(AUTH_TIME_HEADER, String(identity.authTime));
-  // Identity headers are always rewritten from the verified identity so a
-  // client can never smuggle or strip scopes, bearer, or session hash.
-  next.delete(CLI_SCOPES_HEADER);
-
-  if (identity.cliScopes) next.set(CLI_SCOPES_HEADER, identity.cliScopes.join(','));
-  next.delete(CLI_BEARER_HEADER);
-
-  if (identity.cliBearer) {
-    next.set(CLI_BEARER_HEADER, `${identity.cliBearer.tokenHash}:${identity.cliBearer.generation}`);
-  }
-
-  next.delete(SESSION_BEARER_HEADER);
-
-  if (identity.sessionTokenHash) {
-    next.set(SESSION_BEARER_HEADER, identity.sessionTokenHash);
-  }
-
-  return next;
-}
-
 function wantsHtml(request: Request): boolean {
   const url = new URL(request.url);
 
@@ -367,14 +289,14 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   // (core preview/preview-origin.ts).
   if (isPreviewHostRequest(url, env)) return await routePreviewHost(request, env);
 
+  if (url.pathname.startsWith("/api/")) return await api.fetch(request, env, ctx);
+
   if (url.pathname.startsWith("/pc/")) {
     return handlePcRequest(request, env);
   }
 
-  // Cloudflare Access must run before every bypass (auth, public list, ASSETS,
-  // DO writes) and only on `isControlPlaneSurface` paths, never previews or the app.
-  let controlAccess: AccessIdentity | null = null;
-
+  // Cloudflare Access must run before every bypass (auth, public list, ASSETS)
+  // and only on `isControlPlaneSurface` paths, never previews or the app.
   if (isControlPlaneSurface(url.pathname)) {
     const access = await verifyControlPlaneAccess(request, env);
 
@@ -383,8 +305,6 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
 
       return err(adminDenialStatus(access.denial), adminDenialMessage(access.denial));
     }
-
-    controlAccess = access.access;
   }
 
   const appAuthResp = await handleAuthRequest(request, env, ctx);
@@ -395,16 +315,14 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
 
   if (landingResp) return landingResp;
 
-  const cliResp = await handleCliRequest(request, env, ctx);
+  const cliResp = await handleCliRequest(request, env);
 
   if (cliResp) return cliResp;
 
-  // Public: the deploy door is authorized by its run key, blueprints by a signed id.
+  // Public: release artifacts, and the deploy door's OAuth return, which its state cookie authorizes.
   const publicResp = await firstResponse(request, [
     (req) => handleReleaseArtifactRequest(req, env.RELEASES_BUCKET),
-    (req) => handleDeployRequest(req, env),
-    (req) => handleHealthRequest(req, env),
-    (req) => handleSharedPublicRequest(req, env),
+    (req) => handleDeployCallback(req, env),
   ]);
 
   if (publicResp) return publicResp;
@@ -423,11 +341,6 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   if (isPublicPath(url.pathname)) {
     return serveApp(request, env);
   }
-
-  // Webhook delivery: the URL's route capability is its gate.
-  const webhookResp = await handleWebhookDeliveryRequest(request, env, webhookDeliveryResolver(env));
-
-  if (webhookResp) return webhookResp;
 
   let identity: AuthIdentity;
   let authenticatedRequest = request;
@@ -458,42 +371,12 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   // indexed only after the ownership check below.
   observeIdentity(env, identity, { retain: ctx });
 
-  // Not public: reports carry screenshots, so it would be an anonymous upload endpoint.
-  const feedbackResp = await handleFeedbackRequest(authenticatedRequest, env, identity);
-
-  if (feedbackResp) return feedbackResp;
-
-  // Not public: an unauthenticated writer would be a log-injection endpoint.
-  const clientErrorResp = await handleClientErrorRequest(authenticatedRequest, env, identity);
-
-  if (clientErrorResp) return clientErrorResp;
-
-  // Admin authorization lives inside the module; entered only with a verified Access identity.
-  if (controlAccess !== null) {
-    const controlResp = await handleControlRequest(
-      authenticatedRequest, env, identity, controlAccess,
-    );
-
-    if (controlResp) return controlResp;
-  }
-
-  // Account-authority endpoints answer first: they write owner_only UserDO methods.
-  const accountResp = await firstResponse(authenticatedRequest, [
-    (req) => handleAccountRequest(req, env, identity),
-    (req) => handleUserRequest(req, env, identity, ctx),
-    (req) => handleSharedRequest(req, env, identity),
-    (req) => handleDriveRequest(req, env, identity),
-    (req) => handleUpdatesRequest(req, env, identity),
-  ]);
-
-  if (accountResp) return accountResp;
-
   // Refuse any namespace/facet path outside the public actor grammar before SDK routing.
   if (isForeignAgentNamespacePath(url.pathname)) {
     return err(404, 'Not found');
   }
 
-  const agentName = extractAgentName(url.pathname);
+  const agentName = extractOrchestratorAgentName(url.pathname);
 
   if (agentName) {
     // routeAgentRequest maps every DO binding by slug; the rejection above keeps
@@ -508,25 +391,6 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
       headers: appendIdentityHeaders(authenticatedRequest.headers, identity),
     });
 
-    const agent = claim.agent;
-
-    const eventsResp = await firstResponse(reqWithId, [
-      (req) => handleWorkspaceOverviewRequest(req, () => agent.getWorkspaceOverview()),
-      (req) => handleRunEventsRequest(req, runEventsResolver(env), REAL_CLOCK),
-      (req) => handleEvalAbortRequest(req, identity, () => agent.evalAbortActivation()),
-    ]);
-
-    if (eventsResp) return eventsResp;
-    const hubResp = await handleHubRequest(reqWithId, env, agentName, hubAgentResolver(env));
-
-    if (hubResp) return hubResp;
-    // Files and terminal bypass agent RPC: the chat socket's frame ceiling is too small.
-    const filesResp = await handleFilesRequest(reqWithId, env, agentName);
-
-    if (filesResp) return filesResp;
-    const terminalResp = await handleTerminalRequest(reqWithId, terminalRouteDeps(env), agentName, ctx);
-
-    if (terminalResp) return terminalResp;
     // Routed unchanged; only refuse names this workspace does not host.
     const hosted = hostedActorRoute(url.pathname);
 

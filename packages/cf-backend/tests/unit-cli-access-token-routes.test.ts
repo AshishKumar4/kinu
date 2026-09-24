@@ -1,13 +1,16 @@
 // Scoped `pta_…` CI tokens: exec/read scopes gate exactly their surfaces, sensitive routes stay session-only,
 // minting is step-up gated.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { serveFamily } from './helpers/api';
 import { describe, expect, test } from 'bun:test';
-import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
+import { cliRoutes, type CliRoutesEnv } from '../src/cli/routes';
 import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from './helpers/bindings';
 import { AGENT_RPC_ACCESS, PRIVATE_NO_STORE } from '@kinu.run/core';
 import type { JsonValue } from '@kinu.run/core';
 import type { AccessTokenScope, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
+
+const cli = serveFamily(cliRoutes);
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -223,21 +226,21 @@ const RPC = '/api/cli/workspaces/jarvis/rpc';
 describe('access token scope enforcement', () => {
   test('workspace.exec token can mint connect tickets, stop work, and run executors', async () => {
     const { env, calls } = setupEnv();
-    const ticket = await handleCliRequest(req(EXEC_TOKEN, '/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
+    const ticket = await cli(req(EXEC_TOKEN, '/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
     expect(ticket?.status).toBe(200);
     expect(calls).toContain('connect-ticket:exec-hash');
 
-    const stop = await handleCliRequest(req(EXEC_TOKEN, RPC, rpcInit('cancelCurrentWork')), env);
+    const stop = await cli(req(EXEC_TOKEN, RPC, rpcInit('cancelCurrentWork')), env);
     expect(stop?.status).toBe(200);
 
-    const exec = await handleCliRequest(req(EXEC_TOKEN, RPC, rpcInit('executeInExecutor', ['workspace', 'pwd'])), env);
+    const exec = await cli(req(EXEC_TOKEN, RPC, rpcInit('executeInExecutor', ['workspace', 'pwd'])), env);
     expect(exec?.status).toBe(200);
     expect(calls).toContain('executors:exec:workspace:pwd');
   });
 
   test('workspace.exec token cannot read agent state without workspace.read', async () => {
     const { env, calls } = setupEnv();
-    const res = await handleCliRequest(req(EXEC_TOKEN, RPC, rpcInit('getAgentStatus')), env);
+    const res = await cli(req(EXEC_TOKEN, RPC, rpcInit('getAgentStatus')), env);
     expect(res?.status).toBe(403);
     expect((await errorBody(res)).error).toContain('workspace.read');
     expect(calls).not.toContain('status');
@@ -245,16 +248,16 @@ describe('access token scope enforcement', () => {
 
   test('workspace.read token can read but cannot exec', async () => {
     const { env, calls } = setupEnv();
-    const status = await handleCliRequest(req(READ_TOKEN, RPC, rpcInit('getAgentStatus')), env);
+    const status = await cli(req(READ_TOKEN, RPC, rpcInit('getAgentStatus')), env);
     expect(status?.status).toBe(200);
     const statusBody = v.parse(RpcStatusResponseSchema, await handled(status).json());
     expect(statusBody.result).toMatchObject({ name: 'jarvis' });
 
-    const exec = await handleCliRequest(req(READ_TOKEN, RPC, rpcInit('executeInExecutor', ['workspace', 'pwd'])), env);
+    const exec = await cli(req(READ_TOKEN, RPC, rpcInit('executeInExecutor', ['workspace', 'pwd'])), env);
     expect(exec?.status).toBe(403);
     expect((await errorBody(exec)).error).toContain('workspace.exec');
 
-    const ticket = await handleCliRequest(req(READ_TOKEN, '/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
+    const ticket = await cli(req(READ_TOKEN, '/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
     expect(ticket?.status).toBe(403);
     expect((await errorBody(ticket)).error).toContain('workspace.exec');
     expect(calls.some((c) => c.startsWith('connect-ticket:'))).toBe(false);
@@ -279,7 +282,7 @@ describe('access token scope enforcement', () => {
     ];
 
     for (const [path, init] of forbidden) {
-      const res = await handleCliRequest(req(BOTH_TOKEN, path, init), env);
+      const res = await cli(req(BOTH_TOKEN, path, init), env);
       expect(`${path}:${res?.status}`).toBe(`${path}:403`);
       expect((await errorBody(res)).error).toContain('interactive CLI session token');
     }
@@ -289,7 +292,7 @@ describe('access token scope enforcement', () => {
 
   test('off-table rpc methods are 404s for scoped tokens without dispatch', async () => {
     const { env, calls } = setupEnv();
-    const res = await handleCliRequest(req(BOTH_TOKEN, RPC, rpcInit('destroyAgent', ['someone'])), env);
+    const res = await cli(req(BOTH_TOKEN, RPC, rpcInit('destroyAgent', ['someone'])), env);
     expect(res?.status).toBe(404);
     expect(calls).toEqual([]);
   });
@@ -320,7 +323,7 @@ describe('access token scope enforcement', () => {
     const answered: Record<string, number> = {};
 
     for (const method of Object.keys(AGENT_RPC_ACCESS)) {
-      answered[method] = handled(await handleCliRequest(req(READ_TOKEN, RPC, rpcInit(method)), tableEnv)).status;
+      answered[method] = handled(await cli(req(READ_TOKEN, RPC, rpcInit(method)), tableEnv)).status;
     }
 
     const rows = Object.entries(AGENT_RPC_ACCESS);
@@ -335,21 +338,21 @@ describe('access token scope enforcement', () => {
 
   test('/me works for any valid bearer and reports kind and scopes', async () => {
     const { env } = setupEnv();
-    const me = await handleCliRequest(req(EXEC_TOKEN, '/api/cli/me'), env);
+    const me = await cli(req(EXEC_TOKEN, '/api/cli/me'), env);
     expect(me?.status).toBe(200);
     expect(v.parse(MeResponseSchema, await handled(me).json())).toMatchObject({
       user: { id: USER_ID },
       token: { kind: 'access', scopes: ['workspace.exec'] },
     });
 
-    const sessionMe = await handleCliRequest(req(SESSION_TOKEN, '/api/cli/me'), env);
+    const sessionMe = await cli(req(SESSION_TOKEN, '/api/cli/me'), env);
     expect(v.parse(MeResponseSchema, await handled(sessionMe).json()))
       .toMatchObject({ token: { kind: 'session', scopes: 'all' } });
   });
 
   test('unknown access tokens are rejected with 401', async () => {
     const { env } = setupEnv();
-    const res = await handleCliRequest(req(`pta_${USER_ID}_${'x'.repeat(44)}`, '/api/cli/me'), env);
+    const res = await cli(req(`pta_${USER_ID}_${'x'.repeat(44)}`, '/api/cli/me'), env);
     expect(res?.status).toBe(401);
   });
 });
@@ -358,10 +361,7 @@ describe('access token management routes (session tokens only)', () => {
   test('minting requires a step-up-fresh session token', async () => {
     const fresh = setupEnv({ sessionMintedAt: Date.now() - 60_000 });
 
-    const minted = await handleCliRequest(
-      req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'ci', scopes: ['workspace.exec', 'workspace.read'] })),
-      fresh.env,
-    );
+    const minted = await cli(req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'ci', scopes: ['workspace.exec', 'workspace.read'] })), fresh.env);
 
     expect(minted?.status).toBe(201);
     // The mint is the one time the secret is in a body; `no-store` comes from `json()`'s account-wide policy.
@@ -375,10 +375,7 @@ describe('access token management routes (session tokens only)', () => {
 
     const stale = setupEnv({ sessionMintedAt: Date.now() - 24 * 60 * 60 * 1000 });
 
-    const refused = await handleCliRequest(
-      req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'ci', scopes: ['workspace.exec'] })),
-      stale.env,
-    );
+    const refused = await cli(req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'ci', scopes: ['workspace.exec'] })), stale.env);
 
     expect(refused?.status).toBe(401);
     expect((await errorBody(refused)).error).toContain('step-up auth required');
@@ -387,13 +384,10 @@ describe('access token management routes (session tokens only)', () => {
 
   test('mint validates input and surfaces store rejections as 400', async () => {
     const { env } = setupEnv({ sessionMintedAt: Date.now() });
-    const missing = await handleCliRequest(req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'ci' })), env);
+    const missing = await cli(req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'ci' })), env);
     expect(missing?.status).toBe(400);
 
-    const dup = await handleCliRequest(
-      req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'dup', scopes: ['workspace.exec'] })),
-      env,
-    );
+    const dup = await cli(req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'dup', scopes: ['workspace.exec'] })), env);
 
     expect(dup?.status).toBe(400);
     expect((await errorBody(dup)).error).toContain('already exists');
@@ -401,17 +395,17 @@ describe('access token management routes (session tokens only)', () => {
 
   test('lists active tokens and revokes by ref with honest 404s', async () => {
     const { env, calls } = setupEnv();
-    const list = await handleCliRequest(req(SESSION_TOKEN, '/api/cli/tokens'), env);
+    const list = await cli(req(SESSION_TOKEN, '/api/cli/tokens'), env);
     expect(list?.status).toBe(200);
     expect(v.parse(TokenListSchema, await handled(list).json())).toEqual({
       tokens: [{ tokenHash: 'exec-hash', name: 'ci', scopes: ['workspace.exec'], createdAt: 1, lastUsedAt: 2 }],
     });
 
-    const revoked = await handleCliRequest(req(SESSION_TOKEN, '/api/cli/tokens/ci', { method: 'DELETE' }), env);
+    const revoked = await cli(req(SESSION_TOKEN, '/api/cli/tokens/ci', { method: 'DELETE' }), env);
     expect(revoked?.status).toBe(200);
     expect(calls).toContain('tokens:revoke:ci');
 
-    const missing = await handleCliRequest(req(SESSION_TOKEN, '/api/cli/tokens/ghost', { method: 'DELETE' }), env);
+    const missing = await cli(req(SESSION_TOKEN, '/api/cli/tokens/ghost', { method: 'DELETE' }), env);
     expect(missing?.status).toBe(404);
   });
 });
@@ -421,12 +415,12 @@ test('retained subordinate inspection requires the owning interactive session', 
   const inspection = rpcInit('inspectSubordinate', [{ path: [], view: 'children', page: {} }]);
 
   for (const token of [EXEC_TOKEN, READ_TOKEN, BOTH_TOKEN, PROXY_TOKEN]) {
-    expect(handled(await handleCliRequest(req(token, RPC, inspection), env)).status).toBe(403);
+    expect(handled(await cli(req(token, RPC, inspection), env)).status).toBe(403);
   }
 
-  expect(handled(await handleCliRequest(req(SESSION_TOKEN, '/api/cli/workspaces/foreign/rpc', inspection), env)).status).toBe(404);
+  expect(handled(await cli(req(SESSION_TOKEN, '/api/cli/workspaces/foreign/rpc', inspection), env)).status).toBe(404);
   expect(calls).toEqual([]);
-  expect(handled(await handleCliRequest(req(SESSION_TOKEN, RPC, inspection), env)).status).toBe(200);
+  expect(handled(await cli(req(SESSION_TOKEN, RPC, inspection), env)).status).toBe(200);
   expect(calls).toEqual(['inspect']);
-  expect(handled(await handleCliRequest(req(SESSION_TOKEN, RPC, rpcInit('inspectSubordinateStorage', [])), env)).status).toBe(404);
+  expect(handled(await cli(req(SESSION_TOKEN, RPC, rpcInit('inspectSubordinateStorage', [])), env)).status).toBe(404);
 });

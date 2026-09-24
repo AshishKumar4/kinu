@@ -3,7 +3,8 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { AuthIdentity } from '../src/auth/session';
-import { handleEvalAbortRequest } from '../src/eval/abort-route';
+import { evalAbortRoutes } from '../src/eval/abort-route';
+import { serveFamily } from './helpers/api';
 
 const PERSON: AuthIdentity = {
   userId: '0123456789abcdef0123456789abcdef', email: 'ashish@example.com', sub: 'sub', provider: 'google', authTime: 1,
@@ -18,7 +19,7 @@ const post = (path: string) => new Request(`https://kinu.run${path}`, { method: 
 describe('the eval-only abort route', () => {
   test('a person\'s session is refused as not found, and the object is never asked', async () => {
     let asked = 0;
-    const response = await handleEvalAbortRequest(post('/api/workspaces/ws-1/eval/abort'), PERSON, async () => { asked += 1; });
+    const response = await serveFamily(evalAbortRoutes, { identity: PERSON, workspace: { name: 'ws-1', agent: { evalAbortActivation: async () => { asked += 1; } } } })(post('/api/workspaces/ws-1/eval/abort'), {});
 
     expect(response?.status).toBe(404);
     expect(asked).toBe(0);
@@ -27,10 +28,10 @@ describe('the eval-only abort route', () => {
   test('the eval-service identity ends the activation; the stub\'s rejection is the receipt', async () => {
     let asked = 0;
 
-    const response = await handleEvalAbortRequest(post('/api/workspaces/ws-1/eval/abort'), EVAL_SERVICE, async () => {
+    const response = await serveFamily(evalAbortRoutes, { identity: EVAL_SERVICE, workspace: { name: 'ws-1', agent: { evalAbortActivation: async () => {
       asked += 1;
       throw new Error('Durable Object reset: eval-service: the activation was aborted on request');
-    });
+    } } } })(post('/api/workspaces/ws-1/eval/abort'), {});
 
     expect(asked).toBe(1);
 
@@ -40,7 +41,7 @@ describe('the eval-only abort route', () => {
   });
 
   test('any other path or method is not this route', async () => {
-    expect(await handleEvalAbortRequest(post('/api/workspaces/ws-1/runs'), EVAL_SERVICE, async () => {})).toBeNull();
-    expect(await handleEvalAbortRequest(new Request('https://kinu.run/api/workspaces/ws-1/eval/abort'), EVAL_SERVICE, async () => {})).toBeNull();
+    expect(await serveFamily(evalAbortRoutes, { identity: EVAL_SERVICE, workspace: { name: 'ws-1', agent: { evalAbortActivation: async () => {} } } })(post('/api/workspaces/ws-1/runs'), {})).toBeNull();
+    expect(await serveFamily(evalAbortRoutes, { identity: EVAL_SERVICE, workspace: { name: 'ws-1', agent: { evalAbortActivation: async () => {} } } })(new Request('https://kinu.run/api/workspaces/ws-1/eval/abort'), {})).toBeNull();
   });
 });

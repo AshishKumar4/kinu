@@ -1,8 +1,9 @@
 // CLI provider-credential routes: interactive session tokens only, never a secret in the listing, and a mutation
 // reaches workspaces holding cached provider state exactly as the browser routes' mutations do.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { serveFamily } from './helpers/api';
 import { describe, expect, test } from 'bun:test';
-import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
+import { cliRoutes, type CliRoutesEnv } from '../src/cli/routes';
 import type { CredentialSummary } from '../src/user/user-do';
 import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from './helpers/bindings';
 import type { JsonValue } from '@kinu.run/core';
@@ -107,9 +108,9 @@ describe('CLI provider credentials', () => {
   test('a session token can store a key in the account, and every live workspace hears about it', async () => {
     const { env, stored, ctx, notified, settled } = setupEnv();
 
-    const res = await handleCliRequest(credentialRequest({
+    const res = await serveFamily(cliRoutes, { ctx: ctx })(credentialRequest({
       key: 'openrouter.bearer', method: 'POST', body: { kind: 'bearer', token: 'sk-or-real' },
-    }), env, ctx);
+    }), env);
 
     expect(res?.status).toBe(201);
     expect(stored.get('openrouter.bearer')).toMatchObject({ kind: 'bearer' });
@@ -121,9 +122,9 @@ describe('CLI provider credentials', () => {
   test('a CI access token cannot — writing a provider key is interactive-only', async () => {
     const { env, stored, ctx, notified, settled } = setupEnv();
 
-    const res = await handleCliRequest(credentialRequest({
+    const res = await serveFamily(cliRoutes, { ctx: ctx })(credentialRequest({
       token: CI_TOKEN, key: 'openrouter.bearer', method: 'POST', body: { kind: 'bearer', token: 'sk-or-real' },
-    }), env, ctx);
+    }), env);
 
     expect(res?.status).toBe(403);
     expect(await handled(res).text()).toContain('interactive CLI session token');
@@ -134,11 +135,11 @@ describe('CLI provider credentials', () => {
 
   test('the listing names what is connected and never a secret', async () => {
     const { env, ctx } = setupEnv();
-    await handleCliRequest(credentialRequest({
+    await serveFamily(cliRoutes, { ctx: ctx })(credentialRequest({
       key: 'anthropic.bearer', method: 'POST', body: { kind: 'bearer', token: 'sk-ant-real' },
-    }), env, ctx);
+    }), env);
 
-    const res = await handleCliRequest(credentialRequest({}), env);
+    const res = await serveFamily(cliRoutes)(credentialRequest({}), env);
     const body = v.parse(CredentialListSchema, await handled(res).json());
     expect(body).toMatchObject([{ key: 'anthropic.bearer', kind: 'bearer' }]);
     expect(JSON.stringify(body)).not.toContain('sk-ant-real');
@@ -146,10 +147,10 @@ describe('CLI provider credentials', () => {
 
   test('delete removes it, and the workspaces are told twice — once per mutation', async () => {
     const { env, stored, ctx, notified, settled } = setupEnv();
-    await handleCliRequest(credentialRequest({
+    await serveFamily(cliRoutes, { ctx: ctx })(credentialRequest({
       key: 'openai.bearer', method: 'POST', body: { kind: 'bearer', token: 'sk-real' },
-    }), env, ctx);
-    const res = await handleCliRequest(credentialRequest({ key: 'openai.bearer', method: 'DELETE' }), env, ctx);
+    }), env);
+    const res = await serveFamily(cliRoutes, { ctx: ctx })(credentialRequest({ key: 'openai.bearer', method: 'DELETE' }), env);
 
     expect(res?.status).toBe(200);
     expect(stored.size).toBe(0);
@@ -160,9 +161,9 @@ describe('CLI provider credentials', () => {
   test("a key the store refuses reports the store's own reason, and notifies nobody", async () => {
     const { env, ctx, notified, settled } = setupEnv();
 
-    const res = await handleCliRequest(credentialRequest({
+    const res = await serveFamily(cliRoutes, { ctx: ctx })(credentialRequest({
       key: 'cloudflare.ai-gateway', method: 'POST', body: { kind: 'bearer', token: 'x' },
-    }), env, ctx);
+    }), env);
 
     expect(res?.status).toBe(400);
     expect(await handled(res).text()).toContain('derived from your Cloudflare login');

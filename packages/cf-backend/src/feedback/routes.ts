@@ -3,7 +3,7 @@
  * so it stays unit-testable.
  */
 
-import type { AuthIdentity } from '../auth/session';
+import { Hono } from 'hono';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { writeFeedbackMarker, type AnalyticsEnv } from '@kinu.run/core/analytics';
 import { recordFeedback, type FeedbackIngestEnv } from '../control-plane/feedback-ingest';
@@ -11,9 +11,11 @@ import { retryTransientDO } from '@kinu.run/core';
 import type { UserDO } from '../user/user-do';
 import { isWorkspaceName } from '@kinu.run/core';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
-import { FEEDBACK_SCREENSHOT_TYPE } from '@kinu.run/core';
+import { FEEDBACK_ENDPOINT, FEEDBACK_SCREENSHOT_TYPE } from '@kinu.run/core';
 import type { ObjectNamespace } from '@kinu.run/core';
-import { routeFeedback, type WorkspaceAttribution } from './submit';
+import { answerFeedback, type WorkspaceAttribution } from './submit';
+import type { FamilyEnv } from '../api/context';
+import type { AuthIdentity } from '../auth/session';
 
 export type FeedbackRegistry = Pick<UserDO, 'hasWorkspace'>;
 
@@ -52,15 +54,14 @@ async function attributeWorkspace<Id>(
   }
 }
 
-/** Returns null for any other path. */
-export async function handleFeedbackRequest<Id>(
-  request: Request,
-  env: FeedbackEnv<Id>,
-  identity: AuthIdentity | null,
-): Promise<Response | null> {
+/** Optional so the submission's own 401 holds wherever it is mounted. */
+export const feedbackRoutes = new Hono<FamilyEnv<FeedbackEnv<unknown>, { identity?: AuthIdentity }>>();
+
+feedbackRoutes.all(FEEDBACK_ENDPOINT, async (c) => {
+  const env = c.env;
   const bucket = env.FEEDBACK_BUCKET;
 
-  return routeFeedback(request, identity, {
+  return answerFeedback(c.req.raw, c.get('identity') ?? null, {
     store: bucket === undefined ? null : {
       async put(key, bytes) {
         await bucket.put(key, bytes, { httpMetadata: { contentType: FEEDBACK_SCREENSHOT_TYPE } });
@@ -73,4 +74,4 @@ export async function handleFeedbackRequest<Id>(
     newId: () => crypto.randomUUID(),
     now: () => Date.now(),
   });
-}
+});

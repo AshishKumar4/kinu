@@ -2,9 +2,10 @@
  * `/api/shared/*`: shared library and blueprints. `GET /api/shared/blueprint/:id` is public by link: the signature is
  * checked before any object is touched, and the owner's object re-reads the row every call (S6). No credential crosses (S8).
  */
+import { Hono } from 'hono';
 import * as v from 'valibot';
 import {
-  err, json, safeJson, ownerCaller, OwnerCapabilityUnavailableError, retryTransientDO,
+  err, json, safeJson, retryTransientDO,
   formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, LiveShareRecordSchema, labelSigner,
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
   type LiveShareVisibility, LiveShareCreatedSchema,
@@ -18,6 +19,7 @@ import type { SharedBlueprintReceipt } from '../user/user-do';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { ROOT_SLATE_CALLER } from '../slates/bindings';
 import type { ErrorCode } from '@kinu.run/core/obs';
+import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 
 const SlateListingSchema = v.object({
   slates: v.array(v.object({ id: v.string(), title: v.string(), bindings: v.array(v.string()) })),
@@ -51,25 +53,23 @@ async function verifiedBlueprintAddress(env: Env, id: string): Promise<{ workspa
 
 const NOT_FOUND = 'No such blueprint';
 
-/** Public half: before the auth gate; answers nothing but page data. */
-export async function handleSharedPublicRequest(request: Request, env: Env): Promise<Response | null> {
-  const url = new URL(request.url);
-  const match = /^\/api\/shared\/blueprint\/([^/]+)$/.exec(url.pathname);
+/** Public half: before the session gate; answers nothing but page data. */
+export const sharedPublicRoutes = new Hono<FamilyEnv<Env, object>>();
 
-  if (match === null || request.method !== 'GET') return null;
-  const id = decodeURIComponent(match[1]);
-  const address = await verifiedBlueprintAddress(env, id);
+sharedPublicRoutes.get('/api/shared/blueprint/:id', async (c) => {
+  const id = decodeURIComponent(rawParam(c, 'id'));
+  const address = await verifiedBlueprintAddress(c.env, id);
 
   // Unminted, forged and malformed ids get one answer, without waking an object.
   if (address === null) return err(404, NOT_FOUND);
-  const answer = await workspaceOwner(env, address.workspace).readBlueprint(address.share);
+  const answer = await workspaceOwner(c.env, address.workspace).readBlueprint(address.share);
 
   // A revoked blueprint is indistinguishable from one that never existed.
   if (!answer.ok) return err(404, NOT_FOUND);
   const view: BlueprintView = { id, ...answer.value.view };
 
   return json({ body: view }, { headers: { 'cache-control': 'no-store' } });
-}
+});
 
 const PublishBody = v.object({
   workspace: v.string(),
@@ -84,33 +84,25 @@ const ForkBody = v.union([
   v.strictObject({ live: v.string(), ownerWorkspace: v.string(), workspace: v.string() }),
 ]);
 
-export async function handleSharedRequest(request: Request, env: Env, identity: AuthIdentity): Promise<Response | null> {
-  const url = new URL(request.url);
-
-  if (url.pathname !== '/api/shared' && !url.pathname.startsWith('/api/shared/')) return null;
-  const path = url.pathname.slice('/api/shared'.length);
-  let owner: UserCaller;
-
-  try { owner = await ownerCaller(env); }
-  catch (cause) {
-    if (cause instanceof OwnerCapabilityUnavailableError) return err(503, cause.message);
-    throw cause;
-  }
-
-  if (path === '' && request.method === 'GET') return json({ body: await library(env, identity, owner) });
-
-  if (path === '/publish' && request.method === 'POST') return publish(request, env, identity, owner);
-
-  if (path === '/fork' && request.method === 'POST') return fork(request, env, identity);
-
-  if (path === '/live' && request.method === 'POST') return shareLive(request, env, identity, owner);
-
-  if (path === '/revoke' && request.method === 'POST') return revoke(request, env, identity);
-
-  if (path === '/live/open' && request.method === 'POST') return openLive(request, env, identity);
-
-  return null;
+interface SharedVariables extends ApiVariables {
+  owner: UserCaller;
 }
+
+export const sharedRoutes = new Hono<FamilyEnv<Env, SharedVariables>>();
+
+sharedRoutes.use('/api/shared/*', ownerGate());
+
+sharedRoutes.get('/api/shared', async (c) => json({ body: await library(c.env, c.get('identity'), c.get('owner')) }));
+
+sharedRoutes.post('/api/shared/publish', async (c) => publish(c.req.raw, c.env, c.get('identity'), c.get('owner')));
+
+sharedRoutes.post('/api/shared/fork', async (c) => fork(c.req.raw, c.env, c.get('identity')));
+
+sharedRoutes.post('/api/shared/live', async (c) => shareLive(c.req.raw, c.env, c.get('identity'), c.get('owner')));
+
+sharedRoutes.post('/api/shared/revoke', async (c) => revoke(c.req.raw, c.env, c.get('identity')));
+
+sharedRoutes.post('/api/shared/live/open', async (c) => openLive(c.req.raw, c.env, c.get('identity')));
 
 async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Promise<SharedLibrary> {
   const userDO = env.UserDO.get(env.UserDO.idFromName(identity.userId));

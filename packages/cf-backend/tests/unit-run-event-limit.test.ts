@@ -1,6 +1,7 @@
 // KINU-N019: a negative `limit` reached SQLite as `LIMIT -1`, which SQLite reads as no limit. Checked against a
 // real recorder over real SQLite; the stub's `getRunEvents` is the production body, so direct RPC is covered too.
 import type { RunEventsResolver, RunEventsTarget } from '../src/run-events-routes';
+import { serveFamily } from './helpers/api';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -15,7 +16,7 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 mockAgentsSdk();
 
 // Dynamic: the route module resolves the Agent SDK at import time, so it loads after the stub is installed.
-const { handleRunEventsRequest } = await import('../src/run-events-routes');
+const { runEventsRoutes } = await import('../src/run-events-routes');
 
 const SEEDED_EVENTS = 700;
 
@@ -43,9 +44,9 @@ function runEventsWorkspace() {
 async function eventsVia(
   resolveAgent: RunEventsResolver, query: string,
 ): Promise<{ status: number; count: number }> {
-  const res = await handleRunEventsRequest(new Request(
+  const res = await serveFamily(runEventsRoutes(REAL_CLOCK, () => resolveAgent), { workspace: { name: 'jarvis' } })(new Request(
     `https://kinu.example.com/api/workspaces/jarvis/runs/run-1/events${query}`,
-  ), resolveAgent, REAL_CLOCK);
+  ), {});
 
   if (!res) throw new Error('the route did not claim the request');
   const body: unknown = await res.json();

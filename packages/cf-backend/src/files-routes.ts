@@ -1,14 +1,13 @@
-/**
- * PUT/GET `/api/workspaces/:agentName/files?executor=&path=` raw bytes; auth and ownership are enforced upstream in server.ts.
- * HTTP, not agent RPC: a whole file as one RPC argument hits the `do.facet.rpc_bytes` ceiling, so bytes cross in FILE_CHUNK_BYTES chunks.
- */
+/** Raw bytes cross in FILE_CHUNK_BYTES chunks: a whole file as one RPC argument hits `do.facet.rpc_bytes`. */
 
-import { getAgentByName } from "agents";
+import { Hono } from 'hono';
 import { FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, pumpUploadChunks, VfsRevisionSchema, type ExecutorWriteResult, type VfsRevision } from "@kinu.run/core";
 import * as v from 'valibot';
-import type { ExecutorFileChunkRead, ExecutorFileChunkWrite, OrchestratorAgent } from "./orchestrator";
+import type { ExecutorFileChunkRead, ExecutorFileChunkWrite } from "./orchestrator";
 import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
 import { err, fileResponseHeaders, json } from "@kinu.run/core";
+import type { FamilyEnv } from './api/context';
+import { LITERAL_WORKSPACE, type WorkspaceVariables } from './api/workspace';
 
 export interface FilesRouteAgent {
   startExecutorFileDownload(
@@ -20,45 +19,43 @@ export interface FilesRouteAgent {
   abortExecutorFileWrite(transferId: string): Promise<void>;
 }
 
-async function defaultResolveAgent(env: Env | null, agentName: string): Promise<FilesRouteAgent | null> {
-  return env === null
-    ? null
-    : getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
-}
+/** Null reads as "no object to talk to" and answers 503. */
+export type FilesAgentResolver<Bindings> = (env: Bindings, agentName: string) => Promise<FilesRouteAgent | null>;
 
+/** Method, then query, then object, as before. */
+export function filesRoutes<Bindings extends object>(
+  resolveAgent: FilesAgentResolver<Bindings>,
+): Hono<FamilyEnv<Bindings, WorkspaceVariables>> {
+  const routes = new Hono<FamilyEnv<Bindings, WorkspaceVariables>>();
 
-export async function handleFilesRequest(
-  request: Request,
-  env: Env | null,
-  agentName: string,
-  resolveAgent: (env: Env | null, agentName: string) => Promise<FilesRouteAgent | null> = defaultResolveAgent,
-): Promise<Response | null> {
-  const url = new URL(request.url);
+  routes.all(`${LITERAL_WORKSPACE}/files`, async (c) => {
+    const { name, request } = c.get('workspace');
 
-  if (url.pathname !== `/api/workspaces/${agentName}/files`) return null;
+    if (request.method !== 'PUT' && request.method !== 'GET') return err(405, 'use PUT or GET');
+    const url = new URL(request.url);
+    const executorId = url.searchParams.get('executor');
+    const path = url.searchParams.get('path');
 
-  if (request.method !== 'PUT' && request.method !== 'GET') return err(405, 'use PUT or GET');
+    if (!executorId) return err(400, 'executor query parameter required');
 
-  const executorId = url.searchParams.get('executor');
-  const path = url.searchParams.get('path');
+    if (!path) return err(400, 'path query parameter required');
 
-  if (!executorId) return err(400, 'executor query parameter required');
+    const agent = await resolveAgent(c.env, name);
 
-  if (!path) return err(400, 'path query parameter required');
+    if (!agent) return err(503, 'workspace agent unavailable');
 
-  const agent = await resolveAgent(env, agentName);
+    if (request.method === 'PUT') {
+      const expectedRevision = expectedRevisionFrom(request);
 
-  if (!agent) return err(503, 'workspace agent unavailable');
+      return expectedRevision === null
+        ? err(400, 'If-Match must encode a numeric or string revision')
+        : upload({ request, agent, executorId, path, expectedRevision });
+    }
 
-  if (request.method === 'PUT') {
-    const expectedRevision = expectedRevisionFrom(request);
+    return download(agent, executorId, path, url);
+  });
 
-    return expectedRevision === null
-      ? err(400, 'If-Match must encode a numeric or string revision')
-      : upload({ request, agent, executorId, path, expectedRevision });
-  }
-
-  return download(agent, executorId, path, url);
+  return routes;
 }
 
 function expectedRevisionFrom(request: Request): VfsRevision | undefined | null {

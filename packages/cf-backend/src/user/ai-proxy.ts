@@ -1,8 +1,5 @@
-/**
- * OpenAI-compatible inference proxy for signed-in CLI clients (chat/completions, models).
- * `@cf/...` models use the user's Workers AI account, or the platform AI Gateway binding when
- * `DEV_USER_EMAIL` is set; `{author}/{model}` uses the user's AI Gateway. Auth gate: cli/routes.ts.
- */
+/** OpenAI-compatible proxy for CLI clients: `@cf/...` via Workers AI (the platform gateway under `DEV_USER_EMAIL`), `{author}/{model}` via the user's gateway. */
+import { Hono } from 'hono';
 import { createUserDOAuthResolver, type UserCredentialClient } from '../providers/agent-registry';
 import type { OwnerCapabilityEnv, ProviderEnv } from '@kinu.run/core';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
@@ -14,6 +11,8 @@ import { json } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import { JsonObjectSchema, USER_AI_PROXY_PATH, type JsonObject } from '@kinu.run/core';
 import { classify } from '@kinu.run/core/obs';
+import { beneath } from '../api/context';
+import { inferenceProxyGate, type CliEnv } from '../cli/routes';
 import * as v from 'valibot';
 
 const PROXY_PLACEHOLDER = 'https://kinu-user-ai-proxy.invalid';
@@ -27,33 +26,27 @@ export interface UserAIProxyEnv<Id> extends AvailableModelsEnv<Id>, OwnerCapabil
   AI?: NonNullable<ProviderEnv['AI']> & NonNullable<Parameters<typeof createDirectWorkersAIFetch>[0]>;
 }
 
-export async function handleUserAIProxyRequest<Id>(
-  request: Request,
-  env: UserAIProxyEnv<Id>,
-  cli: { userId: string; userDO: UserCredentialClient },
-): Promise<Response> {
-  const url = new URL(request.url);
-  const path = url.pathname.slice(USER_AI_PROXY_PATH.length);
+export const aiProxyRoutes = new Hono<CliEnv>();
 
-  if (path === '/models' && request.method === 'GET') {
-    const menu = await listAvailableModels(env, cli.userId, await ownerCaller(env));
+aiProxyRoutes.use(`${USER_AI_PROXY_PATH}/*`, beneath(USER_AI_PROXY_PATH, inferenceProxyGate));
 
-    return json({
-      body: {
-        object: 'list',
-        data: menu.models
-          .filter((m) => m.provider === 'workers-ai' || m.provider === MY_GATEWAY_PROVIDER_ID)
-          .map((m) => ({ id: m.spec.slice(m.provider.length + 1), object: 'model', owned_by: m.provider })),
-      },
-    });
-  }
+aiProxyRoutes.get(`${USER_AI_PROXY_PATH}/models`, async (c) => {
+  const menu = await listAvailableModels(c.env, c.get('cli').userId, await ownerCaller(c.env));
 
-  if (path === '/chat/completions' && request.method === 'POST') {
-    return proxyChatCompletion(request, env, cli.userDO);
-  }
+  return json({
+    body: {
+      object: 'list',
+      data: menu.models
+        .filter((m) => m.provider === 'workers-ai' || m.provider === MY_GATEWAY_PROVIDER_ID)
+        .map((m) => ({ id: m.spec.slice(m.provider.length + 1), object: 'model', owned_by: m.provider })),
+    },
+  });
+});
 
-  return errorResponse(404, `No such AI proxy route: ${request.method} ${path}`);
-}
+aiProxyRoutes.post(`${USER_AI_PROXY_PATH}/chat/completions`, async (c) => proxyChatCompletion(c.req.raw, c.env, c.get('cli').userDO));
+
+aiProxyRoutes.all(`${USER_AI_PROXY_PATH}/*`, beneath(USER_AI_PROXY_PATH, async (c) =>
+  errorResponse(404, `No such AI proxy route: ${c.req.method} ${c.req.path.slice(USER_AI_PROXY_PATH.length)}`)));
 
 async function proxyChatCompletion<Id>(
   request: Request, env: UserAIProxyEnv<Id>, userDO: UserCredentialClient,

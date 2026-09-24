@@ -1,12 +1,13 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { serveFamily } from './helpers/api';
 import { describe, expect, test } from 'bun:test';
 import {
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_CONNECT_DISCLOSURE,
   summarizeDeviceAction,
   type JsonValue,
 } from '@kinu.run/core';
-import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
-import { unreachableNamespace, userAccount } from './helpers/bindings';
+import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
+import { unreachableNamespace, userAccount, workerContext } from './helpers/bindings';
 import { WORKSPACE, deviceHarness } from './helpers/device-harness';
 import type { AuthIdentity } from '../src/auth/session';
 import * as v from 'valibot';
@@ -86,11 +87,11 @@ async function deviceRoutesSetup() {
   };
 
   const call = (path: string, method: string, body?: JsonValue): Promise<Response | null> =>
-    handleUserRequest(new Request(`https://kinu.example.com/api/user${path}`, {
+    serveFamily(userRoutes, { identity: IDENTITY, ctx: workerContext() })(new Request(`https://kinu.example.com/api/user${path}`, {
       method,
       headers: { 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
-    }), env, IDENTITY);
+    }), env);
 
   /** The device's Sandbox switch, as the Devices page reads it. */
   const tier = async (): Promise<string | undefined> => {

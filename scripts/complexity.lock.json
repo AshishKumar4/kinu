@@ -1,14 +1,10 @@
 {
   "measuredAt": "2026-09-24",
-  "files": 2621,
-  "functions": 63997,
-  "ceiling": 108,
+  "files": 2637,
+  "functions": 64512,
+  "ceiling": 87,
   "line": 32,
   "inventory": [
-    {
-      "key": "packages/cf-backend/src/cli/routes.ts#handleCliRequest",
-      "complexity": 108
-    },
     {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
       "complexity": 87
@@ -166,14 +162,6 @@
       "complexity": 36
     },
     {
-      "key": "packages/cf-backend/src/deploy/routes.ts#handleDeployRequest",
-      "complexity": 35
-    },
-    {
-      "key": "packages/cf-backend/src/server.ts#route",
-      "complexity": 35
-    },
-    {
       "key": "packages/cli/src/cc-transcript.ts#mineSession",
       "complexity": 35
     },
@@ -239,10 +227,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/Composer.tsx#Composer",
-      "complexity": 32
-    },
-    {
-      "key": "packages/cf-backend/src/drive/routes.ts#handleDriveRequest",
       "complexity": 32
     },
     {

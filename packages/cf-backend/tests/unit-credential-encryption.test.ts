@@ -10,7 +10,9 @@ import { createCredentialCipher } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { present } from '@kinu.run/test-utils';
-import { handleUserProviderProxyRequest } from '../src/user/provider-proxy';
+import { providerProxyRoutes } from '../src/user/provider-proxy';
+import { serveFamily } from './helpers/api';
+import { cliAccount, staticRouteCliEnv } from './helpers/bindings';
 
 const rotatedOwner = () => ownerCaller({ CREDENTIAL_ENCRYPTION_KEY: NEXT_KEY });
 
@@ -112,13 +114,28 @@ describe('the credential store is sealed at rest', () => {
       'openai.bearer', 'bearer', await cipher.seal('test-user-do:openai.bearer', JSON.stringify({ kind: 'bearer', token: 'sk-lost' })), 0, 0,
     );
 
-    const response = await handleUserProviderProxyRequest(
-      new Request('https://kinu.example/api/user/ai/proxy/credentials'),
-      { CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY },
-      { userDO: harness.userDO },
+    // The owner's CLI session; the listing's own reads go to the real store.
+    const userId = 'c'.repeat(32);
+    const bearer = `ptc_${userId}_${'s'.repeat(26)}`;
+
+    const account = cliAccount({
+      verifyCliToken: async (_caller, presented: string) => ({
+        ok: presented === bearer, tokenHash: 'session-hash', user: { id: userId, email: 'owner@example.test', displayName: null },
+      }),
+      listCredentials: (caller) => harness.userDO.listCredentials(caller),
+      getCredentialBaseURL: (caller, key) => harness.userDO.getCredentialBaseURL(caller, key),
+    });
+
+    const response = await serveFamily(providerProxyRoutes)(
+      new Request('https://kinu.example/api/user/ai/proxy/credentials', { headers: { authorization: `Bearer ${bearer}` } }),
+      {
+        ...staticRouteCliEnv(),
+        CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+        UserDO: { idFromName: (name: string) => name, get: () => account },
+      },
     );
 
-    const listed = v.parse(ProxyListingSchema, await response.json());
+    const listed = v.parse(ProxyListingSchema, await present(response, 'the listing').json());
 
     expect(listed).toEqual({ credentials: [
       { key: 'anthropic.bearer' },

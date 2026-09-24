@@ -1,20 +1,20 @@
 /**
- * `/api/user/*` account-authority routes. They run ahead of `handleUserRequest` because their
- * UserDO methods are floored at the `owner_only` `account` capability; no workspace token reaches them.
+ * `/api/user/*` account-authority routes. They are mounted ahead of `userRoutes` because their UserDO
+ * methods are floored at the `owner_only` `account` capability; no workspace token reaches them.
  */
+import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
-import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from './user-do';
 import { forgetSharesGiven, type ShareRosterAuthority, type SharesGivenEnv } from './shares-given';
 import type { ObjectNamespace } from '@kinu.run/core';
 import {
   confirmsAccountDelete,
-  
   displayNameProblem,
   EXPERIENCE_KINDS,
-  err, json, safeJson, ownerCaller, OwnerCapabilityUnavailableError,
+  err, json, safeJson,
   type UserCaller,
 } from '@kinu.run/core';
+import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
 
 const ProfilePatch = v.object({ displayName: v.string() });
 
@@ -33,70 +33,62 @@ export interface AccountRoutesEnv<Id> extends SharesGivenEnv<Id> {
   UserDO: ObjectNamespace<Id, ShareRosterAuthority & AccountAuthority>;
 }
 
-export async function handleAccountRequest<Id>(
-  request: Request, env: AccountRoutesEnv<Id>, identity: AuthIdentity,
-): Promise<Response | null> {
-  const url = new URL(request.url);
+interface AccountVariables extends ApiVariables {
+  owner: UserCaller;
+}
 
-  if (!url.pathname.startsWith('/api/user')) return null;
-  const path = url.pathname.slice('/api/user'.length);
+type AccountEnv = FamilyEnv<AccountRoutesEnv<unknown>, AccountVariables>;
 
-  if (!(path === '/onboarding/complete' && request.method === 'POST')
-    && !(path === '/profile' && request.method === 'PATCH')
-    && !(path === '/account' && request.method === 'DELETE')
-    && !(path === '/experience' && request.method === 'GET')) return null;
+function account(c: Context<AccountEnv>): ShareRosterAuthority & AccountAuthority {
+  return c.env.UserDO.get(c.env.UserDO.idFromName(c.get('identity').userId));
+}
 
-  let owner: UserCaller;
+export const accountRoutes = new Hono<AccountEnv>();
 
-  try { owner = await ownerCaller(env); }
-  catch (cause) {
-    if (cause instanceof OwnerCapabilityUnavailableError) return err(503, cause.message);
-    throw cause;
+accountRoutes.post('/api/user/onboarding/complete', ownerGate(), async (c) =>
+  json({ body: await account(c).completeOnboarding(c.get('owner')) }));
+
+accountRoutes.get('/api/user/experience', ownerGate(), async (c) => {
+  const url = new URL(c.req.url);
+  const limitRaw = url.searchParams.get('limit');
+
+  const query = v.safeParse(ExperienceQuery, {
+    kind: url.searchParams.get('kind'),
+    limit: limitRaw === null ? 50 : Number(limitRaw),
+  });
+
+  if (!query.success) return err(400, `kind must be one of ${EXPERIENCE_KINDS.join(', ')} and limit an integer from 1 to 100.`);
+
+  return json({ body: await account(c).searchExperience(c.get('owner'), query.output) });
+});
+
+// The typed confirmation is the account email, not a password: the session authenticates,
+// the phrase separates a stray click from a decision. No rate limit; the phrase is the gate.
+accountRoutes.delete('/api/user/account', ownerGate(), async (c) => {
+  const identity = c.get('identity');
+  const owner = c.get('owner');
+  const body = await safeJson(c.req.raw, DeleteConfirm);
+
+  if (!body || !confirmsAccountDelete(body.confirm, identity.email)) {
+    return err(400, 'Type the account email to confirm.');
   }
 
-  const stub = env.UserDO.get(env.UserDO.idFromName(identity.userId));
+  // Share recipients are named only inside the workspaces the delete destroys; forget them first.
+  await forgetSharesGiven(c.env, identity.userId, owner);
 
-  if (path === '/onboarding/complete' && request.method === 'POST') {
-    return json({ body: await stub.completeOnboarding(owner) });
+  try {
+    await account(c).deleteAccount(owner, identity.userId);
+  } catch (cause) {
+    // The SDK's destroy aborts its own isolate after the durable wipe; the 'destroyed' sentinel
+    // means success (same rule as `tearDownWorkspace`).
+    if (!(cause instanceof Error) || cause.message !== 'destroyed') throw cause;
   }
 
-  if (path === '/experience' && request.method === 'GET') {
-    const limitRaw = url.searchParams.get('limit');
+  return json({ body: { deleted: true } });
+});
 
-    const query = v.safeParse(ExperienceQuery, {
-      kind: url.searchParams.get('kind'),
-      limit: limitRaw === null ? 50 : Number(limitRaw),
-    });
-
-    if (!query.success) return err(400, `kind must be one of ${EXPERIENCE_KINDS.join(', ')} and limit an integer from 1 to 100.`);
-
-    return json({ body: await stub.searchExperience(owner, query.output) });
-  }
-
-  // The typed confirmation is the account email, not a password: the session authenticates,
-  // the phrase separates a stray click from a decision. No rate limit; the phrase is the gate.
-  if (path === '/account' && request.method === 'DELETE') {
-    const body = await safeJson(request, DeleteConfirm);
-
-    if (!body || !confirmsAccountDelete(body.confirm, identity.email)) {
-      return err(400, 'Type the account email to confirm.');
-    }
-
-    // Share recipients are named only inside the workspaces the delete destroys; forget them first.
-    await forgetSharesGiven(env, identity.userId, owner);
-
-    try {
-      await stub.deleteAccount(owner, identity.userId);
-    } catch (cause) {
-      // The SDK's destroy aborts its own isolate after the durable wipe; the 'destroyed' sentinel
-      // means success (same rule as `tearDownWorkspace`).
-      if (!(cause instanceof Error) || cause.message !== 'destroyed') throw cause;
-    }
-
-    return json({ body: { deleted: true } });
-  }
-
-  const body = await safeJson(request, ProfilePatch);
+accountRoutes.patch('/api/user/profile', ownerGate(), async (c) => {
+  const body = await safeJson(c.req.raw, ProfilePatch);
 
   if (!body) return err(400, 'Body must be { displayName }');
 
@@ -104,5 +96,5 @@ export async function handleAccountRequest<Id>(
 
   if (problem !== null) return err(400, problem);
 
-  return json({ body: await stub.setDisplayName(owner, body.displayName) });
-}
+  return json({ body: await account(c).setDisplayName(c.get('owner'), body.displayName) });
+});

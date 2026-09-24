@@ -1,7 +1,8 @@
 // Credential mutations must notify active agents to drop cached provider/model state.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { serveFamily } from './helpers/api';
 import { describe, test, expect } from 'bun:test';
-import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
+import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
 import type { UserCaller } from '@kinu.run/core';
 import type { AuthIdentity } from '../src/auth/session';
@@ -64,11 +65,11 @@ interface UserApiCall {
 }
 
 async function call({ env, ctx, path, method, body }: UserApiCall) {
-  return handleUserRequest(new Request(`https://kinu.example.com/api/user${path}`, {
+  return serveFamily(userRoutes, { identity: IDENTITY, ctx })(new Request(`https://kinu.example.com/api/user${path}`, {
     method,
     headers: { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
-  }), env, IDENTITY, ctx);
+  }), env);
 }
 
 describe('credential-change fanout to agent DOs', () => {

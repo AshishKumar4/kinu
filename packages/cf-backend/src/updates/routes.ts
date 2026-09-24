@@ -2,6 +2,7 @@
  * `/api/updates` (docs/SELF-DEPLOY.md § Updates). Owner only: the address in the deployment's own record;
  * everyone else gets 404, since an update button's existence is a fact about the owner. `dev`/CLI identities are refused.
  */
+import { Hono } from 'hono';
 import {
   DeploymentRecordSchema, ReleaseManifestSchema, SELF_UPDATE_RUN_ID, buildOf, updateOffer,
   type DeploymentRecord, type UpdateBuild, type UpdateOffer,
@@ -11,6 +12,7 @@ import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { AuthIdentity } from '../auth/session';
 import type { DeployRunDO } from '../deploy/deploy-do';
+import type { ApiVariables, FamilyEnv } from '../api/context';
 
 const API = '/api/updates';
 
@@ -18,35 +20,34 @@ const RUN_PATH = `${API}/run`;
 
 const APPLY_PATH = `${API}/apply`;
 
-export async function handleUpdatesRequest(
-  request: Request,
-  env: Env,
-  identity: AuthIdentity,
-): Promise<Response | null> {
-  const path = new URL(request.url).pathname;
+interface UpdatesVariables extends ApiVariables {
+  record: DeploymentRecord | null;
+}
 
-  if (path !== API && path !== RUN_PATH && path !== APPLY_PATH) return null;
+export const updatesRoutes = new Hono<FamilyEnv<Env, UpdatesVariables>>();
 
-  const record = deploymentRecord(env);
+updatesRoutes.on('ALL', [API, RUN_PATH, APPLY_PATH], async (c, next) => {
+  const record = deploymentRecord(c.env);
 
-  if (!ownedBy(record, identity)) return err(404, 'Not found');
+  if (!ownedBy(record, c.get('identity'))) return err(404, 'Not found');
+  c.set('record', record);
+  await next();
+});
 
-  if (path === API && request.method === 'GET') return json({ body: await offer(request, env, record) });
+updatesRoutes.get(API, async (c) => json({ body: await offer(c.req.raw, c.env, c.get('record')) }));
 
-  if (path === RUN_PATH && request.method === 'GET') return json({ body: await runStub(env).snapshot() });
+updatesRoutes.get(RUN_PATH, async (c) => json({ body: await runStub(c.env).snapshot() }));
 
-  if (path === APPLY_PATH && request.method === 'POST') {
-    const held = await offer(request, env, record);
+updatesRoutes.post(APPLY_PATH, async (c) => {
+  const record = c.get('record');
+  const held = await offer(c.req.raw, c.env, record);
 
-    if (record === null || !held.installable) {
-      return err(409, held.reason === '' ? 'There is nothing to install.' : held.reason);
-    }
-
-    return json({ body: await runStub(env).selfUpdate(record, env.KINU_SELF_DEPLOY_REFRESH_TOKEN ?? '') });
+  if (record === null || !held.installable) {
+    return err(409, held.reason === '' ? 'There is nothing to install.' : held.reason);
   }
 
-  return null;
-}
+  return json({ body: await runStub(c.env).selfUpdate(record, c.env.KINU_SELF_DEPLOY_REFRESH_TOKEN ?? '') });
+});
 
 /** A record that will not parse reads as no record. */
 function deploymentRecord(env: Env): DeploymentRecord | null {

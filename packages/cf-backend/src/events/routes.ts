@@ -1,10 +1,6 @@
-/**
- * Hub HTTP routes for triggers, events and email config (auth + ownership enforced by server.ts). Public webhook delivery
- * is served before the auth gate by `handleWebhookDeliveryRequest`, which verifies the URL's route capability first
- * (webhook-route.ts); the per-trigger HMAC/Bearer/mTLS check is still a second gate. Grants require step-up (`x-kinu-auth-time`).
- */
+/** Hub routes (triggers, events, email) behind the workspace gate; grants need step-up. Public delivery: `webhookDeliveryRoutes`. */
 
-import { getAgentByName } from 'agents';
+import { Hono, type Context } from 'hono';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { KvStore } from '@kinu.run/agent-utils';
 import {
@@ -13,12 +9,15 @@ import {
 import { err, json, readBounded, safeJson } from '@kinu.run/core';
 import { ingressAdmitted, ingressDenied, peerIp } from '@kinu.run/core';
 import { isFreshAuthTime } from '../auth/session';
+import { AUTH_TIME_HEADER } from '../cli/rpc-gate';
 import {
   matchWebhookDeliveryPath, verifyWebhookRoute, webhookRouteSecret,
   WEBHOOK_ROUTE_UNAVAILABLE, type SignedWebhookRoute,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
+import { rawParam, type FamilyEnv } from '../api/context';
+import { LITERAL_WORKSPACE, type WorkspaceVariables } from '../api/workspace';
 
 /**
  * Bounds spent against an anonymous caller. The body ceiling refuses rather than truncates (the HMAC covers exact bytes);
@@ -30,7 +29,7 @@ const WEBHOOK_KNOCKS_PER_WINDOW = DEFAULT_RATE_LIMIT_PER_MIN;
 
 const OVER_WEBHOOK_BODY_LIMIT = 'webhook body over the 1 MiB limit';
 
-const WebhookRequestSchema = v.object({
+export const WebhookRequestSchema = v.object({
   label: v.optional(v.string()),
   auth_mode: v.optional(v.picklist(['hmac', 'bearer', 'mtls'])),
   secret: v.optional(v.string()),
@@ -43,7 +42,7 @@ const RequestCfSchema = v.object({
 });
 
 function requestAuthTimeMs(request: Request): number | null {
-  const forwarded = Number(request.headers.get('x-kinu-auth-time') ?? '');
+  const forwarded = Number(request.headers.get(AUTH_TIME_HEADER) ?? '');
 
   if (Number.isFinite(forwarded) && forwarded > 0) return forwarded;
 
@@ -68,94 +67,68 @@ export type HubTarget = Pick<OrchestratorAgent,
  */
 export type HubResolver = (name: string) => Promise<HubTarget>;
 
-export const hubAgentResolver = (env: Env): HubResolver =>
-  (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name);
-
 export type HubEnv = Pick<Env, 'WEBHOOK_ROUTE_SECRET'>;
 
-export async function handleHubRequest(
-  request: Request,
-  env: HubEnv,
-  agentName: string,
-  resolveAgent: HubResolver,
-): Promise<Response | null> {
-  const url = new URL(request.url);
-  const path = url.pathname;
-  const method = request.method;
-  const resolve = () => resolveAgent(agentName);
-
-  const triggersBase = `/api/workspaces/${agentName}/triggers`;
-
-  if (path === triggersBase || path.startsWith(triggersBase + '/')) {
-    return await handleTriggersRoute(request, env, path.slice(triggersBase.length), resolve);
-  }
-
-  if (path === `/api/workspaces/${agentName}/events` && method === 'GET') {
-    return await handleEventsList(request, resolve);
-  }
-
-  if (path === `/api/workspaces/${agentName}/email`) {
-    return await handleEmailConfigRoute(request, resolve);
-  }
-
-  return null;
+interface HubVariables extends WorkspaceVariables {
+  hub: HubTarget;
 }
 
-export type WebhookDeliveryTarget = Pick<OrchestratorAgent, 'acceptWebhookDelivery'>;
+type HubContext<Bindings extends HubEnv> = Context<FamilyEnv<Bindings, HubVariables>>;
 
-/** See {@link HubResolver}. */
-export type WebhookDeliveryResolver = (name: string) => Promise<WebhookDeliveryTarget>;
+const TRIGGERS = `${LITERAL_WORKSPACE}/triggers`;
 
-export const webhookDeliveryResolver = (env: Env): WebhookDeliveryResolver =>
-  (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name);
+const EMAIL = `${LITERAL_WORKSPACE}/email`;
 
-export interface WebhookDeliveryEnv extends HubEnv {
-  AUTH_KV?: KvStore;
-}
+export function hubRoutes<Bindings extends HubEnv>(
+  resolverFor: (env: Bindings) => HubResolver,
+): Hono<FamilyEnv<Bindings, HubVariables>> {
+  const routes = new Hono<FamilyEnv<Bindings, HubVariables>>();
 
-/**
- * Order is the security contract: the URL capability is verified before budget, body, namespace or any RPC, so an
- * unauthenticated caller cannot activate a DO by naming one. Every refusal short of a wrong method is the same 404.
- * Returns null for a non-delivery path.
- */
-export async function handleWebhookDeliveryRequest(
-  request: Request,
-  env: WebhookDeliveryEnv,
-  resolveAgent: WebhookDeliveryResolver,
-): Promise<Response | null> {
-  const match = matchWebhookDeliveryPath(new URL(request.url).pathname);
+  const resolve = async (c: HubContext<Bindings>, next: () => Promise<void>): Promise<void> => {
+    c.set('hub', await resolverFor(c.env)(c.get('workspace').name));
+    await next();
+  };
 
-  if (match === null) return null;
+  // Resolved before the method check, as before.
+  routes.use(`${TRIGGERS}/*`, resolve);
 
-  if (request.method !== 'POST') return err(405, 'use POST');
-  const secret = webhookRouteSecret(env);
+  routes.on('GET', [TRIGGERS, `${TRIGGERS}/`], async (c) => json({ body: await c.get('hub').listTriggers() }));
 
-  if (secret === null || match.kind !== 'signed') return deliveryNotFound();
+  routes.on('POST', [TRIGGERS, `${TRIGGERS}/`], createTrigger);
 
-  if (!(await verifyWebhookRoute(secret, match))) return deliveryNotFound();
+  routes.on('ALL', [TRIGGERS, `${TRIGGERS}/`], async () => err(405, 'GET or POST'));
 
-  return await handleWebhookDelivery(request, env, match, resolveAgent);
-}
+  // `owner`: proven by the workspace gate; the model's cancel comes as `self`.
+  routes.delete(`${TRIGGERS}/:id`, async (c) =>
+    json({ body: await c.get('hub').cancelTrigger(decodeURIComponent(rawParam(c, 'id')), 'owner') }));
 
-/** One answer for every unroutable delivery: nothing read, nothing cached, causes indistinguishable. */
-function deliveryNotFound(): Response {
-  return new Response('Not found', {
-    status: 404,
-    headers: { 'cache-control': 'no-store' },
+  routes.all(`${TRIGGERS}/*`, async () => err(404, 'not found'));
+
+  routes.get(`${LITERAL_WORKSPACE}/events`, async (c) => {
+    const url = new URL(c.req.url);
+    const variant = url.searchParams.get('variant') ?? undefined;
+
+    // Same closed parser the object applies; NaN from `parseInt` reads as unstated, so SQLite never sees a NaN.
+    const bounds = boundEventQuery({
+      since: url.searchParams.has('since')
+        ? parseInt(url.searchParams.get('since') ?? '', 10) : undefined,
+      limit: url.searchParams.has('limit')
+        ? parseInt(url.searchParams.get('limit') ?? '', 10) : undefined,
+    });
+
+    const agent = await resolverFor(c.env)(c.get('workspace').name);
+
+    return json({
+      body: await agent.listRecentEvents({ variant, since: bounds.since, limit: bounds.limit }),
+    });
   });
-}
 
-async function handleEmailConfigRoute(
-  request: Request,
-  resolveAgent: () => Promise<HubTarget>,
-): Promise<Response> {
-  const agent = await resolveAgent();
+  routes.use(EMAIL, resolve);
 
-  if (request.method === 'GET') {
-    return json({ body: await agent.getEmailIngress() });
-  }
+  routes.get(EMAIL, async (c) => json({ body: await c.get('hub').getEmailIngress() }));
 
-  if (request.method === 'PUT') {
+  routes.put(EMAIL, async (c) => {
+    const request = c.get('workspace').request;
     // Widening who can drive turns by email is a grant.
     const stepUp = requireStepUp(request);
 
@@ -170,6 +143,8 @@ async function handleEmailConfigRoute(
       return err(400, 'allow (string[]) and/or notifications (boolean) required');
     }
 
+    const agent = c.get('hub');
+
     if (body.allow !== undefined) {
       await agent.setEmailAllowlist(body.allow);
     }
@@ -179,9 +154,90 @@ async function handleEmailConfigRoute(
     }
 
     return json({ body: await agent.getEmailIngress() });
+  });
+
+  routes.all(EMAIL, async () => err(405, 'GET or PUT'));
+
+  return routes;
+}
+
+async function createTrigger<Bindings extends HubEnv>(c: HubContext<Bindings>): Promise<Response> {
+  const request = c.get('workspace').request;
+  // Creating a trigger is a grant (same rule as the CLI webhook route: auth/session.ts isFreshAuthTime).
+  const stepUp = requireStepUp(request);
+
+  if (stepUp) return stepUp;
+
+  // An unsignable delivery URL is a row nothing could reach, so report it here; public delivery just 404s.
+  if (webhookRouteSecret(c.env) === null) return err(503, WEBHOOK_ROUTE_UNAVAILABLE);
+  const body = await safeJson(request, WebhookRequestSchema);
+
+  if (!body || !body.label || !body.auth_mode) {
+    return err(400, 'label and auth_mode required');
   }
 
-  return err(405, 'GET or PUT');
+  let rateLimit: number;
+
+  try {
+    rateLimit = normalizeWebhookRateLimitPerMin(body.rate_limit_per_min);
+  } catch (e) {
+    return err(400, renderThrownChain({ cause: e }));
+  }
+
+  try {
+    return json({
+      body: await c.get('hub').createDurableWebhook({
+        label: body.label,
+        auth_mode: body.auth_mode,
+        secret: body.secret,
+        accepted_content_type: body.accepted_content_type,
+        rate_limit_per_min: rateLimit,
+      }),
+    }, { status: 201 });
+  } catch (e) {
+    return err(500, renderThrownChain({ cause: e }));
+  }
+}
+
+export type WebhookDeliveryTarget = Pick<OrchestratorAgent, 'acceptWebhookDelivery'>;
+
+/** See {@link HubResolver}. */
+export type WebhookDeliveryResolver = (name: string) => Promise<WebhookDeliveryTarget>;
+
+export interface WebhookDeliveryEnv extends HubEnv {
+  AUTH_KV?: KvStore;
+}
+
+/** Before the session gate. The URL capability is checked before budget, body or any RPC; every refusal but a wrong method is one 404. */
+export function webhookDeliveryRoutes<Bindings extends WebhookDeliveryEnv>(
+  resolverFor: (env: Bindings) => WebhookDeliveryResolver,
+): Hono<FamilyEnv<Bindings, object>> {
+  const routes = new Hono<FamilyEnv<Bindings, object>>();
+
+  routes.all('/api/workspaces/:name/webhook/*', async (c, next) => {
+    const match = matchWebhookDeliveryPath(c.req.path);
+
+    if (match === null) return next();
+
+    if (c.req.method !== 'POST') return err(405, 'use POST');
+    const secret = webhookRouteSecret(c.env);
+
+    if (secret === null || match.kind !== 'signed') return deliveryNotFound();
+
+    if (!(await verifyWebhookRoute(secret, match))) return deliveryNotFound();
+
+    return await handleWebhookDelivery(c.req.raw, c.env, match, resolverFor(c.env));
+  });
+
+  return routes;
+}
+
+/** One answer for every unroutable delivery: nothing read, nothing cached, causes indistinguishable. */
+function deliveryNotFound(): Response {
+  return new Response('Not found', {
+    status: 404,
+    headers: { 'cache-control': 'no-store' },
+  });
 }
 
 /** Capability already settled; the rest is cost ordering: budget, then bytes, then the object, which is the costly persistent thing. */
@@ -240,94 +296,6 @@ async function handleWebhookDelivery(
       admitted: result.admitted,
     },
   }, { status: 202 });
-}
-
-async function handleTriggersRoute(
-  request: Request,
-  env: HubEnv,
-  rest: string,
-  resolveAgent: () => Promise<HubTarget>,
-): Promise<Response> {
-  const agent = await resolveAgent();
-  const method = request.method;
-
-  if (rest === '' || rest === '/') {
-    if (method === 'GET') {
-      return json({ body: await agent.listTriggers() });
-    }
-
-    if (method === 'POST') {
-      // Creating a trigger is a grant (same rule as the CLI webhook route: auth/session.ts isFreshAuthTime).
-      const stepUp = requireStepUp(request);
-
-      if (stepUp) return stepUp;
-
-      // An unsignable delivery URL is a row nothing could reach, so report it here; public delivery just 404s.
-      if (webhookRouteSecret(env) === null) return err(503, WEBHOOK_ROUTE_UNAVAILABLE);
-      const body = await safeJson(request, WebhookRequestSchema);
-
-      if (!body || !body.label || !body.auth_mode) {
-        return err(400, 'label and auth_mode required');
-      }
-
-      let rateLimit: number;
-
-      try {
-        rateLimit = normalizeWebhookRateLimitPerMin(body.rate_limit_per_min);
-      } catch (e) {
-        return err(400, renderThrownChain({ cause: e }));
-      }
-
-      try {
-        return json({
-          body: await agent.createDurableWebhook({
-            label: body.label,
-            auth_mode: body.auth_mode,
-            secret: body.secret,
-            accepted_content_type: body.accepted_content_type,
-            rate_limit_per_min: rateLimit,
-          }),
-        }, { status: 201 });
-      } catch (e) {
-        return err(500, renderThrownChain({ cause: e }));
-      }
-    }
-
-    return err(405, 'GET or POST');
-  }
-
-  const idMatch = rest.match(/^\/([^/]+)$/);
-
-  if (idMatch && method === 'DELETE') {
-    const trigger_id = decodeURIComponent(idMatch[1]);
-
-    // `owner` is proven by server.ts's gates; the model's `agent.cancelSchedule` comes as `self` and is refused owner-created ingress.
-    return json({ body: await agent.cancelTrigger(trigger_id, 'owner') });
-  }
-
-  return err(404, 'not found');
-}
-
-async function handleEventsList(
-  request: Request,
-  resolveAgent: () => Promise<HubTarget>,
-): Promise<Response> {
-  const url = new URL(request.url);
-  const variant = url.searchParams.get('variant') ?? undefined;
-
-  // Same closed parser the object applies; NaN from `parseInt` reads as unstated, so SQLite never sees a NaN.
-  const bounds = boundEventQuery({
-    since: url.searchParams.has('since')
-      ? parseInt(url.searchParams.get('since') ?? '', 10) : undefined,
-    limit: url.searchParams.has('limit')
-      ? parseInt(url.searchParams.get('limit') ?? '', 10) : undefined,
-  });
-
-  const agent = await resolveAgent();
-
-  return json({
-    body: await agent.listRecentEvents({ variant, since: bounds.since, limit: bounds.limit }),
-  });
 }
 
 interface WebhookHeaders {

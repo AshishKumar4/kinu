@@ -2185,13 +2185,15 @@ export {
 } from './preview/preview-exposures';
 
 export {
-  err, escapeHtml, fileResponseHeaders, firstResponse, json,
+  err, ERROR_STATUS, escapeHtml, fileResponseHeaders, firstResponse, json,
   readBounded, readBoundedStream, reoriginateRequest, requestUrl, safeJson,
 } from './http/http';
 
 export { KINU_USER_AGENT, kinuUserAgent } from './utils/user-agent';
 
 export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './http/security-headers';
+
+export { serveApp } from './http/app-shell';
 
 export { ingressAdmitted, ingressDenied, peerIp } from './http/ingress-budget';
 
@@ -2521,7 +2523,7 @@ export {
 } from './events/webhook-route';
 
 export {
-  handleHealthRequest,
+  healthResponse,
 } from './http/health-route';
 
 export {

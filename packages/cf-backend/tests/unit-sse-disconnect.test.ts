@@ -1,6 +1,7 @@
 // Defends: the run-events SSE stream must stop polling the agent DO once the client aborts
 // or cancels.
 import type { RunEventsTarget } from '../src/run-events-routes';
+import { serveFamily } from './helpers/api';
 import type { RunEvent } from '@kinu.run/core';
 import { describe, test, expect } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -8,7 +9,7 @@ import { AwaitedList, handClock } from '@kinu.run/test-utils';
 
 mockAgentsSdk();
 
-const { handleRunEventsRequest } = await import('../src/run-events-routes');
+const { runEventsRoutes } = await import('../src/run-events-routes');
 
 function sseStream(answer: (read: number) => RunEvent[] = () => []) {
   const polled = new AwaitedList<number>();
@@ -40,10 +41,10 @@ describe('run-events SSE client disconnect', () => {
     const aborter = new AbortController();
     const clock = handClock();
 
-    const res = await handleRunEventsRequest(new Request(
+    const res = await serveFamily(runEventsRoutes(clock, () => resolveAgent), { workspace: { name: 'jarvis' } })(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
       { signal: aborter.signal },
-    ), resolveAgent, clock);
+    ), {});
 
     expect(res?.status).toBe(200);
     expect(res?.headers.get('content-type')).toContain('text/event-stream');
@@ -82,9 +83,9 @@ describe('run-events SSE client disconnect', () => {
     const { resolveAgent, pollCount, polled } = sseStream();
     const clock = handClock();
 
-    const res = await handleRunEventsRequest(new Request(
+    const res = await serveFamily(runEventsRoutes(clock, () => resolveAgent), { workspace: { name: 'jarvis' } })(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
-    ), resolveAgent, clock);
+    ), {});
 
     if (!res?.body) throw new Error('Expected an SSE response body');
     const reader = res.body.getReader();
@@ -111,9 +112,9 @@ describe('run-events SSE client disconnect', () => {
     }]);
 
     // A stream that polled instead of closing never reaches `done`: the hang is the failure.
-    const res = await handleRunEventsRequest(new Request(
+    const res = await serveFamily(runEventsRoutes(handClock(), () => resolveAgent), { workspace: { name: 'jarvis' } })(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
-    ), resolveAgent, handClock());
+    ), {});
 
     if (!res?.body) throw new Error('Expected an SSE response body');
     const reader = res.body.getReader();

@@ -9,10 +9,11 @@ import { diagnostics, tolerate } from '@kinu.run/core/obs';
 import type { WSMessage } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator';
 import {
-  type AccessTokenScope, type AgentRpcAccess, type AgentRpcMethod, normalizeAccessTokenScopes, requiredRpcAccess,
-  rpcAccessScope,
+  type AccessTokenScope, type AgentRpcAccess, type AgentRpcMethod, DEV_IDENTITY_HEADER, normalizeAccessTokenScopes,
+  requiredRpcAccess, rpcAccessScope,
 } from '@kinu.run/core';
 import * as v from 'valibot';
+import type { AuthIdentity } from '../auth/session';
 
 /** Always rewritten by the edge after authentication so clients cannot smuggle it. */
 export const CLI_SCOPES_HEADER = 'x-kinu-cli-scopes';
@@ -23,7 +24,7 @@ const CLI_SCOPES_TAG_PREFIX = 'cli-scopes:';
 export const CLI_BEARER_HEADER = 'x-kinu-cli-bearer';
 
 /** Written by the edge beside the scope and bearer headers. */
-export const USER_ID_HEADER = 'x-kinu-user-id';
+const USER_ID_HEADER = 'x-kinu-user-id';
 
 /** The session auth time the step-up gate compares; same writer and rule as the user id header. */
 export const AUTH_TIME_HEADER = 'x-kinu-auth-time';
@@ -89,6 +90,32 @@ export function sessionBearerFromTags(tags: Iterable<string>): { tokenHash: stri
   return null;
 }
 
+/** Every identity header is rewritten from the verified identity: none can be smuggled or stripped. */
+export function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Headers {
+  const next = new Headers(h);
+  // The object reads the identity below, never the credential.
+  next.delete(DEV_IDENTITY_HEADER);
+  next.set(USER_ID_HEADER, identity.userId);
+
+  if (identity.authTime) next.set(AUTH_TIME_HEADER, String(identity.authTime));
+  next.delete(CLI_SCOPES_HEADER);
+
+  if (identity.cliScopes) next.set(CLI_SCOPES_HEADER, identity.cliScopes.join(','));
+  next.delete(CLI_BEARER_HEADER);
+
+  if (identity.cliBearer) {
+    next.set(CLI_BEARER_HEADER, `${identity.cliBearer.tokenHash}:${identity.cliBearer.generation}`);
+  }
+
+  next.delete(SESSION_BEARER_HEADER);
+
+  if (identity.sessionTokenHash) {
+    next.set(SESSION_BEARER_HEADER, identity.sessionTokenHash);
+  }
+
+  return next;
+}
+
 /** Compile-time proof every table key is a real public method on the agent. */
 type AgentRpcMethodsExist = {
   [Method in AgentRpcMethod]: OrchestratorAgent[Method] extends (...args: never[]) => infer _Result
@@ -100,10 +127,7 @@ const agentRpcMethodsExist: AgentRpcMethodsExist = true;
 
 void agentRpcMethodsExist;
 
-/**
- * Members are unsigned: restating signatures on the stub hits TS2589 at `server.ts`'s
- * `handleCliRequest` (measured 2026-09-22); the name is checked at the seam via `v.function()`.
- */
+/** Members unsigned: restated signatures hit TS2589 in `handleAgentRpc` (2026-09-22); `v.function()` checks the name. */
 export type AgentRpcDispatch = {
   readonly [Method in AgentRpcMethod]?: (...args: never[]) => void;
 };

@@ -9,7 +9,7 @@
     "smoke:workspace": "bun scripts/smoke-workspace.ts",
     "types": "wrangler types env.d.ts --include-runtime false"
   },
-  "//dependencies:@mossaic/sdk": "The SDK is vendored SOURCE under third_party/mossaic and built into its own ignored dist by the root prepare hook; `workspace:*` is the only way to name it, because upstream publishes no npm package. The three specifiers its BUILT dist actually imports and cannot resolve on its own are declared here, derived from `dist/*.js` rather than from upstream's manifest: `jose` (2 sites, already present for Kinu's own use), `yjs` (7) and `y-protocols/awareness` (2). `zod/v4` is already covered by zod. `yjs` is EXACT at the version the SDK's peerDependencies name, not a caret, because the bundle externalises it deliberately — upstream's tsdown config says a second copy gives consumers two `Y.Doc` constructors with different module identities and silently broken edits — and because a caret already drifted the tree to 13.6.32 through y-protocols' `^13.0.0` peer while the SDK asks for 13.6.31. NOT declared: `hono`, which the worker/core routes import but no SDK entry point reaches, so it appears nowhere in dist; and `isomorphic-git`, an optional peer named only in comments and never imported. Both would be dependencies on the strength of upstream's manifest rather than of a real import.",
+  "//dependencies:@mossaic/sdk": "The SDK is vendored SOURCE under third_party/mossaic and built into its own ignored dist by the root prepare hook; `workspace:*` is the only way to name it, because upstream publishes no npm package. The three specifiers its BUILT dist actually imports and cannot resolve on its own are declared here, derived from `dist/*.js` rather than from upstream's manifest: `jose` (2 sites, already present for Kinu's own use), `yjs` (7) and `y-protocols/awareness` (2). `zod/v4` is already covered by zod. `yjs` is EXACT at the version the SDK's peerDependencies name, not a caret, because the bundle externalises it deliberately — upstream's tsdown config says a second copy gives consumers two `Y.Doc` constructors with different module identities and silently broken edits — and because a caret already drifted the tree to 13.6.32 through y-protocols' `^13.0.0` peer while the SDK asks for 13.6.31. NOT declared for the SDK: `hono`, which the worker/core routes import but no SDK entry point reaches, so it appears nowhere in dist (Kinu's own /api router declares it below, pinned); and `isomorphic-git`, an optional peer named only in comments and never imported. Both would be dependencies on the strength of upstream's manifest rather than of a real import.",
   "dependencies": {
     "@agent-core/core": "workspace:*",
     "@ai-sdk/anthropic": "3.0.89",
@@ -42,6 +42,7 @@
     "capnweb": "0.8.0",
     "chat": "^4.30.0",
     "d3": "^7.9.0",
+    "hono": "4.13.7",
     "jose": "^6.2.3",
     "just-bash": "^3.0.1",
     "modern-screenshot": "4.7.0",

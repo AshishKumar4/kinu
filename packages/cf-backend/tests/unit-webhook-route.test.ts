@@ -4,6 +4,7 @@
  * minted.
  */
 import { describe, expect, test } from 'bun:test';
+import { serveFamily } from './helpers/api';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { makeKv, type FakeKv } from './helpers/kv';
 import type { HubResolver, HubTarget, WebhookDeliveryEnv, WebhookDeliveryResolver, WebhookDeliveryTarget } from '../src/events/routes';
@@ -17,7 +18,7 @@ import {
 // The route's graph reaches `cloudflare:email` through `agents`: install the stub before it loads.
 mockAgentsSdk();
 
-const { handleWebhookDeliveryRequest, handleHubRequest } = await import('../src/events/routes');
+const { webhookDeliveryRoutes, hubRoutes } = await import('../src/events/routes');
 
 const { default: worker } = await import('../src/server');
 
@@ -119,7 +120,7 @@ describe('a minted route reaches the workspace', () => {
     const { env, resolveAgent, probe, kv } = harness();
     const body = JSON.stringify({ note: 'a build finished' });
     const request = delivery(await mintedPath(), { body });
-    const response = await handleWebhookDeliveryRequest(request, env, resolveAgent);
+    const response = await serveFamily(webhookDeliveryRoutes(() => resolveAgent))(request, env);
 
     expect(response?.status).toBe(202);
     expect(probe.activations).toEqual([`resolve:${WORKSPACE}`]);
@@ -132,7 +133,7 @@ describe('a minted route reaches the workspace', () => {
 
   test('the route capability is not payload auth: the per-trigger gate still refuses', async () => {
     const { env, resolveAgent, probe } = harness({ reject: true });
-    const response = await handleWebhookDeliveryRequest(delivery(await mintedPath()), env, resolveAgent);
+    const response = await serveFamily(webhookDeliveryRoutes(() => resolveAgent))(delivery(await mintedPath()), env);
 
     expect(response?.status).toBe(401);
     expect(probe.deliveries).toEqual([TRIGGER]);
@@ -141,7 +142,7 @@ describe('a minted route reaches the workspace', () => {
 
 describe('no unminted route reaches a Durable Object', () => {
   async function expectRefused(request: Request, { env, resolveAgent, probe, kv }: Harness): Promise<void> {
-    const response = await handleWebhookDeliveryRequest(request, env, resolveAgent);
+    const response = await serveFamily(webhookDeliveryRoutes(() => resolveAgent))(request, env);
 
     expect(response?.status).toBe(404);
     expect(response?.headers.get('cache-control')).toBe('no-store');
@@ -214,7 +215,7 @@ describe('no unminted route reaches a Durable Object', () => {
     for (const [what, path] of Object.entries(rewrites)) {
       const { env, resolveAgent, probe } = harness();
       const request = delivery(path);
-      const response = await handleWebhookDeliveryRequest(request, env, resolveAgent);
+      const response = await serveFamily(webhookDeliveryRoutes(() => resolveAgent))(request, env);
       expect(response?.status, what).toBe(404);
       expect(probe.activations, what).toEqual([]);
       expect(request.bodyUsed, what).toBe(false);
@@ -234,7 +235,7 @@ describe('the delivery route claims exactly its own paths', () => {
   test('a wrong method is refused without addressing the workspace', async () => {
     const { env, resolveAgent, probe } = harness();
     const request = delivery(await mintedPath(), { method: 'PUT' });
-    const response = await handleWebhookDeliveryRequest(request, env, resolveAgent);
+    const response = await serveFamily(webhookDeliveryRoutes(() => resolveAgent))(request, env);
 
     expect(response?.status).toBe(405);
     expect(probe.activations).toEqual([]);
@@ -250,17 +251,15 @@ describe('the delivery route claims exactly its own paths', () => {
       '/api/health',
       '/webhook/anything',
     ]) {
-      expect(await handleWebhookDeliveryRequest(delivery(path), env, resolveAgent)).toBeNull();
+      expect(await serveFamily(webhookDeliveryRoutes(() => resolveAgent))(delivery(path), env)).toBeNull();
     }
   });
 
   test('the authenticated hub router does not serve delivery at all', async () => {
     const { env, resolveHubAgent, probe } = harness();
 
-    expect(await handleHubRequest(delivery(await mintedPath()), env, WORKSPACE, resolveHubAgent)).toBeNull();
-    expect(await handleHubRequest(
-      delivery(`/api/workspaces/${WORKSPACE}/webhook/${TRIGGER}`), env, WORKSPACE, resolveHubAgent,
-    )).toBeNull();
+    expect(await serveFamily(hubRoutes(() => resolveHubAgent), { workspace: { name: WORKSPACE } })(delivery(await mintedPath()), env)).toBeNull();
+    expect(await serveFamily(hubRoutes(() => resolveHubAgent), { workspace: { name: WORKSPACE } })(delivery(`/api/workspaces/${WORKSPACE}/webhook/${TRIGGER}`), env)).toBeNull();
     expect(probe.activations).toEqual([]);
   });
 });
@@ -276,7 +275,7 @@ describe('trigger management reports what delivery hides', () => {
 
   test('no route secret: creation reports the deployment, and registers nothing', async () => {
     const { env, resolveHubAgent, probe } = harness({ secret: null });
-    const response = await handleHubRequest(createRequest(), env, WORKSPACE, resolveHubAgent);
+    const response = await serveFamily(hubRoutes(() => resolveHubAgent), { workspace: { name: WORKSPACE } })(createRequest(), env);
 
     expect(response?.status).toBe(503);
     expect(await response?.json()).toMatchObject({
@@ -287,7 +286,7 @@ describe('trigger management reports what delivery hides', () => {
 
   test('with a route secret the same request is not refused as unconfigured', async () => {
     const { env, resolveHubAgent } = harness();
-    const response = await handleHubRequest(createRequest(), env, WORKSPACE, resolveHubAgent);
+    const response = await serveFamily(hubRoutes(() => resolveHubAgent), { workspace: { name: WORKSPACE } })(createRequest(), env);
 
     expect(response?.status).not.toBe(503);
   });
