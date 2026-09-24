@@ -1748,6 +1748,7 @@ export abstract class ActorAgent extends Agent<Env> {
       send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
       interrupt: () => { this.chatLoop.interrupt(); },
       clear: () => this.clearConversation(),
+      turnClosed: () => { this.turnClaimChanged(); },
     });
 
     return this._chatTransport;
@@ -1818,6 +1819,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Fires once per emptying, in the close hook, after the room has been told. */
   protected lastConnectionClosed(): void {}
+
+  /** Fires after each root turn closes, when its durable claim has settled. */
+  protected abstract turnClaimChanged(): void;
 
   protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
 

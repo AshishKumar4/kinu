@@ -2246,7 +2246,9 @@ export {
 
 export { drawnText, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
 
-export { turnLiveness, type TurnClaimState, type TurnLiveness } from './read-models/turn-liveness';
+export {
+  turnLiveness, TURN_CLAIM_FRAME, TurnClaimFrameSchema, type TurnClaimState, type TurnLiveness,
+} from './read-models/turn-liveness';
 
 export {
   breakdownView, shareOfMeasured,
