@@ -2,7 +2,7 @@
  * Where a suite's agent runs: local `cli-backend` or a deployed Worker workspace, as configuration rather
  * than a second harness. `@cloudflare/think` caps cloud turns at ten model steps and core `runChat` does not,
  * so a suite names its target. Depends only on `@kinu.run/core` (core devDepends on this package); the
- * target implementations live in `tests/evals/`. No `sql` member: a Durable Object's SQLite is reachable only
+ * local implementation lives in `tests/live/target-local.ts`. No `sql` member: a Durable Object's SQLite is reachable only
  * as read models over RPC.
  */
 import { classifyToolFailure, listRuns, RunEventRecorder } from '@kinu.run/core';
@@ -115,7 +115,7 @@ export interface EvalSearchLedger {
   readonly backgroundJobs: number;
 }
 
-/** The seam. Factories in `tests/evals/target-*.ts` return a provisioned target or throw; `teardown` pairs with construction. */
+/** The seam. `tests/live/target-local.ts` returns a provisioned target or throws; `teardown` pairs with construction. */
 export interface AgentEvalTarget {
   readonly backend: EvalBackend;
   /** Banner line naming backend, workspace and origin. */

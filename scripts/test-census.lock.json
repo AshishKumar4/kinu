@@ -1,5 +1,5 @@
 {
-  "measured": "cc80b6f51: 1176 test files, 1027 runnable suites, 13125 tests, 41 runners, 36 non-public product members",
+  "measured": "7c32caef1: 1164 test files, 1014 runnable suites, 12901 tests, 42 runners, 36 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-codemode-sandbox.test.ts :: (file scope) :: declared mirror",
@@ -270,15 +270,11 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: tests/evals-artifact-contract.test.ts :: the degenerate run still emits its diagnostic harness record :: weak-only test",
+      "key": "tautology_suspect :: tests/live/evolution-proof.test.ts :: (file scope) :: expected side computed by the code under test",
       "count": 1
     },
     {
-      "key": "tautology_suspect :: tests/evolution-proof.test.ts :: (file scope) :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: tests/evolution-proof.test.ts :: the plaintext encodes back to the ciphertext, and Atbash is its own inverse :: expected side computed by the code under test",
+      "key": "tautology_suspect :: tests/live/evolution-proof.test.ts :: the plaintext encodes back to the ciphertext, and Atbash is its own inverse :: expected side computed by the code under test",
       "count": 2
     }
   ]

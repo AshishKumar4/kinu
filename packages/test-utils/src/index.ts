@@ -40,13 +40,7 @@ export * from './facts';
 
 export * from './git';
 
-export * from './eval-compare';
-
 export * from './eval-run';
-
-export * from './eval-progress';
-
-export * from './eval-adopted-spend';
 
 export * from './eval-outcome';
 

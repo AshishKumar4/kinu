@@ -49,7 +49,7 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
-import { webHeaders, type PublicSessionPlan } from '../evals/public-session';
+import { webHeaders, type PublicSessionPlan } from '../../evals/src/session';
 import { openBrowser, signedInPage } from './browser';
 
 const SUITE = 'First-run · agent-chats-persist';

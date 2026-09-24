@@ -35,6 +35,10 @@ export {
 /** Instances per pass; each costs a full re-run plus a judge call. 95% half-width at mean 0.5 is ±0.20 at 20. */
 const DEFAULT_REPLAY_SAMPLE_SIZE = 20;
 
+/** The mean replay score the quality panel draws as its floor: below it, the current config answers
+ *  its labeled turns worse than a coin. */
+export const DEFAULT_QUALITY_THRESHOLD = 0.5;
+
 export function initReplayTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS replay_evals (
     actor_id TEXT NOT NULL,

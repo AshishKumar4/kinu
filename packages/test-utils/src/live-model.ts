@@ -161,9 +161,9 @@ export function workerSession(llm: LLMProviderConfig): LiveModelSession {
 
 /** The live target for `suite`, or null; throws when half-configured. Prints the target or the env vars that would enable it. */
 export function liveModelTarget(suite: string): LiveModelTarget | null {
-  // Ambient credentials are not consent to spend: a live run needs `KINU_EVAL_LIVE`, set only by scripts/eval-tier.sh.
+  // Ambient credentials are not consent to spend: a live run needs `KINU_EVAL_LIVE`, set only by the tier scripts.
   if (process.env['KINU_EVAL_LIVE'] !== '1') {
-    console.warn(`[skip] ${suite} — live evals are opt-in: run 'bun run test:eval' (KINU_EVAL_LIVE=1)`);
+    console.warn(`[skip] ${suite} — live suites are opt-in: run 'bun run test:live' (KINU_EVAL_LIVE=1)`);
 
     return null;
   }

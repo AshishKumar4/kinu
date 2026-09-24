@@ -13,10 +13,10 @@
  * required on each side, because both tools were wrong about this tree in
  * opposite ways and the wrongness is the interesting part:
  *
- *   - knip alone reported `vitest-evals`, which `tests/evals-artifact-contract.
- *     test.ts` imports. knip's root `entry` is `scripts/*.ts!` — top level only
- *     — so the eval suites are outside its entry globs and their imports do not
- *     count. Adopting knip's answer would have deleted a live declaration.
+ *   - knip alone reports `vitest-evals`, which `evals/src/eval.ts` imports.
+ *     knip's root `entry` is `scripts/*.ts!` — top level only — so the eval
+ *     suite is outside its entry globs and its imports do not count. Adopting
+ *     knip's answer would delete a live declaration.
  *   - knip alone SPARED four this census reports on nothing but its own
  *     reading: `oxlint-tsgolint`, `typescript`, `just-bash` and
  *     `@rolldown/plugin-babel` — all four peer-required by a package declared
@@ -345,8 +345,8 @@ describe('measured against knip', () => {
     const onlyKnip = [...knip].filter((key) => !census.has(key)).sort();
     const onlyCensus = [...census].filter((key) => !knip.has(key)).sort();
 
-    // `tests/evals-artifact-contract.test.ts:62` imports it; knip's root entry
-    // globs stop at `scripts/*.ts!`, so it cannot see that import.
+    // `evals/src/eval.ts` imports it; knip's root entry globs stop at
+    // `scripts/*.ts!`, so it cannot see that import.
     expect(onlyKnip).toEqual(['package.json#vitest-evals']);
     expect(onlyCensus).toEqual([]);
   });

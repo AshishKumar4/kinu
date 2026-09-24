@@ -113,7 +113,7 @@ describe('the workspace scope', () => {
   test('a root-served file may import a member the root `workspaces` globs claim', () => {
     const sources = new Map([
       ['scripts/probe.ts', `import { build } from '@kinu.run/test-utils';\n`],
-      ['tests/evals/harness.ts', `import { x } from '@kinu.run/cli-backend';\n`],
+      ['tests/live/harness.ts', `import { x } from '@kinu.run/cli-backend';\n`],
     ]);
 
     expect(edgesIn(sources)).toEqual([]);

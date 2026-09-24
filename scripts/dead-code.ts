@@ -35,11 +35,10 @@
  * reference resolver of our own.
  *
  * The FOURTH is derived here instead, and the reason is measured rather than
- * stylistic. knip's dependency pass reported `vitest-evals` unused on this tree
- * — `tests/evals-artifact-contract.ts` imports it, but knip's root `entry` is
- * `scripts/*.ts!`, top level only, so the eval suites are outside its globs and
- * their imports do not count. Deleting on that answer would have broken the
- * eval tier. The census below reads the manifests and the tracked corpus
+ * stylistic. knip's dependency pass reports `vitest-evals` unused on this tree
+ * — `evals/src/eval.ts` imports it, but knip's root `entry` is `scripts/*.ts!`,
+ * top level only, so the eval suite is outside its globs and its imports do not
+ * count. Deleting on that answer would break the eval suite. The census below reads the manifests and the tracked corpus
  * directly, and `dead-code.test.ts` joins the two answers so the difference
  * stays a stated, single, explained row rather than a silent divergence.
  *
@@ -278,10 +277,9 @@ export const keyOf = (d: DeadExport): string => `${d.file}#${d.name} (${d.kind})
  * the same manifests and joins the two, so the derivation stays measured
  * against a second implementation rather than trusted. The join is not an
  * equality: on this tree knip additionally reports `vitest-evals`, which
- * `tests/evals-artifact-contract.test.ts:62` imports — knip's root `entry` is
- * `scripts/*.ts!`, top level only, so the eval suites are outside its entry
- * globs. A census that had simply adopted knip's answer would have deleted a
- * declaration the eval tier needs.
+ * `evals/src/eval.ts` imports — knip's root `entry` is `scripts/*.ts!`, top level
+ * only, so the eval suite is outside its entry globs. A census that had simply
+ * adopted knip's answer would delete a declaration the eval suite needs.
  */
 export interface DeadDependency {
   readonly manifest: string;

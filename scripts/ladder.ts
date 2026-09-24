@@ -77,8 +77,8 @@ export const HOOKS_DIR = '.githooks';
  * `evals` sits LAST, after `deploy`, and that placement is its meaning:
  * live-model behavioural evidence that no hook, push or deploy waits on. A
  * deploy that ran the evals took over an hour and spent real tokens to ship a
- * build, so the evals run deliberately — `bun run evals:full` — and a full
- * evals run still runs every cheaper tier first, which is what the containment
+ * build, so the evals run deliberately — `bun run test:live` and `bun run evals` —
+ * and a full evals run still runs every cheaper tier first, which is what the containment
  * order buys. gate-set-equality exempts exactly this tier from the "every
  * LADDER entry is a deploy gate" rule and prints the exemption with the tier's
  * members, so an entry cannot hide from the deploy by wearing the tier
@@ -581,17 +581,12 @@ export const LADDER: readonly Gate[] = [
     // vitest arm has grown since the 12 s of 2026-09-05. Too slow for commit.
     seconds: 18,
     catches: 'a test that starts skipping, and a declared skip that has started running '
-      + 'without the lock being tightened. Credential-free the eval tier reports 60 skips '
-      + 'across its two runners and exits 0, and that exit code is all anyone reads — so the '
-      + 'skipped set is locked with a written reason per entry. Locking the SET rather than a '
-      + 'count is what makes it work: a count of 60 cannot tell you a different 60 are '
-      + 'skipping now. BOTH RUNNERS, which is what the 2.9s buys over the previous 0.3s: this '
-      + 'gate read `bun test ./tests/` alone while the tier also runs vitest over '
-      + '`tests/evals/**/*.eval.ts`, and that arm reported 36 tests of which 35 skipped with '
-      + 'nothing declaring any of them — the same false green, one runner over, inside the '
-      + 'tier built to prevent it. It also asserts every target contributed a test, and a '
-      + 'file satisfies only the NARROWEST target that claims it, so neither arm can answer '
-      + "for the other's.",
+      + 'without the lock being tightened. Credential-free the live tier reports its skips '
+      + 'and exits 0, and that exit code is all anyone reads — so the skipped set is locked '
+      + 'with a written reason per entry. Locking the SET rather than a count is what makes it '
+      + 'work: a count cannot tell you a different set is skipping now. It also asserts every '
+      + 'target contributed a test, and a file satisfies only the NARROWEST target that claims '
+      + 'it, so no target can answer for another\'s.',
     blind: 'whether a running test asserts anything real. A skip is visible now; a '
       + 'vacuous pass is the next tier\'s problem.',
     inputs: AMBIENT_BY_NAME,
@@ -1202,8 +1197,8 @@ export const LADDER: readonly Gate[] = [
     label: 'Test-utils suite',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 6.9/6.8s (229 tests, mostly the
-    // eval-compare hard-task compute). The 0.2s named only the slicing helpers.
-    // Replaces 0.2s.
+    // hard-task compute, retired with the old eval framework on 2026-09-24; the
+    // gate-cost measurement re-sizes it). The 0.2s named only the slicing helpers.
     seconds: 7,
     catches: 'a broken source-slicing helper. Three wiring suites once asserted against '
       + 'whole files instead of the members they named because this was untested.',
@@ -1339,11 +1334,12 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test --timeout=0 ./tests/',
-    label: 'Root end-to-end lifecycle suites',
+    label: 'Live and first-run suites, credential-free',
     tier: 'ci',
     seconds: 1.3,
-    catches: 'the root end-to-end and eval suites parsing, constructing their workspaces '
-      + 'and reaching their skip decision, credential-free. Kept beside `test:eval` '
+    catches: 'the live end-to-end suites parsing, constructing their workspaces and reaching '
+      + 'their skip decision, plus the first-run tier\'s credential-free half: its wiring, its '
+      + 'defect register and the observations its rows are judged by. Kept beside `test:live` '
       + 'deliberately: this is the run that needs no secret, so it is the one that '
       + 'reproduces anywhere, and `gate:skip-ratchet` is what turns its skips from an '
       + 'invisible exit 0 into a locked, reasoned list. The skip COUNT is not quoted '
@@ -1360,47 +1356,28 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun run test:eval',
-    label: 'Eval tier',
+    run: 'bun run test:live',
+    label: 'Live tier',
     tier: 'evals',
     // The CREDENTIALED cost, because that is the cost this gate actually incurs
-    // where it runs. `scripts/eval-tier.sh` authenticates as `eval-service`
-    // against the deployment from KINU_EVAL_TOKEN, so a run that holds that credential
-    // pays this — and it was declared at 0.3s, the credential-free path where
-    // every live test skips. A gate whose declared cost is four orders of
-    // magnitude under its measured one makes the tier-cost line below fiction,
-    // and the push budget above it unenforceable.
+    // where it runs. `scripts/live-tier.sh` authenticates as `eval-service`
+    // against the deployment from KINU_EVAL_TOKEN, so a run that holds that
+    // credential pays this. It is the old eval tier's bun arm, the part that
+    // remains: 2,745s / 48 calls and 3,843s / 49 calls in the two runs whose
+    // spend files survive, and 3,228s from a third whose artifact does not, kept
+    // as a CEILING rather than cited as a measurement anybody can open.
     seconds: 3228,
-    catches: 'the behavioural evidence nothing else in this ladder can produce: whether '
-      + 'the agent reaches for MCTS on a task that warrants it, whether a search opens '
-      + 'more than one branch and leaves a DURABLY ranked winner, whether every settle '
-      + 'mode writes where the Exploration reader reads, and what fraction of eligible '
-      + 'turns convert to a delegation. Each score reports its denominator, and each '
-      + 'assertion checks that denominator is non-zero BEFORE anything else, because '
-      + '"0 of 0 searches were unranked" is the shape of a check that cannot fail. It '
-      + 'also catches ITSELF running empty: with a target resolved, a run that reports '
-      + 'no model call, or calls whose cost it cannot account for, now exits non-zero '
-      + 'rather than printing `TOTAL: 0 model call(s)` and passing. BUN ARM ONLY, from the '
-      + 'two runs whose spend files still exist: 2,745s / 48 calls / 601,582 in, and '
-      + '3,843s / 49 calls / 600,843 in. The declared 3,228s / 64 calls / 967k came from '
-      + 'a THIRD run whose artifact does not survive, and 64 calls / 967k is atypical '
-      + 'against both that do — so it is kept as a CEILING, labelled as one, rather than '
-      + 'cited as a measurement anybody can open. The second surviving run also contains '
-      + '1,200s of tests being KILLED rather than working (a 900s exploration timeout and '
-      + 'a 300s MCTS one, both since fixed, the same steps completing in 437s and 456s '
-      + 'afterwards), so it overstates waste and understates work at once and no '
-      + 'post-fix cost should be derived from it. The VITEST behaviour arm '
-      + 'is 34 full agent episodes (17 corpus tasks x 2 repeats) and dominates the tier; '
-      + 'the tier now reports each arm\'s own seconds and tokens, which is what replaced '
-      + '"add roughly an hour for the vitest behaviour arm" — a sentence that stood in '
-      + 'for a measurement for as long as that arm produced no report at all. Two more '
-      + 'single-family vitest arms — research (a controlled MCP archive, exact-match '
-      + 'scored) and optimization (a metered corpus instrument with a pre-registered '
-      + 'threshold) — each hold their own spend file and their own liveness assertion, '
-      + 'and each writes a run record `scripts/eval-report.ts` reads. '
-      + 'Credential-free the whole tier is 9s across all five arms (measured '
-      + '2026-08-19), not the 0.3s once declared, which timed only the bun half; '
-      + 'everything skips, which is the path that reproduces anywhere.',
+    catches: 'the live end-to-end evidence nothing else in this ladder produces on the '
+      + 'in-process runtime: multi-turn tool calling and memory across a reopen (E2E '
+      + 'Lifecycle), MCTS evolution and cross-session transfer (Evolution Proof, Deep '
+      + 'Evolution), whether the agent reaches for a search and leaves a DURABLY ranked winner '
+      + '(Exploration), and the hosted smoke. Each score reports its denominator, and each '
+      + 'assertion checks that denominator is non-zero BEFORE anything else, because "0 of 0 '
+      + 'searches were unranked" is the shape of a check that cannot fail. It also catches '
+      + 'ITSELF running empty: with a target resolved, a run that reports no model call, or '
+      + 'calls whose cost it cannot account for, exits non-zero rather than printing `TOTAL: 0 '
+      + 'model call(s)` and passing. Credential-free every live test skips, which is the path '
+      + 'that reproduces anywhere.',
     blind: 'the cf runtime, for everything except the Live Smoke hosted arm. The rest '
       + 'drive core and the CLI\'s local session in-process, so a defect that only '
       + 'appears in workerd — a rejected cross-DO RPC inside background work that only '
@@ -1413,62 +1390,43 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'spends live model turns as the eval identity; its evidence is behavioural and dated, never a function of the tree alone.' },
   },
   {
-    run: 'bun run gate:kinu-tasks',
-    label: 'Kinu task family × model matrix',
+    run: 'bun run evals',
+    label: 'Eval suite',
     tier: 'evals',
-    // FIRST SIZING, NOT A MEASUREMENT. This family has never been run live:
-    // the figure is the trajectory tier's own measured 541s (2026-09-12, five
-    // two-turn episodes on one model, `gate:trajectory`) scaled to four
-    // three-and-four-turn episodes × three trials × three models — 541 × (4/5)
-    // × (3.25/2) × 9 ≈ 6,300s. It is a ceiling to re-size from the first run
-    // record, and it is labelled here because a declared cost that reads like
-    // a measurement is the defect `gate:trajectory`'s own comment records.
-    seconds: 6_300,
-    catches: 'an agent that cannot carry the PRODUCT\'S OWN MACHINERY across turns, graded on '
-      + 'four episodes whose every turn is verified through the artifact\'s own surface against '
-      + 'references the verifier owns: a slate with a JSON HTTP contract seeded in non-sorted '
-      + 'order and re-read after a reconnect; two hires settling while a plan is submitted, with '
-      + 'the reply held to the roster and the task list; workspace-versus-sandbox routing where '
-      + 'the agent must MEET the hosted node\'s codegen boundary rather than guess at it '
-      + '(measured 2026-09-18 on the deployment: `npm i` exits 0, `npx vite` exits 127); and '
-      + 'memory plus tasks across an `abortActivation()` eviction. Each case carries a '
-      + 'per-episode nonce, so a copied answer from an earlier run cannot pass. Its '
-      + 'credential-free half — a minimal correct fixture per case plus one mutation per subgoal, '
-      + 'each proved to flip exactly that subgoal — runs at every tier and costs nothing. Three '
-      + 'models, resolved against each provider\'s own `GET /models` BEFORE anything spends, so '
-      + 'a row cannot report a label whose model nobody confirmed.',
-    blind: 'everything four episodes do not reach, and the granularity its one ordering subgoal '
-      + 'has: `parallel-delegation` reads STEP BOUNDARIES — both `agents` hire rows between the '
-      + 'same pair of consecutive `step_finish` rows, the ledger\'s own record of one assistant '
-      + 'message issuing both (there is no `tool_call_start` row, core/src/events/types.ts:'
-      + '147-151) — so it catches a lead that closed a step between its hires and says nothing '
-      + 'about wall-clock overlap INSIDE one step. It is a capability grade on '
-      + 'ONE workspace per case, so nothing about a second account or a second user is measured. '
-      + 'Its task-closure subgoals read FINAL STATE only: the turn-end task reminder is not on '
-      + 'main, so a product that closed a task the user held back would be caught, but the '
-      + 'reminder\'s own at-most-once rule is not. And it is a live tier — a provider outage and '
-      + 'a behavioural regression produce the same red until the retained transcript is opened.',
-    inputs: { kind: 'live', why: 'drives the DEPLOYED public API on three provider models and spends live turns as the eval identity.' },
+    // FIRST SIZING from the 2026-09-24 pilot on kinu.run: a trial took 12 to 26
+    // minutes on the product model, three at once, so ten trials of one task are
+    // four waves of about 26 minutes and the four tasks run one after another:
+    // 4 x 4 x 26 min is about 25,000s. Re-sized from the first baseline's
+    // per-task wall time, which `evals/scripts/validate.ts` prints.
+    seconds: 25_000,
+    catches: 'a regression in what the DEPLOYED product does for a user, task by task. Each '
+      + 'file in evals/tasks is one multi-turn task on a fresh eval-service workspace, and every '
+      + 'turn is checked black-box: the checker calls the slate the agent built over the slate '
+      + 'RPC and compares every answer with its own reference implementation of the contract, so '
+      + 'any correct build passes. Ten trials per task, compared with the latest complete report '
+      + 'of an earlier deployed build by a two-sided Fisher exact test (evals/src/comparison.ts), '
+      + 'with infrastructure failures and 429 waits reported apart from the agent\'s results.',
+    blind: 'anything the tasks do not exercise, and a change smaller than ten trials can tell '
+      + 'apart from noise. Its subject is the build kinu.run serves, not this checkout: '
+      + '`bun run deploy:preflight` is what says whether the two are the same.',
+    inputs: { kind: 'live', why: 'drives the DEPLOYED product as the eval identity and spends live model turns.' },
   },
   {
-    run: 'bun test --timeout=0 scripts/eval.test.ts scripts/eval-triage.test.ts scripts/deploy-preflight.test.ts',
-    label: 'Evaluation gate logic',
+    run: 'bun test --timeout=0 ./evals/ scripts/deploy-preflight.test.ts',
+    label: 'Eval framework logic',
     tier: 'ci',
     seconds: 1,
-    catches: 'the eval gate\'s own logic, credential-free, plus how the triage instrument '
-      + 'CLASSES a failure: which census part makes a failed call a product defect, that a '
-      + 'correct refusal never enters the worklist, that dispersion counts only inside one '
-      + 'commit and one arm, and — the one that would have mattered most — that a '
-      + '`tool_outcomes` detail carrying a tool USAGE histogram yields no attribution at all. '
-      + 'Reading `run×29` as 29 broken calls would have filed the whole baseline corpus as a '
-      + 'product defect. All three directions were proven red by mutation. The live-model '
-      + 'benchmark runs in the separate gated eval.yml.',
-    blind: 'anything a model actually does, and whether a hand VERDICT in '
-      + 'scripts/eval-triage.verdicts.json is right. A verdict is a written argument about a '
-      + 'trajectory, so nothing here can check one; what is checked is that a stale verdict '
-      + 'and an unverified group both print.',
-    // Measured by `--audit-closure` 2026-09-23.
-    inputs: { ...AMBIENT_BY_NAME, reads: ['tests/eval/corpus/seed.jsonl'] },
+    catches: 'the eval framework\'s own logic, credential-free: the Fisher exact test and the '
+      + 'verdict it feeds, a comparison refused across changed definitions, task versions, trial '
+      + 'counts or infrastructure failures, a baseline refused when a trial is missing or a build '
+      + 'changed under it, a check that throws failing alone, a slate call the deployment could '
+      + 'not carry failing the trial as infrastructure rather than a check, and the session '
+      + 'client\'s frame and socket handling. Plus the preflight that refuses to measure a '
+      + 'deployment serving another revision.',
+    blind: 'anything a model does, and whether a task\'s checker is right about its task. That '
+      + 'is proved per task, before a baseline, against hand-written reference slates on the '
+      + 'deployment: a correct build passes every check and each planted defect fails its own.',
+    inputs: AMBIENT_BY_NAME,
   },
   {
     // The COMMAND deploy.sh runs, spelled identically. Stopping at the
@@ -2288,7 +2246,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'a flow a person runs in the page that breaks on the DEPLOYED build: the same rows '
       + 'the pre-publish run drives against `vite dev`, in real Chrome against the deployment '
       + 'as the eval identity, asserting only what the page shows. The first-run tier reads '
-      + 'the deployment over its API and socket and the trajectory tier drives the model, so '
+      + 'the deployment over its API and socket and the eval suite drives the model, so '
       + 'neither loads the page a person loads; #13 was an API-green workspace whose reloaded '
       + 'page showed no agents.',
     blind: 'a flow no row drives, and the look of the page: rows read presence and text, never '
@@ -2296,52 +2254,6 @@ export const LADDER: readonly Gate[] = [
       + 'have now. The model is real, so a row that needs an answer reads that one arrived, '
       + 'never its words.',
     inputs: { kind: 'live', why: 'drives the DEPLOYED build in real Chrome as the eval identity and spends real model turns.' },
-  },
-  {
-    run: 'bun run gate:trajectory',
-    label: 'Trajectory tier',
-    phase: 'post-publish',
-    deadline: {
-      seconds: 3_600,
-      why: 'covers five two-turn episodes on the product model over the public API, each '
-        + 'run to completion. Measured 1661s on 2026-09-12 with every case red; the bound is '
-        + 'roughly twice that so a slow model answers rather than being killed as a hang.',
-    },
-    alone: 'runs alone, LAST before the build. Its subject is the DEPLOYED product on its default '
-      + 'model, so it spends minutes of live turns on the shared account as the identity '
-      + '`gate:infra` authenticates with; a gate beside it would be inside the workspaces it '
-      + 'creates and tears down, and its wall time — the one figure `LADDER` declares for it — '
-      + 'would be measured under someone else\'s load. After `gate:infra` because that is the '
-      + 'cheapest proof the account answers at all, and a tree that has not been shown to '
-      + 'compile should not spend model calls.',
-    tier: 'deploy',
-    // Measured 2026-09-12 on the deployed 4f4c0af36: one credentialed run of
-    // the five cases on the product model, 541s wall as the script prints it,
-    // after two changes at once — the cases run concurrently and no longer
-    // queue the workspace genesis turn — so the figure is the overall change,
-    // not a per-change attribution. One case red on the deployed sandbox's
-    // `bun` boundary, a product finding rather than a harness defect.
-    seconds: 541,
-    catches: 'an agent that stopped ACTING on the model users have, measured on the build '
-      + 'this deploy just shipped. It runs the trajectory family — five two-turn episodes through the public REST '
-      + 'and socket: write a file then read it back, a correction steered mid-turn, a failed '
-      + 'command repaired in turn two — under `KINU_EVAL_TIER=product`, which pins '
-      + '`EVAL_MODELS.product`, the id core seeds every new workspace with. Every score is off '
-      + 'durable state (file bytes over the files route, `tool_call_end` rows, transcript '
-      + 'rows), so an agent that answers an explicit instruction with a survey and a question '
-      + 'reds on `task_outcome` rather than on a judge\'s opinion. It sits AFTER the publish, '
-      + 'in first-run\'s wave, on purpose: before the upload its only subject was the build '
-      + 'already serving, and that could refuse a regression — never a repair, because the '
-      + 'repair is the build it has not shipped yet.',
-    blind: 'a build that has not shipped — its subject is the build this deploy just '
-      + 'published, so its red is a deployed red: the bad build is already serving when this '
-      + 'fails, and the tier reports rather than prevents; the two post-publish tiers are one '
-      + 'claim only together. Five trajectories, not the product: a '
-      + 'defect on a surface no case names is unmeasured, and every case depends on the '
-      + 'model choosing to use the tool it was asked for, so a refusal reads as a broken '
-      + 'tool until the retained transcript is opened. One model only, by design: the flash '
-      + 'and pro arms are the eval tier\'s and a green here says nothing about them.',
-    inputs: { kind: 'live', why: 'drives the DEPLOYED product on its default model over the public API.' },
   },
 ];
 
@@ -2522,8 +2434,8 @@ export function browserModules(sources: ReadonlyMap<string, string>): ReadonlySe
  *  2026-09-18 on this box, 2,484 files and 35 MB read in 49 ms, so the plan
  *  reads the whole tree rather than a directory somebody expected the
  *  harnesses to stay in — narrowed to `scripts/` it missed
- *  `tests/live-smoke.test.ts`, which launches puppeteer itself inside the
- *  `Root end-to-end lifecycle suites` row. */
+ *  `tests/live/live-smoke.test.ts`, which launches puppeteer itself inside the
+ *  `Live and first-run suites, credential-free` row. */
 let corpusBrowserModules: ReadonlySet<string> | null = null;
 
 export function sharedBrowserModules(): ReadonlySet<string> {
@@ -2548,92 +2460,36 @@ export function sharedOf(
 /** The path of the Python suites' runner, as its gate spells it. */
 export const PYTHON_SUITES_SCRIPT = 'scripts/python-suites.ts';
 
-/** The path of the eval tier's runner, as `bun run test:eval` spells it. */
-export const EVAL_TIER_SCRIPT = 'scripts/eval-tier.sh';
+/** The path of the live tier's runner, as `bun run test:live` spells it. */
+export const LIVE_TIER_SCRIPT = 'scripts/live-tier.sh';
+
+/** The eval suite's vitest config, as `bun run evals` names it. */
+export const EVALS_CONFIG = 'evals/vitest.config.ts';
 
 /** The wrapper that boots the local dev server and runs a command against it,
  *  as a gate spells it. */
 export const DEV_SERVER_WRAPPER = 'scripts/with-dev-server.ts';
 
-/** The eval tier's arms, as data. */
-export interface EvalTierArms {
-  /** The DEFAULT-backend `bun test` argv, verbatim. `--backend cloud` names a
-   *  different list; this is what `bun run test:eval` runs. */
-  readonly bunTargets: readonly string[];
-  /** The single-family vitest arms, each selected by path. */
-  readonly vitestSelected: readonly string[];
-  /** The paths the behaviour arm EXCLUDES. Must equal `vitestSelected` or a
-   *  file runs in two arms and is billed twice — the invariant the script's own
-   *  comments claim and nothing asserted. */
-  readonly vitestExcluded: readonly string[];
+/** `bun --bun vitest run --config evals/vitest.config.ts …`: the eval suite's runner, as `bun run evals` spells it. */
+function runsEvalSuite(words: readonly string[]): boolean {
+  return words.slice(0, 4).join(' ') === 'bun --bun vitest run' && words[words.indexOf('--config') + 1] === EVALS_CONFIG;
 }
 
 /**
- * The eval tier, read out of `scripts/eval-tier.sh`. A parse of the
- * authoritative script, never a copy, for the reason {@link deployGates} is one.
- *
- * It exists because the tier's containment was a claim in prose. The behaviour
- * arm selects `tests/evals/**\/*.eval.ts` and subtracts three named files, and
- * each of those three then selects itself; nothing held the two spellings equal,
- * so a fourth single-family arm added without its `--exclude` would have run one
- * episode in two arms, paid for it twice, and reported both bills as liveness.
- * `ladder.test.ts` compares this against `isVitestEvalSuite` over the tracked
- * enumeration, so the set the tier EXECUTES and the set on disk are one set.
+ * The live tier's `bun test` argv for the default backend, read out of
+ * `scripts/live-tier.sh`: a parse of the authoritative script, never a copy, for
+ * the reason {@link deployGates} is one. The FIRST `TARGETS=(…)` only: the second
+ * sits inside the `--backend cloud` branch, and a resolver that took the last one
+ * would credit the default invocation with the cloud run's single file.
  */
-export function evalTierArms(
-  source = readFileSync(resolve(root, EVAL_TIER_SCRIPT), 'utf8'),
-): EvalTierArms {
-  const assigned = new Map<string, string>();
-  const bunTargets: string[] = [];
-  const vitestSelected: string[] = [];
-  const vitestExcluded: string[] = [];
-
-  // `"$NAME"` resolves against the assignments above it, so a rename that moves
-  // an arm's path moves both spellings at once and this parse cannot disagree
-  // with the shell.
-  const resolveWord = (word: string): string | undefined => {
-    const named = /^"?\$\{?([A-Z_][A-Z0-9_]*)\}?"?$/.exec(word);
-
-    return named?.[1] === undefined ? word.replace(/^"|"$/g, '') : assigned.get(named[1]);
-  };
-
+export function liveTierTargets(source = readFileSync(resolve(root, LIVE_TIER_SCRIPT), 'utf8')): string[] {
   for (const line of source.split('\n')) {
-    const assignment = /^([A-Z_][A-Z0-9_]*)=([^\s()]+)\s*$/.exec(line.trim());
-
-    if (assignment?.[1] !== undefined && assignment[2] !== undefined) {
-      assigned.set(assignment[1], assignment[2]);
-      continue;
-    }
-
-    // The FIRST `TARGETS=(…)` only: the second sits inside the `--backend
-    // cloud` branch, and a resolver that took the last one would credit the
-    // default invocation with the cloud arm's single file.
     const targets = /^TARGETS=\(([^)]*)\)\s*$/.exec(line.trim());
 
-    if (targets?.[1] !== undefined && bunTargets.length === 0) {
-      bunTargets.push(...targets[1].split(/\s+/).filter((word) => word.length > 0));
-      continue;
-    }
-
-    for (const match of line.matchAll(/--exclude\s+(\S+)/g)) {
-      const path = resolveWord(match[1] ?? '');
-
-      if (path !== undefined) vitestExcluded.push(path);
-    }
-
-    // A single-family arm is a positional path after the config flag. The
-    // behaviour arm passes none, which is what makes it the complement: its
-    // invocation wraps immediately after the flag, so the next word is `\` —
-    // bash's line continuation, not an argument. A flag is not a path either.
-    const invocation = /--config\s+vitest\.evals\.config\.ts\s+(\S+)/.exec(line);
-    const selected = invocation?.[1] === undefined ? undefined : resolveWord(invocation[1]);
-
-    if (selected !== undefined && selected !== '\\' && !selected.startsWith('-')) {
-      vitestSelected.push(selected);
-    }
+    if (targets?.[1] !== undefined) return targets[1].split(/\s+/).filter((word) => word.length > 0);
   }
 
-  return { bunTargets, vitestSelected, vitestExcluded };
+  return [];
 }
 
 /**
@@ -2672,11 +2528,6 @@ export const CI_EXEMPT = {
     + 'build, and pointing it at the previous one would report the last deploy\'s product under '
     + "this pull request's name. It also creates workspaces, links real machines and spends "
     + 'model calls on a shared account, none of which belongs on a pull request.',
-  'bun run gate:trajectory':
-    'needs the deployment\'s eval identity and spends live turns on the shared account, '
-    + 'neither of which belongs on a pull request. Its subject is production as it stands, '
-    + 'which a pull request has not changed; it runs at deploy, alone, as the last gate '
-    + 'before the build.',
   'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts':
     'boots the same dev server the live-app row does, on the same `.dev.vars` credentials a '
     + 'pull request must not hold, and spends real model turns on the account through it.',
@@ -2806,20 +2657,15 @@ export function claims(command: string, tracked: readonly string[]): string[] {
     return tracked.filter(isPythonSuite);
   }
 
-  // The EVAL TIER. Two runners inside one script, so the claim is the union of
-  // both: the bun argv it runs by default, and every vitest eval suite its arms
-  // execute. Parsed rather than assumed for the reason `deployGates` is —
-  // before this form existed the tier claimed NOTHING, and the four
-  // `*.eval.ts` suites were credited to `bun test ./tests/`, which cannot see
-  // them.
-  if (words[0] === 'bash' && words[1] === EVAL_TIER_SCRIPT) {
-    const arms = evalTierArms();
-
-    return [...new Set([
-      ...claims(['bun', 'test', ...arms.bunTargets].join(' '), tracked),
-      ...tracked.filter(isVitestEvalSuite),
-    ])];
+  // The LIVE TIER: the bun argv its script runs by default, parsed rather than
+  // assumed for the reason `deployGates` is.
+  if (words[0] === 'bash' && words[1] === LIVE_TIER_SCRIPT) {
+    return claims(['bun', 'test', ...liveTierTargets()].join(' '), tracked);
   }
+
+  // The EVAL SUITE: vitest over the task files, which are exactly the runnable
+  // suites no `bun test` can select. The config's `include` is the enforcing half.
+  if (runsEvalSuite(words)) return tracked.filter(isVitestEvalSuite);
 
   if (words[0] === 'node') {
     return words.filter((word) => isRunnableSuite(word) && tracked.includes(word));
@@ -2888,7 +2734,7 @@ export function claims(command: string, tracked: readonly string[]): string[] {
   // TWO narrowings, and both are what bun would really run. `bunWouldSkip` is
   // the bunfig `pathIgnorePatterns` half; `isBunDiscoverableSuite` is the
   // MATCHER half, and its absence is how `bun test ./tests/` came to be
-  // credited with four `tests/evals/*.eval.ts` suites bun does not select. A
+  // credited with four `.eval.ts` suites bun does not select. A
   // directory target sweeps every tracked path under it, so without this the
   // resolver answered "which files live here" where the question is "which
   // files does this command execute".

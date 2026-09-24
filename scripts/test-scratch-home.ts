@@ -13,11 +13,11 @@
 // process. Tests that need the fallback still delete the variable themselves.
 //
 // WHY THIS MODULE IS SEPARATE FROM THE HOOK. Two runners load it: `bun test` via
-// `bunfig.toml`'s `preload`, and vitest via `vitest.evals.config.ts`'s
-// `setupFiles` (the behavioural eval tier runs on vitest because the spine under
-// test reaches `bun:sqlite`). Their `afterAll` are different functions from
-// different modules, and calling `bun:test`'s under vitest throws `Cannot use
-// afterAll() outside of the test runner` — the eval tier then fails at
+// `bunfig.toml`'s `preload`, and vitest via the `setupFiles` of
+// `evals/vitest.config.ts` and `vitest.first-run.config.ts`. Their `afterAll` are
+// different functions from different modules, and calling `bun:test`'s under
+// vitest throws `Cannot use afterAll() outside of the test runner` — a vitest
+// tier then fails at
 // COLLECTION with no tests and one failed suite, which is how it blocked a
 // production deploy. So the logic lives here, imported statically by a
 // three-line entry per runner, each importing the `afterAll` that belongs to it.
@@ -63,14 +63,14 @@ process.env.KINU_INFLIGHT_ROOT = join(home, 'inflight');
 // The throwaway home isolates a suite from the developer's CONFIG FILE. This is
 // the same property for the ENVIRONMENT, which was the half nobody had done:
 // `resolveCloudSession()` prefers `KINU_TOKEN` over that config file, so a
-// shell that had run `bun run test:eval` or `kinu chat` silently moved ten of
+// shell that had run `bun run test:live` or `kinu chat` silently moved ten of
 // `bun test packages/cli/`'s tests onto their signed-in branch and left them
 // red. See packages/test-utils/src/ambient-env.ts for the measurement.
 //
 // KINU_EVAL_LIVE=1 is the exception because it is already the consent
-// boundary for the one tier that means to use these variables: scripts/
-// eval-tier.sh sets it, nothing else does, and `liveModelTarget()` refuses to
-// spend without it. One rule, not two.
+// boundary for the tiers that mean to use these variables: scripts/live-tier.sh
+// and scripts/first-run-tier.sh set it, nothing else does, and
+// `liveModelTarget()` refuses to spend without it. One rule, not two.
 //
 // It says so rather than doing it quietly — a developer whose shell is signed in
 // should not have to infer why their credential is not in play.
@@ -83,7 +83,7 @@ if (process.env.KINU_EVAL_LIVE !== '1') {
 
   if (ignored.length > 0) {
     console.warn(`[test-preload] ignoring ambient ${ignored.join(', ')} — a signed-in shell is `
-      + 'not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them');
+      + 'not an input to a suite; run the live tier (KINU_EVAL_LIVE=1) to use them');
   }
 }
 

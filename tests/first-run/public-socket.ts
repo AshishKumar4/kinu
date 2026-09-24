@@ -16,7 +16,7 @@ import type { JsonValue } from '../../packages/core/src/index';
 import {
   decodeFrame, encodeChatRequest, encodeRpcRequest, HEADER_WEBSOCKET, recordPublicTurn, webHeaders,
   type PublicSendResult, type PublicTurnRecorder, type PublicWebIdentity,
-} from '../evals/public-session';
+} from '../../evals/src/session';
 
 /** One RPC in flight on a public socket. */
 interface PendingRpc {

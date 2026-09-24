@@ -1,8 +1,8 @@
 /** Refusals matter most: a verifier bug must surface as a red run, not a plausible number. */
 import { describe, test, expect } from 'bun:test';
 import {
-  BUDGET_ADHERENCE, OUTCOME_SCALE, OUTPUT_CAP, TASK_OUTCOME, budgetRow, isCovariateRow,
-  measuredToolErrorRate, outcomeRow, outputCapRow, ratioOutcome, subgoalOutcome,
+  OUTCOME_SCALE, OUTPUT_CAP, TASK_OUTCOME, isCovariateRow,
+  outcomeRow, outputCapRow, ratioOutcome, subgoalOutcome,
 } from '../src/eval-outcome';
 import { OUTPUT_LIMIT_REACHED } from '@kinu.run/core';
 import { BEHAVIOUR_SCORERS } from '../src/agent-evals';
@@ -128,54 +128,6 @@ describe('admissibility rests on the outcome, not on mechanism coverage', () => 
     expect(verdict.mechanismsExercised).toEqual([]);
     expect(verdict.mechanismsAbsent.length).toBe(BEHAVIOUR_SCORERS.length);
     expect(verdict.failures).toEqual([]);
-  });
-});
-
-describe('budgetRow — cost beside the outcome, never instead of it', () => {
-  const budget = { steps: 30, tokens: 150_000, toolErrorRate: 0.6, wallMs: 600_000 };
-
-  test('an episode inside every ceiling scores 1.0 with its quantities preserved', () => {
-    const row = budgetRow(budget, { steps: 8, tokens: 40_000, toolErrorRate: 0.25, wallMs: 120_000 });
-    expect(row.name).toBe(BUDGET_ADHERENCE);
-    expect(row.eligible).toBe(4);
-    expect(row.passed).toBe(4);
-    expect(row.rate).toBe(1);
-    expect(row.measured).toEqual({ steps: 8, tokens: 40_000, toolErrorRate: 0.25, wallMs: 120_000 });
-    expect(isCovariateRow(row.name)).toBe(true);
-  });
-
-  test('an over-budget episode is MEASURED, not refused — over is a finding', () => {
-    const row = budgetRow(budget, { steps: 41, tokens: 40_000, toolErrorRate: 0.25, wallMs: 120_000 });
-    expect(row.eligible).toBe(4);
-    expect(row.passed).toBe(3);
-    expect(row.rate).toBeCloseTo(0.75, 10);
-    expect(row.detail).toContain('OVER');
-  });
-
-  test('an unmeasured error rate is absent, not zero — no perfect score unearned', () => {
-    const row = budgetRow(budget, { steps: 8, tokens: 40_000, toolErrorRate: null, wallMs: 120_000 });
-    expect(row.eligible).toBe(3);
-    expect(row.passed).toBe(3);
-    expect(row.rate).toBe(1);
-    expect(row.detail).toContain('UNMEASURED');
-    expect(row.measured).toEqual({ steps: 8, tokens: 40_000, wallMs: 120_000 });
-  });
-
-  test('a budget that declares nothing holds nothing — eligible zero, rate null', () => {
-    const row = budgetRow({}, { steps: 8, tokens: 40_000, toolErrorRate: null, wallMs: 120_000 });
-    expect(row.eligible).toBe(0);
-    expect(row.passed).toBe(0);
-    expect(row.rate).toBeNull();
-  });
-
-  test('measuredToolErrorRate reads the scorer row, never recomputes it', () => {
-    const row = (name: string, eligible: number, passed: number, rate: number | null) =>
-      ({ name, asserts: `${name} fixture`, eligible, passed, rate, detail: 'fixture' });
-
-    expect(measuredToolErrorRate([row('tool_outcomes', 9, 6, 2 / 3)])).toBeCloseTo(1 / 3, 10);
-    expect(measuredToolErrorRate([row('edit_landing', 2, 2, 1)])).toBeNull();
-    expect(measuredToolErrorRate([row('tool_outcomes', 0, 0, null)])).toBeNull();
-    expect(measuredToolErrorRate([row('tool_outcomes', 9, 9, null)])).toBeNull();
   });
 });
 

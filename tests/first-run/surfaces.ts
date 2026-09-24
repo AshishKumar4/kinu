@@ -76,4 +76,5 @@ export const CAPABILITY_ROWS = {
   'cloud workspace consent, machine not connected and connected': ['machine-consent'],
   'a swarm whose nodes run as hosted agents and settle': ['exploration'],
   'a live web search': ['web-search'],
+  'a correction sent while the agent works': ['steer-correction'],
 } as const satisfies Record<string, Rows>;

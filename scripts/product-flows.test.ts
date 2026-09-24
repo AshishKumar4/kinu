@@ -9,7 +9,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { resolveWebIdentity } from '../tests/evals/public-session';
+import { resolveWebIdentity } from '../evals/src/session';
 import { withBrowser } from './live-app-harness';
 import {
   FLOW_PROBE, FLOW_SLATE, INSPECTOR_SHUT_PX,

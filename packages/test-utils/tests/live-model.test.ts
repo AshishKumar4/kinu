@@ -1,6 +1,5 @@
 /**
- * The per-episode path is proven in `tests/evals/harness-wiring.test.ts`; this covers
- * accumulation, draining, and the absence rules.
+ * Accumulation, draining, and the absence rules of live-model spend reporting.
  */
 import { describe, test, expect, beforeEach } from 'bun:test';
 import type { LanguageModelUsage } from 'ai';

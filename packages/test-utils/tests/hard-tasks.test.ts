@@ -7,15 +7,12 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
 
 import { join } from 'node:path';
-import { minimumPairsForSignificance } from '../../core/src/index';
 import { createWorkspace } from '../../core/src/identity/index';
 import { initWorkspaceSchema, type LLMProviderConfig } from '../../core/src/index';
 import { openWorkspaceCLI, makeWorkspaceSchemaSql } from '../../cli-backend/src/index';
 import { TASK_OUTCOME, type VerifierContext } from '../src/eval-outcome';
 import {
-  HARD_TASKS, HARD_TASK_ENV,
-  hardTaskCases, hardTaskFor, scoreRatio, seedHardTask, verifyHardTask,
-  type HardTask,
+  HARD_TASKS, scoreRatio, seedHardTask, verifyHardTask, type HardTask,
 } from '../src/hard-tasks/index';
 // The substrate lives in core: a registered verifier kind must resolve to code the tool
 // surface can reach.
@@ -671,51 +668,6 @@ describe('scoreRatio — the refusals that keep a bad number from being publishe
     expect(scored.score).toBeLessThanOrEqual(1);
     expect(scored.measured.candOps).toBe(task.problem.lowerBoundOps);
     expect(scored.measured.refOps).toBe(1_000_000);
-  });
-});
-
-describe('the corpus as eval cases', () => {
-  const cases = hardTaskCases();
-
-  test('it can supply the differing pairs an exact paired test needs', () => {
-    expect(cases.length).toBeGreaterThanOrEqual(minimumPairsForSignificance());
-  });
-
-  test('ids are unique, so two tasks cannot collide on one pairing identity', () => {
-    expect(new Set(cases.map((c) => c.id)).size).toBe(cases.length);
-  });
-
-  test('no case carries a rubric or a reference answer — there is nothing for a judge to read', () => {
-    for (const c of cases) {
-      expect(c.rubric, `${c.id} carries a rubric, which is a judge's affordance`).toBeUndefined();
-      expect(c.reference, `${c.id} carries a reference answer for a judge to compare`).toBeUndefined();
-    }
-  });
-
-  test('every case resolves back to its task, and a foreign case resolves to nothing', () => {
-    for (const c of cases) {
-      expect(c.env).toBe(HARD_TASK_ENV);
-      expect(hardTaskFor(c)?.id).toBe(c.id);
-    }
-
-    expect(hardTaskFor({ id: 'ws-fix-broken', env: undefined })).toBeUndefined();
-    expect(hardTaskFor({ id: cases[0]?.id ?? '', env: 'something-else' })).toBeUndefined();
-  });
-
-  test('every prompt quotes the target its own verifier scores against', () => {
-    for (const task of HARD_TASKS) {
-      expect(
-        task.prompt,
-        `${task.id}: the prompt must state the target the scorer uses, or the task is mis-stated`,
-      ).toContain(String(task.problem.targetOps));
-    }
-  });
-
-  test('the instance parameters travel with the case, so a score is re-derivable', () => {
-    for (const c of cases) {
-      const task = hardTaskFor(c);
-      expect(c.params).toEqual({ ...task?.problem.params });
-    }
   });
 });
 

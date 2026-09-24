@@ -89,17 +89,9 @@ describe('this tree', () => {
     const coverage = testCoverage(tests, programs);
 
     expect(tests.length).toBeGreaterThan(0);
-    expect(tests).toContain('tests/deep-evolution.test.ts');
-    expect(tests).toContain('tests/evals/behaviour.eval.ts');
+    expect(tests).toContain('tests/live/deep-evolution.test.ts');
+    expect(tests).toContain('evals/tasks/order-book.eval.ts');
     expect(coverage).toEqual({ governed: tests, missing: [], staleExceptions: [] });
-
-    // This file is inside scripts/, but the compiler resolver exposes the
-    // exclusion the old directory-prefix gate missed. It needs its one exact,
-    // declared-debt row instead of inheriting scripts/' apparent coverage.
-    expect(programs).not.toContain('scripts/eval.test.ts');
-    expect(testCoverage(['scripts/eval.test.ts'], programs, {}).missing).toEqual([
-      'scripts/eval.test.ts',
-    ]);
 
     // This was excluded by the devbox config even though its sibling tests were
     // covered. Removing it from exact membership must fail, while the repaired
@@ -118,24 +110,19 @@ describe('this tree', () => {
       'packages/pc-agent/tests/pty.test.js',
       'packages/pc-agent/tests/refinement-device-view.test.js',
       'packages/pc-agent/tests/sandbox.test.js',
-      'scripts/eval.test.ts',
     ]);
     expect(UNTYPECHECKED_TESTS['packages/pc-agent/tests/daemon.test.js']).toMatchObject({
       kind: 'JavaScript test', runner: 'bun test packages/pc-agent/',
     });
-    expect(UNTYPECHECKED_TESTS['scripts/eval.test.ts']).toMatchObject({
-      kind: 'declared compiler debt', runner: 'bun test scripts/eval.test.ts',
-    });
     expect(Object.keys(SCRIPT_TYPECHECK_DEBT).sort()).toEqual([
-      'scripts/eval.test.ts',
-      'scripts/eval.ts',
       'scripts/layergate.ts',
       'scripts/schema-drift.ts',
     ]);
     expect(scriptDebtCoverage(scriptTypeScriptFiles(), programs)).toEqual({ undeclared: [], stale: [] });
   });
 
-  test('keeps the root tests project on the check path', () => {
+  test('keeps the root tests and evals projects on the check path', () => {
     expect(checkedProjects()).toContain('tests');
+    expect(checkedProjects()).toContain('evals');
   });
 });

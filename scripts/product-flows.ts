@@ -24,7 +24,7 @@ import { tolerate } from '@kinu.run/core/obs';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
-import { webHeaders, type PublicWebIdentity } from '../tests/evals/public-session';
+import { webHeaders, type PublicWebIdentity } from '../evals/src/session';
 import { DESKTOP } from './live-app-harness';
 
 /** Where a row runs and who it runs as. */

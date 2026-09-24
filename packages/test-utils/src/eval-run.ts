@@ -680,7 +680,7 @@ function writeRunRecord(path: string, record: EvalRunRecord): void {
 
 /**
  * Publish a run's record, or say why there is none; the only writer. A run that attempted nothing gets no
- * record. Destination is `KINU_EVAL_RECORD` or the run's transcripts directory, never `tests/eval/runs/`:
+ * record. Destination is `KINU_EVAL_RECORD` or the run's transcripts directory, never a tracked directory:
  * that dirties the checkout and `deploy.sh` refuses a dirty tree. Returns the record, or null.
  */
 export function publishRunRecord(inputs: RunRecordInputs): EvalRunRecord | null {

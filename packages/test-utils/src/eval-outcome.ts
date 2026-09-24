@@ -5,7 +5,7 @@
  */
 import * as v from 'valibot';
 import { OUTPUT_LIMIT_REACHED } from '@kinu.run/core';
-import type { EvalBudget, ExecOutcome, VFS } from '@kinu.run/core';
+import type { ExecOutcome, VFS } from '@kinu.run/core';
 import type { EvalScoreRow } from './eval-run';
 
 /** The one primary metric's row name. */
@@ -125,88 +125,6 @@ export function ratioOutcome(
 /** Is this row a covariate? Total: everything but `task_outcome` is, so new scorers need no registration. */
 export function isCovariateRow(name: string): boolean {
   return name !== TASK_OUTCOME;
-}
-
-/** The budget covariate's row name. Cost explains an outcome; it is never the outcome. */
-export const BUDGET_ADHERENCE = 'budget_adherence';
-
-/**
- * One episode's cost in the four dimensions a budget can name. `toolErrorRate` is nullable: without
- * producer-attributed tool outcomes there is no rate, which is not a rate of zero.
- */
-export interface BudgetMeasurement {
-  readonly steps: number;
-  readonly tokens: number;
-  /** Failed over attributed tool calls; null when attribution is absent or no tool was called. */
-  readonly toolErrorRate: number | null;
-  readonly wallMs: number;
-}
-
-function budgetLine(name: string, limit: number, actual: number, unit: string): string {
-  const verdict = actual <= limit ? 'ok' : 'OVER';
-
-  return `${name} ${verdict} ${String(actual)}${unit}/${String(limit)}${unit}`;
-}
-
-/**
- * Score one episode's cost against its declared ceilings. Eligible counts declared-and-measurable
- * dimensions, so nothing declared yields a null rate. Over budget is a measurement, not a throw.
- */
-export function budgetRow(budget: EvalBudget, measured: BudgetMeasurement): EvalScoreRow {
-  const lines: string[] = [];
-  let eligible = 0;
-  let passed = 0;
-
-  const hold = (within: boolean, line: string): void => {
-    eligible += 1;
-
-    if (within) passed += 1;
-    lines.push(line);
-  };
-
-  if (budget.steps !== undefined) {
-    hold(measured.steps <= budget.steps, budgetLine('steps', budget.steps, measured.steps, ''));
-  }
-
-  if (budget.tokens !== undefined) {
-    hold(measured.tokens <= budget.tokens, budgetLine('tokens', budget.tokens, measured.tokens, ''));
-  }
-
-  if (budget.toolErrorRate !== undefined) {
-    if (measured.toolErrorRate === null) {
-      lines.push('toolErrorRate UNMEASURED — no attributed tool outcome to take a rate over');
-    } else {
-      const rate = measured.toolErrorRate;
-      hold(rate <= budget.toolErrorRate,
-        `toolErrorRate ${rate <= budget.toolErrorRate ? 'ok' : 'OVER'} `
-        + `${rate.toFixed(3)}/${budget.toolErrorRate.toFixed(3)}`);
-    }
-  }
-
-  if (budget.wallMs !== undefined) {
-    hold(measured.wallMs <= budget.wallMs, budgetLine('wall', budget.wallMs, measured.wallMs, 'ms'));
-  }
-
-  const quantities = {
-    steps: measured.steps,
-    tokens: measured.tokens,
-    wallMs: measured.wallMs,
-  };
-
-  const row: EvalScoreRow = {
-    name: BUDGET_ADHERENCE,
-    asserts: 'the episode stayed inside the ceilings its case declared for steps, tokens, '
-      + 'tool error rate and wall time',
-    eligible,
-    passed,
-    rate: eligible === 0 ? null : passed / eligible,
-    detail: lines.length === 0 ? 'no ceiling declared — cost measured, held to nothing' : lines.join('; '),
-    measured: quantities,
-  };
-
-  if (measured.toolErrorRate === null) return row;
-
-  return { ...row, measured: { ...quantities, toolErrorRate: measured.toolErrorRate } };
 }
 
 /** The `tool_outcomes` scorer's error rate, read off the scored row so there is one denominator. Null when unmeasured. */

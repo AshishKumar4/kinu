@@ -672,7 +672,7 @@ hold the lane are derived, never listed: the closure of tracked modules that
 reach puppeteer (`browserModules` in `scripts/ladder.ts`), intersected with
 the files each row claims. Nine rows hold it today: the two UI self-test rows,
 Public pages render, Live app in a browser, React runtime identity,
-Swarm-tree geometry, Chat infinite scroll, Root end-to-end lifecycle suites
+Swarm-tree geometry, Chat infinite scroll, Live and first-run suites (credential-free)
 and the secrets/corpus/preflight self-tests. The plan carries the lane as a
 column, and `scripts/deploy.sh` keeps one holder in flight.
 `scripts/deploy.test.ts` pins that two holders never overlap in the run's

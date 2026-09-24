@@ -2,7 +2,7 @@ import { attachHarnessRunToError, createHarness, normalizeHarnessRun, type Trans
 import type { RunEvent } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
-import type { KinuPublicSession, PublicMessage } from '../../tests/evals/public-session';
+import type { KinuPublicSession, PublicMessage } from './session';
 import { ARMS, deployedBuild, openWorkspace, type EvalArm, type EvalTarget } from './target';
 import type {
   EvalCheck, EvalRunInput, EvalRunOutput, EvalTask, EvalTurn, EvalTurnOutcome, EvalTurnResult, HarnessError,

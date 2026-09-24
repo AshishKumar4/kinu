@@ -3,7 +3,7 @@ import { USER_AI_PROXY_PATH } from '@kinu.run/core';
 import { EVAL_DEPLOYMENT_ORIGIN, evalTargetVerdict, evalWorkspaceName, infraBoundary } from '@kinu.run/test-utils';
 import {
   openPublicSession, resolveWebIdentity, type KinuPublicSession, type PublicWebIdentity,
-} from '../../tests/evals/public-session';
+} from './session';
 
 type Env = Record<string, string | undefined>;
 

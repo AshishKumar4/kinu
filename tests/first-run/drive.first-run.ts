@@ -18,7 +18,7 @@ import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import { DriveListingSchema, MarkedSkillSchema } from '@kinu.run/core';
 import { firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
-import { webHeaders, type KinuPublicSession } from '../evals/public-session';
+import { webHeaders, type KinuPublicSession } from '../../evals/src/session';
 
 const SUITE = 'First-run · drive';
 

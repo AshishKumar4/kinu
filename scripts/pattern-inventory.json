@@ -323,13 +323,6 @@
       "decision": "traversal"
     },
     {
-      "file": "packages/core/src/eval/corpus.ts",
-      "kind": "hand-parser",
-      "owner": "parseCorpus",
-      "sourceSha256": "9fc22a44c8a91b6eddbf951725b7bb98fdda21e454c6f8c747c5e0eccdb9652a",
-      "decision": "framing"
-    },
-    {
       "file": "packages/core/src/events/ingress/email.ts",
       "kind": "regex-literal",
       "owner": "angled",
@@ -1051,24 +1044,10 @@
       "decision": "sourceGate"
     },
     {
-      "file": "scripts/eval-report.ts",
-      "kind": "hand-parser",
-      "owner": "parseArgs",
-      "sourceSha256": "a13b1b8f45fcad569bae433ae85ca381fc65fb7a3c6dd671997201ea20ab5753",
-      "decision": "cli"
-    },
-    {
       "file": "scripts/eval-workspaces.ts",
       "kind": "hand-parser",
       "owner": "parseArgs",
       "sourceSha256": "14ecc19b299e0aa7fe22213b31c53b5d312c2a24671d446ed5d3fac34e9cbfe1",
-      "decision": "cli"
-    },
-    {
-      "file": "scripts/eval.ts",
-      "kind": "hand-parser",
-      "owner": "parseArgs",
-      "sourceSha256": "be0cc6c5493f0f21e78f633060a3706fc28c35d979083d5a0329a53d33dccb46",
       "decision": "cli"
     },
     {
@@ -1184,7 +1163,7 @@
       "decision": "traversal"
     },
     {
-      "file": "tests/evals/device-session.ts",
+      "file": "tests/first-run/device-session.ts",
       "kind": "regex-literal",
       "owner": "title",
       "sourceSha256": "891d93155d34670161d9ad7f34cb467979364a458b5fa4acf3030fc40cd24aea",

@@ -17,7 +17,7 @@ import firstRunConfig, {
 import {
   FIRST_RUN_ARM, FIRST_RUN_CASES, FIRST_RUN_DEFECTS, FIRST_RUN_FAMILY,
 } from './first-run';
-import { resolvePublicSessionPlan } from '../evals/public-session';
+import { resolvePublicSessionPlan } from '../../evals/src/session';
 import { CAPABILITY_ROWS, ENTRY_ROWS, PAGE_ROWS, STRIP_ROWS } from './surfaces';
 
 /** The deployed tier's package command. */
@@ -87,12 +87,12 @@ describe('the first-run corpus is the set this tier runs', () => {
 
     for (const file of onDisk) expect(file.startsWith('tests/first-run/')).toBe(true);
 
-    // And no case file can be selected by the two runners that must never see
-    // it: `bun test` matches only `.test.`/`.spec.`, and the eval tier's config
-    // includes `tests/evals/**` alone.
+    // And no case file can be selected by the runners that must never see it:
+    // `bun test` matches only `.test.`/`.spec.`, and the eval suite's config
+    // includes `evals/tasks/**` alone.
     for (const file of onDisk) {
       expect(/\.(test|spec)\.[cm]?[jt]sx?$/.test(file)).toBe(false);
-      expect(file.startsWith('tests/evals/')).toBe(false);
+      expect(file.startsWith('evals/')).toBe(false);
     }
   });
 
