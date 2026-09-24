@@ -21,7 +21,7 @@ export const CODEX_CRED_KEY = 'codex.oauth';
 
 export const CODEX_DEFAULT_MODEL = 'gpt-5.5';
 
-/** The small tier the evolution engine's mechanical calls run on. */
+/** Evolution's mechanical-call tier. */
 const CODEX_FAST_MODEL = 'gpt-5.4-mini';
 
 /** The remedy for a ChatGPT login refused after the forced-refresh retry: web settings or CLI device-code. */

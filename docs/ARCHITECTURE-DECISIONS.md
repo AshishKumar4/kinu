@@ -718,6 +718,22 @@ read is record-shaped. It is the fourth member of the class
 `getExposedPorts`, `getExecutorDiff` and `listWorkspaceWork`. Unfixed here and
 recorded as O3.
 
+L10. Test scratch stays in the OS temp directory, and each runner chooses that
+directory. Decided 2026-09-24. The owner's rule is that no work lands in
+`/tmp`, which is tmpfs here, so every runner sets `TMPDIR` (the sweep uses
+`/var/tmp`) and runs test commands under eatmydata. The measurements rule out
+the other defaults. On ext4 SQLite's fsyncs are real: a fresh workspace plus
+one turn cost 1,200 of them (708 in `initWorkspaceSchema`, 92 to construct the
+client, 360 in one send), and one CLI file took 176 s against 1.7 s under
+eatmydata. A root under a worktree breaks Chrome, whose `SingletonSocket` lies
+71 bytes below a scratch root, while a Unix socket path holds 107. With
+`TMPDIR=/var/tmp` and eatmydata, `bun test --parallel=4 packages/cf-backend/`
+added at most 90 to 127 MB of entries to `/var/tmp`, other lanes' included,
+and left no scratch root behind (three runs, 2026-09-24). One gap: under bun
+1.4.0, `Bun.spawn` with no `env` passes the environment bun started with, not
+`process.env` as the preload changed it, so those children keep the runner's
+`TMPDIR` instead of the scratch root.
+
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn

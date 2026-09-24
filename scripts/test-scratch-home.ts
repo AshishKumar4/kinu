@@ -54,7 +54,10 @@ mkdirSync(home);
 
 process.env.KINU_HOME = home;
 
-// Child processes inherit a temporary directory owned by this same invocation.
+// Children spawned through `node:child_process`, or with `env: process.env`,
+// inherit a temporary directory owned by this invocation. `Bun.spawn` with no
+// `env` does not: it passes the environment bun started with (L10 in
+// docs/ARCHITECTURE-DECISIONS.md), so its children keep the caller's TMPDIR.
 process.env.TMPDIR = scratchRoot;
 
 // The daemon captures this path on its first require, before a later suite can set it.

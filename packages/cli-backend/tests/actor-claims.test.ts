@@ -194,7 +194,7 @@ test('a source change after admission cannot alter the bytes the turn consumed',
     claim,
     (version) => readVersionedScaffoldSource(left.runtime, version),
     sha256Hex,
-    () => left.stores.claims.consumedContext('turn-src'),
+    await left.stores.claims.consumedContext('turn-src'),
   );
 
   // Recovery refuses rewritten bytes and reports the digest it found.
@@ -228,13 +228,13 @@ test('a cold reader recovers the claimed program identity and the exact context 
     claim,
     (version) => readVersionedScaffoldSource(left.runtime, version),
     sha256Hex,
-    () => cold.claims.consumedContext('turn-cold'),
+    await cold.claims.consumedContext('turn-cold'),
   );
 
   expect(recovery.kind).toBe('build_unknown');
   const consumed = await cold.claims.consumedContext('turn-cold');
   expect(consumed?.stepIndex).toBe(0);
-  const first = consumed?.messages?.[0];
+  const first = consumed?.messages[0];
   expect(first?.role).toBe('user');
   const parts = Array.isArray(first?.content) ? first?.content : [];
   const file = parts.find((part) => part.type === 'file');
@@ -274,7 +274,7 @@ test('a rich tool exchange survives the revision round trip as native messages',
   const roles = (second?.messages ?? []).map((message) => message.role);
   expect(roles).toContain('assistant');
   expect(roles).toContain('tool');
-  const toolMessage = second?.messages?.find((message) => message.role === 'tool');
+  const toolMessage = second?.messages.find((message) => message.role === 'tool');
   const resultPart = Array.isArray(toolMessage?.content) ? toolMessage?.content[0] : undefined;
   expect(resultPart).toMatchObject({ type: 'tool-result', toolCallId: 'call-1', toolName: 'probe' });
 });

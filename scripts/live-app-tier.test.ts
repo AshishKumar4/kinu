@@ -210,11 +210,13 @@ interface LiveIndicatorVerdict {
 /** What a page opened during a turn drew once that turn had ended (#29): every new workspace's page opens on its
  *  first turn. */
 interface OpenedMidTurnVerdict {
-  /** Stop was offered while the turn ran: the page did open during it. */
-  readonly openedLive: boolean;
+  /** The last sample before the turn's held model call was let go: what the page drew while the turn ran. */
+  readonly held: { readonly stop: boolean; readonly task: string | null };
   /** The last sample, taken at the page's first presence read after the turn's close was answered. */
   readonly stop: boolean;
   readonly states: number;
+  /** Samples that read no word from the header's task state. */
+  readonly headerless: number;
   /** Samples where the header and the composer disagreed on whether a turn runs: Stop beside an idle header, or a
    *  working header with no Stop. The header's other words (waiting on you, on a provider) outrank both. */
   readonly disagreed: number;
@@ -376,6 +378,9 @@ const RAIL_SHUT_PX = 64;
 
 const SHUT_NAMES = 'hide|collapse|close';
 
+/** The header's task state, by the name its status carries; its text is the state's word. */
+const TASK_STATE = '[role="status"][aria-label="Task state"]';
+
 /** Every 20 ms from install: whether the chat column offers Stop, how many live states it draws, and the header's
  *  task word. A Thinking row, a live reasoning label, a caret on text that shows, and running call rows (one state
  *  however many run) are live states; a hook on an element that draws nothing is none. Held on `window` until read
@@ -396,12 +401,15 @@ const INSTALL_LIVE_SAMPLER = `(() => {
       t: Math.round(performance.now() - started),
       stop: [...chat.querySelectorAll('button[aria-label="Stop this turn"]')].some(shown),
       states: drawn('thinking').length + drawn('reasoning').length + carets + running,
-      task: document.querySelector('[data-task-state]')?.getAttribute('data-task-state') ?? null,
+      task: document.querySelector(${JSON.stringify(TASK_STATE)})?.textContent?.trim() ?? null,
     });
   }, 20);
 })()`;
 
 const READ_LIVE_SAMPLES = `(() => { clearInterval(window.__liveSampler); return window.__liveSamples; })()`;
+
+/** The newest sample, the sampler left running. */
+const LAST_LIVE_SAMPLE = 'window.__liveSamples.at(-1) ?? null';
 
 const LiveSampleSchema = v.object({ t: v.number(), stop: v.boolean(), states: v.number(), task: v.nullable(v.string()) });
 
@@ -993,8 +1001,9 @@ const disagrees = (sample: v.InferOutput<typeof LiveSampleSchema>): boolean =>
   (sample.stop && sample.task === 'idle') || (!sample.stop && sample.task === 'working');
 
 /** Row 9 (#29): a new workspace's page opens on its first turn, so it loads a claim that is admitted. The turn is
- *  held at its model (`pacedFirstTurn`) while the page loads again and reads its state, then answers. Once the turn
- *  has closed and the page has asked for its live data again, nothing on that page may still say a turn runs. */
+ *  held at its model (`pacedFirstTurn`) while the page loads again and reads its state, and the page must say it
+ *  runs; then it answers. Once the turn has closed and the page has asked for its live data again, nothing on that
+ *  page may still say a turn runs, and at no sample may the header and the composer say different things. */
 async function measureOpenedMidTurn(
   newPage: LiveApp['newPage'], origin: string, firstTurn: HeldCall,
 ): Promise<OpenedMidTurnVerdict> {
@@ -1023,10 +1032,14 @@ async function measureOpenedMidTurn(
     // Loaded again now that the turn is admitted and waiting on its model: the page a new workspace opens on.
     await page.reload({ waitUntil: 'load' });
     await until(page, 'the workspace page, reloaded', `document.querySelector('textarea') !== null`);
+    await until(page, "the header's task state", `document.querySelector(${JSON.stringify(TASK_STATE)}) !== null`);
     await page.evaluate(INSTALL_LIVE_SAMPLER);
     await page.evaluate(COUNT_PRESENCE_ASKS);
     await until(page, "the reloaded page's first presence read", 'window.__presenceAsks > 0');
     await painted(page);
+
+    const held = v.parse(v.nullable(LiveSampleSchema), await page.evaluate(LAST_LIVE_SAMPLE));
+
     firstTurn.release();
     await closed;
 
@@ -1040,10 +1053,11 @@ async function measureOpenedMidTurn(
 
     await shoot(page, 'opened-mid-turn-ended');
 
-    if (last === undefined) throw new Error('the chat column was never sampled');
+    if (held === null || last === undefined) throw new Error('the chat column was never sampled');
 
     return {
-      openedLive: samples.some((sample) => sample.stop), stop: last.stop, states: last.states,
+      held: { stop: held.stop, task: held.task }, stop: last.stop, states: last.states,
+      headerless: samples.filter((sample) => sample.task === null).length,
       disagreed: samples.filter(disagrees).length,
     };
   } finally {
@@ -1210,8 +1224,8 @@ describe('a running turn draws exactly one live state', () => {
 });
 
 describe('a page opened during a turn stops showing it once the turn ends', () => {
-  test('the page opened while the turn ran', () => {
-    expect(verdictOf(observed.openedMidTurn, 'opened-mid-turn').openedLive).toBe(true);
+  test('while the turn runs, the composer offers Stop and the header says working', () => {
+    expect(verdictOf(observed.openedMidTurn, 'opened-mid-turn').held).toEqual({ stop: true, task: 'working' });
   });
 
   test('the composer offers no Stop and the thread draws no live state', () => {
@@ -1220,8 +1234,10 @@ describe('a page opened during a turn stops showing it once the turn ends', () =
     expect({ stop: ended.stop, states: ended.states }).toEqual({ stop: false, states: 0 });
   });
 
-  test('the header and the composer never disagree on whether a turn runs', () => {
-    expect(verdictOf(observed.openedMidTurn, 'opened-mid-turn').disagreed).toBe(0);
+  test('every sample reads the header, and the header never disagrees with the composer', () => {
+    const verdict = verdictOf(observed.openedMidTurn, 'opened-mid-turn');
+
+    expect({ headerless: verdict.headerless, disagreed: verdict.disagreed }).toEqual({ headerless: 0, disagreed: 0 });
   });
 });
 

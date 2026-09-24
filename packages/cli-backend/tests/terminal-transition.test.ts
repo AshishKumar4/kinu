@@ -284,10 +284,10 @@ test('a managed context edit reaches the local request and retained trial togeth
     expect(requests.at(-1)).toContain('NEW premise');
     expect(requests.at(-1)).not.toContain('OLD premise');
     // The admission is the selection before the edit landed; the trial retains the step-0 context.
-    expect(admitted.messages?.[0]).toEqual({ role: 'user', content: 'use the OLD premise' });
+    expect(admitted.messages[0]).toEqual({ role: 'user', content: 'use the OLD premise' });
     expect(trial.context[0]).toEqual({ role: 'user', content: 'use the NEW premise' });
     expect(trial.context.filter((message) => message.content === 'follow-up input')).toHaveLength(1);
-    expect(consumed.messages).toEqual(trial.context);
+    expect(trial.context).toEqual(consumed.messages);
   } finally {
     await session.end();
     db.close();

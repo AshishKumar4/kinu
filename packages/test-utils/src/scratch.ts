@@ -144,6 +144,7 @@ export function releaseOnSignals(): void {
 
 /**
  * A fresh temp directory named by `label`, removed when the run ends; `parent` lets repo-local fixtures resolve deps.
+ * The OS temp directory, not disk: L10 in docs/ARCHITECTURE-DECISIONS.md measured both.
  * Release is registered by the preload's `afterAll`: under `bun test` 1.3.14 `process.on('exit')`/`beforeExit` never fire.
  */
 export function scratchDir(label: string, parent = tmpdir()): string {

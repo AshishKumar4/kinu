@@ -6,6 +6,7 @@ import { KinuError } from '../obs/error';
 import { sha256Hex } from '../safety/argument-digest';
 import { encodeModelMessage, decodeModelMessageValues } from './message-codec';
 import { JsonObjectSchema, isParsedJsonObject, jsonObjectElements, type JsonObject, type JsonValue } from '../utils/json';
+import { freezeTree } from '../utils/freeze';
 import type { SessionPayloads, SessionPayloadReader, SessionPayload } from './payload';
 
 export interface MessageReference { readonly messageId: string }
@@ -108,25 +109,6 @@ function storedParts(content: JsonValue): StoredPart[] {
 
     return { ...v.parse(StoredPartFieldsSchema, part), value };
   });
-}
-
-const ObjectTreeSchema = v.record(v.string(), v.unknown());
-
-// Deep-frozen because every step shares the object; byte views cannot be frozen and are skipped.
-function freezeTree(node: { readonly value: unknown }): void {
-  const { value } = node;
-
-  if (value instanceof Uint8Array || value instanceof ArrayBuffer || value instanceof URL) return;
-
-  if (Array.isArray(value)) {
-    for (const item of value) freezeTree({ value: item });
-  } else if (v.is(ObjectTreeSchema, value)) {
-    for (const item of Object.values(value)) freezeTree({ value: item });
-  } else {
-    return;
-  }
-
-  Object.freeze(value);
 }
 
 export interface ActorReadAuthority {
