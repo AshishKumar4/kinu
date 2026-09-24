@@ -75,7 +75,7 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
 
     const eventsA: SessionEvent[] = [];
     const a = new LocalAgentSession({ rt, db, model: parkedModel('part-'), noAutoEvolve: true, onEvent: (event) => eventsA.push(event) });
-    const dying = a.send('continue me');
+    const dying = a.send('continue me', { id: crypto.randomUUID() });
     await waitFor(() => eventsA.some((event) => event.type === 'text-delta'));
 
     const eventsB: SessionEvent[] = [];

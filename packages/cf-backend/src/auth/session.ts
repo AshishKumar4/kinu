@@ -105,9 +105,9 @@ export function readCookie(request: Request, name: string): string | null {
 }
 
 /** `Lax`, not `Strict`: the OAuth callback is a cross-site navigation that
- *  must carry the handoff cookie. A past `expiresAt` clears the cookie. */
-export function setCookie(name: string, value: string, expiresAt: number): string {
-  const maxAge = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+ *  must carry the handoff cookie. A zero lifetime clears the cookie. */
+export function setCookie(name: string, value: string, lifetimeMs: number): string {
+  const maxAge = Math.max(0, Math.floor(lifetimeMs / 1000));
 
   return `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`;
 }

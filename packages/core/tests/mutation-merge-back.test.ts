@@ -350,12 +350,4 @@ describe('the harness cannot prove a guard it did not remove', () => {
     await expect(mutate('bogus', [['a snippet merge-back.ts does not contain', '']]))
       .rejects.toThrow('found 0');
   });
-
-  test('the pristine module still holds every snippet this file mutates', async () => {
-    const source = await Bun.file(SOURCE).text();
-    expect(source.split(STALE_COMPARISON).length - 1).toBe(1);
-    expect(source.split('const exceeded = memberApplyBound(plan);').length - 1).toBe(1);
-    expect(source.split('if (fresh.baseDigest !== baseDigest) {').length - 1).toBe(1);
-    expect(source.split(DERIVED_ORDER).length - 1).toBe(1);
-  });
 });

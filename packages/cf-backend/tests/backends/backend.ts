@@ -231,7 +231,7 @@ function cli(): SharedBackend {
       decideRefinement: (input) => session.decideRefinement(input),
       revertConversation: (entryId) => session.revertConversation(entryId),
       runScaffoldGepaOptimization: (opts) => session.runScaffoldGepaOptimization(opts),
-      send: async (text, id) => { await session.send(text, id === undefined ? {} : { id }); },
+      send: async (text, id) => { await session.send(text, { id: id ?? crypto.randomUUID() }); },
     },
   };
 }
