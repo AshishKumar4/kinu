@@ -65,7 +65,7 @@ describe('MessageView transcript order', () => {
     expect(html).not.toContain('data-turn-result');
   });
 
-  test('a failed read stays collapsed, muted and in its original position', async () => {
+  test('a failed call stays in its position, closed, and reads as failed', async () => {
     const html = render([
       text('Reading the migration.'),
       tool('a', 'file', { action: 'read', path: 'before.sql' }),
@@ -77,12 +77,10 @@ describe('MessageView transcript order', () => {
 
     expect(rows).toHaveLength(1);
     expect(rows[0]?.get('aria-expanded')).toBe('false');
-    expect(rows[0]?.get('class')).toContain('grid-cols-[20px_minmax(0,1fr)_auto_auto]');
     expect(html.indexOf('before.sql')).toBeLessThan(html.indexOf('missing.sql'));
     expect(html.indexOf('missing.sql')).toBeLessThan(html.indexOf('after.sql'));
     expect(html).toContain('Failed');
-    expect(html).toContain('1 failed');
-    expect(html).not.toContain('p-badge-danger');
+    // The error itself waits behind the row until the reader opens it.
     expect(html).not.toContain('test failure');
   });
 
@@ -193,60 +191,88 @@ describe('MessageView turn end', () => {
   });
 });
 
-describe('MessageView tool prominence', () => {
-  const operations: Array<{ name: string; mutation: JsonObject; read: JsonObject }> = [
-    { name: 'file', mutation: { action: 'write' }, read: { action: 'read' } },
-    { name: 'memory', mutation: { action: 'save' }, read: { action: 'search' } },
-    { name: 'agents', mutation: { action: 'hire' }, read: { action: 'list' } },
-  ];
+describe('MessageView tool rows', () => {
+  /** Every settled or running call row, in document order, by its call's own words. */
+  async function toolRows(html: string): Promise<string[]> {
+    const rows: string[] = [];
+    let open = false;
 
-  test.each(operations)('$name mutations are cards and reads are compact', ({ name, mutation, read }) => {
-    const mutated = render([tool('change', name, mutation)]);
-    const inspected = render([tool('read', name, read)]);
+    await new HTMLRewriter()
+      .on('button[data-tool-state]', {
+        element(el) {
+          open = true;
+          rows.push('');
+          el.onEndTag(() => { open = false; });
+        },
+        text(chunk) {
+          if (open) rows[rows.length - 1] += chunk.text;
+        },
+      })
+      .transform(new Response(html))
+      .text();
 
-    expect(mutated).toContain('data-tool-effect="mutate"');
-    expect(mutated).toContain('grid-cols-[34px_minmax(0,1fr)_auto_auto]');
-    expect(inspected).toContain('data-tool-effect="read"');
-    expect(inspected).toContain('grid-cols-[20px_minmax(0,1fr)_auto_auto]');
+    return rows;
+  }
+
+  function reads(count: number): ToolUIPart[] {
+    return Array.from({ length: count }, (_, index) => tool(`r${String(index)}`, 'file', { action: 'read', path: `f${String(index)}.ts` }));
+  }
+
+  test('every call is its own row, whatever it does, in the order it ran', async () => {
+    const rows = await toolRows(render([
+      tool('w', 'file', { action: 'write', path: 'written.ts' }),
+      tool('r', 'file', { action: 'read', path: 'read.ts' }),
+      tool('m', 'memory', { action: 'save' }),
+      tool('s', 'memory', { action: 'search' }),
+      tool('h', 'agents', { action: 'hire', agent: 'reviewer' }),
+      tool('l', 'agents', { action: 'list' }),
+      tool('x', 'shell', { command: 'touch changed' }),
+    ]));
+
+    expect(rows).toHaveLength(7);
+    expect(rows[0]).toContain('written.ts');
+    expect(rows[1]).toContain('read.ts');
   });
 
-  test('arbitrary codemode result fields remain unknown, rendered quietly', () => {
-    for (const effect of ['read', 'mutate']) {
-      const html = render([
-        tool('program', 'eval', { code: 'return await inspect()' }, { output: { result: { effect } } }),
-      ]);
+  test('a running call shows running on its own row', async () => {
+    const html = render([...reads(2), tool('running', 'file', { action: 'read', path: 'live.ts' }, { state: 'input-available' })], true);
+    const rows = await toolRows(html);
+    const running = await buttonAttributes(html, 'running');
 
-      expect(html).toContain('data-tool-effect="unknown"');
-      expect(html).toContain('grid-cols-[20px_minmax(0,1fr)_auto_auto]');
-    }
+    expect(rows).toHaveLength(3);
+    expect(running).toHaveLength(1);
+    expect(rows[2]).toContain('live.ts');
+    expect(rows[2]).toContain('Running');
   });
 
-  test('a shell program is not labelled as a measured read or mutation', () => {
-    const html = render([
-      tool('read', 'shell', { command: 'cat notes.txt' }),
-      tool('write', 'shell', { command: 'touch changed' }),
-    ]);
+  test('a run of nine read-only calls folds its middle behind "7 more"; a run of eight does not fold', async () => {
+    const folded = render(reads(9));
+    const foldedRows = await toolRows(folded);
 
-    expect(html).toContain('data-tool-count="2"');
-    expect(html).toContain('data-tool-effect="unknown"');
-    expect(html).not.toContain('data-tool-effect="read"');
-    expect(html).not.toContain('data-tool-effect="mutate"');
-    expect(html).not.toContain('grid-cols-[34px_minmax(0,1fr)_auto_auto]');
+    expect(foldedRows).toHaveLength(2);
+    expect(foldedRows[0]).toContain('f0.ts');
+    expect(foldedRows[1]).toContain('f8.ts');
+    expect(folded).toContain('7 more');
+
+    const standing = render(reads(8));
+
+    expect(await toolRows(standing)).toHaveLength(8);
+    expect(standing).not.toContain(' more');
   });
 
-  test('an in-flight read keeps its own prominent running row', async () => {
-    const html = render([
-      tool('a', 'file', { action: 'read' }),
-      tool('b', 'file', { action: 'read' }),
-      tool('running', 'file', { action: 'read' }, { state: 'input-available' }),
-    ], true);
+  test('a call that is not a read breaks a run, so neither side folds', async () => {
+    const html = render([...reads(5), tool('w', 'file', { action: 'write', path: 'between.ts' }), ...reads(5)]);
 
-    const rows = await buttonAttributes(html, 'running');
+    expect(await toolRows(html)).toHaveLength(11);
+    expect(html).not.toContain(' more');
+  });
 
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.get('data-tool-effect')).toBe('read');
-    expect(rows[0]?.get('class')).toContain('grid-cols-[34px_minmax(0,1fr)_auto_auto]');
-    expect(html).toContain('data-tool-count="2"');
+  test('a shell program, or a codemode program whose result claims a read, never folds as a read', async () => {
+    const shell = render(Array.from({ length: 9 }, (_, index) => tool(`s${String(index)}`, 'shell', { command: `cat f${String(index)}.ts` })));
+    const programs = render(Array.from({ length: 9 }, (_, index) => tool(`p${String(index)}`, 'eval', { code: 'return await inspect()' }, { output: { result: { effect: 'read' } } })));
+
+    expect(await toolRows(shell)).toHaveLength(9);
+    expect(await toolRows(programs)).toHaveLength(9);
   });
 });
 

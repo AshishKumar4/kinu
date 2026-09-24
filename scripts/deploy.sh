@@ -936,3 +936,18 @@ echo "          version ${KINU_VERSION:-unknown}"
 echo "          build   $KINU_SHA"
 echo ""
 echo -e "${GREEN}✅ Kinu Worker deployed and verified.${NC}"
+
+# ── Step 7: Measure the build ────────────────────────────────────
+# .github/workflows/evals.yml runs every eval task against the build kinu.run now serves and posts
+# the results on the pull request that merged it. It checks the deployed commit out on GitHub, so an
+# unpushed commit cannot be measured. Non-blocking: the deploy is done whatever this prints.
+echo ""
+if ! command -v gh >/dev/null 2>&1; then
+  echo "⚠ Evals not dispatched: gh is not installed. Once build $KINU_SHA is on GitHub: gh workflow run evals.yml"
+elif ! gh api "repos/{owner}/{repo}/commits/$KINU_SHA" --silent >/dev/null 2>&1; then
+  echo "⚠ Evals not dispatched: build $KINU_SHA is not on GitHub. Push it, then run: gh workflow run evals.yml"
+elif gh workflow run evals.yml >/dev/null 2>&1; then
+  echo "Evals dispatched for build $KINU_SHA: gh run list --workflow=evals.yml"
+else
+  echo "⚠ Evals not dispatched: gh workflow run evals.yml failed; evals.yml must be on the default branch on GitHub."
+fi
