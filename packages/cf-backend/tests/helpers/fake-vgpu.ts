@@ -14,8 +14,20 @@ export class MockVGPUError extends Error {
   }
 }
 
+/** One `geometry()` a renderer made: the floats its vertex layout reads per instance, and each array written to it. */
+export interface FakeGeometry {
+  readonly floatsPerInstance: number;
+  readonly writes: Float32Array[];
+}
+
+/** The part of a `geometry()` spec the fake reads: each buffer's attribute formats. */
+interface FakeGeometrySpec {
+  readonly buffers: readonly { readonly attributes: Readonly<Record<string, string>> }[];
+}
+
 export class FakeGpu {
   readonly errorListeners = new Set<(error: Error) => void>();
+  readonly geometries: FakeGeometry[] = [];
   frames = 0;
   disposed = false;
   /** Thrown by the next `frame()`, as a dead device throws VGPU-DEVICE-LOST rather than via `onError`. */
@@ -89,10 +101,21 @@ export async function installFakeVgpu(): Promise<void> {
     dispose: () => undefined,
   }),
   sampler: () => ({}),
-  geometry: () => ({
-    write: () => undefined,
-    destroy: () => undefined,
-  }),
+  geometry: (gpu: FakeGpu, spec: FakeGeometrySpec) => {
+    const made: FakeGeometry = {
+      // `float32x4` is four floats; a bare `float32` is one.
+      floatsPerInstance: spec.buffers.flatMap((buffer) => Object.values(buffer.attributes))
+        .reduce((floats, format) => floats + Number(format.split('x')[1] ?? 1), 0),
+      writes: [],
+    };
+
+    gpu.geometries.push(made);
+
+    return {
+      write: (data: Float32Array) => { made.writes.push(data.slice()); },
+      destroy: () => undefined,
+    };
+  },
   draw: () => ({
     compile: () => Promise.resolve(),
     set: () => undefined,
