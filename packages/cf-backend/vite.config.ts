@@ -94,6 +94,9 @@ export default defineConfig(({ command }) => ({
     promptText(), slateVendor(), stubClientNodeBuiltins, workerSourceMaps, wgslClientOnly, agents(), react(),
     cloudflare({
       persistState: devStateDir === undefined ? true : { path: devStateDir },
+      // A harness boot opens no Workers inspector. The plugin's default takes 9229, or the next port it finds free
+      // before it binds, so two boots at once both take 9229 and one dies with EADDRINUSE (2026-09-24).
+      inspectorPort: process.env.KINU_DEV_INSPECTOR === "off" ? false : undefined,
       // `vite dev` serves its own preview zone (vite-preview-zone.ts); a build keeps the deployed zone. A harness
       // boot binds the Drive's JWT_SECRET here, as a var: wrangler reads secrets from packages/cf-backend/.dev.vars
       // alone when the checkout has one, and a .dev.vars JWT_SECRET still overrides this.

@@ -448,6 +448,8 @@ async function spawnDevServerOnce(): Promise<DevServerProcess> {
     ["bun", "x", "vite", "dev", "--host", "127.0.0.1", "--port", String(UPSTREAM_PORT), "--strictPort"],
     {
       cwd: CF_BACKEND, stdin: "ignore", stdout: "ignore", stderr: "inherit",
+      // No Workers inspector: its default port is one every dev server on the box races for (vite.config.ts).
+      env: { ...process.env, KINU_DEV_INSPECTOR: "off" },
       // setsid, so vite leads its own process group and every teardown below
       // signals the workerd children with it. `bun x` parents the real vite
       // process, which parents workerd: killing the lone parent orphans both
