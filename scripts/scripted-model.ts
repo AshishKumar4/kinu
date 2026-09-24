@@ -17,7 +17,7 @@
  */
 import { createServer as createHttpServer, type ServerResponse } from 'node:http';
 import * as v from 'valibot';
-import { parseJsonValue } from '@kinu.run/core';
+import { DYNAMIC_CONTEXT_OPEN_TAG, TURN_CONTEXT_HEADER, parseJsonValue, workspacePath } from '@kinu.run/core';
 
 import { apiJson } from './live-app-harness';
 
@@ -51,7 +51,9 @@ export interface ScriptedAnswer {
  *  a titling call carries no tools at all, and a script that ignored that
  *  would answer it with a tool call the request never offered. */
 export interface ScriptedRequest {
-  /** Every user-role message's text, oldest first. */
+  /** What was said to the agent, oldest first: every user-role message's text but the runtime state the
+   *  product sends in that role after the words (a `<dynamic_context>` block, the turn-local context), so
+   *  the last entry is the latest ask. */
   readonly userTexts: readonly string[];
   /** The system messages' text: where a workspace's mission reaches its model. */
   readonly system: string;
@@ -102,13 +104,23 @@ const OutboundBodySchema = v.object({
   }))),
 });
 
+/** A user-role message the product wrote: its live state, sent after the words it describes
+ *  (`prompting/volatile-context.ts`). */
+function isRuntimeState(text: string): boolean {
+  return text.startsWith(DYNAMIC_CONTEXT_OPEN_TAG) || text.startsWith(TURN_CONTEXT_HEADER);
+}
+
 /** The request body as a script reads it. */
 export function readScriptedRequest(body: string): ScriptedRequest {
   const parsed = v.parse(OutboundBodySchema, parseJsonValue(body));
   const messages = parsed.messages ?? [];
 
   return {
-    userTexts: messages.flatMap((message) => message.role === 'user' ? [message.content ?? ''] : []),
+    userTexts: messages.flatMap((message) => {
+      const text = message.content ?? '';
+
+      return message.role === 'user' && !isRuntimeState(text) ? [text] : [];
+    }),
     system: messages.flatMap((message) => message.role === 'system' ? [message.content ?? ''] : []).join('\n'),
     called: messages.flatMap((message) => (message.tool_calls ?? []).flatMap(
       (call) => call.function?.name === undefined ? [] : [call.function.name],
@@ -344,7 +356,7 @@ const SLATE_SERVER = [
   '}',
 ].join('\n');
 
-const SLATE_ROOT = `/home/main/slates/${SLATE_ID}`;
+const SLATE_ROOT = workspacePath(`slates/${SLATE_ID}`);
 
 /** The implement turn's writes, in the order the script plays them. */
 const SLATE_WRITES: readonly ScriptedAnswer[] = [
@@ -405,13 +417,14 @@ export const KEPT_TAB_NOTE = 'Kept-tab probe: save one note.';
 
 export const KEPT_TAB_FORGET = 'Kept-tab probe: forget every note.';
 
-/** The workspace's notes file, as the agent's file tool addresses it. */
-const NOTES_FILE = '/home/user/memory/MEMORY.md';
+/** The workspace's notes file, where the agent's file tool finds it. */
+const NOTES_FILE = workspacePath('memory/MEMORY.md');
 
 /**
  * The kept-tab row's turns, or null for any other request: the first saves a
- * note, which gives the Work tab content; the second rewrites the notes file
- * with no note in it, which takes that content away again.
+ * note, which gives the Work tab content; the second reads the notes file and
+ * rewrites it with no note in it, which takes that content away again (the
+ * file tool refuses to overwrite a file the turn has not read).
  */
 export function keptTabProbe(request: ScriptedRequest): ScriptedAnswer | null {
   const last = request.userTexts.at(-1) ?? '';
@@ -425,9 +438,13 @@ export function keptTabProbe(request: ScriptedRequest): ScriptedAnswer | null {
   }
 
   if (last.includes(KEPT_TAB_FORGET)) {
-    return request.called.includes('file')
-      ? { text: 'Forgotten.' }
-      : { toolCall: { name: 'file', arguments: { action: 'write', path: NOTES_FILE, content: '# Memory\n' } } };
+    const edits = request.called.filter((name) => name === 'file').length;
+
+    if (edits === 0) return { toolCall: { name: 'file', arguments: { action: 'read', path: NOTES_FILE } } };
+
+    if (edits === 1) return { toolCall: { name: 'file', arguments: { action: 'write', path: NOTES_FILE, content: '# Memory\n' } } };
+
+    return { text: 'Forgotten.' };
   }
 
   return null;
