@@ -27,6 +27,7 @@
  * reason: a linker also reports export-shape errors, and an export-shape error
  * yields no metafile. This probe judges RESOLUTION. A half-finished edit in an
  * unrelated file must not be able to make it say nothing.
+ * The walk lives in `deployed-graph.ts` and runs in a process of its own.
  *
  * WHAT THIS PROBE CANNOT SEE. The product runs a container image pinned by
  * registry digest in `packages/cf-backend/wrangler.jsonc`
@@ -37,20 +38,16 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { builtinModules } from 'node:module';
-import { dirname, extname, isAbsolute, join, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 
-import { build, stop, transformSync, type Loader, type PluginBuild } from 'esbuild';
-import { afterAll, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 
+import { readDeployedGraph, type DeployedGraph } from './deployed-graph';
 import { assertMeasured, finding } from './gate-ratchet';
 import { parseJsonc } from './jsonc';
-import {
-  identifierCalleeName, moduleSpecifiers, parse, stringArguments, walk,
-} from './syntax';
+import { parse, walk } from './syntax';
 import { isParseable, trackedFiles } from './sources';
-import { SLATE_VENDOR_ID } from '../packages/cf-backend/slate-vendor';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
@@ -65,78 +62,7 @@ const DEPLOYED_CONFIG = /^packages\/[^/]+\/wrangler\.jsonc$/;
 /** A workspace manifest, which is where a direct dependency is pinned. */
 const WORKSPACE_MANIFEST = /^packages\/[^/]+\/package\.json$/;
 
-/** Extension to esbuild loader, for the files that can carry an import. A file
- *  with any other extension is a leaf: `.json`, `.css` and `.wasm` name no
- *  module. Inferred and validated with `satisfies` rather than annotated open,
- *  so the key set stays type evidence the guard below can narrow against. */
-const LOADERS = {
-  '.ts': 'ts', '.tsx': 'tsx', '.mts': 'ts', '.cts': 'ts',
-  '.js': 'jsx', '.jsx': 'jsx', '.mjs': 'jsx', '.cjs': 'jsx',
-} satisfies Record<string, Loader>;
-
-type ModuleExtension = keyof typeof LOADERS;
-
-/** Narrows an arbitrary extension to a key of {@link LOADERS}, so indexing it
- *  needs no assertion. */
-const isModuleExtension = (extension: string): extension is ModuleExtension =>
-  Object.hasOwn(LOADERS, extension);
-
-const BUILTINS: ReadonlySet<string> = new Set(builtinModules);
-
-/** Specifiers the runtime supplies rather than the graph. `cloudflare:` and
- *  `bun:` are runtime namespaces, and a bare Node builtin reaches workerd
- *  through `nodejs_compat`. */
-function isRuntimeProvided(specifier: string): boolean {
-  return specifier.startsWith('cloudflare:')
-    || specifier.startsWith('node:')
-    || specifier.startsWith('bun:')
-    || BUILTINS.has(specifier);
-}
-
 /* ── The graph ──────────────────────────────────────────────────────────── */
-
-/** One import edge, with the syntax it was written in. The kind is what decides
- *  a package's `exports` branch, so a `require` edge must not be resolved as an
- *  `import` edge. */
-interface Edge {
-  readonly specifier: string;
-  readonly kind: 'import-statement' | 'require-call';
-}
-
-/** An import the resolver refused, named by both ends. */
-export interface Unresolved {
-  /** Repository-relative path of the file holding the specifier. */
-  readonly file: string;
-  readonly specifier: string;
-  readonly reason: string;
-}
-
-/**
- * How esbuild reports a file it could not read. Its `message` is only the
- * summary line, `Transform failed with 1 error:`, and the position lives in
- * `errors[].location`. A reason built from `message` alone names the file and
- * hides the line, which is the difference between a fail-closed report someone
- * can act on and one they have to reproduce. Narrowed with a schema rather than
- * asserted: a thrown value is whatever the thrower chose.
- */
-const TransformFailureSchema = v.object({
-  errors: v.array(v.object({
-    text: v.string(),
-    location: v.nullish(v.object({ line: v.number(), column: v.number() })),
-  })),
-});
-
-export interface DeployedGraph {
-  /** Repository-relative entry points, from the deployed wrangler configs. */
-  readonly entries: readonly string[];
-  /** Absolute path of every module the resolver reached. */
-  readonly modules: readonly string[];
-  /** Every specifier the resolver refused. */
-  readonly unresolved: readonly Unresolved[];
-  /** Files the graph reached and could not read as a module. Reported rather
-   *  than swallowed: an unreadable file is a hole in the measurement. */
-  readonly unreadable: readonly Unresolved[];
-}
 
 const ContainerSchema = v.object({
   class_name: v.optional(v.string()),
@@ -201,141 +127,6 @@ export function deployedConfigs(
       }))),
     };
   });
-}
-
-/**
- * Every module `source` imports, as written. TypeScript is lowered first because
- * a type-only import names a module the artifact never loads, and esbuild's own
- * transform is what decides that on the deploy path. `require` calls are
- * collected too: a CommonJS dependency in the graph still has edges, and a walk
- * that dropped them would under-report which copies ship.
- */
-export function importEdges(file: string, source: string, loader: Loader): readonly Edge[] {
-  const lowered = transformSync(source, { loader, jsx: 'automatic', format: 'esm' }).code;
-  const parsed = parse(`${file}.lowered.ts`, lowered);
-  const edges = new Map<string, Edge>();
-
-  for (const specifier of moduleSpecifiers(parsed.root)) {
-    edges.set(specifier, { specifier, kind: 'import-statement' });
-  }
-
-  walk(parsed.root, (node) => {
-    if (identifierCalleeName(node) !== 'require') return;
-
-    for (const specifier of stringArguments(node)) {
-      if (!edges.has(specifier)) edges.set(specifier, { specifier, kind: 'require-call' });
-    }
-  });
-
-  return [...edges.values()];
-}
-
-/**
- * Walk the deployed graph, resolving every edge with the bundler that emits the
- * artifact. esbuild is used as a resolver only: the traversal is a worklist here
- * so that no linking happens and no unrelated export-shape error can suppress
- * the result.
- */
-export async function deployedGraph(
-  configs: readonly DeployedConfig[] = deployedConfigs(),
-): Promise<DeployedGraph> {
-  const entries = configs.map((config) => config.entry);
-  const visited = new Set<string>();
-  const unresolved: Unresolved[] = [];
-  const unreadable: Unresolved[] = [];
-
-  const traverse = async (resolver: PluginBuild): Promise<void> => {
-    const queue = entries.map((entry) => join(REPO_ROOT, entry));
-
-    while (queue.length > 0) {
-      const file = queue.pop() ?? '';
-
-      if (visited.has(file)) continue;
-      visited.add(file);
-      const extension = extname(file);
-
-      if (!isModuleExtension(extension)) continue;
-      const loader: Loader = LOADERS[extension];
-      let edges: readonly Edge[];
-
-      try {
-        edges = importEdges(file, readFileSync(file, 'utf8'), loader);
-      } catch (error) {
-        const failure = v.safeParse(TransformFailureSchema, error);
-
-        const located = failure.success
-          ? failure.output.errors.map((one) => (one.location === null || one.location === undefined
-            ? one.text
-            : `${String(one.location.line)}:${String(one.location.column)}: ${one.text}`))
-          : [];
-
-        const thrown = error instanceof Error ? error.message.split('\n')[0] ?? '' : String(error);
-
-        unreadable.push({
-          file: relative(REPO_ROOT, file),
-          specifier: '',
-          reason: located.length > 0 ? located.join('; ') : thrown,
-        });
-        continue;
-      }
-
-      for (const edge of edges) {
-        if (isRuntimeProvided(edge.specifier)) continue;
-
-        const found = await resolver.resolve(edge.specifier, {
-          resolveDir: dirname(file), kind: edge.kind,
-        });
-
-        if (found.errors.length > 0 || found.path === '') {
-          unresolved.push({
-            file: relative(REPO_ROOT, file),
-            specifier: edge.specifier,
-            reason: found.errors[0]?.text ?? 'the resolver returned no path',
-          });
-          continue;
-        }
-
-        if (!found.external) queue.push(found.path);
-      }
-    }
-  };
-
-  await build({
-    stdin: { contents: "import 'kinu-graph-root';", resolveDir: REPO_ROOT },
-    absWorkingDir: REPO_ROOT,
-    bundle: true, write: false, logLevel: 'silent',
-    platform: 'browser', mainFields: ['module', 'main'],
-    conditions: ['workerd', 'worker', 'browser'],
-    plugins: [{
-      name: 'kinu-graph',
-      setup(resolver) {
-        // No `u` flag: esbuild compiles a plugin filter with Go's regexp
-        // engine, which rejects the `(?u)` prefix JavaScript adds for it.
-        resolver.onResolve({ filter: /^kinu-graph-root$/ }, () => ({
-          path: 'root', namespace: 'kinu-graph',
-        }));
-        // The slate vendor module is generated by a Vite plugin from the
-        // installed React and capnweb bytes: data with no imports. The walk
-        // records it as a leaf, the way a `.json` file is, so the artifact's
-        // graph reads as Vite emits it.
-        resolver.onResolve({ filter: new RegExp(`^${SLATE_VENDOR_ID}$`) }, () => ({
-          path: SLATE_VENDOR_ID, namespace: 'kinu-vite-virtual',
-        }));
-        resolver.onLoad({ filter: /.*/, namespace: 'kinu-graph' }, async () => {
-          await traverse(resolver);
-
-          return { contents: '', loader: 'js' };
-        });
-      },
-    }],
-  });
-
-  return {
-    entries,
-    modules: [...visited].sort(),
-    unresolved,
-    unreadable,
-  };
 }
 
 /* ── The copies ─────────────────────────────────────────────────────────── */
@@ -547,7 +338,7 @@ export function literalModuleReads(
 
 const CONFIGS = deployedConfigs();
 
-const GRAPH = await deployedGraph(CONFIGS);
+const GRAPH = await readDeployedGraph(CONFIGS.map((config) => config.entry));
 
 const COPIES = boundCopies(GRAPH, CONTAINERS);
 
@@ -582,12 +373,6 @@ console.log(`nested-container-resolution: ${assertMeasured('nested-container-res
 for (const copy of COPIES) console.log(`  binds ${describeCopy(copy)}`);
 
 for (const row of LOCKED) console.log(`  ${LOCK} records ${row.key} at ${row.version}`);
-
-// transformSync and build start an esbuild service child that lives until stop(); the run's leftover-process
-// check ends and fails a file that leaves one behind.
-afterAll(async () => {
-  await stop();
-});
 
 describe('the Containers runtime the deployed artifact binds', () => {
   test('the graph measurement has no holes', () => {
