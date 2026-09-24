@@ -243,14 +243,14 @@ export const FIRST_RUN_DEFECTS = {
     found: 'A blueprint published from a slate carried no mapped bindings; a second workspace imported it with bindings unmapped in the read model, and mapping one to its own MCP server made the slate serve.',
     missedBecause: 'Unit proofs cover publish and admit in isolation; nothing drove the app-host publish, public read, fork, and forker-side serve for the same bytes on the deployed product.',
     provedRedAt: null,
-    redDirection: 'Green requires publish to answer inspection plus link, the public blueprint read to name both bindings credentialed, the fork to answer two requirements with an unmapped graph problem, and hello() to answer, and the importer\'s own MCP roster to answer a list the mapping would read from.',
+    redDirection: 'Green requires publish to answer inspection plus link, the owner\'s Drive library to list the slate and the blueprint, the public blueprint read to name both bindings credentialed, the fork to answer two requirements with an unmapped graph problem, and hello() to answer, and the importer\'s own MCP roster to answer a list the mapping would read from.',
   },
   'drive': {
     id: 'drive',
     found: 'The Drive shipped with no live proof: its unit proofs run the SDK\'s in-memory fake and the workerd tier binds no Mossaic object, so the real tenant store, the /shared mount and the /api/drive routes had never been driven on the deployed product.',
     missedBecause: 'Every Drive suite is green over the fake; nothing opened the live tenant, put a file through the route, and read it back at /shared from a workspace shell.',
     provedRedAt: null,
-    redDirection: 'Green requires GET /api/drive to list the two reserved folders, a made folder and a put file to list back at their size and download as the same bytes, two workspaces of the owner to cat the file at /shared, a pasted skill to land under /skills as a skill on the listing and the mount, and the deletes to leave the root as found.',
+    redDirection: 'Green requires GET /api/drive to list the reserved skills folder, a made folder and a put file to list back at their size and download as the same bytes, two workspaces of the owner to cat the file at /shared, a pasted skill to land under /skills as a skill on the listing and the mount, and the deletes to leave the root as found.',
   },
   'preview-address': {
     id: 'preview-address',

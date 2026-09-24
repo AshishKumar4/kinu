@@ -1208,7 +1208,7 @@ export { ensureDir } from './utils/vfs-helpers';
 export { mossaicVfs, type MossaicClient, type MossaicVfs, type MossaicStat, type MossaicChild } from './vfs/mossaic-vfs';
 
 export {
-  sharedDriveMount, SHARED_SKILLS_DIR, DRIVE_SKILLS_DIR, DRIVE_BLUEPRINTS_DIR, DRIVE_RESERVED_DIRS,
+  sharedDriveMount, SHARED_SKILLS_DIR, DRIVE_SKILLS_DIR, DRIVE_RESERVED_DIRS,
   SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND,
 } from './vfs/shared-drive';
 

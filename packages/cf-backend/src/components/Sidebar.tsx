@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef, type FormEvent, type ReactNode } from "react";
-import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
+import { Link, NavLink, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, SidebarSimpleIcon,
 } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo";
@@ -18,28 +18,23 @@ import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle } from "@k
 import { Modal } from "./ui/Modal";
 import * as v from "valibot";
 import { renderCauseChain, renderThrownChain } from "@kinu.run/core/obs";
-import { PRIMARY_NAV } from "./nav";
+import { navActive, PRIMARY_NAV } from "./nav";
 
-function PrimaryNavRow({ to, label, Icon, end }: {
-  to: string; label: string; Icon: React.ComponentType<{ size?: number; className?: string }>; end: boolean;
-}) {
+function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
+  const { to, label, Icon } = item;
+  const active = navActive(item, useLocation().pathname);
+
   return (
-    <NavLink
+    <Link
       to={to}
-      end={end}
-      className={({ isActive }) =>
-        `flex items-center gap-2.5 rounded-lg py-[7px] pl-3 pr-3 p-t-control transition-colors ${
-          isActive ? 'bg-[var(--c-elevated)] p-text' : 'p-text-2 hover:bg-[var(--c-elevated)]'
-        }`
-      }
+      aria-current={active ? "page" : undefined}
+      className={`flex items-center gap-2.5 rounded-lg py-[7px] pl-3 pr-3 p-t-control transition-colors ${
+        active ? 'bg-[var(--c-elevated)] p-text' : 'p-text-2 hover:bg-[var(--c-elevated)]'
+      }`}
     >
-      {({ isActive }) => (
-        <>
-          <Icon size={15} className={isActive ? 'p-accent' : 'p-text-3'} />
-          <span>{label}</span>
-        </>
-      )}
-    </NavLink>
+      <Icon size={15} className={active ? 'p-accent' : 'p-text-3'} />
+      <span>{label}</span>
+    </Link>
   );
 }
 

@@ -6,7 +6,6 @@
 import { seekPage, type Page, type PageRequest } from '../session/page';
 import * as v from 'valibot';
 import type { ControlPlaneSql, ControlPlaneSqlValue } from './sql';
-import { initPublicShareIndex } from './public-shares';
 import {
   FEEDBACK_MAX_NOTE_CHARS, FEEDBACK_MAX_ROUTE_CHARS, FEEDBACK_MAX_USER_AGENT_CHARS,
   type FeedbackRecord,
@@ -72,7 +71,6 @@ const DDL = [
 
 export function initControlPlaneSchema(sql: ControlPlaneSql): void {
   for (const statement of DDL) sql.exec(statement);
-  initPublicShareIndex(sql);
 }
 
 export interface ControlUserRow {

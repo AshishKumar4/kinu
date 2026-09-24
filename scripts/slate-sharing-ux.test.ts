@@ -1,17 +1,18 @@
 /**
- * The sharing surfaces, in a real browser: the Shared page with its four
- * lists, the blueprint page (signed in and signed out), the share dialog in
- * both modes and the unmapped-bindings panel, each at desktop and phone width
- * in dark and light.
+ * The sharing surfaces, in a real browser: the Drive's Shared tab, the
+ * blueprint page (signed in and signed out), the share dialog in both modes
+ * and the unmapped-bindings panel, each at desktop and phone width in dark and
+ * light.
  *
  * What only a browser can say here: that the warning about secret-shaped text
  * names a location and never a value, that a signed-out visitor's one action
- * is a sign-in, that the picker offers every workspace plus a new one, that
- * the live dialog grants every read member with no click and a mutating one
- * only after a click that changes the grant summary, and that the risk text
+ * is a sign-in, that the fork picker offers every workspace plus a new one,
+ * that the live dialog grants every read member with no click and a mutating
+ * one only after a click that changes the grant summary, that the risk text
  * under a mutating member names the act, the workspace and who can trigger it
- * rather than a generic warning. Screenshots land in ~/kinu-logs/blueprints/
- * and ~/kinu-logs/live-shares/ (outside the worktree).
+ * rather than a generic warning, and that the dialog states the limits a share
+ * runs under. Screenshots land in ~/kinu-logs/blueprints/ and
+ * ~/kinu-logs/live-shares/ (outside the worktree).
  */
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync } from 'node:fs';
@@ -47,35 +48,6 @@ async function shoot(page: Page, name: string, dir = SHOTS): Promise<string> {
   return path;
 }
 
-/** One card in the shared grid, by the controls it offers. */
-interface ShareRow {
-  readonly id: string;
-  readonly kind: string;
-  readonly fork: boolean;
-  readonly forkEnabled: boolean;
-  readonly open: boolean;
-  readonly openEnabled: boolean;
-}
-
-async function showSegment(page: Page, segment: string): Promise<void> {
-  await page.click(`[data-segment="${segment}"]`);
-  await page.waitForFunction(
-    (id: string) => document.querySelector(`[data-segment="${id}"]`)?.getAttribute('aria-selected') === 'true',
-    {}, segment,
-  );
-}
-
-function shareRows(page: Page): Promise<ShareRow[]> {
-  return page.$$eval('[data-share-grid] > li', (items) => items.map((item) => ({
-    id: item.getAttribute('data-share-row') ?? '',
-    kind: item.getAttribute('data-share-kind') ?? '',
-    fork: item.querySelector('[data-fork-share]') !== null,
-    forkEnabled: item.querySelector('[data-fork-share]:not(:disabled)') !== null,
-    open: item.querySelector('[data-open-live]') !== null,
-    openEnabled: item.querySelector('[data-open-live]:not(:disabled)') !== null,
-  })));
-}
-
 describe('slate sharing surfaces', () => {
   test('every surface renders at both widths in both themes, and says what it must', async () => {
     await withGallery(async (gallery) => {
@@ -86,86 +58,22 @@ describe('slate sharing surfaces', () => {
           const shared = await freshPage(gallery, 'shared', theme, viewport);
 
           try {
+            await shared.waitForSelector('[data-drive-share]');
             const text = await shared.evaluate(() => document.body.innerText);
 
-            // Each segment holds exactly the rows its own badge counts, and
-            // All is the kind:id-deduped union of the other four, so the
-            // doubled live row is one card here.
-            const segments = await shared.$$eval('[aria-label="Shared lists"] [role="tab"]', (tabs) => tabs.map((tab) => ({
-              id: tab.getAttribute('data-segment') ?? '',
-              count: Number(tab.querySelector('span')?.textContent ?? '-1'),
-            })));
-
-            const shown = new Map<string, readonly ShareRow[]>();
-
-            for (const segment of segments) {
-              await showSegment(shared, segment.id);
-              shown.set(segment.id, await shareRows(shared));
-              expect(shown.get(segment.id) ?? []).toHaveLength(segment.count);
-            }
-
-            const all = shown.get('all') ?? [];
-
-            const union = new Set(segments.filter((segment) => segment.id !== 'all')
-              .flatMap((segment) => (shown.get(segment.id) ?? []).map((row) => row.id)));
-
-            expect(union.size).toBeGreaterThan(0);
-            expect(new Set(all.map((row) => row.id))).toEqual(union);
-            expect(all).toHaveLength(union.size);
+            // A received row names who shared it; forking one picks a workspace, or a new one.
             expect(text).toContain('sam@example.com');
-            expect(text).toContain('lee@example.com');
-            // Every row forks — a blueprint's publication, a live row's running
-            // tree (forkable unless the owner said otherwise) — and a live row
-            // opens too. A live row whose workspace is out of reach offers
-            // neither, which is one condition, not two.
-            expect(all.filter((row) => row.fork).map((row) => row.id)).toEqual(all.map((row) => row.id));
-            expect(all.filter((row) => row.open).map((row) => row.id))
-              .toEqual(all.filter((row) => row.kind === 'live').map((row) => row.id));
-            expect(all.filter((row) => row.kind === 'live' && row.forkEnabled).map((row) => row.id))
-              .toEqual(all.filter((row) => row.openEnabled).map((row) => row.id));
-            expect(all.filter((row) => row.kind === 'blueprint' && !row.forkEnabled)).toEqual([]);
-            expect(text).toContain('live · public');
-            expect(text).toContain('live · people');
-            await showSegment(shared, 'all');
-            // Three columns at the spec's 1440, one on the phone.
-            await shared.setViewport({ width: viewport === 'desktop' ? 1440 : 390, height: viewport === 'desktop' ? 900 : 844 });
-            const columns = await shared.$eval('[data-share-grid]', (grid) => getComputedStyle(grid).gridTemplateColumns.split(' ').length);
-            expect(columns).toBe(viewport === 'desktop' ? 3 : 1);
-            shots.push(await shoot(shared, `shared-${viewport}-${theme}`));
-            shots.push(await shoot(shared, `shared-four-lists-${viewport}-${theme}`, LIVE_SHOTS));
-            // The segments switch what the grid holds, and search narrows it —
-            // a searched-out segment says "Nothing matches", not its own line.
-            await showSegment(shared, 'received');
-            expect(await shareRows(shared)).toHaveLength(shown.get('received')?.length ?? -1);
-            await shared.type('[aria-label="Search shared"]', 'lighthouse');
-            await shared.waitForFunction(
-              () => document.body.innerText.includes('Nothing matches'),
-            );
-            await shared.$eval('[aria-label="Search shared"]', (input) => {
-              // React owns the value: only the native setter plus an input
-              // event moves its tracker.
-              const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set?.bind(input);
-
-              if (setValue === undefined) throw new Error('HTMLInputElement.prototype has no value setter');
-
-              setValue('');
-              input.dispatchEvent(new Event('input', { bubbles: true }));
-            });
-            await showSegment(shared, 'all');
-            await shared.waitForFunction(
-              (count: number) => document.querySelectorAll('[data-share-grid] > li').length === count,
-              {}, all.length,
-            );
+            await shared.click('[data-drive-share="live-mail-9"] [data-drive-menu]');
             await shared.evaluate(() => {
-              const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim() === 'Fork');
+              const item = [...document.querySelectorAll('[role="menuitem"]')].find((candidate) => candidate.textContent?.trim() === 'Fork…');
 
-              if (button === undefined) throw new Error('no fork button');
-              button.click();
+              if (!(item instanceof HTMLButtonElement)) throw new Error('no Fork… item');
+              item.click();
             });
             await shared.waitForSelector('[role="dialog"]');
+            await shared.waitForFunction(() => (document.querySelector('[role="dialog"]')?.textContent ?? '').includes('checkout-fixes'));
             const dialog = await shared.$eval('[role="dialog"]', (element) => element.textContent ?? '');
             expect(dialog).toContain('New workspace');
-            expect(dialog).toContain('checkout-fixes');
             shots.push(await shoot(shared, `shared-fork-picker-${viewport}-${theme}`));
           } finally {
             await shared.close();
@@ -206,36 +114,36 @@ describe('slate sharing surfaces', () => {
           const live = await freshPage(gallery, 'sharedialog', theme, viewport);
 
           try {
+            // One sentence, who can open it, the fork choice, and the reach folded behind one row.
+            const lead = await live.$eval('[role="dialog"]', (element) => element.textContent ?? '');
+            expect(lead).toContain('It runs in your workspace, as you.');
+            expect(await live.$eval('[data-share-access]', (element) => element.getAttribute('data-share-access'))).toBe('users');
+            expect(await live.$eval('[data-share-fork]', (box) => box instanceof HTMLInputElement && box.checked)).toBe(true);
+            // The bounds a live share runs under, in the dialog that creates it.
+            const limits = await live.$eval('[data-share-limits]', (element) => element.textContent ?? '');
+            expect(limits).toContain(String(SHARE_VIEWER_REQUESTS_PER_MINUTE));
+            expect(limits).toContain(`$${String(SHARE_SPEND_CAP_USD_PER_DAY)}`);
+            shots.push(await shoot(live, `share-dialog-live-${viewport}-${theme}`, LIVE_SHOTS));
+            await live.click('[data-share-reach]');
+            await live.waitForSelector('[data-grant-summary]');
             const text = await live.$eval('[role="dialog"]', (element) => element.textContent ?? '');
-            expect(text).toContain('Share live');
-            expect(text).toContain('What a viewer reaches');
-            // Read members are granted with no click; mutating ones wait for one.
-            // The MEMBER boxes, by their own attribute: the dialog carries the
-            // fork permission on a checkbox too, and that one starts on.
+            // Read members are granted with no click; changes wait for one.
             expect(await live.$$eval('[role="dialog"] input[data-approve]', (boxes) => boxes.filter((box) => box instanceof HTMLInputElement && box.checked).length)).toBe(0);
-            expect(await live.$$eval('[role="dialog"] input[type="checkbox"]:not([data-approve])', (boxes) => boxes.filter((box) => box instanceof HTMLInputElement && box.checked).length)).toBe(1);
-            expect(await live.$eval('[data-grant-summary]', (element) => element.textContent ?? '')).toContain('Viewers get 4 read-only members. You approved 0 of 5 mutating members.');
+            expect(await live.$eval('[data-grant-summary]', (element) => element.textContent ?? '')).toContain('People get 4 read-only members. You allowed 0 of 5 changes.');
             // The risk statement is per member: the act, the workspace, who can trigger it.
             expect(text).toContain('Calls create_issue on GitHub with your credentials.');
             expect(text).toContain('Writes, edits or deletes files in workspace checkout-fixes as you.');
             expect(text).toContain("Sends a message to your agent's inbox as this slate.");
             expect(text).toContain('Runs a model call on your fast tier. Every call spends your inference.');
             expect(text).toContain('Anyone you named on this share can trigger it.');
-            // The bounds a live share actually runs under, in the dialog that
-            // creates it: this said "no bounds wording" until 2026-09-18, when
-            // the bounds themselves landed (host.ts admitViewerRequest and the
-            // per-share daily spend label). A dialog that hid them would be
-            // asking the owner to share on terms it never stated.
-            expect(text).toContain(String(SHARE_VIEWER_REQUESTS_PER_MINUTE));
-            expect(text).toContain(`$${String(SHARE_SPEND_CAP_USD_PER_DAY)}`);
             // The app hop is drawn as a subtree of the slate it names.
             expect(text).toContain('via PEER → digest');
             expect(text).toContain('DIGEST_FILES');
-            shots.push(await shoot(live, `share-dialog-live-${viewport}-${theme}`, LIVE_SHOTS));
             await live.click('[data-approve="ASK.send"]');
-            expect(await live.$eval('[data-grant-summary]', (element) => element.textContent ?? '')).toContain('You approved 1 of 5');
-            // Public wording follows the visibility switch.
-            await live.click('[role="radio"][aria-checked="false"]');
+            expect(await live.$eval('[data-grant-summary]', (element) => element.textContent ?? '')).toContain('You allowed 1 of 5');
+            // Public wording follows the access choice.
+            await live.click('[data-share-access]');
+            await live.click('[data-share-access-option="public"]');
             expect(await live.$eval('[role="dialog"]', (element) => element.textContent ?? '')).toContain('Anyone who opens this share can trigger it.');
             shots.push(await shoot(live, `share-dialog-live-approved-public-${viewport}-${theme}`, LIVE_SHOTS));
           } finally {
@@ -246,14 +154,12 @@ describe('slate sharing surfaces', () => {
 
           try {
             const text = await dialog.$eval('[role="dialog"]', (element) => element.textContent ?? '');
-            expect(text).toContain('Publish blueprint');
-            expect(text).toContain('A forker must connect');
-            expect(text).toContain('GITHUB');
+            expect(text).toContain('Publish');
+            // Only a credentialed binding asks the forker to connect; the app hop is not one.
+            expect(await dialog.$eval('[data-blueprint-connect]', (element) => element.textContent ?? '')).toContain('GITHUB');
             expect(text).not.toContain('PEER (app');
             expect(await dialog.$('[role="dialog"] [role="alert"]')).not.toBeNull();
-            expect(text).toContain('Share with users');
-            expect(text).not.toMatch(/rate|spend|per hour|\$/);
-            shots.push(await shoot(dialog, `share-dialog-${viewport}-${theme}`));
+            expect(text).not.toMatch(/per minute|spend|\$/);
             shots.push(await shoot(dialog, `share-dialog-blueprint-${viewport}-${theme}`, LIVE_SHOTS));
           } finally {
             await dialog.close();
@@ -273,7 +179,7 @@ describe('slate sharing surfaces', () => {
         }
       }
 
-      expect(shots.length).toBe(40);
+      expect(shots.length).toBe(28);
       process.stdout.write(`slate-sharing-ux: ${String(shots.length)} screenshots under ${SHOTS} and ${LIVE_SHOTS}\n`);
     });
   });

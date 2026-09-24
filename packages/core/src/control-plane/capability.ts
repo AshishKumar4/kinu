@@ -18,7 +18,6 @@ const CONTROL_PLANE_CAPABILITIES = {
   'index.workspace': 'ingest',
   'index.forget': 'ingest',
   'feedback.write': 'ingest',
-  'shares.index': 'ingest',
   'overview.read': 'admin',
   'users.read': 'admin',
   'workspaces.read': 'admin',

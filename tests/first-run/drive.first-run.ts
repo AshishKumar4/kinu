@@ -71,7 +71,7 @@ describe(SUITE, () => {
 
         goals.push({
           what: 'drive-routes-answer-with-the-reserved-folders',
-          reached: ['blueprints', 'skills'].every((name) => root.entries.some((entry) => entry.name === name && entry.kind === 'folder')),
+          reached: root.entries.some((entry) => entry.name === 'skills' && entry.kind === 'folder'),
           detail: JSON.stringify(root.entries.map((entry) => [entry.name, entry.kind])),
         });
 
