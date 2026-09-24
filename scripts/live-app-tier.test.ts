@@ -30,10 +30,11 @@ import { SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
 
 import { DESKTOP, withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
 import {
-  CHAT_COMPOSER_LIVE, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, NEW_AGENT, OPEN_NAMES,
-  openInspector, pressUntil, settled,
+  CHAT_COMPOSER_LIVE, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, NEW_AGENT, OPEN_NAMES, RECORD_DEAD_ENDS,
+  openInspector, painted, pressUntil, settled, typeIntoComposer, until,
   type ControlAttempt,
 } from './product-flows';
+import { rowVerdicts } from './row-verdicts';
 import {
   FALLBACK_ANSWER, KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_SILENCE_MS, PACED_TURN_ANSWER, PACED_TURN_ASK,
   SCRIPTED_MODEL_SPEC, SLATE_TITLE,
@@ -65,11 +66,12 @@ async function openWorkspace(newPage: LiveApp['newPage'], origin: string, worksp
   const page = await newPage();
 
   await page.setViewport(DESKTOP);
+  await page.evaluateOnNewDocument(RECORD_DEAD_ENDS);
 
   // 'load', not 'networkidle0': the app holds its event socket open from
   // first paint, so there is never a zero-connection window to wait for.
   await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
-  await page.waitForFunction(`document.querySelector('textarea') !== null`, { polling: 100 });
+  await until(page, 'the workspace page', `document.querySelector('textarea') !== null`);
 
   return page;
 }
@@ -268,8 +270,8 @@ interface KeptTabVerdict {
   /** The marked tab's label at each change, the first entry being the tab the
    *  panel resolved to. The reader's one click is the only change it asks for. */
   readonly marks: readonly string[];
-  /** Every Work presence the page's socket read, in order. The row proves
-   *  nothing unless the product read Work as filled and then as empty. */
+  /** Every Work presence the page's socket read, in order: filled after the
+   *  note turn and empty after the forget turn, or the row ends naming which. */
   readonly workPresence: readonly boolean[];
 }
 
@@ -334,12 +336,7 @@ const SendSiteSchema = v.object({ path: v.string(), tabIndex: v.number(), compos
  *  reaches whatever else is mounted, so the site returned is the honest answer
  *  to which pane the words went into. */
 async function sendInChat(page: Page, text: string): Promise<SendSite> {
-  await page.evaluate(`(() => {
-    const box = document.querySelector('#chat textarea:not([disabled])');
-    if (box === null) throw new Error('no live composer in the chat column');
-    box.focus();
-  })()`);
-  await page.keyboard.type(text);
+  await typeIntoComposer(page, text);
 
   const site = v.parse(SendSiteSchema, await page.evaluate(`(() => {
     const send = [...document.querySelectorAll('#chat button')]
@@ -354,10 +351,7 @@ async function sendInChat(page: Page, text: string): Promise<SendSite> {
     };
   })()`));
 
-  await page.waitForFunction(
-    `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(text)})`,
-    { polling: 100 },
-  );
+  await until(page, 'the sent words in the chat column', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(text)})`);
 
   return site;
 }
@@ -397,6 +391,15 @@ const LiveSampleSchema = v.object({ t: v.number(), stop: v.boolean(), states: v.
 
 const STOP_OFFERED = `document.querySelector('#chat button[aria-label="Stop this turn"]') !== null`;
 
+/** The workspace's own first turn, queued by its create, has answered and ended: words sent before would be
+ *  steered into it instead of opening a turn of their own. */
+const FIRST_TURN_ENDED = `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FALLBACK_ANSWER)}) && !(${STOP_OFFERED})`;
+
+const PACED_ANSWER_SHOWN = `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(PACED_TURN_ANSWER)}) && !(${STOP_OFFERED})`;
+
+/** The chat column's last words, for a row that has to say what the page showed instead. */
+const CHAT_TAIL = `(document.querySelector('#chat')?.textContent ?? '').slice(-240)`;
+
 /** Row 0: a running turn draws exactly one live state, through the silences a thinking model leaves in its
  *  stream (`pacedTurn`). */
 async function measureLiveIndicator(newPage: LiveApp['newPage'], origin: string): Promise<LiveIndicatorVerdict> {
@@ -404,25 +407,30 @@ async function measureLiveIndicator(newPage: LiveApp['newPage'], origin: string)
     origin, { name: `live-row-indicator-${RUN_ID}`, purpose: 'live indicator probe', model: SCRIPTED_MODEL_SPEC });
 
   const page = await openWorkspace(newPage, origin, workspace);
+  const turns = await watchTurns(page);
+  let samples: v.InferOutput<typeof LiveSampleSchema>[];
 
-  // The create's own first turn ends first, so the paced turn is a turn of its own rather than words steered
-  // into that one.
-  await page.waitForFunction(
-    `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FALLBACK_ANSWER)}) && !(${STOP_OFFERED})`,
-    { polling: 100 },
-  );
-  await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
-  await page.evaluate(INSTALL_LIVE_SAMPLER);
-  await sendInChat(page, PACED_TURN_ASK);
-  await page.waitForFunction(
-    `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(PACED_TURN_ANSWER)}) && !(${STOP_OFFERED})`,
-    { polling: 100 },
-  );
+  try {
+    await until(page, "the workspace's first turn to end", FIRST_TURN_ENDED);
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await page.evaluate(INSTALL_LIVE_SAMPLER);
 
-  const samples = v.parse(v.array(LiveSampleSchema), await page.evaluate(READ_LIVE_SAMPLES));
+    const paced = turns.afterTurn();
 
-  await shoot(page, 'live-indicator-settled');
-  await page.close();
+    await sendInChat(page, PACED_TURN_ASK);
+    await paced;
+    await painted(page);
+
+    if (!v.parse(v.boolean(), await page.evaluate(PACED_ANSWER_SHOWN))) {
+      throw new Error(`waiting for the paced answer, its turn closed without it; the chat ends ${JSON.stringify(await page.evaluate(CHAT_TAIL))}`);
+    }
+
+    samples = v.parse(v.array(LiveSampleSchema), await page.evaluate(READ_LIVE_SAMPLES));
+    await shoot(page, 'live-indicator-settled');
+  } finally {
+    await turns.stop();
+    await page.close();
+  }
 
   const running = samples.filter((sample) => sample.stop);
   let longestBlankMs = 0;
@@ -451,21 +459,19 @@ async function measurePanel(newPage: LiveApp['newPage'], origin: string): Promis
   const page = await openWorkspace(newPage, origin, workspace);
 
   await page.evaluate(NEW_AGENT);
-  await page.waitForFunction(`${ACTIVE_TAB_INDEX} > 0`, { polling: 100 });
-  await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+  await until(page, 'an agent tab after Main, current', `${ACTIVE_TAB_INDEX} > 0`);
+  await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
   await page.evaluate(ClickScripts.mainTab);
-  await page.waitForFunction(`${ACTIVE_TAB_INDEX} === 0`, { polling: 100 });
-  await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+  await until(page, "Main's tab, current", `${ACTIVE_TAB_INDEX} === 0`);
+  await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
 
   await openInspector(page);
 
   const counter = await countRpc(page);
 
   await page.evaluate(ClickScripts.filesTab);
-  await page.waitForFunction(
-    `[...document.querySelectorAll('.p-tabstrip')].flatMap(el => [...el.querySelectorAll('button')]).some(b => b.textContent.trim() === 'Files' && b.className.includes('p-tab-active'))`,
-    { polling: 100 },
-  );
+  await until(page, 'the Files tab, active',
+    `[...document.querySelectorAll('.p-tabstrip')].flatMap(el => [...el.querySelectorAll('button')]).some(b => b.textContent.trim() === 'Files' && b.className.includes('p-tab-active'))`);
 
   const marked = v.parse(
     v.object({ ok: v.literal(true), scrollTop: v.number() }),
@@ -485,18 +491,18 @@ async function measurePanel(newPage: LiveApp['newPage'], origin: string): Promis
   const beforeSwitch = counter.counts();
 
   await page.evaluate(ClickScripts.lastAgentTab);
-  await page.waitForFunction(`${ACTIVE_TAB_INDEX} > 0`, { polling: 100 });
+  await until(page, 'an agent tab after Main, current', `${ACTIVE_TAB_INDEX} > 0`);
 
   // The '+' flow: the subordinate column mounts a composer its own socket has
   // enabled. The hosted-actor socket defect left that pane connecting forever,
   // so this row's number is the frames that socket answered with.
-  await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+  await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
 
   const afterSwitch = counter.counts();
 
   await page.evaluate(ClickScripts.mainTab);
-  await page.waitForFunction(`${ACTIVE_TAB_INDEX} === 0`, { polling: 100 });
-  await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+  await until(page, "Main's tab, current", `${ACTIVE_TAB_INDEX} === 0`);
+  await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
   // Let the switch back land before the node is read: a remount replaces the
   // marked element, and the count of marked nodes settles at 0 when it does.
   await settled(page, `document.querySelectorAll('[data-live-probe="work-surface"]').length`);
@@ -609,7 +615,7 @@ async function measureGeometry(newPage: LiveApp['newPage'], origin: string): Pro
   await shoot(page, 'b5-strip-dark');
   await page.evaluate(() => localStorage.setItem('theme', 'light'));
   await page.reload({ waitUntil: 'load' });
-  await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+  await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
   await openInspector(page);
 
   const light = v.parse(StripGeometrySchema, await page.evaluate(readStripGeometry));
@@ -761,7 +767,7 @@ async function measureStampedCard(newPage: LiveApp['newPage'], origin: string): 
   const page = await openWorkspace(newPage, origin, workspace);
   const counter = await countRpc(page);
 
-  await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+  await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
 
   // The root gets a turn of its own first, so the actor's pane below has
   // something it could leak: a transcript with words in it. Without this the
@@ -769,22 +775,17 @@ async function measureStampedCard(newPage: LiveApp['newPage'], origin: string): 
   const rootMarker = `root opening ${crypto.randomUUID().slice(0, 8)}`;
 
   await sendInChat(page, rootMarker);
-  await page.waitForFunction(
-    `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FALLBACK_ANSWER)})`,
-    { polling: 100 },
-  );
+  await until(page, "the root turn's answer", `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FALLBACK_ANSWER)})`);
   await shoot(page, 'stamp-root-before');
 
   await page.evaluate(NEW_AGENT);
-  await page.waitForFunction(
-    `[...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')].length > 1`,
-    { polling: 100 },
-  );
+  await until(page, 'a second agent tab',
+    `[...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')].length > 1`);
   await page.evaluate(ClickScripts.lastAgentTab);
-  await page.waitForFunction(`${ACTIVE_TAB_INDEX} > 0`, { polling: 100 });
+  await until(page, 'an agent tab after Main, current', `${ACTIVE_TAB_INDEX} > 0`);
   // The actor's pane is live when ITS column holds an enabled composer: a pane
   // still connecting renders the notice and no composer at all.
-  await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+  await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
   await settled(page, `document.querySelectorAll('#chat *').length`);
 
   const actorPane = await paneHolds(page, rootMarker);
@@ -797,18 +798,16 @@ async function measureStampedCard(newPage: LiveApp['newPage'], origin: string): 
   // rendered inside a card — the system-card attribute or the drained-events
   // list, never the composer's echo. One predicate for both, so no wait is left
   // dangling on a page that then closes.
-  await page.waitForFunction(
+  await until(page, "the agent turn's answer, or its words in a card",
     `[...document.querySelectorAll('#chat [data-system-event] *, #chat .divide-dashed *')]`
     + `.some(el => (el.textContent ?? '').includes(${JSON.stringify(actorMarker)}))`
-    + ` || (document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FALLBACK_ANSWER)})`,
-    { polling: 100 },
-  );
+    + ` || (document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FALLBACK_ANSWER)})`);
 
   await shoot(page, 'stamp-actor-pane');
 
   await page.evaluate(ClickScripts.mainTab);
-  await page.waitForFunction(`${ACTIVE_TAB_INDEX} === 0`, { polling: 100 });
-  await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+  await until(page, "Main's tab, current", `${ACTIVE_TAB_INDEX} === 0`);
+  await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
   await settled(page, `document.querySelectorAll('#chat *').length`);
 
   const rootPane = await paneHolds(page, actorMarker);
@@ -868,105 +867,158 @@ const RpcAskSchema = v.looseObject({ id: v.string(), method: v.string() });
 
 const RpcAnswerSchema = v.looseObject({ id: v.string(), result: v.optional(v.unknown()) });
 
+/** The reads whose answers carry Work's presence. */
+const PRESENCE_READS = new Set(['getWorkspaceTabPresence', 'getWorkspaceSnapshot']);
+
 /** Work's presence out of either answer that carries it. */
 const PresenceAnswerSchema = v.union([
   v.pipe(v.looseObject({ work: v.boolean() }), v.transform((answer) => answer.work)),
   v.pipe(v.looseObject({ tabPresence: v.looseObject({ work: v.boolean() }) }), v.transform((answer) => answer.tabPresence.work)),
 ]);
 
-/** Every Work presence the page's socket was answered, in order, off the
- *  socket itself; `next` settles on the first answer after it is asked that
- *  matches, so a row waits on the product's own read rather than a clock. */
-interface PresenceWatch {
-  answers(): readonly boolean[];
-  next(work: boolean): Promise<void>;
+/** A turn's frame on the workspace socket, which every page on it gets. A `done` frame closes the turn unless it
+ *  answers words a running turn took in (`landed: 'mid-turn'`); an `error` frame is the turn failing
+ *  (chat-transport.ts `doneFrame`). */
+const ChatResponseSchema = v.looseObject({
+  type: v.literal('cf_agent_use_chat_response'),
+  done: v.optional(v.boolean()),
+  error: v.optional(v.boolean()),
+  landed: v.optional(v.string()),
+  body: v.optional(v.string()),
+});
+
+/** A page's turns off its own socket, and the Work presence it reads. `afterTurn`,
+ *  taken before a send, settles on the answer to the first presence read the
+ *  page asks once the next turn has closed, and rejects with the failure of a
+ *  turn that fails. The page asks that read from the effect that follows the
+ *  turn's last render and every 5 s after (use-kinu `refreshLiveData`), so it
+ *  comes whatever the turn did, after the page drew it, and it is final for
+ *  that turn: a row waits on it, never on the value it hopes for. */
+interface TurnWatch {
+  /** Every Work presence the page was answered, in order. */
+  workPresence(): readonly boolean[];
+  afterTurn(): Promise<boolean>;
   stop(): Promise<void>;
 }
 
-async function watchWorkPresence(page: Page): Promise<PresenceWatch> {
+async function watchTurns(page: Page): Promise<TurnWatch> {
   const cdp = await page.createCDPSession();
 
   await cdp.send('Network.enable');
 
-  const asked = new Set<string>();
+  // Each presence read the page asked, by id, with how many turns had closed when it went.
+  const asked = new Map<string, number>();
   const answers: boolean[] = [];
-  const waiters: { readonly work: boolean; readonly resolve: () => void }[] = [];
+  let closed = 0;
+  let waiters: { readonly closedBefore: number; readonly settle: ReturnType<typeof Promise.withResolvers<boolean>> }[] = [];
 
   cdp.on('Network.webSocketFrameSent', (event: { response?: { payloadData?: string } }) => {
     const ask = v.safeParse(RpcAskSchema, tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input'));
 
-    if (ask.success && (ask.output.method === 'getWorkspaceTabPresence' || ask.output.method === 'getWorkspaceSnapshot')) asked.add(ask.output.id);
+    if (ask.success && PRESENCE_READS.has(ask.output.method)) asked.set(ask.output.id, closed);
   });
   cdp.on('Network.webSocketFrameReceived', (event: { response?: { payloadData?: string } }) => {
-    const answer = v.safeParse(RpcAnswerSchema, tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input'));
+    const received = tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input');
+    const turn = v.safeParse(ChatResponseSchema, received);
 
-    if (!answer.success || !asked.delete(answer.output.id)) return;
+    if (turn.success) {
+      if (turn.output.error === true) {
+        for (const waiter of waiters.splice(0)) waiter.settle.reject(new Error(`the turn failed: ${turn.output.body ?? ''}`));
+      } else if (turn.output.done === true && turn.output.landed !== 'mid-turn') {
+        closed += 1;
+      }
+
+      return;
+    }
+
+    const answer = v.safeParse(RpcAnswerSchema, received);
+    const sentAfter = answer.success ? asked.get(answer.output.id) : undefined;
+
+    if (!answer.success || sentAfter === undefined) return;
+    asked.delete(answer.output.id);
     const presence = v.safeParse(PresenceAnswerSchema, answer.output.result);
 
     if (!presence.success) return;
-    const work = presence.output;
-    answers.push(work);
+    answers.push(presence.output);
+    waiters = waiters.filter((waiter) => {
+      if (sentAfter <= waiter.closedBefore) return true;
+      waiter.settle.resolve(presence.output);
 
-    for (const waiter of waiters.splice(0)) {
-      if (waiter.work === work) waiter.resolve();
-      else waiters.push(waiter);
-    }
+      return false;
+    });
   });
 
   return {
-    answers: () => [...answers],
-    next: (work) => {
-      const { promise, resolve } = Promise.withResolvers<void>();
-      waiters.push({ work, resolve });
+    workPresence: () => [...answers],
+    afterTurn: () => {
+      const settle = Promise.withResolvers<boolean>();
 
-      return promise;
+      waiters.push({ closedBefore: closed, settle });
+
+      return settle.promise;
     },
     stop: async () => { await cdp.detach(); },
   };
 }
 
-/** How many times the chat column shows the scripted model's fallback answer. */
-const FALLBACK_SHOWN = `((document.querySelector('#chat')?.textContent ?? '').split(${JSON.stringify(FALLBACK_ANSWER)}).length - 1)`;
+/** The inspector strip's Work tab. */
+const WORK_TAB = `document.querySelector('#inspector .p-tabstrip [aria-label="Work"]')`;
 
 /** Row 8: the inspector never moves its selection on its own. In a new
  *  workspace the panel resolves to its first tab; the first turn saves a note,
  *  which gives Work content; the reader opens Work; the next turn forgets the
- *  note, which empties Work under the reader. A third turn is the fence: its
- *  answer renders after the page has taken in the emptied read, so a move the
- *  panel made on that read is in the record by then. */
+ *  note, which empties Work under the reader. A third turn is the fence: it
+ *  closes after the page has taken in the emptied read, so a move the panel
+ *  made on that read is in the record by then. A turn that did not fill or
+ *  empty Work ends the row there, naming the read the page made after it. */
 async function measureKeptTab(newPage: LiveApp['newPage'], origin: string): Promise<KeptTabVerdict> {
   const workspace = await createWorkspace(
     origin, { name: `live-row-kept-tab-${RUN_ID}`, purpose: 'kept tab probe', model: SCRIPTED_MODEL_SPEC });
 
   const page = await openWorkspace(newPage, origin, workspace);
-  const presence = await watchWorkPresence(page);
+  const turns = await watchTurns(page);
 
-  await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
-  await openInspector(page);
-  await page.waitForFunction(`${MARKED_TAB} !== null`, { polling: 100 });
-  await page.evaluate(RECORD_MARKS);
+  try {
+    await until(page, "the workspace's first turn to end", FIRST_TURN_ENDED);
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await openInspector(page);
+    await until(page, 'a marked tab in the inspector strip', `${MARKED_TAB} !== null`);
+    await page.evaluate(RECORD_MARKS);
 
-  const filled = presence.next(true);
-  await sendInChat(page, KEPT_TAB_NOTE);
-  await filled;
-  await page.waitForFunction(`document.querySelector('#inspector .p-tabstrip [aria-label="Work"]') !== null`, { polling: 100 });
-  await page.evaluate(`document.querySelector('#inspector .p-tabstrip [aria-label="Work"]').click()`);
-  await page.waitForFunction(`${MARKED_TAB} === 'Work'`, { polling: 100 });
+    const noted = turns.afterTurn();
 
-  const emptied = presence.next(false);
-  await sendInChat(page, KEPT_TAB_FORGET);
-  await emptied;
+    await sendInChat(page, KEPT_TAB_NOTE);
 
-  const shown = v.parse(v.number(), await page.evaluate(FALLBACK_SHOWN));
-  await sendInChat(page, 'Kept-tab probe: the fence.');
-  await page.waitForFunction(`${FALLBACK_SHOWN} > ${String(shown)}`, { polling: 100 });
+    if (!(await noted)) {
+      throw new Error(`waiting for the note turn to fill Work, the page read Work empty once the turn closed; `
+        + `the chat ends ${JSON.stringify(await page.evaluate(CHAT_TAIL))}`);
+    }
 
-  const marks = v.parse(v.array(v.nullable(v.string())), await page.evaluate('window.__keptTabMarks'));
+    await until(page, 'the Work tab in the inspector strip', `${WORK_TAB} !== null`);
+    await page.evaluate(`${WORK_TAB}.click()`);
+    await until(page, 'Work marked current', `${MARKED_TAB} === 'Work'`);
 
-  await presence.stop();
-  await page.close();
+    const forgotten = turns.afterTurn();
 
-  return { marks: marks.map((mark) => mark ?? '(none)'), workPresence: presence.answers() };
+    await sendInChat(page, KEPT_TAB_FORGET);
+
+    if (await forgotten) {
+      throw new Error(`waiting for the forget turn to empty Work, the page read Work filled once the turn closed; `
+        + `the chat ends ${JSON.stringify(await page.evaluate(CHAT_TAIL))}`);
+    }
+
+    const fenced = turns.afterTurn();
+
+    await sendInChat(page, 'Kept-tab probe: the fence.');
+    await fenced;
+
+    const marks = v.parse(v.array(v.nullable(v.string())), await page.evaluate('window.__keptTabMarks'));
+
+    return { marks: marks.map((mark) => mark ?? '(none)'), workPresence: turns.workPresence() };
+  } finally {
+    await turns.stop();
+    await page.close();
+  }
 }
 
 /** Row 7: the run's own state directory, measured on the LOCAL server in both
@@ -984,9 +1036,9 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
   };
 }
 
-async function run(): Promise<void> {
-  const progress = (row: string): void => { process.stderr.write(`live-app-tier: ${row}\n`); };
+const { attempt, verdictOf, broken } = rowVerdicts('live-app-tier', () => observed.bootFailure);
 
+async function run(): Promise<void> {
   // The script answers the live-indicator row's paced turn, the kept-tab
   // row's two asks, every row's throwaway turn with prose and the
   // walkthrough's turns with the plan and the slate — one server, decided per
@@ -997,25 +1049,15 @@ async function run(): Promise<void> {
     const { newPage, origin } = app;
 
     await registerScriptedModel(origin, model.port);
-    observed.liveIndicator = await measureLiveIndicator(newPage, origin);
-    progress('live-indicator done');
-    progress('panel start');
-    observed.panel = await measurePanel(newPage, origin);
-    progress('panel done');
-    observed.planTabs = await measurePlanTabs(newPage, origin);
-    progress('plan-tabs done');
-    observed.geometry = await measureGeometry(newPage, origin);
-    progress('geometry done');
-    observed.controls = await measureControls(newPage, origin);
-    progress('controls done');
-    observed.stamped = await measureStampedCard(newPage, origin);
-    progress('stamped done');
-    observed.walkthrough = await measureWalkthrough(newPage, origin);
-    progress('walkthrough done');
-    observed.keptTab = await measureKeptTab(newPage, origin);
-    progress('kept-tab done');
-    observed.state = await measureState(app);
-    progress('state done');
+    observed.liveIndicator = await attempt('live-indicator', () => measureLiveIndicator(newPage, origin));
+    observed.panel = await attempt('panel', () => measurePanel(newPage, origin));
+    observed.planTabs = await attempt('plan-tabs', () => measurePlanTabs(newPage, origin));
+    observed.geometry = await attempt('geometry', () => measureGeometry(newPage, origin));
+    observed.controls = await attempt('controls', () => measureControls(newPage, origin));
+    observed.stamped = await attempt('stamped', () => measureStampedCard(newPage, origin));
+    observed.walkthrough = await attempt('walkthrough', () => measureWalkthrough(newPage, origin));
+    observed.keptTab = await attempt('kept-tab', () => measureKeptTab(newPage, origin));
+    observed.state = await attempt('state', () => measureState(app));
   });
 
   await model.stop();
@@ -1030,20 +1072,12 @@ beforeAll(async () => {
 
   // Every measured number into the run's own log, the ones no assertion reads
   // included: a red is read with its figures, and a green prints what it saw.
-  process.stderr.write(`live-app-tier verdicts: ${JSON.stringify(observed, null, 2)}\n`);
+  process.stderr.write(`live-app-tier verdicts: ${JSON.stringify({ observed, broke: broken() }, null, 2)}\n`);
 });
 
 afterAll(() => {
   if (observed.bootFailure !== null) throw new Error(observed.bootFailure);
 });
-
-/** A row's verdict, or the failure that it never produced one: an `?? 0`
- *  fallback inside an assertion turns a row that never ran into a green one. */
-function verdictOf<Value>(value: Value | null, row: string): Value {
-  if (value === null) throw new Error(`the ${row} row produced no verdict`);
-
-  return value;
-}
 
 describe('the right panel keeps its Work, Files and Env state when the chat tab changes', () => {
   test('the Files surface DOM node identity and scroll position survive', () => {
@@ -1171,15 +1205,8 @@ describe('the plan review flow end to end', () => {
 
 describe('the inspector never moves its selection on its own', () => {
   test('a new workspace resolves to Files, and the one change after is the reader\'s click', () => {
-    const kept = verdictOf(observed.keptTab, 'kept-tab');
-
-    expect(kept.marks).toEqual(['Files', 'Work']);
-  });
-
-  test('the product read Work filled and then empty, so the emptying was exercised', () => {
-    const kept = verdictOf(observed.keptTab, 'kept-tab');
-
-    expect(kept.workPresence.slice(kept.workPresence.indexOf(true))).toContain(false);
+    // The row itself ends unless the product read Work filled after the first turn and empty after the second.
+    expect(verdictOf(observed.keptTab, 'kept-tab').marks).toEqual(['Files', 'Work']);
   });
 });
 

@@ -43,6 +43,31 @@ export const COST_TABLE = `${root}scripts/gate-cost.json`;
  */
 export const QUIET_LOAD = 2;
 
+/** A Kinu suite, dev server or typechecker. `tsc` is `bun run check` and takes
+ *  the box for minutes. */
+export const KINU_WORK = /(?:vitest|vite|tsc|wrangler|workerd)/u;
+
+/** An editor's language server (`tsc --lsp`) lives as long as the editor and idles: it holds no pool, and a
+ *  wait on it never ends (2026-09-23, a browser row skipped behind one). */
+const LANGUAGE_SERVER = /\0--lsp(?:\0|$)/u;
+
+/**
+ * Whether a process is Kinu work holding a resource the row being measured needs: work of THIS
+ * checkout (`checkout` ends in `/`), named by a path in its command or by its working directory.
+ * What two suites or dev servers of one checkout share is real: its `.wrangler/state`, its
+ * `node_modules/.vite` and its preview zone's port. Another checkout's pool, dev server and Chrome
+ * are processes of their own on ports of their own, so they are only load, which is recorded
+ * (2026-09-24: the complexity row ran green in 29-32 s beside an evals vitest in the primary
+ * checkout and a gallery vite in another worktree).
+ */
+export function holdsCheckoutResource(process: { readonly command: string; readonly cwd?: string }, checkout: string): boolean {
+  if (!KINU_WORK.test(process.command) || LANGUAGE_SERVER.test(process.command)) return false;
+
+  const cwd = process.cwd === undefined ? undefined : `${process.cwd}/`;
+
+  return process.command.includes(checkout) || cwd?.startsWith(checkout) === true;
+}
+
 const RowCostSchema = v.object({
   /** Wall clock alone, seconds. Reported against the row's deadline rather than
    *  used for admission: a wall is not a measure of load. */
