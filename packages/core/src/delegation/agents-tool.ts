@@ -1741,7 +1741,7 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
       },
       oneOf: agentsJsonSchemaVariants(deps, actions),
       // No `additionalProperties: false`: the parse below refuses an unknown field, naming the fields the action
-      // takes. The SDK checks nothing against this schema (it carries no validator); `tools.agents` checks its fields.
+      // takes. The SDK checks nothing against this schema (it carries no validator); the tool surface checks its fields.
     }),
     execute: async (input: AgentsToolInput, toolOptions?: AgentsToolCallOptions) => {
       // The native surface parses too: its inputs are type-checked but not name-checked.

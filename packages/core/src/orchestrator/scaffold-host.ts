@@ -11,7 +11,6 @@ import { boundedInt } from '../utils/bounds';
 import { nanoid } from '../utils/nanoid';
 import { renderThrownChain, KinuError } from '../obs/index';
 import { assertScaffoldActive, type ScaffoldRunControl, type ScaffoldToolOutput } from '../scaffold/executor';
-import { toolInputViolation } from '../tools/tool-schema';
 import type {
   ScaffoldHistoryEntry,
   ScaffoldHistoryPage,
@@ -240,9 +239,6 @@ export function createScaffoldCallTool(
     };
 
     if (signal !== undefined) options.abortSignal = signal;
-    const violation = await toolInputViolation(t, args);
-
-    if (violation !== null) throw new KinuError('bad_input', `invalid scaffold tool arguments: ${violation}`);
     assertScaffoldActive(control);
     const result = await t.execute(args, options);
 

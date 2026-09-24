@@ -17,6 +17,7 @@ import {
 import type { ProfileCatalogEnvelope } from '../types/profile';
 import { TaskListStore, TASK_STATUSES } from '../tasks/store';
 import { clampToolResult, withClampedToolResult, type ClampToolResultOptions } from './clamp';
+import { withCheckedInput, withCheckedInputs } from './tool-schema';
 import { codemodeInputSchema } from './sandbox-contract';
 import { connectedDevices } from '../execution/device-status';
 import { deviceMountSegment } from '../execution/device-tunnel-executor';
@@ -568,7 +569,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     }
   }
 
-  return toolsInWorkMode(deps.workMode ?? 'build', tools);
+  return toolsInWorkMode(deps.workMode ?? 'build', withCheckedInputs(tools));
 }
 
 function formatSearchResults(res: WebSearchResponse): string {
@@ -622,10 +623,10 @@ export function installCodemode(
 
   const built = build({ native: toolsInWorkMode(deps.workMode ?? 'build', surface), craftedTools, providers: rt.executionRouter?.getProviders() ?? [] });
   const clamp = { vfs: rt.storage.vfs, producer: 'eval' as const };
-  surface.eval = withClampedToolResult(
+  surface.eval = withCheckedInput('eval', withClampedToolResult(
     built,
     deps.contextBudget ? { ...clamp, budget: deps.contextBudget } : clamp,
-  );
+  ));
 }
 
 /** The one tool assembly: builtins, admitted narrow, kind tools, allowed narrow, then `eval`. */
@@ -655,7 +656,7 @@ export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
   const built = buildBuiltinTools(builtin.workMode === 'plan' ? { ...builtin, workMode: 'build' } : builtin);
   const narrowed = deps.admitted === undefined ? built : keepBuiltins(built, deps.admitted);
   const recorded = deps.wrapAdmitted === undefined ? narrowed : deps.wrapAdmitted(narrowed);
-  const merged = deps.extra === undefined ? recorded : { ...recorded, ...deps.extra };
+  const merged = deps.extra === undefined ? recorded : { ...recorded, ...withCheckedInputs(deps.extra) };
   const allow = deps.allowed === undefined ? undefined : new Set(deps.allowed);
 
   const surface = allow === undefined
@@ -670,11 +671,11 @@ export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
     if (buildFromSurface.success && 'eval' in surface) {
       const entry = { value: buildFromSurface.output(surface) };
 
-      if (isExecutableToolEntry(entry)) surface.eval = entry.value;
+      if (isExecutableToolEntry(entry)) surface.eval = withCheckedInput('eval', entry.value);
     }
   }
 
-  const finished = deps.post === undefined ? surface : { ...surface, ...deps.post };
+  const finished = deps.post === undefined ? surface : { ...surface, ...withCheckedInputs(deps.post) };
   const modeBound = toolsInWorkMode(deps.workMode ?? 'build', finished);
 
   return deps.wrapFinished === undefined ? modeBound : deps.wrapFinished(modeBound);

@@ -114,12 +114,13 @@ test('throwing the failure value propagates its native reason and a malformed pr
 });
 
 test('a native tool a program calls runs only on input its own schema admits', async () => {
-  const commands: unknown[] = [];
+  let runs = 0;
   const { rt } = createTestRuntime();
 
+  // Counted, not recorded: `toEqual([])` would pass on `[undefined]`, the command a call without one passes.
   const shell = {
-    exec: async (command: string) => {
-      commands.push(command);
+    exec: async () => {
+      runs += 1;
 
       return { stdout: 'ran', stderr: '', exitCode: 0 };
     },
@@ -142,7 +143,7 @@ test('a native tool a program calls runs only on input its own schema admits', a
   expect(await codemodeFunction('tools', 'shell', present(nativeToolFunctions(native).shell, 'shell').execute)({ command: 42 }))
     .toMatchObject({ success: false, reason: 'bad_input', error: expect.stringContaining('command') });
   // Neither call reached the shell.
-  expect(commands).toEqual([]);
+  expect(runs).toBe(0);
 });
 
 test('every member of every namespace refuses with the one declared Refusal, and the program records it', async () => {

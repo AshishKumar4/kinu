@@ -9,7 +9,6 @@ import { hasPlanPermission, workModeRefusal } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
 import { branchableToolCall, bindProgramCall } from './outcome';
 import { TOOL_REACH, CODEMODE_CODE_DESCRIPTION, type ToolSurfaceNarrowing } from './registry';
-import { toolInputViolation } from './tool-schema';
 import { KinuError } from '../obs';
 import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider } from '../types/codemode';
 
@@ -106,9 +105,6 @@ export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
             throw new KinuError('bad_input', `tools.${name}(input): input must be one JSON object, the same shape the native \`${name}\` tool takes`);
           }
 
-          const violation = await toolInputViolation(tool, input.output);
-
-          if (violation !== null) throw new KinuError('bad_input', `tools.${name}(input) does not match the \`${name}\` tool's schema: ${violation}`);
           const result = await execute(input.output, { toolCallId: 'codemode-' + nanoid(), messages: [] });
 
           return result === undefined ? undefined : decodeJsonValue({ value: result });
