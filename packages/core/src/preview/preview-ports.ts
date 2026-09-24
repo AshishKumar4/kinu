@@ -24,7 +24,7 @@ export interface PreviewPortState {
   error: string | null;
 }
 
-/** A failed or pending executor read keeps its previous ports; a successful empty result removes them. */
+/** A failed or pending read keeps its previous ports; an empty success removes them. */
 export function reconcilePreviewPorts(
   previous: readonly PinnedPreviewPort[],
   refreshes: readonly ExecutorPortRefresh[],

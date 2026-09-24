@@ -609,7 +609,7 @@ export function turnInputStart(messages: ReadonlyArray<ModelMessage>): number {
   return messages.at(-1)?.role === 'user' ? messages.length - 1 : messages.length;
 }
 
-/** The turn-local messages and the un-woven index of the turn's input, which they ride right before. */
+/** Turn-local messages and the un-woven index of the input they ride before. */
 export interface TurnLocalPlacement {
   readonly at: number;
   readonly messages: readonly ModelMessage[];

@@ -34,7 +34,7 @@ export interface StepDynamicContext {
 
 /** Raw context ownership is settled before ephemeral render transforms run. */
 export interface StepContextPlane {
-  /** `turnStart`: the index of the turn's input in `messages`, where turn-local messages ride. */
+  /** `turnStart`: the index of the turn's input, which turn-local messages ride before. */
   base(): Promise<{ readonly messages: ModelMessage[]; readonly changed: boolean; readonly turnStart?: number }>;
   consume(step: { readonly stepNumber: number; readonly messages: readonly ModelMessage[] }): Promise<void>;
 }
