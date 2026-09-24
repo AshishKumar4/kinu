@@ -43,8 +43,8 @@ comparable.
 
 ## The defect family
 
-`tests/bench/tasks.jsonl` holds 156 tasks and `tests/bench/patches/` the
-matching 156 patch files (counted 2026-09-22). Each patch is the diff that
+`tests/bench/tasks.jsonl` holds 148 tasks and `tests/bench/patches/` the
+matching 148 patch files (counted 2026-09-24). Each patch is the diff that
 breaks the code.
 
 The runner scores an attempt by running two checks in the sandbox
