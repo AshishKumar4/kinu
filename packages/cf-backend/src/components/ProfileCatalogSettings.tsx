@@ -14,6 +14,8 @@ import {
   effectiveRoleCatalog,
   isValidRoleId,
   offeredReasoningEfforts,
+  parseModelSpec,
+  specWithoutAccount,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
@@ -25,7 +27,7 @@ import {
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { getProfileCatalog, listAvailableModels, updateProfileCatalog, type ModelMenu } from '../lib/user-api';
-import { ModelPicker, reasoningEffortLabel } from './ModelPicker';
+import { AccountPicker, ModelPicker, reasoningEffortLabel, specOnAccount } from './ModelPicker';
 import { BrandMark, providerBrand } from './ui/BrandMark';
 import { Card, Choice, Field, inputCls, tabCls } from './ui/form';
 import { FilledButton } from './ui/FilledButton';
@@ -236,7 +238,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
   const saveWhat = tiersOnly ? 'Save tiers' : 'Save roles and tiers';
 
   const defaultModel = draft === null ? '' : draft.tiers.default.model;
-  const defaultLabel = menu.models.find((model) => model.spec === defaultModel)?.label ?? defaultModel;
+  const defaultLabel = labelOfSpec(menu, defaultModel);
 
   return (
     <>
@@ -256,7 +258,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                 const resolved = assignment ?? draft.tiers.default;
                 const builtin = TIER_IDS.some((id) => id === tierId);
 
-                const entry = menu.models.find((model) => model.spec === resolved.model);
+                const entry = menu.models.find((model) => model.spec === specWithoutAccount(resolved.model));
 
                 const efforts = offeredReasoningEfforts(
                   entry?.reasoningEfforts,
@@ -286,6 +288,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                     <ModelPicker
                       models={menu.models}
                       failures={menu.failures}
+                      accounts={menu.accounts}
                       value={assignment?.model ?? ''}
                       onChange={(model) => setTier(tierId, model)}
                       clearable={tierId !== 'default'}
@@ -437,6 +440,13 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
   );
 }
 
+function labelOfSpec(menu: ModelMenu, spec: string): string {
+  const label = menu.models.find((entry) => entry.spec === specWithoutAccount(spec))?.label ?? spec;
+  const account = spec === '' ? undefined : parseModelSpec(spec).account;
+
+  return account === undefined ? label : `${label} · ${account}`;
+}
+
 function TierFallbacks(props: {
   tierId: TierId;
   chain: readonly string[];
@@ -444,16 +454,24 @@ function TierFallbacks(props: {
   menu: ModelMenu;
   onChange: (fallbacks: readonly string[]) => void;
 }) {
-  const labelOf = (spec: string) => props.menu.models.find((entry) => entry.spec === spec)?.label ?? spec;
   const taken = new Set([props.model, ...props.chain]);
+  const accountsOf = (spec: string) => props.menu.accounts?.[parseModelSpec(spec).provider] ?? [];
+
+  const variants = (spec: string) => [
+    spec, ...(accountsOf(spec).length > 1 ? accountsOf(spec).map((account) => specOnAccount(spec, account)) : []),
+  ];
+
+  const freeVariant = (spec: string) => variants(spec).find((variant) => !taken.has(variant));
 
   return (
     <div className="flex flex-wrap items-center gap-1.5 md:col-span-2 md:col-start-2" role="group" aria-label={`${props.tierId} fallbacks`}>
       <span className="p-meta p-text-3">Fallbacks</span>
       {props.chain.map((spec, index) => (
-        <span key={spec} className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-0.5 text-xs p-text">
+        <span key={spec} data-spec={spec} className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-0.5 text-xs p-text">
           <span className="p-text-3">{index + 1}.</span>
-          {labelOf(spec)}
+          {labelOfSpec(props.menu, spec)}
+          <AccountPicker spec={spec} accounts={accountsOf(spec)} label={`${props.tierId} fallback ${index + 1} account`}
+            onChange={(next) => props.onChange(props.chain.map((entry, at) => (at === index ? next : entry)))} />
           <button type="button" className="p-text-3 hover:p-text" aria-label={`Remove ${spec} from the ${props.tierId} fallbacks`}
             onClick={() => props.onChange(props.chain.filter((entry) => entry !== spec))}>
             <XIcon size={11} />
@@ -461,10 +479,14 @@ function TierFallbacks(props: {
         </span>
       ))}
       <ModelPicker
-        models={props.menu.models.filter((entry) => !taken.has(entry.spec))}
+        models={props.menu.models.filter((entry) => freeVariant(entry.spec) !== undefined)}
         failures={props.menu.failures}
         value=""
-        onChange={(spec) => { if (spec) props.onChange([...props.chain, spec]); }}
+        onChange={(spec) => {
+          const free = spec === '' ? undefined : freeVariant(spec);
+
+          if (free !== undefined) props.onChange([...props.chain, free]);
+        }}
         placeholder={props.chain.length === 0 ? 'Add a fallback model…' : 'Add another…'}
         label={`${props.tierId} add fallback`}
         size="sm"

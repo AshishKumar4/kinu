@@ -3487,6 +3487,22 @@ async function choiceOptions(page: Page, label: string): Promise<string[]> {
   return options;
 }
 
+/** Opens the themed choice named `label` and picks the visible option reading exactly `text`, with a real click. */
+async function chooseOption(page: Page, label: string, text: string): Promise<void> {
+  await page.click(`[aria-label="${label}"]`);
+  await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((node) => node.checkVisibility()));
+
+  for (const option of await page.$$('[role="option"]')) {
+    if (await option.evaluate((node, wanted) => node.checkVisibility() && node.textContent?.trim() === wanted, text)) {
+      await option.click();
+
+      return;
+    }
+  }
+
+  throw new Error(`${label} offers no ${text}`);
+}
+
 describe('model tiers are the owner\'s to add, and each offers its model\'s own levels', () => {
   test('an added tier renders, takes its model\'s levels, and is offered to roles', async () => {
     await withGallery(async ({ newPage, origin }) => {
@@ -3530,6 +3546,13 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
       expect(await choiceOptions(page, 'review reasoning effort'))
         .toEqual(['Model default', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
 
+      // Its provider holds two accounts, so the row asks which; the model's levels stay offered on either.
+      expect(await choiceOptions(page, 'review model account')).toEqual(['Default account', 'main', 'work']);
+      await chooseOption(page, 'review model account', 'work');
+      await page.waitForFunction(() => document.querySelector('[aria-label="review model account"]')?.textContent?.trim() === 'work');
+      expect(await choiceOptions(page, 'review reasoning effort'))
+        .toEqual(['Model default', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
+
       // The role editor lists the new tier.
       expect(await choiceOptions(page, 'Default tier')).toContain('review');
 
@@ -3541,15 +3564,23 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
     });
   });
 
-  test('a tier\'s fallbacks are chosen in order, never repeat a model of its chain, and leave by their remove', async () => {
+  test('a tier\'s fallbacks are chosen in order, may run one model on each account, never repeat an entry, and leave by their remove', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1000, height: 1400 });
       await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=models`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[aria-label="New tier id"]');
 
-      const chain = () => page.$eval('[aria-label="deep fallbacks"]', (group) => [...group.querySelectorAll('span.inline-flex')]
-        .map((chip) => chip.textContent?.trim() ?? ''));
+      const chain = () => page.$eval('[aria-label="deep fallbacks"]', (group) => [...group.querySelectorAll('[data-spec]')]
+        .map((chip) => chip.getAttribute('data-spec') ?? ''));
+
+      const offered = async (label: string) => (await choiceOptions(page, 'deep add fallback')).some((option) => option.includes(label));
+
+      const settled = (specs: readonly string[]) => page.waitForFunction((wanted) => {
+        const chips = [...document.querySelectorAll('[aria-label="deep fallbacks"] [data-spec]')].map((chip) => chip.getAttribute('data-spec'));
+
+        return JSON.stringify(chips) === JSON.stringify(wanted);
+      }, {}, specs);
 
       const pick = async (label: string) => {
         await page.click('[aria-label="deep add fallback"]');
@@ -3567,19 +3598,26 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
       };
 
       expect(await chain()).toEqual([]);
-      expect((await choiceOptions(page, 'deep add fallback')).some((option) => option.includes('Claude Opus 4.7'))).toBe(true);
+      expect(await offered('Claude Opus 4.7')).toBe(true);
       await pick('Claude Opus 4.7');
-      await page.waitForFunction(() => document.querySelector('[aria-label="deep fallbacks"]')?.textContent?.includes('Claude Opus 4.7') === true);
+      await settled(['anthropic/claude-opus-4-7']);
 
-      // A model already in the chain is not offered again.
-      expect((await choiceOptions(page, 'deep add fallback')).some((option) => option.includes('Claude Opus 4.7'))).toBe(false);
+      // An entry names its account: switch the first to `work`, then the same model is offered on each account left.
+      await chooseOption(page, 'deep fallback 1 account', 'work');
+      await settled(['anthropic@work/claude-opus-4-7']);
+
+      await pick('Claude Opus 4.7');
+      await settled(['anthropic@work/claude-opus-4-7', 'anthropic/claude-opus-4-7']);
+      await pick('Claude Opus 4.7');
+      await settled(['anthropic@work/claude-opus-4-7', 'anthropic/claude-opus-4-7', 'anthropic@main/claude-opus-4-7']);
+
+      // Every account of it is in the chain now: it is not offered again.
+      expect(await offered('Claude Opus 4.7')).toBe(false);
       await pick('Llama 4');
-      await page.waitForFunction(() => document.querySelector('[aria-label="deep fallbacks"]')?.textContent?.includes('Llama 4') === true);
-      expect(await chain()).toEqual(['1.Claude Opus 4.7', '2.Llama 4']);
+      await settled(['anthropic@work/claude-opus-4-7', 'anthropic/claude-opus-4-7', 'anthropic@main/claude-opus-4-7', 'workers-ai/llama-4']);
 
-      await page.click('[aria-label="Remove anthropic/claude-opus-4-7 from the deep fallbacks"]');
-      await page.waitForFunction(() => document.querySelector('[aria-label="deep fallbacks"]')?.textContent?.includes('Claude Opus 4.7') === false);
-      expect(await chain()).toEqual(['1.Llama 4']);
+      await page.click('[aria-label="Remove anthropic@work/claude-opus-4-7 from the deep fallbacks"]');
+      await settled(['anthropic/claude-opus-4-7', 'anthropic@main/claude-opus-4-7', 'workers-ai/llama-4']);
       await page.close();
     });
   });

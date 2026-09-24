@@ -334,6 +334,7 @@ async function settingsSectionsFixture(path: string): Promise<Response | null> {
         { spec: "anthropic/claude-opus-4-7", label: "Claude Opus 4.7", provider: "anthropic", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
       ],
       failures: [],
+      accounts: { anthropic: ["main", "work"] },
     });
   }
 
