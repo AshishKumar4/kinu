@@ -2055,12 +2055,13 @@ export class KinuPublicSession {
     this.failInFlight(`the workspace socket closed and could not be recovered: ${error.message}`);
   };
 
-  /** Fail what a dropped socket cannot carry over: rpc replies. Turns survive it. */
+  /** Fail what a dropped socket cannot carry over: rpc replies, as the deployment's failure, not the
+   *  caller's. Turns survive it, and the next rpc redials. */
   private failRequests(reason: string): void {
     const rpcs = [...this.rpcs.values()];
     this.rpcs.clear();
 
-    for (const rpc of rpcs) rpc.reject(new Error(reason));
+    for (const rpc of rpcs) rpc.reject(new Error(`${INFRA_FAILURE_MARKER} — ${reason}`));
   }
 
   /** Reject what the dead socket was carrying. A turn is durable up there and

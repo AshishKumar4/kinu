@@ -14,6 +14,9 @@ import { EvalVerifier } from './verifier';
 /** How often an unsettled workspace is looked at. A poll, not a deadline: nothing here ends a turn. */
 const IDLE_POLL_MS = 3_000;
 
+/** Polls in a row the deployment's transport may fail before the trial fails as infrastructure. */
+const DROPPED_POLLS = 3;
+
 
 export type TrialIdentity = { readonly taskVersion: string; readonly evalCommit: string };
 
@@ -30,12 +33,25 @@ function openRuns(events: readonly RunEvent[]): string[] {
  */
 export async function settle(session: KinuPublicSession): Promise<void> {
   let quiet = 0;
+  let dropped = 0;
 
   for (;;) {
-    const [events, jobs, helpers] = await Promise.all([session.runEvents(), session.backgroundJobs(), session.subordinates()]);
+    let busy = true;
 
-    const busy = openRuns(events).length > 0 || jobs.some((job) => job.status === 'running')
-      || helpers.some((helper) => helper.status === 'working');
+    try {
+      const [events, jobs, helpers] = await Promise.all([session.runEvents(), session.backgroundJobs(), session.subordinates()]);
+
+      busy = openRuns(events).length > 0 || jobs.some((job) => job.status === 'running')
+        || helpers.some((helper) => helper.status === 'working');
+
+      dropped = 0;
+    } catch (error) {
+      // An eviction closes the socket under the polls in flight, and the next poll redials. Three
+      // failed polls in a row is a deployment that is not answering, and fails the trial as that.
+      dropped += 1;
+
+      if (!renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER) || dropped >= DROPPED_POLLS) throw error;
+    }
 
     quiet = busy ? 0 : quiet + 1;
 

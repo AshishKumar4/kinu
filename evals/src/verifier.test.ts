@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
+import { INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import { EvalVerifier, matchesReference, type SlateClient, type VerifierSession } from './verifier';
 
 const CallSchema = v.object({ method: v.string(), args: v.array(JsonValueSchema) });
@@ -56,6 +57,19 @@ describe('EvalVerifier', () => {
 
     expect(checks.map((check) => [check.id, check.pass])).toEqual([['first', true], ['refused', false], ['last', true]]);
     expect(JSON.stringify(checks[1]?.evidence)).toContain('no method missing');
+  });
+
+  test('a call the deployment could not carry fails the trial as infrastructure, not the check', async () => {
+    const dropped: VerifierSession = {
+      ...session({}),
+      slateOp: () => Promise.reject(new Error(`${INFRA_FAILURE_MARKER} — the workspace socket closed (code 1006)`)),
+    };
+
+    const collected = new EvalVerifier(dropped, []).collect(async (verifier) => {
+      await verifier.check('builds', async () => ({ pass: (await verifier.call('app', 'total', [])) !== null }));
+    });
+
+    await expect(collected).rejects.toThrow(INFRA_FAILURE_MARKER);
   });
 });
 

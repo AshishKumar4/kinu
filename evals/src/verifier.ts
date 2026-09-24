@@ -1,6 +1,7 @@
 import * as v from 'valibot';
 import { JsonValueSchema, projectJsonValue, type JsonValue } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
+import { INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import { redact } from './redact';
 import type { EvalCheck } from './task';
 
@@ -160,6 +161,8 @@ export class EvalVerifier {
     try {
       await verify(this);
     } catch (error) {
+      // The deployment's transport failing (`infraBoundary`, a dropped socket) is nothing the build did.
+      if (renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
       // A throw outside any check is the checker's own failure; it fails the turn and says why.
       this.#checks.push({ id: THREW, pass: false, evidence: truncate(redact(renderThrownChain({ cause: error }))) });
     }
@@ -177,6 +180,8 @@ export class EvalVerifier {
         ? { id, pass: outcome.pass }
         : { id, pass: outcome.pass, evidence: projectJsonValue({ value: outcome.evidence }) };
     } catch (error) {
+      // The deployment failing to answer is not the build's failure: the trial fails as infrastructure.
+      if (renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
       // The failure is the check's result: its error is recorded as the evidence.
       this.#checks[index] = { id, pass: false, evidence: truncate(redact(renderThrownChain({ cause: error }))) };
     }
