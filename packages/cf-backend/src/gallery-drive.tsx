@@ -28,6 +28,7 @@ async function seededDrive(): Promise<MossaicVfs> {
   await write("/projects/ops/runbook.md", "# Runbook\n");
   await write("/notes/todo.md", "- write the skill\n");
   await write("/skills/review/SKILL.md", SKILL("review", "Review a pull request the way this team does"));
+  await write("/skills/slates/SKILL.md", SKILL("slates", "The team's own notes on building slates"));
 
   return drive;
 }
