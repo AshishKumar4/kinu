@@ -28,11 +28,11 @@ export class SessionContext {
   selected(): ContextSelection | null {
     this.actor.assertCurrent();
 
-    const row = this.sql<{ context_id: string; revision: number }>`SELECT s.context_id,MAX(r.revision) AS revision
-      FROM actor_context_selection s JOIN context_revisions r ON r.actor_id=s.actor_id AND r.context_id=s.context_id
-      WHERE s.actor_id=${this.actor.actorId} GROUP BY s.context_id`[0];
+    // One index seek; MAX over a GROUP BY join read every revision.
+    const row = this.sql<{ context_id: string; revision: number | null }>`SELECT s.context_id,(SELECT MAX(r.revision) FROM context_revisions r
+      WHERE r.actor_id=s.actor_id AND r.context_id=s.context_id) AS revision FROM actor_context_selection s WHERE s.actor_id=${this.actor.actorId}`[0];
 
-    return row === undefined ? null : { contextId: row.context_id, revision: row.revision };
+    return row === undefined || row.revision === null ? null : { contextId: row.context_id, revision: row.revision };
   }
 
   revisions(contextId: string): readonly { revision: number; author: string; cause: string; turn_id: string | null; proposal_id: string | null; recorded_at: number }[] {

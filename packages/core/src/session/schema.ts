@@ -18,6 +18,8 @@ export function initSessionContextTables(exec: RawSqlExec): void {
       OR (sealed_at IS NOT NULL AND ((content_json IS NOT NULL AND content_path IS NULL AND content_digest IS NULL)
         OR (content_json IS NULL AND content_path IS NOT NULL AND content_digest IS NOT NULL)))))`);
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS session_message_ingress ON session_messages(actor_id,ingress_id) WHERE ingress_id IS NOT NULL`);
+  // `sealAbandoned` names the literal `sealed_at IS NULL` at every admission.
+  exec(`CREATE INDEX IF NOT EXISTS session_open_messages ON session_messages(actor_id) WHERE sealed_at IS NULL`);
   // An open message's parts while its answer streams, deleted when it seals into `content_*`. Long text
   // continues in the next segment so no row reaches the platform row limit.
   exec(`CREATE TABLE IF NOT EXISTS stream_parts (
@@ -56,6 +58,7 @@ export function initSessionContextTables(exec: RawSqlExec): void {
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS context_live_entry ON context_memberships(actor_id,context_id,entry_id) WHERE to_revision IS NULL`);
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS context_live_position ON context_memberships(actor_id,context_id,position) WHERE to_revision IS NULL`);
   exec(`CREATE INDEX IF NOT EXISTS context_history_members ON context_memberships(actor_id,context_id,from_revision,to_revision,position)`);
+  exec(`CREATE INDEX IF NOT EXISTS context_message_members ON context_memberships(actor_id,message_id)`);
   exec(`CREATE TABLE IF NOT EXISTS context_proposals (
     actor_id TEXT NOT NULL, proposal_id TEXT NOT NULL, context_id TEXT NOT NULL, base_revision INTEGER NOT NULL,
     author TEXT NOT NULL, via TEXT NOT NULL, cause TEXT NOT NULL, turn_id TEXT, build_identity TEXT,
