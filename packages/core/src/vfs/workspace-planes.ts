@@ -7,13 +7,15 @@ import {
   NativeSinkPlan, type ForkFileSink, type ForkNativeFilePort,
 } from '../identity/fork-sink';
 import type { ForkFileSource } from '../identity/fork-transfer';
+import type { ForkTreeReader } from '../identity/fork';
 import type { ArchiveFileSource } from '../identity/archive';
 import { SOUL_PATH, summarizeSoulBytes } from '../identity/soul';
+import { isVfsError } from './errno';
 import { workspacePath, WORKSPACE_ROOT } from './workspace-path';
 import type { WorkspaceBundle } from './nimbus-workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
-import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import type { CredentialedVfs, VfsStat } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 
 async function sessionPlane(bundle: WorkspaceBundle): Promise<CredentialedVfs> {
   return (await bundle.session()).vfs.as(CRED_SESSION_USER);
@@ -41,7 +43,7 @@ export async function writeWorkspaceSoul(
 }
 
 /** Range writes are staging-only; ordinary callers must not get raw range-write authority. */
-export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: string): ForkFileSink {
+function workspaceForkPort(bundle: WorkspaceBundle): ForkNativeFilePort {
   // A fork lands on an empty tree, so staging creates parents first.
   const ensureParent = async (path: string): Promise<void> => {
     const resolved = workspacePath(path);
@@ -54,7 +56,7 @@ export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: str
     if (!plane.exists(parent)) plane.mkdir(parent, { recursive: true });
   };
 
-  const native: ForkNativeFilePort = {
+  return {
     async truncate(path, size) {
       await ensureParent(path);
       (await sessionPlane(bundle)).truncate(workspacePath(path), size);
@@ -74,9 +76,41 @@ export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: str
       );
     },
     async unlink(path) { (await sessionPlane(bundle)).unlink(workspacePath(path)); },
-  };
+    async writeFile(path, bytes) {
+      await ensureParent(path);
+      (await sessionPlane(bundle)).writeFile(workspacePath(path), bytes);
+    },
+    async mkdir(path) { (await sessionPlane(bundle)).mkdir(workspacePath(path), { recursive: true }); },
+    async symlink(target, path) {
+      await ensureParent(path);
+      const plane = await sessionPlane(bundle);
+      const at = workspacePath(path);
 
-  return new NativeSinkPlan(native, transferId, {
+      if (lstatOrNull(plane, at)?.type === 'symlink') plane.unlink(at);
+      plane.symlink(target, at);
+    },
+    async stamp(path, meta) {
+      // Kernel: Nimbus refuses a session user's chmod adding group or other bits.
+      const kernel = (await bundle.session()).vfs.as(CRED_KERNEL);
+      const at = workspacePath(path);
+      kernel.chmod(at, meta.mode & 0o777);
+      kernel.utimes(at, meta.mtimeMs, meta.mtimeMs);
+    },
+    async remove(path) {
+      const plane = await sessionPlane(bundle);
+      const at = workspacePath(path);
+      const stat = lstatOrNull(plane, at);
+
+      if (stat === null) return;
+
+      if (stat.type === 'directory') plane.removeRecursive(at);
+      else plane.unlink(at);
+    },
+  };
+}
+
+export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: string): ForkFileSink {
+  return new NativeSinkPlan(workspaceForkPort(bundle), transferId, {
     // SOUL cannot publish by rename: that would skip the protected write's kernel ownership.
     owns: (targetPath) => targetPath === SOUL_PATH,
     async publish(_targetPath, bytes) {
@@ -87,15 +121,35 @@ export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: str
   });
 }
 
-export function createWorkspaceForkSource(
-  bundle: WorkspaceBundle, plane: ForkFileSource,
-): ForkFileSource {
+/** Read as the kernel, so no file's mode hides it from the copy. */
+export function createWorkspaceForkSource(bundle: WorkspaceBundle): ForkFileSource {
   return {
-    ...plane,
-    async readRange(path, offset, length) {
-      return (await sessionPlane(bundle)).readRange(workspacePath(path), offset, length);
+    async open(): Promise<ForkTreeReader> {
+      const plane = (await bundle.session()).vfs.as(CRED_KERNEL);
+
+      return {
+        lstat(path) {
+          const stat = lstatOrNull(plane, workspacePath(path));
+
+          return stat === null ? null : { kind: stat.type, size: stat.size, mode: stat.mode & 0o777, mtimeMs: stat.mtime };
+        },
+        readdir: (path) => plane.readdir(workspacePath(path)).map((entry) => entry.name),
+        readlink: (path) => plane.readlink(workspacePath(path)),
+        readRange: (path, offset, length) => plane.readRangeUncached(workspacePath(path), offset, length),
+        revision: (path) => path === undefined ? plane.revision() : plane.revision(workspacePath(path)),
+      };
     },
   };
+}
+
+function lstatOrNull(plane: CredentialedVfs, path: string): VfsStat | null {
+  try {
+    return plane.lstat(path);
+  } catch (error) {
+    if (isVfsError(error) && error.code === 'ENOENT') return null;
+
+    throw error;
+  }
 }
 
 /** Unsupported node kinds fail the backup rather than producing an incomplete one. */

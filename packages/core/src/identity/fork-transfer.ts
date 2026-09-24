@@ -1,6 +1,6 @@
 /**
  * Workspace fork wire. One RPC argument is capped at 32 MiB (`do.facet.rpc_bytes`), so a fork crosses as
- * bounded frames (`begin`, row batches, file ranges, `commit`); nothing is visible on the target until `commit`.
+ * bounded frames (`begin`, row batches, tree entries, file ranges, `commit`); nothing is visible on the target until `commit`.
  * The cursor lives in the target's `ForkStagingState` row so an interrupted transfer resumes across DO activations.
  */
 
@@ -9,13 +9,15 @@ import { createHash } from 'node:crypto';
 import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../config/store';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
-import type { SqlExecutor, VFS } from '../types/primitives';
+import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from './actor-handle';
-import type { VfsNativeReads } from '../vfs/mounts';
 import type { ForkFileSink } from './fork-sink';
 import { renderIssues } from '../utils/json';
 import { openWorkspaceMainActor } from './workspace-actors';
-import { forkFilePaths, type ForkFilePath } from './fork';
+import {
+  snapshotForkFiles, type ForkFileEntry, type ForkSnapshot, type ForkTreeEntry, type ForkTreeReader,
+} from './fork';
+import { SOUL_PATH } from './soul';
 import {
   forkArtifactPath,
   forkConversationCounts,
@@ -46,8 +48,8 @@ import { ForkTargetWriter, type ForkResult } from './fork-writer';
 import type { ForkStaging, ForkStagingState } from './fork-staging';
 
 /** Fork transfer protocol version; a receiver refuses one it does not implement. Bump when an older
- *  receiver would misread the frame union. v2 carries the canonical conversation store. */
-export const FORK_TRANSFER_VERSION = 2;
+ *  receiver would misread the frame union. v3 carries the workspace tree. */
+export const FORK_TRANSFER_VERSION = 3;
 
 /** Payload bytes per frame: a quarter of `do.facet.rpc_bytes`, leaving headroom for clone metadata and envelope. */
 export const FORK_FRAME_BYTES = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
@@ -65,7 +67,7 @@ export const FORK_ROW_SECTIONS = [
 
 export type ForkRowSection = (typeof FORK_ROW_SECTIONS)[number];
 
-/** Per-section row counts and file count, declared by the source and checked at `commit`. */
+/** Per-section row counts and tree entries, declared by the source and checked at `commit`. */
 const ForkSectionCountsSchema = v.object({
   agentConfig: v.number(),
   craftedTools: v.number(),
@@ -86,6 +88,21 @@ const FRAME_ENVELOPE = {
   digest: v.string(),
 } as const;
 
+/** Relative, no empty, `.` or `..` segment: no frame names a path outside the tree. */
+const ForkTreePathSchema = v.pipe(
+  v.string(),
+  v.check((path) => !path.startsWith('/') && path.split('/').every((part) => part !== '' && part !== '.' && part !== '..'),
+    'a fork path is relative and has no empty, "." or ".." segment'),
+);
+
+const ForkWireEntrySchema = v.variant('kind', [
+  v.object({ kind: v.literal('file'), path: ForkTreePathSchema, mode: v.number(), mtimeMs: v.number(), bytes: v.instance(Uint8Array) }),
+  v.object({ kind: v.literal('directory'), path: ForkTreePathSchema, mode: v.number(), mtimeMs: v.number() }),
+  v.object({ kind: v.literal('symlink'), path: ForkTreePathSchema, target: v.string() }),
+]);
+
+export type ForkWireEntry = v.InferOutput<typeof ForkWireEntrySchema>;
+
 /** One frame of one fork transfer; the canonical wire authority every type on both sides is inferred from. */
 const ForkFrameSchema = v.variant('kind', [
   v.object({
@@ -101,11 +118,12 @@ const ForkFrameSchema = v.variant('kind', [
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('conversationEntries'), rows: v.array(ForkConversationEntryRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('conversationEntryParts'), rows: v.array(ForkConversationEntryPartRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('contextMembers'), rows: v.array(ForkContextMemberRowSchema) }),
-  /** One byte range of one inherited file. Bytes, since only a byte count bounds the RPC argument exactly. */
+  /** One byte range of SOUL.md, a payload, or a file too large for `entries`. Bytes, since only a byte
+   *  count bounds the RPC argument exactly. */
   v.object({
     ...FRAME_ENVELOPE,
     kind: v.literal('file'),
-    path: v.string(),
+    path: ForkTreePathSchema,
     offset: v.number(),
     bytes: v.instance(Uint8Array),
     last: v.boolean(),
@@ -113,7 +131,10 @@ const ForkFrameSchema = v.variant('kind', [
     fileDigest: v.optional(v.string()),
     /** A payload file, `path` relative to its artifact directory; the receiver re-roots it. */
     artifact: v.boolean(),
+    mode: v.number(),
+    mtimeMs: v.number(),
   }),
+  v.object({ ...FRAME_ENVELOPE, kind: v.literal('entries'), entries: v.array(ForkWireEntrySchema) }),
   /** Closes the transfer. `stream` is the rolling hash over every preceding frame's `digest`, so a
      *  dropped, reordered or substituted frame cannot reach a matching commit. */
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('commit'), stream: v.string() }),
@@ -124,6 +145,8 @@ export type ForkFrame = v.InferOutput<typeof ForkFrameSchema>;
 export type ForkBeginFrame = Extract<ForkFrame, { kind: 'begin' }>;
 
 export type ForkFileFrame = Extract<ForkFrame, { kind: 'file' }>;
+
+export type ForkEntriesFrame = Extract<ForkFrame, { kind: 'entries' }>;
 
 export type ForkRowFrame = Extract<ForkFrame, { kind: ForkRowSection }>;
 
@@ -156,6 +179,13 @@ function forkFramePreimage(frame: ForkFrameSealInput): string {
     return `${stableStringify({ ...meta })}|${sha256Hex(bytes)}`;
   }
 
+  if (frame.kind === 'entries') {
+    const { entries, digest: _digest, ...meta } = frame;
+    const hashed = entries.map((entry) => entry.kind === 'file' ? { ...entry, bytes: sha256Hex(entry.bytes) } : entry);
+
+    return stableStringify({ ...meta, entries: hashed });
+  }
+
   const { digest: _digest, ...body } = frame;
 
   return stableStringify(body);
@@ -176,8 +206,10 @@ export function foldForkStream(previous: string, digest: string): string {
   return sha256Hex(`${previous}${digest}`);
 }
 
-/** Source file plane for a streamed fork; ranged reads are required so no file is read whole. */
-export type ForkFileSource = VFS & Pick<VfsNativeReads, 'readRange'>;
+/** Opened once per transfer, then read synchronously, so the files are one snapshot. */
+export interface ForkFileSource {
+  open(): Promise<ForkTreeReader>;
+}
 
 export interface ForkTransferSource {
   sql: SqlExecutor;
@@ -235,6 +267,22 @@ function conversationEntryPartPayloadBytes(row: ForkConversationEntryPartRow): n
 
 function contextMemberPayloadBytes(row: ForkContextMemberRow): number {
   return utf8Bytes(row.entry_id) + utf8Bytes(row.message_id);
+}
+
+function wireEntryPayloadBytes(entry: ForkWireEntry): number {
+  if (entry.kind === 'file') return utf8Bytes(entry.path) + entry.bytes.byteLength;
+
+  return utf8Bytes(entry.path) + (entry.kind === 'symlink' ? utf8Bytes(entry.target) : 0);
+}
+
+function wireEntry(snapshot: ForkSnapshot, entry: ForkTreeEntry): ForkWireEntry {
+  if (entry.kind === 'directory') return { kind: 'directory', path: entry.path, mode: entry.mode, mtimeMs: entry.mtimeMs };
+
+  if (entry.kind === 'symlink') return { kind: 'symlink', path: entry.path, target: entry.target };
+  // Copy: structured clone of a view carries its whole backing buffer.
+  const bytes = entry.size === 0 ? new Uint8Array(0) : snapshot.read(entry, 0, entry.size).slice();
+
+  return { kind: 'file', path: entry.path, mode: entry.mode, mtimeMs: entry.mtimeMs, bytes };
 }
 
 async function* configRows(sql: SqlExecutor): AsyncGenerator<ForkConfigRow> {
@@ -315,8 +363,8 @@ async function* contextMemberRows(plan: ForkConversationPlan): AsyncGenerator<Fo
   for (const member of plan.members) yield member;
 }
 
-/** Reads one source workspace into sealed, bounded fork frames. No snapshot isolation: later mutation
- *  makes the stream disagree with `begin.counts`, which the receiver refuses at commit. */
+/** Reads one source workspace into sealed, bounded fork frames. Rows have no snapshot isolation: later
+ *  mutation makes the stream disagree with `begin.counts`, which the receiver refuses at commit. */
 export async function* forkTransferFrames(
   source: ForkTransferSource,
 ): AsyncGenerator<ForkFrame> {
@@ -331,9 +379,9 @@ export async function* forkTransferFrames(
     artifactDirectory: source.artifactDirectory,
   });
 
-  const filePaths: ForkFilePath[] = [];
-
-  for await (const file of forkFilePaths(source.vfs, plan.artifacts)) filePaths.push(file);
+  const snapshot = snapshotForkFiles(await source.vfs.open(), plan.artifacts.map((relative) => ({
+    relative, path: forkArtifactPath(relative, source.artifactDirectory),
+  })));
 
   const conversation = forkConversationCounts(source.sql, actorId, plan);
 
@@ -343,7 +391,7 @@ export async function* forkTransferFrames(
     craftedTools: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`[0]?.count ?? 0,
     memoryChunks: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`[0]?.count ?? 0,
     ...conversation,
-    files: filePaths.length,
+    files: snapshot.entries.length,
   };
 
   const identity = source.sql<{ id: string; name: string }>`
@@ -434,48 +482,55 @@ export async function* forkTransferFrames(
     }
   }
 
-  for (const file of filePaths) {
-    // Payload paths are relative to the source artifact directory.
-    const path = file.artifact ? forkArtifactPath(file.path, source.artifactDirectory) : file.path;
-    const stat = await source.vfs.stat(path);
-
-    if (stat === null) {
-      throw new Error(`fork transfer lost file ${JSON.stringify(path)} between the walk and the read`);
-    }
-
+  const fileFrames = function* (file: ForkFileEntry): Generator<ForkFrame> {
     // Hashed as ranges are read, so the whole-file digest costs one range of state.
     const fileHash = createHash('sha256');
 
-    for (let offset = 0; offset < stat.size || (offset === 0 && stat.size === 0); offset += source.frameBytes) {
-      const length = Math.min(source.frameBytes, stat.size - offset);
-      const read = length === 0 ? new Uint8Array(0) : await source.vfs.readRange(path, offset, length);
-
-      if (read.byteLength !== length) {
-        throw new Error(
-          `fork transfer read ${read.byteLength} bytes of ${JSON.stringify(path)} where ${length} were asked for; `
-          + 'the file changed under the transfer',
-        );
-      }
-
+    for (let offset = 0; offset < file.size || (offset === 0 && file.size === 0); offset += source.frameBytes) {
+      const length = Math.min(source.frameBytes, file.size - offset);
       // Copy: structured clone of a view carries its whole backing buffer.
-      const range = read.slice();
-      fileHash.update(range);
-      const last = offset + length >= stat.size;
+      const range = length === 0 ? new Uint8Array(0) : snapshot.read(file, offset, length).slice();
 
-      if (last) {
-        yield seal({
-          version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-          kind: 'file', path: file.path, offset, bytes: range, last: true,
-          fileDigest: fileHash.digest('hex'), artifact: file.artifact,
-        });
-      } else {
-        yield seal({
-          version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-          kind: 'file', path: file.path, offset, bytes: range, last: false, artifact: file.artifact,
-        });
-      }
+      fileHash.update(range);
+      const last = offset + length >= file.size;
+
+      const frame = {
+        version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
+        kind: 'file', path: file.path, offset, bytes: range, artifact: file.artifact, mode: file.mode, mtimeMs: file.mtimeMs,
+      } as const;
+
+      yield seal(last ? { ...frame, last: true, fileDigest: fileHash.digest('hex') } : { ...frame, last: false });
     }
+  };
+
+  let batch: ForkWireEntry[] = [];
+  let batchBytes = 0;
+
+  const entriesFrame = (): ForkFrame => {
+    const frame = seal({ version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++, kind: 'entries', entries: batch });
+    batch = [];
+    batchBytes = 0;
+
+    return frame;
+  };
+
+  for (const entry of snapshot.entries) {
+    // SOUL.md's protected write and a payload's re-rooting need their own frames.
+    if (entry.kind === 'file' && (entry.artifact || entry.path === SOUL_PATH || entry.size > source.frameBytes)) {
+      if (batch.length > 0) yield entriesFrame();
+      yield* fileFrames(entry);
+      continue;
+    }
+
+    const wire = wireEntry(snapshot, entry);
+    const bytes = wireEntryPayloadBytes(wire);
+
+    if (batch.length > 0 && batchBytes + bytes > source.frameBytes) yield entriesFrame();
+    batch.push(wire);
+    batchBytes += bytes;
   }
+
+  if (batch.length > 0) yield entriesFrame();
 
   // O(1) on both halves; see {@link foldForkStream}.
   yield sealForkFrame({
@@ -537,7 +592,8 @@ export class ForkTransferReceiver {
 
     if (frame.kind === 'begin') {
       await this.abortOpenFile();
-      await this.writer.clearStagedFiles();
+      await this.files.remove(this.staging.files());
+      this.staging.dropFiles();
       // The write's reset first: the wire's cursor is declared onto a row that already belongs to this fork.
       this.writer.begin(frame.head);
       this.staging.declare({
@@ -583,9 +639,7 @@ export class ForkTransferReceiver {
       return { status: 'published', result: await this.commit(staged, frame.stream) };
     }
 
-    const sectionCursor = frame.kind === 'file'
-      ? await this.stageRange(staged, frame)
-      : this.stageRows(staged, frame);
+    const sectionCursor = await this.stage(staged, frame);
 
     this.staging.advance({
       expectedSeq: frame.seq + 1,
@@ -594,6 +648,14 @@ export class ForkTransferReceiver {
     });
 
     return { status: 'staged' };
+  }
+
+  private async stage(staged: ForkStaging, frame: Exclude<ForkFrame, { kind: 'begin' | 'commit' }>): Promise<number> {
+    if (frame.kind === 'file') return this.stageRange(staged, frame);
+
+    if (frame.kind === 'entries') return this.stageEntries(staged, frame);
+
+    return this.stageRows(staged, frame);
   }
 
   /** One batch of one section; a section the cursor has passed cannot come back. */
@@ -662,10 +724,21 @@ export class ForkTransferReceiver {
     const digest = await this.files.stagedDigest(path, arrived);
 
     if (frame.fileDigest !== digest) throw new Error(`fork transfer file ${JSON.stringify(path)} does not match the digest the source declared`);
-    const committed = await this.files.commitFile(path);
+    const committed = await this.files.commitFile(path, { mode: frame.mode, mtimeMs: frame.mtimeMs });
     this.writer.stageCommittedFile(path, committed?.mission);
     this.opened = null;
     this.staging.file(null, 0);
+
+    return FORK_ROW_SECTIONS.length;
+  }
+
+  private async stageEntries(staged: ForkStaging, frame: ForkEntriesFrame): Promise<number> {
+    if (staged.filePath !== null) {
+      throw new Error(`fork transfer sent whole entries while ${JSON.stringify(staged.filePath)} was still incomplete`);
+    }
+
+    await this.files.place(frame.entries);
+    this.writer.stageCommittedEntries(frame.entries.map((entry) => entry.path));
 
     return FORK_ROW_SECTIONS.length;
   }

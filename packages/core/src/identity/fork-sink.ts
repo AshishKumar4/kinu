@@ -4,7 +4,12 @@
  */
 
 import { createHash } from 'node:crypto';
-import { FORK_FRAME_BYTES } from './fork-transfer';
+import { FORK_FRAME_BYTES, type ForkWireEntry } from './fork-transfer';
+
+export interface ForkFileMeta {
+  mode: number;
+  mtimeMs: number;
+}
 
 /** Native operations a streamed fork needs; deliberately not VFS (no raw range-write authority for ordinary callers). */
 export interface ForkNativeFilePort {
@@ -15,6 +20,13 @@ export interface ForkNativeFilePort {
   readRange(path: string, offset: number, length: number): Promise<Uint8Array>;
   rename(from: string, to: string): Promise<void>;
   unlink(path: string): Promise<void>;
+  writeFile(path: string, bytes: Uint8Array): Promise<void>;
+  mkdir(path: string): Promise<void>;
+  /** Replaces a symlink already there (a re-delivered frame). */
+  symlink(target: string, path: string): Promise<void>;
+  stamp(path: string, meta: ForkFileMeta): Promise<void>;
+  /** Recursive; a missing path is not an error. */
+  remove(path: string): Promise<void>;
 }
 
 /** Metadata from committing one file; the protected SOUL sink carries its mission here. */
@@ -39,8 +51,10 @@ export interface ForkFileSink {
   /** SHA-256 of the staged `bytes` for `path`, computed from staging rather than a running hash
      *  so it does not depend on one activation seeing every range. */
   stagedDigest(path: string, bytes: number): Promise<string>;
-  commitFile(path: string): Promise<ForkFileCommit | void>;
+  commitFile(path: string, meta: ForkFileMeta): Promise<ForkFileCommit | void>;
   abortFile(path: string): Promise<void>;
+  place(entries: readonly ForkWireEntry[]): Promise<void>;
+  remove(paths: readonly string[]): Promise<void>;
 }
 
 /**
@@ -139,7 +153,7 @@ export class NativeSinkPlan implements ForkFileSink {
     return hash.digest('hex');
   }
 
-  async commitFile(path: string): Promise<ForkFileCommit> {
+  async commitFile(path: string, meta: ForkFileMeta): Promise<ForkFileCommit> {
     if (path !== this.target) throw new Error(`fork file sink has no open file ${JSON.stringify(path)}`);
 
     if (this.temp === null) {
@@ -154,6 +168,7 @@ export class NativeSinkPlan implements ForkFileSink {
 
     const temp = this.temp;
     await this.files.rename(temp, path);
+    await this.files.stamp(path, meta);
     this.clear();
 
     return {};
@@ -166,6 +181,27 @@ export class NativeSinkPlan implements ForkFileSink {
     this.clear();
 
     if (temp !== null) await this.files.unlink(temp);
+  }
+
+  async place(entries: readonly ForkWireEntry[]): Promise<void> {
+    for (const entry of entries) {
+      if (this.protect?.owns(entry.path)) {
+        throw new Error(`fork protected destination ${JSON.stringify(entry.path)} arrived as a whole entry, not through its protected write`);
+      }
+
+      if (entry.kind === 'symlink') {
+        await this.files.symlink(entry.target, entry.path);
+        continue;
+      }
+
+      if (entry.kind === 'directory') await this.files.mkdir(entry.path);
+      else await this.files.writeFile(entry.path, entry.bytes);
+      await this.files.stamp(entry.path, entry);
+    }
+  }
+
+  async remove(paths: readonly string[]): Promise<void> {
+    for (const path of paths) await this.files.remove(path);
   }
 
   private clear(): void {

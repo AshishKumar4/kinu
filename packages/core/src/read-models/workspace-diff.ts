@@ -13,7 +13,7 @@ import * as v from 'valibot';
 import { CommandResultSchema } from '../execution/exec-result';
 import { KinuError, renderThrownChain } from '../obs/index';
 import { sha256Hex } from '../safety/argument-digest';
-import { isSystemManaged } from './files-plane';
+import { isSystemManaged } from '../vfs/workspace-path';
 
 /** `do.sqlite.row_bytes` caps a body's row, which also holds its 64-hex key. */
 const BODY_MAX_BYTES = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value - 64;

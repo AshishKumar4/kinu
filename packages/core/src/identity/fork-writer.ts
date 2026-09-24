@@ -1,6 +1,6 @@
 /** Workspace fork write and its accounting. The target DB must already be initialized (initWorkspaceSchema). */
 
-import type { SqlExecutor, VFS } from '../types/primitives';
+import type { SqlExecutor } from '../types/primitives';
 import { SOUL_PATH } from './soul';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import { ForkStagingState } from './fork-staging';
@@ -73,7 +73,6 @@ export class ForkTargetWriter {
 
   constructor(
     private readonly target: SqlExecutor,
-    private readonly targetVfs: VFS,
     private readonly opts: ForkWriteTarget,
   ) {
     this.now = opts.now ?? Date.now();
@@ -242,13 +241,10 @@ export class ForkTargetWriter {
     this.staging.count({ files: 1 });
   }
 
-  /** Remove files a prior unpublished transfer staged, per the target's `fork_staged_files` rows. */
-  async clearStagedFiles(): Promise<void> {
-    for (const path of this.staging.files()) {
-      if (await this.targetVfs.exists(path)) await this.targetVfs.unlink(path);
-    }
-
-    this.staging.dropFiles();
+  /** Record the whole tree entries a sink placed; SOUL never arrives this way (its sink refuses it). */
+  stageCommittedEntries(paths: readonly string[]): void {
+    for (const path of paths) this.staging.addFile(path);
+    this.staging.count({ files: paths.length });
   }
 
   /** How much has landed, read from the target, for the wire's completeness check. */
@@ -344,7 +340,8 @@ export class ForkTargetWriter {
     // Fork marker: a system entry on the cut point; a chain node only, deliberately not a context member.
     const syntheticText =
       `You were forked from workspace "${head.source.workspaceName}" at message ${head.cut.messageId} on `
-      + `${new Date(this.now).toISOString()}. The conversation above happened before the fork. `
+      + `${new Date(this.now).toISOString()}. The conversation above happened before the fork. Your files are a copy `
+      + `of that workspace's files as they were when the fork was made, so they can hold work from after that message. `
       + `Your current tool set and memory are authoritative; ignore any tools or context `
       + `referenced before the fork that you don't see in your active tool list.`;
 

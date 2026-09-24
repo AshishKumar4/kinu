@@ -261,7 +261,7 @@ function ForkModal({
 
   return (
     <Modal
-      title="Fork from here"
+      title="Fork the workspace from here"
       icon={<GitBranchIcon size={18} className="p-accent" />}
       onClose={onCancel}
       busy={busy}
@@ -273,10 +273,12 @@ function ForkModal({
       </>}
     >
       <div className="text-xs p-text-2 leading-relaxed space-y-1.5">
-        <p>Create a new workspace that branches off <span className="font-mono p-text">{sourceName}</span> at this message.</p>
+        <p>Create a new workspace from <span className="font-mono p-text">{sourceName}</span>, with its own conversation and its own copy of the files.</p>
         <ul className="list-disc list-inside space-y-0.5 p-text-3">
-          <li>Copies: SOUL.md, {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"}, memory, learned tools</li>
-          <li>Resets: MCTS tree, evolution events, scaffold</li>
+          <li>Conversation: the {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"} up to this one</li>
+          <li>Files: the project, SOUL.md and memory as they are now, not as they were at this message</li>
+          <li>Also copied: learned tools and settings</li>
+          <li>Starts fresh: MCTS tree, evolution events, scaffold, installed runtimes</li>
           <li>Source workspace is unaffected</li>
         </ul>
       </div>

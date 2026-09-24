@@ -4,8 +4,10 @@
  * with no cross-DO SQL and one RPC argument is capped (`do.facet.rpc_bytes`). Spec: docs/WORKSPACES.md.
  */
 
-import { walkRecursive } from '@kinu.run/agent-utils/vfs';
-import type { SqlExecutor, VFS } from '../types/primitives';
+import { KinuError } from '../obs/error';
+import { isSystemManaged } from '../vfs/workspace-path';
+import type { SqlExecutor } from '../types/primitives';
+import { compareCodeUnits } from '../utils/text';
 import { SOUL_PATH } from './soul';
 
 export interface ForkLineageRow {
@@ -39,38 +41,106 @@ export function readForkLineage(sql: SqlExecutor): ForkLineageRow | null {
   };
 }
 
-export interface ForkFilePath {
-  path: string;
-  /** A payload file, relative to its owning artifact directory rather than a workspace path. */
-  artifact: boolean;
+export interface ForkTreeStat {
+  kind: 'file' | 'directory' | 'symlink';
+  size: number;
+  mode: number;
+  mtimeMs: number;
 }
 
-/**
- * Paths a fork inherits, in order: SOUL.md, `memory/` (a directory walk, so storage encoding cannot change
- * what a fork means), then the plan's payload files. No scaffold, so the fork re-bootstraps v0.
- */
-export async function* forkFilePaths(
-  vfs: VFS, artifacts: readonly string[] = [],
-): AsyncGenerator<ForkFilePath> {
-  const carried: ForkFilePath[] = [];
+/** Synchronous, so one walk is one instant. `revision(path)` exceeds an earlier `revision()` iff the path changed since (Nimbus `SqliteVFS.revision`). */
+export interface ForkTreeReader {
+  lstat(path: string): ForkTreeStat | null;
+  readdir(path: string): string[];
+  readlink(path: string): string;
+  readRange(path: string, offset: number, length: number): Uint8Array;
+  revision(path?: string): number;
+}
 
-  if (await vfs.exists(SOUL_PATH)) carried.push({ path: SOUL_PATH, artifact: false });
+export type ForkTreeEntry =
+  /** `artifact`: `path` is relative to the artifact directory. */
+  | { kind: 'file'; path: string; size: number; mode: number; mtimeMs: number; artifact: boolean }
+  | { kind: 'directory'; path: string; mode: number; mtimeMs: number }
+  | { kind: 'symlink'; path: string; target: string };
 
-  if (await vfs.exists('memory')) {
-    // The walker's bounds guard other callers; a fork carries the whole memory tree, so none is set.
-    const walk = await walkRecursive(vfs, 'memory', Infinity, Infinity);
+export type ForkFileEntry = Extract<ForkTreeEntry, { kind: 'file' }>;
 
-    for (const entry of walk.entries) {
-      if (!entry.stat.isDir) carried.push({ path: entry.path, artifact: false });
+export interface ForkSnapshot {
+  /** SOUL.md, the tree (each directory after its contents), then payload files. */
+  readonly entries: readonly ForkTreeEntry[];
+  /** Throws if `file` changed since the snapshot. */
+  read(file: ForkFileEntry, offset: number, length: number): Uint8Array;
+}
+
+/** Re-bootstrapped at v0 in the fork. */
+const NOT_CARRIED_AT_ROOT: ReadonlySet<string> = new Set(['scaffold']);
+
+/** SOUL.md, what the Files tab shows (minus the scaffold), and the conversation's payload files, in one synchronous walk. */
+export function snapshotForkFiles(
+  tree: ForkTreeReader, artifacts: readonly { relative: string; path: string }[],
+): ForkSnapshot {
+  const clock = tree.revision();
+  const entries: ForkTreeEntry[] = [];
+  const soul = tree.lstat(SOUL_PATH);
+
+  if (soul?.kind === 'file') entries.push(fileEntry(SOUL_PATH, soul, false));
+
+  // Post-order: a directory's mode and mtime land after its contents.
+  const walk = (directory: string): void => {
+    for (const name of tree.readdir(directory).sort(compareCodeUnits)) {
+      if (isSystemManaged(name) || (directory === '' && (NOT_CARRIED_AT_ROOT.has(name) || name === SOUL_PATH))) continue;
+      const path = directory === '' ? name : `${directory}/${name}`;
+      const stat = tree.lstat(path);
+
+      if (stat === null) throw new Error(`fork could not stat ${JSON.stringify(path)}, which its directory listed`);
+
+      if (stat.kind === 'directory') {
+        walk(path);
+        entries.push({ kind: 'directory', path, mode: stat.mode, mtimeMs: stat.mtimeMs });
+      } else if (stat.kind === 'symlink') {
+        entries.push({ kind: 'symlink', path, target: tree.readlink(path) });
+      } else {
+        entries.push(fileEntry(path, stat, false));
+      }
     }
+  };
+
+  walk('');
+  const payloads = new Map<string, string>();
+
+  for (const artifact of artifacts) {
+    if (payloads.has(artifact.relative)) continue;
+    payloads.set(artifact.relative, artifact.path);
+    const stat = tree.lstat(artifact.path);
+
+    if (stat?.kind !== 'file') {
+      throw new KinuError('missing', `fork cannot carry payload ${JSON.stringify(artifact.path)}: the conversation references it and it is not a file`);
+    }
+
+    entries.push(fileEntry(artifact.relative, stat, true));
   }
 
-  for (const artifact of artifacts) carried.push({ path: artifact, artifact: true });
-  const seen = new Set<string>();
+  return {
+    entries,
+    read(file, offset, length) {
+      const at = file.artifact ? payloads.get(file.path) ?? file.path : file.path;
+      const bytes = tree.readRange(at, offset, length);
 
-  for (const file of carried) {
-    if (seen.has(file.path)) continue;
-    seen.add(file.path);
-    yield file;
-  }
+      // Same synchronous step as the read: no write lands between them.
+      if (tree.revision(at) > clock) {
+        throw new KinuError('unavailable', `${JSON.stringify(file.path)} changed while the fork was copying the workspace, `
+          + 'so the copy would not be one snapshot and no fork was created. Fork again once whatever is writing it has stopped.');
+      }
+
+      if (bytes.byteLength !== length) {
+        throw new Error(`fork read ${bytes.byteLength} bytes of ${JSON.stringify(file.path)} where ${length} were asked for`);
+      }
+
+      return bytes;
+    },
+  };
+}
+
+function fileEntry(path: string, stat: ForkTreeStat, artifact: boolean): ForkFileEntry {
+  return { kind: 'file', path, size: stat.size, mode: stat.mode, mtimeMs: stat.mtimeMs, artifact };
 }

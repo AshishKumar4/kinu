@@ -11,7 +11,7 @@ import {
 } from '../vfs/mounts';
 import { isVfsError } from '../vfs/errno';
 import { inlineFileType } from './file-types';
-import { isSystemManaged } from './files-plane';
+import { isSystemManaged } from '../vfs/workspace-path';
 import type { VFS, VfsRevision } from '../types/primitives';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, type Refusal } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';

@@ -10,7 +10,7 @@ import {
   FORK_STREAM_SEED, ForkStagingState, ForkTargetWriter, ForkTransferReceiver, NativeSinkPlan, SOUL_PATH,
   foldForkStream, forkTransferFrames, initWorkspaceSchema, readForkLineage, sealForkFrame,
   SessionHistory, summarizeSoulBytes, WorkspaceActorDirectory, openWorkspaceMainActor,
-  type ForkFrame, type ForkLineageRow, type ForkNativeFilePort, type ForkResult,
+  type ForkFileSource, type ForkFrame, type ForkLineageRow, type ForkNativeFilePort, type ForkResult,
   type ForkStaging, type SqlExecutor, type SqlValue, type VFS, type VfsEntryStat,
 } from '@kinu.run/core';
 
@@ -41,6 +41,7 @@ declare const crypto: Crypto & {
 
 /**
  * The probe's file plane: one durable BLOB row per written range, so no file is ever held whole.
+ * Directories are implied by paths and nothing ever changes under a transfer, so its revision is 0.
  * Bind `bytes.slice().buffer`, not `bytes.buffer`: a payload is a view over a larger buffer.
  */
 class ProbeFilePlane implements VFS {
@@ -77,11 +78,39 @@ class ProbeFilePlane implements VFS {
         });
       },
       unlink: async (path) => { this.exec(`DELETE FROM probe_file_ranges WHERE path = ?`, path); },
+      writeFile: (path, bytes) => this.writeFile(path, bytes),
+      mkdir: async () => {},
+      symlink: async () => { throw new Error('the probe plane holds no symlinks'); },
+      stamp: async () => {},
+      remove: async (path) => { this.exec(`DELETE FROM probe_file_ranges WHERE path = ? OR path LIKE ?`, path, `${path}/%`); },
     };
   }
 
-  /** One byte range, clipped inside SQLite so a read never materializes more than the request. */
+  /** The source half: the same rows, read synchronously as one snapshot. */
+  get source(): ForkFileSource {
+    return {
+      open: async () => ({
+        lstat: (path) => {
+          const size = this.size(path);
+
+          if (size !== null) return { kind: 'file', size, mode: 0o644, mtimeMs: 0 };
+
+          return this.names(path).length === 0 ? null : { kind: 'directory', size: 0, mode: 0o755, mtimeMs: 0 };
+        },
+        readdir: (path) => this.names(path),
+        readlink: () => { throw new Error('the probe plane holds no symlinks'); },
+        readRange: (path, offset, length) => this.readRangeSync(path, offset, length),
+        revision: () => 0,
+      }),
+    };
+  }
+
   async readRange(path: string, offset: number, length: number): Promise<Uint8Array> {
+    return this.readRangeSync(path, offset, length);
+  }
+
+  /** One byte range, clipped inside SQLite so a read never materializes more than the request. */
+  private readRangeSync(path: string, offset: number, length: number): Uint8Array {
     const end = offset + length;
     const out = new Uint8Array(length);
     let filled = 0;
@@ -102,14 +131,34 @@ class ProbeFilePlane implements VFS {
     return filled === length ? out : out.subarray(0, filled);
   }
 
-  async stat(path: string): Promise<VfsEntryStat | null> {
+  private size(path: string): number | null {
     const raw = this.exec(
       `SELECT max(start + length(bytes)) AS size FROM probe_file_ranges WHERE path = ?`, path,
     )[0]?.size;
 
-    const size = raw === null || raw === undefined ? null : Number(raw);
+    return raw === null || raw === undefined ? null : Number(raw);
+  }
 
-    if (size !== null && size !== undefined) return { size, mtimeMs: 0, isDir: false };
+  /** Names directly under `path` ('' is the root). */
+  private names(path: string): string[] {
+    const prefix = path === '' ? '' : `${path}/`;
+    const names = new Set<string>();
+
+    for (const row of this.exec(
+      `SELECT DISTINCT path FROM probe_file_ranges WHERE path LIKE ? ORDER BY path`, `${prefix}%`,
+    )) {
+      const rest = v.parse(v.string(), row.path).slice(prefix.length);
+      const slash = rest.indexOf('/');
+      names.add(slash < 0 ? rest : rest.slice(0, slash));
+    }
+
+    return [...names];
+  }
+
+  async stat(path: string): Promise<VfsEntryStat | null> {
+    const size = this.size(path);
+
+    if (size !== null) return { size, mtimeMs: 0, isDir: false };
 
     const holds = this.exec(
       `SELECT 1 AS found FROM probe_file_ranges WHERE path LIKE ? LIMIT 1`, `${path}/%`,
@@ -123,18 +172,7 @@ class ProbeFilePlane implements VFS {
   }
 
   async readdir(path: string): Promise<string[]> {
-    const prefix = `${path}/`;
-    const names = new Set<string>();
-
-    for (const row of this.exec(
-      `SELECT DISTINCT path FROM probe_file_ranges WHERE path LIKE ? ORDER BY path`, `${prefix}%`,
-    )) {
-      const rest = v.parse(v.string(), row.path).slice(prefix.length);
-      const slash = rest.indexOf('/');
-      names.add(slash < 0 ? rest : rest.slice(0, slash));
-    }
-
-    return [...names];
+    return this.names(path);
   }
 
   async mkdir(): Promise<void> {}
@@ -340,7 +378,7 @@ export class ForkSourceProbeDO extends ForkProbeDO {
         sql: this.sql,
         // Forking under any other actor would read an empty transcript and pass vacuously.
         actor: openWorkspaceMainActor(this.sql),
-        vfs: this.plane,
+        vfs: this.plane.source,
         artifactDirectory: PROBE_ARTIFACTS,
         untilMessageId: PROBE_CUT_MESSAGE_ID,
         transferId,
@@ -351,7 +389,7 @@ export class ForkSourceProbeDO extends ForkProbeDO {
           continue;
         }
 
-        if (request.stop === 'files' && frame.kind === 'file') break;
+        if (request.stop === 'files' && (frame.kind === 'file' || frame.kind === 'entries')) break;
 
         if (request.stop !== 'end' && frame.kind === 'commit') break;
 
@@ -422,7 +460,7 @@ export class ForkTargetProbeDO extends ForkProbeDO {
     }
 
     this.receiver ??= new ForkTransferReceiver(
-      new ForkTargetWriter(this.sql, this.plane, {
+      new ForkTargetWriter(this.sql, {
         workspaceId: this.ctx.id.toString(),
         workspaceName: 'fork-target',
         artifactDirectory: PROBE_ARTIFACTS,

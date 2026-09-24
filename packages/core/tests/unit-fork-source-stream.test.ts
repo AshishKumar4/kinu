@@ -35,7 +35,7 @@ async function seedChain(ws: TestWorkspace): Promise<ForkConversation> {
 function framesFor(ws: TestWorkspace, frameBytes = 2048, untilMessageId = 'm3'): Promise<ForkFrame[]> {
   return Array.fromAsync(forkTransferFrames({
     // Entries and memberships are keyed on the conversation owner; any other handle snapshots the wrong transcript.
-    sql: ws.sql, actor: openWorkspaceMainActor(ws.sql), vfs: ws.vfs,
+    sql: ws.sql, actor: openWorkspaceMainActor(ws.sql), vfs: ws.forkSource,
     artifactDirectory: SOURCE_ARTIFACTS,
     untilMessageId, transferId: 'transfer', frameBytes,
   }));
@@ -67,6 +67,7 @@ function rowPayloadBytes(frame: ForkFrame): number {
       return frame.rows.reduce((total, row) => total + bytes(row.entry_id) + bytes(row.message_id), 0);
     case 'begin':
     case 'file':
+    case 'entries':
     case 'commit':
       return 0;
   }
@@ -119,7 +120,7 @@ describe('forkTransferFrames source streamer', () => {
       conversationEntries: carried.conversationEntries.length,
       conversationEntryParts: carried.conversationEntryParts.length,
       contextMembers: carried.contextMembers.length,
-      files: carried.files.length + carried.artifacts.length,
+      files: carried.files.length + carried.artifacts.length + carried.directories.length + carried.symlinks.length,
     });
   });
 
@@ -164,7 +165,7 @@ describe('forkTransferFrames source streamer', () => {
     expect(referenced).toContain(payloads[0]?.path);
   });
 
-  test('ranges files byte-exactly, digests their last range, and emits an empty file once', async () => {
+  test('ranges a file past one frame byte-exactly, digests its last range, and carries an empty file whole', async () => {
     const ws = createTestWorkspace();
     await seedChain(ws);
     await ws.vfs.writeFile('memory/ranged.md', 'abcdefghij'.repeat(100));
@@ -175,10 +176,12 @@ describe('forkTransferFrames source streamer', () => {
     const bytes = Bun.concatArrayBuffers(ranged.map((frame) => frame.bytes));
     expect(new TextDecoder().decode(bytes)).toBe('abcdefghij'.repeat(100));
     expect(ranged.at(-1)?.fileDigest).toBe(new Bun.CryptoHasher('sha256').update(bytes).digest('hex'));
-    const empty = frames.filter(isFileFrame).filter((frame) => frame.path === 'memory/empty.md');
+
+    const empty = frames.flatMap((frame) => (frame.kind === 'entries' ? frame.entries : []))
+      .filter((entry) => entry.path === 'memory/empty.md');
+
     expect(empty).toHaveLength(1);
-    expect(empty[0]?.last).toBe(true);
-    expect(empty[0]?.offset).toBe(0);
+    expect(empty[0]?.kind === 'file' && empty[0].bytes.byteLength).toBe(0);
   });
 
   test('a payload outside the artifact directory refuses the fork rather than carrying it', async () => {
