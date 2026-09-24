@@ -487,7 +487,7 @@ interface SignInOptions {
   readonly returnTo?: string;
   readonly accounts?: () => Response;
   /** Runs after the start hands out its state, before the callback redeems it. */
-  readonly between?: (state: string) => Promise<void>;
+  readonly afterStart?: (state: string) => Promise<void>;
 }
 
 async function cloudflareSignIn(
@@ -538,7 +538,7 @@ async function cloudflareSignInSteps(
       .find((value) => value.startsWith(`${OAUTH_STATE_COOKIE_NAME}=`));
 
     if (!state || !setCookie) throw new Error('sign-in start handed out no bound handoff');
-    await options.between?.(state);
+    await options.afterStart?.(state);
     const callbackUrl = new URL(`${origin}/auth/cloudflare/callback`);
     callbackUrl.searchParams.set('state', state);
     callbackUrl.searchParams.set('code', 'auth-code-1');
@@ -654,7 +654,7 @@ async function cloudflareSignInSteps(
     const user = { id: 'cf-user-7', email: 'p@example.com' };
 
     const { done, callback } = await cloudflareSignInSteps(env, { access_token: 'cf-a' }, user, {
-      between: async (state) => {
+      afterStart: async (state) => {
         raw = state;
         held = kv.keys();
       },

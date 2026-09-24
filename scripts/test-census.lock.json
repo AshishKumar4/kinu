@@ -1,5 +1,5 @@
 {
-  "measured": "a2eee387b: 1186 test files, 1028 runnable suites, 13122 tests, 41 runners, 35 non-public product members",
+  "measured": "20316c680: 1186 test files, 1028 runnable suites, 13122 tests, 41 runners, 35 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-codemode-sandbox.test.ts :: (file scope) :: declared mirror",
@@ -87,30 +87,6 @@
     },
     {
       "key": "mirror :: scripts/test-census.test.ts :: RED: the author s own declaration of the mirror :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-auth-security.test.ts :: (file scope) :: between() over source text",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-auth-security.test.ts :: a Cloudflare API outage does not fail a valid sign-in :: expect(<source text>).toBe",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-auth-security.test.ts :: Cloudflare OAuth profile uses the Cloudflare API user shape :: expect(<source text>).toBe",
-      "count": 2
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-auth-security.test.ts :: Cloudflare OAuth token variants survive the callback into the stored credential :: expect(<source text>).toBe",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-auth-security.test.ts :: sign-in returns the browser where it was going, and logout ends the session :: expect(<source text>).toBe",
-      "count": 2
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-auth-security.test.ts :: the sign-in state is stored only as its hash and is burned by the callback :: expect(<source text>).toBe",
       "count": 1
     },
     {
