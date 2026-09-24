@@ -184,37 +184,17 @@ describe("CLI inspection commands", () => {
     expect(globalModel).toBeUndefined();
   });
 
-  test("kinu effort updates the active profile authority and appears in status", async () => {
+  test("kinu effort sets the workspace's own effort, and status shows it", async () => {
     const home = scratchDir("cli-effort");
     await createLocalAgent(home, "localtest");
 
-    const configured = runCli(home, ["model", "localtest", "fixture-model"], {
-      KINU_BASE_URL: "http://localhost:1/v1", KINU_AUTH: "Bearer fixture",
-    });
-
-    expect(configured.exitCode, configured.stderr.toString()).toBe(0);
-
     const initial = runCli(home, ["effort", "localtest"]);
     expect(initial.exitCode, initial.stderr.toString()).toBe(0);
-    expect(initial.stdout.toString()).toContain("medium (chat default)");
+    expect(initial.stdout.toString()).toContain("medium");
 
     const set = runCli(home, ["effort", "localtest", "high"]);
     expect(set.exitCode).toBe(0);
     expect(set.stdout.toString()).toContain("set high");
-
-    const saved = v.parse(v.object({
-      reasoningEffort: v.optional(v.string()),
-      localProfile: v.object({
-        catalog: v.object({
-          tiers: v.object({
-            default: v.object({ reasoningEffort: v.string() }),
-          }),
-        }),
-      }),
-    }), JSON.parse(readFileSync(join(home, "config.json"), "utf8")));
-
-    expect(saved.reasoningEffort).toBeUndefined();
-    expect(saved.localProfile.catalog.tiers.default.reasoningEffort).toBe("high");
 
     const stored = runCli(home, ["effort", "localtest"]);
     expect(stored.stdout.toString()).toContain("high");

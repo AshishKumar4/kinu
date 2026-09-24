@@ -21,15 +21,20 @@
  * how a widened `name_origin` CHECK refused every mission-only create on the
  * accounts that predated it (2026-09-22).
  *
+ * `CREATE VIEW IF NOT EXISTS` is the same no-op for a view: storage keeps the
+ * definition that created it, so every later definition is one no reader gets.
+ * A view is locked as its whole normalized definition, and any change is drift.
+ *
  * WHAT IT MEASURES and WHAT IT GOVERNS are the same set, and that is checked
- * rather than claimed: every `CREATE TABLE IF NOT EXISTS` in the product corpus
- * `scripts/sources.ts` enumerates. A DDL this cannot parse FAILS the gate. The
- * previous regex required the closing paren on its own line and read the table
- * name as `\w+`, so it measured 114 of 126 statements while reporting on all of
- * them: four real tables whose column list arrives through a `${DDL}` template
- * constant were invisible (`turn_outcomes`, `lessons`, `imported_experience`,
- * `experience_library`), and three prose sentences about this very mechanism
- * were counted as tables named `is`, `will` and `quietly`.
+ * rather than claimed: every `CREATE TABLE IF NOT EXISTS` and `CREATE VIEW IF
+ * NOT EXISTS` in the product corpus `scripts/sources.ts` enumerates. A DDL this
+ * cannot parse FAILS the gate. The previous regex required the closing paren on
+ * its own line and read the table name as `\w+`, so it measured 114 of 126
+ * statements while reporting on all of them: four real tables whose column list
+ * arrives through a `${DDL}` template constant were invisible (`turn_outcomes`,
+ * `lessons`, `imported_experience`, `experience_library`), and three prose
+ * sentences about this very mechanism were counted as tables named `is`, `will`
+ * and `quietly`.
  *
  * `--lock` writes an entry for a table that has none and REFUSES to change one
  * that has: a genesis is a fact about deployed storage, and a gate whose
@@ -61,6 +66,9 @@ const GENESIS_LOCK = `${root}scripts/schema-genesis.lock.json`;
  *  is a no-op …` out of the table census. */
 const DDL_RE = /CREATE TABLE IF NOT EXISTS\s+([a-z_][a-z0-9_]*)\s*(?:\(|\$\{\s*([A-Za-z_$][\w$]*)\s*\})/g;
 
+/** A view's name, up to the `AS` its definition follows. */
+const VIEW_RE = /CREATE VIEW IF NOT EXISTS\s+([a-z_][a-z0-9_]*)\s+AS\s/g;
+
 /** A body part opening a table CONSTRAINT rather than naming a column. */
 const CONSTRAINT_KEYWORD = {
   PRIMARY: true, UNIQUE: true, FOREIGN: true, CHECK: true, CONSTRAINT: true,
@@ -74,7 +82,8 @@ export interface Violation {
 /** One table's DDL as the corpus declares it: every body part — each column
  *  definition and table constraint — normalized, in DDL order. A table declared
  *  twice in one file carries the UNION: both statements reach the same
- *  storage, and whichever runs first is the shape it has. */
+ *  storage, and whichever runs first is the shape it has. A view is recorded
+ *  the same way under its own name, one part per definition declaring it. */
 export interface TableDdl {
   readonly table: string;
   readonly file: string;
@@ -392,6 +401,37 @@ export function tablesIn(sources: ReadonlyMap<string, string>): TableDdl[] {
   return [...sources].flatMap(([file, source]) => parseTables(file, source));
 }
 
+/**
+ * Every view one file declares, its definition read from `AS` to the end of the
+ * template literal the statement opens. Fail-closed: a definition this cannot
+ * read as text — outside a template, or interpolated — is a parse failure,
+ * never a view quietly left out of the census.
+ */
+export function parseViews(file: string, source: string): TableDdl[] {
+  const byView = new Map<string, string[]>();
+
+  for (const match of source.matchAll(VIEW_RE)) {
+    const view = match[1];
+
+    if (view === undefined) continue;
+    const start = match.index + match[0].length;
+    const end = source.slice(0, match.index).trimEnd().endsWith('`') ? source.indexOf('`', start) : -1;
+    const definition = end === -1 ? '' : source.slice(start, end).replace(/--[^\n]*/g, '').trim();
+
+    if (definition === '' || definition.includes('${')) {
+      throw new Error(`schema-drift: ${file}: view ${view} has a definition this cannot read`);
+    }
+
+    const parts = byView.get(view) ?? [];
+    const part = normalizedPart(definition);
+
+    if (!parts.includes(part)) parts.push(part);
+    byView.set(view, parts);
+  }
+
+  return [...byView].map(([table, parts]) => ({ table, file, parts }));
+}
+
 const GenesisLockSchema = v.record(v.string(), v.array(v.string()));
 
 export type GenesisLock = v.InferOutput<typeof GenesisLockSchema>;
@@ -400,12 +440,17 @@ export function readGenesisLock(path: string = GENESIS_LOCK): GenesisLock {
   return v.parse(GenesisLockSchema, JSON.parse(readFileSync(path, 'utf8')));
 }
 
-/** The two fixes every drift has, printed by name. This repository carries no
- *  reconcile, so a shipped table's shape moves only with its storage: a schema
- *  change is a reset deployment (AGENTS.md). */
-const DRIFT_FIX = 'put the new shape in a table of its own, or make this a reset deployment and re-lock: '
-  + 'delete scripts/schema-genesis.lock.json, run `bun scripts/schema-drift.ts --lock`, '
-  + 'and state the reset in the commit body';
+/** What a drifted table or view does while every test stays green. */
+const DRIFT_SILENTLY = {
+  table: 'CREATE TABLE IF NOT EXISTS never touches existing storage: a reader naming an added '
+    + 'column answers "no such column" (GET /api/cli/devices, production 500), and a write the '
+    + 'new DDL admits fails the old constraint (the widened name_origin CHECK refused every '
+    + 'mission-only create on older accounts, 2026-09-22)',
+  view: 'CREATE VIEW IF NOT EXISTS never replaces a view that exists: storage keeps the definition '
+    + 'it was created with, and every reader gets that definition\'s rows and columns',
+} as const;
+
+type DdlKind = keyof typeof DRIFT_SILENTLY;
 
 /** What moved between a table's genesis and its DDL: columns in either
  *  direction, then every other definition that is not what storage holds. */
@@ -434,9 +479,18 @@ function driftFound(genesis: readonly string[], parts: readonly string[]): strin
  * changed" passes hardest on exactly the tables nobody has looked at.
  */
 export function driftViolations(tables: readonly TableDdl[], lock: GenesisLock): Violation[] {
+  return violationsOf('table', tables, lock);
+}
+
+/** Every view whose definition is not its genesis, or that has none. */
+export function viewDriftViolations(views: readonly TableDdl[], lock: GenesisLock): Violation[] {
+  return violationsOf('view', views, lock);
+}
+
+function violationsOf(kind: DdlKind, entries: readonly TableDdl[], lock: GenesisLock): Violation[] {
   const violations: Violation[] = [];
 
-  for (const { table, file, parts } of tables) {
+  for (const { table, file, parts } of entries) {
     const key = lockKey(table, file);
     const genesis = lock[key];
 
@@ -444,7 +498,7 @@ export function driftViolations(tables: readonly TableDdl[], lock: GenesisLock):
       violations.push({
         key,
         detail: finding({
-          invariant: 'every table in the corpus has a recorded genesis DDL',
+          invariant: `every ${kind} in the corpus has a recorded genesis DDL`,
           at: `${file} (${table})`,
           found: 'no entry in scripts/schema-genesis.lock.json',
           silently: 'the gate compares today against nothing and passes over every change made since',
@@ -459,14 +513,15 @@ export function driftViolations(tables: readonly TableDdl[], lock: GenesisLock):
     violations.push({
       key,
       detail: finding({
-        invariant: 'a shipped table\'s DDL is the genesis its storage was created with',
+        invariant: `a shipped ${kind}'s DDL is the genesis its storage was created with`,
         at: `${file} (${table})`,
         found: driftFound(genesis, parts),
-        silently: 'CREATE TABLE IF NOT EXISTS never touches existing storage: a reader naming an added '
-          + 'column answers "no such column" (GET /api/cli/devices, production 500), and a write the '
-          + 'new DDL admits fails the old constraint (the widened name_origin CHECK refused every '
-          + 'mission-only create on older accounts, 2026-09-22)',
-        fix: DRIFT_FIX,
+        silently: DRIFT_SILENTLY[kind],
+        // The two fixes every drift has. This repository carries no reconcile, so a shipped shape
+        // moves only with its storage: a schema change is a reset deployment (AGENTS.md).
+        fix: `put the new shape in a ${kind} of its own, or make this a reset deployment and re-lock: `
+          + 'delete scripts/schema-genesis.lock.json, run `bun scripts/schema-drift.ts --lock`, '
+          + 'and state the reset in the commit body',
       }),
     });
   }
@@ -552,17 +607,18 @@ export interface Survey {
   /** Files PARSED: those carrying a statement this gate reads. */
   readonly parsed: number;
   readonly tables: readonly TableDdl[];
+  readonly views: readonly TableDdl[];
   readonly lock: GenesisLock;
   readonly violations: readonly Violation[];
-  /** Locked tables no longer in the corpus. Retained on purpose — see header. */
+  /** Locked tables and views no longer in the corpus. Retained on purpose — see header. */
   readonly retired: readonly string[];
 }
 
-/** The one statement the gate reads. A product file without it declares no
- *  table, so parsing it is work with no possible verdict. The ENUMERATION stays
- *  whole — this narrows only what is handed to the parser, and both counts are
- *  printed, so the corpus cannot shrink behind the number. */
-const READABLE_TOKEN = /CREATE TABLE IF NOT EXISTS/;
+/** The two statements the gate reads. A product file without either declares
+ *  no table or view, so parsing it is work with no possible verdict. The
+ *  ENUMERATION stays whole — this narrows only what is handed to the parser, and
+ *  both counts are printed, so the corpus cannot shrink behind the number. */
+const READABLE_TOKEN = /CREATE (?:TABLE|VIEW) IF NOT EXISTS/;
 
 export function survey(lock: GenesisLock = readGenesisLock()): Survey {
   // Working tree, not HEAD: the gate must fail on the change being made, not on
@@ -575,14 +631,16 @@ export function survey(lock: GenesisLock = readGenesisLock()): Survey {
   const sources = readMatching(isProductSource);
   const readable = new Map([...sources].filter(([, source]) => READABLE_TOKEN.test(source)));
   const tables = tablesIn(readable);
-  const present = new Set(tables.map(({ table, file }) => lockKey(table, file)));
+  const views = [...readable].flatMap(([file, source]) => parseViews(file, source));
+  const present = new Set([...tables, ...views].map(({ table, file }) => lockKey(table, file)));
 
   return {
     files: sources.size,
     parsed: readable.size,
     tables,
+    views,
     lock,
-    violations: driftViolations(tables, lock),
+    violations: [...driftViolations(tables, lock), ...viewDriftViolations(views, lock)],
     retired: Object.keys(lock).filter((key) => !present.has(key)).sort(),
   };
 }
@@ -597,7 +655,7 @@ export function blindSpots(state: Survey): string[] {
       + 'an object this reads the keys of',
     'an interpolation inside a definition (a CHECK list built from a constant) is compared as its '
       + 'source text, so a change to the value it names is invisible',
-    `${String(state.retired.length)} locked table(s) are no longer in the corpus and stay locked, `
+    `${String(state.retired.length)} locked table(s) and view(s) are no longer in the corpus and stay locked, `
       + 'never re-locked: storage created under that DDL may still exist',
     'a table created outside the product corpus — a test fixture, a statement typed into a shell — '
       + 'is not enumerated here',
@@ -625,10 +683,13 @@ if (import.meta.main) {
     ['product files enumerated', state.files],
     ['of them parsed', state.parsed],
     ['tables', state.tables.length],
+    ['views', state.views.length],
   ];
 
   if (locking) {
-    const update = lockUpdate(state.tables, state.lock, (table) => genesisForNewTable(table, state.lock));
+    const update = lockUpdate(
+      [...state.tables, ...state.views], state.lock, (entry) => genesisForNewTable(entry, state.lock),
+    );
 
     if (update.refused.length > 0) {
       console.error(
@@ -643,7 +704,7 @@ if (import.meta.main) {
 
     writeFileSync(GENESIS_LOCK, `${JSON.stringify(update.next, null, 2)}\n`);
     console.log(
-      `schema-drift: locked ${String(update.added.length)} new table(s) — `
+      `schema-drift: locked ${String(update.added.length)} new table(s) and view(s) — `
       + assertMeasured('schema-drift', corpus),
     );
 

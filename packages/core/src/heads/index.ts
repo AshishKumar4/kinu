@@ -24,7 +24,6 @@ export type {
 export {
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
-  budgetExhausted,
   HEAD_BUILTIN_TOOLS,
   keepBuiltins,
   headStatusUnsettled,
@@ -48,7 +47,7 @@ export {
 } from './head-stream';
 
 export {
-  reconcileInterruptedForks, forkInterruptedWake, jobRedriveResumeGate, resumableForkRoots,
+  reconcileInterruptedForks, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
   type RunEventLedger,
 } from './reconcile';
@@ -62,6 +61,7 @@ export {
 
 export {
   HeadController,
+  runHeadSplit,
   type HeadRuntime,
   type HeadGrounding,
   type SpawnedHead,

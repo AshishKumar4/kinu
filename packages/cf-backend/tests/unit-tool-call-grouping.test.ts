@@ -30,7 +30,11 @@ function tool(
 const text = (content: string): TextUIPart => ({ type: 'text', text: content });
 
 const kinds = (parts: readonly Part[]) =>
-  groupMessageParts(parts).map((b) => (b.kind === 'tool-run' ? `run(${b.parts.length})` : b.part.type));
+  groupMessageParts(parts).map((b) => (b.kind === 'fold' ? `fold(${b.parts.length})` : b.part.type));
+
+/** `count` finished reads, their ids starting at `from`. */
+const reads = (count: number, from = 1): ToolUIPart[] =>
+  Array.from({ length: count }, (_, index) => tool(String(from + index), 'file', 'output-available'));
 
 describe('tool effects follow the operation', () => {
   const cases: Array<{ name: string; input: JsonObject; effect: 'read' | 'mutate' | 'unknown' }> = [
@@ -90,59 +94,37 @@ describe('tool effects follow the operation', () => {
 });
 
 describe('grouping a turn into blocks', () => {
-  test('finished reads group while delegation keeps its own card', () => {
-    expect(kinds([
-      text('found it'),
-      tool('1', 'file', 'output-available'),
-      tool('2', 'file', 'output-available'),
-      tool('3', 'file', 'output-available'),
-      tool('4', 'agents', 'output-available', { action: 'hire' }),
-      text('done'),
-    ])).toEqual(['text', 'run(3)', 'tool-agents', 'text']);
+  test('eight finished reads stay eight rows, and the ninth folds the run', () => {
+    expect(kinds(reads(8))).toEqual(Array.from({ length: 8 }, () => 'tool-file'));
+    expect(kinds(reads(9))).toEqual(['fold(9)']);
   });
 
-  test('step markers do not split a sequential tool run', () => {
+  test('step markers do not split a run of reads', () => {
     const step: Part = { type: 'step-start' };
-    expect(kinds([
-      step,
-      tool('1', 'file', 'output-available'),
-      step,
-      tool('2', 'shell', 'output-available', { command: 'ls' }),
-      step,
-      tool('3', 'file', 'output-available'),
-    ])).toEqual(['run(3)']);
+    expect(kinds(reads(9).flatMap((part) => [step, part]))).toEqual(['fold(9)']);
   });
 
-  test('a call still running keeps its own row, and does not join the group', () => {
-    expect(kinds([
-      tool('1', 'file', 'output-available'),
-      tool('2', 'file', 'output-available'),
-      tool('3', 'file', 'output-available'),
-      tool('4', 'shell', 'input-available'),
-    ])).toEqual(['run(3)', 'tool-shell']);
+  test('a call still running keeps its own row, and does not join the run', () => {
+    expect(kinds([...reads(9), tool('10', 'shell', 'input-available')])).toEqual(['fold(9)', 'tool-shell']);
   });
 
-  test('a failed read groups in its original position', () => {
-    expect(kinds([
-      tool('1', 'file', 'output-available'),
-      tool('2', 'file', 'output-error'),
-      tool('3', 'file', 'output-available'),
-    ])).toEqual(['run(3)']);
+  test('a failed read folds in its original position', () => {
+    expect(kinds([...reads(4), tool('5', 'file', 'output-error'), ...reads(4, 6)])).toEqual(['fold(9)']);
   });
 
-  test('two adjacent finished calls share one bordered tool card', () => {
-    expect(kinds([tool('1', 'file', 'output-available'), tool('2', 'file', 'output-available')]))
-      .toEqual(['run(2)']);
+  test('a mutation splits runs and keeps its own row', () => {
+    expect(kinds([...reads(9), tool('10', 'file', 'output-available', { action: 'edit', path: 'a' }), ...reads(9, 11)]))
+      .toEqual(['fold(9)', 'tool-file', 'fold(9)']);
   });
 
-  test('text between two runs splits them', () => {
-    expect(kinds([
-      tool('1', 'file', 'output-available'), tool('2', 'file', 'output-available'), tool('3', 'file', 'output-available'),
-      text('now the tests'),
-      tool('4', 'shell', 'output-available', { command: 'ls' }),
-      tool('5', 'shell', 'output-available', { command: 'cat notes.txt' }),
-      tool('6', 'shell', 'output-available', { command: 'git status' }),
-    ])).toEqual(['run(3)', 'text', 'run(3)']);
+  test('a call of unknown effect is no read, and breaks the run', () => {
+    expect(kinds([...reads(5), tool('6', 'agents', 'output-available', { action: 'hire' }), ...reads(5, 7)]))
+      .toEqual([...Array.from({ length: 5 }, () => 'tool-file'), 'tool-agents', ...Array.from({ length: 5 }, () => 'tool-file')]);
+  });
+
+  test('text between reads splits the run', () => {
+    expect(kinds([...reads(5), text('now the tests'), ...reads(5, 6)]))
+      .toEqual([...Array.from({ length: 5 }, () => 'tool-file'), 'text', ...Array.from({ length: 5 }, () => 'tool-file')]);
   });
 
   test('non-tool parts are passed through untouched, in order', () => {
@@ -151,15 +133,7 @@ describe('grouping a turn into blocks', () => {
       .toEqual(['reasoning', 'text']);
   });
 
-  test('a mutation splits adjacent runs of reads and keeps its own card', () => {
-    expect(kinds([
-      tool('1', 'file', 'output-available'), tool('2', 'file', 'output-available'),
-      tool('3', 'file', 'output-available', { action: 'edit', path: 'a' }),
-      tool('4', 'file', 'output-available'), tool('5', 'file', 'output-available'),
-    ])).toEqual(['run(2)', 'tool-file', 'run(2)']);
-  });
-
-  test('a read that returned a preview never folds into activity', () => {
+  test('a read that returned a preview never folds', () => {
     const preview: ToolUIPart = {
       type: 'tool-file', toolCallId: 'preview', state: 'output-available',
       input: { action: 'read' }, output: { url: 'https://8789-kinu-app-p8789_ab12cd34.preview.example.test', port: 8789 },
@@ -172,11 +146,7 @@ describe('grouping a turn into blocks', () => {
     });
 
     try {
-      expect(kinds([
-        tool('1', 'file', 'output-available'), tool('2', 'file', 'output-available'),
-        preview,
-        tool('4', 'file', 'output-available'), tool('5', 'file', 'output-available'),
-      ])).toEqual(['run(2)', 'tool-file', 'run(2)']);
+      expect(kinds([...reads(9), preview, ...reads(9, 11)])).toEqual(['fold(9)', 'tool-file', 'fold(9)']);
     } finally {
       if (previous) Object.defineProperty(globalThis, 'document', previous);
       else Reflect.deleteProperty(globalThis, 'document');

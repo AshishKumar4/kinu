@@ -247,7 +247,9 @@ export class EvolutionEngine {
   readonly recordsTurns: boolean;
   private recoveryPending = true;
 
-  constructor(rt: AgentRuntime, history: SessionHistory, config?: Partial<EvolutionConfig>) {
+  constructor(
+    rt: AgentRuntime, history: SessionHistory, config: Partial<EvolutionConfig> & Pick<EvolutionConfig, 'reportModelCall'>,
+  ) {
     this.rt = rt;
     this.history = history;
     this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };
@@ -958,6 +960,7 @@ export class EvolutionEngine {
         judgeSamples: overrides.judgeSamples,
         maxEvalLLMCalls: overrides.maxEvalLLMCalls,
         onProgress: this.config.onMctsProgress,
+        reportModelCall: this.config.reportModelCall,
       });
 
       this.emit({

@@ -8,7 +8,8 @@
     ".": "./src/index.ts",
     "./turn-model": "./src/turn-model.ts",
     "./parity-normalizer": "./src/parity-normalizer.ts",
-    "./mossaic": "./src/mossaic.ts"
+    "./mossaic": "./src/mossaic.ts",
+    "./hand-clock": "./src/hand-clock.ts"
   },
   "dependencies": {
     "@kinu.run/core": "workspace:*",

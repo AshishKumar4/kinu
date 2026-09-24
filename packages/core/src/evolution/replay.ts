@@ -33,7 +33,7 @@ export {
 } from '../types/evolution';
 
 /** Instances per pass; each costs a full re-run plus a judge call. 95% half-width at mean 0.5 is ±0.20 at 20. */
-export const DEFAULT_REPLAY_SAMPLE_SIZE = 20;
+const DEFAULT_REPLAY_SAMPLE_SIZE = 20;
 
 export function initReplayTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS replay_evals (

@@ -1,5 +1,5 @@
 import {
-  chmodSync, existsSync, readFileSync, mkdirSync, readdirSync, realpathSync,
+  chmodSync, existsSync, readFileSync, mkdirSync, readdirSync, realpathSync, statSync,
   writeFileSync, unlinkSync,
 } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
@@ -14,12 +14,12 @@ import {
   OPENAI_BASE_URL,
   OPENAI_DEFAULT_MODEL,
   OPENROUTER_BASE_URL,
-  JsonObjectSchema, openWorkspaceMainActor,
+  JsonObjectSchema, openWorkspaceMainActor, discoverOpenAICompatibleModels,
   ProfileCatalogEnvelopeSchema,
   type JsonObject,
   type LLMProviderConfig,
+  type ModelInfo,
   type ProfileCatalogEnvelope,
-  type ReasoningEffort,
   shellQuote,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
@@ -107,8 +107,6 @@ export interface KinuConfig {
   user?: { id: string; email: string; displayName?: string | null };
   agents?: Record<string, KinuAgentConfig>;
   aliases?: Record<string, string>;
-  model?: string;
-  reasoningEffort?: ReasoningEffort;
   updateCheck?: boolean;
   updateCheckedAt?: number;
   updateLatestSeen?: string;
@@ -191,8 +189,6 @@ const KinuConfigSchema: v.GenericSchema<KinuConfig> = v.object({
   })),
   agents: v.optional(v.record(v.string(), KinuAgentConfigSchema)),
   aliases: v.optional(StringMapSchema),
-  model: v.optional(v.string()),
-  reasoningEffort: v.optional(v.picklist(['low', 'medium', 'high'])),
   updateCheck: v.optional(v.boolean()),
   updateCheckedAt: v.optional(v.number()),
   updateLatestSeen: v.optional(v.string()),
@@ -303,6 +299,21 @@ function listLocalRefs(cwd = process.cwd()): LocalAgentRef[] {
 
 export function localWorkspaceMembers(workspaceId: string, cwd = process.cwd()): LocalAgentRef[] {
   return listLocalRefs(cwd).filter((ref) => ref.workspaceId === workspaceId);
+}
+
+/** The workspace placed here whose database was written last. */
+export function lastUsedLocalRef(cwd = process.cwd()): LocalAgentRef | null {
+  let latest: { readonly ref: LocalAgentRef; readonly writtenAt: number } | null = null;
+
+  for (const ref of listLocalRefs(cwd)) {
+    // WAL writes land in -wal until a checkpoint.
+    const writtenAt = Math.max(...[ref.dbPath, `${ref.dbPath}-wal`]
+      .map((path) => statSync(path, { throwIfNoEntry: false })?.mtimeMs ?? 0));
+
+    if (latest === null || writtenAt > latest.writtenAt) latest = { ref, writtenAt };
+  }
+
+  return latest?.ref ?? null;
 }
 
 export function listAgentDirs(cwd = process.cwd()): string[] {
@@ -467,13 +478,6 @@ export function loadConfigFile(): KinuConfig {
     // Defaulting would discard the whole file over one bad field and look like a first run.
     throw new Error(`${CONFIG_PATH} is not a valid Kinu config; fix or remove it.`, { cause: error });
   }
-}
-
-export function setDefaultModel(spec: string): void {
-  const normalized = spec.trim();
-
-  if (!normalized) throw new Error('model spec required');
-  updateConfigFile((config) => { config.model = normalized; });
 }
 
 function writeConfigFileUnlocked(config: KinuConfig): void {
@@ -708,11 +712,12 @@ function validateAliasName(alias: string): void {
   }
 }
 
-/** Default endpoint for bare model ids; null when nothing derives one. Use {@link requireLLMConfig} where core needs an endpoint. */
+/** Default endpoint for bare model ids, null when nothing derives one; see {@link requireLLMConfig}. */
 export function resolveLLMConfig(opts?: {
   model?: string;
   baseUrl?: string;
   auth?: string;
+  defaultModel?: string;
 }): LLMProviderConfig | null {
   const file = loadConfigFile();
 
@@ -727,7 +732,7 @@ export function resolveLLMConfig(opts?: {
   const model = opts?.model
     ?? process.env.KINU_MODEL
     ?? process.env.AI_GATEWAY_MODEL
-    ?? file.model;
+    ?? opts?.defaultModel;
 
   if (baseURL && auth) {
     return {
@@ -779,6 +784,7 @@ export function requireLLMConfig(opts?: {
   model?: string;
   baseUrl?: string;
   auth?: string;
+  defaultModel?: string;
 }): LLMProviderConfig {
   const config = resolveLLMConfig(opts);
 
@@ -869,21 +875,44 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
   const compat = file.providers?.openaiCompat?.default;
 
   // A local Ollama accepts `@cf/deepseek-ai/…` as a model name and serves something else.
-  if (compat && !(providerModel && isNativeCloudSpec(providerModel))) {
-    const headers = { ...compat.headers };
-
-    if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
-    Object.assign(headers, compat.extraHeaders);
-
+  if (compat && providerModel && !isNativeCloudSpec(providerModel)) {
     return {
       name: 'openai-compat',
       baseURL: compat.baseURL,
-      headers,
-      model: stripProvider(providerModel ?? 'gpt-4o-mini', 'openai-compat'),
+      headers: openAiCompatHeaders(compat),
+      model: stripProvider(providerModel, 'openai-compat'),
     };
   }
 
   return null;
+}
+
+function openAiCompatHeaders(compat: v.InferOutput<typeof OpenAiCompatConfigSchema>): Record<string, string> {
+  const headers = { ...compat.headers };
+
+  if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
+
+  return Object.assign(headers, compat.extraHeaders);
+}
+
+export async function firstOpenAiCompatModel(): Promise<string | null> {
+  const compat = loadConfigFile().providers?.openaiCompat?.default;
+
+  if (compat === undefined) return null;
+
+  let first: ModelInfo | undefined;
+
+  try {
+    [first] = await discoverOpenAICompatibleModels({ baseURL: compat.baseURL, headers: openAiCompatHeaders(compat) });
+  } catch (cause) {
+    throw new Error(`Could not list the models of the OpenAI-compatible endpoint at ${compat.baseURL}.`, { cause });
+  }
+
+  if (first === undefined) {
+    throw new Error(`The OpenAI-compatible endpoint at ${compat.baseURL} lists no models and none is named: run kinu provider connect openai-compatible.`);
+  }
+
+  return `openai-compat/${first.id}`;
 }
 
 /** Families served by their own auth seams (claude binary login, opencode auth.json); the endpoint is only a marker. */
@@ -902,8 +931,6 @@ function registryFamilyMarker(model: string | undefined): LLMProviderConfig | nu
 }
 
 function preferredModelFromCredentials(file: KinuConfig): string | undefined {
-  if (file.model) return file.model;
-
   if (file.providers?.codex?.accessToken || file.providers?.codex?.refreshToken || process.env.CODEX_ACCESS_TOKEN) return `codex/${CODEX_DEFAULT_MODEL}`;
 
   if (file.providers?.openai?.apiKey || process.env.OPENAI_API_KEY) return `openai/${OPENAI_DEFAULT_MODEL}`;

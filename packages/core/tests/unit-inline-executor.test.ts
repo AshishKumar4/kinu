@@ -259,7 +259,7 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     const { vfs, exec } = buildPlane();
     await exec.tools.writeFile.execute('src/main.ts', 'a');
     expect(await vfs.readFile('src/main.ts', { encoding: 'utf8' })).toBe('a');
-    expect(await vfs.readFile('/home/user/src/main.ts', { encoding: 'utf8' })).toBe('a');
+    expect(await vfs.readFile('/home/main/src/main.ts', { encoding: 'utf8' })).toBe('a');
   });
 
   test('another environment is not addressable from here at all', async () => {

@@ -109,11 +109,15 @@ export async function attachMachine(request: AttachMachineRequest): Promise<Atta
   // in `~/bin` never runs sandboxed and `hostname` answers the real host.
   const binDir = join(home, '.local', 'bin');
   const execLogPath = join(home, 'exec.log');
+  // The machine's own KINU_HOME is `.kinu` inside the consented root, the
+  // layout `kinu connect` gives a person's home: device.json and the bearer
+  // live there, apart from the rest of the root this shim's directory is in.
+  const kinuHome = join(home, '.kinu');
   mkdirSync(binDir, { recursive: true, mode: 0o700 });
-  mkdirSync(join(home, 'agents'), { recursive: true, mode: 0o700 });
-  mkdirSync(join(home, 'inflight'), { recursive: true, mode: 0o700 });
+  mkdirSync(join(kinuHome, 'agents'), { recursive: true, mode: 0o700 });
+  mkdirSync(join(kinuHome, 'inflight'), { recursive: true, mode: 0o700 });
   writeFileSync(
-    join(home, 'device.json'),
+    join(kinuHome, 'device.json'),
     `${JSON.stringify({
       user: registration.userId,
       token: registration.token,
@@ -159,11 +163,11 @@ export async function attachMachine(request: AttachMachineRequest): Promise<Atta
     env: {
       ...process.env,
       HOME: home,
-      KINU_HOME: home,
+      KINU_HOME: kinuHome,
       // Read from the environment by the daemon rather than derived from its
       // home, so two daemons would otherwise share one in-flight root and
       // reconcile each other's commands.
-      KINU_INFLIGHT_ROOT: join(home, 'inflight'),
+      KINU_INFLIGHT_ROOT: join(kinuHome, 'inflight'),
       PATH: `${binDir}:${process.env.PATH ?? ''}`,
     },
     stdout: logFd,

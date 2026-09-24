@@ -65,7 +65,7 @@ export async function desktopCommand(action: string | undefined, opts: { label?:
     console.log('');
     console.log(`${OK('✓')} Connected as ${ACCENT(result.label)}`);
 
-    for (const line of describeDeviceSandbox(result.sandbox)) console.log(`  ${line}`);
+    for (const line of describeDeviceSandbox(result.sandbox, result.wholeMachine)) console.log(`  ${line}`);
     console.log(`${DIM('Manage it under Account settings → Devices.')}`);
     console.log(`${DIM('Daemon log:')} ${DAEMON_LOG_PATH}`);
     console.log('');

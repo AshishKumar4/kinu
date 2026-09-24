@@ -22,6 +22,7 @@ import {
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { mcpPresetById } from "@kinu.run/core";
+import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT } from "@kinu.run/core";
 import type { ReasoningEffort } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
@@ -34,7 +35,8 @@ import { WorkspaceBar } from "@/components/WorkspaceBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
-import { WorkSurface, ACTIVITY_SURFACE, type SurfaceKind } from "@/components/surfaces/WorkSurface";
+import { ACTIVITY_SURFACE, type SurfaceKind } from "@kinu.run/core";
+import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { SlateFallbackFrame, SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
 import PlanReviewView from "@/components/surfaces/PlanReviewView";
 import { SlateFrame } from "@/components/slates/SlateFrame";
@@ -97,7 +99,7 @@ import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun,
   FileCheckpointEntry, FileCheckpointListing, ForkRunParams,
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
-  PendingAction, ProducerSpend, RunSummary, SearchNode, Usage, WorkspaceSpend,
+  PendingAction, ProducerSpend, RunSummary, SearchTreeRow, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
 import type { McpServerSummary, ModelMenuEntry, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import { McpServerSummarySchema } from "@/lib/user-api";
@@ -158,7 +160,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
       id: "dev_1", label: "ashish-mbp", os: "darwin", hostname: "ashish-mbp.local",
       connected: true, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 90e3,
       expiresAt: NOW + 50 * 864e5, lastIp: "192.0.2.2", lastAgent: "kinu-device",
-      replacedAt: null, revokedAt: null, unstoppedAt: null,
+      replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
     },
   ],
@@ -170,7 +172,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   ],
 });
 
-const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices"]);
+const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices", "devices-empty"]);
 
 /* Account-settings failure rig: Codex stays failed until `gallery:settings-heal`, the gateway read pends until
    `gallery:settings-release`; sibling GETs settle immediately so branch-local publication is observable. */
@@ -471,17 +473,19 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
   }
 
   if (path === "/api/user/devices") {
+    if (frame === "devices-empty") return fixtureJson([]);
     const incident = localStorage.getItem("gallery-device-incident");
 
     if (incident === "acknowledged") return fixtureJson([]);
-    const revoked = incident === "revoked";
+    const revoked = incident === "revoked" || incident === "reused";
 
     return fixtureJson([
       {
         id: "dev-1", label: "Workstation", os: "linux", hostname: "workstation",
         connected: !revoked, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
         lastIp: "192.0.2.1", lastAgent: "kinu-device", replacedAt: null,
-        revokedAt: revoked ? NOW : null, unstoppedAt: revoked ? NOW : null,
+        revokedAt: revoked ? NOW : null, unstoppedAt: incident === "revoked" ? NOW : null,
+        reuseDetectedAt: incident === "reused" ? NOW : null, wholeMachine: false,
         sandbox: {
           tier: parseDeviceTier(localStorage.getItem("gallery-device-tier")),
           capability: "sandboxed", reason: null, gpu: ["/dev/nvidia0"],
@@ -491,7 +495,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
         id: "dev-2", label: "Owner laptop", os: "darwin", hostname: "ashish-mbp.local",
         connected: false, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 7200e3, expiresAt: NOW + 50 * 864e5,
         lastIp: "192.0.2.2", lastAgent: "kinu-device", replacedAt: null,
-        revokedAt: null, unstoppedAt: null,
+        revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: true,
         sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
       }] : []),
     ]);
@@ -575,7 +579,7 @@ function deviceConnectFixture(path: string, method: string): Response | null {
       connected: connectFixtureMode !== "stall",
       createdAt: NOW, lastSeenAt: NOW, expiresAt: NOW + 864e5,
       lastIp: "192.0.2.7", lastAgent: "kinu-device", replacedAt: null,
-      revokedAt: null, unstoppedAt: null,
+      revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
     }]);
   }
@@ -900,7 +904,7 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
  return row; };
 
   const root = push({
-    id: "n000", parent_id: null, depth: 0, visits: 31, value: 0.028,
+    id: "n000", parent_id: null, depth: 0, visits: 31, value: 0.028, own_score: 0.028,
     status: "open", action: "Find why the SAVE20 coupon 500s",
     task: "Find why the SAVE20 coupon 500s and fix it.",
     observation: "Four candidate fixes explored; one line survived to depth 6.",
@@ -958,7 +962,7 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
 
       const child = push({
         id: `n${String(rows.length).padStart(3, "0")}`,
-        parent_id: parent.id, depth: parent.depth + 1, visits, value: score, status,
+        parent_id: parent.id, depth: parent.depth + 1, visits, value: score, own_score: score, status,
         action: MCTS_ACTIONS[(rows.length * 7 + parent.depth) % MCTS_ACTIONS.length],
         observation: status === "failed"
           ? "Branch errored: the staging DB refused the ALTER while checkout held the lock."
@@ -1417,7 +1421,7 @@ const REVERT_THREAD: UIMessage[] = [
   }),
 ];
 
-const REVERT_DEVICE_CONNECTED = new URLSearchParams(location.search).get("checkpoints") === "1";
+const REVERT_CHECKPOINTS = new URLSearchParams(location.search).get("checkpoints");
 
 const REVERT_CHECKPOINT: FileCheckpointEntry = {
   id: "c0ffee1", dir: "/pc/ashish-device/work/shop", at: NOW - 6 * 60e3,
@@ -1425,9 +1429,14 @@ const REVERT_CHECKPOINT: FileCheckpointEntry = {
 };
 
 /** Separate facts: an unreachable store says nothing about what a turn changed. */
-const REVERT_LISTING: FileCheckpointListing = REVERT_DEVICE_CONNECTED
-  ? { availability: { available: true }, entries: [REVERT_CHECKPOINT] }
-  : { availability: { available: false, reason: "no device connected — connect one with `kinu connect`" }, entries: [] };
+const REVERT_LISTINGS = new Map<string | null, FileCheckpointListing>([
+  ["1", { availability: { available: true }, entries: [REVERT_CHECKPOINT] }],
+  ["none", { availability: { available: true }, entries: [] }],
+  ["nogit", { availability: { available: false, reason: CHECKPOINTS_UNAVAILABLE_NO_GIT }, entries: [] }],
+]);
+
+const REVERT_LISTING: FileCheckpointListing = REVERT_LISTINGS.get(REVERT_CHECKPOINTS)
+  ?? { availability: { available: false, reason: CHECKPOINTS_NO_DEVICE }, entries: [] };
 
 function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "revert") seedGalleryChat(REVERT_THREAD);
@@ -1639,35 +1648,35 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
 // `lean/Checkout/Coupon.lean` is invented along with the coupon table; the module does not exist. Enrolled in `CITATION_ILLUSTRATIVE`.
 const PROVE_ROWS: MctsRow[] = [
   {
-    id: "pv000", parent_id: null, depth: 0, visits: 0, value: 0, status: "open",
+    id: "pv000", parent_id: null, depth: 0, visits: 0, value: 0, own_score: 0, status: "open",
     action: "Prove the coupon guard terminates",
     task: "Prove that applyCoupon terminates for every coupon row, including kind = null.",
     observation: "The workspace as found: lean/Checkout/Coupon.lean, 3 sorries.",
     created_at: NOW - 78e5,
   },
   {
-    id: "pv001", parent_id: "pv000", depth: 1, visits: 4, value: 0.31, status: "open",
+    id: "pv001", parent_id: "pv000", depth: 1, visits: 4, value: 0.31, own_score: 0.31, status: "open",
     action: "Induct on the discount list", observation: "Checker accepted 1 of 3 goals.",
     created_at: NOW - 77e5,
   },
   {
-    id: "pv002", parent_id: "pv000", depth: 1, visits: 1, value: 0.12, status: "pruned",
+    id: "pv002", parent_id: "pv000", depth: 1, visits: 1, value: 0.12, own_score: 0.12, status: "pruned",
     action: "Case-split on kind first", observation: "Below the prune floor after one rollout.",
     created_at: NOW - 77e5,
   },
   {
-    id: "pv003", parent_id: "pv001", depth: 2, visits: 3, value: 0.68, status: "open",
+    id: "pv003", parent_id: "pv001", depth: 2, visits: 3, value: 0.68, own_score: 0.68, status: "open",
     action: "Strengthen the induction hypothesis", observation: "Checker accepted 2 of 3 goals.",
     created_at: NOW - 76e5,
   },
   {
-    id: "pv004", parent_id: "pv000", depth: 1, visits: 0, value: 0, status: "failed",
+    id: "pv004", parent_id: "pv000", depth: 1, visits: 0, value: 0, own_score: 0, status: "failed",
     action: "Reduce to the existing monotonicity lemma",
     observation: "Branch errored: the lemma this cites was renamed and no longer resolves.",
     created_at: NOW - 77e5,
   },
   {
-    id: "pv005", parent_id: "pv003", depth: 3, visits: 5, value: 0.94, status: "terminal",
+    id: "pv005", parent_id: "pv003", depth: 3, visits: 5, value: 0.94, own_score: 0.94, status: "terminal",
     action: "Discharge the null case from the guard",
     observation: "Checker accepted 3 of 3 goals. No sorries remain.",
     code_used: "theorem applyCoupon_terminates : ∀ c, Terminates (applyCoupon c) := by",
@@ -1678,57 +1687,57 @@ const PROVE_ROWS: MctsRow[] = [
 /** A `custom` composition that fans in (`expand:'aggregate'`): `sw004` and `sw009` are the aggregate vertices, readable only from the journal. */
 const SWARM_ROWS: MctsRow[] = [
   {
-    id: "sw000", parent_id: null, depth: 0, visits: 0, value: 0, status: "open",
+    id: "sw000", parent_id: null, depth: 0, visits: 0, value: 0, own_score: 0, status: "open",
     action: "Reconcile the three coupon fixes",
     task: "Reduce checkout p95 without regressing the coupon guard.",
     observation: "The workspace as found: p95 = 412ms on the failing fixture.",
     created_at: NOW - 22e5,
   },
   {
-    id: "sw001", parent_id: "sw000", depth: 1, visits: 3, value: 0.44, status: "open",
+    id: "sw001", parent_id: "sw000", depth: 1, visits: 3, value: 0.44, own_score: 0.44, status: "open",
     action: "Cache the resolved kind per coupon id", observation: "p95 = 318ms.",
     created_at: NOW - 21e5,
   },
   {
-    id: "sw002", parent_id: "sw000", depth: 1, visits: 2, value: 0.37, status: "open",
+    id: "sw002", parent_id: "sw000", depth: 1, visits: 2, value: 0.37, own_score: 0.37, status: "open",
     action: "Index rules by kind at load", observation: "p95 = 341ms.",
     created_at: NOW - 21e5,
   },
   {
-    id: "sw003", parent_id: "sw000", depth: 1, visits: 1, value: 0.19, status: "pruned",
+    id: "sw003", parent_id: "sw000", depth: 1, visits: 1, value: 0.19, own_score: 0.19, status: "pruned",
     action: "Precompute the whole discount table", observation: "p95 = 402ms — below the prune floor.",
     created_at: NOW - 21e5,
   },
   {
-    id: "sw004", parent_id: "sw001", depth: 2, visits: 4, value: 0.71, status: "open",
+    id: "sw004", parent_id: "sw001", depth: 2, visits: 4, value: 0.71, own_score: 0.71, status: "open",
     action: "Reconcile the cache with the load-time index",
     observation: "p95 = 244ms. Both parents' writes touched pricing.ts; this candidate is the merge.",
     created_at: NOW - 20e5,
   },
   {
-    id: "sw005", parent_id: "sw002", depth: 2, visits: 2, value: 0.52, status: "open",
+    id: "sw005", parent_id: "sw002", depth: 2, visits: 2, value: 0.52, own_score: 0.52, status: "open",
     action: "Narrow the index to the percentage path", observation: "p95 = 296ms.",
     created_at: NOW - 20e5,
   },
   {
-    id: "sw006", parent_id: "sw002", depth: 2, visits: 1, value: 0.28, status: "pruned",
+    id: "sw006", parent_id: "sw002", depth: 2, visits: 1, value: 0.28, own_score: 0.28, status: "pruned",
     action: "Index every rule field", observation: "p95 = 377ms — below the prune floor.",
     created_at: NOW - 20e5,
   },
   {
-    id: "sw007", parent_id: "sw004", depth: 3, visits: 6, value: 0.93, status: "terminal",
+    id: "sw007", parent_id: "sw004", depth: 3, visits: 6, value: 0.93, own_score: 0.93, status: "terminal",
     action: "Drop the redundant second lookup",
     observation: "p95 = 188ms. The guard's fixture still passes.",
     code_used: "const kind = cached ?? inferKind(coupon);",
     created_at: NOW - 19e5,
   },
   {
-    id: "sw008", parent_id: "sw004", depth: 3, visits: 2, value: 0.61, status: "open",
+    id: "sw008", parent_id: "sw004", depth: 3, visits: 2, value: 0.61, own_score: 0.61, status: "open",
     action: "Warm the cache on first read", observation: "p95 = 271ms.",
     created_at: NOW - 19e5,
   },
   {
-    id: "sw009", parent_id: "sw005", depth: 3, visits: 3, value: 0.66, status: "open",
+    id: "sw009", parent_id: "sw005", depth: 3, visits: 3, value: 0.66, own_score: 0.66, status: "open",
     action: "Reconcile the narrowed index with the warm cache",
     observation: "p95 = 258ms. Consumed both depth-2 candidates that scored.",
     created_at: NOW - 19e5,
@@ -1796,7 +1805,7 @@ const SWARM_RUN: HeadRunView = {
  */
 const REFUSED_ROWS: MctsRow[] = [
   {
-    id: "rf000", parent_id: null, depth: 0, visits: 0, value: 0, status: "open",
+    id: "rf000", parent_id: null, depth: 0, visits: 0, value: 0, own_score: 0, status: "open",
     action: "Find a coupon row that breaks the guard",
     task: "Find a coupon row that makes applyCoupon throw after the migration.",
     observation: "The workspace as found: 41 coupon fixtures.",
@@ -1826,7 +1835,7 @@ const REFUSED_RUN: HeadRunView = {
  */
 const RUNNING_ROWS: MctsRow[] = [
   {
-    id: "lv000", parent_id: null, depth: 0, visits: 0, value: 0, status: "open",
+    id: "lv000", parent_id: null, depth: 0, visits: 0, value: 0, own_score: 0, status: "open",
     action: "Audit the coupon guard for unsafe kind reads",
     task: "Audit every reader of coupon.kind across the checkout package and report the ones "
       + "that can throw on a null kind, with the call path and a suggested guard.",
@@ -1834,13 +1843,13 @@ const RUNNING_ROWS: MctsRow[] = [
     created_at: NOW - 42e4,
   },
   {
-    id: "lv001", parent_id: "lv000", depth: 1, visits: 1, value: 0.72, status: "open",
+    id: "lv001", parent_id: "lv000", depth: 1, visits: 1, value: 0.72, own_score: 0.72, status: "open",
     action: "Walk the cart serializer's null path",
     observation: "Two readers dereference rules[kind] with no guard.",
     created_at: NOW - 30e4,
   },
   {
-    id: "lv002", parent_id: "lv000", depth: 1, visits: 1, value: 0.44, status: "open",
+    id: "lv002", parent_id: "lv000", depth: 1, visits: 1, value: 0.44, own_score: 0.44, status: "open",
     action: "Check the admin coupon report",
     observation: "One reader, already guarded by an early return.",
     created_at: NOW - 26e4,
@@ -2417,7 +2426,7 @@ const CANVAS_ROWS: readonly ExplorationCanvasRun[] = FORK_RUNS.map((run) => ({
 }));
 
 /** The stub stands in for the server, so the canvas payload must be the server's full row, not the client's loose shape. */
-function asSearchNode(row: MctsRow, rootId: string): SearchNode {
+function asSearchNode(row: MctsRow, rootId: string): SearchTreeRow {
   return {
     id: row.id,
     parent_id: row.parent_id,
@@ -2429,6 +2438,7 @@ function asSearchNode(row: MctsRow, rootId: string): SearchNode {
     code_language: row.code_used ? "typescript" : null,
     visits: row.visits,
     value: row.value,
+    own_score: row.own_score,
     depth: row.depth,
     // `running` is a merged-head status the search_nodes CHECK constraint cannot hold.
     status: row.status === "running" ? "open" : row.status,
@@ -4463,8 +4473,8 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
       ...(offlineDevice ? [] : [{ name: "pc", type: "dir" as const, mtimeMs: NOW - 60e3 }]),
       { name: "sandbox", type: "dir", mtimeMs: NOW - 30 * 60e3 },
     ]],
-    ["/home", [{ name: "user", type: "dir", mtimeMs: NOW - 4 * 36e5 }]],
-    ["/home/user", [
+    ["/home", [{ name: "main", type: "dir", mtimeMs: NOW - 4 * 36e5 }]],
+    ["/home/main", [
       { name: "memory", type: "dir", mtimeMs: NOW - 26e5 },
       { name: "skills", type: "dir", mtimeMs: NOW - 20 * 864e5 },
       { name: "AGENTS.md", type: "file", size: 2_148, mtimeMs: NOW - 3 * 864e5 },
@@ -4472,8 +4482,8 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
       { name: "notes.md", type: "file", size: 4_402, mtimeMs: NOW - 42e5 },
       { name: "binary-weights.bin", type: "file", size: 4_089_446, mtimeMs: NOW - 6 * 864e5 },
     ]],
-    ["/home/user/memory", [{ name: "MEMORY.md", type: "file", size: 1_204, mtimeMs: NOW - 26e5 }]],
-    ["/home/user/skills", [{ name: "sql-triage.md", type: "file", size: 2_010, mtimeMs: NOW - 20 * 864e5 }]],
+    ["/home/main/memory", [{ name: "MEMORY.md", type: "file", size: 1_204, mtimeMs: NOW - 26e5 }]],
+    ["/home/main/skills", [{ name: "sql-triage.md", type: "file", size: 2_010, mtimeMs: NOW - 20 * 864e5 }]],
     ["/sandbox", [{ name: "workspace", type: "dir", mtimeMs: NOW - 30 * 60e3 }]],
     ["/sandbox/workspace", [
       { name: "build.log", type: "file", size: 18_211, mtimeMs: NOW - 31 * 60e3 },
@@ -4504,9 +4514,9 @@ const PC_MOUNT = `/pc/${PC_SEGMENT}`;
 const PC_CONSENTED_ROOT = `${PC_MOUNT}/home/dev`;
 
 const FILES_TEXT = {
-  "/home/user/notes.md": "# Checkout coupon regression\n\n- kind:null rows come from the 0412 migration\n- the serializer guards only percentage coupons\n- fix drafted in packages/checkout/src/apply-coupon.ts\n",
-  "/home/user/SOUL.md": "I keep this workspace's changes small and proven.\n",
-  "/home/user/AGENTS.md": "## Working agreements\n\nRun the checkout suite before claiming a fix.\n",
+  "/home/main/notes.md": "# Checkout coupon regression\n\n- kind:null rows come from the 0412 migration\n- the serializer guards only percentage coupons\n- fix drafted in packages/checkout/src/apply-coupon.ts\n",
+  "/home/main/SOUL.md": "I keep this workspace's changes small and proven.\n",
+  "/home/main/AGENTS.md": "## Working agreements\n\nRun the checkout suite before claiming a fix.\n",
   [`${PC_CONSENTED_ROOT}/quarterly-report.txt`]: "Q3 numbers, draft 2 — do not circulate.\n",
   [`${PC_CONSENTED_ROOT}/notes.html`]: "<h1>Q3 close</h1><p>Signed off by finance.</p>\n",
   "/sandbox/workspace/build.log": "$ bun run build\nbundled 412 modules in 1.9s\nok\n",
@@ -4671,9 +4681,9 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
         {deferPreview && (
           <div className="absolute z-20 flex gap-2 p-2">
             <button data-files-fixture-mutate type="button" onClick={() => {
-              const path = "/home/user/notes.md";
+              const path = "/home/main/notes.md";
               contents.set(path, "# Fresh after refresh\n\nThe older reply must not reclaim this preview.\n");
-              store.set("/home/user", (store.get("/home/user") ?? []).map((entry) => (
+              store.set("/home/main", (store.get("/home/main") ?? []).map((entry) => (
                 entry.name === "notes.md" ? { ...entry, mtimeMs: Date.now() } : entry
               )));
             }}>Mutate preview source</button>
@@ -5743,7 +5753,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
   return {
     id, label, os: "linux", hostname: label, connected: true,
     createdAt: NOW - 30 * 864e5, lastSeenAt: NOW - 60e3, expiresAt: NOW + 60 * 864e5,
-    lastIp: "192.0.2.9", lastAgent: "kinu-device", replacedAt: null, revokedAt: null, unstoppedAt: null,
+    lastIp: "192.0.2.9", lastAgent: "kinu-device", replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
     sandbox,
     version: "0.3.0+gallery", servedVersion: "0.3.0+gallery", update: "current",
   };
@@ -6123,6 +6133,7 @@ async function mount() {
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
     ["devices", { node: <DevicesFrame />, entries: ["/devices"] }],
+    ["devices-empty", { node: <DevicesFrame />, entries: ["/devices"] }],
     ["couponboard", { node: <CouponBoardSlate />, entries: ["/"] }],
   ]);
 

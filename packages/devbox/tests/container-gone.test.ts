@@ -50,6 +50,17 @@ describe('a heartbeat landing inside a restoration leaves that restoration alone
     }).toEqual({ stamps: 1, replacedCount: 1, tickSawReplacement: false, ready: true });
   });
 
+  test('a settled beat asks the container one question: the boot-id read is its ping', async () => {
+    const { box, container } = harness(TestBox);
+    await box.devboxStartup();
+    const before = container.sequence.length;
+
+    await box.devboxHeartbeat();
+
+    expect(container.sequence.slice(before)).toEqual(['exec:cat']);
+    expect((await box.devboxState()).lastTick?.ping).toBe('ok');
+  });
+
   test('the beat refuses replacement and arms the hook coordinator without restoring', async () => {
     const { box, container } = harness(TestBox);
     await box.devboxStartup();

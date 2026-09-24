@@ -118,7 +118,6 @@ describe('providers command — the provider revision', () => {
   test('a disconnect that removes a stored credential advances it', () => {
     const home = freshHome();
     writeFileSync(join(home, 'config.json'), JSON.stringify({
-      model: 'openai/gpt-5.5',
       providers: { openai: { apiKey: 'sk' } },
     }));
     expect(revisionOf(home)).toBe(0);
@@ -156,33 +155,53 @@ describe('providers command — disconnect', () => {
     return parseJsonObject(readFileSync(join(home, 'config.json'), 'utf8'));
   }
 
-  test('removes the stored credential from disk and clears the default model', () => {
+  /** The default model, set the way the home screen's Defaults set it. */
+  function withDefaultModel(home: string, model: string): void {
+    const proc = Bun.spawnSync({
+      cmd: [process.execPath, '-e', `
+        const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
+        await updateDefaultTier({ model: ${JSON.stringify(model)} });
+      `],
+      cwd: repoRoot,
+      env: { ...process.env, KINU_HOME: home },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    expect(proc.exitCode, proc.stderr.toString()).toBe(0);
+  }
+
+  const DefaultModelSchema = v.object({
+    localProfile: v.object({ catalog: v.object({ tiers: v.object({ default: v.object({ model: v.string() }) }) }) }),
+  });
+
+  test('removes the stored credential from disk and says the default model ran on it, leaving the default', () => {
     const home = homeWith({
-      model: 'codex/gpt-5.5',
       providers: {
         codex: { accessToken: 'at-secret', refreshToken: 'rt-secret' },
         openai: { apiKey: 'sk-keep-me' },
       },
     });
 
+    withDefaultModel(home, 'codex/gpt-5.5');
     const res = runProviders(['disconnect', 'codex'], { home });
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain('Removed the codex credential from this machine');
+    expect(res.stdout).toContain('codex/gpt-5.5 runs on it');
 
     const config = readConfig(home);
     expect(config.providers).toEqual({ openai: { apiKey: 'sk-keep-me' } });
-    expect(config.model).toBeUndefined();
+    expect(v.parse(DefaultModelSchema, config).localProfile.catalog.tiers.default.model).toBe('codex/gpt-5.5');
     expect(readFileSync(join(home, 'config.json'), 'utf8')).not.toContain('secret');
   });
 
-  test('leaves another provider\'s default model alone', () => {
-    const home = homeWith({
-      model: 'openai/gpt-5.5',
-      providers: { codex: { accessToken: 'at' }, openai: { apiKey: 'sk' } },
-    });
+  test('says nothing about a default model that runs on another provider', () => {
+    const home = homeWith({ providers: { codex: { accessToken: 'at' }, openai: { apiKey: 'sk' } } });
+    withDefaultModel(home, 'openai/gpt-5.5');
 
-    runProviders(['disconnect', 'codex'], { home });
-    expect(readConfig(home).model).toBe('openai/gpt-5.5');
+    const res = runProviders(['disconnect', 'codex'], { home });
+    expect(res.stdout).not.toContain('runs on it');
+    expect(v.parse(DefaultModelSchema, readConfig(home)).localProfile.catalog.tiers.default.model).toBe('openai/gpt-5.5');
   });
 
   test('says so when the provider was not connected, and changes nothing', () => {

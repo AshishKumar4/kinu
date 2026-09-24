@@ -14,7 +14,8 @@
 import * as v from 'valibot';
 import { argumentDigest, sha256Hex } from '../safety/argument-digest';
 import {
-  admitsPublication, isBetter,
+  admitsPublication, FloorBreachSchema, isBetter,
+  type FloorBreach,
   type ExplorationRecord, type Floor, type ObjectiveDirection, type ObjectiveIdentity,
   type PublicationState, type VerifierSpec,
 } from './objective';
@@ -57,8 +58,18 @@ const EXPLORATION_RECORDS_DDL = `CREATE TABLE IF NOT EXISTS exploration_records 
   PRIMARY KEY (actor_id, record_key)
 )`;
 
+const EXPLORATION_SEALS_DDL = `CREATE TABLE IF NOT EXISTS exploration_seals (
+  actor_id     TEXT NOT NULL,
+  objective_id TEXT NOT NULL,
+  floor_digest TEXT NOT NULL,
+  breach_json  TEXT NOT NULL,
+  sealed_at    INTEGER NOT NULL,
+  PRIMARY KEY (actor_id, objective_id, floor_digest)
+)`;
+
 export function initExplorationRecordsTable(execRaw: RawSqlExec): void {
   execRaw(EXPLORATION_RECORDS_DDL);
+  execRaw(EXPLORATION_SEALS_DDL);
   // Scoped by identity and floor, like every read below.
   execRaw('CREATE INDEX IF NOT EXISTS idx_er_cell ON exploration_records'
     + '(actor_id, objective_id, floor_digest, descriptor, value)');
@@ -386,6 +397,37 @@ export function cellOccupants(
   return recordsInCell(sql, actor, handle, { direction: scope.identity.direction, seek: null, limit: NO_LIMIT });
 }
 
+export function sealRecords(
+  sql: SqlExecutor,
+  actor: ActorHandle,
+  input: { readonly identity: ObjectiveIdentity; readonly breach: FloorBreach; readonly at: number },
+): void {
+  const { identity, breach, at } = input;
+  actor.assertCurrent();
+  void sql`INSERT INTO exploration_seals (actor_id, objective_id, floor_digest, breach_json, sealed_at)
+    VALUES (${actor.actorId}, ${objectiveIdOf(identity)}, ${floorDigestOf(breach.floor)},
+      ${JSON.stringify(breach)}, ${at})
+    ON CONFLICT (actor_id, objective_id, floor_digest) DO NOTHING`;
+}
+
+/** The run's own seal, else the store's. */
+export function publicationOf(
+  sql: SqlExecutor, actor: ActorHandle, own: PublicationState, scope: RecordScope,
+): PublicationState {
+  const floorDigest = floorDigestOf(scope.floor);
+
+  if (own.kind === 'sealed' || floorDigest === null) return own;
+
+  const row = sql<{ breach_json: string }>`
+    SELECT breach_json FROM exploration_seals
+    WHERE actor_id = ${actor.actorId} AND objective_id = ${objectiveIdOf(scope.identity)}
+      AND floor_digest = ${floorDigest}`[0];
+
+  if (row === undefined) return own;
+
+  return { kind: 'sealed', breach: v.parse(FloorBreachSchema, JSON.parse(row.breach_json)) };
+}
+
 /**
  * Write one measurement or refuse with a reason. The seal is checked before anything is
  * read; the monotone rule after.
@@ -403,6 +445,11 @@ export function recordExploration(
 
   // After the seal, before any read: neither a breached run nor a retired actor may inspect the store.
   actor.assertCurrent();
+
+  if (admitsPublication(publicationOf(sql, actor, input.publication, write), 'records').kind === 'refused') {
+    return { kind: 'refused', cause: 'sealed' };
+  }
+
   const actorId = actor.actorId;
 
   const objectiveId = objectiveIdOf(write.identity);

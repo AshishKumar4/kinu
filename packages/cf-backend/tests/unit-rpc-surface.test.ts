@@ -8,52 +8,28 @@ import {
   ORCHESTRATOR_RPC_SURFACE,
   USER_DO_RPC_SURFACE,
   sealRpcSurface,
+  type UserDoRpcMethod,
 } from '../src/rpc-surface';
-import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
-import { declaredClassMembers, isInternalMember } from './helpers/declared-members';
+import { AGENT_RPC_ACCESS } from '@kinu.run/core';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { decodeJsonValue, type JsonValue } from '@kinu.run/core';
+import type { Agent } from 'agents';
 import * as v from 'valibot';
+import { ActorAgent } from '../src/actor-agent';
+import { OrchestratorAgent } from '../src/orchestrator';
+import type { UserDO } from '../src/user/user-do';
+import type { FilesRouteAgent } from '../src/files-routes';
+import type { TerminalWorkspace } from '../src/terminal-route';
+import { orchestratorHarness, rpcReachableFrom, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 type UserDOInstance = ReturnType<typeof createTestUserDO>['userDO'];
 
-type RpcTarget = UserDOInstance | Leaf | Middle2;
-
-
-/** workerd's stub-resolution rule, stated independently of `sealRpcSurface`; the mechanism tests pin the two together. */
-function rpcReachableNames(target: RpcTarget): string[] {
-  const own = new Set(Object.getOwnPropertyNames(target));
-  const reachable = new Set<string>();
-
-  for (let proto: object | null = Object.getPrototypeOf(target);
-       proto !== null && proto !== Object.prototype;
-       proto = Object.getPrototypeOf(proto)) {
-    for (const name of Object.getOwnPropertyNames(proto)) {
-      if (name !== 'constructor' && !own.has(name)) reachable.add(name);
-    }
-  }
-
-  return [...reachable].sort();
-}
-
-/** Read from the one declaration in src/rpc-surface.ts; a pattern that stops matching throws rather than passing on an empty list. */
-function surfaceLiteral(constName: string): string[] {
-  const body = source('rpc-surface.ts').match(
-    new RegExp(`const ${constName}[^=]*= \\[([\\s\\S]*?)\\] as const`),
-  )?.[1];
-
-  if (!body) throw new Error(`surface literal ${constName} is not declared in rpc-surface.ts`);
-
-  return [...body.matchAll(/'([^']+)'/g)]
-    .map((match) => match[1])
-    .filter((name): name is string => name !== undefined)
-    .sort();
-}
+type RpcTarget = UserDOInstance | HarnessOrchestratorAgent | Leaf | Middle2;
 
 /** What a stub-holder gets. Denial reproduces workerd's own wording. */
 async function callOverRpc(target: RpcTarget, method: string, args: JsonValue[]) {
-  if (!rpcReachableNames(target).includes(method)) {
+  if (!rpcReachableFrom(target).includes(method)) {
     throw new Error(`The RPC receiver does not implement the method "${method}".`);
   }
 
@@ -142,31 +118,48 @@ describe('the UserDO capability gate is reachable-surface enforced, not advisory
   });
 });
 
-// An allowlist is only fail-closed if it cannot drift from the class, so these read the source.
+// An allowlist is only fail-closed if it cannot drift from the class. The compiler holds the lists to
+// the classes' public members; a sealed instance shows what a stub-holder reaches.
 
-const declaredMembers = declaredClassMembers(
-  readFileSync(join(import.meta.dir, '..', 'src', 'user', 'user-do.ts'), 'utf8'),
-);
+/** Public methods a class declares above `Base`. */
+type OwnPublicMethods<T, Base> = {
+  [K in Exclude<keyof T, keyof Base>]: T[K] extends (...args: never[]) => void ? K : never
+}[Exclude<keyof T, keyof Base>];
+
+/** `true` when `Names` is empty; otherwise the names, so the compiler error lists them. */
+type NoneOf<Names> = [Names] extends [never] ? true : Names;
 
 /** Public because the SDK base calls them in process (`agents/dist/src-5W6JNKVb.js:823`), so they cannot be
  *  `protected`. Not on the surface: the seal shadows each. */
-const SDK_HOOK_OVERRIDES = ['createMcpOAuthProvider'];
+const SDK_HOOK_OVERRIDES = ['createMcpOAuthProvider'] as const satisfies readonly (keyof UserDO)[];
+
+// Every public UserDO method is listed, or is an SDK hook the seal shadows on purpose.
+const everyUserDoMethodListed: NoneOf<Exclude<
+  OwnPublicMethods<UserDO, Agent<Env>>, UserDoRpcMethod | (typeof SDK_HOOK_OVERRIDES)[number]
+>> = true;
+
+// Every CLI-dispatched name is a public orchestrator member: a private or deleted one fails here.
+const everyDispatchedNameIsPublic: NoneOf<Exclude<keyof typeof AGENT_RPC_ACCESS, keyof OrchestratorAgent>> = true;
+
+/** Exactly the methods each Worker route is typed to call on the orchestrator stub. */
+const FILES_ROUTE_CALLS = {
+  startExecutorFileDownload: true, readExecutorFileChunk: true, abortExecutorFileDownload: true,
+  writeExecutorFileChunk: true, abortExecutorFileWrite: true,
+} as const satisfies Record<keyof FilesRouteAgent, true>;
+
+const TERMINAL_ROUTE_CALLS = {
+  prepareTerminal: true, openDeviceTerminal: true, fetch: true,
+} as const satisfies Record<keyof TerminalWorkspace, true>;
 
 describe('the UserDO RPC surface cannot drift from the class', () => {
-  test('every public member is on the surface', () => {
-    const missing = declaredMembers
-      .filter((m) => !isInternalMember(m))
-      .map((m) => m.name)
-      .filter((name) => !USER_DO_RPC_SURFACE.includes(name) && !SDK_HOOK_OVERRIDES.includes(name));
-
-    expect(missing.sort()).toEqual([]);
+  test('the compiler holds every public method to the surface', () => {
+    expect([everyUserDoMethodListed, everyDispatchedNameIsPublic]).toEqual([true, true]);
   });
 
   test('a base-declared hook override is public in TypeScript and sealed over RPC', async () => {
     const harness = createTestUserDO();
 
     for (const name of SDK_HOOK_OVERRIDES) {
-      expect(declaredMembers.some((m) => m.name === name && !isInternalMember(m))).toBe(true);
       await expect(callOverRpc(harness.userDO, name, ['https://kinu.example/callback']))
         .rejects.toThrow(`The RPC receiver does not implement the method "${name}".`);
     }
@@ -174,60 +167,16 @@ describe('the UserDO RPC surface cannot drift from the class', () => {
     harness.close();
   });
 
-  test('no internal member is on the surface', () => {
-    const leaked = declaredMembers
-      .filter(isInternalMember)
-      .map((m) => m.name)
-      .filter((name) => USER_DO_RPC_SURFACE.includes(name));
-
-    expect(leaked.sort()).toEqual([]);
-  });
-
-  test('the surface names nothing the class does not have', () => {
-    const declared = new Set(declaredMembers.map((m) => m.name));
-
-    const stale = USER_DO_RPC_SURFACE
-      .filter((name) => !PLATFORM_RPC_SURFACE.includes(name))
-      .filter((name) => !declared.has(name));
-
-    expect(stale.sort()).toEqual([]);
-  });
-
-  test('the check sees the member shapes someone might actually add', () => {
-    // A regex matching only `async foo(` would miss getters, generics, plain and `private` methods.
-    const named = (name: string) => declaredMembers.some((m) => m.name === name);
-    expect(named('getAuthHeaders')).toBe(true);   // async, no modifier
-    expect(named('fetch')).toBe(true);            // override async
-    expect(named('sqlx')).toBe(true);             // private, non-async, generic
-    expect(named('readCredential')).toBe(true);   // private, async
-    expect(named('rewrapCredentials')).toBe(true); // private, non-async, promise-returning
-    expect(declaredMembers.filter(isInternalMember).length).toBeGreaterThan(5);
-  });
-
   test('a UserDO instance reaches no further than its declared surface', () => {
     const harness = createTestUserDO();
-    const beyond = rpcReachableNames(harness.userDO).filter((n) => !USER_DO_RPC_SURFACE.includes(n));
+    const beyond = rpcReachableFrom(harness.userDO).filter((n) => !USER_DO_RPC_SURFACE.includes(n));
     expect(beyond).toEqual([]);
     harness.close();
   });
 });
 
-// `OrchestratorAgent` cannot be constructed under bun (its base chain reaches cloudflare:*), so its surface is checked as data against the class sources.
-
-const SRC = join(import.meta.dir, '..', 'src');
-
-const source = (file: string) => readFileSync(join(SRC, file), 'utf8');
-
-const PLATFORM_RPC_SURFACE = surfaceLiteral('PLATFORM_RPC_SURFACE');
-
-const AGENTS_FACET_RPC_SURFACE = surfaceLiteral('AGENTS_FACET_RPC_SURFACE');
-
-/** Every Durable Object class in the Worker, and the surface it must seal to.
- *  `KinuSandbox` is the one omission — see the test that pins it. */
-const SEALED_CLASSES = [
-  { file: 'user/user-do.ts', klass: 'UserDO', constant: 'USER_DO_RPC_SURFACE', surface: USER_DO_RPC_SURFACE },
-  { file: 'orchestrator.ts', klass: 'OrchestratorAgent', constant: 'ORCHESTRATOR_RPC_SURFACE', surface: ORCHESTRATOR_RPC_SURFACE },
-] as const;
+/** The names Cloudflare's runtime invokes on a Durable Object: its fetch, alarm and hibernation handlers. */
+const RUNTIME_HANDLERS = ['fetch', 'alarm', 'webSocketMessage', 'webSocketClose', 'webSocketError'];
 
 /** Inherited members that make an unsealed DO a liability: the SDK's sql runner, storage teardown, state writer and method bridges. */
 const MUST_STAY_DENIED = [
@@ -235,66 +184,30 @@ const MUST_STAY_DENIED = [
   '_cf_invokeSubAgent', '_cf_invokeSubAgentPath', '_cf_invokeAgentPath', '_cf_invokeStubMethod',
 ];
 
+const SEALED_SURFACES = [
+  ['UserDO', USER_DO_RPC_SURFACE],
+  ['OrchestratorAgent', ORCHESTRATOR_RPC_SURFACE],
+] as const;
+
 describe('every Durable Object that holds something worth stealing is sealed', () => {
-  test.each(SEALED_CLASSES.map((c) => [c.klass, c] as const))(
-    '%s seals itself to its own surface',
-    (_name, { file, klass, constant }) => {
-      const src = source(file);
-      // The seal has to run in the class's own constructor: `this`'s prototype
-      // chain is only final once the SDK bases have finished with it.
-      expect(src).toContain(`export class ${klass} extends`);
-      expect(src).toContain(`sealRpcSurface(this, ${constant});`);
-    },
-  );
+  test('an OrchestratorAgent seals itself: a stub-holder reaches only its surface', () => {
+    const reachable = rpcReachableFrom(orchestratorHarness().agent);
 
-  test.each(SEALED_CLASSES.map((c) => [c.klass, c] as const))(
-    '%s denies the inherited members that matter',
-    (_name, { surface }) => {
-      expect(MUST_STAY_DENIED.filter((name) => surface.includes(name))).toEqual([]);
-    },
-  );
-
-  test.each(SEALED_CLASSES.map((c) => [c.klass, c] as const))(
-    '%s carries the platform surface it is dispatched on',
-    (_name, { surface }) => {
-      expect(PLATFORM_RPC_SURFACE.filter((name) => !surface.includes(name))).toEqual([]);
-    },
-  );
-
-  test('only the agent family carries the facet protocol', () => {
-    for (const { klass, surface } of SEALED_CLASSES) {
-      const missing = AGENTS_FACET_RPC_SURFACE.filter((name) => !surface.includes(name));
-      // A facet and its root call these on each other across a real stub; the
-      // UserDO is neither, so it keeps them closed.
-      expect({ klass, missing: missing.length }).toEqual({ klass, missing: klass === 'UserDO' ? AGENTS_FACET_RPC_SURFACE.length : 0 });
-    }
+    expect(reachable.filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name))).toEqual([]);
+    // What the seal keeps is what a caller needs: the CLI transport's table resolves on the instance.
+    expect(Object.keys(AGENT_RPC_ACCESS).filter((name) => !reachable.includes(name))).toEqual([]);
   });
 
-  test('KinuSandbox is knowingly left open', () => {
-    // Its surface is @cloudflare/sandbox's and it holds no owner credentials; sealing it would pin a third-party API.
-    const src = source('kinu-sandbox.ts');
-    expect(src).toContain('export class KinuSandbox extends Devbox<Env>');
-    expect(src).not.toContain('sealRpcSurface');
+  test.each(SEALED_SURFACES)('%s denies the inherited members that matter', (_name, surface) => {
+    expect(MUST_STAY_DENIED.filter((name) => surface.includes(name))).toEqual([]);
   });
 
-  test('no other Durable Object class slipped in unsealed', () => {
-    // `Devbox<` too: KinuSandbox extends it rather than `Sandbox<` directly.
-    const known = new Set([...SEALED_CLASSES.map((c) => c.klass), 'ActorAgent', 'KinuSandbox']);
-
-    const classes = readdirSync(SRC, { recursive: true, encoding: 'utf8' })
-      .filter((f) => f.endsWith('.ts'))
-      .flatMap((f) => [...source(f).matchAll(/^export (?:abstract )?class ([A-Za-z0-9_$]+) extends (Agent<|ActorAgent|Sandbox<|Devbox<)/gm)]
-        .map((m) => m[1]));
-
-    expect(classes.filter((name) => !known.has(name))).toEqual([]);
-    // The scan must match the class it was written for; matching nothing would pass vacuously.
-    expect(classes).toContain('KinuSandbox');
+  test.each(SEALED_SURFACES)('%s carries the runtime handlers it is dispatched on', (_name, surface) => {
+    expect(RUNTIME_HANDLERS.filter((name) => !surface.includes(name))).toEqual([]);
   });
 });
 
-describe('the agent surfaces cannot drift from their classes', () => {
-  const actorMembers = declaredClassMembers(source('actor-agent.ts'));
-
+describe('the agent surfaces cannot drift from their callers', () => {
   /** Reached by a stub inside this Worker, never for a client: the MCP adapter's scaffold run. */
   const internalOrchestratorRpc = ['runScaffoldOnce'] as const;
 
@@ -305,18 +218,11 @@ describe('the agent surfaces cannot drift from their classes', () => {
     expect(missing.sort()).toEqual([]);
   });
 
-  /** No subordinate snapshot hop: `subordinateView` reads `actor_id`-scoped config rows, so there is no stub or allowlist entry to drift. */
+  test('worker routes call only methods a sealed orchestrator answers', () => {
+    const reachable = rpcReachableFrom(orchestratorHarness().agent);
+    const called = [...Object.keys(FILES_ROUTE_CALLS), ...Object.keys(TERMINAL_ROUTE_CALLS)];
 
-  test('worker routes call only methods on the orchestrator surface', () => {
-    const called = ['terminal-route.ts', 'files-routes.ts'].flatMap((file) =>
-      [...source(file).matchAll(/\bagent\.([A-Za-z]\w*)\(/g)]
-        .map((match) => match[1])
-        .filter((name): name is string => name !== undefined));
-
-    expect(called).toContain('prepareTerminal');
-    expect(called).toContain('readExecutorFileChunk');
-    expect(called).toContain('writeExecutorFileChunk');
-    expect(called.filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name))).toEqual([]);
+    expect(called.filter((name) => !reachable.includes(name))).toEqual([]);
   });
 
   test('internal cross-DO methods stay sealed from client RPC', () => {
@@ -326,44 +232,15 @@ describe('the agent surfaces cannot drift from their classes', () => {
       .toEqual([]);
   });
 
-  test('the orchestrator surface names only members it or ActorAgent declares', () => {
-    const declared = new Set(
-      [...declaredClassMembers(source('orchestrator.ts')), ...actorMembers].map((m) => m.name),
-    );
-
-    const stale = ORCHESTRATOR_RPC_SURFACE
-      .filter((name) => !PLATFORM_RPC_SURFACE.includes(name) && !AGENTS_FACET_RPC_SURFACE.includes(name))
-      .filter((name) => !declared.has(name));
-
-    expect(stale.sort()).toEqual([]);
-  });
-
-  test('the orchestrator surface exposes no internal of its own or of ActorAgent', () => {
-    const internal = [...declaredClassMembers(source('orchestrator.ts')), ...actorMembers]
-      .filter(isInternalMember)
-      .map((m) => m.name);
-
-    expect(internal.length).toBeGreaterThan(0);
-    expect(internal.filter((name) => ORCHESTRATOR_RPC_SURFACE.includes(name)).sort()).toEqual([]);
-  });
-
   /**
    * The control plane lives on the substrate once; a copy on the root lets two implementations drift.
    * Behaviour is pinned in unit-actor-control-plane.test.ts and unit-actor-transcript-page.test.ts.
    */
   test('the shared control plane is declared on ActorAgent and not on the root', () => {
-    const shared = [
-      'getStoredModelSpec', 'setModel', 'send', 'cancelCurrentWork', 'getChatHistoryPage',
-    ];
+    const shared = ['getStoredModelSpec', 'setModel', 'send', 'cancelCurrentWork', 'getChatHistoryPage'];
 
-    const onActor = actorMembers.map((m) => m.name).filter((name) => shared.includes(name));
-    expect(onActor.sort()).toEqual([...shared].sort());
-
-    const redeclared = declaredClassMembers(source('orchestrator.ts'))
-      .map((m) => m.name)
-      .filter((name) => shared.includes(name));
-
-    expect(redeclared).toEqual([]);
+    expect(shared.filter((name) => !Object.hasOwn(ActorAgent.prototype, name))).toEqual([]);
+    expect(shared.filter((name) => Object.hasOwn(OrchestratorAgent.prototype, name))).toEqual([]);
   });
 });
 
@@ -412,14 +289,16 @@ const MCP_AGENT_ONLY = ['_cf_scheduleDestroy'];
 describe('the SDK half of the surface is derived from the installed agents package', () => {
   const sources = installedAgentsSources();
 
-  test('the facet surface is exactly the cross-stub protocol, minus the bridges', () => {
+  test('the orchestrator carries exactly the cross-stub facet protocol, minus the bridges; the UserDO none', () => {
     const derived = crossStubFacetNames(sources)
       .filter((name) => !UNIVERSAL_BRIDGES.includes(name) && !MCP_AGENT_ONLY.includes(name));
 
     // The scan must SEE the protocol: a dist layout it no longer parses would
     // otherwise derive an empty list and hold the surface to nothing.
     expect(derived.length).toBeGreaterThan(10);
-    expect(AGENTS_FACET_RPC_SURFACE).toEqual(derived);
+    expect(ORCHESTRATOR_RPC_SURFACE.filter((name) => name.startsWith('_cf_')).sort()).toEqual(derived);
+    // A facet and its root call these on each other across a real stub; the UserDO is neither.
+    expect(USER_DO_RPC_SURFACE.filter((name) => name.startsWith('_cf_'))).toEqual([]);
   });
 
   test('the bridges and the McpAgent-only name are still what the SDK calls over a stub', () => {
@@ -430,7 +309,7 @@ describe('the SDK half of the surface is derived from the installed agents packa
     for (const name of [...UNIVERSAL_BRIDGES, ...MCP_AGENT_ONLY]) expect(all).toContain(name);
   });
 
-  test('the platform surface carries the one name getAgentByName calls on the stub', () => {
+  test('every sealed surface carries the one name getAgentByName calls on the stub', () => {
     const routing = readFileSync(join(AGENTS_DIST, 'agent-routing.js'), 'utf8');
     const body = routing.match(/async function getAgentByName\([\s\S]*?\n}/)?.[0];
 
@@ -441,7 +320,10 @@ describe('the SDK half of the surface is derived from the installed agents packa
       .filter((name): name is string => name !== undefined);
 
     expect(calledOnStub.length).toBeGreaterThan(0);
-    expect(calledOnStub.filter((name) => !PLATFORM_RPC_SURFACE.includes(name))).toEqual([]);
+
+    for (const [, surface] of SEALED_SURFACES) {
+      expect(calledOnStub.filter((name) => !surface.includes(name))).toEqual([]);
+    }
   });
 });
 
@@ -494,7 +376,7 @@ class Leaf extends Middle {
 describe('sealRpcSurface', () => {
   test('an unsealed class exposes its whole chain, including the SDK query runner', async () => {
     const open = new Middle2();
-    expect(rpcReachableNames(open)).toEqual([
+    expect(rpcReachableFrom(open)).toEqual([
       'baseUsesSql', 'liveState', 'overridable', 'publicApi', 'sharedWithSubclasses', 'sql',
     ]);
     expect(await callOverRpc(open, 'sql', [['SELECT * FROM user_credentials']]))
@@ -502,7 +384,7 @@ describe('sealRpcSurface', () => {
   });
 
   test('a sealed class exposes exactly its surface', () => {
-    expect(rpcReachableNames(new Leaf())).toEqual(['markedCallable', 'overridable', 'publicApi']);
+    expect(rpcReachableFrom(new Leaf())).toEqual(['markedCallable', 'overridable', 'publicApi']);
   });
 
   test('inherited members, protected members and TypeScript privates are all denied', async () => {
@@ -534,7 +416,7 @@ describe('sealRpcSurface', () => {
   test('a surface entry the class does not have is ignored, not trusted', async () => {
     const open = new Middle2();
     sealRpcSurface(open, ['publicApi', 'noSuchMethod']);
-    expect(rpcReachableNames(open)).toEqual(['publicApi']);
+    expect(rpcReachableFrom(open)).toEqual(['publicApi']);
     await expect(callOverRpc(open, 'noSuchMethod', [])).rejects.toThrow('does not implement');
   });
 });

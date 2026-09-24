@@ -3,6 +3,7 @@ import {
   renderAlignmentConvergence, renderCalibrationReport, SPEND_SOURCE_LABEL, usageTotal,
   type AlignmentConvergence, type GepaOptimizationResult, type JsonObject, type JsonValue,
   type MissionBudgetLimits, type SearchNode, type Usage, type WorkspaceSpend,
+  type AgentRpcMethod,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
@@ -574,7 +575,7 @@ export async function webhookCommand(name: string, label: string | undefined, op
 }
 
 function cloudRead(
-  auth: { origin: string; token: string }, target: AgentTarget, method: string, args: JsonValue[] = [],
+  auth: { origin: string; token: string }, target: AgentTarget, method: AgentRpcMethod, args: JsonValue[] = [],
 ): Promise<JsonValue> {
   return callAgentRpc({
     origin: auth.origin, token: auth.token, name: target.cloudName, method, schema: JsonValueSchema, args,

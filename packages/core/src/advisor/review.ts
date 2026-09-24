@@ -345,7 +345,7 @@ const ADVISOR_REVIEW_MAX_ATTEMPTS = 3;
 const ADVISOR_TRANSIENT_CODES: readonly ErrorCode[] = ['unavailable', 'timeout', 'io'];
 
 /** Null means no note; malformed output is recorded by the caller, not thrown: the turn already ended. */
-export async function reviewCompletedTurn(deps: {
+async function reviewCompletedTurn(deps: {
   readonly llm: LLM;
   readonly turn: CompletedTurn;
   readonly reachable?: readonly string[];
@@ -362,7 +362,7 @@ export const ADVISOR_HEADER =
   '[Advisor — a second model reviewed the turn you just finished. This is the Kinu '
   + 'runtime, not the user. Weigh it against what you know; it may be wrong.]';
 
-export function advisorSignalText(note: AdvisorNote): string {
+function advisorSignalText(note: AdvisorNote): string {
   return `${ADVISOR_HEADER}\n\n${ADVISOR_SEVERITY_LABEL[note.severity]}: ${note.note}`;
 }
 

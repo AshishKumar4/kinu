@@ -1,5 +1,5 @@
 // A live turn's one indicator is derived from each part's stream state, never part order; nothing
-// animates on a clock: a closed part reports `thinking`, an open one reports itself.
+// animates on a clock: a closed part, or an open one with nothing to draw yet, reports `thinking`.
 import './helpers/ui-module-globals';
 import { describe, test, expect } from 'bun:test';
 import { createElement } from 'react';
@@ -147,25 +147,30 @@ describe('WorkspacePage paints exactly one live indicator', () => {
     ));
   }
 
-  const indicators = (markup: string) => markup.split('data-live-indicator').length - 1;
+  /** The live states the thread DRAWS: a Thinking row, a live reasoning label, a caret on text that shows, and
+   *  running call rows, which are one state however many run. A hook on an element that draws nothing is none. */
+  function liveStates(markup: string): number {
+    const hooked = (kind: string) => markup.split(`data-live-indicator="${kind}"`).length - 1;
+    const carets: string[] = [];
+
+    new HTMLRewriter()
+      .on('[data-live-indicator="text"]', {
+        element() { carets.push(''); },
+        text(chunk) { carets[carets.length - 1] += chunk.text; },
+      })
+      .transform(markup);
+    const caretsOnText = carets.filter((drawn) => drawn.trim() !== '').length;
+
+    return hooked('thinking') + hooked('reasoning') + caretsOnText + (markup.includes('data-tool-state="running"') ? 1 : 0);
+  }
+
+  const live = turnLiveness({ claim: { kind: 'admitted', turnId: 't1', claimedAt: 1 }, streaming: true });
 
   test("a user-last transcript on a live turn paints one indicator and offers Stop", () => {
-    const liveness = turnLiveness({ claim: { kind: 'admitted', turnId: 't1', claimedAt: 1 }, streaming: true });
-    const markup = thread([{ id: 'u1', role: 'user', parts: [text('build the chess app')] }], liveness);
+    const markup = thread([{ id: 'u1', role: 'user', parts: [text('build the chess app')] }], live);
 
-    expect(indicators(markup)).toBe(1);
-    expect(composerMarkup(liveness)).toContain('Stop this turn');
-  });
-
-  test('a streaming assistant row carries the indicator itself — the page adds none', () => {
-    const liveness = turnLiveness({ claim: { kind: 'admitted', turnId: 't1', claimedAt: 1 }, streaming: true });
-
-    const markup = thread([
-      { id: 'u1', role: 'user', parts: [text('go')] },
-      { id: 'a1', role: 'assistant', parts: [text('Reading the han', 'streaming')] },
-    ], liveness);
-
-    expect(indicators(markup)).toBe(1);
+    expect(liveStates(markup)).toBe(1);
+    expect(composerMarkup(live)).toContain('Stop this turn');
   });
 
   test('an idle thread paints none', () => {
@@ -174,17 +179,35 @@ describe('WorkspacePage paints exactly one live indicator', () => {
       { id: 'a1', role: 'assistant', parts: [text('Done.', 'done')] },
     ], { kind: 'idle' });
 
-    expect(indicators(markup)).toBe(0);
+    expect(liveStates(markup)).toBe(0);
   });
 
   test('a stranded turn offers recovery, never Stop', () => {
     const liveness = turnLiveness({ claim: { kind: 'stranded', turnId: 't9', claimedAt: 4 }, streaming: true });
     const markup = thread([{ id: 'u1', role: 'user', parts: [text('go')] }], liveness);
 
-    expect(indicators(markup)).toBe(0);
+    expect(liveStates(markup)).toBe(0);
 
     const composer = composerMarkup(liveness);
     expect(composer).not.toContain('Stop this turn');
     expect(composer).toContain('Recover this turn');
+  });
+
+  // A Responses-API model (Muse Spark through OpenCode Go, GPT-5) opens a reasoning item and streams no summary
+  // into it, so the block stays empty for as long as the model thinks.
+  const liveRows: ReadonlyArray<readonly [string, Part[]]> = [
+    ['text the stream is writing', [text('Reading the han', 'streaming')]],
+    ['blank text the stream has opened', [text('\n\n', 'streaming')]],
+    ['a reasoning block opened with no text yet', [{ type: 'step-start' }, reasoning('', 'streaming')]],
+    ['a running call beside a later settled one', [{ type: 'step-start' }, tool('a', 'input-available'), tool('b', 'output-available')]],
+  ];
+
+  test.each(liveRows)('a live assistant row holding %s draws one live state', (_holding, parts) => {
+    const markup = thread([
+      { id: 'u1', role: 'user', parts: [text('go')] },
+      { id: 'a1', role: 'assistant', parts },
+    ], live);
+
+    expect(liveStates(markup)).toBe(1);
   });
 });

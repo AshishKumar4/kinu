@@ -24,6 +24,8 @@ import {
   createCompletionLLM,
   ensembleReport,
   getChatHistoryPage, readSessionTranscript, CHAT_SESSION_ID,
+  missingSubordinateHistory, readSubordinateInspection, SubordinateInspectionRequestSchema,
+  type SubordinateInspectionRequest, type SubordinateInspectionResult,
   getEvolutionChangelog,
   ingestOutcomeLabels,
   initTurnOutcomeTables,
@@ -73,6 +75,8 @@ import {
   type TimerTrigger,
   type MctsSearchRunSummary,
   type ReasoningEffort,
+  setModel,
+  setReasoningEffort,
   decodeJsonValue,
   parseJsonValue,
   type SqlExec,
@@ -394,7 +398,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
         id: row.id,
         kind: 'mcts',
         label: row.action,
-        score: row.value,
+        value: row.value,
         status: row.status,
         ts: row.created_at,
       })));
@@ -495,6 +499,35 @@ export function getLocalChatHistory(name: string, limit = 100): Promise<ChatHist
     const transcript = readSessionTranscript(sql, openWorkspaceMainActor(sql), CHAT_SESSION_ID, () => Promise.resolve(files));
 
     return [...(await getChatHistoryPage(transcript, { limit })).items];
+  });
+}
+
+/** Walks from the main actor; starts nothing. */
+export function inspectLocalSubordinate(name: string, request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
+  const input = v.parse(SubordinateInspectionRequestSchema, request);
+
+  return withLocalDbAsync(name, async (db) => {
+    const directory = actorDirectory(db);
+
+    if (directory === null) return missingSubordinateHistory(input.path);
+    let target = directory.main();
+
+    for (const segment of input.path) {
+      const child = directory.resolveChild(target, segment);
+
+      if (child === null) return missingSubordinateHistory(input.path);
+      target = child;
+    }
+
+    const sql = makeSql(db);
+    const files = inspectionFiles(db, resolveAgentRef(name)?.cwd ?? null);
+
+    return readSubordinateInspection({
+      sql,
+      raw: makeSqlExec(db),
+      actor: target,
+      transcriptFor: (actor) => readSessionTranscript(sql, actor, CHAT_SESSION_ID, () => Promise.resolve(files)),
+    }, input);
   });
 }
 
@@ -698,6 +731,28 @@ export async function createLocalTimerTrigger(name: string, input: { cron?: stri
     const actor = openWorkspaceMainActor(makeSql(db));
 
     return createTimerTrigger(new TriggerRegistry(hubSql(db), actor, NOOP_ALARM), { ...input, trust: 'owner' }, Date.now());
+  });
+}
+
+export async function setLocalWorkspaceModel(name: string, spec: string): Promise<{ spec: string }> {
+  const { resolver } = createConfiguredLocalModelResolver({ agentName: name });
+
+  return withLocalWritableDb(name, (db) => setModel({
+    config: openWorkspaceMainActor(makeSql(db)).config,
+    normalize: (value) => resolver.normalizeSpecSync(value),
+    onChanged: () => {},
+  }, spec));
+}
+
+export async function setLocalWorkspaceReasoningEffort(name: string, effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
+  return withLocalWritableDb(name, (db) => setReasoningEffort(openWorkspaceMainActor(makeSql(db)).config, effort));
+}
+
+export async function readLocalWorkspacePins(name: string): Promise<{ model: string | null; reasoningEffort: ReasoningEffort | null }> {
+  return withLocalWritableDb(name, (db) => {
+    const config = openWorkspaceMainActor(makeSql(db)).config;
+
+    return { model: config.getModel(), reasoningEffort: config.getReasoningEffort() };
   });
 }
 

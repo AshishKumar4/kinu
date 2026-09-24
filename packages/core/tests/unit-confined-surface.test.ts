@@ -220,8 +220,7 @@ describe('node proposal merges after the eval finish', () => {
       model,
       journal,
       logger: createRecordingLogger(),
-      maxWallClockMs: 60_000,
-      codemodeTool,
+      nodeCodemode: () => codemodeTool,
     };
 
     const run = await runNodeAgent(input, deps);

@@ -24,7 +24,7 @@ const codemodeHandoff: SubordinateHandoff = {
   phase: { busy: false, lastActivityAt: null, workingOn: null },
 };
 
-import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
+import { createTestRuntime, scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { hostedSeatsOver } from '../../core/tests/helpers-actor-host';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
@@ -127,7 +127,7 @@ function searchOnlyDeps(): AgentsToolDeps {
   // would otherwise share one claim ledger and loop pointer.
   const seats = hostedSeatsOver({ rt, db: testSql.db });
 
-  return { mode: 'build', swarm: { rt, hostNode: seats.hostNode, model: expandingModel() } };
+  return { mode: 'build', swarm: { rt, hostNode: seats.hostNode, model: expandingModel(), ...unobservedSearchSeams() } };
 }
 
 function fullDeps(): AgentsToolDeps {

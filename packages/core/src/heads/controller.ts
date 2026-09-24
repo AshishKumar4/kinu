@@ -1,6 +1,6 @@
 /**
  * HeadController: split, await, merge for branching heads, over a `HeadRuntime` port.
- * Heads settle independently (Promise.allSettled); a deadline is raced only when the caller asked for one.
+ * Heads settle independently (Promise.allSettled).
  */
 
 import * as v from 'valibot';
@@ -20,7 +20,9 @@ import {
   type SerializedMessage,
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
+  forkMission,
 } from './types';
+import type { HeadSplitRequest, HeadSplitResult } from './head-tools';
 import { headProducedFindings } from './head-summary';
 import { MergeOutputSchema, type MergeOutput } from './merge-schema';
 import { evaluateWithMultiModelJudging, median } from '../mcts/evaluation';
@@ -76,7 +78,7 @@ function isRootJournal(journal: HeadJournalPort): journal is HeadRootJournal {
 export interface SpawnedHead {
   readonly id: HeadId;
   run(): Promise<HeadReport>;
-  /** Best-effort abort when a caller-requested deadline passes. */
+  /** Best-effort. */
   abort(reason: string): Promise<void>;
 }
 
@@ -195,9 +197,9 @@ export class HeadController {
         mergeStrategy: strategy,
         // A fork explores under the loop it forks from, via the per-kind default.
         loop: defaultLoopOrigin('head'),
+        ...forkMission(opts.missionLabels),
       };
 
-      if (opts.missionLabels?.length) Object.assign(input, { missionLabels: opts.missionLabels });
       // A local journal writes the row before this returns; nothing may push that write behind a microtask.
       const spawnRecorded = this.journal.insertSpawn(input);
 
@@ -246,35 +248,29 @@ export class HeadController {
       rationale: opts.request.rationale,
     });
 
-    // Deadline measured from `startedAt` (heads spawned), not `spawnedAt`: sub-agent cold start
-    // must not count against a head's own time.
     const reports = await Promise.all(
       settled.map(async (s): Promise<HeadReport> => {
         // A failed-spawn head rejoins in its original slot so the merge still sees every head.
         if (!('run' in s)) return s;
         const h = s;
 
-        const remainingMs = parentBudget.maxWallClockMs === undefined
-          ? undefined
-          : parentBudget.maxWallClockMs - (this.clock.now() - startedAt);
-
         try {
-          const report = await raceWithTimeout(h, remainingMs, this.clock);
+          const report = await h.run();
           await this.journal.recordReport(report);
 
           return report;
         } catch (err) {
           const failed: HeadReport = {
             id: h.id,
-            status: 'budget_exceeded',
-            summary: 'Head was aborted before producing a report.',
+            status: 'errored',
+            summary: 'Head failed before producing a report.',
             evidence: [],
             decisions: [],
             artifactRefs: [],
             fileChanges: [],
             childHeadIds: [],
             toolCalls: [], stepCount: 0,
-            // Usage unknown after a deadline cut: `{}`, not zeros.
+            // The head never reported, so its usage is unknown: `{}`, not zeros.
             usage: {},
             wallClockMs: this.clock.now() - startedAt,
             errorMessage: renderThrownChain({ cause: err }),
@@ -514,40 +510,31 @@ export class HeadController {
   }
 }
 
-/** `undefined` deadline: the head runs until done. Shared with steer-branch.ts. */
-export async function raceWithTimeout(
-  h: SpawnedHead, timeoutMs: number | undefined, clock: Clock = REAL_CLOCK,
-): Promise<HeadReport> {
-  if (timeoutMs === undefined) return h.run();
-
-  if (timeoutMs <= 0) {
-    await h.abort('wall-clock budget already exhausted at spawn time');
-    throw new Error('wall-clock budget already exhausted');
-  }
-
-  const expiry = Promise.withResolvers<never>();
-
-  const cancel = clock.after(timeoutMs, async () => {
-    // The deadline owns the abort first, then rejects the race: no live head may outlast a declared timeout.
-    try {
-      await h.abort('wall-clock budget exhausted');
-    } catch (cause) {
-      // No caller to throw to inside this timer, so the failure is logged.
-      diagnostics.failure(
-        'head.abort_failed',
-        toKinuError({ doing: 'abort a head whose wall-clock budget expired', cause, otherwise: 'timeout' }),
-        { headId: h.id },
-      );
-    }
-
-    expiry.reject(new Error(`wall-clock budget exceeded after ${timeoutMs}ms`));
+/** A head's `split_subheads` as every backend runs it: its children charge its mission, so a subtree cannot
+ *  spend outside the budget its root turn runs under. */
+export async function runHeadSplit(
+  controller: HeadController, parent: HeadInput, request: HeadSplitRequest,
+): Promise<HeadSplitResult> {
+  const result = await controller.run({
+    parentHeadId: parent.id,
+    parentDepth: parent.depth,
+    rootId: parent.rootId,
+    inheritedContext: parent.inheritedContext,
+    request: { rationale: request.rationale, heads: request.heads, mergeStrategy: request.mergeStrategy },
+    parentBudget: parent.budget,
+    model: parent.model,
+    mode: parent.mode,
+    ...forkMission(parent.missionLabels),
   });
 
-  try {
-    return await Promise.race([h.run(), expiry.promise]);
-  } finally {
-    cancel();
-  }
+  return {
+    narrative: result.mergedNarrative,
+    decisions: result.selectedDecisions,
+    unresolvedQuestions: result.unresolvedQuestions,
+    blindSpots: result.blindSpots,
+    childHeadIds: result.headIds,
+    headCount: result.costSummary.headCount,
+  };
 }
 
 /** Heads that changed nothing are omitted; tolerates a missing array from the RPC boundary. */

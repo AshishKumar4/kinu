@@ -1,14 +1,13 @@
 import { scratchDir } from '../../test-utils/src/scratch';
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
+import * as v from "valibot";
 import {
   createCliSession,
   findTranscriptPath,
   listCliSessions,
-  readCliSessionTranscript,
-  transcriptMessages,
 } from "../src/session";
 import { SessionRecorder } from "../src/session-recorder";
 import type { AgentClientEvent } from "../src/agent-client";
@@ -17,6 +16,24 @@ function tempTranscriptDir(): string {
   const dir = scratchDir("transcripts");
 
   return dir;
+}
+
+const RecordedEntrySchema = v.looseObject({
+  type: v.string(),
+  text: v.optional(v.string()),
+  toolName: v.optional(v.string()),
+  success: v.optional(v.boolean()),
+});
+
+/** What the recorder wrote, in file order, read from the JSONL artifact itself. */
+function recordedEntries(dir: string, id: string): Array<v.InferOutput<typeof RecordedEntrySchema>> {
+  const path = findTranscriptPath("jarvis", id, { transcriptDir: dir });
+
+  if (path === null) throw new Error(`no transcript ${id}`);
+
+  return readFileSync(path, "utf8").split("\n").filter(Boolean)
+    .map((line) => v.parse(RecordedEntrySchema, JSON.parse(line)))
+    .filter((entry) => entry.type !== "session");
 }
 
 describe("CLI transcripts", () => {
@@ -47,21 +64,6 @@ describe("CLI transcripts", () => {
     expect(findTranscriptPath("jarvis", session.id, { transcriptDir: dir })).toBeNull();
   });
 
-  test("hydrates recorded turns into TUI messages", () => {
-    const dir = tempTranscriptDir();
-    const session = createCliSession("jarvis", { transcriptDir: dir, conversationId: "default" });
-    session.append("user", { text: "build it" });
-    session.append("tool_call", { toolName: "workspace.writeFile", args: { path: "a.ts" } });
-    session.append("tool_result", { toolName: "workspace.writeFile", result: "ok" });
-    session.append("assistant", { text: "done" });
-
-    const transcript = readCliSessionTranscript("jarvis", session.id, { transcriptDir: dir });
-    const messages = transcriptMessages(transcript.entries);
-
-    expect(messages.map((message) => message.role)).toEqual(["user", "tool_call", "tool_result", "assistant"]);
-    expect(messages.at(-1)?.content).toBe("done");
-  });
-
   test("recorder persists text and tool calls in chronological order", () => {
     const dir = tempTranscriptDir();
     const session = createCliSession("jarvis", { transcriptDir: dir, conversationId: "default" });
@@ -82,19 +84,18 @@ describe("CLI transcripts", () => {
 
     for (const event of events) recorder.record(session, event);
 
-    const transcript = readCliSessionTranscript("jarvis", session.id, { transcriptDir: dir });
-    const messages = transcriptMessages(transcript.entries);
+    const entries = recordedEntries(dir, session.id);
 
-    expect(messages.map((m) => m.role)).toEqual([
+    expect(entries.map((entry) => entry.type)).toEqual([
       "assistant", "tool_call", "tool_result",
       "assistant", "tool_call", "tool_result",
       "assistant",
     ]);
-    expect(messages.filter((m) => m.role === "assistant").map((m) => m.content))
+    expect(entries.filter((entry) => entry.type === "assistant").map((entry) => entry.text?.trim()))
       .toEqual(["first text", "second text", "third text"]);
-    expect(messages.filter((m) => m.role === "tool_call").map((m) => m.toolName))
+    expect(entries.filter((entry) => entry.type === "tool_call").map((entry) => entry.toolName))
       .toEqual(["read_file", "write_file"]);
-    expect(messages.filter((m) => m.role === "tool_result").map((m) => m.success))
+    expect(entries.filter((entry) => entry.type === "tool_result").map((entry) => entry.success))
       .toEqual([true, false]);
   });
 
@@ -110,10 +111,9 @@ describe("CLI transcripts", () => {
       { type: "turn-end", turn: { text: "synthesized answer", toolCalls: [], steps: 1, durationMs: 1, hadError: false } },
     ] satisfies AgentClientEvent[]) recorder.record(session, event);
 
-    const transcript = readCliSessionTranscript("jarvis", session.id, { transcriptDir: dir });
-    const messages = transcriptMessages(transcript.entries);
-    expect(messages.map((m) => m.role)).toEqual(["tool_call", "tool_result", "assistant"]);
-    expect(messages.at(-1)?.content).toBe("synthesized answer");
+    const entries = recordedEntries(dir, session.id);
+    expect(entries.map((entry) => entry.type)).toEqual(["tool_call", "tool_result", "assistant"]);
+    expect(entries.at(-1)?.text).toBe("synthesized answer");
   });
 
   test("skips malformed headers when listing and locating", () => {

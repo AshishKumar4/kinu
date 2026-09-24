@@ -17,7 +17,7 @@ import {
 } from '../scaffold/shadow';
 import type { ExperienceKind, PublishableCandidate } from './types';
 
-export const EXPERIENCE_MIN_FACT_CONFIDENCE = 0.8;
+const EXPERIENCE_MIN_FACT_CONFIDENCE = 0.8;
 
 /** Live graded turns required after promotion: the same evidence count the shadow gate demands offline. */
 const EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS = DEFAULT_SHADOW_CONFIG.minTrials;

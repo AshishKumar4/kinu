@@ -23,10 +23,11 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as v from 'valibot';
-import { git, initRepo, scratchDir } from '@kinu.run/test-utils';
+import { git, gitEnv, initRepo, scratchDir } from '@kinu.run/test-utils';
 import {
   ALLOWED_PREFIXES, BLIND_SPOTS, GENERATED_SUBJECT, MESSAGE_LINE_CEILING, NAMES_WITHOUT_CODE,
   NARRATION, ROSTER, type Rule, SUBJECT_CEILING, cleanMessage, codeIdentifierTest,
@@ -417,7 +418,7 @@ describe('the message git hands the hook is cleaned the way git cleans it', () =
       '+// Found by SpecAudit: the owner asked for this',
     ].join('\n');
 
-    const cleaned = cleanMessage(raw);
+    const cleaned = cleanMessage(raw, 'strip');
     expect(cleaned).toBe('fix(core): charge the pruner once\n\nThe weave adds blocks back after '
       + 'the budget is taken.');
     // Without the cut, somebody else's docstring inside the staged diff is a
@@ -427,7 +428,54 @@ describe('the message git hands the hook is cleaned the way git cleans it', () =
   });
 
   test('an empty message is not a finding — git aborts the commit itself', () => {
-    expect(inspect(cleanMessage('# nothing but comments\n'), isCode)).toEqual([]);
+    expect(inspect(cleanMessage('# nothing but comments\n', 'strip'), isCode)).toEqual([]);
+  });
+});
+
+describe('the hook judges the message git will store', () => {
+  /** A merge of five conflicting files, resolved and staged, in a repository
+   *  whose commit-msg hook is this gate. */
+  const conflictedMerge = (): string => {
+    const repo = scratchDir('commit-hygiene-merge');
+    const files = ['a', 'b', 'c', 'd', 'e'].map((name) => `${name}.txt`);
+    const write = (text: string): void => { for (const file of files) writeFileSync(join(repo, file), text); };
+
+    initRepo(repo);
+    write('base\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-qm', 'chore(repo): seed');
+    git(repo, 'switch', '-qc', 'side');
+    write('side\n');
+    git(repo, 'commit', '-qam', 'chore(repo): side');
+    git(repo, 'switch', '-q', '-');
+    write('ours\n');
+    git(repo, 'commit', '-qam', 'chore(repo): ours');
+    expect(spawnSync('git', ['-C', repo, 'merge', 'side'], { env: gitEnv() }).status).toBe(1);
+    write('resolved\n');
+    git(repo, 'add', '.');
+    writeFileSync(join(repo, '.git', 'hooks', 'commit-msg'),
+      `#!/bin/sh\nexec bun ${join(import.meta.dir, 'commit-hygiene.ts')} "$1"\n`, { mode: 0o755 });
+
+    return repo;
+  };
+
+  test('a --no-edit merge keeps its # Conflicts: list, so the hook counts it and refuses', () => {
+    // 2026-09-23: git opened no editor and stored the list; the hook had read the
+    // message with every `#` line gone and passed it, and the history tier
+    // refused the stored message at the next commit.
+    const repo = conflictedMerge();
+    const commit = spawnSync('git', ['-C', repo, 'commit', '--no-edit'], { env: gitEnv(), encoding: 'utf8' });
+
+    expect(commit.status).toBe(1);
+    expect(commit.stderr + commit.stdout).toContain('message-size');
+  });
+
+  test('from an editor git drops the list, the hook agrees, and the stored message passes as history', () => {
+    const repo = conflictedMerge();
+    const commit = spawnSync('git', ['-C', repo, 'commit'], { env: { ...gitEnv(), GIT_EDITOR: 'true' }, encoding: 'utf8' });
+
+    expect(commit.status).toBe(0);
+    expect(sizeViolations(git(repo, 'log', '-1', '--format=%B'))).toEqual([]);
   });
 });
 

@@ -1,13 +1,31 @@
 /-
-  Kinu.Execution.Capabilities — Capability subsumption and routing correctness.
-  Historical static lattice; current sources are
-  packages/core/src/execution/types.ts#ExecutorKind and
-  packages/core/src/execution/router.ts#DefaultExecutionRouter.
-  The source ships sandbox/laptop/parent and runtime-dependent capability sets;
-  its router does not search by required capabilities. The old container/ssh
-  lattice and its subsumption chain are NOT a refinement of those bodies.
-  The routing theorems remain conditional facts about the abstract route below.
-  0 sorry.
+  Kinu.Execution.Capabilities — what each shipped executor claims it can do.
+  0 sorry, 0 axioms.
+
+  One function per executor constructor, over the inputs that constructor reads:
+  `packages/core/src/execution/inline.ts#createInlineExecutor` (the workspace,
+  plus its host toolchain), `nimbus.ts#createNimbusExecutor` (ports and a runtime
+  catalog), `nimbus.ts#createNimbusWorkspaceExecutor` (the workspace with a Nimbus
+  session attached), `sandbox.ts#createSandboxExecutor`,
+  `device-tunnel-executor.ts#createDeviceTunnelExecutor` (what the device's
+  toolchain probe found) and `parent.ts#createParentExecutor`. `Capability` and
+  `ExecutorKind` are state mirrors of `EXECUTOR_CAPABILITIES` and `ExecutorKind`.
+
+  Every toolchain an executor reads comes from a PATH probe or from the
+  workspace's runtime packages, both of which name only `probed` capabilities.
+  From that:
+
+  - every executor either owns its files or shares them, never both and never
+    neither, and its kind says which (`the_kind_says_who_owns_the_files`);
+  - no executor claims `docker` or `gpu`, although both are in the vocabulary
+    (`no_executor_claims_docker_or_gpu`), so a requirement for either is never met;
+  - attaching a Nimbus session keeps every workspace capability and adds every
+    Nimbus capability except owned files (`a_session_extends_the_workspace`);
+  - a Nimbus box with ports and a runtime catalog subsumes the sandbox, and the
+    sandbox subsumes no Nimbus box (`the_sandbox_never_subsumes_a_nimbus_box`).
+
+  The router lists available executors; it does not choose one by required
+  capability, so no routing function is modelled.
 -/
 
 namespace Kinu.Execution.Capabilities
@@ -19,145 +37,160 @@ inductive Capability where
   | netOutbound | netInbound
   | processSpawn | processLong | processSignal
   | gpu
-  deriving DecidableEq, Repr, BEq
+  deriving DecidableEq, Repr
 
 inductive ExecutorKind where
-  | workspace | nimbus | container | ssh
-  deriving DecidableEq, Repr, BEq
+  | workspace | nimbus | sandbox | device | parent
+  deriving DecidableEq, Repr
 
-def hasCap : ExecutorKind → Capability → Bool
-  | .workspace, .javascript   => true
-  | .workspace, .typescript   => true
-  | .workspace, .shell        => true
-  | .workspace, .fsShared     => true
-  | .nimbus, .javascript      => true
-  | .nimbus, .typescript      => true
-  | .nimbus, .shell           => true
-  | .nimbus, .npm             => true
-  | .nimbus, .git             => true
-  | .nimbus, .fsOwned         => true
-  | .nimbus, .netOutbound     => true
-  | .nimbus, .netInbound      => true
-  | .nimbus, .processSpawn    => true
-  | .nimbus, .processLong     => true
-  | .container, .javascript   => true
-  | .container, .typescript   => true
-  | .container, .python       => true
-  | .container, .nativeBinary => true
-  | .container, .shell        => true
-  | .container, .npm          => true
-  | .container, .git          => true
-  | .container, .fsOwned      => true
-  | .container, .netOutbound  => true
-  | .container, .netInbound   => true
-  | .container, .processSpawn => true
-  | .container, .processLong  => true
-  | .container, .processSignal => true
-  | .ssh, .javascript         => true
-  | .ssh, .typescript         => true
-  | .ssh, .python             => true
-  | .ssh, .nativeBinary       => true
-  | .ssh, .shell              => true
-  | .ssh, .npm                => true
-  | .ssh, .git                => true
-  | .ssh, .docker             => true
-  | .ssh, .fsOwned            => true
-  | .ssh, .netOutbound        => true
-  | .ssh, .netInbound         => true
-  | .ssh, .processSpawn       => true
-  | .ssh, .processLong        => true
-  | .ssh, .processSignal      => true
-  | .ssh, .gpu                => true
-  | _, _                      => false
+/-- What a PATH probe can settle: the capabilities of `TOOLCHAIN_PROBE`. The
+    workspace's runtime packages (`workspaceToolchainCapabilities`) name a subset. -/
+def probed : List Capability := [.javascript, .typescript, .python, .npm, .git]
 
-def subsumes (a b : ExecutorKind) : Prop :=
-  ∀ (c : Capability), hasCap b c = true → hasCap a c = true
+/-- A toolchain as its producers make it: drawn from `probed`. -/
+def FromProbe (cs : List Capability) : Prop := ∀ c ∈ cs, c ∈ probed
 
--- ── Subsumption chain ────────────────────────────────────────────
+/-- `createNimbusExecutor`'s inputs: ports it may expose inbound, and a runtime
+    catalog for `python` and native binaries. -/
+structure NimbusConfig where
+  inbound : Bool
+  catalog : Bool
+  deriving DecidableEq, Repr
 
--- Workspace uses fsShared (DO-local), all others use fsOwned (separate FS).
--- Therefore Nimbus does NOT subsume Workspace (different fs model).
--- The valid subsumption chain is: Container ⊇ Nimbus, SSH ⊇ Container.
+/-- A shipped executor and the inputs its constructor reads. -/
+inductive Executor where
+  | inline (toolchain : List Capability)
+  | nimbus (config : NimbusConfig)
+  | nimbusWorkspace (toolchain : List Capability) (config : NimbusConfig)
+  | sandbox
+  | device (present : List Capability)
+  | parent
 
-private theorem container_subsumes_nimbus_aux (c : Capability) :
-    hasCap .nimbus c = true → hasCap .container c = true := by
-  cases c <;> decide
+def Executor.kind : Executor → ExecutorKind
+  | .inline _ => .workspace
+  | .nimbus _ => .nimbus
+  | .nimbusWorkspace _ _ => .workspace
+  | .sandbox => .sandbox
+  | .device _ => .device
+  | .parent => .parent
 
-theorem container_subsumes_nimbus : subsumes .container .nimbus :=
-  container_subsumes_nimbus_aux
+def inlineCaps (toolchain : List Capability) : List Capability :=
+  [.javascript, .typescript, .shell, .fsShared] ++ toolchain
 
-private theorem ssh_subsumes_container_aux (c : Capability) :
-    hasCap .container c = true → hasCap .ssh c = true := by
-  cases c <;> decide
+def nimbusCaps (config : NimbusConfig) : List Capability :=
+  [.javascript, .typescript, .shell, .npm, .git, .fsOwned, .netOutbound] ++
+    (if config.inbound then [.netInbound] else []) ++
+    [.processSpawn, .processLong, .processSignal] ++
+    (if config.catalog then [.python, .nativeBinary] else [])
 
-theorem ssh_subsumes_container : subsumes .ssh .container :=
-  ssh_subsumes_container_aux
+def sandboxCaps : List Capability :=
+  [.javascript, .typescript, .nativeBinary, .shell, .npm, .git, .fsOwned,
+   .netOutbound, .netInbound, .processSpawn, .processLong]
 
-theorem ssh_subsumes_nimbus : subsumes .ssh .nimbus := by
-  intro c h; exact ssh_subsumes_container c (container_subsumes_nimbus c h)
+/-- `STRUCTURAL`, then what the device's probe found. -/
+def deviceCaps (present : List Capability) : List Capability :=
+  [.nativeBinary, .shell, .fsOwned, .netOutbound, .processSpawn] ++ present
 
--- Workspace is NOT subsumable by the others (fsShared vs fsOwned).
--- This is architecturally correct: workspace shares the DO's filesystem,
--- while nimbus/container/ssh each own separate filesystems.
-theorem workspace_incomparable_nimbus :
-    ¬ subsumes .nimbus .workspace := by
-  intro h
-  have := h .fsShared (by decide)
-  simp [hasCap] at this
+def Executor.caps : Executor → List Capability
+  | .inline toolchain => inlineCaps toolchain
+  | .nimbus config => nimbusCaps config
+  | .nimbusWorkspace toolchain config =>
+    inlineCaps toolchain ++ (nimbusCaps config).filter (· != .fsOwned) ++ [.fsShared]
+  | .sandbox => sandboxCaps
+  | .device present => deviceCaps present
+  | .parent => [.shell, .fsShared]
 
-theorem chain :
-    subsumes .container .nimbus ∧ subsumes .ssh .container :=
-  ⟨container_subsumes_nimbus, ssh_subsumes_container⟩
+/-- The toolchain inputs of an executor come from a probe. -/
+def Executor.Probed : Executor → Prop
+  | .inline toolchain => FromProbe toolchain
+  | .nimbusWorkspace toolchain _ => FromProbe toolchain
+  | .device present => FromProbe present
+  | _ => True
 
--- ── Router model ─────────────────────────────────────────────────
+/-- The kinds whose executor shares the workspace's files. -/
+def ExecutorKind.sharesFiles : ExecutorKind → Bool
+  | .workspace | .parent => true
+  | .nimbus | .sandbox | .device => false
 
-structure ExecutorEntry where
-  kind : ExecutorKind
-  available : Bool
-  deriving Repr, BEq
+private theorem not_probed_of (cs : List Capability) (h : FromProbe cs) (c : Capability)
+    (hc : c ∉ probed) : c ∉ cs := fun hm => hc (h c hm)
 
-def satisfiesAll (entry : ExecutorEntry) (required : List Capability) : Bool :=
-  entry.available && required.all (hasCap entry.kind)
+/-- **The kind says who owns the files.** A workspace or parent executor claims
+    shared files and not owned ones; a Nimbus, sandbox or device executor claims
+    owned files and not shared ones. -/
+theorem the_kind_says_who_owns_the_files (e : Executor) (h : e.Probed) :
+    (Capability.fsShared ∈ e.caps ↔ e.kind.sharesFiles = true) ∧
+    (Capability.fsOwned ∈ e.caps ↔ e.kind.sharesFiles = false) := by
+  have hs : ∀ cs, FromProbe cs → Capability.fsShared ∉ cs := fun cs hcs =>
+    not_probed_of cs hcs _ (by decide)
+  have ho : ∀ cs, FromProbe cs → Capability.fsOwned ∉ cs := fun cs hcs =>
+    not_probed_of cs hcs _ (by decide)
+  cases e with
+  | inline t =>
+    have := ho t h
+    simp [Executor.caps, Executor.kind, ExecutorKind.sharesFiles, inlineCaps, this]
+  | nimbus n =>
+    cases n with
+    | mk i c => cases i <;> cases c <;> decide
+  | nimbusWorkspace t n =>
+    have := ho t h
+    simp [Executor.caps, Executor.kind, ExecutorKind.sharesFiles, inlineCaps, this, List.mem_filter]
+  | sandbox => decide
+  | device p =>
+    have := hs p h
+    simp [Executor.caps, Executor.kind, ExecutorKind.sharesFiles, deviceCaps, this]
+  | parent => decide
 
-def route (entries : List ExecutorEntry) (required : List Capability) : Option ExecutorEntry :=
-  entries.find? (satisfiesAll · required)
+/-- **No executor claims `docker` or `gpu`.** A probe cannot settle either
+    (`TOOLCHAIN_UNPROBEABLE`), and no constructor claims them outright. -/
+theorem no_executor_claims_docker_or_gpu (e : Executor) (h : e.Probed) :
+    Capability.docker ∉ e.caps ∧ Capability.gpu ∉ e.caps := by
+  have hd : ∀ cs, FromProbe cs → Capability.docker ∉ cs := fun cs hcs =>
+    not_probed_of cs hcs _ (by decide)
+  have hg : ∀ cs, FromProbe cs → Capability.gpu ∉ cs := fun cs hcs =>
+    not_probed_of cs hcs _ (by decide)
+  have hn : ∀ n : NimbusConfig, Capability.docker ∉ nimbusCaps n ∧ Capability.gpu ∉ nimbusCaps n := by
+    intro n; cases n with
+    | mk i c => cases i <;> cases c <;> decide
+  cases e with
+  | inline t => simp [Executor.caps, inlineCaps, hd t h, hg t h]
+  | nimbus n => exact hn n
+  | nimbusWorkspace t n =>
+    simp [Executor.caps, inlineCaps, hd t h, hg t h, List.mem_filter, (hn n).1, (hn n).2]
+  | sandbox => decide
+  | device p => simp [Executor.caps, deviceCaps, hd p h, hg p h]
+  | parent => decide
 
--- ── Router correctness (structural) ──────────────────────────────
+/-- `a` can do everything `b` can. -/
+def Subsumes (a b : Executor) : Prop := ∀ c ∈ b.caps, c ∈ a.caps
 
-/-- Any entry returned by route satisfies all required capabilities. -/
-theorem route_satisfies_all (entries : List ExecutorEntry) (required : List Capability)
-    (e : ExecutorEntry) (h : route entries required = some e) :
-    satisfiesAll e required = true := by
-  induction entries with
-  | nil => simp [route, List.find?] at h
-  | cons hd tl ih =>
-    simp only [route, List.find?] at h
-    split at h
-    · injection h with h; rw [← h]; assumption
-    · exact ih h
+theorem subsumes_refl (e : Executor) : Subsumes e e := fun _ h => h
 
-/-- Any entry returned by route is available. -/
-theorem route_available (entries : List ExecutorEntry) (required : List Capability)
-    (e : ExecutorEntry) (h : route entries required = some e) :
-    e.available = true := by
-  have hsat := route_satisfies_all entries required e h
-  simp only [satisfiesAll, Bool.and_eq_true] at hsat
-  exact hsat.1
+theorem subsumes_trans (a b c : Executor) (hab : Subsumes a b) (hbc : Subsumes b c) :
+    Subsumes a c := fun x hx => hab x (hbc x hx)
 
-/-- Any entry returned by route has every required capability. -/
-theorem route_has_all_caps (entries : List ExecutorEntry) (required : List Capability)
-    (e : ExecutorEntry) (h : route entries required = some e)
-    (c : Capability) (hc : c ∈ required) :
-    hasCap e.kind c = true := by
-  have hsat := route_satisfies_all entries required e h
-  simp only [satisfiesAll, Bool.and_eq_true] at hsat
-  exact List.all_eq_true.mp hsat.2 c hc
+/-- **A session extends the workspace**: the workspace with a Nimbus session keeps
+    every capability of the workspace alone, and gains every Nimbus capability but
+    owned files. -/
+theorem a_session_extends_the_workspace (t : List Capability) (n : NimbusConfig) :
+    Subsumes (.nimbusWorkspace t n) (.inline t) ∧
+    ∀ c ∈ nimbusCaps n, c ≠ .fsOwned → c ∈ (Executor.nimbusWorkspace t n).caps := by
+  refine ⟨fun c hc => ?_, fun c hc hne => ?_⟩
+  · simp only [Executor.caps] at hc ⊢
+    exact List.mem_append_left _ (List.mem_append_left _ hc)
+  · simp only [Executor.caps]
+    exact List.mem_append_left _ (List.mem_append_right _
+      (List.mem_filter.mpr ⟨hc, by simpa using hne⟩))
 
--- ── Subsumption is a preorder ────────────────────────────────────
-
-theorem subsumes_refl (k : ExecutorKind) : subsumes k k := fun _ h => h
-
-theorem subsumes_trans (a b c : ExecutorKind) (hab : subsumes a b) (hbc : subsumes b c) :
-    subsumes a c := fun cap hc => hab cap (hbc cap hc)
+/-- **A fully configured Nimbus box subsumes the sandbox, and the sandbox subsumes
+    no Nimbus box**: every Nimbus box can signal processes and the sandbox cannot. -/
+theorem the_sandbox_never_subsumes_a_nimbus_box (n : NimbusConfig) :
+    Subsumes (.nimbus ⟨true, true⟩) .sandbox ∧ ¬ Subsumes .sandbox (.nimbus n) := by
+  refine ⟨fun c hc => ?_, fun h => ?_⟩
+  · revert c; decide
+  · have hsig : Capability.processSignal ∈ (Executor.nimbus n).caps := by
+      cases n with
+      | mk i c => cases i <;> cases c <;> decide
+    exact absurd (h _ hsig) (by decide)
 
 end Kinu.Execution.Capabilities

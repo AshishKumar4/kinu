@@ -1,8 +1,6 @@
 // Tests the container owner's resource lane, shared by every agent's Durable Object, from
 // independent callers: resource identity is topology, and a stream's claim ends at drain.
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
 import {
   canonicalPath,
@@ -296,37 +294,5 @@ describe('a claim that outlives its call', () => {
     const reader = stream.getReader();
     await reader.cancel('the consumer went away');
     expect(owner.lane.busy()).toBe(false);
-  });
-});
-
-// The SDK exports none of the read result types; deriving them from the pinned declaration
-// keeps one authority, where a copied body would drift silently.
-describe('the read overrides derive their types instead of restating them', () => {
-  const module = readFileSync(join(import.meta.dir, '../src/devbox.ts'), 'utf8');
-
-  test('the base declaration is the source of both arms', () => {
-    expect(module).toContain("ReadFileArms<Sandbox<unknown>['readFile']>");
-    expect(module).toContain("override readFile(...args: ReadArms['stream']['args'])");
-    expect(module).toContain("override readFile(...args: ReadArms['value']['args'])");
-  });
-
-  test('no SDK result interface is copied into this package', () => {
-    // The fields those unexported interfaces carry. Any of them appearing as a
-    // declaration here means someone restated a third-party contract.
-    for (const copied of ['bytesWritten', 'interface ReadFileResult', 'interface ReadFileStreamResult']) {
-      expect(module).not.toContain(copied);
-    }
-  });
-
-  test('the SDK still declares the two arms the match depends on', () => {
-    // `tsc` proves the derivation resolves; this pins why, so an SDK release merging the two
-    // overloads fails here instead of silently leaving a stream unheld.
-    const declaration = readFileSync(
-      join(import.meta.dir, '../../../node_modules/@cloudflare/sandbox/dist/sandbox-BtaWcmmG.d.ts'),
-      'utf8',
-    );
-
-    expect(declaration).toContain("encoding: 'none';");
-    expect(declaration).toContain("encoding?: Exclude<FileEncoding, 'none'>;");
   });
 });

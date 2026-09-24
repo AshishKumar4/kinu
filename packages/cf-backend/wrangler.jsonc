@@ -12,6 +12,9 @@
   // (code 10021). If a specific experimental feature is needed, enable it
   // by its real flag name (e.g. `streaming_subrequests`).
   "compatibility_flags": ["nodejs_compat"],
+  // Durable Objects allow up to 300,000 ms of CPU per invocation (DO limits docs); the 30 s default killed
+  // in-workspace commands measured at 32 s of CPU (kinu-logs/nimbus-integration/REPORT.md, 2026-09-23).
+  "limits": { "cpu_ms": 300000 },
   // Wrangler uploads the Worker's source maps with the version, and Cloudflare
   // remaps every uncaught exception's stack against them before it reaches
   // Workers Logs or a tail. Without this, a production stack trace names the one
@@ -146,19 +149,19 @@
   },
   // PINNED BY DIGEST, not by tag. A tag is a mutable pointer, and this is the one
   // file where a mutable pointer decides which bytes run inside a container
-  // holding somebody's workspace: `docker.io/cloudflare/sandbox:0.12.8` can be
+  // holding somebody's workspace: `docker.io/cloudflare/sandbox:0.12.9` can be
   // re-pushed by anyone who can push that repository, and the next container
   // start would pick the new image up with nothing here changed and nothing to
   // read afterwards that says which image ran.
   //
-  // The digest is `cloudflare/sandbox:0.12.8` as the registry resolved it on
-  // 2026-08-27, from the manifest endpoint itself:
+  // The base is `cloudflare/sandbox:0.12.9` as the registry resolved it on
+  // 2026-09-23, from the manifest endpoint itself:
   //   curl -sI -H "Authorization: Bearer <docker.io pull token>" \
   //     -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-  //     https://registry-1.docker.io/v2/cloudflare/sandbox/manifests/0.12.8
-  //   docker-content-digest: sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f
+  //     https://registry-1.docker.io/v2/cloudflare/sandbox/manifests/0.12.9
+  //   docker-content-digest: sha256:4a56a37a3cfd9b38d65bb4b5d0b341e6490a3a4c0226274ae4c1cca4948e85fe
   //
-  // 0.12.8 must stay equal to the `@cloudflare/sandbox` version in package.json:
+  // 0.12.9 must stay equal to the `@cloudflare/sandbox` version in package.json:
   // the SDK asks the container for its own SANDBOX_VERSION on every start and
   // logs a mismatch (Sandbox.checkVersionCompatibility). The intended
   // version→digest pair is declared once, in `scripts/release-config.test.ts`,
@@ -167,7 +170,7 @@
   "containers": [
     {
       "class_name": "KinuSandbox",
-      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:3b11f7bf756af01664663f05fd1f3c1721dababc6a4fcf2bfa047d341d9b6a9e",
+      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:c2c03bdf3b46d22633ffdeab545953d7c0caa0fb562d36e70ebdd4618898c718",
       "max_instances": 10,
       "instance_type": {
         "vcpu": 2,
@@ -266,17 +269,18 @@
   // disable either executor.
   "vars": {
     "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/kinu-ai-gateway/workers-ai/v1",
-    // Container control plane. Every getSandbox call site passes
-    // `transport: SANDBOX_TRANSPORT` from `src/sandbox-exec-lane.ts` explicitly
-    // — runtime.ts, orchestrator.ts, terminal-route.ts, preview-proxy.ts — and
-    // that is what actually switches an EXISTING sandbox: the SDK persists
-    // transport in the sandbox object's storage and a stored value beats this
-    // var on every cold start. The var covers the other direction: a future
-    // getSandbox that omits the option would otherwise inherit the SDK's `http`
-    // field default, which is the route-based compatibility client. Cloudflare
-    // deprecated `http`/`websocket` on 2026-06-09 ("will not ship in future
-    // Sandbox SDK majors") and 1.0 drops the knob entirely, so `rpc` is both the
-    // measured-better and the only surviving path. Keep the two in step.
+    // Container control plane. Product code opens every sandbox client through
+    // `openSandbox` (`src/sandbox-exec-lane.ts`), which passes `SANDBOX_TRANSPORT`
+    // (core `preview/sandbox-id.ts`), and that is what actually switches an
+    // EXISTING sandbox: the SDK persists transport in the sandbox object's
+    // storage and a stored value beats this var on every cold start. The var
+    // covers the other direction: a getSandbox that omits the option, as the
+    // SDK's own `proxyToSandbox` does, inherits the SDK's `http` field default,
+    // which is the route-based compatibility client. Cloudflare deprecated
+    // `http`/`websocket` on 2026-06-09 ("will not ship in future Sandbox SDK
+    // majors") and 1.0 drops the knob entirely, so `rpc` is both the
+    // measured-better and the only surviving path. The release-config gate
+    // holds the two in step.
     "SANDBOX_TRANSPORT": "rpc",
     "PREVIEW_HOST_SUFFIX": "kinu.run",
     "CLI_PUBLIC_ORIGIN": "https://kinu.run",

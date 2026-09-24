@@ -1,32 +1,41 @@
 // Roster and parked-decision planes ride typed source callbacks into the one shared assembler; a backend
-// splice after `collectDynamicContext` would drop planes for actors that do not re-splice.
+// splice after `collectDynamicContext` would drop planes for actors that do not re-splice. Observed where
+// the model reads them: the request a turn prepares.
 import { describe, expect, test } from 'bun:test';
-import { DeferredApprovalStore, formatApproval } from '@kinu.run/core';
-import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { DeferredApprovalStore, formatApproval, SubordinateRosterStore } from '@kinu.run/core';
+import { sqlOver } from '@kinu.run/test-utils';
+import { makeSqlExec } from '../../core/tests/helpers';
+import {
+  chatSessionTurns, orchestratorHarness, workspaceMainActor, type HarnessOrchestratorAgent,
+} from './helpers/actor-harness';
 
-describe('the orchestrator dynamic context reads its own planes', () => {
-  function harness(): ActorHarness<HarnessOrchestratorAgent> {
-    return orchestratorHarness();
-  }
-
-  test('a hired subordinate renders as a delegate ahead of any search roster', () => {
-    const agent = harness().agent;
-    agent.harnessRoster().create({ name: 'scout', actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'working', currentTask: 'map the failure surface', createdAt: Date.now(), dismissedAt: null, lifetime: 'durable', taskEventId: null });
-
-    const delegates = agent.observeDynamicContext().delegates;
-    expect(delegates?.items).toContainEqual({
-      kind: 'subordinate',
-      name: 'scout',
-      phase: 'working',
-      task: 'map the failure surface',
-    });
+/** Everything the model reads for one turn: the prepared system prompt and prompt messages. */
+async function modelContext(agent: HarnessOrchestratorAgent): Promise<string> {
+  const prepared = await chatSessionTurns(agent).prepare({
+    messages: [{ role: 'user', content: 'What is waiting on me?' }],
   });
 
-  test('a deferred shell approval is parked on the user in the block', () => {
-    const agent = harness().agent;
-    const rt = agent.observeRuntime();
+  return [prepared.system ?? '', ...prepared.prompt.map((message) => JSON.stringify(message.content))].join('\n');
+}
 
-    const parked = new DeferredApprovalStore(rt.storage.sql, rt.actor).create({
+describe('the orchestrator dynamic context reads its own planes', () => {
+  test('a hired subordinate renders as a delegate in the block', async () => {
+    const { agent, db } = orchestratorHarness();
+    new SubordinateRosterStore(makeSqlExec(db), workspaceMainActor(db)).create({
+      name: 'scout', actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator',
+      status: 'working', currentTask: 'map the failure surface', createdAt: Date.now(), dismissedAt: null,
+      lifetime: 'durable', taskEventId: null,
+    });
+
+    const context = await modelContext(agent);
+    expect(context).toContain('scout');
+    expect(context).toContain('map the failure surface');
+  });
+
+  test('a deferred shell approval is parked on the user in the block', async () => {
+    const { agent, db } = orchestratorHarness();
+
+    const parked = new DeferredApprovalStore(sqlOver(db), workspaceMainActor(db)).create({
       id: `defer-${crypto.randomUUID()}`,
       command: 'bun run deploy',
       executor: 'workspace',
@@ -36,13 +45,11 @@ describe('the orchestrator dynamic context reads its own planes', () => {
 
     expect(parked.status).toBe('queued');
 
-    const approvals = agent.observeDynamicContext().approvals;
-    expect(approvals?.total).toBe(1);
-    expect(approvals?.items[0]?.detail).toContain('bun run deploy');
+    expect(await modelContext(agent)).toContain('bun run deploy');
   });
 
   test('a raised device consent waits on the user in the block', async () => {
-    const agent = harness().agent;
+    const { agent } = orchestratorHarness();
 
     // Settle the caller's promise afterward so this fixture leaves no work detached.
     const consent = agent.awaitDeviceConsent({
@@ -52,9 +59,7 @@ describe('the orchestrator dynamic context reads its own planes', () => {
       command: 'git push origin main',
     });
 
-    const approvals = agent.observeDynamicContext().approvals;
-    expect(approvals?.items.some((approval) => approval.kind === 'device consent'
-      && approval.detail.includes('git push origin main'))).toBe(true);
+    expect(await modelContext(agent)).toContain('git push origin main');
 
     const [pendingConsent] = await agent.listPendingConsents();
 

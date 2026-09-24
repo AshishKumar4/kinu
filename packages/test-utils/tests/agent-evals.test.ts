@@ -5,7 +5,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   initAlternateTakesTable, initHeadsTables, initMctsSearchTable, initRunEventTables,
-  initSearchTables, listForkRuns, type ActorHandle, type JsonObject, type SqlExecutor,
+  initSearchTables, initSwarmNodeRecords, listForkRuns, type ActorHandle, type JsonObject, type SqlExecutor,
 } from '@kinu.run/core';
 import { createTestSql, testActorHandle, type TestSql } from '../src/sql';
 import { createTestActors } from '../src/actors';
@@ -26,6 +26,7 @@ interface ForkStore extends TestSql {
 function forkStore(): ForkStore {
   const store = createTestSql();
   initSearchTables(store.execRaw);
+  initSwarmNodeRecords(store.execRaw);
   initMctsSearchTable(store.execRaw);
   initAlternateTakesTable(store.execRaw);
   initHeadsTables(store.execRaw);
@@ -56,11 +57,13 @@ function seedSearch(store: ForkStore, opts: {
   for (let i = 0; i < branches; i++) {
     const id = `${root}-n${String(i)}`;
     const terminal = winner === i;
+    // A leaf's mean is its own score: one reward reached it.
+    const score = terminal ? (opts.value ?? 0.8) : 0.2;
     void sql`INSERT INTO search_nodes
-      (actor_id, id, parent_id, root_id, task, depth, status, value, visits, created_at)
+      (actor_id, id, parent_id, root_id, task, depth, status, value, visits, created_at, evaluation_json)
       VALUES (${actorId}, ${id}, ${root}, ${root}, ${'task ' + root}, ${1},
               ${branchStatus(terminal, winner)},
-              ${terminal ? (opts.value ?? 0.8) : 0.2}, ${1}, ${1_001 + i})`;
+              ${score}, ${1}, ${1_001 + i}, ${JSON.stringify({ score })})`;
   }
 
   if (winner !== null) {

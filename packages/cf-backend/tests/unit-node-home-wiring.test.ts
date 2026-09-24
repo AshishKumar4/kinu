@@ -42,7 +42,7 @@ const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
 const ORIGIN: VfsCred = { uid: SESSION_UID, gid: SESSION_UID, groups: [SESSION_UID], umask: 0o022 };
 
 /** A tree only the ORIGIN has: the read window a node must keep. */
-const ORIGIN_REPO = '/home/user/repo';
+const ORIGIN_REPO = '/home/main/repo';
 
 function sqlBinding(value: SqlValue): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
@@ -440,9 +440,9 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const written: string[] = [];
     box.files.write = async (path) => { written.push(path); };
 
-    await nimbusSessionFiles(box).writeFile('/home/user/notes.md', 'origin');
+    await nimbusSessionFiles(box).writeFile('/home/main/notes.md', 'origin');
 
-    expect(written).toEqual(['/home/user/notes.md']);
+    expect(written).toEqual(['/home/main/notes.md']);
     expect(nimbus.calls).toEqual([]);
   });
 
@@ -585,14 +585,14 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
 
     if (identity.isolation !== 'private-home') throw new Error('node needs its own home');
     const child = await first.asAgent(identity);
-    expect(await first.shell.exec('echo main > /tmp/note; echo shared > /home/user/shared')).toMatchObject({ exitCode: 0 });
+    expect(await first.shell.exec('echo main > /tmp/note; echo shared > /home/main/shared')).toMatchObject({ exitCode: 0 });
     expect(await child.shell.exec('echo node > /tmp/note')).toMatchObject({ exitCode: 0 });
-    expect((await first.shell.exec('echo $HOME $TMPDIR')).stdout.trim()).toBe('/home/user /tmp/main');
+    expect((await first.shell.exec('echo $HOME $TMPDIR')).stdout.trim()).toBe('/home/main /tmp/main');
     const second = createWorkspace({ sql, transactions, generation: workspaceGenerationStorage(sql) });
     const restored = await second.asAgent(identity);
     expect((await second.shell.exec('cat /tmp/note')).stdout).toBe('main\n');
     expect((await restored.shell.exec('cat /tmp/note')).stdout).toBe('node\n');
-    expect(await restored.vfs.readFile('/home/user/shared', { encoding: 'utf8' })).toBe('shared\n');
+    expect(await restored.vfs.readFile('/home/main/shared', { encoding: 'utf8' })).toBe('shared\n');
     const root = (await second.privileged()).root;
     expect(root.exists('tmp/main/note')).toBe(true);
     await second.destroy();
@@ -652,7 +652,7 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
 /** The SDK's `files.write` takes no precondition and `stat` reports no revision, so no plane declares
  *  `writeFileIfRevision`: in-place save is `unsupported`, unconditional save lands. */
 describe('a plane with no compare-and-write says so, once, in one voice', () => {
-  const lookupFor = (files: VFS): ExecutorFileLookup => ({ getProvider: () => ({ files, homeDir: async () => '/home/user' }) });
+  const lookupFor = (files: VFS): ExecutorFileLookup => ({ getProvider: () => ({ files, homeDir: async () => '/home/main' }) });
 
   test('neither session plane declares a conditional write', async () => {
     const f = await openFixture();

@@ -1,7 +1,7 @@
 // LocalAgentSession loop over the real createCLIRuntime and a fake streaming model: turns stream and persist,
 // programmatic turns serialize, broadcast fans out, end() flushes.
 import { describe, test, expect } from 'bun:test';
-import { createMockFetch, createTestActorsOver, createTestSql, present, readTranscriptRows, scratchDir, scratchPath, toolExecute, scriptedTurnModel, type TranscriptRow } from '@kinu.run/test-utils';
+import { createMockFetch, createTestActorsOver, createTestSql, present, readTranscriptRows, scratchDir, scratchPath, toolExecute, scriptedTurnModel, type TranscriptRow, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { MissionGovernor } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
@@ -23,7 +23,7 @@ import {
   initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox,
   backgroundJobNotice,
   backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID,
-  JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY,
+  JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY, usageTotal,
   profileCatalogDigest, BUILTIN_ROLE_DEFINITIONS,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   EventLog, TriggerRegistry, listTriggers,
@@ -471,6 +471,51 @@ function searchingModel(): LanguageModel {
       };
     },
   });
+}
+
+/** The owner's words that start a search, and the task its nodes get: kept apart so a node's request is told apart. */
+const SEARCH_ASK = 'Find two ways to speed up the parser.';
+
+const SEARCH_TASK = 'Name one way to make tokenizing faster.';
+
+/** A single-part tool call, streamed as the provider streams one. */
+function toolCallStream(toolName: string, input: JsonObject, usage: LanguageModelV2Usage): ReadableStream<LanguageModelV2StreamPart> {
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue({ type: 'stream-start', warnings: [] });
+      controller.enqueue({ type: 'tool-call', toolCallId: `${toolName}-0`, toolName, input: JSON.stringify(input) });
+      controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+      controller.close();
+    },
+  });
+}
+
+/** The owner's turn starts a two-node search; each node runs `return 6 * 7;`, then answers. Records what nodes were sent. */
+function codingSearchModel() {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  const nodeCalls: LanguageModelV2CallOptions[] = [];
+
+  const model = new TestLanguageModelV2({
+    provider: 'fake', modelId: 'fake-model',
+    doStream: async (options) => {
+      const step = options.prompt.filter((message) => message.role === 'tool').length;
+
+      if (JSON.stringify(options.prompt).includes(SEARCH_ASK)) {
+        const stream = step === 0
+          ? toolCallStream('agents', { action: 'swarm', task: SEARCH_TASK, preset: 'ideate', branches: 2, depth: 1 }, usage)
+          : textStream('Searching.', usage);
+
+        return { stream, response: { headers: {} } };
+      }
+
+      nodeCalls.push(options);
+      const stream = step === 0 ? toolCallStream('eval', { code: 'return 6 * 7;' }, usage) : textStream('Computed.', usage);
+
+      return { stream, response: { headers: {} } };
+    },
+  });
+
+  return { model, nodeCalls };
 }
 
 function setupWithResolver(
@@ -4082,6 +4127,86 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     expect(session.branch('nothing running')).toBe(false);
     expect(session.branch('   ')).toBe(false);
   });
+
+  test('a branch of a turn under a mission budget charges that mission', async () => {
+    const { model, release } = branchableModel('the live answer', () => 'the branch answer');
+    const { session, events } = setup('unused', model);
+    session.budget.declare('q3', { tokens: 1_000_000 });
+
+    // A scheduled wake is the turn a mission labels: its trigger names the label, its drain turn runs under it.
+    const fireAt = Date.now() + 60_000;
+    await session.createTimerTrigger({ atMs: fireAt, label: 'nightly review', trust: 'owner', missionLabel: 'q3' });
+    await session.fireDueTriggers(fireAt);
+    await waitFor(() => events.some((e) => e.type === 'text-delta'));
+    expect(session.branch('check the release notes instead')).toBe(true);
+    release();
+    await waitFor(() => branchEvents(events).some((e) => e.status === 'settled'), 5000);
+
+    // The live turn's call and the branch head's: a fork of a budgeted turn cannot spend outside its budget.
+    expect(session.budget.snapshot('q3').map((mission) => mission.calls)).toEqual([2]);
+    await session.end();
+  });
+});
+
+describe('LocalAgentSession — the lifetime search', () => {
+  /** The branch lane's two calls: exploring one approach, and reflecting on the traces. */
+  const isBranchCall = (body: string): boolean =>
+    body.includes('You are an expert agent exploring one approach') || body.includes('Task: Given my purpose');
+
+  test("a lifetime search's branch calls are billed once each", async () => {
+    // Branches run in their own processes against the configured endpoint, so the endpoint is a local server.
+    let branchCalls = 0;
+
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        if (isBranchCall(await request.text())) branchCalls += 1;
+
+        return Response.json({
+          id: 'cmpl-lifetime', object: 'chat.completion', created: 1, model: 'test-model',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'Cache the token table.' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+        });
+      },
+    });
+
+    try {
+      const db = new Database(scratchPath('local-session-lifetime', 'agent.db'));
+      // Opened in the mode the CLI opens its database (openWorkspaceCLI): the branch processes open this file too.
+      db.exec('PRAGMA journal_mode = WAL');
+      initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+
+      const rt = createCLIRuntime(db, {
+        dbPath: db.filename,
+        llm: {
+          name: 'workers-ai', baseURL: `http://127.0.0.1:${String(server.port)}/v1`,
+          headers: { Authorization: 'Bearer lifetime' }, model: 'test-model',
+        },
+      });
+
+      const events: SessionEvent[] = [];
+      const session = new LocalAgentSession({ rt, db, model: fakeModel('noted'), onEvent: (event) => events.push(event) });
+      // Four windows closed in an earlier life, so this session's first window starts the search.
+      void rt.storage.sql`INSERT INTO actor_config (actor_id, key, value) VALUES (${rt.actor.actorId}, 'closed_turn_windows', '4')`;
+
+      for (let turn = 1; turn <= 5; turn++) await session.send(`turn ${turn}`);
+      await waitFor(() => events.some((event) => event.type === 'evolution' && event.event === 'mcts_complete'), 60_000);
+
+      // The search ran to its end rather than failing to start its branches.
+      expect(events.flatMap((event) => event.type === 'evolution' && event.event === 'mcts_complete' ? [event.message] : []))
+        .toEqual([expect.stringMatching(/^Evolution (explored|converged)/u)]);
+
+      // The search runs between turns, so its calls are filed under the workspace's own run.
+      const billed = session.getRunEvents(WORKSPACE_RUN_ID)
+        .filter((event) => event.type === 'model_call' && event.source === 'mcts');
+
+      expect(branchCalls).toBeGreaterThan(0);
+      expect(billed).toHaveLength(branchCalls);
+      await session.end();
+    } finally {
+      await server.stop(true);
+    }
+  });
 });
 
 describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () => {
@@ -4260,6 +4385,31 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(settled.report.expansions).toBe(2);
     expect(settled.candidates).toHaveLength(2);
     expect(settled.report.tokens).toBeGreaterThan(0);
+
+    // What the search cost is what the spend ledger bills: a `swarm` row per node, summing to its tokens.
+    const billed = [WORKSPACE_RUN_ID, ...session.listRuns().items.map((r) => r.runId)]
+      .flatMap((runId) => session.getRunEvents(runId))
+      .flatMap((e) => (e.type === 'model_call' && e.source === 'swarm' ? [e.usage] : []));
+
+    expect(billed).toHaveLength(settled.report.expansions);
+    expect(billed.reduce((sum, usage) => sum + (usage === undefined ? 0 : usageTotal(usage) ?? 0), 0))
+      .toBe(settled.report.tokens);
+
+    await session.end();
+  });
+
+  test('a search node runs code and is offered the web', async () => {
+    // Defends: a node offered an `eval` that refuses as unconfigured, and no `web`, because the swarm was built without either.
+    const { model, nodeCalls } = codingSearchModel();
+    const { session } = setup('unused', model);
+    await session.send(SEARCH_ASK);
+    await session.settleBackgroundWork();
+
+    const opening = nodeCalls.find((call) => !call.prompt.some((message) => message.role === 'tool'));
+    const answered = nodeCalls.find((call) => call.prompt.some((message) => message.role === 'tool'));
+
+    expect(opening?.tools?.map((offered) => offered.name)).toEqual(expect.arrayContaining(['eval', 'web']));
+    expect(JSON.stringify(answered?.prompt.filter((message) => message.role === 'tool'))).toContain('42');
 
     await session.end();
   });
@@ -4667,7 +4817,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { dbPath: ':memory:', llm: DUMMY_LLM });
 
-    return { deps: { mode: 'build', swarm: { rt, model, hostNode: nodeSeatFactory(rt) } }, calls };
+    return { deps: { mode: 'build', swarm: { rt, model, hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams() } }, calls };
   }
 
   test('a script searches, branches on the result, and returns its own synthesis', async () => {
@@ -5063,7 +5213,7 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
     const head = await runtime.spawnHead({
       id: 'h-fork', rootId: 'r1', parentId: null, depth: 0, mode: 'build',
       task: 'look at the parser', rationale: 'because', inheritedContext: [],
-      budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+      budget: { maxDepth: 2, spawnedAt: Date.now() },
       loop: defaultLoopOrigin('head'), mergeStrategy: 'synthesize', model: 'local/fork',
     });
 
@@ -5109,7 +5259,7 @@ test('an authorized Build turn queued behind Plan regains native file authority'
       return { stream: new ReadableStream<LanguageModelV2StreamPart>({
         start(controller) {
           controller.enqueue({ type: 'stream-start', warnings: [] });
-          controller.enqueue({ type: 'tool-call', toolCallId: 'file-' + current, toolName: 'file', input: JSON.stringify({ action: 'write', path: '/home/user/queued-build.txt', content: 'authorized Build' }) });
+          controller.enqueue({ type: 'tool-call', toolCallId: 'file-' + current, toolName: 'file', input: JSON.stringify({ action: 'write', path: '/home/main/queued-build.txt', content: 'authorized Build' }) });
           controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: { inputTokens: 5, outputTokens: 7, totalTokens: 12 } });
           controller.close();
         },
@@ -5125,7 +5275,7 @@ test('an authorized Build turn queued behind Plan regains native file authority'
   release.resolve();
   await plan;
   await session.send('Now implement the change.');
-  expect(await rt.storage.vfs.readFile('/home/user/queued-build.txt', { encoding: 'utf8' })).toBe('authorized Build');
+  expect(await rt.storage.vfs.readFile('/home/main/queued-build.txt', { encoding: 'utf8' })).toBe('authorized Build');
   const writes = events.filter((event) => event.type === 'tool-result' && event.toolName === 'file');
   expect(writes).toHaveLength(2);
   expect(writes[0]).toMatchObject({ success: false, reason: 'denied' });
@@ -5155,4 +5305,31 @@ test('the actual local turn executes its selected version instead of the mutable
     await session.end();
     db.close();
   }
+});
+
+describe('LocalAgentSession — a workspace bound to a directory', () => {
+  test('tells the model its files are local:// in a system prompt that stays byte-identical across turns', async () => {
+    const root = scratchDir('local-session-bound-prefix');
+    const db = new Database(scratchPath('local-session-bound-prefix', 'agent.db'));
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM, cwd: root });
+    const systems: string[] = [];
+
+    const session = new LocalAgentSession({
+      rt, db, model: systemCapturingModel('ok', (system) => { systems.push(system); }),
+      onEvent: () => {}, noAutoEvolve: true, cwd: root,
+    });
+
+    try {
+      await session.send('first');
+      await session.send('second');
+    } finally {
+      await session.end();
+      db.close();
+    }
+
+    expect(systems.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(systems).size).toBe(1);
+    expect(systems[0]).toContain('`local://` for this workspace');
+  });
 });

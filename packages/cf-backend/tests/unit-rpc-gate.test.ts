@@ -1,25 +1,13 @@
-// One table (AGENT_RPC_ACCESS) names every remotely invokable agent method and its credential class, and both
-// transports enforce it: the websocket frame gate here and the /workspaces/:name/rpc dispatcher in cli/routes.ts.
+// One table (core AGENT_RPC_ACCESS) names every remotely invokable agent method and its credential class; the
+// websocket frame gate here pins scoped sockets to its rows. The CLI's calls are typed by the table, and the wiring
+// from edge to ticket to object runs end to end in workerd/cli-scoped-socket.test.ts.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { cliScopesConnectionTag, rejectOutOfScopeRpc } from '../src/cli/rpc-gate';
 import {
-  AGENT_RPC_ACCESS,
-  CLI_SCOPES_HEADER,
-  cliScopesConnectionTag,
-  rejectOutOfScopeRpc,
-  requiredRpcAccess,
-  rpcAccessScope,
-} from '../src/cli/rpc-gate';
-import { extractTicketOrchestratorAgentName } from '@kinu.run/core';
+  AGENT_RPC_ACCESS, extractTicketOrchestratorAgentName, requiredRpcAccess, rpcAccessScope,
+} from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
-
-const root = join(import.meta.dir, '..');
-
-function source(path: string): string {
-  return readFileSync(join(root, path), 'utf8');
-}
 
 function rpcFrame(method: string, id = 'req-1'): string {
   return JSON.stringify({ type: 'rpc', id, method, args: [] });
@@ -181,13 +169,8 @@ describe('rpc gate on scoped connections', () => {
   });
 });
 
-describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
-  test('the edge rewrites the scope header from the verified identity', () => {
-    const server = source('src/server.ts');
-    expect(server).toContain('next.delete(CLI_SCOPES_HEADER)');
-    expect(server).toContain('next.set(CLI_SCOPES_HEADER, identity.cliScopes');
-    expect(server).toContain('if (verified.scopes) identity.cliScopes = verified.scopes');
-    // Tickets admit the root and one hosted actor beneath it; a `/sub/` hop names nothing.
+describe('a connect ticket names its workspace', () => {
+  test('a ticket admits the root and one hosted actor beneath it; a `/sub/` hop names nothing', () => {
     expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/workspace')).toBe('workspace');
     expect(extractTicketOrchestratorAgentName(
       '/agents/orchestrator-agent/workspace/actor/researcher',
@@ -200,72 +183,9 @@ describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
     )).toBeNull();
     expect(extractTicketOrchestratorAgentName('/agents/user-d-o/victim')).toBeNull();
   });
-
-  test('ticket verification resolves the bearer scopes at verify time', () => {
-    const userDO = source('src/user/user-do.ts');
-    expect(userDO).toContain('cliBearerScopes');
-    expect(userDO).toContain('getActiveAccessTokenScopes');
-    expect(userDO).toContain("if (bearerScopes !== 'all') verification.scopes = bearerScopes");
-  });
-
-  test('the actor substrate gates rpc frames and pins scoped sockets readonly', () => {
-    const actor = source('src/actor-agent.ts');
-    expect(actor).toContain('rejectOutOfScopeRpc(connection.tags, message)');
-    expect(actor).toContain('cliScopesConnectionTag(ctx.request.headers.get(CLI_SCOPES_HEADER))');
-    expect(actor).toContain('override shouldConnectionBeReadonly');
-  });
-
-  test('the HTTP dispatcher consumes THIS table — no second scope policy anywhere', () => {
-    const routes = source('src/cli/routes.ts');
-    expect(routes).toContain("from './rpc-gate'");
-    expect(routes).toContain('requiredRpcAccess(');
-    // No per-agent-method scope map may exist outside rpc-gate.ts.
-    expect(routes).not.toContain('SCOPED_RPC_ALLOWLIST');
-    expect(routes).not.toContain(String.raw`/^\/workspaces\/[^/]+\/[^/]+/`);
-  });
-
-  test('the header constant has one home', () => {
-    expect(CLI_SCOPES_HEADER).toBe('x-kinu-cli-scopes');
-    expect(source('src/server.ts')).not.toContain("'x-kinu-cli-scopes'");
-    expect(source('src/orchestrator.ts')).not.toContain("'x-kinu-cli-scopes'");
-  });
 });
 
-describe('the table is the CLI dispatch allowlist, not documentation', () => {
-  // cli/routes.ts dispatches only AGENT_RPC_ACCESS keys, so a @callable the CLI calls but the table omits
-  // fails against every cloud workspace while passing every local test.
-  const CLI_SRC = join(root, '../cli/src');
-
-  function cliInvokedNames(): string[] {
-    const files = readdirSync(CLI_SRC, { recursive: true, encoding: 'utf8' })
-      .filter((file) => file.endsWith('.ts') || file.endsWith('.tsx'));
-
-    const names = new Set<string>();
-
-    for (const file of files) {
-      const src = readFileSync(join(CLI_SRC, file), 'utf8');
-
-      for (const call of src.matchAll(/\b\w*[Rr]pc\w*\s*(?:<[^>]*>)?\s*\(([^()]*?)\)/gs)) {
-        for (const literal of call[1].matchAll(/'([A-Za-z][A-Za-z0-9_]*)'/g)) names.add(literal[1]);
-      }
-    }
-
-    return [...names];
-  }
-
-  function orchestratorCallables(): Set<string> {
-    return new Set([...source('src/orchestrator.ts')
-      .matchAll(/@callable\([^)]*\)\s*(?:async\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)]
-      .map((match) => match[1]));
-  }
-
-  test('every orchestrator RPC the CLI invokes is in the table', () => {
-    const callables = orchestratorCallables();
-    const invoked = cliInvokedNames().filter((name) => callables.has(name));
-    expect(invoked.length).toBeGreaterThan(20);
-    expect(invoked.filter((name) => !(name in AGENT_RPC_ACCESS)).sort()).toEqual([]);
-  });
-
+describe('outcome calibration and judging rows', () => {
   test('the calibration flow is reachable at the class each step needs', () => {
     expect(AGENT_RPC_ACCESS.getOutcomeCalibration).toBe('workspace.read');
     expect(AGENT_RPC_ACCESS.sampleOutcomeLabeling).toBe('workspace.read');

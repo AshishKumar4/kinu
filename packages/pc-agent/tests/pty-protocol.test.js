@@ -35,6 +35,9 @@ const {
 
 const { createSessions, TERMINAL_NAME } = require('../src/pty.js');
 
+/** The block a hub with the owner's Sandbox switch OFF sends. */
+const RAW = { tier: 'raw', agentHome: '', roots: [] };
+
 const SETTLE_MS = 15_000;
 
 async function until(predicate, what, budgetMs = SETTLE_MS) {
@@ -106,7 +109,7 @@ describe('opening a terminal is a call, and the rest is a stream', () => {
   test('an open answers with the session, and its bytes arrive as output frames', async () => {
     const { ctx } = context();
     const ws = fakeWs();
-    handle({ id: 'rpc-abcdefghij-1', method: PTY_OPEN_METHOD, params: ['pane-a', 90, 30] }, ws, ctx);
+    handle({ id: 'rpc-abcdefghij-1', method: PTY_OPEN_METHOD, sandbox: RAW, params: ['pane-a', 90, 30] }, ws, ctx);
     const reply = await ws.response('rpc-abcdefghij-1');
     expect(reply.error).toBeUndefined();
     expect(reply.result.session).toBe('pane-a');
@@ -129,7 +132,7 @@ describe('opening a terminal is a call, and the rest is a stream', () => {
   test('a session runs the plan a command runs, with the terminal named in it', async () => {
     const { ctx, plans } = context();
     const ws = fakeWs();
-    handle({ id: 'rpc-abcdefghij-2', method: PTY_OPEN_METHOD, params: ['pane-b', 80, 24] }, ws, ctx);
+    handle({ id: 'rpc-abcdefghij-2', method: PTY_OPEN_METHOD, sandbox: RAW, params: ['pane-b', 80, 24] }, ws, ctx);
     await ws.response('rpc-abcdefghij-2');
 
     // The raw tier's own argv, from sandbox.plan: a shell running one command,
@@ -163,7 +166,7 @@ describe('opening a terminal is a call, and the rest is a stream', () => {
   test('a window the kernel cannot carry is refused on the reply', async () => {
     const { ctx } = context();
     const ws = fakeWs();
-    handle({ id: 'rpc-abcdefghij-4', method: PTY_OPEN_METHOD, params: ['pane-d', 0, 24] }, ws, ctx);
+    handle({ id: 'rpc-abcdefghij-4', method: PTY_OPEN_METHOD, sandbox: RAW, params: ['pane-d', 0, 24] }, ws, ctx);
     const reply = await ws.response('rpc-abcdefghij-4');
     expect(reply.error).toContain('width must be a whole number from 1 to 1000');
   });
@@ -174,7 +177,7 @@ describe('opening a terminal is a call, and the rest is a stream', () => {
     // not droppable — a hub that never hears it holds a terminal that no
     // longer exists, and no later frame would correct that.
     const ws = fakeWs(4 * 1024 * 1024);
-    handle({ id: 'rpc-abcdefghij-5', method: PTY_OPEN_METHOD, params: ['pane-e', 80, 24] }, ws, ctx);
+    handle({ id: 'rpc-abcdefghij-5', method: PTY_OPEN_METHOD, sandbox: RAW, params: ['pane-e', 80, 24] }, ws, ctx);
     const reply = await ws.response('rpc-abcdefghij-5');
     expect(reply.result.pid).toBeGreaterThan(0);
     handle({ type: PTY_INPUT_FRAME, session: 'pane-e', data: Buffer.from('exit 0\r').toString('base64') }, ws, ctx);
@@ -230,22 +233,22 @@ describe('a terminal is confined exactly as a command is', () => {
       sandbox: { tier: 'sandboxed', agentHome: '/tmp/not-an-agent-home', roots: [] },
     }, ws, ctx);
     const reply = await ws.response('rpc-abcdefghij-9');
-    // The agent-home rule fires before the capability check can be reached, so
-    // this is refused on a machine that CAN sandbox as well.
-    expect(reply.error).toMatch(/agent home must sit under|sandbox_unavailable/);
+    // Refused either way: by the capability on a machine that cannot sandbox,
+    // and by the agent-home rule on one that can.
+    expect(reply.error).toMatch(/agent home must be|sandbox_unavailable/);
     expect(ctx.sessions.size()).toBe(0);
   });
 
-  test('a frame with no sandbox block is raw, exactly as an exec frame is', async () => {
-    const { ctx, plans } = context();
+  test('a frame with no sandbox block is refused, exactly as an exec frame is', async () => {
+    const { ctx } = context();
     const ws = fakeWs();
     handle({ id: 'rpc-abcdefghij-10', method: PTY_OPEN_METHOD, params: ['pane-i', 80, 24] }, ws, ctx);
-    await ws.response('rpc-abcdefghij-10');
-    // No bwrap in the argv: the hub that sent this has not been told about the
-    // Sandbox switch, and the daemon does not invent a confinement it was
-    // never given the home for. planFromFrame holds this rule for exec; the
-    // pty frame carries the same field, so the same absence means the same
-    // thing here. The assertion observes the argv the daemon built.
-    expect(plans[0].argv[0]).toBe('bash');
+    handle({ id: 'rpc-abcdefghij-11', method: 'exec', params: ['echo hello'] }, ws, ctx);
+    const ptyReply = await ws.response('rpc-abcdefghij-10');
+    // A shell on the owner's machine with no tier is a shell with none of the
+    // confinement they chose, so the absence is a refusal on both paths.
+    expect(ptyReply.error).toContain('names no sandbox tier');
+    expect((await ws.response('rpc-abcdefghij-11')).error).toBe(ptyReply.error);
+    expect(ctx.sessions.size()).toBe(0);
   });
 });

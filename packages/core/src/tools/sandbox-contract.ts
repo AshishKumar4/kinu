@@ -23,6 +23,7 @@ export function craftedToolDescription(name: string, description?: string): stri
   return description === undefined || description === '' ? `Crafted tool: ${name}` : description;
 }
 
+
 /** Shared by both backends; CF reassigns it over `createCodeTool`'s own schema. */
 export function codemodeInputSchema(): Schema<{ code: string }> {
   return jsonSchema<{ code: string }>({

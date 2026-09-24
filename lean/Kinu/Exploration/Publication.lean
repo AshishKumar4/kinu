@@ -1,8 +1,8 @@
 /-
   Kinu.Exploration.Publication — S7, S6, S4 and S1. 0 sorry.
 
-  Models `PublicationState`, `FloorRederivation` and `ExplorationRecord`
-  (`packages/core/src/types/objective.ts#PublicationState`, #FloorRederivation,
+  Models `PublicationState` and `ExplorationRecord`
+  (`packages/core/src/types/objective.ts#PublicationState`,
   #ExplorationRecord, #PUBLICATION_SURFACES and #CarrySuppression), plus
   `packages/core/src/strategy/objective.ts#admitsPublication`. Specified by docs/EXPLORATION.md —
   "The objective", "The closed verifier registry", "The publication seal",
@@ -97,7 +97,7 @@ def Breach.wellFormed (b : Breach) : Bool :=
   comparability. The two theorems below are why both decisions are needed together:
   the identity is floor-blind by design, so an identity-keyed seal cannot tell a
   corrected floor from the breached one and would seal the run that re-derived the
-  bound — which is precisely what *The publication seal* says clears a seal. -/
+  bound — which is precisely how *The publication seal* lifts. -/
 
 /-- The comparability key, reduced to what matters here: it does not mention the
     floor. -/
@@ -395,39 +395,17 @@ theorem surface_enumeration_has_six : allSurfaces.length = 6 := by decide
 
 /-! ## The run's state, and the two disjoint action alphabets -/
 
-/-- A human's replacement for a breached floor (`FloorRederivation`). Required to
-    clear a seal, and required to carry the same burden the original floor did,
-    because a seal cleared by an action nobody can audit reintroduces "a floor is a
-    proof or it is nothing" at the RECOVERY step. -/
-structure Rederivation where
-  floor : Floor
-  /-- Which of the two hypotheses was resolved, and on what evidence. -/
-  adjudication : String
-  deriving Repr, BEq, Inhabited
-
-/-- A re-derivation that cannot state its proof is not one, and a replacement bound
-    itself refuted by C1 or C2 is not a re-derivation either — it is the
-    same defect again. -/
-def Rederivation.admissible (rd : Rederivation) (baseline : Int) (d : Direction) : Bool :=
-  floorAdmissible rd.floor baseline d && !(rd.adjudication == "")
-
-/-- Whether the store will accept a publication.
-
-    `clearedBy` lives INSIDE the sealed state rather than flipping it back to
-    `open_`, which mirrors `PublicationState` and is the better audit trail: the
-    breach stays visible after recovery, so a record published retroactively can
-    still be traced to the bound that was re-derived. -/
+/-- Whether the store will accept a publication. Nothing clears a seal: a
+    re-derived floor or a replaced verifier is another key (`sealKey_discriminates`),
+    which starts open. -/
 inductive Publication where
   | open_
-  | sealed (breach : Breach) (clearedBy : Option Rederivation)
+  | sealed (breach : Breach)
   deriving Repr, Inhabited
 
-/-- Sealed, with nothing recorded that clears it. This is the state the reachability
-    theorem is about. -/
-def Publication.uncleared : Publication → Bool
+def Publication.isSealed : Publication → Bool
   | .open_ => false
-  | .sealed _ none => true
-  | .sealed _ (some _) => false
+  | .sealed _ => true
 
 /-- **The gate, and it takes the surface as an argument it does not read.**
 
@@ -438,21 +416,18 @@ def Publication.uncleared : Publication → Bool
     non-exception, which is the property that makes the enumeration safe to grow. -/
 def admits : Publication → Surface → Bool
   | .open_, _ => true
-  | .sealed _ (some _), _ => true
-  | .sealed _ none, _ => false
+  | .sealed _, _ => false
 
 /-- **The seal admits no per-surface exception.** Not a convention to be respected —
     a theorem. Any future attempt to exempt one surface has to change `admits`, and
     changing `admits` breaks this. -/
 theorem admits_ignores_surface (p : Publication) (sfc₁ sfc₂ : Surface) :
     admits p sfc₁ = admits p sfc₂ := by
-  cases p <;> rename_i _ <;> simp [admits] <;> rename_i cleared <;> cases cleared <;> rfl
+  cases p <;> rfl
 
-theorem admits_iff_not_uncleared (p : Publication) (sfc : Surface) :
-    admits p sfc = !p.uncleared := by
-  cases p with
-  | open_ => rfl
-  | sealed b cleared => cases cleared <;> rfl
+theorem admits_iff_not_sealed (p : Publication) (sfc : Surface) :
+    admits p sfc = !p.isSealed := by
+  cases p <;> rfl
 
 /-- A published row. `verifierDigest` is carried because retroactive publication is
     gated on *Comparability*'s digest equality: it decides which withheld measurements
@@ -497,13 +472,12 @@ def initRun (i : Identity) : RunState :=
   { identity := i, pub := .open_, floorSuspended := false, published := [],
     suppressed := 0, scored := [], nodes := [], halted := false }
 
-/-- **The actions the RUN can take. A re-derivation is deliberately absent.**
+/-- **The actions the RUN can take. None of them clears a seal.**
 
-    *The publication seal*: a seal is cleared only by a RECORDED re-derivation — not
-    by a retry, and not by a later candidate scoring inside the bound. That is not a
-    guard to be checked, it is a statement about WHOSE alphabet contains the
-    clearing edge — so it is two disjoint types. `sealed_is_absorbing` is that
-    sentence, and it is the load-bearing step of S7. -/
+    *The publication seal*: not a retry, and not a later candidate scoring inside
+    the bound. Publication resumes only under another key, a re-derived floor or a
+    replaced verifier. `sealed_is_absorbing` is that sentence, and it is the
+    load-bearing step of S7. -/
 inductive RunAction where
   /-- The environment answers. Retained whether or not the floor is suspended. -/
   | evaluate (c : Scored)
@@ -538,7 +512,7 @@ def stepOf (s : RunState) (a : RunAction) : RunState :=
   if s.halted then s else
     match a with
     | .evaluate c => { s with scored := c :: s.scored }
-    | .breach b => { s with pub := .sealed b none, floorSuspended := true }
+    | .breach b => { s with pub := .sealed b, floorSuspended := true }
     | .publish sfc r =>
         if admits s.pub sfc then
           (if publishable s then { s with published := (sfc, r) :: s.published } else s)
@@ -552,17 +526,6 @@ def stepOf (s : RunState) (a : RunAction) : RunState :=
         { s with nodes := { id := id, depth := depth, observation := some obs } :: s.nodes }
     | .fault _ => { s with halted := true }
     | .retry => s
-
-/-- A recorded re-derivation. Records itself INTO the seal rather than removing it,
-    and does not resurrect a halted run — a fault is a defect in the instrument
-    rather than a claim about the bound. -/
-def rederive (s : RunState) (rd : Rederivation) (baseline : Int) (d : Direction) :
-    RunState :=
-  if rd.admissible baseline d then
-    match s.pub with
-    | .open_ => s
-    | .sealed b _ => { s with pub := .sealed b (some rd), floorSuspended := false }
-  else s
 
 /-- A finite trace of the run's own actions. -/
 def runOf (s : RunState) : List RunAction → RunState :=
@@ -579,14 +542,14 @@ theorem runOf_cons (s : RunState) (a : RunAction) (as : List RunAction) :
 /-- A breach seals publication, in one step, with nothing recorded that clears
     it. -/
 theorem breach_seals (s : RunState) (b : Breach) (h : s.halted = false) :
-    (stepOf s (.breach b)).pub = .sealed b none := by
+    (stepOf s (.breach b)).pub = .sealed b := by
   simp [stepOf, h]
 
 /-- **A publication to ANY enumerated surface requires an admitting state.**
     Quantified over `Surface`, which is what the audit's finding forced: a theorem
     over one field alone leaves `experience_library` outside it. -/
 theorem publish_requires_open (s : RunState) (b : Breach) (sfc : Surface) (r : Row)
-    (h : s.pub = .sealed b none) :
+    (h : s.pub = .sealed b) :
     (stepOf s (.publish sfc r)).published = s.published := by
   by_cases hh : s.halted = true
   · simp [stepOf, hh]
@@ -594,7 +557,7 @@ theorem publish_requires_open (s : RunState) (b : Breach) (sfc : Surface) (r : R
 
 /-- And so does a RETROACTIVE publication, to any surface. -/
 theorem retroPublish_requires_open (s : RunState) (b : Breach) (sfc : Surface) (r : Row)
-    (h : s.pub = .sealed b none) :
+    (h : s.pub = .sealed b) :
     (stepOf s (.retroPublish sfc r)).published = s.published := by
   by_cases hh : s.halted = true
   · simp [stepOf, hh]
@@ -605,7 +568,7 @@ theorem retroPublish_requires_open (s : RunState) (b : Breach) (sfc : Surface) (
     `evaluate` that measures back inside the bound, and a `retroPublish` to any
     surface. -/
 theorem sealed_is_absorbing (s : RunState) (a : RunAction) (b : Breach)
-    (h : s.pub = .sealed b none) : ∃ b', (stepOf s a).pub = .sealed b' none := by
+    (h : s.pub = .sealed b) : ∃ b', (stepOf s a).pub = .sealed b' := by
   by_cases hh : s.halted = true
   · exact ⟨b, by simp [stepOf, hh, h]⟩
   · cases a with
@@ -617,7 +580,7 @@ theorem sealed_is_absorbing (s : RunState) (a : RunAction) (b : Breach)
     | fault e => exact ⟨b, by simp [stepOf, hh, h]⟩
     | retry => exact ⟨b, by simp [stepOf, hh, h]⟩
 
-/-- **S7, as reachability over the whole publication egress: from an uncleared
+/-- **S7, as reachability over the whole publication egress: from a
     sealed state, NO finite sequence of the run's own actions publishes to ANY
     enumerated surface.**
 
@@ -627,7 +590,7 @@ theorem sealed_is_absorbing (s : RunState) (a : RunAction) (b : Breach)
     quantifies over every trace, so there is no such path to find — and now over
     every surface, so there is no such sink either. -/
 theorem sealed_publishes_nothing (s : RunState) (b : Breach)
-    (h : s.pub = .sealed b none) (as : List RunAction) :
+    (h : s.pub = .sealed b) (as : List RunAction) :
     (runOf s as).published = s.published := by
   induction as generalizing s b with
   | nil => rfl
@@ -678,7 +641,7 @@ theorem every_surface_is_retro_writable (s : RunState) (sfc : Surface) (r : Row)
 
 /-- **A retry does not clear a seal** (*The publication seal*, named explicitly). -/
 theorem retry_does_not_clear (s : RunState) (b : Breach)
-    (h : s.pub = .sealed b none) : (stepOf s .retry).pub = .sealed b none := by
+    (h : s.pub = .sealed b) : (stepOf s .retry).pub = .sealed b := by
   by_cases hh : s.halted = true <;> simp [stepOf, hh, h]
 
 /-- **A later candidate scoring back inside the bound does not clear a seal**
@@ -686,61 +649,14 @@ theorem retry_does_not_clear (s : RunState) (b : Breach)
     hypothesis was true, and treating the second as exoneration would let one lucky
     measurement restore a guarantee nobody re-proved"). -/
 theorem good_measurement_does_not_clear (s : RunState) (b : Breach) (c : Scored)
-    (h : s.pub = .sealed b none) :
-    (stepOf s (.evaluate c)).pub = .sealed b none := by
+    (h : s.pub = .sealed b) :
+    (stepOf s (.evaluate c)).pub = .sealed b := by
   by_cases hh : s.halted = true <;> simp [stepOf, hh, h]
-
-/-! ### The recorded re-derivation — the one edge out -/
-
-/-- A re-derivation carrying its burden records itself into the seal and the state
-    admits publication again, so the sealed state is not a dead end the reachability
-    theorem exploits. The breach REMAINS, which is the audit trail. -/
-theorem admissible_rederivation_admits (s : RunState) (rd : Rederivation) (b : Breach)
-    (baseline : Int) (d : Direction) (sfc : Surface)
-    (hs : s.pub = .sealed b none) (h : rd.admissible baseline d = true) :
-    (rederive s rd baseline d).pub = .sealed b (some rd)
-    ∧ admits (rederive s rd baseline d).pub sfc = true
-    ∧ (rederive s rd baseline d).floorSuspended = false := by
-  refine ⟨by simp [rederive, h, hs], by simp [rederive, h, hs, admits], by simp [rederive, h, hs]⟩
-
-/-- **A re-derivation whose replacement bound is itself refuted does not clear the
-    seal.** You cannot clear a seal with the same defect again: C1
-    applies to the replacement floor exactly as it applied to the original. -/
-theorem refuted_replacement_does_not_clear (s : RunState) (rd : Rederivation)
-    (baseline : Int) (d : Direction) (b : Breach)
-    (hsealed : s.pub = .sealed b none) (h : floorRoom rd.floor d < 0) :
-    (rederive s rd baseline d).pub = .sealed b none := by
-  have hbad : rd.admissible baseline d = false := by
-    simp [Rederivation.admissible,
-      floorAdmissible_rejects_negative_margin rd.floor baseline d h]
-  simp [rederive, hbad, hsealed]
-
-/-- **A re-derivation that states no adjudication does not clear the seal.** "A
-    re-derivation that cannot state its proof is not one." -/
-theorem unaudited_rederivation_does_not_clear (s : RunState) (rd : Rederivation)
-    (baseline : Int) (d : Direction) (b : Breach)
-    (hsealed : s.pub = .sealed b none) (h : rd.adjudication = "") :
-    (rederive s rd baseline d).pub = .sealed b none := by
-  have hbad : rd.admissible baseline d = false := by
-    simp [Rederivation.admissible, h]
-  simp [rederive, hbad, hsealed]
-
-/-- After a recorded, admissible re-derivation, publication to every surface is
-    reachable again. The converse of S7, and what makes S7 a claim about the run's
-    alphabet rather than a claim that publication is impossible. -/
-theorem rederivation_restores_publication (s : RunState) (rd : Rederivation) (b : Breach)
-    (baseline : Int) (d : Direction) (sfc : Surface) (r : Row)
-    (hs : s.pub = .sealed b none) (hrd : rd.admissible baseline d = true)
-    (hh : s.halted = false) (hlive : publishable s = true) :
-    (stepOf (rederive s rd baseline d) (.publish sfc r)).published
-      = (sfc, r) :: s.published := by
-  simp [rederive, hrd, hs, stepOf, hh, admits, publishable] at hlive ⊢
-  simp [hlive]
 
 /-! ### Retroactive publication is gated on the verifier, not merely on the seal -/
 
 /-- **A retroactive write whose measurement came from a different verifier writes
-    nothing**, on any surface, even with the seal cleared. *Comparability*: a digest
+    nothing**, on any surface, even with the run open. *Comparability*: a digest
     mismatch means these are not the same measurement. -/
 theorem retroPublish_requires_same_verifier (s : RunState) (sfc : Surface) (r : Row)
     (h : r.verifierDigest ≠ s.identity.verifierDigest) :
@@ -767,7 +683,7 @@ theorem breach_does_not_halt (s : RunState) (b : Breach) :
 /-- A sealed run still scores candidates: the search is still producing candidates
     the verifier still scores, and only the floor's guarantee is void. -/
 theorem sealed_still_scores (s : RunState) (b : Breach) (c : Scored)
-    (_h : s.pub = .sealed b none) (hh : s.halted = false) :
+    (_h : s.pub = .sealed b) (hh : s.halted = false) :
     (stepOf s (.evaluate c)).scored = c :: s.scored := by
   simp [stepOf, hh]
 
@@ -791,24 +707,19 @@ theorem breach_records_suspension (s : RunState) (b : Breach) (hh : s.halted = f
     suppressed" and is NOT the same claim as a suppression of zero cells — a sealed
     run that reached no new best still had its carry axis voided. -/
 def carrySuppression (s : RunState) : Option Nat :=
-  if s.pub.uncleared then some s.suppressed else none
+  if s.pub.isSealed then some s.suppressed else none
 
 /-- **`none` and `some 0` are different claims, and the model keeps them
     different.** The distinction the TypeScript docstring insists on, as a
     theorem. -/
 theorem suppression_none_is_not_zero (i : Identity) (b : Breach) :
     carrySuppression (initRun i) = none
-    ∧ carrySuppression { initRun i with pub := .sealed b none } = some 0 := by
+    ∧ carrySuppression { initRun i with pub := .sealed b } = some 0 := by
   refine ⟨rfl, rfl⟩
-
-/-- A cleared seal discloses nothing, because nothing is being suppressed. -/
-theorem cleared_seal_discloses_nothing (s : RunState) (b : Breach) (rd : Rederivation)
-    (h : s.pub = .sealed b (some rd)) : carrySuppression s = none := by
-  simp [carrySuppression, h, Publication.uncleared]
 
 /-- Every refused publication is counted, in one step. -/
 theorem sealed_publish_counts_the_refusal (s : RunState) (b : Breach) (sfc : Surface)
-    (r : Row) (h : s.pub = .sealed b none) (hh : s.halted = false) :
+    (r : Row) (h : s.pub = .sealed b) (hh : s.halted = false) :
     (stepOf s (.publish sfc r)).suppressed = s.suppressed + 1 := by
   simp [stepOf, hh, h, admits]
 
@@ -834,14 +745,14 @@ def hasFault : List RunAction → Bool
   | .fault _ :: _ => true
   | _ :: as => hasFault as
 
-/-- **The disclosure cannot under-report: from an uncleared seal, the suppression
+/-- **The disclosure cannot under-report: from a seal, the suppression
     count grows by exactly the number of publications the trace attempted.**
 
     This is what makes the disclosed count trustworthy rather than best-effort. A
     faultless trace is required because a fault stops the run, and after a fault
     there is nothing left to suppress — which is S6, not a gap. -/
 theorem suppression_counts_every_refusal (s : RunState) (b : Breach)
-    (as : List RunAction) (h : s.pub = .sealed b none) (hh : s.halted = false)
+    (as : List RunAction) (h : s.pub = .sealed b) (hh : s.halted = false)
     (hf : hasFault as = false) :
     (runOf s as).suppressed = s.suppressed + publishAttempts as := by
   induction as generalizing s b with
@@ -1176,12 +1087,11 @@ theorem bestOf_mem (d : Direction) (vs : List Int) (v : Int)
 /-- Total: every run state reports exactly one outcome, in a fixed precedence.
 
     **The seal reaches publication and NOT the report.** A fault outranks a breach
-    because a fault means no number the run produced can be trusted; an UNCLEARED
-    breach outranks the discrimination verdict because the run's numbers are
-    withheld. A cleared seal falls through, because publication is admitted again. -/
+    because a fault means no number the run produced can be trusted; a breach
+    outranks the discrimination verdict because the run's numbers are withheld. -/
 def report (d : Direction) (s : RunState) : Report :=
   if s.halted then .faulted
-  else if s.pub.uncleared then .breached
+  else if s.pub.isSealed then .breached
   else
     match discrimination 2 s.scored with
     | .insufficient =>
@@ -1199,8 +1109,8 @@ def report (d : Direction) (s : RunState) : Report :=
     exactly how a breach becomes "the floor was wrong and nothing said so", which is
     the failure the floor exists to prevent. -/
 theorem sealed_still_reports (d : Direction) (s : RunState) (b : Breach)
-    (h : s.pub = .sealed b none) (hh : s.halted = false) : report d s = .breached := by
-  simp [report, hh, h, Publication.uncleared]
+    (h : s.pub = .sealed b) (hh : s.halted = false) : report d s = .breached := by
+  simp [report, hh, h, Publication.isSealed]
 
 /-- A reported success names a value that was actually measured. -/
 theorem success_was_measured (d : Direction) (s : RunState) (v : Int)
@@ -1210,7 +1120,7 @@ theorem success_was_measured (d : Direction) (s : RunState) (v : Int)
   · rw [if_pos hh] at h; exact absurd h (by simp)
   · simp only [Bool.not_eq_true] at hh
     rw [if_neg (by simp [hh])] at h
-    by_cases hu : s.pub.uncleared = true
+    by_cases hu : s.pub.isSealed = true
     · rw [if_pos hu] at h; exact absurd h (by simp)
     · simp only [Bool.not_eq_true] at hu
       rw [if_neg (by simp [hu])] at h
@@ -1240,7 +1150,7 @@ theorem inert_cannot_succeed (d : Direction) (s : RunState) (v : Int)
   · rw [if_pos hh]; simp
   · simp only [Bool.not_eq_true] at hh
     rw [if_neg (by simp [hh])]
-    by_cases hu : s.pub.uncleared = true
+    by_cases hu : s.pub.isSealed = true
     · rw [if_pos hu]; simp
     · simp only [Bool.not_eq_true] at hu
       rw [if_neg (by simp [hu]), h]; simp
@@ -1254,21 +1164,21 @@ theorem insufficient_cannot_succeed (d : Direction) (s : RunState) (v : Int)
   · rw [if_pos hh]; simp
   · simp only [Bool.not_eq_true] at hh
     rw [if_neg (by simp [hh])]
-    by_cases hu : s.pub.uncleared = true
+    by_cases hu : s.pub.isSealed = true
     · rw [if_pos hu]; simp
     · simp only [Bool.not_eq_true] at hu
       rw [if_neg (by simp [hu]), h]
       cases bestOf d (measuredValues s.scored) <;> simp
 
-/-- **An uncleared sealed run never reports success**, whatever it measured
+/-- **A sealed run never reports success**, whatever it measured
     afterwards. -/
 theorem sealed_never_succeeds (d : Direction) (s : RunState) (b : Breach) (v : Int)
-    (h : s.pub = .sealed b none) : report d s ≠ .success v := by
+    (h : s.pub = .sealed b) : report d s ≠ .success v := by
   unfold report
   by_cases hh : s.halted = true
   · rw [if_pos hh]; simp
   · simp only [Bool.not_eq_true] at hh
-    rw [if_neg (by simp [hh]), if_pos (by simp [h, Publication.uncleared])]
+    rw [if_neg (by simp [hh]), if_pos (by simp [h, Publication.isSealed])]
     simp
 
 def sampleIdentity : Identity :=

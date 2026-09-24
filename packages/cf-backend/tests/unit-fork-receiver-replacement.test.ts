@@ -7,7 +7,7 @@ import {
   FORK_STREAM_SEED, FORK_TRANSFER_VERSION, foldForkStream, sealForkFrame,
   type ForkFrame,
 } from '@kinu.run/core';
-import { orchestratorHarness, reactivateOrchestratorHarness } from './helpers/actor-harness';
+import { orchestratorHarness, reactivateOrchestratorHarness, workspaceFiles } from './helpers/actor-harness';
 
 const OWNER = 'harness-owner';
 
@@ -90,7 +90,7 @@ describe('a replacement transfer stages under its OWN suffix', () => {
     if (!outcome.ok) throw new Error(`commit refused: ${outcome.reason}`);
     expect(outcome.status).toBe('published');
 
-    const landed = await second.agent.observeRuntime().storage.vfs
+    const landed = await workspaceFiles(second.agent)
       .readFile('memory/replaced.md', { encoding: 'utf8' });
 
     expect(landed).toBe('replacement transfer bytes!');

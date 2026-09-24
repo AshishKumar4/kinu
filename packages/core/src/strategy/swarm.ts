@@ -527,7 +527,6 @@ export function archiveRegionRefusal(
   }
 
   if (caps.depth && caps.depth.value > 1) {
-    // Cells are written at settle, so there is no second level to select from within a run.
     return badInput(`advance:"archive" bins its candidates into cells at the settle barrier, so during the `
       + `run there is no archive to select a second level FROM and depth ${String(caps.depth.value)} `
       + 'cannot be run — it is refused rather than silently flattened, because a cap accepted and ignored '
@@ -817,7 +816,7 @@ export interface SwarmCandidate {
   readonly unmeasurable: string | null;
   /**
    * Why the node never finished (status, steps, clock); distinct from
-   * {@link unmeasurable} so a deadline cut is not reported as a verifier complaint.
+   * {@link unmeasurable} so a cut node is not reported as a verifier complaint.
    */
   readonly incomplete: string | null;
   readonly score: number | null;

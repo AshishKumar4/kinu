@@ -8,7 +8,6 @@ import type {
   VFS as CoreVFS, Executor, LLM, Schedule, Identity,
   SqlExecutor, SqlValue, RawSqlExec,
   ExecuteResult, ResolvedProvider,
-  CraftStore as CoreCraftStore, CraftedTool as CoreCraftedTool,
   FiberCtx, ExecutionRouter,
   TurnAccumulator,
   DeferredApprovalChannel,
@@ -37,22 +36,21 @@ import {
   type FixedTierSource,
   type VectorStore,
 } from "@kinu.run/core";
-import type { SandboxHandle } from "@kinu.run/core";
+import type { DeviceFileScope, SandboxHandle } from "@kinu.run/core";
 import { withHostedNodeExecution, REAL_CLOCK } from '@kinu.run/core';
 import type { HostedNodeHome } from '@kinu.run/core';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
 import { diagnostics, KinuError, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
-import { getSandbox } from "@cloudflare/sandbox";
 import { kinuEgressParams } from "./egress/configure";
 import { driveBound, tenantDrive } from "./drive/tenant";
-import { adaptCloudflareSandbox, SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
+import { adaptCloudflareSandbox, openSandbox } from "./sandbox-exec-lane";
 import { previewHostSuffix } from "@kinu.run/core";
-import { sandboxIdForWorkspace } from "@kinu.run/core";
+import { SANDBOX_TRANSPORT, sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
-import { CraftStore as AgentUtilsCraftStore } from "@kinu.run/agent-utils/stores";
+import { CraftStore as AgentUtilsCraftStore, craftStoreView } from "@kinu.run/agent-utils/stores";
 import { generateText, type LanguageModelUsage } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
@@ -120,7 +118,7 @@ export interface ActorRuntimeIdentity {
 }
 
 interface RuntimeUserDOClient extends UserCredentialClient, DeviceHubClient {
-  getDeviceFileView(caller: UserCaller, agentName: string, device?: string): Promise<{ unconfined: boolean }>;
+  getDeviceFileView(caller: UserCaller, agentName: string, device?: string): Promise<{ scope: DeviceFileScope }>;
 }
 
 interface RuntimeUserDONamespace {
@@ -280,7 +278,7 @@ export function createCFRuntime(
 
   const memory = adaptMemory(memoryStore, originVfs, vectorStore, memoryConfig);
 
-  const craftStore = adaptCraftStore(craftStoreImpl);
+  const craftStore = craftStoreView(craftStoreImpl);
 
   const envForExec = env;
 
@@ -322,7 +320,6 @@ export function createCFRuntime(
       ownGrants: () => memoryConfig.getShellApprovalGrants(),
     });
 
-  // Never receives the VFS-only `/pc` or `/sandbox` mounts.
   const shell = withApprovalGatedShell(nimbusSessionShell(executionBox), approvalPolicy);
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
   // State services keep `baseWorkspaceVfs` and never index foreign bytes. The context mount is last:
@@ -360,6 +357,8 @@ export function createCFRuntime(
   }
 
   const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
+  // The shell this actor runs as serves its file tool's mount points.
+  workspaceBox.mountTable?.(agentFileVfs, hooks.workspaceExecution?.cred);
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
     // Declared exactly when NIMBUS_RUNTIME_CACHE is bound: without it there is nothing to install.
@@ -379,12 +378,7 @@ export function createCFRuntime(
 
   if (env.Sandbox) {
     try {
-      // Must be passed identically on every getSandbox() for an id: changing it disconnects the client, and
-      // the SDK persists transport in storage. The route clients cannot restore a large workspace
-      // (`sandbox.route_client.restore_bytes`).
-      const sdk = getSandbox(env.Sandbox, sandboxId, {
-        normalizeId: true, transport: SANDBOX_TRANSPORT,
-      });
+      const sdk = openSandbox(env.Sandbox, sandboxId, { normalizeId: true });
 
       // Egress is configured before the container runs anything, not in `onStart` (too late); until then
       // the container has no network, so it fails closed. Only the owning workspace configures.
@@ -491,13 +485,13 @@ export function createCFRuntime(
   executionRouter.register(createDeviceTunnelExecutor(deviceTransport, {
     consentedRoot: async (deviceId) => cliCwdForDevice() ?? await deviceScope('consentedRoot', deviceId),
     deviceHome: async (deviceId) => cliCwdForDevice() ?? await deviceScope('deviceHome', deviceId),
-    unconfined: async (deviceId) => {
+    scope: async (deviceId) => {
       const hub = userDOStubFor(env, actor);
 
-      if (!hub) return false;
+      if (!hub) return 'root';
 
       try {
-        return (await hub.getDeviceFileView(await userCallerFor(actor), actor.workspaceName, deviceId)).unconfined;
+        return (await hub.getDeviceFileView(await userCallerFor(actor), actor.workspaceName, deviceId)).scope;
       } catch (cause) {
         throw toKinuError({
           doing: "reading the device's file-view scope",
@@ -512,6 +506,7 @@ export function createCFRuntime(
     actor: actor.actor,
     storage: { vfs: agentFileVfs, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
     agentStateVfs: originVfs,
+    workspaceIsMachine: false,
     startupWork,
     memory, executor, llm, schedule, identity, craftStore,
     get judgeModel() { return profileLane('judge'); },
@@ -569,41 +564,6 @@ function buildVectorStore(
 
     return createNoopVectorStore();
   }
-}
-
-function adaptCraftStore(impl: AgentUtilsCraftStore): CoreCraftStore {
-  return {
-    create(t) {
-      impl.create({
-        name: t.name, description: t.description,
-        params: t.params ?? undefined,
-        code: t.code, scope: t.scope ?? "local",
-      });
-    },
-    update(name, patch) {
-      impl.update(name, patch);
-    },
-    get(name) {
-      const tool = impl.get(name);
-
-      return tool ? adaptCraftedTool(tool) : undefined;
-    },
-    delete(name) { impl.delete(name); },
-    list() { return impl.list().map(adaptCraftedTool); },
-    search(query, limit) { return impl.search(query, limit).map(adaptCraftedTool); },
-  };
-}
-
-function adaptCraftedTool(t: ReturnType<AgentUtilsCraftStore['list']>[number]): CoreCraftedTool {
-  return {
-    name: t.name,
-    description: t.description,
-    params: t.params,
-    code: t.code,
-    scope: t.scope,
-    createdAt: t.createdAt,
-    updatedAt: t.updatedAt,
-  };
 }
 
 function createExecutor(loader: WorkerLoader): Executor {

@@ -5,8 +5,7 @@ import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import * as v from 'valibot';
 import { ftsQueryTerms } from '@kinu.run/agent-utils/memory';
-import { parseJsonValue, type JsonValue } from '../utils/json';
-import { classify } from '../obs/index';
+import { safeJsonParse, type JsonValue } from '../utils/json';
 
 
 export interface Fact {
@@ -55,20 +54,11 @@ interface FactRow {
 function rowToFact(r: FactRow): Fact {
   return {
     key: r.key,
-    value: safeParse(r.value_json),
+    value: safeJsonParse(r.value_json),
     confidence: r.confidence,
     source: r.source ?? '',
     lastObservedAt: r.last_observed_at,
   };
-}
-
-function safeParse(json: string): JsonValue {
-  try { return parseJsonValue(json); }
-  catch (error) {
-    if (classify({ cause: error }) !== 'malformed-input') throw error;
-
-    return json;
-  }
 }
 
 export function normalizeFactKey(key: string): string {

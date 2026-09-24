@@ -6,7 +6,7 @@ import {
 } from '../src/identity/soul';
 import { initAllTables } from '../src/identity/schema';
 import { createWorkspace } from '../src/identity/create';
-import { makeSql, makeExecRaw, createWorkspaceBundle, makeAgentDatabase } from './helpers';
+import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers';
 
 const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
 
@@ -82,9 +82,8 @@ describe('the mission a read-only listing reads', () => {
 describe('workspace birth', () => {
   test('createWorkspace seeds a readable soul and a matching mission', async () => {
     const db = new Database(':memory:');
-    const agentDb = makeAgentDatabase(db);
 
-    const rt = await createWorkspace(agentDb, {
+    const rt = await createWorkspace(db, {
       name: 'atlas', purpose: 'Help with testing.', llm: TEST_LLM,
     });
 
@@ -97,7 +96,7 @@ describe('workspace birth', () => {
   test('the seeds are real files the agent can read back', async () => {
     const db = new Database(':memory:');
 
-    const rt = await createWorkspace(makeAgentDatabase(db), {
+    const rt = await createWorkspace(db, {
       name: 'quiet-harbor-1a4e20', title: 'Atlas', purpose: 'Help with testing.', llm: TEST_LLM,
     });
 
@@ -107,13 +106,13 @@ describe('workspace birth', () => {
 
   /** `name` is the address and `title` is the name; a workspace is born untitled. */
   test('the documents a model reads are headed by the title, never by the slug', async () => {
-    const titled = await createWorkspace(makeAgentDatabase(new Database(':memory:')), {
+    const titled = await createWorkspace(new Database(':memory:'), {
       name: 'quiet-harbor-1a4e20', title: 'Callback Audit', purpose: 'Audit it.', llm: TEST_LLM,
     });
 
     expect(await readSoul(titled.storage.vfs)).toStartWith('# Callback Audit');
 
-    const untitled = await createWorkspace(makeAgentDatabase(new Database(':memory:')), {
+    const untitled = await createWorkspace(new Database(':memory:'), {
       name: 'quiet-harbor-1a4e20', purpose: 'Audit it.', llm: TEST_LLM,
     });
 

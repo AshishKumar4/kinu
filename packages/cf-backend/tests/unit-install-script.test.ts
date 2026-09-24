@@ -191,10 +191,6 @@ async function makeSandbox(options: SandboxOptions = {}): Promise<InstallSandbox
     chmodSync(join(stubBin, 'bun'), 0o755);
   }
 
-  // The /usr/local/bin symlink step must not touch the real system.
-  writeFileSync(join(stubBin, 'ln'), '#!/bin/sh\nexit 0\n');
-  chmodSync(join(stubBin, 'ln'), 0o755);
-
   return { home, stubBin, bunLog, managedBun: join(home, '.kinu/runtime/bin/bun') };
 }
 
@@ -266,15 +262,37 @@ describe('install.sh terminal handling', () => {
     expect(result.exitCode).toBe(0);
   });
 
-  test('the canonical install command is one pipeline, and the script says how to activate it', async () => {
+  test('the canonical install command is one pipeline, and kinu runs in the calling shell right after it', async () => {
     const script = await servedScript('/install.sh');
     const { home, stubBin } = await makeSandbox();
     writeFileSync(join(home, 'install.sh'), script);
     const install = buildCliInstallCommand({ origin: ORIGIN, setup: false });
     expect(install).toBe(`curl -fsSL '${ORIGIN}/install.sh' | bash -s -- --no-setup`);
-    expect(install).not.toContain('KINU_PARENT_ACTIVATES');
-    expect(install).not.toContain('export PATH');
 
+    // The calling shell's PATH lists ~/.local/bin, as a Fedora login shell does always and an Ubuntu one does once
+    // the directory exists. The installer is that shell's child, so a directory the caller searches is its only reach.
+    const localBin = join(home, '.local/bin');
+
+    const run = spawnSync('bash', ['-c', [
+      install,
+      'printf "RESOLVED=%s\\n" "$(command -v kinu)"',
+      'kinu --help',
+    ].join('\n')], {
+      encoding: 'utf8',
+      env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${localBin}:${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash', ...RELEASE_ENV },
+    });
+
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain(`RESOLVED=${join(localBin, 'kinu')}\n`);
+    expect(run.stdout).toContain('setup   connect your account');
+    expect(run.stdout).not.toContain('To use kinu in this shell now');
+  });
+
+  test('with no linkable directory on the calling PATH, the script prints the export that activates it', async () => {
+    const script = await servedScript('/install.sh');
+    const { home, stubBin } = await makeSandbox();
+    writeFileSync(join(home, 'install.sh'), script);
+    const install = buildCliInstallCommand({ origin: ORIGIN, setup: false });
     const binDir = join(home, '.kinu/bin');
 
     const run = spawnSync('bash', ['-c', [
@@ -286,7 +304,6 @@ describe('install.sh terminal handling', () => {
     });
 
     expect(run.status, run.stderr).toBe(0);
-    // The installer's own process cannot change the calling shell's PATH, so the hint must appear.
     expect(run.stdout).toContain('BEFORE=\n');
     expect(run.stdout).toContain('To use kinu in this shell now, run:');
 
@@ -303,14 +320,6 @@ describe('install.sh terminal handling', () => {
     expect(activated.status, activated.stderr).toBe(0);
     expect(activated.stdout).toContain(join(home, '.kinu/bin/kinu'));
     expect(activated.stdout).toContain('setup   connect your account');
-  });
-
-  test('nothing in the served installer reads KINU_PARENT_ACTIVATES', async () => {
-    const script = await servedScript('/install.sh');
-    expect(script).not.toContain('KINU_PARENT_ACTIVATES');
-    expect(script).not.toContain('PARENT_ACTIVATES');
-    // Gated on the script's own PATH check, not on anything the caller sets.
-    expect(script).toContain('if [ "$NEEDS_PARENT_ACTIVATION" = "1" ]; then');
   });
 
   test('--connect pairs the machine from inside the installer, before the PATH hint', async () => {
@@ -347,7 +356,7 @@ describe('install.sh terminal handling', () => {
     expect(script).toContain('run_on_tty "$BIN_PATH" setup --origin "$KINU_ORIGIN" --account-only');
     expect(script).toContain('run_on_tty "$BIN_PATH" connect');
     // Under curl|bash a stdin-reading child would eat unread script bytes.
-    expect(script).toContain('"$BIN_PATH" --help </dev/null');
+    expect(script).toContain('KINU_REFRESH_ONLY=1 "$BIN_PATH" </dev/null');
   });
 
   test('a CLI that dies in raw mode leaves the terminal sane after the served script exits', async () => {
@@ -497,21 +506,16 @@ describe('Bun runtime resolution is one source of truth', () => {
     expect(Number(minKey)).toBeGreaterThan(0);
   });
 
-  test('both served scripts carry the same resolution and neither probes Bun on its own', async () => {
+  test('only the launcher resolves and provides Bun; the installer never probes it', async () => {
     const shared = bunResolutionShell();
     const install = await servedScript('/install.sh');
     const launcher = await servedScript('/downloads/kinu');
 
-    for (const script of [install, launcher]) {
-      expect(script).toContain(shared);
-      // A second probe is the defect: two answers to one question.
-      expect(script.split('command -v bun').length - 1)
-        .toBe(shared.split('command -v bun').length - 1);
-      expect(script).toContain('kinu_resolve_bun');
-    }
-
-    // The CLI imports bun:sqlite; there is no Node path.
-    expect(launcher).not.toContain('bun.sh/install');
+    expect(launcher).toContain(shared);
+    // A second probe is the defect: two answers to one question.
+    expect(launcher.split('command -v bun').length - 1).toBe(shared.split('command -v bun').length - 1);
+    expect(install).not.toContain('command -v bun');
+    expect(install).not.toContain('bun.sh/install');
     expect(launcher).toContain('exec "$KINU_BUN" run "$CLI_DIR/cli.js" "$@"');
   });
 
@@ -587,7 +591,8 @@ describe('Bun runtime resolution is one source of truth', () => {
 
   test('an existing compatible Bun is used as it is, and nothing is downloaded', async () => {
     const script = await servedScript('/install.sh');
-    const { home, stubBin, managedBun } = await makeSandbox({ ambientBun: '1.9.2' });
+    const launcher = await servedScript('/downloads/kinu');
+    const { home, stubBin, managedBun } = await makeSandbox({ ambientBun: '1.9.2', launcher });
     const result = await runHeadlessInstall(script, home, stubBin);
 
     expect(result.timedOut).toBe(false);
@@ -599,7 +604,8 @@ describe('Bun runtime resolution is one source of truth', () => {
 
   test('a Bun older than the approved one is not accepted, and the approved one is installed once', async () => {
     const script = await servedScript('/install.sh');
-    const { home, stubBin, managedBun } = await makeSandbox({ ambientBun: '1.1.45' });
+    const launcher = await servedScript('/downloads/kinu');
+    const { home, stubBin, managedBun } = await makeSandbox({ ambientBun: '1.1.45', launcher });
     const result = await runHeadlessInstall(script, home, stubBin);
 
     expect(result.timedOut).toBe(false);
@@ -612,7 +618,8 @@ describe('Bun runtime resolution is one source of truth', () => {
 
   test('KINU_INSTALL_BUN=0 names the version it needs instead of installing one', async () => {
     const script = await servedScript('/install.sh');
-    const { home, stubBin, managedBun } = await makeSandbox({ ambientBun: null });
+    const launcher = await servedScript('/downloads/kinu');
+    const { home, stubBin, managedBun } = await makeSandbox({ ambientBun: null, launcher });
     const result = await runHeadlessInstall(script, home, stubBin, { KINU_INSTALL_BUN: '0' });
 
     expect(result.output).toContain(`Bun ${approvedBun()} or newer is required.`);

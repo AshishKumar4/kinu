@@ -1,7 +1,5 @@
 // Sticky last-active executor only when already active, else workspace: status/diff reads must not wake idle remotes.
 import { describe, test, expect } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import {
   executorLabel, executorSortKey, pickDefaultExecutor, releaseSubstrate,
   type ExecutorInfo,
@@ -101,20 +99,5 @@ describe("executor labels name one environment each", () => {
     for (const name of NAMES) {
       expect(executorLabel(name)).not.toBe(name);
     }
-  });
-});
-
-/** The Files action derives from the core mount table (EXECUTOR_MOUNTS), never a second UI table. */
-describe("the environment surface names environments directly", () => {
-  const surface = readFileSync(
-    join(import.meta.dir, "..", "src", "components", "surfaces", "EnvironmentSurface.tsx"), "utf8",
-  );
-
-  test("no mount-to-executor translation layer survives in the surface", () => {
-    expect(surface).not.toContain("executorForMount");
-  });
-
-  test("file roots derive from the core mount table, not a UI copy", () => {
-    expect(surface).toContain("EXECUTOR_MOUNTS");
   });
 });

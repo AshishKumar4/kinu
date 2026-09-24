@@ -1,5 +1,6 @@
 import { deleteCloudCredential, listCloudCredentials } from '../cloud-api';
-import { bumpProviderRevision, loadConfigFile, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
+import { bumpProviderRevision, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
+import { readDefaultTier } from '../profiles';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { readProviderConnections } from './provider-connect';
 import { canonicalProviderName, connectOptions, connectProviderOnConsole } from './setup';
@@ -122,7 +123,7 @@ function deleteKey(
   return true;
 }
 
-/** A default model left pointing at a disconnected provider is the trap `kinu create` warns about. */
+/** A default left on a disconnected provider fails every unpinned turn. */
 const MODEL_SPEC_PREFIXES = new Map<ProviderName, readonly string[]>([
   ['codex', ['codex/']],
   ['openai', ['openai/']],
@@ -151,7 +152,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
     const command = provider === 'claude' ? 'claude logout' : 'opencode auth logout';
     console.log(`${WARN('!')} Kinu stores no ${tool} credential; it uses your ${tool} sign-in.`);
     console.log(DIM(`  Sign out of ${tool} itself: ${command}`));
-    clearDefaultModelFor(provider);
+    warnDefaultModelFor(provider);
     // Kinu holds nothing here, but a resident session must re-probe that tool's login.
     bumpProviderRevision();
 
@@ -184,7 +185,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
 
   if (!removed) console.log(`${WARN('!')} ${provider} was not connected. Nothing to remove.`);
 
-  clearDefaultModelFor(provider);
+  warnDefaultModelFor(provider);
   // Published even when no row was found, so a resident session stops offering a revoked provider.
   bumpProviderRevision();
 
@@ -214,20 +215,19 @@ async function disconnectAccountProvider(name: string): Promise<void> {
 
   await deleteCloudCredential(cloud.origin, cloud.token, credKey);
   console.log(`${OK('✓')} Removed the ${ACCENT(name)} credential from your Kinu account.`);
-  clearDefaultModelPrefixes([`${name}/`]);
+  warnDefaultModelPrefixes([`${name}/`]);
   bumpProviderRevision();
 }
 
-function clearDefaultModelFor(provider: ProviderName): void {
-  clearDefaultModelPrefixes(MODEL_SPEC_PREFIXES.get(provider) ?? []);
+function warnDefaultModelFor(provider: ProviderName): void {
+  warnDefaultModelPrefixes(MODEL_SPEC_PREFIXES.get(provider) ?? []);
 }
 
-function clearDefaultModelPrefixes(prefixes: readonly string[]): void {
-  const current = loadConfigFile().model;
+function warnDefaultModelPrefixes(prefixes: readonly string[]): void {
+  const current = readDefaultTier()?.model;
 
   if (current === undefined || !prefixes.some((prefix) => current.startsWith(prefix))) return;
-  updateConfigFile((config) => { delete config.model; });
-  console.log(DIM(`  Cleared the default model (${current}).`));
+  console.log(`${WARN('!')} The default model ${current} runs on it; pick another under Defaults on kinu's home screen.`);
 }
 
 function maybeProvider(value: string): ProviderName | undefined {

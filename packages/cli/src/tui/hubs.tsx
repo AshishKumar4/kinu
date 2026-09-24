@@ -4,10 +4,13 @@ import { tierIdsOf,
   type ProfileCatalogEnvelope,
   type ResolvedTurnProfile,
   type RoleId,
+  type SubordinateRosterEntry,
 } from '@kinu.run/core';
+import type { ScrollBoxRenderable } from '@opentui/core';
 import { agentWorkspaceKey } from '../agent-list';
-import type { TuiAgentSummary } from './tui-shell';
+import type { TuiAgentStatus, TuiAgentSummary, TuiSubordinate } from './tui-shell';
 import { agentDisplayLabel } from '@kinu.run/core';
+import { MessageList, type DisplayMessage } from './messages';
 import { useTuiTheme, type TuiThemeColors } from './theme';
 
 export type TuiHubView = 'agents' | 'roles' | 'tiers';
@@ -24,7 +27,13 @@ export interface TuiAgentHubEntry {
   readonly workspace: string;
   readonly task?: string;
   readonly current?: boolean;
+  /** Set only where its conversation can be read. */
+  readonly path?: readonly string[];
 }
+
+type HubEntryDraft = { -readonly [Key in keyof TuiAgentHubEntry]: TuiAgentHubEntry[Key] };
+
+type SubordinateDraft = { -readonly [Key in keyof TuiSubordinate]: TuiSubordinate[Key] };
 
 const AGENT_KIND_LABEL = {
   main: 'main',
@@ -37,6 +46,7 @@ export function buildAgentHubEntries(input: {
   items: readonly TuiAgentSummary[];
   current: { name: string; mode: 'local' | 'cloud' };
   currentEntry: TuiAgentHubEntry;
+  subordinates: readonly TuiSubordinate[];
   projectRoot: string;
 }): TuiAgentHubEntry[] {
   const { items, current, currentEntry, projectRoot } = input;
@@ -50,7 +60,30 @@ export function buildAgentHubEntries(input: {
     ? items.filter((item) => item.mode === 'local' && agentWorkspaceKey(item, projectRoot) === groupKey)
     : alone;
 
-  if (members.length === 0) return [currentEntry];
+  const nestedUnder = (parentId: string, own: boolean, workspace: string, subordinates: readonly TuiSubordinate[]) =>
+    subordinates.map((subordinate): TuiAgentHubEntry => {
+      const row: HubEntryDraft = {
+        id: `${parentId}/${subordinate.id}`,
+        label: agentDisplayLabel({ name: subordinate.id, label: subordinate.label }),
+        kind: 'subordinate',
+        status: subordinate.status,
+        workspace,
+      };
+
+      if (subordinate.task !== undefined) row.task = subordinate.task;
+
+      if (own) row.path = [subordinate.id];
+
+      // Role and tier render as one pair: knowing only half shows neither.
+      if (subordinate.roleId !== undefined && subordinate.tierId !== undefined) {
+        row.roleId = subordinate.roleId;
+        row.tierId = subordinate.tierId;
+      }
+
+      return row;
+    });
+
+  if (members.length === 0) return [currentEntry, ...nestedUnder(currentEntry.id, true, currentEntry.workspace, input.subordinates)];
 
   const workspace = current.mode === 'local'
     ? (currentRow?.workspaceId ?? currentEntry.workspace)
@@ -70,22 +103,7 @@ export function buildAgentHubEntries(input: {
           workspace,
         };
 
-    const nested = (member.subordinates ?? []).map((subordinate): TuiAgentHubEntry => {
-      const base = {
-        id: `${member.mode}:${member.name}/${subordinate.id}`,
-        label: agentDisplayLabel({ name: subordinate.id, label: subordinate.label }),
-        kind: 'subordinate',
-        status: subordinate.status,
-        workspace,
-      } satisfies TuiAgentHubEntry;
-
-      // Role and tier render as one pair: knowing only half shows neither.
-      if (subordinate.roleId === undefined || subordinate.tierId === undefined) return base;
-
-      return { ...base, roleId: subordinate.roleId, tierId: subordinate.tierId };
-    });
-
-    return [row, ...nested];
+    return [row, ...nestedUnder(`${member.mode}:${member.name}`, own, workspace, own ? input.subordinates : (member.subordinates ?? []))];
   });
 }
 
@@ -98,7 +116,38 @@ export interface TuiProfileHubData {
 
 export interface TuiHubData {
   readonly agents: readonly TuiAgentHubEntry[];
+  readonly subordinates: readonly TuiSubordinate[];
+  readonly subordinatesError?: string;
   readonly profile: TuiProfileHubData;
+}
+
+const ROSTER_STATUS = {
+  idle: 'idle',
+  working: 'running',
+  awaiting_input: 'needs-you',
+} as const satisfies Record<Exclude<SubordinateRosterEntry['status'], 'dismissed'>, TuiAgentStatus>;
+
+export function subordinatesFromRoster(entries: readonly SubordinateRosterEntry[]): TuiSubordinate[] {
+  return entries.flatMap((entry): TuiSubordinate[] => {
+    if (entry.status === 'dismissed' || entry.deleteRequested) return [];
+    const seed = entry.birth?.seed;
+
+    // A finished birth drops its seed.
+    const subordinate: SubordinateDraft = {
+      id: entry.name,
+      label: seed?.displayName.trim() ? seed.displayName : entry.name,
+      status: ROSTER_STATUS[entry.status],
+    };
+
+    if (entry.currentTask !== null) subordinate.task = entry.currentTask;
+
+    if (seed?.tier !== undefined) {
+      subordinate.roleId = seed.role;
+      subordinate.tierId = seed.tier;
+    }
+
+    return [subordinate];
+  });
 }
 
 const HUB_TITLES = { agents: 'Agent Hub', roles: 'Role Hub', tiers: 'Tier Hub' } as const;
@@ -122,6 +171,7 @@ export function HubOverlay(props: {
   readonly height: number;
   /** Absent without `onNewAgent`. */
   readonly newAgentHint?: string;
+  readonly selectedAgentId?: string | null;
 }) {
   const { colors } = useTuiTheme();
   const panelWidth = Math.min(Math.max(34, Math.floor(props.width * 0.72)), 88, Math.max(1, props.width - 2));
@@ -157,7 +207,7 @@ export function HubOverlay(props: {
         <span fg={props.view === 'tiers' ? colors.intent.accent : colors.text.muted}>Tiers</span>
       </text>
       {props.view === 'agents' && (
-        <AgentHubRows data={props.data} newAgentHint={props.newAgentHint} />
+        <AgentHubRows data={props.data} newAgentHint={props.newAgentHint} selectedAgentId={props.selectedAgentId ?? null} />
       )}
       {props.view === 'roles' && <RoleHubRows data={props.data.profile} />}
       {props.view === 'tiers' && <TierHubRows data={props.data.profile} />}
@@ -165,9 +215,10 @@ export function HubOverlay(props: {
   );
 }
 
-function AgentHubRows({ data, newAgentHint }: {
+function AgentHubRows({ data, newAgentHint, selectedAgentId }: {
   readonly data: TuiHubData;
   readonly newAgentHint?: string | undefined;
+  readonly selectedAgentId: string | null;
 }) {
   const { colors } = useTuiTheme();
 
@@ -202,7 +253,7 @@ function AgentHubRows({ data, newAgentHint }: {
         <box key={workspace.name} flexDirection="column" style={{ marginBottom: 1 }}>
           <text><span fg={colors.text.muted}>{workspace.name}</span></text>
           {workspace.agents.map((agent) => (
-            <box key={agent.id} flexDirection="column" style={{ backgroundColor: colors.background.recessed, paddingLeft: 1, paddingRight: 1 }}>
+            <box key={agent.id} flexDirection="column" style={{ backgroundColor: agent.id === selectedAgentId ? colors.background.selection : colors.background.recessed, paddingLeft: 1, paddingRight: 1 }}>
               <text>
                 {agent.kind !== 'main' && <span fg={colors.border.strong}>└ </span>}
                 <span fg={statusColor(agent.status, colors)}>{agent.status === 'running' ? '● ' : '○ '}</span>
@@ -214,6 +265,12 @@ function AgentHubRows({ data, newAgentHint }: {
           ))}
         </box>
       ))}
+      {data.subordinatesError !== undefined && (
+        <text><span fg={colors.intent.danger}>{data.subordinatesError}</span></text>
+      )}
+      {data.agents.some((agent) => agent.kind === 'subordinate') && (
+        <text><span fg={colors.text.muted}>↑↓ choose · Enter opens a subagent's conversation</span></text>
+      )}
       {hint}
     </box>
   );
@@ -266,11 +323,75 @@ function TierHubRows({ data }: { readonly data: TuiProfileHubData }) {
           </box>
         );
       })}
-      <text><span fg={colors.text.muted}>A tier is a model and an effort you named. /model and /effort change the default tier.</span></text>
+      <text><span fg={colors.text.muted}>A tier is a model and an effort you named. /model and /effort set this workspace's own.</span></text>
     </box>
   );
 }
 
+export interface TuiSubagentChat {
+  readonly name: string;
+  readonly label: string;
+  /** Null while loading. */
+  readonly messages: DisplayMessage[] | null;
+  readonly error: string | null;
+}
+
+export function SubagentChatOverlay(props: {
+  readonly chat: TuiSubagentChat;
+  readonly width: number;
+  readonly height: number;
+  readonly scrollRef: (value: ScrollBoxRenderable | null) => void;
+}) {
+  const { colors } = useTuiTheme();
+  const { chat } = props;
+  const panelWidth = Math.max(1, Math.min(120, props.width - 2));
+  const panelHeight = Math.max(3, props.height - 2);
+  const note = (fg: string, text: string) => <text><span fg={fg}>{text}</span></text>;
+  let body = note(colors.text.muted, 'Reading its conversation…');
+
+  if (chat.error !== null) body = note(colors.intent.danger, chat.error);
+  else if (chat.messages?.length === 0) body = note(colors.text.muted, 'No messages yet.');
+  else if (chat.messages !== null) {
+    body = (
+      <scrollbox
+        ref={props.scrollRef}
+        stickyScroll={true}
+        stickyStart="bottom"
+        style={{
+          flexGrow: 1,
+          rootOptions: { backgroundColor: colors.background.overlay },
+          viewportOptions: { backgroundColor: colors.background.overlay },
+          contentOptions: { backgroundColor: colors.background.overlay },
+        }}
+      >
+        <MessageList messages={chat.messages} />
+      </scrollbox>
+    );
+  }
+
+  return (
+    <box
+      flexDirection="column"
+      style={{
+        position: 'absolute',
+        zIndex: 72,
+        top: 1,
+        left: Math.max(0, Math.floor((props.width - panelWidth) / 2)),
+        width: panelWidth,
+        height: panelHeight,
+        border: true,
+        borderStyle: 'rounded',
+        borderColor: colors.border.strong,
+        backgroundColor: colors.background.overlay,
+        paddingLeft: 1,
+        paddingRight: 1,
+      }}
+      title={`${agentDisplayLabel({ name: chat.name, label: chat.label })} · subagent · ↑↓ scroll · Esc back`}
+    >
+      {body}
+    </box>
+  );
+}
 
 function statusColor(status: TuiAgentHubEntry['status'], colors: TuiThemeColors): string {
   if (status === 'running') return colors.intent.accent;

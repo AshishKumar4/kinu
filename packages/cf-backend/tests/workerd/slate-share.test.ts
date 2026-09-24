@@ -84,3 +84,62 @@ it('a shared slate still serves after the object that ran it is evicted', async 
 
   expect(await probe().viewerFetch(created.share.handle, CLAIM)).toEqual({ status: 200, body: 'share-ok' });
 });
+
+it('a mutating member is granted by approval only', async () => {
+  const probe = subject('live-approved');
+  await probe.start();
+
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
+    await probe.share([{ binding: 'FILES', member: 'writeFile' }])).value);
+
+  // The unapproved share above refuses the same call: the approval is the grant.
+  expect(await probe.viewerBatch(created.share.handle, CLAIM)).toEqual({ probe: 'fixture-bytes', mutateError: 'mutate answered' });
+});
+
+it("revoking a share refuses the next call of a session it admitted", async () => {
+  const probe = subject('live-revoke-mid');
+  await probe.start();
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
+
+  const session = await probe.viewerSocketAcross(created.share.handle, CLAIM, created.share.id, 'revoke');
+
+  expect(session.before).toBe('fixture-bytes');
+  // The revoke stops the slate, so the session's own next call dies with it; one already in flight is refused.
+  expect(session.after).not.toBe('fixture-bytes');
+  expect(JSON.parse(session.late)).toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('no longer shared') });
+});
+
+it('a share past its daily spend refuses calls as budget and shows paused', async () => {
+  const probe = subject('live-spent');
+  await probe.start();
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
+
+  const session = await probe.viewerSocketAcross(created.share.handle, CLAIM, created.share.id, 'spend');
+
+  expect(session).toMatchObject({ before: 'fixture-bytes', after: expect.stringContaining('paused for today') });
+
+  const shares = v.parse(v.object({ ok: v.literal(true), value: v.array(v.looseObject({ id: v.string(), paused: v.optional(v.boolean()) })) }),
+    await probe.liveShares()).value;
+
+  expect(shares.find((row) => row.id === created.share.id)?.paused).toBe(true);
+  const rows = v.parse(Requests, await probe.requests(created.share.id)).value;
+  expect(rows[0]?.calls.map((call) => call.ok)).toEqual([true, false, false]);
+});
+
+it('an app hop under a share runs the slate it names and is audited under its effect', async () => {
+  const probe = subject('live-hop');
+  await probe.start();
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
+
+  expect(created.share.grant.slates).toContain('digest');
+  expect(await probe.viewerHop(created.share.handle, CLAIM)).toBe('"digest-ok"');
+  const rows = v.parse(Requests, await probe.requests(created.share.id)).value;
+  expect(rows[0]?.calls).toEqual([{ slate: 'board', binding: 'PEER', member: 'digest', effect: 'read', ok: true }]);
+});
+
+it('a blueprint import brings the code and runs none of it', async () => {
+  const probe = subject('blueprint-import');
+  await probe.start();
+
+  expect(await probe.importBlueprint()).toEqual({ fork: expect.not.stringMatching(/^board$/u), running: 0 });
+});

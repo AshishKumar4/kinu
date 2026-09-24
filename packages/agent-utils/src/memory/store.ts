@@ -33,7 +33,7 @@ export interface MemoryIndexDelta {
 	deletedIds: string[];
 }
 
-/** The `memory_chunks` FTS5 tables; standalone so workspace schema init can create them without a store. */
+/** Standalone so workspace schema init needs no store. */
 export function initMemoryChunkTables(sql: SqlExecutor): void {
 	void sql`
 		CREATE TABLE IF NOT EXISTS memory_chunks (

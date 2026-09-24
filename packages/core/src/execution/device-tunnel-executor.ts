@@ -37,12 +37,12 @@ const NOT_CONNECTED =
   'that walks them through linking a machine (Devices / Executors tab, or `kinu connect`). ' +
   'Nothing runs here until they do, so carry on with what does not need their machine.';
 
-/** True by construction of this executor's wiring; no answer from the machine could confirm or deny them. */
+/** True by this executor's wiring; the machine cannot confirm or deny them. */
 const STRUCTURAL: readonly ExecutorCapability[] = [
   'native_binary', 'shell', 'fs_owned', 'net_outbound', 'process_spawn',
 ] as const;
 
-/** Only the machine can answer these, including two nobody can answer (always unmeasured, never silently absent). */
+/** Only the machine can answer these; two are always unmeasured, never silently absent. */
 const ASKED_OF_THE_MACHINE: readonly ExecutorCapability[] = [
   ...TOOLCHAIN_PROBED_CAPABILITIES,
   ...TOOLCHAIN_UNPROBEABLE.map(([capability]) => capability),
@@ -135,6 +135,18 @@ const DeviceExecResultSchema = v.object({
 
 const DeviceListResultSchema = v.array(JsonValueSchema);
 
+/** A daemon from before paging answers one array. */
+const DeviceListPageSchema = v.union([
+  DeviceListResultSchema,
+  v.object({ entries: DeviceListResultSchema, next: v.nullable(v.number()) }),
+]);
+
+/** Under the 32 MiB a Worker receives per WebSocket message or RPC, even as base64 in JSON. */
+const DEVICE_READ_CHUNK_BYTES = 8 * 1024 * 1024;
+
+/** 10,000 names at NAME_MAX still fit one answer. */
+const DEVICE_LIST_PAGE_ENTRIES = 10_000;
+
 const DeviceStatSchema = v.nullable(v.object({
   size: v.number(),
   mtimeMs: v.number(),
@@ -150,7 +162,7 @@ function parseInput<TSchema extends v.GenericSchema>(
   return result.success ? result.output : undefined;
 }
 
-/** Permissive object so a `{ signal }`-only caller does not drop the device option on a shape mismatch. */
+/** Permissive, so a `{ signal }`-only caller keeps its device option. */
 const DeviceSelectionSchema = v.union([
   v.string(),
   v.object({ device: v.optional(v.string()) }),
@@ -192,7 +204,7 @@ export function createDeviceTunnelExecutor(
     const identity: Partial<Pick<ExecutorStatus, 'label' | 'granted' | 'sandbox'>> = {};
 
     if (named) identity.label = named.name;
-    // Per-device answers are read only when exactly one machine is live; otherwise the hub's top-level answer stands.
+    // Per-device answers count only when exactly one machine is live.
     const perDeviceReach = live.length === 1 ? live[0].granted : undefined;
     const granted = perDeviceReach ?? s.workspaceGranted;
 
@@ -200,7 +212,7 @@ export function createDeviceTunnelExecutor(
 
     if (s.sandbox !== undefined) identity.sandbox = s.sandbox;
 
-    // Reach, not liveness: a connected machine without this workspace's grant raises the owner's card first.
+    // Reach, not liveness: a machine without this workspace's grant raises the owner's card first.
     if (s.connected && granted === false) {
       return {
         configured: true, available: false, active: false, status: 'idle',
@@ -222,7 +234,7 @@ export function createDeviceTunnelExecutor(
     return { configured: false, available: false, active: false, status: 'not_configured', ...identity };
   };
 
-  // Derived per read (a device can install a toolchain mid-session), memoised on the answer it came from.
+  // Derived per read: a device can install a toolchain mid-session.
   let memo: {
     from: DeviceToolchain | null;
     capabilities: ReadonlySet<ExecutorCapability>;
@@ -233,7 +245,7 @@ export function createDeviceTunnelExecutor(
     const answer = freshDeviceToolchain(transport.status().toolchain, Date.now());
 
     if (memo?.from === answer) return memo;
-    // Inside the answer's scope: measured (present or absent). Outside it, and `docker`/`gpu` always: unmeasured.
+    // Inside the answer's scope: measured. Outside it, and `docker`/`gpu` always: unmeasured.
     const measured = answer?.asked ?? [];
     memo = {
       from: answer,
@@ -263,11 +275,11 @@ export function createDeviceTunnelExecutor(
 
         if (device.kind === 'refusal') return device.refusal;
         const deviceId = device.deviceId;
-        // Minted before sending: the daemon registers the process group under this id, so a cancel or detach can name it.
+        // Minted before sending, so a cancel or detach can name the process group.
         const requestId = nextDeviceRequestId();
         const ownership = readDeviceOwnershipContext({ context: args[1] });
         ownership.report?.(requestId);
-        // Read per call: a detached scope owns this command from the insert, avoiding a handover race.
+        // Read per call: a detached scope owns this command from the insert.
         const backgroundJobId = ownership.owner?.() ?? null;
         const execOpts: DeviceExecOptions = { timeoutMs: 0, requestId };
 
@@ -277,7 +289,7 @@ export function createDeviceTunnelExecutor(
 
         try {
           const result = await raceAbort(
-            // No transport deadline for arbitrary user work; abort signal, turn cancellation and tunnel liveness still bound it.
+            // No transport deadline: abort, turn cancellation and tunnel liveness still bound it.
             () => rpc('exec', [command], execOpts),
             signal,
             EXEC_NOT_STARTED,
@@ -520,24 +532,25 @@ function filesForCall(
   return { kind: 'view', view: deviceFiles(transport, consent, resolved.deviceId) };
 }
 
-/**
- * Device file view scope: only the directory named at `kinu connect` while Sandbox is on. No `$HOME` fallback (it holds
- * `~/.kinu/config.json`, `~/.ssh`). `unconfined` is the same switch the shell sandbox reads.
- */
+/** A device file view's reach: `unconfined` (Sandbox off), `sandboxed` (the consented directory and the agent's own
+ *  tmp, which the daemon maps `/tmp` and `/var/tmp` to), `root` (the consented directory). Never `$HOME`. */
+export type DeviceFileScope = 'unconfined' | 'sandboxed' | 'root';
+
 export interface DeviceFileConsent {
   /** Consented directory on the named machine, or null when it reported none. */
   consentedRoot(deviceId?: string): Promise<string | null>;
   /** That machine's HELLO-reported home, or null. Where the view opens without a consented dir; never a scope. */
   deviceHome(deviceId?: string): Promise<string | null>;
-  /** Sandbox switch off on that device: lifts the path scope as it lifts the shell's. */
-  unconfined(deviceId?: string): Promise<boolean>;
+  scope(deviceId?: string): Promise<DeviceFileScope>;
 }
 
 const ALWAYS_CONSENTED: DeviceFileConsent = {
   consentedRoot: async () => '/',
   deviceHome: async () => '/',
-  unconfined: async () => true,
+  scope: async () => 'unconfined',
 };
+
+const AGENT_TMP_PATHS = ['/tmp', '/var/tmp'] as const;
 
 export type DeviceVFS = VFS & Pick<ExecutorProvider, 'homeDir'> & Pick<VfsNativeReads, 'readRange'>;
 
@@ -574,15 +587,19 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   };
 
   const guard = async (path: string, op: string): Promise<string | null> => {
-    if (await consent.unconfined(deviceId)) return null;
+    const scope = await consent.scope(deviceId);
+
+    if (scope === 'unconfined') return null;
+
+    if (scope === 'sandboxed' && AGENT_TMP_PATHS.some((tmp) => path === tmp || path.startsWith(`${tmp}/`))) return null;
     const root = await effectiveRoot();
 
     // A device that named no directory threw above rather than widening to `/`.
     if (!(path === root || path.startsWith(`${root}/`))) {
       throw makeVfsError(
         'EACCES',
-        `'${path}' is outside the consented device directory '${root}' — `
-        + 'the agent sees its own home plus the folders the owner consented, and nothing else. '
+        `'${path}' is outside the consented device directory '${root}' — the agent sees the folder the owner `
+        + `consented${scope === 'sandboxed' ? ' and its own /tmp' : ''}, and nothing else. `
         + `Ask the owner to consent that directory, ${op} '${path}'`,
         path,
       );
@@ -605,22 +622,43 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     return text;
   };
 
+  const readChunked = async (path: string, root: string | null, offset: number, length: number | null): Promise<Uint8Array> => {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+
+    for (;;) {
+      const asked = length === null ? DEVICE_READ_CHUNK_BYTES : Math.min(DEVICE_READ_CHUNK_BYTES, length - total);
+      const raw = await transport.rpc('readRange', [path, offset + total, asked, { root }], target);
+
+      if (raw === undefined || !isJsonObject(raw) || raw.encoding !== 'base64') {
+        throw makeVfsError('EIO', 'device returned an unreadable file range', path);
+      }
+
+      const chunk = base64ToBytes(v.parse(v.string(), raw.content));
+      chunks.push(chunk);
+      total += chunk.length;
+
+      if (chunk.length < asked || total === length) break;
+    }
+
+    if (chunks.length === 1) return chunks[0];
+    const bytes = new Uint8Array(total);
+    let at = 0;
+
+    for (const chunk of chunks) {
+      bytes.set(chunk, at);
+      at += chunk.length;
+    }
+
+    return bytes;
+  };
+
   return {
     homeDir: openingDir,
     async readFile(path, opts) {
-      const root = await guard(path, 'open');
-      const raw = await transport.rpc('readFile', [path, { encoding: 'base64', root }], target);
+      const bytes = await readChunked(path, await guard(path, 'open'), 0, null);
 
-      if (raw !== undefined && isJsonObject(raw) && raw.encoding === 'base64') {
-        const content = v.parse(v.string(), raw.content);
-        const bytes = base64ToBytes(content);
-
-        return opts?.encoding === 'utf8' ? new TextDecoder().decode(bytes) : bytes;
-      }
-
-      const text = v.parse(v.string(), raw);
-
-      return opts?.encoding === 'utf8' ? text : new TextEncoder().encode(text);
+      return opts?.encoding === 'utf8' ? new TextDecoder().decode(bytes) : bytes;
     },
 
     async readRange(path, offset, length) {
@@ -628,14 +666,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
         throw makeVfsError('EIO', 'range offset and length must be positive safe integers', path);
       }
 
-      const root = await guard(path, 'open');
-      const raw = await transport.rpc('readRange', [path, offset, length, { root }], target);
-
-      if (raw === undefined || !isJsonObject(raw) || raw.encoding !== 'base64') {
-        throw makeVfsError('EIO', 'device returned an unreadable file range', path);
-      }
-
-      return base64ToBytes(v.parse(v.string(), raw.content));
+      return readChunked(path, await guard(path, 'open'), offset, length);
     },
 
     async writeFile(path, data) {
@@ -659,7 +690,21 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
 
     async readdir(path) {
       const root = await guard(path, 'scandir');
-      const entries = v.parse(DeviceListResultSchema, await transport.rpc('listFiles', [path, { root }], target));
+      const entries: JsonValue[] = [];
+
+      for (let offset: number | null = 0; offset !== null;) {
+        const page: v.InferOutput<typeof DeviceListPageSchema> = v.parse(DeviceListPageSchema, await transport.rpc(
+          'listFiles', [path, { root, offset, limit: DEVICE_LIST_PAGE_ENTRIES }], target,
+        ));
+
+        if (Array.isArray(page)) {
+          entries.push(...page);
+          offset = null;
+        } else {
+          entries.push(...page.entries);
+          offset = page.next;
+        }
+      }
 
       return entries.map((entry) => {
         if (isJsonObject(entry)) {

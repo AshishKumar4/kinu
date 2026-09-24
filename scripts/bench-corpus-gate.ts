@@ -9,16 +9,14 @@
  * aborts a whole `compare`/`gain`/`validate` run mid-flight with no partial report
  * (scripts/bench.ts:377 vs :390).
  *
- * WHY THIS IS ITS OWN GATE AT PUSH TIER RATHER THAN A TEST AT CI. The check is
- * 159 `git apply --check` invocations, measured at 0.15s over the whole corpus —
- * below `preflight` (0.12s) in the same order and two orders below `bun run
- * check`. Held at ci, the author of the breaking refactor learns after pushing,
- * which is exactly how all 16 re-anchors to date happened: a separate `bench:
- * re-anchor …` commit landing after the change that caused it. At commit tier the
- * breaking change fails on the machine that made it, before the code leaves it,
- * while the person who moved the code is still holding it. Push rather than commit
- * only because the commit tier's 15s budget has 0.5s of honest headroom and a stale
- * patch is fully recoverable one tier later.
+ * WHY THIS IS ITS OWN GATE AT COMMIT TIER RATHER THAN A TEST AT CI. The check is
+ * one `git apply --check` per seeded patch, measured at 0.34s over the whole
+ * corpus (2026-09-23). Held at ci, the author of the breaking refactor learns
+ * after pushing, which is exactly how all 16 re-anchors to date happened: a
+ * separate `bench: re-anchor …` commit landing after the change that caused it.
+ * Held at push, comment-only commits on 2026-09-22 broke 37 seeded patches and
+ * committed cleanly. At commit tier the breaking change fails on the commit that
+ * makes it, while the person who moved the code is still holding it.
  *
  * WHY NOT LOOSEN THE APPLY INSTEAD. Measured against each re-anchor commit's own
  * parent tree, over the 15 historical breakages: `git apply --3way` merges

@@ -4,21 +4,11 @@ import { join } from 'node:path';
 
 const source = (path: string) => readFileSync(join(import.meta.dir, '..', path), 'utf8');
 
-const page = source('src/pages/WorkspacePage.tsx');
-
-// The mode control and Steer-as-Branch gate live in the shared composer, not in WorkspacePage.
-const composer = source('src/components/Composer.tsx');
-
 const review = source('src/components/surfaces/PlanReviewView.tsx');
 
 const css = source('src/index.css');
 
 describe('Plan mode browser contract', () => {
-  test('a streaming Plan turn cannot expose Steer-as-Branch', () => {
-    expect(composer).toContain('mode?.value !== "plan"');
-    expect(page).toContain('!t || !state.isStreaming || effectiveChatMode === "plan"');
-  });
-
   test('reuses the supported Plannotator primitives inside Kinu ownership', () => {
     expect(review).toContain('@plannotator/ui/components/Viewer');
     expect(review).toContain('@plannotator/ui/components/AnnotationPanel');

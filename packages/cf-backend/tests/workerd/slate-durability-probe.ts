@@ -44,9 +44,11 @@ type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 export class ObservedOrchestrator extends ProductionOrchestrator {
   constructor(ctx: AgentContext, env: ProbeEnv) {
     super(ctx, env);
+    // The production constructor already sealed these subclass methods away as own properties.
     Reflect.deleteProperty(this, 'portReservations');
     Reflect.deleteProperty(this, 'runProgram');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram']);
+    Reflect.deleteProperty(this, 'forgetActivation');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation']);
   }
 
   async portReservations(): Promise<DurabilityReservation[]> {
@@ -72,6 +74,17 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
     return JSON.stringify(await execute({ code }, { toolCallId: 'slate-program', messages: [] }) ?? null);
   }
+
+  /**
+   * What the next activation starts from when the platform evicts this one but keeps its facets: the
+   * hosted workspace and the slate host are built again, while `ctx.facets` still holds the running
+   * application. Neither is destroyed, since destroying would end the facets, which is not what the
+   * platform does.
+   */
+  forgetActivation(): void {
+    Reflect.set(this, '_workspace', undefined);
+    Reflect.set(this, '_slates', undefined);
+  }
 }
 
 export { ObservedOrchestrator as OrchestratorAgent };
@@ -83,7 +96,7 @@ export { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 /** `slateAs` is absent on purpose: `Rpc.Result` over its recursive `JsonValue` is TS2589; the probe
  *  reaches it through `workspaceOwner()`, as production's actor does. */
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor'> & Pick<ObservedOrchestrator, 'portReservations' | 'runProgram'>;
+  'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor'> & Pick<ObservedOrchestrator, 'portReservations' | 'runProgram' | 'forgetActivation'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
  *  the fixture read. */
@@ -146,7 +159,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const target = await this.workspaceTarget(input.workspace);
 
     await this.claimWorkspace(target, input.workspace, input.owner);
-    const root = `/home/user/slates/${input.id}`;
+    const root = `/home/main/slates/${input.id}`;
 
     await this.writeSlateFile(target, `${root}/package.json`, JSON.stringify({
       main: 'server.ts',
@@ -154,6 +167,8 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     }));
     await this.writeSlateFile(target, `${root}/server.ts`, [
       'import { SlateObject } from "kinu:slate";',
+      // One token per evaluation of this module: a restarted application answers with a new one.
+      'let evaluation;',
       'export class Slate extends SlateObject {',
       '  async ping() {',
       '    this.sql.exec("CREATE TABLE IF NOT EXISTS probe (n INTEGER NOT NULL)");',
@@ -161,6 +176,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
       '    const rows = this.sql.exec("SELECT count(*) AS n FROM probe").toArray()[0].n;',
       '    return { rows };',
       '  }',
+      '  async evaluation() { evaluation ??= crypto.randomUUID(); return evaluation; }',
       `  async fetch() { return new Response(${JSON.stringify(input.body)}); }`,
       '}',
     ].join('\n'));
@@ -189,7 +205,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const target = await this.workspaceTarget(input.workspace);
 
     await this.claimWorkspace(target, input.workspace, input.owner);
-    const root = '/home/user/slates/whiteboard';
+    const root = '/home/main/slates/whiteboard';
 
     await this.writeSlateFile(target, `${root}/package.json`, JSON.stringify({ main: 'server.ts', slate: { title: 'Whiteboard' } }));
     await this.writeSlateFile(target, `${root}/server.ts`, [
@@ -210,6 +226,10 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
   async portReservations(workspace: string): Promise<DurabilityReservation[]> {
     return (await this.workspaceTarget(workspace)).portReservations();
+  }
+
+  async forgetActivation(workspace: string): Promise<void> {
+    await (await this.workspaceTarget(workspace)).forgetActivation();
   }
 
   /** A `null` answer is the edge declining the hostname, a fixture fault, so it throws. */

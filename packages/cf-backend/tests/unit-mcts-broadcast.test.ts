@@ -5,11 +5,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import {
-  orchestratorHarness,
-  type ActorHarness,
-  type HarnessOrchestratorAgent,
-} from './helpers/actor-harness';
+import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceMainActor } from './helpers/actor-harness';
 import { present } from '@kinu.run/test-utils';
 
 const BroadcastSchema = v.object({
@@ -66,7 +62,7 @@ function seedNode(
     `INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation, code_used, depth, visits, value, status, created_at)
      VALUES (?, ?, ?, ?, ?, 'action', ?, NULL, ?, ?, 0.5, 'open', ?)`,
   ).run(
-    harness.agent.observeRuntime().actor.actorId,
+    workspaceMainActor(harness.db).actorId,
     node.id,
     node.parent ?? null,
     node.root,

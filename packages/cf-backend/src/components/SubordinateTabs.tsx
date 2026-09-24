@@ -32,13 +32,15 @@ interface SubordinateTabsProps {
 }
 
 function StatusMark({ subordinate }: { subordinate: SubordinateRosterEntry }) {
+  const yields = "transition-opacity group-hover/tab:opacity-0 group-has-[[data-tab-delete]:focus-visible]/tab:opacity-0";
+
   if (subordinate.status === "awaiting_input") {
-    return <span className="rounded-sm px-1.5 py-0.5 p-badge-warning">input</span>;
+    return <span className={`rounded-sm px-1.5 py-0.5 p-badge-warning ${yields}`}>input</span>;
   }
 
   return (
     <span
-      className={`size-1.5 shrink-0 rounded-full ${subordinate.status === "working" ? "p-dot-success p-dot-pulse" : "p-dot-neutral"}`}
+      className={`size-1.5 shrink-0 rounded-full ${subordinate.status === "working" ? "p-dot-success p-dot-pulse" : "p-dot-neutral"} ${yields}`}
       aria-label={subordinate.status === "working" ? "Working" : "Idle"}
     />
   );
@@ -73,7 +75,7 @@ export function SubordinateTabs({
             aria-current={!activeName ? "page" : undefined}
             className={`${tabCls} h-full px-3 ${!activeName ? "p-tab-active font-medium" : ""}`}
           >
-            <HouseIcon size={13} weight={!activeName ? "fill" : "regular"} />
+            <HouseIcon size={13} weight={!activeName ? "fill" : "regular"} className="-translate-y-px" />
             Main
           </Link>
           {employable.map((subordinate) => {
@@ -83,13 +85,14 @@ export function SubordinateTabs({
             return (
               <div key={subordinate.name} data-agent-tab={subordinate.name} className="group/tab relative shrink-0">
                 {active ? (
-                  <div aria-current="page" className={`${tabCls} p-tab-active h-full max-w-64 pl-3 pr-8 font-medium`}>
+                  <div aria-current="page" className={`${tabCls} p-tab-active h-full max-w-64 px-3 font-medium`}>
                     <InlineRenameTitle
                       title={title}
                       editValue={subordinate.displayName}
                       onRename={(displayName) => onRename(subordinate.name, displayName)}
                       subject="agent"
                       textClass={`p-t-control p-accent font-medium ${subordinate.displayName ? "" : "italic"}`}
+                      pencil={false}
                     />
                     <StatusMark subordinate={subordinate} />
                   </div>
@@ -97,9 +100,10 @@ export function SubordinateTabs({
                   <Link
                     to={`${mainPath}/agents/${subordinate.name}`}
                     title={subordinate.currentTask ?? title}
-                    className={`${tabCls} h-full max-w-52 pl-3 pr-8 p-text-3`}
+                    className={`${tabCls} h-full max-w-52 px-3 p-text-3`}
                   >
                     <span className={`truncate ${subordinate.displayName ? "" : "italic p-text-3"}`}>{title}</span>
+                    <StatusMark subordinate={subordinate} />
                   </Link>
                 )}
                 <button
@@ -126,7 +130,8 @@ export function SubordinateTabs({
                     setDismissError(null);
                     setDismissTarget(subordinate);
                   }}
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-1 opacity-0 p-text-3 transition-all hover:p-danger focus-visible:opacity-100 group-hover/tab:opacity-70 disabled:opacity-40"
+                  data-tab-delete
+                  className="absolute right-[7.5px] top-[calc(50%-1px)] -translate-y-1/2 rounded-sm p-0.5 opacity-0 p-text-3 transition-all hover:p-danger focus-visible:opacity-100 group-hover/tab:opacity-70 disabled:opacity-40"
                   title={subordinate.createdBy === "user" ? `Delete ${title}` : `Dismiss ${title}`}
                   aria-label={subordinate.createdBy === "user" ? `Delete ${title}` : `Dismiss ${title}`}
                 >
@@ -148,7 +153,7 @@ export function SubordinateTabs({
               }
             }}
             disabled={creating}
-            className="p-btn-ghost my-1 ml-2 flex size-7 shrink-0 self-center items-center justify-center disabled:opacity-50"
+            className="p-btn-ghost mb-0.5 ml-2 flex size-7 shrink-0 self-center items-center justify-center disabled:opacity-50"
             title={ADD_AGENT_LABEL}
             aria-label={ADD_AGENT_LABEL}
           >

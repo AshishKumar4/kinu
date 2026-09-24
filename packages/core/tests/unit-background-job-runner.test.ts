@@ -1204,8 +1204,8 @@ describe('recoveryBackoffMs sanitizes counts the curve cannot use', () => {
 
 test('a recovered Plan job cannot mutate project files through a Build-shaped callback', async () => {
   const { rt } = createTestRuntime();
-  const path = '/home/user/resumed.txt';
-  await rt.storage.vfs.mkdir('/home/user', { recursive: true });
+  const path = '/home/main/resumed.txt';
+  await rt.storage.vfs.mkdir('/home/main', { recursive: true });
   await rt.storage.vfs.writeFile(path, 'original');
   const file = buildBuiltinTools({ rt, history: storesFor(rt).history }).file;
 

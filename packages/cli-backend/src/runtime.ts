@@ -4,17 +4,18 @@
  * AGENTS.md) binds to `config.cwd` when set, else shares the in-SQLite tree.
  */
 
-import type { Database, SQLQueryBindings } from 'bun:sqlite';
+import type { Database } from 'bun:sqlite';
 import type {
-  AgentRuntime, ActorHandle, ActorReference, CraftStore as CoreCraftStore, LLM, ModelRouteResolution,
-  ResolvedTurnProfile, Shell,
+  AgentRuntime, ActorHandle, ActorReference, LLM, ModelRouteResolution,
+  ResolvedTurnProfile, Shell, ShellExecResult, OutputSpill, SpillOutcome,
 } from '@kinu.run/core';
 import type {
-  Schedule, Memory, VFS, VfsNativeReads, SqlExec, SqlExecutor, SqlValue, RawSqlExec, WorkspaceSchemaSql,
+  Schedule, Memory, VFS, VfsNativeReads, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql,
 } from '@kinu.run/core';
 import type { DeferredApprovalChannel, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
-import { mkdirSync, rmSync, chmodSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, rmSync, chmodSync, writeSync } from 'node:fs';
+import { constants as osConstants } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, headAgentName, subordinateAgentName, MAIN_AGENT, facetHomeProvisioner, agentAffinityKey,
@@ -23,7 +24,7 @@ import {
   createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
   DefaultExecutionRouter, createInlineExecutor,
-  withMountTable, standardMounts, readTailWithVfsOps,
+  withMountTable, standardMounts, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
   withApprovalGatedShell, holdsGrant,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount, skillsMount,
@@ -31,6 +32,7 @@ import {
   type AgentStores, type ChildContextResolver,
   type ModelCallSink, type ModelOperationSink, type NodeHomeHost, type NodeWorkspace,
   type WorkspaceActor,
+  BoundedOutput, COMMAND_OUTPUT_LIMITS, nanoid, SPILL_DIRS, unsandboxedCommandEnvironment,
 } from '@kinu.run/core';
 import {
   createWorkspace as createWorkspaceFilesystem,
@@ -47,16 +49,18 @@ import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { MemoryStore } from '@kinu.run/agent-utils';
-import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils';
+import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils';
 import { createSandboxedExecutor } from './executor';
 import { createHostCheckpoints } from './checkpoints';
 import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
 import { createCwdPlaneVFS } from './host-mount';
+import { inlineWorkspaceStorage, sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
 import { createSqlFiber, detectOrphanedFibers } from '@kinu.run/core';
-import { createBranchSpawner } from './branch-process';
+import { BRANCH_CREDENTIAL_ENV, createBranchSpawner } from './branch-process';
+import { dotenvLoadedNames } from './dotenv-provenance';
 import {
-  createLocalModelResolver, createLocalProviderLLM,
+  createLocalModelResolver, createLocalProviderLLM, PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV,
   type LocalModelResolver, type LocalProviderCredentials,
 } from './model-resolver';
 import {
@@ -65,9 +69,11 @@ import {
 } from './profile-authority';
 import type { LocalCodexAuthStore } from './codex-auth-store';
 import type { FileCheckpoints } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderCauseChain, toKinuError } from '@kinu.run/core/obs';
 import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalDatabasePath, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from './actor-identity';
 import * as v from 'valibot';
+
+const HARNESS_CREDENTIAL_ENV = [...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV, ...BRANCH_CREDENTIAL_ENV];
 
 interface CLIRuntimeOptions {
   dbPath: string;
@@ -135,45 +141,8 @@ export interface CLIRuntime extends AgentRuntime {
 
 export type LocalDb = Database;
 
-type WorkspaceSql = Parameters<typeof createWorkspaceFilesystem>[0]['sql'];
-
-type WorkspaceTransactions = Parameters<typeof createWorkspaceFilesystem>[0]['transactions'];
-
-interface NimbusSqlRow {
-  [column: string]: string | number | bigint | null | ArrayBuffer | ArrayBufferView;
-}
-
-interface LocalSqlRow {
-  [column: string]: string | number | boolean | null | ArrayBuffer | Uint8Array;
-}
-
-const sqlBindingSchema = v.union([
-  v.string(), v.number(), v.bigint(), v.boolean(), v.null(),
-  v.instance(ArrayBuffer), v.instance(Uint8Array),
-]);
-
-function bunSqlBinding(input: { value: unknown }): SQLQueryBindings {
-  const value = v.parse(sqlBindingSchema, input.value);
-
-  return value instanceof ArrayBuffer ? new Uint8Array(value) : value;
-}
-
 export function makeSql(db: Database): SqlExecutor {
-  const sql: SqlExecutor = function <T = unknown>(
-    strings: TemplateStringsArray,
-    ...values: SqlValue[]
-  ): T[] {
-    const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
-    // The filesystem binds BLOBs as ArrayBuffer (Cloudflare DO storage.sql's
-    // native type); bun:sqlite only binds TypedArrays, so coerce.
-    const bound = values.map((value) => bunSqlBinding({ value }));
-
-    // `all()` for every statement, as DO `storage.sql` does: `UPDATE … RETURNING`
-    // is a write that produces rows, so sniffing the verb would return `[]`.
-    return db.prepare<T, SQLQueryBindings[]>(query).all(...bound);
-  };
-
-  return sql;
+  return wrapDatabase(db).sql;
 }
 
 export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
@@ -184,32 +153,10 @@ export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
  *  Nimbus filesystem read as the kernel. */
 export function inspectionFiles(db: Database, cwd: string | null): Pick<VFS, 'readFile'> {
   if (cwd !== null) return createCwdPlaneVFS(cwd, undefined);
-  const vfs = new SqliteVFS(nimbusSql(db), localTransactions(db)).as(CRED_KERNEL);
+  const storage = inlineWorkspaceStorage(db);
+  const vfs = new SqliteVFS(storage.sql, storage.transactions).as(CRED_KERNEL);
 
   return { readFile: (path, opts) => Promise.resolve(opts?.encoding === undefined ? vfs.readFile(path) : vfs.readFileString(path)) };
-}
-
-export function nimbusSql(db: Database): WorkspaceSql {
-  const exec: WorkspaceSql['exec'] = (query, ...bindings) => {
-    const bound = bindings.map((value) => bunSqlBinding({ value }));
-    const stmt = db.prepare<NimbusSqlRow, SQLQueryBindings[]>(query);
-
-    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...bound);
-    stmt.run(...bound);
-
-    return [];
-  };
-
-  return { exec };
-}
-
-/** `bun:sqlite` transactions; a database without one runs non-atomically, stated rather than pretended. */
-export function localTransactions(db: Database): WorkspaceTransactions {
-  return {
-    storage: {
-      transactionSync: <T,>(callback: () => T): T => db.transaction(callback)(),
-    },
-  };
 }
 
 /**
@@ -221,27 +168,7 @@ const WORKSPACE_RUNTIMES: readonly RuntimePackage[] = [bashRuntime, cpythonRunti
 
 /** Positional-binding SQL; a Durable Object's `ctx.storage.sql` is this natively. */
 export function makeSqlExec(db: Pick<Database, 'prepare'>): SqlExec {
-  const exec: SqlExec['exec'] = (query, ...bindings) => {
-    const bound = bindings.map((value) => bunSqlBinding({ value }));
-    // Eager and `all()` regardless of verb, like `storage.sql.exec`.
-    const rows = db.prepare<LocalSqlRow, SQLQueryBindings[]>(query).all(...bound).map(toSqlRow);
-
-    return { toArray: () => rows };
-  };
-
-  return { exec };
-}
-
-function toSqlRow(row: LocalSqlRow) {
-  const output: Record<string, SqlValue> = {};
-
-  for (const [column, value] of Object.entries(row)) {
-    output[column] = value instanceof Uint8Array
-      ? new Uint8Array(value).buffer
-      : value;
-  }
-
-  return output;
+  return sqlStorageOver(db);
 }
 
 /** All onto one database, so no caller can pair a DDL handle with another file's reads. */
@@ -265,24 +192,6 @@ function adaptMemory(store: MemoryStore, vfs: VFS & Pick<VfsNativeReads, 'readRa
     },
     read: (path) => store.readFile(path),
     tail: (path, bytes) => readTailWithVfsOps(vfs, path, bytes),
-  };
-}
-
-/** The concrete store returns null for a miss; core uses undefined. */
-function adaptCraftStore(store: AgentUtilsCraftStore): CoreCraftStore {
-  return {
-    create(tool) {
-      store.create(tool);
-    },
-    update(name, patch) {
-      store.update(name, patch);
-    },
-    get(name) {
-      return store.get(name) ?? undefined;
-    },
-    delete(name) { store.delete(name); },
-    list() { return store.list(); },
-    search(query, limit = 10) { return store.search(query, limit); },
   };
 }
 
@@ -439,12 +348,11 @@ export function createCLIRuntime(
     codexConfigPath: config.codexConfigPath,
   });
 
-  const workspaceSql = nimbusSql(db);
+  const storage = inlineWorkspaceStorage(db);
 
   const workspace = createWorkspaceFilesystem({
-    sql: workspaceSql,
-    transactions: localTransactions(db),
-    generation: workspaceGenerationStorage(workspaceSql),
+    ...storage,
+    generation: workspaceGenerationStorage(storage.sql),
     runtimes: WORKSPACE_RUNTIMES,
     runtimeFacets: localFacetHost(),
   } satisfies WorkspaceOptions);
@@ -460,7 +368,7 @@ export function createCLIRuntime(
 
   const craftStoreImpl = new AgentUtilsCraftStore(sql);
   craftStoreImpl.ensureSchema();
-  const craftStore = adaptCraftStore(craftStoreImpl);
+  const craftStore = craftStoreView(craftStoreImpl);
   let approvalChannel: RequestShellApproval | null = null;
   let approvalDeferrals: DeferredApprovalChannel | null = null;
   let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
@@ -504,7 +412,7 @@ export function createCLIRuntime(
       return { vfs: fileVfs, artifactDirectory };
     }
 
-    const home = await facetHomeProvisioner((async () => ({ ...await workspace.privileged(), sql: workspaceSql }))(), () => target.assertCurrent())(actorFacetName(record));
+    const home = await facetHomeProvisioner((async () => ({ ...await workspace.privileged(), sql: storage.sql }))(), () => target.assertCurrent())(actorFacetName(record));
 
     if (home.isolation !== 'private-home') throw new KinuError('io', 'actor home provisioner returned a shared plane');
     const plane = await workspace.asAgent(home);
@@ -518,6 +426,7 @@ export function createCLIRuntime(
 
   const agentVfs = withMountTable(fileVfs, [
     ...standardMounts((name) => executionRouter.getProvider(name)),
+    sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
     skillsMount((): VFS => agentVfs),
     // `/context`: this actor's own working history, keyed on its own id.
     contextMount({
@@ -528,6 +437,8 @@ export function createCLIRuntime(
       },
     }),
   ]);
+
+  if (cwd === null) workspace.mountTable(agentVfs);
 
   const limits = hostResourceLimits();
 
@@ -549,6 +460,7 @@ export function createCLIRuntime(
 
   const runtime: CLIRuntime = Object.assign(buildRuntime({
     transactionSync: write => db.transaction(write)(),
+    workspaceIsMachine: cwd !== null,
     actor, sql,
     execRaw,
     vfs: agentVfs,
@@ -588,7 +500,7 @@ export function createCLIRuntime(
   if (facetShell) {
     runtime.facetShell = facetShell;
   } else {
-    runtime.nodeHome = async () => ({ ...await workspace.privileged(), sql: workspaceSql });
+    runtime.nodeHome = async () => ({ ...await workspace.privileged(), sql: storage.sql });
   }
 
   runtime.nodeRuntime = localNodeRuntime({
@@ -795,6 +707,7 @@ async function buildCLIHeadRuntime(
   // `/context` is this head's own history, not the parent's.
   const agentVfs = withMountTable(vfs, [
     ...standardMounts((name) => executionRouter.getProvider(name)),
+    sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
     skillsMount((): VFS => agentVfs),
     contextMount({
       stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
@@ -809,6 +722,7 @@ async function buildCLIHeadRuntime(
     // programs; with the default, the parent would execute its head's source.
     scaffoldPath: actorScaffoldPath(opts.actorBinding),
     actor, sql, execRaw: parent.storage.execRaw, vfs: agentVfs, agentStateVfs,
+    workspaceIsMachine: parent.workspaceIsMachine,
     llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     memory: parent.memory, craftStore: parent.craftStore,
     spawnBranch: parent.spawnBranch, abortBranch: parent.abortBranch,
@@ -845,78 +759,143 @@ const shellOptionsSchema = v.object({
   signal: v.optional(v.instance(AbortSignal)),
 });
 
+export function createHostShell(cwd: string, source: NodeJS.ProcessEnv = process.env): Shell {
+  const env = unsandboxedCommandEnvironment(source, new Set([...HARNESS_CREDENTIAL_ENV, ...dotenvLoadedNames(process.cwd(), source)]));
 
-export function createHostShell(cwd: string, env: NodeJS.ProcessEnv = process.env): Shell {
   return {
     exec(command: string, stdinOrOptions?: string | { stdin?: string; signal?: AbortSignal }) {
-      return new Promise((resolve) => {
-        const stdinText = v.safeParse(v.string(), stdinOrOptions);
-        const options = v.safeParse(shellOptionsSchema, stdinOrOptions);
-        const optionsStdin = options.success ? options.output.stdin : undefined;
-        const stdin = stdinText.success ? stdinText.output : optionsStdin;
-        const signal = options.success ? options.output.signal : undefined;
-        let settled = false;
+      const { promise, resolve } = Promise.withResolvers<ShellExecResult>();
+      const stdinText = v.safeParse(v.string(), stdinOrOptions);
+      const options = v.safeParse(shellOptionsSchema, stdinOrOptions);
+      const optionsStdin = options.success ? options.output.stdin : undefined;
+      const stdin = stdinText.success ? stdinText.output : optionsStdin;
+      const signal = options.success ? options.output.signal : undefined;
+      const outputId = nanoid(10);
+      let settled = false;
 
-        const child = spawn('/bin/sh', ['-lc', command], {
-          cwd,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          env,
-          detached: true,
-        });
-
-        let stdout = '';
-        let stderr = '';
-
-        const finish = (result: { stdout: string; stderr: string; exitCode: number }) => {
-          if (settled) return;
-          settled = true;
-          signal?.removeEventListener('abort', onAbort);
-          resolve(result);
-        };
-
-        const onAbort = () => {
-          const pid = child.pid;
-
-          if (!pid) return;
-          tolerate(() => process.kill(-pid, 'SIGTERM'), 'esrch');
-          setTimeout(() => {
-            if (!settled) {
-              tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
-            }
-          }, 1500).unref();
-        };
-
-        if (signal?.aborted) onAbort();
-        else signal?.addEventListener('abort', onAbort, { once: true });
-        child.stdout.on('data', (d) => { stdout += d.toString(); });
-        child.stderr.on('data', (d) => { stderr += d.toString(); });
-        child.on('error', (err) => finish({ stdout, stderr: err.message, exitCode: 1 }));
-
-        const settle = (code: number | null, signalName: NodeJS.Signals | null) => {
-          const aborted = (signal?.aborted ?? false) || signalName === 'SIGTERM' || signalName === 'SIGKILL';
-          finish({
-            stdout,
-            stderr: aborted ? `${stderr}${stderr ? '\n' : ''}Command aborted.` : stderr,
-            exitCode: code ?? (aborted ? 130 : 0),
-          });
-        };
-
-        // A backgrounded grandchild keeps stdout open, so `close` may never
-        // come; `exit` starts a bounded drain instead.
-        child.on('close', settle);
-        child.on('exit', (code, signalName) => {
-          setTimeout(() => {
-            if (settled) return;
-            child.stdout.destroy();
-            child.stderr.destroy();
-            child.unref();
-            settle(code, signalName);
-          }, EXITED_COMMAND_DRAIN_MS).unref();
-        });
-
-        if (stdin) child.stdin.end(stdin);
-        else child.stdin.end();
+      const child = spawn('/bin/sh', ['-lc', command], {
+        cwd,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env,
+        detached: true,
       });
+
+      const stdout = new BoundedOutput(COMMAND_OUTPUT_LIMITS, () => hostOutputSpill(cwd, `shell-${outputId}.stdout.log`));
+      const stderr = new BoundedOutput(COMMAND_OUTPUT_LIMITS, () => hostOutputSpill(cwd, `shell-${outputId}.stderr.log`));
+
+      const conclude = (end: ProcessEnd | { readonly error: Error }) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener('abort', onAbort);
+        const out = stdout.finish('stdout');
+        const err = stderr.finish('stderr');
+
+        if ('error' in end) {
+          resolve({ stdout: out, stderr: end.error.message, exitCode: 1 });
+
+          return;
+        }
+
+        const { exitCode, note } = exitStatus(end, signal?.aborted === true);
+        resolve({ stdout: out, stderr: note === '' ? err : `${err}${err ? '\n' : ''}${note}`, exitCode });
+      };
+
+      const onAbort = () => {
+        const pid = child.pid;
+
+        if (!pid) return;
+        tolerate(() => process.kill(-pid, 'SIGTERM'), 'esrch');
+        setTimeout(() => {
+          if (!settled) {
+            tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
+          }
+        }, 1500).unref();
+      };
+
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
+      child.stdout.on('data', (chunk: Buffer) => { stdout.write(chunk); });
+      child.stderr.on('data', (chunk: Buffer) => { stderr.write(chunk); });
+      child.on('error', (error) => conclude({ error }));
+
+      // A backgrounded grandchild keeps stdout open, so `close` may never
+      // come; `exit` starts a bounded drain instead.
+      child.on('close', (code, signalName) => conclude({ code, signalName }));
+      child.on('exit', (code, signalName) => {
+        setTimeout(() => {
+          if (settled) return;
+          child.stdout.destroy();
+          child.stderr.destroy();
+          child.unref();
+          conclude({ code, signalName });
+        }, EXITED_COMMAND_DRAIN_MS).unref();
+      });
+
+      if (stdin) child.stdin.end(stdin);
+      else child.stdin.end();
+
+      return promise;
+    },
+  };
+}
+
+interface ProcessEnd {
+  readonly code: number | null;
+  readonly signalName: NodeJS.Signals | null;
+}
+
+interface ExitStatus {
+  readonly exitCode: number;
+  readonly note: string;
+}
+
+function exitStatus(end: ProcessEnd, aborted: boolean): ExitStatus {
+  if (aborted) return { exitCode: end.code ?? 130, note: 'Command aborted.' };
+
+  if (end.signalName !== null) {
+    return { exitCode: 128 + osConstants.signals[end.signalName], note: `Command terminated by ${end.signalName}.` };
+  }
+
+  return end.code === null
+    ? { exitCode: 1, note: 'Command ended with neither an exit code nor a signal.' }
+    : { exitCode: end.code, note: '' };
+}
+
+function hostOutputSpill(cwd: string, name: string): OutputSpill {
+  const path = `${SPILL_DIRS.toolOutput}/${name}`;
+  let fd: number | null = null;
+  let failure: string | null = null;
+
+  const fail = (input: { doing: string; cause: unknown }): void => {
+    const error = toKinuError({ ...input, otherwise: 'io' });
+    diagnostics.failure('shell.output_spill_failed', error);
+    failure = renderCauseChain(error);
+  };
+
+  try {
+    mkdirSync(join(cwd, SPILL_DIRS.toolOutput), { recursive: true });
+    fd = openSync(join(cwd, path), 'w', 0o600);
+  } catch (cause) {
+    fail({ doing: `opening ${path} for a command's output`, cause });
+  }
+
+  return {
+    write(chunk) {
+      if (fd === null) return;
+
+      try {
+        for (let offset = 0; offset < chunk.length;) offset += writeSync(fd, chunk, offset);
+      } catch (cause) {
+        fail({ doing: `writing a command's output to ${path}`, cause });
+        closeSync(fd);
+        fd = null;
+      }
+    },
+    close(): SpillOutcome {
+      if (fd !== null) closeSync(fd);
+      fd = null;
+
+      return failure === null ? { path } : { failure };
     },
   };
 }

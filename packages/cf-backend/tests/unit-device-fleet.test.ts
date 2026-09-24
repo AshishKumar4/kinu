@@ -220,8 +220,9 @@ describe('two daemons connected at once', () => {
   test('the file view scope is the named machine\'s own', async () => {
     const fleet = await twoDaemons();
 
-    expect(await fleet.userDO.getDeviceFileView(fleet.workspace, WORKSPACE, fleet.macId)).toEqual({ unconfined: false });
-    expect(await fleet.userDO.getDeviceFileView(fleet.workspace, WORKSPACE)).toEqual({ unconfined: false });
+    // Sandboxed, the named machine's view adds the agent's own /tmp; unnamed among two is the root alone.
+    expect(await fleet.userDO.getDeviceFileView(fleet.workspace, WORKSPACE, fleet.macId)).toEqual({ scope: 'sandboxed' });
+    expect(await fleet.userDO.getDeviceFileView(fleet.workspace, WORKSPACE)).toEqual({ scope: 'root' });
     await fleet.end();
   });
 });

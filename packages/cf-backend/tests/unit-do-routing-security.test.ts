@@ -1,6 +1,4 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
@@ -9,6 +7,9 @@ import {
   isForeignAgentNamespacePath,
 } from '@kinu.run/core';
 import { deriveUserId } from '../src/auth/store';
+import { unreachableNamespace, workerContext } from './helpers/bindings';
+import { makeKv } from './helpers/kv';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
 /**
  * F1 account-takeover regression: partyserver routes every DO namespace by slug, and a derivable
@@ -16,9 +17,8 @@ import { deriveUserId } from '../src/auth/store';
  * Defenses: the /agents/* transport is pinned to the orchestrator namespace; UserDO exposes no @callable.
  */
 
-const ROOT = join(import.meta.dir, '..');
-
-const source = (p: string): string => readFileSync(join(ROOT, p), 'utf8');
+// Dynamic: the entry's graph reaches `cloudflare:email` and `cloudflare:workers` through `agents`.
+const { default: worker } = await import('../src/server');
 
 describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator', () => {
   test('the concrete exploit path is a foreign-namespace request (→ rejected)', async () => {
@@ -96,49 +96,23 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
     expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/actor/researcher')).toBe('my-workspace');
   });
 
-  test('server.ts rejects foreign namespaces with a 404 before ownership + routing', () => {
-    const src = source('src/server.ts');
-    // The pin 404s ahead of the ownership claim and the partyserver route, so no privileged code runs on a foreign path.
-    const pin = src.indexOf('if (isForeignAgentNamespacePath(url.pathname)) {');
-    const claim = src.indexOf('claimOwnedWorkspace(env, identity.userId, agentName)');
-    const route = src.indexOf('routeAgentRequest(reqWithId, env)');
-    expect(pin).toBeGreaterThan(-1);
-    expect(claim).toBeGreaterThan(-1);
-    expect(src).toContain("return err(404, 'Not found');");
-    expect(pin).toBeLessThan(claim);
-    expect(claim).toBeLessThan(route);
-  });
-});
+  test('a signed-in request for a foreign namespace is refused before anything asks an account', async () => {
+    // Every account and workspace object refuses: an ownership claim or a route would answer 500, not 404.
+    const env: Partial<Env> = {};
+    Object.assign(env, {
+      AUTH_KV: makeKv(),
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+      DEV_USER_EMAIL: 'owner@example.com',
+      UserDO: unreachableNamespace('UserDO'),
+      OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+    });
 
-describe('F1 defense 2 — @callable surface reduction (worker-side stubs preserved)', () => {
-  // Exposure is asserted in `tests/workerd/decorated-agent.test.ts` (the SDK registry, KINU-065); a
-  // source-text oracle cannot hold it. Here: the methods must stay declared `async`, since stub holders
-  // call them over native Durable Object RPC.
+    for (const path of ['/agents/user-d-o/victim', `/agents/user-d-o/${await deriveUserId('victim@example.com')}`]) {
+      // SAFETY: every member the foreign-namespace refusal reads is constructed above; the loopback host is
+      // where the dev identity signs the request in.
+      const answer = await worker.fetch(new Request(`http://localhost${path}`), env as Env, workerContext());
 
-  test('every UserDO method is preserved for worker-side stub callers', () => {
-    const src = source('src/user/user-do.ts');
-
-    for (const m of ['getAuthHeaders', 'mintCliToken', 'setCredential', 'listWorkspaces', 'ensureProfile', 'ensureWorkspaceCapability']) {
-      expect(src).toMatch(new RegExp(`async ${m}(?:<[^>]+>)?\\(`));
-    }
-  });
-
-  test('worker-only privileged methods are preserved on both actor roots', () => {
-    // Declared once on ActorAgent so both roots share one implementation and exposure decision;
-    // unreachability is asserted in `tests/workerd/decorated-agent.test.ts`.
-    const orchestrator = source('src/orchestrator.ts');
-
-    for (const m of [
-      'rawCopyFromFork', 'claimOwner', 'acceptWebhookDelivery', 'acceptEmailDelivery',
-      'receivePeerMessage', 'listPeersFromMcp', 'runTaskFromMcp', 'saveNoteFromMcp', 'sendPeerFromMcp',
-    ]) {
-      expect(orchestrator).toContain(`async ${m}(`);
-    }
-
-    const actor = source('src/actor-agent.ts');
-
-    for (const m of ['installWorkspaceCapability', 'getSubordinateBootstrapIdentity', 'receiveSubordinateEvent']) {
-      expect(actor).toContain(`async ${m}(`);
+      expect(answer.status).toBe(404);
     }
   });
 });

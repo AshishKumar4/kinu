@@ -33,7 +33,7 @@ const NEXT_BUILD = {
 async function hasVaultSecrets(): Promise<boolean> {
   const stub = env.DEPLOY_RUN_PROBE.get(env.DEPLOY_RUN_PROBE.idFromName(SELF_UPDATE_RUN_ID));
 
-  return (await stub.heldSecretNames()).length > 0;
+  return (await stub.heldCredentials()).length > 0;
 }
 
 const STRANGER = { ...OWNER, userId: 'probe-other', email: 'someone@example.com' };

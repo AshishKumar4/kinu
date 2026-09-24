@@ -20,6 +20,7 @@ import {
   type SlateBindingCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim, type WorkspaceOverviewSlate,
   type MissionGovernor,
 } from '@kinu.run/core';
+import { canonicalWorkspacePath, workspacePath, WORKSPACE_ROOT } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import { ERROR_CODES, KinuError, classifyErrorCode, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
@@ -59,6 +60,10 @@ interface ViewerAdmission {
 
 /** A guest refusal crosses Cap'n Web as a plain Error with message `reason: error`. */
 const SLATE_REFUSAL_MESSAGE = new RegExp(`^(${ERROR_CODES.join('|')}): ([\\s\\S]*)$`);
+
+const SLATES_DIRECTORY = workspacePath('slates');
+
+const SLATE_FILE = new RegExp(`^${WORKSPACE_ROOT}/slates/([^/]+)(?:/|$)`);
 
 function shareOutcome(response: Response): 'ok' | 'refused' | 'error' {
   if (response.ok) return 'ok';
@@ -345,9 +350,9 @@ export class SlateHost {
     const vfs = session.vfs.as(caller.cred);
     const projects: Record<string, SlateProject> = {};
 
-    if (!vfs.exists('/home/user/slates')) return projects;
+    if (!vfs.exists(SLATES_DIRECTORY)) return projects;
 
-    for (const entry of vfs.readdir('/home/user/slates')) {
+    for (const entry of vfs.readdir(SLATES_DIRECTORY)) {
       if (entry.type !== 'directory') continue;
 
       try {
@@ -514,9 +519,9 @@ export class SlateHost {
     const slates: SlateSummary[] = [];
     const problems: SlateProblem[] = [];
 
-    if (!vfs.exists('/home/user/slates')) return { slates, problems };
+    if (!vfs.exists(SLATES_DIRECTORY)) return { slates, problems };
 
-    for (const entry of vfs.readdir('/home/user/slates')) {
+    for (const entry of vfs.readdir(SLATES_DIRECTORY)) {
       if (entry.type !== 'directory') continue;
 
       try {
@@ -899,7 +904,7 @@ export class SlateHost {
     const ids = new Set<string>();
 
     for (const path of paths) {
-      const match = /^\/?home\/user\/slates\/([^/]+)(?:\/|$)/.exec(path);
+      const match = SLATE_FILE.exec(canonicalWorkspacePath(path.startsWith('/') ? path : `/${path}`));
       const id = match?.[1];
 
       if (id !== undefined) ids.add(id);

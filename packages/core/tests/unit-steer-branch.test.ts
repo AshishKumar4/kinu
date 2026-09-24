@@ -73,6 +73,7 @@ describe('startBranchHead — one budgeted head over the HeadRuntime seam', () =
     const handle = await startBranchHead(runtime, journal, {
       task: 'try the other approach',
       inheritedContext: [{ id: 'c1', role: 'user', content: 'original ask', createdAt: 1 }],
+      missionLabels: [],
     });
 
     const report = await handle.result;
@@ -107,7 +108,7 @@ describe('startBranchHead — one budgeted head over the HeadRuntime seam', () =
       return completedReport(input.id, 'late', 'aborted');
     });
 
-    const handle = await startBranchHead(runtime, journal, { task: 'x', inheritedContext: [] });
+    const handle = await startBranchHead(runtime, journal, { task: 'x', inheritedContext: [], missionLabels: [] });
     await handle.abort('live turn did not complete');
     expect(aborts).toEqual(['live turn did not complete']);
     release();
@@ -133,7 +134,7 @@ describe('branchOutcomeFromJournal — the journal read a cold settle makes', ()
       return errorMessage === undefined ? reported : { ...reported, errorMessage };
     });
 
-    const handle = await startBranchHead(runtime, journal, { task: 'try the other way', inheritedContext: [] });
+    const handle = await startBranchHead(runtime, journal, { task: 'try the other way', inheritedContext: [], missionLabels: [] });
 
     if (status !== null) await handle.result;
 
@@ -348,6 +349,7 @@ describe('settlePendingBranch — the keyed settle both backends run at turn end
     const handle = await startBranchHead(runtime, journal, {
       task,
       inheritedContext: [{ id: 'c1', role: 'user', content: 'original ask', createdAt: 1 }],
+      missionLabels: [],
     });
 
     const entry: PendingBranch = { id: handle.id, task, handle: Promise.resolve(handle) };

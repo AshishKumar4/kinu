@@ -42,7 +42,7 @@ const TurnContinuitySchema: v.GenericSchema<TurnContinuity> = v.union([
 ]);
 
 /** Bumped when what an effect records changes meaning, not its implementation. */
-export const TERMINAL_EFFECT_KEY_VERSION = 'v1';
+const TERMINAL_EFFECT_KEY_VERSION = 'v1';
 
 /** An empty scope is not an identity: such a sequence runs unledgered and its bodies key nothing. */
 export function keyedScope(scope: string): string | undefined {
@@ -55,7 +55,7 @@ export const TERMINAL_EFFECT_RETRY_BASE_MS = 5_000;
 export const TERMINAL_EFFECT_RETRY_CEILING_MS = 600_000;
 
 /** Doubling from the base delay to the ceiling. */
-export function terminalEffectBackoffMs(attempts: number): number {
+function terminalEffectBackoffMs(attempts: number): number {
   const grown = TERMINAL_EFFECT_RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1);
 
   return Math.min(grown, TERMINAL_EFFECT_RETRY_CEILING_MS);

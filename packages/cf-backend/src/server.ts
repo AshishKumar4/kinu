@@ -43,7 +43,7 @@ import {
   type AuthIdentity,
 } from "./auth/session";
 import {
-  containPreviewResponse, hostOf, isPreviewHostRequest, previewHostSuffix, previewSuffixMetaName,
+  containPreviewResponse, hostOf, isPreviewHostRequest, previewHostSuffix, previewPortSuffix, previewSuffixMetaName,
 } from "@kinu.run/core";
 import { withAppSecurityHeaders } from "@kinu.run/core";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do";
@@ -108,7 +108,7 @@ async function serveApp(request: Request, env: Env): Promise<Response> {
   return withAppSecurityHeaders(
     configured,
     new URL(request.url),
-    suffix ? `https://*.${suffix}` : null,
+    suffix ? `https://*.${suffix}${previewPortSuffix(env)}` : null,
   );
 }
 

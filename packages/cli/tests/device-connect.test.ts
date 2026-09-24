@@ -28,15 +28,8 @@ import { daemonArchive, releaseSigningEnv, startUpdateHub, until, type UpdateHub
 
 const repoRoot = resolve(__dirname, '../../..');
 
-/**
- * Modules the daemon requires beside itself, derived from its require lines; a sibling missing
- * here kills every clean install on its first require.
- */
+/** What the daemon requires beside itself, as this repo ships it: the installer must land each one, byte for byte. */
 const DAEMON_SIBLINGS = { 'sandbox.js': SANDBOX_SOURCE, 'pty.js': PTY_SOURCE, 'update.js': UPDATE_SOURCE } as const;
-
-/** Mirrors the installer's private reader of `require('./x')` lines; drift fails these tests. */
-const REQUIRED_SIBLINGS = [...DAEMON_SOURCE.matchAll(/require\('\.\/([^']+)'\)/g)]
-  .map((m) => m[1] ?? '').filter((n) => n !== '');
 
 function newProjectDir(): string {
   const dir = scratchDir('test-project');
@@ -71,7 +64,7 @@ interface StubCloudOptions {
   devices?: () => unknown[];
   registerGate?: { release: Promise<void>; onArrival?: () => void };
   registrationFailure?: { status: number; error: string };
-  onRegister?: (body: { label?: string }) => void;
+  onRegister?: (body: { label?: string; replaces?: string }) => void;
   /** Ticket-exchange statuses in order, last repeating; 401 makes the daemon exit, 404 retries. */
   ticketStatuses?: readonly number[];
 }
@@ -99,7 +92,7 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
 
       if (url.pathname === '/api/cli/devices' && req.method === 'POST') {
         hits.register += 1;
-        const body = v.safeParse(v.object({ label: v.optional(v.string()) }), await req.json());
+        const body = v.safeParse(v.object({ label: v.optional(v.string()), replaces: v.optional(v.string()) }), await req.json());
         opts.onRegister?.(body.success ? body.output : {});
 
         if (opts.registerGate) {
@@ -198,12 +191,13 @@ function connectedDevice(connected: boolean, overrides: Partial<CloudDevice> = {
     createdAt: 0,
     lastSeenAt: null,
     sandbox: { tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [] },
+    wholeMachine: false,
     ...overrides,
   };
 }
 
 function connectedResult(label = connectedDevice(true).label) {
-  return { kind: 'connected', deviceId: 'dev_1', label, sandbox: connectedDevice(true).sandbox };
+  return { kind: 'connected', deviceId: 'dev_1', label, sandbox: connectedDevice(true).sandbox, wholeMachine: false };
 }
 
 async function waitForPidExit(pid: number, timeoutMs = 3_000): Promise<boolean> {
@@ -410,6 +404,32 @@ describe('device-connect daemon lifecycle', () => {
     expect(await waitForPidExit(status.daemonPid ?? 0)).toBe(true);
   });
 
+  test('linking this machine again names the registration it replaces, only to the hub that issued it', async () => {
+    const bodies: Array<{ label?: string; replaces?: string }> = [];
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)], onRegister: (body) => { bodies.push(body); } });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
+    // The session daemon dies with the script; a pidfile it left must name a dead process, or the
+    // next connect reads "already running" and registers nothing.
+    const connect = async () => {
+      await runScript(home, `
+        import { connectDevice } from './packages/cli/src/device-connect.ts';
+        await connectDevice({ origin: '${stub.origin}', token: 'ptc_test' }, { session: true });
+        process.exit(0);
+      `);
+      const pidfile = join(home, 'pc-agent.pid');
+
+      if (existsSync(pidfile)) expect(await waitForPidExit(Number(readFileSync(pidfile, 'utf-8').trim()))).toBe(true);
+    };
+
+    // A device.json another deployment issued is that deployment's secret, and stays unsent.
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', token: 'pdt_other_hub', origin: 'https://other.example' }));
+    await connect();
+    await connect();
+
+    expect(bodies.map((body) => body.replaces)).toEqual([undefined, 'device-token']);
+  });
+
   test('session mode is a no-op while a daemon is already running', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(false)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
@@ -491,15 +511,6 @@ describe('the sandbox state the machine reported', () => {
     }
   });
 
-  test('the user-namespace fix is core\'s sentence, never a second copy here', () => {
-    const source = readFileSync(resolve(repoRoot, 'packages/cli/src/device-connect.ts'), 'utf8');
-    const SYSCTL = 'kernel.apparmor_restrict_unprivileged_userns=0';
-    expect(sandboxReasonFix('no_userns')).toContain(SYSCTL);
-    expect(source).not.toContain(SYSCTL);
-    expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason: 'no_userns', detail: null, gpu: [] })[1])
-      .toContain(SYSCTL);
-  });
-
   test('a machine that cannot sandbox says so, and the reason code stays out of it', () => {
     expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [] }))
       .toEqual(['This machine cannot sandbox.', sandboxReasonFix(null), NO_COMMANDS_LINE]);
@@ -547,6 +558,7 @@ describe('the sandbox state the machine reported', () => {
           id: 'dev_3', label: 'vm',
           sandbox: { tier: 'sandboxed', capability: 'files_only', reason: 'no_userns', detail: null, gpu: [] },
         }),
+        connectedDevice(true, { id: 'dev_5', label: 'server', wholeMachine: true }),
         connectedDevice(false, { id: 'dev_4', label: 'retired' }),
       ],
     });
@@ -559,7 +571,14 @@ describe('the sandbox state the machine reported', () => {
     `);
 
     expect(out.trim())
-      .toBe('Connected: studio (sandbox on), tower (sandbox OFF), vm (cannot sandbox)');
+      .toBe('Connected: studio (sandbox on), tower (sandbox OFF), vm (cannot sandbox), server (whole machine)');
+  });
+
+  test('a machine linked from / is described as the whole machine, whatever the switch says', () => {
+    const [line] = describeDeviceSandbox({ tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [] }, true);
+
+    expect(line).toContain('the agent has this whole machine');
+    expect(line).not.toContain('Sandbox on');
   });
 
   test('a device row from a hub too old to report the switch still lists', async () => {
@@ -593,8 +612,8 @@ describe('device-connect install hardening', () => {
     expect(JSON.parse(out.trim())).toEqual(connectedResult());
     expect(stub.hits.daemonScript).toBe(0);
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
-    expect(REQUIRED_SIBLINGS.length).toBeGreaterThan(1);
-    expect(Object.keys(DAEMON_SIBLINGS).sort()).toEqual([...REQUIRED_SIBLINGS].sort());
+    // A sibling missing beside the installed daemon kills it on its first require.
+    expect(await runScript(home, `require(${JSON.stringify(join(home, 'pc-agent.js'))}); console.log('loaded');`)).toBe('loaded\n');
 
     for (const [name, source] of Object.entries(DAEMON_SIBLINGS)) {
       expect(readFileSync(join(home, name), 'utf-8')).toBe(source);

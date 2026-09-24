@@ -6,6 +6,7 @@ import {
   resolveLLMConfig,
   resolveProviderCredentials,
 } from './config';
+import { readDefaultTier } from './profiles';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 export interface LocalModelResolverOptions {
@@ -42,7 +43,6 @@ export async function findUnusableModel(opts: LocalModelResolverOptions = {}): P
     spec = resolver.normalizeSpecSync(opts.model ?? null);
     provider = parseModelSpec(spec).provider;
   } catch (error) {
-    // A resolution failure means unusable; do not swallow it.
     return {
       spec: opts.model ?? 'The configured model',
       reason: renderThrownChain({ cause: error }),
@@ -58,7 +58,7 @@ export async function findUnusableModel(opts: LocalModelResolverOptions = {}): P
 
 export function createConfiguredLocalModelResolver(opts: LocalModelResolverOptions = {}): ConfiguredLocalModelResolver {
   // A null endpoint only removes the bare-id default.
-  const llmConfig = resolveLLMConfig(opts);
+  const llmConfig = resolveLLMConfig({ ...opts, defaultModel: readDefaultTier()?.model });
   const cloud = resolveCloudSession();
 
   const resolver = createLocalModelResolver({

@@ -261,8 +261,8 @@ describe('reviewCommand — a rule fires on what is invoked, not what is mention
 
   test('a program handed to an interpreter is opaque, so the whole line is matched', () => {
     decidesAll([
-      'bash -c "rm -rf /home/user"',
-      'python3 -c "os.system(\'rm -rf /home/user\')"',
+      'bash -c "rm -rf /home/main"',
+      'python3 -c "os.system(\'rm -rf /home/main\')"',
       'ssh box "sudo reboot"',
     ], 'gate');
   });

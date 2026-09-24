@@ -4,22 +4,20 @@
  * Nimbus's hosted runtime (`composeHostedRuntime`); facets reach it through {@link createWorkspaceBoxClient}.
  */
 
-import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
+import { createWorkspace, workspaceBoxFiles, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import type { RuntimeSource, SupervisorOpResult, WorkspaceBundle } from '@kinu.run/core/workspace';
 import { decodeJsonValue } from '@kinu.run/core';
 import type {
   JsonValue,
-  NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, WorkspacePreviewUrl,
+  NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, PreviewRouteCheck, WorkspacePreviewUrl,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, tolerate, toKinuError, type Refusal } from '@kinu.run/core/obs';
-import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { diagnostics, KinuError, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { SUPERVISOR_OPS, type SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { ComposedFacetManager, HostedRuntime, HostedRuntimeOptions, HostedRuntimeTask, WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
-import { clearPortCapability, readPortExposure, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
+import { clearPortCapability, readPortReservation, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
 import type { DurableApps } from '@kinu.run/core/slates';
 import * as v from 'valibot';
 
@@ -75,91 +73,6 @@ function hostedRuntimeModule(): Promise<HostedRuntimeModule> {
   }));
 
   return runtimeModule;
-}
-
-/** Only ENOENT (by `code`, not rendered text) reads as absence; other failures throw. */
-function absentAsNull<T>(read: () => T): T | null {
-  return tolerate(read, 'enoent') ?? null;
-}
-
-/** The raw `SqliteVFS` as the session user: the same identity the Nimbus session's file RPCs resolve to. */
-function workspaceBoxFiles(open: () => Promise<SqliteVFS>, cred: VfsCred = CRED_SESSION_USER): NimbusSandboxHandle['files'] {
-  const view = async (): Promise<CredentialedVfs> => (await open()).as(cred);
-
-  return {
-    as: (agent) => workspaceBoxFiles(open, agent),
-    async read(path) {
-      const vfs = await view();
-
-      return absentAsNull(() => vfs.readFileString(path));
-    },
-    async readBytes(path) {
-      const vfs = await view();
-
-      return absentAsNull(() => vfs.readFile(path));
-    },
-    async readRange(path, offset, length) {
-      const vfs = await view();
-
-      return absentAsNull(() => vfs.readRange(path, offset, length));
-    },
-    async write(path, content) {
-      const vfs = await view();
-      // The SDK write contract creates missing parents.
-      const cut = path.lastIndexOf('/');
-
-      if (cut > 0) {
-        const parent = path.slice(0, cut);
-
-        if (!vfs.exists(parent)) vfs.mkdir(parent, { recursive: true });
-      }
-
-      vfs.writeFile(path, content);
-    },
-    async stat(path) {
-      const vfs = await view();
-
-      return absentAsNull(() => {
-        const stat = vfs.stat(path);
-
-        return { type: stat.type, size: stat.size, mtime: stat.mtime };
-      });
-    },
-    async lstat(path) {
-      const vfs = await view();
-
-      return absentAsNull(() => {
-        const stat = vfs.lstat(path);
-
-        return { type: stat.type, size: stat.size, mtime: stat.mtime, mode: stat.mode };
-      });
-    },
-    async rename(from, to) { (await view()).rename(from, to); },
-    async chmod(path, mode) { (await view()).chmod(path, mode); },
-    async list(path) {
-      return (await view()).readdir(path ?? '/').map((entry) => ({ name: entry.name, type: entry.type }));
-    },
-    async exists(path) { return (await view()).exists(path); },
-    async mkdir(path) { (await view()).mkdir(path, { recursive: true }); },
-    async delete(path, options) {
-      const vfs = await view();
-
-      if (options?.recursive) {
-        vfs.removeRecursive(path);
-
-        return;
-      }
-
-      // Non-recursive delete of a directory is `rmdir`, which refuses a populated one.
-      if (vfs.isDirectory(path)) {
-        vfs.rmdir(path);
-
-        return;
-      }
-
-      vfs.unlink(path);
-    },
-  };
 }
 
 export interface HostedWorkspaceDeps<Id> {
@@ -237,6 +150,23 @@ function previewUnavailable(refusal: Refusal): Response {
     status: 503,
     headers: { 'cache-control': 'no-store', 'content-type': 'application/json', 'retry-after': '3' },
   });
+}
+
+interface PreviewGateRefusal {
+  readonly gate: 'no-exposure' | 'handle-mismatch' | 'ensure-missing' | 'ensure-unavailable' | 'no-listener' | 'capability-mismatch';
+  readonly owner: string | null;
+  readonly detail: string;
+  readonly refusal?: Refusal;
+}
+
+type PreviewGates =
+  | { readonly routed: false; readonly refused: PreviewGateRefusal }
+  | { readonly routed: true; readonly capability: string; readonly refused: PreviewGateRefusal | null };
+
+function routeCheck(gates: PreviewGates): PreviewRouteCheck {
+  return gates.refused === null
+    ? { reached: true }
+    : { reached: false, gate: gates.refused.gate, detail: gates.refused.detail };
 }
 
 /** Rows carry the recipe, never the inputs: the slate host re-drives through its own boot and the row is
@@ -354,6 +284,44 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
 
   const runtime = async (): Promise<HostedRuntime> => (await compose()).runtime;
 
+  // Checked against the durable record: a port never handed a URL is refused even if something listens.
+  const previewGates = async (port: number, handle: string): Promise<PreviewGates> => {
+    const exposure = await readPortReservation(deps.ctx, port);
+    const capability = exposure?.capability ?? null;
+
+    if (exposure === null || capability === null) {
+      return { routed: false, refused: { gate: 'no-exposure', owner: null, detail: `no exposure record holds port ${port}` } };
+    }
+
+    const { owner } = exposure;
+
+    if (capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) {
+      return { routed: false, refused: { gate: 'handle-mismatch', owner, detail: `the URL names another exposure of port ${port}` } };
+    }
+
+    const refusal = owner !== null && exposure.kind === 'explicit' ? await deps.ensureSlate?.(owner) ?? null : null;
+
+    if (refusal !== null) {
+      const gate = refusal.reason === 'missing' ? 'ensure-missing' : 'ensure-unavailable';
+
+      return { routed: false, refused: { gate, owner, detail: refusal.error, refusal } };
+    }
+
+    const listener = portRegistry.get(port);
+
+    if (listener === undefined) {
+      return { routed: true, capability, refused: { gate: 'no-listener', owner, detail: `nothing is listening on port ${port}` } };
+    }
+
+    if (listener.capability !== capability) {
+      const state = (await bundle.session()).processes.get(listener.pid)?.state ?? 'absent';
+
+      return { routed: true, capability, refused: { gate: 'capability-mismatch', owner, detail: `pid=${String(listener.pid)} state=${state}` } };
+    }
+
+    return { routed: true, capability, refused: null };
+  };
+
   const files = workspaceBoxFiles(async () => (await bundle.session()).vfs);
   const boxes = new Map<string, NimbusSandboxHandle>();
 
@@ -370,7 +338,12 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
       const held = boxes.get(shellId);
 
       if (held) return held;
-      const built = workspaceBox({ runtime, ports: portRegistry, ctx: deps.ctx, files, shellId, previewUrl: deps.previewUrl });
+
+      const built = workspaceBox({
+        runtime, ports: portRegistry, ctx: deps.ctx, files, shellId, previewUrl: deps.previewUrl, previewGates,
+        mountTable: (plane, cred) => { bundle.mountTable(plane, cred); },
+      });
+
       boxes.set(shellId, built);
 
       return built;
@@ -414,45 +387,21 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
       },
     },
     async routePreview(port, handle, request, pathname) {
+      const gates = await previewGates(port, handle);
+
       // Every refusal names its branch: a bare 404 is otherwise indistinguishable from the runner's own.
-      const refused = (reason: string, owner: string | null, detail = ''): void => {
-        diagnostics.event('preview.route.refused', { port, handle, reason, owner: owner ?? '', detail });
-      };
-
-      // Checked against the durable record: a port never handed a URL is a 404 even if something listens.
-      const exposure = await readPortExposure(deps.ctx, port);
-
-      if (exposure === null) {
-        refused('no-exposure', null);
-
-        return previewNotFound();
+      if (gates.refused !== null) {
+        const { gate, owner, detail } = gates.refused;
+        diagnostics.event('preview.route.refused', { port, handle, reason: gate, owner: owner ?? '', detail });
       }
 
-      if (exposure.capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) {
-        refused('handle-mismatch', exposure.owner);
+      if (!gates.routed) {
+        const { refusal } = gates.refused;
 
-        return previewNotFound();
+        return refusal === undefined || refusal.reason === 'missing' ? previewNotFound() : previewUnavailable(refusal);
       }
 
-      if (exposure.owner !== null) {
-        const refusal = await deps.ensureSlate?.(exposure.owner) ?? null;
-
-        if (refusal !== null) {
-          refused(refusal.reason === 'missing' ? 'ensure-missing' : 'ensure-unavailable', exposure.owner, refusal.error);
-
-          return refusal.reason === 'missing' ? previewNotFound() : previewUnavailable(refusal);
-        }
-      }
-
-      const listener = portRegistry.get(port);
-
-      if (listener === undefined) {
-        refused('no-listener', exposure.owner);
-      } else if (listener.capability !== exposure.capability) {
-        const state = (await bundle.session()).processes.get(listener.pid)?.state ?? 'absent';
-
-        refused('capability-mismatch', exposure.owner, `pid=${String(listener.pid)} state=${state}`);
-      }
+      const { capability } = gates;
 
       const publicRequest = new Request(request);
       // Drop the visitor's header first: naming the invocation stops retained preview bindings standing in
@@ -465,7 +414,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
       const { facets } = await compose();
 
       try {
-        const response = await facets.apps.routeCapabilityPort(port, exposure.capability, publicRequest, pathname);
+        const response = await facets.apps.routeCapabilityPort(port, capability, publicRequest, pathname);
 
         // A 101 only opens the socket: the process's close listener releases the invocation.
         if (response.status !== 101) invocation?.release();
@@ -493,6 +442,8 @@ function workspaceBox(deps: {
   files: NimbusSandboxHandle['files'];
   shellId: string;
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
+  previewGates(port: number, handle: string): Promise<PreviewGates>;
+  mountTable: NonNullable<NimbusSandboxHandle['mountTable']>;
 }): NimbusSandboxHandle {
   const { runtime, shellId } = deps;
 
@@ -529,7 +480,9 @@ function workspaceBox(deps: {
           throw new KinuError('unsupported', `workspace port ${port} is listening and has no preview URL: ${answer.unavailable}`);
         }
 
-        return { port: exposed.port, pid: exposed.pid, capability: exposed.capability, url: answer.url };
+        const gates = await deps.previewGates(port, exposed.capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH));
+
+        return { port: exposed.port, pid: exposed.pid, capability: exposed.capability, url: answer.url, route: routeCheck(gates) };
       },
       // Retire the capability before dropping the listener, so a crash leaves a dead token, not a live one.
       unexpose: async (port) => {
@@ -546,5 +499,6 @@ function workspaceBox(deps: {
         ),
       ),
     },
+    mountTable: deps.mountTable,
   };
 }

@@ -10,7 +10,7 @@ import { codemodeText } from '../tools/sandbox-contract';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
 import { REAL_CLOCK, type Clock } from '../types/clock';
 
-export const TAVILY_CRED_KEY = 'tavily';
+const TAVILY_CRED_KEY = 'tavily';
 
 export interface WebSearchResult {
   title: string;
@@ -415,7 +415,7 @@ function clampLimit(limit: number | undefined): number {
 }
 
 /** Parses `result__a` / `result__snippet` anchors from DuckDuckGo's HTML endpoint. */
-export function parseDuckDuckGoHtml(html: string, limit: number): WebSearchResult[] {
+function parseDuckDuckGoHtml(html: string, limit: number): WebSearchResult[] {
   const results: WebSearchResult[] = [];
   const linkRe = /<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
   const snippetRe = /<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;

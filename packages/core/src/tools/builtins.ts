@@ -374,7 +374,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       return referenceRoots({
         devices: connectedDevices(fleet).map((device) => deviceMountSegment(device, fleet)),
         sandbox: router?.getProvider('sandbox') !== undefined,
-        local: false,
+        local: rt.workspaceIsMachine,
       });
     },
   });

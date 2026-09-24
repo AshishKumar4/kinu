@@ -5,6 +5,7 @@ import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import { initSearchTables } from '../src/mcts/schemas';
+import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
 import { readLatestSearchTree, readSearchNodeDetail } from '../src/read-models/search-tree';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
@@ -15,6 +16,7 @@ function freshDb() {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   initSearchTables(execRaw);
+  initSwarmNodeRecords(execRaw);
 
   return { db, sql, actor: createTestActors(sql, execRaw).main };
 }

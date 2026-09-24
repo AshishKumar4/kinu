@@ -21,10 +21,9 @@
  * So `onStart` awaits nothing: overrides return `void` (an added `await` is TS1308), and since the base declares
  * `void | Promise<void>` this pins it; `scripts/do-init-gate.ts` generalises to later DO classes.
  */
+import type { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { orchestratorHarness } from './helpers/actor-harness';
+import { chatSessionTurns, orchestratorHarness, workspaceMainActor } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
@@ -53,29 +52,19 @@ describe('no Durable Object awaits anything unadmitted inside its init gate', ()
   });
 });
 
+/** Actors that own a scaffold version, as the precondition writes them. */
+function scaffoldOwners(db: Database): string[] {
+  return db.query<{ actor_id: string }, []>('SELECT DISTINCT actor_id FROM scaffold_versions ORDER BY actor_id').all()
+    .map((row) => row.actor_id);
+}
+
 describe('the scaffold precondition moved to the turn, and is still reached', () => {
-  const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
+  test('activation owns no scaffold; the first turn prepares it', async () => {
+    const workspace = orchestratorHarness(undefined, { freshScaffold: true });
+    await workspace.agent.activateActor();
+    expect(scaffoldOwners(workspace.db)).toEqual([]);
 
-  test('prepareTurn awaits it, so every turn path is covered', () => {
-    // `prepareTurn` is the loop's one preparation seam, so every turn path awaits `readTurnInputs` through it.
-    const prepareTurn = actor.slice(
-      actor.indexOf('protected async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease)'),
-      actor.indexOf('this.actorSession.bindProfile(lease, assembled.profile, assembled.profileInputs);'),
-    );
-
-    expect(prepareTurn).toContain('await this.readTurnInputs(');
-
-    const reads = actor.slice(
-      actor.indexOf('private async readTurnInputs(tools: ToolSet)'),
-      actor.indexOf('this.profileInputs(),'),
-    );
-
-    expect(reads).toContain('await this.ensureOwnedScaffold()');
-  });
-
-  test('it is declared once on the shared actor base, not per root', () => {
-    expect(actor.match(/ensureOwnedScaffold\(\): Promise<void>/g)).toHaveLength(1);
-    const orchestrator = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
-    expect(orchestrator).not.toContain('ensureOwnedScaffold(): Promise<void>');
+    await chatSessionTurns(workspace.agent).prepare({ messages: [{ role: 'user', content: 'hello' }] });
+    expect(scaffoldOwners(workspace.db)).toEqual([workspaceMainActor(workspace.db).actorId]);
   });
 });

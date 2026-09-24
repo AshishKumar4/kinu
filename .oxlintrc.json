@@ -70,6 +70,12 @@
     "anti-slop/no-module-mocking": "error",
     "anti-slop/no-near-duplicate-functions": "error",
     "anti-slop/no-object-parameters": "error",
+    "anti-slop/no-output-token-cap": "error",
+    "anti-slop/require-rpc-seal": "error",
+    "anti-slop/require-super-alarm": "error",
+    "anti-slop/no-tui-colour-literal": "error",
+    "anti-slop/require-variant-utility": "error",
+    "anti-slop/no-cli-credential-flag": "error",
     "anti-slop/no-unaccounted-catch": "error",
     "anti-slop/no-reduce-accumulator-copy": "error",
     "anti-slop/no-reflect-apply": "error",
@@ -95,6 +101,23 @@
       "files": ["**/tests/**", "**/test/**", "**/__tests__/**", "**/*.test.*", "**/*.eval.*", "**/*.spec.*"],
       "rules": {
         "typescript/consistent-type-assertions": "off"
+      }
+    },
+    {
+      "files": ["packages/*/src/**"],
+      "excludeFiles": ["packages/cf-backend/src/sandbox-exec-lane.ts"],
+      "rules": {
+        "no-restricted-imports": ["error", {
+          "paths": [{
+            "name": "@cloudflare/sandbox",
+            "importNames": ["getSandbox"],
+            "message": "Reach a sandbox through `openSandbox` (packages/cf-backend/src/sandbox-exec-lane.ts). It fixes the transport, which the SDK persists per sandbox; a client naming another loses its in-flight requests."
+          }],
+          "patterns": [{
+            "group": ["**/node_modules/**"],
+            "message": "A dependency is used through its export map. If the package exports no subpath for what you need, patch its package.json under patches/ (bun patchedDependencies) and say so there; never reach through the installed tree."
+          }]
+        }]
       }
     }
   ],

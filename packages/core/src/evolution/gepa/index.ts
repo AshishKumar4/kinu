@@ -27,7 +27,6 @@ export {
 export {
   initGepaTables, startGepaRun, finishGepaRun,
   persistGepaCandidate,
-  updateGepaRunCounters,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront,
   makePersistingHooks,
   type GepaRunSummary, type GepaParetoEntry,

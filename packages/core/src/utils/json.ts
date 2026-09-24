@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import { renderThrownChain } from '../obs/index';
+import { classify, renderThrownChain } from '../obs/index';
 
 export type JsonPrimitive = string | number | boolean | null;
 
@@ -60,6 +60,16 @@ const BoundaryObjectSchema = v.record(v.string(), v.unknown());
 
 export function parseJsonValue(text: string): JsonValue {
   return v.parse(JsonValueSchema, JSON.parse(text));
+}
+
+/** Text that is not JSON reads back as itself; any other failure throws. */
+export function safeJsonParse(text: string): JsonValue {
+  try { return parseJsonValue(text); }
+  catch (error) {
+    if (classify({ cause: error }) !== 'malformed-input') throw error;
+
+    return text;
+  }
 }
 
 export function parseJsonObject(text: string): JsonObject {

@@ -311,7 +311,7 @@ Three properties follow:
   table. A snapshot of the plane copies the small inode index and no blobs.
 - POSIX semantics: one filesystem, addressed the same way by
   `vfs.readFile('/etc/passwd')` and by `run "cat /etc/passwd"`. Relative paths
-  resolve at `WORKSPACE_ROOT` (`/home/user`). Ownership is uid/gid/mode on
+  resolve at `WORKSPACE_ROOT` (`/home/main`; `/home/user` links to it). Ownership is uid/gid/mode on
   inodes. That makes a swarm node's `/home/<node>` and its private `/tmp` an
   enforced boundary, not a convention (`core/src/vfs/agent-home.ts`).
 - Chunked blobs: `SqliteVFS` splits file content into `file_chunks` rows of
@@ -373,6 +373,20 @@ The working context sits beside the chain. `actor_contexts`,
 record which messages the model reads at each revision, and
 `context_proposals` holds edits staged against it. The owner or the actor reads
 and edits them through the `/context` mount (`vfs/context-plane.ts`).
+
+Every model request leaves evidence in `actor_requests`: one row for a turn's
+admission, then one row per step. An admission's messages are the working
+context revision it was admitted at. A step's messages are a revision of the
+actor's `requests` context, which nobody selects and which is stored in the
+same interval rows (`context_memberships`); `request_renders` names that
+revision. So a step writes only the positions that changed since the previous
+request. A message the step pipeline made or rewrote (a woven block, replayed
+tool-call ids, cache markers) is one `render` row, named by the SHA-256 of its
+stored bytes, however many requests carry it. `SessionRequests`
+(`session/requests.ts`) owns this. Steps recorded before the `requests` context
+existed kept their lists in `request_messages`, which nothing reads or writes
+now. Such a step reads as "Request details were not kept", and a turn
+interrupted on one settles `aborted` with that note in its thread.
 
 Readers answer from the entries: the chat pane's page walk
 (`getChatHistoryPage` in `read-models/status.ts`, over `session/page.ts`),

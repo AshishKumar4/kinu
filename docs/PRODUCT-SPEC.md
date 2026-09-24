@@ -303,7 +303,7 @@ None of this forms one serializable prompt file. Each mutable runtime object is 
 
 | Path or area | What it currently represents | What it does not prove |
 |---|---|---|
-| `/home/user` | Canonical relative-path root for workspace file operations. | A second file copy for each actor. |
+| `/home/main` | Canonical relative-path root for workspace file operations; the main agent's home. `/home/user` is a link to it. | A second file copy for each actor. |
 | `SOUL.md` | Owner-editable workspace identity/purpose prose. | Permission for an agent to rewrite owner policy. |
 | `memory/MEMORY.md`, `memory/*` | Durable notes and indexed memory. | The exact active conversation. |
 | `scaffold/agent.js`, `scaffold/agent.js.vN` | Main scaffold view and version source. SQL selects the current/promoted version. | That any arbitrary file overwrite automatically changes an in-flight loop. |

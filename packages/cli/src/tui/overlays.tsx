@@ -328,15 +328,16 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
   const options: SelectOption[] = filteredModels.map((model) => {
     const context = formatContextWindow(model.contextWindow);
 
+    const fields = [
+      model.label,
+      model.provider,
+      model.spec,
+      context ? `${context} ctx` : '',
+      model.capabilities?.length ? model.capabilities.join(', ') : '',
+    ].filter(Boolean).join(' · ');
+
     return {
-      name: clipText([
-        model.spec === currentSpec ? '✓' : ' ',
-        model.label,
-        model.provider,
-        model.spec,
-        context ? `${context} ctx` : '',
-        model.capabilities?.length ? model.capabilities.join(', ') : '',
-      ].filter(Boolean).join(' · '), innerWidth),
+      name: clipText(`${model.spec === currentSpec ? '✓' : ' '} ${fields}`, innerWidth),
       description: '',
       value: model,
     };

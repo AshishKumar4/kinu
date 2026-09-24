@@ -4,6 +4,7 @@
  * The signed message is the canonical text {@link releaseMessage} builds, never JSON.
  */
 import * as v from 'valibot';
+import { compareCodeUnits } from '../utils/text';
 
 /** Hex. A rotation must ship under the old key first: older machines verify with the key they carry. */
 export const RELEASE_SIGNING_PUBLIC_KEY = '232098b9f5cc9b300b903bb9f3347ecb2b62115b2711438ab7fab12d30bfbaef';
@@ -28,16 +29,10 @@ export const SignedReleaseSchema = v.object({
 
 export type SignedRelease = v.InferOutput<typeof SignedReleaseSchema>;
 
-/** Codepoint order, never locale order: it is part of the signed bytes. */
-function comparePaths(a: string, b: string): number {
-  if (a < b) return -1;
-
-  return a > b ? 1 : 0;
-}
-
 function releaseMessage(version: string, checksums: ReleaseChecksums): Uint8Array<ArrayBuffer> {
   const lines = Object.entries(checksums)
-    .sort(([a], [b]) => comparePaths(a, b))
+    // Never locale order: the order is part of the signed bytes.
+    .sort(([a], [b]) => compareCodeUnits(a, b))
     .map(([path, sha256]) => `${path} ${sha256.toLowerCase()}`);
 
   return new TextEncoder().encode([MESSAGE_PREFIX, version, ...lines, ''].join('\n'));

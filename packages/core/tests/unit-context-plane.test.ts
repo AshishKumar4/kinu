@@ -19,7 +19,7 @@ import { TurnFileLedger } from '../src/tools/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 import type { ActorContextStores, ChildContextResolver, ContextFileHeader } from '../src/vfs/context-plane';
 import type { ContextEditEvent } from '../src/types/context-plane';
-import type { VFS } from '../src/types/primitives';
+import type { SqlExecutor, SqlValue, VFS } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 
@@ -63,12 +63,25 @@ function emptyTree(): VFS {
 interface Workspace {
   readonly bind: (actorId: string) => Bound;
   readonly files: VFS;
+  readonly sql: SqlExecutor;
+  /** Every row of every table. */
+  readonly rows: () => number;
+  /** SQL statements the stores ran so far. */
+  readonly statements: () => number;
   readonly close: () => void;
 }
 
 function workspace(): Workspace {
   const testSql = createTestSql();
-  const { sql, execRaw } = testSql;
+  const { execRaw } = testSql;
+  let statements = 0;
+
+  const sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => {
+    statements += 1;
+
+    return testSql.sql<T>(query, ...values);
+  };
+
   const actors = createTestActors(sql, execRaw);
   initActorClaimTables(execRaw);
   const transactionSync = <T>(write: () => T): T => write();
@@ -87,6 +100,10 @@ function workspace(): Workspace {
       return { handle, claims, history, stores: { claims, events: null } };
     },
     files: vfs,
+    sql,
+    rows: () => testSql.db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table'").all()
+      .reduce((sum, { name }) => sum + (testSql.db.query<{ n: number }, []>(`SELECT count(*) AS n FROM "${name}"`).get()?.n ?? 0), 0),
+    statements: () => statements,
     close: () => { testSql.close(); },
   };
 }
@@ -298,6 +315,25 @@ test('evidence under /context is readable and not writable, and the plane invent
   await expect(vfs.unlink('/context/working.jsonl')).rejects.toMatchObject({ code: 'EACCES' });
   await expect(vfs.mkdir('/context/whatever')).rejects.toMatchObject({ code: 'EACCES' });
   expect(await vfs.exists('/context/nothing-here.json')).toBe(false);
+  ws.close();
+});
+
+test('a step recorded before request lists were kept reads as a note, not an error', async () => {
+  const ws = workspace();
+  const actor = ws.bind('actor-unkept');
+  const vfs = planeFor(actor);
+  await hydrate(actor, [{ role: 'user', content: 'q' }]);
+  const claim = await admitOn(actor, { runId: 'run-1', turnId: 'turn-1' });
+  // What the code before the request lineage left of a step: its row, its list in a table nothing reads now.
+  void ws.sql`INSERT INTO actor_requests(actor_id,request_id,turn_id,run_id,epoch,step_index,revision,context_id,context_revision,metadata_json,recorded_at)
+    VALUES(${claim.actorId},'old-step',${claim.turnId},${claim.runId},${claim.epoch},0,1,${claim.workingContextId},${claim.workingRevision},'{}',0)`;
+
+  const document = v.parse(v.object({ request: v.object({ id: v.string() }), messages: v.null(), note: v.string() }),
+    JSON.parse(await readText(vfs, '/context/requests/turn-1/1-1.json')));
+
+  expect(document.request.id).toBe('old-step');
+  expect(document.note).toMatch(/^Request details were not kept before \d{4}-\d\d-\d\d \d\d:\d\d UTC\.$/u);
+  expect((await actor.claims.consumedContext('turn-1', 0))?.messages).toBeNull();
   ws.close();
 });
 
@@ -517,13 +553,13 @@ test('a landed edit preserves the recorded tail exactly, with a woven block and 
 
   await hydrate(actor, older);
   const claim = await admitOn(actor, { runId: 'run-coord', turnId: 'turn-coord' });
-  const admitted = await actor.claims.admittedFor(claim);
-  expect(admitted.messages).toHaveLength(3);
+  const admitted = (await actor.claims.admittedContext(claim.turnId))?.messages ?? [];
+  expect(admitted).toHaveLength(3);
 
   const steps = stepsOf(actor, claim);
 
   const first = await composePrepareStep({ prune, dynamic, context: steps },
-    { stepNumber: 0, messages: [...admitted.messages], steps: [] });
+    { stepNumber: 0, messages: [...admitted], steps: [] });
 
   expect(first?.messages).toHaveLength(4);
   const renderedFirst = await actor.claims.consumedContext('turn-coord');
@@ -574,6 +610,50 @@ test('a landed edit preserves the recorded tail exactly, with a woven block and 
     { stepNumber: 2, messages: [], steps: [] });
 
   expect(third?.messages?.[0]).toEqual({ role: 'user', content: 'corrected question' });
+  ws.close();
+});
+
+/** 2026-09-23, 300 two-step turns through the CLI: every request stored a copy of every tool exchange and one row per
+ *  prompt message, so turn 2 added 77 rows and turn 300 added 4,845, and turn time grew with them. */
+test('a turn stores and runs only what it added, and every request reads back as the messages it sent', async () => {
+  const ws = workspace();
+  const actor = ws.bind('actor-growth');
+  const assertOwner = () => { actor.handle.assertCurrent(); };
+
+  // The production step pipeline: a woven block, replayed tool ids rewritten, cache markers on the tail.
+  const pipeline = {
+    prune: { contextWindow: 200_000, modelOutputLimit: 8_000 },
+    dynamic: { ledger: new DynamicContextLedger(), snapshot: () => ({ recoveries: ['a finding proven by execution'] }) },
+    destinationProviderId: 'anthropic',
+    cache: { strategy: { kind: 'anthropic' as const } },
+  };
+
+  const added: { rows: number; statements: number }[] = [];
+
+  for (let turn = 0; turn < 24; turn++) {
+    const turnId = `turn-${String(turn)}`;
+    const before = { rows: ws.rows(), statements: ws.statements() };
+    await actor.history.append({ id: `ask-${String(turn)}`, message: { role: 'user', content: `question ${String(turn)}` }, origin: 'input', turnId, assertOwner });
+    const claim = await admitOn(actor, { runId: `run-${String(turn)}`, turnId });
+    const context = stepsOf(actor, claim);
+    const sent = [await composePrepareStep({ ...pipeline, context }, { stepNumber: 0, messages: [], steps: [] })];
+    await actor.history.append({ id: `call-${String(turn)}`, origin: 'output', turnId, assertOwner,
+      message: { role: 'assistant', content: [{ type: 'tool-call', toolCallId: `c${String(turn)}`, toolName: 'probe', input: { turn } }] } });
+    await actor.history.append({ id: `result-${String(turn)}`, origin: 'output', turnId, assertOwner,
+      message: { role: 'tool', content: [{ type: 'tool-result', toolCallId: `c${String(turn)}`, toolName: 'probe', output: { type: 'text', value: `output ${String(turn)}` } }] } });
+    sent.push(await composePrepareStep({ ...pipeline, context }, { stepNumber: 1, messages: [], steps: [] }));
+    await actor.history.append({ id: `answer-${String(turn)}`, origin: 'output', turnId, assertOwner,
+      message: { role: 'assistant', content: [{ type: 'text', text: `answer ${String(turn)}` }] } });
+    actor.claims.settle(claim, 'completed');
+    added.push({ rows: ws.rows() - before.rows, statements: ws.statements() - before.statements });
+
+    // Byte for byte: the replay and cache checks read this list, not a copy of the step pipeline's inputs.
+    for (const [step, request] of sent.entries()) expect(JSON.stringify((await actor.claims.consumedContext(turnId, step))?.messages)).toBe(JSON.stringify(request?.messages));
+  }
+
+  // Each turn adds the same four messages, so after the first it writes the same rows and runs the same statements,
+  // however long the history: a statement per carried message is latency the clock would show later.
+  expect(added.slice(1)).toEqual(added.slice(1).map(() => added[1]));
   ws.close();
 });
 

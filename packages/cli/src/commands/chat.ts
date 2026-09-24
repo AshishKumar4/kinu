@@ -1,4 +1,5 @@
 import { resolveAgentTarget } from '../agent-target';
+import { lastUsedLocalRef } from '../config';
 import { agentTargetExists, requireAgentTarget } from '../local-target';
 import { CloudAgentClient } from '../cloud-agent-client';
 import { createLocalPeerAgent } from '../agent-create';
@@ -41,7 +42,12 @@ export async function chatCommand(
   let chosen = name;
 
   if (chosen === undefined || chosen === '') {
-    if (!opts.classic && process.stdin.isTTY && process.stdout.isTTY) {
+    // The directory is the workspace: reopen the one used last here.
+    const here = lastUsedLocalRef();
+
+    if (here !== null) {
+      chosen = here.name;
+    } else if (!opts.classic && process.stdin.isTTY && process.stdout.isTTY) {
       // Lazy: opentui captures the terminal and must never load on non-TUI paths.
       const { runHomeTui } = await import('../tui/home-app');
       const action = await runHomeTui(opts);
@@ -50,7 +56,9 @@ export async function chatCommand(
 
       return;
     }
+  }
 
+  if (chosen === undefined || chosen === '') {
     const agents = listKnownAgents();
 
     if (agents.length === 0) {
@@ -83,8 +91,6 @@ export async function chatCommand(
   if (target.mode === 'local') ensureLocalDaemonRunning();
   installTurnDiagnostics();
   const client = await createAgentClient(target, opts);
-  // Only cloud replays history; a local conversation seeds the model from the database.
-  const hydrateHistory = target.mode === 'cloud';
 
   if (opts.classic || !process.stdin.isTTY || !process.stdout.isTTY) {
     await runChatLoop({ client });
@@ -92,7 +98,6 @@ export async function chatCommand(
     const { runTuiChat } = await import('../tui/chat-app');
     await runTuiChat({
       client,
-      hydrateHistory,
       onWorkspaceSelect: async (selectedName) => {
         const selectedTarget = resolveAgentTarget(selectedName);
 
@@ -108,7 +113,6 @@ export async function chatCommand(
       },
       onNewAgent: async (current) => {
         if (current.mode === 'cloud') {
-          // Only the cloud client can create an additional agent on its workspace.
           if (!(current instanceof CloudAgentClient)) {
             throw new Error('This cloud session cannot create additional agents.');
           }

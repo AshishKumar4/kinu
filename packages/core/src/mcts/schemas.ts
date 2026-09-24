@@ -35,4 +35,13 @@ export function initSearchTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE INDEX IF NOT EXISTS idx_sn_parent ON search_nodes(actor_id, parent_id)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_sn_status_value ON search_nodes(actor_id, status, value DESC)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_sn_root_status ON search_nodes(actor_id, root_id, status)`);
+  // A node's own score; every reader of a score reads it here.
+  // `MCTS/Convergence.lean — the_winner_carries_the_best_reward`.
+  execRaw(`CREATE VIEW IF NOT EXISTS search_node_scores AS
+    SELECT n.*, CASE
+      WHEN n.parent_id IS NULL THEN n.value
+      WHEN r.record_json IS NOT NULL THEN json_extract(r.record_json, '$.outcome.score')
+      ELSE COALESCE(json_extract(n.evaluation_json, '$.score'), 0) END AS own_score
+    FROM search_nodes n
+    LEFT JOIN swarm_node_records r ON r.actor_id = n.actor_id AND r.node_id = n.id`);
 }

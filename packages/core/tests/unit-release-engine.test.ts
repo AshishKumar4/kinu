@@ -778,7 +778,7 @@ describe('createSandboxReleaseExec', () => {
       writeFile: async () => ({}),
       listFiles: async () => ({ files: [] }),
       deleteFile: async () => ({}),
-      exposePort: async () => ({ url: 'x', port: 0 }),
+      exposePort: async () => ({ url: 'x', port: 0, route: { reached: true } }),
       unexposePort: async () => ({}),
       getExposedPorts: async () => [],
       ...sandboxHandleLifecycle,
@@ -838,7 +838,7 @@ describe('createSandboxReleaseExec', () => {
 
     const ok = createSandboxReleaseExec(handle, {
       exposePort: async (port, opts) => ({
-        supported: true, url: `https://${port}-sb-t.previews.example/`, port, name: opts?.name, verified_listening: true,
+        supported: true, url: `https://${port}-sb-t.previews.example/`, port, name: opts?.name, route: { reached: true },
       }),
     });
 

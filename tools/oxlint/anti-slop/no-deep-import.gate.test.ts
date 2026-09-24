@@ -67,6 +67,18 @@ assert.deepEqual(
   [["**/node_modules/**"]],
   `${RULE} must ban every path through node_modules, at any depth, for any package`,
 );
+// An override replaces the rule's options for the files it matches, so each override that sets the rule
+// restates the group; one that dropped it would re-admit the reach in exactly those files.
+for (const override of config.overrides ?? []) {
+  const options = override.rules?.[RULE];
+
+  if (options === undefined) continue;
+  assert.deepEqual(
+    options[1]?.patterns?.map((pattern: { group: readonly string[] }) => pattern.group),
+    [["**/node_modules/**"]],
+    `the override for ${JSON.stringify(override.files)} sets ${RULE} without the node_modules ban`,
+  );
+}
 assert.equal(config.options?.denyWarnings, true);
 assert.equal(config.options?.reportUnusedDisableDirectives, "error");
 

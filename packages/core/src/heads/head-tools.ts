@@ -7,12 +7,12 @@
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import { buildToolSurface } from '../tools/builtins';
 import { buildHeadAccumulatorTools, HeadCapture, withHeadCaptureRecording } from './head-inference';
-import { budgetExhausted, HEAD_BUILTIN_TOOLS } from './types';
+import { HEAD_BUILTIN_TOOLS } from './types';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { SessionHistory } from '../session/history';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
 import type { WebSearchProvider } from '../web/index';
-import { KinuError, renderThrownChain } from '../obs/index';
+import { renderThrownChain } from '../obs/index';
 import { failedToolOutcome } from '../tools/outcome';
 import { permitInPlan } from '../execution/work-mode';
 
@@ -52,7 +52,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
   const extra: ToolSet = { ...buildHeadAccumulatorTools(capture) };
 
   // Depth is fixed for the whole run, so a head with none left is not offered the tool, and the prompt
-  // (built from these keys) follows. The wall clock stays a runtime check in execute.
+  // (built from these keys) follows.
   if (input.budget.maxDepth > 0) {
     extra.split_subheads = permitInPlan(tool({
       description:
@@ -78,18 +78,6 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
         },
       }),
       execute: async ({ rationale, heads, merge_strategy }, options): Promise<string> => {
-        // Only the deadline can be spent here. Recorded so refusals are visible in the journal.
-        const exhausted = budgetExhausted(input.budget);
-
-        if (exhausted.exhausted) {
-          const failure = new KinuError('denied', 'Cannot split: budget exhausted (' + exhausted.reason + ').');
-          capture.recordToolCall({
-            name: 'split_subheads', args: { rationale, heads }, result: failure.message,
-            outcome: failedToolOutcome({ cause: failure }), toolCallId: options.toolCallId,
-          });
-          throw failure;
-        }
-
         try {
           const result = await deps.split({
             rationale, heads, mergeStrategy: merge_strategy ?? input.mergeStrategy,

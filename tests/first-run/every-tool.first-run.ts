@@ -37,7 +37,7 @@ const CASE = 'every-tool' as const;
  *  table moves this row with it. */
 const ROOT_TOOLS: readonly string[] = BUILTIN_TOOLS.filter((name) => !DEPS_GATED_TOOLS.includes(name));
 
-const PROBE_PATH = '/home/user/tools-probe.txt';
+const PROBE_PATH = '/home/main/tools-probe.txt';
 
 const PROBE_BYTES = 'KINU-EVERY-TOOL';
 

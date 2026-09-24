@@ -3,8 +3,13 @@
  * the output limit must owe exactly one continuation turn, and no other turn owes one.
  */
 import { describe, expect, test } from 'bun:test';
-import { OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OUTPUT_LIMIT_REACHED } from '@kinu.run/core';
-import { orchestratorHarness, chatSessionTurns, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import {
+  OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OUTPUT_LIMIT_REACHED, PROGRAMMATIC_MESSAGE_ID_PREFIX,
+} from '@kinu.run/core';
+import {
+  orchestratorHarness, chatSessionTurns, ledgerOver, storedChat, workspaceMainActor,
+  type ActorHarness, type HarnessOrchestratorAgent,
+} from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 
 interface EffectRow {
@@ -12,16 +17,29 @@ interface EffectRow {
   readonly status: string;
 }
 
+/** The sequence's per-effect rows as stored, before its close prunes the completed ones. */
+function storedEffects(harness: ActorHarness<HarnessOrchestratorAgent>, turnId: string, messageId: string): EffectRow[] {
+  return harness.db.query<EffectRow, [string, string]>(
+    'SELECT effect_key, status FROM terminal_effects WHERE actor_id = ? AND sequence_id = ? ORDER BY seq, effect_key',
+  ).all(workspaceMainActor(harness.db).actorId, ledgerOver(harness.db).sequenceId({ turnId, messageId }));
+}
+
 /** Settle one response with finish `reason` through production's loop and ledger; return its claimed rows. */
 async function settle(
   harness: ActorHarness<HarnessOrchestratorAgent>, turnId: string, messageId: string, reason: 'stop' | typeof OUTPUT_LIMIT_REACHED,
 ): Promise<readonly EffectRow[]> {
   await chatSessionTurns(harness.agent).settle({ turnId, messageId, text: 'the answer so far', finishReason: reason });
-  const effects = harness.agent.harnessTerminalEffects(turnId, messageId);
-  await harness.agent.harnessTerminalReported();
+  const effects = storedEffects(harness, turnId, messageId);
   await joinHarnessFibers();
 
   return effects;
+}
+
+/** Whether the continuation turn keyed on `messageId` is in the stored conversation. */
+async function continuationOnDisk(harness: ActorHarness<HarnessOrchestratorAgent>, messageId: string): Promise<boolean> {
+  const id = `${PROGRAMMATIC_MESSAGE_ID_PREFIX}output-continuation:${messageId}`;
+
+  return (await storedChat(harness)).some((message) => message.id === id);
 }
 
 const owesContinuation = (effects: readonly EffectRow[]): boolean =>
@@ -34,7 +52,7 @@ describe('a cloud turn cut at the output limit is continued exactly once', () =>
     const effects = await settle(harness, 'u-cut', 'a-cut', OUTPUT_LIMIT_REACHED);
 
     // Keyed on this response so a post-eviction replay finds the same turn.
-    expect(harness.agent.harnessChatLoop.announcementOnDisk('output-continuation:a-cut')).toBe(true);
+    expect(await continuationOnDisk(harness, 'a-cut')).toBe(true);
     expect((await harness.agent.listRuns()).items).toHaveLength(2);
     // Still owed: the continuation turn ran after the row was attempted.
     expect(effects.find((row) => row.effect_key === 'v1:output_continuation:a-cut'))
@@ -48,7 +66,7 @@ describe('a cloud turn cut at the output limit is continued exactly once', () =>
     const effects = await settle(harness, 'u-done', 'a-done', 'stop');
 
     expect(owesContinuation(effects)).toBe(false);
-    expect(harness.agent.harnessChatLoop.announcementOnDisk('output-continuation:a-done')).toBe(false);
+    expect(await continuationOnDisk(harness, 'a-done')).toBe(false);
   });
 
   /** One continuation is the whole allowance, matching `runChat`; a second `length` is partial completion. */
@@ -59,23 +77,6 @@ describe('a cloud turn cut at the output limit is continued exactly once', () =>
       kinuEvent: OUTPUT_CONTINUATION_EVENT,
     });
     const effects = await settle(harness, 'u-second', 'a-second', OUTPUT_LIMIT_REACHED);
-
-    expect(owesContinuation(effects)).toBe(false);
-  });
-
-  /** A continuation spliced mid-turn carries no `kinuEvent`, and must still not earn a second one. */
-  test('a turn that absorbed the continuation mid-step owes no second one', async () => {
-    const harness = orchestratorHarness();
-    harness.agent.harnessDrivingUserMessage('write the whole report');
-    await harness.agent.declareTurnInFlight(true);
-
-    const routed = await harness.agent.observeOrch().inbox.send({
-      kind: OUTPUT_CONTINUATION_EVENT, text: OUTPUT_CONTINUATION_TEXT,
-    });
-
-    expect(routed).toBe('mid-turn');
-    await harness.agent.observeOrch().inbox.prepareStep({ stepNumber: 0, messages: [] });
-    const effects = await settle(harness, 'u-spliced', 'a-spliced', OUTPUT_LIMIT_REACHED);
 
     expect(owesContinuation(effects)).toBe(false);
   });

@@ -8,14 +8,21 @@ export type {
   ExecutorInfo,
   ResourceLimits,
   ExecutionRouter,
+  PreviewRouteCheck,
 } from './types';
 
 export { EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS } from './types';
 
 export {
   commandResult, CommandResultSchema, COMMAND_RESULT_TYPE, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
-  STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
 } from './exec-result';
+
+export {
+  BoundedOutput, COMMAND_OUTPUT_LIMITS,
+  type CommandOutputLimits, type OutputSpill, type SpillOutcome,
+} from './bounded-output';
+
+export { unsandboxedCommandEnvironment } from './command-env';
 
 export {
   TurnEscalationLedger, ESCALATION_OUTCOMES,
@@ -113,4 +120,4 @@ export { sandboxFiles } from './sandbox';
 export { nimbusSessionFiles } from './nimbus';
 
 
-export { deviceFiles, type DeviceFileConsent } from './device-tunnel-executor';
+export { deviceFiles, type DeviceFileConsent, type DeviceFileScope } from './device-tunnel-executor';

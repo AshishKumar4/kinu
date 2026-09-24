@@ -7,13 +7,10 @@ import type { UIMessage } from 'ai';
 import type { PlanReview, SlateSummary, JsonObject, JsonValue } from '@kinu.run/core';
 import { MOVIE_CUES, MOVIE_END } from '@kinu.run/core';
 import { PLAN_FIXTURE, SLATE_PREVIEW_URL, SLATE_SUMMARY } from './landing-fixtures';
+import { SLATE_PREFIX, type SlateSurfaceKind } from '@kinu.run/core';
 
-/** Structurally the product `SurfaceKind` subset, restated rather than imported: the scripts
- *  gate typechecks this file under its own JSX runtime, and any component import drags in DOM. */
-export type MovieSurface = 'Work' | `slate:${string}`;
-
-/** `SLATE_PREFIX` in `components/surfaces/presence.ts`, restated for the same reason. */
-const SLATE_PREFIX = 'slate:';
+/** The two surfaces the walkthrough shows. */
+export type MovieSurface = 'Work' | SlateSurfaceKind;
 
 export type MovieTarget = 'cursor-origin' | 'composer' | 'approve' | 'slate-tab';
 
@@ -215,9 +212,9 @@ function messagesAt(t: number): UIMessage[] {
   if (t >= MOVIE_CUES.approvedText) build.push({ type: 'text', text: APPROVED_TEXT });
 
   for (const [id, path, startAt, doneAt] of [
-    ['movie-manifest', '/home/user/slates/support-queue/package.json', MOVIE_CUES.manifestStart, MOVIE_CUES.manifestDone],
-    ['movie-server', '/home/user/slates/support-queue/server.ts', MOVIE_CUES.serverStart, MOVIE_CUES.serverDone],
-    ['movie-client', '/home/user/slates/support-queue/client.tsx', MOVIE_CUES.clientStart, MOVIE_CUES.clientDone],
+    ['movie-manifest', '/home/main/slates/support-queue/package.json', MOVIE_CUES.manifestStart, MOVIE_CUES.manifestDone],
+    ['movie-server', '/home/main/slates/support-queue/server.ts', MOVIE_CUES.serverStart, MOVIE_CUES.serverDone],
+    ['movie-client', '/home/main/slates/support-queue/client.tsx', MOVIE_CUES.clientStart, MOVIE_CUES.clientDone],
   ] as const) {
     const write = toolPart(t, {
       tool: 'file', id, startAt, doneAt,

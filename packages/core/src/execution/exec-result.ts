@@ -4,6 +4,7 @@ import * as v from 'valibot';
 import { ERROR_CODES, refusalOf, KinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import { FILE_REFUSAL_REASONS } from '../types/file-edits';
+import type { PreviewRouteCheck } from './types';
 
 const RefusalSchema = v.object({
   reason: v.picklist(ERROR_CODES),
@@ -22,12 +23,12 @@ export interface ExecOutcome {
   readonly refusal?: Refusal;
 }
 
-export const STDOUT_LABEL = '--- stdout ---';
+const STDOUT_LABEL = '--- stdout ---';
 
-export const STDERR_LABEL = '--- stderr ---';
+const STDERR_LABEL = '--- stderr ---';
 
 /** What a command that wrote nothing anywhere reads as. */
-export const NO_OUTPUT = '(no output)';
+const NO_OUTPUT = '(no output)';
 
 /** Encode a declared refusal-string channel; never use it to classify arbitrary output. */
 export function refusalText(error: KinuError | Refusal): string {
@@ -67,6 +68,12 @@ export function commandResult(result: ExecOutcome): CommandResult {
   const output = formatExecResult(result);
 
   return (result.exitCode ?? 0) === 0 ? output : { reason: 'io', error: output, execution: { exitCode: result.exitCode ?? 0 } };
+}
+
+export function exposedPortText(url: string, port: number, route: PreviewRouteCheck): string {
+  return route.reached
+    ? `${url}\nverified: a request to this URL reaches the server on port ${String(port)}`
+    : `${url}\nnot reached: the preview route's ${route.gate} gate refused: ${route.detail}`;
 }
 
 export function formatExecResult(result: ExecOutcome): string {
