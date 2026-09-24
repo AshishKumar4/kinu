@@ -1,27 +1,25 @@
 /**
- * What one eval run was, recorded so later runs can be compared against it. A run is not admissible
- * evidence until the harness asserts the outcome was measured, not merely configured. The observation
- * union and pairing key follow pi's vitest-evals collector; statistics live in packages/core/src/bench.
+ * What one first-run tier run was, recorded beside its transcripts. A run is not admissible evidence
+ * until the harness asserts the outcome was measured, not merely configured. The observation union
+ * follows pi's vitest-evals collector.
  */
 import { execFileSync } from 'node:child_process';
-import * as v from 'valibot';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { recordNoModelEpisode, recordUnmeasuredEpisode, recordWorkspaceSpend, type LiveModelSpend } from './live-model';
 import {
-  BUILTIN_TOOLS, classifyToolFailure, DEFAULT_WORKERS_AI_MODEL_ID, minimumPairsForSignificance, requiredPairs,
-  type ActorHandle, type Clock, type ReasoningEffort, type RunEvent, type SqlExecutor, type WorkspaceSpend,
-  type ToolOutcome,
+  classifyToolFailure, DEFAULT_WORKERS_AI_MODEL_ID,
+  type Clock, type ReasoningEffort, type RunEvent, type WorkspaceSpend, type ToolOutcome,
 } from '@kinu.run/core';
 import { gitEnv } from './git';
-import { BEHAVIOUR_SCORERS, type BehaviourScorer } from './agent-evals';
+import { BEHAVIOUR_SCORERS } from './agent-evals';
 import { TASK_OUTCOME, isCovariateRow, type EvalSubgoal } from './eval-outcome';
 import { compareRunEventOrder } from './eval-target';
 
 /**
  * The DeepSeek arms, read from the live model catalogue (flash is not derivable from pro: `-0813` vs
  * `-0731`). Flash for high-volume stats, pro for upper bounds. `product` is imported from core's default,
- * the arm `gate:trajectory` runs on after a deploy.
+ * the arm the first-run tier runs on after a deploy.
  */
 export const EVAL_MODELS = {
   flash: '@cf/deepseek-ai/deepseek-v4-flash-0731',
@@ -44,8 +42,6 @@ export interface EvalArmState {
 }
 
 export type EvalPromptStyle = 'caveman' | 'use-swarm';
-
-export const FULL_TOOL_SURFACE: readonly string[] = [...BUILTIN_TOOLS];
 
 /** pi's outcome union: a score exists only when scored. `incomplete` is no verdict (cancelled, crashed,
  *  or killed by the environment); the run still owes the case, so a restart retries it. */
@@ -364,15 +360,15 @@ export type EvalObservation =
     readonly scores: readonly EvalScoreRow[];
     readonly turns: number;
     readonly toolCalls: number;
-    /** The tools this attempt called, in order. Optional: flash-a/b records predate it; read with `?? []`. */
-    readonly toolNames?: readonly string[];
+    /** The tools this attempt called, in order. */
+    readonly toolNames: readonly string[];
     readonly tokensIn: number;
     readonly tokensOut: number;
-    /** Reasoning tokens, when the provider reported them. Optional: flash-a/b predate it. */
-    readonly reasoningOut?: number;
+    /** Reasoning tokens, zero when the provider reported none. */
+    readonly reasoningOut: number;
     readonly ms: number;
-    /** Bounded run-event provenance; see {@link EvalRunProvenance}. Optional so older records stay readable. */
-    readonly provenance?: EvalRunProvenance;
+    /** Bounded run-event provenance; see {@link EvalRunProvenance}. */
+    readonly provenance: EvalRunProvenance;
   }
   | {
     readonly taskId: string;
@@ -381,10 +377,6 @@ export type EvalObservation =
     readonly reason: string;
     readonly scores?: never;
   };
-
-export function observationKey(o: Pick<EvalObservation, 'taskId' | 'repetition'>): string {
-  return `${o.taskId}#${String(o.repetition)}`;
-}
 
 /**
  * Why a run is or is not admissible evidence. `outcomesScored` is what gates; mechanism coverage fields are
@@ -410,18 +402,16 @@ export interface EvalRunRecord {
   readonly schema: 1;
   readonly runId: string;
   readonly createdAt: string;
-  /** The eval family (`behaviour`, `research`, `optimization`); `scripts/eval-report.ts` groups on it.
-   *  Optional: flash-a/b predate it, and absence reads as pre-family. */
-  readonly family?: string;
+  /** The tier that wrote the record (`first-run`). */
+  readonly family: string;
   /** The commit under test and whether the tree was dirty; a dirty tree makes a run unreproducible. */
   readonly gitSha: string;
   readonly gitDirty: boolean;
   readonly tier: EvalTier;
   readonly modelId: string;
-  /** The single model the ledger observed serving turns ({@link modelObservedFromEvents}), else null.
-   *  `assessAdmissibility` refuses a record whose non-null observed model differs from `modelId`.
-   *  Optional so older records stay readable; absence is not agreement. */
-  readonly modelObserved?: string | null;
+  /** The single model the ledger observed serving turns ({@link createObservedModelAccumulator}), else null.
+   *  `assessAdmissibility` refuses a record whose non-null observed model differs from `modelId`. */
+  readonly modelObserved: string | null;
   readonly repeats: number;
   readonly seed: number;
   readonly arm: EvalArmState;
@@ -437,73 +427,6 @@ export interface EvalRunRecord {
   readonly transcripts: string;
 }
 
-/** What this design can resolve, computed before anything is spent: 2 differing pairs cannot beat p = 0.5. */
-export interface EvalPreRegistration {
-  readonly tasks: number;
-  readonly repeats: number;
-  readonly pairs: number;
-  readonly minimumPairs: number;
-  readonly dispersion: number;
-  /** False when `dispersion` is the neutral 0.5 assumption rather than measured by running one arm twice. */
-  readonly dispersionMeasured: boolean;
-  /** Tasks needed to resolve a 10 / 20 percentage-point effect at 80% power. */
-  readonly pairsFor10pp: number;
-  readonly pairsFor20pp: number;
-  readonly canReachSignificance: boolean;
-  readonly note: string;
-}
-
-/**
- * @param measuredDispersion ψ from running one arm twice on this corpus (`scripts/eval-dispersion.ts`).
- *   Omitted: the neutral 0.5 is used and labelled as assumed.
- */
-export function preRegister(
-  tasks: number, repeats: number, measuredDispersion?: number,
-): EvalPreRegistration {
-  const minimumPairs = minimumPairsForSignificance();
-  const dispersionMeasured = measuredDispersion !== undefined && measuredDispersion > 0;
-  const dispersion = dispersionMeasured ? measuredDispersion : 0.5;
-  const pairsFor10pp = requiredPairs(0.10, { dispersion });
-  const pairsFor20pp = requiredPairs(0.20, { dispersion });
-  const canReachSignificance = tasks >= minimumPairs;
-
-  const basis = dispersionMeasured
-    ? `psi ${dispersion.toFixed(6)} MEASURED on this corpus`
-    : `psi ${dispersion.toFixed(2)} ASSUMED — no same-arm pair measured yet`;
-
-  return {
-    tasks, repeats, pairs: tasks, minimumPairs, dispersion, dispersionMeasured,
-    pairsFor10pp, pairsFor20pp, canReachSignificance,
-    note: canReachSignificance
-      ? `${String(tasks)} pairs can reach significance; resolving 20pp at 80% power needs `
-        + `${String(pairsFor20pp)} (${basis})`
-      : `${String(tasks)} pairs CANNOT reach significance at any effect size — `
-        + `${String(minimumPairs)} is the floor (${basis})`,
-  };
-}
-
-/** Score every behavioural instrument against one store. A throwing scorer propagates: a corrupt ledger is not an absent mechanism. */
-export function scoreTrajectory(
-  sql: SqlExecutor, actor: ActorHandle, scorers: readonly BehaviourScorer[] = BEHAVIOUR_SCORERS,
-): EvalScoreRow[] {
-  return scorers.map((scorer) => {
-    const score = scorer.score(sql, actor);
-
-    return { ...score, name: scorer.name, asserts: scorer.asserts };
-  });
-}
-
-/**
- * The model a run's ledger observed serving its turns, or null unless exactly one serving id appears.
- * `step_finish` rows only: `model_call` rows include judges and auxiliary lanes on other models by design.
- */
-export function modelObservedFromEvents(events: readonly RunEvent[]): string | null {
-  const seen = new Set<string>();
-  collectServingIds(events, seen);
-
-  return seen.size === 1 ? [...seen][0] ?? null : null;
-}
-
 function collectServingIds(events: readonly RunEvent[], seen: Set<string>): void {
   for (const event of events) {
     // CLI steps carry no modelId; their agent operations do.
@@ -514,7 +437,10 @@ function collectServingIds(events: readonly RunEvent[], seen: Set<string>): void
   }
 }
 
-/** The incremental form of {@link modelObservedFromEvents}, one accumulator per run, same single-or-null rule. */
+/**
+ * The model a run's ledger observed serving its turns, fed run by run: null unless exactly one serving id
+ * appears. `step_finish` rows only: `model_call` rows include judges and auxiliary lanes on other models by design.
+ */
 export interface ObservedModelAccumulator {
   note(events: readonly RunEvent[]): void;
   readonly observed: string | null;
@@ -680,7 +606,7 @@ function writeRunRecord(path: string, record: EvalRunRecord): void {
 
 /**
  * Publish a run's record, or say why there is none; the only writer. A run that attempted nothing gets no
- * record. Destination is `KINU_EVAL_RECORD` or the run's transcripts directory, never `tests/eval/runs/`:
+ * record. Destination is `KINU_EVAL_RECORD` or the run's transcripts directory, never a tracked directory:
  * that dirties the checkout and `deploy.sh` refuses a dirty tree. Returns the record, or null.
  */
 export function publishRunRecord(inputs: RunRecordInputs): EvalRunRecord | null {
@@ -701,42 +627,6 @@ export function publishRunRecord(inputs: RunRecordInputs): EvalRunRecord | null 
   return record;
 }
 
-/** The version marker every stored record must carry, validated so a schema bump fails loudly. Schema 1 is
- *  only produced by `writeRunRecord`, so the envelope is the record's identity. */
-const RunRecordSchema = v.custom<EvalRunRecord>(
-  (raw) => v.is(v.looseObject({ schema: v.literal(1) }), raw),
-  'not an eval run record of schema 1',
-);
-
-export function readRunRecord(path: string): EvalRunRecord {
-  const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
-  const record = v.safeParse(RunRecordSchema, raw);
-
-  if (!record.success) {
-    throw new Error(`${path}: ${record.issues.map((issue) => issue.message).join('; ')}`);
-  }
-
-  return record.output;
-}
-
-/** Every record path under a root (`<root>/<run>/run-record.json` or `<root>/*.json`), shared by eval-report and eval-triage. */
-export function runRecordPaths(root: string): string[] {
-  if (!existsSync(root)) return [];
-  const paths: string[] = [];
-
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    if (entry.isDirectory()) {
-      const candidate = join(root, entry.name, 'run-record.json');
-
-      if (existsSync(candidate)) paths.push(candidate);
-    } else if (entry.name.endsWith('.json')) {
-      paths.push(join(root, entry.name));
-    }
-  }
-
-  return paths.sort();
-}
-
 function covariateRate(row: { eligible: number; passed: number; unmeasured: boolean }): string {
   if (row.unmeasured) {
     return `unmeasured — ${String(row.eligible)} observed opportunities, ${String(row.passed)} known successes`;
@@ -752,7 +642,7 @@ export function formatRunRecord(record: EvalRunRecord): string {
   const a = record.admissibility;
 
   const lines = [
-    `run ${record.runId} — ${record.family ?? '(pre-family record)'}, `
+    `run ${record.runId} — ${record.family}, `
       + `${record.tier} (${record.modelId})`,
     `  ledger observed: ${record.modelObserved ?? 'no serving model — the record carries no ledger check'}`,
     `  commit ${record.gitSha.slice(0, 9)}${record.gitDirty ? ' [DIRTY — unreproducible]' : ''}`,

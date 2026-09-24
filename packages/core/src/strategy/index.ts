@@ -1,4 +1,3 @@
-// The mcts/heads/single-shot adapter contract lives with its sole consumer, `eval/strategy.ts`.
 export * from './objective';
 
 export * from './swarm';

@@ -222,7 +222,7 @@ export {
 } from './evolution/behavior-labels';
 
 export {
-  initReplayTables, runReplayEval, listReplayEvals,
+  initReplayTables, runReplayEval, listReplayEvals, DEFAULT_QUALITY_THRESHOLD,
   type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
 } from './evolution/replay';
 
@@ -1376,7 +1376,6 @@ export * from './events/ingress/index';
 export * from './strategy/index';
 
 // Eval harness
-export * from './eval/index';
 
 // Bench harness: pure math; the runner lives in scripts/bench.ts.
 export * from './bench/index';
@@ -1919,7 +1918,7 @@ export type {
 } from './read-models/workspace-spend';
 
 export {
-  censusToolFailures, classifyToolFailure, toolFailureKey, toolFailurePartOfKey,
+  censusToolFailures, classifyToolFailure, toolFailureKey,
 } from './read-models/tool-failures';
 
 export type {

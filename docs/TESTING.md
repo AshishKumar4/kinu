@@ -1,6 +1,6 @@
 # Testing Kinu
 
-Most tests run on Bun: core, cf-backend, cli-backend, cli. Durable Object tests run under vitest inside workerd. Behavioural evals run under vitest. The UI gates drive Chrome through puppeteer. This doc gives commands, measured counts, and test conventions.
+Most tests run on Bun: core, cf-backend, cli-backend, cli. Durable Object tests run under vitest inside workerd. The eval suite and the first-run tier run under vitest. The UI gates drive Chrome through puppeteer. This doc gives commands, measured counts, and test conventions.
 
 ## Commands
 
@@ -63,10 +63,11 @@ The ten failures depended on the ambient origin, so they moved between runs. `sc
 
 The preload also assigns a throwaway `KINU_HOME`. `createCLIRuntime` builds its shadow-git checkpoints under `$KINU_HOME/checkpoints`. Before this containment, `mount-plane.test.ts` put ~580 checkpoint stores in the developer's real home.
 
-## The eval tier, which calls a real model
+## The live tier, which calls a real model
 
 ```bash
-bun run test:eval                        # every local arm; resolves a credential by itself
+bun run test:live                        # every suite under tests/live; resolves a credential by itself
+bun run test:live:cloud                  # the one suite with a hosted arm, against the deployment
 ```
 
 The tier acts as the `eval-service` account on the one deployment, `https://kinu.run` (`EVAL_DEPLOYMENT_ORIGIN` in `packages/test-utils/src/eval-identity.ts`). A loopback dev server is the only other origin it accepts. There is no staging. `scripts/eval-credentials.ts` reads `KINU_EVAL_TOKEN` or `~/.config/kinu/eval-session/config.json` (mode 0600 or refused), never `~/.kinu/config.json`. Create the isolated session once:
@@ -77,52 +78,40 @@ KINU_HOME=~/.config/kinu/eval-session \
 chmod 600 ~/.config/kinu/eval-session/config.json
 ```
 
-The deployment synthesizes `eval-service@kinu.run` (`DEV_USER_EMAIL`). That session can create and remove throwaway workspaces. A scoped `ai.proxy` token cannot, so it cannot cover hosted or browser smoke arms.
+The deployment synthesizes `eval-service@kinu.run` (`DEV_USER_EMAIL`). That session can create and remove throwaway workspaces. A scoped `ai.proxy` token cannot, so it cannot cover the hosted arm.
 
-This is the terminal `evals` tier, never a commit, push, CI, or deploy gate. A deploy runs smoke only. The tier prints target and cost basis before spending. With a target resolved, a run that reports no model call exits non-zero; before that check existed, a run reported `TOTAL: 0 model call(s)` with every live test skipped and passed a deploy gate.
+This is a terminal tier, never a commit, push, CI, or deploy gate. The tier prints target and cost basis before spending. With a target resolved, a run that reports no model call exits non-zero; before that check existed, a run reported `TOTAL: 0 model call(s)` with every live test skipped and passed a deploy gate.
 
-### The arms
+### What it runs
 
-The local backend runs six arms. `bun test` matches `*.test.ts` / `*_test.*` / `*.spec.*`, never `*.eval.ts`, so the bun suites and the vitest behaviour arm are two runners. The other four arms are single vitest files, split out because `scripts/eval-spend.ts --expect-live` checks one spend file per arm. A paid subject sharing a file could stop reaching a model while the shared total still passed. On its own file, its zero fails under the printed `EXPECT_LIVE`.
+`scripts/live-tier.sh` runs `bun test ./tests/live/` once:
 
-| Arm | Command | What it measures |
-|---|---|---|
-| bun suites | `bun test ./tests/` | end-to-end lifecycle (a five-turn conversation with a threaded history, judged on content per turn), evolution across sessions, MCTS reached and durably ranked, delegation conversion, one real turn per backend |
-| behaviour evals | `vitest --config vitest.evals.config.ts`, excluding the single-family files | the 7 verifier-graded hard tasks × 2 repetitions = 14 full agent episodes. Judged on the outcome (`task_outcome`) and cost (`budget_adherence`) only, per m303; the mechanism rows (steering, crafting, edits, recovery, spill, tool outcomes) stay in the record as evidence and are not judged. `KINU_EVAL_ARM` picks the arm (below) |
-| live swarm | `vitest … tests/evals/swarm.eval.ts` | one `agents({action:'swarm'})` call through the real tool surface: a `depth:2 branches:3` verifier-scored search with `expand:'aggregate'`, graded on the caller's own `exec-ratio` instrument |
-| research | `vitest … tests/evals/research.eval.ts` | one agent episode whose only source for a fictional topic is a controlled MCP archive this repo serves (`tests/evals/fixtures/`). It is scored by exact match on planted numbers and a canary token. That proves reading, names fabrication, and needs no LLM judge |
-| optimization | `vitest … tests/evals/optimization.eval.ts` | one agent episode against the swarm arm's own metered instrument (`hard-majority-vote`), full tool surface offered, held to a pre-registered `task_outcome ≥ 0.5`. Swarm use and tree shape recorded, never dictated |
-| math | `vitest … tests/evals/math.eval.ts` | nine problem kinds (a linear recurrence, a divisor sum, Pell, spanning trees, dice, blocked lattice paths, a prime sum, a totient sum, a squarefree count), each a fresh instance drawn from a per-run seed (`KINU_EVAL_SEED` pins one), one spawned `kinu exec` episode per instance, `answer.txt` compared exactly. A wrong answer is recorded, not failed. The credential-free half checks every solver against a brute force, the brute-force barriers, and the verifier's green and red fixtures |
+| Suite | What it measures |
+|---|---|
+| `e2e-lifecycle.test.ts` | a five-turn conversation with a threaded history, judged on content per turn, with evolution and MCTS on the in-process runtime |
+| `e2e-full-lifecycle.test.ts`, `deep-evolution.test.ts`, `evolution-proof.test.ts` | evolution across sessions and cross-session transfer |
+| `exploration.test.ts` | whether the agent reaches for a search and leaves a durably ranked winner |
+| `live-smoke.test.ts` | one real turn per backend; under `--backend cloud`, the deployed worker |
 
-The swarm arm requires a winner, oracle calls against its baseline,
-`exploration_records` read through the reader under the objective identity and
-floor digest, and reported `judgeEnsemble` / `fanIn` / `carry` values matching its
-axes. Its credential-free half runs at every tier: the action is offered and a
-strict parse refuses an unknown field by name.
+`tests/live/harness.ts` builds the agent surface through the production roots and holds the refusals that stop a runtime which cannot execute. `tests/live/target-local.ts` provisions the in-process target.
 
-`tests/evals/fixtures/veldmar-corpus.ts` holds research facts, canary, served
-text, and expected answers. Its free checks require facts only in the archive,
-the canary in exactly one entry, and the product `connectMcpServers` handshake.
-Deleting the canary fails before spend. The optimization free check requires a
-threshold that is both clearable and missable.
+The live swarm grade (`tests/evals/swarm.eval.ts`: one `agents({action:'swarm'})` search graded on the caller's own `exec-ratio` instrument by winner/baseline ratio, fan-in and keyed records) was retired with the old eval framework on 2026-09-24. It never produced a settled run: its one credentialed run (1,338 s, 2.45M input tokens) stopped `aborted` after three expansions with no winner, and `exec-ratio` cannot run on the deployment (below), so it could only ever grade the in-process runtime. The swarm is covered by `exploration.test.ts` (a search is reached for, branched and durably ranked, in-process), `tests/first-run/exploration.first-run.ts` (a swarm started on the deployment settles every node and shows on the Swarms pane), and core's unit tests of fan-in (`unit-swarm-depth.test.ts`) and record keying (`unit-exploration-records.test.ts`). Its step-cap probe runs on every eval turn (see Evals).
 
-### Which agent an arm runs against (`--backend local | cloud`)
+### Which agent it runs against (`--backend local | cloud`)
 
-Targets are typed in `packages/test-utils/src/eval-target.ts`.
+`--backend` sets `KINU_EVAL_BACKEND` (`packages/test-utils/src/eval-target.ts`). `tests/live/target-local.ts` provisions the local runtime.
 
 ```bash
-bun run test:eval                        # local target: the in-process cli-backend runtime
-bun run evals:cloud                      # cloud target: a real workspace on the deployment
+bun run test:live                        # local target: the in-process cli-backend runtime
+bun run test:live:cloud                  # cloud target: a real workspace on the deployment
 bun run deploy:preflight                 # does the deployment run this branch? (the cloud arm's gate)
 ```
 
-The seam exists because the two backends once ran different turn loops. The hosted actor ran `@cloudflare/think`, which capped a turn at ten model steps: four of four capped production runs across two workspaces reported `run_end: 'completed'` while the model still called tools, and no local suite could reach that loop. Think was removed from the hosted adapter on 2026-09-20 (`9220b6c05`). Both backends now drive core `ChatSession` (`packages/core/src/orchestrator/chat-session.ts`).
+The two backends once ran different turn loops. The hosted actor ran `@cloudflare/think`, which capped a turn at ten model steps: four of four capped production runs across two workspaces reported `run_end: 'completed'` while the model still called tools, and no local suite could reach that loop. Think was removed from the hosted adapter on 2026-09-20 (`9220b6c05`). Both backends now drive core `ChatSession` (`packages/core/src/orchestrator/chat-session.ts`), and every eval turn checks for that cut (see Evals).
 
-The executors still differ. The local target has the CLI shell with a real `node`. The deployment has the Nimbus `node` shim; per `packages/test-utils/src/eval-target.ts`, it rejects esbuild-wasm's `wasmModule` option, so `exec-ratio`, the only registered verifier kind, returns `unavailable` there.
+The executors still differ. The local target has the CLI shell with a real `node`. The deployment has the Nimbus `node` shim, which rejects esbuild-wasm's `wasmModule` option, so `exec-ratio`, the only registered verifier kind, cannot run there.
 
-The target exposes only the run-event log, workspace spend, a capability probe, filesystem and shell, five search-ledger reads, additional-agent roster, and teardown. It exposes no `sql`. A deployed workspace's SQLite stays in its Durable Object and is read over RPC. `VerifierProbe` writes a module and runs `node`. Its predecessor only asserted a verifier shell existed. `probeVerifier` lives in the target so both arms use it.
-
-Both targets compute spend as `getActivitySnapshot().spend` through `workspaceSpend({ events, sql })` inside the Durable Object (`packages/cf-backend/src/orchestrator.ts`). `recordWorkspaceSpend` is the one accumulator. An episode with no accounting is unmeasured, never zero. `platformSpecific(plan, only, reason, assert)` marks one-target checks and prints their reason. Never hide one in `if (backend === 'local')`.
+Both targets compute spend as `getActivitySnapshot().spend` through `workspaceSpend({ events, sql })` inside the Durable Object (`packages/cf-backend/src/orchestrator.ts`). `recordWorkspaceSpend` is the one accumulator. An episode with no accounting is unmeasured, never zero.
 
 #### The cloud arm is manual and cleans up after itself
 
@@ -130,27 +119,17 @@ The cloud arm needs `--backend cloud` on top of the live-tier requirements, so n
 
 | State | What it says |
 |---|---|
-| no eval credential | mint one: `kinu auth --origin https://kinu.run`, then `kinu tokens create --name evals --scopes ai.proxy`, export as `KINU_EVAL_TOKEN`. The local arm needs none |
+| no eval credential | mint one with `KINU_EVAL_WEB_IDENTITY=... bun scripts/eval-session-mint.ts`, export as `KINU_EVAL_TOKEN`. The local arm needs none |
 | the deployment runs another build | both shas and `bun run deploy`. `--allow-stale` measures the deployed build on purpose |
 | the deployment has no build stamp | its asset bundle is incomplete, so its CLI downloads are broken too. Re-run `bun run deploy` |
 | the deployment is unreachable | the transport failure verbatim. The status code is the whole evidence for calling it infrastructure |
 | credential fronts a model, not a deployment | an AI Gateway creates nothing, so there is no workspace API. Mint an eval-service credential |
 
-Workspaces use the `eval-` prefix and `finally` calls `teardown`. `infraBoundary` marks a cold start or 5xx `INFRA FAILURE`. `skip-ratchet.ts` keeps that classification in the tier report.
-
-A cloud arm must provision through `resolveEvalTarget`. A suite that calls `provisionLocalTarget` is local regardless of its banner, so the tier skips it and names it. Under `--backend cloud` the tier runs `tests/live-smoke.test.ts` as its bun target, the swarm arm's cross-target test, and three cloud-only arms that drive the deployed public API: `trajectory.eval.ts`, `device.eval.ts`, and `kinu-tasks.eval.ts`. It skips the behaviour, research and optimization arms. `tests/e2e-lifecycle.test.ts` drives `generateText`, `EvolutionEngine`, and `runMCTS` over a `CLIRuntime`, so it skips under `=cloud`, as do the swarm suite's in-process arms. `scripts/eval-tier.sh` owns this list. Backend-specific report filenames keep a cloud run from overwriting local evidence.
-
-#### The research and optimization arms drive the spawned CLI
-
-Each runs `kinu create <name> --mode local`, then `kinu exec --workspace <name> --json`, in a scratch `KINU_HOME`. It judges the child event stream and `$home/<workspace>/agent.db`. `tests/evals/cli-driver.ts` is the glue and `bench/harbor/kinu_agent.py` the precedent.
-
-The child's working directory is scratch: `<home>/project`, never this repository. On 2026-08-24 evals left `reference.mjs`, `solution.mjs`, `test-eval.mjs`, `.kinu/tool-output/`, and `attachments/` in the repository because the child ran in the driver's directory.
-
-An eval must drive the shipped agent, not `LocalAgentSession` in-process. The latter bypasses turn assembly, client boundary, and research MCP resolution. `resolveMcpServers()` reads `mcpServers` from `~/.kinu/config.json`, and `LocalAgentClient` connects them. Handing `connectMcp` servers proves none of that. Create and exec with the same child environment. Measured 2026-08-20, creating against one endpoint then execing against another failed every turn with `Your Cloudflare login is no longer valid` while the latter answered a direct request.
+Workspaces use the `eval-` prefix and `finally` calls `teardown`. `infraBoundary` marks a cold start or 5xx `INFRA FAILURE`. Under `--backend cloud` the tier runs `tests/live/live-smoke.test.ts` alone: the other suites drive a `CLIRuntime`, which no deployed workspace hands out.
 
 #### The five-turn conversation
 
-`tests/e2e-lifecycle.test.ts` certifies the core loop: soul and memory reach the model, tools round-trip, history accumulates, evolution and MCTS run. It is an inner API, without turn assembly, reactor, wakes, or prompt cache. The spawned-surface arms cover those paths.
+`tests/live/e2e-lifecycle.test.ts` certifies the core loop: soul and memory reach the model, tools round-trip, history accumulates, evolution and MCTS run. It is an inner API, without turn assembly, reactor, wakes, or prompt cache. The eval suite covers those paths on the deployment.
 
 It once sent `messages: [user]`: five one-turn conversations. Turn 5 asked "Summarize what we discussed", received "nothing", and passed on `length > 0`. Threading the history is not enough to prove it works. Measured 2026-08-20: the `memory` builtin searches the same conversation store (`packages/core/src/tools/memory-tool.ts`, `packages/core/src/memory/conversation-search.ts`). An unthreaded turn 5 reproduced turn 1's code and said "Here's a summary of our previous discussion" from 118 characters holding only turn 3's note. Two runs scored 6/0 and 5/1.
 
@@ -158,42 +137,9 @@ The suite labels both checks. `MECHANISM` reads the message list handed to the m
 
 Two non-defects: FTS stemming matches turn 4 "validation" prompt to turn 3 "validate" note. The cap rose from 600 s to 1,800 s after two runs reached 600,008 ms and 600,003 ms. Turn 2 alone made 12 tool calls.
 
-### Run records and the reader
+### Run records
 
-An arm that attempts a task writes `run-record.json` (schema 1, `EvalRunRecord` in `packages/test-utils/src/eval-run.ts`) and transcripts under `bench-artifacts/`. It records family, verdicts, wall `ms`, turns, tool calls and names, tokens, spend, and optimization `swarm_use.measured` (nodes, depth, records written) with `threshold_attained`. `bun scripts/eval-report.ts` groups records by family.
-
-`publishRunRecord` is the only writer and writes nothing without observations. Without credentials, arm `afterAll` handlers once wrote 81 of the first 89 records with zero observations. The writer guard protects future families. Records can show outcome movement, swarm use versus attainment (the report 2×2), family time/spend, called tools, and transcripts. They cannot yet show single-observation significance, causal swarm benefit, or per-step time.
-
-Behaviour knobs (`tests/evals/behaviour.eval.ts`; `KINU_EVAL_RECORD` in `packages/test-utils/src/eval-run.ts`; research and optimization use the same tier and record knobs):
-
-| Variable | Effect |
-|---|---|
-| `KINU_EVAL_TIER=flash\|pro` | picks the model; `flash` is the volume arm and the default |
-| `KINU_EVAL_REPEATS` | repetitions per task; default 2 for flash, 1 for pro |
-| `KINU_EVAL_SEED` | the run seed; default 1 |
-| `KINU_EVAL_EVOLUTION=0` | turns evolution off |
-| `KINU_EVAL_ARM` | `baseline` (default); `solo` withholds the `agents` tool and its swarm search; `codemode` leaves `eval` as the only native tool; `caveman` and `use-swarm` rewrite the mission text (`tests/evals/prompt-style.ts`). The harness applies the tool arms through the session's role allowlist, and `compareRuns(…, { treatment })` admits exactly the one field an A/B moves |
-| `KINU_EVAL_RECORD` | where the run record is written; default beside the retained transcripts under `bench-artifacts/` |
-
-### Triaging after `bun run evals:full`
-
-`bun scripts/eval-triage.ts` groups failures by scorer, `tool·action·reason`,
-and task. Each class has a different owner:
-
-| Class | Meaning | Owner |
-|---|---|---|
-| `product-defect` | a tool broke, or an attempt raised out of the code under test | the product owner |
-| `eval-defect` | the instrument produced no evidence: a run that attempted nothing, a turn that never closed, an outcome nothing checked, a program the workspace does not have | the instrument owner |
-| `flake` | one commit and one arm gave this task and scorer both verdicts | nobody yet. Measure ψ with `scripts/eval-dispersion.ts` |
-| `model-behaviour` | the mechanism had its opportunity and the model did not take it | nobody. This is the finding |
-
-Run the tier, then the script. With no arguments it reads `bench-artifacts/` and `tests/eval/runs/`, exits 0, and gates nothing. Read each evidence pointer, then record a ruling in `scripts/eval-triage.verdicts.json` with group key, class, date, what you read, and note. `UNVERIFIED` needs a ruling. A non-failure ruling prints `STALE VERDICT`. Report `model-behaviour`. Never repair it.
-
-The script recomputes admissibility because stored verdicts reflect their old policy. Both published baselines said `admissible: true` but failed the current rule until republished. It uses `toolFailurePartOfKey`, so the published mix and live census agree. Old records can name no failing call. An empty `product-defect` group then means unmeasured, not clean.
-
-First triage, 2026-08-20: 89 records, 24 groups, no product defect, 10 eval defects, 2 flakes, 12 mechanism findings. The largest group was 45 records that attempted nothing. The writer now refuses that shape. Two of the 89 records are tracked; `bench-artifacts/` is gitignored, so its count moves and the group shape is what to read. The tracked records alone give 19 groups.
-
-`flash-a` and `flash-b` are retired. Neither declares a hard-task corpus task, has a verifier or `measured` payload, or names a transcripts directory because teardown deleted stores. No `task_outcome` can be derived. They were republished under current policy without new facts. `compareRuns` refuses them rather than pairing and dropping 13 attempts. No baseline exists until a credentialed run publishes one. The verdict file has seven hand-checked rulings, one overriding the machine.
+A suite that attempts a task writes `run-record.json` (schema 1, `EvalRunRecord` in `packages/test-utils/src/eval-run.ts`) and transcripts under `bench-artifacts/`. `publishRunRecord` is the only writer and writes nothing without observations: without credentials, `afterAll` handlers once wrote 81 of the first 89 records with zero observations.
 
 ### Cost and duration
 
@@ -201,40 +147,19 @@ Every figure comes from a logged run. An undated row is the run whose spend file
 
 | | wall clock | model calls | input tokens |
 |---|---|---|---|
-| whole tier, credential-free (2026-08-19, five arms) | 9 s | 0 | n/a |
 | bun suites, credentialed | 2,745 s | 48 | 601.6k |
 | bun suites, credentialed (second run) | 3,843 s | 49 | 600.8k |
-| behaviour evals, credentialed | not measured | not measured | not measured |
-| live swarm, credentialed | 1,338 s | 3 | 2,453.4k (134.1k out) |
-| research, credentialed (2026-08-20) | 263 s | 4 | 81.1k (1.3k out) |
-| optimization, credentialed (2026-08-20) | 669 s | 18 | 1,143.8k (50.8k out) |
-| `tests/live-smoke.test.ts` alone | 74 s | 3 | 55.6k |
+| `tests/live/live-smoke.test.ts` alone | 74 s | 3 | 55.6k |
 
-`scripts/ladder.ts` declares 3,228 s / 64 calls / 967k from a lost third artifact: budget ceiling, not typical. The 3,843 s run includes 1,200 s of killed tests (900 s exploration, 300 s MCTS). Both are fixed; the same steps now take 437 s and 456 s. Do not derive post-fix cost from that run.
+`scripts/ladder.ts` declares 3,228 s from a lost third artifact: budget ceiling, not typical. The 3,843 s run includes 1,200 s of killed tests (900 s exploration, 300 s MCTS). Both are fixed; the same steps now take 437 s and 456 s. Do not derive post-fix cost from that run. The five-turn e2e measured 5 calls / 20.0k input, then 9 / 39.8k.
 
-Research and optimization were measured 2026-08-20 on `@cf/deepseek-ai/deepseek-v4-flash-0731` through the worker proxy. Both were spawned `kinu` CLI episodes and passed. Research made 2 turns, 6 archive-only tool calls, 4 steps, and ran 260 s. It returned 1847, 96.4, 27.3, and the canary. Optimization made 2 turns, 17 calls, 18 steps, and ran 666 s. It scored `task_outcome` 1.000 against 0.5 with 2,972 oracle calls, against a 2,880,000 reference and 2,992 corpus target. The log score clamped from 1.0010. It used no swarm: 0 nodes and 0 `agents` calls. One run is one observation.
-
-Optimization used 14x research input tokens on the same credential. The five-turn e2e measured 5 calls / 20.0k input, then 9 / 39.8k. Turn 2 made 12 tool calls in the second. Budget from the larger figure. The behaviour arm has no measured wall time: it produced no report before per-arm timing existed.
-
-The live swarm row is red. One run took 1,338 s and 3 calls, used 2,453,377 input / 134,076 output tokens, and had a 2,880,000 oracle baseline (exactly 2·1200²). It stopped `aborted` after 3 expansions: no winner, `records.written: 0`, `fanIn.levels: 0`, three unusable parents. Its first assertion, `expect(report.stop).not.toBe('aborted')`, failed. An unsettled run is refused, not measured. No settled run with a winner and a winner/baseline ratio exists yet.
-
-Earlier attempts: camelCase floor input was refused as `Invalid key: Expected "best_known_honest"`. An expired login made three depth-1 heads error in ~1 s while three others stayed running at zero steps for 63 minutes with no write or exit, though `live-smoke.test.ts` passed 5 calls / 55.7k tokens an hour later. A healthy credential ran one 26-minute, 91% CPU step on a 50,000-token `hard-select-kth`. So the eval uses `hard-majority-vote` (n=1200).
-
-### Sizing before you run it
-
-`runSwarmAction` (`packages/core/src/delegation/agents-tool.ts:1544`) sets no node budget. There is no step cap (owner ruling 2026-08-21). `runNodeLoop` ends when tools stop. No wall clock applies.
-
-`LLM_CALL_TIMEOUT_MS` and `LLM_CALL_MAX_RETRIES` are gone. The only code reference asserts their absence (`packages/core/tests/unit-call-bounds.test.ts:52-53`); `packages/core/tests/unit-swarm-node-envelope.test.ts` covers a node whose one step takes 26 minutes. A rate-limited request waits indefinitely (`packages/core/src/providers/rate-limit-retry.ts:130`: `for (let attempt = 1; ; attempt++)`). `PROVIDER_SDK_RETRIES = 2` (`packages/core/src/providers/rate-limit-retry.ts:14`) is the transport retry at `streamText`. A call ends when the provider answers, fails definitively, or is cancelled. A turn ends on completion, user stop, or throw. `classifyRunEnd` names the result. `AGENTS_ACTION_FIELDS.swarm` (`packages/core/src/delegation/agents-tool.ts:723`) records the deliberately absent iteration and wall-clock inputs.
-
-One wave had three nodes: 22, 25, 26 steps; 25, 27, 27 tool calls; 1,216-1,337 s each; ~2.45M input tokens; no candidate. No node finished, so 26 is a floor, not a typical demand. `depth × branches` bounds shape. Inside a turn only `abortSignal` bounds work. That wave recorded all three as `aborted` when the 20-minute envelope fired. That envelope cut healthy nodes before any real job completed, so no default node clock remains (owner ruling 2026-08-21). `packages/core/src/strategy/node-agent.ts:788` builds the `isAborted` poll the loop reads between steps. That is why a 26-minute in-process step ignored both that timer and vitest `testTimeout`.
-
-The account allows 300 requests/minute. A full tier averages under one. Run one live tier per account. Concurrent tiers yield `orchestrator.detached_work_failed / Request Timeout` and zero-step turns, the same shape as an outage. For one proof, `KINU_EVAL_LIVE=1 bun test ./tests/live-smoke.test.ts` takes 74 s and proves a real turn on both the deployed worker and local session spine.
+The account allows 300 requests/minute. Run one live tier per account: concurrent tiers yield `orchestrator.detached_work_failed / Request Timeout` and zero-step turns, the same shape as an outage. For one proof, `KINU_EVAL_LIVE=1 bun test ./tests/live/live-smoke.test.ts` takes 74 s and proves a real turn on both the deployed worker and the local session spine.
 
 ### What a failure means
 
-- A failed suite means model behavior or an outage. Only `infraBoundary` (`packages/test-utils/src/live-model.ts`) marks infrastructure. The skip ratchet prints it separately. Unmarked failures stay behavioral.
+- A failed suite means model behaviour or an outage. Only `infraBoundary` (`packages/test-utils/src/live-model.ts`) marks infrastructure. The skip ratchet prints it separately. Unmarked failures stay behavioural.
 - An undeclared skip is absent from `scripts/skip-ratchet.lock.json`. Make it run, or record the reason it cannot.
-- No liveness proven means a resolved target showed no model call. `eval-spend.ts` names one of four shapes and checks both the arm spend file and tier total.
+- No liveness proven means a resolved target showed no model call. `eval-spend.ts` names one of four shapes.
 - A green run with no credentials proves nothing about the model: live tests skip, the ratchet checks the declared skips, and liveness reports nothing to prove.
 
 ### Pointing it elsewhere
@@ -242,16 +167,48 @@ The account allows 300 requests/minute. A full tier averages under one. Run one 
 Either pair is explicit and never overridden:
 
 ```bash
-KINU_ORIGIN=… KINU_TOKEN=…            # the deployment or a loopback dev server; mint with
-                                            #   kinu tokens create --name evals --scopes ai.proxy
+KINU_ORIGIN=… KINU_TOKEN=…            # the deployment or a loopback dev server
 AI_GATEWAY_BASE_URL=… AI_GATEWAY_AUTH=…     # an AI Gateway, for models the proxy does not front
 ```
 
-`KINU_BASE_URL` + `KINU_AUTH` alias the second pair. A value that names a deployment's own inference route is target-checked against the same allowlist (`evalModelEndpointVerdict`). Only the tier scripts (`eval-tier.sh`, `first-run-tier.sh`, `trajectory-tier.sh`) set `KINU_EVAL_LIVE=1`; to hand-run a live suite, set it yourself.
+`KINU_BASE_URL` + `KINU_AUTH` alias the second pair. A value that names a deployment's own inference route is target-checked against the same allowlist (`evalModelEndpointVerdict`). Only the tier scripts (`live-tier.sh`, `first-run-tier.sh`) set `KINU_EVAL_LIVE=1`; to hand-run a live suite, set it yourself.
 
 ### The bench setup is a different thing
 
-`bun scripts/bench.ts` tests whether self-evolution helps against the seeded-defect corpus in `tests/bench/patches/` (156 patches on 2026-09-22). `bun scripts/bench-corpus-gate.ts` re-checks every patch with `git apply --check`. It uses only `BENCH_BASE_URL` / `BENCH_AUTH` / `BENCH_MODEL`, not eval credentials. See [Bench](BENCH.md).
+`bun scripts/bench.ts` tests whether self-evolution helps against the seeded-defect corpus in `bench/corpus/patches/` (148 patches on 2026-09-24). `bun scripts/bench-corpus-gate.ts` re-checks every patch with `git apply --check`. It uses only `BENCH_BASE_URL` / `BENCH_AUTH` / `BENCH_MODEL`, not eval credentials. See [Bench](BENCH.md).
+
+## Evals: whether the deployed product does the work
+
+`evals/` measures what a user of kinu.run gets. Each file in `evals/tasks/` is one task, read top to bottom: the workspace's mission and the data it is seeded with, the contract the agent is asked to build to, the checker's own reference implementation of that contract, then two to four turns. Every turn sends one prompt to a fresh eval-service workspace on the deployment, waits until the workspace settles (no run open, no background job running, no helper working), then checks the result from outside: it calls the slate the agent built over the slate RPC, the call the slate's own interface makes, and compares every answer with the reference's. Any build that follows the contract passes; the checker never reads the agent's code or its run ledger.
+
+| Task | Turns | What it checks |
+|---|---|---|
+| `lending-library` | 4 | A lending library slate: loans, due dates, five rejection codes; an overdue report written from it; a rule change that must keep existing loans; a question answered from the data. Survives an eviction. |
+| `request-logs` | 3 | A slate that reads gateway log files through a namespace binding: per-route counts, error rates and nearest-rank percentiles; a new day and a rule change without a rebuild. |
+| `budget-board` | 4 | Two slates joined by an app binding: a ledger and a budget board that reads it live; euros converted at a rate file the checker rewrites; the ledger's listing replaced by pages while the board keeps working. |
+| `order-book` | 3 | A limit order book with price-time priority, market orders and cancels, checked against a reference engine over two seeded days of orders; self-trade prevention and post-only orders added later. |
+
+```bash
+bun run evals                                  # every task, 10 trials each, on kinu.run
+bun run evals evals/tasks/order-book.eval.ts   # one task
+KINU_EVAL_TRIALS=3 bun run evals               # a pilot
+bun run evals:ui                               # the report in the vitest-evals UI
+bun evals/scripts/compare.ts --candidate bench-artifacts/evals/results.json --out /tmp/cmp [--baseline <results.json>]
+```
+
+A run needs `KINU_EVAL_WEB_IDENTITY` (the deployment's `DEV_IDENTITY_SECRET`, in `.dev.vars`), which makes each trial the `eval-service` identity. Every trial deletes its workspace when it ends. Nothing ends a trial on a clock: a turn ends when the deployment says so.
+
+**Cohorts.** A result belongs to (task, model, arm). The model defaults to the product default, `workers-ai/@cf/zai-org/glm-5.3`; `KINU_EVAL_MODELS` adds others. An arm is a named workspace setting applied when a trial's workspace opens (`evals/src/target.ts`); `product` changes nothing and is the only arm today.
+
+**Infrastructure is not a result.** A trial that the deployment could not carry (a transport failure, a dropped socket the redial could not recover, the build changing mid-trial, a turn the deployment ended in error) is an infrastructure failure: it is reported apart and a cohort holding one is not compared. A request the build answered with a failure of its own (a 5xx, a refused RPC) is the build's result: the turn fails as `t<n> deployment.refused` with the answer as its evidence and counts against the pass rate. A credential the deployment did not accept, the account's rate limit, Cloudflare's 52x and its transient Durable Object failures stay infrastructure (`infraBoundary`, `packages/test-utils/src/live-model.ts`). Waits on the model provider (429 backoff on the eval account's rate limit) are counted per task and left out of durations. `KINU_EVAL_CONCURRENCY` (default 3) bounds trials at once, because more only adds 429 waits.
+
+**The step-cap probe.** Every turn also fails `deployment.cut-reported-completed` when a run it opened stopped with tool calls still pending and the deployment reported it `completed`: a loop cut mid-work that said it finished. The product seals such a run `incomplete` (`classifyRunEnd`, `packages/core/src/orchestrator/turn-lifecycle.ts`). Four capped production turns once reported `completed`, and no suite on the deployment could see it.
+
+**Comparison.** `evals/src/comparison.ts` compares two reports cohort by cohort: pass counts under a two-sided Fisher exact test, a verdict (`regressed` when any comparable task fell with p < 0.05, `improved`, `unchanged`, `inconclusive`), the failed checks with their first evidence, the most common tool error, and how the agent worked per model (steps, tokens, the share of tool calls that were `eval`). Cohorts are not compared across a change to `evals/` itself, a different task version, different trial counts, or infrastructure failures.
+
+**In CI.** `.github/workflows/evals.yml` runs after a deploy (Step 7 of `scripts/deploy.sh` dispatches it): every task against the build kinu.run serves, compared with the latest complete report of an earlier build it descends from. Each task runs as blocks of five trials, one job each, because ten trials of the slowest task at three at a time come near GitHub's six-hour job limit; `KINU_EVAL_FIRST_TRIAL` numbers a block, and the joined report must hold trials 1 to 10 once each before it is stored as a baseline. The results comment and a Kinu workspace's "why the evals failed" go on the pull request that merged the deployed commit, or on the commit; earlier ones are deleted. The deployed commit has to be on GitHub.
+
+**Adding a task.** Copy the shape of an existing file. Prove the checker before any model runs: build a correct slate by hand and planted-defect variants, run the turn's `verify` against them on the deployment, and see the correct build pass every check and each defect fail exactly its own. Then run a 3-trial pilot and read the failed trajectories (`bun evals/scripts/trajectories.ts <results.json> <out.md> --failed`): change the prompt only where the agent's reading was defensible and the checker rejected it.
 
 ## Test categories
 
@@ -304,15 +261,15 @@ packages/
    ├─ ambient-env.ts    ── stripAmbientCredentials, LIVE_MODEL_ENV
    └─ facts.ts          ── createTestFactsStore
 tests/
-├─ e2e-lifecycle.test.ts
-├─ e2e-full-lifecycle.test.ts
-├─ deep-evolution.test.ts
-├─ evolution-proof.test.ts
-├─ live-smoke.test.ts
-├─ eval-corpus-quality.test.ts
-├─ evals-artifact-contract.test.ts
-├─ first-run/           (the first-run tier)
-└─ evals/               (the vitest `*.eval.ts` arms and their harness)
+├─ live/                (the live tier: end-to-end suites that call a real model)
+└─ first-run/           (the first-run tier: post-publish checks of the deployed product)
+evals/
+├─ tasks/               (the eval suite: one `*.eval.ts` per task)
+├─ src/                 (the framework: task, verifier, harness, session, comparison, report)
+└─ scripts/             (compare, validate, baseline, trajectories, diagnose, post-comment)
+bench/
+├─ corpus/              (the seeded-defect corpus `scripts/bench.ts` measures; data, no suites)
+└─ harbor/, clbench/    (the external-benchmark adapters, Python)
 ```
 
 `bun test tests` matches nothing. Only `./tests/` selects root suites. The `catches` text of the `bun test ./tests/` row in `scripts/ladder.ts` records that path form.

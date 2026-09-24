@@ -78,4 +78,5 @@ export const CAPABILITY_ROWS = {
   'a swarm whose nodes run as hosted agents and settle': ['exploration'],
   'a live web search': ['web-search'],
   'an internal address refused on every fetch path': ['capability-isolation'],
+  'a correction sent while the agent works': ['steer-correction'],
 } as const satisfies Record<string, Rows>;

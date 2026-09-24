@@ -1,9 +1,8 @@
 // Entry zero: one complete, executable `agents.swarm` call, asserted against the shipped
 // parser, preset table, validity predicate and verifier registry. Its numbers are read from
-// `hard-majority-vote` in HARD_TASKS, never retyped.
+// the majority-vote problem in `fixtures/majority-vote.ts`, never retyped.
 // Specified by docs/EXPLORATION.md.
 import { describe, test, expect } from 'bun:test';
-import { HARD_TASKS, type HardTask } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import * as objectiveModule from '../src/strategy/objective';
 import * as swarmModule from '../src/strategy/swarm';
@@ -18,24 +17,9 @@ import { VERIFIER_KINDS, resolveVerifier, unregisteredKindRefusal } from '../src
 import { AGENTS_TOOL_ACTIONS } from '../src/tools/registry';
 import { parseAgentsToolInput } from '../src/delegation/agents-tool';
 import { JsonObjectSchema } from '../src/utils/json';
+import { MAJORITY_VOTE } from './fixtures/majority-vote';
 
-/** A missing task is a broken instrument, not a skipped case. */
-function majorityVote(): HardTask {
-  const found = HARD_TASKS.find((task) => task.id === 'hard-majority-vote');
-
-  if (!found) {
-    throw new Error(
-      'hard-majority-vote is absent from HARD_TASKS, so entry zero quotes numbers '
-      + 'no shipped task measures',
-    );
-  }
-
-  return found;
-}
-
-const TASK = majorityVote();
-
-const PROBLEM = TASK.problem;
+const PROBLEM = MAJORITY_VOTE;
 
 /**
  * `verify` in the only form that crosses a JSON tool argument. `spec` is `RatioProblem` in
@@ -108,10 +92,14 @@ describe('entry zero crosses a JSON tool boundary, or it is not a call', () => {
   });
 
   test('the closure arm of VerifierSource could not have been sent', () => {
-    expect(v.is(JsonObjectSchema, { ...WIRE_OBJECTIVE, verify: TASK.verify })).toBe(false);
+    const resolved = resolveVerifier(VERIFY);
+
+    if ('reason' in resolved) throw new Error(resolved.error);
+    // The same measurement as a closure, which no JSON tool argument can carry.
+    expect(v.is(JsonObjectSchema, { ...WIRE_OBJECTIVE, verify: resolved.verify })).toBe(false);
     // The live parser refuses it too, not just the JSON schema.
     expect(() => parseAgentsToolInput({ input: {
-      ...CALL, objective: { ...WIRE_OBJECTIVE, verify: TASK.verify },
+      ...CALL, objective: { ...WIRE_OBJECTIVE, verify: resolved.verify },
     } })).toThrow();
   });
 

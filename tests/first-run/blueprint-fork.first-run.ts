@@ -10,7 +10,7 @@ import {
   BlueprintForkSchema, JsonValueSchema, parseSlateProject, PublishedBlueprintSchema, SharedLibrarySchema, SlateCapabilityGraphSchema,
 } from '@kinu.run/core';
 import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
-import { webHeaders } from '../evals/public-session';
+import { webHeaders } from '../../evals/src/session';
 
 const SUITE = 'First-run · blueprint-fork';
 

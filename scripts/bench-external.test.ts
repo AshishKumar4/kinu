@@ -480,9 +480,9 @@ describe('the Terminal-Bench arm before it spends anything', () => {
       provenance: v.object({ expectedSampleOrdinal: v.number() }),
       sourceCorpus: v.object({ content_hash: v.string() }),
       taskIds: v.array(v.string()),
-    }), JSON.parse(readFileSync(join(REPO_ROOT, 'tests/bench/terminal-bench-2.1-population.json'), 'utf8')));
+    }), JSON.parse(readFileSync(join(REPO_ROOT, 'bench/corpus/terminal-bench-2.1-population.json'), 'utf8')));
 
-    const registered = readFileSync(join(REPO_ROOT, 'tests/bench/seal-ledger.jsonl'), 'utf8')
+    const registered = readFileSync(join(REPO_ROOT, 'bench/corpus/seal-ledger.jsonl'), 'utf8')
       .split('\n')
       .filter((line) => line.trim() !== '' && !line.startsWith('#'))
       .map((line) => v.safeParse(TbenchPrereg, JSON.parse(line)))

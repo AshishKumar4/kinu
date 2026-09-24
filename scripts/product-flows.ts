@@ -10,7 +10,7 @@
  * by the eval plane's own resolver, so a row never asks where it runs.
  *
  * WHY THIS EXISTS. The first-run tier reads the deployment over its API and its
- * socket, the trajectory tier drives the model through the socket, and the
+ * socket, the eval suite drives the model through the socket, and the
  * `*-ux` browser tests run on the gallery's fixtures. None of them loads the
  * page a person loads, so a workspace whose agents were all present over the
  * API showed none of them after a reload (#13), and every gate stayed green.
@@ -25,7 +25,7 @@ import { tolerate } from '@kinu.run/core/obs';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
-import { webHeaders, type PublicWebIdentity } from '../tests/evals/public-session';
+import { webHeaders, type PublicWebIdentity } from '../evals/src/session';
 import { DESKTOP } from './live-app-harness';
 
 /** Where a row runs and who it runs as. */

@@ -58,10 +58,10 @@ import {
   type EpisodeEvidenceReader, type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalSubgoal, type EvalTier,
 } from '@kinu.run/test-utils';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
-import { disposeFailedCase } from '../evals/episode-failure';
+import { disposeFailedCase } from './episode-failure';
 import {
   resolvePublicSessionPlan, type KinuPublicSession, type PublicSessionPlan,
-} from '../evals/public-session';
+} from '../../evals/src/session';
 
 /** The family every case's record is published under, so one tier's evidence is
  *  one family rather than six. */
@@ -109,6 +109,7 @@ export const FIRST_RUN_CASES = [
   'exploration',
   'deploy-door',
   'capability-isolation',
+  'steer-correction',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -552,6 +553,20 @@ export const FIRST_RUN_DEFECTS = {
       + 'both web paths, and `refusedHostname` skipped in `codemode-egress.ts` turns the workerd '
       + 'codemode-sandbox and slate-egress rows red.',
   },
+  'steer-correction': {
+    id: 'steer-correction',
+    found: 'A correction typed while the agent is still working has to reach the work: either the '
+      + 'running turn reads it at a step or it runs as the next turn. A correction the product '
+      + 'acknowledges and then drops leaves the agent finishing the instruction the user took back.',
+    missedBecause: 'unit-mid-turn-steer and the busy-chat workerd probe splice scripted turns; the '
+      + "composer's steer against a model on the deployment ran only in the trajectory eval family, "
+      + 'which is retired, and no first-run row sends one.',
+    provedRedAt: null,
+    redDirection: 'Not proved red against a deployed sha: a dropped steer cannot be deployed, and there '
+      + 'is no staging. The red direction is proved on planted evidence in steer-observation.test.ts: a '
+      + 'correction the running turn never read fails correction-applied, steer-is-durable and '
+      + 'listing-truthful, and a steer the workspace never answered fails landing.',
+  },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
 /** Which arm this process is — the same split every sibling eval arm declares. */
@@ -674,6 +689,7 @@ const SHORT_SUBJECT = {
   'exploration': 'swarm',
   'deploy-door': 'door',
   'capability-isolation': 'isolation',
+  'steer-correction': 'steer',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */

@@ -9,7 +9,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { SHARE_VIEWER_REQUESTS_PER_MINUTE } from '@kinu.run/core';
-import { resolveWebIdentity } from '../tests/evals/public-session';
+import { resolveWebIdentity } from '../evals/src/session';
 import { withBrowser } from './live-app-harness';
 import {
   DRIVE_SLATE, FLOW_PROBE, FLOW_SLATE, INSPECTOR_SHUT_PX,

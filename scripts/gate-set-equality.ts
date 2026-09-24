@@ -370,7 +370,7 @@ function localImports(file: string, tracked: ReadonlySet<string>): string[] {
  */
 const SELECTS = [
   'packages/core/src/index.ts', 'scripts/ladder.test.ts', 'packages/cf-backend/src/App.tsx',
-  'packages/pc-agent/tests/daemon.test.js', 'tests/evals/delegation.eval.ts', 'tools/x.mjs',
+  'packages/pc-agent/tests/daemon.test.js', 'evals/tasks/delegation.eval.ts', 'tools/x.mjs',
 ];
 
 const REJECTS = [

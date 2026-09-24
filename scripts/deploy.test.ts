@@ -363,8 +363,8 @@ describe("deploy gate", () => {
     expect(byPhase.preflight).toEqual(["bun scripts/preflight.ts"]);
     expect(byPhase.hammer).toEqual(["bun run gate:hammer"]);
     expect(byPhase.infra).toEqual(["bun run gate:infra"]);
-    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bash scripts/product-flows-tier.sh", "bun run gate:trajectory"]);
-    expect(byPhase.source?.length).toBe(PLAN.length - 6);
+    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bash scripts/product-flows-tier.sh"]);
+    expect(byPhase.source?.length).toBe(PLAN.length - 5);
 
     for (const gate of LADDER) {
       if (gate.phase === undefined) {
@@ -867,12 +867,12 @@ describe("deploy gate", () => {
     expect(REQUIRED_GATES).toContain('bun run gate:infra');
     // ITS OWN WAVE, AFTER EVERY SOURCE GATE, so an account that cannot be
     // proved never reaches Wrangler deployment; and THE LAST WAVE BEFORE THE
-    // UPLOAD, which is what the property has always meant: the trajectory
-    // tier moved after the publish on 2026-09-12, beside first-run, because a
-    // pre-publish live gate can only measure the previous build and refused
+    // UPLOAD, which is what the property has always meant: a live gate against
+    // the deployment runs after the publish, beside first-run, because a
+    // pre-publish live gate can only measure the previous build and refuses
     // the deploy carrying its fix.
     expect(PRE_PUBLISH_WAVES.at(-1)).toEqual(['bun run gate:infra']);
-    expect(POST_DEPLOY_GATES).toContain('bun run gate:trajectory');
+    expect(POST_DEPLOY_GATES).toContain('bun run gate:first-run');
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
     expect(source.indexOf('run_phase infra')).toBeLessThan(source.indexOf('Step 2: Building Kinu'));
     expect(source.indexOf('run_phase post-publish')).toBeGreaterThan(source.indexOf('Step 4: Post-deploy smoke test'));
@@ -951,20 +951,22 @@ describe("one deploy path", () => {
    *  for sitting in a step body rather than in prose. */
   const PER_PACKAGE_DEPLOY = /--cwd\s+\S+\s+deploy/u;
 
-  /** Launching an eval. The tier script, the root scripts that run it, and the
-   *  report driver a workflow runs directly. */
+  /** Launching a run that spends on a credential: the live tier's script, the
+   *  root script that runs it, and the eval suite. */
   const EVAL_LAUNCHERS = [
-    "scripts/eval-tier.sh",
-    "scripts/eval.ts",
-    "bun run test:eval",
-    "bun run evals:",
+    "scripts/live-tier.sh",
+    "bun run test:live",
+    "bun run evals",
   ] as const;
 
-  /** The one process that rules on which deployment an eval credential may name
-   *  (`packages/test-utils/src/eval-identity.ts` holds the allowlist it reads).
-   *  Without it, a benchmark job takes an origin and an auth header straight from
-   *  repository secrets, so one secret can name production and nothing asks. */
-  const EVAL_RESOLVER = "scripts/eval-credentials.ts";
+  /** What rules on which deployment a credential may name
+   *  (`packages/test-utils/src/eval-identity.ts` holds the allowlist both read):
+   *  `eval-credentials.ts` for a tier that takes KINU_EVAL_TOKEN, and the eval
+   *  suite's own harness, which refuses an origin outside the allowlist before any
+   *  trial (evals/src/target.test.ts). Without one, a job takes an origin and an
+   *  auth header straight from repository secrets, so one secret can name
+   *  production and nothing asks. */
+  const EVAL_RESOLVERS = ["scripts/eval-credentials.ts", "bun run evals"] as const;
 
   const ScriptsSchema = v.object({ scripts: v.optional(v.record(v.string(), v.string())) });
   const manifests = trackedFiles().filter((file) => basename(file) === "package.json");
@@ -997,22 +999,22 @@ describe("one deploy path", () => {
   // Harness boundary: the manifest's own `scripts` block, parsed. Blind spot:
   // one level of indirection — a script that runs `bun scripts/<name>.ts` is one word
   // here whatever `x.ts` launches.
-  test("no package script launches an eval outside the tier script", () => {
+  test("no package script launches a live suite outside the tier script", () => {
     let tierLaunches = 0;
 
     for (const manifest of manifests) {
       for (const [name, body] of Object.entries(scriptsOf(manifest))) {
-        if (body.includes("scripts/eval-tier.sh")) tierLaunches += 1;
-        // The tier resolves the credential, writes a spend file per arm and runs
-        // the skip ratchet. A script around the report driver has none of that,
-        // and an eval that measures nothing reads as an eval that passed.
-        expect(body, `${manifest} script "${name}" runs the eval driver outside the tier script`)
-          .not.toContain("scripts/eval.ts");
+        if (body.includes("scripts/live-tier.sh")) tierLaunches += 1;
+        // The tier resolves the credential, writes a spend file and runs the
+        // skip ratchet. A script running the live suites directly has none of
+        // that, and a run that measures nothing reads as a run that passed.
+        expect(body, `${manifest} script "${name}" runs the live suites outside the tier script`)
+          .not.toMatch(/bun test[^&|;]*tests\/live/u);
       }
     }
 
-    // Non-vacuity: the corpus really does contain the eval launch site.
-    expect(tierLaunches, "no package script launches the eval tier").toBeGreaterThan(0);
+    // Non-vacuity: the corpus really does contain the tier's launch site.
+    expect(tierLaunches, "no package script launches the live tier").toBeGreaterThan(0);
   });
 
   // The documented commands and the runnable ones are the same set or the
@@ -1172,8 +1174,8 @@ describe("one deploy path", () => {
       if (!bodies.some((body) => EVAL_LAUNCHERS.some((launcher) => body.includes(launcher)))) continue;
       launching += 1;
       expect(
-        bodies.some((body) => body.includes(EVAL_RESOLVER)),
-        `${label} launches an eval without resolving its target through ${EVAL_RESOLVER}`,
+        bodies.some((body) => EVAL_RESOLVERS.some((resolver) => body.includes(resolver))),
+        `${label} launches an eval without resolving its target through ${EVAL_RESOLVERS.join(' or ')}`,
       ).toBe(true);
     }
 
