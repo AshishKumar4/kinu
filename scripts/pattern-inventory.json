@@ -967,13 +967,6 @@
       "decision": "lexical"
     },
     {
-      "file": "packages/test-utils/src/hard-tasks/cost-model.ts",
-      "kind": "regex-literal",
-      "owner": "content",
-      "sourceSha256": "25641be18f2494e367f3567c3ec52fffde575c5ac716486606acb780013944ec",
-      "decision": "sourceGate"
-    },
-    {
       "file": "scripts/bench-devbox-strategies.ts",
       "kind": "regex-literal",
       "owner": "key",

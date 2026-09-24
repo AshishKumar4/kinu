@@ -105,7 +105,7 @@ inductive FloorKind where
 
 /-- Only `certificate` and `physical` are admissible AS floors. An `adversary`
     bound is a worst case, and using one as a floor scores a lucky honest run as a
-    cheat (`packages/test-utils/src/hard-tasks/tasks.ts#COMPARE_ORACLE`). The type keeps `adversary` as a DECLARABLE
+    cheat (`packages/core/src/types/objective.ts#Floor.kind`). The type keeps `adversary` as a DECLARABLE
     value that is refused, so an author is told why instead of quietly relabelling
     it — which is why this is a predicate over a three-valued type rather than a
     two-valued type. -/
@@ -187,7 +187,7 @@ theorem floorAdmissible_rejects_adversary (f : Floor) (baseline : Int)
 /-! ### The majority-vote floor, as a witness that C1 is not the check that
      caught it
 
-  The majority-vote numbers (`packages/test-utils/src/hard-tasks/tasks.ts#MAJORITY`), with `MAJORITY.n = 1200`
+  The majority-vote numbers (`packages/core/tests/fixtures/majority-vote.ts#MAJORITY`), with `MAJORITY.n = 1200`
   and a `minimise` objective in oracle calls. C1 and C2 would NOT have caught this
   floor and C3 — the reported margin, which *Floor margin* requires the caller be
   SHOWN — is what would. These two theorems are that claim, mechanised: the
@@ -196,11 +196,11 @@ theorem floorAdmissible_rejects_adversary (f : Floor) (baseline : Int)
   claiming more for the mechanical checks than they deliver. -/
 
 /-- The defective floor: `2*(n-1) = 2398` against a best known honest cost of
-    2992 (`packages/test-utils/src/hard-tasks/tasks.ts#MAJORITY_VOTE`, `packages/test-utils/src/hard-tasks/tasks.ts#MAJORITY`). -/
+    2992 (`packages/core/tests/fixtures/majority-vote.ts#MAJORITY_VOTE`, `packages/core/tests/fixtures/majority-vote.ts#MAJORITY`). -/
 def majorityVoteDefectiveFloor : Floor :=
   { value := 2398, kind := .certificate, bestKnownHonest := 2992 }
 
-/-- The corrected floor, `n = 1200` (`packages/test-utils/src/hard-tasks/tasks.ts#MAJORITY_VOTE`). -/
+/-- The corrected floor, `n = 1200` (`packages/core/tests/fixtures/majority-vote.ts#MAJORITY_VOTE`). -/
 def majorityVoteCorrectedFloor : Floor :=
   { value := 1200, kind := .certificate, bestKnownHonest := 2992 }
 

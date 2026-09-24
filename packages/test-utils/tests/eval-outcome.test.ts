@@ -1,8 +1,7 @@
 /** Refusals matter most: a verifier bug must surface as a red run, not a plausible number. */
 import { describe, test, expect } from 'bun:test';
 import {
-  OUTCOME_SCALE, TASK_OUTCOME, isCovariateRow,
-  outcomeRow, ratioOutcome, subgoalOutcome,
+  TASK_OUTCOME, isCovariateRow, outcomeRow, subgoalOutcome,
 } from '../src/eval-outcome';
 import { BEHAVIOUR_SCORERS } from '../src/agent-evals';
 import { assessAdmissibility, type EvalObservation } from '../src/eval-run';
@@ -22,28 +21,9 @@ describe('subgoalOutcome — partial credit from a count', () => {
     expect(outcomeRow(subgoalOutcome(0, 4, 'no check passed')).rate).toBe(0);
   });
 
-  test('measured quantities survive onto the row, so a ratio can be re-derived', () => {
+  test('measured quantities survive onto the row', () => {
     const row = outcomeRow(subgoalOutcome(1, 2, 'one of two', { comparisons: 812, reference: 604 }));
     expect(row.measured).toEqual({ comparisons: 812, reference: 604 });
-  });
-});
-
-describe('ratioOutcome — a measured ratio as fixed point', () => {
-  test('a ratio survives the integer round trip at OUTCOME_SCALE resolution', () => {
-    const row = outcomeRow(ratioOutcome(0.734, '604 comparisons against a 823 reference'));
-    expect(row.eligible).toBe(OUTCOME_SCALE);
-    expect(row.passed).toBe(Math.round(0.734 * OUTCOME_SCALE));
-    expect(row.rate).toBeCloseTo(0.734, 6);
-  });
-
-  test('REFUSED: a ratio above 1 throws instead of clamping to a perfect score', () => {
-    // Clamping would report 1.000 for a normalization bug.
-    expect(() => ratioOutcome(1.4, 'mis-normalized speedup')).toThrow(/normalized to \[0,1\]/);
-  });
-
-  test('REFUSED: a non-finite ratio throws rather than becoming NaN in the record', () => {
-    expect(() => ratioOutcome(Number.NaN, 'divide by zero baseline')).toThrow(/normalized/);
-    expect(() => ratioOutcome(Number.POSITIVE_INFINITY, 'zero-cost claim')).toThrow(/normalized/);
   });
 });
 

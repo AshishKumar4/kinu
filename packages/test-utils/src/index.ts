@@ -44,8 +44,6 @@ export * from './eval-run';
 
 export * from './eval-outcome';
 
-export * from './hard-tasks/index';
-
 export * from './parity-normalizer';
 
 export * from './slate-viewer';
