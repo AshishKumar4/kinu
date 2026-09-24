@@ -1,11 +1,14 @@
 /**
- * Every text role meets WCAG AA against every surface it can land on, on both themes, as Chromium resolves
- * the app's palette: each token is painted through a probe on the real stylesheet, so the cascade, the
- * light theme's overrides and every `var()` indirection are the browser's own, not a reading of index.css.
+ * The app's palette as Chromium resolves it: each token is painted through a probe on the real stylesheet, so
+ * the cascade, the light theme's overrides and every `var()` indirection are the browser's own.
+ *
+ * Every text role meets WCAG AA against every surface it can land on, on both themes. And Kumo, whose
+ * components ship compiled, paints from the Kinu palette: its colour tokens are the only lever, and a token
+ * left unmapped, or mapped to a literal, silently keeps Kumo's blue (or the dark value on the light theme).
  */
 import { describe, expect, test } from 'bun:test';
 
-import { withGallery } from './gallery-harness';
+import { unruledClasses, withGallery } from './gallery-harness';
 
 const MODES = ['dark', 'light'] as const;
 
@@ -101,10 +104,79 @@ function contrast(ink: Rgba, paper: Rgba): number {
   return Number(((Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05)).toFixed(2));
 }
 
+/** Kumo's colour families: the size scale and the raw neutral ramp are inputs, not surfaces the palette themes. */
+const KUMO_COLOUR = '^--(color-kumo-(?!neutral-)|text-color-kumo-)';
+
+/** Each Kumo colour token before and after the palette moves, every class naming a Kumo token, and those
+ *  of them no served rule selects. */
+interface KumoRead {
+  readonly tokens: Readonly<Record<string, readonly [before: string, after: string]>>;
+  readonly utilities: readonly string[];
+  readonly unruled: readonly string[];
+}
+
+/**
+ * Runs inside the page; closes over nothing. Every `--c-*` the document declares is rewritten on the root to a
+ * sentinel colour: a Kumo token that follows the palette moves with it, and one left on Kumo's own value does not.
+ */
+function readKumo(colourFamily: string): Omit<KumoRead, 'unruled'> {
+  const family = new RegExp(colourFamily, 'u');
+  const kumo = new Set<string>();
+  const palette = new Set<string>();
+
+  const walk = (rules: CSSRuleList): void => {
+    for (const rule of rules) {
+      if (rule instanceof CSSStyleRule) {
+        for (let at = 0; at < rule.style.length; at += 1) {
+          const name = rule.style.item(at);
+
+          if (family.test(name)) kumo.add(name);
+
+          if (name.startsWith('--c-')) palette.add(name);
+        }
+      }
+
+      if (rule instanceof CSSGroupingRule) walk(rule.cssRules);
+    }
+  };
+
+  for (const sheet of document.styleSheets) walk(sheet.cssRules);
+
+  // `bg-kumo-base`, `hover:bg-kumo-tint`, `!text-kumo-default`: every class naming a Kumo token.
+  const utilities = new Set([...document.querySelectorAll('[class*="-kumo-"]')]
+    .flatMap((element) => [...element.classList].filter((name) => name.includes('-kumo-'))));
+
+  const colourOf = (name: string): string => {
+    const probe = document.createElement('div');
+    probe.style.color = `var(${name})`;
+    document.body.append(probe);
+    const computed = getComputedStyle(probe).color;
+    probe.remove();
+
+    return computed;
+  };
+
+  const before = new Map([...kumo].map((name) => [name, colourOf(name)] as const));
+
+  for (const [index, name] of [...palette].entries()) {
+    document.documentElement.style.setProperty(name, `rgb(${String(index % 256)}, ${String(Math.floor(index / 256))}, 251)`);
+  }
+
+  const tokens: Record<string, readonly [string, string]> = {};
+
+  for (const name of kumo) tokens[name] = [before.get(name) ?? '', colourOf(name)];
+
+  return { tokens, utilities: [...utilities] };
+}
+
 type Mode = (typeof MODES)[number];
 
-const palettes = await withGallery(async ({ newPage, origin }) => {
+/** Transparent is a mapping (`--color-kumo-tip-shadow`), not a colour the palette could move. */
+const TRANSPARENT = 'rgba(0, 0, 0, 0)';
+
+const { palettes, kumo } = await withGallery(async ({ newPage, origin }) => {
   const byMode: Partial<Record<Mode, Palette>> = {};
+  const kumoByMode: Partial<Record<Mode, KumoRead>> = {};
 
   for (const mode of MODES) {
     const page = await newPage();
@@ -113,9 +185,20 @@ const palettes = await withGallery(async ({ newPage, origin }) => {
     await page.goto(`${origin}/gallery.html?frame=home`, { waitUntil: 'networkidle0' });
     byMode[mode] = await page.evaluate(paletteOf, ASKED);
     await page.close();
+
+    // The workspace page mounts Kumo's compiled components: tabs, the composer's controls.
+    const workspace = await newPage();
+    await workspace.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: mode }]);
+    await workspace.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+    // Kumo's components ship compiled: their utilities exist only if Tailwind's sources reached Kumo's dist.
+    kumoByMode[mode] = {
+      ...await workspace.evaluate(readKumo, KUMO_COLOUR),
+      unruled: await workspace.evaluate(unruledClasses, '[class*="-kumo-"]', '-kumo-', []),
+    };
+    await workspace.close();
   }
 
-  return byMode;
+  return { palettes: byMode, kumo: kumoByMode };
 });
 
 describe.each([...MODES])('the app palette on the %s theme', (mode) => {
@@ -159,5 +242,30 @@ describe.each([...MODES])('the app palette on the %s theme', (mode) => {
     })).filter((row) => row.ratio < AA);
 
     expect(failures).toEqual([]);
+  });
+});
+
+describe.each([...MODES])('Kumo on the %s theme', (mode) => {
+  const read = kumo[mode];
+
+  if (read === undefined) throw new Error(`no Kumo read on the ${mode} theme`);
+
+  test('the page carries Kumo\'s colour tokens and components that use its utilities', () => {
+    // An empty read would make every check below pass vacuously.
+    expect(Object.keys(read.tokens).length).toBeGreaterThan(30);
+    expect(Object.keys(read.tokens)).toContain('--color-kumo-brand');
+    expect(read.utilities.length).toBeGreaterThan(10);
+  });
+
+  test('every Kumo colour token moves with the Kinu palette', () => {
+    const fixed = Object.entries(read.tokens)
+      .filter(([, [before, after]]) => before === after && before !== TRANSPARENT)
+      .map(([name, [before]]) => `${name} stays ${before}`);
+
+    expect(fixed).toEqual([]);
+  });
+
+  test('every Kumo utility the page carries was generated into the served CSS', () => {
+    expect(read.unruled).toEqual([]);
   });
 });

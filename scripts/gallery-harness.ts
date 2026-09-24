@@ -121,6 +121,43 @@ export function diagnosticsSettled(lines: RecordedDiagnostics, count: number): P
   return lines.settled(count);
 }
 
+/**
+ * Runs inside the page, so it closes over nothing: `page.evaluate(unruledClasses, scope, family, markers)`.
+ * Each class the elements matching `scope` carry, with `family` in its name, that no rule in the page's
+ * stylesheets selects. Tailwind generates only the utilities its sources reach, so a vendor component
+ * whose `@source` matched nothing carries classes that paint nothing. `markers` are classes a library
+ * uses as handles, never as styles.
+ */
+export function unruledClasses(scope: string, family: string, markers: readonly string[]): string[] {
+  const selectors: string[] = [];
+
+  const walk = (rules: CSSRuleList): void => {
+    for (const rule of rules) {
+      if (rule instanceof CSSStyleRule) selectors.push(rule.selectorText);
+
+      if (rule instanceof CSSGroupingRule) walk(rule.cssRules);
+    }
+  };
+
+  for (const sheet of document.styleSheets) walk(sheet.cssRules);
+
+  // `.bg-kumo-base/90` is another class than `.bg-kumo-base`: a selected name ends at an identifier boundary.
+  const selects = (selector: string, name: string): boolean => {
+    const needle = `.${CSS.escape(name)}`;
+
+    for (let at = selector.indexOf(needle); at !== -1; at = selector.indexOf(needle, at + 1)) {
+      if (!/^[\w\\-]/u.test(selector.slice(at + needle.length))) return true;
+    }
+
+    return false;
+  };
+
+  const classes = new Set([...document.querySelectorAll(scope)]
+    .flatMap((element) => [...element.classList].filter((name) => name.includes(family) && !markers.includes(name))));
+
+  return [...classes].filter((name) => !selectors.some((selector) => selects(selector, name)));
+}
+
 
 function chromePath(): string | undefined {
   for (const candidate of ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium']) {
