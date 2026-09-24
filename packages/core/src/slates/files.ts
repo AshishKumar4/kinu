@@ -8,6 +8,7 @@ import type { WorkspaceSlateContentStore } from './content';
 import { KinuError } from '../obs/error';
 import { tolerate } from '../obs/index';
 import { compareCodeUnits } from '../utils/text';
+import { unmovedSince } from '../vfs/unmoved';
 
 export { SlateDirectoryName };
 
@@ -45,10 +46,8 @@ const ManifestRowSchema = v.object({
   path: v.string(), size: v.number(), mtime_ms: v.number(), ino: v.number(), content: v.string(), recorded_at: v.number(),
 });
 
-/** A same-size rewrite in the row's own millisecond keeps all three, so such a row is not trusted.
- *  Blind to `touch -d` restoring the recorded mtime at the same size. */
 function unmoved(row: ManifestRow, stat: FileStat): boolean {
-  return row.size === stat.size && row.mtimeMs === stat.mtime && row.ino === stat.ino && row.mtimeMs < row.recordedAt;
+  return row.ino === stat.ino && unmovedSince(row, row.recordedAt, { size: stat.size, mtimeMs: stat.mtime });
 }
 
 class SlateManifest {

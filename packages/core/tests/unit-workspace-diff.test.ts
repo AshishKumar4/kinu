@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { git, gitEnv, initRepo, scratchDir } from '@kinu.run/test-utils';
@@ -23,6 +23,11 @@ const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, mod
 
 /** A PNG signature and a NUL byte: binary to the change-set. */
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
+
+afterEach(() => { setSystemTime(); });
+
+/** One millisecond for a write, a capture and a same-size rewrite, as one request's frozen clock gives them. */
+const ONE_MILLISECOND = Date.parse('2026-09-24T00:00:00.000Z');
 
 describe('workspace diff lifecycle', () => {
   test('workspace birth captures seed files before any agent work', async () => {
@@ -76,12 +81,16 @@ describe('workspace diff lifecycle', () => {
   });
 
   test('a workspace past four hundred files still diffs, reading only the file that moved', async () => {
+    // Written, reviewed and rewritten in three requests: a file written in the review's own millisecond is read again.
+    setSystemTime(ONE_MILLISECOND);
     const { rt } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
     await rt.storage.vfs.mkdir('s', { recursive: true });
 
     for (let i = 0; i < 450; i++) await rt.storage.vfs.writeFile(`s/f-${i}.txt`, `line ${i}\n`);
+    setSystemTime(ONE_MILLISECOND + 1000);
     await resetWorkspaceBaseline(rt);
+    setSystemTime(ONE_MILLISECOND + 2000);
     await rt.storage.vfs.writeFile('s/f-7.txt', 'line 7\nchanged\n');
     const readFile = rt.storage.vfs.readFile.bind(rt.storage.vfs);
     const read: string[] = [];
@@ -160,6 +169,32 @@ describe('workspace diff lifecycle', () => {
     expect(await listed()).toEqual([]);
     expect(restoreWorkspaceBaseline(rt)).toMatchObject({ ok: true });
     expect(await listed()).toEqual(['changed hello.py', 'added logo.png']);
+  });
+
+  test('a same-size rewrite in the millisecond its baseline was captured is read, not trusted', async () => {
+    setSystemTime(ONE_MILLISECOND);
+    const { rt } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await rt.storage.vfs.writeFile('hello.py', 'print(42)\n');
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('hello.py', 'print(43)\n');
+
+    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['changed hello.py']);
+  });
+
+  test('a review re-reads a file rewritten in the previous capture\'s millisecond, so it keeps what the file held', async () => {
+    setSystemTime(ONE_MILLISECOND);
+    const { rt } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await rt.storage.vfs.writeFile('hello.py', 'print(42)\n');
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('hello.py', 'print(43)\n');
+    setSystemTime(ONE_MILLISECOND + 1000);
+    await resetWorkspaceBaseline(rt);
+    setSystemTime(ONE_MILLISECOND + 2000);
+    await rt.storage.vfs.writeFile('hello.py', 'print(42)\n');
+
+    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['changed hello.py']);
   });
 
   test('a workspace without a baseline starts tracking at its first read, then shows exactly what it writes', async () => {
