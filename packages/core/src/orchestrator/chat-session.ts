@@ -268,8 +268,8 @@ export interface ChatSessionOptions {
 
 export interface SendOptions {
   readonly tier?: TierId;
-  /** Absent, the session mints one; a rerun keeps it as its turn id. */
-  readonly id?: string;
+  /** A retry with this id lands once; a rerun keeps it as its turn id. */
+  readonly id: string;
   /** A turn it starts, and its leftovers' rerun, run under it. Build by default. */
   readonly mode?: WorkMode;
 }
@@ -465,7 +465,7 @@ export class ChatSession {
    * turn finished, never guessed at admission. Rejects when it did not land (lease refused, or handed
    * back by an interrupt). Use {@link admit} for admission only.
    */
-  async send(input: string | { text: string; files: ReadonlyArray<PromptFile> }, opts: SendOptions = {}): Promise<SendLanding> {
+  async send(input: string | { text: string; files: ReadonlyArray<PromptFile> }, opts: SendOptions): Promise<SendLanding> {
     const landing = Promise.withResolvers<SendLanding>();
 
     await this.admit(input, opts, landing);
@@ -485,10 +485,10 @@ export class ChatSession {
   /** Resolves once the words are reserved and owed a landing; a `landing` is registered before the message can move. */
   async admit(
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
-    opts: SendOptions = {},
+    opts: SendOptions,
     landing: SendLandingWaiter | null = null,
   ): Promise<void> {
-    if (opts.id !== undefined) this.refuseUnusableId(opts.id);
+    this.refuseUnusableId(opts.id);
     const { text, files } = normalizePromptInput(input);
 
     // The operator spoke: the reminder count starts over.
@@ -500,8 +500,7 @@ export class ChatSession {
     }
 
     if (this.turnInFlight()) {
-      // Identity is assigned on acceptance, so a surface never renders the message twice.
-      const id = opts.id ?? `steer-${crypto.randomUUID().slice(0, 12)}`;
+      const { id } = opts;
       const steer: UserSteer & { readonly id: string; readonly mode?: WorkMode } = { text, id, ...(opts.mode !== undefined && { mode: opts.mode }) };
 
       if (files !== undefined && files.length > 0) Object.assign(steer, { files });
@@ -522,8 +521,8 @@ export class ChatSession {
     };
 
     // The pending_steers insert runs before the pump can begin the turn.
-    const pendingSendId = opts.id ?? `steer-${crypto.randomUUID().slice(0, 12)}`;
-    const turnId = opts.id ?? crypto.randomUUID();
+    const pendingSendId = opts.id;
+    const turnId = opts.id;
 
     if (landing !== null) this.landings.set(turnId, landing);
     this.pendingSends.reserve({ id: pendingSendId, turnId: null, mode, text, files });

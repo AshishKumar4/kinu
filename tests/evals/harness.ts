@@ -1050,7 +1050,7 @@ export async function runBehaviourTask(
   // the instrument's cost, not the agent's, and charging it to the episode
   // would make the budget a property of the machine it ran on.
   const episodeStartedAt = Date.now();
-  await session.send(promptFor(task.task, opts.arm.prompt));
+  await session.send(promptFor(task.task, opts.arm.prompt), { id: crypto.randomUUID() });
   await session.settleBackgroundWork();
   const episodeWallMs = Date.now() - episodeStartedAt;
 

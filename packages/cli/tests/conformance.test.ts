@@ -133,7 +133,7 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
   });
 
   const session = await host.acquire(AGENT_NAME);
-  await session.send('what can you do?');
+  await session.send('what can you do?', { id: crypto.randomUUID() });
 
   const db = new Database(dbPath, { readonly: true });
   // Only a function tool carries an input schema; provider-defined tools have no Kinu action enum.

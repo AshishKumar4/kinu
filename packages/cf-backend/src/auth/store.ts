@@ -36,7 +36,7 @@ export interface OAuthStateInput {
 export interface OAuthHandoff {
   state: string;
   binding: string;
-  expiresAt: number;
+  lifetimeMs: number;
 }
 
 export interface OAuthProfile {
@@ -49,6 +49,8 @@ export interface OAuthProfile {
 
 export interface BrowserSession {
   token: string;
+  /** The one instant the KV record's TTL and the cookie's lifetime are both taken from. */
+  issuedAt: number;
   expiresAt: number;
   identity: AuthIdentity;
 }
@@ -115,9 +117,9 @@ export async function createOAuthState(
     expiresAt,
   };
 
-  await writeKvJson(kv, `oauth-state:${await sha256Hex(state)}`, record, expiresAt);
+  await writeKvJson(kv, `oauth-state:${await sha256Hex(state)}`, record, OAUTH_STATE_TTL_MS);
 
-  return { state, binding, expiresAt };
+  return { state, binding, lifetimeMs: OAUTH_STATE_TTL_MS };
 }
 
 /** Deleted before it is judged, so a concurrent second callback finds nothing. A callback whose
@@ -178,7 +180,7 @@ export async function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthPro
       userId: identity.userId,
       ...minted,
       expiresAt,
-    }, expiresAt);
+    }, SESSION_TTL_MS);
   } catch (writeFailed) {
     // This token is never returned; withdraw the row rather than leave it holding a slot.
     try {
@@ -194,7 +196,7 @@ export async function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthPro
     throw new SessionAuthorityUnavailableError({ cause: writeFailed });
   }
 
-  return { token, expiresAt, identity };
+  return { token, issuedAt: now, expiresAt, identity };
 }
 
 /** A session that cannot be checked is not an invalid one: answering 401 during an outage would sign

@@ -337,12 +337,12 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
   const norm = parityNormalizer();
 
   // 1. An idle send runs as a turn of its own.
-  await a.send('one');
+  await a.send('one', { id: crypto.randomUUID() });
 
   // 2. A send mid-turn with a file lands and is answered at the next step boundary (the drain's, not admission's).
-  const turnTwo = a.send('two');
+  const turnTwo = a.send('two', { id: crypto.randomUUID() });
   await waitFor(() => turnEvents(eventsA, 2).some((event) => event.type === 'tool-call'));
-  const steerTwo = a.send({ text: 'two-steer', files: [NOTE_FILE] });
+  const steerTwo = a.send({ text: 'two-steer', files: [NOTE_FILE] }, { id: crypto.randomUUID() });
   two.stepGate.resolve();
   const landingTwo = await steerTwo;
   await waitFor(() => two.prompts.length === 2);
@@ -351,9 +351,9 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
   const afterTwo = await durableRows(db, norm, transcript);
 
   // 3. An interrupt hands the steer back and cuts the turn: the send is refused, never landed.
-  const turnThree = a.send('three');
+  const turnThree = a.send('three', { id: crypto.randomUUID() });
   await waitFor(() => turnEvents(eventsA, 3).some((event) => event.type === 'text-delta'));
-  const steerThree = a.send('three-steer');
+  const steerThree = a.send('three-steer', { id: crypto.randomUUID() });
   await waitFor(() => pendingSteerTexts(db).includes('three-steer'));
   const returned = a.interrupt();
   const landingThree = await refusalCode(steerThree);
@@ -361,9 +361,9 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
   three.release();
 
   // 4. A send with a file is acknowledged mid-turn, then the process dies before the drain; its producers stay parked.
-  const turnFour = a.send('four');
+  const turnFour = a.send('four', { id: crypto.randomUUID() });
   await waitFor(() => turnEvents(eventsA, 4).some((event) => event.type === 'tool-call'));
-  const steerFour = a.send({ text: 'four-steer', files: [NOTE_FILE] });
+  const steerFour = a.send({ text: 'four-steer', files: [NOTE_FILE] }, { id: crypto.randomUUID() });
   await waitFor(() => pendingSteerTexts(db).includes('four-steer'));
   const landingFour = 'acknowledged';
   const beforeRestart = await durableRows(db, norm, transcript);
@@ -384,7 +384,7 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
   const modelB = sequencedModel([answeringModel('answer four again', restartedPrompts), answeringModel('answer five', restartedPrompts)]);
   const b = new LocalAgentSession({ rt, db, model: modelB, noAutoEvolve: true, onEvent: (event) => eventsB.push(event) });
   await waitFor(() => eventsB.some((event) => event.type === 'turn-end'));
-  const landingFive = await b.send('five');
+  const landingFive = await b.send('five', { id: crypto.randomUUID() });
 
   const record: ParitySnapshot = {
     afterTwo,

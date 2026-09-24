@@ -64,7 +64,7 @@ const session = new LocalAgentSession({
   },
 });
 
-await session.send('refactor the parser');
+await session.send('refactor the parser', { id: crypto.randomUUID() });
 
 // The title lane is detached, so `send` resolves before it runs; this is the join a one-shot process makes.
 await session.settleBackgroundWork();

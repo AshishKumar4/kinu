@@ -95,7 +95,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
 
     // Killed after the takes claim wrote its rows and before anything recorded that it had.
     session.cutAt('takes', 'after');
-    await session.send('refactor the parser');
+    await session.send('refactor the parser', { id: crypto.randomUUID() });
 
     expect(claimedTakes(rt)).toBe(1);
     expect(completedTurns(rt)).toBe(0);
@@ -132,7 +132,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
         const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
 
         session.cutAt(effect, phase);
-        await session.send('write the migration');
+        await session.send('write the migration', { id: crypto.randomUUID() });
 
         expect(observe(rt)).toBe(phase === 'after' ? 1 : 0);
         expect(state.titleCalls).toBe(0);
@@ -175,7 +175,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     });
 
     session.cutAt('completion_gate', 'before');
-    await session.send('rename the columns');
+    await session.send('rename the columns', { id: crypto.randomUUID() });
 
     const asked = () => events.filter(
       (e) => e.type === 'turn-start' && e.event === COMPLETION_GATE_EVENT,
@@ -206,7 +206,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     const events: SessionEvent[] = [];
     const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
 
-    await session.send('tidy the imports');
+    await session.send('tidy the imports', { id: crypto.randomUUID() });
     await session.end();
 
     const settled = {
@@ -233,7 +233,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
 
     session.cutAt('turn_record', 'before');
-    await session.send('write the migration');
+    await session.send('write the migration', { id: crypto.randomUUID() });
     expect(completedTurns(rt)).toBe(0);
 
     // Core's in-flight guard is process-local; only the driver lease stops a second opener running the same rows.
@@ -263,7 +263,7 @@ test('a managed context edit reaches the local request and retained trial togeth
   const session = new LocalAgentSession({ rt, db, model, onEvent: () => {} });
 
   try {
-    await session.send('use the OLD premise');
+    await session.send('use the OLD premise', { id: crypto.randomUUID() });
     await session.settleBackgroundWork();
     // Armed after the first turn: a drain still running that turn's trial re-reads the queue between laps and
     // would take the follow-up's trial with it, however fast the workspace files answer.
@@ -271,7 +271,7 @@ test('a managed context edit reaches the local request and retained trial togeth
     const document = v.parse(v.string(), await rt.storage.vfs.readFile('/context/working.jsonl', { encoding: 'utf8' }));
     await rt.storage.vfs.writeFile('/context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
     await expect(rt.storage.vfs.writeFile('/context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);
-    await session.send('follow-up input');
+    await session.send('follow-up input', { id: crypto.randomUUID() });
     await session.settleBackgroundWork();
     const trial = listQueuedShadowTrials(rt.storage.sql, rt.actor, 1).find((row) => row.task === 'follow-up input');
     const claim = rt.stores.claims.latestTurn();
@@ -492,7 +492,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
 
     session.cutAt('turn_record', 'before');
-    await session.send('write the migration');
+    await session.send('write the migration', { id: crypto.randomUUID() });
     expect(completedTurns(rt)).toBe(0);
 
     // `--no-auto-evolve` on the recovering process does not un-owe a window row earned with evolution on.
@@ -520,7 +520,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     });
 
     session.cutAt('turn_record', 'before');
-    await session.send('write the migration');
+    await session.send('write the migration', { id: crypto.randomUUID() });
 
     // The inverse: a turn that owed no evolution state must not acquire one from the recovering host.
     const next = await restart({ rt, db, model, events });
@@ -564,7 +564,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     });
 
     session.cutAt('completion_gate', 'before');
-    await session.send('rename the columns');
+    await session.send('rename the columns', { id: crypto.randomUUID() });
 
     const asked = () => events.filter(
       (e) => e.type === 'turn-start' && e.event === COMPLETION_GATE_EVENT,
@@ -628,7 +628,7 @@ describe('an owed follow-up turn waits for its own row', () => {
     const retries = () => events.filter((e) => e.type === 'turn-start' && e.event === 'overflow_retry').length;
     const owed = () => stillOwed(rt).map((row) => row.effect_name);
 
-    await session.send('build the thing');
+    await session.send('build the thing', { id: crypto.randomUUID() });
     await session.settleBackgroundWork();
 
     expect(retries()).toBe(1);
@@ -700,7 +700,7 @@ describe('a terminal close that fails leaves a way back', () => {
     const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
     session.armWakeImmediately();
 
-    await session.send('write the migration');
+    await session.send('write the migration', { id: crypto.randomUUID() });
     await session.settleBackgroundWork();
 
     // Nothing is owed; only the wake the catch armed can close the sequence.

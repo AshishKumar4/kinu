@@ -24,6 +24,7 @@ import { tolerate } from '@kinu.run/core/obs';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
+import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { webHeaders, type PublicWebIdentity } from '../tests/evals/public-session';
 import { DESKTOP } from './live-app-harness';
 
@@ -135,14 +136,18 @@ const CHAT_IDLE = `[...document.querySelectorAll('#chat button')].some((el) => e
 /** What stops a row dead: an app script that never loaded, which leaves the
  *  page blank; a turn the socket reported ended in error, which the page may
  *  never show as ended; the welcome page, which stands in front of every route
- *  until the account finishes setup; or a danger notice, the product saying why
+ *  until the account finishes setup, once it offers its next step again (while
+ *  it saves one, Next and Finish setup are disabled, and a save that fails
+ *  enables them beside its error); or a danger notice, the product saying why
  *  the thing asked for will not come. */
 const DEAD_END = `(() => {
   const script = (window.__scriptFailures ?? []).at(-1);
   if (script !== undefined) return 'the app script ' + script + ' failed to load, which leaves the page blank';
   const failed = (window.__turnErrors ?? []).at(-1);
   if (failed !== undefined) return 'a turn that ended in error: ' + failed;
-  if (location.pathname === '/welcome') {
+  const welcomeOffers = [...document.querySelectorAll('button')].some((b) => !b.disabled && b.getClientRects().length > 0
+    && ['Next', 'Finish setup'].includes((b.textContent ?? '').trim()));
+  if (location.pathname === '/welcome' && welcomeOffers) {
     const said = [...document.querySelectorAll('.p-danger')].map((el) => (el.textContent ?? '').trim()).join(' ');
     return 'the welcome page, which the account has not finished' + (said === '' ? '' : ': ' + said);
   }
@@ -151,21 +156,54 @@ const DEAD_END = `(() => {
   return notice === undefined ? null : 'a notice: ' + notice;
 })()`;
 
-/** Wait until `condition` holds in the page, or fail at once naming the dead end
- *  the page shows instead (a page opened without {@link RECORD_DEAD_ENDS}
- *  cannot show a failed turn or a script that never loaded). Each wait is
- *  logged by what it waits for, so a run the tier's deadline ends still names
- *  the step it was in. */
-export async function until(page: Page, what: string, condition: string): Promise<void> {
+/** The waits open now, by what they wait for. No wait has a clock: one whose condition never comes is ended by
+ *  the row's deadline, whose SIGTERM runs the hold below, so the run ends naming the wait and not only the row. */
+const openWaits = new Set<{ readonly what: string }>();
+
+let dropWaitsHold: (() => void) | null = null;
+
+/** `wait`, logged by what it waits for when it opens and when it is reached, and named while it is open. */
+async function named<Value>(what: string, wait: () => Promise<Value>): Promise<Value> {
+  const open = { what };
   const started = performance.now();
 
+  openWaits.add(open);
+  dropWaitsHold ??= holdForRelease('the open waits', () => {
+    process.stderr.write(`ended while waiting for ${[...openWaits].map((pending) => pending.what).join('; ')}\n`);
+  });
   process.stderr.write(`  waiting for ${what}\n`);
 
-  const outcome = await (await page.waitForFunction(`(${condition}) ? 'reached' : ${DEAD_END}`, { polling: 100 })).jsonValue();
+  try {
+    const value = await wait();
 
-  if (outcome !== 'reached') throw new Error(`waiting for ${what}, the page showed ${String(outcome)}`);
+    process.stderr.write(`  ${what} after ${((performance.now() - started) / 1000).toFixed(1)} s\n`);
 
-  process.stderr.write(`  ${what} after ${((performance.now() - started) / 1000).toFixed(1)} s\n`);
+    return value;
+  } finally {
+    openWaits.delete(open);
+
+    if (openWaits.size === 0) {
+      dropWaitsHold();
+      dropWaitsHold = null;
+    }
+  }
+}
+
+/** Wait until `condition` holds in the page, or fail at once naming the dead end
+ *  the page shows instead (a page opened without {@link RECORD_DEAD_ENDS}
+ *  cannot show a failed turn or a script that never loaded). */
+export async function until(page: Page, what: string, condition: string): Promise<void> {
+  await named(what, async () => {
+    const outcome = await (await page.waitForFunction(`(${condition}) ? 'reached' : ${DEAD_END}`, { polling: 100 })).jsonValue();
+
+    if (outcome !== 'reached') throw new Error(`waiting for ${what}, the page showed ${String(outcome)}`);
+  });
+}
+
+/** Wait on a promise the page cannot be polled for, such as a turn closing on its socket, named as {@link until}
+ *  names its waits. */
+export async function waitOn<Value>(what: string, promise: Promise<Value>): Promise<Value> {
+  return named(what, () => promise);
 }
 
 async function openWorkspacePage(target: FlowTarget, path: string): Promise<Page> {
@@ -590,18 +628,26 @@ export const INSPECTOR_SHUT_PX = 40;
 
 export const OPEN_NAMES = 'show|expand|open';
 
-/** The clockless settle after a press: the measured number, equal on two
- *  consecutive animation frames. A control that does nothing settles at the
- *  number it started with, so no deadline is needed to tell an inert control
- *  from a slow one, and a panel that animates is read after it lands. */
+/** The clockless settle after a press: no finite animation running or waiting
+ *  to start, and the measured number equal on two consecutive animation frames
+ *  with none. `getAnimations()` flushes pending style, so a transition the
+ *  press has just set off is counted before it has moved a pixel: equal frames
+ *  alone read the rail as settled at its open 240 px while its collapse waited
+ *  pending (2026-09-24, 10 of 40 collapses short of the end state at 6x CPU
+ *  throttling). An infinite animation, a pulsing dot, never finishes and is not
+ *  waited on. A control that does nothing settles at the number it started
+ *  with, so no deadline is needed to tell an inert control from a slow one. */
 export async function settled(page: Page, read: string): Promise<void> {
   await page.evaluate('window.__liveSettle = undefined');
   await page.waitForFunction(
     `(() => {
       const value = ${read};
+      const moving = document.getAnimations().some((animation) =>
+        (animation.pending || animation.playState === 'running')
+        && animation.effect?.getComputedTiming().endTime !== Infinity);
       const previous = window.__liveSettle;
-      window.__liveSettle = value;
-      return previous === value;
+      window.__liveSettle = moving ? undefined : value;
+      return !moving && previous === value;
     })()`,
     { polling: 'raf' },
   );
