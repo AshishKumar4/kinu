@@ -336,8 +336,12 @@ export function pacedFirstTurn(request: ScriptedRequest, held: HeldCall): Script
 
 /* ── The reconnect turn ───────────────────────────────────────────────── */
 
-/** The words that ask for the reconnect turn. */
+/** The words that ask for the reconnect turn: one per row, since each row's turn waits on a call of its own. */
 export const RECONNECT_TURN_ASK = 'Reconnect probe: take your steps, then wait.';
+
+export const OBSERVED_TURN_ASK = 'Observer probe: take your steps, then wait.';
+
+export const SLEPT_TURN_ASK = 'Sleep probe: take your steps, then wait.';
 
 /** The folders the reconnect turn lists before its held call, one step each; a new workspace has both. (Listing its
  *  `memory` folder fails, which would leave a row that never reads done.) */
@@ -350,10 +354,10 @@ export const RECONNECT_STEPS = RECONNECT_FOLDERS.length;
  * The reconnect turn: {@link RECONNECT_STEPS} steps that each say what they do and list a folder, then a call held on
  * `held` whose answer closes the turn, so the turn is still running whatever the row does meanwhile. Each lists a
  * different folder, since a third identical call makes the harness steer the turn (turn-steering.ts). Null for any
- * request that did not ask for it.
+ * request that did not send `ask`.
  */
-export function reconnectTurn(request: ScriptedRequest, held: HeldCall): ScriptedAnswer | null {
-  if (!request.userTexts.some((text) => text.includes(RECONNECT_TURN_ASK))) return null;
+export function reconnectTurn(request: ScriptedRequest, ask: string, held: HeldCall): ScriptedAnswer | null {
+  if (!request.userTexts.some((text) => text.includes(ask))) return null;
 
   if (!request.available.includes('file')) return { text: FALLBACK_ANSWER };
 
