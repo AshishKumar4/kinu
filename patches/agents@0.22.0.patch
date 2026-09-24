@@ -13,18 +13,28 @@ index 07ae3e535f77ae29689662228b381b2f03451524..64d1aa70026c06d734682bb321dda031
     * Forcefully abort a running sub-agent. The child stops executing
     * immediately and will be restarted on next {@link subAgent} call.
 diff --git a/dist/chat/react.js b/dist/chat/react.js
-index 6698ed48841e17b1a5c8c59665188b1d8f2f0f03..857f5af7eaa648a1975d55f7ad1aba5eda30cfa7 100644
+index 6698ed48841e17b1a5c8c59665188b1d8f2f0f03..807989d5a931f91497ebc4c8d104e0225ebe7c7c 100644
 --- a/dist/chat/react.js
 +++ b/dist/chat/react.js
-@@ -818,6 +818,8 @@ function useAgentChat(options) {
+@@ -818,6 +818,10 @@ function useAgentChat(options) {
  						if (!isEarlyToolContinuation) return;
  					}
  					if (!resumingToolContinuationRef.current) pendingReplayResumeRequestIdsRef.current.add(data.id);
-+					const heldAnswerId = localResponseIds.get(data.id);
++					const observedStream = streamStateRef.current;
++					const observedAnswerId = observedStream.status === "observing" && observedStream.streamId === data.id ? observedStream.accumulator.messageId : void 0;
++					const heldAnswerId = localResponseIds.get(data.id) ?? observedAnswerId;
 +					if (heldAnswerId !== void 0 && customTransport.isAwaitingResume()) setMessages((currentMessages) => currentMessages.filter((message) => message.id !== heldAnswerId));
  					if (customTransport.handleStreamResuming(data)) return;
  					if (localRequestIdsRef.current.has(data.id)) return;
  					if (fallbackAckedResumeRequestIdsRef.current.has(data.id)) return;
+@@ -964,6 +968,7 @@ function useAgentChat(options) {
+ 			sawClose = true;
+ 			fallbackAckedResumeRequestIds.clear();
+ 			if (!resume) clearFallbackObserver();
++			restoreProtectedStreamingAssistant();
+ 		}
+ 		function onAgentOpen() {
+ 			socketIsOpen = true;
 diff --git a/dist/src-5W6JNKVb.js b/dist/src-5W6JNKVb.js
 index 8154429c7c282aac3cba5f62c49f21f48164b721..05232bc0bfd88481180bd7cb5c188750f0fc9168 100644
 --- a/dist/src-5W6JNKVb.js
