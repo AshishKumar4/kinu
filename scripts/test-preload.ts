@@ -6,7 +6,7 @@
 // runner — `bun:test`'s, which throws if called under any other.
 import { afterAll, setDefaultTimeout } from 'bun:test';
 
-import { buildSlateVendor, type SlateVendor } from '../packages/cf-backend/slate-vendor';
+import { buildSlateVendor } from '../packages/cf-backend/slate-vendor';
 import { release } from './test-scratch-home';
 
 // No per-test clock. Bun's 5 s default is a wall clock racing the machine: on
@@ -25,6 +25,19 @@ import { release } from './test-scratch-home';
 setDefaultTimeout(0);
 
 afterAll(release);
+
+// Release this file's plugins, so the runner can collect the file. Under
+// `--parallel` each file runs in a fresh global, and a `Bun.plugin` callback,
+// the two below and every `mock.module` (which is a plugin too), keeps its
+// global and everything that global reached alive until the worker exits.
+// Measured 2026-09-24 on bun 1.4.0, `bun test --parallel=4 packages/cf-backend/`
+// (272 files): without this line the live global objects after a full GC grew
+// one per file (87 after 87 files) and one worker held 1.4 GB of heap; the
+// suite's cgroup peaked at 9.6 to 12.3 GB. With it: at most 5 live globals,
+// 161 MB of heap per worker, and a 2.5 to 3.1 GB peak. Without `--parallel`
+// the files share one global, and this hook runs once, after the last file.
+// `packages/test-utils/tests/preload-release.test.ts` proves it both ways.
+afterAll(() => { Bun.plugin.clearAll(); });
 
 // The two `cloudflare:` builtins the Agents SDK's ROOT module imports
 // (`EmailMessage` from cloudflare:email, `RpcTarget`/`exports` from
@@ -98,17 +111,12 @@ Bun.plugin({
 // The slate vendor bundle under bun test: the same `virtual:kinu-slate-vendor`
 // module the Vite plugin serves in dev/build/vitest, resolved here through
 // the package's own `buildSlateVendor` so bun tests measure the real bytes.
+// The runner calls this once per global (it caches the module), so under
+// `--parallel` that is once per importing file: about 90 ms of esbuild each
+// (measured 2026-09-24).
 Bun.plugin({
   name: 'kinu-slate-vendor-for-bun-test',
   setup(build) {
-    // One build per process: the bundle is esbuild over react and capnweb, and
-    // every suite that imports the id gets the same bytes.
-    let loaded: { exports: { default: SlateVendor }; loader: 'object' } | undefined;
-
-    build.module('virtual:kinu-slate-vendor', () => {
-      loaded ??= { exports: { default: buildSlateVendor() }, loader: 'object' };
-
-      return loaded;
-    });
+    build.module('virtual:kinu-slate-vendor', () => ({ exports: { default: buildSlateVendor() }, loader: 'object' }));
   },
 });
