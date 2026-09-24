@@ -313,6 +313,8 @@ export default defineConfig({
           modules: probeModules(publicSurfaceProbe),
           // `DEV_USER_EMAIL` selects the dev inference plane and the loopback identity.
           bindings: { DEV_USER_EMAIL: 'probe@local', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
+          // The CLI device sign-in and its rate limits live in AUTH_KV (cli-scoped-socket).
+          kvNamespaces: ['AUTH_KV'],
           serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'SurfaceAI' } },
           outboundService: probeOutbound,
           durableObjects: {

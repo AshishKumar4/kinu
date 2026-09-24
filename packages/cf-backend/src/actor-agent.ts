@@ -30,9 +30,10 @@ import {
   cliScopesConnectionTag,
   sessionBearerConnectionTag,
   sessionBearerFromTags,
-  rejectOutOfScopeRpc, requiredRpcAccess,
+  rejectOutOfScopeRpc,
   type CliSocketBearer,
 } from "./cli/rpc-gate";
+import { requiredRpcAccess } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";

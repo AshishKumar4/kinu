@@ -155,7 +155,7 @@ the workspace transcript for the answer.
 
 Chat rides the agent websocket. Every method-shaped call goes through
 `POST /api/cli/workspaces/:name/rpc` with `{ method, args }`. The
-`AGENT_RPC_ACCESS` table (`packages/cf-backend/src/cli/rpc-gate.ts`) holds one
+`AGENT_RPC_ACCESS` table (`packages/core/src/cli/agent-rpc-access.ts`) holds one
 scope policy for both transports: the HTTP dispatcher and the websocket frame
 gate (`rejectOutOfScopeRpc`). On HTTP, membership is the dispatch allowlist, so
 a name off the table never runs. Each entry is `workspace.read`,
@@ -300,11 +300,14 @@ callables exist in no form: no alias, no refusing stub. An unregistered
 workspace answers 404 and is never created on first touch. Creation goes
 through the explicit create APIs, so probes cannot register workspaces
 (`claimOwnedWorkspace` in `packages/cf-backend/src/user/workspace-ownership.ts`,
-called on the agent path in `server.ts`). Four more suites guard the rest:
+called on the agent path in `server.ts`). Five more suites guard the rest:
 `unit-rpc-gate.test.ts` (scope table), `unit-cli-access-token-routes.test.ts`
-and `unit-cli-control-routes.test.ts` (both transports), and
-`unit-turn-pipeline-correctness.test.ts` (turn-pipeline wiring). Run those
-instead of grepping the tree. [TESTING.md](TESTING.md) covers the suites.
+and `unit-cli-control-routes.test.ts` (both transports),
+`workerd/cli-scoped-socket.test.ts` (a scoped token's ticket and socket through
+the production Worker), and `unit-turn-pipeline-correctness.test.ts`
+(turn-pipeline wiring). Run those instead of grepping the tree. The CLI types
+every method name it sends by `AgentRpcMethod`, so a call the table lacks does
+not compile. [TESTING.md](TESTING.md) covers the suites.
 
 One rule binds any change here: when authenticated production behavior went
 unexercised, name the unverified part instead of claiming readiness.

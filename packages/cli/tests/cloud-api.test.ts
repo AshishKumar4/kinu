@@ -73,7 +73,7 @@ describe('callAgentRpc', () => {
   test('server rejections surface as thrown messages', async () => {
     const server = Bun.serve({
       port: 0,
-      fetch: () => Response.json({ error: 'No such agent RPC method: nope' }, { status: 404 }),
+      fetch: () => Response.json({ error: 'This token lacks the workspace.read scope' }, { status: 403 }),
     });
 
     try {
@@ -81,10 +81,10 @@ describe('callAgentRpc', () => {
         origin: `http://localhost:${server.port}`,
         token: 't',
         name: 'a',
-        method: 'nope',
+        method: 'getAgentStatus',
         schema: v.null(),
       }))
-        .rejects.toThrow('No such agent RPC method: nope');
+        .rejects.toThrow('This token lacks the workspace.read scope');
     } finally {
       await server.stop(true);
     }
