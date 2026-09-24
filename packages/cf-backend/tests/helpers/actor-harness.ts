@@ -33,7 +33,7 @@ import type { WorkspaceHostTarget } from '../../src/workspace-host';
 import {
   actorReferenceOf,
   type ActorHandle,
-  type ActorHost, type HostedActor, type SubordinateSeed, type HeadStreamFrame,
+  type ActorHost, type HostedActor, type SubordinateSeed,
 } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
@@ -182,8 +182,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     });
   }
 
-  /** The head-stream broadcaster (`protected` on the actor). */
-  observePublishHeadStreamFrame(frame: HeadStreamFrame): void { this.publishHeadStreamFrame(frame); }
   /** The child substrate, for lifecycle verbs without a roster row. */
   observeSubordinateRuntime() { return this.subordinateRuntime(); }
   observeRuntime(): AgentRuntime { return this.rt; }

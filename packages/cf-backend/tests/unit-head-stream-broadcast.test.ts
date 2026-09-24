@@ -1,11 +1,19 @@
 /**
- * `publishHeadStream` sits on the root turn's critical path (one DO, one input gate), so it may only fan out and
- * must never touch storage; `recordHeadStep` is the durable, writing twin.
+ * A search node's streamed words sit on the root turn's critical path (one DO, one input gate), so they may only
+ * fan out and must never touch storage; the node's recorded steps are the durable trace. Driven as production
+ * drives it: the owner's turn starts a search through the main actor's `agents` tool, every model call the
+ * platform gateway's.
  */
-
-import { describe, test, expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { catalogTurn, gatewayWorkspace, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import {
+  chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun,
+} from './helpers/platform-gateway';
+
+const ASK = 'Find a way to speed up the parser.';
+
+const ANSWER = 'Cache the token table between passes.';
 
 const FrameSchema = v.object({
   type: v.literal('head_stream'),
@@ -14,47 +22,55 @@ const FrameSchema = v.object({
   delta: v.string(),
 });
 
-function captureFrames(agent: HarnessOrchestratorAgent): string[] {
-  const sent: string[] = [];
+function fromTheOwner(run: RecordedGatewayRun): boolean {
+  const opening = requestOf(run).messages.find((message) => message.role === 'user');
+
+  return JSON.stringify(opening?.content ?? '').includes(ASK);
+}
+
+function stepOf(run: RecordedGatewayRun): number {
+  return requestOf(run).messages.filter((message) => message.role === 'tool').length;
+}
+
+/** The main actor starts a one-node search; the node runs code once, then answers. */
+const searching = stubAiBinding((run) => {
+  if (fromTheOwner(run)) {
+    return stepOf(run) === 0
+      ? toolCallCompletion(run, {
+        tool: 'agents', args: { action: 'swarm', task: 'Name one way to tokenize faster.', preset: 'ideate', branches: 1, depth: 1 },
+      }, 'swarm_0')
+      : chatCompletion(run, 'Searching.');
+  }
+
+  return stepOf(run) === 0
+    ? toolCallCompletion(run, { tool: 'eval', args: { code: 'return 6 * 7;' } }, 'eval_0')
+    : chatCompletion(run, ANSWER);
+});
+
+function captureFrames(agent: HarnessOrchestratorAgent): unknown[] {
+  const sent: unknown[] = [];
   Object.defineProperty(agent, 'broadcast', {
     configurable: true,
-    value: (payload: string) => { sent.push(payload); },
+    value: (payload: string) => { sent.push(JSON.parse(payload)); },
   });
 
   return sent;
 }
 
-describe('publishHeadStreamFrame', () => {
-  test('both kinds go out as frames the client validator accepts', () => {
-    const harness = orchestratorHarness();
-    const sent = captureFrames(harness.agent);
+test("a node's streamed words go out as frames the client validator accepts, and add no step to its trace", async () => {
+  const { agent, db } = gatewayWorkspace(searching);
+  const sent = captureFrames(agent);
 
-    harness.agent.observePublishHeadStreamFrame({ headId: 'head-7', kind: 'reasoning', delta: 'weighing the two lexers' });
-    harness.agent.observePublishHeadStreamFrame({ headId: 'head-7', kind: 'text', delta: 'the lexer handles UTF-8' });
+  await catalogTurn(agent, ASK);
+  await agent.harnessJoinDetachedFibers();
 
-    expect(sent.map((payload) => v.parse(FrameSchema, JSON.parse(payload)))).toEqual([
-      { type: 'head_stream', headId: 'head-7', kind: 'reasoning', delta: 'weighing the two lexers' },
-      { type: 'head_stream', headId: 'head-7', kind: 'text', delta: 'the lexer handles UTF-8' },
-    ]);
-  });
+  const frames = sent.filter((frame) => v.is(v.looseObject({ type: v.literal('head_stream') }), frame))
+    .map((frame) => v.parse(FrameSchema, frame));
 
-  test('it writes nothing — the frame is not a second copy of the trace', () => {
-    const harness = orchestratorHarness();
-    captureFrames(harness.agent);
+  const steps = db.query<{ head_id: string }, []>('SELECT head_id FROM head_steps').all();
 
-    const rows = (): number => {
-      // A count read back off SQLite is untyped input: parse, don't cast.
-      const counted = v.parse(
-        v.object({ n: v.number() }),
-        harness.db.prepare('SELECT COUNT(*) AS n FROM head_steps').get(),
-      );
-
-      return counted.n;
-    };
-
-    const before = rows();
-    harness.agent.observePublishHeadStreamFrame({ headId: 'head-7', kind: 'text', delta: 'a partial answer' });
-    // `recordHeadStep` is the only writer of this table.
-    expect(rows()).toBe(before);
-  });
+  expect(frames.map((frame) => frame.delta).join('')).toBe(ANSWER);
+  expect(new Set(frames.map((frame) => frame.headId)).size).toBe(1);
+  // Two model steps (the eval call, then the answer): the trace holds those, whatever the stream sent.
+  expect(steps.filter((step) => step.head_id === frames[0]?.headId)).toHaveLength(2);
 });
