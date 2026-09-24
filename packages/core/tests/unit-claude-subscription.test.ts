@@ -406,6 +406,16 @@ describe('the Claude subscription wire', () => {
     await expect(turn(createClaudeProvider(), deps(fetchFn, ['revoked'], 'kinu-agent-1'))).rejects.toThrow('Your Claude login is no longer valid.');
     expect(sent).toEqual([]);
   });
+
+  test('a model name the retired claude binary made up is refused before anything is sent, pointing to /model', () => {
+    const { sent, fetchFn } = wire([]);
+
+    for (const retired of ['claude-opus-4-x', 'claude-sonnet-4-x', 'claude-haiku-4-x']) {
+      expect(() => createClaudeProvider().createModel(retired, deps(fetchFn, [login('t')]))).toThrow('Pick a Claude model with /model.');
+    }
+
+    expect(sent).toEqual([]);
+  });
 });
 
 describe('the Claude sign-in', () => {

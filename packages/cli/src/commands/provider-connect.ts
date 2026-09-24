@@ -11,6 +11,7 @@ import {
   claudeCodeFrom,
   storedAccounts,
   createClaudeOAuthClient,
+  listAnthropicModels,
   createCodexOAuthClient,
   startClaudeSignIn,
   decodeCodexAccountId,
@@ -355,9 +356,19 @@ async function connectCloudflare(port: ProviderConnectPort, origin: string | und
   return { kind: 'connected', summary: `Signed in as ${email}` };
 }
 
+/** The stored default only while Claude serves it. */
+async function suggestedClaudeModel(): Promise<string> {
+  const current = currentModel(readDefaultTier()?.model, 'claude');
+
+  if (current === undefined) return ANTHROPIC_DEFAULT_MODEL;
+  const served = await listAnthropicModels({ fetch });
+
+  return served.some((model) => model.id === current) ? current : ANTHROPIC_DEFAULT_MODEL;
+}
+
 async function connectClaude(port: ProviderConnectPort, requestedModel: string | undefined, account: string): Promise<ProviderConnectOutcome> {
   const answered = account === MAIN_ACCOUNT
-    ? requestedModel ?? await port.ask({ label: 'Default Claude model', fallback: currentModel(readDefaultTier()?.model, 'claude') ?? ANTHROPIC_DEFAULT_MODEL })
+    ? requestedModel ?? await port.ask({ label: 'Default Claude model', fallback: await suggestedClaudeModel() })
     : null;
 
   const credential = await runClaudeSignIn(port);

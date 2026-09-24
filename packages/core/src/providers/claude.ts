@@ -69,6 +69,9 @@ const DEAD_LOGIN = 'Your Claude login is no longer valid. Reconnect Claude in Us
 
 const NOT_CONNECTED = 'Claude is not connected. Connect Claude in User settings, or run `kinu provider connect claude`.';
 
+/** Aliases the retired `claude -p` provider offered; api.anthropic.com serves none of them. */
+const RETIRED_CLI_MODELS = new Set(['claude-opus-4-x', 'claude-sonnet-4-x', 'claude-haiku-4-x']);
+
 const BlockSchema = v.looseObject({
   type: v.string(),
   text: v.optional(v.string()),
@@ -526,6 +529,10 @@ export function createClaudeProvider(): ModelProvider {
     unavailableReason() { return NOT_CONNECTED; },
     listModels: (deps) => listAnthropicModels(deps),
     createModel(modelId, deps): LanguageModel {
+      if (RETIRED_CLI_MODELS.has(modelId)) {
+        throw new KinuError('bad_input', `Claude has no model ${modelId}: that name came from the retired claude binary. Pick a Claude model with /model.`);
+      }
+
       const affinity = deps.sessionAffinity;
       const headerSessionId = affinity === undefined ? undefined : claudeSessionId(affinity);
       const call: ClaudeCall = { deps, modelId, version, sessionId: headerSessionId ?? crypto.randomUUID(), headerSessionId };

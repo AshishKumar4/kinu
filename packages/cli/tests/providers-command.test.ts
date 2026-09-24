@@ -45,6 +45,22 @@ function freshHome(): string {
   return home;
 }
 
+/** The default model, set the way the home screen's Defaults set it. */
+function withDefaultModel(home: string, model: string): void {
+  const proc = Bun.spawnSync({
+    cmd: [process.execPath, '-e', `
+      const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
+      await updateDefaultTier({ model: ${JSON.stringify(model)} });
+    `],
+    cwd: repoRoot,
+    env: { ...process.env, KINU_HOME: home },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+
+  expect(proc.exitCode, proc.stderr.toString()).toBe(0);
+}
+
 describe('providers command — Claude subscription', () => {
   /** The token endpoint answers inside the child; the person pastes what Claude showed them. */
   function connectClaude(home: string, account: string) {
@@ -59,13 +75,19 @@ describe('providers command — Claude subscription', () => {
         });
       };
       let opened = '';
+      const offered = [];
       const port = {
         report: (line) => { if (line.startsWith('Open: ')) opened = line.slice('Open: '.length); },
-        ask: async (request) => request.secret ? 'code-from-claude#' + new URL(opened).searchParams.get('state') : 'claude-opus-4-7',
+        ask: async (request) => {
+          if (request.secret) return 'code-from-claude#' + new URL(opened).searchParams.get('state');
+          offered.push(request.fallback);
+
+          return 'claude-opus-4-7';
+        },
         skippable: async () => null,
       };
       const outcome = await connectProvider('claude', port, { account: ${JSON.stringify(account)} });
-      console.log(JSON.stringify({ outcome, opened, sent }));
+      console.log(JSON.stringify({ outcome, opened, sent, offered }));
     `;
 
     const proc = Bun.spawnSync({
@@ -83,6 +105,7 @@ describe('providers command — Claude subscription', () => {
       outcome: v.object({ kind: v.string(), summary: v.string(), detail: v.optional(v.string()) }),
       opened: v.string(),
       sent: v.array(v.tuple([v.string(), v.record(v.string(), v.string())])),
+      offered: v.array(v.string()),
     }), JSON.parse(proc.stdout.toString()));
   }
 
@@ -101,6 +124,13 @@ describe('providers command — Claude subscription', () => {
     const stored = v.parse(v.object({ providers: v.object({ claude: v.object({ accessToken: v.string(), refreshToken: v.string() }) }) }), parseJsonObject(readFileSync(join(home, 'config.json'), 'utf8')));
 
     expect(stored.providers.claude).toMatchObject({ accessToken: 'sk-ant-oat01-fresh', refreshToken: 'rt-fresh' });
+  });
+
+  test('a default the retired claude binary made up is not offered again; a model Claude serves is', () => {
+    const home = freshHome();
+
+    withDefaultModel(home, 'claude/claude-opus-4-x');
+    expect(connectClaude(home, 'main').offered).toEqual(['claude-opus-4-7']);
   });
 
   test('a second account signs in beside the first and is listed by name', () => {
@@ -162,22 +192,6 @@ describe('providers command — disconnect', () => {
 
   function readConfig(home: string): JsonObject {
     return parseJsonObject(readFileSync(join(home, 'config.json'), 'utf8'));
-  }
-
-  /** The default model, set the way the home screen's Defaults set it. */
-  function withDefaultModel(home: string, model: string): void {
-    const proc = Bun.spawnSync({
-      cmd: [process.execPath, '-e', `
-        const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
-        await updateDefaultTier({ model: ${JSON.stringify(model)} });
-      `],
-      cwd: repoRoot,
-      env: { ...process.env, KINU_HOME: home },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-
-    expect(proc.exitCode, proc.stderr.toString()).toBe(0);
   }
 
   const DefaultModelSchema = v.object({
