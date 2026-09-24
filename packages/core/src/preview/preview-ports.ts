@@ -10,6 +10,8 @@ export interface PinnedPreviewPort {
 export interface ExposedPortList {
   ports: Array<{ port: number; url: string; name?: string }>;
   error?: string;
+  /** Starting, so nothing yet; not a failure. */
+  pending?: string;
 }
 
 export interface ExecutorPortRefresh {
@@ -22,7 +24,7 @@ export interface PreviewPortState {
   error: string | null;
 }
 
-/** A failed executor read keeps its previous ports; a successful empty result removes them. */
+/** A failed or pending executor read keeps its previous ports; a successful empty result removes them. */
 export function reconcilePreviewPorts(
   previous: readonly PinnedPreviewPort[],
   refreshes: readonly ExecutorPortRefresh[],
@@ -36,6 +38,8 @@ export function reconcilePreviewPorts(
       failures.push(`${executor}: ${result.error}`);
       continue;
     }
+
+    if (result.pending !== undefined) continue;
 
     const ports: PinnedPreviewPort[] = [];
     const identities = new Set<number>();

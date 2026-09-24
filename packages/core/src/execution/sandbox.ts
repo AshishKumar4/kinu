@@ -146,6 +146,12 @@ function sandboxFailure(input: { doing: string; cause: unknown }): KinuError {
   return toKinuError({ ...input, otherwise: transient ? 'unavailable' : 'io' });
 }
 
+export class SandboxPending extends KinuError {
+  constructor(reason: string) {
+    super('unavailable', reason);
+  }
+}
+
 /** Retries only transient errors, with exponential backoff; non-transient errors throw immediately. */
 export async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
   let lastErr: unknown;
