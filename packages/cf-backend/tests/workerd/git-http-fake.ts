@@ -2,6 +2,7 @@
  * One repository over git's smart HTTP protocol: a hosted `git clone` is always a network clone.
  * isomorphic-git demuxes upload-pack as side-band frames whatever it negotiated, so `side-band-64k`.
  */
+import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
 
@@ -71,15 +72,6 @@ function pkt(bytes: Uint8Array): Uint8Array {
 
 const FLUSH = encoder.encode('0000');
 
-function concat(parts: readonly Uint8Array[]): Uint8Array<ArrayBuffer> {
-  const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
-  let offset = 0;
-
-  for (const part of parts) { out.set(part, offset); offset += part.length; }
-
-  return out;
-}
-
 const PACKFILE = (() => {
   const header = new Uint8Array(12);
   const view = new DataView(header.buffer);
@@ -108,10 +100,10 @@ const PACKFILE = (() => {
     entries.push(Uint8Array.from(bytes), new Uint8Array(deflateSync(held.body)));
   }
 
-  const body = concat([header, ...entries]);
+  const body = Buffer.concat([header, ...entries]);
   const digest = Uint8Array.from(createHash('sha1').update(body).digest());
 
-  return concat([body, digest]);
+  return Buffer.concat([body, digest]);
 })();
 
 /** NAK, then the pack in side-band channel 1, in frames a pkt-line length can carry. */
@@ -130,10 +122,10 @@ const UPLOAD_PACK = (() => {
 
   frames.push(FLUSH);
 
-  return concat(frames);
+  return Buffer.concat(frames);
 })();
 
-const ADVERTISEMENT = concat([
+const ADVERTISEMENT = Buffer.concat([
   pkt(encoder.encode('# service=git-upload-pack\n')),
   FLUSH,
   pkt(encoder.encode(`${GIT_COMMIT_OID} HEAD\0side-band-64k shallow symref=HEAD:refs/heads/${GIT_BRANCH} agent=nimbus-fixture\n`)),

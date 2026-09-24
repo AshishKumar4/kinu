@@ -1,6 +1,6 @@
 {
   "measuredAt": "2026-09-24",
-  "total": 203,
+  "total": 195,
   "files": {
     "packages/cf-backend/tests/helpers/kv.ts": {
       "clock-compare": 1
@@ -205,26 +205,6 @@
     "scripts/public-pages.test.ts": {
       "sleep": 4
     },
-    "tests/evals/cli-driver.ts": {
-      "sleep": 1
-    },
-    "tests/evals/device-session.ts": {
-      "sleep": 3
-    },
-    "tests/evals/device.eval.ts": {
-      "clock-compare": 1,
-      "sleep": 2
-    },
-    "tests/evals/eval-progress.test.ts": {
-      "sleep": 1,
-      "clock-compare": 1
-    },
-    "tests/evals/prompt-ledger.ts": {
-      "sleep": 1
-    },
-    "tests/evals/swarm.eval.ts": {
-      "sleep": 1
-    },
     "tests/first-run/background-settle.first-run.ts": {
       "sleep": 1
     },
@@ -235,6 +215,9 @@
     "tests/first-run/device-link.first-run.ts": {
       "clock-compare": 5,
       "sleep": 7
+    },
+    "tests/first-run/device-session.ts": {
+      "sleep": 3
     },
     "tests/first-run/enter-sends.first-run.ts": {
       "clock-compare": 1,

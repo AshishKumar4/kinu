@@ -38,6 +38,7 @@ export const PAGE_ROWS = {
   triggers: ['workspace-panes'],
   drive: ['drive'],
   driveFolder: ['drive'],
+  shared: ['blueprint-fork'],
   sharedBlueprint: ['blueprint-fork'],
   deploy: ['deploy-door'],
   updates: { unreachable: 'the update offer answers only the deployment\'s recorded owner and 404s everyone else (updates/routes.ts), and the eval identity is not the owner' },
@@ -77,4 +78,5 @@ export const CAPABILITY_ROWS = {
   'a swarm whose nodes run as hosted agents and settle': ['exploration'],
   'a live web search': ['web-search'],
   'an internal address refused on every fetch path': ['capability-isolation'],
+  'a correction sent while the agent works': ['steer-correction'],
 } as const satisfies Record<string, Rows>;

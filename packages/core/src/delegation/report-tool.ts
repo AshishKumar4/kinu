@@ -26,16 +26,16 @@ function handoffField(purpose: string): HandoffProperty {
   return {
     type: 'array',
     items: { type: 'string' },
-    description: `${purpose} One short entry per item — the four lists share a ${SUBORDINATE_REPORT_HANDOFF_MAX_CHARS}-character budget, so put the detail in \`content\` or leave a workspace path.`,
+    description: `${purpose} One short entry each; the four lists share ${SUBORDINATE_REPORT_HANDOFF_MAX_CHARS} characters.`,
   };
 }
 
 /** What each handoff field is for, in the model's words; `satisfies` keeps it total. */
 const HANDOFF_PROPERTIES = {
-  concerns: handoffField('Uncertainty the orchestrator has to weigh: what you are not confident in, and what it would cost if you are wrong.'),
-  deviations: handoffField('Where the work departed from the brief you were given, and what you did instead.'),
-  findings: handoffField('Decisions you took and constraints you discovered that outlive this assignment.'),
-  open_work: handoffField('What remains — unfinished work, follow-ups, and what you would do next.'),
+  concerns: handoffField('What you are unsure of, and the cost if you are wrong.'),
+  deviations: handoffField('Where you departed from the brief, and what you did instead.'),
+  findings: handoffField('Decisions and constraints that outlive this assignment.'),
+  open_work: handoffField('Unfinished work and follow-ups.'),
 } satisfies Record<SubordinateReportHandoffField, HandoffProperty>;
 
 /** Report input as it arrives, unvalidated: the AI SDK skips `Schema.validate` for

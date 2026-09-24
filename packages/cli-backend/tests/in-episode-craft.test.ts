@@ -101,7 +101,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
       'return await tools.doubleIt(21);',
     ]);
 
-    await session.send('go');
+    await session.send('go', { id: crypto.randomUUID() });
 
     const toolResults = events.filter(
       (e): e is Extract<SessionEvent, { type: 'tool-result' }> => e.type === 'tool-result',
@@ -136,7 +136,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
       'return typeof tools.brokenIt;',
     ]);
 
-    await session.send('go');
+    await session.send('go', { id: crypto.randomUUID() });
 
     const results = events.filter(
       (e): e is Extract<SessionEvent, { type: 'tool-result' }> => e.type === 'tool-result',
@@ -182,7 +182,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
       };
     })();
 
-    await off.session.send('go');
+    await off.session.send('go', { id: crypto.randomUUID() });
 
     // Crafting is a capability, not evolution; only the scoring is evolution state.
     const results = off.events.filter(

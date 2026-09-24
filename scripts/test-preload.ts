@@ -5,8 +5,14 @@
 // imports too. All this file contributes is the `afterAll` that belongs to THIS
 // runner — `bun:test`'s, which throws if called under any other.
 import { afterAll, setDefaultTimeout } from 'bun:test';
+import { createHash } from 'node:crypto';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import * as v from 'valibot';
 
-import { release } from './test-scratch-home';
+import { SlateVendorSchema, type SlateVendor } from '../packages/cf-backend/slate-vendor';
+import { endChildren } from './deadline';
+import { release, runTemp } from './test-scratch-home';
 
 // No per-test clock. Bun's 5 s default is a wall clock racing the machine: on
 // 2026-09-15 it read red on a test that passes alone, under the deploy wave's
@@ -23,7 +29,21 @@ import { release } from './test-scratch-home';
 // `gate:test-clocks` refuses per-test durations in the corpus.
 setDefaultTimeout(0);
 
-afterAll(release);
+// A file that ends with a child still running fails, naming it, and the child
+// is ended first, so it holds no memory and writes into no released scratch.
+// Under `--parallel` this runs per file; without it, once for the run. The
+// run's own check (`scripts/deadline.ts`) finds what outlived its parent.
+afterAll(() => {
+  const left = endChildren(process.pid);
+
+  release();
+
+  if (left.length > 0) {
+    // Per file under `--parallel`; without it this runs once, so the file named is only the last one.
+    throw new Error(`test files up to ${Bun.main} left ${String(left.length)} process(es) of their own running, now ended: `
+      + `${left.join('; ')}. A test file ends what it starts and awaits its exit.`);
+  }
+});
 
 // Release this file's plugins, so the runner can collect the file. Under
 // `--parallel` each file runs in a fresh global, and a `Bun.plugin` callback,
@@ -108,23 +128,51 @@ Bun.plugin({
 });
 
 // The slate vendor bundle under bun test: the same `virtual:kinu-slate-vendor`
-// module the Vite plugin serves in dev/build/vitest, resolved here through
-// the package's own `buildSlateVendor` so bun tests measure the real bytes.
-// The runner calls this once per global (it caches the module), so under
-// `--parallel` that is once per importing file: about 90 ms of esbuild each
-// (measured 2026-09-24). Imported here, after the line below: esbuild reads it
-// once, when it loads. Its sync API then runs one esbuild per call instead of
-// keeping a worker thread and an `esbuild --service` child (median 35 MB, up
-// to 205 MB) alive until the global is collected: 55 to 78 of them per cf run.
-process.env.ESBUILD_WORKER_THREADS = '0';
-
+// module the Vite plugin serves in dev/build/vitest, built by the package's own
+// `buildSlateVendor` so bun tests measure the real bytes. The runner calls this
+// once per global, so under `--parallel` once per importing file, and a build
+// per call spawned esbuild about 270 times per cf run. Under bun 1.4.0 a
+// synchronous spawn (esbuild's `buildSync` with ESBUILD_WORKER_THREADS=0) can
+// miss its child's exit and spin forever: 2 of 6 hammer runs and a sweep row
+// stalled that way on 2026-09-24, each on one file, beside an esbuild zombie.
+// So the bytes are built once per set of inputs, by `build-slate-vendor.ts` in
+// a process of its own, and shared through a file the runs read.
 Bun.plugin({
   name: 'kinu-slate-vendor-for-bun-test',
   setup(build) {
-    build.module('virtual:kinu-slate-vendor', async () => {
-      const { buildSlateVendor } = await import('../packages/cf-backend/slate-vendor');
-
-      return { exports: { default: buildSlateVendor() }, loader: 'object' };
-    });
+    build.module('virtual:kinu-slate-vendor', async () => ({ exports: { default: await sharedSlateVendor() }, loader: 'object' }));
   },
 });
+
+/**
+ * What decides the vendor's bytes: its build, and the lockfile, manifest and patches that pin what it bundles.
+ * Read only when a file imports the vendor: the preload loads in every test, including copies of the repo
+ * that carry no lockfile or patches (mutation-fences runs its owners in a sparse checkout).
+ */
+function vendorInputs(): readonly string[] {
+  return [
+    new URL('../packages/cf-backend/slate-vendor.ts', import.meta.url).pathname,
+    new URL('../bun.lock', import.meta.url).pathname,
+    new URL('../package.json', import.meta.url).pathname,
+    ...readdirSync(new URL('../patches', import.meta.url).pathname).map((name) => new URL(`../patches/${name}`, import.meta.url).pathname),
+  ];
+}
+
+const VENDOR_BUILD = new URL('./build-slate-vendor.ts', import.meta.url).pathname;
+
+/** The vendor for these inputs, from its file in the run's temp directory; a worker that finds none builds it. */
+async function sharedSlateVendor(): Promise<SlateVendor> {
+  const key = createHash('sha256');
+
+  for (const input of vendorInputs()) key.update(readFileSync(input));
+  const file = join(runTemp, `kinu-slate-vendor-${key.digest('hex').slice(0, 16)}.json`);
+
+  // Workers that miss at once each build; the build renames into place, so a reader sees a whole file.
+  if (!existsSync(file)) {
+    const code = await Bun.spawn([process.execPath, VENDOR_BUILD, file], { stdout: 'inherit', stderr: 'inherit' }).exited;
+
+    if (code !== 0) throw new Error(`building the slate vendor into ${file} exited with ${String(code)}`);
+  }
+
+  return v.parse(v.pipe(v.string(), v.parseJson(), SlateVendorSchema), readFileSync(file, 'utf8'));
+}

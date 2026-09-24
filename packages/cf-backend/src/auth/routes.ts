@@ -160,7 +160,7 @@ async function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, provider
   const codeChallenge = await oauth.calculatePKCECodeChallenge(codeVerifier);
   const nonce = provider.kind === 'oidc' ? oauth.generateRandomNonce() : null;
 
-  const { state, binding, expiresAt: handoffExpiresAt } = await createOAuthState(env.AUTH_KV, {
+  const { state, binding, lifetimeMs } = await createOAuthState(env.AUTH_KV, {
     provider: provider.id,
     codeVerifier,
     nonce,
@@ -185,7 +185,7 @@ async function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, provider
 
   // KV holds only the binding's hash; this cookie is what the callback proves the sign-in with.
   const headers = new Headers({ 'cache-control': 'no-store' });
-  headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, binding, handoffExpiresAt));
+  headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, binding, lifetimeMs));
 
   return redirect(authorizationUrl.toString(), { headers });
 }
@@ -250,7 +250,7 @@ async function completeOAuth<Id>(
 
     const destination = new URL(savedState.returnTo, url.origin).toString();
     const headers = new Headers({ 'cache-control': 'no-store' });
-    headers.append('set-cookie', setCookie(SESSION_COOKIE_NAME, session.token, session.expiresAt));
+    headers.append('set-cookie', setCookie(SESSION_COOKIE_NAME, session.token, session.expiresAt - session.issuedAt));
 
     return redirect(destination, {
       headers,

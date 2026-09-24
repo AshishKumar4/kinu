@@ -24,14 +24,14 @@ import * as v from 'valibot';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { hostedActorSocketPath } from '@kinu.run/core';
+import { hostedActorSocketPath, TurnClaimFrameSchema } from '@kinu.run/core';
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import { SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
 
 import { DESKTOP, withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
 import {
   CHAT_COMPOSER_LIVE, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, NEW_AGENT, OPEN_NAMES, RECORD_DEAD_ENDS,
-  openInspector, painted, pressUntil, settled, typeIntoComposer, until,
+  openInspector, painted, pressUntil, settled, typeIntoComposer, until, waitOn,
   type ControlAttempt,
 } from './product-flows';
 import { rowVerdicts } from './row-verdicts';
@@ -442,8 +442,9 @@ async function measureLiveIndicator(newPage: LiveApp['newPage'], origin: string)
     const paced = turns.afterTurn();
 
     await sendInChat(page, PACED_TURN_ASK);
-    await paced;
-    await painted(page);
+    await waitOn('the paced turn to close', paced);
+    // The turn has closed on the socket; the pane ends it once its stream does.
+    await until(page, 'the pane to end the paced turn', `!(${STOP_OFFERED})`);
 
     if (!v.parse(v.boolean(), await page.evaluate(PACED_ANSWER_SHOWN))) {
       throw new Error(`waiting for the paced answer, its turn closed without it; the chat ends ${JSON.stringify(await page.evaluate(CHAT_TAIL))}`);
@@ -633,6 +634,7 @@ async function measureGeometry(newPage: LiveApp['newPage'], origin: string): Pro
   const page = await openWorkspace(newPage, origin, workspace);
 
   await openInspector(page);
+  await until(page, 'a marked tab in the inspector strip', `${MARKED_TAB} !== null`);
 
   const dark = v.parse(StripGeometrySchema, await page.evaluate(readStripGeometry));
 
@@ -641,6 +643,7 @@ async function measureGeometry(newPage: LiveApp['newPage'], origin: string): Pro
   await page.reload({ waitUntil: 'load' });
   await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
   await openInspector(page);
+  await until(page, 'a marked tab in the inspector strip', `${MARKED_TAB} !== null`);
 
   const light = v.parse(StripGeometrySchema, await page.evaluate(readStripGeometry));
 
@@ -900,11 +903,15 @@ const PresenceAnswerSchema = v.union([
   v.pipe(v.looseObject({ tabPresence: v.looseObject({ work: v.boolean() }) }), v.transform((answer) => answer.tabPresence.work)),
 ]);
 
-/** A turn's frame on the workspace socket, which every page on it gets. A `done` frame closes the turn unless it
- *  answers words a running turn took in (`landed: 'mid-turn'`); an `error` frame is the turn failing
- *  (chat-transport.ts `doneFrame`). */
+/** The chat request a send puts on the socket; its id names the turn's frames. */
+const ChatRequestSchema = v.looseObject({ type: v.literal('cf_agent_use_chat_request'), id: v.string() });
+
+/** A turn's frame on the workspace socket, which every page on it gets, under the id of the request that opened
+ *  it. The request's `done` frame closes the turn, unless it says the words landed in a turn already running
+ *  (`landed: 'mid-turn'`); an `error` frame is the turn failing (chat-transport.ts `doneFrame`). */
 const ChatResponseSchema = v.looseObject({
   type: v.literal('cf_agent_use_chat_response'),
+  id: v.string(),
   done: v.optional(v.boolean()),
   error: v.optional(v.boolean()),
   landed: v.optional(v.string()),
@@ -912,60 +919,132 @@ const ChatResponseSchema = v.looseObject({
 });
 
 /** A page's turns off its own socket, and the Work presence it reads. `afterTurn`,
- *  taken before a send, settles on the answer to the first presence read the
- *  page asks once the next turn has closed, and rejects with the failure of a
- *  turn that fails. The page asks that read from the effect that follows the
- *  turn's last render and every 5 s after (use-kinu `refreshLiveData`), so it
- *  comes whatever the turn did, after the page drew it, and it is final for
- *  that turn: a row waits on it, never on the value it hopes for. */
+ *  taken before a send, follows the chat request that send puts on the socket:
+ *  it settles on the answer to the first presence read the page asks once that
+ *  request's turn has closed, and rejects when the turn fails or the words land
+ *  in a turn already running. Only that request's frames count: the socket also
+ *  carries every other request's, a resent or a probing one included. The page
+ *  asks that read from the effect that follows the turn's last render and every
+ *  5 s after (use-kinu `refreshLiveData`), so it comes whatever the turn did,
+ *  after the page drew it, and it is final for that turn: a row waits on it,
+ *  never on the value it hopes for. */
 interface TurnWatch {
   /** Every Work presence the page was answered, in order. */
   workPresence(): readonly boolean[];
   afterTurn(): Promise<boolean>;
+  /** A turn no page sent, such as a workspace's first: the one the root's claim names as open when this is
+   *  taken, else the next it admits. It follows that turn's own id through the claim every snapshot and
+   *  `turn_claim` frame the page receives carries, closes once a claim no longer names it, and settles as
+   *  `afterTurn` does. A claim does not say how its turn ended, so this never rejects. */
+  afterClaimedTurn(): Promise<boolean>;
   stop(): Promise<void>;
 }
+
+interface TurnWaiter {
+  /** What names the turn: the chat request the page sends, or the root's claim. */
+  readonly follows: 'request' | 'claim';
+  /** The request's id or the claimed turn's, once known. */
+  id: string | null;
+  /** How many presence reads the page had asked when the turn closed; null while it runs. */
+  closedAtAsk: number | null;
+  readonly settle: ReturnType<typeof Promise.withResolvers<boolean>>;
+}
+
+const ClaimStateSchema = TurnClaimFrameSchema.entries.claim;
+
+/** The turn a claim names as open (null once settled), read when the page had asked `atAsk` presence reads. */
+interface ClaimRead {
+  readonly turnId: string | null;
+  readonly atAsk: number;
+}
+
+/** The claim a workspace snapshot answer carries (`getWorkspaceSnapshot`'s `turnClaim`). */
+const SnapshotClaimSchema = v.looseObject({ turnClaim: ClaimStateSchema });
 
 async function watchTurns(page: Page): Promise<TurnWatch> {
   const cdp = await page.createCDPSession();
 
   await cdp.send('Network.enable');
 
-  // Each presence read the page asked, by id, with how many turns had closed when it went.
+  // Each presence read the page asked, by id, with its place among the reads asked.
   const asked = new Map<string, number>();
   const answers: boolean[] = [];
-  let closed = 0;
-  let waiters: { readonly closedBefore: number; readonly settle: ReturnType<typeof Promise.withResolvers<boolean>> }[] = [];
+  let asks = 0;
+  let waiters: TurnWaiter[] = [];
+  // The newest claim the page read: a snapshot asked before it may answer with an older claim, so it is not read.
+  let claimed: ClaimRead = { turnId: null, atAsk: -1 };
+
+  const readClaim = (claim: v.InferOutput<typeof ClaimStateSchema>, atAsk: number): void => {
+    if (atAsk < claimed.atAsk) return;
+    claimed = { turnId: claim.kind === 'settled' ? null : claim.turnId, atAsk };
+
+    for (const waiter of waiters) {
+      if (waiter.follows !== 'claim' || waiter.closedAtAsk !== null) continue;
+
+      if (waiter.id === null) waiter.id = claimed.turnId;
+      else if (waiter.id !== claimed.turnId) waiter.closedAtAsk = asks;
+    }
+  };
 
   cdp.on('Network.webSocketFrameSent', (event: { response?: { payloadData?: string } }) => {
-    const ask = v.safeParse(RpcAskSchema, tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input'));
+    const frame = tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input');
+    const request = v.safeParse(ChatRequestSchema, frame);
+    const unsent = waiters.find((waiter) => waiter.follows === 'request' && waiter.id === null);
 
-    if (ask.success && PRESENCE_READS.has(ask.output.method)) asked.set(ask.output.id, closed);
+    if (request.success && unsent !== undefined) unsent.id = request.output.id;
+
+    const ask = v.safeParse(RpcAskSchema, frame);
+
+    if (ask.success && PRESENCE_READS.has(ask.output.method)) {
+      asked.set(ask.output.id, asks);
+      asks += 1;
+    }
   });
   cdp.on('Network.webSocketFrameReceived', (event: { response?: { payloadData?: string } }) => {
-    const received = tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input');
-    const turn = v.safeParse(ChatResponseSchema, received);
+    const frame = tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input');
+    const turn = v.safeParse(ChatResponseSchema, frame);
 
     if (turn.success) {
+      const waiter = waiters.find((candidate) => candidate.follows === 'request' && candidate.id === turn.output.id);
+
+      if (waiter === undefined) return;
+
       if (turn.output.error === true) {
-        for (const waiter of waiters.splice(0)) waiter.settle.reject(new Error(`the turn failed: ${turn.output.body ?? ''}`));
-      } else if (turn.output.done === true && turn.output.landed !== 'mid-turn') {
-        closed += 1;
+        waiters = waiters.filter((candidate) => candidate !== waiter);
+        waiter.settle.reject(new Error(`the turn failed: ${turn.output.body ?? ''}`));
+      } else if (turn.output.done === true && turn.output.landed === 'mid-turn') {
+        waiters = waiters.filter((candidate) => candidate !== waiter);
+        waiter.settle.reject(new Error('the words landed in a turn already running, so no turn of their own closed'));
+      } else if (turn.output.done === true) {
+        waiter.closedAtAsk = asks;
       }
 
       return;
     }
 
-    const answer = v.safeParse(RpcAnswerSchema, received);
-    const sentAfter = answer.success ? asked.get(answer.output.id) : undefined;
+    const claimFrame = v.safeParse(TurnClaimFrameSchema, frame);
 
-    if (!answer.success || sentAfter === undefined) return;
+    if (claimFrame.success) {
+      readClaim(claimFrame.output.claim, asks);
+
+      return;
+    }
+
+    const answer = v.safeParse(RpcAnswerSchema, frame);
+    const place = answer.success ? asked.get(answer.output.id) : undefined;
+
+    if (!answer.success || place === undefined) return;
     asked.delete(answer.output.id);
+    const snapshot = v.safeParse(SnapshotClaimSchema, answer.output.result);
+
+    if (snapshot.success) readClaim(snapshot.output.turnClaim, place);
+
     const presence = v.safeParse(PresenceAnswerSchema, answer.output.result);
 
     if (!presence.success) return;
     answers.push(presence.output);
     waiters = waiters.filter((waiter) => {
-      if (sentAfter <= waiter.closedBefore) return true;
+      if (waiter.closedAtAsk === null || place < waiter.closedAtAsk) return true;
       waiter.settle.resolve(presence.output);
 
       return false;
@@ -977,7 +1056,14 @@ async function watchTurns(page: Page): Promise<TurnWatch> {
     afterTurn: () => {
       const settle = Promise.withResolvers<boolean>();
 
-      waiters.push({ closedBefore: closed, settle });
+      waiters.push({ follows: 'request', id: null, closedAtAsk: null, settle });
+
+      return settle.promise;
+    },
+    afterClaimedTurn: () => {
+      const settle = Promise.withResolvers<boolean>();
+
+      waiters.push({ follows: 'claim', id: claimed.turnId, closedAtAsk: null, settle });
 
       return settle.promise;
     },
@@ -1019,13 +1105,12 @@ async function measureOpenedMidTurn(
     await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
     await until(page, 'the workspace page', `document.querySelector('textarea') !== null`);
 
-    // Settles on the first turn's close; a turn that closes before its model call has nothing to hold.
-    const closed = turns.afterTurn();
-    const beforeModel = closed.then(() => 'closed' as const, () => 'failed' as const);
-    const outcome = await Promise.race([firstTurn.arrived.then(() => 'held' as const), beforeModel]);
+    // No page sent the workspace's first turn, so its close is read off the claim that names it; a turn that
+    // closes before its model call has nothing to hold.
+    const closed = turns.afterClaimedTurn();
 
-    // A failed turn rethrows its own failure.
-    if (outcome === 'failed') await closed;
+    const outcome = await waitOn("the workspace's first turn to reach its model",
+      Promise.race([firstTurn.arrived.then(() => 'held' as const), closed.then(() => 'closed' as const)]));
 
     if (outcome !== 'held') throw new Error("the workspace's first turn closed before it reached its model");
 
@@ -1041,7 +1126,7 @@ async function measureOpenedMidTurn(
     const held = v.parse(v.nullable(LiveSampleSchema), await page.evaluate(LAST_LIVE_SAMPLE));
 
     firstTurn.release();
-    await closed;
+    await waitOn("the workspace's first turn to close", closed);
 
     const asked = v.parse(v.number(), await page.evaluate('window.__presenceAsks'));
 
@@ -1095,7 +1180,7 @@ async function measureKeptTab(newPage: LiveApp['newPage'], origin: string): Prom
 
     await sendInChat(page, KEPT_TAB_NOTE);
 
-    if (!(await noted)) {
+    if (!(await waitOn('the note turn to close', noted))) {
       throw new Error(`waiting for the note turn to fill Work, the page read Work empty once the turn closed; `
         + `the chat ends ${JSON.stringify(await page.evaluate(CHAT_TAIL))}`);
     }
@@ -1108,7 +1193,7 @@ async function measureKeptTab(newPage: LiveApp['newPage'], origin: string): Prom
 
     await sendInChat(page, KEPT_TAB_FORGET);
 
-    if (await forgotten) {
+    if (await waitOn('the forget turn to close', forgotten)) {
       throw new Error(`waiting for the forget turn to empty Work, the page read Work filled once the turn closed; `
         + `the chat ends ${JSON.stringify(await page.evaluate(CHAT_TAIL))}`);
     }
@@ -1116,7 +1201,7 @@ async function measureKeptTab(newPage: LiveApp['newPage'], origin: string): Prom
     const fenced = turns.afterTurn();
 
     await sendInChat(page, 'Kept-tab probe: the fence.');
-    await fenced;
+    await waitOn('the fence turn to close', fenced);
 
     const marks = v.parse(v.array(v.nullable(v.string())), await page.evaluate('window.__keptTabMarks'));
 

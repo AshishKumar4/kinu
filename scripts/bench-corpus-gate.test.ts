@@ -15,9 +15,9 @@ import { corpusMembership, stalePatches } from './bench-corpus';
 
 /** The fixture's own patch list. A fixture has no git index, so it
  *  names its files itself — see `stalePatches`. */
-const PATCH_FILES = ['tests/bench/patches/pick-returns-largest.patch'];
+const PATCH_FILES = ['bench/corpus/patches/pick-returns-largest.patch'];
 
-const WITH_ORPHAN = [...PATCH_FILES, 'tests/bench/patches/nobody-measures-me.patch'];
+const WITH_ORPHAN = [...PATCH_FILES, 'bench/corpus/patches/nobody-measures-me.patch'];
 
 const SOURCE = ['export function pick(items: number[]): number {',
   '  const sorted = [...items].sort((a, b) => a - b);',
@@ -45,18 +45,18 @@ interface FixtureOptions {
 
 function fixture(opts: FixtureOptions = {}): string {
   const root = scratchDir('bench-corpus-census');
-  mkdirSync(join(root, 'tests', 'bench', 'patches'), { recursive: true });
+  mkdirSync(join(root, 'bench', 'corpus', 'patches'), { recursive: true });
   mkdirSync(join(root, 'src'), { recursive: true });
   writeFileSync(join(root, 'src', 'pick.ts'), opts.source ?? SOURCE);
-  writeFileSync(join(root, 'tests', 'bench', 'tasks.jsonl'), `${JSON.stringify({
+  writeFileSync(join(root, 'bench', 'corpus', 'tasks.jsonl'), `${JSON.stringify({
     id: 'pick-returns-largest', title: 'pick returns the largest',
     prompt: 'One test fails: pick returns the wrong end of the sorted list. Fix the source.',
     suite: 'core', editable: ['src/pick.ts'],
   })}\n`);
-  writeFileSync(join(root, 'tests', 'bench', 'patches', 'pick-returns-largest.patch'), PATCH);
+  writeFileSync(join(root, 'bench', 'corpus', 'patches', 'pick-returns-largest.patch'), PATCH);
 
   if (opts.orphanPatch === true) {
-    writeFileSync(join(root, 'tests', 'bench', 'patches', 'nobody-measures-me.patch'), PATCH);
+    writeFileSync(join(root, 'bench', 'corpus', 'patches', 'nobody-measures-me.patch'), PATCH);
   }
 
   return root;
@@ -88,7 +88,7 @@ describe('corpusMembership', () => {
 
   test('an orphan patch that still applies is reported', () => {
     expect(corpusMembership(fixture({ orphanPatch: true }), WITH_ORPHAN).orphans)
-      .toEqual(['tests/bench/patches/nobody-measures-me.patch']);
+      .toEqual(['bench/corpus/patches/nobody-measures-me.patch']);
   });
 
   // On disk, so `loadBenchCorpus` is satisfied here and throws on a fresh clone.

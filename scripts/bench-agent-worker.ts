@@ -85,7 +85,7 @@ async function main(): Promise<void> {
 
   try {
     for (const [index, ask] of input.asks.entries()) {
-      await session.send(ask);
+      await session.send(ask, { id: crypto.randomUUID() });
       await proxy.settle();
       const remove = input.removeAfterAsk[index];
 

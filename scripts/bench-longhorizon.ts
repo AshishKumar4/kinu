@@ -53,7 +53,7 @@ export interface LoadedLongHorizonCorpus {
 }
 
 export function loadLongHorizonCorpus(repoRoot: string, opts: PartitionOptions = {}): LoadedLongHorizonCorpus {
-  const path = join(repoRoot, 'tests', 'bench', 'longhorizon.jsonl');
+  const path = join(repoRoot, 'bench', 'corpus', 'longhorizon.jsonl');
   const raw = readFileSync(path, 'utf8');
   const tasks: BenchTask[] = [];
   const specs = new Map<string, LongHorizonSpec>();

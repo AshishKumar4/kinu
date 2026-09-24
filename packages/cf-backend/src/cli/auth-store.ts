@@ -218,8 +218,8 @@ export async function startCliAuth<Id>(env: CliAuthEnv<Id>, request: CliAuthRequ
     };
 
     // Record before pointer: a pointer that outran its record reads as an unknown code.
-    await writeKvJson(env.AUTH_KV, deviceKey(deviceHash), record, expiresAt + RETENTION_MS);
-    await writeKvJson(env.AUTH_KV, codeKey(userCode), { deviceHash }, expiresAt + RETENTION_MS);
+    await writeKvJson(env.AUTH_KV, deviceKey(deviceHash), record, AUTH_TTL_MS + RETENTION_MS);
+    await writeKvJson(env.AUTH_KV, codeKey(userCode), { deviceHash }, AUTH_TTL_MS + RETENTION_MS);
 
     return {
       deviceToken,
@@ -279,7 +279,7 @@ export async function pollCliAuth<Id>(
   // KV is the transport, not the gate: no compare-and-swap and per-colo cached reads, so two polls can
   // both read `approved`. The one-time claim is the DO mint's, keyed by the device hash.
   await writeKvJson(
-    env.AUTH_KV, deviceKey(hash), { ...record, status: 'consumed' }, record.expiresAt + RETENTION_MS,
+    env.AUTH_KV, deviceKey(hash), { ...record, status: 'consumed' }, record.expiresAt + RETENTION_MS - now,
   );
 
   const userDO = env.UserDO.get(env.UserDO.idFromName(record.userId));
@@ -347,7 +347,7 @@ export async function approveCliAuth<Id>(
     userId: identity.userId,
     userEmail: identity.email,
     approvedAt: now,
-  }, record.expiresAt + RETENTION_MS);
+  }, record.expiresAt + RETENTION_MS - now);
 
   return { ok: true, status: 'approved', user: { id: identity.userId, email: identity.email } };
 }
@@ -359,13 +359,13 @@ async function rateLimit(kv: KvStore, key: string, limit: number, now: number): 
 
   if (!bucket || bucket.resetAt <= now) {
     const resetAt = now + RATE_WINDOW_MS;
-    await writeKvJson(kv, bucketKey, { count: 1, resetAt }, resetAt);
+    await writeKvJson(kv, bucketKey, { count: 1, resetAt }, RATE_WINDOW_MS);
 
     return;
   }
 
   if (bucket.count >= limit) throw new RateLimitError();
-  await writeKvJson(kv, bucketKey, { count: bucket.count + 1, resetAt: bucket.resetAt }, bucket.resetAt);
+  await writeKvJson(kv, bucketKey, { count: bucket.count + 1, resetAt: bucket.resetAt }, bucket.resetAt - now);
 }
 
 async function readByUserCode(

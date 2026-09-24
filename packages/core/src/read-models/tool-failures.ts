@@ -116,11 +116,6 @@ function classifyBindingFailure(failure: BindingFailure): ToolFailure {
   return { tool: failure.tool, action: failure.action, ...attribute(reason) };
 }
 
-/** The part of a persisted {@link toolFailureKey}, via the same policy as the live census. */
-export function toolFailurePartOfKey(key: string): ToolFailurePart {
-  return partOfReason(key.slice(key.lastIndexOf('·') + 1));
-}
-
 /** `tool·action·reason`; action omitted when the tool has none. */
 export function toolFailureKey(f: ToolFailure): string {
   return f.action === null ? `${f.tool}·${f.reason}` : `${f.tool}·${f.action}·${f.reason}`;

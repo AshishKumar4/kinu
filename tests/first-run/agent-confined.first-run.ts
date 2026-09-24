@@ -18,8 +18,8 @@ import * as v from 'valibot';
 
 import { hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG } from '../../packages/core/src/index';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import type { KinuPublicSession } from '../evals/public-session';
-import { webHeaders } from '../evals/public-session';
+import type { KinuPublicSession } from '../../evals/src/session';
+import { webHeaders } from '../../evals/src/session';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';

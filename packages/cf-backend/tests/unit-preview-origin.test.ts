@@ -28,7 +28,8 @@ import {
   nimbusPreviewUrl,
   WORKSPACE_PREVIEW_PATH,
 } from '../src/nimbus-route';
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, type TestUserDO } from './helpers/user-do';
+import { createSession } from '../src/auth/store';
 import { makeKv } from './helpers/kv';
 import { sandboxPreviewExposures } from '@kinu.run/core';
 import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
@@ -38,6 +39,7 @@ import type { SandboxPreviewEnv } from '../src/preview-proxy';
 import { PreviewFrame } from '../src/components/PreviewFrame';
 import type { SandboxOptions } from '@cloudflare/sandbox';
 import { present } from '@kinu.run/test-utils';
+import * as v from 'valibot';
 
 // The SDK entry pulls in `cloudflare:workers`, which only exists inside workerd; proxyToSandbox is
 // the seam the Worker delegates to, so everything Kinu owns stays under test.
@@ -56,6 +58,9 @@ let repairs: Array<{ id: string; options?: SandboxOptions }> = [];
 
 let repairFailure: Error | null = null;
 
+/** Every sandbox client any route opened, whatever it then asked of it. */
+let sandboxesOpened = 0;
+
 // Reset in `afterAll`, so a later file meets the real SDK.
 await installSandboxSdkMock();
 
@@ -68,13 +73,17 @@ setSandboxSdk({
 
     return scripted === null ? null : scripted.clone();
   },
-  getSandbox: (_namespace: NonNullable<Env['Sandbox']>, id: string, options?: SandboxOptions) => ({
-    ensureReady: async () => {
+  getSandbox: (_namespace: NonNullable<Env['Sandbox']>, id: string, options?: SandboxOptions) => {
+    sandboxesOpened += 1;
+
+    return {
+      ensureReady: async () => {
       repairs.push({ id, options });
 
-      if (repairFailure) throw repairFailure;
-    },
-  }),
+        if (repairFailure) throw repairFailure;
+      },
+    };
+  },
 });
 
 afterAll(() => { setSandboxSdk(null); });
@@ -870,6 +879,62 @@ async function served(url: string, zone: Partial<Env>, headers: Record<string, s
   return worker.fetch(new Request(url, { headers }), env as Env, workerContext());
 }
 
+/** What the asset binding serves for any app path: the shell, which a preview must never be. */
+const APP_BODY = '<body>app</body>';
+
+const APP_DOCUMENT = `<!doctype html><head></head>${APP_BODY}`;
+
+/**
+ * A browser signed in through the real session store: the cookie is live in the user's own object, so a request
+ * carrying it is authenticated as the Worker authenticates it, and reaches every route a signed-in owner does.
+ */
+async function signedInBrowser() {
+  const accounts = new Map<string, TestUserDO>();
+
+  const account = (userId: string): TestUserDO => {
+    const held = accounts.get(userId) ?? createTestUserDO({ durableObjectId: userId });
+
+    accounts.set(userId, held);
+
+    return held;
+  };
+
+  const env: Partial<Env> = {};
+
+  Object.assign(env, {
+    AUTH_KV: makeKv(),
+    CLI_PUBLIC_ORIGIN: APP,
+    PREVIEW_HOST_SUFFIX: SUFFIX,
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    UserDO: { idFromName: (name: string) => name, get: (id: string) => account(id).userDO },
+    OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+    ASSETS: { fetch: async () => new Response(APP_DOCUMENT, { headers: { 'content-type': 'text/html' } }) },
+    Sandbox: CONTAINERS.Sandbox,
+  });
+
+  // SAFETY: the session store reads AUTH_KV, the user objects and the encryption key, all constructed above.
+  const session = await createSession(env as Env, {
+    provider: 'cloudflare', providerSub: 'cf-owner', email: 'owner@example.com', emailVerified: true, displayName: null,
+  });
+
+  const cookie = `${SESSION_COOKIE_NAME}=${session.token}`;
+
+  const fetch = (path: string, init: RequestInit = {}): Promise<Response> => {
+    const headers = new Headers(init.headers);
+
+    headers.set('cookie', cookie);
+
+    // SAFETY: every binding a signed-in route reads is constructed above; the workspace object refuses by name.
+    return worker.fetch(new Request(`${APP}${path}`, { ...init, headers }), env as Env, workerContext());
+  };
+
+  /** The owner's stored value for `key`, read as the settings page reads it. */
+  const config = async (key: string): Promise<string | null> =>
+    v.parse(v.object({ value: v.nullable(v.string()) }), await (await fetch(`/api/user/config/${key}`)).json()).value;
+
+  return { fetch, config };
+}
+
 /** The `<meta>` tags of a served page, by name. */
 async function metaTags(page: Response): Promise<Map<string, string>> {
   const tags = new Map<string, string>();
@@ -1040,6 +1105,37 @@ describe('worker wiring', () => {
     expect(answer.status).toBe(302);
     expect(answer.headers.get('location')).toStartWith(`${APP}/login?`);
     expect(sdkRequest).toBeNull();
+  });
+
+  test('a signed-in write from a preview origin is refused before any route runs', async () => {
+    const browser = await signedInBrowser();
+    const preview = `https://${PREVIEW_TOKEN}-${PREVIEW_SANDBOX_ID}.${SUFFIX}`;
+
+    const write = (origin: string, value: string) => browser.fetch('/api/user/config/editor', {
+      method: 'PUT', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ value }),
+    });
+
+    const created = await browser.fetch('/api/user/workspaces', {
+      method: 'POST', headers: { origin: preview, 'content-type': 'application/json' }, body: JSON.stringify({ purpose: 'forged' }),
+    });
+
+    expect([created.status, (await write(preview, 'forged')).status]).toEqual([403, 403]);
+    expect(await browser.config('editor')).toBeNull();
+
+    // The gate tells origins apart: the app's own write lands.
+    expect((await write(APP, 'mine')).status).toBe(200);
+    expect(await browser.config('editor')).toBe('mine');
+  });
+
+  test('a signed-in owner asking the app host for a preview gets the app, never a sandbox', async () => {
+    const browser = await signedInBrowser();
+    const [forwards, opened] = [sdkForwards, sandboxesOpened];
+
+    const answer = await browser.fetch(`/_preview/${String(PREVIEW_PORT)}/`, { headers: { accept: 'text/html' } });
+
+    expect(answer.status).toBe(200);
+    expect(await answer.text()).toContain(APP_BODY);
+    expect([sdkForwards, sandboxesOpened]).toEqual([forwards, opened]);
   });
 
   test('the served app document names the preview zone the browser frames', async () => {

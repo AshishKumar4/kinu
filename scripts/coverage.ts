@@ -214,9 +214,9 @@ function uninstrumentedGroups(): readonly UninstrumentedGroup[] {
       suites: tracked.filter(isPythonSuite).sort(),
     },
     {
-      label: 'vitest eval suites',
-      why: 'the eval tier calls a real model when credentialed and is the terminal tier, '
-        + 'never a coverage input; its credential-free halves are bun suites covered above',
+      label: 'eval tasks',
+      why: 'the eval suite drives the deployed product with a real model and is the terminal '
+        + 'tier, never a coverage input; its framework\'s credential-free half is bun suites covered above',
       suites: tracked.filter(isVitestEvalSuite).sort(),
     },
   ];

@@ -8,8 +8,6 @@ import {
   BUILTIN_TOOL_SPECS,
   compilePromptSurface,
   currentDateForPrompt,
-  DELEGATION_INHERITANCE,
-  DELEGATION_RUNGS,
   modelSupportsTools,
   BUILTIN_ROLE_DEFINITIONS,
   deriveRoleLabel,
@@ -28,7 +26,7 @@ import {
   type PromptExecutorInfo,
 } from '../src/index';
 import { AGENTS_ACTION_FIELDS } from '../src/delegation/agents-tool';
-import { DELEGATION_SECTION, OPERATING_GUIDANCE } from '../src/prompting/section-templates';
+import { OPERATING_GUIDANCE } from '../src/prompting/section-templates';
 import type { SystemPromptOptions } from '../src/prompt';
 import {
   NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_POINTS, resolveSwarm,
@@ -91,9 +89,7 @@ describe('buildSystemPromptSync', () => {
   });
 
   test('tree search is action=swarm, and it is a rung rather than a settlement', () => {
-    const agents = BUILTIN_TOOL_DESCRIPTIONS.agents;
-    expect(agents).not.toContain('settle=');
-    expect(agents).toMatch(/Run a search \(action=swarm\)/);
+    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).not.toContain('settle=');
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
     expect(prompt).toMatch(/`swarm` runs parallel nodes over this workspace/);
@@ -150,104 +146,6 @@ describe('buildSystemPromptSync', () => {
     expect(noDelegation).not.toContain('agents.<action>');
   });
 
-  test('the agents schema description leads with the one-sentence lifetime frame', () => {
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(
-      /Use when: One delegation ladder, two rungs: a search is ephemeral/,
-    );
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(
-      /Candidates are scored by your verifier running in this workspace when you declare an `objective`, and ranked by a judge ensemble when you do not/,
-    );
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents.indexOf('one subordinate per independent workstream'))
-      .toBeLessThan(BUILTIN_TOOL_DESCRIPTIONS.agents.indexOf('full turn'));
-  });
-
-  test('the rungs are specified once, in the schema — the prompt only indexes them', () => {
-    // Schema descriptions are family-neutral, so a prompt copy of the rungs is pure duplication.
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain(DELEGATION_RUNGS.swarm);
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain(DELEGATION_RUNGS.hire);
-    expect(prompt).not.toContain(DELEGATION_RUNGS.swarm);
-    expect(prompt).not.toContain(DELEGATION_RUNGS.hire);
-  });
-
-  test('the two delegation bodies share no sentence, so neither can drift into the other', () => {
-    // Template markers are stripped first: a `{{#if}}` between lines otherwise glues sentences and hides a copy.
-    const sentences = (text: string): string[] =>
-      text.replace(/\{\{[^}]*\}\}/g, ' ')
-        .split(/(?<=[.!?])[\s\n]+/).map((s) => s.trim()).filter((s) => s.length > 25);
-
-    const section = new Set(sentences(DELEGATION_SECTION.source));
-    const shared = sentences(BUILTIN_TOOL_SPECS.agents.whenToUse).filter((s) => section.has(s));
-    expect(shared).toEqual([]);
-    expect(sentences(BUILTIN_TOOL_SPECS.agents.whenToUse).length).toBeGreaterThan(10);
-    expect(section.size).toBeGreaterThan(4);
-  });
-
-  test('completion never evicts: the hire rung teaches that finished subordinates STAY', () => {
-    // Dismissing a subordinate on completion wipes its context.
-    expect(DELEGATION_RUNGS.hire).toMatch(/reports and STAYS/);
-    expect(DELEGATION_RUNGS.hire).toMatch(/dismiss only one whose role is permanently over/);
-    expect(DELEGATION_RUNGS.hire).not.toMatch(/retire it when done/);
-    expect(DELEGATION_RUNGS.hire).not.toMatch(/cheap to create and dismiss/);
-    const { rt } = createTestRuntime();
-    expect(buildSystemPromptSync(rt)).not.toContain('A finished subordinate');
-  });
-
-  test('the search rung says who decides, stated as a mechanism and not a preference', () => {
-    const agents = BUILTIN_TOOL_DESCRIPTIONS.agents;
-    const scorers = /by your verifier running in this workspace when you declare an `objective`/g;
-    expect(agents).toMatch(scorers);
-    expect(agents.match(scorers)).toHaveLength(1);
-    expect(agents).toMatch(/and ranked by a judge ensemble when you do not/);
-    expect(agents.match(/and ranked by a judge ensemble when you do not/g)).toHaveLength(1);
-    expect(agents).toMatch(/You name the shape with `preset`, and a verifier is CODE that runs here rather than a model's opinion of the answer/);
-    expect(agents).toMatch(/a metric nothing can execute is not an objective/);
-    expect(agents.indexOf('handing you back only what they found'))
-      .toBeLessThan(agents.indexOf('It refuses rather than approximates'));
-    expect(agents).not.toMatch(/genuinely unclear/);
-  });
-
-  test('the search rung carries no triggers — no breadth, doubt or payoff framing', () => {
-    expect(DELEGATION_RUNGS.swarm).toMatch(/^Run a search \(action=swarm\): N nodes each running its own tool loop/);
-    expect(DELEGATION_RUNGS.swarm).toMatch(/handing you back only what they found/);
-    expect(DELEGATION_RUNGS.swarm).not.toContain('spend someone else\'s context instead of your own');
-    expect(DELEGATION_RUNGS.swarm).not.toMatch(/Two triggers\./);
-    expect(DELEGATION_RUNGS.swarm).not.toMatch(/Breadth:/);
-    expect(DELEGATION_RUNGS.swarm).not.toMatch(/Doubt:/);
-    expect(DELEGATION_RUNGS.swarm).not.toMatch(/being unsure is itself a reason to search/);
-    expect(DELEGATION_RUNGS.swarm).not.toMatch(/you cannot check your own output/);
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).not.toContain('spend someone else\'s context');
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).not.toMatch(/being unsure is itself a reason to search/);
-    expect(buildSystemPromptSync(createTestRuntime().rt)).not.toContain('spend someone else\'s context');
-  });
-
-  test('both rungs scale the count to the task and calibrate it on numbers this repo runs', () => {
-    // Derived from the preset table: registry.ts is import-free, so prose there drifts from the rows.
-    const widths = NAMED_SWARM_PRESETS.map((preset) => SWARM_PRESET_POINTS[preset].branches);
-    const band = `from ${String(Math.min(...widths))} to ${String(Math.max(...widths))} per level`;
-    expect(DELEGATION_RUNGS.swarm).toContain(band);
-    expect(DELEGATION_RUNGS.swarm).toContain('`branches` is that count');
-
-    // `agentsActionsFor` gates `swarm` separately, so the hire rung must stand alone without preset vocabulary.
-    expect(DELEGATION_RUNGS.hire).toMatch(/how many independent workstreams the task holds/);
-    expect(DELEGATION_RUNGS.hire).not.toContain('preset');
-    expect(DELEGATION_RUNGS.hire).not.toContain('branches');
-
-    expect(DELEGATION_RUNGS.swarm).toContain('token bill');
-    expect(DELEGATION_RUNGS.hire).toContain('token bill');
-  });
-
-  test('the prompt index names the actions without teaching when to delegate', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).not.toMatch(/when the work already has 2\+ independent angles/);
-    expect(prompt).not.toMatch(/uncertain enough to be worth two attempts at once/);
-    expect(prompt).not.toMatch(/A search writes its own competing candidates/);
-    expect(prompt).not.toMatch(/you supply what counts, not the angles/);
-    expect(prompt).not.toContain(DELEGATION_RUNGS.swarm);
-  });
-
   test('every surface that enumerates presets names all six, and every one of them resolves', () => {
     const doctrine = SWARM_PRESET_DOCTRINE.join(' ');
 
@@ -270,16 +168,6 @@ describe('buildSystemPromptSync', () => {
     }
   });
 
-  test('the preset list is rendered where `preset` is filled, and not a second time in the rung', () => {
-    const doctrine = SWARM_PRESET_DOCTRINE.join(' ');
-    expect(DELEGATION_RUNGS.swarm).not.toContain('preset=optimise');
-    expect(DELEGATION_RUNGS.swarm).not.toContain('research/audit/redteam');
-    expect(DELEGATION_RUNGS.swarm).not.toContain(doctrine);
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).not.toContain('research/audit/redteam');
-    expect(DELEGATION_RUNGS.swarm).toContain('You name the shape with `preset`');
-    expect(buildSystemPromptSync(createTestRuntime().rt)).not.toContain(doctrine);
-  });
-
   test('no built-in skill body calls an action or a field the tool surface does not have', () => {
     // Nothing typechecks a template string, so a renamed action or field drifts silently.
     const liveActions: readonly string[] = AGENTS_TOOL_ACTIONS;
@@ -297,16 +185,6 @@ describe('buildSystemPromptSync', () => {
         }
       }
     }
-  });
-
-  test('what a node can lean on is stated where the task is written, and nowhere twice', () => {
-    expect(DELEGATION_INHERITANCE.swarm.brief).toMatch(/the search's `context`/);
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain(DELEGATION_INHERITANCE.swarm.rung);
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).not.toContain(DELEGATION_INHERITANCE.swarm.brief);
-    expect(prompt).toMatch(/`swarm` runs parallel nodes over this workspace/);
-    expect(prompt).not.toContain('shared/findings');
   });
 
   test('delegation never advertises unsupported per-node model routing', () => {
@@ -348,25 +226,12 @@ describe('buildSystemPromptSync', () => {
     expect(buildSystemPromptSync(rt)).toContain(example);
   });
 
-  test('tool when-to-use doctrine is schema-only: descriptions carry it, prompt prose does not', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
+  test('tool notes are schema-only: the prompt repeats none of them', () => {
+    const prompt = buildSystemPromptSync(createTestRuntime().rt);
 
     for (const name of BUILTIN_TOOLS) {
-      const spec = BUILTIN_TOOL_SPECS[name];
-      const description = BUILTIN_TOOL_DESCRIPTIONS[name];
-      expect(description.startsWith(spec.summary)).toBe(true);
-      expect(description).toContain(`Use when: ${spec.whenToUse}`);
-      expect(description).toContain(`Avoid when: ${spec.whenNotToUse}`);
-      expect(description).toContain(`Returns: ${spec.result}`);
-      expect(prompt).not.toContain(spec.whenToUse);
-      expect(prompt).not.toContain(spec.whenNotToUse);
-
-      if ('doctrine' in spec && spec.doctrine) expect(prompt).not.toContain(spec.doctrine);
+      for (const note of BUILTIN_TOOL_SPECS[name].notes) expect(prompt).not.toContain(note);
     }
-
-    expect(prompt).not.toContain('Use when:');
-    expect(prompt).not.toContain('Avoid when:');
   });
 
   test('the tool index is one rendering for every model family', () => {
@@ -401,12 +266,6 @@ describe('buildSystemPromptSync', () => {
     expect(kimi).toContain('Call the tools listed here');
   });
 
-  test('memory conversations scroll contract is schema-only', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).not.toContain('around_message_id');
-  });
-
   test('teaches craft-on-repeat, search-before-solve, and the lessons loop', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
@@ -417,7 +276,6 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/curriculum/);
     expect(prompt).not.toContain('agent.proposeCurriculum(');
     expect(agentSelfTypes()).toContain('proposeCurriculum');
-    expect(BUILTIN_TOOL_DESCRIPTIONS.memory).toMatch(/failures are recorded as lessons/i);
   });
 
   test('honors soulOverride', () => {
@@ -469,10 +327,7 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
     expect(prompt).not.toContain('## Memory and facts');
-    const memory = BUILTIN_TOOL_DESCRIPTIONS.memory;
-    expect(memory).toMatch(/remember\/recall hold a small named value/);
-    expect(memory).toMatch(/update a stale key rather than adding a contradictory second fact/);
-    expect(memory).toMatch(/conversations reads what this agent said before/);
+    expect(prompt).not.toContain('around_message_id');
   });
 
   test('no release overlay renders: nothing could ever stamp it', () => {

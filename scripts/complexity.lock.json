@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-24",
-  "files": 2627,
-  "functions": 64767,
+  "files": 2621,
+  "functions": 63997,
   "ceiling": 108,
   "line": 32,
   "inventory": [
@@ -194,10 +194,6 @@
       "complexity": 35
     },
     {
-      "key": "tests/evals/kinu-tasks.eval.ts#open>afterTurnOne",
-      "complexity": 35
-    },
-    {
       "key": "packages/cli/src/commands/debug.ts#printHumanSummary",
       "complexity": 34
     },
@@ -239,10 +235,6 @@
     },
     {
       "key": "scripts/wired.ts#findEntrypoints>walk#2",
-      "complexity": 33
-    },
-    {
-      "key": "tests/evals/kinu-tasks.eval.ts#slateFixtureServer>fetch",
       "complexity": 33
     },
     {

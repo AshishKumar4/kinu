@@ -59,7 +59,7 @@ describe('tool_call_end', () => {
     const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
     const session = new LocalAgentSession({ rt, db, model: searchingModel(), noAutoEvolve: true, onEvent: () => {} });
 
-    await session.send('What do you remember?');
+    await session.send('What do you remember?', { id: crypto.randomUUID() });
     await session.end();
 
     const rows = db.query<{ payload: string }, []>("SELECT payload FROM run_events WHERE type = 'tool_call_end' ORDER BY rowid").all()

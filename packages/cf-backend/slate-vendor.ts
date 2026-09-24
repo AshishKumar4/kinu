@@ -1,18 +1,24 @@
 import { buildSync, type Metafile } from 'esbuild';
 import * as reactNs from 'react';
+import * as v from 'valibot';
 import type { Plugin } from 'vite';
 
-/** Vendored react/capnweb bytes for the slate runner; `src/slate-vendor.d.ts` mirrors this shape. */
-export interface SlateVendor {
-  readonly react: string;
-  readonly reactStub: string;
-  readonly capnweb: string;
-  readonly capnwebWorkers: string;
+const SpecifiersSchema = v.array(v.string());
+
+/** Vendored react/capnweb bytes for the slate runner; `src/slate-vendor.d.ts` names this type. The bun test
+ *  preload reads a built copy back from disk through the schema. */
+export const SlateVendorSchema = v.object({
+  react: v.string(),
+  reactStub: v.string(),
+  capnweb: v.string(),
+  capnwebWorkers: v.string(),
   /** External specifiers per bundle, from the metafile. */
-  readonly imports: { readonly react: readonly string[]; readonly capnweb: readonly string[]; readonly capnwebWorkers: readonly string[] };
+  imports: v.object({ react: SpecifiersSchema, capnweb: SpecifiersSchema, capnwebWorkers: SpecifiersSchema }),
   /** `react` export names, from the metafile. */
-  readonly reactExports: readonly string[];
-}
+  reactExports: v.array(v.string()),
+});
+
+export type SlateVendor = v.InferOutput<typeof SlateVendorSchema>;
 
 /** React ships CJS, so esbuild cannot see `export *` names; enumerate them off the installed module. */
 const REACT_ENTRY = [

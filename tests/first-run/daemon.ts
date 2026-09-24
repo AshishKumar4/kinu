@@ -32,7 +32,7 @@ import type { Subprocess } from 'bun';
 
 import { infraBoundary } from '@kinu.run/test-utils';
 import { listCloudDevices, registerCloudDevice } from '../../packages/cli/src/cloud-api';
-import { grantDeviceConsent, revokeDeviceOverUserRoute, type DeviceAccount } from '../evals/device-session';
+import { grantDeviceConsent, revokeDeviceOverUserRoute, type DeviceAccount } from './device-session';
 
 /** How long a spawned daemon is given to report connected. The product's own
  *  connect waits on the daemon's signals with no clock; a first-run case has

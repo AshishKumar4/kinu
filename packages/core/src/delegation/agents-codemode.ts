@@ -12,8 +12,6 @@ import { projectJsonValue } from '../utils/json';
 import * as v from 'valibot';
 import type { CodemodeProvider } from '../tools/sandbox-contract';
 import { TOOL_REACH, type AgentsToolAction } from '../tools/registry';
-// The sandbox declaration and native schema must render presets from the same rows.
-import { SWARM_PRESET_DOCTRINE } from '../strategy/swarm';
 import { isJsonObject, JsonValueSchema, type JsonObject } from '../utils/json';
 import {
   agentsActionInputVariantsFor,
@@ -27,51 +25,13 @@ import {
 
 import { renderThrownChain } from '../obs/index';
 
-/** Sandbox declaration per action. Literals, so every backend renders the same contract. */
+/** What a program must know beyond the native schema, per member. Literals, so every backend renders the same contract. */
 const AGENTS_CODEMODE_MEMBER_DOCS = {
-  swarm: `  /** Run a configured search whose candidates are MEASURED rather than judged.
-   *  You name the shape with \`preset\` and what counts with \`objective\`, and
-   *  every candidate is scored by your own verifier running in this workspace.
-${SWARM_PRESET_DOCTRINE.map((line) => `   *    ${line}`).join('\n')}
-   *  \`role\` puts every node under one catalog role (omit for your own active
-   *  role — a swarm is role-homogeneous, never mixed); \`tier\` picks the
-   *  inference tier when the role's default is not what you want, and
-   *  \`models\` routes each node to its own model spec round-robin by slot —
-   *  one or the other, never both. A search without \`preset\` takes your
-   *  role's default preset.
-   *  \`verify\` names a REGISTERED instrument and carries its whole spec: a
-   *  script path invented here does not resolve and the call is refused, which
-   *  is the one guard that makes a measured number worth anything. A \`floor\`
-   *  is a PROOF — a candidate measuring past it comes back as a breach with the
-   *  measurement kept and no score, because the bound may be what is wrong.
-   *  It refuses rather than approximates: an illegal composition names the axis
-   *  to change, and a shape no engine here runs faithfully says so instead of
-   *  returning a number from a different mechanism.
-   *  NOT resumable from here: a search started inside eval rides this
-   *  sandbox call, and eval declines background resume because its
-   *  side effects cannot be safely re-run. Script quick fan-out here; call the
-   *  top-level \`agents\` tool for one long search that must survive an
-   *  eviction, which resumes from its search checkpoint. */`,
-  hire: `  /** Put ONE workstream in front of ONE agent. With \`role\` it CREATES the
-   *  agent — it starts FRESH, it did not see this conversation, so \`mission\`
-   *  is its whole brief — and \`agent\` is then the optional name to create it
-   *  under. \`role\` is a catalog role id (the ids are listed on the native
-   *  agents tool's role fields); \`tier\` optionally overrides that role's
-   *  default inference tier. WITHOUT \`role\`, \`agent\` names one that already
-   *  exists and \`message\` is the work: a subordinate's report arrives later as
-   *  an event that wakes you — it does NOT resolve here — and a peer workspace
-   *  agent's reply is awaited until it arrives, however long the peer's work
-   *  takes. Default scope:"subordinate" hires into THIS workspace;
-   *  scope:"workspace" creates a specialist workspace of its own, sends it
-   *  \`message\`, and awaits the result. */`,
-  msg: `  /** Say something to an agent WITHOUT handing it a workstream: \`agent\`
-   *  names one by name (no reply awaited), or \`event_id\` answers an incoming
-   *  agent message event instead. Exactly one of the two; naming both is
-   *  refused. */`,
-  list: `  /** The unified roster: subordinates here plus the owner's other workspace
-   *  agents. Pass \`agent\` for one subordinate's live status instead. */`,
-  dismiss: `  /** Retire a subordinate. Archived by default (its context is kept); pass
-   *  keep_history:false ONLY to permanently wipe its storage. */`,
+  swarm: '  /** A search started here is not resumed after an eviction; one started by the native tool is. */',
+  hire: '  /** A subordinate\'s report arrives later as an event; a peer workspace agent\'s reply is awaited here. */',
+  msg: '',
+  list: '',
+  dismiss: '',
 } satisfies Record<AgentsToolAction, string>;
 
 /** Per-member return annotations. `unknown` where the caller only reads it
@@ -107,24 +67,6 @@ function renderInputVariant(
   ].join('\n');
 }
 
-/** The `hire` doc's task-lifetime half, rendered only where the task-hire port is wired. */
-const AGENTS_CODEMODE_TASK_LIFETIME_DOC = `  /** \`lifetime\` decides how long a created helper lives. "durable" (the
-   *  default) stays in your roster across turns. "task" creates a full agent
-   *  for this ONE question — its own context window, its own tool loop — and
-   *  THIS call resolves with its finished answer, after which the row is
-   *  archived and only its transcript remains. There is no follow-up, so put
-   *  the whole question in \`mission\` and name bulk material by workspace path
-   *  so that agent reads it itself. */`;
-
-function memberDoc(action: AgentsToolAction, deps: AgentsToolDeps): string {
-  const base = AGENTS_CODEMODE_MEMBER_DOCS[action];
-
-  return action === 'hire' && deps.team?.temporary
-    ? `${base}
-${AGENTS_CODEMODE_TASK_LIFETIME_DOC}`
-    : base;
-}
-
 function renderInputType(action: AgentsToolAction, deps: AgentsToolDeps): string {
   const variants = agentsActionInputVariantsFor(deps, action);
 
@@ -132,8 +74,9 @@ function renderInputType(action: AgentsToolAction, deps: AgentsToolDeps): string
     ? renderInputVariant(variants[0].fields, variants[0])
     : variants.map(variant => renderInputVariant(variant.fields, variant)).join('\n  | ');
 
-  return `${memberDoc(action, deps)}
-  ${action}(input: ${variants.length === 1 ? input : `\n  | ${input}`}): ${memberReturn(action, deps)};`;
+  const doc = AGENTS_CODEMODE_MEMBER_DOCS[action];
+
+  return `${doc === '' ? '' : `${doc}\n`}  ${action}(input: ${variants.length === 1 ? input : `\n  | ${input}`}): ${memberReturn(action, deps)};`;
 }
 
 /** One-line member descriptions for the provider record. */
@@ -169,6 +112,7 @@ function memberDescription(action: AgentsToolAction, deps: AgentsToolDeps): stri
  *  from `agentsActionsFor`, which walks the canonical ladder. */
 function renderTypes(actions: readonly AgentsToolAction[], deps: AgentsToolDeps): string {
   return [
+    '/** The native `agents` actions; each takes that action\'s input without `action`. */',
     'export declare const agents: {',
     ...actions.map(action => renderInputType(action, deps)),
     '};',

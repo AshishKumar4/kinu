@@ -8,9 +8,11 @@ import {
 } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { inputCls } from "@/components/ui/form";
 import { SecretWarning } from "@/pages/BlueprintPage";
-import { publishBlueprint, type Published } from "@/lib/shared-api";
+import { publishBlueprint, revokeShare, type Published } from "@/lib/shared-api";
+import { EmailsField, emailsOf, Failure, Lead, StopButton } from "./ShareParts";
 
 const HistorySchema = v.object({ versions: v.array(v.object({ id: v.string() })) });
 
@@ -24,6 +26,15 @@ export interface BlueprintFixture {
   versions: string[];
   inspection: BlueprintInspection;
   shares: SlateShareRecord[];
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-3">
+      <dt className="shrink-0 p-meta p-text-3 sm:w-24 sm:pt-1.5">{label}</dt>
+      <dd className="min-w-0 flex-1">{children}</dd>
+    </div>
+  );
 }
 
 export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, fixture }: {
@@ -44,8 +55,8 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, fix
   const [busy, setBusyState] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [published, setPublished] = useState<Published | null>(null);
-  const [listed, setListed] = useState(false);
   const setBusy = useCallback((next: boolean) => { setBusyState(next); onBusy(next); }, [onBusy]);
+
   useEffect(() => {
     if (fixture !== undefined) return;
     let live = true;
@@ -75,7 +86,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, fix
     return () => { live = false; };
   }, [fixture, rpc, slate, version, include]);
 
-  const topLevel = inspection === null ? [] : [...new Set(inspection.entries.map((entry) => entry.path.split("/")[0]))];
+  const topLevel = inspection === null ? [] : [...new Set(inspection.entries.map((entry) => entry.path.split("/")[0] ?? entry.path))];
   const includes = (name: string) => include === null ? true : include.has(name);
 
   const toggle = (name: string) => {
@@ -95,109 +106,103 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, fix
     setErr(null);
 
     try {
-      const list = emails.split(/[\s,;]+/).map((email) => email.trim()).filter(Boolean);
-      setPublished(await publishBlueprint({ workspace, slate, version, include: include === null ? undefined : [...include], emails: list, public: listed }));
+      setPublished(await publishBlueprint({ workspace, slate, version, include: include === null ? undefined : [...include], emails: emailsOf(emails) }));
     } catch (cause) {
       setErr(renderThrownChain({ cause }));
     } finally {
       setBusy(false);
     }
-  }, [busy, version, emails, workspace, slate, include, listed]);
+  }, [busy, version, emails, workspace, slate, include, setBusy]);
 
   const unshare = useCallback(async (share: string) => {
     setErr(null);
 
     try {
-      answered(await rpc<SlateAnswer<unknown>>("slate", [{ op: "unshare", share }]), SlateShareRecordSchema);
+      await revokeShare({ workspace, share });
       setShares((previous) => previous.filter((row) => row.id !== share));
     } catch (cause) {
       setErr(renderThrownChain({ cause }));
     }
-  }, [rpc]);
+  }, [workspace]);
 
-  const footer = published === null ? (
-    <>
-      <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-      <FilledButton onClick={publish} disabled={busy || version === null || inspection === null}>
-        {busy ? <><Loader size="sm" /><span className="ml-1">Publishing…</span></> : "Publish blueprint"}
-      </FilledButton>
-    </>
-  ) : <Button size="sm" variant="ghost" onClick={onClose}>Done</Button>;
+  if (published !== null) {
+    const link = `${location.origin}${blueprintPagePath(published.id)}`;
+
+    return (
+      <>
+        <div className="space-y-3 text-xs">
+          <p className="p-notice-success rounded-md px-3 py-2" data-blueprint-published>Published. Anyone with the link can read it and fork a copy.</p>
+          <div className="flex items-center gap-2">
+            <a href={blueprintPagePath(published.id)} className="min-w-0 flex-1 break-all font-mono p-accent" target="_blank" rel="noopener noreferrer">{link}</a>
+            <CopyButton value={link} what="the blueprint link" className="p-btn-quiet rounded p-1" />
+          </div>
+          {published.users.length > 0 && <p className="p-text-3">It is in the Drive of {published.users.join(", ")}.</p>}
+        </div>
+        <div className="flex justify-end"><FilledButton className="h-8 px-4 text-sm" onClick={onClose}>Done</FilledButton></div>
+      </>
+    );
+  }
 
   return (
     <>
-      {published !== null ? (
-        <div className="space-y-2 text-xs">
-          <div className="p-notice-success rounded-md px-3 py-2">Published. Anyone with the link can read it and fork it into their own workspace.</div>
-          <a href={blueprintPagePath(published.id)} className="block break-all font-mono p-accent" target="_blank" rel="noopener noreferrer">{location.origin}{blueprintPagePath(published.id)}</a>
-          {published.users.length > 0 && <p className="p-text-3">Shared with {published.users.join(", ")}.</p>}
-        </div>
-      ) : (
-        <div className="space-y-4 text-xs">
-          <p className="p-text-2 leading-relaxed">
-            A blueprint is a committed version exported with every binding unmapped: source, package.json, assets and nothing else. Your connections, keys and vault stay here; a forker connects their own.
-          </p>
-          {versions === null && err === null && <div className="flex justify-center py-4"><Loader size="sm" /></div>}
-          {versions !== null && versions.length === 0 && <div className="p-notice-info rounded-md px-3 py-2">Commit this slate first; a blueprint is cut from a committed version.</div>}
-          {versions !== null && versions.length > 0 && (
-            <label className="block space-y-1">
-              <span className="p-meta p-text-3">Committed version</span>
+      <div className="space-y-4">
+        <Lead>People get their own copy to fork. Nothing of yours comes with it: no connections, chats or data.</Lead>
+        {versions === null && err === null && <div className="flex justify-center py-2"><Loader size="sm" /></div>}
+        {versions !== null && versions.length === 0 && <div className="p-notice-info rounded-md px-3 py-2 text-xs">Commit this slate first: a blueprint is cut from a committed version.</div>}
+        {versions !== null && versions.length > 0 && (
+          <dl className="space-y-3">
+            <Field label="Version">
               <select value={version ?? ""} onChange={(event) => { setVersion(event.target.value); setInclude(null); }} className={inputCls} disabled={busy}>
                 {versions.map((id, index) => <option key={id} value={id}>{index === versions.length - 1 ? `${id} (latest)` : id}</option>)}
               </select>
-            </label>
-          )}
-          {inspection !== null && (
-            <>
-              <fieldset className="space-y-1">
-                <legend className="p-meta p-text-3 mb-1">Paths the blueprint includes</legend>
-                {topLevel.map((name) => (
-                  <label key={name} className="flex items-center gap-2 font-mono p-text">
-                    <input type="checkbox" checked={includes(name)} onChange={() => toggle(name)} disabled={busy || name === "package.json"} />
-                    {name}{name === "package.json" && <span className="p-text-4 font-sans">always</span>}
-                  </label>
-                ))}
-              </fieldset>
-              <div className="space-y-1">
-                <div className="p-meta p-text-3">A forker must connect</div>
-                {inspection.credentialed.length === 0 ? (
-                  <p className="p-text-3">Nothing: this slate reaches none of your connections.</p>
-                ) : (
-                  <ul className="space-y-0.5">
-                    {inspection.credentialed.map((binding) => (
-                      <li key={binding.name}><span className="font-mono p-text">{binding.name}</span> <span className="p-text-3">({binding.kind}{binding.target ? `: ${binding.target}` : ""})</span></li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-              <SecretWarning warnings={inspection.warnings} />
-            </>
-          )}
-          <label className="block space-y-1">
-            <span className="p-meta p-text-3">Share with users (emails, optional)</span>
-            <input value={emails} onChange={(event) => setEmails(event.target.value)} className={inputCls} placeholder="pat@example.com, sam@example.com" disabled={busy} />
-          </label>
-          <label className="flex items-center gap-2 p-text">
-            <input type="checkbox" checked={listed} onChange={(event) => setListed(event.target.checked)} disabled={busy} />
-            <span>List publicly <span className="p-text-3">on the Shared page, where anyone signed in can find it</span></span>
-          </label>
-          {shares.length > 0 && (
-            <div className="space-y-1">
-              <div className="p-meta p-text-3">Already published from this slate</div>
-              <ul className="space-y-1">
-                {shares.map((share) => (
-                  <li key={share.id} className="flex items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate p-text-2">{new Date(share.createdAt).toLocaleString()}{share.users.length > 0 ? ` · ${share.users.join(", ")}` : ""}</span>
-                    <button type="button" onClick={() => unshare(share.id)} className="p-btn-quiet rounded-md px-2 py-0.5" disabled={busy}>Stop sharing</button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {err && <div className="p-notice-danger rounded-md px-3 py-2">{err}</div>}
-        </div>
-      )}
-      <div className="mt-5 flex justify-end gap-2">{footer}</div>
+            </Field>
+            {inspection !== null && (
+              <Field label="Includes">
+                <span className="flex flex-wrap gap-1.5">
+                  {topLevel.map((name) => (
+                    <label key={name} className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs ${includes(name) ? "p-border p-text" : "border-dashed p-border p-text-3"}`}>
+                      <input type="checkbox" checked={includes(name)} onChange={() => toggle(name)} disabled={busy || name === "package.json"} className="accent-[var(--c-accent)]" />
+                      <span className="font-mono">{name}</span>
+                    </label>
+                  ))}
+                </span>
+              </Field>
+            )}
+            {inspection !== null && inspection.credentialed.length > 0 && (
+              <Field label="They connect">
+                <span className="block pt-1.5 p-meta p-text-2" data-blueprint-connect>
+                  Their own {inspection.credentialed.map((binding) => binding.name).join(", ")}, when they fork it.
+                </span>
+              </Field>
+            )}
+          </dl>
+        )}
+        {inspection !== null && <SecretWarning warnings={inspection.warnings} />}
+        <EmailsField value={emails} onChange={setEmails} disabled={busy} placeholder="Add people by email (optional)" />
+        <p className="p-meta p-text-3">Anyone with the link can read it; a fork needs a Kinu account.</p>
+        {shares.length > 0 && (
+          <div className="space-y-1.5">
+            <p className="p-meta font-medium p-text-3">Published</p>
+            <ul className="p-group">
+              {shares.map((share) => (
+                <li key={share.id} data-blueprint-share={share.id} className="flex items-center gap-3 px-3.5 py-2">
+                  <span className="min-w-0 flex-1 truncate p-meta p-text-2">
+                    {new Date(share.createdAt).toLocaleDateString()}{share.users.length > 0 ? ` · ${share.users.join(", ")}` : ""}
+                  </span>
+                  <StopButton onStop={() => void unshare(share.id)} disabled={busy} />
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <Failure message={err} />
+      </div>
+      <div className="flex justify-end gap-2 border-t p-border pt-4">
+        <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+        <FilledButton className="h-8 px-4 text-sm" onClick={() => void publish()} disabled={busy || version === null || inspection === null} data-blueprint-publish>
+          {busy ? <><Loader size="sm" /><span className="ml-1">Publishing…</span></> : "Publish"}
+        </FilledButton>
+      </div>
     </>
   );
 }

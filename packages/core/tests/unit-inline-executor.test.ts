@@ -493,17 +493,17 @@ describe('workspace.createTool — the tool is born scorable', () => {
   });
 });
 
-describe('workspace.slate', () => {
+describe('workspace.slates', () => {
   test('an absent host is omitted from callable and declared capabilities', () => {
     const exec = buildExec(createTestRuntime().rt);
-    expect(exec.tools.slate).toBeUndefined();
-    expect(exec.types).not.toContain('function slate(');
+    expect(exec.tools.slates).toBeUndefined();
+    expect(exec.types).not.toContain('const slates');
   });
 
   test('invalid operation fields are refused before the available host is called', async () => {
     const { rt } = createTestRuntime();
     const exec = buildExec(rt, async () => { throw new Error('invalid operation reached the host'); });
-    expect(await exec.tools.slate.execute({ op: 'commit', id: '../outside' })).toMatchObject({ ok: false, reason: 'bad_input' });
-    expect(await exec.tools.slate.execute({ op: 'call', id: 'notes', method: 'echo', args: [() => 1] })).toMatchObject({ ok: false, reason: 'bad_input' });
+    expect(await exec.tools.slates.execute({ op: 'commit', id: '../outside' })).toMatchObject({ success: false, reason: 'bad_input' });
+    expect(await exec.tools.slates.execute({ op: 'call', id: 'notes', method: 'echo', args: [() => 1] })).toMatchObject({ success: false, reason: 'bad_input' });
   });
 });

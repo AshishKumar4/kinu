@@ -39,8 +39,8 @@ import { afterAll, describe, test } from 'vitest';
 import type { Browser, Page } from 'puppeteer';
 
 import { scratchDir, workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
-import type { PublicSessionPlan } from '../evals/public-session';
-import type { DeviceAccount } from '../evals/device-session';
+import type { PublicSessionPlan } from '../../evals/src/session';
+import type { DeviceAccount } from './device-session';
 import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine } from './daemon';
 import { approvalClearsSelection, isApprovalButtonLabel } from './approval-observation';
 import { openBrowser, signedInPage } from './browser';

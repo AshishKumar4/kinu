@@ -21,7 +21,7 @@
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import { EVAL_DEPLOYMENT_ORIGIN, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
-import { webHeaders, type PublicSessionPlan } from '../evals/public-session';
+import { webHeaders, type PublicSessionPlan } from '../../evals/src/session';
 import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
 const SUITE = 'First-run · account-settings';
