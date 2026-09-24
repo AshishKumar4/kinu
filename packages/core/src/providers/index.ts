@@ -52,6 +52,8 @@ export {
   type ClaudeOAuthClient, type ClaudeSignIn,
 } from './claude-oauth';
 
+export { CLAUDE_LOGIN_ISSUER, CODEX_LOGIN_ISSUER, subscriptionIssuer, type SubscriptionIssuer } from './subscription-login';
+
 export * from './fetch-shim';
 
 export * from './gateway-binding-fetch';

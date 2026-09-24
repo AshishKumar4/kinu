@@ -1,23 +1,21 @@
 // Subscription logins on this machine, one `config.json` provider section per issuer with named accounts.
-// Every issuer refreshes through the one path below.
+// Every issuer renews through core's issuer table, as a hosted account's logins do.
 import {
   CLAUDE_CRED_KEY,
-  CLAUDE_REFRESH_LEAD_MS,
+  CLAUDE_LOGIN_ISSUER,
   CODEX_CRED_KEY,
-  CODEX_REFRESH_LEAD_SEC,
+  CODEX_LOGIN_ISSUER,
   JsonObjectSchema,
   JsonValueSchema,
   MAIN_ACCOUNT,
   accountCredentialKey,
   accountOf,
   baseCredentialKey,
-  codexAccessTokenExpiring,
   codexCredentialToHeaders,
-  createClaudeOAuthClient,
-  createCodexOAuthClient,
   credentialToHeaders,
   type AuthResolution,
   type OAuthCredential,
+  type SubscriptionIssuer,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { readFileSync } from 'node:fs';
@@ -51,28 +49,12 @@ type KinuConfigFile = v.InferOutput<typeof kinuConfigSchema>;
 interface OAuthIssuer {
   readonly section: 'codex' | 'claude';
   headers(credential: OAuthCredential): Record<string, string>;
-  expiring(credential: OAuthCredential): boolean;
-  refresh(credential: OAuthCredential, fetchFn: typeof fetch | undefined): Promise<OAuthCredential>;
+  readonly renewal: SubscriptionIssuer;
 }
 
 const ISSUERS = new Map<string, OAuthIssuer>([
-  [CODEX_CRED_KEY, {
-    section: 'codex',
-    headers: codexCredentialToHeaders,
-    expiring: (credential) => (credential.expiresAt !== undefined && Date.now() + CODEX_REFRESH_LEAD_SEC * 1_000 >= credential.expiresAt)
-      || codexAccessTokenExpiring(credential.accessToken),
-    async refresh(credential, fetchFn) {
-      const fresh = await createCodexOAuthClient(fetchFn).refresh(credential.refreshToken ?? '');
-
-      return { kind: 'oauth', accessToken: fresh.accessToken, refreshToken: fresh.refreshToken, expiresAt: fresh.expiresAt, metadata: credential.metadata };
-    },
-  }],
-  [CLAUDE_CRED_KEY, {
-    section: 'claude',
-    headers: (credential) => credentialToHeaders(CLAUDE_CRED_KEY, credential),
-    expiring: (credential) => credential.expiresAt !== undefined && Date.now() + CLAUDE_REFRESH_LEAD_MS >= credential.expiresAt,
-    refresh: (credential, fetchFn) => createClaudeOAuthClient(fetchFn).refresh(credential),
-  }],
+  [CODEX_CRED_KEY, { section: 'codex', headers: codexCredentialToHeaders, renewal: CODEX_LOGIN_ISSUER }],
+  [CLAUDE_CRED_KEY, { section: 'claude', headers: (credential) => credentialToHeaders(CLAUDE_CRED_KEY, credential), renewal: CLAUDE_LOGIN_ISSUER }],
 ]);
 
 /** Whether a key names a subscription login this store holds, any account. */
@@ -119,7 +101,7 @@ export function createFileOAuthStore(configPath: string, opts: { fetch?: typeof 
 
       if (!credential?.accessToken) return null;
 
-      if (!credential.refreshToken || !(authOpts?.forceRefresh === true || issuer.expiring(credential))) {
+      if (!credential.refreshToken || !(authOpts?.forceRefresh === true || issuer.renewal.expiring(credential))) {
         return { headers: issuer.headers(credential), credentialKey: key };
       }
 
@@ -147,12 +129,12 @@ async function refreshUnderLock(
   return withConfigLockAsync(configPath, async () => {
     const latest = readCredential(configPath, key);
 
-    if (latest?.accessToken && latest.accessToken !== original.accessToken && !issuer.expiring(latest)) {
+    if (latest?.accessToken && latest.accessToken !== original.accessToken && !issuer.renewal.expiring(latest)) {
       return latest;
     }
 
     const current = latest ?? original;
-    const refreshed = await issuer.refresh({ ...current, refreshToken: current.refreshToken ?? original.refreshToken }, fetchFn);
+    const refreshed = await issuer.renewal.refresh({ ...current, refreshToken: current.refreshToken ?? original.refreshToken }, fetchFn);
 
     writeCredential(configPath, key, refreshed);
 

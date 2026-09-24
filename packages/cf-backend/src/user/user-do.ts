@@ -58,9 +58,13 @@ import {
   type ReleaseDeployment,
   type ReleaseSource,
   type ReleaseSourceInput,
+  CLAUDE_CRED_KEY,
   CODEX_CRED_KEY,
   OAuthTokenError,
+  baseCredentialKey,
   createCodexOAuthClient,
+  subscriptionIssuer,
+  type SubscriptionIssuer,
   decodeCodexAccountId,
   tokensToCredential,
   type DeviceCodeStart,
@@ -104,7 +108,7 @@ import {
   DeviceTerminalHub, terminalFromSocket,
   DeviceRequestLedger,
   type ClaimedDeviceRequest, type DeviceCancelOutcome,
-  credentialToHeaders, codexAccessTokenExpiring,
+  credentialToHeaders,
   validateCredential, validateCredentialKey, validateWorkspaceName,
   createCredentialCipher, isSealedCredential, type CredentialCipher,
   listEgressSecrets, putEgressSecret, resolveEgressInjection,
@@ -547,6 +551,13 @@ export interface CredentialSummary {
 
 /** What one OAuth refresh established; see `UserDO.refreshOAuthCredential`. */
 type OAuthRefresh = OAuthCredential | 'revoked' | { readonly failed: KinuError };
+
+/** How a failed refresh of each login `UserDO` renews reads, by base key: a named account reads as its issuer's. */
+const REFRESH_DOING: ReadonlyMap<string, string> = new Map([
+  [CODEX_CRED_KEY, 'refreshing the Codex credential'],
+  [CLAUDE_CRED_KEY, 'refreshing the Claude credential'],
+  [CLOUDFLARE_OAUTH_CRED_KEY, 'refreshing the Cloudflare credential'],
+]);
 
 export interface CodexStatus {
   connected: boolean;
@@ -3329,8 +3340,8 @@ export class UserDO extends Agent<Env> {
 
     const cred = validateCredential({ value: credentialJson });
 
-    if (key === CODEX_CRED_KEY && cred.kind === 'oauth' && !cred.refreshToken) {
-      throw new Error('codex.oauth requires an OAuth refresh token.');
+    if (subscriptionIssuer(key) !== null && cred.kind === 'oauth' && !cred.refreshToken) {
+      throw new Error(`${key} requires an OAuth refresh token.`);
     }
 
     await this.writeCredential(key, cred);
@@ -3670,14 +3681,13 @@ export class UserDO extends Agent<Env> {
     // Explicitly non-null so the refresh reassignment below doesn't re-widen to `Credential | null`.
     let cred: Credential = stored;
 
-    if (storedKey === CODEX_CRED_KEY && cred.kind === 'oauth') {
-      const refreshToken = cred.refreshToken;
+    const issuer = subscriptionIssuer(storedKey);
 
-      if (!refreshToken) return null;
-      const needRefresh = opts?.forceRefresh === true || codexAccessTokenExpiring(cred.accessToken);
+    if (issuer !== null && cred.kind === 'oauth') {
+      if (!cred.refreshToken) return null;
 
-      if (needRefresh) {
-        const refreshed = await this.refreshCodexInternal({ ...cred, refreshToken });
+      if (opts?.forceRefresh === true || issuer.expiring(cred)) {
+        const refreshed = await this.refreshSubscriptionLogin(storedKey, cred, issuer);
 
         if (refreshed === 'revoked') return null;
 
@@ -3825,32 +3835,26 @@ export class UserDO extends Agent<Env> {
   /** `'revoked'` on `invalid_grant` or a disconnect mid-refresh; `{ failed }` when the issuer
    * could not be asked. Writes carry the revision fence so a newer login is never demoted. */
   private async refreshOAuthCredential(
-    key: typeof CLOUDFLARE_OAUTH_CRED_KEY | typeof CODEX_CRED_KEY,
+    key: string,
     rotate: () => Promise<OAuthCredential>,
     onRevoked: (revision: number) => Promise<void>,
   ): Promise<OAuthRefresh> {
     const revision = this.credentialRevision(key);
-    const codex = key === CODEX_CRED_KEY;
-    const doing = codex ? 'refreshing the Codex credential' : 'refreshing the Cloudflare credential';
+    const doing = REFRESH_DOING.get(baseCredentialKey(key)) ?? `refreshing ${key}`;
     let rotated: OAuthCredential;
 
     try {
       rotated = await rotate();
     } catch (err) {
       if (err instanceof OAuthTokenError && err.revoked) {
-        const failure = toKinuError({ doing, cause: err, otherwise: 'denied' });
-
-        if (codex) diagnostics.failure('credential.codex_refresh_revoked', failure);
-        else diagnostics.failure('credential.cloudflare_refresh_revoked', failure);
+        diagnostics.failure('credential.refresh_revoked', toKinuError({ doing, cause: err, otherwise: 'denied' }), { credentialKey: key });
         await onRevoked(revision);
 
         return 'revoked';
       }
 
       const failure = toKinuError({ doing, cause: err, otherwise: 'unavailable' });
-
-      if (codex) diagnostics.failure('credential.codex_refresh_failed', failure);
-      else diagnostics.failure('credential.cloudflare_refresh_failed', failure);
+      diagnostics.failure('credential.refresh_failed', failure, { credentialKey: key });
 
       return { failed: failure };
     }
@@ -3870,17 +3874,13 @@ export class UserDO extends Agent<Env> {
     );
   }
 
-  /** Only model calls read the Codex credential, so a rejected refresh deletes the row and
-   * the connect CTA resurfaces. */
-  private refreshCodexInternal(current: OAuthCredential & { refreshToken: string }): Promise<OAuthRefresh> {
+  /** Only model calls read a subscription login, so a rejected refresh deletes that login's row and the connect
+   * CTA resurfaces; another account of the same issuer is left alone. */
+  private refreshSubscriptionLogin(key: string, current: OAuthCredential, issuer: SubscriptionIssuer): Promise<OAuthRefresh> {
     return this.refreshOAuthCredential(
-      CODEX_CRED_KEY,
-      async () => {
-        const fresh = await createCodexOAuthClient().refresh(current.refreshToken);
-
-        return { kind: 'oauth', accessToken: fresh.accessToken, refreshToken: fresh.refreshToken, expiresAt: fresh.expiresAt, metadata: current.metadata };
-      },
-      async (revision) => { this.retireRejectedCredential(CODEX_CRED_KEY, revision); },
+      key,
+      () => issuer.refresh(current),
+      async (revision) => { this.retireRejectedCredential(key, revision); },
     );
   }
 
