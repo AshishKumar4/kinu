@@ -13,6 +13,7 @@ import { withMountTable } from '../src/vfs/mounts';
 import { makeVfsError } from '../src/vfs/errno';
 import { decodeModelMessageValues, encodeModelMessageValues } from '../src/session/message-codec';
 import { composePrepareStep, type StepContextPlane } from '../src/prompting/prepare-step';
+import type { StepPruneBudget } from '../src/prompting/step-prune';
 import { DynamicContextLedger } from '../src/prompting/volatile-context';
 import { createFileDispatcher } from '../src/tools/file-tool';
 import { TurnFileLedger } from '../src/tools/file-ledger';
@@ -592,16 +593,15 @@ test('a landed edit preserves the recorded tail exactly, with a woven block and 
   ws.close();
 });
 
-/** 2026-09-23, 300 two-step turns through the CLI: every request stored a copy of every tool exchange and one row per
- *  prompt message, so turn 2 added 77 rows and turn 300 added 4,845, and turn time grew with them. */
-test('a turn stores and runs only what it added, and every request reads back as the messages it sent', async () => {
+/** Turns of four messages (ask, tool call, tool result, answer) through the production step pipeline: a woven block,
+ *  replayed tool ids rewritten, cache markers on the tail. Answers what each turn wrote and ran. */
+async function twoStepTurns(prune: StepPruneBudget, output: (turn: number) => string): Promise<{ rows: number; statements: number }[]> {
   const ws = workspace();
   const actor = ws.bind('actor-growth');
   const assertOwner = () => { actor.handle.assertCurrent(); };
 
-  // The production step pipeline: a woven block, replayed tool ids rewritten, cache markers on the tail.
   const pipeline = {
-    prune: { contextWindow: 200_000, modelOutputLimit: 8_000 },
+    prune,
     dynamic: { ledger: new DynamicContextLedger(), snapshot: () => ({ recoveries: ['a finding proven by execution'] }) },
     destinationProviderId: 'anthropic',
     cache: { strategy: { kind: 'anthropic' as const } },
@@ -619,7 +619,7 @@ test('a turn stores and runs only what it added, and every request reads back as
     await actor.history.append({ id: `call-${String(turn)}`, origin: 'output', turnId, assertOwner,
       message: { role: 'assistant', content: [{ type: 'tool-call', toolCallId: `c${String(turn)}`, toolName: 'probe', input: { turn } }] } });
     await actor.history.append({ id: `result-${String(turn)}`, origin: 'output', turnId, assertOwner,
-      message: { role: 'tool', content: [{ type: 'tool-result', toolCallId: `c${String(turn)}`, toolName: 'probe', output: { type: 'text', value: `output ${String(turn)}` } }] } });
+      message: { role: 'tool', content: [{ type: 'tool-result', toolCallId: `c${String(turn)}`, toolName: 'probe', output: { type: 'text', value: output(turn) } }] } });
     sent.push(await composePrepareStep({ ...pipeline, context }, { stepNumber: 1, messages: [], steps: [] }));
     await actor.history.append({ id: `answer-${String(turn)}`, origin: 'output', turnId, assertOwner,
       message: { role: 'assistant', content: [{ type: 'text', text: `answer ${String(turn)}` }] } });
@@ -630,10 +630,27 @@ test('a turn stores and runs only what it added, and every request reads back as
     for (const [step, request] of sent.entries()) expect(JSON.stringify((await actor.claims.consumedContext(turnId, step))?.messages)).toBe(JSON.stringify(request?.messages));
   }
 
+  ws.close();
+
+  return added;
+}
+
+/** 2026-09-23, 300 two-step turns through the CLI: every request stored a copy of every tool exchange and one row per
+ *  prompt message, so turn 2 added 77 rows and turn 300 added 4,845, and turn time grew with them. */
+test('a turn stores and runs only what it added, and every request reads back as the messages it sent', async () => {
+  const added = await twoStepTurns({ contextWindow: 200_000, modelOutputLimit: 8_000 }, (turn) => `output ${String(turn)}`);
+
   // Each turn adds the same four messages, so after the first it writes the same rows and runs the same statements,
   // however long the history: a statement per carried message is latency the clock would show later.
   expect(added.slice(1)).toEqual(added.slice(1).map(() => added[1]));
-  ws.close();
+});
+
+/** Review 2026-09-24: pruning rebuilt each pruned result every step, so every request encoded and looked up all of them. */
+test('a pruned tool result keeps its identity, so a turn runs the same statements however many are pruned', async () => {
+  // Every result outgrows the window's prune batch, so each step prunes all but the newest: one more a turn.
+  const added = await twoStepTurns({ contextWindow: 8_000, modelOutputLimit: 2_000 }, (turn) => `${String(turn).padStart(3, '0')}${'x'.repeat(19_997)}`);
+
+  expect(added.slice(1)).toEqual(added.slice(1).map(() => added[1]));
 });
 
 test('an edit mid-exchange is deferred with its reason, then lands at the next safe boundary', async () => {
