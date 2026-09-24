@@ -3,10 +3,19 @@
 // code the deploy wrapper reports — and a run that ends is left alone.
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { DEADLINE_EXIT_CODE, deadlineLine, runUnderDeadline } from './deadline';
+import { readFileSync } from 'node:fs';
+import { tolerate } from '@kinu.run/core/obs';
+import { DEADLINE_EXIT_CODE, deadlineLine, leftoverLine, runUnderDeadline } from './deadline';
 import { GATE_DEADLINE_SECONDS, LADDER, scriptDeadline } from './ladder';
 
 const HANG = join(import.meta.dir, 'fixtures', 'deadline', 'hang.ts');
+
+/** Whether `pid` still holds memory: gone, a zombie, or a process past releasing it on its way out holds none. */
+function holdsMemory(pid: number): boolean {
+  const status = tolerate(() => readFileSync(`/proc/${String(pid)}/status`, 'utf8'), 'enoent');
+
+  return status !== undefined && /^VmRSS:/mu.test(status);
+}
 
 describe('a run under a deadline', () => {
   test('a run that hangs is killed at the deadline and named, with the wrapper exit code', async () => {
@@ -25,6 +34,23 @@ describe('a run under a deadline', () => {
     expect(ok).toMatchObject({ killed: false, exitCode: 0 });
     expect(failed).toMatchObject({ killed: false, exitCode: 3 });
     expect(failed.stderr).not.toContain('KILLED');
+  });
+
+  test('a run that exits with a process of its own still running fails, naming it, and it is ended', async () => {
+    // The shell exits at once; the sleep it backgrounded outlives it and holds the stdout pipe.
+    const outcome = await runUnderDeadline({ argv: ['sh', '-c', 'sleep 30 & echo $!'], seconds: 30, label: 'leaves one', stdio: 'pipe' });
+    const pid = Number(outcome.stdout.trim());
+
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.leftovers).toEqual([`${String(pid)} sleep 30`]);
+    expect(outcome.stderr).toContain(leftoverLine({ label: 'leaves one' }, outcome.leftovers));
+    expect(holdsMemory(pid)).toBe(false);
+  });
+
+  test('a process the run ended before it exited is not a leftover', async () => {
+    const outcome = await runUnderDeadline({ argv: ['sh', '-c', 'sleep 30 & kill $!; wait $!; exit 0'], seconds: 30, label: 'ends its own', stdio: 'pipe' });
+
+    expect(outcome).toMatchObject({ exitCode: 0, leftovers: [] });
   });
 
   test('a given environment is the child\'s whole environment, and none inherits this process\'s', async () => {

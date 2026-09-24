@@ -125,6 +125,11 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + 'repository path: the roots are the test runs\' own, minted outside the tree.',
   ],
   [
+    'scripts/deadline.ts',
+    'reads /proc for the processes a run or a test file left running. They are live processes, '
+    + 'not repository paths, and git has no list of them.',
+  ],
+  [
     'scripts/bench-sandbox.ts',
     'copies the tree into a solver sandbox and re-points `node_modules/@kinu.run/*` symlinks. '
     + '`git ls-files` does not list `node_modules`, so the set it needs is exactly the set no '

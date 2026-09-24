@@ -35,7 +35,7 @@ function readBootId(): string | undefined {
 
 /** Field 22 of `/proc/<pid>/stat`, counted after the parenthesised command name, which may hold
  *  spaces; undefined once the process is gone. */
-function processStartTicks(pid: number): number | undefined {
+export function processStartTicks(pid: number): number | undefined {
   const stat = tolerate(() => readFileSync(`/proc/${String(pid)}/stat`, 'utf8'), 'enoent');
 
   return stat === undefined ? undefined : Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);

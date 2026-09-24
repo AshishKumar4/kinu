@@ -734,6 +734,24 @@ and left no scratch root behind (three runs, 2026-09-24). One gap: under bun
 `process.env` as the preload changed it, so those children keep the runner's
 `TMPDIR` instead of the scratch root.
 
+L11. A run or a test file that ends with processes of its own still running
+fails, and they are ended. Decided 2026-09-24. `runUnderDeadline` gives every
+run a `KINU_RUN` value that all its processes inherit. After the exit, a live
+process still carrying that value is killed and named in the run's red. The
+`bun test` preload does the same for a file's live children when the file
+ends. The two cover each other's blind spot. The environment check finds a
+server that a shell backgrounded, after the shell has gone. The child check
+finds a child that runs under an environment of its own, like the pc-agent
+supervisors under the sandbox's allow-list. Measured: `bun test` of
+`unit-pc-agent-exec.test.ts` left nine 30 MB supervisors and a `sleep 20`, and
+it passed. Neither `bun test --parallel=4` nor the esbuild processes its
+files start leave anything at the exit on their own (14 of 14 probe runs),
+so the run check does not race them. The per-file check found esbuild services
+in `unit-slate-vendor` and `unit-slate-client-module`. Those two files now run
+esbuild's sync API one process per call. Blind: a process that rebuilt its
+environment and outlived its parent, anything off Linux, and
+`scripts/deploy.sh`'s rows, which run under coreutils `timeout`.
+
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn
