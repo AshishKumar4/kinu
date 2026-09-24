@@ -935,7 +935,8 @@ interface TurnWatch {
   /** A turn no page sent, such as a workspace's first: the one the root's claim names as open when this is
    *  taken, else the next it admits. It follows that turn's own id through the claim every snapshot and
    *  `turn_claim` frame the page receives carries, closes once a claim no longer names it, and settles as
-   *  `afterTurn` does. A claim does not say how its turn ended, so this never rejects. */
+   *  `afterTurn` does; it rejects, naming the turn and its outcome, when the claim settles it any way but
+   *  completed. */
   afterClaimedTurn(): Promise<boolean>;
   stop(): Promise<void>;
 }
@@ -981,8 +982,14 @@ async function watchTurns(page: Page): Promise<TurnWatch> {
     for (const waiter of waiters) {
       if (waiter.follows !== 'claim' || waiter.closedAtAsk !== null) continue;
 
-      if (waiter.id === null) waiter.id = claimed.turnId;
-      else if (waiter.id !== claimed.turnId) waiter.closedAtAsk = asks;
+      if (waiter.id === null) {
+        waiter.id = claimed.turnId;
+      } else if (claim.kind === 'settled' && claim.turnId === waiter.id && claim.outcome !== 'completed') {
+        waiters = waiters.filter((candidate) => candidate !== waiter);
+        waiter.settle.reject(new Error(`the turn ${waiter.id} settled ${claim.outcome ?? 'with no outcome'}`));
+      } else if (waiter.id !== claimed.turnId) {
+        waiter.closedAtAsk = asks;
+      }
     }
   };
 
