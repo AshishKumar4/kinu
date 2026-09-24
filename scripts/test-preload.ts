@@ -129,13 +129,19 @@ Bun.plugin({
   },
 });
 
-/** What decides the vendor's bytes: its build, and the lockfile, manifest and patches that pin what it bundles. */
-const VENDOR_INPUTS = [
-  new URL('../packages/cf-backend/slate-vendor.ts', import.meta.url).pathname,
-  new URL('../bun.lock', import.meta.url).pathname,
-  new URL('../package.json', import.meta.url).pathname,
-  ...readdirSync(new URL('../patches', import.meta.url).pathname).map((name) => new URL(`../patches/${name}`, import.meta.url).pathname),
-];
+/**
+ * What decides the vendor's bytes: its build, and the lockfile, manifest and patches that pin what it bundles.
+ * Read only when a file imports the vendor: the preload loads in every test, including copies of the repo
+ * that carry no lockfile or patches (mutation-fences runs its owners in a sparse checkout).
+ */
+function vendorInputs(): readonly string[] {
+  return [
+    new URL('../packages/cf-backend/slate-vendor.ts', import.meta.url).pathname,
+    new URL('../bun.lock', import.meta.url).pathname,
+    new URL('../package.json', import.meta.url).pathname,
+    ...readdirSync(new URL('../patches', import.meta.url).pathname).map((name) => new URL(`../patches/${name}`, import.meta.url).pathname),
+  ];
+}
 
 const VENDOR_BUILD = new URL('./build-slate-vendor.ts', import.meta.url).pathname;
 
@@ -143,7 +149,7 @@ const VENDOR_BUILD = new URL('./build-slate-vendor.ts', import.meta.url).pathnam
 async function sharedSlateVendor(): Promise<SlateVendor> {
   const key = createHash('sha256');
 
-  for (const input of VENDOR_INPUTS) key.update(readFileSync(input));
+  for (const input of vendorInputs()) key.update(readFileSync(input));
   const file = join(runTemp, `kinu-slate-vendor-${key.digest('hex').slice(0, 16)}.json`);
 
   // Workers that miss at once each build; the build renames into place, so a reader sees a whole file.
