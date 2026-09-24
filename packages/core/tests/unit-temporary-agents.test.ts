@@ -655,7 +655,7 @@ describe('a child that cannot answer still ends the call', () => {
       const scene = makeScene();
       const run = startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
       await run.ready;
-      const report = present(terminalTaskReport({ lifetime: 'task', ending, assistantText: '' }), 'the child\'s terminal report');
+      const report = present(terminalTaskReport({ lifetime: 'task', ending, assistantText: '', narration: [] }), 'the child\'s terminal report');
       await scene.report({ status: report.status, origin: 'turn_end', content: report.content });
 
       const failed = v.parse(FailedOutcome, await run.settled);
@@ -667,15 +667,25 @@ describe('a child that cannot answer still ends the call', () => {
   }
 
   test('an answered ending carries the child\'s own words as the answer', () => {
-    expect(terminalTaskReport({ lifetime: 'task', ending: 'answered', assistantText: '  done  ' }))
+    expect(terminalTaskReport({ lifetime: 'task', ending: 'answered', assistantText: '  done  ', narration: ['Checking first.', 'done'] }))
       .toEqual({ status: 'completed', content: 'done' });
-    expect(terminalTaskReport({ lifetime: 'task', ending: 'answered', assistantText: '   ' }))
+    expect(terminalTaskReport({ lifetime: 'task', ending: 'answered', assistantText: '   ', narration: [] }))
       .toMatchObject({ status: 'blocked' });
+  });
+
+  test('a stopped or failed ending reports every step\'s words, one line each, then why it ended', () => {
+    const narration = ['Step 1: the ledger totals match.', '', 'Step 2: two refunds lack a receipt.'];
+
+    expect(terminalTaskReport({ lifetime: 'task', ending: 'interrupted', assistantText: 'Step 2: two refunds lack a receipt.', narration }))
+      .toMatchObject({ status: 'blocked', content: expect.stringMatching(/^Step 1: the ledger totals match\.\nStep 2: two refunds lack a receipt\.\n\n\S/u) });
+    // A runner's own summary that is not one of the steps' words follows them.
+    expect(terminalTaskReport({ lifetime: 'task', ending: 'errored', assistantText: 'Head h1 errored: out of budget', narration })?.content)
+      .toStartWith('Step 1: the ledger totals match.\nStep 2: two refunds lack a receipt.\nHead h1 errored: out of budget\n\n');
   });
 
   test('a durable child owes nothing extra — the policy returns null for it', () => {
     for (const ending of TASK_TURN_ENDINGS) {
-      expect(terminalTaskReport({ lifetime: 'durable', ending, assistantText: 'x' })).toBeNull();
+      expect(terminalTaskReport({ lifetime: 'durable', ending, assistantText: 'x', narration: [] })).toBeNull();
     }
   });
 });

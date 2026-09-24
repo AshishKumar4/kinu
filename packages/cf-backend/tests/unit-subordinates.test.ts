@@ -31,7 +31,7 @@ describe('subordinate wiring', () => {
     expect(identity.lifetime).toBe('task');
 
     for (const ending of TASK_TURN_ENDINGS) {
-      const report = terminalTaskReport({ lifetime: identity.lifetime, ending, assistantText: ending === 'answered' ? 'The evidence is complete.' : '' });
+      const report = terminalTaskReport({ lifetime: identity.lifetime, ending, assistantText: ending === 'answered' ? 'The evidence is complete.' : '', narration: [] });
       expect(report?.status).toBe(ending === 'answered' ? 'completed' : 'blocked');
       expect(report?.content).toBeString();
     }

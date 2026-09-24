@@ -262,6 +262,11 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return chain.reverse();
   }
 
+  /** What a turn said on its way, oldest first: each text part among `references`. */
+  async narration(references: readonly ConversationPartReference[]): Promise<string[]> {
+    return (await this.parts(references)).flatMap((part) => (part.type === 'text' ? [v.parse(v.string(), part.text)] : []));
+  }
+
   async parts(references: readonly ConversationPartReference[]): Promise<JsonObject[]> {
     const cache = new Map<string, readonly StoredPart[]>();
     const parts: JsonObject[] = [];
@@ -486,19 +491,20 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
   }
 
   /**
-   * The row keeps every part the turn streamed, in order, so a settled answer reads as it streamed. The recorded
+   * The row keeps every part the turn streamed, in order, so a settled answer reads as it streamed. A recorded
    * answer takes the place of the trailing texts it is made of, or follows the row when it is made of none (the
-   * answer written for a turn that streamed no text, a head's report), so the row's last text is the answer.
+   * answer written for a turn that streamed no text, a head's report); one the turn streamed stays where it is.
    */
   async prepareAssistant(input: { readonly id: string; readonly parentId: string; readonly turnId: string; readonly runId: string; readonly parts: readonly MessagePartReference[]; readonly finalText: MessagePartReference | null; readonly metadata?: JsonObject }): Promise<PreparedConversationEntry> {
     const parts = [...input.parts];
+    const finalText = input.finalText;
 
-    if (input.finalText !== null) {
-      const covered = answeredTexts(await this.parts(input.parts), rowText({ role: 'assistant', parts: await this.parts([input.finalText]) }));
+    if (finalText !== null && !parts.some((part) => part.messageId === finalText.messageId && part.partNo === finalText.partNo)) {
+      const covered = answeredTexts(await this.parts(input.parts), rowText({ role: 'assistant', parts: await this.parts([finalText]) }));
       const [last, ...continued] = covered;
 
-      if (last === undefined) parts.push(input.finalText);
-      else parts[last] = input.finalText;
+      if (last === undefined) parts.push(finalText);
+      else parts[last] = finalText;
 
       for (const index of continued) parts.splice(index, 1);
     }

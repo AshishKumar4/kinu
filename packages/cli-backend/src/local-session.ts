@@ -300,7 +300,7 @@ export interface LocalParentRelay {
    * child only for a completed, parent-driven turn with something to say and no `report` call.
    */
   readonly owed: (
-    ending: TaskTurnEnding, assistantText: string,
+    ending: TaskTurnEnding, assistantText: string, narration: readonly string[],
   ) => { readonly status: SubordinateReportStatus; readonly content: string } | null;
   /** Dedupe key on the parent's rail, so a replay cannot wake it twice. */
   readonly sequenceId: (messageId: string) => string;
@@ -1805,7 +1805,7 @@ export class LocalAgentSession implements BackendHost {
     const ending = taskTurnEnding(input.completed, input.interrupted);
 
     const relay = this.parentRelay;
-    const parentReport = relay?.owed(ending, input.assistantText) ?? null;
+    const parentReport = relay?.owed(ending, input.assistantText, input.narration) ?? null;
 
     const facts: TerminalTurnFacts = {
       messageId: input.messageId,

@@ -13,7 +13,7 @@ import {
   subordinateForkContext, type SubordinateInheritedContext,
   inheritedAsModelMessage,
   classifyRunEnd, closeTurnRun, openTurnRun,
-  terminalTaskReport, defaultLoopOrigin, delegationBudgetOf, delegationExhausted,
+  terminalTaskReport, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, CHAT_SESSION_ID,
   type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor,
   type DelegationBudget,
   type DynamicContext, type HeadInferenceDeps, type HeadInput, type HostedActor, type ResolvedTurnProfile,
@@ -357,9 +357,11 @@ export async function runHostedTask(
       }), { workspace: actor.record.workspaceId });
     }
 
+    const narration = await actor.stores.history.transcript(CHAT_SESSION_ID).narration(report.canonicalCompletion?.outputPartReferences ?? []);
+
     const owed = reports.settled
       ? null
-      : terminalTaskReport({ lifetime: hostedLifetime(actor.record), ending, assistantText: report.summary });
+      : terminalTaskReport({ lifetime: hostedLifetime(actor.record), ending, assistantText: report.summary, narration });
 
     const relayed = owed ?? (
       ending === 'answered' && subordinateRelaysTurnEnd({

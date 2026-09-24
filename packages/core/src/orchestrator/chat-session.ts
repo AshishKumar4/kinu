@@ -209,6 +209,8 @@ export interface OwedTerminalEffectsInput {
   /** Read off the settling turn itself; undefined for a person's message. */
   readonly event: string | undefined;
   readonly assistantText: string;
+  /** Each step's own words, oldest first: a task child that did not answer reports them. */
+  readonly narration: readonly string[];
   readonly completed: boolean;
   /** A task child's caller distinguishes interrupted from errored. */
   readonly interrupted: boolean;
@@ -963,6 +965,7 @@ export class ChatSession {
       event: eventName,
       startedAt,
       assistantText: fullText,
+      narration: await this.transcript.narration(execution.outputPartReferences),
       // A turn cut before its first token has no answer row.
       assistantRow: streamed || !interrupted,
       preparedAssistant,
@@ -1059,6 +1062,7 @@ export class ChatSession {
     readonly event: string | undefined;
     readonly startedAt: number;
     readonly assistantText: string;
+    readonly narration: readonly string[];
     /** False only for a turn interrupted before it streamed anything. */
     readonly assistantRow: boolean;
     readonly preparedAssistant: PreparedConversationEntry | null;
@@ -1121,6 +1125,7 @@ export class ChatSession {
         userText: item.text,
         event: input.event,
         assistantText: input.assistantText,
+        narration: input.narration,
         completed: runError === null,
         interrupted: input.interrupted,
         taskReminder,

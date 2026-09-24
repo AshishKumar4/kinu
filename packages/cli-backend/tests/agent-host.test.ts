@@ -276,6 +276,42 @@ function progressThenChildModel(then: 'answer' | 'throw') {
   });
 }
 
+/** A child that says what each step found and files a progress note, twice, then fails before it answers. */
+function narratedThenFailingChildModel(narration: readonly string[]) {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  let calls = 0;
+
+  return new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    doStream: async () => {
+      const said = narration[calls];
+
+      calls += 1;
+
+      if (said === undefined) throw new Error('provider is down');
+
+      return {
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            controller.enqueue({ type: 'text-start', id: 'txt-0' });
+            controller.enqueue({ type: 'text-delta', id: 'txt-0', delta: said });
+            controller.enqueue({ type: 'text-end', id: 'txt-0' });
+            controller.enqueue({
+              type: 'tool-call', toolCallId: `note-${String(calls)}`, toolName: REPORT_TOOL,
+              input: JSON.stringify({ status: 'progress', content: `step ${String(calls)}` }),
+            });
+            controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+            controller.close();
+          },
+        }),
+        response: { headers: {} },
+      };
+    },
+  });
+}
+
 async function seedAgent(state: string, name: string): Promise<string> {
   const dbPath = join(state, name, 'agent.db');
   mkdirSync(dirname(dbPath), { recursive: true });
@@ -971,6 +1007,24 @@ describe('LocalAgentHost', () => {
       expect(reports).toBe(0);
     });
   }
+
+  test('a temporary child that fails after two steps answers its caller with both steps\' words', async () => {
+    const narration = ['Step 1: the ledger totals match.', 'Step 2: two refunds lack a receipt.'];
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+
+    const { host } = makeHost(state, narratedThenFailingChildModel(narration), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ]);
+
+    const team = await host.team('root');
+    const temporary = present(team.temporary, 'the temporary hire port');
+    const outcome = await temporary.run({ role: 'researcher', roleLabel: 'researcher', task: 'Audit the ledger.', mode: 'build' });
+
+    expect(outcome).toMatchObject({ status: 'failed', lifetime: 'task' });
+    expect(v.parse(v.object({ answer: v.string() }), outcome).answer).toStartWith(`${narration.join('\n')}\n\n`);
+    await host.close();
+  });
 
   test('a subordinate turn gets advisor feedback while its evolution window stays empty', async () => {
     const { state, project } = makeRoots();

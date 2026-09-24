@@ -366,7 +366,7 @@ test('drain recovery returns the newest nonempty canonical answer across sibling
   } finally { s.testSql.close(); }
 });
 
-/** A chat transcript whose turn streamed `parts`, settled with `answer` written apart when it is not the last text. */
+/** A chat transcript whose turn streamed `parts`, settled with its last streamed text, or with `answer` written apart. */
 async function settledAnswer(s: ReturnType<typeof setup>, parts: JsonObject[], answer: string | null) {
   initSessionTranscriptTables(s.rt.storage.execRaw);
   const transcript = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, atomic: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
@@ -374,7 +374,11 @@ async function settledAnswer(s: ReturnType<typeof setup>, parts: JsonObject[], a
   transcript.appendUser(await transcript.prepareUser({ id: 'ask', turnId: 'turn', message: input, metadata: { drainTurnId: 'drain' } }));
   const output = s.messages.insert(await s.messages.prepareParts({ id: 'output', role: 'assistant', content: parts, envelope: {} }), 'output');
   const streamed = parts.map((_, partNo) => ({ messageId: output.messageId, partNo }));
-  const finalText = answer === null ? streamed.at(-1) ?? null : { messageId: s.messages.insert(await s.messages.prepare({ role: 'assistant', content: answer }, 'display'), 'render').messageId, partNo: 0 };
+  const lastText = parts.reduce((found, part, index) => (part.type === 'text' ? index : found), -1);
+
+  const finalText = answer === null ? streamed[lastText] ?? null
+    : { messageId: s.messages.insert(await s.messages.prepare({ role: 'assistant', content: answer }, 'display'), 'render').messageId, partNo: 0 };
+
   transcript.appendAssistant(await transcript.prepareAssistant({ id: 'answer', parentId: 'ask', turnId: 'turn', runId: 'run', parts: streamed, finalText }));
   const drawn = (await transcript.message('answer'))?.parts ?? [];
 
@@ -401,6 +405,19 @@ test('a multi-step answer draws every part it streamed, and every reader of the 
     expect(await answersForDrainTurns(transcript, ['drain'])).toEqual(new Map([['drain', 'Done.']]));
     expect((await inheritedContextFromTranscript(transcript)).find(row => row.role === 'assistant')?.content).toBe('Done.');
     expect(rowText({ role: 'assistant', parts: (await transcript.message('answer'))?.parts ?? [] })).toBe('Done.');
+  } finally { s.testSql.close(); }
+});
+
+test('a turn that ends on a tool (stopped mid-call, or at the step cap) keeps its row as it streamed', async () => {
+  const s = setup();
+
+  try {
+    const { transcript, drawn } = await settledAnswer(s, [
+      { type: 'text', text: 'Step 1: listing.' }, ...listed('one'), { type: 'text', text: 'Step 2: reading.' }, ...listed('two'),
+    ], null);
+
+    expect(drawn).toEqual(['Step 1: listing.', 'tool-file', 'Step 2: reading.', 'tool-file']);
+    expect((await transcript.project('answer'))?.content).toBe('Step 2: reading.');
   } finally { s.testSql.close(); }
 });
 

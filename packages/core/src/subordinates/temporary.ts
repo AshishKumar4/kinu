@@ -69,6 +69,8 @@ export function terminalTaskReport(input: {
   readonly ending: TaskTurnEnding;
   /** The child's own closing words, when it had any. */
   readonly assistantText: string;
+  /** Each step's own words, oldest first (`SessionTranscriptReader.narration`). */
+  readonly narration: readonly string[];
 }): { readonly status: SubordinateReportStatus; readonly content: string } | null {
   if (input.lifetime !== TEMPORARY_LIFETIME) return null;
   const text = input.assistantText.trim();
@@ -81,10 +83,12 @@ export function terminalTaskReport(input: {
   }
 
   const reason = TASK_ENDING_REPORT[input.ending];
+  // Every step's words ride along, one line each: a turn that stops or fails often found something on the way.
+  const said = input.narration.map((each) => each.trim()).filter((each) => each.length > 0);
 
-  // The child's own words still ride along when it managed any: a failing turn
-  // often says something useful before it fails.
-  return { status: 'blocked', content: text.length > 0 ? `${text}\n\n${reason}` : reason };
+  if (text.length > 0 && !said.includes(text)) said.push(text);
+
+  return { status: 'blocked', content: said.length > 0 ? `${said.join('\n')}\n\n${reason}` : reason };
 }
 
 /**
