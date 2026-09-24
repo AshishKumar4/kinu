@@ -50,7 +50,7 @@ jobs:
       - name: Read the deployed build
         id: build
         run: |
-          sha=$(curl -fsS https://kinu.run/api/health | jq -r '.sha // empty')
+          sha=$(curl -fsS https://kinu.run/api/health | jq -r '.build.sha // empty')
           if [[ ! "$sha" =~ ^[0-9a-f]{7,40}$ ]]; then
             echo "::error::kinu.run/api/health names no build sha"
             exit 1
