@@ -135,14 +135,18 @@ const CHAT_IDLE = `[...document.querySelectorAll('#chat button')].some((el) => e
 /** What stops a row dead: an app script that never loaded, which leaves the
  *  page blank; a turn the socket reported ended in error, which the page may
  *  never show as ended; the welcome page, which stands in front of every route
- *  until the account finishes setup; or a danger notice, the product saying why
+ *  until the account finishes setup, once it offers its next step again (while
+ *  it saves one, Next and Finish setup are disabled, and a save that fails
+ *  enables them beside its error); or a danger notice, the product saying why
  *  the thing asked for will not come. */
 const DEAD_END = `(() => {
   const script = (window.__scriptFailures ?? []).at(-1);
   if (script !== undefined) return 'the app script ' + script + ' failed to load, which leaves the page blank';
   const failed = (window.__turnErrors ?? []).at(-1);
   if (failed !== undefined) return 'a turn that ended in error: ' + failed;
-  if (location.pathname === '/welcome') {
+  const welcomeOffers = [...document.querySelectorAll('button')].some((b) => !b.disabled && b.getClientRects().length > 0
+    && ['Next', 'Finish setup'].includes((b.textContent ?? '').trim()));
+  if (location.pathname === '/welcome' && welcomeOffers) {
     const said = [...document.querySelectorAll('.p-danger')].map((el) => (el.textContent ?? '').trim()).join(' ');
     return 'the welcome page, which the account has not finished' + (said === '' ? '' : ': ' + said);
   }
