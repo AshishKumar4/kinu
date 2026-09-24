@@ -150,15 +150,15 @@ describe('a message typed while the agent is working', () => {
     expect(landed[1].steerId).toBe(landed[0].steerId);
   });
 
-  test('a steer that names a skill the turn does not carry brings its body to the next step', async () => {
-    // Skills resolve when the turn opens, so a mid-turn steer naming one must still activate it.
+  test('a steer that invokes a skill the turn does not carry brings its body to the next step', async () => {
+    // Skills resolve when the turn opens, so a mid-turn /skill invocation must still activate it.
     const h = steerHarness();
     await h.startTurn();
 
-    await h.agent.send('/slates now build one that answers GET /ping', 'steer-ping');
+    await h.agent.send('/slates now build a slate that answers GET /ping', 'steer-ping');
 
     const carried = await stepMessages(h.agent, 0, HISTORY);
-    expect(carried[HISTORY.length]).toEqual({ role: 'user', content: '/slates now build one that answers GET /ping' });
+    expect(carried[HISTORY.length]).toEqual({ role: 'user', content: '/slates now build a slate that answers GET /ping' });
     const reference = carried[HISTORY.length + 1];
     expect(reference?.role).toBe('user');
     expect(JSON.stringify(reference?.content)).toContain('### slates');
