@@ -1,6 +1,6 @@
 // Tool-side contract of the unified `agents` tool; transports are covered in cf-backend tests.
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
+import { createTestRuntime, toolExecute, scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { hostedSeatsOver } from './helpers-actor-host';
 
 import * as v from 'valibot';
@@ -119,6 +119,7 @@ function swarmDeps(overrides: Partial<AgentsSwarmDeps> = {}): AgentsSwarmDeps {
   return {
     rt, model: testModel,
     hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
+    ...unobservedSearchSeams(),
     ...overrides,
   };
 }

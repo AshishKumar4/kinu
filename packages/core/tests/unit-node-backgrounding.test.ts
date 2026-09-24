@@ -163,7 +163,7 @@ interface Fixture {
 
 function fixture(over: {
   readonly model: NodeAgentDeps['model'];
-  readonly codemodeTool?: unknown;
+  readonly codemodeTool?: (finished: ToolSet) => ToolSet[string];
 }): Fixture {
   const { rt, db } = createTestRuntime();
   initHeadsTables(rt.storage.execRaw);
@@ -208,15 +208,15 @@ function fixture(over: {
       return seat;
     },
     model: over.model, journal,
-
-    maxWallClockMs: 60_000,
     logger,
     backgroundPolicy: () => ({
       detachAfterMs: DETACH_MS, settleGraceMs: SETTLE_MS, wakesAfterTurn: true,
     }),
   };
 
-  if (over.codemodeTool !== undefined) deps.codemodeTool = over.codemodeTool;
+  const codemodeTool = over.codemodeTool;
+
+  if (codemodeTool !== undefined) deps.nodeCodemode = () => codemodeTool;
 
   const jobStarted = (): Promise<void> => started.promise;
 
@@ -241,7 +241,7 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
 
     const { input, deps, journal, detached, jobStarted } = fixture({
       model: detachThenReport(prompts, (count) => { if (count === 2) secondRequest.resolve(); }),
-      codemodeTool: slow.entry,
+      codemodeTool: () => slow.entry,
     });
 
     const running = runNodeAgent(input, deps);
@@ -293,7 +293,7 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     const prompts: string[][] = [];
 
     const { input, deps, detached, jobStarted } = fixture({
-      model: detachThenReport(prompts), codemodeTool: slow.entry,
+      model: detachThenReport(prompts), codemodeTool: () => slow.entry,
     });
 
     const running = runNodeAgent(input, deps);

@@ -4,7 +4,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { present } from '@kinu.run/test-utils';
+import { present, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
@@ -35,7 +35,7 @@ function workspace(outcome: 'accepted' | 'corrected' = 'corrected') {
     llmResponses: { [CLASSIFY]: `{"outcome":"${outcome}","confidence":0.9,"evidence":"test"}` },
   });
 
-  return { rt, engine: new EvolutionEngine(rt, stores.history) };
+  return { rt, engine: new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend }) };
 }
 
 /** An outcome row minus the identity and clock a deferral legitimately changes. */
@@ -189,7 +189,7 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
 
   test('with auto-evolution off nothing is deferred and nothing is drained', async () => {
     const { rt, stores } = createTestRuntime({ llmResponses: {} });
-    const engine = new EvolutionEngine(rt, stores.history, { enabled: false });
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend, enabled: false });
     engine.deferTurnReview(makeTurn(), 'anything');
     expect(engine.sessionWindow.countQueuedReviews()).toBe(0);
     expect(await engine.runDeferredTurnReviews()).toEqual({ reviewed: 0, refused: [] });

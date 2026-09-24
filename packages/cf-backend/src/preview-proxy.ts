@@ -3,7 +3,7 @@
  * The label is proven against the published KV exposures first: `proxyToSandbox` creates a Durable Object per guessed hostname.
  */
 
-import { getSandbox, proxyToSandbox, type SandboxEnv } from "@cloudflare/sandbox";
+import { proxyToSandbox, type SandboxEnv } from "@cloudflare/sandbox";
 import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { escapeHtml } from "@kinu.run/core";
 import { containPreviewResponse, sandboxPreviewLabelOf } from "@kinu.run/core";
@@ -12,7 +12,7 @@ import { sandboxPreviewExposed, type PreviewSuffixEnv } from "@kinu.run/core";
 import type { KvStore } from "@kinu.run/agent-utils";
 import { sanitizePreviewRequestHeaders } from "./lib/preview-request";
 import type { KinuSandbox } from "./kinu-sandbox";
-import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
+import { openSandbox } from "./sandbox-exec-lane";
 
 /** `proxyToSandbox`'s response for every forward failure; `unit-preview-origin.test.ts` pins the shape. */
 const SDK_FORWARD_FAILURE = { status: 500, body: 'Proxy routing error' } as const;
@@ -107,10 +107,7 @@ async function isStalePreview(response: Response): Promise<boolean> {
  */
 async function repairStalePreview(sandboxId: string, env: SandboxEnv<KinuSandbox>): Promise<void> {
   try {
-    // The SDK drops in-flight requests if an id's transport changes, so every call site passes SANDBOX_TRANSPORT.
-    await getSandbox(env.Sandbox, sandboxId, {
-      normalizeId: true, transport: SANDBOX_TRANSPORT,
-    }).ensureReady();
+    await openSandbox(env.Sandbox, sandboxId, { normalizeId: true }).ensureReady();
   } catch (cause) {
     diagnostics.failure('preview.stale_repair_failed', toKinuError({
       doing: 'restoring the container behind a stale preview URL',

@@ -60,6 +60,18 @@ describe('the terminal transition claim', () => {
     expect(transitions.begin(transition)).toBe('done');
   });
 
+  /** Keyed per response: a turn-wide key would read a second answer as the first one's closed sequence. */
+  test('two responses under one turn id settle as two sequences', () => {
+    const { transitions, claims } = ledger();
+    const step = { turnId: 'u-multi', messageId: 'a-step' };
+    const final = { turnId: 'u-multi', messageId: 'a-final' };
+
+    expect(transitions.begin(step)).toBe('first');
+    transitions.end(step);
+    expect(transitions.begin(final)).toBe('first');
+    expect(claims().map((row) => row.call_id).sort()).toEqual(['terminal:response:a-final', 'terminal:response:a-step']);
+  });
+
   /** Invented identities would collide: every unclaimable turn would share one key. */
   test('a turn with no durable identity is unclaimed rather than invented', () => {
     const { transitions, claims } = ledger();

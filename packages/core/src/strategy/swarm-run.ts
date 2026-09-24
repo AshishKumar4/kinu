@@ -22,7 +22,7 @@ import type { PublishHeadStream } from '../heads/head-stream';
 import type { AnnounceHeadActivity } from '../heads/live-journal';
 import { SwarmBudget } from './swarm-budget';
 import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
-import type { HostedNodeSeat } from './node-agent';
+import type { HostedNodeSeat, NodeCodemode } from './node-agent';
 import { missionMeter, type MissionScope } from '../mission-budget';
 import type { WebSearchProvider } from '../web/index';
 import type { ResolvedVerifier } from './verifier-registry';
@@ -70,7 +70,6 @@ export interface SwarmRunDeps {
   readonly signal?: AbortSignal;
   /** See HeadInferenceDeps.clock. */
   readonly clock?: Clock;
-  /** Absent = unreported, which the spend coverage fraction states. */
   readonly reportModelCall?: ModelCallSink;
   /** Transient output frames (heads/head-stream.ts). Absent = nothing watching. */
   readonly publishHeadStream?: PublishHeadStream;
@@ -78,8 +77,6 @@ export interface SwarmRunDeps {
   readonly announceHeadActivity?: AnnounceHeadActivity;
   /** Defaults to the process logger. The only place a refused toolless proposal is observable. */
   readonly logger?: Logger;
-  /** Optional per-agent-node wall-clock deadline. No default: owner ruling 2026-08-21, no per-turn bounds. */
-  readonly maxWallClockMs?: number;
   /**
    * Charged per model call as calls happen, for every call this run makes; the spawning
    * caller must not charge a lump afterwards. Absent = unbudgeted.
@@ -91,8 +88,7 @@ export interface SwarmRunDeps {
   readonly provisionHome?: NodeWorkspaceProvisioner;
   /** See {@link NodeAgentDeps.runtimeForWorkspace}. */
   readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
-  /** Absent narrows the agent node's surface; it does not break it. */
-  readonly codemodeTool?: unknown;
+  readonly nodeCodemode?: NodeCodemode;
   readonly webSearch?: WebSearchProvider;
   /**
    * Compaction seam over *Inherited context*: rewrite a parent's context once for all its children.
@@ -301,9 +297,9 @@ export async function runSwarm(
   const nodeDeps = buildNodeDeps({
     hostNode: deps.hostNode, model: nodeModel, journal, logger: log,
     signal: deps.signal, clock: deps.clock, reportModelCall: deps.reportModelCall,
-    maxWallClockMs: deps.maxWallClockMs, mission: deps.mission,
+    mission: deps.mission,
     provisionHome: deps.provisionHome, runtimeForWorkspace: deps.runtimeForWorkspace,
-    codemodeTool: deps.codemodeTool, webSearch: deps.webSearch,
+    nodeCodemode: deps.nodeCodemode, webSearch: deps.webSearch,
     publishHeadStream: deps.publishHeadStream,
   });
 

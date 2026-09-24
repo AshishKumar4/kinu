@@ -71,6 +71,8 @@ import {
   type ObjectiveIdentity,
 } from '../../packages/core/src/index';
 import { KinuError, refusalOf, type Refusal } from '@kinu.run/core/obs';
+import { createDefaultWebSearchProvider, createWebCodemodeProvider } from '../../packages/core/src/web/index';
+import { hostedCodemodeTool } from '../../packages/cli-backend/src/head-runtime';
 import {
   bestInCell, floorDigestOf, recordsFor, verifierDigestOf,
 } from '../../packages/core/src/strategy/records';
@@ -78,7 +80,7 @@ import { provisionLocalTarget, type LocalAgentEvalTarget } from './target-local'
 import type { CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { resolveEvalTarget } from './target';
 import {
-  EVAL_MODELS, HARD_TASKS, ledgerTotalsFromEvents, liveChatModel,
+  EVAL_MODELS, HARD_TASKS, ledgerTotalsFromEvents, liveChatModel, liveModelCallSink,
   recordTargetEpisodeSpend, reportLiveModelSpend, stepBoundEvidence, toolExecute,
   UNCONFIGURED_LLM,
   type EvalTier, type HardTask,
@@ -532,6 +534,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     for (const file of TASK.seed) await rt.storage.vfs.writeFile(file.path, file.content);
 
     model = liveChatModel(LLM_CONFIG);
+    const web = createDefaultWebSearchProvider({ fetch: globalThis.fetch.bind(globalThis) });
     tools = buildActorTools({
       rt,
       history: rt.stores.history,
@@ -542,7 +545,13 @@ describe('Swarm evals — a live measured search through the settled tool surfac
         // actor of the one workspace database, and this arm drives the rung directly
         // rather than through `sendTurn`, so without it the search would run every
         // node on the caller's actor and share one claim ledger across the wave.
-        swarm: { rt, model, hostNode: (node) => target.hostNode(node) },
+        swarm: {
+          rt, model, hostNode: (node) => target.hostNode(node),
+          reportModelCall: liveModelCallSink(rt.storage.sql, rt.actor),
+          // A node's eval and web as the CLI session builds them.
+          nodeCodemode: (actor) => hostedCodemodeTool(actor, [createWebCodemodeProvider(web)]),
+          webSearch: web,
+        },
       },
       effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => WORKSPACE_RUN_ID },
     });

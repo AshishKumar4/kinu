@@ -25,7 +25,7 @@ function headInput(): HeadInput {
     task: 'probe the parser', rationale: 'cover the lexer angle',
     mode: 'build',
     inheritedContext: [{ id: 'm1', role: 'user', content: 'the prior user message', createdAt: 1 }],
-    budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: 2_000_000_000_000 },
+    budget: { maxDepth: 2, spawnedAt: 2_000_000_000_000 },
     mergeStrategy: 'synthesize',
     loop: defaultLoopOrigin('head'),
   };

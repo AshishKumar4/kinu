@@ -77,10 +77,11 @@ import {
   makeSql, makeWorkspaceSchemaSql, type CLIRuntime,
 } from '../../packages/cli-backend/src/runtime';
 import { createNodeCodemodeToolFactory } from '../../packages/cli-backend/src/codemode-tool-factory';
+import { hostedCodemodeTool } from '../../packages/cli-backend/src/head-runtime';
 import { createNodeCraftedExecute } from '../../packages/cli-backend/src/craft-executor';
 import {
   budgetRow, hardTaskFor, ledgerTotalsFromEvents, measuredToolErrorRate,
-  outputCapRow, projectRunEventProvenance, recordLiveModelEpisode, scratchDir,
+  liveModelCallSink, outputCapRow, projectRunEventProvenance, recordLiveModelEpisode, scratchDir,
   scoreTrajectory, seedHardTask, stepBoundEvidence, verifyHardTask, walkRunEvents,
   type EvalArmState, type EvalScoreRow, type HardTask, type LedgerTotals,
 } from '@kinu.run/test-utils';
@@ -186,6 +187,10 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   const swarm: AgentsSwarmDeps = {
     rt,
     model,
+    reportModelCall: liveModelCallSink(sql, rt.actor),
+    // A node's eval and web as the CLI session builds them.
+    nodeCodemode: (actor) => hostedCodemodeTool(actor, [createWebCodemodeProvider(webSearch)]),
+    webSearch,
     hostNode: () => Promise.reject(new Error(
       'this eval surface builds tools without a session, so it cannot seat a swarm node; '
       + 'drive the rung through a target that implements hostNode',

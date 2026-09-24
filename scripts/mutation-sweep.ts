@@ -112,6 +112,7 @@ const OTHER_TIERS: readonly Tier[] = [
   { root: 'packages/cf-backend/', seconds: 14 },
   { root: 'packages/cli-backend/', seconds: 33 },
   { root: 'packages/cli/', seconds: 77 },
+  { root: 'packages/devbox/', seconds: 32 },
 ];
 
 /**
@@ -128,6 +129,7 @@ const OUT_OF_SCOPE = {
   'packages/test-utils/': 'test scaffold, so every export there is legitimately test-only',
   'tools/': 'run by raw node under a separate entrypoint, not by `bun test`',
   'packages/pc-agent/': 'JavaScript checked by `node --check`, outside every mutation target',
+  'packages/agent-core/': 'a vendored upstream build; its one suite checks the bytes against the pinned upstream',
 } satisfies Record<string, string>;
 
 /** How much longer than the pristine baseline a mutant may run before the sweep stops

@@ -21,6 +21,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import type { BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Identity } from '../src/types/primitives';
+import { unobservedSpend } from '@kinu.run/test-utils';
 
 /** The one role a fixture actor resolves under; no `allowedTools`, so it never narrows a suite's surface. */
 const TESTER: RoleDefinition = {
@@ -110,7 +111,7 @@ export function hostedSeatsOver(input: {
       setTimer: (fn, ms) => { timers.push({ fn, ms }); },
     },
     // The real engine; auto-evolution off unless the suite opted in.
-    engine: new EvolutionEngine(bound.runtime, bound.stores.history, { enabled: input.autoEvolve === true }),
+    engine: new EvolutionEngine(bound.runtime, bound.stores.history, { reportModelCall: unobservedSpend, enabled: input.autoEvolve === true }),
     // This actor's own log: publishing into the root's rows would move another actor's turn.
     eventLog: new EventLog(exec, bound.handle),
   });

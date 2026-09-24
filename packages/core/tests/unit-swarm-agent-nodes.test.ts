@@ -5,7 +5,7 @@
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -519,7 +519,7 @@ describe('the mission ledger a search charges', () => {
 
     const deps: AgentsToolDeps = {
       mode: 'build',
-      swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model },
+      swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, ...unobservedSearchSeams() },
       budget: governor,
     };
 

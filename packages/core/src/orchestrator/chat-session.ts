@@ -276,6 +276,9 @@ export interface SendOptions {
 
 export type SendLandingWaiter = Pick<ReturnType<typeof Promise.withResolvers<SendLanding>>, 'resolve' | 'reject'>;
 
+/** A caller-named message: the key its row and reservation are stored under. */
+const MessageIdSchema = v.pipe(v.string(), v.nonEmpty(), v.maxLength(128));
+
 function refusedLanding(refusal: Refusal): KinuError {
   return new KinuError(refusal.reason, `${refusal.error}. Close that session, or send this from it.`);
 }
@@ -470,12 +473,22 @@ export class ChatSession {
     return landing.promise;
   }
 
+  /** An id already landed or reserved would send the same words twice. */
+  private refuseUnusableId(id: string): void {
+    if (!v.is(MessageIdSchema, id)) throw new KinuError('bad_input', 'A message id is 1 to 128 characters.');
+
+    if (this.transcript.has(id) || this.pendingSends.has(id)) {
+      throw new KinuError('bad_input', `message ${id} was already sent`);
+    }
+  }
+
   /** Resolves once the words are reserved and owed a landing; a `landing` is registered before the message can move. */
   async admit(
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
     opts: SendOptions = {},
     landing: SendLandingWaiter | null = null,
   ): Promise<void> {
+    if (opts.id !== undefined) this.refuseUnusableId(opts.id);
     const { text, files } = normalizePromptInput(input);
 
     // The operator spoke: the reminder count starts over.

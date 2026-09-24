@@ -3,17 +3,16 @@
 import { describe, expect, test } from 'bun:test';
 import { createTestActorsOver, createTestRuntime, createTestSql, toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
-import { hostedExplorationHarness, orchestratorHarness, rpcReachableFrom, workspaceMainActor } from './helpers/actor-harness';
+import {
+  chatSessionTurns, gatewayWorkspace, orchestratorHarness, rpcReachableFrom, workspaceMainActor,
+} from './helpers/actor-harness';
+import { chatCompletion, requestOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
 import { isAgentRpcMethod } from '../src/cli/rpc-gate';
-import { hostBranch } from '../src/exploration-hosting';
 import {
   HeadCapture,
   HeadController,
   HeadJournal,
-  agentHome,
   buildHeadSystemPrompt,
-  headAgentName,
-  parseActorKey,
   initHeadsTables,
   type HeadInput,
   type HeadReport,
@@ -59,12 +58,30 @@ interface SplitToolInput {
   merge_strategy?: 'synthesize' | 'best_of' | 'consensus';
 }
 
+/** A steer branch of a live turn, run to its end on the gateway: the one production entry a top-level head has. */
+async function branchHeadRun(gateway: StubbedAiBinding) {
+  const workspace = gatewayWorkspace(gateway);
+  const turns = chatSessionTurns(workspace.agent);
+
+  await turns.openInFlight('u-live', 'a-live');
+  const branch = await workspace.agent.branchTurn('read the parser');
+
+  if (branch.branchId === undefined) throw new Error(`the branch was refused: ${branch.reason ?? 'no reason'}`);
+  await turns.settle({ messageId: 'a-live', text: 'the answer' });
+  await workspace.agent.harnessJoinDetachedFibers();
+
+  const head = `${branch.branchId}-head`;
+  const seat = workspace.db.query<{ actor_id: string }, [string]>('SELECT actor_id FROM workspace_actors WHERE creation_id = ?').get(head);
+
+  return { db: workspace.db, head, seat: seat?.actor_id };
+}
+
 function headInput(overrides?: Partial<HeadInput>): HeadInput {
   return {
     id: 'head-1', rootId: 'root-1', parentId: null, depth: 0,
     task: 'study the cloned repo', rationale: 'the parser angle',
     inheritedContext: [],
-    budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+    budget: { maxDepth: 2, spawnedAt: Date.now() },
     // A fork explores under the loop it forks from; a fresh bootstrap loop measures the wrong program.
     loop: { kind: 'inherit' },
     mergeStrategy: 'synthesize',
@@ -150,7 +167,7 @@ describe('head tool surface — containment', () => {
   test('split_subheads is not on the surface at all once the depth budget is spent', async () => {
     // Depth is fixed for the run, so the tool could only ever refuse.
     const { tools } = buildSurface({
-      input: headInput({ budget: { maxDepth: 0, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
+      input: headInput({ budget: { maxDepth: 0, spawnedAt: Date.now() } }),
     });
 
     expect(tools.split_subheads).toBeUndefined();
@@ -160,32 +177,10 @@ describe('head tool surface — containment', () => {
 
   test('the surface states the depth that is actually left', async () => {
     const { tools } = buildSurface({
-      input: headInput({ budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
+      input: headInput({ budget: { maxDepth: 2, spawnedAt: Date.now() } }),
     });
 
     expect(tools.split_subheads?.description).toContain('2 more level(s)');
-  });
-
-  test('split_subheads refuses once a caller-requested deadline has passed, and records the refusal', async () => {
-    // Wall-clock can pass mid-run, unlike depth, so the tool stays and refuses when called.
-    const calls = { splits: 0 };
-
-    const { tools, capture } = buildSurface({
-      input: headInput({ budget: { maxDepth: 3, maxWallClockMs: 50, spawnedAt: Date.now() - 5_000 } }),
-      split: countingSplit(calls, { narrative: '', headCount: 0 }),
-    });
-
-    const split = toolExecute<SplitToolInput, string>(tools.split_subheads);
-    await expect(split({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }))
-      .rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('budget exhausted (wall-clock)') });
-    expect(calls.splits).toBe(0);
-    expect(capture.toolCalls).toHaveLength(1);
-    const refusal = capture.toolCalls.at(0);
-
-    if (!refusal) throw new Error('Expected split refusal to be recorded');
-    expect(refusal.name).toBe('split_subheads');
-    expect(refusal.result).toContain('wall-clock');
-    expect(refusal.outcome).toEqual({ success: false, reason: 'denied' });
   });
 
   test('split_subheads is NOT refused for spend — a long-running head may still split', async () => {
@@ -229,59 +224,17 @@ describe('head tool surface — containment', () => {
 /** Where an exploration actor's trace lands and what a rollout branch may touch (C2: one journal per subtree). */
 describe('exploration actors write the workspace journal and acquire only their own plane', () => {
   test("a head's step trace lands in the workspace's journal, under the workspace's own actor", async () => {
-    const workspace = orchestratorHarness();
-    const head = await hostedExplorationHarness(workspace, 'head', 'head-1');
+    const workspace = await branchHeadRun(stubAiBinding((run) => chatCompletion(run, 'read the parser')));
     const root = workspaceMainActor(workspace.db).actorId;
     // Distinct actors: a step filed under the head's own id would be invisible to the subtree's journal readers.
-    expect(head.actor.handle.actorId).not.toBe(root);
-
-    await workspace.agent.observeExplorationSeams().recordStep('head-1', 1, {
-      text: 'read the parser', toolCalls: [],
-    });
+    expect(workspace.seat).not.toBe(root);
 
     // Unscoped on purpose: a read filtered by the expected actor would pass on a row filed under the wrong owner.
     const rows = workspace.db.prepare<{ actor_id: string; head_id: string; text: string }, []>(
       'SELECT actor_id, head_id, text FROM head_steps',
     ).all();
 
-    expect(rows).toEqual([{ actor_id: root, head_id: 'head-1', text: 'read the parser' }]);
-  });
-
-  test('a rollout branch reasons through the caller\'s model seam and is given no plane to act on', async () => {
-    const workspace = orchestratorHarness();
-    const asked: string[] = [];
-    // `register` is idempotent per creation id, so seat and branch handle bind one actor.
-    const branchRecord = (await hostedExplorationHarness(workspace, 'branch', 'branch-1')).actor.record;
-
-    const branch = await hostBranch(workspace.agent.observeExplorationSeams(), 'branch-1', {
-      explorePrompt: ({ context }) => ({ system: 'score this rollout', user: `context: ${context}` }),
-      reflectionPrompt: (task, traces) => `why did ${task} score badly after ${traces}`,
-      complete: async (request) => {
-        asked.push(request.user);
-
-        return { text: 'the parser branch looks promising' };
-      },
-    });
-
-    const answer = await branch.explore({
-      priorHistory: [{ role: 'user', content: 'probe the parser' }],
-      craftedTools: [],
-      languages: ['typescript'],
-      mode: 'build',
-    });
-
-    expect(answer.text).toBe('the parser branch looks promising');
-    expect(asked).toEqual(['context: user: probe the parser']);
-    // `hostedHomeKind` is null for a branch, while a head gets home and credential; asserted as a pair so
-    // "no directory" cannot hold trivially. Keyed off the storage key the directory issued.
-    const head = await hostedExplorationHarness(workspace, 'head', 'head-2');
-    const headHome = agentHome(headAgentName(parseActorKey(head.actor.record.storageKey).id));
-    const branchHome = agentHome(headAgentName(parseActorKey(branchRecord.storageKey).id));
-    expect(await workspace.agent.statWorkspaceFile(headHome))
-      .toMatchObject({ ok: true, value: expect.objectContaining({ isDir: true }) });
-    expect(await workspace.agent.statWorkspaceFile(branchHome))
-      .toMatchObject({ ok: true, value: null });
-    await branch.release();
+    expect(rows).toEqual([{ actor_id: root, head_id: workspace.head, text: 'read the parser' }]);
   });
 });
 
@@ -325,11 +278,7 @@ describe('recursive split budget', () => {
           { task: 'child two', rationale: 'second angle' },
         ],
       },
-      parentBudget: {
-        maxDepth: 2,
-        maxWallClockMs: 60_000,
-        spawnedAt: Date.now(),
-      },
+      parentBudget: { maxDepth: 2, spawnedAt: Date.now() },
     });
 
     expect(spawned).toHaveLength(2);
@@ -339,29 +288,39 @@ describe('recursive split budget', () => {
 });
 
 describe('the mission ledger bounds a hosted head', () => {
-  // A head has no execution cap of its own, so the mission budget is the only bound on a fork.
+  test('a branch of a turn under a mission budget charges that mission', async () => {
+    const task = 'check the release notes instead';
+    const liveCall = Promise.withResolvers<void>();
+    const releaseLive = Promise.withResolvers<void>();
+    let held = false;
 
-  test('an unbudgeted head is given no ledger at all, and a budgeted one is given its own labels', () => {
-    const seams = orchestratorHarness().agent.observeExplorationSeams();
-    // Null, not an inert port: an undeclared run must not touch the table.
-    expect(seams.mission(headInput())).toBeNull();
-    // The denominator: without it the null above holds for a seam that always answers null.
-    const scoped = seams.mission(headInput({ missionLabels: ['q3-migration'] }));
-    expect(scoped?.labels).toEqual(['q3-migration']);
-  });
+    // The live turn's first call is held until the branch starts, so the branch forks a running turn.
+    const gateway = stubAiBinding(async (run) => {
+      if (JSON.stringify(requestOf(run).messages[0]?.content ?? '').includes(task)) return chatCompletion(run, 'the branch answer');
 
-  test('the port charges the ledger of the actor that declared the budget', async () => {
-    const workspace = orchestratorHarness();
+      if (!held) {
+        held = true;
+        liveCall.resolve();
+        await releaseLive.promise;
+      }
 
-    const scoped = workspace.agent.observeExplorationSeams()
-      .mission(headInput({ missionLabels: ['q3-migration'] }));
+      return chatCompletion(run, 'the live answer');
+    });
 
-    if (!scoped) throw new Error('a head with labels is given a mission port');
+    const { agent } = gatewayWorkspace(gateway);
+    agent.budget.declare('q3', { tokens: 1_000_000 });
 
-    // The debit lands on this workspace's own ledger; a closure over a released or foreign handle throws on `assertCurrent`.
-    expect(await scoped.port.guard('model_call', scoped.labels)).toBeNull();
-    await scoped.port.debit(120, { labels: scoped.labels, calls: 1 });
-    expect(await scoped.port.guard('model_call', scoped.labels)).toBeNull();
+    // A scheduled wake is the turn a mission labels: its trigger names the label, its drain turn runs under it.
+    await agent.createTimerTrigger({ atMs: Date.now(), label: 'nightly review', trust: 'owner', missionLabel: 'q3' });
+    const wake = agent._kinuTimerTick();
+    await liveCall.promise;
+    expect(await agent.branchTurn(task)).toMatchObject({ accepted: true });
+    releaseLive.resolve();
+    await wake;
+    await agent.harnessJoinDetachedFibers();
+
+    // The live turn's call and the branch head's: a fork of a budgeted turn cannot spend outside its budget.
+    expect(agent.budget.snapshot('q3').map((mission) => mission.calls)).toEqual([2]);
   });
 
   test('the two ledger members serve a sibling object and never a public transport', () => {

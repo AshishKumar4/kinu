@@ -142,17 +142,18 @@ export interface NodeAgentDeps {
    * shell and file plane. Null or absent keeps the seat's own runtime.
    */
   runtimeForWorkspace?: ((workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>) | null;
-  codemodeTool?: unknown;
+  nodeCodemode?: NodeCodemode;
   webSearch?: WebSearchProvider;
   gradeReport?: (candidate: string) => Promise<string | null>;
-  /** Caller-declared deadline, checked between steps. There is no default wall clock over a node. */
-  maxWallClockMs?: number;
   backgroundPolicy?: () => BackgroundPolicy;
 }
 
 
 
 
+
+/** A node's `eval` over the actor it runs as, whose runtime may be rebuilt for its home. */
+export type NodeCodemode = (actor: HostedActor) => (finished: ToolSet) => ToolSet[string];
 
 /** One node's own actor and its per-turn seams; returned by {@link NodeAgentDeps.hostNode} because each is per actor. */
 export interface HostedNodeSeat {
@@ -530,11 +531,7 @@ export async function runNodeAgent(
     deps.provisionHome,
   );
 
-  const nodeBudget: HeadBudget = {
-    maxDepth: 0,
-    spawnedAt: Date.now(),
-    maxWallClockMs: deps.maxWallClockMs,
-  };
+  const nodeBudget: HeadBudget = { maxDepth: 0, spawnedAt: Date.now() };
 
   const headInput: HeadInput = {
     id: input.nodeId,
@@ -677,7 +674,7 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNo
 
   if (deps.mission !== undefined) loop.mission = deps.mission;
 
-  if (deps.codemodeTool !== undefined) loop.codemodeTool = deps.codemodeTool;
+  if (deps.nodeCodemode !== undefined) loop.codemodeTool = deps.nodeCodemode(loop.actor);
 
   if (deps.webSearch !== undefined) loop.webSearch = deps.webSearch;
 
