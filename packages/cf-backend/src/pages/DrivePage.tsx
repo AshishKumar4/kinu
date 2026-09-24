@@ -20,6 +20,7 @@ import { useAsyncResource, lastValue, type AsyncResource } from "@/hooks/use-asy
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useCopy } from "@/hooks/use-copy";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { inputCls } from "@/components/ui/form";
 import {
   Cover, FileCover, FOLDER_ICON, FolderTile, GRID, LINK_ICON, SHARE_ICON, SKILLS_ICON, SLATE_ICON, Tile, fileIcon, type MenuItem,
 } from "@/components/drive/DriveTiles";
@@ -239,6 +240,31 @@ function SectionList({ groups, titled = false }: { groups: readonly { label: str
   );
 }
 
+/** Newest first, narrowed to rows whose title, description or sharer holds the search. */
+function sharedRows(rows: readonly SharedRow[], needle: string): SharedRow[] {
+  return rows
+    .filter((row) => needle === "" || [row.title, row.description, row.owner ?? ""].some((text) => text.toLowerCase().includes(needle)))
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+function SharedBody({ shared, query, tile }: { shared: SharedLibrary | null; query: string; tile: (row: SharedRow, mine: boolean) => ReactNode }) {
+  if (shared === null) return <div className="flex justify-center py-16"><Loader size="base" /></div>;
+  const needle = query.trim().toLowerCase();
+  const received = sharedRows(shared.received, needle);
+  const mine = sharedRows(shared.mine, needle);
+
+  if (needle !== "" && received.length + mine.length === 0) {
+    return <p className="py-12 text-center p-text-3" data-drive-no-match>{`Nothing matches “${query.trim()}”`}</p>;
+  }
+
+  return (
+    <SectionList titled groups={[
+      { label: "Shared with you", tiles: received.map((row) => tile(row, false)) },
+      { label: "Shared by you", tiles: mine.map((row) => tile(row, true)) },
+    ]} />
+  );
+}
+
 function MineBody({ resource, onRetry, empty, isRoot, sharesAnything, children }: {
   resource: AsyncResource<DriveListing>;
   onRetry: () => void;
@@ -362,6 +388,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const [dialog, setDialog] = useState<DriveDialogState | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
+  const [query, setQuery] = useState("");
   const nextTransfer = useRef(0);
 
   const titleOf = (workspace: string): string => {
@@ -564,7 +591,15 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
           )}
         </header>
 
-        {sharesAnything && <div className="mt-5"><TabStrip tab={tab} /></div>}
+        {sharesAnything && (
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <TabStrip tab={tab} />
+            {tab === "shared" && (
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search shared" aria-label="Search shared"
+                data-drive-search className={`${inputCls} w-full sm:ml-auto sm:w-60`} />
+            )}
+          </div>
+        )}
         {tab === "mine" && !isRoot && <div className="mt-6"><Crumbs path={path} /></div>}
         {subtitle !== null && <p className={`p-meta p-text-3 ${isRoot ? "mt-4" : "mt-1"}`}>{subtitle}</p>}
 
@@ -583,14 +618,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
             </MineBody>
           </DropZone>
         ) : (
-          <div className="mt-6">
-            {shared === null ? <div className="flex justify-center py-16"><Loader size="base" /></div> : (
-              <SectionList titled groups={[
-                { label: "Shared with you", tiles: shared.received.map((row) => shareTile(row, false)) },
-                { label: "Shared by you", tiles: shared.mine.map((row) => shareTile(row, true)) },
-              ]} />
-            )}
-          </div>
+          <div className="mt-6"><SharedBody shared={shared} query={query} tile={shareTile} /></div>
         )}
       </div>
 

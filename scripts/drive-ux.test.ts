@@ -203,6 +203,30 @@ describe('the Drive', () => {
           { title: 'Shared with you', tiles: ['Inbox digest', 'Deploy status board'] },
           { title: 'Shared by you', tiles: ['Issue triage', 'Issue triage'] },
         ]);
+        // Newest first, though the owner's rows arrive oldest first.
+        expect(await shared.$$eval('[data-drive-section="Shared by you"] [data-drive-share-kind]',
+          (tiles) => tiles.map((tile) => tile.getAttribute('data-drive-share-kind')))).toEqual(['live', 'blueprint']);
+
+        // Search narrows both sections by title, description or sharer, and says so when nothing matches.
+        const search = async (text: string): Promise<void> => {
+          await shared.click('[data-drive-search]', { count: 3 });
+          await shared.keyboard.press('Backspace');
+
+          if (text !== '') await shared.type('[data-drive-search]', text);
+        };
+
+        await search('digest');
+        expect(await sections(shared)).toEqual([{ title: 'Shared with you', tiles: ['Inbox digest'] }]);
+        await search('every service');
+        expect(await sections(shared)).toEqual([{ title: 'Shared with you', tiles: ['Deploy status board'] }]);
+        await search('SAM@');
+        expect(await sections(shared)).toEqual([{ title: 'Shared with you', tiles: ['Inbox digest', 'Deploy status board'] }]);
+        await search('triage');
+        expect(await sections(shared)).toEqual([{ title: 'Shared by you', tiles: ['Issue triage', 'Issue triage'] }]);
+        await search('nothing like it');
+        expect(await sections(shared)).toEqual([]);
+        expect(await shared.$eval('[data-drive-no-match]', (element) => element.textContent)).toBe('Nothing matches “nothing like it”');
+        await search('');
         // Both forks where the sharer allows it; what the owner shared also stops.
         expect((await menuOf(shared, '[data-drive-share="live-mail-9"]')).map((item) => item.label)).toEqual(['Open', 'Fork…']);
         expect((await menuOf(shared, '[data-drive-share="live-board-1"]')).map((item) => item.label)).toEqual(['Open', 'Fork…', 'Stop sharing']);

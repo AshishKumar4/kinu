@@ -147,8 +147,8 @@ const LIBRARY: SharedLibrary = {
     { id: "standup", title: "Standup notes", workspace: "email-triage", bindings: 0 },
   ],
   mine: [
-    { id: "live-board-1", kind: "live", share: "live-board-1", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 864e5, bindings: 4, visibility: "public", workspace: "checkout-fixes", users: [], fork: true },
     { id: "checkout-fixes~k7Qm2pV9xRt3aB4c~mfrq6zk3p2xw7ha", kind: "blueprint", share: "k7Qm2pV9xRt3aB4c", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 3 * 864e5, bindings: 4, workspace: "checkout-fixes", users: ["pat@example.com"] },
+    { id: "live-board-1", kind: "live", share: "live-board-1", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 864e5, bindings: 4, visibility: "public", workspace: "checkout-fixes", users: [], fork: true },
   ],
   received: [
     { id: "live-mail-9", kind: "live", share: "live-mail-9", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 2 * 3600e3, bindings: 2, visibility: "users", workspace: "sam-mail", owner: "sam@example.com", fork: true },
