@@ -291,8 +291,9 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     }));
   }
 
-  /** One scripted turn at the store boundary, wired as `ActorSession` wires it: the input, the claim, a
-   *  request, the tool call and its result, a second request, the answer. Returns the request bytes. */
+  /** One scripted turn at the store boundary, wired as `ActorSession.runTurn` wires it: the input, the
+   *  admitted context and its claim, a request, the tool call and its result, a second request, the
+   *  answer, and the turn's output read back. Returns the request bytes. */
   private async turn(actor: ActorHandle, stores: AgentStores, turn: number): Promise<number> {
     const turnId = `turn-${String(turn)}`;
     const assertOwner = (): void => { actor.assertCurrent(); };
@@ -301,17 +302,14 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
 
     await history.append({ id: `input-${String(turn)}`, message: { role: 'user', content: `question ${String(turn)}` }, origin: 'input', turnId, assertOwner });
 
-    const claim = await claims.admit({
-      runId: `run-${String(turn)}`, turnId, workMode: 'build', program: PROGRAM,
-      context: history.context.selected() ?? history.context.initialize(),
-    });
+    const admitted = await history.materialize();
+
+    const claim = await claims.admit({ runId: `run-${String(turn)}`, turnId, workMode: 'build', program: PROGRAM, context: admitted.selection });
 
     const steps: StepContextPlane = {
       base: () => history.stepBase(() => { history.assertEpoch(claim.turnId, claim.epoch); }, claim.turnId, null),
       consume: async ({ stepNumber, messages }) => { await claims.consume(claim, { index: stepNumber, messages }); },
     };
-
-    const admitted = await claims.admittedFor(claim);
 
     const first = await composePrepareStep({ context: steps }, { stepNumber: 0, messages: [...admitted.messages], steps: [] });
 
@@ -321,6 +319,7 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
 
     await history.append({ id: `answer-${String(turn)}`, message: { role: 'assistant', content: `answer ${String(turn)}` }, origin: 'output', turnId, assertOwner });
     claims.settle(claim, 'completed');
+    await history.outputForTurn(turnId);
 
     return requestBytes(first?.messages) + requestBytes(second?.messages);
   }
