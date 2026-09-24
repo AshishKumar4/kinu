@@ -5,9 +5,9 @@
  *
  * Dynamic context (DynamicContextLedger): each model step renders live state
  * into one `<dynamic_context fingerprint="…">` block, appended at the tail only
- * when it differs from the newest block. Blocks freeze where born and never
- * move or change (moving a mid-array message invalidates every later cache
- * breakpoint); only `dropSuperseded`, under measured pressure, removes any.
+ * when it differs from the newest block. Blocks freeze where born (moving a
+ * mid-array message invalidates every later cache breakpoint); only
+ * `dropSuperseded`, under measured pressure, removes any.
  * In-memory only. Nothing clock-derived may render: it would append a block
  * per request.
  *

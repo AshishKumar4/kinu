@@ -106,14 +106,9 @@ export type ExecutionVerdict = 'succeeded' | 'failed';
 
 /**
  * The environment's verdict on a turn, for turns no user will grade (`kinu exec`,
- * reactor or job wakes). Deterministic; nothing the model wrote is read.
- *
- *   • no non-lookup tool call → null (ungraded, not a success).
- *   • `hadError` → 'failed'.
- *   • the last acting call failed → 'failed'.
- *   • otherwise → 'succeeded'.
- *
- * The last call decides so a failure the turn went on to fix is not punished.
+ * reactor or job wakes). Deterministic; nothing the model wrote is read. A turn with
+ * no acting call is ungraded, not a success; `hadError` fails it; otherwise its last
+ * acting call decides, so a failure the turn went on to fix is not punished.
  * Neither stdout nor returned JSON counts as evidence. It remains a proxy, priced
  * by EXECUTION_QUALITY and sourced as `execution`.
  */
