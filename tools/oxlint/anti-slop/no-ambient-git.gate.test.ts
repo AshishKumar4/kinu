@@ -127,7 +127,7 @@ const ignorePatterns: readonly string[] = config.ignorePatterns ?? [];
  * were being counted that oxlint never sees:
  *
  *   168 files it cannot parse (159 `.patch`, 5 `.jsonl`, 4 `.py`), swept in by the directory arm
- *       once it started matching everything under `tests/` — `tests/bench/patches/` is data.
+ *       once it started matching everything under `tests/` — the bench patches, now `bench/corpus/patches/`, are data.
  *    30 files inside `.oxlintrc.json`'s own `ignorePatterns`, which is this plugin's directory.
  *       Read from the config rather than hardcoded, so the two cannot drift apart. That blind
  *       spot is where THIS FILE lives, and it holds bare `git` spawns of its own (the

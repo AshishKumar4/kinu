@@ -11,7 +11,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   mergeReports, parseJUnit, readSkipLock, reconcileSkips, skipDebt, unmatchedTargets,
-  ALL_SKIP_RATCHET_TARGETS, SKIP_RATCHET_TARGETS, SKIP_RATCHET_VITEST_TARGETS, SKIP_LOCK_PATH,
+  SKIP_RATCHET_TARGETS, SKIP_LOCK_PATH,
   type TestReport,
 } from './skip-ratchet';
 
@@ -48,118 +48,6 @@ const VITEST_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
             <skipped/>
         </testcase>
         <testcase classname="tests/evals/behaviour.eval.ts" name="corpus quality — can this corpus rank anything at all &gt; the corpus is large enough for significance to be reachable" time="0.001">
-        </testcase>
-    </testsuite>
-</testsuites>`;
-
-/**
- * The LIVE SWARM arm's report, verbatim from a credential-free run of the third arm.
- *
- * Its own fixture rather than a variant of the one above, because the property the
- * two prove together is that each arm is INDEPENDENTLY provable: both are vitest, so
- * they share the reporter's shape and differ only in which file they name — which is
- * exactly the confusion a single fixture would hide. One skip and one test that runs,
- * which is what this arm reports with no credential.
- */
-const SWARM_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
-<testsuites name="vitest tests" tests="2" failures="0" errors="0" time="0.044844334">
-    <testsuite name="tests/evals/swarm.eval.ts" tests="2" failures="0" errors="0" skipped="1" time="0.044844334">
-        <testcase classname="tests/evals/swarm.eval.ts" name="Swarm evals — a live measured search through the settled tool surface &gt; the settled surface is the path: swarm is offered, and an unknown field is refused by name" time="0.003815921">
-        </testcase>
-        <testcase classname="tests/evals/swarm.eval.ts" name="Swarm evals — a live measured search through the settled tool surface &gt; MEASURED: a live swarm crowns a winner that beats its own measured baseline" time="0">
-            <skipped/>
-        </testcase>
-    </testsuite>
-</testsuites>`;
-
-/**
- * The RESEARCH, OPTIMIZATION and TRAJECTORY arms' reports, verbatim from a
- * credential-free run of each single-family file: the credential-free half runs,
- * the MEASURED half skips. One fixture each for the reason the swarm arm has its
- * own — all five vitest arms share one reporter shape and differ only in the
- * file they name, which is exactly what a shared fixture would hide.
- */
-const RESEARCH_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
-<testsuites name="vitest tests" tests="3" failures="0" errors="0" time="0.5">
-    <testsuite name="tests/evals/research.eval.ts" tests="3" failures="0" errors="0" skipped="1" time="0.5">
-        <testcase classname="tests/evals/research.eval.ts" name="Research evals — a live retrieval from a controlled MCP source &gt; the corpus is controlled: facts in the archive, none of them in the prompt" time="0.001">
-        </testcase>
-        <testcase classname="tests/evals/research.eval.ts" name="Research evals — a live retrieval from a controlled MCP source &gt; the archive comes up through the product MCP client and both tools answer" time="0.4">
-        </testcase>
-        <testcase classname="tests/evals/research.eval.ts" name="Research evals — a live retrieval from a controlled MCP source &gt; MEASURED: the agent reads the archive and its report carries the planted facts and the canary" time="0">
-            <skipped/>
-        </testcase>
-    </testsuite>
-</testsuites>`;
-
-const OPTIMIZATION_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
-<testsuites name="vitest tests" tests="2" failures="0" errors="0" time="0.1">
-    <testsuite name="tests/evals/optimization.eval.ts" tests="2" failures="0" errors="0" skipped="1" time="0.1">
-        <testcase classname="tests/evals/optimization.eval.ts" name="Optimization evals — a measured challenge with a pre-registered threshold &gt; the threshold is a bar something can clear and something can miss" time="0.002">
-        </testcase>
-        <testcase classname="tests/evals/optimization.eval.ts" name="Optimization evals — a measured challenge with a pre-registered threshold &gt; MEASURED: the agent attains the threshold on the metered instrument" time="0">
-            <skipped/>
-        </testcase>
-    </testsuite>
-</testsuites>`;
-
-const MATH_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
-<testsuites name="vitest tests" tests="2" failures="0" errors="0" time="0.1">
-    <testsuite name="tests/evals/math.eval.ts" tests="2" failures="0" errors="0" skipped="1" time="0.1">
-        <testcase classname="tests/evals/math.eval.ts" name="Math evals — seeded instances, exact answers &gt; the exact verifier accepts the answer and refuses every near miss" time="0.002">
-        </testcase>
-        <testcase classname="tests/evals/math.eval.ts" name="Math evals — seeded instances, exact answers &gt; MEASURED: every seeded instance, graded exactly" time="0">
-            <skipped/>
-        </testcase>
-    </testsuite>
-</testsuites>`;
-
-/** The TRAJECTORY arm, which is CLOUD ONLY: `eval-tier.sh` runs it under
- *  `--backend cloud` alone, so a local run names no `--target` for it and this
- *  fixture is what proves the target is satisfiable when the arm DOES run. */
-const TRAJECTORY_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
-<testsuites name="vitest tests" tests="6" failures="0" errors="0" time="0.1">
-    <testsuite name="tests/evals/trajectory.eval.ts" tests="6" failures="0" errors="0" skipped="3" time="0.1">
-        <testcase classname="tests/evals/trajectory.eval.ts" name="Trajectory evals — multi-turn episodes through the public API &gt; every case is multi-turn, uniquely named, and machine-checkable" time="0.002">
-        </testcase>
-        <testcase classname="tests/evals/trajectory.eval.ts" name="Trajectory evals — multi-turn episodes through the public API &gt; a closed turn with no tool call is refused, and a real trajectory is not" time="0.001">
-        </testcase>
-        <testcase classname="tests/evals/trajectory.eval.ts" name="Trajectory evals — multi-turn episodes through the public API &gt; a partial run is inadmissible, and a complete one carries the primary metric" time="0.001">
-        </testcase>
-        <testcase classname="tests/evals/trajectory.eval.ts" name="Trajectory evals — multi-turn episodes through the public API &gt; MEASURED: public-file-artifact" time="0">
-            <skipped/>
-        </testcase>
-        <testcase classname="tests/evals/trajectory.eval.ts" name="Trajectory evals — multi-turn episodes through the public API &gt; MEASURED: public-steer-correction" time="0">
-            <skipped/>
-        </testcase>
-        <testcase classname="tests/evals/trajectory.eval.ts" name="Trajectory evals — multi-turn episodes through the public API &gt; MEASURED: public-failure-recovery" time="0">
-            <skipped/>
-        </testcase>
-    </testsuite>
-</testsuites>`;
-
-/** The DEVICE arm, cloud only for the same reason and reported the same way: it
- *  links the host it runs on to a deployment, so a local run names no `--target`
- *  for it and this fixture is what proves the target is satisfiable when the arm
- *  DOES run. */
-const DEVICE_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
-<testsuites name="vitest tests" tests="2" failures="0" errors="0" time="0.1">
-    <testsuite name="tests/evals/device.eval.ts" tests="2" failures="0" errors="0" skipped="1" time="0.1">
-        <testcase classname="tests/evals/device.eval.ts" name="Device evals — one machine, linked and driven through the deployed API &gt; the record carries a step outcome or it is not evidence" time="0.002">
-        </testcase>
-        <testcase classname="tests/evals/device.eval.ts" name="Device evals — one machine, linked and driven through the deployed API &gt; MEASURED: device-connect-e2e" time="0">
-            <skipped/>
-        </testcase>
-    </testsuite>
-</testsuites>`;
-
-const KINU_TASKS_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
-<testsuites name="vitest tests" tests="2" failures="0" errors="0" time="0.1">
-    <testsuite name="tests/evals/kinu-tasks.eval.ts" tests="2" failures="0" errors="0" skipped="1" time="0.1">
-        <testcase classname="tests/evals/kinu-tasks.eval.ts" name="Kinu task evals — red probes over credential-free fixtures &gt; slate-ledger: a correct slate passes, and each mutation flips its own subgoal" time="0.01">
-        </testcase>
-        <testcase classname="tests/evals/kinu-tasks.eval.ts" name="Kinu task evals — measured &gt; MEASURED: slate-ledger" time="0">
-            <skipped/>
         </testcase>
     </testsuite>
 </testsuites>`;
@@ -380,54 +268,18 @@ describe('unmatchedTargets', () => {
   </testsuite>
 </testsuites>`;
 
-  // RED BEFORE: `./tests/` is satisfied by the bun arm alone, so a run that
-  // reported only bun looked complete while the whole vitest arm went unmeasured.
-  // The two later bun targets are unmatched here for the same reason: a report
-  // from the root suites says nothing about `packages/core/tests/e2e/` or the
-  // bench rig, which is exactly why each is its own target.
+  // A report from the root suites says nothing about `packages/core/tests/e2e/`
+  // or the bench rig, which is exactly why each is its own target.
   test('a report from the root suites alone leaves every other target unmatched', () => {
     expect(unmatchedTargets(parseJUnit(REPORT))).toEqual([
       './packages/core/tests/e2e/', './scripts/bench-external.test.ts',
-      ...SKIP_RATCHET_VITEST_TARGETS,
     ]);
   });
 
-  test('every arm reporting satisfies every target', () => {
-    const merged = mergeReports(
-      [REPORT, CORE_E2E_REPORT, BENCH_EXTERNAL_REPORT,
-        VITEST_REPORT, SWARM_REPORT, RESEARCH_REPORT, OPTIMIZATION_REPORT, MATH_REPORT,
-        TRAJECTORY_REPORT, DEVICE_REPORT, KINU_TASKS_REPORT]
-        .map((xml) => parseJUnit(xml)),
-    );
+  test('every target reporting satisfies every target', () => {
+    const merged = mergeReports([REPORT, CORE_E2E_REPORT, BENCH_EXTERNAL_REPORT].map((xml) => parseJUnit(xml)));
 
     expect(unmatchedTargets(merged)).toEqual([]);
-  });
-
-  // ONE ARM AT A TIME, both directions, because the vitest arms are the set a
-  // single target could not tell apart: they run under one config and differ only in
-  // the file they select, so a report from any one must leave every OTHER owing one.
-  test('a report from one vitest arm leaves the bun target and every other arm unmatched', () => {
-    const arms: readonly { readonly file: string; readonly xml: string }[] = [
-      { file: './tests/evals/behaviour.eval.ts', xml: VITEST_REPORT },
-      { file: './tests/evals/swarm.eval.ts', xml: SWARM_REPORT },
-      { file: './tests/evals/research.eval.ts', xml: RESEARCH_REPORT },
-      { file: './tests/evals/optimization.eval.ts', xml: OPTIMIZATION_REPORT },
-      { file: './tests/evals/math.eval.ts', xml: MATH_REPORT },
-      { file: './tests/evals/trajectory.eval.ts', xml: TRAJECTORY_REPORT },
-      { file: './tests/evals/device.eval.ts', xml: DEVICE_REPORT },
-      { file: './tests/evals/kinu-tasks.eval.ts', xml: KINU_TASKS_REPORT },
-    ];
-
-    // The fixture set and the target list are the same set, or an arm added to
-    // one and not the other would silently shrink this proof.
-    expect(arms.map((arm) => arm.file).sort()).toEqual([...SKIP_RATCHET_VITEST_TARGETS].sort());
-
-    for (const arm of arms) {
-      expect(unmatchedTargets(parseJUnit(arm.xml))).toEqual([
-        ...SKIP_RATCHET_TARGETS,
-        ...SKIP_RATCHET_VITEST_TARGETS.filter((target) => target !== arm.file),
-      ]);
-    }
   });
 });
 
@@ -454,34 +306,26 @@ describe('the committed lock', () => {
   // including ones nobody looked at — this gate's own defect class. Requiring the
   // suite separator is what keeps the prefix narrower than the file.
   test('every family entry names a suite, never a bare file', () => {
-    const families = readSkipLock().filter((e) => e.family === true);
-    expect(families.length).toBeGreaterThan(0);
-
-    for (const entry of families) {
+    for (const entry of readSkipLock().filter((e) => e.family === true)) {
       expect(entry.key).toContain('.ts › ');
       expect(entry.key.split(' › ')[1]?.length ?? 0).toBeGreaterThan(0);
     }
   });
 
-  test('the gate declares both runners\' targets and its lock path', () => {
+  test('the gate declares its targets and its lock path', () => {
     expect(SKIP_RATCHET_TARGETS.length).toBeGreaterThan(0);
-    expect(SKIP_RATCHET_VITEST_TARGETS.length).toBeGreaterThan(0);
 
     // The leading `./` is load bearing — see unmatchedTargets above.
-    for (const target of ALL_SKIP_RATCHET_TARGETS) expect(target.startsWith('./')).toBe(true);
-
-    // The vitest arm is named as a FILE on purpose: a directory would be
-    // satisfied by the bun suites that sit in the same one.
-    for (const target of SKIP_RATCHET_VITEST_TARGETS) expect(target.endsWith('.eval.ts')).toBe(true);
+    for (const target of SKIP_RATCHET_TARGETS) expect(target.startsWith('./')).toBe(true);
     expect(SKIP_LOCK_PATH).toContain('skip-ratchet.lock.json');
   });
 });
 
 /**
- * With a target resolved every locked entry RUNS — all 25 are `skipIf(!TARGET)`,
+ * With a target resolved every locked entry RUNS — each is `skipIf(!TARGET)`,
  * measured: `bun test ./tests/live-smoke.test.ts` under KINU_EVAL_LIVE=1 ran
  * both of its locked entries, 3 model calls, 74.3s. Read as `stale` that made the
- * eval tier's own ratchet return 1 on every credentialed run.
+ * tier's own ratchet return 1 on every credentialed run.
  */
 describe('skipDebt', () => {
   const verdict = { added: ['undeclared skip'], stale: ['locked, ran'] };
@@ -502,51 +346,43 @@ describe('skipDebt', () => {
 });
 
 /**
- * The two properties `evals:cloud` needed and did not have: a target set that
- * follows the RUN, and a directory target only a file `bun test` can select may
- * answer for.
+ * A target set that follows the RUN, and a directory target only a file `bun
+ * test` can select may answer for.
  */
 describe('the target set is the executed set', () => {
   const cloudReport = (): TestReport => parseJUnit(`<?xml version="1.0"?>
 <testsuites name="bun test" tests="1" failures="0" skipped="0">
-  <testsuite name="tests/live-smoke.test.ts" file="tests/live-smoke.test.ts" tests="1">
-    <testcase name="reaches the deployment" classname="Live Smoke" file="tests/live-smoke.test.ts" line="4" />
+  <testsuite name="tests/live/live-smoke.test.ts" file="tests/live/live-smoke.test.ts" tests="1">
+    <testcase name="reaches the deployment" classname="Live Smoke" file="tests/live/live-smoke.test.ts" line="4" />
   </testsuite>
 </testsuites>`);
 
   test('the full target list refuses a run that measured a deliberate subset', () => {
-    // The defect: `bun run evals:cloud` runs two of five arms ON PURPOSE, and
-    // the default list demanded reports from all five. Three targets came back
-    // unmatched and the tier exited 1 having done exactly what it was told, so
-    // every reachable "fix" was a weakening.
-    const missing = unmatchedTargets(cloudReport(), ALL_SKIP_RATCHET_TARGETS);
-    expect(missing).toContain('./tests/evals/behaviour.eval.ts');
-    expect(missing).toContain('./tests/evals/research.eval.ts');
-    expect(missing).toContain('./tests/evals/optimization.eval.ts');
+    // `bun run test:live:cloud` runs one file ON PURPOSE; the default list would
+    // demand reports from targets that run never starts.
+    const missing = unmatchedTargets(cloudReport(), SKIP_RATCHET_TARGETS);
+    expect(missing).toEqual(['./packages/core/tests/e2e/', './scripts/bench-external.test.ts']);
   });
 
-  test('naming the arms that ran clears it without weakening anything', () => {
-    expect(unmatchedTargets(cloudReport(), ['tests/live-smoke.test.ts'])).toEqual([]);
+  test('naming the target that ran clears it without weakening anything', () => {
+    expect(unmatchedTargets(cloudReport(), ['./tests/live/live-smoke.test.ts'])).toEqual([]);
   });
 
   test('a named target the run did not produce is still refused', () => {
     // The other direction, and the one that keeps `--target` from being an
-    // escape hatch: a caller may narrow the CLAIM, never the proof. An arm
+    // escape hatch: a caller may narrow the CLAIM, never the proof. A target
     // named and absent from the report is a crash, not a decision.
-    expect(unmatchedTargets(cloudReport(), ['tests/live-smoke.test.ts', './tests/evals/swarm.eval.ts']))
-      .toEqual(['./tests/evals/swarm.eval.ts']);
+    expect(unmatchedTargets(cloudReport(), ['./tests/live/live-smoke.test.ts', './tests/live/exploration.test.ts']))
+      .toEqual(['./tests/live/exploration.test.ts']);
   });
 
-  test('a vitest-only file cannot answer for a bun directory target', () => {
-    // Narrowest-claim protects the four `*.eval.ts` files that have targets of
-    // their own and reopens the hole for a fifth: a new
-    // `tests/evals/planning.eval.ts` sits under `./tests/`, has no target, and
-    // would have satisfied the BUN arm — so a bun arm that collected nothing
-    // could look complete on the strength of a vitest file.
+  test('a file bun cannot select cannot answer for a bun directory target', () => {
+    // A `.eval.ts` under `./tests/` is runnable by vitest alone, so a bun run
+    // that collected nothing could otherwise look complete on its strength.
     const vitestOnly = parseJUnit(`<?xml version="1.0"?>
 <testsuites name="vitest" tests="1" failures="0" skipped="0">
-  <testsuite name="tests/evals/planning.eval.ts" tests="1">
-    <testcase name="plans" classname="tests/evals/planning.eval.ts" />
+  <testsuite name="tests/live/planning.eval.ts" tests="1">
+    <testcase name="plans" classname="tests/live/planning.eval.ts" />
   </testsuite>
 </testsuites>`);
 
@@ -572,7 +408,7 @@ describe('the target set is the executed set', () => {
   test('every locked key sits under some target, so no entry governs nothing', () => {
     // A lock entry whose file no target reaches can never go stale and can never
     // be reconciled: it is a reason nobody will ever have to defend again.
-    const prefixes = ALL_SKIP_RATCHET_TARGETS.map((target) => target.replace(/^\.\//, ''));
+    const prefixes = SKIP_RATCHET_TARGETS.map((target) => target.replace(/^\.\//, ''));
 
     const orphans = readSkipLock(SKIP_LOCK_PATH)
       .filter((entry) => !prefixes.some((prefix) => entry.key.startsWith(prefix)))

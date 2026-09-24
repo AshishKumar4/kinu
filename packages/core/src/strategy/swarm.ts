@@ -29,7 +29,7 @@ export {
 
 import {
   SWARM_ADVANCES,
-  type BranchContext, type SwarmAdvance, type SwarmCarry, type SwarmConfig,
+  type BranchContext, type SwarmAdvance, type SwarmConfig,
   type SwarmInput, type SwarmNodeAssignment, type SwarmRefusal,
   type SwarmSettle,
 } from '../types/swarm';
@@ -67,10 +67,7 @@ export interface SwarmPresetPoint {
   readonly config: SwarmConfig;
   readonly depth: number;
   readonly branches: number;
-  /**
-   * The non-derivable clause of the doctrine, without the preset's name;
-   * {@link SWARM_PRESET_DOCTRINE} derives the mechanical half from the axes.
-   */
+  /** What the preset is for, without its name; {@link SWARM_PRESET_DOCTRINE} renders it. */
   readonly doctrine: string;
 }
 
@@ -92,8 +89,7 @@ export const SWARM_PRESET_POINTS = {
     // Depth 1: `advance:'none'` has no selection step.
     depth: 1,
     branches: 5,
-    doctrine: 'returns a set of distinct approaches, unranked. Reach for it when the thing you '
-      + 'want is not measurable: it has no value signal by design and refuses an `objective`.',
+    doctrine: 'distinct approaches, unranked; refuses an `objective`.',
   },
   /**
    * Coverage rows. `verify` because an archive cell is keyed and ranked by the objective;
@@ -109,7 +105,7 @@ export const SWARM_PRESET_POINTS = {
     },
     depth: 1,
     branches: 4,
-    doctrine: 'covers a space instead of climbing it, over a subject dimension you choose.',
+    doctrine: 'covers a subject.',
   },
   audit: {
     config: {
@@ -120,8 +116,7 @@ export const SWARM_PRESET_POINTS = {
     },
     depth: 1,
     branches: 4,
-    doctrine: 'is the same coverage shape over a finding CLASS rather than a subject, so ten '
-      + 'variants of one finding stay one finding.',
+    doctrine: 'covers classes of finding, so variants of one finding stay one.',
   },
   redteam: {
     config: {
@@ -133,7 +128,7 @@ export const SWARM_PRESET_POINTS = {
     },
     depth: 1,
     branches: 4,
-    doctrine: 'is the same coverage shape over a TACTIC.',
+    doctrine: 'covers tactics.',
   },
   optimise: {
     config: {
@@ -143,7 +138,7 @@ export const SWARM_PRESET_POINTS = {
     },
     depth: 5,
     branches: 3,
-    doctrine: 'climbs one number you can measure — a cost, a runtime, a count.',
+    doctrine: 'climbs one measured number.',
   },
   prove: {
     config: {
@@ -158,7 +153,7 @@ export const SWARM_PRESET_POINTS = {
     // Deepest row: an exact checker refutes a wrong branch instead of carrying it down.
     depth: 7,
     branches: 3,
-    doctrine: 'drives a checker that accepts a candidate or does not.',
+    doctrine: 'drives a checker that accepts or rejects a candidate.',
   },
 } as const satisfies Record<NamedSwarmPreset, SwarmPresetRow>;
 
@@ -190,47 +185,11 @@ export function unmeasuredPoint(row: SwarmPresetPoint): SwarmPresetPoint {
   };
 }
 
-/** A `Record` over the axis so a new `advance` value must state its phrase. */
-const ADVANCE_DOCTRINE = {
-  none: (row) => `a flat measured wave of ${String(row.branches)}`,
-  uct: (row) => `a depth-${String(row.depth)} UCT tree`,
-  'best-first': (row) => `a depth-${String(row.depth)} best-first tree`,
-  archive: () => 'a one-level coverage grid keyed by `key`, one elite per cell',
-  pareto: () => 'a Pareto front over an `instanced` or `vector` objective',
-} satisfies Record<SwarmAdvance, (row: SwarmPresetPoint) => string>;
-
-const CARRY_DOCTRINE = {
-  none: '',
-  reflections: ', reflections seeding the next run',
-  elites: ', its best kept in this workspace to seed the next run',
-  artifacts: ', its best published for a later run to read',
-} satisfies Record<SwarmCarry, string>;
-
-/**
- * The one preset enumeration every model-facing surface renders; only
- * {@link SwarmPresetPoint.doctrine} is hand-written.
- */
+/** The one preset enumeration every model-facing surface renders, from each row's `doctrine`. */
 export const SWARM_PRESET_DOCTRINE: readonly string[] = [
-  'Every preset is callable as `preset` + `task` alone, and nothing else is required. '
-    + 'With no `objective` a preset runs a JUDGED SWEEP at its own width: N candidates in '
-    + 'parallel, ranked by a judge ensemble, none selected down a tree and none published. '
-    + '"Sweep N" below is that width.',
-  ...NAMED_SWARM_PRESETS.map((preset) => {
-    const row = SWARM_PRESET_POINTS[preset];
-
-    if (row.config.score.kind !== 'verify') return `${preset} ${row.doctrine}`;
-
-    const measured = ADVANCE_DOCTRINE[row.config.advance.kind](row)
-      + CARRY_DOCTRINE[row.config.carry.kind];
-
-    return `${preset} ${row.doctrine} Sweep ${String(row.branches)}; with an \`objective\`, ${measured}.`;
-  }),
-  'An `objective` is worth naming when the thing you want can be measured by RUNNING '
-    + `something: \`verify\` takes one of the registered instruments (${VERIFIER_KINDS.join(', ')}) `
-    + 'and hands it a whole `spec` in one call. Omit it and the sweep is a real ranked result, '
-    + 'not a refusal.',
-  'custom states all six axes in `config` under a `label`, optionally seeded from `from`. '
-    + 'Reach for it when no preset names the shape you want.',
+  'Each needs only `task`; without an `objective` it is a judged sweep.',
+  ...NAMED_SWARM_PRESETS.map((preset) => `${preset}: ${SWARM_PRESET_POINTS[preset].doctrine}`),
+  'custom: all six axes in `config` under a `label`.',
 ];
 
 /** Derived by exclusion so a new `advance` value cannot fall outside every tree rule. */
@@ -857,7 +816,7 @@ export interface SwarmCandidate {
   readonly unmeasurable: string | null;
   /**
    * Why the node never finished (status, steps, clock); distinct from
-   * {@link unmeasurable} so a deadline cut is not reported as a verifier complaint.
+   * {@link unmeasurable} so a cut node is not reported as a verifier complaint.
    */
   readonly incomplete: string | null;
   readonly score: number | null;

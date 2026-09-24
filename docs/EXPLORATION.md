@@ -334,16 +334,15 @@ Implemented by `strategy/node-agent.ts`, `heads/head-inference.ts`, `chat.ts`,
 
 ## What bounds a node
 
-A swarm node has no step cap and no default wall clock (owner ruling,
+A swarm node has no step cap and no wall clock (owner ruling,
 2026-08-21). `runChat` has no cap: its default stop condition, `UNBOUNDED_STEPS`
 in `chat.ts`, never fires, and a caller's condition only adds a stop reason.
 The arbiter owns swarm node depth. A head with no split depth left still
 finishes its own work, but its tool surface no longer offers a split.
 
 A swarm node ends when the model stops calling tools and it holds nothing, when
-the search aborts it, when its mission governor declines the next request, or
-when an opt-in `maxWallClockMs` deadline passes. Shipped dispatch sets no
-deadline. The last three are read between steps, so none interrupts a step. A
+the search aborts it, or when its mission governor declines the next request.
+The last two are read between steps, so neither interrupts a step. A
 swarm node runs in the isolate that ran the search, as its own logical actor of
 the one workspace, and the search records the cut on the swarm node's own
 report under the cancel reason. The loop runs in one place, so the cut is
@@ -352,17 +351,17 @@ observed in one place.
 Three tool-using nodes still ran at 1,216,358 / 1,310,061 / 1,336,833 ms across
 22 / 25 / 26 steps when a 1,200,000 ms abort fired. Their mean steps were
 55,289 / 52,403 / 51,417 ms. Each is a lower bound because no node finished.
-Measured 2026-08-19 at `8afd45e8d`, on one credentialed depth-2 width-3
-`tests/evals/swarm.eval.ts` run against the shipped default model.
+Measured 2026-08-19 at `8afd45e8d`, on one credentialed depth-2 width-3 run of
+the swarm eval (retired 2026-09-24) against the shipped default model.
 
-A deadline cannot pre-empt a step. One step held 91% CPU for 26 minutes, and
-neither the deadline nor `AbortSignal` reached it. That run has no recorded
+Nothing pre-empts a step. One step held 91% CPU for 26 minutes, and
+`AbortSignal` did not reach it. That run has no recorded
 date, so it is an anecdote, not a result. This limit is open: no measurement
 yet sets a bound on one step's request.
 
-Implemented by `runNodeAgent`, `runNodeLoop`, `budgetExhausted`, and
-`UNBOUNDED_STEPS`. `packages/core/tests/unit-swarm-node-envelope.test.ts` holds
-the contract and figures in both directions.
+Implemented by `runNodeAgent`, `runNodeLoop`, and `UNBOUNDED_STEPS`.
+`packages/core/tests/unit-swarm-node-envelope.test.ts` holds the contract: a
+node whose one step takes 26 minutes still finishes.
 
 An aborted, exhausted or errored swarm node returns an unscored status, step
 count and clock, and the engine skips instrument and ensemble. This differs

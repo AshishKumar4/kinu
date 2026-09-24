@@ -5,8 +5,8 @@
 
 import type { SqlExecutor } from './types/primitives';
 import type { HeadInput, HeadReport, HeadRunHeadView, SerializedMessage } from './heads/types';
-import { headStatusUnsettled, storedHeadReportStatus } from './heads/types';
-import { raceWithTimeout, type HeadRuntime } from './heads/controller';
+import { forkMission, headStatusUnsettled, storedHeadReportStatus } from './heads/types';
+import type { HeadRuntime } from './heads/controller';
 import type { HeadJournal } from './heads/journal';
 import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes';
 import { nanoid } from './utils/nanoid';
@@ -47,6 +47,8 @@ export interface BranchStartInput {
   task: string;
   /** Already capped by the backend's readInheritedContext. */
   inheritedContext: SerializedMessage[];
+  /** The live turn's mission scope (`MissionGovernor.scope`), read when the owner branches. */
+  missionLabels: readonly string[];
   id?: string;
   model?: string;
 }
@@ -54,7 +56,7 @@ export interface BranchStartInput {
 export interface SteerBranchHandle {
   readonly id: string;
   readonly task: string;
-  /** Never rejects; timeouts and failures resolve as budget_exceeded / errored reports. */
+  /** Never rejects: a throw resolves errored, or aborted after this handle's abort. */
   readonly result: Promise<HeadReport>;
   abort(reason: string): Promise<void>;
 }
@@ -81,22 +83,26 @@ export async function startBranchHead(
     model: input.model,
     mergeStrategy: 'best_of',
     loop: defaultLoopOrigin('head'),
+    ...forkMission(input.missionLabels),
   };
 
   journal.recordSplit(rootId, BRANCH_RATIONALE, spawnedAt);
   journal.insertSpawn(headInput);
   const spawned = await runtime.spawnHead(headInput);
+  const stop = new AbortController();
 
   const result = (async (): Promise<HeadReport> => {
     let report: HeadReport;
 
     try {
-      report = await raceWithTimeout(spawned, undefined);
+      report = await spawned.run();
     } catch (cause) {
       report = {
         id: headInput.id,
-        status: 'budget_exceeded',
-        summary: 'Branch was aborted before producing an answer.',
+        status: stop.signal.aborted ? 'aborted' : 'errored',
+        summary: stop.signal.aborted
+          ? `Branch was aborted: ${renderThrownChain({ cause: stop.signal.reason })}`
+          : 'Branch failed before producing an answer.',
         evidence: [], decisions: [], artifactRefs: [], fileChanges: [],
         childHeadIds: [], toolCalls: [], stepCount: 0,
         // `{}` rather than zeros: the branch may have spent unreported tokens.
@@ -115,7 +121,12 @@ export async function startBranchHead(
     id: rootId,
     task: input.task,
     result,
-    abort: (reason) => spawned.abort(reason),
+    abort: (reason) => {
+      // First, so the run's throw sees it.
+      stop.abort(new Error(reason));
+
+      return spawned.abort(reason);
+    },
   };
 }
 

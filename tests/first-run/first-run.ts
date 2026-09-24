@@ -58,10 +58,10 @@ import {
   type EpisodeEvidenceReader, type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalSubgoal, type EvalTier,
 } from '@kinu.run/test-utils';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
-import { disposeFailedCase } from '../evals/episode-failure';
+import { disposeFailedCase } from './episode-failure';
 import {
   resolvePublicSessionPlan, type KinuPublicSession, type PublicSessionPlan,
-} from '../evals/public-session';
+} from '../../evals/src/session';
 
 /** The family every case's record is published under, so one tier's evidence is
  *  one family rather than six. */
@@ -109,6 +109,7 @@ export const FIRST_RUN_CASES = [
   'exploration',
   'deploy-door',
   'capability-isolation',
+  'steer-correction',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -243,14 +244,14 @@ export const FIRST_RUN_DEFECTS = {
     found: 'A blueprint published from a slate carried no mapped bindings; a second workspace imported it with bindings unmapped in the read model, and mapping one to its own MCP server made the slate serve.',
     missedBecause: 'Unit proofs cover publish and admit in isolation; nothing drove the app-host publish, public read, fork, and forker-side serve for the same bytes on the deployed product.',
     provedRedAt: null,
-    redDirection: 'Green requires publish to answer inspection plus link, the public blueprint read to name both bindings credentialed, the fork to answer two requirements with an unmapped graph problem, and hello() to answer, and the importer\'s own MCP roster to answer a list the mapping would read from.',
+    redDirection: 'Green requires publish to answer inspection plus link, the owner\'s Drive library to list the slate and the blueprint, the public blueprint read to name both bindings credentialed, the fork to answer two requirements with an unmapped graph problem, and hello() to answer, and the importer\'s own MCP roster to answer a list the mapping would read from.',
   },
   'drive': {
     id: 'drive',
     found: 'The Drive shipped with no live proof: its unit proofs run the SDK\'s in-memory fake and the workerd tier binds no Mossaic object, so the real tenant store, the /shared mount and the /api/drive routes had never been driven on the deployed product.',
     missedBecause: 'Every Drive suite is green over the fake; nothing opened the live tenant, put a file through the route, and read it back at /shared from a workspace shell.',
     provedRedAt: null,
-    redDirection: 'Green requires GET /api/drive to list the two reserved folders, a made folder and a put file to list back at their size and download as the same bytes, two workspaces of the owner to cat the file at /shared, a pasted skill to land under /skills as a skill on the listing and the mount, and the deletes to leave the root as found.',
+    redDirection: 'Green requires GET /api/drive to list the reserved skills folder, a made folder and a put file to list back at their size and download as the same bytes, two workspaces of the owner to cat the file at /shared, a pasted skill to land under /skills as a skill on the listing and the mount, and the deletes to leave the root as found.',
   },
   'preview-address': {
     id: 'preview-address',
@@ -552,6 +553,20 @@ export const FIRST_RUN_DEFECTS = {
       + 'both web paths, and `refusedHostname` skipped in `codemode-egress.ts` turns the workerd '
       + 'codemode-sandbox and slate-egress rows red.',
   },
+  'steer-correction': {
+    id: 'steer-correction',
+    found: 'A correction typed while the agent is still working has to reach the work: either the '
+      + 'running turn reads it at a step or it runs as the next turn. A correction the product '
+      + 'acknowledges and then drops leaves the agent finishing the instruction the user took back.',
+    missedBecause: 'unit-mid-turn-steer and the busy-chat workerd probe splice scripted turns; the '
+      + "composer's steer against a model on the deployment ran only in the trajectory eval family, "
+      + 'which is retired, and no first-run row sends one.',
+    provedRedAt: null,
+    redDirection: 'Not proved red against a deployed sha: a dropped steer cannot be deployed, and there '
+      + 'is no staging. The red direction is proved on planted evidence in steer-observation.test.ts: a '
+      + 'correction the running turn never read fails correction-applied, steer-is-durable and '
+      + 'listing-truthful, and a steer the workspace never answered fails landing.',
+  },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
 /** Which arm this process is — the same split every sibling eval arm declares. */
@@ -674,6 +689,7 @@ const SHORT_SUBJECT = {
   'exploration': 'swarm',
   'deploy-door': 'door',
   'capability-isolation': 'isolation',
+  'steer-correction': 'steer',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */

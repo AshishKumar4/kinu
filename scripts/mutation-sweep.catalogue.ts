@@ -70,19 +70,19 @@ export const CATALOGUE: readonly Mutation[] = [
   {
     id: 'converse-capability-union',
     file: 'packages/core/src/delegation/agents-tool.ts',
-    find: 'const converse = !!deps.team || !!deps.peers;',
-    replace: 'const converse = !!deps.team && !!deps.peers;',
-    decision: 'hire/ask/send/list are offered when EITHER team or peers is wired',
+    find: 'const converse = deps.team !== undefined || deps.peers !== undefined;',
+    replace: 'const converse = deps.team !== undefined && deps.peers !== undefined;',
+    decision: 'hire, msg and list are offered when EITHER team or peers is wired',
     symbol: 'agentsActionsFor',
     control: 'unit-agents-tool.test.ts',
   },
   {
     id: 'dispatch-unsupported-guard',
     file: 'packages/core/src/delegation/agents-tool.ts',
-    find: 'if (!actions.includes(input.action)) {',
-    replace: 'if (actions.includes(input.action)) {',
+    find: '  if (!actions.includes(action)) {',
+    replace: '  if (actions.includes(action)) {',
     decision: "an action this actor's deps do not support is refused before the switch",
-    symbol: 'dispatchAgentsAction',
+    symbol: 'actionAdmission',
     control: 'unit-agents-tool.test.ts',
   },
   // The tokens left this line on 2026-08-19: the mission port now charges every call as
@@ -175,7 +175,7 @@ export const CATALOGUE: readonly Mutation[] = [
   // re-pointed at the engines underneath — `runMCTS`'s own `judgeSamples`
   // precedence is defended by four `integration-mcts.test.ts` cases at the engine
   // seam and seeded as a bench defect
-  // (`tests/bench/patches/mcts-strategy-ignores-judge-samples-override.patch`,
+  // (`bench/corpus/patches/mcts-strategy-ignores-judge-samples-override.patch`,
   // re-authored onto `mcts/engine.ts` when the adapter it named was deleted),
   // which is a measurement this catalogue would only duplicate.
 
@@ -187,15 +187,6 @@ export const CATALOGUE: readonly Mutation[] = [
     replace: 'if (deps.mission === undefined) nodeDeps.mission = deps.mission;',
     decision: "a caller's mission ledger reaches every node, so each debits its own steps",
     symbol: 'runSwarm',
-  },
-  {
-    id: 'node-wallclock-zero-honoured',
-    file: 'packages/core/src/strategy/swarm-setup.ts',
-    find: 'if (deps.maxWallClockMs !== undefined) nodeDeps.maxWallClockMs = deps.maxWallClockMs;',
-    replace: 'nodeDeps.maxWallClockMs = deps.maxWallClockMs;',
-    decision: 'an undeclared clock stays an ABSENT key — no default wall clock over node work (ruling 2026-08-21)',
-    symbol: 'runSwarm',
-    control: 'unit-swarm-incomplete-node.test.ts',
   },
   {
     id: 'judged-rank-direction',
@@ -293,10 +284,10 @@ export const CATALOGUE: readonly Mutation[] = [
   {
     id: 'empty-report-falls-back',
     file: 'packages/core/src/strategy/node-agent.ts',
-    find: '  const conclusion = input.reported?.content.trim() || input.report.summary.trim();',
-    replace: '  const conclusion = input.reported?.content.trim() ?? input.report.summary.trim();',
+    find: "  const conclusion = captured === '' ? input.report.summary.trim() : captured;",
+    replace: '  const conclusion = input.reported === null ? input.report.summary.trim() : captured;',
     decision: 'a node reporting whitespace has reported nothing, so the loop summary stands',
-    symbol: 'runNodeAgent',
+    symbol: 'readNodeReport',
     control: 'unit-node-host.test.ts',
   },
   {

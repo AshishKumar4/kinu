@@ -102,6 +102,23 @@
       "rules": {
         "typescript/consistent-type-assertions": "off"
       }
+    },
+    {
+      "files": ["packages/*/src/**"],
+      "excludeFiles": ["packages/cf-backend/src/sandbox-exec-lane.ts"],
+      "rules": {
+        "no-restricted-imports": ["error", {
+          "paths": [{
+            "name": "@cloudflare/sandbox",
+            "importNames": ["getSandbox"],
+            "message": "Reach a sandbox through `openSandbox` (packages/cf-backend/src/sandbox-exec-lane.ts). It fixes the transport, which the SDK persists per sandbox; a client naming another loses its in-flight requests."
+          }],
+          "patterns": [{
+            "group": ["**/node_modules/**"],
+            "message": "A dependency is used through its export map. If the package exports no subpath for what you need, patch its package.json under patches/ (bun patchedDependencies) and say so there; never reach through the installed tree."
+          }]
+        }]
+      }
     }
   ],
   "ignorePatterns": [

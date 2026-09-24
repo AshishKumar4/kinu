@@ -150,10 +150,4 @@ export class TurnContextMeter {
 
     return latest;
   }
-
-  reset(): void {
-    this.system = undefined;
-    this.tools = undefined;
-    this.latest = undefined;
-  }
 }

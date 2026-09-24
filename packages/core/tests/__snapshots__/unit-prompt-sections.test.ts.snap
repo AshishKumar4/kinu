@@ -22,10 +22,10 @@ exports[`every registered section reaches a rendered prompt the Markdown extract
   "no-tools": "d1d05d0f1e701e1d954252de4a9cc33ea33572c038fd37c37149e8d52bf79a71",
   "plan-mode-with-submission": "5f43c1a5fb865b71d3da57ac8b47efe279d379b978f0e26f871158b6c8e3fd6b",
   "plan-mode-without-submission": "5f43c1a5fb865b71d3da57ac8b47efe279d379b978f0e26f871158b6c8e3fd6b",
-  "role-auditor": "9c4e995df214f149c8f2b6b6cc8ca321fbd28b75331959dac0b4c826cd438f11",
+  "role-auditor": "45da8c43f47ff0485fdd7651d10cd587a795a81335f2c6c02f90ecf34ebce0f2",
   "role-designer": "57592fc6847c62ab7dd677cf2ff10628119c579249e9c6469e67dda0158d2c58",
-  "role-planner": "45c53738fd3f89713c4acff482688e7196d4948854419779835c5085058807a6",
-  "role-researcher": "563866af9fe91b89f5cb2e0033f25e740d91eb147e10d107a5eccab598defdc8",
+  "role-planner": "272198ebffe6516c582bf911966e929b25bc13d899c09e9b189fece51799cdc9",
+  "role-researcher": "69e82b9b7072104ffa267fd9af61e91cda20105230c4653a2e823b89f730ce6a",
   "role-task": "7ed0486988a4d3585b8aea7de27ccc8dcd902a3cf3d25df806618bdb833ca1be",
 }
 `;

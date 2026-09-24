@@ -1,21 +1,16 @@
 /**
- * A two-judge cross-family LLM panel that re-judges the owner's hand-labeled
- * turns, and the pre-registered bar it must clear before recalibrations may be
- * drawn by the panel with a human audit slice.
+ * A two-judge cross-family LLM panel that re-judges the owner's hand-labeled turns, and the pre-registered bar it
+ * must clear before it may draw recalibrations with a human audit slice.
  *
- * Judges see exactly `renderLabelingEvidence`, never another rater's verdict.
- * Unanimous or nothing: a split is `unclear`, with no tie-break. κ and error
- * profiles come from ppi.ts (`designWeightedKappa`, `resampledAccuracy`).
+ * Judges see exactly `renderLabelingEvidence`, never another rater's verdict. A split is `unclear`, never
+ * tie-broken. κ and error profiles come from ppi.ts (`designWeightedKappa`, `resampledAccuracy`).
  *
- * Stand-in bar, all on lower 95% bounds (`STAND_IN_THRESHOLDS`): κ(human ↔
- * ensemble) clears the kappa bar; the panel's κ with the human is at least the
- * classifier's over the same turns; negative-class sensitivity and specificity
- * clear theirs, which bounds the Rogan–Gladen denominator q̂₁ + q̂₀ − 1.
+ * Stand-in bar, on lower 95% bounds (`STAND_IN_THRESHOLDS`): κ(human ↔ ensemble) clears the kappa bar and is at
+ * least the classifier's over the same turns; negative-class sensitivity and specificity clear theirs, bounding the
+ * Rogan–Gladen denominator q̂₁ + q̂₀ − 1. Landis & Koch (Biometrics 33:159, 1977) put "substantial" agreement at
+ * 0.61 and up.
  *
- * Landis & Koch (Biometrics 33:159, 1977) put "substantial" agreement at 0.61 and up.
- *
- * The bar errs toward more hand-labeling; answer refusals with more labels,
- * never a lower bar. Passing enables nothing automatically.
+ * A refusal is answered with more labels, never a lower bar. Passing enables nothing automatically.
  */
 
 import * as v from 'valibot';

@@ -4,7 +4,7 @@
  * The container PTY is the sandbox SDK's (`/ws/pty`); the workspace shell is the runtime's (workspace-terminal.ts).
  */
 
-import { getSandbox, type PtyOptions } from "@cloudflare/sandbox";
+import type { PtyOptions } from "@cloudflare/sandbox";
 import { getAgentByName } from "agents";
 import { diagnostics, renderCauseChain, toKinuError } from "@kinu.run/core/obs";
 import type { OrchestratorAgent } from "./orchestrator";
@@ -12,9 +12,9 @@ import type { OrchestratorAgent } from "./orchestrator";
 import { err, json } from "@kinu.run/core";
 import { DEVICE_PTY_MAX_AXIS, DEVICE_TERMINAL_PATH } from "@kinu.run/core";
 import { terminalLane } from "@kinu.run/core";
-import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { WORKSPACE_TERMINAL_PATH } from "@kinu.run/core";
+import { openSandbox } from "./sandbox-exec-lane";
 
 /**
  * Optional: `getSession` is added by `getSandbox`'s Proxy, not declared on the class. A property,
@@ -56,10 +56,9 @@ export interface TerminalRouteDeps {
 export function terminalRouteDeps(env: Env): TerminalRouteDeps {
   return {
     resolveWorkspace: (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name),
-    // Every call site for one sandbox must pass the same transport; the SDK persists it per id.
     resolveSandbox: (name) => env.Sandbox === undefined
       ? null
-      : getSandbox(env.Sandbox, sandboxIdForWorkspace(name), { normalizeId: true, transport: SANDBOX_TRANSPORT }),
+      : openSandbox(env.Sandbox, sandboxIdForWorkspace(name), { normalizeId: true }),
     UserDO: env.UserDO,
   };
 }

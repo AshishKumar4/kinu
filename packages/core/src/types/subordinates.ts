@@ -67,10 +67,8 @@ export interface TemporaryRunRefusal {
   readonly error: string;
 }
 
-/**
- * No `active()`/`history()`: the one roster (`agents.list`) already answers both.
- * Optional in the type, required wherever a backend wires a roster.
- */
+/** No `active()`/`history()`: the one roster (`agents.list`) already answers both. Required wherever a backend
+ *  wires a roster. */
 export interface TemporaryAgentPort {
   /**
    * Provision a child, run it to its single answer, release it. No elapsed bound: it ends on the

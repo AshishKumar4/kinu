@@ -34,6 +34,7 @@ import {
 import { advisorWorkspaceGuidance } from '../prompting/agents-md';
 import { resolveModelRoute } from '../profiles/model-route';
 import { contextWindowForModel } from '../context-window';
+import { TurnContextMeter } from '../context-meter';
 import { SessionHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
@@ -91,7 +92,7 @@ export interface ActorExecutionResult {
   readonly program: ActorTurnProgram | null;
   /** Written before the first effect; null only when preparation failed before admission. */
   readonly claim: ActorTurnClaim | null;
-  /** Admission evidence from the claim ledger; empty when no claim was admitted. */
+  /** What the first request sent, else the admitted context; empty without a claim. */
   readonly admittedMessages: readonly ModelMessage[];
   readonly outputReferences: readonly MessageReference[];
   readonly outputPartReferences: readonly MessagePartReference[];
@@ -464,6 +465,7 @@ export class ActorSession {
     let program: ActorTurnProgram | null = null;
     let failure: Error | null = null;
     let durableOutput: SessionStream | null = null;
+    let admittedMessages: readonly ModelMessage[] = [];
 
     try {
       active.phase = 'running';
@@ -484,6 +486,7 @@ export class ActorSession {
       });
 
       active.claim = claim;
+      admittedMessages = admitted.messages;
       durableOutput = new SessionStream(this.canonical, lease.turnId, claim.epoch);
       const stream = durableOutput;
 
@@ -493,7 +496,7 @@ export class ActorSession {
         assertActive: input.assertActive,
         scaffoldStreamOptions: input.scaffoldStreamOptions,
         chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions,
-          meter: this.orchestrator.acc.composition,
+          meter: new TurnContextMeter(),
           persistStreamPart: part => stream.nativePart(part),
           persistStep: messages => stream.nativeStep(messages),
           dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools) },
@@ -506,6 +509,8 @@ export class ActorSession {
             },
             consume: async ({ stepNumber, messages }) => {
               const consumed = await this.options.claims.consume(claim, { index: stepNumber, messages });
+
+              if (stepNumber === 0) admittedMessages = [...messages];
               stream.beginRequest(consumed.requestId, stepNumber);
             },
           } } satisfies ChatOptions,
@@ -531,6 +536,7 @@ export class ActorSession {
             this.orchestrator.acc.recordStep({
               text: event.text, finishReason: event.finishReason, toolCalls: event.toolCalls, toolResults: event.toolResults,
               response: { messages: event.responseMessages }, usage: event.usage, request: event.request,
+              context: event.context,
             });
             break;
           case 'error': {
@@ -579,12 +585,11 @@ export class ActorSession {
     const output = await this.canonical.outputForTurn(lease.turnId);
     const outputReferences = output.messages;
     const finalTextReference = await this.matchTranscriptText(text, outputReferences);
-    const admitted = active.claim === null ? null : (await this.options.claims.consumedContext(lease.turnId, 0)) ?? (await this.options.claims.admittedFor(active.claim));
 
     return {
       text, answer, steps, failure, program, claim: active.claim,
       interrupted: active.abort.signal.aborted || failure?.message === INTERRUPTED_TURN,
-      admittedMessages: admitted?.messages ?? [],
+      admittedMessages,
       outputReferences, finalTextReference,
       outputPartReferences: output.parts,
     };

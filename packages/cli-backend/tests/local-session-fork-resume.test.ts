@@ -62,7 +62,7 @@ function interruptedWorkspace() {
       id: `h${i}`, parentId: null, rootId: ROOT, depth: 1,
       task: `angle ${i}`, rationale: 'why', mode: 'build',
       inheritedContext: [], mergeStrategy: 'synthesize', loop: defaultLoopOrigin('head'),
-      budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: now },
+      budget: { maxDepth: 2, spawnedAt: now },
     });
   }
 

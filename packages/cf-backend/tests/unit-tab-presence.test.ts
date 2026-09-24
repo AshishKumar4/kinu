@@ -33,7 +33,7 @@ const FULL: TabPresence = { releases: true, explorations: true, work: true };
 
 const SILENT_RPC: Rpc = () => Promise.withResolvers<never>().promise;
 
-const renderStrip = (tabPresence: TabPresence | undefined): string =>
+const renderStrip = (tabPresence: TabPresence | undefined, presencePending = false): string =>
   renderToStaticMarkup(createElement(WorkSurface, {
     surface: 'Work',
     onSurface: () => {},
@@ -57,6 +57,7 @@ const renderStrip = (tabPresence: TabPresence | undefined): string =>
     onRefreshJobs: () => {},
     pendingActions: [],
     tabPresence,
+    presencePending,
     rpc: SILENT_RPC,
   }));
 
@@ -132,6 +133,17 @@ describe('the first frame marks the tab a request lands on', () => {
 
   test('a request with content is marked where it is', () => {
     expect(currentTabs(renderStrip(FULL))).toEqual(['Work']);
+  });
+});
+
+describe('nothing lands while the workspace presence read is pending', () => {
+  // Main's sweep, 2026-09-24: a new workspace's strip marked Work while that read was in flight, then moved
+  // itself to Files when the read said Work was empty (the kept-tab row read Work, Files, Work).
+  test('the strip offers its tabs and marks none', () => {
+    const html = renderStrip(undefined, true);
+
+    expect(currentTabs(html)).toEqual([]);
+    expect(html).toContain('aria-label="Files"');
   });
 });
 

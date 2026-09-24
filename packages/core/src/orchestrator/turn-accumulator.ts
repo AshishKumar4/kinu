@@ -4,7 +4,7 @@
 import type { ModelMessage } from 'ai';
 import type { ToolCallRecord } from '../evolution/types';
 import { TurnContextBudget, citesSpillAddress } from '../context-budget';
-import { TurnContextMeter } from '../context-meter';
+import type { ContextComposition } from '../context-meter';
 import { FAILURE_WITHOUT_ERROR, type RunEventInput } from '../events/types';
 import { TurnFileLedger } from '../tools/file-ledger';
 import { TurnEscalationLedger } from '../execution/escalation';
@@ -31,6 +31,8 @@ export interface StepLike {
   response?: { modelId?: string; messages?: readonly ModelMessage[] };
   /** The request body this step sent and when; a cache warm replays the turn's last one. */
   request?: { body?: unknown; sentAt?: number };
+  /** The breakdown of the request this step sent. */
+  context?: ContextComposition;
 }
 
 /** ai-SDK v6 tool-result hook shape. */
@@ -78,8 +80,6 @@ export class TurnAccumulator {
   readonly context = new TurnContextBudget();
   readonly files = new TurnFileLedger();
   readonly escalations = new TurnEscalationLedger();
-  /** Drained per step so a measurement pairs with the usage of the request it measured. */
-  readonly composition = new TurnContextMeter();
   /** Written by craft-cycle.ts: crafted tools run inside `eval`, never as `toolCalls` names. */
   private readonly craftUsed = new Set<string>();
   /** Cumulative messages already written durably. A shorter array means a re-drive: resync
@@ -104,7 +104,6 @@ export class TurnAccumulator {
     this.context.reset();
     this.files.reset();
     this.escalations.reset();
-    this.composition.reset();
     this.craftUsed.clear();
     this.durableMessages = 0;
   }
@@ -211,7 +210,6 @@ export class TurnAccumulator {
       `textLen=${textLen} tools=${toolCalls.length}[${toolCallNames}] results=${toolResults.length}` +
       extrasStr,
     );
-    const composition = this.composition.take();
     // An empty array means no response reported (scaffold step boundary); never rewind on it.
     const cumulative = ctx.response?.messages ?? [];
     const produced = cumulative.length > 0 ? cumulative.slice(this.durableMessages) : [];
@@ -231,7 +229,7 @@ export class TurnAccumulator {
 
     if (produced.length > 0) stepEvent.messages = [...produced];
 
-    if (composition) stepEvent.context = composition;
+    if (ctx.context) stepEvent.context = ctx.context;
 
     // Priced with the same rate and arithmetic as the mission ledger; no rate means no `usd`.
     if (reported) {

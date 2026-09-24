@@ -9,7 +9,7 @@ import type { SqlExec, SqlExecutor, Storage } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
 import { ActorSession } from '../orchestrator/actor-session';
 import type { AgentOrchestratorDeps } from '../orchestrator/agent-orchestrator';
-import type { StoredActorClaim } from '../orchestrator/actor-claims';
+import type { ContextRevision, StoredActorClaim } from '../orchestrator/actor-claims';
 import type { SessionFilePlane } from '../session/payload';
 import { actorReferenceOf, sameActorReference, type ActorHandle, type ActorReference } from '../identity/actor-handle';
 import { createAgentStores, type AgentStores } from './agent-stores';
@@ -436,7 +436,19 @@ export function childContextResolver(deps: {
   };
 }
 
-/** Call only with recovery authority. Verified claims stay owed: bytes alone do not prove the turn finished. */
+/** The claim's consumed request, or why its own rows cannot be read: a failure no later sweep reads differently. */
+async function consumedEvidence(stores: AgentStores, claim: StoredActorClaim): Promise<{ readonly context: ContextRevision | null } | { readonly failure: KinuError }> {
+  try {
+    return { context: await stores.claims.consumedContext(claim.turnId) };
+  } catch (cause) {
+    return { failure: toKinuError({ doing: 'reading the request record of an interrupted turn', cause, otherwise: 'io' }) };
+  }
+}
+
+/**
+ * Call only with recovery authority. Verified claims stay owed: bytes alone do not prove the turn finished. A claim whose
+ * record fails to read settles `error` once; an actor that cannot be opened stays owed.
+ */
 export async function recoverActorTurns(
   host: Pick<ActorHost, 'resumable'> & {
     acquire(reference: ActorReference): Promise<Pick<HostedActor, 'runtime' | 'stores'> & {
@@ -447,11 +459,13 @@ export async function recoverActorTurns(
 ): Promise<{
   readonly verified: readonly string[];
   readonly refused: readonly string[];
+  readonly failed: readonly string[];
   readonly unreadable: readonly string[];
   readonly active: readonly string[];
 }> {
   const verified: string[] = [];
   const refused: string[] = [];
+  const failed: string[] = [];
   const unreadable: string[] = [];
   const active: string[] = [];
 
@@ -464,11 +478,25 @@ export async function recoverActorTurns(
         continue;
       }
 
+      const evidence = await consumedEvidence(actor.stores, turn.claim);
+
+      if (actor.session.inFlight) {
+        active.push(turn.claim.turnId);
+        continue;
+      }
+
+      if ('failure' in evidence) {
+        actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'error');
+        failed.push(turn.claim.turnId);
+        diagnostics.failure('actor.turn_record_unreadable', evidence.failure, { actor: turn.record.name, turn: turn.claim.turnId });
+        continue;
+      }
+
       const verdict = await verifyClaimedProgram(
         turn.claim,
         (version) => readVersionedScaffoldSource(actor.runtime, version),
         (source) => sha256Hex(source),
-        () => actor.stores.claims.consumedContext(turn.claim.turnId),
+        evidence.context,
       );
 
       if (actor.session.inFlight) {
@@ -493,5 +521,5 @@ export async function recoverActorTurns(
     }
   }
 
-  return { verified, refused, unreadable, active };
+  return { verified, refused, failed, unreadable, active };
 }

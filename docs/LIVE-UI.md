@@ -49,10 +49,10 @@ Use a slate for a workspace dashboard, a live-data view or any dynamic UI. A
 standalone Node/Vite application belongs on an executor that supports its
 toolchain, not in the hosted Worker runtime.
 
-To run a Worker slate, call `workspace.slate({op: 'preview', id})` directly. It
+To run a Worker slate, call `workspace.slates.<id>.$preview()` directly. It
 compiles and boots the module; nothing has to be checked or committed first.
-Success returns `{ok: true, value: {url, port, inline: {height}}}`. Use
-`value.url`. A refusal carries `reason` and `error` and no URL.
+Success returns `{url, port, inline: {height}}`. A refusal carries `success:
+false`, `reason` and `error`, and no URL.
 
 ```json
 {
@@ -88,33 +88,42 @@ to package `name` to the directory id.
 
 Schema: `packages/core/src/slates/project.ts`.
 
-## One codemode operation
+## The `workspace.slates` namespace
 
-Everything goes through `workspace.slate(operation)` in `eval`. There are no
-separate slate tools or codemode aliases. `TOOL_REACH.slate` is
-`{ native: false, codemode: "workspace", replay: "claimed" }`. Each operation
-has a strict field set.
+In `eval`, `workspace.slates.<id>` is that slate's server class, the same stub
+its client gets: `await workspace.slates.whiteboard.addStroke(stroke)` calls
+`addStroke` and returns its JSON result. Members named with `$` are lifecycle;
+no class method can take such a name, so a class method named `remove` or
+`history` is always the class's own. There are no `{op}` envelopes and no
+separate slate tools. `TOOL_REACH.slate` is
+`{ native: false, codemode: "workspace", replay: "claimed" }`.
 
-| Operation | Input | Result |
-|---|---|---|
-| List | `{op: 'list'}` | Project summaries and per-project problems |
-| Preview | `{op: 'preview', id}` | Live preview URL, port and inline height |
-| Call | `{op: 'call', id, method, args?}` | JSON return value of that method on the `Slate` class; omitted args mean `[]` |
-| Commit | `{op: 'commit', id}` | Immutable source version |
-| History | `{op: 'history', id}` | Durable slate record and versions |
-| Fork | `{op: 'fork', version}` | New slate with source from that version |
-| Restore | `{op: 'restore', id, version}` | Source restored into the named slate |
-| Remove | `{op: 'remove', id}` | Processes stopped, port, URL and `this.sql` storage released, tree deleted; committed versions stay |
-| Sharing | `inspect`, `publish`, `unshare`, `shares`, `graph`, `share`, `liveShares`, `viewerRequests` | Blueprints and live shares ([SLATE-SHARING.md](SLATE-SHARING.md)) |
+| Member | Result |
+|---|---|
+| `workspace.slates.<id>.<method>(...args)` | JSON return value of that method on the `Slate` class |
+| `workspace.slates.<id>.$preview()` | Live preview URL, port and inline height |
+| `workspace.slates.<id>.$methods()` | The methods its class exports |
+| `workspace.slates.<id>.$commit()` | Immutable source version |
+| `workspace.slates.<id>.$history()` | Durable slate record and versions |
+| `workspace.slates.<id>.$restore(version)` | Source restored into this slate |
+| `workspace.slates.<id>.$remove()` | Processes stopped, port, URL and `this.sql` storage released, tree deleted; committed versions stay |
+| `workspace.slates.$list()` | Project summaries and per-project problems |
+| `workspace.slates.$fork(version)` | New slate with source from that version |
+| Sharing | `$inspect(version, include?)`, `$publish(version, include?)`, `$share(options)` and `$graph()` on a slate; `$shares()`, `$liveShares()`, `$unshare(share)` and `$viewerRequests(share)` on `workspace.slates` ([SLATE-SHARING.md](SLATE-SHARING.md)) |
 
-Answers are `{ok: true, value}` or `{ok: false, reason, error}`. History needs a
-durable record, which a commit or a preview creates; a directory alone has none.
-Method names start with an ASCII letter, contain only letters, digits and
-underscores, are at most 64 characters, and exclude `constructor`. `fetch` is
-never callable as a method. In Plan mode only the read operations run: `list`,
-`history`, `inspect`, `shares`, `graph`, `liveShares` and `viewerRequests`.
-`remove` and every sharing operation except `graph` belong to the workspace
-root.
+A member answers its value, or a refusal `{success: false, reason, error}`.
+History needs a durable record, which a commit or a preview creates; a directory
+alone has none. Method names start with an ASCII letter, contain only letters,
+digits and underscores, are at most 64 characters, and exclude `constructor`.
+`fetch` is never callable as a method, and `then`, `toJSON`, `toString` and
+`valueOf` are never reached through `workspace.slates`. In Plan mode only the read
+members run: `$list`, `$history`, `$inspect`, `$shares`, `$graph`, `$liveShares` and
+`$viewerRequests`. `$remove` and every sharing member except `$graph` belong to
+the workspace root.
+
+The sandbox binder (`bindSlates` in `packages/core/src/execution/codemode-node-shim.ts`)
+maps each member to one operation of the host contract,
+`SLATE_PROGRAM_MEMBERS` in `packages/core/src/slates/rpc.ts`.
 
 Contract: `packages/core/src/slates/rpc.ts`. Hosted dispatch lives in
 `packages/cf-backend/src/slates/host.ts`.

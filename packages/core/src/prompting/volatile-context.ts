@@ -5,9 +5,9 @@
  *
  * Dynamic context (DynamicContextLedger): each model step renders live state
  * into one `<dynamic_context fingerprint="…">` block, appended at the tail only
- * when it differs from the newest block. Blocks freeze where born and never
- * move or change (moving a mid-array message invalidates every later cache
- * breakpoint); only `dropSuperseded`, under measured pressure, removes any.
+ * when it differs from the newest block. Blocks freeze where born (moving a
+ * mid-array message invalidates every later cache breakpoint); only
+ * `dropSuperseded`, under measured pressure, removes any.
  * In-memory only. Nothing clock-derived may render: it would append a block
  * per request.
  *
@@ -33,7 +33,7 @@ import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import type { ActiveSkillSet } from '../skills/types';
 import { describeActivationReason } from '../skills/render';
 import type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
-import { renderToolsDeclaration, type CraftedDeclaration } from '../tools/sandbox-contract';
+import { renderCraftedToolsDeclaration, type CraftedDeclaration } from '../tools/sandbox-contract';
 
 export type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
 
@@ -420,7 +420,7 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, s
 
   if (ctx.craftedTools !== undefined) {
     add('craftedTools', `${DYNAMIC_SECTION_TITLES.craftedTools}\n${ctx.craftedTools.length > 0
-      ? renderToolsDeclaration({}, ctx.craftedTools)
+      ? renderCraftedToolsDeclaration(ctx.craftedTools)
       : NO_CRAFTED_TOOLS_YET}`);
   }
 

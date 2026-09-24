@@ -40,17 +40,9 @@ export * from './facts';
 
 export * from './git';
 
-export * from './eval-compare';
-
 export * from './eval-run';
 
-export * from './eval-progress';
-
-export * from './eval-adopted-spend';
-
 export * from './eval-outcome';
-
-export * from './hard-tasks/index';
 
 export * from './parity-normalizer';
 

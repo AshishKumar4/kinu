@@ -43,7 +43,7 @@ import type { WebSearchProvider } from '../web/index';
 import type { NodeAgentDeps } from './node-agent';
 import type { PublishHeadStream } from '../heads/head-stream';
 import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
-import type { HostedNodeSeat } from './node-agent';
+import type { HostedNodeSeat, NodeCodemode } from './node-agent';
 import type { MissionScope } from '../mission-budget';
 import type { SwarmCandidate } from './swarm';
 import type { PublicationState } from './objective';
@@ -833,18 +833,16 @@ export function buildNodeDeps(input: {
   readonly clock?: Clock;
   readonly reportModelCall?: ModelCallSink;
   readonly publishHeadStream?: PublishHeadStream;
-  readonly maxWallClockMs?: number;
   readonly mission?: MissionScope;
   readonly provisionHome?: NodeWorkspaceProvisioner;
   readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
-  readonly codemodeTool?: unknown;
+  readonly nodeCodemode?: NodeCodemode;
   readonly webSearch?: WebSearchProvider;
 }): NodeAgentDeps {
   const deps = input;
 
   const nodeDeps: NodeAgentDeps = {
     hostNode: deps.hostNode, model: deps.model, journal: deps.journal, logger: deps.logger,
-    // No default wall clock; `maxWallClockMs` is opt-in.
   };
 
   if (deps.signal !== undefined) nodeDeps.signal = deps.signal;
@@ -855,15 +853,13 @@ export function buildNodeDeps(input: {
 
   if (deps.publishHeadStream !== undefined) nodeDeps.publishHeadStream = deps.publishHeadStream;
 
-  if (deps.maxWallClockMs !== undefined) nodeDeps.maxWallClockMs = deps.maxWallClockMs;
-
   if (deps.mission !== undefined) nodeDeps.mission = deps.mission;
 
   if (deps.provisionHome !== undefined) nodeDeps.provisionHome = deps.provisionHome;
 
   if (deps.runtimeForWorkspace !== undefined) nodeDeps.runtimeForWorkspace = deps.runtimeForWorkspace;
 
-  if (deps.codemodeTool !== undefined) nodeDeps.codemodeTool = deps.codemodeTool;
+  if (deps.nodeCodemode !== undefined) nodeDeps.nodeCodemode = deps.nodeCodemode;
 
   if (deps.webSearch !== undefined) nodeDeps.webSearch = deps.webSearch;
 

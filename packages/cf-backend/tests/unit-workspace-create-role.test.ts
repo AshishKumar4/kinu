@@ -32,22 +32,29 @@ interface CreateBody {
   reasoningEffort?: string;
 }
 
+/** An account with Cloudflare connected, whose menu offers the native Workers AI default. */
+const CONNECTED = { authorization: 'Bearer token' };
+
 /** The whole route is driven because the request-body-to-input mapping is under test. */
 async function postCreate(
   body: CreateBody,
   envelope: ProfileCatalogEnvelope = envelopeWithDefault(DEFAULT_WORKERS_AI_MODEL_SPEC),
-): Promise<{ status: number; calls: string[]; error: string | null }> {
+  authHeaders: Record<string, string> | null = CONNECTED,
+): Promise<{ status: number; calls: string[]; registered: string[]; error: string | null }> {
   const calls: string[] = [];
+  const registered: string[] = [];
 
   const userDO = userAccount({
     async getProfileCatalog(_caller: UserCaller) { return envelope; },
-    async getAuthHeaders(_caller: UserCaller) { return { authorization: 'Bearer token' }; },
+    async getAuthHeaders(_caller: UserCaller) { return authHeaders; },
     async getCredentialBaseURL(_caller: UserCaller) {
       return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
     },
     async listCredentials(_caller: UserCaller) { return []; },
     async ensureWorkspaceCapability() {},
     async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
+      registered.push(name);
+
       return {
         entry: { name, displayName: displayName ?? name, createdAt: 7, lastVisited: 7, archivedAt: null },
         status: 'created' as const,
@@ -110,7 +117,7 @@ async function postCreate(
 
     const error = response.ok ? null : v.parse(v.object({ error: v.string() }), await response.json()).error;
 
-    return { status: response.status, calls, error };
+    return { status: response.status, calls, registered, error };
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -179,6 +186,20 @@ describe('the model and effort a create request asks for', () => {
     expect(created.status).toBe(201);
     expect(created.calls).toContain('effort:high');
     expect(created.calls.indexOf('effort:high')).toBeLessThan(created.calls.indexOf('genesis'));
+  });
+
+  test('an account with no model it can serve is refused before a workspace exists', async () => {
+    // The catalog default names a model no connected provider serves, and nothing is connected to offer another.
+    const created = await postCreate(
+      { name: AGENT, purpose: 'Review the checkout flow.' },
+      envelopeWithDefault('openai-compat:gone/some-model'),
+      null,
+    );
+
+    // A conflict with the account's setup, not a malformed request: the page offers the settings to fix it.
+    expect(created.status).toBe(409);
+    expect(created.error).toContain('Workers AI is not connected');
+    expect([created.registered, created.calls]).toEqual([[], []]);
   });
 
   test('an unknown effort is a bad request, not a workspace', async () => {

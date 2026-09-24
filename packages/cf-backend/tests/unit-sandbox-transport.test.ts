@@ -1,70 +1,67 @@
 /**
- * Defends: `sandbox.executor_registered` reporting `transport: 'websocket'` while the process used rpc.
- * Source assertions are the subject: `runtime.ts` cannot load in a test, and `wrangler.jsonc` agreement is config.
+ * Defends: the sandbox executor's Workers Logs line naming a transport its client never used. It said
+ * `websocket` while the client ran over rpc, so a disconnect was diagnosed against the wrong transport.
+ * Both halves are observed: the options the Sandbox SDK receives, and the line the console logger writes.
+ * Product code opens no sandbox but through `openSandbox` (`no-restricted-imports` in `.oxlintrc.json`), and
+ * the release-config gate holds the deployed default to the same transport.
  */
-import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { SANDBOX_TRANSPORT } from '../src/sandbox-exec-lane';
+import { afterAll, expect, spyOn, test } from 'bun:test';
+import type { SandboxOptions } from '@cloudflare/sandbox';
+import * as v from 'valibot';
+import { mockAgentsSdk } from './helpers/agents-sdk';
+import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
 
-const ROOT = join(import.meta.dir, '..');
+mockAgentsSdk();
 
-const read = (relative: string): string => readFileSync(join(ROOT, relative), 'utf8');
+const opened: (SandboxOptions | undefined)[] = [];
 
-const CALL_SITES = [
-  'src/runtime.ts',
-  'src/orchestrator.ts',
-  'src/preview-proxy.ts',
-  'src/terminal-route.ts',
-] as const;
+// Reset in `afterAll`, so a later file meets the real SDK.
+await installSandboxSdkMock();
 
-describe('one transport, named once', () => {
-  test('the shared constant is rpc, which is the owner decision the evidence supports', () => {
-    // The route-based client (`http`/`websocket`) fails restores at 12 MiB and above on a real 0.12.7
-    // container (`sandbox.route_client.restore_bytes`); changing this value is an owner decision.
-    expect(SANDBOX_TRANSPORT).toBe('rpc');
-  });
+setSandboxSdk({
+  getSandbox: (_ns: NonNullable<Env['Sandbox']>, _id: string, options?: SandboxOptions) => {
+    opened.push(options);
 
-  test('every getSandbox call site passes the constant, never a literal', () => {
-    for (const site of CALL_SITES) {
-      const source = read(site);
-      expect(source).toContain('transport: SANDBOX_TRANSPORT');
-      expect(source).not.toContain('transport: "rpc"');
-      expect(source).not.toContain("transport: 'rpc'");
-    }
-  });
-
-  test('the executor_registered event reports the constant, not a literal', () => {
-    const runtime = read('src/runtime.ts');
-    const event = runtime.slice(runtime.indexOf("diagnostics.event('sandbox.executor_registered'"));
-    expect(event).not.toBe('');
-    const emitted = event.slice(0, event.indexOf('}'));
-    expect(emitted).toContain('transport: SANDBOX_TRANSPORT');
-    // The exact stale value that shipped, refused by name.
-    expect(emitted).not.toContain('websocket');
-  });
-
-  test('no cf-backend source names websocket as a transport', () => {
-    for (const site of CALL_SITES) {
-      expect(read(site)).not.toContain("transport: 'websocket'");
-      expect(read(site)).not.toContain('transport: "websocket"');
-    }
-  });
+    // Registering adapts the client and calls nothing on it; a call would need a container this test has not.
+    return new Proxy({}, {
+      get: (_target, member) => {
+        throw new Error(`no container behind this sandbox client: ${String(member)} was called`);
+      },
+    });
+  },
 });
 
-describe('the constant and the deployed configuration agree', () => {
-  const wrangler = read('wrangler.jsonc');
+afterAll(() => { setSandboxSdk(null); });
 
-  test('the deployment declares the same value the code passes', () => {
-    const declared = [...wrangler.matchAll(/"SANDBOX_TRANSPORT"\s*:\s*"([^"]+)"/g)]
-      .map((match) => match[1]);
+// Must follow the sandbox double: the harness's module graph reaches the sandbox SDK.
+const { orchestratorHarness } = await import('./helpers/actor-harness');
 
-    // Exactly one: a second environment must be read, not averaged into a pass.
-    expect(declared).toEqual([SANDBOX_TRANSPORT]);
+/** A Workers Logs line as the console logger writes it, narrowed to the field read here. */
+const LogLineSchema = v.pipe(v.string(), v.parseJson(), v.object({
+  event: v.string(),
+  fields: v.optional(v.looseObject({ transport: v.optional(v.string()) })),
+}));
+
+test('the executor opens its client over rpc, and its log line names that transport', () => {
+  // The actor installs its console sink when it is constructed, so the line is read where Workers Logs reads it.
+  const consoleError = spyOn(console, 'error');
+  let lines: unknown[];
+
+  try {
+    orchestratorHarness(undefined, { container: true });
+    lines = consoleError.mock.calls.map(([line]) => line);
+  } finally {
+    consoleError.mockRestore();
+  }
+
+  const registered = lines.flatMap((line) => {
+    const parsed = v.safeParse(LogLineSchema, line);
+
+    return parsed.success && parsed.output.event === 'sandbox.executor_registered' ? [parsed.output] : [];
   });
 
-  test('the var is still set, because a dropped option must inherit rpc', () => {
-    // Not redundant: the SDK's `transport` defaults to `http`, so the var catches a getSandbox missing the option.
-    expect(wrangler).toContain(`"SANDBOX_TRANSPORT": "${SANDBOX_TRANSPORT}"`);
-  });
+  // The route-based client (`http`/`websocket`) fails restores at 12 MiB and above on a real 0.12.7
+  // container (`sandbox.route_client.restore_bytes`); changing the transport is an owner decision.
+  expect(opened.map((options) => options?.transport)).toEqual(['rpc']);
+  expect(registered.map((line) => line.fields?.transport)).toEqual(['rpc']);
 });

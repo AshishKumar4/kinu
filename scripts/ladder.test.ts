@@ -23,15 +23,15 @@ import { relative, resolve } from 'node:path';
 import { childEnv, git } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
-  BUDGET_TOLERANCE, CI_EXEMPT, EVAL_TIER_SCRIPT, HOOKS_DIR, LADDER, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
-  DEPLOY_PHASES, browserModules, declaredTierCost, deployPlan, evalTierArms, gatesFor, judgeBudgets, packageScripts,
+  BUDGET_TOLERANCE, CI_EXEMPT, HOOKS_DIR, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
+  DEPLOY_PHASES, browserModules, declaredTierCost, deployPlan, gatesFor, judgeBudgets, liveTierTargets, packageScripts,
   printPlan, readBudget, runnableArgv, sharedBrowserModules, sharedOf, trackedTestFiles, type LadderBudget,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
-  isRunnableSuite, isVitestEvalSuite, readMatching,
+  isVitestEvalSuite, readMatching,
 } from './sources';
-import { SKIP_RATCHET_VITEST_TARGETS } from './skip-ratchet';
+import { SKIP_RATCHET_TARGETS } from './skip-ratchet';
 import { QUIET_LOAD, readCosts } from './gate-cost';
 
 const root = resolve(import.meta.dir, '..');
@@ -74,24 +74,18 @@ const NON_BUN_RUNNERS: readonly {
  * Suites whose ONLY runner sits after the CI tier, each naming the gate that
  * claims it. Pinned by equality below, so a new one is a deliberate edit here.
  *
- * The `*.eval.ts` files are here because the eval tier is the one tier a pull
- * request does not wait on, and until `claims()` learned bun's real matcher they
- * were credited to `bun test ./tests/` at the ci tier — a bun gate that cannot
- * select a `.eval.ts` at all. Four live eval suites therefore read as CI-covered
- * while the only thing that ran them was `bun run test:eval`, which claimed
- * nothing. The live-app suite and the product flows are here because their own
+ * The `*.eval.ts` task files are here because the eval suite measures the
+ * deployed product, which a pull request has not changed, and a `bun test` gate
+ * cannot select a `.eval.ts` at all — so `bun run evals` is their only runner.
+ * The live-app suite and the product flows are here because their own
  * deploy rows are their only runners: CI_EXEMPT carries why a pull request
  * cannot boot the product's dev server.
  */
 const AFTER_CI_SUITES = {
-  'tests/evals/behaviour.eval.ts': 'bun run test:eval',
-  'tests/evals/device.eval.ts': 'bun run test:eval',
-  'tests/evals/optimization.eval.ts': 'bun run test:eval',
-  'tests/evals/math.eval.ts': 'bun run test:eval',
-  'tests/evals/research.eval.ts': 'bun run test:eval',
-  'tests/evals/swarm.eval.ts': 'bun run test:eval',
-  'tests/evals/trajectory.eval.ts': 'bun run test:eval',
-  'tests/evals/kinu-tasks.eval.ts': 'bun run test:eval',
+  'evals/tasks/budget-board.eval.ts': 'bun run evals',
+  'evals/tasks/lending-library.eval.ts': 'bun run evals',
+  'evals/tasks/order-book.eval.ts': 'bun run evals',
+  'evals/tasks/request-logs.eval.ts': 'bun run evals',
   'scripts/live-app-tier.test.ts': 'bun test --timeout=0 scripts/live-app-tier.test.ts',
   'scripts/product-flows.test.ts': 'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts',
 } satisfies Record<string, string>;
@@ -235,7 +229,7 @@ describe('the ladder measures something', () => {
     expect(reaching.size).toBeGreaterThan(30);
     expect(corpus.has(censusFile)).toBeTrue();
 
-    for (const file of ['scripts/computed-style.test.ts', 'scripts/provider-wait-ux.test.ts', 'tests/live-smoke.test.ts']) {
+    for (const file of ['scripts/computed-style.test.ts', 'scripts/provider-wait-ux.test.ts', 'tests/live/live-smoke.test.ts']) {
       expect(reaching.has(file), `${file} drives a browser and the closure does not reach it`).toBeTrue();
     }
 
@@ -268,11 +262,11 @@ describe('the ladder measures something', () => {
     expect(plan.filter((row) => row.shared === 'browser').map((row) => row.label).sort()).toEqual([
       'Chat infinite scroll',
       'Gate self-tests: secrets, corpus, preflight',
+      'Live and first-run suites, credential-free',
       'Live app in a browser',
       'Product flows in a browser, on the local dev server',
       'Public pages render',
       'React runtime identity',
-      'Root end-to-end lifecycle suites',
       'Swarm-tree geometry',
       'UI gate self-tests',
       'UI gate self-tests: chat and files',
@@ -343,24 +337,15 @@ describe('the ladder measures something', () => {
     expect(claims('bun run test:cli', tracked).filter((path) => path.startsWith('packages/cli/tests/')).length)
       .toBeGreaterThan(40);
 
-    // Derived, not counted. This was `toBe(6)`, and it drifted to 8 the moment
-    // two `tests/evals/*.eval.test.ts` suites landed — the same defect as the
-    // bench glob below, one line apart, blocking every push twice in an hour. A
-    // cardinality assertion over a globbed set is drift by construction.
+    // Derived, not counted: a cardinality assertion over a globbed set is drift
+    // by construction.
     //
-    // `isBunDiscoverableSuite`, NOT `isRunnableSuite`, and that was the defect.
-    // The runnable set counts `.eval.` because the lint rule governs those
-    // files; `bun test` does not select them — measured, a directory of
-    // `a.test.ts`, `c.spec.ts`, `d_test.ts`, `e_spec.ts`, `g.test.tsx`,
-    // `b.eval.ts` and `f.eval.tsx` runs five files. So this assertion held
-    // `bun test ./tests/` equal to a set containing four `*.eval.ts` suites bun
-    // never runs, and CEMENTED the wrong ownership by equality: the eval tier's
-    // whole vitest half read as covered by a ci-tier bun gate.
-    //
-    // Cross-checked rather than tautological: `claims()` resolves COMMAND TEXT,
-    // while `isBunDiscoverableSuite` is a FILENAME rule, so agreement between
-    // them is a real assertion about the recursion — and `./tests/` recursing is
-    // exactly why `test:eval` names only that directory.
+    // `isBunDiscoverableSuite`, NOT `isRunnableSuite`. The runnable set counts
+    // `.eval.` because the lint rule governs those files; `bun test` does not
+    // select them — measured, a directory of `a.test.ts`, `c.spec.ts`,
+    // `d_test.ts`, `e_spec.ts`, `g.test.tsx`, `b.eval.ts` and `f.eval.tsx` runs
+    // five files. Cross-checked rather than tautological: `claims()` resolves
+    // COMMAND TEXT, while `isBunDiscoverableSuite` is a FILENAME rule.
     const bunSuitesUnderTests = tracked
       .filter((file) => file.startsWith('tests/') && isBunDiscoverableSuite(file))
       .sort();
@@ -368,25 +353,16 @@ describe('the ladder measures something', () => {
     expect(bunSuitesUnderTests.length).toBeGreaterThan(0);
     expect(claims('bun test ./tests/', tracked).sort()).toEqual(bunSuitesUnderTests);
 
-    // The other half of the SAME partition, and a denominator for it: the files
-    // under `tests/` that are runnable and NOT bun-discoverable are exactly the
-    // eval tier's vitest suites, and there is at least one — otherwise the line
-    // above would be trivially total.
-    const vitestUnderTests = tracked
-      .filter((file) => file.startsWith('tests/') && isVitestEvalSuite(file))
-      .sort();
+    // The other half of the partition: every runnable suite no `bun test` can
+    // select is an eval task, and `bun run evals` claims exactly those.
+    const evalTasks = tracked.filter(isVitestEvalSuite).sort();
 
-    expect(vitestUnderTests.length).toBeGreaterThan(0);
-    expect(claims('bun test ./tests/', tracked).filter((path) => vitestUnderTests.includes(path)))
-      .toEqual([]);
-    expect([...bunSuitesUnderTests, ...vitestUnderTests].sort()).toEqual(
-      tracked.filter((file) => file.startsWith('tests/') && isRunnableSuite(file)).sort(),
-    );
-    // The eval tier's own claim: the bun argv it runs plus every vitest eval
-    // suite. It claimed NOTHING before `claims()` learned the form, which is why
-    // the four files above had to be credited somewhere they could not run.
-    expect(claims('bun run test:eval', tracked).sort())
-      .toEqual([...bunSuitesUnderTests, ...vitestUnderTests].sort());
+    expect(evalTasks.length).toBeGreaterThan(0);
+    expect(evalTasks.filter((file) => !file.startsWith('evals/tasks/'))).toEqual([]);
+    expect(claims('bun run evals', tracked).sort()).toEqual(evalTasks);
+    // The live tier's claim is the bun argv its script runs by default.
+    expect(claims('bun run test:live', tracked).sort())
+      .toEqual(bunSuitesUnderTests.filter((file) => file.startsWith('tests/live/')));
     // The glob and named-file forms are proved over a FIXTURE tree below
     // (`claims() resolves a glob against whatever tree it is given`), never by
     // naming the live repo's files: this held a thirteen-entry list of bench
@@ -406,9 +382,9 @@ describe('the ladder measures something', () => {
     // monotonicity- and reachability-checked like every bun suite.
     expect(claims('bun run test:workerd', tracked).length).toBeGreaterThan(0);
 
-    // The three rows partition the script's set: no workerd file is in two
+    // The four rows partition the script's set: no workerd file is in two
     // rows or in none.
-    const rows = ['bun run test:workerd:cf', 'bun run test:workerd:cf-long', 'bun run test:workerd:devbox']
+    const rows = ['bun run test:workerd:cf', 'bun run test:workerd:cf-long', 'bun run test:workerd:devbox', 'bun run test:workerd:cf-complexity']
       .map((run) => claims(run, tracked));
 
     expect(rows.every((files) => files.length > 0)).toBe(true);
@@ -680,70 +656,15 @@ describe('every test file is claimed by some runner', () => {
     expect(elsewhere.filter((path) => python.includes(path))).toEqual([]);
   });
 
-  test('the eval tier\'s arms partition the vitest eval suites exactly once each', () => {
-    // CONTAINMENT OVER THE EXECUTED SET, which is what the tier's own comments
-    // claimed and nothing checked. The behaviour arm selects the config's
-    // `include` and subtracts three named files; each of those three then selects
-    // itself. Two spellings of one list, and the script says so twice — "the two
-    // spellings have to be one string or the file runs twice and is billed twice"
-    // — with nothing holding them equal.
-    //
-    // What that permits: a fourth single-family arm whose `--exclude` somebody
-    // forgot runs ONE live episode in TWO arms, writes two spend files, and both
-    // count as liveness. The tier would report more model calls for the same
-    // work and read as healthier.
-    const arms = evalTierArms();
-    const onDisk = tracked.filter(isVitestEvalSuite).sort();
-    expect(onDisk.length).toBeGreaterThan(0);
+  test('the live tier runs one directory, and the skip ratchet proves it non-empty', () => {
+    // The script's default argv is what the ladder credits the tier with, and the
+    // ratchet's first target is what proves that argv produced tests: one list,
+    // read from the script, so a rename moves both.
+    const script = readFileSync(resolve(root, LIVE_TIER_SCRIPT), 'utf8');
 
-    // The single-family arms and the behaviour arm's exclusions are one list.
-    expect([...arms.vitestSelected].sort()).toEqual([...arms.vitestExcluded].sort());
-    expect(arms.vitestSelected.length).toBeGreaterThan(0);
-    // No arm names a path twice, and every named path is a real tracked suite.
-    expect(new Set(arms.vitestSelected).size).toBe(arms.vitestSelected.length);
-    expect(arms.vitestSelected.filter((path) => !onDisk.includes(path))).toEqual([]);
-    // And the behaviour arm's REMAINDER is the rest of the set, so every file on
-    // disk is executed by exactly one arm. `BEHAVIOUR_EVAL` is the ratchet target
-    // for that remainder, so it has to be inside it.
-    const behaviour = onDisk.filter((path) => !arms.vitestSelected.includes(path));
-    expect(behaviour.length).toBeGreaterThan(0);
-    expect([...arms.vitestSelected, ...behaviour].sort()).toEqual(onDisk);
-
-    // The bun arm's argv, resolved the same way every other gate's is. One entry,
-    // because `arm` in the script carries one ratchet target per arm and refuses
-    // more.
-    expect(arms.bunTargets).toEqual(['./tests/']);
-  });
-
-  test('every eval-tier arm has a ratchet target and every target is an arm', () => {
-    // The two lists that decide whether the tier can pass: `eval-tier.sh` names
-    // an arm per invocation, and `skip-ratchet.ts` proves one target per arm
-    // non-empty. A target with no arm is a report the run cannot produce — which
-    // is exactly what made `bun run evals:cloud` exit 1 while measuring what it
-    // was asked to — and an arm with no target is an arm whose silent zero
-    // nothing catches.
-    const script = readFileSync(resolve(root, EVAL_TIER_SCRIPT), 'utf8');
-    const arms = evalTierArms(script);
-    const vitestTargets = [...SKIP_RATCHET_VITEST_TARGETS].sort();
-
-    const behaviour = tracked
-      .filter((path) => isVitestEvalSuite(path) && !arms.vitestSelected.includes(path));
-
-    expect([...arms.vitestSelected, ...behaviour].map((path) => `./${path}`).sort())
-      .toEqual(vitestTargets);
-    // The script passes each arm's target to the ratchet from the same array it
-    // builds the reports from — asserted on the text because bash cannot import
-    // the declaration and this is the line that keeps the two in step.
-    expect(script).toContain('for target in "${ARM_TARGETS[@]}"; do RATCHET_ARGS+=(--target "$target"); done');
-
-    // Each arm's target must be spelled from the one variable that also names the
-    // path vitest selects, so a rename moves both at once.
-    for (const name of [
-      'BEHAVIOUR_EVAL', 'SWARM_EVAL', 'RESEARCH_EVAL', 'OPTIMIZATION_EVAL', 'MATH_EVAL',
-      'TRAJECTORY_EVAL', 'DEVICE_EVAL', 'KINU_TASKS_EVAL',
-    ]) {
-      expect(script).toContain(`"./$${name}"`);
-    }
+    expect(liveTierTargets(script)).toEqual(['./tests/live/']);
+    expect(SKIP_RATCHET_TARGETS).toContain('./tests/');
+    expect(script).toContain('RATCHET_ARGS=(--junit "$JUNIT" --target "${TARGETS[0]}")');
   });
 
   test('the CLI suite is the only tier that runs its own files', () => {

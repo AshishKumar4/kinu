@@ -43,12 +43,11 @@ import type { HostedNodeHome } from '@kinu.run/core';
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
 import { diagnostics, KinuError, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
-import { getSandbox } from "@cloudflare/sandbox";
 import { kinuEgressParams } from "./egress/configure";
 import { driveBound, tenantDrive } from "./drive/tenant";
-import { adaptCloudflareSandbox, SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
+import { adaptCloudflareSandbox, openSandbox } from "./sandbox-exec-lane";
 import { previewHostSuffix } from "@kinu.run/core";
-import { sandboxIdForWorkspace } from "@kinu.run/core";
+import { SANDBOX_TRANSPORT, sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore, craftStoreView } from "@kinu.run/agent-utils/stores";
@@ -379,12 +378,7 @@ export function createCFRuntime(
 
   if (env.Sandbox) {
     try {
-      // Must be passed identically on every getSandbox() for an id: changing it disconnects the client, and
-      // the SDK persists transport in storage. The route clients cannot restore a large workspace
-      // (`sandbox.route_client.restore_bytes`).
-      const sdk = getSandbox(env.Sandbox, sandboxId, {
-        normalizeId: true, transport: SANDBOX_TRANSPORT,
-      });
+      const sdk = openSandbox(env.Sandbox, sandboxId, { normalizeId: true });
 
       // Egress is configured before the container runs anything, not in `onStart` (too late); until then
       // the container has no network, so it fails closed. Only the owning workspace configures.

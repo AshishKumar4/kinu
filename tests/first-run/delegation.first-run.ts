@@ -30,7 +30,7 @@
  */
 import { afterAll, describe, test } from 'vitest';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import type { KinuPublicSession } from '../evals/public-session';
+import type { KinuPublicSession } from '../../evals/src/session';
 import { observeDelegationHires, observeDelegationRetirement } from './delegation-observation';
 import { firstRunReplyText, firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
 import {

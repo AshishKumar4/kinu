@@ -2,7 +2,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw, createMockLLM, createTestRuntime } from './helpers';
-import { createTestActors, present } from '@kinu.run/test-utils';
+import { createTestActors, present, unobservedSpend } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
 import { initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes';
@@ -174,7 +174,7 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
     initSearchTables(rt.storage.execRaw);
     initScaffoldTables(rt.storage.execRaw);
 
-    const engine = new EvolutionEngine(rt, stores.history, {
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend,
       replayTaskRunner: async (task) => `current-config answer: ${task}`,
     });
 
@@ -199,7 +199,7 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
     initSearchTables(rt.storage.execRaw);
     initScaffoldTables(rt.storage.execRaw);
 
-    const engine = new EvolutionEngine(rt, stores.history, {
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend,
       replayTaskRunner: async (task) => `current-config answer: ${task}`,
     });
 
@@ -227,7 +227,7 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
     initSearchTables(rt.storage.execRaw);
     initScaffoldTables(rt.storage.execRaw);
 
-    const engine = new EvolutionEngine(rt, stores.history, {
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend,
       replayTaskRunner: async (task) => `current-config answer: ${task}`,
     });
 
@@ -240,7 +240,7 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
 
   test('no runner configured → replay skipped, returns null', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
     seedOutcomes(rt.storage.sql, rt.actor);
     expect(await engine.runReplayEval()).toBeNull();
     expect(listReplayEvals(rt.storage.sql, rt.actor)).toHaveLength(0);

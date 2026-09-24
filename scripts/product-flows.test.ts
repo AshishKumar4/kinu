@@ -8,16 +8,17 @@
  * the tests below read only what the page showed.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { renderThrownChain } from '@kinu.run/core/obs';
-import { resolveWebIdentity } from '../tests/evals/public-session';
+import { SHARE_VIEWER_REQUESTS_PER_MINUTE } from '@kinu.run/core';
+import { resolveWebIdentity } from '../evals/src/session';
 import { withBrowser } from './live-app-harness';
 import {
-  FLOW_PROBE, FLOW_SLATE, INSPECTOR_SHUT_PX,
-  agentIsThereOnReturn, driveKeepsWhatIsDone, reachesHome, slateShowsItsPreview, workspaceGetsFirstAnswer,
-  writtenFileShowsInFilesAndChanges,
-  type AgentReturnVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict, type FlowTarget,
-  type SlatePreviewVerdict, type WrittenFileVerdict,
+  DRIVE_SLATE, FLOW_PROBE, FLOW_SLATE, INSPECTOR_SHUT_PX,
+  agentIsThereOnReturn, driveKeepsWhatIsDone, driveOpens, reachesHome, slateOpensFromMyStuff, slateSharesWithNoBindings,
+  slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges,
+  type AgentReturnVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
+  type FlowTarget, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict, type WrittenFileVerdict,
 } from './product-flows';
+import { rowVerdicts } from './row-verdicts';
 
 interface FlowVerdicts {
   welcome: WelcomeVerdict | null;
@@ -26,35 +27,20 @@ interface FlowVerdicts {
   writtenFile: WrittenFileVerdict | null;
   slate: SlatePreviewVerdict | null;
   drive: DriveVerdict | null;
+  driveOpens: DriveOpensVerdict | null;
+  slateOpens: SlateOpensVerdict | null;
+  slateShare: SlateShareVerdict | null;
 }
 
 const observed: FlowVerdicts = {
   welcome: null, firstAnswer: null, agentReturn: null, writtenFile: null, slate: null, drive: null,
+  driveOpens: null, slateOpens: null, slateShare: null,
 };
 
 /** Why no row could start: no origin, or no identity for it. */
 let setup: string | null = null;
 
-/** Each row that threw, with the account of why, so one broken flow cannot
- *  hide the others. */
-const broke = new Map<string, string>();
-
-async function attempt<Value>(row: string, flow: () => Promise<Value>): Promise<Value | null> {
-  const started = performance.now();
-
-  process.stderr.write(`product-flows: ${row} started\n`);
-
-  try {
-    return await flow();
-  } catch (cause) {
-    broke.set(row, renderThrownChain({ cause }));
-    process.stderr.write(`product-flows: ${row} broke: ${broke.get(row) ?? ''}\n`);
-
-    return null;
-  } finally {
-    process.stderr.write(`product-flows: ${row} ended after ${((performance.now() - started) / 1000).toFixed(0)} s\n`);
-  }
-}
+const { attempt, verdictOf, broken } = rowVerdicts('product-flows', () => setup);
 
 beforeAll(async () => {
   const origin = process.env.KINU_ORIGIN;
@@ -84,21 +70,17 @@ beforeAll(async () => {
     observed.writtenFile = await attempt('written-file', () => writtenFileShowsInFilesAndChanges(target));
     observed.slate = await attempt('slate-preview', () => slateShowsItsPreview(target));
     observed.drive = await attempt('drive', () => driveKeepsWhatIsDone(target));
+    observed.driveOpens = await attempt('drive-opens', () => driveOpens(target));
+    observed.slateOpens = await attempt('slate-opens', () => slateOpensFromMyStuff(target));
+    observed.slateShare = await attempt('slate-share', () => slateSharesWithNoBindings(target));
   });
 
-  process.stderr.write(`product-flows at ${origin}: ${JSON.stringify({ observed, broke: Object.fromEntries(broke) }, null, 2)}\n`);
+  process.stderr.write(`product-flows at ${origin}: ${JSON.stringify({ observed, broke: broken() }, null, 2)}\n`);
 });
 
 afterAll(() => {
   if (setup !== null) throw new Error(setup);
 });
-
-/** A row's verdict, or the failure that it never produced one. */
-function verdictOf<Value>(value: Value | null, row: string): Value {
-  if (value === null) throw new Error(`the ${row} row produced no verdict: ${broke.get(row) ?? setup ?? 'it never ran'}`);
-
-  return value;
-}
 
 describe('the product reaches its home page', () => {
   test('through setup when the account has not done it, and straight there when it has', () => {
@@ -177,5 +159,55 @@ describe('what a person does in the Drive page is kept', () => {
 
     expect(drive.afterDelete).not.toContain(drive.renamed);
     expect(drive.afterDelete).not.toContain(drive.file);
+  });
+});
+
+describe('the Drive opens and draws nothing empty', () => {
+  test('on My stuff, or on Shared for an account that owns nothing yet, with its sidebar row lit', () => {
+    const opened = verdictOf(observed.driveOpens, 'drive-opens');
+
+    expect(['/drive', '/shared']).toContain(opened.landedAt);
+    expect(opened.sidebarLit).toBe(true);
+  });
+
+  test('every section it draws holds a tile, and a Drive with nothing draws its empty state instead', () => {
+    const opened = verdictOf(observed.driveOpens, 'drive-opens');
+
+    expect(opened.sections.filter((section) => section.tiles === 0)).toEqual([]);
+    expect(opened.empty).toBe(opened.sections.length === 0);
+  });
+});
+
+describe('a slate opens from My stuff on its own tab', () => {
+  test('My stuff tiles it under its title', () => {
+    expect(verdictOf(observed.slateOpens, 'slate-opens').tileName).toBe(DRIVE_SLATE.title);
+  });
+
+  test('pressing the tile opens its workspace with the slate the current tab', () => {
+    const opened = verdictOf(observed.slateOpens, 'slate-opens');
+
+    expect(opened.landedAt.startsWith(`/workspace/${encodeURIComponent(opened.workspace)}`)).toBe(true);
+    expect(opened.slateTabCurrent).toBe(true);
+  });
+});
+
+describe('a slate with no bindings shares from its tile, and stops (#25)', () => {
+  test('the dialog draws no Reach row and states only the request limit', () => {
+    const shared = verdictOf(observed.slateShare, 'slate-share');
+
+    expect(shared.reachRow).toBe(false);
+    expect(shared.limits).toContain(String(SHARE_VIEWER_REQUESTS_PER_MINUTE));
+    expect(shared.limits).not.toContain('$');
+  });
+
+  test('the share is made and listed under Shared by you', () => {
+    const shared = verdictOf(observed.slateShare, 'slate-share');
+
+    expect(shared.created).toContain('Anyone with the link can open it.');
+    expect(shared.sharedByYou).toContain(DRIVE_SLATE.title);
+  });
+
+  test('Stop sharing takes it off the Drive', () => {
+    expect(verdictOf(observed.slateShare, 'slate-share').afterStop).not.toContain(DRIVE_SLATE.title);
   });
 });

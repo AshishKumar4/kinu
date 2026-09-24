@@ -163,8 +163,7 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
   });
 
   test('a failing test is the WORK failing, and is neither a refusal nor a defect', () => {
-    // The classifier's contract only: on the real runtime `bun` is absent and this exits 127 (see
-    // tests/evals/harness-wiring.test.ts).
+    // The classifier's contract only: on the real runtime `bun` is absent and this exits 127.
     const failure = classifyToolFailure(call({
       name: 'shell', toolCallId: 't1', args: { command: 'bun test src/broken.test.ts' },
       outcome: { success: false, reason: 'io', execution: { exitCode: 1 } }, result: 'Error (exit 1)\n--- stdout ---\n1 fail, 3 pass\n',

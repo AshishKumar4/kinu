@@ -105,7 +105,7 @@
      derivation: tinted ground (#E9E2D3), paper cards (#F7F3E9), strong
      visible rules (#D2C6AE family), gold deepened for text (#8F5C10).
    · Every text token meets WCAG AA (4.5:1+) on every surface it is
-     specced for, in both modes — enforced by unit-palette-contrast. Two
+     specced for, in both modes — enforced by scripts/palette-ux. Two
      rungs are lifted a hair above the mock's literals for exactly this
      gate and say so in their comments.
 
@@ -288,8 +288,8 @@ html, body, #root {
      outranks both without needing higher specificity. The mapping must stay
      COMPLETE — Kumo's defaults are cool neutrals plus a blue brand
      (`oklch(0.5772 0.2324 260)`), and any token left unmapped shows up as
-     exactly that blue/grey against the umber ground. `unit-kumo-token-
-     coverage.test.ts` fails when Kumo adds one we have not mapped.
+     exactly that blue/grey against the umber ground. `scripts/palette-ux`
+     fails when Kumo adds one we have not mapped.
 
      Light mode needs no second copy: every value indirects through `--c-*`,
      which the `[data-mode="light"]` block below re-points. ── */

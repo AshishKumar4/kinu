@@ -324,7 +324,7 @@ Classification is narrow. 429 and 529 always count. A 503 counts only when statu
 | `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` | Wrangler secret | Retired encryption keys (comma-separated), read-only, for a rotation window |
 | `WEBHOOK_ROUTE_SECRET` | Wrangler secret | **Required for webhook ingress.** Signs the route capability every public delivery URL carries (`events/webhook-route.ts`). Without it, webhook creation answers 503 and delivery answers 404. Rotating it revokes every issued URL. |
 | `AI_GATEWAY_URL` | wrangler.jsonc `vars` | Platform AI Gateway endpoint, in the Worker's own account. Names the gateway, upstream provider and endpoint prefix the `AI` binding transport addresses. No token needed. |
-| `SANDBOX_TRANSPORT` | wrangler.jsonc `vars` | Container control plane, `rpc`. A stored per-sandbox transport beats this var on a cold start; the var covers a future `getSandbox` that omits the option. |
+| `SANDBOX_TRANSPORT` | wrangler.jsonc `vars` | Container control plane, `rpc`. A stored per-sandbox transport beats this var on a cold start; the var covers a `getSandbox` that omits the option, as the SDK's own `proxyToSandbox` does. Product code opens clients only through `openSandbox`; the release-config gate holds the var to `SANDBOX_TRANSPORT`. |
 | `PREVIEW_HOST_SUFFIX` | wrangler.jsonc `vars` | Zone Workspace and Sandbox previews are served under, one capability hostname per exposed port. Requires a proxied wildcard DNS record on that zone plus a `*.<zone>/*` route; the wrangler.jsonc comment has both steps. Every host under it except the app's own serves previews and nothing else. Empty means previews are unavailable. |
 | `PREVIEW_HOST_PORT` | `vite dev` only | The port preview and share URLs carry when the preview zone is not on 443. `vite dev` serves `*.preview.localhost` on its own https port (`packages/cf-backend/vite-preview-zone.ts`) and sets this with `PREVIEW_HOST_SUFFIX`; production leaves it unset. |
 | `CLI_PUBLIC_ORIGIN` | wrangler.jsonc `vars` | Origin embedded in installer/setup commands |
@@ -399,7 +399,7 @@ A dirty checkout is refused first, so the `/api/health` build SHA always names t
 2. Build. `vite build`, then `scripts/build-worker-release.ts` (the self-deploy tarball and `release.json`), then `scripts/build-cli-dist.sh` (four platform artifacts, the shared CPython runtime, a `.sha256` for each, and `kinu-version.json`). The build fails if any output misses `dist/client/downloads/`. The worker tarball is over the 25 MiB per-file asset limit, so the script uploads it and its `.sha256` to the `kinu-releases` R2 bucket before the deploy.
 3. Deploy. `npx wrangler deploy --tag <sha> --message "kinu production <sha>"`, so the published Worker version carries the build sha as a version annotation. Workers Logs tags an invocation with a version id and nothing else, and `npx wrangler versions list` prints the pair. The step verifies the `KinuSandbox` binding appears in output and the assets directory reported is the one downloads were staged into.
 4. Smoke test. HTTP 200 plus app content on `https://kinu.run/`. The `/api/health` stamp equals the deployed commit. `/downloads/kinu-version.json` and `release.json` parse and name that commit, and the worker tarball's `.sha256` matches the signed manifest. The CLI launcher points at the deployed artifacts. Every artifact downloads, unpacks, and matches its published `.sha256`. Stamp checks retry with backoff: edge rollout takes about two minutes, and a stamp that never converges is the real failure.
-5. Post-publish tiers. The first-run and trajectory tiers drive the deployed product as the eval service identity, in one wave.
+5. Post-publish tiers. The first-run tier and the product flows drive the deployed product as the eval service identity, in one wave.
 6. Infrastructure verification. `bun scripts/infra-verify.ts production --phase=post-deploy`, the strictest phase, unconditional.
 7. Summary. URL, Version ID, build sha.
 
@@ -432,14 +432,14 @@ Step 2 asserts downloads exist in `dist/client/downloads/`. Step 3 asserts wrang
 
 ### CI credentials
 
-`.github/workflows/eval.yml` holds credentials, so it asks for the GitHub environment `eval` and read-only repository permissions. Two things only an operator can do:
+`.github/workflows/evals.yml` holds a credential, so its two jobs that read it (`evals`, `diagnose`) ask for the GitHub environment `eval`, and no pull request can start the workflow: it is dispatched after a deploy and measures the deployed build. Two things only an operator can do:
 
 | Operator setup required | Where | Why the repository cannot do it |
 |---|---|---|
-| Create an environment named `eval` and move `EVAL_SERVICE_TOKEN`, `EVAL_ANTHROPIC_API_KEY` and `EVAL_OPENAI_API_KEY` into it. | GitHub → Settings → Environments | The workflow declares `environment: eval`, the only boundary a file in the repository can ask for. Which secrets that environment holds is a dashboard setting. The job can be started by labelling a pull request, so it checks out the reviewed base revision rather than the branch. A branch that changes the eval setup or corpus has to land, or be dispatched from a trusted ref, before it is measured. `validate-corpus` runs the branch's own code and holds no credential. |
+| Create an environment named `eval` holding `KINU_EVAL_WEB_IDENTITY`, the deployment's `DEV_IDENTITY_SECRET`, which lets a trial act as `eval-service`. | GitHub → Settings → Environments | The workflow declares `environment: eval`, the only boundary a file in the repository can ask for. Which secrets that environment holds is a dashboard setting. |
 | For a deploy from CI, mint `CLOUDFLARE_API_TOKEN` with Edit Cloudflare Workers, plus Workers R2 Storage: Edit, Workers KV Storage: Edit and Vectorize: Edit, scoped to the deploy account. | Cloudflare → My Profile → API Tokens | Nothing in a repository can reduce what an account-scoped token may do. `scripts/deploy.sh` prints this list when wrangler is not authenticated, and stops before the build. |
 
-`scripts/release-config.test.ts` (required gate) holds these properties. Every workflow declares its token permissions. Every credential-bearing job names an environment. A credential-bearing job reachable from a pull request pins the base revision. No workflow pipes a download into a shell. No action is used from a moving ref.
+`scripts/release-config.test.ts` (required gate) holds these properties. Every workflow declares its token permissions. Every credential-bearing job names an environment. No pull request can start a credential-bearing job. No workflow pipes a download into a shell. No action is used from a moving ref.
 
 ### Eval preflight
 

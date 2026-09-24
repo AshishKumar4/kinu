@@ -2,7 +2,7 @@
  * The one Kinu wake row (`_kinuTimerTick`) carries every async lane; losing it silently stops the workspace.
  * The alarm itself is fired for real in tests/workerd/do-alarm.test.ts (redelivery-on-throw).
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, setSystemTime, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { openWorkspaceMainActor } from '@kinu.run/core';
 import { makeSql } from '../../core/tests/helpers';
@@ -29,6 +29,29 @@ function wakeArmed(db: Database): boolean {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The platform clock moves only across I/O: pinned at `at`, it steps one second after each schedule write, so
+ * two arms of one wake straddle a second boundary on every run instead of on a starved box.
+ */
+function scheduleWritesTakeASecond(agent: HarnessOrchestratorAgent, at: number) {
+  let now = at;
+  setSystemTime(new Date(now));
+  const write = agent.schedule.bind(agent);
+
+  Object.defineProperty(agent, 'schedule', {
+    configurable: true,
+    value: async (...args: Parameters<typeof write>) => {
+      const row = await write(...args);
+      now += 1000;
+      setSystemTime(new Date(now));
+
+      return row;
+    },
+  });
+
+  return { seconds: () => Math.floor(now / 1000) };
+}
 
 /** Injects the schedule-write failure that would end the chain. */
 function breakScheduleWrites(agent: HarnessOrchestratorAgent): void {
@@ -588,7 +611,7 @@ describe('the workspace keeps exactly one wake row', () => {
     await turns.settle({ messageId: request.identity.messageId, text: 'done' });
   });
 
-  test('an email the binding refused is retried by the one timer wake', async () => {
+  test('an email the binding refused is retried by the one future timer wake', async () => {
     // The mail outbox arms the Kinu timer like every other wake, awaited: a lost arm drops the receipt silently.
     const refusals: string[] = [];
 
@@ -605,17 +628,24 @@ describe('the workspace keeps exactly one wake row', () => {
       },
     );
 
-    const admission = await agent.acceptEmailDelivery({
-      from: 'owner@example.com', to: 'workspace@kinu.run', subject: 'status?', body_text: 'how is the deploy?',
-      message_id: '<m-1@example.com>', in_reply_to: null, references: null, attachments: [], now: Date.now(),
-    });
+    const clock = scheduleWritesTakeASecond(agent, Date.UTC(2026, 8, 24, 12));
 
-    expect(admission).toMatchObject({ admitted: true, duplicate: false });
-    expect(refusals).toEqual(['send']);
+    try {
+      const admission = await agent.acceptEmailDelivery({
+        from: 'owner@example.com', to: 'workspace@kinu.run', subject: 'status?', body_text: 'how is the deploy?',
+        message_id: '<m-1@example.com>', in_reply_to: null, references: null, attachments: [], now: Date.now(),
+      });
 
-    const wakes = (await agent.listSchedules()).filter((row) => row.callback === KINU_TIMER_CALLBACK);
-    expect(wakes).toHaveLength(1);
-    expect((wakes[0]?.time ?? 0) * 1000).toBeGreaterThan(Date.now());
+      expect(admission).toMatchObject({ admitted: true, duplicate: false });
+      expect(refusals).toEqual(['send']);
+
+      // The inbound email's drain wake falls due as the retry is armed. Arming collapses future rows only
+      // (a due row is the next alarm's, which re-derives the wake), so the retry rides the one future row.
+      const wakes = (await agent.listSchedules()).filter((row) => row.callback === KINU_TIMER_CALLBACK);
+      expect(wakes.filter((row) => row.time > clock.seconds())).toHaveLength(1);
+    } finally {
+      setSystemTime();
+    }
   });
 
   test('two concurrent arms converge on ONE wake row, the earliest', async () => {

@@ -116,7 +116,7 @@ describe('an interrupted turn', () => {
       onEvent: (event) => { if (event.type === 'run-event' && event.event.type === 'model_operation') opened.resolve(); },
     });
 
-    const turn = a.send('say nothing');
+    const turn = a.send('say nothing', { id: crypto.randomUUID() });
     await opened.promise;
     a.interrupt();
     await turn;
@@ -133,7 +133,7 @@ describe('an interrupted turn', () => {
       onEvent: (event) => { if (event.type === 'text-delta') streamed.resolve(); },
     });
 
-    const cutTurn = b.send('say part');
+    const cutTurn = b.send('say part', { id: crypto.randomUUID() });
     await streamed.promise;
     b.interrupt();
     await cutTurn;
@@ -153,7 +153,7 @@ describe('the assistant row holds the answer', () => {
       rt, db, model: narratedModel('Running the test in the sandbox:', 'FAIL'), noAutoEvolve: true, onEvent: (event) => events.push(event),
     });
 
-    await session.send('Run the test and reply with only PASS or FAIL.');
+    await session.send('Run the test and reply with only PASS or FAIL.', { id: crypto.randomUUID() });
     await session.end();
 
     const streamed = events.filter((event) => event.type === 'text-delta').map((event) => event.type === 'text-delta' ? event.delta : '');
@@ -173,7 +173,7 @@ describe('the assistant row holds the answer', () => {
       onEvent: (event) => { if (event.type === 'text-delta') streamedA.resolve(); },
     });
 
-    const dying = a.send('continue me');
+    const dying = a.send('continue me', { id: crypto.randomUUID() });
     await streamedA.promise;
 
     const eventsB: SessionEvent[] = [];
@@ -205,7 +205,7 @@ describe('the assistant row holds the answer', () => {
       onEvent: (event) => { if (event.type === 'text-delta') streamedA.resolve(); },
     });
 
-    const dying = a.send('continue me');
+    const dying = a.send('continue me', { id: crypto.randomUUID() });
     await streamedA.promise;
 
     const ended = Promise.withResolvers<void>();

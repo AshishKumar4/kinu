@@ -1,11 +1,11 @@
 /**
- * The per-episode path is proven in `tests/evals/harness-wiring.test.ts`; this covers
- * accumulation, draining, and the absence rules.
+ * Accumulation, draining, and the absence rules of live-model spend reporting.
  */
 import { describe, test, expect, beforeEach } from 'bun:test';
 import type { LanguageModelUsage } from 'ai';
 import { cloudProxyBaseURL } from '@kinu.run/core';
 import {
+  DeploymentAnswer, INFRA_FAILURE_MARKER, infraBoundary,
   liveModelSpend, recordLiveModelSpend, reportLiveModelSpend, resetLiveModelSpend, workerSession,
 } from '../src/live-model';
 
@@ -136,5 +136,28 @@ describe('workerSession — the deployment behind a worker-proxy target', () => 
       headers: { Authorization: 'Bearer token-1' },
       model: 'model-1',
     })).toThrow('is not a worker AI-proxy base URL');
+  });
+});
+
+describe('infraBoundary — the environment failing, never the build answering', () => {
+  const failing = (error: Error) => infraBoundary('GET /api/workspaces', () => Promise.reject(error));
+
+  test('a failed answer of the build\'s own passes on unmarked: a product 5xx is the build\'s result', async () => {
+    const answer = new DeploymentAnswer('could not read the chat history: 500 Internal Server Error', 500);
+
+    await expect(failing(answer)).rejects.toBe(answer);
+    await expect(failing(new DeploymentAnswer('the workspace RPC failed: no such tool'))).rejects.toBeInstanceOf(DeploymentAnswer);
+  });
+
+  test('a transport failure, and an answer from around the build, are infrastructure', async () => {
+    const around = [
+      new TypeError('fetch failed'),
+      new DeploymentAnswer('could not create a workspace: 401 Unauthorized', 401),
+      new DeploymentAnswer('could not read the runs: 429 Too Many Requests', 429),
+      new DeploymentAnswer('could not read the runs: 522 Connection timed out', 522),
+      new DeploymentAnswer('the workspace RPC failed: Network connection lost.'),
+    ];
+
+    for (const error of around) await expect(failing(error)).rejects.toThrow(INFRA_FAILURE_MARKER);
   });
 });

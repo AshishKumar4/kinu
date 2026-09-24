@@ -193,7 +193,7 @@ async function authorize(request: Request, env: Env, stub: DurableObjectStub<Dep
   });
 
   handoff.headers.set('cache-control', 'no-store');
-  handoff.headers.append('set-cookie', setCookie(DEPLOY_STATE_COOKIE_NAME, sha256Hex(state), Date.now() + STATE_TTL_MS));
+  handoff.headers.append('set-cookie', setCookie(DEPLOY_STATE_COOKIE_NAME, sha256Hex(state), STATE_TTL_MS));
 
   return handoff;
 }

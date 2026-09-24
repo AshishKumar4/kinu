@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { jsonSchema, tool } from 'ai';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
 import {
   ActorSession, EvolutionEngine, WorkspaceActorDirectory, createAgentStores, profileCatalogDigest,
   resolveTurnProfile, verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
@@ -74,7 +74,7 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
 
     const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null,
     orchestration: {
-      engine: new EvolutionEngine(runtime, stores.history, { enabled: false }), eventLog: new EventLog(eventSql, handle),
+      engine: new EvolutionEngine(runtime, stores.history, { reportModelCall: unobservedSpend, enabled: false }), eventLog: new EventLog(eventSql, handle),
       host: {
         broadcast: () => {},
         enqueueTurn: async () => { throw new Error('this fixture must not enqueue another turn'); },
@@ -194,7 +194,7 @@ test('a source change after admission cannot alter the bytes the turn consumed',
     claim,
     (version) => readVersionedScaffoldSource(left.runtime, version),
     sha256Hex,
-    () => left.stores.claims.consumedContext('turn-src'),
+    await left.stores.claims.consumedContext('turn-src'),
   );
 
   // Recovery refuses rewritten bytes and reports the digest it found.
@@ -228,7 +228,7 @@ test('a cold reader recovers the claimed program identity and the exact context 
     claim,
     (version) => readVersionedScaffoldSource(left.runtime, version),
     sha256Hex,
-    () => cold.claims.consumedContext('turn-cold'),
+    await cold.claims.consumedContext('turn-cold'),
   );
 
   expect(recovery.kind).toBe('build_unknown');

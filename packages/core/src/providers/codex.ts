@@ -1,12 +1,12 @@
 // Codex via ChatGPT subscription (chatgpt.com/backend-api/codex/responses); auth headers from the AuthResolver.
 // `originator: codex_cli_rs` is the WAF bypass; Cloudflare may still 403 Workers' data-center IPs.
 import { createOpenAI } from '@ai-sdk/openai';
-import type { LanguageModel } from 'ai';
+import { wrapLanguageModel, type LanguageModel } from 'ai';
 import type { AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
 import { MODEL_INPUT_MODALITIES } from './types';
 import { asFetchFunction } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
-import { authCacheKey, cloneModelInfos, copyHeaders, positiveInteger } from './util';
+import { authCacheKey, cloneModelInfos, copyHeaders, positiveInteger, statelessResponses } from './util';
 import { nonEmptyString } from '../utils/json';
 import * as v from 'valibot';
 import { OAuthTokenError } from './oauth-token-error';
@@ -21,7 +21,7 @@ export const CODEX_CRED_KEY = 'codex.oauth';
 
 export const CODEX_DEFAULT_MODEL = 'gpt-5.5';
 
-/** The small tier the evolution engine's mechanical calls run on. */
+/** Evolution's mechanical-call tier. */
 const CODEX_FAST_MODEL = 'gpt-5.4-mini';
 
 /** The remedy for a ChatGPT login refused after the forced-refresh retry: web settings or CLI device-code. */
@@ -204,7 +204,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
       // apiKey is unused (customFetch sets Authorization) but the SDK requires a non-empty value.
       const provider = createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: customFetch });
 
-      return provider.responses(modelId);
+      return wrapLanguageModel({ model: provider.responses(modelId), middleware: statelessResponses(true) });
     },
   };
 }
@@ -299,19 +299,14 @@ export function normalizeCodexResponsesRequest(init: RequestInit | undefined): R
   if (!parsedBody.success) return init;
   const body = parsedBody.output;
 
-  if (nonEmptyString({ value: body.instructions })) {
-    return {
-      ...init,
-      body: JSON.stringify({ ...body, store: false }),
-    };
-  }
+  if (nonEmptyString({ value: body.instructions })) return init;
 
   const parsedInput = v.safeParse(JsonArraySchema, body.input);
 
   if (!parsedInput.success) {
     return {
       ...init,
-      body: JSON.stringify({ ...body, instructions: CODEX_DEFAULT_INSTRUCTIONS, store: false }),
+      body: JSON.stringify({ ...body, instructions: CODEX_DEFAULT_INSTRUCTIONS }),
     };
   }
 
@@ -335,12 +330,7 @@ export function normalizeCodexResponsesRequest(init: RequestInit | undefined): R
 
   return {
     ...init,
-    body: JSON.stringify({
-      ...body,
-      instructions,
-      store: false,
-      input: remainingInput,
-    }),
+    body: JSON.stringify({ ...body, instructions, input: remainingInput }),
   };
 }
 

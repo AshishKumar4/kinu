@@ -58,7 +58,7 @@ function workspace() {
       id: `h${i}`, parentId: null, rootId: ROOT, depth: 1,
       task: `angle ${i}`, rationale: 'why', mode: 'build',
       inheritedContext: [], mergeStrategy: 'synthesize',
-      budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: now },
+      budget: { maxDepth: 2, spawnedAt: now },
       loop: defaultLoopOrigin('head'),
     });
   }
@@ -311,7 +311,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
       id: 'resumed-node', parentId: null, rootId: 'root-resumed', depth: 1,
       task: 'the continuation', rationale: 'why', mode: 'build',
       inheritedContext: [], mergeStrategy: 'synthesize',
-      budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: activationStart + 5 },
+      budget: { maxDepth: 2, spawnedAt: activationStart + 5 },
       loop: defaultLoopOrigin('head'),
     });
 

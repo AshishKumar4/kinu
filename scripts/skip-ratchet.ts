@@ -27,28 +27,18 @@
  *   2. IT NAMES THE COST OF EACH SKIP. The lock stores a reason per entry, so
  *      "19 skips" is a list someone can argue with rather than a number nobody
  *      reads.
- *   3. IT COVERS BOTH RUNNERS. The eval tier has two, split by file extension:
- *      `bun test ./tests/` and `vitest --config vitest.evals.config.ts` over
- *      `tests/evals/**\/*.eval.ts`, which bun's matcher cannot see. This gate
- *      read only the first, so the vitest arm reported 36 tests, 35 skipped and
- *      exit 0 with nothing declaring any of them — the same false green, one
- *      runner over, inside the tier built to prevent it. `./tests/` could not
- *      catch it either: the bun arm satisfies that target by itself, which is
- *      why the vitest arm is named as a FILE.
  *
- * Run it standalone — credential-free, both runners, everything live skips and
- * the ratchet says so — or hand it a live run's reports with one `--junit <path>`
+ * Run it standalone — credential-free, everything live skips and the ratchet
+ * says so — or hand it a live run's report with a `--junit <path>`
  * per arm so the eval tier does not pay for the suites twice. Add `--expect-live`
  * there: with a target resolved, a locked skip that RAN is the tier working, not
  * debt, and calling it debt made the tier unable to pass on a credentialed
  * machine.
  *
- * A run that executes a SUBSET of the arms names that subset with `--target`,
- * once per arm. Without it the non-emptiness proof is aimed at every arm this
- * file knows about, which is right standalone and wrong for `evals:cloud`: that
- * backend runs two of five arms on purpose, so three targets reported missing
- * and the tier exited 1 having measured exactly what it meant to. The claim
- * follows the run.
+ * A run that executes a SUBSET of the targets names that subset with `--target`.
+ * Without it the non-emptiness proof is aimed at every target this file knows
+ * about, which is right standalone and wrong for a tier that runs one directory
+ * of them. The claim follows the run.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -67,8 +57,7 @@ const root = new URL('..', import.meta.url).pathname;
  * leading `./` is load bearing, and `assertMeasured` below is what keeps it
  * honest.
  *
- * THREE ENTRIES, EACH A SET NOTHING ELSE CAN ANSWER FOR, for the reason the
- * vitest arms below are named as files.
+ * THREE ENTRIES, EACH A SET NOTHING ELSE CAN ANSWER FOR.
  *
  * `./packages/core/tests/e2e/` holds three live tests — one MCTS search cycle
  * and two scaffold lifecycles, all behind `describe.skipIf(!isE2EConfigured())`
@@ -84,47 +73,6 @@ const root = new URL('..', import.meta.url).pathname;
  */
 export const SKIP_RATCHET_TARGETS: readonly string[] = [
   './tests/', './packages/core/tests/e2e/', './scripts/bench-external.test.ts',
-];
-
-/**
- * The vitest side of the eval tier, named as FILES rather than a directory.
- *
- * `./tests/` is satisfied by the bun arm alone, so without file-named arms a
- * MISSING vitest report reads as clean — and the vitest arm
- * reports 36 tests of which 35 skip, credential-free, exiting 0. That is the
- * exact false green this file exists for, one runner over. `bun test` cannot see
- * these files (it matches only `*.test.*` / `*_test.*` / `*.spec.*`), so they can
- * never appear in the bun report and a directory target cannot distinguish them.
- *
- * ONE ENTRY PER ARM, because `unmatchedTargets` proves a target non-empty and an arm
- * is what can go missing: `eval-tier.sh` runs the behaviour eval, the live swarm
- * eval, the research eval, the optimization eval, the math eval, the trajectory
- * eval, the device eval and the kinu-tasks eval as separate invocations with
- * separate spend files, so a target naming only the first would be satisfied
- * while any of the others produced no report at all.
- *
- * A target here is a target this file may be asked to prove non-empty, never a
- * claim that every backend runs it: the trajectory arm is CLOUD ONLY, and
- * `eval-tier.sh` passes `--target` per arm it actually ran, so a local run is
- * never held to a report that backend does not produce.
- *
- * A rename therefore fails this gate loudly with the path it looked for, which is
- * the correct outcome: the arm moved and nobody re-pointed the gate at it.
- */
-export const SKIP_RATCHET_VITEST_TARGETS: readonly string[] = [
-  './tests/evals/behaviour.eval.ts',
-  './tests/evals/swarm.eval.ts',
-  './tests/evals/research.eval.ts',
-  './tests/evals/optimization.eval.ts',
-  './tests/evals/math.eval.ts',
-  './tests/evals/trajectory.eval.ts',
-  './tests/evals/device.eval.ts',
-  './tests/evals/kinu-tasks.eval.ts',
-];
-
-/** Every target, both runners. What `unmatchedTargets` proves by default. */
-export const ALL_SKIP_RATCHET_TARGETS: readonly string[] = [
-  ...SKIP_RATCHET_TARGETS, ...SKIP_RATCHET_VITEST_TARGETS,
 ];
 
 export const SKIP_LOCK_PATH = resolve(root, 'scripts/skip-ratchet.lock.json');
@@ -323,7 +271,7 @@ export function reconcileSkips(
  * the caller knows that. Credential-free, a locked entry that ran is the lock
  * owing an update and the ratchet tightens. With a target it is the tier doing
  * the one thing it exists for — every locked entry is gated on `skipIf(!TARGET)`
- * — so reading it as debt made `bash scripts/eval-tier.sh` unable to exit 0 on
+ * — so reading it as debt made the live tier unable to exit 0 on
  * the only kind of machine that pays for it: 25 locked entries run, 25 report
  * stale, exit 1.
  *
@@ -345,25 +293,19 @@ export function skipDebt(
  * sits under. A target matching nothing means the gate looked at an empty set
  * and would have reported clean.
  *
- * A FILE SATISFIES ONLY THE NARROWEST TARGET THAT CLAIMS IT, and that is what
- * makes the two arms independently provable. `tests/evals/behaviour.eval.ts` sits
- * under `./tests/`, so plain prefix matching let EITHER arm satisfy BOTH targets:
- * a run that reported only the vitest arm looked complete, and so did a run that
- * reported only bun. Narrowest-claim gives each arm a target nothing else can
- * answer for.
+ * A FILE SATISFIES ONLY THE NARROWEST TARGET THAT CLAIMS IT, so a target nested
+ * inside another is provable on its own: with plain prefix matching a file under
+ * the narrower one would satisfy both.
  *
  * AND A DIRECTORY TARGET IS A `bun test` ARGV, so only a file `bun test` can
- * SELECT may answer for it. Narrowest-claim alone closes the hole for the four
- * `*.eval.ts` files that have targets of their own and reopens it for the fifth:
- * a new `tests/evals/planning.eval.ts` runs in the behaviour arm, has no target,
- * sits under `./tests/`, and would have satisfied the BUN arm — so a bun arm that
- * collected nothing at all could look complete on the strength of a vitest file.
- * The runner's real matcher is the test, imported from the one enumeration rather
- * than restated here.
+ * SELECT may answer for it: a report naming a file bun cannot run would
+ * otherwise make an arm that collected nothing look complete. The runner's real
+ * matcher is the test, imported from the one enumeration rather than restated
+ * here.
  */
 export function unmatchedTargets(
   report: TestReport,
-  targets: readonly string[] = ALL_SKIP_RATCHET_TARGETS,
+  targets: readonly string[] = SKIP_RATCHET_TARGETS,
 ): readonly string[] {
   const prefixes = targets.map((target) => target.replace(/^\.\//, ''));
   const seen = [...report.files];
@@ -378,26 +320,12 @@ export function unmatchedTargets(
   });
 }
 
-/**
- * Run both arms of the tier and hand back both reports.
- *
- * Both, not one: `bun test` cannot see `*.eval.ts` and vitest is not given the
- * bun suites, so a single runner covers a strict subset of what this gate
- * governs. Running only bun here is what let 35 vitest skips exist outside the
- * lock. `bun --bun` is required for the vitest arm — the spine under test opens
- * its store through `bun:sqlite`, and node-hosted vitest fails at import and
- * collects ZERO tests, which would read as a clean arm.
- */
+/** Run the targets under `bun test` and hand back the report. */
 function runTargets(): readonly string[] {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-skip-ratchet-'));
 
   const arms: readonly { readonly what: string; readonly argv: readonly string[] }[] = [
     { what: 'bun test', argv: ['test', '--timeout=0', ...SKIP_RATCHET_TARGETS, '--reporter=junit'] },
-    {
-      what: 'vitest',
-      argv: ['--bun', './node_modules/.bin/vitest', 'run', '--config', 'vitest.evals.config.ts',
-        '--reporter=junit'],
-    },
   ];
 
   try {
@@ -406,8 +334,7 @@ function runTargets(): readonly string[] {
 
       const result = spawnSync(
         'bun',
-        // Bun spells the destination `--reporter-outfile`, vitest `--outputFile`.
-        [...argv, what === 'vitest' ? `--outputFile=${out}` : `--reporter-outfile=${out}`],
+        [...argv, `--reporter-outfile=${out}`],
         { cwd: root, encoding: 'utf8', stdio: ['ignore', 'inherit', 'inherit'] },
       );
 
@@ -455,19 +382,12 @@ function junitPaths(argv: readonly string[]): readonly string[] | null {
 
 /**
  * Every `--target <prefix>` on the command line, in order. Empty means
- * {@link ALL_SKIP_RATCHET_TARGETS}, which is what a standalone run proves.
+ * {@link SKIP_RATCHET_TARGETS}, which is what a standalone run proves.
  *
- * IT EXISTS BECAUSE THE ARM SET IS A PROPERTY OF THE RUN, not of this file.
- * `bun run evals:cloud` deliberately runs two of the five arms — the other
- * three cannot read `resolveEvalTarget` and would report an in-process
- * measurement under a cloud banner — so the default target list demanded
- * reports from three arms that backend never starts, `unmatchedTargets`
- * reported all three missing, and the cloud tier could not exit 0 on any
- * machine. The reachable-looking fixes were all weakenings: drop a `--junit`,
- * skip the ratchet for cloud, or delete the targets. So the caller names the
- * arms it RAN and this gate proves exactly those non-empty. An arm omitted from
- * the run is omitted from the claim, which `eval-tier.sh` prints as `not run:`
- * rather than leaving implicit.
+ * IT EXISTS BECAUSE THE TARGET SET IS A PROPERTY OF THE RUN, not of this file.
+ * The live tier runs `./tests/live/` (one file of it under `--backend cloud`),
+ * so the default list would demand reports from targets that run never starts.
+ * The caller names what it RAN and this gate proves exactly that non-empty.
  */
 function targetPrefixes(argv: readonly string[]): readonly string[] | null {
   const targets: string[] = [];
@@ -487,8 +407,8 @@ function main(argv: readonly string[]): number {
   const lockRequested = argv.includes('--lock');
   // A resolved live target changes what the lock MEANS, not how strict this gate
   // is. Every locked entry is `skipIf(!TARGET)`, so with a target they run — and
-  // reading that as `stale` made the eval tier's own ratchet unpassable on the
-  // one machine that pays for it. Set from `EXPECT_LIVE` in eval-tier.sh, beside
+  // reading that as `stale` made the live tier's own ratchet unpassable on the
+  // one machine that pays for it. Set from `EXPECT_LIVE` in live-tier.sh, beside
   // the banner, so the line a reader sees and the mode this runs in agree.
   const expectLive = argv.includes('--expect-live');
   const paths = junitPaths(argv);
@@ -510,7 +430,7 @@ function main(argv: readonly string[]): number {
   // The EXECUTED set, never a wider claim. Standalone this file's own list is
   // the executed set because `runTargets` runs it; with reports handed over, the
   // caller ran the arms and says which.
-  const targets = named.length === 0 ? ALL_SKIP_RATCHET_TARGETS : named;
+  const targets = named.length === 0 ? SKIP_RATCHET_TARGETS : named;
 
   const xmls = paths.length === 0 ? runTargets() : paths.map((p) => readFileSync(p, 'utf8'));
   const report = mergeReports(xmls.map(parseJUnit));
@@ -525,15 +445,11 @@ function main(argv: readonly string[]): number {
         + 'entry reads as stale and no new skip can ever be added — a gate over nothing',
       fix: named.length === 0
         ? 'a bun target missing is a path-form defect — `bun test tests` and `bun test '
-          + 'tests/` both match NOTHING here, only `./tests/` selects the root suites. A '
-          + 'vitest target missing means the eval tier ran only its bun arm, or the '
-          + '`*.eval.ts` file moved: pass its report with a second --junit, or re-point '
-          + 'SKIP_RATCHET_VITEST_TARGETS at where the arm now lives'
+          + 'tests/` both match NOTHING here, only `./tests/` selects the root suites'
         : 'these targets were named with --target by the caller, so the run CLAIMED to '
-          + 'have executed them and its report does not show it: an arm crashed before '
-          + 'writing tests, or the arm list and the --target list disagree. In '
-          + 'eval-tier.sh both come from the one ARM_* array, so they cannot — check '
-          + 'that array first',
+          + 'have executed them and its report does not show it: the run crashed before '
+          + 'writing tests, or its argv and its --target disagree. live-tier.sh passes '
+          + 'the first entry of the argv it ran, so check that array first',
     }));
 
     return 1;

@@ -397,24 +397,20 @@ export function createFileTool(deps: FileToolDeps): ToolSet[string] {
     inputSchema: jsonSchema<FileToolInput>({
       type: 'object',
       properties: {
-        action: {
-          type: 'string',
-          enum: [...FILE_TOOL_ACTIONS],
-          description: 'read contents, list a directory, stat a path, search a file for literal text, edit exact text, or write a whole file.',
-        },
-        path: { type: 'string', description: 'Path in this agent\'s own durable workspace filesystem; relative paths resolve at its root. Mounted executors\' files also appear under their mounts — a bound container at /sandbox, a connected device at /pc. Other environments have their own filesystems, reached through their namespaces in eval.' },
-        offset: { type: 'number', description: 'For action=read: 1-indexed first line to return (default 1).' },
-        limit: { type: 'number', description: 'For action=read: how many lines to return (default: as many as fit).' },
-        content: { type: 'string', description: 'For action=write: the file\'s complete new contents.' },
-        query: { type: 'string', description: 'For action=search: literal text to find in this file; returns matching lines and line numbers.' },
+        action: { type: 'string', enum: [...FILE_TOOL_ACTIONS] },
+        path: { type: 'string', description: 'Relative paths resolve at the workspace root. A bound container\'s files are under /sandbox, a connected machine\'s under /pc.' },
+        offset: { type: 'number', description: 'For read: the first line, 1-indexed (default 1).' },
+        limit: { type: 'number', description: 'For read: lines to return (default: as many as fit).' },
+        content: { type: 'string', description: 'For write: the whole new content.' },
+        query: { type: 'string', description: 'For search: literal text; returns the matching lines with their numbers.' },
         edits: {
           type: 'array',
-          description: 'For action=edit: replacements, all matched against the file as you read it and applied together or not at all.',
+          description: 'For edit: replacements matched against the file as last read, applied together or not at all.',
           items: {
             type: 'object',
             properties: {
-              old_text: { type: 'string', description: 'Text to replace, copied exactly from the file — indentation, blank lines and all — with enough context around it to occur exactly once.' },
-              new_text: { type: 'string', description: 'What replaces it. Empty string deletes the matched text.' },
+              old_text: { type: 'string', description: 'Text copied exactly from the file, with enough context to occur once.' },
+              new_text: { type: 'string', description: 'The replacement; empty deletes.' },
             },
             required: ['old_text', 'new_text'],
           },

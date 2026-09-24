@@ -2,8 +2,7 @@
  * What is measured, who measures it, and where the number is kept. Spec:
  * docs/EXPLORATION.md "The objective" through "The records store".
  * A node never supplies its own score: a verifier gets a filesystem and a shell
- * only, so an outcome is a property of the final state. test-utils declares an
- * identical `VerifierContext` and cannot be imported here; keep the two in step.
+ * only, so an outcome is a property of the final state.
  */
 
 import * as v from 'valibot';

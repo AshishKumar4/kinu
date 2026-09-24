@@ -14,8 +14,9 @@
  * (`judgeMarginalisationRefusal`), so a tree of uneven depth is the subordinate
  * tree's row (`delegation-tree`), not this one.
  *
- * WHY THE EVAL TIER'S SWARM ARM DOES NOT COVER IT. Its cloud arm asserts a
- * search row exists; it reads neither the pane nor whether the nodes settled.
+ * THE ONLY SWARM ON THE DEPLOYMENT. The retired eval tier's swarm arm asserted
+ * only that a search row existed; it read neither the pane nor whether the
+ * nodes settled.
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';

@@ -25,13 +25,14 @@
  *   module's `sourceMappingURL` instead. The flag without the Vite side is a
  *   silent no-op, which is why both halves are asserted here.
  *
- * A3 NO CREDENTIAL-BEARING JOB RUNS UNREVIEWED CODE. `eval.yml`'s benchmark job
- *   can be started by labelling a pull request, and a `pull_request` checkout is
- *   that pull request's code. It therefore installed the branch's lockfile and ran
- *   the branch's `scripts/eval.ts` with the eval-service token and two vendor keys
- *   in the environment. A job holding a secret must check out a revision somebody
- *   reviewed, and must be bound to a GitHub environment so the secret is not
- *   readable by every other workflow in the repository.
+ * A3 NO CREDENTIAL-BEARING JOB RUNS UNREVIEWED CODE. The old `eval.yml`'s
+ *   benchmark job could be started by labelling a pull request, and a
+ *   `pull_request` checkout is that pull request's code: it installed the
+ *   branch's lockfile and ran the branch's scripts with the eval-service token and
+ *   two vendor keys in the environment. So no job holding a secret may be started
+ *   by a pull request at all (`evals.yml` measures the deployed build, dispatched
+ *   after a deploy), and each is bound to a GitHub environment so the secret is
+ *   not readable by every other workflow in the repository.
  *
  * A4 NO WORKFLOW FETCHES ITS TOOLCHAIN FROM A MOVING TARGET. Three workflows
  *   piped `master` of the elan installer into a shell, and in the staging deploy
@@ -54,6 +55,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 
+import { isPreviewHostRequest, previewHostSuffix } from '../packages/core/src/preview/preview-origin';
+import { SANDBOX_TRANSPORT } from '../packages/core/src/preview/sandbox-id';
 import { parseJsonc } from './jsonc';
 import { readRepositoryFile, trackedFiles } from './sources';
 // The config module itself, not its text: the failure being guarded is a hook
@@ -138,6 +141,11 @@ const WranglerSchema = v.object({
     class_name: v.string(),
     image: v.string(),
   }))),
+  assets: v.object({ run_worker_first: v.union([v.boolean(), v.array(v.string())]) }),
+  vars: v.object({ PREVIEW_HOST_SUFFIX: v.string(), CLI_PUBLIC_ORIGIN: v.string(), SANDBOX_TRANSPORT: v.string() }),
+  kv_namespaces: v.array(v.object({ binding: v.string() })),
+  d1_databases: v.optional(v.array(v.object({ binding: v.string() }))),
+  durable_objects: v.object({ bindings: v.array(v.object({ name: v.string(), class_name: v.string() })) }),
 });
 
 const CONFIG = parseJsonc(readFileSync(join(REPO_ROOT, WRANGLER), 'utf8'), WranglerSchema, WRANGLER);
@@ -220,9 +228,6 @@ describe("the deployed Worker's stack traces are readable", () => {
 const StepSchema = v.looseObject({
   uses: v.optional(v.string()),
   run: v.optional(v.string()),
-  // `ref` is named because one assertion reads it; `looseObject` keeps the rest
-  // of `with` for the secret search.
-  with: v.optional(v.looseObject({ ref: v.optional(v.string()) })),
 });
 
 const JobSchema = v.looseObject({
@@ -291,10 +296,11 @@ const SECRET_JOBS = secretBearingJobs();
 describe('the workflows that publish and measure this product', () => {
   test('every workflow is read, and the credential-bearing jobs are named', () => {
     expect(WORKFLOW_FILES.length, 'the workflow corpus collapsed').toBeGreaterThan(3);
-    // Named, not counted. These two hold every credential in the repository, and
-    // the assertions below are only worth anything if they are still the two.
+    // Named, not counted. These hold every credential in the repository, and
+    // the assertions below are only worth anything if they are still these.
     expect(SECRET_JOBS.map((entry) => entry.label).sort()).toEqual([
-      '.github/workflows/eval.yml#benchmark',
+      '.github/workflows/evals.yml#diagnose',
+      '.github/workflows/evals.yml#evals',
     ]);
   });
 
@@ -312,7 +318,8 @@ describe('the workflows that publish and measure this product', () => {
     // in the repository, including one added by a branch. An environment is the
     // only boundary GitHub offers that a file in the repository can ask for.
     const bound = new Map([
-      ['.github/workflows/eval.yml#benchmark', 'eval'],
+      ['.github/workflows/evals.yml#diagnose', 'eval'],
+      ['.github/workflows/evals.yml#evals', 'eval'],
     ]);
 
     for (const { label, job } of SECRET_JOBS) {
@@ -320,30 +327,17 @@ describe('the workflows that publish and measure this product', () => {
     }
   });
 
-  test('a job that holds a secret checks out no pull-request code', () => {
-    let checked = 0;
+  test('no pull request can start a job that holds a secret', () => {
+    // A `pull_request` checkout is that pull request's code, and a label is all
+    // it takes to start one: the job would run a branch nobody reviewed beside
+    // the credential.
+    const PULL_REQUEST = ['pull_request', 'pull_request_target'];
 
-    for (const { label, job, triggers } of SECRET_JOBS) {
-      if (!triggers.includes('pull_request') && !triggers.includes('pull_request_target')) continue;
-
-      for (const step of job.steps ?? []) {
-        if (step.uses === undefined || !step.uses.includes('actions/checkout')) continue;
-        const ref = step.with?.ref;
-        // The default ref for a `pull_request` event is the pull request merged
-        // into the base, so an absent `ref` IS the defect.
-        expect(ref, `${label} checks out the default (pull request) ref`).toBeDefined();
-        expect(ref ?? '', `${label} checks out the pull request's own head`)
-          .not.toContain('head');
-        expect(ref ?? '', `${label} does not pin the reviewed base revision`)
-          .toContain('base.sha');
-        checked += 1;
-      }
+    for (const { label, triggers } of SECRET_JOBS) {
+      expect(triggers.filter((trigger) => PULL_REQUEST.includes(trigger)), `${label} can be started by a pull request`).toEqual([]);
     }
 
-    // Non-vacuity: a secret-bearing job really is reachable from a pull request,
-    // which is the whole reason this assertion exists.
-    expect(checked, 'no secret-bearing job is triggered by a pull request')
-      .toBeGreaterThan(0);
+    expect(SECRET_JOBS.length, 'no job holds a secret, so nothing here was checked').toBeGreaterThan(0);
   });
 
   test('no run body interpolates event data into a command', () => {
@@ -457,5 +451,53 @@ describe('the workflows that publish and measure this product', () => {
     }
 
     expect(pinned, 'no workflow uses an action').toBeGreaterThan(0);
+  });
+});
+
+/**
+ * A5 PREVIEWS ARE ISOLATED BY HOST. Agent-written apps are served on subdomains of the preview zone, and the
+ * Worker tells a preview host from the app host before any route runs. That holds only if the Worker sees
+ * every request: asset routing is path-only, so a path the asset router answered first (`/assets/*` on a
+ * preview host included) would reach the app's files without the host check.
+ */
+describe('previews are isolated by host', () => {
+  test("the production preview zone is the app host's own subdomains", () => {
+    const vars = CONFIG.vars;
+    const appHost = new URL(vars.CLI_PUBLIC_ORIGIN).hostname;
+
+    expect(previewHostSuffix(vars)).toBe(appHost);
+    expect(isPreviewHostRequest(new URL(vars.CLI_PUBLIC_ORIGIN), vars)).toBe(false);
+    expect(isPreviewHostRequest(new URL(`https://probe.${appHost}`), vars)).toBe(true);
+  });
+
+  test('every request reaches the Worker before the asset router', () => {
+    expect(CONFIG.assets.run_worker_first, `${WRANGLER} lets the asset router answer some paths first`).toBe(true);
+  });
+});
+
+/**
+ * A6 SIGN-IN HAS NO SINGLE CHOKEPOINT. Sign-in state is short-lived KV records plus each user's own object,
+ * which answers whether a session is live. A database or a singleton auth object in front of every sign-in
+ * would make one binding the login path of every user at once.
+ */
+describe('sign-in has no single chokepoint', () => {
+  test('auth state is the AUTH_KV namespace and the user objects, and nothing fronts them', () => {
+    const objects = CONFIG.durable_objects.bindings.flatMap((binding) => [binding.name, binding.class_name]);
+
+    expect(CONFIG.kv_namespaces.map((namespace) => namespace.binding)).toContain('AUTH_KV');
+    expect(CONFIG.d1_databases ?? []).toEqual([]);
+    expect(objects.filter((name) => /auth/iu.test(name))).toEqual([]);
+  });
+});
+
+/**
+ * A7 THE SANDBOX HAS ONE TRANSPORT. The Sandbox SDK keeps the transport a sandbox was first reached over and
+ * drops the in-flight requests of a client that names another. Product code opens every client through
+ * `openSandbox`, which passes `SANDBOX_TRANSPORT`; the SDK's own lookup passes none (`proxyToSandbox`,
+ * SDK 0.12.9), and the sandbox object then takes this var, whose absence means `http`.
+ */
+describe('the sandbox has one transport', () => {
+  test('the deployed default is the transport every client names', () => {
+    expect(CONFIG.vars.SANDBOX_TRANSPORT).toBe(SANDBOX_TRANSPORT);
   });
 });

@@ -161,9 +161,9 @@ export function workerSession(llm: LLMProviderConfig): LiveModelSession {
 
 /** The live target for `suite`, or null; throws when half-configured. Prints the target or the env vars that would enable it. */
 export function liveModelTarget(suite: string): LiveModelTarget | null {
-  // Ambient credentials are not consent to spend: a live run needs `KINU_EVAL_LIVE`, set only by scripts/eval-tier.sh.
+  // Ambient credentials are not consent to spend: a live run needs `KINU_EVAL_LIVE`, set only by the tier scripts.
   if (process.env['KINU_EVAL_LIVE'] !== '1') {
-    console.warn(`[skip] ${suite} — live evals are opt-in: run 'bun run test:eval' (KINU_EVAL_LIVE=1)`);
+    console.warn(`[skip] ${suite} — live suites are opt-in: run 'bun run test:live' (KINU_EVAL_LIVE=1)`);
 
     return null;
   }
@@ -188,11 +188,52 @@ export function liveModelTarget(suite: string): LiveModelTarget | null {
 /** Marker on failures caused by the environment rather than the agent; read by `scripts/skip-ratchet.ts`. */
 export const INFRA_FAILURE_MARKER = 'INFRA FAILURE';
 
-/** Run a deployment-dependent step and label its failure as infrastructure, preserving the cause. */
+/**
+ * Cloudflare's own transient Durable Object failures, verbatim from its error-handling guide
+ * (developers.cloudflare.com/durable-objects/best-practices/error-handling): a request that failed
+ * with one never reached the code under test.
+ */
+export const TRANSIENT_PLATFORM_ERRORS: readonly string[] = [
+  'Network connection lost',
+  'Cannot resolve Durable Object due to transient issue on remote node',
+  'Durable Object reset because its code was updated',
+  "The Durable Object's code has been updated",
+];
+
+/**
+ * The deployment answered, and the answer was a failure (a 5xx, a refused RPC): the build's own
+ * result, which {@link infraBoundary} passes on unmarked. `status` is the HTTP status; a socket
+ * RPC reply has none.
+ */
+export class DeploymentAnswer extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message);
+    this.name = 'DeploymentAnswer';
+  }
+}
+
+/**
+ * Whether a failed answer came from around the build rather than from it: a credential the
+ * deployment did not accept, the account's rate limit, Cloudflare's own 52x, or a transient
+ * Durable Object failure the build's code relayed.
+ */
+function platformAnswer(answer: DeploymentAnswer): boolean {
+  const status = answer.status ?? 0;
+
+  return status === 401 || status === 429 || (status >= 520 && status <= 530)
+    || TRANSIENT_PLATFORM_ERRORS.some((message) => answer.message.includes(message));
+}
+
+/**
+ * Run a deployment-dependent step and label its failure as infrastructure, preserving the cause,
+ * unless the deployment itself answered with the failure: that is the build's result.
+ */
 export async function infraBoundary<T>(boundary: string, op: () => Promise<T>): Promise<T> {
   try {
     return await op();
   } catch (err) {
+    if (err instanceof DeploymentAnswer && !platformAnswer(err)) throw err;
+
     throw new Error(
       `${INFRA_FAILURE_MARKER} — ${boundary} did not answer: ${String(err)}. `
       + "The environment failed here, so nothing about the agent's behaviour was measured; "
@@ -222,9 +263,8 @@ export function liveChatModel(llm: LLMProviderConfig): LanguageModel {
 }
 
 /**
- * Measured live-run spend. Three feeds, one meter: per call (`recordLiveModelSpend`), per episode from the
- * store (`recordLiveModelEpisode`), adopted from a prior process (`recordAdoptedLiveModelSpend`). Each process
- * appends its total to `KINU_EVAL_SPEND_FILE`. Unreported usage adds nothing to token totals, so they are a floor.
+ * Measured live-run spend. Two feeds, one meter: per call (`recordLiveModelSpend`) and per episode from the
+ * store (`recordLiveModelEpisode`). Each process appends its total to `KINU_EVAL_SPEND_FILE`. Unreported usage adds nothing to token totals, so they are a floor.
  */
 export interface LiveModelSpend {
   readonly calls: number;
@@ -308,29 +348,6 @@ export function recordNoModelEpisode(spend: WorkspaceSpend): void {
   }
 
   spendEpisodesWithoutModel += 1;
-}
-
-/** What a durable case record says a previous process spent; read back, not recomputed. */
-export interface AdoptedCaseSpend {
-  readonly calls: number;
-  readonly usage: Usage;
-}
-
-/** Whether a durable record could account for the case it belongs to. */
-export type AdoptedSpendVerdict = 'accounted' | 'unaccounted';
-
-/** Record spend a resumed run adopted; records lacking calls or usage count as unmeasured. Once-per-case is `AdoptedSpendMeter`'s job. */
-export function recordAdoptedLiveModelSpend(adopted: AdoptedCaseSpend): AdoptedSpendVerdict {
-  if (adopted.calls <= 0 || !usageReported(adopted.usage)) {
-    spendEpisodesUnmeasured += 1;
-
-    return 'unaccounted';
-  }
-
-  spendCalls += adopted.calls;
-  spendUsage = addUsage(spendUsage, adopted.usage);
-
-  return 'accounted';
 }
 
 export function liveModelSpend(): LiveModelSpend {

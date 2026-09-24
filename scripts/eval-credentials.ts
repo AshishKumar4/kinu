@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// The credential the eval tier runs on, printed for `scripts/eval-tier.sh`.
+// The credential a live tier runs on, printed for its script (`scripts/live-tier.sh`, `scripts/first-run-tier.sh`).
 //
 // Two lines on stdout — origin, then token — or NOTHING when no eval credential
 // exists. Diagnostics go to stderr and never carry the token. Exits non-zero
@@ -22,7 +22,7 @@
 // WHY A SEPARATE PROCESS, still. `scripts/test-scratch-home.ts` strips the
 // ambient credential variables at preload in every test process, so a resolver
 // running inside a suite sees an empty environment no matter how correct it is.
-// `eval-tier.sh` runs first and is already the consent boundary — it is the ONE
+// The tier script runs first and is already the consent boundary — it is the ONE
 // place KINU_EVAL_LIVE is set — so resolving the identity is the same
 // decision, made in the same place.
 //

@@ -269,17 +269,18 @@
   // disable either executor.
   "vars": {
     "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/kinu-ai-gateway/workers-ai/v1",
-    // Container control plane. Every getSandbox call site passes
-    // `transport: SANDBOX_TRANSPORT` from `src/sandbox-exec-lane.ts` explicitly
-    // — runtime.ts, orchestrator.ts, terminal-route.ts, preview-proxy.ts — and
-    // that is what actually switches an EXISTING sandbox: the SDK persists
-    // transport in the sandbox object's storage and a stored value beats this
-    // var on every cold start. The var covers the other direction: a future
-    // getSandbox that omits the option would otherwise inherit the SDK's `http`
-    // field default, which is the route-based compatibility client. Cloudflare
-    // deprecated `http`/`websocket` on 2026-06-09 ("will not ship in future
-    // Sandbox SDK majors") and 1.0 drops the knob entirely, so `rpc` is both the
-    // measured-better and the only surviving path. Keep the two in step.
+    // Container control plane. Product code opens every sandbox client through
+    // `openSandbox` (`src/sandbox-exec-lane.ts`), which passes `SANDBOX_TRANSPORT`
+    // (core `preview/sandbox-id.ts`), and that is what actually switches an
+    // EXISTING sandbox: the SDK persists transport in the sandbox object's
+    // storage and a stored value beats this var on every cold start. The var
+    // covers the other direction: a getSandbox that omits the option, as the
+    // SDK's own `proxyToSandbox` does, inherits the SDK's `http` field default,
+    // which is the route-based compatibility client. Cloudflare deprecated
+    // `http`/`websocket` on 2026-06-09 ("will not ship in future Sandbox SDK
+    // majors") and 1.0 drops the knob entirely, so `rpc` is both the
+    // measured-better and the only surviving path. The release-config gate
+    // holds the two in step.
     "SANDBOX_TRANSPORT": "rpc",
     "PREVIEW_HOST_SUFFIX": "kinu.run",
     "CLI_PUBLIC_ORIGIN": "https://kinu.run",

@@ -7,23 +7,21 @@
  * constructor. `scripts/first-run-tier.sh` spells the invocation correctly; this
  * note exists so a hand-run does too.
  *
- * WHY A THIRD CONFIG, beside `vitest.evals.config.ts`. The subject is different
- * and so is WHEN it runs. The eval tier measures behaviour before a deploy, on
- * whichever target the knob names, and it is minutes to hours of model calls.
- * This tier runs AFTER a deploy, against the build that just landed, and it
- * refuses every other target. Folding them into one config would make "which
- * build did this measure" unanswerable from the invocation, which is the one
- * question a post-deploy claim rests on.
+ * WHY A CONFIG OF ITS OWN, beside `evals/vitest.config.ts`. The subject is
+ * different: the eval suite measures how well the agent does a task, ten trials
+ * each, and reports pass rates; this tier checks that each defect a person found
+ * by hand stays fixed, once per deploy, and every row must pass. Folding them
+ * into one config would make "which question did this answer" unanswerable from
+ * the invocation.
  *
  * WHY `*.first-run.ts` AND NOT `*.test.ts` OR `*.eval.ts`. Three runners must
  * not be able to reach each other's files. `bun test` selects only
  * `*.test.*`/`*.spec.*`/`*_test.*`/`*_spec.*` — so `bun test ./tests/`, a
  * pre-deploy gate, cannot pick these up and try to drive a deployment that does
- * not exist yet. `vitest.evals.config.ts`'s include is `tests/evals/**` — so the
- * eval tier cannot pick them up either, and `claims()` cannot credit an arm with
+ * not exist yet. `evals/vitest.config.ts`'s include is `evals/tasks/**` — so the
+ * eval suite cannot pick them up either, and `claims()` cannot credit a gate with
  * a file it never runs. The partition is by FILE EXTENSION and DIRECTORY rather
- * than by an ignore list somebody has to keep in step, which is the same
- * argument the eval config makes about `.eval.ts`.
+ * than by an ignore list somebody has to keep in step.
  *
  * TWO PROJECTS, RUN SIDE BY SIDE by `scripts/first-run-tier.sh`. Every case
  * opens its own fresh workspace, so cases do not share a workspace, a chat or a

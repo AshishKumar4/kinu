@@ -372,17 +372,13 @@ async function readCappedBody(res: Response, cap: number): Promise<{ bytes: Uint
 
 /** Explicit because members take positional args; a generated declaration would suggest `web.search({ query })`. */
 const TYPES = `export declare const web: {
-  /** Search the live web. Returns up to \`limit\` ranked results (default 5,
-   *  max 20), each with title, url, snippet and position — plus a freshness
-   *  date when the source has one, and a synthesized answer when a Tavily key
-   *  is connected. */
+  /** Up to \`limit\` ranked results (default 5, max 20). */
   search(query: string, opts?: { limit?: number }): Promise<{
     query: string;
     results: Array<{ title: string; url: string; snippet: string; date?: string; position: number }>;
     answer?: string;
     source: string;
   }>;
-  /** Fetch one absolute http(s) URL as clean markdown. */
   fetch(url: string): Promise<{ url: string; title?: string; retrievedAt: string; markdown: string }>;
 };
 `;

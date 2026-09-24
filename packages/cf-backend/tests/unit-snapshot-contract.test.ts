@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { parse, walk, type SyntaxNode } from '../../../scripts/syntax';
-import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
+import { AGENT_RPC_ACCESS } from '@kinu.run/core';
 
 const CLIENT = 'packages/cf-backend/src/hooks/use-kinu.ts';
 

@@ -1,8 +1,11 @@
 /**
  * Preview-origin containment: agent-written HTML never runs on the app's origin or with its session
- * cookie. Cross-preview cookie-site isolation remains a deployment prerequisite (below).
+ * cookie. Cross-preview cookie-site isolation remains a deployment prerequisite.
  */
+import './helpers/ui-module-globals';
 import { afterAll, describe, expect, test } from 'bun:test';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -12,6 +15,8 @@ import {
   isPreviewUrl,
   isPreviewHostRequest,
   previewHostSuffix,
+  previewSuffixMetaName,
+  buildWorkspacePreviewHost,
 } from '@kinu.run/core';
 import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
 import {
@@ -23,15 +28,18 @@ import {
   nimbusPreviewUrl,
   WORKSPACE_PREVIEW_PATH,
 } from '../src/nimbus-route';
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, type TestUserDO } from './helpers/user-do';
+import { createSession } from '../src/auth/store';
 import { makeKv } from './helpers/kv';
 import { sandboxPreviewExposures } from '@kinu.run/core';
 import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
-import { unreachableNamespace, unreachableObjects } from './helpers/bindings';
+import { unreachableNamespace, unreachableObjects, workerContext } from './helpers/bindings';
 import type { NimbusPreviewEnv, WorkspacePreviewHost } from '../src/nimbus-route';
 import type { SandboxPreviewEnv } from '../src/preview-proxy';
+import { PreviewFrame } from '../src/components/PreviewFrame';
 import type { SandboxOptions } from '@cloudflare/sandbox';
 import { present } from '@kinu.run/test-utils';
+import * as v from 'valibot';
 
 // The SDK entry pulls in `cloudflare:workers`, which only exists inside workerd; proxyToSandbox is
 // the seam the Worker delegates to, so everything Kinu owns stays under test.
@@ -50,6 +58,9 @@ let repairs: Array<{ id: string; options?: SandboxOptions }> = [];
 
 let repairFailure: Error | null = null;
 
+/** Every sandbox client any route opened, whatever it then asked of it. */
+let sandboxesOpened = 0;
+
 // Reset in `afterAll`, so a later file meets the real SDK.
 await installSandboxSdkMock();
 
@@ -62,13 +73,17 @@ setSandboxSdk({
 
     return scripted === null ? null : scripted.clone();
   },
-  getSandbox: (_namespace: NonNullable<Env['Sandbox']>, id: string, options?: SandboxOptions) => ({
-    ensureReady: async () => {
+  getSandbox: (_namespace: NonNullable<Env['Sandbox']>, id: string, options?: SandboxOptions) => {
+    sandboxesOpened += 1;
+
+    return {
+      ensureReady: async () => {
       repairs.push({ id, options });
 
-      if (repairFailure) throw repairFailure;
-    },
-  }),
+        if (repairFailure) throw repairFailure;
+      },
+    };
+  },
 });
 
 afterAll(() => { setSandboxSdk(null); });
@@ -76,9 +91,11 @@ afterAll(() => { setSandboxSdk(null); });
 const { servePreviewRequest } =
   await import('../src/preview-proxy');
 
+// Dynamic: the entry's graph reaches `cloudflare:email` and `cloudflare:workers` through `agents`.
+const { default: worker } = await import('../src/server');
+
 const root = join(import.meta.dir, '..');
 
-const source = (path: string): string => readFileSync(join(root, path), 'utf8');
 
 const APP = 'https://kinu.example.com';
 
@@ -196,10 +213,15 @@ describe('preview sandbox policy', () => {
     expect(PREVIEW_SANDBOX).toContain('allow-scripts');
   });
 
-  test('the iframe attribute is the shared policy, not a private copy', () => {
-    const frame = source('src/components/PreviewFrame.tsx');
-    expect(frame).toContain('sandbox={PREVIEW_SANDBOX}');
-    expect(frame).not.toContain('allow-same-origin');
+  test('in the page the Worker serves, a preview is framed under the shared policy', async () => {
+    const head = await metaTags(await appDocument({ PREVIEW_HOST_SUFFIX: SUFFIX }));
+    const frame = inPage(head, () => renderToStaticMarkup(createElement(PreviewFrame, { url: PREVIEW_URL })));
+    const sandboxes: (string | null)[] = [];
+
+    await new HTMLRewriter().on('iframe', { element(element) { sandboxes.push(element.getAttribute('sandbox')); } })
+      .transform(new Response(frame)).text();
+
+    expect(sandboxes).toEqual([PREVIEW_SANDBOX]);
   });
 
   test('the policy is a response header, not only the iframe attribute', () => {
@@ -288,14 +310,6 @@ describe('preview host resolution', () => {
   test('the configured zone is the suffix', () => {
     expect(previewHostSuffix(ENV)).toBe(SUFFIX);
     expect(previewHostSuffix({ ...ENV, PREVIEW_HOST_SUFFIX: `.${SUFFIX.toUpperCase()}.` })).toBe(SUFFIX);
-  });
-
-  test('production records that its current suffix is not a per-preview cookie-site boundary', () => {
-    const wrangler = source('wrangler.jsonc');
-    const configured = /"PREVIEW_HOST_SUFFIX":\s*"([^"]+)"/.exec(wrangler)?.[1];
-    expect(configured).toBe('kinu.run');
-    const prose = wrangler.replace(/^\s*\/\/ ?/gmu, '').replace(/\s+/gu, ' ');
-    expect(prose).toContain('A PSL-backed suffix is required before this can be claimed');
   });
 
   test('unconfigured or unusable means no preview host at all', () => {
@@ -432,18 +446,6 @@ describe('serving the preview host', () => {
   test("the SDK's forward-failure response is still the shape we match", () => {
     const sdk = readFileSync(join(root, '../../node_modules/@cloudflare/sandbox/dist/index.js'), 'utf8');
     expect(sdk.includes('Proxy routing error')).toBe(true);
-  });
-
-  test('the error page escapes what it echoes from the hostname', () => {
-    expect(source('src/preview-proxy.ts')).toContain('escapeHtml(sandboxId)');
-  });
-
-  test('routing is the SDK\'s, not a second parser of our own', () => {
-    const proxy = source('src/preview-proxy.ts');
-    expect(proxy).toContain('proxyToSandbox(new Request(request');
-    expect(proxy).toContain('sanitizePreviewRequestHeaders(request.headers)');
-    expect(proxy).not.toContain('validatePortToken');
-    expect(proxy).not.toContain('containerFetch');
   });
 });
 
@@ -861,6 +863,124 @@ describe('what the app is willing to frame', () => {
   });
 });
 
+/** One request through the Worker's own entry, with only the bindings a routing decision reads. */
+async function served(url: string, zone: Partial<Env>, headers: Record<string, string> = {}): Promise<Response> {
+  const env: Partial<Env> = {};
+  Object.assign(env, zone, {
+    AUTH_KV: makeKv(),
+    CLI_PUBLIC_ORIGIN: APP,
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    ASSETS: { fetch: async () => new Response('<!doctype html><head></head>', { headers: { 'content-type': 'text/html' } }) },
+    Sandbox: CONTAINERS.Sandbox,
+  });
+
+  // SAFETY: every member the routes under test read is constructed above: the preview host, the public app
+  // document and the sign-in redirect answer before any other binding is touched.
+  return worker.fetch(new Request(url, { headers }), env as Env, workerContext());
+}
+
+/** What the asset binding serves for any app path: the shell, which a preview must never be. */
+const APP_BODY = '<body>app</body>';
+
+const APP_DOCUMENT = `<!doctype html><head></head>${APP_BODY}`;
+
+/**
+ * A browser signed in through the real session store: the cookie is live in the user's own object, so a request
+ * carrying it is authenticated as the Worker authenticates it, and reaches every route a signed-in owner does.
+ */
+async function signedInBrowser() {
+  const accounts = new Map<string, TestUserDO>();
+
+  const account = (userId: string): TestUserDO => {
+    const held = accounts.get(userId) ?? createTestUserDO({ durableObjectId: userId });
+
+    accounts.set(userId, held);
+
+    return held;
+  };
+
+  const env: Partial<Env> = {};
+
+  Object.assign(env, {
+    AUTH_KV: makeKv(),
+    CLI_PUBLIC_ORIGIN: APP,
+    PREVIEW_HOST_SUFFIX: SUFFIX,
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    UserDO: { idFromName: (name: string) => name, get: (id: string) => account(id).userDO },
+    OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+    ASSETS: { fetch: async () => new Response(APP_DOCUMENT, { headers: { 'content-type': 'text/html' } }) },
+    Sandbox: CONTAINERS.Sandbox,
+  });
+
+  // SAFETY: the session store reads AUTH_KV, the user objects and the encryption key, all constructed above.
+  const session = await createSession(env as Env, {
+    provider: 'cloudflare', providerSub: 'cf-owner', email: 'owner@example.com', emailVerified: true, displayName: null,
+  });
+
+  const cookie = `${SESSION_COOKIE_NAME}=${session.token}`;
+
+  const fetch = (path: string, init: RequestInit = {}): Promise<Response> => {
+    const headers = new Headers(init.headers);
+
+    headers.set('cookie', cookie);
+
+    // SAFETY: every binding a signed-in route reads is constructed above; the workspace object refuses by name.
+    return worker.fetch(new Request(`${APP}${path}`, { ...init, headers }), env as Env, workerContext());
+  };
+
+  /** The owner's stored value for `key`, read as the settings page reads it. */
+  const config = async (key: string): Promise<string | null> =>
+    v.parse(v.object({ value: v.nullable(v.string()) }), await (await fetch(`/api/user/config/${key}`)).json()).value;
+
+  return { fetch, config };
+}
+
+/** The `<meta>` tags of a served page, by name. */
+async function metaTags(page: Response): Promise<Map<string, string>> {
+  const tags = new Map<string, string>();
+
+  await new HTMLRewriter().on('meta[name]', {
+    element(element) { tags.set(element.getAttribute('name') ?? '', element.getAttribute('content') ?? ''); },
+  }).transform(page).text();
+
+  return tags;
+}
+
+/** Renders with `document` answering from a served page's head, the one thing a component asks of it here. */
+function inPage<T>(head: ReadonlyMap<string, string>, render: () => T): T {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'document');
+
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: {
+      querySelector: (selector: string) => {
+        const content = head.get(/^meta\[name="([^"]+)"\]$/u.exec(selector)?.[1] ?? '');
+
+        return content === undefined ? null : { content };
+      },
+    },
+  });
+
+  try {
+    return render();
+  } finally {
+    if (previous === undefined) Reflect.deleteProperty(globalThis, 'document');
+    else Object.defineProperty(globalThis, 'document', previous);
+  }
+}
+
+/** A shared blueprint's page: public, so the app document renders with no session. */
+function appDocument(zone: Partial<Env>): Promise<Response> {
+  return served(`${APP}/shared/blueprint/b-1`, zone);
+}
+
+function frameSources(document: Response): string[] {
+  const directive = (document.headers.get('content-security-policy') ?? '').split(';').map((part) => part.trim())
+    .find((part) => part.startsWith('frame-src '));
+
+  return directive?.split(/\s+/u).slice(1) ?? [];
+}
+
 function cspOf(previewOrigin: string | null): string {
   const res = withAppSecurityHeaders(
     new Response('<!doctype html>', { headers: { 'content-type': 'text/html; charset=utf-8' } }),
@@ -893,8 +1013,12 @@ describe('the app document policy', () => {
     expect(cspOf(null)).toContain("frame-src 'self'");
   });
 
-  test('the app names the preview wildcard, not a single host', () => {
-    expect(source('src/server.ts')).toContain('`https://*.${suffix}`');
+  test('the app document frames any preview host of the zone, on the zone\'s port', async () => {
+    // The dev zone serves previews on a port of its own; a production zone on 443 names none.
+    expect(frameSources(await appDocument({ PREVIEW_HOST_SUFFIX: SUFFIX, PREVIEW_HOST_PORT: '8788' })))
+      .toEqual(["'self'", `https://*.${SUFFIX}:8788`]);
+    expect(frameSources(await appDocument({ PREVIEW_HOST_SUFFIX: SUFFIX }))).toEqual(["'self'", `https://*.${SUFFIX}`]);
+    expect(frameSources(await appDocument({}))).toEqual(["'self'"]);
   });
 
   test('the chat WebSocket survives the connect-src rule', () => {
@@ -962,75 +1086,73 @@ describe('CSRF on cookie-authenticated requests', () => {
 });
 
 describe('worker wiring', () => {
-  const server = source('src/server.ts');
+  const ZONE = { PREVIEW_HOST_SUFFIX: SUFFIX };
 
-  const SOURCE_ORDER_GATES = [
-    {
-      name: 'the preview host serves previews and nothing else',
-      gate: 'isPreviewHostRequest(url, env)',
-      answers: 'return servePreviewRequest(request, env)',
-      before: 'handlePcRequest(request, env)',
-    },
-    {
-      name: 'the CSRF gate runs before any authenticated route',
-      gate: 'crossSiteRejection(request)',
-      // The gate must come first in source order, whatever the call shape.
-      answers: 'handleUserRequest(req, env, identity, ctx)',
-      before: 'handleUserRequest(req, env, identity, ctx)',
-    },
-  ] as const;
+  test('the preview host answers every path itself, never an app route', async () => {
+    for (const path of ['/install', '/pc/install', '/login']) {
+      const answer = await served(`https://probe.${SUFFIX}${path}`, ZONE);
 
-  for (const { name, gate, answers, before } of SOURCE_ORDER_GATES) {
-    test(name, () => {
-      expect(server).toContain(gate);
-      expect(server).toContain(answers);
-      expect(server.indexOf(gate)).toBeLessThan(server.indexOf(before));
+      expect(answer.status).toBe(404);
+      expect(answer.headers.get('content-security-policy')).toBe(`sandbox ${PREVIEW_SANDBOX}`);
+    }
+  });
+
+  test('no route on the app host serves previews', async () => {
+    sdkRequest = null;
+    const answer = await served(`${APP}/_preview/8080/`, ZONE, { accept: 'text/html' });
+
+    // Unauthenticated, so the sign-in page; a preview route would have asked the Sandbox SDK.
+    expect(answer.status).toBe(302);
+    expect(answer.headers.get('location')).toStartWith(`${APP}/login?`);
+    expect(sdkRequest).toBeNull();
+  });
+
+  test('a signed-in write from a preview origin is refused before any route runs', async () => {
+    const browser = await signedInBrowser();
+    const preview = `https://${PREVIEW_TOKEN}-${PREVIEW_SANDBOX_ID}.${SUFFIX}`;
+
+    const write = (origin: string, value: string) => browser.fetch('/api/user/config/editor', {
+      method: 'PUT', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ value }),
     });
-  }
 
-  test('no route on the app host serves previews', () => {
-    expect(source('src/auth/session.ts')).not.toContain('_preview');
-    expect(server).not.toContain('_preview');
+    const created = await browser.fetch('/api/user/workspaces', {
+      method: 'POST', headers: { origin: preview, 'content-type': 'application/json' }, body: JSON.stringify({ purpose: 'forged' }),
+    });
+
+    expect([created.status, (await write(preview, 'forged')).status]).toEqual([403, 403]);
+    expect(await browser.config('editor')).toBeNull();
+
+    // The gate tells origins apart: the app's own write lands.
+    expect((await write(APP, 'mine')).status).toBe(200);
+    expect(await browser.config('editor')).toBe('mine');
   });
 
-  test('every asset response goes through the app document policy', () => {
-    expect(server).toContain('serveApp(request, env)');
-    expect(server).not.toContain('return env.ASSETS.fetch(request)');
-    expect(server).not.toContain('await env.ASSETS.fetch(request), identity');
-    expect(server).toContain('previewSuffixMetaName()');
-    expect(server).toContain('new HTMLRewriter()');
+  test('a signed-in owner asking the app host for a preview gets the app, never a sandbox', async () => {
+    const browser = await signedInBrowser();
+    const [forwards, opened] = [sdkForwards, sandboxesOpened];
+
+    const answer = await browser.fetch(`/_preview/${String(PREVIEW_PORT)}/`, { headers: { accept: 'text/html' } });
+
+    expect(answer.status).toBe(200);
+    expect(await answer.text()).toContain(APP_BODY);
+    expect([sdkForwards, sandboxesOpened]).toEqual([forwards, opened]);
   });
 
-  test('Nimbus previews route on the isolated host before app authentication', () => {
-    expect(server).toContain('handleNimbusPreviewHostRequest(request, env)');
-    expect(server.indexOf('handleNimbusPreviewHostRequest(request, env)'))
-      .toBeLessThan(server.indexOf('authenticateRequest(request, env)'));
-    expect(server).not.toContain('handleNimbusPreviewRequest');
+  test('the served app document names the preview zone the browser frames', async () => {
+    const meta = `<meta name="${previewSuffixMetaName()}" content="${SUFFIX}">`;
+
+    expect(await (await appDocument(ZONE)).text()).toContain(meta);
+    expect(await (await appDocument({})).text()).not.toContain(previewSuffixMetaName());
   });
 
-  test('production enables preview subdomains below the app host', () => {
-    // Comments are stripped: the example zone above the var is not the configured one.
-    const wrangler = source('wrangler.jsonc').replace(/^\s*\/\/.*$/gm, '');
+  test('a workspace preview is answered on its isolated host, with no sign-in asked', async () => {
+    const host = present(buildWorkspacePreviewHost({
+      port: 5173, workspace: 'ws-probe', handle: 'a'.repeat(10), token: 'b'.repeat(15), suffix: SUFFIX,
+    }), 'the workspace preview host');
 
-    const first = (key: string): string =>
-      present(wrangler.match(new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`)), `the "${key}" entry in wrangler.jsonc`)[1];
+    const answer = await served(`https://${host}/`, ZONE, { accept: 'text/html' });
 
-    const vars = {
-      PREVIEW_HOST_SUFFIX: first('PREVIEW_HOST_SUFFIX'),
-      CLI_PUBLIC_ORIGIN: first('CLI_PUBLIC_ORIGIN'),
-    };
-
-    const suffix = previewHostSuffix(vars);
-    const appHost = new URL(vars.CLI_PUBLIC_ORIGIN).hostname;
-    expect(suffix).toBe(appHost);
-    expect(isPreviewHostRequest(new URL(vars.CLI_PUBLIC_ORIGIN), vars)).toBe(false);
-    expect(isPreviewHostRequest(new URL(`https://probe.${suffix}`), vars)).toBe(true);
+    expect(answer.status).not.toBe(302);
+    expect(answer.headers.get('content-security-policy')).toBe(`sandbox ${PREVIEW_SANDBOX}`);
   });
-
-  test('asset routing cannot bypass the host-aware preview gate', () => {
-    const wrangler = source('wrangler.jsonc').replace(/^\s*\/\/.*$/gm, '');
-    expect(wrangler).toMatch(/"run_worker_first"\s*:\s*true/);
-    expect(wrangler).not.toContain('!/assets/*');
-  });
-
 });
