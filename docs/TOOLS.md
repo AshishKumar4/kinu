@@ -160,8 +160,8 @@ gains concentrate on weak models.
 `team`, and `peers`. There is no `think` group; `think` survives only as a
 stored run-event tool name, which `read-models/timeline.ts` maps to the `mcts`
 timeline kind. `hire`'s `lifetime` decides whether the helper persists. `swarm`
-measures candidates and settles into this turn. `DELEGATION_RUNGS` in
-`registry.ts` holds the rung text the `agents` schema description renders; the
+measures candidates and settles into this turn. `AGENTS_TOOL_NOTES` in
+`registry.ts` holds the notes the `agents` schema description renders; the
 prompt's `## Delegation` section (`prompts/delegation-section.md`) lists the
 actions the actor holds.
 
@@ -369,8 +369,8 @@ on every backend. There is no second spelling and no alias.
 
 | Backend | How `tools.<name>` becomes callable |
 |---|---|
-| Cloudflare | one `CodemodeProvider` named `tools` (`packages/cf-backend/src/codemode-tool.ts`): native tools are host-dispatched functions, crafted tools are defined by its `prelude`, and `renderToolsDeclaration(native, crafted)` is the declaration the model reads |
-| CLI | the `tools` parameter of the evaluated function (`packages/cli-backend/src/codemode-tool-factory.ts`), beside `workspace` and `console`: native tools through the same `nativeToolFunctions` Cloudflare uses, crafted tools from the per-call set, and the same `renderToolsDeclaration(native, crafted)` block. `buildActorTools` builds the sandbox last, over the finished surface, so the block lists every tool the actor holds |
+| Cloudflare | one `CodemodeProvider` named `tools` (`packages/cf-backend/src/codemode-tool.ts`): native tools are host-dispatched functions, crafted tools are defined by its `prelude`, and each native tool's own schema is its declaration |
+| CLI | the `tools` parameter of the evaluated function (`packages/cli-backend/src/codemode-tool-factory.ts`), beside `workspace` and `console`: native tools through the same `nativeToolFunctions` Cloudflare uses, crafted tools from the per-call set. `buildActorTools` builds the sandbox last, over the finished surface, so `tools` binds every tool the actor holds |
 
 Both re-read the crafted set per call, so a tool saved one program earlier is
 callable now. A native tool used as a bare identifier gets an explanation, not

@@ -959,56 +959,28 @@ type DbWrite =
   | { op: 'update'; table: string; set: { [column: string]: DbValue }; where: DbWhere }
   | { op: 'delete'; table: string; where: DbWhere };
 /**
- * Tables in this workspace's own database. \`state.*\` keeps one JSON value per
- * key; \`db.*\` keeps rows you filter, sort, count and update in place, and is
- * where structured data a later turn has to query belongs.
- *
- * No operation takes SQL. The host compiles every statement from these
- * arguments against the table's declared columns, so a column the table never
- * declared is a refusal rather than a query, and there is no view, trigger,
- * index, PRAGMA or attached-database operation at all.
- *
- * \`scope: 'actor'\` rows are yours alone: the host binds your own actor id into
- * every statement, and no other agent's rows are reachable through any
- * argument you can pass. \`scope: 'workspace'\` rows are shared with every agent
- * of this workspace, and the table itself is visible to all of them either way.
- *
- * A refusal is \`{ reason, error }\` and is data you can branch on. \`where: {}\`
- * matches every row you can reach. An object carrying an \`op\` property is read
- * as a predicate, so a whole JSON document compared for equality is written
- * \`{ op: '=', value: { … } }\`.
+ * Tables in this workspace's database: rows you filter, sort, count and update. No operation takes SQL;
+ * each statement is built from these arguments against the table's declared columns. \`scope: 'actor'\`
+ * rows are yours alone, \`scope: 'workspace'\` rows are shared with every agent here. A refusal is
+ * \`{ reason, error }\`. \`where: {}\` matches every row you can reach; an object with \`op\` is a predicate,
+ * so compare a JSON document with \`{ op: '=', value: { … } }\`.
  */
 export declare const db: {
-  /** Declare a table once. Re-declaring the identical shape does nothing; a
-   *  DIFFERENT shape under a name that exists is refused rather than migrated,
-   *  so pick another name. \`blob\` columns take and return base64 text; \`json\`
-   *  columns take and return any JSON document. \`primaryKey\` and \`unique\` are
-   *  scoped to you on an actor-scope table. */
+  /** Re-declaring the same shape does nothing; a different shape under an existing name is refused.
+   *  \`blob\` columns take and return base64, \`json\` columns any JSON document. */
   createTable(spec: { name: string; scope: 'actor' | 'workspace'; columns: DbColumn[] }): Promise<DbTable>;
-  /** Every table this workspace holds, with who declared it. */
   listTables(): Promise<DbTable[]>;
-  /** One table's column declaration. */
   schema(table: string): Promise<DbTable>;
-  /** Read rows. Returns ${SELECT_LIMIT_DEFAULT} rows unless you say otherwise and at most ${SELECT_LIMIT_MAX}; page with \`offset\`. */
+  /** ${SELECT_LIMIT_DEFAULT} rows unless \`limit\` says otherwise, at most ${SELECT_LIMIT_MAX}; page with \`offset\`. */
   select(table: string, query?: DbQuery): Promise<{ [column: string]: DbValue }[]>;
-  /** How many rows match, without reading them. */
   count(table: string, where?: DbWhere): Promise<number>;
-  /** Insert rows, up to ${MAX_ROWS_PER_INSERT} per call. Rows may omit different nullable columns. */
+  /** Up to ${MAX_ROWS_PER_INSERT} rows per call. */
   insert(table: string, rows: { [column: string]: DbValue }[]): Promise<{ rowsAffected: number }>;
-  /** Set columns on every matching row. */
   update(table: string, set: { [column: string]: DbValue }, where: DbWhere): Promise<{ rowsAffected: number }>;
-  /** Delete every matching row. Spelled \`deleteRows\` and not \`delete\`
-   *  because the hosted sandbox renames any member whose name is a JavaScript
-   *  reserved word, which leaves the original spelling uncallable there — the
-   *  BATCH operation is still \`{ op: 'delete' }\`, which is data and not a
-   *  member name. */
   deleteRows(table: string, where: DbWhere): Promise<{ rowsAffected: number }>;
-  /** Up to ${MAX_BATCH_OPS} writes in ONE transaction: all of them land or none does. A
-   *  refusal names the operation that failed as \`failedIndex\`, and nothing the
-   *  operations before it did survives. */
+  /** Up to ${MAX_BATCH_OPS} writes in one transaction: all land or none does; \`failedIndex\` names the one that failed. */
   batch(ops: DbWrite[]): Promise<{ rowsAffected: number }[] | { reason: string; error: string; failedIndex: number }>;
-  /** Retire a table you declared, with its rows. Build turns only, and refused
-   *  while another agent holds rows in an actor-scope table you share. */
+  /** Drop a table you declared, with its rows. */
   dropTable(table: string): Promise<{ ok: true }>;
 };`;
 

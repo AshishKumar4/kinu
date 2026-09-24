@@ -52,69 +52,33 @@ export interface AgentSelfHost {
 
 const CURRICULUM_STATUS_UNION = PROPOSED_TASK_STATUSES.map((s) => `'${s}'`).join(' | ');
 
-const TYPES = `export declare const agent: {
-  /** Propose N self-curriculum tasks (Voyager-style); returns the proposals. */
+const TYPES = `/** Your own lifecycle. */
+export declare const agent: {
   proposeCurriculum(count?: number): Promise<unknown>;
-  /** List your proposed curriculum tasks, optionally filtered by status. */
   listCurriculum(status?: ${CURRICULUM_STATUS_UNION}): Promise<unknown>;
-  /** Accept a proposed task by id (it becomes runnable). */
   acceptCurriculumTask(id: string): Promise<unknown>;
-  /** Propose a new version of your own scaffold (the agentic loop). Routed
-   *  through the existing 4-gate validation + the fixed misevolution gate; an
-   *  accepted proposal becomes the pending version, is scored by shadow
-   *  evaluation against the live scaffold, and only goes live after winning
-   *  the promotion gate. The code must export \`async function* run(rt, task)\`
-   *  and reach the host only via the \`host.*\` bridge; rationale must be
-   *  ≥ 50 chars. Pass \`baseVersion\` to branch from an archived variant
-   *  (see scaffoldVersions) instead of the live current. */
+  /** A new version of your scaffold: \`code\` exports \`async function* run(rt, task)\` and reaches the host
+   *  only through \`host.*\`; \`rationale\` is at least 50 characters. It goes live only after winning a
+   *  shadow evaluation against the current version. \`baseVersion\` branches from an archived one. */
   proposeScaffold(rationale: string, code: string, baseVersion?: number):
     Promise<{ ok: boolean; version?: number; error?: string; stage?: number }>;
-  /** Read-only scaffold archive: your versions with status (current/pending/
-   *  historical/rolled_back), lineage (parent_version) and shadow-eval record
-   *  (wins/losses/ties/win_rate). Stepping stones for proposeScaffold. */
+  /** Your scaffold versions with status, lineage and shadow-evaluation record. */
   scaffoldVersions(limit?: number): Promise<unknown>;
-  /** Schedule a future autonomous turn. Pass { cron } for recurring OR
-   *  { atMs } (epoch ms) for one-shot; optional label + payload. The reactor
-   *  wakes you when it fires.
-   *  Optionally give the whole schedule a CUMULATIVE spend cap with
-   *  budget_usd / budget_tokens: every turn it wakes, every fork those turns
-   *  run and everything they spawn debit one durable ledger, and the host
-   *  declines further model calls and spawns once it is spent — a long
-   *  autonomous run cannot outspend it by writing code that forgets to stop.
-   *  Recurring schedules accumulate across fires; name budget_label to share
-   *  one ledger across several schedules. Omit for no cap. */
+  /** A future turn: \`cron\` recurs, \`atMs\` (epoch ms) fires once. \`budget_usd\`/\`budget_tokens\` cap
+   *  everything its turns spend, across fires; \`budget_label\` shares one ledger between schedules. */
   schedule(opts: {
     cron?: string; atMs?: number; label?: string; payload?: object;
     budget_usd?: number; budget_tokens?: number; budget_label?: string;
   }): Promise<{ id: string; kind: string; nextFireAt: number | null; budget?: unknown }>;
-  /** Cancel a previously-scheduled trigger by id. Idempotent: changed is
-   *  false when it was already revoked. */
   cancelSchedule(id: string): Promise<{ ok: boolean; changed: boolean }>;
-  /** Read a mission budget: one label, or everything the CURRENT turn spends
-   *  against when called with no argument. Returns [] when this run is
-   *  uncapped, which is the default. */
+  /** One mission budget, or with no label every budget this turn spends against; [] when uncapped. */
   budget(label?: string): Promise<unknown>;
-  /** Read a background job. A SETTLED job returns its full row — result or
-   *  error. When a job backgrounds you get a { jobId } and are woken with the
-   *  result when it settles: the wake is the delivery, so call this for the
-   *  job a wake named (or to re-read an old one), never in a loop — a job
-   *  still running has no result to read. */
+  /** A background job's row. A running job has no result yet; its result wakes you when it settles. */
   jobResult(jobId: string): Promise<{ id: string; kind: string; status: 'running' | 'completed' | 'failed' | 'cancelled'; result?: string | null; error?: string | null; note?: string } | null>;
-  /** List your recent background jobs (newest first). */
   backgroundJobs(limit?: number): Promise<unknown>;
-  /** Fold the conversation NOW: arm the compaction ladder so your next turn is
-   *  assembled from a fresh handoff checkpoint instead of waiting for the
-   *  token trigger. Call it at a phase boundary — a piece of work finished and
-   *  its tool traffic is no longer worth carrying. Nothing is lost: the folded
-   *  range is archived verbatim and listed in the checkpoint's Compaction
-   *  Archive manifest, so exact prior wording stays one workspace.readFile
-   *  away. One fold per call, applied at the next turn assembly. */
+  /** Compact the conversation when the next turn is assembled; the folded range stays archived. */
   compactNow(): Promise<{ armed: boolean; appliesAt: 'next-turn-assembly' }>;
-  /** Read-only loss curve: replay-eval entries (newest first) — outcome-
-   *  labeled past turns re-run against your CURRENT config and scored
-   *  against how they originally landed. loss = 1 − mean score, and every
-   *  entry carries an 'interval' field — the 95% CI on that mean. Read them
-   *  together. */
+  /** Past turns replayed against your current config, newest first: loss = 1 − mean score, with a 95% interval. */
   replayEvals(limit?: number): Promise<unknown>;
 };
 `;

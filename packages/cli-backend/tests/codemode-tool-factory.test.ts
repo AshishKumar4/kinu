@@ -213,13 +213,6 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
     ] });
   });
 
-  test('the tool description tells the model what workspace.* actually is', async () => {
-    const factory = createNodeCodemodeToolFactory();
-    const built = factory({ native: {}, craftedTools: () => ({}), providers: [] });
-    expect(built.description).toContain('canonical durable workspace');
-    expect(built.description).toContain('`shell` with runtime "workspace"');
-  });
-
   test('every wired namespace is DECLARED to the model, not just bound', async () => {
     // Each provider's `types` must reach the description, or its callables are reachable but undiscoverable.
     // Capability and executor providers arrive by different routes.
@@ -244,8 +237,6 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
     expect(built.description).toContain('export declare const memory: {');
     expect(built.description).toContain('save(content: string)');
     expect(built.description).toContain('export declare const workspace: {');
-    expect(built.description).toContain('Namespaces bound in this sandbox:');
-    expect(built.description).toContain('canonical durable workspace');
   });
 });
 
@@ -344,15 +335,14 @@ describe('createNodeCodemodeToolFactory — native tools under tools.<name>', ()
     expect(seen).toEqual(['ls']);
   });
 
-  test('native declarations stay in the tool and crafted declarations ride the live ledger', () => {
+  test('native tools are declared by their own schemas and crafted declarations ride the live ledger', () => {
     const built = createNodeCodemodeToolFactory()({
       native: surfaceWith(async () => ''),
       craftedTools: () => ({ double: { description: 'Doubles a number', execute: async () => 2 } }),
       providers: [],
     });
 
-    expect(built.description).toContain('export declare const tools: {');
-    expect(built.description).toContain('shell(input: { command: string }): Promise<unknown>;');
+    expect(built.description).not.toContain('shell(input:');
     expect(built.description).not.toContain('double(...args: unknown[]): Promise<unknown>;');
     expect(renderDynamicContextBlock({ craftedTools: [{ name: 'double', description: 'Doubles a number' }] }))
       .toContain('double(...args: unknown[]): Promise<unknown>;');

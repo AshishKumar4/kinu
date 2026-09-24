@@ -15,6 +15,14 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 ### Changed
 
 - Hosted actors now use the Agents platform directly, without Think's duplicate session, workspace, inference queue or recovery boot. The shared Kinu chat loop retains the existing browser/CLI protocol and initializes the root transcript through the public session provider. Accepted sends and unfinished workspace work keep the sandbox protected across eviction.
+- **Tool descriptions carry only what a call needs.** Each built-in tool's
+  description is now a one-line summary plus the facts its schema cannot
+  state; the when-to-use and avoid-when prose is gone, and `eval` no longer
+  tells a model to prefer `shell` or `file` for single steps, so the model
+  chooses. `eval` stops declaring every native tool a second time: `tools.<name>`
+  takes the input that tool's own schema declares. The hosted request's seven
+  tool definitions shrink from 66.0 KB to 30.1 KB, the local one's from 52.2 KB
+  to 22.8 KB.
 
 ### Added
 

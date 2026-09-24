@@ -445,24 +445,17 @@ export function createDeviceTunnelExecutor(
     disconnect: async () => { /* the hub owns the socket lifecycle */ },
     tools,
     types: `/**
- * Every call below either answers, or resolves to a refusal
- * \`{"reason":"<class>","error":"<what happened>"}\`. \`reason\` is the class —
- * bad_input, unavailable, unsupported, timeout, cancelled, oom, io — so branch on
- * it rather than matching prose. \`unavailable\` means no device is attached right
- * now; the error text says how the user attaches one. With several of the user's
- * machines connected, a call that names none refuses asking for one: pass
- * \`{ device: "<name>" }\` — the names are in the execution-status block.
+ * The user's own machine. A refused call resolves to \`{"reason","error"}\`: reason is bad_input,
+ * unavailable (no machine attached; the error says how to attach one), unsupported, timeout,
+ * cancelled, oom or io. With several machines connected, name one with \`{ device: "<name>" }\`.
  */
 declare namespace device {
-  /** Execute a command on the user's local machine */
   function exec(command: string, opts?: { device?: string }): Promise<${COMMAND_RESULT_TYPE}>;
-  /** Read a file from the user's local filesystem */
   function readFile(path: string, opts?: { device?: string }): Promise<string>;
-  /** Write a file to the user's local filesystem */
   function writeFile(path: string, content: string, opts?: { device?: string }): Promise<string>;
-  /** List directory contents on the user's local machine — or a refusal payload */
+  /** Entries, or a refusal. */
   function readdir(path: string, opts?: { device?: string }): Promise<string[] | string>;
-  /** true or false — or a refusal payload, if the device could not be asked */
+  /** A boolean, or a refusal. */
   function exists(path: string, opts?: { device?: string }): Promise<boolean | string>;
 }`,
     positionalArgs: true,

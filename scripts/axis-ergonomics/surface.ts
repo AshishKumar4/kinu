@@ -219,9 +219,8 @@ function axisLines(variant: SurfaceVariant): string {
 }
 
 /**
- * The rendered tool docstring, in the exact five-part shape
- * `renderToolSchemaDescription` produces: summary, Use when, Avoid when,
- * doctrine, Returns.
+ * The rendered tool docstring, in the five-part shape product tool docstrings
+ * had when this study ran: summary, Use when, Avoid when, doctrine, Returns.
  */
 export function renderSwarmDescription(variant: SurfaceVariant): string {
   const summary =

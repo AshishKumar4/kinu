@@ -569,10 +569,7 @@ export {
   type WebToolAction,
   type FileToolAction,
   type TasksToolAction,
-  DELEGATION_FRAME,
-  DELEGATION_INHERITANCE,
-  DELEGATION_RUNGS,
-  DELEGATION_CONVERSE,
+  AGENTS_TOOL_NOTES,
   renderToolSchemaDescription,
   renderCodemodeDescription, CODEMODE_CODE_DESCRIPTION,
   TOOL_REACH,
@@ -589,8 +586,8 @@ export {
 
 export {
   CRAFTED_TOOL_NAMESPACE,
-  craftedToolDescription, firstSentence, jsonSchemaToTs, nativeToolInputSchema, codemodeInputSchema,
-  renderToolsDeclaration, nativeToolFunctions, codemodeFunction, craftedFailureFunctions, slateToolReach, callCodemodeMember,
+  craftedToolDescription, codemodeInputSchema,
+  renderCraftedToolsDeclaration, nativeToolFunctions, codemodeFunction, craftedFailureFunctions, slateToolReach, callCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,

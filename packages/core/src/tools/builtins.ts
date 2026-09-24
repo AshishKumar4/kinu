@@ -259,17 +259,15 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     inputSchema: jsonSchema<{ command: string; runtime?: string; why?: string }>({
       type: 'object',
       properties: {
-        command: { type: 'string', description: 'Shell command to run' },
+        command: { type: 'string' },
         runtime: {
           type: 'string',
           enum: shellRuntimes,
-          description:
-            '`workspace` (default), `sandbox`, or one of the user\'s machines by the nickname the live system state lists. With several machines connected a nickname is required.',
+          description: 'Default: workspace. A user\'s machine goes by its nickname from the execution status, which is required when several are connected.',
         },
         why: {
           type: 'string',
-          description:
-            'Required when runtime is anything other than workspace: one short clause saying what that environment gives you that the workspace shell does not (a long-running process, an inbound port, real parallelism, resources). Recorded durably against the outcome, so it is how escalations get evaluated later — not a formality.',
+          description: 'Required for any runtime but workspace: what it gives that the workspace shell lacks (a long-running process, an inbound port, parallelism, resources). Recorded with the outcome.',
         },
       },
       required: ['command'],
@@ -398,35 +396,21 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           type: 'string',
           enum: [...memoryActionsFor(facts !== undefined)],
           description: facts
-            ? 'remember/recall/forget a keyed fact, save/search prose notes and remembered facts, or read this agent’s past conversation'
-            : 'save a note, search memory notes, or read this agent’s past conversation',
+            ? 'remember, recall, forget: a keyed fact. save: a note. search: notes and facts. conversations: your past conversations.'
+            : 'save: a note. search: notes. conversations: your past conversations.',
         },
-        key: { type: 'string', description: 'For action=remember/recall/forget: a stable identifier (e.g. "user.tz", "deploy.target").' },
-        value: { description: 'For action=remember: any JSON value — string, number, object, array.' },
-        confidence: { type: 'number', minimum: 0, maximum: 1, description: 'For action=remember: 0..1; default 1.0.' },
-        content: { type: 'string', description: 'For action=save: the note text.' },
+        key: { type: 'string', description: 'For remember, recall, forget: a stable name such as "deploy.target".' },
+        value: { description: 'For remember: any JSON value.' },
+        confidence: { type: 'number', minimum: 0, maximum: 1, description: 'For remember; default 1.' },
+        content: { type: 'string', description: 'For save.' },
         query: {
           type: 'string',
-          description: 'For action=search: full-text query over notes'
-            + (facts ? ' and remembered facts (key or value)' : '')
-            + '. For action=conversations: full-text query over prior messages (all terms must match; omit to browse archived roots).',
+          description: 'For search. For conversations: every term must match; omit it to browse archived conversations.',
         },
-        around_message_id: {
-          type: 'string',
-          description: 'For action=conversations: return messages around this message id instead of searching.',
-        },
-        window: {
-          type: 'number',
-          description: 'For action=conversations scroll: messages on each side of the anchor (default 5, max 20).',
-        },
-        max_chars: {
-          type: 'number',
-          description: 'For action=conversations scroll: per-message character budget (default 700). Raise it to read full messages; truncation says how much was cut.',
-        },
-        limit: {
-          type: 'number',
-          description: 'For action=conversations: max search hits (default 5, max 10) or archived roots (default 10, max 20).',
-        },
+        around_message_id: { type: 'string', description: 'For conversations: read around this message instead of searching.' },
+        window: { type: 'number', description: 'For conversations around a message: messages each side (default 5, max 20).' },
+        max_chars: { type: 'number', description: 'For conversations around a message: characters per message (default 700).' },
+        limit: { type: 'number', description: 'For conversations: max hits (default 5, max 10), or archived conversations (default 10, max 20).' },
       },
       required: ['action'],
     }),
@@ -443,31 +427,14 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         action: {
           type: 'string',
           enum: [...TASKS_TOOL_ACTIONS],
-          description: 'add tasks, update one task\'s status, list the whole task list, or switch your durable active role',
+          description: 'add, update or list tasks; mode reads or switches your role.',
         },
-        titles: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'For action=add: one title per task, in the order you plan to do them. Write the whole plan in one call.',
-        },
-        parent: {
-          type: 'string',
-          description: 'For action=add: the id of the task these are subtasks of (e.g. "t2"). Omit for top-level tasks. Subtasks nest one level only.',
-        },
-        id: { type: 'string', description: 'For action=update: the task id, as `add` or `list` returned it (e.g. "t3").' },
-        status: {
-          type: 'string',
-          enum: [...TASK_STATUSES],
-          description: 'For action=update: active when you start the item, done when it is finished, dropped when it is no longer needed, open to reopen it.',
-        },
-        note: {
-          type: ['string', 'null'],
-          description: 'For action=update: a one-line annotation beside the item, or null to clear it. Either `status` or `note` must be present.',
-        },
-        role: {
-          type: 'string',
-          description: 'For action=mode: the role id to switch to (kebab-case; the catalog defines which exist — unknown ids are refused with the known list). The switch applies from your NEXT turn. Omit to read the active role id.',
-        },
+        titles: { type: 'array', items: { type: 'string' }, description: 'For add: one title per task, in order.' },
+        parent: { type: 'string', description: 'For add: the task id these are subtasks of; one level only.' },
+        id: { type: 'string', description: 'For update: the task id, such as "t3".' },
+        status: { type: 'string', enum: [...TASK_STATUSES], description: 'For update.' },
+        note: { type: ['string', 'null'], description: 'For update: a one-line note beside the item; null clears it. Update needs `status` or `note`.' },
+        role: { type: 'string', description: 'For mode: the role id to switch to from your next turn; omit it to read the active role.' },
       },
       required: ['action'],
     }),
@@ -485,11 +452,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           action: {
             type: 'string',
             enum: [...WEB_TOOL_ACTIONS],
-            description: 'search the live web for ranked results, or fetch one URL as markdown',
           },
-          query: { type: 'string', description: 'For action=search: the search query.' },
-          limit: { type: 'number', description: 'For action=search: max results (default 5, max 20).' },
-          url: { type: 'string', description: 'For action=fetch: the absolute http(s) URL to fetch.' },
+          query: { type: 'string', description: 'For search.' },
+          limit: { type: 'number', description: 'For search: max results (default 5, max 20).' },
+          url: { type: 'string', description: 'For fetch: an absolute http(s) URL.' },
         },
         required: ['action'],
       }),
@@ -534,9 +500,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           status: {
             type: 'string',
             enum: [...SUBORDINATE_REPORT_STATUSES],
-            description: 'completed = the assignment is done. blocked = you need input to continue. progress = significant mid-task update.',
+            description: 'completed: the assignment is done. blocked: you need input. progress: a mid-task update.',
           },
-          content: { type: 'string', maxLength: 20000, description: 'What to tell the orchestrator — the result, or what you are blocked on. Prose; the fields beside it carry the parts the orchestrator has to act on.' },
+          content: { type: 'string', maxLength: 20000, description: 'The result, or what blocks you.' },
           ...reportHandoffProperties(report),
         },
         required: ['status', 'content'],

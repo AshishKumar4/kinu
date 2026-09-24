@@ -245,14 +245,13 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     }),
   },
   {
-    id: 'tool-contract/doctrine-truncated',
+    id: 'tool-contract/notes-truncated',
     layer: 'tool-contract',
     patches: ['renderToolSchemaDescription'],
-    models: 'the avoid-when doctrine falls out of every tool schema description',
+    models: 'every note after the first falls out of each tool schema description',
     inject: (s) => ({
       ...s,
-      renderToolSchemaDescription: (spec) =>
-        s.renderToolSchemaDescription(spec).split('\n').filter((line) => !line.startsWith('Avoid when:')).join('\n'),
+      renderToolSchemaDescription: (spec) => s.renderToolSchemaDescription({ ...spec, notes: spec.notes.slice(0, 1) }),
     }),
   },
   {

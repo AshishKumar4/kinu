@@ -1,7 +1,6 @@
 // Tool card summary lines: repeated calls stay distinguishable, and no summary invents detail.
 import { describe, test, expect } from 'bun:test';
 import { clip, describeToolCall, summarizeToolCall, toolCallEffect } from '../src/tools/tool-call-summary';
-import { renderCodemodeDescription } from '../src/tools/registry';
 
 describe('tool call summaries — the unified agents tool', () => {
   test('agents calls are told apart by action and target', () => {
@@ -107,12 +106,6 @@ describe('tool call summaries — builtins', () => {
     expect(describeToolCall('eval', { code })).toBe('Fetch the roster to identify idle agents');
     expect(summarizeToolCall('eval', { code })).toBe('const r = await team.list();');
     expect(describeToolCall('eval', { code: 'const r = await team.list();' })).toBe('Ran a tool program');
-  });
-
-  test('the codemode prompt requires the intent line the interface reads', () => {
-    const description = renderCodemodeDescription(['declare const workspace: unknown;']);
-    expect(description).toContain('Start every program with exactly one `//` comment');
-    expect(description).toContain('The interface shows this line to the user as the call intent.');
   });
 
   test('native calls name their operation and target in plain language', () => {

@@ -9,7 +9,7 @@ import { type Tool, type ToolSet } from 'ai';
 import type { ActorHandle, AgentsToolDeps, DeviceRequestChannel, SqlExecutor, CraftStore, ExecutionRouter } from "@kinu.run/core";
 import {
   createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider,
-  renderCodemodeDescription, renderToolsDeclaration, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE,
+  renderCodemodeDescription, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE,
   type WebSearchProvider, type CodemodeProvider, type WorkMode,
   currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode,
   selectInjectableCraftedTools,
@@ -139,7 +139,8 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
         const toolsProvider: CodemodeProvider = {
           name: CRAFTED_TOOL_NAMESPACE,
           tools: nativeToolFunctions(toolsInWorkMode(mode, reachable)),
-          types: renderToolsDeclaration(reachable, []),
+          // Declared by schemas
+          types: '',
           positionalArgs: true,
         };
 

@@ -15,7 +15,7 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import {
   CRAFTED_TOOL_NAMESPACE,
   decodeJsonValue, explainNativeToolReferenceError, nativeToolFunctions,
-  renderCodemodeDescription, renderToolsDeclaration, codemodeInputSchema,
+  renderCodemodeDescription, codemodeInputSchema,
   withCraftedToolDeclarations,
   codemodeFunction, withCodemodeProgram,
 } from '@kinu.run/core';
@@ -75,12 +75,10 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
     // A crafted name shadows a native one, as in the CF prelude.
     const nativeBindings = nativeToolFunctions(surface.native);
 
-    const toolsDeclaration = renderToolsDeclaration(surface.native, []);
-
     return withCraftedToolDeclarations(tool({
       // Every provider's `types` must be read into the description, or the model
       // gets callables it was never told about.
-      description: renderCodemodeDescription([toolsDeclaration, ...providers.map((provider) => provider.types)], 'local'),
+      description: renderCodemodeDescription(providers.map((provider) => provider.types), 'local'),
       inputSchema: codemodeInputSchema(),
       execute: (args, options) => withCodemodeProgram(async () => {
         requireBuild('Native JavaScript execution without a constrained runtime');

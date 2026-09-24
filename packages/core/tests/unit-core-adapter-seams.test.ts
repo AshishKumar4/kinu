@@ -18,7 +18,7 @@ import {
   defaultSpecFor, DEFAULT_WORKERS_AI_MODEL_SPEC, workersAiSpec,
   DEFAULT_ROLE_ID, REPORT_TOOL, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
   craftedToolDescription, toCraftedToolSource, type CraftedTool,
-  CRAFTED_TOOL_NAMESPACE, renderToolsDeclaration, nativeToolFunctions, jsonSchemaToTs, nativeToolInputSchema,
+  CRAFTED_TOOL_NAMESPACE, nativeToolFunctions,
   attributeCraftedFailure, craftFailureMarker,
   initCompletedTurnTable, createCompletedTurnStore,
   initEventsHubTables, EventLog,
@@ -26,7 +26,6 @@ import {
   type BackendHost, type BroadcastEvent, type ProgrammaticTurn,
 } from '../src/index';
 import { makeSqlExec } from './helpers';
-import { isJsonObject, type JsonValue } from '../src/utils/json';
 
 describe('EVENT_VARIANTS — the array and the type cannot disagree', () => {
   // One declaration: a hand-mirrored picklist would compile yet refuse a new variant at its route.
@@ -579,30 +578,6 @@ describe('the sandbox contract — one namespace for every tool', () => {
     expect(craftedToolDescription('summarize', 'Folds a report')).toBe('Folds a report');
   });
 
-  test('the declaration lists native tools with their input type, then crafted tools', () => {
-    const native = {
-      file: tool({
-        description: 'The file plane: read | edit | write.\nMore doctrine.',
-        inputSchema: jsonSchema<{ action: string; path: string }>({
-          type: 'object',
-          properties: {
-            action: { type: 'string', enum: ['read', 'edit', 'write'] },
-            path: { type: 'string', description: 'A workspace path.' },
-          },
-          required: ['action', 'path'],
-        }),
-        execute: async () => 'x',
-      }),
-    };
-
-    const rendered = renderToolsDeclaration(native, [{ name: 'summarize', description: 'Folds a report' }]);
-    expect(rendered).toContain('export declare const tools: {');
-    expect(rendered).toContain('file(input: { action: "read" | "edit" | "write"; path: string }): Promise<unknown>;');
-    expect(rendered).toContain('/** The file plane: read | edit | write. Same input as the native `file` tool. */');
-    expect(rendered).toContain('/** Folds a report (crafted by you) */');
-    expect(rendered).toContain('summarize(...args: unknown[]): Promise<unknown>;');
-  });
-
   test('a native tool takes exactly one JSON object through the sandbox', async () => {
     const seen: unknown[] = [];
 
@@ -627,91 +602,6 @@ describe('the sandbox contract — one namespace for every tool', () => {
     const refused = await file.execute('a');
     expect(refused).toEqual({ success: false, reason: 'bad_input', error: 'tools.file(input): input must be one JSON object, the same shape the native `file` tool takes' });
     expect(seen).toHaveLength(2);
-  });
-
-  test('a schema this renderer cannot read renders as unknown, never throws', () => {
-    expect(jsonSchemaToTs(undefined)).toBe('unknown');
-    expect(jsonSchemaToTs({ type: 'array', items: { type: 'number' } })).toBe('number[]');
-    expect(jsonSchemaToTs({ anyOf: [{ type: 'string' }, { type: 'null' }] })).toBe('string | null');
-  });
-
-  /** Deep-freeze, so a renderer that mutates the schema it was handed throws. */
-  function deepFreeze(value: JsonValue | undefined): void {
-    if (Array.isArray(value)) {
-      for (const member of value) deepFreeze(member);
-
-      Object.freeze(value);
-
-      return;
-    }
-
-    if (value === undefined || !isJsonObject(value)) return;
-
-    for (const member of Object.values(value)) deepFreeze(member);
-
-    Object.freeze(value);
-  }
-
-  test('a property description stays on the native schema; the declaration carries only the shape', () => {
-    // The sandbox declaration ships in the eval docstring on every request; descriptions already ride
-    // the native schema, so repeating them duplicates text per request.
-    const markers = ['UNIQACTION', 'UNIQQUERY', 'UNIQPATH', 'UNIQNESTED', 'UNIQTARGET', 'UNIQDEPTH', 'UNIQINCLUDE'];
-
-    const native = {
-      file: tool({
-        description: 'The file plane.',
-        inputSchema: jsonSchema<{ action: string }>({
-          type: 'object',
-          properties: {
-            action: {
-              type: 'string',
-              enum: ['read', 'edit', 'write'],
-              description: 'UNIQACTION which verb runs against the plane. A second sentence nobody needs twice.',
-            },
-            query: {
-              const: 'status',
-              description: 'UNIQQUERY the one lookup this tool answers. A second sentence nobody needs twice.',
-            },
-            path: {
-              type: 'string',
-              description: 'UNIQPATH absolute inside the durable plane. A second sentence nobody needs twice.',
-            },
-            target: {
-              anyOf: [
-                {
-                  type: 'object',
-                  properties: {
-                    depth: { type: 'number', description: 'UNIQDEPTH how many levels to descend.' },
-                    include: { type: 'array', items: { type: 'string' }, description: 'UNIQINCLUDE names to keep.' },
-                  },
-                  required: ['depth'],
-                  description: 'UNIQNESTED a structured descent rather than a path. A second sentence nobody needs twice.',
-                },
-                { type: 'string' },
-              ],
-              description: 'UNIQTARGET either a path or a structured descent. A second sentence nobody needs twice.',
-            },
-          },
-          required: ['action', 'query'],
-        }),
-        execute: async () => 'x',
-      }),
-    };
-
-    const frozen = JSON.stringify(native.file.inputSchema);
-    deepFreeze(nativeToolInputSchema(native.file));
-    Object.freeze(native.file.inputSchema);
-
-    const rendered = renderToolsDeclaration(native, []);
-
-    expect(rendered).toContain('file(input: { action: "read" | "edit" | "write"; query: "status"; path?: string; target?: { depth: number; include?: string[] } | string }): Promise<unknown>;');
-
-    for (const marker of markers) expect(rendered).not.toContain(marker);
-
-    expect(JSON.stringify(native.file.inputSchema)).toBe(frozen);
-    const providerSchema = JSON.stringify(nativeToolInputSchema(native.file));
-
-    for (const marker of markers) expect(providerSchema).toContain(marker);
   });
 });
 

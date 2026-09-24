@@ -22,7 +22,6 @@ import {
   type JsonValue,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
-  SWARM_PRESET_DOCTRINE,
   type AgentsSwarmDeps,
   type AgentsToolDeps,
   type PeersToolDeps,
@@ -534,36 +533,13 @@ describe('agents.* codemode namespace — declared types', () => {
     for (const action of AGENTS_TOOL_ACTIONS) expect(full).toContain(`${action}(input`);
   });
 
-  test('the search docstring states the non-resumable cost of searching in-sandbox', () => {
-    const types = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types ?? '';
-    expect(types).toContain('NOT resumable from here');
-    expect(types).toContain('eval declines background resume');
-    expect(types).toContain('top-level `agents` tool');
-  });
-
-  test('the search docstring says what is measured and what a refusal names', () => {
-    // The declaration says `verify` names a registered instrument and that an illegal composition is refused by
-    // name.
-    const types = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types ?? '';
-    expect(types).toContain('MEASURED rather than judged');
-    expect(types).toContain('names a REGISTERED instrument');
-    expect(types).toContain('names the axis');
-    // `preset` is optional now: an omitted preset takes the role's default.
-    expect(types).toMatch(/^ {4}preset\?: "ideate" \| "research"/m);
-    expect(types).not.toContain('settle');
-    // The refusal's classification is declared, like the file dispatcher's.
-    expect(types).toContain('{ reason: string; error: string }');
-  });
-
-  test('the declared preset union is every preset the tool advertises, with the same doctrine', () => {
+  test('the declared preset union is every preset the tool advertises', () => {
     // Derived from the schema, so the sandbox declaration cannot offer a different preset set.
     const types = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types ?? '';
 
     for (const preset of SWARM_PRESETS) expect(types).toContain(`"${preset}"`);
     expect(types).toContain(`preset?: ${SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};`);
     expect(types).toContain(`from?: ${NAMED_SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};`);
-
-    for (const line of SWARM_PRESET_DOCTRINE) expect(types).toContain(line);
   });
 
   test('the same action set renders byte-identically whatever built the deps', () => {
@@ -914,9 +890,8 @@ describe('agents delegation — role/tier/preset precedence', () => {
 
     const withCatalog = rendered(profileDeps());
     expect(withCatalog).toContain('researcher');
-    expect(withCatalog).toContain('preset research');
     // No catalog wired → no summaries, and nothing invented.
-    expect(rendered({ swarm: swarmDeps() })).not.toContain('Available roles');
+    expect(rendered({ swarm: swarmDeps() })).not.toContain('researcher');
   });
 });
 

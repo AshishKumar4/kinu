@@ -327,9 +327,10 @@ function formatStartResult(result: NimbusStartResult, namespace: string): Comman
   return commandResult({ stdout: lines.join('\n'), exitCode: running ? 0 : result.process.exitCode ?? 0 });
 }
 
-/** Process/port/runtime tool declarations shared by `createNimbusExecutor` and `createNimbusWorkspaceExecutor`. */
-const SESSION_CONTROL_TYPES =
-  `  function startProcess(command: string, options?: { cwd?: string; timeoutMs?: number; env?: Record<string,string> }): Promise<${COMMAND_RESULT_TYPE}>;
+/** Process/port/runtime declarations shared by `createNimbusExecutor` and `createNimbusWorkspaceExecutor`;
+ *  `result` is the command result type, which the workspace namespace spells with its own `Refusal`. */
+const sessionControlTypes = (result: string) =>
+  `  function startProcess(command: string, options?: { cwd?: string; timeoutMs?: number; env?: Record<string,string> }): Promise<${result}>;
   function killProcess(pid: number | { pid: number }): Promise<string>;
   function logs(pid: number | { pid: number; lines?: number; bytes?: number }): Promise<string>;
   function exposePort(port: number | { port: number }): Promise<string>;
@@ -782,11 +783,8 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
     disconnect: async () => { active = false; },
     tools,
     types: `/**
- * Every call below either answers, or resolves to a refusal
- * \`{"reason":"<class>","error":"<what happened>"}\`. \`reason\` is the class —
- * bad_input, unavailable, unsupported, timeout, cancelled, oom, io — so branch on
- * it rather than matching prose. \`unsupported\` means this deployment's session
- * handle has no such surface and a retry cannot change that.
+ * A refused call resolves to \`{"reason","error"}\`; \`unsupported\` means this deployment's session
+ * lacks the surface, so a retry cannot help.
  */
 declare namespace ${namespace} {
   function exec(command: string): Promise<${COMMAND_RESULT_TYPE}>;
@@ -795,12 +793,12 @@ declare namespace ${namespace} {
   function writeFile(path: string, content: string): Promise<string>;
   function listFiles(path?: string): Promise<string>;
   function readdir(path?: string): Promise<string>;
-  /** true or false — or a refusal payload, if the session could not be asked. */
+  /** A boolean, or a refusal. */
   function exists(path: string): Promise<boolean | string>;
   function stat(path: string): Promise<${COMMAND_RESULT_TYPE}>;
   function mkdir(path: string): Promise<string>;
   function rm(path: string): Promise<string>;
-${SESSION_CONTROL_TYPES}
+${sessionControlTypes(COMMAND_RESULT_TYPE)}
 }`,
     positionalArgs: true,
     async exposePort(port: number) {
@@ -882,8 +880,8 @@ export function createNimbusWorkspaceExecutor(opts: NimbusWorkspaceExecutorOpts)
   } = session.tools;
 
   const sessionTypes = `
-  function runCode(code: string, options?: { language?: 'javascript'|'typescript'|'python'|'ruby'|'shell'; install?: 'never'|'ifMissing' }): Promise<${COMMAND_RESULT_TYPE}>;
-${SESSION_CONTROL_TYPES}`;
+  function runCode(code: string, options?: { language?: 'javascript'|'typescript'|'python'|'ruby'|'shell'; install?: 'never'|'ifMissing' }): Promise<string | Refusal>;
+${sessionControlTypes('string | Refusal')}`;
 
   const workspaceTools = { ...inline.tools, ...sessionTools };
 
