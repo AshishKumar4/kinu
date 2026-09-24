@@ -19,10 +19,81 @@ index ab583395295c780d5b86dfba29fca3fb4593f322..0d71413ba779217bb1a7828374b4dc24
                  fileEntries.push({
                      name: arg,
 diff --git a/dist/vfs/sqlite-vfs.js b/dist/vfs/sqlite-vfs.js
-index 363e3db45eb7fad69b4b24b53a016aecac84b80f..521f73c16330f21a739944906d17c13826876c56 100644
+index 363e3db45eb7fad69b4b24b53a016aecac84b80f..148bbc85a605cef3941368cb17b6c28eb55b385f 100644
 --- a/dist/vfs/sqlite-vfs.js
 +++ b/dist/vfs/sqlite-vfs.js
-@@ -2656,7 +2656,10 @@ export class SqliteVFS {
+@@ -1416,6 +1416,21 @@ export class SqliteVFS {
+         if (resolved.inode?.kind !== 'directory')
+             throw vfsError('ENOTDIR', parent);
+     }
++    /**
++     * Kinu patch, Nimbus ask N22: the storage key a new entry named `path` takes, its parent resolved
++     * through any link and its own name as given. Keyed on the path as given, an entry made
++     * through a link to a directory (/home/user -> /home/main) landed under the link's name,
++     * where nothing reached through the link finds it.
++     */
++    createdPath(path, cred) {
++        const key = this.storageKey(path, cred);
++        const parent = this.parentPath(key);
++        if (parent === '')
++            return key;
++        const resolved = this.resolvePath(parent, cred, true, true).path;
++        const name = key.slice(parent.length + 1);
++        return resolved === '' ? name : `${resolved}/${name}`;
++    }
+     /**
+      * POSIX sticky-bit restriction on a shared directory.
+      *
+@@ -1481,11 +1496,20 @@ export class SqliteVFS {
+             return this._revision;
+         // A credentialed caller asks about its own view; a confined one asking
+         // after /tmp/x means its own file, so the counter must be that file's.
+-        const p = cred === undefined ? normalizeVfsPath(path) : this.storageKey(path, cred);
++        const p = cred === undefined ? normalizeVfsPath(path) : this.revisionKey(path, cred);
+         if (p === '')
+             return this._revision;
+         return this._pathRevisions.get(p) ?? 0;
+     }
++    /** Kinu patch, Nimbus ask N22: mutations stamp the path a link resolves to, so that is the path read. */
++    revisionKey(path, cred) {
++        try {
++            return this.resolvePath(path, cred, true, true).path;
++        }
++        catch {
++            return this.storageKey(path, cred);
++        }
++    }
+     /**
+      * Advance the clock once, stamp every path + its ancestors, and record
+      * the mutation in the invalidation log.
+@@ -1675,10 +1699,13 @@ export class SqliteVFS {
+         }
+     }
+     mkdir(path, options, cred) {
+-        const normalized = this.storageKey(path, cred);
+-        this.assertMutationsAllowed([normalized]);
+-        if (this.exists(normalized, cred))
++        const requested = this.storageKey(path, cred);
++        this.assertMutationsAllowed([requested]);
++        if (this.exists(requested, cred))
+             return;
++        // Kinu patch, Nimbus ask N22: made where a link resolves, not under its name.
++        const normalized = this.createdPath(requested, cred);
++        this.assertMutationsAllowed([normalized]);
+         if (options?.recursive) {
+             const parts = normalized.split('/').filter(Boolean);
+             let current = '';
+@@ -1781,7 +1808,8 @@ export class SqliteVFS {
+     }
+     symlink(target, path, cred) {
+         this.assertMutationsAllowed([path]);
+-        const normalized = this.storageKey(path, cred);
++        // Kinu patch, Nimbus ask N22: made where a link resolves, not under its name.
++        const normalized = this.createdPath(path, cred);
+         const prior = this.checkAccess(normalized, 0, cred, { followLeaf: false, allowMissingLeaf: true });
+         if (prior.inode)
+             throw vfsError('EEXIST', normalized);
+@@ -2656,7 +2684,10 @@ export class SqliteVFS {
          const inode = resolved.inode;
          if (inode && inode.kind !== 'directory')
              throw vfsError('ENOTDIR', path);
@@ -34,6 +105,98 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..521f73c16330f21a739944906d17c138
          if (!kids) {
              // W2.5b diagnostic: empty children-set for a directory we expected
              // to be populated.
+@@ -2714,18 +2745,19 @@ export class SqliteVFS {
+         const np = this.storageKey(path, cred);
+         const resolved = this.checkAccess(np, 0, cred, { followLeaf: false });
+         this.checkParentAccess(resolved.path, cred);
+-        const inode = this.inodes.get(np);
++        // Kinu patch, Nimbus ask N22: the directory a link reaches, not the link's name.
++        const inode = this.inodes.get(resolved.path);
+         if (!inode)
+             throw vfsError('ENOENT', path);
+         this.checkStickyParentMutation(resolved.path, inode, cred);
+         // Check if empty using children index (O(1) instead of O(N))
+-        const kids = this.children.get(np);
++        const kids = this.children.get(resolved.path);
+         if (kids && kids.size > 0) {
+             throw vfsError('ENOTEMPTY', path);
+         }
+         if (!inode.isDir)
+             throw vfsError('ENOTDIR', path);
+-        this.writeBatch({ inodes: [], chunks: [], deletePaths: [np] }, cred);
++        this.writeBatch({ inodes: [], chunks: [], deletePaths: [resolved.path] }, cred);
+     }
+     /**
+      * Remove a path and everything beneath it, in bounded transactions.
+@@ -3038,14 +3070,15 @@ export class SqliteVFS {
+     }
+     // ── Batch write (npm install fast path) ───────────────────────────────
+     normalizeBatchInode(entry, cred) {
+-        const path = this.storageKey(entry.path, cred);
++        // Kinu patch, Nimbus ask N22: written where a link resolves, not under its name.
++        const path = this.createdPath(entry.path, cred);
+         const prior = this.inodes.get(path);
+         const newUid = cred.uid === 0 ? (entry.uid ?? 1000) : cred.uid;
+         const newGid = cred.uid === 0 ? (entry.gid ?? 1000) : cred.gid;
+         return {
+             ...entry,
+             path,
+-            parentPath: this.storageKey(entry.parentPath, cred),
++            parentPath: this.parentPath(path),
+             mode: prior
+                 ? prior.mode
+                 : inodeKind(entry) === 'symlink'
+@@ -3080,7 +3113,7 @@ export class SqliteVFS {
+             }
+         };
+         for (const path of payload.deletePaths ?? []) {
+-            const normalized = this.storageKey(path, cred);
++            const normalized = this.createdPath(path, cred);
+             const existing = this.checkAccess(normalized, 0, cred, {
+                 followLeaf: false,
+                 allowMissingLeaf: true,
+@@ -3095,15 +3128,17 @@ export class SqliteVFS {
+             else
+                 checkParent(entry.path);
+         }
+-        for (const chunk of payload.chunks) {
+-            const path = this.storageKey(chunk.path, cred);
+-            if (!pending.has(path))
+-                this.checkAccess(path, 0o2, cred, { followLeaf: false });
++        // Kinu patch, Nimbus ask N22: a chunk and a delete are keyed as their inode is.
++        const chunks = payload.chunks.map((chunk) => ({ ...chunk, path: this.createdPath(chunk.path, cred) }));
++        for (const chunk of chunks) {
++            if (!pending.has(chunk.path))
++                this.checkAccess(chunk.path, 0o2, cred, { followLeaf: false });
+         }
+         return {
+             ...payload,
+             inodes,
+-            deletePaths: payload.deletePaths?.map((path) => this.storageKey(path, cred)),
++            chunks,
++            deletePaths: payload.deletePaths?.map((path) => this.createdPath(path, cred)),
+         };
+     }
+     /**
+@@ -3470,7 +3505,7 @@ export class SqliteVFS {
+                         // Close the group before the file that would overflow it, so a
+                         // file either fits whole or begins a group of its own. The
+                         // estimate only picks the boundary — the flush asserts the bound.
+-                        const prior = this.inodes.get(normalizeVfsPath(record.inode.path));
++                        const prior = this.inodes.get(this.createdPath(record.inode.path, cred));
+                         const overflows = group.wouldExceedFile(record.inode.size, record.inode.chunkCount, prior !== undefined && !prior.isDir);
+                         if (overflows !== null)
+                             flushGroup();
+@@ -4377,7 +4412,8 @@ export class SqliteVFS {
+         const toCreate = [];
+         const seen = new Set();
+         for (const path of paths) {
+-            const parts = path.split('/').filter(Boolean);
++            // Kinu patch, Nimbus ask N22: made where a link resolves, not under its name.
++            const parts = this.createdPath(path, cred).split('/').filter(Boolean);
+             let current = '';
+             for (const part of parts) {
+                 current = current ? current + '/' + part : part;
 diff --git a/src/shell/unix-commands.ts b/src/shell/unix-commands.ts
 index 15de09dcb7e88641427a9b5053457ce961c08f18..83776ce2b07ef80e6ea3efe39c1561e1f5fde3d5 100644
 --- a/src/shell/unix-commands.ts
@@ -55,10 +218,80 @@ index 15de09dcb7e88641427a9b5053457ce961c08f18..83776ce2b07ef80e6ea3efe39c1561e1
          fileEntries.push({
            name: arg,
 diff --git a/src/vfs/sqlite-vfs.ts b/src/vfs/sqlite-vfs.ts
-index 336f9918ac93fd50b60331d544474a0ed9998fcd..c5ff264818ef67c2b24a981d54ef1cc7da6afff4 100644
+index 336f9918ac93fd50b60331d544474a0ed9998fcd..ce718518e320ea2b78162c2913c514c1e048170d 100644
 --- a/src/vfs/sqlite-vfs.ts
 +++ b/src/vfs/sqlite-vfs.ts
-@@ -3381,7 +3381,10 @@ export class SqliteVFS {
+@@ -1836,6 +1836,21 @@ export class SqliteVFS {
+     if (resolved.inode?.kind !== 'directory') throw vfsError('ENOTDIR', parent);
+   }
+ 
++  /**
++   * Kinu patch, Nimbus ask N22: the storage key a new entry named `path` takes, its parent resolved
++   * through any link and its own name as given. Keyed on the path as given, an entry made
++   * through a link to a directory (/home/user -> /home/main) landed under the link's name,
++   * where nothing reached through the link finds it.
++   */
++  private createdPath(path: string, cred: VfsCred): string {
++    const key = this.storageKey(path, cred);
++    const parent = this.parentPath(key);
++    if (parent === '') return key;
++    const resolved = this.resolvePath(parent, cred, true, true).path;
++    const name = key.slice(parent.length + 1);
++    return resolved === '' ? name : `${resolved}/${name}`;
++  }
++
+   /**
+    * POSIX sticky-bit restriction on a shared directory.
+    *
+@@ -1901,12 +1916,21 @@ export class SqliteVFS {
+     if (path === undefined) return this._revision;
+     // A credentialed caller asks about its own view; a confined one asking
+     // after /tmp/x means its own file, so the counter must be that file's.
+-    const p = cred === undefined ? normalizeVfsPath(path) : this.storageKey(path, cred);
++    const p = cred === undefined ? normalizeVfsPath(path) : this.revisionKey(path, cred);
+     if (p === '') return this._revision;
+     return this._pathRevisions.get(p) ?? 0;
+   }
+ 
+ 
++  /** Kinu patch, Nimbus ask N22: mutations stamp the path a link resolves to, so that is the path read. */
++  private revisionKey(path: string, cred: VfsCred): string {
++    try {
++      return this.resolvePath(path, cred, true, true).path;
++    } catch {
++      return this.storageKey(path, cred);
++    }
++  }
++
+   /**
+    * Advance the clock once, stamp every path + its ancestors, and record
+    * the mutation in the invalidation log.
+@@ -2100,9 +2124,12 @@ export class SqliteVFS {
+   }
+ 
+   private mkdir(path: string, options: { recursive?: boolean; mode?: number } | undefined, cred: VfsCred): void {
+-    const normalized = this.storageKey(path, cred);
++    const requested = this.storageKey(path, cred);
++    this.assertMutationsAllowed([requested]);
++    if (this.exists(requested, cred)) return;
++    // Kinu patch, Nimbus ask N22: made where a link resolves, not under its name.
++    const normalized = this.createdPath(requested, cred);
+     this.assertMutationsAllowed([normalized]);
+-    if (this.exists(normalized, cred)) return;
+ 
+     if (options?.recursive) {
+       const parts = normalized.split('/').filter(Boolean);
+@@ -2211,7 +2238,8 @@ export class SqliteVFS {
+ 
+   private symlink(target: string, path: string, cred: VfsCred): void {
+     this.assertMutationsAllowed([path]);
+-    const normalized = this.storageKey(path, cred);
++    // Kinu patch, Nimbus ask N22: made where a link resolves, not under its name.
++    const normalized = this.createdPath(path, cred);
+     const prior = this.checkAccess(normalized, 0, cred, { followLeaf: false, allowMissingLeaf: true });
+     if (prior.inode) throw vfsError('EEXIST', normalized);
+     this.checkParentAccess(normalized, cred);
+@@ -3381,7 +3409,10 @@ export class SqliteVFS {
      const resolved = np ? this.checkAccess(np, 0o4, cred) : { path: '', inode: undefined };
      const inode = resolved.inode;
      if (inode && inode.kind !== 'directory') throw vfsError('ENOTDIR', path);
@@ -70,3 +303,91 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..c5ff264818ef67c2b24a981d54ef1cc7
      if (!kids) {
        // W2.5b diagnostic: empty children-set for a directory we expected
        // to be populated.
+@@ -3445,16 +3476,17 @@ export class SqliteVFS {
+     const np = this.storageKey(path, cred);
+     const resolved = this.checkAccess(np, 0, cred, { followLeaf: false });
+     this.checkParentAccess(resolved.path, cred);
+-    const inode = this.inodes.get(np);
++    // Kinu patch, Nimbus ask N22: the directory a link reaches, not the link's name.
++    const inode = this.inodes.get(resolved.path);
+     if (!inode) throw vfsError('ENOENT', path);
+     this.checkStickyParentMutation(resolved.path, inode, cred);
+     // Check if empty using children index (O(1) instead of O(N))
+-    const kids = this.children.get(np);
++    const kids = this.children.get(resolved.path);
+     if (kids && kids.size > 0) {
+       throw vfsError('ENOTEMPTY', path);
+     }
+     if (!inode.isDir) throw vfsError('ENOTDIR', path);
+-    this.writeBatch({ inodes: [], chunks: [], deletePaths: [np] }, cred);
++    this.writeBatch({ inodes: [], chunks: [], deletePaths: [resolved.path] }, cred);
+   }
+ 
+   /**
+@@ -3754,14 +3786,15 @@ export class SqliteVFS {
+   // ── Batch write (npm install fast path) ───────────────────────────────
+ 
+   private normalizeBatchInode(entry: BatchInodeEntry, cred: VfsCred): NormalizedBatchInodeEntry {
+-    const path = this.storageKey(entry.path, cred);
++    // Kinu patch, Nimbus ask N22: written where a link resolves, not under its name.
++    const path = this.createdPath(entry.path, cred);
+     const prior = this.inodes.get(path);
+     const newUid = cred.uid === 0 ? (entry.uid ?? 1000) : cred.uid;
+     const newGid = cred.uid === 0 ? (entry.gid ?? 1000) : cred.gid;
+     return {
+       ...entry,
+       path,
+-      parentPath: this.storageKey(entry.parentPath, cred),
++      parentPath: this.parentPath(path),
+       mode: prior
+         ? prior.mode
+         : inodeKind(entry) === 'symlink'
+@@ -3795,7 +3828,7 @@ export class SqliteVFS {
+     };
+ 
+     for (const path of payload.deletePaths ?? []) {
+-      const normalized = this.storageKey(path, cred);
++      const normalized = this.createdPath(path, cred);
+       const existing = this.checkAccess(normalized, 0, cred, {
+         followLeaf: false,
+         allowMissingLeaf: true,
+@@ -3807,14 +3840,16 @@ export class SqliteVFS {
+       if (prior) this.checkAccess(entry.path, 0o2, cred, { followLeaf: false });
+       else checkParent(entry.path);
+     }
+-    for (const chunk of payload.chunks) {
+-      const path = this.storageKey(chunk.path, cred);
+-      if (!pending.has(path)) this.checkAccess(path, 0o2, cred, { followLeaf: false });
++    // Kinu patch, Nimbus ask N22: a chunk and a delete are keyed as their inode is.
++    const chunks = payload.chunks.map((chunk) => ({ ...chunk, path: this.createdPath(chunk.path, cred) }));
++    for (const chunk of chunks) {
++      if (!pending.has(chunk.path)) this.checkAccess(chunk.path, 0o2, cred, { followLeaf: false });
+     }
+     return {
+       ...payload,
+       inodes,
+-      deletePaths: payload.deletePaths?.map((path) => this.storageKey(path, cred)),
++      chunks,
++      deletePaths: payload.deletePaths?.map((path) => this.createdPath(path, cred)),
+     };
+   }
+ 
+@@ -4235,7 +4270,7 @@ export class SqliteVFS {
+             // Close the group before the file that would overflow it, so a
+             // file either fits whole or begins a group of its own. The
+             // estimate only picks the boundary — the flush asserts the bound.
+-            const prior = this.inodes.get(normalizeVfsPath(record.inode.path));
++            const prior = this.inodes.get(this.createdPath(record.inode.path, cred));
+             const overflows = group.wouldExceedFile(
+               record.inode.size,
+               record.inode.chunkCount,
+@@ -5276,7 +5311,8 @@ export class SqliteVFS {
+     const seen = new Set<string>();
+ 
+     for (const path of paths) {
+-      const parts = path.split('/').filter(Boolean);
++      // Kinu patch, Nimbus ask N22: made where a link resolves, not under its name.
++      const parts = this.createdPath(path, cred).split('/').filter(Boolean);
+       let current = '';
+       for (const part of parts) {
+         current = current ? current + '/' + part : part;
