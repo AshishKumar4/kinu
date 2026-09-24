@@ -197,14 +197,13 @@ function reviewedTrajectory(
 }
 
 /**
- * Run the refiner for one claimed request, persist its proposal, route its
- * edits, and settle. Null when this pass lost the claim.
+ * Run the refiner for one claimed request, persist its proposal, route its edits, and settle. Null when this pass
+ * lost the claim.
  *
- * The proposal is persisted before the first owner write, so `resume` re-routes
- * the same edits and routes adopt existing owner records instead of asking the
- * refiner again. The claim is re-checked before every owner write, since owners
- * are other stores the row cannot guard. `settleRoutes` runs immediately after
- * `gated`, so fact-only proposals reach `applied` in the same pass.
+ * The proposal is persisted before the first owner write, so `resume` re-routes the same edits, adopting existing
+ * owner records instead of asking the refiner again. The claim is re-checked before every owner write: owners are
+ * stores the row cannot guard. `settleRoutes` runs right after `gated`, so fact-only proposals reach `applied` in the
+ * same pass.
  */
 async function plan(
   deps: RefinementDeps,
@@ -351,15 +350,11 @@ async function askRefiner(
 }
 
 /**
- * The refiner's brief: trajectory, addressable artifacts, prior refinements,
- * and the answer shape.
+ * The refiner's brief: trajectory, addressable artifacts, prior refinements, and the answer shape.
  *
- * Held-out (val) turns from `buildOutcomeEvalSplit` are withheld, since section
- * trials score on them; showing them would let a proposal memorise its exam
- * (GEPA keeps the same train/eval split). Turns are bounded by
- * `EVIDENCE_BUDGETS`. The answer shape is printed from
- * `REFINEMENT_PROPOSAL_EXAMPLE` so brief and schema cannot disagree; the prose
- * adds that every level is strict and the rationale floor applies to every kind.
+ * Held-out (val) turns from `buildOutcomeEvalSplit` are withheld: section trials score on them, so showing them
+ * would let a proposal memorise its exam (GEPA keeps the same split). Turns are bounded by `EVIDENCE_BUDGETS`. The
+ * answer shape is printed from `REFINEMENT_PROPOSAL_EXAMPLE`, so brief and schema cannot disagree.
  */
 async function renderRefinerBrief(deps: RefinementDeps, request: RefinementRequest, contextRefs: readonly string[]): Promise<string> {
   const sql = deps.control.sql;

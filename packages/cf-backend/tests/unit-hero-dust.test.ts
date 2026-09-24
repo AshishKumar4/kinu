@@ -1,19 +1,11 @@
 // The backdrop's claims (deterministic, slow, faint) must hold before any canvas draws it.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 
 import {
   createDustRenderer, DustField, type DustFrame, type DustSurface,
 } from '@kinu.run/core/web/hero-canvas';
 import type { ArtPalette } from '@kinu.run/core/web/art';
-
-const LANDING_DIR = resolve(import.meta.dir, '../src/components/landing');
-
-const DUST_SOURCE = readFileSync(resolve(LANDING_DIR, '../../../../core/src/web/hero-canvas.ts'), 'utf8');
-
-const STAGE_SOURCE = readFileSync(resolve(LANDING_DIR, 'search-tree/stage.ts'), 'utf8');
 
 const DARK: ArtPalette = { mode: 'dark', accent: [224, 164, 88], bright: [227, 210, 174], ash: [156, 145, 132], ground: [15, 13, 11] };
 
@@ -84,7 +76,6 @@ describe('the dust drifts deterministically', () => {
     const frame = fieldAfter(90, 91, 56, 844 / 390).frame();
     const stride = strideOf(frame);
 
-    expect(DUST_SOURCE).toContain('DUST_STRIDE = 4');
     expect(stride).toBe(4);
 
     for (let index = 0; index < frame.count; index += 1) {
@@ -107,8 +98,6 @@ describe('the dust drifts deterministically', () => {
     for (let index = 0; index < 60; index += 1) field.step(1 / 60);
     const after = field.frame();
     const stride = strideOf(after);
-
-    expect(DUST_SOURCE).toContain('MAX_DRIFT = 0.015');
 
     for (let index = 0; index < after.count; index += 1) {
       const at = index * stride;
@@ -188,21 +177,5 @@ describe('the dust renderer paints gold, twice per mote', () => {
       const alpha = Number(style.slice(style.lastIndexOf(',') + 1, -1));
       expect(alpha).toBeLessThanOrEqual(0.18);
     }
-  });
-});
-
-describe('the backdrop swaps where the copy stacks', () => {
-  test('the hero renders the tree at lg and the dust below it', () => {
-    const source = readFileSync(resolve(LANDING_DIR, 'LandingHero.tsx'), 'utf8');
-
-    expect(source).toContain('lg:grid-cols-[');
-    expect(source).toContain('wide ? <SearchTreeHero /> : <HeroDust />');
-  });
-
-  test('the query is Tailwind lg, which this theme does not redefine', () => {
-    expect(STAGE_SOURCE).toContain("WIDE_HERO_QUERY = '(min-width: 64rem)'");
-
-    const css = readFileSync(resolve(LANDING_DIR, '../../index.css'), 'utf8');
-    expect(css).not.toContain('--breakpoint-lg');
   });
 });

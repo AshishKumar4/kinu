@@ -18,6 +18,7 @@ import {
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
   type WorkspaceSpend,
+  type AgentRpcMethod,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -265,13 +266,13 @@ const WorkspaceSpendSchema: v.GenericSchema<WorkspaceSpend> = v.object({
 
 export const ActivitySpendSchema = v.object({ spend: WorkspaceSpendSchema });
 
-/** The one method-shaped CLI-to-cloud path; the server's AGENT_RPC_ACCESS table (cf-backend cli/rpc-gate.ts)
+/** The one method-shaped CLI-to-cloud path; the AGENT_RPC_ACCESS table (core cli/agent-rpc-access.ts)
  * is the allowlist and per-method auth policy. */
 export interface AgentRpcCall<Input, T> {
   readonly origin: string;
   readonly token: string;
   readonly name: string;
-  readonly method: string;
+  readonly method: AgentRpcMethod;
   readonly schema: v.GenericSchema<Input, T>;
   readonly args?: JsonValue[];
 }

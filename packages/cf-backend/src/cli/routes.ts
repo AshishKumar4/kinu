@@ -21,10 +21,10 @@ import {
   inspectCliAuth, pollCliAuth, startCliAuth, tokenAllows,
   type CliAuthAuthority, type CliTokenIdentity,
 } from './auth-store';
-import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from '@kinu.run/core';
 import {
-  isAgentRpcMethod, requiredRpcAccess, rpcAccessScope, type AgentRpcDispatch,
-} from './rpc-gate';
+  ACCESS_TOKEN_SCOPES, isAgentRpcMethod, requiredRpcAccess, rpcAccessScope, type AccessTokenScope,
+} from '@kinu.run/core';
+import type { AgentRpcDispatch } from './rpc-gate';
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell, cliPlatformShell } from '@kinu.run/core';
 import { listAvailableModels } from '../user/available-models';

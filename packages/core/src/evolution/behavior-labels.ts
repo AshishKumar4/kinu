@@ -1,16 +1,12 @@
 /**
- * Behavioral weak labels: turns judged by what the user did (Escape, tool
- * rejection, re-asking, approval), and the harness that scores raters against
- * them. Pure; model calls go through the caller's `LLM`.
+ * Behavioral weak labels: turns judged by what the user did (Escape, tool rejection, re-asking, approval), and the
+ * harness that scores raters against them. Pure; model calls go through the caller's `LLM`.
  *
- * Not a substitute for calibration.ts: these turns come from another agent and
- * population, so a sensitivity/specificity profile here does not transport to a
- * Kinu ledger, and the labeled subset is selected (rules fire only on clear
- * acts), so every number is conditional on a rule firing. Hence no
- * `correctedRate`: PPI's rectifier needs a known-probability sample.
+ * Not a substitute for calibration.ts: these turns come from another agent and population, so their
+ * sensitivity/specificity profile does not transport to a Kinu ledger, and every number is conditional on a rule
+ * firing (rules fire only on clear acts). Hence no `correctedRate`: PPI's rectifier needs a known-probability sample.
  *
- * The labeler is mechanical (no LLM) and precision-first: rules that disagree
- * make the turn abstain.
+ * The labeler is mechanical (no LLM) and precision-first: rules that disagree make the turn abstain.
  */
 
 import type { LLM } from '../types/primitives';

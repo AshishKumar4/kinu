@@ -2246,7 +2246,9 @@ export {
 
 export { drawnText, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
 
-export { turnLiveness, type TurnClaimState, type TurnLiveness } from './read-models/turn-liveness';
+export {
+  turnLiveness, TURN_CLAIM_FRAME, TurnClaimFrameSchema, type TurnClaimState, type TurnLiveness,
+} from './read-models/turn-liveness';
 
 export {
   breakdownView, shareOfMeasured,
@@ -2358,6 +2360,15 @@ export {
   revokeAccessToken,
   getActiveAccessTokenScopes,
 } from './cli/access-tokens';
+
+export {
+  AGENT_RPC_ACCESS,
+  isAgentRpcMethod,
+  requiredRpcAccess,
+  rpcAccessScope,
+  type AgentRpcAccess,
+  type AgentRpcMethod,
+} from './cli/agent-rpc-access';
 
 export {
   bunResolutionShell,

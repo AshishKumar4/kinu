@@ -15,7 +15,7 @@ import {
   type LabelIngestResult, type LabelingItem, type OutcomeLabel, type TurnOutcome,
   projectJsonValue,
 } from '@kinu.run/core';
-import type { JsonValue } from '@kinu.run/core';
+import type { AgentRpcMethod, JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
 import { defaultTranscriptRoot, mineTranscripts, renderMineSkips, type MineResult } from '../cc-transcript';
@@ -425,7 +425,7 @@ function fetchEnsemble(target: AgentTarget): Promise<EnsembleReport> {
 
 function cloudRpc<T>(
   target: AgentTarget,
-  method: string,
+  method: AgentRpcMethod,
   schema: v.GenericSchema<T>,
   args: JsonValue[] = [],
 ): Promise<T> {

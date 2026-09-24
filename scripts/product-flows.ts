@@ -319,7 +319,7 @@ async function settledAfter(page: Page, ledger: FrameLedger, ...methods: readonl
 }
 
 /** Two animation frames: whatever the last answer set in motion has painted. */
-async function painted(page: Page): Promise<void> {
+export async function painted(page: Page): Promise<void> {
   await page.evaluate(() => new Promise<void>((resolve) => {
     requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
   }));
