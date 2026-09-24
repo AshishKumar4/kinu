@@ -450,7 +450,7 @@ async function measureLiveIndicator(newPage: LiveApp['newPage'], origin: string)
     const paced = turns.afterTurn();
 
     await sendInChat(page, PACED_TURN_ASK);
-    await waitOn('the paced turn to close', paced);
+    await waitOn(page, 'the paced turn to close', paced);
     // The turn has closed on the socket; the pane ends it once its stream does.
     await until(page, 'the pane to end the paced turn', `!(${STOP_OFFERED})`);
 
@@ -1130,7 +1130,7 @@ async function measureOpenedMidTurn(
     // closes before its model call has nothing to hold.
     const closed = turns.afterClaimedTurn();
 
-    const outcome = await waitOn("the workspace's first turn to reach its model",
+    const outcome = await waitOn(page, "the workspace's first turn to reach its model",
       Promise.race([firstTurn.arrived.then(() => 'held' as const), closed.then(() => 'closed' as const)]));
 
     if (outcome !== 'held') throw new Error("the workspace's first turn closed before it reached its model");
@@ -1147,7 +1147,7 @@ async function measureOpenedMidTurn(
     const held = v.parse(v.nullable(LiveSampleSchema), await page.evaluate(LAST_LIVE_SAMPLE));
 
     firstTurn.release();
-    await waitOn("the workspace's first turn to close", closed);
+    await waitOn(page, "the workspace's first turn to close", closed);
 
     const asked = v.parse(v.number(), await page.evaluate('window.__presenceAsks'));
 
@@ -1283,7 +1283,7 @@ async function measureKeptTab(newPage: LiveApp['newPage'], origin: string): Prom
 
     await sendInChat(page, KEPT_TAB_NOTE);
 
-    if (!(await waitOn('the note turn to close', noted))) {
+    if (!(await waitOn(page, 'the note turn to close', noted))) {
       throw new Error(`waiting for the note turn to fill Work, the page read Work empty once the turn closed; `
         + `the chat ends ${JSON.stringify(await page.evaluate(CHAT_TAIL))}`);
     }
@@ -1296,7 +1296,7 @@ async function measureKeptTab(newPage: LiveApp['newPage'], origin: string): Prom
 
     await sendInChat(page, KEPT_TAB_FORGET);
 
-    if (await waitOn('the forget turn to close', forgotten)) {
+    if (await waitOn(page, 'the forget turn to close', forgotten)) {
       throw new Error(`waiting for the forget turn to empty Work, the page read Work filled once the turn closed; `
         + `the chat ends ${JSON.stringify(await page.evaluate(CHAT_TAIL))}`);
     }
@@ -1304,7 +1304,7 @@ async function measureKeptTab(newPage: LiveApp['newPage'], origin: string): Prom
     const fenced = turns.afterTurn();
 
     await sendInChat(page, 'Kept-tab probe: the fence.');
-    await waitOn('the fence turn to close', fenced);
+    await waitOn(page, 'the fence turn to close', fenced);
 
     const marks = v.parse(v.array(v.nullable(v.string())), await page.evaluate('window.__keptTabMarks'));
 

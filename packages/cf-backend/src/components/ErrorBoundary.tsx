@@ -60,7 +60,7 @@ export class ErrorBoundary extends Component<Props, State> {
     return (
       <div className="h-full overflow-y-auto flex items-start justify-center p-6">
         <div className="max-w-2xl w-full text-left space-y-3">
-          <div className="text-sm font-medium p-text">
+          <div data-failure className="text-sm font-medium p-text">
             This view crashed{this.props.label ? ` (${this.props.label})` : ''}. Try again, or reload the page.
           </div>
           <div className="text-xs p-text-3 font-mono break-words p-fill rounded-sm p-3 border p-border text-left">
