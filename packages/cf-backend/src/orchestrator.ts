@@ -2740,13 +2740,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         resumable: (limit) => host.resumable(limit),
         acquire: async (reference) => {
           const actor = await host.acquire(reference);
+          const root = reference.actorId === rootActorId;
 
           return {
             runtime: actor.runtime,
-            stores: actor.stores,
+            // The root recovers through the stores its session, resumed above, admits and settles through:
+            // its tabs are told about every claim written there.
+            stores: root ? this.stores : actor.stores,
             session: {
               get inFlight() {
-                return reference.actorId === rootActorId ? rootIsLive() : actor.session.inFlight;
+                return root ? rootIsLive() : actor.session.inFlight;
               },
             },
           };
@@ -4333,7 +4336,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** The root's tabs read the claim when they load, and hear it again here when a turn closes or is recovered. */
+  /** The root's tabs read the claim when they load, and hear every change to it here. */
   protected override turnClaimChanged(): void {
     this.broadcastToActor(null, JSON.stringify({ type: TURN_CLAIM_FRAME, claim: this.turnClaimState() }));
   }
@@ -4350,7 +4353,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (claim === null) return { recovered: 'none' };
     this.claims.settleRecovered(claim.turnId, claim.epoch, 'indeterminate');
-    this.turnClaimChanged();
     diagnostics.event('turn.claim_recovered', { turnId: claim.turnId, epoch: claim.epoch });
 
     if (!this.owedWorkExists()) return { recovered: 'sealed' };

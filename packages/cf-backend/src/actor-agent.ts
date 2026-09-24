@@ -1680,7 +1680,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected get actorSession(): ActorSession {
     this._actorSession ??= new ActorSession({
       runtime: this.rt,
-      claims: this.stores.claims,
+      claims: this.claims,
       history: this.stores.history,
       installedBuild: this.installedBuildIdentity(),
       events: this.stores.eventRecorder,
@@ -1749,7 +1749,6 @@ export abstract class ActorAgent extends Agent<Env> {
       send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
       interrupt: () => { this.chatLoop.interrupt(); },
       clear: () => this.clearConversation(),
-      turnClosed: () => { this.turnClaimChanged(); },
     });
 
     return this._chatTransport;
@@ -1821,7 +1820,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Fires once per emptying, in the close hook, after the room has been told. */
   protected lastConnectionClosed(): void {}
 
-  /** Fires after each root turn closes, when its durable claim has settled. */
+  /** Fires after each committed change to the root actor's turn claims. */
   protected abstract turnClaimChanged(): void;
 
   protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
@@ -2328,9 +2327,19 @@ export abstract class ActorAgent extends Agent<Env> {
     return undefined;
   }
 
-  /** Protected because a subclass settles and recovers claims it did not admit. */
+  private _claimsObserved = false;
+
+  /** Protected because a subclass settles and recovers claims it did not admit. The one way this object reaches
+   *  its claims, so every change it makes to them reaches {@link turnClaimChanged}. */
   protected get claims(): ActorClaimStore {
-    return this.stores.claims;
+    const claims = this.stores.claims;
+
+    if (!this._claimsObserved) {
+      this._claimsObserved = true;
+      claims.observe(() => { this.turnClaimChanged(); });
+    }
+
+    return claims;
   }
 
   /**
@@ -2922,7 +2931,7 @@ export abstract class ActorAgent extends Agent<Env> {
         resolveProfile: () => this.routingProfile(),
         contextPlane: {
           actorId: this.actorHandle().actorId,
-          claims: () => this.stores.claims,
+          claims: () => this.claims,
           events: () => this.stores.eventRecorder,
           children: childContextResolver({
             host: { bindStores: (reference) => this.actorHost().bindStores(reference) },

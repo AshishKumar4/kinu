@@ -3,6 +3,7 @@ import type { WorkMode } from '../types/turn';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { KinuError } from '../obs/error';
+import { diagnostics, toKinuError } from '../obs/index';
 import { nowMs } from '../utils/date';
 import { RUN_END_REASONS } from './turn-lifecycle';
 import { initSessionContextTables } from '../session/schema';
@@ -70,8 +71,15 @@ interface ClaimRow { turn_id: string; run_id: string; epoch: number; work_mode: 
 /** Execution fencing and immutable prepared-request references. It never owns message bodies. */
 export class ActorClaimStore {
   readonly actorId: string;
+  private readonly listeners = new Set<() => void>();
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle,
     private readonly transactionSync: <T>(write: () => T) => T, readonly history: SessionHistory) { this.actorId = actor.actorId; }
+
+  observe(listener: () => void): () => void {
+    this.listeners.add(listener);
+
+    return () => { this.listeners.delete(listener); };
+  }
 
   async admit(input: { readonly runId: string; readonly turnId: string; readonly workMode: WorkMode; readonly program: ActorProgramIdentity; readonly context: ContextSelection }): Promise<ActorTurnClaim> {
     this.actor.assertCurrent();
@@ -106,6 +114,7 @@ export class ActorClaimStore {
 
     // Seal messages left open under a superseded epoch only after this admission holds the turn.
     await this.history.sealAbandoned();
+    this.changed();
 
     return claim;
   }
@@ -159,11 +168,13 @@ export class ActorClaimStore {
 
   settle(claim: ActorTurnClaim, outcome: ClaimOutcome): void {
     this.transactionSync(() => { this.assertLive(claim); void this.sql`UPDATE actor_turn_claims SET status='settled',outcome=${outcome},settled_at=${nowMs()} WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`; });
+    this.changed();
   }
 
   settleRecovered(turnId: string, epoch: number, outcome: ClaimOutcome): void {
     this.actor.assertCurrent();
     void this.sql`UPDATE actor_turn_claims SET status='settled',outcome=${outcome},settled_at=${nowMs()} WHERE actor_id=${this.actorId} AND turn_id=${turnId} AND epoch=${epoch} AND status='admitted'`;
+    this.changed();
   }
 
   read(turnId: string): StoredActorClaim | null {
@@ -188,6 +199,14 @@ export class ActorClaimStore {
     const { request, messages } = await this.history.requests.materialize(id);
 
     return { requestId: id, revision: request.revision, epoch: request.epoch, workingRevision: request.source.revision, workingContextId: request.source.contextId, stepIndex: request.step, messages };
+  }
+  private changed(): void {
+    for (const listener of this.listeners) {
+      try { listener(); } catch (cause) {
+        diagnostics.failure('actor.claim_listener_failed',
+          toKinuError({ doing: 'notify a turn-claim listener', cause, otherwise: 'io' }), { actorId: this.actorId });
+      }
+    }
   }
   private claimOf(row: ClaimRow): StoredActorClaim {
     return Object.freeze({ actorId: this.actorId, turnId: row.turn_id, runId: row.run_id, epoch: row.epoch, workMode: row.work_mode,

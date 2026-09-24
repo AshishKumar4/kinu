@@ -36,8 +36,6 @@ export interface ChatWire {
   send(input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<SendLanding>;
   interrupt(): void;
   clear(): Promise<void>;
-  /** After a turn's closing frames: the root tells its tabs the claim that turn settled. */
-  readonly turnClosed?: () => void;
 }
 
 export interface ChatRoom {
@@ -359,7 +357,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
       case 'turn-end':
         await this.closeTurn();
-        this.wire.turnClosed?.();
 
         return;
 

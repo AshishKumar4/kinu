@@ -16,8 +16,7 @@ const TurnClaimStateSchema = v.variant('kind', [
 
 export type TurnClaimState = v.InferOutput<typeof TurnClaimStateSchema>;
 
-/** Sent to every tab of the root actor when a turn closes or a stranded one is recovered, so no tab keeps the
- *  claim it loaded with. */
+/** Sent to every tab of the root actor each time its claim changes, so no tab keeps the claim it loaded with. */
 export const TURN_CLAIM_FRAME = 'turn_claim';
 
 export const TurnClaimFrameSchema = v.object({ type: v.literal(TURN_CLAIM_FRAME), claim: TurnClaimStateSchema });
