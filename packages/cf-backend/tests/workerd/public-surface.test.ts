@@ -449,6 +449,52 @@ describe('a hosted actor\'s window acts only on its own actor', () => {
     await env.SURFACE_CONTROL.resetModelLog();
   });
 
+  it('refuses a call whose arguments are not JSON values, which the runtime would still run on the workspace', async () => {
+    const SWAPPED_MODEL = 'openai-compat/swapped-by-window';
+    const { rootPath, actorName, actorPath } = await workspaceWithTwoChats('pool-window-overflow');
+    const window = await openPane(actorPath);
+
+    // `1e999` parses to Infinity: a frame whose arguments are not JSON values once skipped the gate, and the call ran.
+    window.send('{"type":"rpc","id":"overflow","method":"getChatHistoryPage","args":[{"limit":40},1e999]}');
+    window.send(`{"type":"rpc","id":"nested","method":"setModel","args":["${SWAPPED_MODEL}",{"cap":-1e999}]}`);
+    await refused(window, 'overflow', 'getChatHistoryPage', actorName);
+    await refused(window, 'nested', 'setModel', actorName);
+    window.close();
+
+    const root = await openPane(rootPath);
+
+    root.send(rpcRequest('model', 'getStoredModelSpec', []));
+    expect((await root.rpc('model', v.object({ spec: v.nullable(v.string()) }))).spec).toContain(PINNED_MODEL);
+    root.close();
+    await env.SURFACE_CONTROL.resetModelLog();
+  });
+
+  it('answers the workspace\'s device consents and tools, and lists only its own agent\'s jobs', async () => {
+    const { rootPath, actorName, actorPath } = await workspaceWithTwoChats('pool-window-workspace');
+    const root = await openPane(rootPath);
+
+    root.send(rpcRequest('sibling', 'createSubordinateAgent', []));
+    const siblingName = (await root.rpc('sibling', CreatedActorSchema)).name;
+
+    root.close();
+    const window = await openPane(actorPath);
+
+    window.send(rpcRequest('consents', 'listPendingConsents', []));
+    window.send(rpcRequest('answer', 'resolveDeviceConsent', ['consent-never-asked', 'deny']));
+    window.send(rpcRequest('tools', 'getToolDescriptions', []));
+    window.send(rpcRequest('jobs', 'listBackgroundJobs', [20, actorName]));
+    window.send(rpcRequest('workspace-jobs', 'listBackgroundJobs', [20]));
+    window.send(rpcRequest('sibling-jobs', 'listBackgroundJobs', [20, siblingName]));
+    expect(await window.rpc('consents', v.array(v.unknown()))).toEqual([]);
+    expect(await window.rpc('answer', v.object({ ok: v.boolean() }))).toEqual({ ok: false });
+    await window.rpc('tools', v.object({ builtIn: v.array(v.object({ name: v.string() })) }));
+    expect(await window.rpc('jobs', v.array(v.unknown()))).toEqual([]);
+    await refused(window, 'workspace-jobs', 'listBackgroundJobs', actorName);
+    await refused(window, 'sibling-jobs', 'listBackgroundJobs', actorName);
+    window.close();
+    await env.SURFACE_CONTROL.resetModelLog();
+  });
+
   it('sends into its own agent\'s turn, never the workspace\'s', async () => {
     const SENT_MARKER = 'window-sent-marker';
     const { rootPath, actorName, actorPath } = await workspaceWithTwoChats('pool-window-send');

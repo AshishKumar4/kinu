@@ -49,6 +49,14 @@ describe('connect-ticket scope tags', () => {
     expect(rejectOutOfScopeRpc([tag], rpcFrame('getAgentStatus'))).not.toBeNull();
     expect(rejectOutOfScopeRpc([tag], rpcFrame('setModel'))).not.toBeNull();
   });
+
+  test('an argument JSON values cannot hold does not carry a call past the scope', () => {
+    // `1e999` parses to Infinity, and the SDK still runs the call.
+    const overflow = '{"type":"rpc","id":"req-9","method":"setModel","args":["openai/gpt-5",1e999]}';
+    const rejection = rejectOutOfScopeRpc(READ_EXEC, overflow);
+
+    expect(v.parse(RpcErrorFrameSchema, JSON.parse(rejection ?? '')).error).toContain('requires an interactive CLI session');
+  });
 });
 
 describe('the scope table', () => {

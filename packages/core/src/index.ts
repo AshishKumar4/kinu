@@ -2372,11 +2372,14 @@ export {
 
 export {
   AGENT_RPC_ACCESS,
+  hostedWindowCalls,
+  hostedWindowMay,
   isAgentRpcMethod,
   requiredRpcAccess,
   rpcAccessScope,
   type AgentRpcAccess,
   type AgentRpcMethod,
+  type HostedWindowActor,
 } from './cli/agent-rpc-access';
 
 export {

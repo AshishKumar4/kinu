@@ -38,7 +38,7 @@ import {
 import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
 import type { AgentModelMenu, AgentRpcMethod } from '@kinu.run/core';
-import { pageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
+import { hostedWindowCalls, pageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
   createUserUiMessage,
@@ -330,8 +330,8 @@ export class CloudAgentClient implements AgentClient {
   readonly agentName: string;
   readonly consents: DeviceConsentSurface;
   readonly localControls = null;
-  readonly checkpoints: FileCheckpointSurface;
-  readonly plans: PlanReviewSurface;
+  readonly checkpoints: FileCheckpointSurface | null;
+  readonly plans: PlanReviewSurface | null;
   readonly inlineAttachmentLimitBytes = CLOUD_MAX_INLINE_ATTACHMENT_BYTES;
   readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;
 
@@ -377,7 +377,7 @@ export class CloudAgentClient implements AgentClient {
         'resolveDeviceConsent', ResolveDeviceConsentSchema, [consentId, decision],
       ),
     };
-    this.checkpoints = {
+    this.checkpoints = subordinateName ? null : {
       list: async (limit, turnId) => v.parse(
         FileCheckpointListingSchema,
         await this.callRpc('listFileCheckpoints', [limit ?? 50, turnId ?? null]),
@@ -388,7 +388,7 @@ export class CloudAgentClient implements AgentClient {
       ),
     };
     // The sealed plan RPCs (`agent-rpc-access.ts`).
-    this.plans = {
+    this.plans = subordinateName ? null : {
       active: async () => v.parse(CloudPlanReviewSchema, await this.callRpc('getActivePlanReview', [])),
       saveAnnotations: async (id, revision, annotations) => v.parse(
         CloudPlanReviewResultSchema,
@@ -420,7 +420,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   branch(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
-    if (this.activeTurns.size === 0) return false;
+    if (this.activeTurns.size === 0 || !this.mayCall('branchTurn')) return false;
     const text = promptText(prompt).trim();
 
     if (!text) return false;
@@ -531,11 +531,16 @@ export class CloudAgentClient implements AgentClient {
     return this.callParentHttp(method, schema, args);
   }
 
+  private mayCall(method: AgentRpcMethod): boolean {
+    return this.subordinateName === null || hostedWindowCalls(method);
+  }
+
   private callParentHttp<Input, T = Input>(method: AgentRpcMethod, schema: v.GenericSchema<Input, T>, args: JsonValue[] = []): Promise<T> {
     return callAgentRpc({ origin: this.origin, token: this.token, name: this.cloudName, method, schema, args });
   }
 
   private async callRpc(method: AgentRpcMethod, args: JsonValue[]): Promise<JsonValue> {
+    if (!this.mayCall(method)) throw new Error(`${method} is not available in an additional agent's session.`);
     await this.ensureOpen();
     const ws = this.ws;
 
@@ -733,6 +738,8 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async latestTakes(): Promise<AlternateTakeSet | null> {
+    if (!this.mayCall('latestAlternateTakes')) return null;
+
     return v.parse(v.nullable(AlternateTakeSetSchema), await this.callRpc('latestAlternateTakes', []));
   }
 
@@ -788,7 +795,8 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async listJobs(limit = 20): Promise<AgentJobSummary[]> {
-    const jobs = await this.callHttp('listBackgroundJobs', v.array(CloudBackgroundJobSchema), [limit]);
+    const args: JsonValue[] = this.subordinateName === null ? [limit] : [limit, this.subordinateName];
+    const jobs = await this.callHttp('listBackgroundJobs', v.array(CloudBackgroundJobSchema), args);
 
     return jobs.map((job) => ({ id: job.id, kind: job.kind, status: job.status }));
   }

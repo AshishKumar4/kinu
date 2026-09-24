@@ -2415,8 +2415,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async listBackgroundJobs(limit = 20): Promise<BackgroundJob[]> {
-    return listBackgroundJobs(this.jobs, limit);
+  async listBackgroundJobs(limit = 20, actor?: string): Promise<BackgroundJob[]> {
+    return listBackgroundJobs(actor === undefined ? this.jobs : this.hostedChild(actor).child.stores.jobs, limit);
   }
 
   /** Wrapped at one boundary so the retry ratio is visible across all four sites.

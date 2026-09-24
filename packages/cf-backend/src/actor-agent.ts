@@ -31,9 +31,11 @@ import {
   sessionBearerConnectionTag,
   sessionBearerFromTags,
   rejectOutOfScopeRpc,
+  rpcFrameOf,
   type CliSocketBearer,
+  type RpcFrame,
 } from "./cli/rpc-gate";
-import { requiredRpcAccess } from "@kinu.run/core";
+import { hostedWindowMay, requiredRpcAccess } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
@@ -213,7 +215,7 @@ import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
 import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
 import { diagnostics, KinuError, refusalOf, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
-import { hostedWindowMay, type UserDoRpcMethod } from "./rpc-surface";
+import type { UserDoRpcMethod } from "./rpc-surface";
 import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import type { WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
@@ -224,12 +226,6 @@ import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
-
-interface ClientRpcFrame {
-  id: string;
-  method: string;
-  args: readonly JsonValue[];
-}
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
 interface ModelDimensions {
@@ -291,20 +287,6 @@ interface AsyncTaskOwner {
 
 /** Only RPC methods rpc-surface.ts declares reachable; any other is a compile error. */
 type UserHubClient = Pick<UserDO, UserDoRpcMethod>;
-
-const ClientRpcFrameSchema = v.object({
-  type: v.literal('rpc'), id: v.string(), method: v.string(), args: v.array(JsonValueSchema),
-});
-
-function parseClientRpcFrame(message: WSMessage): ClientRpcFrame | null {
-  if (!v.is(v.string(), message)) return null;
-  const json = tolerate<unknown>(() => JSON.parse(message), 'malformed-input');
-
-  if (json === undefined) return null;
-  const frame = v.safeParse(ClientRpcFrameSchema, json);
-
-  return frame.success ? { id: frame.output.id, method: frame.output.method, args: frame.output.args } : null;
-}
 
 /** The agents SDK treats this close code as terminal (`isTerminalCloseEvent`), so a
  * client whose authority is gone stops reconnecting. */
@@ -630,14 +612,18 @@ export abstract class ActorAgent extends Agent<Env> {
    *  methods denied to client sockets. */
   protected isClientRpcMethodDenied(_method: string): boolean { return false; }
 
-  private clientRpcRefusal(connection: Connection, rpc: ClientRpcFrame): string | null {
+  private clientRpcRefusal(connection: Connection, rpc: RpcFrame): string | null {
     if (this.isClientRpcMethodDenied(rpc.method)) return `${rpc.method} is not available from client connections.`;
     const name = actorFromConnectionTags(connection.tags);
 
     if (name === null) return null;
+    // The SDK runs any array of arguments; a window's must be JSON values.
+    const args = v.safeParse(v.array(JsonValueSchema), rpc.args);
+
+    if (!args.success) return `${rpc.method} from ${name}'s window carries arguments that are not JSON values.`;
     const id = this.hostedActorId(name);
 
-    return id !== null && hostedWindowMay(rpc.method, rpc.args, { name, id }) ? null : `${rpc.method} from ${name}'s window may act only on ${name}.`;
+    return id !== null && hostedWindowMay(rpc.method, args.output, { name, id }) ? null : `${rpc.method} from ${name}'s window may act only on ${name}.`;
   }
 
   private addressedActor(): string | null {
@@ -1023,7 +1009,7 @@ export abstract class ActorAgent extends Agent<Env> {
         return;
       }
 
-      const rpc = parseClientRpcFrame(message);
+      const rpc = rpcFrameOf(message);
       const refusal = rpc === null ? null : this.clientRpcRefusal(connection, rpc);
 
       if (rpc && refusal !== null) {
@@ -1594,7 +1580,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const denial = await this.socketAuthorityDenial(connection);
 
     if (denial === null) return false;
-    const rpc = parseClientRpcFrame(message);
+    const rpc = rpcFrameOf(message);
 
     // The rpc reply carries the authority's reason so a pending call fails instead of hanging;
     // the close reason is the user-facing instruction for the token kind.
