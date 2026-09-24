@@ -203,7 +203,7 @@ function offlineDevice(executors: readonly PromptExecutorInfo[]): PromptExecutor
     exec.name === 'device' && exec.configured === true && !executorIsSelectable(exec));
 }
 
-function renderExecutorSection(surface: PromptSurface, render: RenderSection): string {
+function renderExecutorSection(surface: PromptSurface, render: RenderSection, workspaceIsMachine: boolean): string {
   const tools = surface.builtinTools;
 
   if (!hasTool(tools, 'eval') && !hasTool(tools, 'shell')) return '';
@@ -228,6 +228,7 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection): s
   return render(EXECUTORS_SECTION, {
     executorLines: lines.join('\n'),
     workspaceRoot: WORKSPACE_ROOT,
+    workspaceReference: workspaceIsMachine ? 'local' : 'vfs',
     hasDevices: devices.length > 0,
     hasSandbox: devices.some((exec) => exec.name === 'sandbox'),
     deviceNamespaces: devices.map((exec) => `\`${exec.name}.*\``).join(', '),
@@ -347,7 +348,7 @@ export function buildSystemPromptSync(
     renderRoleSection(surface, render),
     renderOperatingGuidance(surface, render),
     // Execution doctrine before the tool index: a rule read after the menu is applied late.
-    renderExecutorSection(surface, render),
+    renderExecutorSection(surface, render, rt.workspaceIsMachine),
     renderToolsSection(surface, render),
     renderAgentStateSection(surface, render),
     ...(lead ? [

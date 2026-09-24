@@ -189,4 +189,21 @@ describe('the composer on a real terminal', () => {
     expect(run.screen).toContain('line two');
     expect(run.screen).not.toContain('agent prose reply');
   });
+
+  test('typing after a click on the transcript lands in the composer', () => {
+    const run = runTuiInPty(entry, {
+      steps: [
+        { wait: 'Connected to pty', timeout: 15 },
+        { send: 'abc' },
+        { wait: 'abc', timeout: 3 },
+        { send: '\u001B[<0;50;12M' },
+        { send: '\u001B[<0;50;12m' },
+        { sleep: 0.3 },
+        { send: 'XYZ' },
+        { wait: 'abcXYZ', timeout: 3 },
+      ],
+    });
+
+    expect(run.waits.every((wait) => wait.met), run.screen).toBe(true);
+  });
 });

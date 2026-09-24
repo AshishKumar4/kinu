@@ -152,7 +152,7 @@ export function getMctsConfig(config: AgentConfigStore): MctsConfigView {
   };
 }
 
-/** Returns the effective config, so a caller sees what a clamped value became. */
+/** Returns the effective config: what a clamped value became. */
 export function setMctsConfig(config: AgentConfigStore, view: Partial<MctsConfigView>): MctsConfigView {
   config.setMctsOverrides({
     explorationWeight: view.explorationConstant,
@@ -174,7 +174,7 @@ export function getEvolutionConfig(config: AgentConfigStore): EvolutionConfigVie
   };
 }
 
-/** Returns the effective config, so a caller sees what a clamped value became. */
+/** Returns the effective config: what a clamped value became. */
 export function setEvolutionConfig(
   config: AgentConfigStore,
   view: Partial<EvolutionConfigView>,

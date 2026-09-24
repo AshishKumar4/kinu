@@ -75,15 +75,6 @@ export function settleToolEffect(
       AND result_json IS NULL`;
 }
 
-/** Call only once the turn's answer is durably persisted. */
-export function releaseTurnEffectClaims(
-  sql: SqlExecutor, actor: ActorHandle, turnId: string,
-): void {
-  actor.assertCurrent();
-  void sql`DELETE FROM tool_effect_claims
-    WHERE actor_id=${actor.actorId} AND turn_id=${turnId}`;
-}
-
 export interface EffectClaimDeps {
   readonly sql: SqlExecutor;
   /** Claim keys collide across actors of one workspace, so reads are scoped to this actor. */

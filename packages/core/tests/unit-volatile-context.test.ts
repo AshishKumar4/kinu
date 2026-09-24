@@ -26,7 +26,7 @@ import {
 } from '../src/index';
 import { Fnv1a64 } from '../src/utils/fnv1a';
 import { admitActiveSkills } from '../src/skills/loader';
-import { skillPath } from '../src/skills/discover';
+import { skillViewPath, WORKSPACE_SKILLS_DIR } from '../src/skills/types';
 import { estimateTokens } from '../src/llm';
 import type {
   ActiveSkill, ActiveSkillSet, DiscoveredSkill, InstructionTrustResolver, SkillsVfs,
@@ -79,9 +79,8 @@ function skill(name: string): ActiveSkill {
 /** The same skill as discovery returns it, before any body was read. */
 function header(name: string, chars: number) {
   return {
-    name, description: `${name} skill`, allowed_tools: [], keywords: [],
-    auto_activate: false, disable_model_invocation: false, user_invocable: true,
-    bodyRef: { kind: 'file', path: skillPath(name), chars } as const,
+    name, description: `${name} skill`, allowed_tools: [], user_invocable: true,
+    bodyRef: { kind: 'file', path: `${WORKSPACE_SKILLS_DIR}/${name}.md`, chars } as const,
     ext: {}, source: 'vfs',
   } satisfies DiscoveredSkill;
 }
@@ -108,6 +107,7 @@ function skillsVfsOf(bodies: Readonly<Record<string, string>>): SkillsVfs & { re
       return sourceOf(path, body);
     },
     writeFile: async () => undefined,
+    readdir: async () => [],
   };
 }
 
@@ -156,13 +156,13 @@ describe('byte-stable system prefix', () => {
     const { rt } = createTestRuntime();
     const a = skill('alpha');
     const b = skill('beta');
-    const byKeyword: ActiveSkillSet = { active: [b, a], reasons: [{ name: 'beta', reason: { kind: 'keyword', matched_keyword: 'deploy' } }] };
+    const byPin: ActiveSkillSet = { active: [b, a], reasons: [{ name: 'beta', reason: { kind: 'always_active', via: 'config' } }] };
     const byExplicit: ActiveSkillSet = { active: [a, b], reasons: [{ name: 'beta', reason: { kind: 'explicit', matched_token: 'beta' } }] };
-    const one = buildSystemPromptSync(rt, { activeSkills: byKeyword });
+    const one = buildSystemPromptSync(rt, { activeSkills: byPin });
     const two = buildSystemPromptSync(rt, { activeSkills: byExplicit });
     expect(one).toBe(two);
     expect(one).toContain('Body of alpha');
-    expect(one).not.toContain('keyword "deploy"');
+    expect(one).not.toContain('pinned via config');
   });
 
   test('hash changes only on real events: stable across rebuilds, changed on soul / skill-set changes', () => {
@@ -740,29 +740,27 @@ describe('observeSystemPromptHash', () => {
 describe('renderTurnLocalContext', () => {
   test('renders activation reasons and the device notice under the turn header', () => {
     const text = present(renderTurnLocalContext({
-      activeSkills: { active: [skill('alpha')], reasons: [{ name: 'alpha', reason: { kind: 'keyword', matched_keyword: 'deploy' } }] },
+      activeSkills: { active: [skill('alpha')], reasons: [{ name: 'alpha', reason: { kind: 'explicit', matched_token: 'deploy' } }] },
       deviceNotice: '## Context update\nYour user\'s PC just connected.',
     }), 'turn-local context');
 
     expect(text).toStartWith(TURN_CONTEXT_HEADER);
-    expect(text).toContain('alpha (keyword "deploy")');
+    expect(text).toContain('alpha (explicit /deploy)');
     expect(text).toContain('PC just connected');
   });
 
   test('every activation reason kind renders in its own form', () => {
     const text = present(renderTurnLocalContext({
       activeSkills: {
-        active: [skill('alpha'), skill('beta'), skill('gamma')],
+        active: [skill('alpha'), skill('gamma')],
         reasons: [
           { name: 'alpha', reason: { kind: 'explicit', matched_token: 'deploy' } },
-          { name: 'beta', reason: { kind: 'keyword', matched_keyword: 'ship' } },
           { name: 'gamma', reason: { kind: 'always_active', via: 'config' } },
         ],
       },
     }), 'turn-local context');
 
     expect(text).toContain('- alpha (explicit /deploy)');
-    expect(text).toContain('- beta (keyword "ship")');
     expect(text).toContain('- gamma (pinned via config)');
   });
 
@@ -1575,7 +1573,7 @@ describe('active-skill budget priority (activation precedence, stable render ord
       vfs,
       activated: [
         { skill: invoked, reason: { kind: 'explicit', matched_token: 'zzz-invoked' } },
-        { skill: giant, reason: { kind: 'keyword', matched_keyword: 'deploy' } },
+        { skill: giant, reason: { kind: 'always_active', via: 'config' } },
       ],
       admissionTokens: estimateTokens(invokedBody.length) + 1,
       trust: APPROVED,
@@ -1589,7 +1587,7 @@ describe('active-skill budget priority (activation precedence, stable render ord
     const reference = renderActiveSkillsSection(admitted, 'unverified');
     expect(reference).toContain('### aaa-giant');
     expect(reference).toContain(`${giantBody.length} chars`);
-    expect(reference).toContain(`workspace.readFile("${giant.bodyRef.path}")`);
+    expect(reference).toContain(skillViewPath('aaa-giant'));
     expect(section).not.toContain('### aaa-giant');
     expect(reference).not.toContain('THE-INVOKED-BODY');
   });

@@ -1,17 +1,14 @@
 /**
- * A head is a fork of its parent turn and runs in the same open envelope: no default wall clock,
- * step count, or token pool. The remaining bounds are recursion depth, a caller-requested deadline,
- * and cancellation by the spawner.
+ * A head is a fork of its parent turn and runs in the same open envelope: no wall clock, step count,
+ * or token pool. The remaining bounds are recursion depth and cancellation by the spawner.
  */
 
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
 import type { LanguageModel } from 'ai';
-import { createTestRuntime, present, scriptedTurnModel } from '@kinu.run/test-utils';
+import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
-import {
-  budgetExhausted, deriveChildBudget, type HeadBudget, type HeadInput,
-} from '../src/heads/types';
+import { deriveChildBudget, type HeadBudget, type HeadInput } from '../src/heads/types';
 import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference';
 import { usageTotal } from '../src/usage';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
@@ -25,69 +22,10 @@ async function hostedHead(): Promise<HostedNodeSeat> {
   return hostedSeatsOver({ rt, db: testSql.db }).seat('head-envelope', 'head');
 }
 
-describe('budgetExhausted — a deadline only if one was requested', () => {
-  test('a head without a deadline is not exhausted by time or spend', () => {
-    const b: HeadBudget = { maxDepth: 1, spawnedAt: Date.now() - 60 * 60_000 };
-    expect(budgetExhausted(b).exhausted).toBe(false);
-  });
-
-  test('zero split depth does not exhaust an existing head', () => {
-    const b: HeadBudget = { maxDepth: 0, spawnedAt: Date.now() };
-    expect(budgetExhausted(b)).toEqual({ exhausted: false });
-  });
-
-  test('a caller-requested deadline is enforced once it passes', () => {
-    const spawnedAt = Date.now() - 10_000;
-    expect(budgetExhausted({ maxDepth: 3, maxWallClockMs: 60_000, spawnedAt }).exhausted).toBe(false);
-    expect(budgetExhausted({ maxDepth: 3, maxWallClockMs: 5_000, spawnedAt }))
-      .toEqual({ exhausted: true, reason: 'wall-clock' });
-  });
-});
-
-
 describe('deriveChildBudget', () => {
   test('decrements depth and inherits the open envelope', () => {
     const parent: HeadBudget = { maxDepth: 2, spawnedAt: 1_000 };
-    const child = deriveChildBudget(parent, 2_000);
-    expect(child.maxDepth).toBe(parent.maxDepth - 1);
-    expect(child.maxWallClockMs).toBeUndefined();
-    expect(child.spawnedAt).toBe(2_000);
-  });
-
-  test('fan-out does not shrink a child — six siblings each get the parent envelope', () => {
-    const parent: HeadBudget = { maxDepth: 2, spawnedAt: 1_000 };
-    const children = Array.from({ length: 6 }, () => deriveChildBudget(parent, 1_000));
-
-    for (const c of children) {
-      expect(c).toEqual({ maxDepth: parent.maxDepth - 1, spawnedAt: 1_000 });
-    }
-  });
-
-  test("a requested deadline still bounds every descendant by the parent's remaining time", () => {
-    const now = 1_000_000;
-    // Parent spawned 40s ago with a 60s ceiling → 20s left.
-    const parent: HeadBudget = { maxDepth: 3, maxWallClockMs: 60_000, spawnedAt: now - 40_000 };
-    const child = deriveChildBudget(parent, now);
-    expect(child.maxWallClockMs).toBe(20_000);
-    const childCeiling = present(child.maxWallClockMs, "the child's wall-clock ceiling");
-    const parentCeiling = present(parent.maxWallClockMs, "the parent's wall-clock ceiling");
-
-    expect(child.spawnedAt + childCeiling).toBeLessThanOrEqual(parent.spawnedAt + parentCeiling);
-  });
-
-  test('a 3-deep recursive split keeps every descendant under the requested deadline', () => {
-    const start = 5_000_000;
-    const root: HeadBudget = { maxDepth: 4, maxWallClockMs: 30_000, spawnedAt: start };
-    const rootDeadline = root.spawnedAt + present(root.maxWallClockMs, "the root's wall-clock ceiling");
-    let parent = root;
-    let now = start;
-
-    for (let depth = 0; depth < 3; depth++) {
-      now += 8_000;
-      const child = deriveChildBudget(parent, now);
-      expect(child.spawnedAt + present(child.maxWallClockMs, "the child's wall-clock ceiling")).toBeLessThanOrEqual(rootDeadline);
-      parent = child;
-    }
+    expect(deriveChildBudget(parent, 2_000)).toEqual({ maxDepth: 1, spawnedAt: 2_000 });
   });
 });
 
@@ -278,12 +216,6 @@ describe('buildHeadSystemPrompt — the head is told the truth about its envelop
     const prompt = buildHeadSystemPrompt(loopInput());
     expect(prompt).toContain('no time or token limit');
     expect(prompt).not.toContain('wall-clock');
-  });
-
-  test('a caller-requested deadline IS disclosed', async () => {
-    const { buildHeadSystemPrompt } = await import('../src/heads/head-inference');
-    const prompt = buildHeadSystemPrompt(loopInput({ maxWallClockMs: 90_000 }));
-    expect(prompt).toContain('90000ms wall-clock');
   });
 
   test('remaining recursion depth is stated as the number it actually is', async () => {

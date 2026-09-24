@@ -9,9 +9,12 @@ block=$probe_dir/block
 merged=$probe_dir/merged
 upper=/var/tmp/devbox/upper
 mkdir -p "$base" "$delta" "$block" "$merged" "$upper" "$probe_dir/work"
+# The overlay's daemon still holds its lowers while it exits after its own unmount, so the lowers
+# detach lazily: a plain unmount there fails EBUSY whenever the daemon is slower than this shell.
 cleanup() {
-  for mount in "$merged" "$block" "$delta" "$base"; do
-    if mountpoint -q "$mount"; then fusermount3 -u "$mount"; fi
+  if mountpoint -q "$merged"; then fusermount3 -u "$merged"; fi
+  for mount in "$block" "$delta" "$base"; do
+    if mountpoint -q "$mount"; then fusermount3 -uz "$mount"; fi
   done
 }
 trap cleanup EXIT

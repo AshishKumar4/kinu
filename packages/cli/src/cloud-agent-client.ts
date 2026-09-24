@@ -4,7 +4,7 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   JsonValueSchema,
   PlanReviewSchema,
-  ChatHistoryEntrySchema, type ChatHistoryEntry,
+  ChatHistoryEntrySchema,
   ORCHESTRATOR_AGENT_SLUG,
   hostedActorSocketPath,
   decodeJsonValue,
@@ -37,12 +37,13 @@ import {
 } from './session';
 import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
-import { normalizeModelMenu, type AgentModelMenu } from '@kinu.run/core';
-import { pageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, type SubordinateInspectionRequest, type SubordinateInspectionResult, type Page, type SeekCursor } from '@kinu.run/core';
+import type { AgentModelMenu, AgentRpcMethod } from '@kinu.run/core';
+import { pageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
   createUserUiMessage,
   findForkPivot,
+  readConversation,
   promptFiles,
   promptText,
   type AgentChangelogView,
@@ -378,7 +379,7 @@ export class CloudAgentClient implements AgentClient {
         FileRestoreResultSchema, await this.callRpc('restoreFileCheckpoint', [dir, id]),
       ),
     };
-    // The sealed plan RPCs (`rpc-gate.ts`).
+    // The sealed plan RPCs (`agent-rpc-access.ts`).
     this.plans = {
       active: async () => v.parse(CloudPlanReviewSchema, await this.callRpc('getActivePlanReview', [])),
       saveAnnotations: async (id, revision, annotations) => v.parse(
@@ -504,7 +505,7 @@ export class CloudAgentClient implements AgentClient {
 
   async fork(point: ForkPoint): Promise<AgentForkResult> {
     if (this.activeTurns.size > 0) throw new Error('Cannot fork while a turn is running.');
-    const rows = await this.transcript();
+    const rows = await this.history();
     const pivotRow = rows[findForkPivot(rows, point)];
 
     if (pivotRow === undefined) throw new Error("Could not locate that message in the agent's chat history.");
@@ -514,7 +515,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   /** For surfaces that must not force a websocket open; live-session ops use callRpc. */
-  private callHttp<T>(method: string, schema: v.GenericSchema<T>, args: JsonValue[] = []): Promise<T> {
+  private callHttp<T>(method: AgentRpcMethod, schema: v.GenericSchema<T>, args: JsonValue[] = []): Promise<T> {
     if (this.subordinateName) {
       return this.callRpc(method, args).then((result) => v.parse(schema, result));
     }
@@ -522,11 +523,11 @@ export class CloudAgentClient implements AgentClient {
     return this.callParentHttp(method, schema, args);
   }
 
-  private callParentHttp<Input, T = Input>(method: string, schema: v.GenericSchema<Input, T>, args: JsonValue[] = []): Promise<T> {
+  private callParentHttp<Input, T = Input>(method: AgentRpcMethod, schema: v.GenericSchema<Input, T>, args: JsonValue[] = []): Promise<T> {
     return callAgentRpc({ origin: this.origin, token: this.token, name: this.cloudName, method, schema, args });
   }
 
-  private async callRpc(method: string, args: JsonValue[]): Promise<JsonValue> {
+  private async callRpc(method: AgentRpcMethod, args: JsonValue[]): Promise<JsonValue> {
     await this.ensureOpen();
     const ws = this.ws;
 
@@ -603,27 +604,10 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async history(): Promise<AgentTranscriptMessage[]> {
-    return (await this.transcript()).map((row) => ({
-      id: row.id, role: row.role, content: row.content, metadata: row.metadata,
-    }));
-  }
-
-  /** Paged, never capped: `fork()` would report a message past the cap as not found. */
-  private async transcript(): Promise<ChatHistoryEntry[]> {
-    const rows: ChatHistoryEntry[] = [];
-    let cursor: SeekCursor | null = null;
-
-    for (;;) {
-      const page: Page<ChatHistoryEntry> = await this.callHttp(
-        'getChatHistoryPage', CloudChatPageSchema,
-        [cursor === null ? {} : { cursor: { after: cursor.after } }],
-      );
-
-      rows.unshift(...page.items);
-
-      if (page.status === 'end') return rows;
-      cursor = page.next;
-    }
+    return readConversation((request) => this.callHttp(
+      'getChatHistoryPage', CloudChatPageSchema,
+      [request.cursor === undefined ? {} : { cursor: { after: request.cursor.after } }],
+    ));
   }
 
   async status(): Promise<AgentClientStatus> {
@@ -806,7 +790,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async listModels(): Promise<AgentModelMenu> {
-    const menu = normalizeModelMenu({ payload: await listCloudAvailableModels(this.origin, this.token) });
+    const menu = await listCloudAvailableModels(this.origin, this.token);
 
     // Only an empty menu with no failures is an error; provider failures are reported to the picker.
     if (menu.models.length === 0 && menu.failures.length === 0) {

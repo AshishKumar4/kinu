@@ -92,7 +92,7 @@ function headInput(): HeadInput {
     task: 'analyze the parser', rationale: 'cover the lexer angle',
     mode: 'build',
     inheritedContext: [],
-    budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: 2_000_000_000_000 },
+    budget: { maxDepth: 2, spawnedAt: 2_000_000_000_000 },
     mergeStrategy: 'synthesize',
     loop: defaultLoopOrigin('head'),
   };

@@ -9,8 +9,9 @@ import {
   type RecoveryStage, type StartClock,
 } from '../src/lifecycle';
 import type { StoredValue } from '../src/storage';
+import { handClock } from '../../test-utils/src/hand-clock';
 import {
-  Devbox, FakeSandbox, gate, harness, manualStartClock, SandboxFailure, STAMP_COMMAND,
+  Devbox, FakeSandbox, gate, harness, SandboxFailure, STAMP_COMMAND,
   type FakeStorage, type Harness, type StartFault,
 } from './support/devbox-harness';
 
@@ -55,7 +56,7 @@ const TIGHT_POLICY: DevboxPolicy = {
 class TightBox extends Devbox<unknown> {
   /** The budget's clock, advanced by the test: a 20 ms budget is a fact of
    *  arithmetic here, not a race against the machine. */
-  readonly clock = manualStartClock();
+  readonly clock = handClock(1_000_000);
 
   protected override get policy(): DevboxPolicy {
     return TIGHT_POLICY;

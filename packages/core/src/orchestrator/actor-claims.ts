@@ -38,10 +38,9 @@ export interface StoredActorClaim {
 export interface ContextRevision {
   readonly requestId: string; readonly revision: number; readonly epoch: number;
   readonly workingRevision: number; readonly workingContextId: string; readonly stepIndex: number | null;
-  readonly messages: readonly ModelMessage[];
+  /** Null: a step recorded before request lists were kept. */
+  readonly messages: readonly ModelMessage[] | null;
 }
-
-export interface RenderedRequest extends Omit<ContextRevision, 'messages'> { readonly messageCount: number }
 
 export interface ConsumedContext { readonly requestId: string; readonly revision: number }
 
@@ -82,7 +81,6 @@ export class ActorClaimStore {
     const admission = await this.history.requests.prepare({
       id: `${input.turnId}:${epoch}:admission`, turnId: input.turnId, runId: input.runId, epoch, revision: 0, step: null,
       source: input.context, metadata: { program: { ...input.program }, workMode: input.workMode },
-      messages: this.history.context.entries(input.context),
     });
 
     const claim = this.transactionSync(() => {
@@ -122,7 +120,7 @@ export class ActorClaimStore {
     const prepared = await this.history.requests.prepareRendered({ id: crypto.randomUUID(), turnId: claim.turnId, runId: claim.runId,
       epoch: claim.epoch, revision: latest + 1, step: input.index, source, messages: input.messages, metadata: { program: { ...claim.program }, workMode: claim.workMode } });
 
-    return this.transactionSync(() => {
+    const consumed = this.transactionSync(() => {
       this.assertLive(claim);
       const currentRevision = this.sql<{ revision: number | null }>`SELECT MAX(revision) AS revision FROM actor_requests WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`[0]?.revision ?? 0;
 
@@ -135,6 +133,10 @@ export class ActorClaimStore {
 
       return { requestId: prepared.request.id, revision: prepared.request.revision };
     });
+
+    this.history.requests.remember(prepared);
+
+    return consumed;
   }
 
   async consumedContext(turnId: string, stepIndex?: number): Promise<ContextRevision | null> {
@@ -153,27 +155,6 @@ export class ActorClaimStore {
     const request = this.history.requests.forTurn(turnId).find(item => item.epoch === claim.epoch && item.step === null);
 
     return request === undefined ? null : this.materialize(request.id);
-  }
-
-  async admittedFor(claim: ActorTurnClaim): Promise<ContextRevision> {
-    const context = await this.admittedContext(claim.turnId);
-
-    if (claim.actorId !== this.actorId || context === null || context.epoch !== claim.epoch || context.workingRevision !== claim.workingRevision || context.workingContextId !== claim.workingContextId) {
-      throw new KinuError('denied', 'the claimed context admission is no longer available');
-    }
-
-    return context;
-  }
-
-  revisions(turnId: string): readonly RenderedRequest[] {
-    this.actor.assertCurrent();
-
-    return this.history.requests.forTurn(turnId).map(request => ({ requestId: request.id, revision: request.revision, epoch: request.epoch,
-      workingRevision: request.source.revision, workingContextId: request.source.contextId, stepIndex: request.step, messageCount: request.messages.length }));
-  }
-
-  async contextRevision(requestId: string): Promise<ContextRevision | null> {
-    return this.history.requests.read(requestId) === null ? null : this.materialize(requestId);
   }
 
   settle(claim: ActorTurnClaim, outcome: ClaimOutcome): void {
@@ -225,10 +206,10 @@ export class ActorClaimStore {
   }
 }
 
+/** `not_kept`: the consumed step predates kept request lists. */
 export type ClaimRecovery =
-  | { readonly kind: 'verified'; readonly claim: StoredActorClaim; readonly context: readonly ModelMessage[] }
-  | { readonly kind: 'source_changed'; readonly claim: StoredActorClaim; readonly found: string | null }
-  | { readonly kind: 'build_unknown'; readonly claim: StoredActorClaim; readonly context: readonly ModelMessage[] };
+  | { readonly kind: 'verified' | 'build_unknown' | 'not_kept'; readonly claim: StoredActorClaim }
+  | { readonly kind: 'source_changed'; readonly claim: StoredActorClaim; readonly found: string | null };
 
 export async function verifyClaimedProgram(claim: StoredActorClaim, readVersionedSource: (version: number) => Promise<string | null>, digestOf: (source: string) => string,
   loadContext: () => Promise<ContextRevision | null>): Promise<ClaimRecovery> {
@@ -236,9 +217,11 @@ export async function verifyClaimedProgram(claim: StoredActorClaim, readVersione
 
   if (context === null) throw new KinuError('missing', 'claimed request evidence is missing');
 
-  if (claim.program.kind === 'builtin') return claim.program.build === null ? { kind: 'build_unknown', claim, context: context.messages } : { kind: 'verified', claim, context: context.messages };
+  if (context.messages === null) return { kind: 'not_kept', claim };
+
+  if (claim.program.kind === 'builtin') return { kind: claim.program.build === null ? 'build_unknown' : 'verified', claim };
   const source = await readVersionedSource(claim.program.version);
   const found = source === null ? null : digestOf(source);
 
-  return found === null || found !== claim.program.digest ? { kind: 'source_changed', claim, found } : { kind: 'verified', claim, context: context.messages };
+  return found === null || found !== claim.program.digest ? { kind: 'source_changed', claim, found } : { kind: 'verified', claim };
 }

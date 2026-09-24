@@ -78,7 +78,7 @@ describe('the Mossaic adapter boundary', () => {
       stat: async (p) => fail(p), exists: async (p) => fail(p), unlink: async (p) => fail(p),
       mkdir: async (p) => fail(p), rmdir: async (p) => fail(p), removeRecursive: async (p) => fail(p),
       rename: async (p) => fail(p), symlink: async (_t, p) => fail(p), readlink: async (p) => fail(p),
-      listChildren: async (p) => fail(p),
+      listChildren: async (p) => fail(p), createReadStream: async (p) => fail(p),
     };
   }
 

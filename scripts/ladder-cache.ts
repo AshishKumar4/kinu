@@ -3,13 +3,19 @@
  * proof that nothing it can read has changed.
  *
  * The proof is a sha256 over the gate's input closure (`ladder-closure.ts`):
- * the command, every closure file's working-tree bytes, the value of every
- * environment name the closure declares or reads by literal, and the
+ * the command, the checkout it runs in, every closure file's working-tree
+ * bytes, the value of every environment name the gate is given, and the
  * toolchain (bun, node, typescript, oxlint, wrangler, vitest, the platform).
  * A recorded entry lives outside the tree at `~/.cache/kinu-ladder/<sha256>`
  * and names the gate, the revision it was proved on, its wall seconds, the
  * closure size and the tool versions. Nothing expires by time: an entry is
  * either the hash of the tree you have or it is not consulted.
+ *
+ * The environment is an input the runner CONTROLS rather than one it
+ * trusts: a derived gate runs with exactly the names its key hashes
+ * ({@link gateEnvironment}), so a name the walker never saw, however the gate
+ * reads it, reads as unset on every run and cannot make two runs under one
+ * key differ.
  *
  * What never records: a red result; a gate whose closure is uncomputable or
  * live; a gate whose closure hashed differently after the run than before it
@@ -22,10 +28,11 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
+import { CHILD_ENV_NAMES } from '../packages/test-utils/src/ambient-env';
 import { deriveClosure } from './ladder-closure';
 import type { Closure, Derived, Inputs, Repo } from './ladder-closure';
 
@@ -79,9 +86,17 @@ const EntrySchema = v.object({
 
 export type Entry = v.InferOutput<typeof EntrySchema>;
 
+/** What a key holds in the store. An entry that does not read back as one is
+ *  no proof of anything, so it counts as a miss: the gate runs, and its green
+ *  run replaces the entry. */
+export type Lookup =
+  | { readonly kind: 'entry'; readonly entry: Entry }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unreadable'; readonly why: string };
+
 export interface Store {
   readonly directory: string;
-  lookup(key: string): Entry | undefined;
+  lookup(key: string): Lookup;
   record(key: string, entry: Entry): void;
 }
 
@@ -93,23 +108,49 @@ export function defaultStoreDirectory(base = process.env.XDG_CACHE_HOME): string
   return join(base === undefined || base.length === 0 ? join(homedir(), '.cache') : base, 'kinu-ladder');
 }
 
+/** `path`'s bytes on the disk before this returns, not in the page cache. */
+function flushed(path: string, flags: 'r' | 'w', bytes?: string): void {
+  const descriptor = openSync(path, flags);
+
+  try {
+    if (bytes !== undefined) writeSync(descriptor, bytes);
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
 export function storeAt(directory: string): Store {
   return {
     directory,
     lookup(key) {
       const path = join(directory, key);
 
-      if (!existsSync(path)) return undefined;
+      if (!existsSync(path)) return { kind: 'absent' };
+      const text = readFileSync(path, 'utf8');
 
-      return v.parse(EntrySchema, JSON.parse(readFileSync(path, 'utf8')));
+      try {
+        const parsed = v.safeParse(EntrySchema, JSON.parse(text));
+
+        return parsed.success
+          ? { kind: 'entry', entry: parsed.output }
+          : { kind: 'unreadable', why: `not an entry: ${v.summarize(parsed.issues).split('\n')[0] ?? ''}` };
+      } catch (error) {
+        return { kind: 'unreadable', why: `not JSON (${String(text.length)} bytes): ${error instanceof Error ? error.message : String(error)}` };
+      }
     },
     record(key, entry) {
       mkdirSync(directory, { recursive: true });
-      // Written whole then renamed: a concurrent reader sees a complete
-      // entry or none, never a truncated one.
+      // Written whole, flushed, then renamed, and the rename flushed: a
+      // concurrent reader sees a complete entry or none, and a crash leaves the
+      // old entry or the new one. Without the flushes a crash after the rename
+      // left entries of the right size holding only NUL bytes (2026-09-22,
+      // 11 entries on integration/0923a): the name reached the disk before the
+      // blocks it named.
       const temporary = join(directory, `.${key}.${String(process.pid)}`);
-      writeFileSync(temporary, `${JSON.stringify(entry, null, 2)}\n`);
+      flushed(temporary, 'w', `${JSON.stringify(entry, null, 2)}\n`);
       renameSync(temporary, join(directory, key));
+      flushed(directory, 'r');
     },
   };
 }
@@ -123,6 +164,28 @@ export type EnvReader = (name: string) => string | undefined;
 
 export const ambientEnv: EnvReader = (name) => process.env[name];
 
+/** The names every derived gate is given beside its closure's own: what any
+ *  process needs from its surroundings (`CHILD_ENV_NAMES`: the path, home,
+ *  temp, user, shell, locale, zone and terminal), and `CI`, which bun test
+ *  and vitest read to decide whether a missing snapshot fails the run. */
+export const GATE_BASE_ENV: readonly string[] = [...CHILD_ENV_NAMES, 'CI'];
+
+/** Every environment name a derived gate is given and keyed on, sorted. */
+export function gateEnvNames(closure: Derived): readonly string[] {
+  return [...new Set([...GATE_BASE_ENV, ...closure.env])].sort();
+}
+
+/** The whole environment a derived gate runs under: {@link gateEnvNames}
+ *  with their current values, an unset name left out. Nothing else reaches
+ *  the gate, so every value it can see is a key input. */
+export function gateEnvironment(closure: Derived, env: EnvReader = ambientEnv) {
+  return Object.fromEntries(gateEnvNames(closure).flatMap((name) => {
+    const value = env(name);
+
+    return value === undefined ? [] : [[name, value] as const];
+  }));
+}
+
 /** Everything one key is taken over. */
 export interface KeyPreimage {
   readonly run: string;
@@ -132,13 +195,18 @@ export interface KeyPreimage {
   readonly env?: EnvReader;
 }
 
-/** The key: sha256 over the run, the closure's bytes, the declared
- *  environment values and the toolchain. Environment VALUES enter the
- *  preimage only, so a secret named on a row never lands in the store. */
+/** The key: sha256 over the run, the checkout's root, the closure's bytes,
+ *  the environment the gate is given and the toolchain. The root is a key
+ *  input because the gate runs in it: an absolute path lands in socket
+ *  names, temp paths and messages, and a checkout's untracked state is not
+ *  another checkout's, so a proof recorded in one checkout is never another's.
+ *  Environment VALUES enter the preimage only, so a secret named on a row
+ *  never lands in the store. */
 export function keyFor(preimage: KeyPreimage): string {
   const { run, closure, tools, repo, env = ambientEnv } = preimage;
   const hash = createHash('sha256');
   hash.update(`run\0${run}\0`);
+  hash.update(`root\0${repo.root}\0`);
   hash.update(`tools\0${JSON.stringify(tools)}\0`);
 
   for (const file of closure.files) {
@@ -147,7 +215,7 @@ export function keyFor(preimage: KeyPreimage): string {
     hash.update('\0');
   }
 
-  for (const name of closure.env) hash.update(`env\0${name}\0${env(name) ?? '\u0001unset'}\0`);
+  for (const name of gateEnvNames(closure)) hash.update(`env\0${name}\0${env(name) ?? '\u0001unset'}\0`);
 
   return hash.digest('hex');
 }
@@ -155,7 +223,8 @@ export function keyFor(preimage: KeyPreimage): string {
 /** A gate's cache decision before it runs. */
 export type Plan =
   | { readonly kind: 'hit'; readonly key: string; readonly entry: Entry; readonly closure: Derived }
-  | { readonly kind: 'miss'; readonly key: string; readonly closure: Derived }
+  /** `unreadable` names why the entry stored under this key proves nothing. */
+  | { readonly kind: 'miss'; readonly key: string; readonly closure: Derived; readonly unreadable?: string }
   | { readonly kind: 'uncacheable'; readonly closure: Exclude<Closure, Derived> };
 
 /** One gate row against one tree: the command, the inputs its row declares,
@@ -174,11 +243,11 @@ export function planGate(gate: GateCacheRequest): Plan {
 
   if (closure.kind !== 'derived') return { kind: 'uncacheable', closure };
   const key = keyFor({ run: gate.run, closure, tools: gate.tools, repo: gate.repo });
-  const entry = gate.store.lookup(key);
+  const stored = gate.store.lookup(key);
 
-  if (entry === undefined) return { kind: 'miss', key, closure };
+  if (stored.kind === 'entry') return { kind: 'hit', key, entry: stored.entry, closure };
 
-  return { kind: 'hit', key, entry, closure };
+  return stored.kind === 'unreadable' ? { kind: 'miss', key, closure, unreadable: stored.why } : { kind: 'miss', key, closure };
 }
 
 /** Record a green run. The closure is re-derived and re-hashed AFTER the run:
@@ -216,12 +285,14 @@ export const CACHE_BLIND_SPOTS: readonly string[] = [
   'A READ BY PATH — DECLARED, NOT SEEN. A file in a graph that opens the tree by path is '
   + 'cacheable only with a `reads` list on its row, and the list is a claim; `--audit-closure` '
   + 'runs the gate under strace and names every tree file opened outside the closure.',
-  'AN ENVIRONMENT READ BY COMPUTED KEY — DECLARED, NOT SEEN. Only literal `process.env.NAME` '
-  + 'reads and the row\'s `env` list enter the key; a name reached through a computed key that '
-  + 'the row does not declare is invisible. The environment read WHOLE is never cached.',
-  'OUTSIDE THE TREE — NOT AN INPUT. $HOME state, /etc, the clock and the network are not '
-  + 'hashed; a gate that reads them is declared `live` and never cached, and a gate that '
-  + 'reads them without saying so is a hole this cache cannot close.',
+  'THE ENVIRONMENT IS CLOSED, NOT SEEN. A derived gate runs with the base names, the names its '
+  + 'graph reads literally and the names its row declares, and with nothing else, so a read '
+  + 'the walker missed sees an unset name on every run rather than a value the key never held. '
+  + 'A gate that needs another name fails for want of it; the fix is the name on its row.',
+  'OUTSIDE THE TREE — NOT AN INPUT. $HOME state, /etc, the binaries PATH finds (git, python, '
+  + 'the browser puppeteer downloaded), the clock and the network are not hashed; a gate that '
+  + 'reads them is declared `live` and never cached, and a gate that reads them without saying '
+  + 'so is a hole this cache cannot close.',
   'THE VERDICT IS HASHED BEFORE AND AFTER THE RUN, NOT DURING IT. A file edited and restored '
   + 'inside the run\'s window hashes identical at both ends and the run is recorded.',
 ];

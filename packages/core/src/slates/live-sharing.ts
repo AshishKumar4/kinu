@@ -63,10 +63,6 @@ export class WorkspaceLiveShares {
     return this.deps.shares.byHandle(handle);
   }
 
-  admitsUser(share: string, userId: string): boolean {
-    return this.deps.shares.hasUser(share, userId);
-  }
-
   requests(share: string): ViewerRequestRecord[] {
     return v.parse(v.array(ViewerRequestRecordSchema), this.deps.shares.requests(share));
   }

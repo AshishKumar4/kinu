@@ -7,9 +7,11 @@ delta=$probe_dir/$generation
 block=$probe_dir/block
 merged=$probe_dir/merged
 mkdir -p "$base" "$delta" "$block" "$merged" "$probe_dir/work"
+# Lowers detach lazily: the overlay's daemon still holds them while it exits (block-lower-probe.sh).
 cleanup() {
-  for mount in "$merged" "$block" "$delta" "$base"; do
-    if mountpoint -q "$mount"; then fusermount3 -u "$mount"; fi
+  if mountpoint -q "$merged"; then fusermount3 -u "$merged"; fi
+  for mount in "$block" "$delta" "$base"; do
+    if mountpoint -q "$mount"; then fusermount3 -uz "$mount"; fi
   done
   chown -R --no-dereference "$(stat -c %u:%g /fixture)" /fixture
 }

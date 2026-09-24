@@ -1,8 +1,10 @@
-import { previewHostSuffix, previewSuffixMetaName, type PreviewSuffixEnv } from '../preview/preview-origin';
+import {
+  previewHostSuffix, previewPortSuffix, previewSuffixMetaName, type PreviewPortEnv, type PreviewSuffixEnv,
+} from '../preview/preview-origin';
 import type { AssetFetcher } from './deployed-assets';
 import { withAppSecurityHeaders } from './security-headers';
 
-interface AppShellEnv extends PreviewSuffixEnv {
+interface AppShellEnv extends PreviewSuffixEnv, PreviewPortEnv {
   readonly ASSETS: AssetFetcher;
 }
 
@@ -21,6 +23,6 @@ export async function serveApp(request: Request, env: AppShellEnv): Promise<Resp
   return withAppSecurityHeaders(
     configured,
     new URL(request.url),
-    suffix ? `https://*.${suffix}` : null,
+    suffix ? `https://*.${suffix}${previewPortSuffix(env)}` : null,
   );
 }

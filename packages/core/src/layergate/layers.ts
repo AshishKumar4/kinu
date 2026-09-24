@@ -18,6 +18,7 @@ import type { KinuEvent, ReadableKinuEvent } from '../events/hub/types';
 import type { LexicalHit } from '../memory/hybrid-search';
 import type { ScaffoldArchiveEntry } from '../scaffold/archive';
 import type { ActiveSkill } from '../skills/types';
+import { workspaceSkillPath } from '../skills/discover';
 import type { PipelineSubjects } from './subjects';
 import * as v from 'valibot';
 import type { RunEventInput } from '../events/types';
@@ -59,12 +60,9 @@ const SKILL: ActiveSkill = Object.freeze({
   name: 'deploy-runbook',
   description: 'How this project deploys.',
   allowed_tools: ['shell', 'workspace.*'],
-  keywords: ['deploy', 'rollout'],
-  auto_activate: true,
-  disable_model_invocation: false,
   user_invocable: true,
   body: 'Step one. Step two. Step three.',
-  bodyRef: { kind: 'file', path: '/workspace/skills/deploy-runbook.md', chars: 31 } as const,
+  bodyRef: { kind: 'file', path: workspaceSkillPath('deploy-runbook'), chars: 31 } as const,
   ext: {},
   source: 'vfs',
 });
@@ -72,11 +70,9 @@ const SKILL: ActiveSkill = Object.freeze({
 const PINNED_SKILL: ActiveSkill = Object.freeze({
   ...SKILL,
   name: 'house-style',
-  keywords: [],
-  auto_activate: false,
   allowed_tools: [],
   body: 'Write in the first person.',
-  bodyRef: { kind: 'file', path: '/workspace/skills/house-style.md', chars: 26 } as const,
+  bodyRef: { kind: 'file', path: workspaceSkillPath('house-style'), chars: 26 } as const,
 });
 
 function toolMessage(id: string, text: string): ModelMessage {
@@ -205,7 +201,7 @@ const COMMANDS = Object.freeze([
   // Merely quotes a dangerous command; never gated (the binary is `grep`).
   'grep -rn "rm -rf" scripts/',
   // …unless an interpreter is the one being handed the program.
-  'bash -c "rm -rf /home/user/work"',
+  'bash -c "rm -rf /home/main/work"',
 ]);
 
 /** Safety-gate probes run every command against both; the pair must disagree where it should. */
@@ -291,7 +287,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           currentDate: '2026-01-01',
           cwd: '/workspace',
           agentsMd: { admitted: [{ path: '/AGENTS.md', content: 'Root rules.', trust: 'approved' }], referenced: [] },
-          activeSkills: { active: [SKILL], reasons: [{ name: SKILL.name, reason: { kind: 'keyword', matched_keyword: 'deploy' } }] },
+          activeSkills: { active: [SKILL], reasons: [{ name: SKILL.name, reason: { kind: 'explicit', matched_token: 'deploy-runbook' } }] },
         }),
       },
       {
@@ -306,10 +302,10 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             currentDate: '2026-01-01',
           };
 
-          const byKeyword = s.buildSystemPromptSync({
+          const byPin = s.buildSystemPromptSync({
             ...base,
             availableTools: [...base.availableTools],
-            activeSkills: { active: [SKILL], reasons: [{ name: SKILL.name, reason: { kind: 'keyword', matched_keyword: 'deploy' } }] },
+            activeSkills: { active: [SKILL], reasons: [{ name: SKILL.name, reason: { kind: 'always_active', via: 'config' } }] },
           });
 
           const byExplicit = s.buildSystemPromptSync({
@@ -318,7 +314,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             activeSkills: { active: [SKILL], reasons: [{ name: SKILL.name, reason: { kind: 'explicit', matched_token: '/deploy-runbook' } }] },
           });
 
-          return { identical: byKeyword === byExplicit, length: byKeyword.length };
+          return { identical: byPin === byExplicit, length: byPin.length };
         },
       },
       {
@@ -373,11 +369,10 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'context-assembly/skill-activation-precedence',
-        asserts: 'explicit beats keyword beats always-active, and non-invocable skills stay off',
+        asserts: 'explicit beats always-active, and non-invocable skills stay off',
         observe: (s) => s.resolveActiveSkills({
           available: [SKILL, PINNED_SKILL],
           explicit: ['house-style'],
-          userMessage: 'time to deploy the service',
           alwaysActive: ['deploy-runbook', 'house-style'],
         }),
       },
@@ -459,7 +454,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'activation reasons and the one-turn device notice ride the turn-local message',
         observe: (s) => s.turnLocalContextMessage({
           deviceNotice: 'Your PC just connected.',
-          activeSkills: { active: [SKILL], reasons: [{ name: SKILL.name, reason: { kind: 'keyword', matched_keyword: 'deploy' } }] },
+          activeSkills: { active: [SKILL], reasons: [{ name: SKILL.name, reason: { kind: 'explicit', matched_token: 'deploy-runbook' } }] },
         }),
       },
       {

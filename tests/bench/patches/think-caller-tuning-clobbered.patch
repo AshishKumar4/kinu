@@ -1,9 +1,9 @@
 diff --git a/packages/core/src/evolution/engine.ts b/packages/core/src/evolution/engine.ts
-index d04ceaf0a..6cc3e56c3 100644
+index c4c67cd8a..0c3c8481d 100644
 --- a/packages/core/src/evolution/engine.ts
 +++ b/packages/core/src/evolution/engine.ts
-@@ -310,7 +310,7 @@ export class EvolutionEngine {
-   constructor(rt: AgentRuntime, history: SessionHistory, config?: Partial<EvolutionConfig>) {
+@@ -252,7 +252,7 @@ export class EvolutionEngine {
+   ) {
      this.rt = rt;
      this.history = history;
 -    this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };

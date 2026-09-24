@@ -456,7 +456,7 @@ export interface MissionScope {
   readonly port: MissionBudgetPort;
 }
 
-export function localMissionPort(governor: MissionGovernor): MissionBudgetPort {
+function localMissionPort(governor: MissionGovernor): MissionBudgetPort {
   return {
     async guard(seam, labels) { return governor.guard(seam, labels); },
     async debit(tokens, opts) { governor.debit(tokens, opts); },

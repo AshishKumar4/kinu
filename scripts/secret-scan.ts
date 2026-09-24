@@ -8,7 +8,7 @@
 // inspection keeps a removed credential from becoming a forgotten credential:
 // it walks every locally stored ref and scans each reachable text blob exactly
 // once. Neither report writes a matched value to stdout or stderr.
-import { join, relative } from 'node:path';
+import { join } from 'node:path';
 import {
   bytesToText,
   historyObjects,
@@ -526,8 +526,8 @@ export interface LiveScanResult {
 /** The live/index scan has no suppression plane. Deliberate fixtures assemble
  * their secret-shaped bytes at runtime, so every source byte stays governed. */
 export function scanLiveIndex(): LiveScanResult {
-  const self = relative(REPO_ROOT, import.meta.path);
-  const corpus = readMatching((file) => isTextSource(file) && file !== self);
+  // The scanner's own source included: its detectors are assembled at runtime, so it holds no literal they match.
+  const corpus = readMatching(isTextSource);
   const findings: Finding[] = [];
 
   for (const [file, text] of corpus) findings.push(...scanText(file, text));

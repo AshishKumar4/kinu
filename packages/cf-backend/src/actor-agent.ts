@@ -30,9 +30,10 @@ import {
   cliScopesConnectionTag,
   sessionBearerConnectionTag,
   sessionBearerFromTags,
-  rejectOutOfScopeRpc, requiredRpcAccess,
+  rejectOutOfScopeRpc,
   type CliSocketBearer,
 } from "./cli/rpc-gate";
+import { requiredRpcAccess } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
@@ -61,7 +62,7 @@ import {
   type AdvisorRecoverySnapshot, type AdvisorDisposition,
   advisorWorkspaceGuidance,
   buildActorTools, buildBuiltinTools,
-  buildMcpToolSet,
+  buildMcpToolSet, toolSchemaDialect, withToolSchemaDialect,
   type WebSearchProvider,
   buildSystemPromptSync,
   type PromptIdentity,
@@ -175,7 +176,7 @@ import {
   type CFRuntime, type CFRuntimeHooks,
 } from "./runtime";
 import {
-  hostNodeSeat, hostBranch, abortHostedBranch,
+  hostNodeSeat, hostBranch, abortHostedBranch, nodeCodemodeTool,
   type ExplorationHostSeams, type BranchRunnerDeps,
 } from "./exploration-hosting";
 import { hostedSubordinateRuntime, type SubordinateHostSeams } from "./subordinate-hosting";
@@ -1220,7 +1221,7 @@ export abstract class ActorAgent extends Agent<Env> {
       actor: this.actorHandle(),
       sql: this.boundSql,
       effects: this.terminalEffectTable(),
-      now: () => Date.now() + this._terminalClockSkewMs,
+      now: () => Date.now(),
       fault: () => this.terminalEffectFault,
       // A synchronous DO run is already atomic; transactionSync keeps the claim and roster one unit
       // regardless of what core later puts between them.
@@ -1360,9 +1361,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Test-only deterministic cut point in the terminal sequence. Null in production. */
   protected terminalEffectFault: TerminalEffectFault | null = null;
-
-  /** Test-only skew of the ledger clock (the only clock the due-check reads). Zero in production. */
-  protected _terminalClockSkewMs = 0;
 
   /** Read at the start of a terminal sequence and carried through: the loop's live turn becomes
    *  the next one as soon as it opens, so a detached re-read could close the wrong claim. */
@@ -1724,7 +1722,6 @@ export abstract class ActorAgent extends Agent<Env> {
           // Arm the turn's own wake at its open, so a kill mid-turn leaves both the run row and the wake
           // that re-drives what it owed.
           armTurnWake: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
-          modelWindow: () => this.modelCatalog.window(),
           steerSkills: (text) => steerSkillsBlock({
             vfs: this.rt.storage.vfs,
             config: this.config,
@@ -1752,6 +1749,7 @@ export abstract class ActorAgent extends Agent<Env> {
       send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
       interrupt: () => { this.chatLoop.interrupt(); },
       clear: () => this.clearConversation(),
+      turnClosed: () => { this.turnClaimChanged(); },
     });
 
     return this._chatTransport;
@@ -1822,6 +1820,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Fires once per emptying, in the close hook, after the room has been told. */
   protected lastConnectionClosed(): void {}
+
+  /** Fires after each root turn closes, when its durable claim has settled. */
+  protected abstract turnClaimChanged(): void;
 
   protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
 
@@ -2633,6 +2634,9 @@ export abstract class ActorAgent extends Agent<Env> {
     const swarm: AgentsSwarmDeps = {
       rt: this.rt,
       model: this.getModel(),
+      reportModelCall: (report) => { this.reportModelCall(report); },
+      nodeCodemode: (actor) => nodeCodemodeTool(seams, actor),
+      webSearch: seams.webSearch(),
       originContext: () => this._turnOriginContext,
       resolveModel: (spec: string) => this.ownedModelServices.resolveModel(spec),
       // Same catalog session as the context window and mission ledger, so a search's estimate
@@ -3500,15 +3504,13 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Resolves on admission, not landing; where the words land reaches clients as steer_status
-   * under the same id. Unrecognized mode runs as build; an already-held id is refused. */
+   * under the same id. Unrecognized mode runs as build. */
   @callable()
   async send(text: string, id: string, files: readonly PromptFile[] = [], mode?: WorkMode): Promise<void> {
     this.ensureSchema();
     const attachments = v.parse(v.array(PromptFileSchema), files);
-    const messageId = v.parse(v.pipe(v.string(), v.nonEmpty(), v.maxLength(128)), id);
 
-    if (this.admittedSend(messageId)) throw new KinuError('bad_input', `message ${messageId} was already sent`);
-    await this.chatLoop.admit({ text, files: attachments }, { id: messageId, mode: isWorkMode(mode) ? mode : 'build' });
+    await this.chatLoop.admit({ text, files: attachments }, { id, mode: isWorkMode(mode) ? mode : 'build' });
   }
 
   /** Aborts the in-flight LLM request first so stop works even if the cancel frame is lost.
@@ -3847,7 +3849,7 @@ export abstract class ActorAgent extends Agent<Env> {
       }));
       this.logActivity('mcp_tools_served', `${Object.keys(tools).length} tools`);
 
-      return tools;
+      return withToolSchemaDialect(tools, toolSchemaDialect(this.effectiveModelSpec()));
     } catch (err) {
       const failure = toKinuError({
         doing: 'building the user MCP tool adapters for this turn',

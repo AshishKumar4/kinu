@@ -27,8 +27,9 @@ import {
   InstructionApprovalStore, initInstructionApprovalsTable, instructionDigest,
 } from '../src/safety/instruction-trust';
 import { trustedActiveSkills, unionAllowedTools } from '../src/skills/render';
-import { discoverSkills, skillPath } from '../src/skills/discover';
-import { SKILLS_DIR } from '../src/skills/types';
+import { discoverSkills, workspaceSkillPath } from '../src/skills/discover';
+import { WORKSPACE_SKILLS_DIR } from '../src/skills/types';
+import { vfsDirname } from '../src/utils/vfs-helpers';
 import { gatherApprovableInstructions } from '../src/read-models/instruction-approvals';
 import type { ActiveSkill, ActiveSkillSet } from '../src/skills/types';
 import type { AgentRuntime } from '../src/types/agent-runtime';
@@ -53,7 +54,7 @@ import {
 import {
   decideRefinementRoute, showRefinementRoute,
 } from '../src/evolution/refinement-skill';
-import { createTestSql, present } from '@kinu.run/test-utils';
+import { createTestSql, present, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
 
@@ -283,13 +284,10 @@ function activeSkill(name: string, trust: ActiveSkill['trust'], allowed: string[
     name,
     description: `the ${name} skill`,
     allowed_tools: allowed,
-    keywords: [],
-    auto_activate: false,
-    disable_model_invocation: false,
     user_invocable: true,
     ext: {},
     source: trust === 'builtin' ? 'builtin' : 'vfs',
-    bodyRef: { kind: 'file', path: `/workspace/skills/${name}.md`, chars: body.length },
+    bodyRef: { kind: 'file', path: workspaceSkillPath(name), chars: body.length },
     body,
     trust,
   };
@@ -298,7 +296,7 @@ function activeSkill(name: string, trust: ActiveSkill['trust'], allowed: string[
 const BREVITY_SKILL =
   '---\nname: brevity\ndescription: answer briefly\nallowed_tools: [read]\n---\nBe brief.';
 
-const BREVITY_PATH = skillPath('brevity');
+const BREVITY_PATH = workspaceSkillPath('brevity');
 
 const BUILTIN_CLASH =
   '---\nname: audit-implementation\ndescription: not the real one\n---\nMine now.';
@@ -372,11 +370,11 @@ async function readSkill(rt: AgentRuntime, path: string): Promise<string | null>
 
 async function writeSkill(rt: AgentRuntime, path: string, source: string): Promise<void> {
   const vfs = rt.agentStateVfs ?? rt.storage.vfs;
-  await vfs.mkdir(SKILLS_DIR, { recursive: true });
+  await vfs.mkdir(vfsDirname(path), { recursive: true });
   await vfs.writeFile(path, source);
 }
 
-/** What the prompt would see: `discoverSkills` under SKILLS_DIR. */
+/** What the prompt would see: `discoverSkills` over the skill roots. */
 async function discoveredSkillNames(rt: AgentRuntime): Promise<string[]> {
   const vfs = rt.agentStateVfs ?? rt.storage.vfs;
   const discovery = await discoverSkills(vfs, { admissionTokens: 100_000 });
@@ -384,7 +382,7 @@ async function discoveredSkillNames(rt: AgentRuntime): Promise<string[]> {
   return discovery.skills.filter((skill) => skill.bodyRef.kind === 'file').map((skill) => skill.name);
 }
 
-/** The owner's approval surface, the other reader a SKILLS_DIR write would reach. */
+/** The owner's approval surface, the other reader a skills-root write would reach. */
 async function gatheredSkillPaths(rt: AgentRuntime): Promise<string[]> {
   const vfs = rt.agentStateVfs ?? rt.storage.vfs;
 
@@ -768,13 +766,13 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(route.digest).toBe(instructionDigest(BREVITY_SKILL));
     expect(row.stage).toBe('evaluating');
 
-    // Nothing under SKILLS_DIR, so the proposal reaches no prompt.
+    // Nothing under the skills root, so the proposal reaches no prompt.
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
     expect(await discoveredSkillNames(fx.rt)).toEqual([]);
     expect(await gatheredSkillPaths(fx.rt)).toEqual([]);
     // Staged where nothing reads them; the owner reads them from the request view.
     expect(await readSkill(fx.rt, refinementStagingPath(opened.id, 'brevity'))).toBe(BREVITY_SKILL);
-    expect(refinementStagingPath(opened.id, 'brevity').startsWith(SKILLS_DIR)).toBe(false);
+    expect(refinementStagingPath(opened.id, 'brevity').startsWith(WORKSPACE_SKILLS_DIR)).toBe(false);
     // Granting is still the owner's act.
     expect(fx.approvals.list()).toEqual([]);
 
@@ -795,7 +793,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     for (const [edit, expected] of [
       [{ path: '/workspace/notes/brevity.md', source: BREVITY_SKILL }, 'canonical skill path'],
       [{ path: BREVITY_PATH, source: '---\nname: brevity\n---\nno description' }, 'not a valid skill'],
-      [{ path: skillPath('audit-implementation'), source: BUILTIN_CLASH }, 'built-in skill'],
+      [{ path: workspaceSkillPath('audit-implementation'), source: BUILTIN_CLASH }, 'built-in skill'],
     ] as const) {
       const fx = fixture();
       seedGradedTurns(fx.rt, 3);
@@ -1241,7 +1239,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(store.get(opened.id)?.stage).toBe('planning');
 
     // The real recovery caller: an engine built after the nudge started.
-    const recovery = new EvolutionEngine(fx.rt, fx.stores.history, { enabled: false });
+    const recovery = new EvolutionEngine(fx.rt, fx.stores.history, { reportModelCall: unobservedSpend, enabled: false });
     // It recovered its empty review queue and left the live claim alone.
     expect(recovery.sessionWindow.countQueuedReviews()).toBe(0);
     expect(store.get(opened.id)?.stage).toBe('planning');

@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { jsonSchema, tool } from 'ai';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
 import {
   ActorSession, EvolutionEngine, WorkspaceActorDirectory, createAgentStores, profileCatalogDigest,
   resolveTurnProfile, verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
@@ -74,7 +74,7 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
 
     const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null,
     orchestration: {
-      engine: new EvolutionEngine(runtime, stores.history, { enabled: false }), eventLog: new EventLog(eventSql, handle),
+      engine: new EvolutionEngine(runtime, stores.history, { reportModelCall: unobservedSpend, enabled: false }), eventLog: new EventLog(eventSql, handle),
       host: {
         broadcast: () => {},
         enqueueTurn: async () => { throw new Error('this fixture must not enqueue another turn'); },
@@ -234,7 +234,7 @@ test('a cold reader recovers the claimed program identity and the exact context 
   expect(recovery.kind).toBe('build_unknown');
   const consumed = await cold.claims.consumedContext('turn-cold');
   expect(consumed?.stepIndex).toBe(0);
-  const first = consumed?.messages[0];
+  const first = consumed?.messages?.[0];
   expect(first?.role).toBe('user');
   const parts = Array.isArray(first?.content) ? first?.content : [];
   const file = parts.find((part) => part.type === 'file');
@@ -274,7 +274,7 @@ test('a rich tool exchange survives the revision round trip as native messages',
   const roles = (second?.messages ?? []).map((message) => message.role);
   expect(roles).toContain('assistant');
   expect(roles).toContain('tool');
-  const toolMessage = second?.messages.find((message) => message.role === 'tool');
+  const toolMessage = second?.messages?.find((message) => message.role === 'tool');
   const resultPart = Array.isArray(toolMessage?.content) ? toolMessage?.content[0] : undefined;
   expect(resultPart).toMatchObject({ type: 'tool-result', toolCallId: 'call-1', toolName: 'probe' });
 });

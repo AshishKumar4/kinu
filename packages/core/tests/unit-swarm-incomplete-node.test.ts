@@ -10,6 +10,8 @@ import type { LanguageModelV3Prompt } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
+import { MissionGovernor, localMissionScope, type MissionScope } from '../src/mission-budget';
+import type { AgentRuntime } from '../src/types/agent-runtime';
 import { runSwarm } from '../src/strategy/swarm-run';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
 import { diversityAngle } from '../src/mcts/diversity';
@@ -166,11 +168,19 @@ function scriptedNodes(
   });
 }
 
+/** Smaller than one scripted step (18 tokens), so the step that opens a node spends it. */
+function tightMission(rt: AgentRuntime): MissionScope | undefined {
+  const governor = new MissionGovernor({ storage: rt.storage, actor: rt.actor });
+  governor.declare('mission', { tokens: 10 }, {});
+
+  return localMissionScope(governor, ['mission']) ?? undefined;
+}
+
 async function run(input: {
   readonly branch0: Outcome;
   readonly branch1: Outcome;
-  /** Absent is an absent key, and then the node has no clock. */
-  readonly maxWallClockMs?: number;
+  /** A mission the first node step spends, so the next request is declined. */
+  readonly tightMission?: boolean;
   /** The host refuses one node's actor, so the search holds nothing for it. */
   readonly losesOne?: boolean;
 }) {
@@ -195,16 +205,10 @@ async function run(input: {
     mode: 'build',
     logger,
     signal: cancel.signal,
+    mission: input.tightMission === true ? tightMission(rt) : undefined,
   };
 
-  // Assigned, not spread: "declared nothing" and "declared undefined" must stay distinct.
-  const declared: SwarmRunDeps = { ...deps };
-
-  if (input.maxWallClockMs !== undefined) {
-    Object.assign(declared, { maxWallClockMs: input.maxWallClockMs });
-  }
-
-  const result = await runSwarm(declared, resolved());
+  const result = await runSwarm(deps, resolved());
 
   const rows = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes WHERE actor_id = ${rt.actor.actorId}
@@ -286,60 +290,18 @@ describe('an unfinished node is distinguishable from a badly-measured one', () =
   });
 
   test('a node that ran out of BUDGET is reported the same way, by its own status', async () => {
-    // A zero clock exhausts the node before its first step, so this status is deterministic.
+    // The mission is spent by the first step, so the node's next request is declined whichever node gets there.
     const { result } = await run({
       branch0: { ends: 'completed', content: fenced(WASTEFUL) },
       branch1: { ends: 'completed', content: fenced(WASTEFUL) },
-      maxWallClockMs: 0,
+      tightMission: true,
     });
 
     if ('reason' in result) throw new Error(`the run refused: ${result.error}`);
     const cut = result.candidates.find((candidate) => candidate.incomplete !== null);
     expect(cut?.incomplete).toStartWith('budget_exceeded after ');
-    expect(cut?.incomplete).toContain('wall-clock budget exhausted');
+    expect(cut?.incomplete).toContain('Mission budget "mission" is spent');
     expect(cut?.score).toBeNull();
-  });
-});
-
-describe('every node runs to the deadline its caller declared, and to none other', () => {
-  test('nothing declared reaches the node as an ABSENT clock', async () => {
-    // No derived envelope or step cap: an invented envelope would cut these nodes.
-    const { result } = await run({
-      branch0: { ends: 'completed', content: fenced(WASTEFUL) },
-      branch1: { ends: 'completed', content: fenced(WASTEFUL) },
-    });
-
-    if ('reason' in result) throw new Error(`the run refused: ${result.error}`);
-    expect(result.candidates).toHaveLength(2);
-    expect(result.candidates.map((candidate) => candidate.incomplete)).toEqual([null, null]);
-  });
-
-  test('a clock the caller declared reaches the node; zero is a declaration', async () => {
-    // Zero catches `||` where `??` belongs. Per-node step behaviour is in
-    // unit-swarm-node-envelope.test.ts; this pins what the run hands its nodes.
-    const settled: Outcome = { ends: 'completed', content: fenced(WASTEFUL) };
-
-    const cases = [
-      // Large enough that the report gate's instrument run cannot expire it.
-      { name: 'nothing declared', declare: {}, cut: [false, false] },
-      { name: 'a clock declared', declare: { maxWallClockMs: 600_000 }, cut: [false, false] },
-      { name: 'a clock of zero', declare: { maxWallClockMs: 0 }, cut: [true, true] },
-    ] as const;
-
-    for (const declaration of cases) {
-      const { result } = await run({
-        branch0: settled, branch1: settled, ...declaration.declare,
-      });
-
-      if ('reason' in result) {
-        throw new Error(`the run refused with ${declaration.name}: ${result.error}`);
-      }
-
-      expect({
-        case: declaration.name,
-        cut: result.candidates.map((candidate) => candidate.incomplete !== null),
-      }).toEqual({ case: declaration.name, cut: [...declaration.cut] });
-    }
   });
 });
 

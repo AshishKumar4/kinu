@@ -1,4 +1,4 @@
-/** The listing/stat shape a walk needs; `isDir` rather than a Node-style Stats. */
+/** The listing/stat shape a walk needs. */
 export type WalkStat = { size: number; mtimeMs: number; isDir: boolean };
 
 export type WalkableVFS = {

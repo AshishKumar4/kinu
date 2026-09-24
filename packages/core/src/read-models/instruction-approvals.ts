@@ -10,9 +10,10 @@ import {
   type InstructionTrust, type InstructionTrustResolver,
 } from '../safety/instruction-trust';
 import {
-  discoverSkills, readSkillFile, type DiscoverOpts, type SkillsVfs,
+  discoverSkills, readSkillFile, type SkillsVfs,
 } from '../skills/discover';
 import { boundedInt } from '../utils/bounds';
+import { compareCodeUnits } from '../utils/text';
 import { seekPage, type Page, type PageRequest } from '../session/page';
 import type { AgentsMdSources } from '../prompting/agents-md';
 import { tolerateAsync } from '../obs/index';
@@ -92,13 +93,7 @@ function instructionAnchor(row: InstructionSourceRow): string {
 }
 
 function compareRows(a: InstructionSourceMeta, b: InstructionSourceMeta): number {
-  if (a.kind !== b.kind) return a.kind < b.kind ? -1 : 1;
-
-  if (a.path < b.path) return -1;
-
-  if (a.path > b.path) return 1;
-
-  return 0;
+  return compareCodeUnits(a.kind, b.kind) || compareCodeUnits(a.path, b.path);
 }
 
 /** Ordered by identity (kind, path) only, so a cursor survives a rewrite between pages. */
@@ -160,7 +155,6 @@ export async function gatherApprovableInstructions(input: {
   readonly agentsMd?: AgentsMdSources;
   readonly skillsVfs: SkillsVfs;
   readonly admissionTokens: number;
-  readonly skillsDir?: string;
 }): Promise<InstructionSourceMeta[]> {
   const sources: InstructionSourceMeta[] = (input.agentsMd?.admitted ?? []).map((file) => ({
     path: file.path, kind: 'agents_md' as const, bytes: file.content.length,
@@ -178,10 +172,7 @@ export async function gatherApprovableInstructions(input: {
     sources.push({ path: entry.path, kind: 'agents_md', bytes: 0, reason: entry.reason });
   }
 
-  const opts: DiscoverOpts = { admissionTokens: input.admissionTokens };
-
-  if (input.skillsDir !== undefined) opts.skillsDir = input.skillsDir;
-  const discovery = await discoverSkills(input.skillsVfs, opts);
+  const discovery = await discoverSkills(input.skillsVfs, { admissionTokens: input.admissionTokens });
   const skills = discovery.skills.filter((skill) => skill.bodyRef.kind === 'file');
 
   const sizes = await Promise.all(skills.map(async (skill) => {

@@ -7,9 +7,9 @@ import {
   type JsonValue,
 } from '@kinu.run/core';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
-import { bootstrappedProfile, unreachableNamespace, userAccount, workerContext } from './helpers/bindings';
+import { unreachableNamespace, userAccount, workerContext } from './helpers/bindings';
+import { WORKSPACE, deviceHarness } from './helpers/device-harness';
 import type { AuthIdentity } from '../src/auth/session';
-import type { DeviceTier, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 
 describe('device consent prompt data', () => {
@@ -55,6 +55,7 @@ describe('device consent prompt data', () => {
 });
 
 // PUT /api/user/devices/:id/sandbox: the owner-set tier is the only tier; there is no per-workspace tier.
+// Driven over a real UserDO, so what a route did is what Settings -> Devices reads back.
 
 const IDENTITY: AuthIdentity = {
   userId: '0123456789abcdef0123456789abcdef',
@@ -64,24 +65,19 @@ const IDENTITY: AuthIdentity = {
   authTime: Date.now(),
 };
 
-function deviceRoutesSetup() {
-  // Mirrors the UserDO contract so the flip is observable through the browser's routes.
-  const tiers = new Map<string, string>();
-  const calls: Array<{ deviceId: string; tier: string }> = [];
+const DeviceRowsSchema = v.array(v.looseObject({ id: v.string(), sandbox: v.looseObject({ tier: v.string() }) }));
+
+const ConsentRowsSchema = v.array(v.looseObject({ agentName: v.string(), deviceId: v.string(), policy: v.string() }));
+
+async function deviceRoutesSetup() {
+  const harness = await deviceHarness();
+  const account = harness.userDO;
 
   const stub = userAccount({
-    async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
-    async listDeviceConsents(_caller: UserCaller) {
-      return [{ agentName: 'jarvis', deviceId: 'dev-1', policy: 'allow', lastMethod: null, lastSummary: null }];
-    },
-    async setDeviceTier(_caller: UserCaller, deviceId: string, tier: DeviceTier) {
-      calls.push({ deviceId, tier });
-
-      if (deviceId !== 'dev-1') return { ok: false as const };
-      tiers.set(deviceId, tier);
-
-      return { ok: true as const };
-    },
+    ensureProfile: account.ensureProfile.bind(account),
+    listDevices: account.listDevices.bind(account),
+    setDeviceTier: account.setDeviceTier.bind(account),
+    listDeviceConsents: account.listDeviceConsents.bind(account),
   });
 
   const env: UserRoutesEnv<string> = {
@@ -90,75 +86,90 @@ function deviceRoutesSetup() {
     OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
   };
 
-  const call = (path: string, method: string, body?: JsonValue) =>
+  const call = (path: string, method: string, body?: JsonValue): Promise<Response | null> =>
     serveFamily(userRoutes, { identity: IDENTITY, ctx: workerContext() })(new Request(`https://kinu.example.com/api/user${path}`, {
       method,
       headers: { 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
     }), env);
 
-  return { call, calls, tiers };
+  /** The device's Sandbox switch, as the Devices page reads it. */
+  const tier = async (): Promise<string | undefined> => {
+    const rows = v.parse(DeviceRowsSchema, await requiredResponse(await call('/devices', 'GET')).json());
+
+    return rows.find((row) => row.id === harness.deviceId)?.sandbox.tier;
+  };
+
+  const consents = async () => v.parse(ConsentRowsSchema, await requiredResponse(await call('/devices/consents', 'GET')).json());
+
+  return { harness, call, tier, consents };
 }
 
-function requiredResponse(response: Response | null | undefined): Response {
+function requiredResponse(response: Response | null): Response {
   if (!response) throw new Error('expected user route to return a response');
 
   return response;
 }
 
 describe('the device Sandbox route', () => {
-  test('PUT turns the sandbox off and the tier reaches the UserDO', async () => {
-    const { call, calls, tiers } = deviceRoutesSetup();
+  test('PUT turns the sandbox off and on, and the Devices page reads it back', async () => {
+    const { harness, call, tier } = await deviceRoutesSetup();
 
-    const off = await call('/devices/dev-1/sandbox', 'PUT', { tier: 'raw' });
+    const off = await call(`/devices/${harness.deviceId}/sandbox`, 'PUT', { tier: 'raw' });
     expect(requiredResponse(off).status).toBe(200);
-    expect(calls).toEqual([{ deviceId: 'dev-1', tier: 'raw' }]);
-    expect(tiers.get('dev-1')).toBe('raw');
+    expect(await tier()).toBe('raw');
 
-    const on = await call('/devices/dev-1/sandbox', 'PUT', { tier: 'sandboxed' });
+    const on = await call(`/devices/${harness.deviceId}/sandbox`, 'PUT', { tier: 'sandboxed' });
     expect(requiredResponse(on).status).toBe(200);
-    expect(tiers.get('dev-1')).toBe('sandboxed');
+    expect(await tier()).toBe('sandboxed');
+    await harness.closeDeviceHarness();
   });
 
-  test('a tier outside the vocabulary is refused before the DO call', async () => {
-    const { call, calls } = deviceRoutesSetup();
+  test('a tier outside the vocabulary is refused and the device keeps its switch', async () => {
+    const { harness, call, tier } = await deviceRoutesSetup();
+    const before = await tier();
 
     // `files_only` is what a machine reports, never what an owner selects.
-    for (const tier of ['files_only', 'root_of_everything', '']) {
-      const bad = await call('/devices/dev-1/sandbox', 'PUT', { tier });
-      expect(requiredResponse(bad).status).toBe(400);
+    for (const bad of ['files_only', 'root_of_everything', '']) {
+      const refused = await call(`/devices/${harness.deviceId}/sandbox`, 'PUT', { tier: bad });
+      expect(requiredResponse(refused).status).toBe(400);
     }
 
-    const missing = await call('/devices/dev-1/sandbox', 'PUT', {});
+    const missing = await call(`/devices/${harness.deviceId}/sandbox`, 'PUT', {});
     expect(requiredResponse(missing).status).toBe(400);
-    expect(calls).toEqual([]);
+    expect(await tier()).toBe(before);
+    await harness.closeDeviceHarness();
   });
 
   test('an unknown device answers 404 rather than reporting success', async () => {
-    const { call } = deviceRoutesSetup();
+    const { harness, call, tier } = await deviceRoutesSetup();
+    const before = await tier();
+
     const gone = await call('/devices/dev-nope/sandbox', 'PUT', { tier: 'raw' });
     expect(requiredResponse(gone).status).toBe(404);
+    expect(await tier()).toBe(before);
+    await harness.closeDeviceHarness();
   });
 
   test('a binding listing carries no tier of its own', async () => {
-    const { call } = deviceRoutesSetup();
-    const list = await call('/devices/consents', 'GET');
-    expect(requiredResponse(list).status).toBe(200);
+    const { harness, consents } = await deviceRoutesSetup();
+    harness.consentDecision = 'always';
+    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/home/me/a.md'], { agentName: WORKSPACE });
 
-    const rows = v.parse(
-      v.array(v.looseObject({ agentName: v.string(), deviceId: v.string() })),
-      await requiredResponse(list).json(),
-    );
+    const rows = await consents();
 
-    expect(rows).toHaveLength(1);
+    expect(rows).toEqual([expect.objectContaining({ agentName: WORKSPACE, deviceId: harness.deviceId, policy: 'allow' })]);
     expect(Object.keys(rows[0] ?? {})).not.toContain('scope');
+    await harness.closeDeviceHarness();
   });
 
   test('the consent-tier PUT is gone, not merely unused', async () => {
-    const { call, calls } = deviceRoutesSetup();
-    const answer = await call('/devices/dev-1/consent', 'PUT', { agentName: 'jarvis', scope: 'full_filesystem' });
-    // Either way, nothing reached the UserDO.
-    expect(answer === null || answer === undefined || answer.status === 404).toBe(true);
-    expect(calls).toEqual([]);
+    const { harness, call, consents } = await deviceRoutesSetup();
+
+    const answer = await call(`/devices/${harness.deviceId}/consent`, 'PUT', { agentName: WORKSPACE, scope: 'full_filesystem' });
+
+    expect(answer === null || answer.status === 404).toBe(true);
+    expect(await consents()).toEqual([]);
+    await harness.closeDeviceHarness();
   });
 });

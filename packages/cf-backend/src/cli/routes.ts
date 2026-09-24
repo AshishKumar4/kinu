@@ -22,14 +22,14 @@ import {
   inspectCliAuth, pollCliAuth, startCliAuth, tokenAllows,
   type CliAuthAuthority, type CliTokenIdentity,
 } from './auth-store';
-import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from '@kinu.run/core';
 import {
-  isAgentRpcMethod, requiredRpcAccess, rpcAccessScope, type AgentRpcDispatch,
-} from './rpc-gate';
+  ACCESS_TOKEN_SCOPES, isAgentRpcMethod, requiredRpcAccess, rpcAccessScope, type AccessTokenScope,
+} from '@kinu.run/core';
+import type { AgentRpcDispatch } from './rpc-gate';
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell, cliPlatformShell } from '@kinu.run/core';
 import { listAvailableModels } from '../user/available-models';
-import { answerCatalogPut, OptionalLabelSchema } from '../user/routes';
+import { answerCatalogPut } from '../user/routes';
 import { WebhookRequestSchema } from '../events/routes';
 import type { CloudWorkspaceBirth, CloudWorkspaceRegistry } from '../user/workspace-create';
 import type { CreateWorkspaceEnv, CredentialFanoutTarget } from '../user/workspace-access';
@@ -44,6 +44,8 @@ import { OwnerCapabilityUnavailableError, ownerCaller } from '@kinu.run/core';
 import { rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 import * as v from 'valibot';
 import { classify, renderThrownChain } from '@kinu.run/core/obs';
+
+const DeviceRegistrationRequestSchema = v.object({ label: v.optional(v.string()), replaces: v.optional(v.string()) });
 
 /** Content-type for a published download path, or null. Public: a fresh install and a
  *  self-updating deployment have no session here. */
@@ -381,8 +383,8 @@ cliRoutes.get('/api/cli/devices', async (c) => json({ body: await c.get('cli').u
 
 cliRoutes.post('/api/cli/devices', async (c) => {
   const cli = c.get('cli');
-  const body = await safeJson(c.req.raw, OptionalLabelSchema);
-  const { deviceId, token } = await cli.userDO.registerDevice(await ownerCaller(c.env), body?.label);
+  const registration = await safeJson(c.req.raw, DeviceRegistrationRequestSchema) ?? {};
+  const { deviceId, token } = await cli.userDO.registerDevice(await ownerCaller(c.env), registration.label, registration.replaces);
 
   return json({ body: { deviceId, token, userId: cli.userId, origin: new URL(c.req.url).origin } }, { status: 201 });
 });
@@ -640,7 +642,8 @@ KINU_ORIGIN="\${KINU_ORIGIN:-${origin}}"
 KINU_HOME="\${KINU_HOME:-$HOME/.kinu}"
 BIN_DIR="$KINU_HOME/bin"
 BIN_PATH="$BIN_DIR/kinu"
-NEEDS_PARENT_ACTIVATION=0
+# The calling shell's PATH. This script is that shell's child, so it can change only its own copy.
+CALLER_PATH="$PATH"
 YES=0
 NO_SETUP=0
 CONNECT=0
@@ -683,9 +686,11 @@ case "$(uname -s)" in
 esac
 
 if [ "$UNINSTALL" = "1" ]; then
-  if [ -L /usr/local/bin/kinu ] && [ "$(readlink /usr/local/bin/kinu)" = "$BIN_PATH" ]; then
-    rm -f /usr/local/bin/kinu 2>/dev/null || true
-  fi
+  for link_dir in "$HOME/.local/bin" "$HOME/bin" /usr/local/bin; do
+    if [ -L "$link_dir/kinu" ] && [ "$(readlink "$link_dir/kinu")" = "$BIN_PATH" ]; then
+      rm -f "$link_dir/kinu" 2>/dev/null || true
+    fi
+  done
   rm -f "$BIN_PATH"
   if [ "$PURGE" = "1" ]; then rm -rf "$KINU_HOME"; fi
   say "Kinu CLI removed."
@@ -699,23 +704,6 @@ need() {
 need curl
 need tar
 need mktemp
-
-${bunResolutionShell()}
-# The one runtime this CLI has. An existing compatible Bun is used as it is;
-# otherwise the approved Bun is installed once, under $KINU_HOME, where the
-# launcher's own resolution reaches it without depending on any shell profile.
-provide_bun() {
-  if ! kinu_resolve_bun; then
-    if [ "\${KINU_INSTALL_BUN:-1}" = "0" ]; then
-      die "Bun $KINU_BUN_VERSION or newer is required. Install Bun, or rerun without KINU_INSTALL_BUN=0."
-    fi
-    say "Installing Bun $KINU_BUN_VERSION..."
-    mkdir -p "$KINU_HOME/runtime"
-    curl -fsSL https://bun.sh/install | BUN_INSTALL="$KINU_HOME/runtime" bash -s "bun-v$KINU_BUN_VERSION"
-    kinu_resolve_bun || die "Bun $KINU_BUN_VERSION was installed to $KINU_MANAGED_BUN but did not run."
-  fi
-  say "Using Bun $("$KINU_BUN" --version) at $KINU_BUN."
-}
 
 # Permission probes (test -r/-w) pass even without a controlling terminal,
 # so actually open /dev/tty — the redirect itself must work or the
@@ -768,20 +756,42 @@ run_connect_if_requested() {
 }
 
 # The launcher is on disk by now. Running it once with the refresh set is what
-# fetches the build, so the download has exactly one implementation and
-# "kinu update" takes the same one.
+# fetches the build, and installs Bun when this machine has none it can use, so
+# the download has exactly one implementation. REFRESH_ONLY stops it after the
+# swap: the staged build already answered --version there.
 download_cli() {
   # </dev/null: under curl|bash our stdin is the unread remainder of this
   # script — a child that reads stdin would consume it mid-execution.
-  help="$(KINU_HOME="$KINU_HOME" KINU_ORIGIN="$KINU_ORIGIN" KINU_REFRESH_CLI=1 "$BIN_PATH" --help </dev/null)" \\
+  KINU_HOME="$KINU_HOME" KINU_ORIGIN="$KINU_ORIGIN" KINU_REFRESH_CLI=1 KINU_REFRESH_ONLY=1 "$BIN_PATH" </dev/null \\
     || die "Kinu CLI download failed."
-  printf '%s\\n' "$help" | grep -Eq '^[[:space:]]+setup[[:space:]]' \\
-    || die "Downloaded Kinu CLI is missing setup. Retry after the deployment has finished."
+}
+
+# The only way the calling shell can run kinu at once: a directory its PATH
+# already lists. Only the usual user and local bin directories qualify, in the
+# caller's PATH order; another tool's bin directory is not ours to write into.
+link_into_caller_path() {
+  link_ifs="$IFS"
+  IFS=:
+  set -f
+  for link_dir in $CALLER_PATH; do
+    case "$link_dir" in "$HOME/.local/bin"|"$HOME/bin"|/usr/local/bin) ;; *) continue ;; esac
+    case "$link_dir" in "$HOME"/*) mkdir -p "$link_dir" 2>/dev/null || true ;; esac
+    if [ ! -d "$link_dir" ] || [ ! -w "$link_dir" ]; then continue; fi
+    # A kinu there that is not a link is not this installer's to replace.
+    if [ -e "$link_dir/kinu" ] && [ ! -L "$link_dir/kinu" ]; then continue; fi
+    if ln -sfn "$BIN_PATH" "$link_dir/kinu"; then break; fi
+  done
+  set +f
+  IFS="$link_ifs"
+}
+
+# What \`kinu\` runs in the calling shell now, or nothing.
+caller_kinu() {
+  (PATH="$CALLER_PATH"; command -v kinu 2>/dev/null) || true
 }
 
 mkdir -p "$BIN_DIR"
 chmod 700 "$KINU_HOME"
-provide_bun
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -791,15 +801,11 @@ curl -fsSL "$KINU_ORIGIN/downloads/kinu" -o "$tmp/kinu"
 chmod 755 "$tmp/kinu"
 mv "$tmp/kinu" "$BIN_PATH"
 download_cli
-
-if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
-  ln -sfn "$BIN_PATH" /usr/local/bin/kinu
-fi
+link_into_caller_path
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *)
-    NEEDS_PARENT_ACTIVATION=1
     profile=""
     shell_name="$(basename "\${SHELL:-}")"
     if [ "$shell_name" = "zsh" ]; then profile="$HOME/.zshrc";
@@ -839,12 +845,17 @@ else
   say "Kinu CLI is ready."
 fi
 
-# The profile line above serves every LATER shell. This one shell already read
-# its profile, so it needs the export said out loud — last, where the user is
-# still looking. The installer runs in its own process and cannot do it for them.
-if [ "$NEEDS_PARENT_ACTIVATION" = "1" ]; then
+# The profile line above serves every LATER shell. When no directory on the
+# calling shell's PATH could take the link, that shell still needs the export,
+# said last, where the user is still looking.
+found="$(caller_kinu)"
+if [ -z "$found" ]; then
   say ""
   say "To use kinu in this shell now, run:"
+  say "  export PATH=\\"$BIN_DIR:\\$PATH\\""
+elif [ "$found" != "$BIN_PATH" ] && [ "$(readlink "$found" 2>/dev/null || true)" != "$BIN_PATH" ]; then
+  say ""
+  say "This shell finds another kinu first, at $found. To use this one, run:"
   say "  export PATH=\\"$BIN_DIR:\\$PATH\\""
 fi
 `;
@@ -913,6 +924,20 @@ die() {
   exit 1
 }
 
+# The one runtime this CLI has. An existing compatible Bun is used as it is;
+# otherwise the approved Bun is installed once, under $KINU_HOME, where
+# kinu_resolve_bun finds it whatever PATH a later shell has.
+provide_bun() {
+  if kinu_resolve_bun; then return 0; fi
+  if [ "\${KINU_INSTALL_BUN:-1}" = "0" ]; then
+    die "Bun $KINU_BUN_VERSION or newer is required. Install Bun, or rerun without KINU_INSTALL_BUN=0."
+  fi
+  echo "Installing Bun $KINU_BUN_VERSION..." >&2
+  mkdir -p "$KINU_HOME/runtime"
+  curl -fsSL https://bun.sh/install | BUN_INSTALL="$KINU_HOME/runtime" bash -s "bun-v$KINU_BUN_VERSION" >&2
+  kinu_resolve_bun || die "Bun $KINU_BUN_VERSION was installed to $KINU_MANAGED_BUN but did not run."
+}
+
 # The one lock every writer of the CLI tree takes — this launcher, 'kinu
 # update' and its detached child — as a directory: mkdir creates it atomically
 # or refuses. The holder's pid is inside, so a lock a dead process left is
@@ -940,27 +965,30 @@ take_cli_lock() {
 # verified against the checksum the signature covers, never against a
 # checksum the origin chooses for itself (a hostile or compromised deploy
 # could otherwise hand every machine bytes to run — SECURITY-devices C1).
-# The manifest is fetched and verified ONCE, before any artifact, and the
-# signed checksums are read from it per artifact. The verification runs on
-# the Bun this launcher already resolved: Ed25519 over WebCrypto.
+# The downloads start together and need no Bun; nothing downloaded is unpacked
+# or run until the signature and the signed checksum for it verify, so a
+# release the pinned key did not sign still lands nothing. The signed checksums
+# are read from the manifest per artifact. The verification runs on the Bun
+# this launcher resolved: Ed25519 over WebCrypto.
 RELEASE_SIGNING_PUBLIC_KEY="\${KINU_RELEASE_SIGNING_PUBLIC_KEY:-${RELEASE_SIGNING_PUBLIC_KEY}}"
 MANIFEST_URL="\${KINU_ORIGIN}${CLI_VERSION_PATH}"
+DOWNLOADS=""
 verify_release() {
   manifest="$1"
-  curl -fsSL "$MANIFEST_URL" -o "$manifest" || die "Could not download the release manifest from $MANIFEST_URL."
+  wait "$2" || die "Could not download the release manifest from $MANIFEST_URL."
   "$KINU_BUN" -e '
     const [file, publicKeyHex] = process.argv.slice(1);
     const manifest = JSON.parse(require("fs").readFileSync(file, "utf8"));
     const checksums = manifest.checksums, signature = manifest.signature, version = manifest.version;
     const fail = (why) => { console.error(why); process.exit(1); };
-    if (typeof version !== "string" || typeof signature !== "string" || Object(checksums) !== checksums) fail("the release manifest carries no signature; nothing is downloaded");
+    if (typeof version !== "string" || typeof signature !== "string" || Object(checksums) !== checksums) fail("the release manifest carries no signature; nothing is installed");
     const lines = Object.entries(checksums).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([p, d]) => p + " " + String(d).toLowerCase());
     const message = new TextEncoder().encode(["kinu-release-v1", version, ...lines, ""].join("\\n"));
     const key = Uint8Array.from(publicKeyHex.match(/../g), (pair) => parseInt(pair, 16));
     const sig = Uint8Array.from(Buffer.from(signature, "base64"));
     crypto.subtle.importKey("raw", key, { name: "Ed25519" }, false, ["verify"])
       .then((k) => crypto.subtle.verify("Ed25519", k, sig, message))
-      .then((ok) => { if (!ok) fail("the release signature does not verify against the pinned key; nothing is downloaded"); });
+      .then((ok) => { if (!ok) fail("the release signature does not verify against the pinned key; nothing is installed"); });
   ' "$manifest" "$RELEASE_SIGNING_PUBLIC_KEY" || die "The release is not one this launcher trusts."
 }
 signed_checksum() {
@@ -982,7 +1010,7 @@ fetch_verified() {
   artifact="/downloads/\${url##*/downloads/}"
   expected="$(signed_checksum "$manifest" "$artifact")" || die "The signed release names no $artifact."
   [ -n "$expected" ] || die "The signed checksum for $url is empty."
-  curl -fsSL "$url" -o "$into" || die "Could not download $url."
+  wait "$4" || die "Could not download $url."
   if command -v sha256sum >/dev/null 2>&1; then
     actual="$(sha256sum "$into" | awk '{print $1}')"
   elif command -v shasum >/dev/null 2>&1; then
@@ -1007,10 +1035,17 @@ refresh_cli() {
   mkdir -p "$CLI_ROOT"
   tmp="$(mktemp -d)"
   next="$CLI_ROOT/next-$$"
-  trap 'rm -rf "$tmp" "$next" "$CLI_LOCK"' EXIT
-  verify_release "$tmp/kinu-version.json"
-  fetch_verified "$TARBALL_URL" "$tmp/cli.tar.gz" "$tmp/kinu-version.json"
-  fetch_verified "$RUNTIME_URL" "$tmp/runtime.tar.gz" "$tmp/kinu-version.json"
+  trap 'kill $DOWNLOADS 2>/dev/null || true; rm -rf "$tmp" "$next" "$CLI_LOCK"' EXIT
+  curl -fsSL "$MANIFEST_URL" -o "$tmp/kinu-version.json" & manifest_pid=$!
+  curl -fsSL "$TARBALL_URL" -o "$tmp/cli.tar.gz" & tarball_pid=$!
+  curl -fsSL "$RUNTIME_URL" -o "$tmp/runtime.tar.gz" & runtime_pid=$!
+  DOWNLOADS="$manifest_pid $tarball_pid $runtime_pid"
+  provide_bun
+  echo "Using Bun $("$KINU_BUN" --version) at $KINU_BUN." >&2
+  verify_release "$tmp/kinu-version.json" "$manifest_pid"
+  fetch_verified "$TARBALL_URL" "$tmp/cli.tar.gz" "$tmp/kinu-version.json" "$tarball_pid"
+  fetch_verified "$RUNTIME_URL" "$tmp/runtime.tar.gz" "$tmp/kinu-version.json" "$runtime_pid"
+  DOWNLOADS=""
   mkdir -p "$tmp/extract"
   tar -xzf "$tmp/cli.tar.gz" -C "$tmp/extract"
   tar -xzf "$tmp/runtime.tar.gz" -C "$tmp/extract"
@@ -1077,15 +1112,9 @@ check_launch() {
   fi
 }
 
-kinu_resolve_bun || {
-  echo "Bun $KINU_BUN_VERSION or newer is required for this Kinu CLI build." >&2
-  echo "Reinstall Kinu so it can provide one:" >&2
-  echo "  curl -fsSL ${origin}/install.sh | bash" >&2
-  exit 1
-}
-# Whatever the CLI shells out to gets the same Bun this launcher verified.
-PATH="\${KINU_BUN%/*}:$PATH"
-export PATH
+# A refresh starts its downloads before it provides Bun, so the two overlap;
+# every other launch needs Bun now to check what is installed.
+if [ "\${KINU_REFRESH_CLI:-0}" != "1" ]; then provide_bun; fi
 
 # 'kinu update' is the CLI's own command: it stages, verifies and swaps its
 # tree the same way, then rewrites this script. The launcher downloads only
@@ -1102,6 +1131,16 @@ if take_cli_lock; then
   fi
   rm -rf "$CLI_LOCK"
   trap - EXIT
+fi
+[ -n "$KINU_BUN" ] || provide_bun
+# Whatever the CLI shells out to gets the same Bun this launcher verified.
+PATH="\${KINU_BUN%/*}:$PATH"
+export PATH
+
+# The installer's refresh ends here: the staged build already answered --version.
+if [ "\${KINU_REFRESH_ONLY:-0}" = "1" ]; then
+  [ -f "$CLI_DIR/cli.js" ] || die "No Kinu build is installed."
+  exit 0
 fi
 
 cd "$CLI_DIR"

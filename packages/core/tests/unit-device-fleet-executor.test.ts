@@ -143,7 +143,7 @@ describe('the device fleet at the executor surface', () => {
     expect(await provider.tools.writeFile.execute('/tmp/x', 'y', { device: 'ashish@studio' })).toBe('Written 1 bytes to /tmp/x');
 
     expect(t.sent.map((frame) => [frame.method, frame.deviceId])).toEqual([
-      ['readFile', 'dev-rig'], ['listFiles', 'dev-rig'], ['exists', 'dev-studio'], ['writeFile', 'dev-studio'],
+      ['readRange', 'dev-rig'], ['listFiles', 'dev-rig'], ['exists', 'dev-studio'], ['writeFile', 'dev-studio'],
     ]);
   });
 
@@ -176,7 +176,7 @@ describe('the composite file plane', () => {
     const t = fleetTransport([STUDIO, SPARE]);
 
     const provider = createDeviceTunnelExecutor(t, {
-      consentedRoot: async () => '/home/dev', deviceHome: async () => '/home/dev', unconfined: async () => true,
+      consentedRoot: async () => '/home/dev', deviceHome: async () => '/home/dev', scope: async () => 'unconfined',
     });
 
     const plane = provider.files;
@@ -198,7 +198,7 @@ describe('the composite file plane', () => {
     const t = fleetTransport([STUDIO, RIG, SPARE]);
 
     const provider = createDeviceTunnelExecutor(t, {
-      consentedRoot: async () => '/', deviceHome: async () => '/', unconfined: async () => true,
+      consentedRoot: async () => '/', deviceHome: async () => '/', scope: async () => 'unconfined',
     });
 
     const plane = provider.files;
@@ -219,7 +219,7 @@ describe('the composite file plane', () => {
     const t = fleetTransport([STUDIO, RIG]);
 
     const provider = createDeviceTunnelExecutor(t, {
-      consentedRoot: async () => '/', deviceHome: async () => '/', unconfined: async () => true,
+      consentedRoot: async () => '/', deviceHome: async () => '/', scope: async () => 'unconfined',
     });
 
     const plane = provider.files;
@@ -255,7 +255,7 @@ describe('where the file browser lands on a mount', () => {
     const provider = createDeviceTunnelExecutor(t, {
       consentedRoot: async (id) => consented[id ?? ''] ?? null,
       deviceHome: async (id) => consented[id ?? ''] ?? null,
-      unconfined: async () => opts.unconfined ?? false,
+      scope: async () => (opts.unconfined === true ? 'unconfined' : 'root'),
     });
 
     const router = new DefaultExecutionRouter();
@@ -264,7 +264,7 @@ describe('where the file browser lands on a mount', () => {
 
     const lookup = {
       getProvider: (name: string) => name === 'workspace'
-        ? { files: workspace, homeDir: async () => '/home/user' }
+        ? { files: workspace, homeDir: async () => '/home/main' }
         : router.getProvider(name),
     };
 

@@ -1,8 +1,8 @@
 /**
- * THE KINU TASK FAMILY: four multi-turn episodes over the product's own
+ * THE KINU TASK FAMILY: five multi-turn episodes over the product's own
  * machinery, measured through the PUBLIC API on the deployed product.
  *
- * WHY THESE FOUR. The cfos PR 525 tasks work because every turn is verified
+ * WHY THESE FIVE. The cfos PR 525 tasks work because every turn is verified
  * through the artifact's own surface against references the verifier owns,
  * state must survive turn boundaries and a fresh connection, and the agent's
  * REPLY is checked against the data. Their reviewers' findings are the bar
@@ -11,11 +11,12 @@
  * asked; every verifier is run against a minimal correct fixture and a broken
  * one before it ships.
  *
- * Kinu's four exercise the product's own machinery — slates with a contract,
+ * Kinu's five exercise the product's own machinery — slates with a contract,
  * hires running concurrently with a plan, workspace-versus-sandbox routing,
- * memory and tasks across an eviction — so each is both a capability grade and
- * a regression net for the defects fixed this week (B1, B3, B10, the pane
- * room, the wake chains, the task reminder).
+ * memory and tasks across an eviction, an app asked for with no format named —
+ * so each is both a capability grade and a regression net for the defects
+ * fixed this week (B1, B3, B10, the pane room, the wake chains, the task
+ * reminder, the 2048 game built as a standalone server).
  *
  * SHAPE. `KinuTaskCase` is `TrajectoryCase`'s shape with one difference the
  * cfos bar forces: the turns are DATA, and the verifier is opened PER EPISODE
@@ -129,7 +130,7 @@ import * as v from 'valibot';
 
 import {
   type EvalBudget, type JsonValue, type LLMProviderConfig, parseJsonValue, type PlanReview,
-  REAL_CLOCK, type RunEvent,
+  REAL_CLOCK, type RunEvent, WORKSPACE_ROOT,
 } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
 import {
@@ -152,6 +153,7 @@ import {
   scorePublicLedger,
   type KinuPublicSession,
   type PublicMessage,
+  type PublicSlatePreview,
   type PublicSendResult,
   type PublicSessionPlan,
   previewTarget,
@@ -262,7 +264,7 @@ function mintNonce(): string {
  *  that has not grown it. */
 export type KinuTaskSession = Pick<KinuPublicSession,
   | 'readFile' | 'writeFile' | 'execute' | 'backgroundJobs'
-  | 'listSlates' | 'exposedPorts' | 'fetchPreview'
+  | 'listSlates' | 'previewSlate' | 'exposedPorts' | 'fetchPreview'
   | 'subordinates' | 'tasks' | 'plans' | 'decidePlan'
   | 'connect' | 'disconnect' | 'runEvents' | 'history'
   | 'abortActivation'
@@ -457,7 +459,7 @@ const DOC_BULLET = /^- (q-\S+) · (.+) · (\w+)$/u;
  *  reference is the TICKET IDS the verifier POSTs, so the nonce reaches the
  *  episode through {@link queueSeed} rather than through the ask. */
 const CASE_SLATE_TURNS = (): readonly string[] => [
-  'Build a slate at /home/user/slates/queue/ (package.json main "server.ts", slate '
+  'Build a slate at /home/main/slates/queue/ (package.json main "server.ts", slate '
   + '{"title":"Queue","port":8790,"bindings":{}}) that keeps a support-ticket queue in memory '
   + 'with this exact JSON HTTP contract, then start its preview and reply with only the preview URL.\n'
   + '- POST /tickets {id, title, priority, agent} → 201 {ticket}; 409 {"error":"DUPLICATE_ID"} if '
@@ -1597,8 +1599,96 @@ const DURABLE_CONTINUITY: KinuTaskCase = {
   },
 };
 
+// ── game-as-slate ───────────────────────────────────────────────────
+
+/** Turn one is the owner's own ask from the 2048 transcript: an app, no format named. */
+const CASE_GAME_TURNS = (nonce: string): readonly string[] => [
+  'build a 2048 game',
+  `Put ${nonce} in the game's title.`,
+  'Reply with only the link where I can play it.',
+];
+
+/** A settled read of the slates skill, by the native file tool or inside a program. */
+function readsSlatesSkill(call: ToolCallEnd): boolean {
+  return ok(call) && textOf(call.args).includes('skills/slates/');
+}
+
+const GAME_AS_SLATE: KinuTaskCase = {
+  id: 'game-as-slate',
+  purpose: 'A builder who makes small apps and games people can use straight away.',
+  seed: () => [],
+  turns: CASE_GAME_TURNS,
+  budget: { ...TASK_BUDGET },
+  open(nonce) {
+    const turns = CASE_GAME_TURNS(nonce);
+    let slateId = '';
+    let url = '';
+
+    /** Turn 1: built as a slate that previews, with no server of its own. */
+    async function afterTurnOne(io: KinuTaskIo): Promise<readonly EvalSubgoal[]> {
+      const ledger = promptToolCalls(io.events, turns[0], io.absorbedBy);
+      requireMeasuredToolOutcomes(ledger);
+      const listing = await io.session.listSlates();
+      const slate = listing.slates[0];
+      slateId = slate?.id ?? '';
+      const preview = slate === undefined ? null : await io.session.previewSlate(slate.id);
+      url = preview?.ok === true ? preview.value.url : '';
+      const page = url === '' ? { status: 0, text: '' } : await io.session.fetchPreview(url, '/');
+      const slatePorts = new Set(listing.slates.flatMap((row) => row.port === undefined ? [] : [row.port]));
+
+      const standalone = [...await io.session.exposedPorts('workspace'), ...await io.session.exposedPorts('sandbox')]
+        .filter((port) => !slatePorts.has(port.port));
+
+      const skillReads = ledger.filter(readsSlatesSkill);
+
+      return [
+        {
+          what: 'slate', reached: slate !== undefined,
+          detail: `slates ${JSON.stringify(listing.slates)}; problems ${JSON.stringify(listing.problems)}`,
+        },
+        {
+          what: 'playable', reached: page.status === 200,
+          detail: preview === null ? 'no slate to preview' : `preview ${JSON.stringify(preview)}; GET / HTTP ${String(page.status)} ${excerpt(page.text, 120)}`,
+        },
+        {
+          what: 'no-standalone-server', reached: standalone.length === 0,
+          detail: standalone.length === 0 ? 'no port exposed outside a slate' : `exposed ${JSON.stringify(standalone)}`,
+        },
+        {
+          what: 'read-slates-skill', reached: skillReads.length > 0,
+          detail: `${String(skillReads.length)} settled read(s) of the slates skill among ${String(ledger.length)} call(s)`,
+        },
+      ];
+    }
+
+    return {
+      async after(turn, io) {
+        if (turn === 0) return afterTurnOne(io);
+
+        if (turn === 1) {
+          const dir = `${WORKSPACE_ROOT}/slates/${slateId}`;
+          const found = slateId === '' ? null : await io.session.execute('workspace', `grep -rl -- '${nonce}' '${dir}'`);
+
+          return [{
+            what: 'retitled', reached: (found?.stdout ?? '').trim() !== '',
+            detail: found === null ? 'no slate to retitle' : `grep in ${dir}: ${excerpt(found.stdout ?? found.error ?? '', 160)}`,
+          }];
+        }
+
+        const answer = reply(io.history);
+        const bare = (link: string): string => link.trim().replace(/\/+$/u, '');
+
+        return [{
+          what: 'link', reached: url !== '' && bare(answer) === bare(url),
+          detail: `preview ${url === '' ? 'never started' : url}; reply ${excerpt(answer)}`,
+        }];
+      },
+    };
+  },
+};
+
 export const KINU_TASK_CASES: readonly KinuTaskCase[] = [
-  SLATE_LEDGER, DELEGATE_AND_BUILD, CLONE_AND_SERVE, DURABLE_CONTINUITY,
+  SLATE_LEDGER, DELEGATE_AND_BUILD, CLONE_AND_SERVE, DURABLE_CONTINUITY, GAME_AS_SLATE,
 ];
 
 const DECLARED = KINU_TASK_CASES.map((entry) => entry.id);
@@ -1625,9 +1715,9 @@ afterAll(() => {
   });
 });
 
-describe('Kinu task evals — the product\'s own machinery over four episodes', () => {
+describe('Kinu task evals — the product\'s own machinery over five episodes', () => {
   test('every case is multi-turn, uniquely named, nonce-bearing and machine-checkable', () => {
-    expect(KINU_TASK_CASES).toHaveLength(4);
+    expect(KINU_TASK_CASES).toHaveLength(5);
     expect(new Set(DECLARED).size).toBe(DECLARED.length);
     expect(KINU_TASK_TRIALS).toBe(3);
 
@@ -1646,12 +1736,13 @@ describe('Kinu task evals — the product\'s own machinery over four episodes', 
     // a nonce is only worth having if the thing a copied answer would have to
     // match carries it. `delegate-and-build` puts it in the ask (the two files'
     // bytes), `slate-ledger` in the ticket ids the verifier POSTs, and
-    // `clone-and-serve` in the seed the agent clones and serves.
+    // `clone-and-serve` in the seed the agent clones and serves, and
+    // `game-as-slate` in the title turn two asks for, found in the slate's source.
     // `durable-continuity` carries none, and that is the honest reading: its
     // three facts are the spec's own literals, and its subject is an eviction
     // rather than an unguessable reference.
     expect(KINU_TASK_CASES.filter((entry) => entry.turns('ZZZZZZ').join('\n').includes('ZZZZZZ'))
-      .map((entry) => entry.id)).toEqual(['delegate-and-build']);
+      .map((entry) => entry.id)).toEqual(['delegate-and-build', 'game-as-slate']);
 
     expect(KINU_TASK_CASES.filter((entry) => entry.seed('ZZZZZZ')
       .some((file) => file.content.includes('ZZZZZZ'))).map((entry) => entry.id))
@@ -1693,7 +1784,7 @@ describe('Kinu task evals — the product\'s own machinery over four episodes', 
 });
 
 /**
- * LIVE: the four cases run concurrently, each on its own workspace, each
+ * LIVE: the five cases run concurrently, each on its own workspace, each
  * verified AFTER EVERY TURN. `genesis: false` so the workspace's own
  * unrequested first turn never runs.
  */
@@ -1899,6 +1990,8 @@ interface FixtureState {
   subordinates: PublicSubordinate[];
   plans: PlanReview[];
   preview(url: string, path: string, body?: { method: string; json?: unknown }): { status: number; text: string };
+  /** A slate's preview start; absent means no slate in this world can start. */
+  slatePreview?(id: string): PublicSlatePreview;
   /** The ledger the session's OWN read answers, for a verifier that re-reads
    *  it after acting — the run an approval queues appears here. */
   runs?: readonly RunEvent[];
@@ -1912,6 +2005,7 @@ function fixtureSession(state: FixtureState): KinuTaskSession {
     execute: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
     backgroundJobs: async () => [],
     listSlates: async () => ({ slates: [...state.slates], problems: [] }),
+    previewSlate: async (id: string) => state.slatePreview?.(id) ?? { ok: false, reason: 'missing', error: `no slate ${id}` },
     exposedPorts: async (executor: string) => [...(state.ports[executor] ?? [])],
     fetchPreview: async (url: string, path: string, body?: { method: string; json?: unknown }) =>
       state.preview(url, path, body),
@@ -2503,8 +2597,8 @@ function cloneWorld(options: CloneFixtureOptions): FixtureWorld {
     [
       runStart('c0', turns[0] ?? '', base),
       toolRow({ runId: 'c0', index: 1, at: base + 1_000, name: 'shell', id: 'git',
-        args: { command: 'cd seed/app-a && git init && git add -A && git commit -m seed && git clone . /home/user/apps/a', runtime: 'workspace' },
-        result: 'Cloning into /home/user/apps/a' }),
+        args: { command: 'cd seed/app-a && git init && git add -A && git commit -m seed && git clone . /home/main/apps/a', runtime: 'workspace' },
+        result: 'Cloning into /home/main/apps/a' }),
       runEnd('c0', base + 2_000),
     ],
     [runStart('c1', turns[1] ?? '', base + 20_000), runEnd('c1', base + 21_000)],
@@ -2653,7 +2747,80 @@ function continuityWorld(options: ContinuityFixtureOptions): FixtureWorld {
   };
 }
 
-describe('Kinu task evals — red probes over the three canned worlds', () => {
+// ── Case 5's fixture: an app asked for with no format named ─────────
+
+interface GameFixtureOptions {
+  /** The 2048 transcript: no slate, a static page on an exposed port, the skill never found. */
+  readonly staticPage?: boolean;
+  /** A server exposed beside a correct slate. */
+  readonly serverBeside?: boolean;
+  /** The skill read at a path that does not exist. */
+  readonly skillMissed?: boolean;
+  /** The title turn changed nothing in the slate's source. */
+  readonly titleUnchanged?: boolean;
+  /** The link wrapped in a sentence. */
+  readonly proseLink?: boolean;
+}
+
+const GAME_URL = 'https://eval-game-slate-2048.kinu.run/';
+
+function gameWorld(options: GameFixtureOptions): FixtureWorld {
+  const turns = CASE_GAME_TURNS(PROBE_NONCE);
+  const base = Date.parse('2026-09-23T12:00:00Z');
+  const slate = options.staticPage !== true;
+
+  const state: FixtureState = {
+    slates: slate ? [{ id: '2048', title: '2048', bindings: [] }] : [],
+    ports: { workspace: [], sandbox: [] },
+    files: {}, tasks: [], subordinates: [], plans: [],
+    slatePreview: (id) => ({ ok: true, value: { url: GAME_URL, port: id === '2048' ? 0 : -1 } }),
+    preview: (url, path) => url === GAME_URL && path === '/'
+      ? { status: 200, text: '<!doctype html><title>2048</title>' }
+      : { status: 404, text: 'not found' },
+  };
+
+  const skillPath = options.skillMissed === true || options.staticPage === true ? '/workspace/skills/slates.md' : '/skills/slates/SKILL.md';
+
+  const ledgers: RunEvent[][] = [
+    [
+      runStart('g0', turns[0] ?? '', base),
+      toolRow({ runId: 'g0', index: 1, at: base + 1_000, name: 'file', id: 'skill',
+        args: { action: 'read', path: skillPath }, failed: skillPath !== '/skills/slates/SKILL.md' }),
+      toolRow({ runId: 'g0', index: 2, at: base + 2_000, name: 'file', id: 'write',
+        args: { action: 'write', path: slate ? 'slates/2048/server.ts' : 'game/index.html' }, result: 'ok' }),
+      runEnd('g0', base + 3_000),
+    ],
+    [runStart('g1', turns[1] ?? '', base + 20_000), runEnd('g1', base + 21_000)],
+    [runStart('g2', turns[2] ?? '', base + 40_000), runEnd('g2', base + 41_000)],
+  ];
+
+  const link = options.staticPage === true ? 'https://eval-game-8080.kinu.run/' : GAME_URL;
+
+  return {
+    session: {
+      ...fixtureSession(state),
+      execute: async (_executor: string, command: string) => ({
+        stdout: slate && options.titleUnchanged !== true && command.includes(PROBE_NONCE) ? `${WORKSPACE_ROOT}/slates/2048/client.tsx\n` : '',
+        stderr: '', exitCode: 0,
+      }),
+    },
+    events: (turn) => ledgers.slice(0, turn + 1).flat(),
+    history: (turn) => [
+      userRow(turns[0] ?? ''), assistantRow('Built it.'),
+      ...(turn >= 1 ? [userRow(turns[1] ?? ''), assistantRow('Retitled.')] : []),
+      ...(turn >= 2 ? [userRow(turns[2] ?? ''), assistantRow(options.proseLink === true ? `Play it here: ${link}` : link)] : []),
+    ],
+    advance: (turn) => {
+      if (turn !== 0) return;
+
+      if (options.staticPage === true || options.serverBeside === true) {
+        state.ports = { workspace: [{ port: 8080, url: 'https://eval-game-8080.kinu.run/' }], sandbox: [] };
+      }
+    },
+  };
+}
+
+describe('Kinu task evals — red probes over the four canned worlds', () => {
   test('delegate-and-build: a correct delegation passes, and each mutation flips its own subgoal', async () => {
     await probe(DELEGATE_AND_BUILD, 'minimal correct', delegateWorld({}), []);
     await probe(DELEGATE_AND_BUILD, 'hires split by a step boundary', delegateWorld({ sequentialHires: true }), ['parallel-delegation']);
@@ -2680,5 +2847,15 @@ describe('Kinu task evals — red probes over the three canned worlds', () => {
     await probe(DURABLE_CONTINUITY, 'on-call file paraphrased', continuityWorld({ paraphrasedFile: true }), ['files']);
     await probe(DURABLE_CONTINUITY, 'a task left open', continuityWorld({ taskLeftOpen: true }), ['tasks-done']);
     await probe(DURABLE_CONTINUITY, 'reply ends in a question', continuityWorld({ trailingQuestion: true }), ['no-question']);
+  });
+
+  test('game-as-slate: a slate passes, and each mutation flips its own subgoal', async () => {
+    await probe(GAME_AS_SLATE, 'minimal correct', gameWorld({}), []);
+    await probe(GAME_AS_SLATE, 'the 2048 transcript: a static page on an exposed port', gameWorld({ staticPage: true }),
+      ['slate', 'playable', 'no-standalone-server', 'read-slates-skill', 'retitled', 'link']);
+    await probe(GAME_AS_SLATE, 'a server beside the slate', gameWorld({ serverBeside: true }), ['no-standalone-server']);
+    await probe(GAME_AS_SLATE, 'skill read at a path that does not exist', gameWorld({ skillMissed: true }), ['read-slates-skill']);
+    await probe(GAME_AS_SLATE, 'title turn changed nothing', gameWorld({ titleUnchanged: true }), ['retitled']);
+    await probe(GAME_AS_SLATE, 'link wrapped in a sentence', gameWorld({ proseLink: true }), ['link']);
   });
 });

@@ -22,7 +22,7 @@ const {
   ExecutorFileDownload, ExecutorFileUpload, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, VfsRevisionSchema,
 } = await import("@kinu.run/core");
 
-const URL_ = "https://kinu.test/api/workspaces/ws/files?executor=workspace&path=/home/user/blob.bin";
+const URL_ = "https://kinu.test/api/workspaces/ws/files?executor=workspace&path=/home/main/blob.bin";
 
 const ErrorReplySchema = v.object({ error: v.string() });
 
@@ -95,7 +95,7 @@ function makeAgent({ supportsConditionalWrites = true }: { supportsConditionalWr
 
   const router = {
     getProvider: (id: string) =>
-      id === "workspace" ? { files: vfs, homeDir: async () => "/home/user" } : undefined,
+      id === "workspace" ? { files: vfs, homeDir: async () => "/home/main" } : undefined,
   };
 
   return {
@@ -223,14 +223,14 @@ describe("files route — PUT", () => {
     const response = await route(put(whole), harness);
     expect(response.status).toBe(200);
     expect(v.parse(OkReplySchema, await response.json())).toEqual({ ok: true });
-    expect([...present(harness.files.get("/home/user/blob.bin"), "the uploaded blob.bin")]).toEqual([...whole]);
+    expect([...present(harness.files.get("/home/main/blob.bin"), "the uploaded blob.bin")]).toEqual([...whole]);
   });
 
   test("an exact multiple of the chunk size is the boundary case and works", async () => {
     const harness = makeAgent();
     const whole = patternBytes(3 * FILE_CHUNK_BYTES);
     expect((await route(put(whole), harness)).status).toBe(200);
-    expect(present(harness.files.get("/home/user/blob.bin"), "the uploaded blob.bin").byteLength).toBe(whole.byteLength);
+    expect(present(harness.files.get("/home/main/blob.bin"), "the uploaded blob.bin").byteLength).toBe(whole.byteLength);
   });
 
   test("one byte past the total limit is a 413 that writes nothing and aborts", async () => {
@@ -241,8 +241,8 @@ describe("files route — PUT", () => {
     expect(response.status).toBe(413);
     expect(v.parse(ErrorReplySchema, await response.json()).error)
       .toBe(`file exceeds the ${Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024))} MiB transfer limit`);
-    expect(harness.files.has("/home/user/blob.bin")).toBe(false);
-    expect(harness.aborted).toEqual(["/home/user/blob.bin"]);
+    expect(harness.files.has("/home/main/blob.bin")).toBe(false);
+    expect(harness.aborted).toEqual(["/home/main/blob.bin"]);
   });
 
   test("a declared length over the limit is a 413 refused before the body is pulled", async () => {
@@ -263,7 +263,7 @@ describe("files route — PUT", () => {
     expect(v.parse(ErrorReplySchema, await response.json()).error)
       .toBe(`file exceeds the ${Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024))} MiB transfer limit`);
     expect(pulls).toBe(0);
-    expect(harness.files.has("/home/user/blob.bin")).toBe(false);
+    expect(harness.files.has("/home/main/blob.bin")).toBe(false);
   });
 
   test("an undeclared body over the limit is CANCELLED at the first byte past it, not drained", async () => {
@@ -293,15 +293,15 @@ describe("files route — PUT", () => {
     expect(cancelled).toBe("the request body is over its limit");
     // One chunk past the limit is all the count needs; the rest stays unread.
     expect(pulls).toBe(Math.floor(FILE_TRANSFER_MAX_BYTES / CHUNK) + 1);
-    expect(harness.files.has("/home/user/blob.bin")).toBe(false);
-    expect(harness.aborted).toEqual(["/home/user/blob.bin"]);
+    expect(harness.files.has("/home/main/blob.bin")).toBe(false);
+    expect(harness.aborted).toEqual(["/home/main/blob.bin"]);
   });
 
   test("a body at exactly the limit is allowed — the refusal starts one byte later", async () => {
     const harness = makeAgent();
     const whole = patternBytes(FILE_TRANSFER_MAX_BYTES);
     expect((await route(put(whole), harness)).status).toBe(200);
-    expect(present(harness.files.get("/home/user/blob.bin"), "the uploaded blob.bin").byteLength).toBe(FILE_TRANSFER_MAX_BYTES);
+    expect(present(harness.files.get("/home/main/blob.bin"), "the uploaded blob.bin").byteLength).toBe(FILE_TRANSFER_MAX_BYTES);
   });
 
   test("the whole body is never buffered at the edge: arrayBuffer would be a defect", async () => {
@@ -311,24 +311,24 @@ describe("files route — PUT", () => {
       value: () => { throw new Error("route buffered the whole body"); },
     });
     expect((await route(request, harness)).status).toBe(200);
-    expect(present(harness.files.get("/home/user/blob.bin"), "the uploaded blob.bin").byteLength).toBe(FILE_CHUNK_BYTES + 9);
+    expect(present(harness.files.get("/home/main/blob.bin"), "the uploaded blob.bin").byteLength).toBe(FILE_CHUNK_BYTES + 9);
   });
 
   test("an expected revision writes atomically when it still matches", async () => {
     const harness = makeAgent();
-    await harness.seed("/home/user/blob.bin", new TextEncoder().encode("first"));
+    await harness.seed("/home/main/blob.bin", new TextEncoder().encode("first"));
 
     const response = await route(put("current", { "If-Match": "1" }), harness);
 
     expect(response.status).toBe(200);
     expect(v.parse(ConditionalOkReplySchema, await response.json())).toEqual({ ok: true, revision: 2 });
-    expect(new TextDecoder().decode(harness.files.get("/home/user/blob.bin"))).toBe("current");
+    expect(new TextDecoder().decode(harness.files.get("/home/main/blob.bin"))).toBe("current");
   });
 
   test("a stale expected revision cannot overwrite a newer interleaved write", async () => {
     const harness = makeAgent();
-    await harness.seed("/home/user/blob.bin", new TextEncoder().encode("first"));
-    await harness.seed("/home/user/blob.bin", new TextEncoder().encode("newer"));
+    await harness.seed("/home/main/blob.bin", new TextEncoder().encode("first"));
+    await harness.seed("/home/main/blob.bin", new TextEncoder().encode("newer"));
 
     const response = await route(put("stale", { "If-Match": "1" }), harness);
 
@@ -337,23 +337,23 @@ describe("files route — PUT", () => {
       error: 'This file changed after you opened it.',
       revision: 2,
     });
-    expect(new TextDecoder().decode(harness.files.get("/home/user/blob.bin"))).toBe("newer");
+    expect(new TextDecoder().decode(harness.files.get("/home/main/blob.bin"))).toBe("newer");
   });
 
   test("an upload without If-Match remains unconditional", async () => {
     const harness = makeAgent();
-    await harness.seed("/home/user/blob.bin", new TextEncoder().encode("newer"));
+    await harness.seed("/home/main/blob.bin", new TextEncoder().encode("newer"));
 
     const response = await route(put("unconditional"), harness);
 
     expect(response.status).toBe(200);
     expect(v.parse(OkReplySchema, await response.json())).toEqual({ ok: true });
-    expect(new TextDecoder().decode(harness.files.get("/home/user/blob.bin"))).toBe("unconditional");
+    expect(new TextDecoder().decode(harness.files.get("/home/main/blob.bin"))).toBe("unconditional");
   });
 
   test("a conditional upload is refused when its file plane lacks native compare-and-write", async () => {
     const harness = makeAgent({ supportsConditionalWrites: false });
-    await harness.seed("/home/user/blob.bin", new TextEncoder().encode("current"));
+    await harness.seed("/home/main/blob.bin", new TextEncoder().encode("current"));
 
     const response = await route(put("new", { "If-Match": "1" }), harness);
 
@@ -361,7 +361,7 @@ describe("files route — PUT", () => {
     expect(v.parse(ErrorReplySchema, await response.json())).toEqual({
       error: 'This file plane cannot protect an in-place edit from a newer write. Download it to edit safely.',
     });
-    expect(new TextDecoder().decode(harness.files.get("/home/user/blob.bin"))).toBe("current");
+    expect(new TextDecoder().decode(harness.files.get("/home/main/blob.bin"))).toBe("current");
   });
 
   test('malformed and non-scalar revisions refuse before writing', async () => {
@@ -369,21 +369,21 @@ describe("files route — PUT", () => {
       const harness = makeAgent();
       const response = await route(put('new bytes', { 'If-Match': revision }), harness);
       expect(response.status).toBe(400);
-      expect(harness.files.has('/home/user/blob.bin')).toBe(false);
+      expect(harness.files.has('/home/main/blob.bin')).toBe(false);
     }
   });
 
   test('a quoted numeric-looking revision remains distinct from a numeric revision', async () => {
     const harness = makeAgent();
-    await harness.seed('/home/user/blob.bin', new TextEncoder().encode('original'), '7');
+    await harness.seed('/home/main/blob.bin', new TextEncoder().encode('original'), '7');
     const stale = await route(put('wrong revision', { 'If-Match': '7' }), harness);
     expect(stale.status).toBe(412);
     expect(v.parse(ConflictReplySchema, await stale.json()).revision).toBe('7');
-    expect(new TextDecoder().decode(harness.files.get('/home/user/blob.bin'))).toBe('original');
+    expect(new TextDecoder().decode(harness.files.get('/home/main/blob.bin'))).toBe('original');
 
     const written = await route(put('matching revision', { 'If-Match': JSON.stringify('7') }), harness);
     expect(written.status).toBe(200);
-    expect(new TextDecoder().decode(harness.files.get('/home/user/blob.bin'))).toBe('matching revision');
+    expect(new TextDecoder().decode(harness.files.get('/home/main/blob.bin'))).toBe('matching revision');
   });
 
   test("concurrent same-path uploads never share buffered chunks", async () => {
@@ -391,18 +391,18 @@ describe("files route — PUT", () => {
     const a = new TextEncoder().encode("AA");
     const b = new TextEncoder().encode("BB");
     expect(await harness.agent.writeExecutorFileChunk({
-      executorId: "workspace", path: "/home/user/blob.bin", transferId: "upload-a", offset: 0, chunk: a.subarray(0, 1), final: false,
+      executorId: "workspace", path: "/home/main/blob.bin", transferId: "upload-a", offset: 0, chunk: a.subarray(0, 1), final: false,
     })).toEqual({ ok: true });
     expect(await harness.agent.writeExecutorFileChunk({
-      executorId: "workspace", path: "/home/user/blob.bin", transferId: "upload-b", offset: 0, chunk: b.subarray(0, 1), final: false,
+      executorId: "workspace", path: "/home/main/blob.bin", transferId: "upload-b", offset: 0, chunk: b.subarray(0, 1), final: false,
     })).toEqual({ ok: true });
     expect(await harness.agent.writeExecutorFileChunk({
-      executorId: "workspace", path: "/home/user/blob.bin", transferId: "upload-a", offset: 1, chunk: a.subarray(1), final: true,
+      executorId: "workspace", path: "/home/main/blob.bin", transferId: "upload-a", offset: 1, chunk: a.subarray(1), final: true,
     })).toEqual({ ok: true });
     expect(await harness.agent.writeExecutorFileChunk({
-      executorId: "workspace", path: "/home/user/blob.bin", transferId: "upload-b", offset: 1, chunk: b.subarray(1), final: true,
+      executorId: "workspace", path: "/home/main/blob.bin", transferId: "upload-b", offset: 1, chunk: b.subarray(1), final: true,
     })).toEqual({ ok: true });
-    expect(new TextDecoder().decode(harness.files.get("/home/user/blob.bin")))
+    expect(new TextDecoder().decode(harness.files.get("/home/main/blob.bin")))
       .toBe("BB");
   });
   test("every chunk carries the expected revision fixed by offset zero", async () => {
@@ -410,16 +410,16 @@ describe("files route — PUT", () => {
     const first = new TextEncoder().encode("fi");
     const second = new TextEncoder().encode("le");
     expect(await harness.agent.writeExecutorFileChunk({
-      executorId: "workspace", path: "/home/user/blob.bin", transferId: "conditional-upload", offset: 0, chunk: first, final: false,
+      executorId: "workspace", path: "/home/main/blob.bin", transferId: "conditional-upload", offset: 0, chunk: first, final: false,
       expectedRevision: 1,
     })).toEqual({ ok: true });
     expect(await harness.agent.writeExecutorFileChunk({
-      executorId: "workspace", path: "/home/user/blob.bin", transferId: "conditional-upload", offset: 2, chunk: second, final: true,
+      executorId: "workspace", path: "/home/main/blob.bin", transferId: "conditional-upload", offset: 2, chunk: second, final: true,
       expectedRevision: 2,
     })).toEqual({
       error: 'file transfer out of sync: expected revision does not match the first chunk',
     });
-    expect(harness.files.has("/home/user/blob.bin")).toBe(false);
+    expect(harness.files.has("/home/main/blob.bin")).toBe(false);
   });
 });
 
@@ -428,7 +428,7 @@ describe("files route — GET", () => {
   test("a multi-chunk download streams byte-exact bytes", async () => {
     const harness = makeAgent();
     const whole = patternBytes(2 * FILE_CHUNK_BYTES + 11);
-    await harness.seed("/home/user/blob.bin", whole);
+    await harness.seed("/home/main/blob.bin", whole);
 
     const response = await route(new Request(URL_), harness);
     expect(response.status).toBe(200);
@@ -437,10 +437,10 @@ describe("files route — GET", () => {
 
   test("a second GET of the same path reads the modified file", async () => {
     const harness = makeAgent();
-    await harness.seed("/home/user/blob.bin", new TextEncoder().encode("first"));
+    await harness.seed("/home/main/blob.bin", new TextEncoder().encode("first"));
     expect(new TextDecoder().decode(await collect(await route(new Request(URL_), harness))))
       .toBe("first");
-    await harness.seed("/home/user/blob.bin", new TextEncoder().encode("second"));
+    await harness.seed("/home/main/blob.bin", new TextEncoder().encode("second"));
     expect(new TextDecoder().decode(await collect(await route(new Request(URL_), harness))))
       .toBe("second");
     expect(harness.reads.count).toBe(2);
@@ -448,7 +448,7 @@ describe("files route — GET", () => {
 
   test("a premature zero-byte chunk fails instead of spinning forever", async () => {
     const harness = makeAgent();
-    await harness.seed("/home/user/blob.bin", new Uint8Array([1]));
+    await harness.seed("/home/main/blob.bin", new Uint8Array([1]));
     harness.agent.readExecutorFileChunk = async () => ({ bytes: new Uint8Array(0) });
 
     const response = await route(new Request(URL_), harness);
@@ -457,7 +457,7 @@ describe("files route — GET", () => {
 
   test("a file over the total limit is a 413 before one byte is read", async () => {
     const harness = makeAgent();
-    await harness.seed("/home/user/blob.bin", patternBytes(FILE_TRANSFER_MAX_BYTES + 1));
+    await harness.seed("/home/main/blob.bin", patternBytes(FILE_TRANSFER_MAX_BYTES + 1));
     const response = await route(new Request(URL_), harness);
     expect(response.status).toBe(413);
     expect(harness.reads.count).toBe(0);
@@ -467,6 +467,6 @@ describe("files route — GET", () => {
     const harness = makeAgent();
     const response = await route(new Request(URL_), harness);
     expect(response.status).toBe(404);
-    expect(v.parse(ErrorReplySchema, await response.json()).error).toContain("/home/user/blob.bin");
+    expect(v.parse(ErrorReplySchema, await response.json()).error).toContain("/home/main/blob.bin");
   });
 });

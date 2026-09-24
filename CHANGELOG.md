@@ -16,6 +16,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 - The Worker's `/api` routes are served by one Hono app whose route order is the old dispatch order, gate for gate. An error no route catches is now answered as a JSON 500 naming its cause, never cached, instead of the platform's error page; the run-event routes read the workspace whose ownership was just proven, even when the request spells its name with escapes.
 - Hosted actors now use the Agents platform directly, without Think's duplicate session, workspace, inference queue or recovery boot. The shared Kinu chat loop retains the existing browser/CLI protocol and initializes the root transcript through the public session provider. Accepted sends and unfinished workspace work keep the sandbox protected across eviction.
+- **The default model lives in the profile's default tier, and nowhere else.** `kinu setup` and the first provider connect set it only while it is unset, a later connect leaves it, and Defaults on the home screen change it; `config.json` keeps no top-level `model` or `reasoningEffort`. `/model`, `/effort`, the TUI model picker, `kinu model`, `kinu effort` and the rpc `model` command set the open workspace's own model or effort, and a new workspace pins a model only when `--model` names one.
 
 ### Added
 

@@ -232,6 +232,13 @@ export async function hostNodeSeat(
   };
 }
 
+/** A swarm node's `eval`, over the hosted actor the node runs as. */
+export function nodeCodemodeTool(seams: ExplorationHostSeams, actor: HostedActor): (finished: ToolSet) => Tool {
+  if (!isCFRuntime(actor.runtime)) throw new KinuError('unsupported', 'a swarm node must run on the cf runtime');
+
+  return seams.codemodeTool(actor.runtime, seams.webSearch());
+}
+
 /**
  * Retire exploration actors whose work is provably finished. The ledger is the only
  * status authority: any reported status is terminal, unknown statuses are not, and

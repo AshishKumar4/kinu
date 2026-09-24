@@ -5,7 +5,7 @@ import { serveFamily } from './helpers/api';
 import { describe, expect, test } from 'bun:test';
 import { cliRoutes, type CliRoutesEnv } from '../src/cli/routes';
 import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from './helpers/bindings';
-import { PRIVATE_NO_STORE } from '@kinu.run/core';
+import { AGENT_RPC_ACCESS, PRIVATE_NO_STORE } from '@kinu.run/core';
 import type { JsonValue } from '@kinu.run/core';
 import type { AccessTokenScope, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -295,6 +295,45 @@ describe('access token scope enforcement', () => {
     const res = await cli(req(BOTH_TOKEN, RPC, rpcInit('destroyAgent', ['someone'])), env);
     expect(res?.status).toBe(404);
     expect(calls).toEqual([]);
+  });
+
+  test('a read-only token reaches exactly the read rows of the one table, and a never row is not there', async () => {
+    const { env } = setupEnv();
+    const dispatched: string[] = [];
+
+    const claimOwner = async (userId: string) => ({ owner: userId, capabilityHash: 'sha-existing' });
+
+    // Any method the dispatcher invokes answers null and is recorded; ownership is the one real call. Not a
+    // thenable: the stub is returned from an async function, which would otherwise await it forever.
+    const workspace = new Proxy(workspaceObject({ claimOwner }), {
+      get: (_target, member) => {
+        if (member === 'then') return undefined;
+
+        if (member === 'claimOwner') return claimOwner;
+
+        return async () => {
+          dispatched.push(String(member));
+
+          return null;
+        };
+      },
+    });
+
+    const tableEnv: CliRoutesEnv<string> = { ...env, OrchestratorAgent: { idFromName: (n) => n, get: () => workspace } };
+    const answered: Record<string, number> = {};
+
+    for (const method of Object.keys(AGENT_RPC_ACCESS)) {
+      answered[method] = handled(await cli(req(READ_TOKEN, RPC, rpcInit(method)), tableEnv)).status;
+    }
+
+    const rows = Object.entries(AGENT_RPC_ACCESS);
+
+    expect(answered).toEqual(Object.fromEntries(rows.map(([method, access]) => {
+      if (access === 'workspace.read') return [method, 200];
+
+      return [method, access === 'never' ? 404 : 403];
+    })));
+    expect(dispatched.sort()).toEqual(rows.filter(([, access]) => access === 'workspace.read').map(([method]) => method).sort());
   });
 
   test('/me works for any valid bearer and reports kind and scopes', async () => {

@@ -24,6 +24,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import { createTestRuntime, storesFor } from './helpers';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { RunEventRecorder } from '../src/events/recorder';
+import { unobservedSpend } from '@kinu.run/test-utils';
 
 const EVAL_SIZE = 8;
 
@@ -146,7 +147,7 @@ function seedLedger(rt: AgentRuntime, counts: { failures: number; guards: number
  */
 async function seedAdvisorNotes(rt: AgentRuntime, count: number): Promise<void> {
   const history = storesFor(rt).history;
-  const engine = new EvolutionEngine(rt, history);
+  const engine = new EvolutionEngine(rt, history, { reportModelCall: unobservedSpend });
 
   for (let i = 0; i < count; i++) {
     const turnId = `adv-${String(i)}`;

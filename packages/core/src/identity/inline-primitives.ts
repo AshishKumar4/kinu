@@ -1,15 +1,15 @@
 // Inline primitives over a bun:sqlite-style database for createWorkspace; the filesystem is the production one.
 
 import { createWorkspace as createWorkspaceFilesystem, workspaceGenerationStorage } from '../vfs/nimbus-workspace';
-import type { WorkspaceBundle } from '../vfs/nimbus-workspace';
+import type { WorkspaceBundle, WorkspaceOptions } from '../vfs/nimbus-workspace';
 import { readTailWithVfsOps, type VfsNativeReads } from '../vfs/mounts';
 import { chunkMarkdown, initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
+import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils/stores';
 import type { CraftStore } from '../types/agent-runtime';
 import type {
-  Executor, FiberCtx, Memory, RawSqlExec, Schedule, SqlExecutor, VFS,
+  Executor, FiberCtx, Memory, RawSqlExec, Schedule, SqlExec, SqlExecutor, SqlValue, VFS,
 } from '../types/primitives';
 import type { ActorHandle } from './actor-handle';
-import type { CraftedTool } from '../types/craft';
 import { nanoid } from '../utils/nanoid';
 import { decodeJsonValue } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
@@ -22,52 +22,60 @@ export interface AgentDatabase {
   transaction<T>(fn: () => T): () => T;
 }
 
-export function wrapDatabase(db: AgentDatabase) {
-  const sql: SqlExecutor = function <T = unknown>(
-    strings: TemplateStringsArray,
-    ...values: unknown[]
-  ): T[] {
-    const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
-    // DO storage.sql binds BLOBs as ArrayBuffer; bun:sqlite only binds TypedArrays.
-    const bound = values.map((binding) => (binding instanceof ArrayBuffer ? new Uint8Array(binding) : binding));
-    const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
-    const stmt = db.prepare<T>(query);
+/** Bun would store an object as NULL, so one is refused. */
+const SqlBindingSchema = v.union([
+  v.string(), v.number(), v.bigint(), v.boolean(), v.null(),
+  v.pipe(v.undefined(), v.transform(() => null)),
+  v.pipe(v.instance(ArrayBuffer), v.transform((bytes) => new Uint8Array(bytes))),
+  v.pipe(
+    v.custom<ArrayBufferView>((value) => ArrayBuffer.isView(value), 'a byte view'),
+    v.transform((view) => new Uint8Array(view.buffer, view.byteOffset, view.byteLength)),
+  ),
+]);
 
-    if (isRead) return stmt.all(...bound);
-    stmt.run(...bound);
+/** Rows for every statement, as DO storage.sql answers a write's `RETURNING`. */
+function sqlExecOver(db: Pick<AgentDatabase, 'prepare'>) {
+  return <T>(query: string, ...bindings: unknown[]): T[] =>
+    db.prepare<T>(query).all(...bindings.map((binding) => v.parse(SqlBindingSchema, binding)));
+}
 
-    return [];
+/** DO storage.sql's cursor: a blob reads back as its own ArrayBuffer. */
+export function sqlStorageOver(db: Pick<AgentDatabase, 'prepare'>): SqlExec {
+  const exec = sqlExecOver(db);
+
+  return {
+    exec(query, ...bindings) {
+      const rows = exec<Record<string, SqlValue | Uint8Array>>(query, ...bindings).map((row) => Object.fromEntries(
+        Object.entries(row).map(([column, value]) => [column, value instanceof Uint8Array ? new Uint8Array(value).buffer : value]),
+      ));
+
+      return { toArray: () => rows };
+    },
   };
+}
+
+export function wrapDatabase(db: AgentDatabase) {
+  const exec = sqlExecOver(db);
+
+  const sql: SqlExecutor = <T = unknown>(strings: TemplateStringsArray, ...values: unknown[]): T[] =>
+    exec<T>(strings.join('?'), ...values);
 
   const execRaw: RawSqlExec = (ddl: string) => db.exec(ddl);
 
   return { sql, execRaw };
 }
 
-/** Nimbus over a bun:sqlite-style database, storing bytes as a Durable Object does. */
-export function createInlineWorkspace(db: AgentDatabase): WorkspaceBundle {
-  const sql = {
-    exec(query: string, ...bindings: unknown[]) {
-      const bound = bindings.map((binding) => (binding instanceof ArrayBuffer ? new Uint8Array(binding) : binding ?? null));
-      const stmt = db.prepare(query);
-
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return db.prepare<never>(query).all(...bound);
-      stmt.run(...bound);
-
-      return [];
-    },
+export function inlineWorkspaceStorage(db: AgentDatabase): Pick<WorkspaceOptions, 'sql' | 'transactions'> {
+  return {
+    sql: { exec: sqlExecOver(db) },
+    transactions: { storage: { transactionSync: <T,>(callback: () => T): T => db.transaction(callback)() } },
   };
+}
 
-  return createWorkspaceFilesystem({
-    sql,
-    transactions: {
-      storage: {
-        transactionSync: <T,>(cb: () => T): T =>
-          db.transaction(cb)(),
-      },
-    },
-    generation: workspaceGenerationStorage(sql),
-  });
+export function createInlineWorkspace(db: AgentDatabase): WorkspaceBundle {
+  const storage = inlineWorkspaceStorage(db);
+
+  return createWorkspaceFilesystem({ ...storage, generation: workspaceGenerationStorage(storage.sql) });
 }
 
 /** LIKE-based search over `memory_chunks`, written through the production chunker and its one DDL owner. */
@@ -120,28 +128,7 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeR
 }
 
 export function createInlineCraftStore(db: AgentDatabase): CraftStore {
-  return {
-    create(tool) {
-      db.run(
-        'INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [tool.name, tool.description, tool.params ? JSON.stringify(tool.params) : null, tool.code, tool.scope, Date.now(), Date.now()],
-      );
-    },
-    update(name, patch) {
-      if (patch.code !== undefined) db.run('UPDATE crafted_tools SET code = ?, updated_at = ? WHERE name = ?', [patch.code, Date.now(), name]);
-
-      if (patch.description !== undefined) db.run('UPDATE crafted_tools SET description = ?, updated_at = ? WHERE name = ?', [patch.description, Date.now(), name]);
-    },
-    get(name) { return db.prepare<CraftedTool>('SELECT * FROM crafted_tools WHERE name = ?').all(name)[0]; },
-    delete(name) { db.run('DELETE FROM crafted_tools WHERE name = ?', [name]); },
-    list() { return db.prepare<CraftedTool>('SELECT * FROM crafted_tools').all(); },
-    search(query, limit = 10) {
-      const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-      const all = db.prepare<CraftedTool>('SELECT * FROM crafted_tools').all();
-
-      return all.filter(t => words.some(w => t.description.toLowerCase().includes(w))).slice(0, limit);
-    },
-  };
+  return craftStoreView(new AgentUtilsCraftStore(wrapDatabase(db).sql));
 }
 
 export function createInlineExecutor(): Executor {

@@ -17,14 +17,14 @@
  *   - destroy() first kills every retained process record, then delegates SDK
  *     teardown and clears this ephemeral DO's storage.
  *
- * The token-guarded JSON API is a thin forwarder: every route maps onto one
- * SDK method via handleProbeOp from ./worker-contract, so what the probe
+ * The token-guarded JSON API is a thin forwarder: `serveProbeRequest` from
+ * ./worker-contract maps every route onto one SDK method, so what the probe
  * measures is the platform, not this file. Routes: `/exec`, `/put`, `/prepare`,
  * `/start`, `/poll`, `/stop` (restart only), and `/destroy` (teardown).
  * Everything measured lives in probe.ts, which the driver uploads through
- * `/put` and runs through `/exec`. Lifecycle wiring is pinned by source-text
- * assertions in bench-fuse-probe.test.ts plus the fixture workers-types tsc;
- * route behaviour is tested against pure contract fakes.
+ * `/put` and runs through `/exec`. The routes are tested in
+ * bench-fuse-probe.test.ts against contract fakes; this class runs only under
+ * workerd and is checked by the fixture's workers-types tsc.
  */
 
 
@@ -35,11 +35,9 @@ import {
   SANDBOX_IMAGE,
   SANDBOX_IMAGE_VERSION,
   destroyProbeRuntime,
-  handleProbeOp,
-  isAuthorized,
-  parseProbeRequest,
+  serveProbeRequest,
 } from "./worker-contract";
-import type { ProbeRequest, RunIdentity } from "./worker-contract";
+import type { RunIdentity } from "./worker-contract";
 
 export { Sandbox } from "@cloudflare/sandbox";
 
@@ -121,37 +119,9 @@ class FuseProbeBox extends Sandbox<ProbeEnv> {
 }
 
 export default {
-  async fetch(request: Request, env: ProbeEnv): Promise<Response> {
-    if (!isAuthorized(env.FUSE_PROBE_TOKEN, request.headers.get("x-fuse-probe-token"))) {
-      return Response.json({ error: "unauthorized" }, { status: 401 });
-    }
-
-    const pathname = new URL(request.url).pathname;
-
-    if (request.method === 'GET' && pathname === '/health') {
-      return Response.json({ ok: true });
-    }
-
+  fetch(request: Request, env: ProbeEnv): Promise<Response> {
     // getSandbox returns the typed FuseProbeBox RPC surface.
-    const sandbox = getSandbox(env.Sandbox, SANDBOX_ID, { normalizeId: true, transport: "rpc" });
-    let command: ProbeRequest;
-
-    try {
-      command = parseProbeRequest(pathname, await request.json());
-    } catch (error) {
-      return Response.json(
-        { error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) },
-        { status: 400 },
-      );
-    }
-
-    try {
-      return await handleProbeOp(pathname, sandbox, command);
-    } catch (error) {
-      return Response.json(
-        { error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) },
-        { status: 500 },
-      );
-    }
+    return serveProbeRequest(request, env.FUSE_PROBE_TOKEN,
+      () => getSandbox(env.Sandbox, SANDBOX_ID, { normalizeId: true, transport: "rpc" }));
   },
 };

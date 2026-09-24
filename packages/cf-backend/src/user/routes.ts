@@ -18,7 +18,7 @@ import { isControlPlaneOperator, type AdminGateEnv } from '../control-plane/admi
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 import * as v from 'valibot';
 
-export const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
+const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
 
 /** Every UserDO call `/api/user/*` makes: one gate holds one stub. */
 export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
@@ -235,7 +235,7 @@ userRoutes.delete('/api/user/devices/:id/unstopped', async (c) => {
   try {
     const result = await c.get('stub').acknowledgeUnstoppedDevice(c.get('owner'), decodeURIComponent(rawParam(c, 'id')));
 
-    if (!result.ok) return err(404, 'No unconfirmed command incident matched this revoked device');
+    if (!result.ok) return err(404, 'No incident matched this revoked device');
 
     return json({ body: { ok: true } });
   } catch (e) {

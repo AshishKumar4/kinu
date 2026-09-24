@@ -10,7 +10,7 @@ import {
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
-  createReportCodemodeProvider, HeadController, REAL_CLOCK, SubordinateRosterStore,
+  createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   recoverActorTurns, EventLog, actorReferenceOf,
   activePromptSectionOverrides,
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
@@ -20,7 +20,7 @@ import {
   type AssignedTurnFraming, type BuiltinToolName,
   type BoundActor, type DynamicContext, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
-  type LoopOrigin, type MergeResult, type NimbusSandboxHandle, type NodeHomeHost,
+  type LoopOrigin, type NimbusSandboxHandle, type NodeHomeHost,
   type SqlExec, type SqlValue, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
@@ -41,7 +41,7 @@ import {
   createWorkspaceActorHost, provisionHostedActorHome, type WorkspaceHostSeams,
 } from "./actor-hosting";
 import {
-  hostNodeSeat, reclaimSettledExplorationActors,
+  hostNodeSeat, nodeCodemodeTool, reclaimSettledExplorationActors,
   type ExplorationHostSeams,
 } from "./exploration-hosting";
 import {
@@ -56,10 +56,9 @@ import type { ToolSet } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "@kinu.run/core";
-import { getSandbox } from "@cloudflare/sandbox";
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
-import type { ActivitySnapshot, TabPresence, TurnClaimState } from "@kinu.run/core";
+import { TURN_CLAIM_FRAME, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from '@kinu.run/core';
@@ -145,7 +144,7 @@ import {
   runSleepTimeCompute, applySleepTimeUpdate,
   SleepTimeUpdateSchema, SLEEP_TIME_CADENCE, sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
   type SleepTimeUpdate, type SleepTimeWindow,
-  effectAlreadyDone, recordEffectDone,
+  effectAlreadyDone, recordEffectDone, oncePerTick,
   // Core owns the ingress gates; this actor owns the transports in front of them
   // (DO alarm, Worker webhook + email routes, cross-DO RPC).
   acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
@@ -215,7 +214,7 @@ import {
   DeviceConsentRegistry, DeviceConsentStore,
   type DeviceConsentAnswer, type DeviceConsentDecision,
   type DeviceConsentRequest, type PendingDeviceConsent,
-  DeferredApprovalQueue, DeferredApprovalStore,
+  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
   type DeferredApproval, type DeferredApprovalAnswer, type DeferredApprovalChannel,
   type DeferredApprovalNotice, type ApprovalGrant,
   TURN_AUTHOR_METADATA_KEY,
@@ -239,7 +238,7 @@ import {
   acceptSandboxLifecycleFailure, initSandboxLifecycleTable,
   type SandboxLifecycleFailureResult,
 } from "./sandbox-lifecycle";
-import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
+import { openSandbox } from "./sandbox-exec-lane";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import {
@@ -728,6 +727,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const swarm: AgentsSwarmDeps = {
       rt: turn.runtime,
       model: turn.model,
+      reportModelCall: (report) => { this.reportModelCall(report); },
+      nodeCodemode: (actor) => nodeCodemodeTool(seams, actor),
+      webSearch: seams.webSearch(),
       resolveModel: (spec: string) => this.ownedModelServices.resolveModel(spec),
       // Same catalog session as the mission ledger, so a search's estimate and its debit read one rate.
       costModel: () => ({
@@ -823,31 +825,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       throw new KinuError('missing', 'This workspace has no owner, so a head cannot split further.');
     }
 
-    const controller = new HeadController(runtimeForSplit, journal, REAL_CLOCK);
-
-    const controllerInput: Parameters<HeadController['run']>[0] = {
-      parentHeadId: parent.id,
-      parentDepth: parent.depth,
-      rootId: parent.rootId,
-      inheritedContext: parent.inheritedContext,
-      request: { rationale: request.rationale, heads: [...request.heads], mergeStrategy: request.mergeStrategy },
-      parentBudget: parent.budget,
-      mode: parent.mode,
-      model: parent.model,
-    };
-
-    // A subtree charges its root's mission, or a head escapes its budget by splitting again.
-    if (parent.missionLabels?.length) controllerInput.missionLabels = parent.missionLabels;
-    const result: MergeResult = await controller.run(controllerInput);
-
-    return {
-      narrative: result.mergedNarrative,
-      decisions: result.selectedDecisions,
-      unresolvedQuestions: result.unresolvedQuestions,
-      blindSpots: result.blindSpots,
-      childHeadIds: result.headIds,
-      headCount: result.costSummary.headCount,
-    };
+    return await runHeadSplit(new HeadController(runtimeForSplit, journal, REAL_CLOCK), parent, request);
   }
 
   /**
@@ -914,7 +892,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected override async terminalFor(connection: Pick<Connection, 'tags'>): Promise<WorkspaceTerminal | null> {
-    return isWorkspaceTerminal(connection.tags) ? await this.hostedWorkspace().terminal() : null;
+    if (!isWorkspaceTerminal(connection.tags)) return null;
+    // Building the root runtime registers the mount table this shell serves.
+    void this.rt;
+
+    return await this.hostedWorkspace().terminal();
   }
 
   protected override workModeForMetadata(metadata: JsonObject | undefined): WorkMode {
@@ -1508,6 +1490,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         transaction: (body) => { this.ctx.storage.transactionSync(body); },
         // The turn review's model calls debit the reviewed turn's mission; unbudgeted turns never reach it.
         governor: this.budget,
+        reportModelCall: (report) => { this.reportModelCall(report); },
         // Same broadcast sink as agents(action:'swarm') in ActorAgent.
         onMctsProgress: (event) => this.onMctsProgress(event),
         // Replay-eval rollout runs the live scaffold with the real LLM and tool bridges.
@@ -2603,9 +2586,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async decideDeferredApprovals(
     ids: string[], decision: DeferredApprovalAnswer,
   ): Promise<{ decided: string[] }> {
-    const decided = await this.deferrals.decide(ids, decision);
-
-    return { decided: decided.map((a) => a.id) };
+    return decideDeferredApprovals(this.deferrals, ids, decision);
   }
 
 
@@ -3231,11 +3212,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     const id = newBranchId();
+    // Read before the await: the branch charges the turn the owner redirected, not whichever runs next.
+    const missionLabels = this.budget.scope;
     const inheritedContext = await this.readInheritedContext();
     this._pendingBranches.push({
       id, task,
       handle: startBranchHead(runtime, this.headJournal, {
-        id, task, inheritedContext,
+        id, task, inheritedContext, missionLabels,
       }),
     });
     this.broadcastBranchStatus({ type: 'branch_status', status: 'running', branchId: id, task });
@@ -3711,10 +3694,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     if (this.env.Sandbox) {
-      // {@link SANDBOX_TRANSPORT}: the SDK drops in-flight requests if the transport changes between calls.
-      const sb = getSandbox(this.env.Sandbox, sandboxIdForWorkspace(this.name), {
-        normalizeId: true, transport: SANDBOX_TRANSPORT,
-      });
+      const sb = openSandbox(this.env.Sandbox, sandboxIdForWorkspace(this.name), { normalizeId: true });
 
       // Before destroy(): the container object owns its /workspace snapshot, and
       // once its storage is gone nothing knows which R2 objects were its.
@@ -4353,6 +4333,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
+  /** The root's tabs read the claim when they load, and hear it again here when a turn closes or is recovered. */
+  protected override turnClaimChanged(): void {
+    this.broadcastToActor(null, JSON.stringify({ type: TURN_CLAIM_FRAME, claim: this.turnClaimState() }));
+  }
+
   /**
    * Settle a claim nobody is executing, sealed `indeterminate` since its outcome is unknown,
    * and give any actor that still owes a wake one so the turn resumes.
@@ -4365,6 +4350,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (claim === null) return { recovered: 'none' };
     this.claims.settleRecovered(claim.turnId, claim.epoch, 'indeterminate');
+    this.turnClaimChanged();
     diagnostics.event('turn.claim_recovered', { turnId: claim.turnId, epoch: claim.epoch });
 
     if (!this.owedWorkExists()) return { recovered: 'sealed' };
@@ -4858,7 +4844,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       workspaceId: this.ctx.id.toString(), workspaceName: forkName, ownerUserId,
       // The target's own payload plane: carried payloads are re-rooted so the fork never reads its source.
       artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
-      writeSoulFile: (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content),
       transaction: (rows) => this.ctx.storage.transactionSync(rows),
     });
 
@@ -5031,7 +5016,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this._gepaTickRunning = true;
 
     try {
-      await this.oncePerTick(PROMPT_SECTION_LANE, lane, () => this.advancePromptSections());
+      await oncePerTick(this.boundSql, this.actorHandle(), { scope: PROMPT_SECTION_LANE, tick: lane, workspace: this.name },
+        () => this.advancePromptSections());
     } finally {
       this._gepaTickRunning = false;
     }
@@ -5039,35 +5025,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Cadence pass live in this activation; eviction clears it and the durable `running` row remains. */
   private _gepaTickRunning = false;
-
-  /**
-   * Run one non-replayable pass at most once per tick; a replay seeing entry without completion abandons it.
-   * Entry is marked in the same synchronous slice as `pass()`, so it commits with the pass's first writes.
-   */
-  protected async oncePerTick(scope: string, tick: string | undefined, pass: () => Promise<void>): Promise<void> {
-    // No tick means no durable obligation: run the pass and key nothing.
-    if (tick === undefined) {
-      await pass();
-
-      return;
-    }
-
-    if (effectAlreadyDone(this.boundSql, this.actorHandle(), scope, `${tick}:done`)) return;
-
-    if (effectAlreadyDone(this.boundSql, this.actorHandle(), scope, `${tick}:entered`)) {
-      diagnostics.event('evolution.interrupted_pass_abandoned', {
-        workspace: this.name, lane: scope, tick,
-      });
-      recordEffectDone(this.boundSql, this.actorHandle(), { scope: scope, key: `${tick}:done` });
-
-      return;
-    }
-
-    const running = pass();
-    recordEffectDone(this.boundSql, this.actorHandle(), { scope: scope, key: `${tick}:entered` });
-    await running;
-    recordEffectDone(this.boundSql, this.actorHandle(), { scope: scope, key: `${tick}:done` });
-  }
 
   /** Advance the evolved-prompt-section loop one step; policy lives in core's `advancePromptSectionLane`. */
   protected async advancePromptSections(): Promise<void> {

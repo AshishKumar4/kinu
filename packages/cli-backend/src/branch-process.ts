@@ -16,6 +16,8 @@ import {
 import type { LocalProviderCredentials } from './model-resolver';
 import { registerLocalActor, localActorProcessBootstrap, retireLocalActor } from './actor-identity';
 
+export const BRANCH_CREDENTIAL_ENV = ['KINU_AUTH', 'KINU_LLM_HEADERS', 'KINU_PROVIDER_CREDENTIALS'] as const;
+
 /**
  * No wall clock on branch RPCs or startup (owner ruling 2026-08-21): a dead child rejects pending
  * calls via the exit hook, and a live one bounds its own LLM calls and reports errors over the pipe.
@@ -60,14 +62,18 @@ export function createBranchSpawner(
 
     const workerPath = join(dirname(fileURLToPath(import.meta.url)), 'branch-worker.ts');
 
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      KINU_LLM_NAME: config.llm?.name ?? '',
-      KINU_BASE_URL: config.llm?.baseURL ?? '',
+    const credentials: Record<(typeof BRANCH_CREDENTIAL_ENV)[number], string> = {
       KINU_AUTH: config.llm?.headers.Authorization ?? config.llm?.headers.authorization ?? '',
-      KINU_MODEL: config.llm?.model ?? '',
       KINU_LLM_HEADERS: JSON.stringify(config.llm?.headers ?? {}),
       KINU_PROVIDER_CREDENTIALS: JSON.stringify(config.providerCredentials ?? {}),
+    };
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      ...credentials,
+      KINU_LLM_NAME: config.llm?.name ?? '',
+      KINU_BASE_URL: config.llm?.baseURL ?? '',
+      KINU_MODEL: config.llm?.model ?? '',
       KINU_ROOT_DB: rootDbPath,
       KINU_ACTOR_BOOTSTRAP: JSON.stringify(localActorProcessBootstrap(config.parent, binding)),
     };

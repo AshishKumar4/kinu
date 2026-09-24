@@ -1,21 +1,15 @@
-// One table (AGENT_RPC_ACCESS) names every remotely invokable agent method and its credential class, and both
-// transports enforce it: the websocket frame gate here and the /workspaces/:name/rpc dispatcher in cli/routes.ts.
+// One table (core AGENT_RPC_ACCESS) names every remotely invokable agent method and its credential class; the
+// websocket frame gate here pins scoped sockets to its rows. The CLI's calls are typed by the table, and the wiring
+// from edge to ticket to object runs end to end in workerd/cli-scoped-socket.test.ts.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import {
-  AGENT_RPC_ACCESS,
-  CLI_BEARER_HEADER,
-  CLI_SCOPES_HEADER,
+  appendIdentityHeaders, CLI_BEARER_HEADER, CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc,
   SESSION_BEARER_HEADER,
-  appendIdentityHeaders,
-  cliScopesConnectionTag,
-  rejectOutOfScopeRpc,
-  requiredRpcAccess,
-  rpcAccessScope,
 } from '../src/cli/rpc-gate';
-import { extractTicketOrchestratorAgentName } from '@kinu.run/core';
+import {
+  AGENT_RPC_ACCESS, extractTicketOrchestratorAgentName, requiredRpcAccess, rpcAccessScope,
+} from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
@@ -23,12 +17,6 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 mockAgentsSdk();
 
 const { api } = await import('../src/api/app');
-
-const root = join(import.meta.dir, '..');
-
-function source(path: string): string {
-  return readFileSync(join(root, path), 'utf8');
-}
 
 function rpcFrame(method: string, id = 'req-1'): string {
   return JSON.stringify({ type: 'rpc', id, method, args: [] });
@@ -190,10 +178,9 @@ describe('rpc gate on scoped connections', () => {
   });
 });
 
-describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
-  test('the edge rewrites the scope header from the verified identity', () => {
-    // A client's own identity headers never survive the edge: each is rewritten from the verified
-    // identity, or removed when the identity has none.
+describe('the edge rewrites identity headers from the verified identity', () => {
+  test("a client's own identity headers never survive the edge", () => {
+    // Each is rewritten from the verified identity, or removed when the identity has none.
     const forged = new Headers({
       [CLI_SCOPES_HEADER]: 'workspace.exec',
       [CLI_BEARER_HEADER]: 'forged:9',
@@ -216,8 +203,11 @@ describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
     expect(ticket.get(CLI_SCOPES_HEADER)).toBe('workspace.read');
     expect(ticket.get(CLI_BEARER_HEADER)).toBe('token-1:2');
     expect(ticket.has(SESSION_BEARER_HEADER)).toBe(false);
-    expect(source('src/server.ts')).toContain('if (verified.scopes) identity.cliScopes = verified.scopes');
-    // Tickets admit the root and one hosted actor beneath it; a `/sub/` hop names nothing.
+  });
+});
+
+describe('a connect ticket names its workspace', () => {
+  test('a ticket admits the root and one hosted actor beneath it; a `/sub/` hop names nothing', () => {
     expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/workspace')).toBe('workspace');
     expect(extractTicketOrchestratorAgentName(
       '/agents/orchestrator-agent/workspace/actor/researcher',
@@ -230,21 +220,9 @@ describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
     )).toBeNull();
     expect(extractTicketOrchestratorAgentName('/agents/user-d-o/victim')).toBeNull();
   });
+});
 
-  test('ticket verification resolves the bearer scopes at verify time', () => {
-    const userDO = source('src/user/user-do.ts');
-    expect(userDO).toContain('cliBearerScopes');
-    expect(userDO).toContain('getActiveAccessTokenScopes');
-    expect(userDO).toContain("if (bearerScopes !== 'all') verification.scopes = bearerScopes");
-  });
-
-  test('the actor substrate gates rpc frames and pins scoped sockets readonly', () => {
-    const actor = source('src/actor-agent.ts');
-    expect(actor).toContain('rejectOutOfScopeRpc(connection.tags, message)');
-    expect(actor).toContain('cliScopesConnectionTag(ctx.request.headers.get(CLI_SCOPES_HEADER))');
-    expect(actor).toContain('override shouldConnectionBeReadonly');
-  });
-
+describe('the HTTP transport', () => {
   test('the HTTP dispatcher consumes THIS table — no second scope policy anywhere', () => {
     // One route in the whole /api app dispatches agent RPC. Hono dispatches in registration order, so
     // its place in the table is its policy: after the CLI bearer, ahead of the access-token route
@@ -258,49 +236,9 @@ describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
     expect(present(cliGates[0], 'the CLI bearer')).toBeLessThan(at);
     expect(at).toBeLessThan(present(cliGates[1], 'the access-token route policy'));
   });
-
-  test('the header constant has one home', () => {
-    expect(CLI_SCOPES_HEADER).toBe('x-kinu-cli-scopes');
-    expect(source('src/server.ts')).not.toContain("'x-kinu-cli-scopes'");
-    expect(source('src/orchestrator.ts')).not.toContain("'x-kinu-cli-scopes'");
-  });
 });
 
-describe('the table is the CLI dispatch allowlist, not documentation', () => {
-  // cli/routes.ts dispatches only AGENT_RPC_ACCESS keys, so a @callable the CLI calls but the table omits
-  // fails against every cloud workspace while passing every local test.
-  const CLI_SRC = join(root, '../cli/src');
-
-  function cliInvokedNames(): string[] {
-    const files = readdirSync(CLI_SRC, { recursive: true, encoding: 'utf8' })
-      .filter((file) => file.endsWith('.ts') || file.endsWith('.tsx'));
-
-    const names = new Set<string>();
-
-    for (const file of files) {
-      const src = readFileSync(join(CLI_SRC, file), 'utf8');
-
-      for (const call of src.matchAll(/\b\w*[Rr]pc\w*\s*(?:<[^>]*>)?\s*\(([^()]*?)\)/gs)) {
-        for (const literal of call[1].matchAll(/'([A-Za-z][A-Za-z0-9_]*)'/g)) names.add(literal[1]);
-      }
-    }
-
-    return [...names];
-  }
-
-  function orchestratorCallables(): Set<string> {
-    return new Set([...source('src/orchestrator.ts')
-      .matchAll(/@callable\([^)]*\)\s*(?:async\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)]
-      .map((match) => match[1]));
-  }
-
-  test('every orchestrator RPC the CLI invokes is in the table', () => {
-    const callables = orchestratorCallables();
-    const invoked = cliInvokedNames().filter((name) => callables.has(name));
-    expect(invoked.length).toBeGreaterThan(20);
-    expect(invoked.filter((name) => !(name in AGENT_RPC_ACCESS)).sort()).toEqual([]);
-  });
-
+describe('outcome calibration and judging rows', () => {
   test('the calibration flow is reachable at the class each step needs', () => {
     expect(AGENT_RPC_ACCESS.getOutcomeCalibration).toBe('workspace.read');
     expect(AGENT_RPC_ACCESS.sampleOutcomeLabeling).toBe('workspace.read');

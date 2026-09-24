@@ -83,7 +83,7 @@ function sdkBox(host: ProgrammaticHost) {
   };
 
   return Nimbus.fromEnv({ NIMBUS_SESSION: { idFromName: (name: string) => name, get: () => stub } })
-    .sandbox('workspace', { root: '/home/user' });
+    .sandbox('workspace', { root: '/home/main' });
 }
 
 /** Per-uid `chown` is uid-0 only, so the host creates the agent's home and hands it over, as a real boot does. */
@@ -132,27 +132,27 @@ describe('programmatic exec under a named credential', () => {
   test('the identity is refused where it has no permission, and nothing lands', async () => {
     const workspace = await openWorkspace();
     provisionHome(workspace, '/home/agent-a', AGENT_A);
-    provisionHome(workspace, '/home/user/private', SESSION_USER);
+    provisionHome(workspace, '/home/main/private', SESSION_USER);
 
     const box = sdkBox(workerHost(workspace));
-    const refused = await box.exec('echo leak > /home/user/private/leak.txt', asAgent);
+    const refused = await box.exec('echo leak > /home/main/private/leak.txt', asAgent);
 
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr.toLowerCase()).toContain('permission denied');
-    expect(await workspace.vfs.as(ROOT).exists('/home/user/private/leak.txt')).toBe(false);
+    expect(await workspace.vfs.as(ROOT).exists('/home/main/private/leak.txt')).toBe(false);
   });
 
   test('a refused traversal cannot even be read by the wrong identity', async () => {
     const workspace = await openWorkspace();
-    provisionHome(workspace, '/home/user/private', SESSION_USER);
-    workspace.vfs.as(SESSION_USER).writeFile('/home/user/private/secret.txt', 'session bytes');
+    provisionHome(workspace, '/home/main/private', SESSION_USER);
+    workspace.vfs.as(SESSION_USER).writeFile('/home/main/private/secret.txt', 'session bytes');
 
     const box = sdkBox(workerHost(workspace));
-    const refused = await box.exec('cat /home/user/private/secret.txt', asAgent);
+    const refused = await box.exec('cat /home/main/private/secret.txt', asAgent);
 
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stdout).not.toContain('session bytes');
-    expect(await box.exec('cat /home/user/private/secret.txt')).toMatchObject({
+    expect(await box.exec('cat /home/main/private/secret.txt')).toMatchObject({
       exitCode: 0,
       stdout: 'session bytes',
     });
@@ -177,8 +177,8 @@ describe('programmatic exec under a named credential', () => {
     const workspace = await openWorkspace();
     const box = sdkBox(workerHost(workspace));
 
-    expect(await box.exec('touch /home/user/default.txt')).toMatchObject({ exitCode: 0 });
-    expect(await statUid(workspace, '/home/user/default.txt')).toBe(SESSION_USER.uid);
+    expect(await box.exec('touch /home/main/default.txt')).toMatchObject({ exitCode: 0 });
+    expect(await statUid(workspace, '/home/main/default.txt')).toBe(SESSION_USER.uid);
   });
 
   test('a durable shell carries the credential through its own scoped shell', async () => {

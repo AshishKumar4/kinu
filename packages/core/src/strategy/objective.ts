@@ -6,8 +6,9 @@
  * identical `VerifierContext` and cannot be imported here; keep the two in step.
  */
 
+import * as v from 'valibot';
 import type {
-  CarrySuppression, Floor,
+  CarrySuppression, Floor, FloorBreach, MeasuredValue,
   Objective, ObjectiveDirection, ObjectiveScale,
   ParetoAxes, ParetoAxis, ParetoEvidence, PublicationState, PublicationSurface,
   PublicationVerdict, PublishingCarry, VerifierKind,
@@ -16,7 +17,7 @@ import type {
 import { PUBLICATION_SURFACES } from '../types/objective';
 
 export type {
-  CarrySuppression, Floor, FloorBreach, FloorRederivation, MeasuredValue, Measurement,
+  CarrySuppression, Floor, FloorBreach, MeasuredValue, Measurement,
   MeasurementContext, Objective, ObjectiveDirection, ObjectiveIdentity, ObjectiveScale,
   ParetoAxes, ParetoAxis, ParetoEvidence, PublicationState, PublicationSurface,
   PublicationVerdict, PublishingCarry, Unmeasurable, Verifier, VerifierFault,
@@ -28,6 +29,28 @@ export type {
 export {
   PUBLICATION_SURFACES, PUBLISHING_CARRIES, VERIFIER_KINDS,
 } from '../types/objective';
+
+export const MeasuredValueSchema: v.GenericSchema<MeasuredValue> = v.object({
+  kind: v.literal('measured'),
+  value: v.number(),
+  detail: v.string(),
+  measured: v.optional(v.record(v.string(), v.number())),
+  perInstance: v.optional(v.record(v.string(), v.number())),
+});
+
+const FloorSchema: v.GenericSchema<Floor> = v.object({
+  value: v.number(),
+  proof: v.string(),
+  kind: v.picklist(['certificate', 'adversary', 'physical']),
+  bestKnownHonest: v.number(),
+});
+
+export const FloorBreachSchema: v.GenericSchema<FloorBreach> = v.object({
+  floor: FloorSchema,
+  measured: MeasuredValueSchema,
+  margin: v.number(),
+  hypotheses: v.tuple([v.literal('floor_wrong'), v.literal('verifier_gameable')]),
+});
 
 /**
  * The model-facing statement of each registered kind and the `spec` keys it needs.
@@ -60,14 +83,12 @@ export function floorMargin(floor: Floor, direction: ObjectiveDirection): number
 
 /**
  * The publication gate, total over {@link PUBLICATION_SURFACES}: the caller must name
- * the surface. A sealed state with a recorded {@link FloorRederivation} admits again.
+ * the surface.
  */
 export function admitsPublication(
   state: PublicationState, surface: PublicationSurface,
 ): PublicationVerdict {
   if (state.kind === 'open') return { kind: 'admitted' };
-
-  if (state.clearedBy !== null) return { kind: 'admitted' };
 
   return { kind: 'refused', surface, breach: state.breach };
 }
@@ -77,8 +98,6 @@ export function carrySuppression(
   state: PublicationState, carry: PublishingCarry, suppressedCells: number,
 ): CarrySuppression | null {
   if (state.kind === 'open') return null;
-
-  if (state.clearedBy !== null) return null;
 
   return {
     carry,

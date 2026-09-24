@@ -14,7 +14,7 @@
  * could see it — the fix landed with a workerd-pool proof for exactly that
  * reason, and this case is the deployed half of the same claim.
  *
- * WHY A PATH OUTSIDE THE WORKSPACE TREE. Under `/home/user` the workspace's own
+ * WHY A PATH OUTSIDE THE WORKSPACE TREE. Under `/home/main` the workspace's own
  * overlay can serve a read; an absolute path elsewhere is the ORIGIN SESSION's
  * filesystem, which is the plane whose ranged read was broken. So the case
  * writes its own file at a known absolute path outside the tree, with bytes it
@@ -42,7 +42,7 @@ const CASE = 'files-outside-tree' as const;
 const PLANE = 'workspace';
 
 /**
- * A path OUTSIDE `/home/user`, which is what routes the read to the origin
+ * A path OUTSIDE `/home/main`, which is what routes the read to the origin
  * session rather than to the workspace overlay. `/tmp` because every box has
  * one and nothing else on the deployment owns this name.
  */

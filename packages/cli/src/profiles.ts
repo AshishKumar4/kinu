@@ -6,22 +6,16 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  BUILTIN_PROFILE_CATALOG,
   ProfileCatalogEnvelopeSchema,
   profileCatalogDigest,
   validateProfileCatalog,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
-  type ReasoningEffort,
+  type TierAssignment,
 } from '@kinu.run/core';
 import * as v from 'valibot';
-import {
-  ensureSecretDir, withConfigLock, writeSecretFile, type ProfileEnvelopeSource,
-} from '@kinu.run/cli-backend';
-import {
-  AGENT_HOME, loadConfigFile, requireStoredAuthConfig, resolveLLMConfig,
-  updateConfigFile, sessionExpired,
-} from './config';
+import { ensureSecretDir, withConfigLock, writeSecretFile, type ProfileEnvelopeSource } from '@kinu.run/cli-backend';
+import { AGENT_HOME, loadConfigFile, requireStoredAuthConfig, updateConfigFile, sessionExpired } from './config';
 import { getCloudProfile, updateCloudProfile } from './cloud-api';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
@@ -55,10 +49,16 @@ export function loadLocalProfileAuthority(): ProfileCatalogEnvelope | null {
 }
 
 /** Replaces whole; the version counts replacements. */
-function writeLocalProfile(catalog: ProfileCatalog): ProfileCatalogEnvelope {
+export function writeLocalProfile(catalog: ProfileCatalog, mode: 'replace' | 'seed' = 'replace'): ProfileCatalogEnvelope {
   const validated = validateProfileCatalog({ value: catalog });
   let envelope!: ProfileCatalogEnvelope;
   updateConfigFile((config) => {
+    if (mode === 'seed' && config.localProfile) {
+      envelope = config.localProfile;
+
+      return;
+    }
+
     envelope = {
       authority: { kind: 'local' },
       version: (config.localProfile?.version ?? 0) + 1,
@@ -103,7 +103,7 @@ function readAccountCache(): AccountProfileCache {
 }
 
 /** Null if never fetched here; corrupt entries throw. */
-export function loadCachedAccountProfile(accountId: string): ProfileCatalogEnvelope | null {
+function loadCachedAccountProfile(accountId: string): ProfileCatalogEnvelope | null {
   const entry = readAccountCache().accounts[accountId];
 
   if (!entry) return null;
@@ -155,7 +155,7 @@ interface AccountRead {
 }
 
 /** Server answer (refreshing the cache), else this account's cache; no entry rethrows. */
-async function readAccountProfile(accountId: string): Promise<AccountRead> {
+export async function readAccountProfile(accountId: string): Promise<AccountRead> {
   const auth = requireStoredAuthConfig();
 
   try {
@@ -177,25 +177,12 @@ async function readAccountProfile(accountId: string): Promise<AccountRead> {
   }
 }
 
-/** Read for writes: CAS needs the server's version, so the cache answers only if the fetch failed. */
-export async function loadActiveProfile(): Promise<ProfileCatalogEnvelope> {
+/** Never seeds or fetches. */
+export function readDefaultTier(): TierAssignment | null {
   const authority = resolveProfileAuthority();
+  const profile = authority.kind === 'local' ? loadLocalProfileAuthority() : loadCachedAccountProfile(authority.accountId);
 
-  if (authority.kind === 'local') {
-    const existing = loadLocalProfileAuthority();
-
-    if (existing) return existing;
-    const model = resolveLLMConfig()?.model;
-
-    if (!model) throw new Error('Set a default model first with /model <spec>.');
-
-    return writeLocalProfile({
-      roles: BUILTIN_PROFILE_CATALOG.roles,
-      tiers: { default: { model } },
-    });
-  }
-
-  return (await readAccountProfile(authority.accountId)).envelope;
+  return profile?.catalog.tiers.default ?? null;
 }
 
 export function createProfileAuthorityReader(): ProfileEnvelopeSource {
@@ -222,42 +209,13 @@ function reportResolution(source: ProfileReadSource, startedAt: number): void {
   diagnostics.event('profile.authority_read', { source, durationMs: Date.now() - startedAt });
 }
 
-/** Updates the canonical store's default tier; a first `model` creates the local authority. */
-export async function updateDefaultTier(
-  patch: { model?: string; reasoningEffort?: ReasoningEffort },
+export async function writeAccountProfile(
+  accountId: string,
+  expectedVersion: number,
+  catalog: ProfileCatalog,
 ): Promise<ProfileCatalogEnvelope> {
-  const authority = resolveProfileAuthority();
-
-  if (authority.kind === 'local' && loadLocalProfileAuthority() === null && patch.model) {
-    const defaultTier = patch.reasoningEffort === undefined
-      ? { model: patch.model }
-      : { model: patch.model, reasoningEffort: patch.reasoningEffort };
-
-    return writeLocalProfile({
-      roles: BUILTIN_PROFILE_CATALOG.roles,
-      tiers: { default: defaultTier },
-    });
-  }
-
-  const current = await loadActiveProfile();
-
-  const defaultTier = {
-    ...current.catalog.tiers.default,
-    ...patch,
-  };
-
-  const catalog: ProfileCatalog = {
-    roles: current.catalog.roles,
-    tiers: { ...current.catalog.tiers, default: defaultTier },
-  };
-
-  if (current.authority.kind === 'local') return writeLocalProfile(catalog);
   const auth = requireStoredAuthConfig();
-
-  const result = await updateCloudProfile(auth.origin, auth.token, {
-    catalog,
-    expectedVersion: current.version,
-  });
+  const result = await updateCloudProfile(auth.origin, auth.token, { catalog, expectedVersion });
 
   if ('conflict' in result) {
     throw new Error(
@@ -266,7 +224,7 @@ export async function updateDefaultTier(
     );
   }
 
-  cacheAccountProfile(current.authority.accountId, result.envelope);
+  cacheAccountProfile(accountId, result.envelope);
 
   return result.envelope;
 }

@@ -16,11 +16,23 @@ const traceabilityPath = join(leanRoot, "traceability.yaml");
 const allowedKernelAxioms = new Set(["propext", "Classical.choice", "Quot.sound"]);
 
 const allowedStatuses = new Set([
+  "proved-and-refined",
   "proved-in-abstract-model",
   "by-construction-witness",
   "trusted-model-assumption",
   "specified-not-modeled",
 ]);
+
+// `proved-and-refined` is a proof plus a bridge to the deployed code: each entry of
+// its `refinement` list pairs a fixture the model generated with the test that
+// runs the deployed TypeScript on it. `scripts/verify-lean.sh` regenerates every
+// fixture from the model and runs every named test, so the status cannot outlive
+// either half. What a fixture does NOT show is agreement on inputs it does not
+// contain: the bridge is a finite sample, and the proof covers the model alone.
+const fixtureRoot = join(leanRoot, "fixtures");
+
+const refinementPattern =
+  /^(lean\/fixtures\/([a-z0-9-]+)\.json) :: (packages\/[a-z0-9-]+\/tests\/[A-Za-z0-9._-]+\.test\.(?:ts|js))$/;
 
 const qualifiedNamePattern = /^Kinu(?:\.[A-Za-z_][A-Za-z0-9_']*)+$/;
 
@@ -85,6 +97,7 @@ function parseTraceability(source) {
         axioms: [],
         tsRefs: [],
         remainingEvidence: [],
+        refinement: [],
       };
       requirements.set(id, current);
       listKey = undefined;
@@ -99,7 +112,7 @@ function parseTraceability(source) {
       if (current.fields.has(key)) fail(`duplicate field at line ${lineNumber}: ${current.id}.${key}`);
       current.fields.add(key);
 
-      if (["theorems", "axioms", "tsRefs", "remainingEvidence"].includes(key)) {
+      if (["theorems", "axioms", "tsRefs", "remainingEvidence", "refinement"].includes(key)) {
         if (rawValue !== "" && rawValue !== "[]") {
           fail(`unsupported inline list at line ${lineNumber}: ${key}`);
         }
@@ -406,8 +419,10 @@ function relativePath(path) {
 // comment inside a SQL template ends the literal early, and because the SQL
 // carries no braces the depth survives and all four cited members still resolve.
 // Deciding parseability is tsc's job and this gate must not be read as doing it.
+// A `.js` file is scanned the same way: the device daemon (`packages/pc-agent`) is
+// plain JavaScript, and its declarations have the same top-level shapes.
 const tsRefPattern =
-  /^([A-Za-z0-9_.\-/]+\.ts)#([A-Za-z_$][A-Za-z0-9_$]*)(?:\.([A-Za-z_$][A-Za-z0-9_$]*))?$/;
+  /^([A-Za-z0-9_.\-/]+\.(?:ts|js))#([A-Za-z_$][A-Za-z0-9_$]*)(?:\.([A-Za-z_$][A-Za-z0-9_$]*))?$/;
 
 const tsTopDeclarationPattern =
   /^\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(function\s*\*?|class|interface|type|enum|const\s+enum|const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)/;
@@ -717,6 +732,53 @@ function tsStringLiterals(file, span) {
   return values;
 }
 
+/**
+ * Why a refinement entry does not bridge, or undefined when it does: the fixture
+ * is a generated case list naming itself, and the test exists and reads that
+ * fixture. Whether the test ASSERTS anything about it is the test's own review.
+ */
+function refinementProblem(fixture, name, test) {
+  let parsed;
+
+  try {
+    parsed = JSON.parse(readFileSync(resolve(repoRoot, fixture), "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return "the fixture does not exist";
+
+    if (error instanceof SyntaxError) return `the fixture is not JSON: ${error.message}`;
+    throw error;
+  }
+
+  if (parsed?.fixture !== name) return `the fixture names itself ${JSON.stringify(parsed?.fixture)}, not ${name}`;
+
+  if (!Array.isArray(parsed.cases) || parsed.cases.length === 0) return "the fixture holds no case";
+  let source;
+
+  try {
+    source = readFileSync(resolve(repoRoot, test), "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return "the test does not exist";
+    throw error;
+  }
+
+  if (!source.includes(fixture)) return `the test never reads ${fixture}`;
+
+  return undefined;
+}
+
+function fixtureNames() {
+  try {
+    return readdirSync(fixtureRoot);
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+const refinementFixtures = new Set();
+
+const refinementTests = new Set();
+
 const requirements = parseTraceability(readFileSync(traceabilityPath, "utf8"));
 
 if (requirements.size === 0) fail("traceability.yaml contains no requirements");
@@ -755,9 +817,13 @@ for (const requirement of requirements.values()) {
     fail(`${requirement.id}: trusted-model-assumption must enumerate at least one axiom`);
   }
 
-  if (["proved-in-abstract-model", "by-construction-witness"].includes(requirement.status) &&
+  if (["proved-and-refined", "proved-in-abstract-model", "by-construction-witness"].includes(requirement.status) &&
       requirement.theorems.length === 0) {
     fail(`${requirement.id}: ${requirement.status} must claim at least one theorem`);
+  }
+
+  if ((requirement.status === "proved-and-refined") !== (requirement.refinement.length > 0)) {
+    fail(`${requirement.id}: a refinement list belongs to proved-and-refined and to nothing else`);
   }
 
   if (requirement.status !== "trusted-model-assumption" && requirement.axioms.length > 0) {
@@ -794,6 +860,38 @@ for (const requirement of requirements.values()) {
 
     if (resolved.error !== undefined) fail(`${requirement.id}: tsRef ${ref} ${resolved.error}`);
   }
+
+  for (const entry of requirement.refinement) {
+    const match = refinementPattern.exec(entry);
+
+    if (match === null) {
+      fail(`${requirement.id}: refinement ${entry} is not \`lean/fixtures/<name>.json :: packages/<pkg>/tests/<file>.test.ts\` (or .test.js)`);
+      continue;
+    }
+
+    const [, fixture, name, test] = match;
+    refinementFixtures.add(fixture);
+    refinementTests.add(test);
+    const problem = refinementProblem(fixture, name, test);
+
+    if (problem !== undefined) fail(`${requirement.id}: refinement ${entry}: ${problem}`);
+  }
+}
+
+// A fixture no requirement claims is a bridge nothing relies on: either its
+// requirement lost the entry, or the fixture outlived its model.
+for (const entry of fixtureNames()) {
+  if (!refinementFixtures.has(`lean/fixtures/${entry}`)) {
+    fail(`lean/fixtures/${entry} is claimed by no requirement's refinement list`);
+  }
+}
+
+
+// `scripts/verify-lean.sh` runs exactly the tests the manifest names, one line each.
+if (process.argv.includes("--list-refinement-tests")) {
+  exitOnFailures();
+  process.stdout.write([...refinementTests].map((test) => `${test}\n`).join(""));
+  process.exit(0);
 }
 
 const declarations = collectDeclarations(walkLeanSources(leanRoot));
@@ -824,13 +922,7 @@ for (const name of declarations.axioms) {
 // `open`).
 //
 // Enrolled rather than discovered: a mirror nobody declared cannot be checked, so
-// adding one is a reviewable edit. Two mirrors are deliberately absent because
-// they hold in neither direction today and the model, not the gate, is what has
-// to move: `Execution.Capabilities.ExecutorKind` still names `container` and `ssh`
-// against `ExecutorKind`'s `sandbox`, `laptop` and `parent`, and
-// `Execution.ToolSystem.TopLevelTool` still names five tools against
-// `BUILTIN_TOOLS`. Both are recorded as remaining evidence on PR-EXEC-001 and
-// PR-EXEC-002.
+// adding one is a reviewable edit.
 const STATE_MIRRORS = [
   { lean: "Kinu.Exploration.Settle.Unit", ts: "packages/core/src/types/swarm.ts#SWARM_UNITS" },
   { lean: "Kinu.Exploration.Settle.Expand", ts: "packages/core/src/types/swarm.ts#SWARM_EXPANDS" },
@@ -847,6 +939,7 @@ const STATE_MIRRORS = [
   { lean: "Kinu.Exploration.Publication.Surface", ts: "packages/core/src/types/objective.ts#PUBLICATION_SURFACES" },
   { lean: "Kinu.NodeStatus", ts: "packages/core/src/types/mcts.ts#NodeStatus" },
   { lean: "Kinu.Execution.Capabilities.Capability", ts: "packages/core/src/execution/types.ts#EXECUTOR_CAPABILITIES" },
+  { lean: "Kinu.Execution.Capabilities.ExecutorKind", ts: "packages/core/src/execution/types.ts#ExecutorKind" },
   { lean: "Kinu.Storage.SnapshotChain.Kind", ts: "packages/devbox/src/storage.ts#CheckpointKind" },
 ];
 
@@ -924,7 +1017,8 @@ if (manifestOnly) {
   console.log(
     `check-traceability: manifest OK — ${requirements.size} requirements, ` +
     `${citedSymbols.size} cited TypeScript declarations, ${STATE_MIRRORS.length} state mirrors, ` +
-    `${theoremOwners.size} claimed theorems (kernel axiom audit skipped: --manifest-only)`,
+    `${theoremOwners.size} claimed theorems, ${refinementFixtures.size} refinement fixtures ` +
+    "(kernel axiom audit skipped: --manifest-only)",
   );
   process.exit(0);
 }
@@ -1029,5 +1123,6 @@ const statusSummary = [...statusCounts].map(([status, count]) => `${status}=${co
 
 console.log(
   `check-traceability: OK — ${requirements.size} requirements, ${reported.size} theorems, ` +
-  `${declarations.axioms.size} trusted axiom (${statusSummary})`,
+  `${declarations.axioms.size} trusted axiom, ${refinementFixtures.size} refinement fixtures ` +
+  `(${statusSummary})`,
 );

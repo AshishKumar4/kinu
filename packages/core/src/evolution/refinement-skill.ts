@@ -2,16 +2,16 @@
 // may grant instructions, so nothing else may shorten this path.
 //
 // Staged bytes live under `.kinu/` because `discoverSkills` reads
-// `/workspace/skills` every turn regardless of trust. Decisions carry the
+// the workspace skills root every turn regardless of trust. Decisions carry the
 // displayed digest because list positions can shift between show and decide.
 // Trust is written before the file: a trust row without a file is inert; a
 // file without a trust row is live in the prompt.
 
 import { instructionDigest } from '../safety/instruction-trust';
-import { BUILTIN_SKILL_NAMES, skillPath } from '../skills/discover';
+import { BUILTIN_SKILL_NAMES, workspaceSkillPath } from '../skills/discover';
 import { parseSkillFile, skillNameProblem } from '../skills/parse';
-import { SKILLS_DIR } from '../skills/types';
 import type { VFS } from '../types/primitives';
+import { vfsDirname } from '../utils/vfs-helpers';
 import { renderThrownChain } from '../obs/index';
 import {
   createRefinementStore, refinementRequestView, refinementStagingPath,
@@ -64,7 +64,7 @@ export async function routeSkill(
       + 'its name, because a built-in carries system placement no file has earned');
   }
 
-  const canonical = skillPath(parsed.skill.name);
+  const canonical = workspaceSkillPath(parsed.skill.name);
 
   if (edit.path !== canonical) {
     return refused(`the path must be the canonical skill path for its own name (${canonical}), `
@@ -90,7 +90,7 @@ export async function routeSkill(
   }
 
   const staged = refinementStagingPath(request.id, parsed.skill.name);
-  await vfs.mkdir(stagingDirOf(staged), { recursive: true });
+  await vfs.mkdir(vfsDirname(staged), { recursive: true });
   await vfs.writeFile(staged, edit.source);
 
   const route: RefinementRoute = {
@@ -107,10 +107,6 @@ export async function routeSkill(
   return route;
 }
 
-function stagingDirOf(staged: string): string {
-  return staged.slice(0, staged.lastIndexOf('/'));
-}
-
 /** The staged bytes for one route, or null when the staging is gone. */
 async function readStagedSkill(
   deps: RefinementDeps,
@@ -121,9 +117,9 @@ async function readStagedSkill(
 }
 
 function stagedPathFor(request: RefinementRequest, route: RefinementRoute): string {
-  const name = route.target.slice(route.target.lastIndexOf('/') + 1).replace(/\.md$/u, '');
+  const folder = vfsDirname(route.target);
 
-  return refinementStagingPath(request.id, name);
+  return refinementStagingPath(request.id, folder.slice(folder.lastIndexOf('/') + 1));
 }
 
 /**
@@ -400,7 +396,7 @@ async function promoteStagedSkill(
     }
 
     try {
-      await vfs.mkdir(SKILLS_DIR, { recursive: true });
+      await vfs.mkdir(vfsDirname(route.target), { recursive: true });
       await vfs.writeFile(route.target, source);
     } catch (err) {
       // Staging is untouched, so the next settle retries.

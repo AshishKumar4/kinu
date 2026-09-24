@@ -12,9 +12,9 @@ import { PreviewChrome } from '@/components/PreviewFrame';
 import { SidebarRail } from '@/components/SidebarRail';
 import { SubordinateTabs } from '@/components/SubordinateTabs';
 import { WorkspaceBar, type Altitude } from '@/components/WorkspaceBar';
-import { WorkSurface, type SurfaceKind } from '@/components/surfaces/WorkSurface';
+import { WorkSurface } from '@/components/surfaces/WorkSurface';
 import { InspectorToggle, WorkbenchPanels } from '@/components/WorkbenchPanels';
-import { SLATE_PREFIX } from '@/components/surfaces/presence';
+import { SLATE_PREFIX, type SurfaceKind } from '@kinu.run/core';
 import { SupervisePage } from '@/pages/SupervisePage';
 import { AccountProvider } from '@/hooks/use-account';
 import { WorkspaceRosterProvider } from '@/hooks/use-workspace-roster';
@@ -493,14 +493,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
             <WorkbenchPanels
               scope={kind}
               workspace={undefined}
-              contents={{
-                pendingActions: isMovie ? [] : work.pending(),
-                pendingConsents: [],
-                slates,
-                previewFocus: null,
-                pinnedPorts: [],
-                activePlan: plan,
-              }}
+              contents={{ pendingActions: isMovie ? [] : work.pending(), pendingConsents: [], activePlan: plan }}
               chat={(inspectorControl) => <>
                 <SubordinateTabs
                   workspace={LANDING_WORKSPACE}

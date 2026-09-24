@@ -18,7 +18,7 @@ import {
   type ProviderCatalogEntry, type DeviceFlowStart,
   type CloudflareGatewayStatus, type CloudflareAccountStatus,
 } from "@/lib/user-api";
-import { Card, Field, inputCls } from "@/components/ui/form";
+import { Card, Choice, Field, inputCls } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -113,17 +113,15 @@ function CloudflareAccountSection({ status, onChanged }: {
 
   return (
     <Field label="Workers AI account">
-      <select
+      <Choice label="Workers AI account"
+        className="sm:max-w-sm"
         value={status.selectedId ?? ''}
-        onChange={(e) => choose(e.target.value)}
         disabled={saving}
-        className={`${inputCls} sm:max-w-sm`}
-      >
-        {status.selectedId === null && <option value="">(no account selected)</option>}
-        {status.accounts.map((account) => (
-          <option key={account.id} value={account.id}>{account.name}</option>
-        ))}
-      </select>
+        options={[
+          ...(status.selectedId === null ? [{ value: '', label: '(no account selected)' }] : []),
+          ...status.accounts.map((account) => ({ value: account.id, label: account.name })),
+        ]}
+        onChange={choose} />
       {error && <p className="text-xs p-danger">{error}</p>}
     </Field>
   );
@@ -171,17 +169,12 @@ function CloudflareGatewaySection({ status, returnTo, onChanged }: {
           <span className="font-mono p-text">{status.selectedId}</span>
         </div>
       ) : (
-        <select
+        <Choice label="AI Gateway"
+          className="sm:max-w-sm"
           value={status.selectedId ?? ''}
-          onChange={(e) => choose(e.target.value)}
           disabled={saving}
-          className={`${inputCls} sm:max-w-sm`}
-        >
-          <option value="">(no gateway selected)</option>
-          {status.gateways.map((gw) => (
-            <option key={gw.id} value={gw.id}>{gw.id}</option>
-          ))}
-        </select>
+          options={[{ value: '', label: '(no gateway selected)' }, ...status.gateways.map((gw) => ({ value: gw.id, label: gw.id }))]}
+          onChange={choose} />
       )}
       {error && <p className="text-xs p-danger">{error}</p>}
     </Field>

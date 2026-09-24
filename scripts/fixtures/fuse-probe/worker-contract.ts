@@ -208,6 +208,34 @@ export async function destroyProbeRuntime(
 }
 
 
+/**
+ * The token-guarded JSON API: a request without the run's token is refused before anything is read,
+ * `/health` answers without the container, and only a body its route accepts reaches the box.
+ */
+export async function serveProbeRequest(request: Request, token: string | undefined, box: () => ProbeBox): Promise<Response> {
+  if (!isAuthorized(token, request.headers.get("x-fuse-probe-token"))) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  const pathname = new URL(request.url).pathname;
+
+  if (request.method === "GET" && pathname === "/health") return Response.json({ ok: true });
+
+  let command: ProbeRequest;
+
+  try {
+    command = parseProbeRequest(pathname, await request.json());
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) }, { status: 400 });
+  }
+
+  try {
+    return await handleProbeOp(pathname, box(), command);
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) }, { status: 500 });
+  }
+}
+
 function startRequest(request: ProbeRequest): StartProcessRequest {
   if ('operationId' in request && 'command' in request) return request;
   throw new Error('start request did not pass StartProcessSchema');

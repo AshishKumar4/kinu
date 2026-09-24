@@ -314,7 +314,7 @@ Every fetch goes through `withRateLimitRetry` (`packages/core/src/providers/rate
 
 Classification is narrow. 429 and 529 always count. A 503 counts only when status text, `x-error-code` or body matches overload, capacity, too many requests, or rate limit. An unreadable 503 propagates rather than reading healthy. Without `Retry-After` the wait is a full-jitter draw doubling from 2 s to a 60 s cap (`DEFAULT_BASE_DELAY_MS`, `DEFAULT_MAX_DELAY_MS`). Non-replayable bodies pass through untouched. SDK transport retry is pinned at `PROVIDER_SDK_RETRIES = 2`, stated at the `streamText` call, so a vendor default cannot move it silently.
 
-`ProviderPacer` (`packages/core/src/providers/pacing.ts`) spaces request starts per shared host. It holds the lane only while awaiting headers. A request sleeping out `Retry-After` frees capacity for siblings. `declareWait` joins siblings into one cooldown instead of each starting into a refusing limit.
+`ProviderPacer` (`packages/core/src/providers/pacing.ts`) holds requests to a host behind its declared cooldown. `declareWait` joins siblings into one cooldown instead of each starting into a refusing limit. The pacer counts no requests. Workers limits connections waiting for headers to six per invocation and queues the seventh itself. An isolate-wide count made one request wait on another request's release, and workerd cancels such a request as hung: HTTP 500 `error code: 1101` on kinu.run, 2026-09-23.
 
 ## Environment variables
 
@@ -324,8 +324,9 @@ Classification is narrow. 429 and 529 always count. A 503 counts only when statu
 | `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` | Wrangler secret | Retired encryption keys (comma-separated), read-only, for a rotation window |
 | `WEBHOOK_ROUTE_SECRET` | Wrangler secret | **Required for webhook ingress.** Signs the route capability every public delivery URL carries (`events/webhook-route.ts`). Without it, webhook creation answers 503 and delivery answers 404. Rotating it revokes every issued URL. |
 | `AI_GATEWAY_URL` | wrangler.jsonc `vars` | Platform AI Gateway endpoint, in the Worker's own account. Names the gateway, upstream provider and endpoint prefix the `AI` binding transport addresses. No token needed. |
-| `SANDBOX_TRANSPORT` | wrangler.jsonc `vars` | Container control plane, `rpc`. A stored per-sandbox transport beats this var on a cold start; the var covers a future `getSandbox` that omits the option. |
+| `SANDBOX_TRANSPORT` | wrangler.jsonc `vars` | Container control plane, `rpc`. A stored per-sandbox transport beats this var on a cold start; the var covers a `getSandbox` that omits the option, as the SDK's own `proxyToSandbox` does. Product code opens clients only through `openSandbox`; the release-config gate holds the var to `SANDBOX_TRANSPORT`. |
 | `PREVIEW_HOST_SUFFIX` | wrangler.jsonc `vars` | Zone Workspace and Sandbox previews are served under, one capability hostname per exposed port. Requires a proxied wildcard DNS record on that zone plus a `*.<zone>/*` route; the wrangler.jsonc comment has both steps. Every host under it except the app's own serves previews and nothing else. Empty means previews are unavailable. |
+| `PREVIEW_HOST_PORT` | `vite dev` only | The port preview and share URLs carry when the preview zone is not on 443. `vite dev` serves `*.preview.localhost` on its own https port (`packages/cf-backend/vite-preview-zone.ts`) and sets this with `PREVIEW_HOST_SUFFIX`; production leaves it unset. |
 | `CLI_PUBLIC_ORIGIN` | wrangler.jsonc `vars` | Origin embedded in installer/setup commands |
 | `CLI_APPROVAL_ORIGIN` | wrangler.jsonc `vars` | Browser approval origin for CLI auth |
 | `GOOGLE_OAUTH_CLIENT_ID` | wrangler.jsonc `vars` | Google OAuth client id |
@@ -343,7 +344,7 @@ Classification is narrow. 429 and 529 always count. A 503 counts only when statu
 | `CONTROL_PLANE_ADMINS` | wrangler.jsonc `vars` | Operator emails allowed on `/control` |
 | `CONTROL_PLANE_ACCESS_TEAM_DOMAIN`, `CONTROL_PLANE_ACCESS_AUD` | wrangler.jsonc `vars` | The Cloudflare Access team and application the `/control` assertion is verified against (`control-plane/access-gate.ts`). Unset or empty means the admin plane answers 404 to everyone |
 | `DEV_USER_EMAIL` | wrangler.jsonc `vars` | The eval service identity, `eval-service@kinu.run`. Off localhost it applies only to a request presenting `DEV_IDENTITY_SECRET`, and the admin gate refuses it regardless |
-| `DEV_IDENTITY_SECRET` | Wrangler secret | The whole authority for the `DEV_USER_EMAIL` identity, sent in `x-kinu-dev-identity` |
+| `DEV_IDENTITY_SECRET` | Wrangler secret | The whole authority for the `DEV_USER_EMAIL` identity, sent in `x-kinu-dev-identity-secret` (core `DEV_IDENTITY_HEADER`; Workers Logs redacts a header whose name contains `secret`) |
 | `KINU_ORIGIN` | CLI shell env | Override CLI app origin for alternate deployments |
 | `KINU_BASE_URL` | CLI shell env | Advanced direct LLM override for local agents |
 | `KINU_AUTH` | CLI shell env | Advanced direct LLM auth override for local agents |

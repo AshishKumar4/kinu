@@ -1,8 +1,9 @@
 import type { SqlExecutor, SqlRow } from "../types";
 import type { CraftedTool, CraftedToolProvider } from "../codemode/builder";
+import { fillToCapacity, relaxFtsQuery, sanitizeFtsQuery } from "../memory/query";
 import * as v from "valibot";
 
-type CraftRow = SqlRow<{
+type CraftedToolRow = SqlRow<{
 	name: string;
 	description: string;
 	params: string | null;
@@ -26,7 +27,7 @@ function isCraftScope(scope: string): scope is CraftedTool["scope"] {
 	return scope === "local" || scope === "shared";
 }
 
-function rowToTool(row: CraftRow): CraftedTool {
+function rowToTool(row: CraftedToolRow): CraftedTool {
 	if (!isCraftScope(row.scope)) throw new Error(`invalid crafted tool scope: ${row.scope}`);
 
 	return {
@@ -40,7 +41,7 @@ function rowToTool(row: CraftRow): CraftedTool {
 	};
 }
 
-/** The `crafted_tools` table, FTS5 index and sync triggers; standalone so schema init needs no store. */
+/** Standalone so schema init needs no store. */
 export function initCraftedToolsTables(sql: SqlExecutor): void {
 	void sql`
 		CREATE TABLE IF NOT EXISTS crafted_tools (
@@ -140,34 +141,76 @@ export class CraftStore implements CraftedToolProvider {
 	}
 
 	get(name: string): CraftedTool | null {
-		const rows = this.sql<CraftRow>`SELECT * FROM crafted_tools WHERE name = ${name}`;
+		const rows = this.sql<CraftedToolRow>`SELECT * FROM crafted_tools WHERE name = ${name}`;
 
 		return rows.length > 0 ? rowToTool(rows[0]) : null;
 	}
 
 	list(): CraftedTool[] {
-		const rows = this.sql<CraftRow>`SELECT * FROM crafted_tools ORDER BY updated_at DESC`;
+		const rows = this.sql<CraftedToolRow>`SELECT * FROM crafted_tools ORDER BY updated_at DESC`;
 
 		return rows.map(rowToTool);
 	}
 
+	/** All terms first, then any term to fill `limit`, as memory recall does. */
 	search(query: string, limit = 10): CraftedTool[] {
-		const safeQuery = `"${query.replace(/"/g, '""')}"`;
+		const strictQuery = sanitizeFtsQuery(query);
+		const strict = this.matching(strictQuery, limit);
+		const relaxed = strict.length >= limit ? null : relaxFtsQuery(strictQuery);
 
-		const rows = this.sql<CraftRow>`
+		const rows = relaxed === null
+			? strict
+			: fillToCapacity(strict, this.matching(relaxed, limit), limit, (row) => row.name);
+
+		return rows.map(rowToTool);
+	}
+
+	private matching(match: string, limit: number): CraftedToolRow[] {
+		return this.sql<CraftedToolRow>`
 			SELECT t.* FROM crafted_tools t
 			JOIN crafted_tools_fts f ON t.rowid = f.rowid
-			WHERE crafted_tools_fts MATCH ${safeQuery}
+			WHERE crafted_tools_fts MATCH ${match}
 			ORDER BY rank
 			LIMIT ${limit}
 		`;
-
-		return rows.map(rowToTool);
 	}
 
 	getAll(): CraftedTool[] {
-		const rows = this.sql<CraftRow>`SELECT * FROM crafted_tools`;
+		const rows = this.sql<CraftedToolRow>`SELECT * FROM crafted_tools`;
 
 		return rows.map(rowToTool);
 	}
+}
+
+/** `AgentRuntime.craftStore`: a miss is `undefined` and a write answers nothing. */
+export interface CraftStoreView {
+	create(tool: Omit<CraftedTool, "createdAt" | "updatedAt">): void;
+	update(name: string, patch: Partial<CraftedTool>): void;
+	get(name: string): CraftedTool | undefined;
+	delete(name: string): void;
+	list(): CraftedTool[];
+	search(query: string, limit?: number): CraftedTool[];
+}
+
+export function craftStoreView(store: CraftStore): CraftStoreView {
+	return {
+		create(tool) {
+			store.create(tool);
+		},
+		update(name, patch) {
+			store.update(name, patch);
+		},
+		get(name) {
+			return store.get(name) ?? undefined;
+		},
+		delete(name) {
+			store.delete(name);
+		},
+		list() {
+			return store.list();
+		},
+		search(query, limit = 10) {
+			return store.search(query, limit);
+		},
+	};
 }

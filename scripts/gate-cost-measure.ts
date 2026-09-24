@@ -50,13 +50,13 @@
  *     [--quiet-wait=<s>] [--shared-wait=<s>]
  */
 
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { tolerate } from '@kinu.run/core/obs';
 import { KILL_AFTER_SECONDS } from './deadline';
 import {
-  COST_TABLE, QUIET_LOAD, type RowCost, costRssMb, costThreads, machineName, readCosts, writeCosts,
+  COST_TABLE, KINU_WORK, QUIET_LOAD, type RowCost, costRssMb, costThreads, holdsCheckoutResource, machineName, readCosts, writeCosts,
 } from './gate-cost';
 import {
   GATE_DEADLINE_SECONDS, SHARED_POOL, gatesFor, packageScripts, sharedOf, trackedTestFiles,
@@ -276,17 +276,9 @@ function rusageCpuSeconds(report: string): number {
   return seconds;
 }
 
-/** A Kinu suite, dev server or typechecker alive in any checkout. `vitest` and
- *  `vite` reach for the workerd pool and Chrome, which are ONE machine resource
- *  shared by every worktree; `tsc` is `bun run check` and takes the box for
- *  minutes. */
-const KINU_WORK = /(?:vitest|vite|tsc|wrangler|workerd)/u;
-
-const KINU_TREE = /(?:Kinu-wt-|\/Proteus\/)/u;
-
 /** Why this box cannot be measured on right now. `shared` separates the two
- *  kinds: another checkout's suite holds a resource this row needs and must be
- *  waited out, while load is only load and can be recorded instead. */
+ *  kinds: this checkout's other suite holds a resource this row needs and must
+ *  be waited out, while load is only load and can be recorded instead. */
 interface Contention {
   readonly reason: string;
   readonly shared: boolean;
@@ -296,11 +288,11 @@ interface Contention {
  * Why this box is not quiet enough to measure on, or undefined when it is.
  *
  * Two conditions, because they answer different questions. The process scan
- * NAMES the Kinu work a lane can be asked to stop, and a second workerd pool
- * beside another worktree's is not a measurement at all — it is two lanes
- * fighting over one resource. The load average counts everything, including
- * work nobody here owns (a Lean build in another tree), and a figure taken
- * under it is still a figure: see {@link QUIET_LOAD}.
+ * NAMES the work of this checkout that holds what the row needs, and a second
+ * suite on one checkout's state is not a measurement at all. The load average
+ * counts everything else, including other checkouts' suites and work nobody
+ * here owns (a Lean build in another tree), and a figure taken under it is
+ * still a figure: see {@link QUIET_LOAD}.
  *
  * `own` is this process's own session, which is measuring rather than
  * competing.
@@ -315,7 +307,12 @@ function contention(own: number): Contention | undefined {
     if (stat === undefined || Number(stat.slice(stat.lastIndexOf(') ') + 2).split(' ')[3]) === own) continue;
     const command = tolerate(() => readFileSync(`/proc/${entry}/cmdline`, 'utf8'), 'enoent') ?? '';
 
-    if (KINU_WORK.test(command) && KINU_TREE.test(command)) {
+    if (!KINU_WORK.test(command)) continue;
+    // Another user's working directory is unreadable, and no checkout here is theirs.
+    const owner = tolerate(() => statSync(`/proc/${entry}`).uid, 'enoent');
+    const cwd = owner === process.getuid?.() ? tolerate(() => readlinkSync(`/proc/${entry}/cwd`), 'enoent') : undefined;
+
+    if (holdsCheckoutResource({ command, cwd }, root)) {
       return {
         reason: `pid ${entry} holds a shared resource: ${command.replaceAll('\0', ' ').trim().slice(0, 90)}`,
         shared: true,
@@ -493,10 +490,10 @@ if (import.meta.main) {
     // WAIT ON THE CONDITION, NOT A CLOCK, and wait differently for the two
     // conditions.
     //
-    // The workerd pool, a dev server and Chrome are ONE machine resource shared
-    // by every worktree, so a row that reaches for one waits out another
-    // checkout's however long that takes, up to `--shared-wait`, and is NAMED
-    // rather than measured beside a second pool. Which rows those are is
+    // A checkout's workerd pool, dev server and Chrome share its state, cache
+    // and ports ({@link holdsCheckoutResource}), so a row that reaches for one
+    // waits out this checkout's other suite however long that takes, up to
+    // `--shared-wait`, and is NAMED rather than measured beside it. Which rows those are is
     // DERIVED — the command, the package script it resolves to, and the browser
     // modules every file it claims reaches — never a list here. The browser
     // half is the plan's own `shared` column ({@link sharedOf}), so the row the

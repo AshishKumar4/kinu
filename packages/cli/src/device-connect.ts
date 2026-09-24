@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
+import * as v from 'valibot';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { classify, classifyErrorCode, diagnostics, KinuError, renderThrownChain, tolerate, toKinuError } from '@kinu.run/core/obs';
 import { describeGpuNodes, effectiveDeviceMode, sandboxReasonFix } from '@kinu.run/core';
@@ -82,7 +83,7 @@ export interface ConnectOutcomeDescription {
 }
 
 export type ConnectDeviceResult =
-  | { kind: 'connected'; deviceId: string; label: string; sandbox: CloudDeviceSandbox }
+  | { kind: 'connected'; deviceId: string; label: string; sandbox: CloudDeviceSandbox; wholeMachine: boolean }
   | { kind: 'cancelled'; deviceId: string }
   | { kind: 'already-running'; connected: boolean };
 
@@ -96,7 +97,7 @@ export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions
 
   assertDaemonPlatformSupported();
   const runtime = daemonRuntime();
-  const device = await registerDeviceForConnect(auth, opts.label);
+  const device = await registerDeviceForConnect(auth, opts.label, previousDeviceToken(auth.origin));
   installDaemonFiles(device);
   const launch = startInstalledDaemon(opts.session === true, runtime);
   // The daemon must show as connected on the server before success is claimed.
@@ -106,7 +107,9 @@ export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions
   thisDeviceConnected = true;
 
   // The hub is the authority on the machine's name, not the name typed at the prompt.
-  return { kind: 'connected', deviceId: device.deviceId, label: connected.label, sandbox: connected.sandbox };
+  return {
+    kind: 'connected', deviceId: device.deviceId, label: connected.label, sandbox: connected.sandbox, wholeMachine: connected.wholeMachine,
+  };
 }
 
 export interface DaemonStatus {
@@ -179,7 +182,7 @@ export async function deviceStatusLine(): Promise<string> {
     const connected = devices.filter((device) => device.connected);
 
     if (connected.length > 0) {
-      const named = connected.map((device) => `${device.label} (${sandboxStateTag(device.sandbox)})`);
+      const named = connected.map((device) => `${device.label} (${device.wholeMachine ? 'whole machine' : sandboxStateTag(device.sandbox)})`);
 
       return `Connected: ${named.join(', ')}`;
     }
@@ -210,8 +213,12 @@ export function describeConnectOutcome(result: ConnectDeviceResult, session: boo
   }
 }
 
-/** The fix sentence comes from `@kinu.run/core`; the daemon's reason code (`no_bwrap`, `no_userns`) is deliberately not printed. */
-export function describeDeviceSandbox(sandbox: CloudDeviceSandbox): string[] {
+/** The fix sentence comes from `@kinu.run/core`; the daemon's reason code is not printed. */
+export function describeDeviceSandbox(sandbox: CloudDeviceSandbox, wholeMachine = false): string[] {
+  if (wholeMachine) {
+    return ['Linked from /, so the agent has this whole machine: every file you can open, and its commands run as you.'];
+  }
+
   switch (effectiveDeviceMode(sandbox)) {
     case 'sandboxed':
       return [
@@ -260,11 +267,25 @@ async function listDevicesForConnect(auth: DeviceAuth, doing: string) {
   }
 }
 
-async function registerDeviceForConnect(auth: DeviceAuth, label: string | undefined) {
+/** This machine's token on `origin`: linking again replaces its registration. */
+function previousDeviceToken(origin: string): string | undefined {
+  const text = tolerate(() => readFileSync(DEVICE_CONFIG_PATH, 'utf-8'), 'enoent');
+
+  if (text === undefined) return undefined;
+  const parsed = v.safeParse(PreviousDeviceSchema, tolerate(() => JSON.parse(text), 'malformed-input'));
+
+  if (!parsed.success || parsed.output.origin.replace(/\/+$/, '') !== origin.replace(/\/+$/, '')) return undefined;
+
+  return parsed.output.token;
+}
+
+const PreviousDeviceSchema = v.object({ origin: v.string(), token: v.string() });
+
+async function registerDeviceForConnect(auth: DeviceAuth, label: string | undefined, replaces: string | undefined) {
   try {
-    return await registerCloudDevice(auth.origin, auth.token, label);
+    return await registerCloudDevice(auth.origin, auth.token, label, replaces);
   } catch (cause) {
-    const detail = redactSecrets(renderThrownChain({ cause }), [auth.token]);
+    const detail = redactSecrets(renderThrownChain({ cause }), [auth.token, ...(replaces === undefined ? [] : [replaces])]);
 
     if (/\b(?:duplicate|already exists|already in use)\b/i.test(detail)) {
       throw new KinuError(
@@ -308,7 +329,7 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
     user: device.userId,
     token: device.token,
     origin: device.origin.replace(/\/+$/, ''),
-    // The directory `kinu connect` ran in is the consented root; the hub scopes base-tier file calls to it.
+    // The directory `kinu connect` ran in is the consented root.
     root: process.cwd(),
   }, null, 2)}\n`;
 

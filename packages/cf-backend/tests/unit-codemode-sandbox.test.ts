@@ -8,7 +8,7 @@ import type { CraftedTool, CraftStore, JsonValue } from "@kinu.run/core";
 import { craftFailureMarker, selectInjectableCraftedTools } from "@kinu.run/core";
 import { createTestSql, scratchDir } from "@kinu.run/test-utils";
 import { initCraftedToolsTables } from "@kinu.run/agent-utils/stores";
-import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from "@kinu.run/core";
+import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE, WORKSPACE_ROOT } from "@kinu.run/core";
 // @cloudflare/codemode needs the workerd-only module, which the preload's boundary stub serves.
 import { renderToolsPrelude } from "../src/codemode-sandbox";
 
@@ -185,54 +185,13 @@ describe("defineCrafted — a tool breaks only its own name", () => {
 });
 
 describe("createRequire — Node's fs and child_process over the workspace", () => {
-  const files = new Map<string, string>([["notes.md", "hello"]]);
-
   const workspace = {
-    readFile: async (path: string) => {
-      const text = files.get(path);
-
-      if (text === undefined) throw new Error(`workspace.readFile: ENOENT ${path}`);
-
-      return text;
-    },
-    writeFile: async (path: string, content: string) => {
-      files.set(path, content);
-
-      return "ok";
-    },
-    readdir: async (path: string) => {
-      if (path !== "/" && path !== ".") throw new Error("ENOTDIR");
-
-      return [...files.keys()];
-    },
-    exists: async (path: string) => files.has(path),
     exec: async (command: string) => command.startsWith("false")
       ? "Error (exit 1)\n--- stderr ---\nnope"
       : `ran: ${command}`,
   };
 
-  const require = shim.createRequire({ workspace, builtins: { "node:path": { join: (...parts: string[]) => parts.join("/") } } });
-
-  test("fs/promises reads and writes workspace files", async () => {
-    const fs = require("fs/promises");
-    expect(await fs.readFile("notes.md", "utf8")).toBe("hello");
-    await fs.writeFile("out.txt", "written");
-    expect(files.get("out.txt")).toBe("written");
-    await fs.appendFile("out.txt", "!");
-    expect(files.get("out.txt")).toBe("written!");
-    expect(await fs.readdir("/")).toEqual(["notes.md", "out.txt"]);
-    expect((await fs.stat("notes.md")).isFile()).toBe(true);
-    expect((await fs.stat("/")).isDirectory()).toBe(true);
-  });
-
-  test("a missing file is an ENOENT error, like Node's", async () => {
-    const err = await rejectionOf(require("node:fs/promises").readFile("absent.md", "utf8"));
-    expect(err.message).toContain("ENOENT");
-  });
-
-  test("the sync fs API names the async form instead of hanging", () => {
-    expect(() => require("fs").readFileSync("notes.md")).toThrow('fs.readFileSync is not available in this sandbox: use await require("fs/promises").readFile(...)');
-  });
+  const require = shim.createRequire({ workspace, builtins: { "node:path": { join: (...parts: string[]) => parts.join("/") } }, cwd: WORKSPACE_ROOT });
 
   test("child_process.exec runs through the workspace shell, in promise and callback form", async () => {
     const { exec } = require("child_process");

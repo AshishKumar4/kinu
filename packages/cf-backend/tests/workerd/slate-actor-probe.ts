@@ -26,8 +26,8 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
   async craftedSlate(): Promise<string> {
     const vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
     const files = vfs.as(CRED_SESSION_USER);
-    files.mkdir('/home/user/slates/crafted', { recursive: true });
-    files.writeFile('/home/user/slates/crafted/package.json', JSON.stringify({
+    files.mkdir('/home/main/slates/crafted', { recursive: true });
+    files.writeFile('/home/main/slates/crafted/package.json', JSON.stringify({
       main: 'server.ts', slate: { bindings: { CALCULATE: { kind: 'tool', name: 'calculate' } } },
     }));
     const sql = bindAgentSql(this);
@@ -88,9 +88,9 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
 
   async code(mode: WorkMode, code: string): Promise<{ answer: string; file: string }> {
     const files = new SqliteVFS(this.ctx.storage.sql, this.ctx).as(CRED_SESSION_USER);
-    files.mkdir('/home/user', { recursive: true });
+    files.mkdir('/home/main', { recursive: true });
 
-    if (!files.exists('/home/user/plan-data.txt')) files.writeFile('/home/user/plan-data.txt', 'original');
+    if (!files.exists('/home/main/plan-data.txt')) files.writeFile('/home/main/plan-data.txt', 'original');
     const sql = bindAgentSql(this);
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS crafted_tools(name TEXT, score REAL, last_used_at INTEGER)');
     initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
@@ -107,9 +107,9 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
         executionRouter: { getProviders: () => [{
           name: 'workspace', positionalArgs: true,
           tools: {
-            readFile: { planAllowed: true, description: 'Read the fixture file', execute: async () => files.readFileString('/home/user/plan-data.txt') },
+            readFile: { planAllowed: true, description: 'Read the fixture file', execute: async () => files.readFileString('/home/main/plan-data.txt') },
             writeFile: { description: 'Modify the fixture file', execute: async () => {
-              files.writeFile('/home/user/plan-data.txt', 'changed');
+              files.writeFile('/home/main/plan-data.txt', 'changed');
 
               return 'written';
             } },
@@ -124,6 +124,6 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     if (execute === undefined) throw new Error('No callable codemode tool');
     const answer = await execute({ code }, { toolCallId: 'mode-probe', messages: [] });
 
-    return { answer: JSON.stringify(answer ?? null), file: files.readFileString('/home/user/plan-data.txt') };
+    return { answer: JSON.stringify(answer ?? null), file: files.readFileString('/home/main/plan-data.txt') };
   }
 }

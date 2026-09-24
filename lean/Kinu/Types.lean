@@ -14,35 +14,6 @@ inductive NodeStatus where
   | failed
   deriving Repr, BEq, DecidableEq, Inhabited
 
-structure NodeData where
-  id       : String
-  parentId : Option String
-  depth    : Nat
-  visits   : Nat
-  value    : Float
-  status   : NodeStatus
-  action   : String
-  deriving Repr, BEq, Inhabited
-
-/-! ## Capability model -/
-
-inductive Op where
-  | ToolCall : String → String → Op
-  | SQLWrite
-  | SQLRead
-  | NetworkFetch
-  | ScaffoldWrite
-  | SpawnSubAgent
-  deriving Repr, BEq
-
-structure ResolvedProvider where
-  ns        : String
-  toolNames : List String
-  deriving Repr, BEq
-
-def grantableOps (providers : List ResolvedProvider) : List Op :=
-  providers.flatMap fun p => p.toolNames.map fun n => Op.ToolCall p.ns n
-
 /-! ## CraftStore types -/
 
 structure CraftedTool where
@@ -69,15 +40,14 @@ structure ScaffoldHistory where
 /-! ## MCTS system state -/
 
 structure OrchestratorState where
-  nodes     : List NodeData
-  budget    : Nat
-  storageId : String
+  budget  : Nat
+  actorId : String
   deriving Repr, BEq, Inhabited
 
 structure BranchState where
-  id        : String
-  storageId : String
-  score     : Option Float
+  id      : String
+  actorId : String
+  score   : Option Float
   deriving Repr, BEq, Inhabited
 
 structure MCTSSystemState where
@@ -86,7 +56,7 @@ structure MCTSSystemState where
   deriving Repr, BEq, Inhabited
 
 def StorageIsolated (s : MCTSSystemState) : Prop :=
-  ∀ b ∈ s.branches, b.storageId ≠ s.orch.storageId
+  ∀ b ∈ s.branches, b.actorId ≠ s.orch.actorId
 
 /-! ## Evolution types -/
 

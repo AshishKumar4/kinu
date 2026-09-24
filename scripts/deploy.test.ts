@@ -363,8 +363,8 @@ describe("deploy gate", () => {
     expect(byPhase.preflight).toEqual(["bun scripts/preflight.ts"]);
     expect(byPhase.hammer).toEqual(["bun run gate:hammer"]);
     expect(byPhase.infra).toEqual(["bun run gate:infra"]);
-    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bun run gate:trajectory"]);
-    expect(byPhase.source?.length).toBe(PLAN.length - 5);
+    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bash scripts/product-flows-tier.sh", "bun run gate:trajectory"]);
+    expect(byPhase.source?.length).toBe(PLAN.length - 6);
 
     for (const gate of LADDER) {
       if (gate.phase === undefined) {

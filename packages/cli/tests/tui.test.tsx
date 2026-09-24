@@ -379,7 +379,7 @@ describe('CLI TUI layout', () => {
     const agent = fakeClient({ name: 'scroller', history: async () => transcript });
 
     try {
-      root.render(<ChatApp client={agent.client} hydrateHistory={true} onExit={() => {}} />);
+      root.render(<ChatApp client={agent.client} onExit={() => {}} />);
       await renderSettled(renderOnce);
       expect(captureCharFrame()).toContain('line-59');
       expect(captureCharFrame()).not.toContain('line-00');

@@ -5,7 +5,6 @@ export {
   gatedGrants,
   formatApprovalGrant, holdsGrant,
   parseApprovalGrant,
-  approvalGrants,
   gateExec,
   grantsAreSubset,
   resolveInheritedGrants,
@@ -84,11 +83,9 @@ export {
 
 export {
   DeferredApprovalQueue,
+  decideDeferredApprovals,
   DeferredApprovalStore,
   initDeferredApprovalsTable,
-  queuedActionMessage,
-  deniedActionMessage,
-  decisionWakeMessage,
   DEFERRED_APPROVAL_SIGNAL,
   DENIAL_STANDING_MS,
   type DeferredApproval,

@@ -35,6 +35,12 @@ export const DEPLOY_FAKE_ROTATED_REFRESH = 'probe-refresh-token-2';
 /** Distinct from the first token so a run still presenting the expired one is visible (see `expireGrant`). */
 export const DEPLOY_FAKE_REFRESHED_ACCESS_TOKEN = 'probe-access-token-2';
 
+/** Every credential this plane hands a run. */
+export const DEPLOY_FAKE_CREDENTIALS: readonly string[] = [
+  DEPLOY_FAKE_CLIENT_ID, DEPLOY_FAKE_ACCESS_TOKEN, DEPLOY_FAKE_REFRESH_TOKEN,
+  DEPLOY_FAKE_ROTATED_REFRESH, DEPLOY_FAKE_REFRESHED_ACCESS_TOKEN,
+];
+
 /** The only session the probe deployment's Updates surface answers. */
 export const DEPLOY_FAKE_OWNER = 'owner@example.com';
 

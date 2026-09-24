@@ -26,7 +26,11 @@
  *     closure file; `bun.lock` and `patches/` standing in for `node_modules`.
  *   - The row's declared `reads`, expanded against the tracked corpus, and
  *     the row's declared `env` names beside every literal `process.env.NAME`
- *     the graph carries.
+ *     the graph carries. Those names, and the base names in
+ *     `ladder-cache.ts`, are the whole environment the runner gives a
+ *     derived gate, so a read of any other name, however it is spelled,
+ *     sees nothing: enumerating `process.env`, reading it by a computed key
+ *     and handing it to a child are all bounded by what the key hashes.
  *
  * What makes a closure UNCOMPUTABLE, and therefore the gate never cached:
  *   - a shell gate or a word form this resolver does not understand;
@@ -51,7 +55,8 @@ import { moduleEdges, readAliases, readWorkspace, resolveSpecifier, walkModules 
 import type { Alias, PackageDir } from './import-graph';
 import { enumerateRepository, isManifest, isParseable, isTypescriptConfig, readRepositoryFile } from './sources';
 import type { Node } from 'oxc-parser';
-import { literalString, parse, walk } from './syntax';
+import { parseJsonc } from './jsonc';
+import { collapsePath, literalString, parse, walk } from './syntax';
 import type { SyntaxNode } from './syntax';
 
 /** What a ladder row says about its inputs. Every row declares one. */
@@ -63,7 +68,8 @@ export type Inputs =
      *  empty list is a declaration too: nothing beyond the graph. */
     readonly reads?: readonly string[];
     /** Environment names whose values change the verdict, beyond the literal
-     *  `process.env.NAME` reads the graph carries. */
+     *  `process.env.NAME` reads the graph carries. The runner passes a
+     *  derived gate these names and no undeclared one. */
     readonly env?: readonly string[];
     /** Tracked paths a computed `import()` or `require()` in the graph can
      *  load. A graph with such a site and no declaration is never cached; a
@@ -381,38 +387,73 @@ interface Form {
   readonly corpus: boolean;
 }
 
+/** The ladder's own deadline wrapper, as a package script spells it:
+ *  `bun scripts/ladder.ts --run <command…>` runs the command, so the
+ *  command's closure is the gate's, beside the wrapper's own graph. */
+const RUNNER_SCRIPT = 'scripts/ladder.ts';
+
+const RUNNER_FLAG = '--run';
+
+/** `bun run <name>`: the named file, or every `&&` part of the package
+ *  script the name holds, beside the manifest that holds it. */
+function scriptForm(run: string, name: string | undefined, repo: Repo, depth: number): Form | Uncomputable {
+  // `bun run <file>` runs the file, as `bun <file>` does.
+  if (name !== undefined && isParseable(name)) return { entries: [name], reads: [], corpus: false };
+  const body = name === undefined ? undefined : repo.scripts[name];
+
+  if (name === undefined || body === undefined || name.startsWith('-')) {
+    return { kind: 'uncomputable', why: `${run}: no package script by that name` };
+  }
+
+  const entries: string[] = [];
+  const reads: string[] = [];
+  let corpus = false;
+
+  for (const part of body.split('&&')) {
+    const inner = resolveForm(part.trim(), repo, depth + 1);
+
+    if ('kind' in inner) return inner;
+    entries.push(...inner.entries);
+    reads.push(...inner.reads);
+    corpus ||= inner.corpus;
+  }
+
+  return { entries: [...entries, 'package.json'], reads, corpus };
+}
+
+/** `bun <file> …` or `node <file> …`; through the deadline wrapper, the
+ *  wrapped command's closure beside the wrapper's own. */
+function fileForm(file: string, rest: readonly string[], repo: Repo, depth: number): Form | Uncomputable {
+  if (file !== RUNNER_SCRIPT || rest[0] !== RUNNER_FLAG) return { entries: [file], reads: [], corpus: false };
+  const inner = resolveForm(rest.slice(1).join(' '), repo, depth + 1);
+
+  return 'kind' in inner ? inner : { entries: [file, ...inner.entries], reads: inner.reads, corpus: inner.corpus };
+}
+
+/** `vitest run --root <base> <target>`: every parseable file under the
+ *  target, with the base read whole for the configs vitest resolves in it. */
+function vitestForm(run: string, words: readonly string[], repo: Repo): Form | Uncomputable {
+  const rootAt = words.indexOf('--root');
+  const base = rootAt === -1 ? undefined : words[rootAt + 1];
+  const target = words.slice(2).find((word, index) => !word.startsWith('-') && index + 2 !== rootAt + 1);
+
+  if (base === undefined || target === undefined) return { kind: 'uncomputable', why: `${run}: vitest form without --root and a target` };
+  const prefix = `${base}/${target}`;
+
+  return {
+    entries: repo.files.filter((file) => file.startsWith(prefix) && isParseable(file)),
+    reads: [`${base}/`],
+    corpus: false,
+  };
+}
+
 /** One command's entry files, or why it has none. Recurses through `bun run`. */
 function resolveForm(run: string, repo: Repo, depth: number): Form | Uncomputable {
   if (depth > 4) return { kind: 'uncomputable', why: `${run}: package scripts nest deeper than four levels` };
   const words = run.split(/\s+/).filter((word) => word.length > 0 && !/^[A-Z_][A-Z0-9_]*=/.test(word));
   const [first, second] = words;
 
-  if (first === 'bun' && second === 'run') {
-    const name = words[2];
-
-    // `bun run <file>` runs the file, as `bun <file>` does.
-    if (name !== undefined && isParseable(name)) return { entries: [name], reads: [], corpus: false };
-    const body = name === undefined ? undefined : repo.scripts[name];
-
-    if (name === undefined || body === undefined || name.startsWith('-')) {
-      return { kind: 'uncomputable', why: `${run}: no package script by that name` };
-    }
-
-    const entries: string[] = [];
-    const reads: string[] = [];
-    let corpus = false;
-
-    for (const part of body.split('&&')) {
-      const inner = resolveForm(part.trim(), repo, depth + 1);
-
-      if ('kind' in inner) return inner;
-      entries.push(...inner.entries);
-      reads.push(...inner.reads);
-      corpus ||= inner.corpus;
-    }
-
-    return { entries: [...entries, 'package.json'], reads, corpus };
-  }
+  if (first === 'bun' && second === 'run') return scriptForm(run, words[2], repo, depth);
 
   if (first === 'bun' && second === 'test') {
     const suites = repo.claims(run);
@@ -423,7 +464,7 @@ function resolveForm(run: string, repo: Repo, depth: number): Form | Uncomputabl
   }
 
   if ((first === 'bun' || first === 'node') && second !== undefined && isParseable(second) && !second.startsWith('-')) {
-    return { entries: [second], reads: [], corpus: false };
+    return fileForm(second, words.slice(2), repo, depth);
   }
 
   if (first === 'node') {
@@ -434,20 +475,7 @@ function resolveForm(run: string, repo: Repo, depth: number): Form | Uncomputabl
 
   if (first === 'tsc' || first === 'oxlint') return { entries: [], reads: [], corpus: true };
 
-  if (first === 'vitest' && second === 'run') {
-    const rootAt = words.indexOf('--root');
-    const base = rootAt === -1 ? undefined : words[rootAt + 1];
-    const target = words.slice(2).find((word, index) => !word.startsWith('-') && index + 2 !== rootAt + 1);
-
-    if (base === undefined || target === undefined) return { kind: 'uncomputable', why: `${run}: vitest form without --root and a target` };
-    const prefix = `${base}/${target}`;
-
-    return {
-      entries: repo.files.filter((file) => file.startsWith(prefix) && isParseable(file)),
-      reads: [`${base}/`],
-      corpus: false,
-    };
-  }
+  if (first === 'vitest' && second === 'run') return vitestForm(run, words, repo);
 
   if (first === 'bash' || first === 'sh') return { kind: 'uncomputable', why: `${run}: a shell gate has no computable closure` };
 
@@ -471,6 +499,33 @@ function configsOnPath(file: string, universe: ReadonlySet<string>): string[] {
   return out;
 }
 
+const TsconfigExtends = v.object({ extends: v.optional(v.union([v.string(), v.array(v.string())])) });
+
+/** The configs a TypeScript config extends, transitively, as the tree holds
+ *  them: bun and the compiler read the whole chain, and a config on the path
+ *  whose base is not an input is a key that misses the compiler options.
+ *  A package `extends` resolves into `node_modules`, which the lock stands for. */
+function extendedConfigs(config: string, repo: Repo, universe: ReadonlySet<string>): string[] {
+  const chain: string[] = [];
+  const pending = [config];
+
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const parents = parseJsonc(repo.read(next), TsconfigExtends, next).extends;
+
+    for (const parent of parents === undefined ? [] : [parents].flat()) {
+      if (!parent.startsWith('.')) continue;
+      const base = collapsePath(`${next.slice(0, next.lastIndexOf('/') + 1)}${parent}`);
+      const target = [base, `${base}.json`].find((candidate) => universe.has(candidate));
+
+      if (target === undefined || chain.includes(target)) continue;
+      chain.push(target);
+      pending.push(target);
+    }
+  }
+
+  return chain;
+}
+
 /** The declaration a derived row carries, with every list present. */
 type Declared = Extract<Inputs, { kind: 'derived' }>;
 
@@ -478,12 +533,13 @@ type Declared = Extract<Inputs, { kind: 'derived' }>;
  * Why a walked graph cannot be cached under its declaration, or nothing.
  *
  * Each rule is fail-closed: the closure is a proof that nothing the gate can
- * read has changed, and a graph that reads the environment whole, imports by
- * a computed specifier, reads through a computed key, or opens the tree by an
- * undeclared path has inputs no hash over the module graph stands for. A path
- * read on a CORPUS gate is bounded by the corpus — every tracked file is
- * already in the closure, and what it opens outside the tree is the cache's
- * stated blind spot — so only a non-corpus gate must declare one.
+ * read has changed, and a graph that imports by a computed specifier or opens
+ * the tree by an undeclared path has inputs no hash over the module graph
+ * stands for. A path read on a CORPUS gate is bounded by the corpus — every
+ * tracked file is already in the closure, and what it opens outside the tree
+ * is the cache's stated blind spot — so only a non-corpus gate must declare
+ * one. The environment is not a rule here: the runner hands a derived gate
+ * only the names its key hashes (`gateEnvironment` in `ladder-cache.ts`).
  */
 function refusal(run: string, walked: Walk, inputs: Declared, corpus: boolean): string | undefined {
   const [computedImport] = walked.computedImports;
@@ -496,19 +552,6 @@ function refusal(run: string, walked: Walk, inputs: Declared, corpus: boolean): 
     return `${run}: the row declares \`imports\` and the graph has no computed import — a stale declaration`;
   }
 
-  const [enumerated] = walked.envEnumerated;
-
-  if (enumerated !== undefined) {
-    return `${run}: ${enumerated} reads the environment whole (spread, enumerated or passed as a value), `
-      + `so no list of names bounds what the gate can see (${String(walked.envEnumerated.length)} such file(s))`;
-  }
-
-  const [computedEnv] = walked.envComputed;
-
-  if (computedEnv !== undefined && inputs.env === undefined) {
-    return `${run}: ${computedEnv} reads the environment through a computed key and the row declares no \`env\``;
-  }
-
   const [pathReader] = walked.readsByPath;
 
   if (pathReader !== undefined && inputs.reads === undefined && !corpus) {
@@ -517,6 +560,53 @@ function refusal(run: string, walked: Walk, inputs: Declared, corpus: boolean): 
   }
 
   return undefined;
+}
+
+/** What the walker could not prove and `--audit-closure` checks instead, one
+ *  note apiece, printed beside the gate on a miss. */
+function closureNotes(walked: Walk, inputs: Declared, corpus: boolean): string[] {
+  const notes: string[] = [];
+
+  if (corpus) {
+    if (walked.corpus) notes.push(`reads the corpus through ${CORPUS_MODULE}: every tracked file is an input`);
+    else if (inputs.corpus === true) notes.push('the row declares it reads the tree: every tracked file is an input');
+    else notes.push('reads the whole corpus: every tracked file is an input');
+  }
+
+  if (walked.computedImports.length > 0) {
+    notes.push(`${String(walked.computedImports.length)} computed import(s) at ${walked.computedImports.join(', ')}; the row `
+      + `declares imports [${(inputs.imports ?? []).join(', ')}] — checked by --audit-closure, not by the walker`);
+  }
+
+  if (walked.readsByPath.length > 0) {
+    notes.push(`${String(walked.readsByPath.length)} file(s) in the graph read by path or spawn; `
+      + (corpus ? 'bounded by the corpus inside the tree' : `the row declares reads [${(inputs.reads ?? []).join(', ')}]`)
+      + ' — checked by --audit-closure, not by the walker');
+  }
+
+  const envReaders = [...new Set([...walked.envEnumerated, ...walked.envComputed])];
+
+  if (envReaders.length > 0) {
+    notes.push(`${String(envReaders.length)} file(s) read the environment whole or by a computed key (${envReaders.join(', ')}); `
+      + 'the gate is run with only the names its key hashes, so any other name reads as unset');
+  }
+
+  return notes;
+}
+
+/** The configs every closure file is read under: each `package.json`,
+ *  `tsconfig.json` and `bunfig.toml` on its path, and every TypeScript config
+ *  one of those, or a closure file itself, extends. */
+function configsOf(files: ReadonlySet<string>, repo: Repo, universe: ReadonlySet<string>): Set<string> {
+  const configs = new Set<string>();
+
+  for (const file of files) for (const config of configsOnPath(file, universe)) configs.add(config);
+
+  for (const file of [...files, ...configs]) {
+    if (isTypescriptConfig(file)) for (const base of extendedConfigs(file, repo, universe)) configs.add(base);
+  }
+
+  return configs;
 }
 
 /** The closure of one gate command under its row's declaration. */
@@ -537,20 +627,10 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
   const refused = refusal(run, walked, inputs, corpus);
 
   if (refused !== undefined) return { kind: 'uncomputable', why: refused };
-  const [computedImport] = walked.computedImports;
-  const [computedEnv] = walked.envComputed;
-  const [pathReader] = walked.readsByPath;
-  const notes: string[] = [];
   const universe = new Set(repo.files);
   const files = new Set<string>(walked.files);
 
-  if (corpus) {
-    for (const file of repo.files) files.add(file);
-
-    if (walked.corpus) notes.push(`reads the corpus through ${CORPUS_MODULE}: every tracked file is an input`);
-    else if (inputs.corpus === true) notes.push('the row declares it reads the tree: every tracked file is an input');
-    else notes.push('reads the whole corpus: every tracked file is an input');
-  }
+  if (corpus) for (const file of repo.files) files.add(file);
 
   for (const prefix of [...form.reads, ...(inputs.reads ?? []), ...(inputs.imports ?? [])]) {
     const matched = repo.files.filter((file) => file === prefix || (prefix.endsWith('/') && file.startsWith(prefix)));
@@ -558,11 +638,6 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
     if (matched.length === 0) return { kind: 'uncomputable', why: `${run}: declared read ${prefix} matches no tracked file` };
 
     for (const file of matched) files.add(file);
-  }
-
-  if (computedImport !== undefined) {
-    notes.push(`${String(walked.computedImports.length)} computed import(s) at ${walked.computedImports.join(', ')}; the row `
-      + `declares imports [${(inputs.imports ?? []).join(', ')}] — checked by --audit-closure, not by the walker`);
   }
 
   // An untracked file in the closure is bytes the tree cannot name: a built
@@ -575,27 +650,15 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
     return { kind: 'uncomputable', why: `${run}: ${generated} is generated or untracked, so the tree cannot name its bytes` };
   }
 
-  if (pathReader !== undefined) {
-    notes.push(`${String(walked.readsByPath.length)} file(s) in the graph read by path or spawn; `
-      + (corpus ? 'bounded by the corpus inside the tree' : `the row declares reads [${(inputs.reads ?? []).join(', ')}]`)
-      + ' — checked by --audit-closure, not by the walker');
-  }
-
-  if (computedEnv !== undefined) {
-    notes.push(`environment read through a computed key in ${walked.envComputed.join(', ')}; the row declares `
-      + `env [${(inputs.env ?? []).join(', ')}] — only literal and declared names enter the key`);
-  }
-
-  for (const file of Array.from(files)) for (const config of configsOnPath(file, universe)) files.add(config);
+  for (const config of configsOf(files, repo, universe)) files.add(config);
 
   for (const file of dependencyInputs(repo)) files.add(file);
-  const env = new Set<string>([...walked.env, ...(inputs.env ?? [])]);
 
   return {
     kind: 'derived',
     files: [...files].sort(),
-    env: [...env].sort(),
+    env: [...new Set([...walked.env, ...(inputs.env ?? [])])].sort(),
     corpus,
-    notes,
+    notes: closureNotes(walked, inputs, corpus),
   };
 }

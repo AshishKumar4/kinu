@@ -69,11 +69,9 @@ function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
   return 'localVfs' in runtime && 'sandboxHandle' in runtime;
 }
 
-/** Declare the container binding before acquiring the head: `runtimeFor` memoizes one runtime per handle and gates the sandbox on `env.Sandbox`. */
-
+/** The workspace has a container, so the head's runtime registers a sandbox executor over it. */
 async function hostedHead(files: Record<string, string> = {}, id = 'head-1', userPlane?: RecordedUserPlaneCalls) {
-  const workspace = orchestratorHarness(userPlane);
-  workspace.agent.declareContainerBinding();
+  const workspace = orchestratorHarness(userPlane, { container: true });
   workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
 
   for (const [path, content] of Object.entries(files)) {
@@ -105,7 +103,7 @@ describe('a head forks its parent workspace', () => {
     const { rt } = await hostedHead({ 'repo/README.md': '# cloned project' });
 
     const workspace = workspacePlane(rt);
-    expect(await workspace.tools.readFile.execute('/home/user/repo/README.md')).toBe('# cloned project');
+    expect(await workspace.tools.readFile.execute('/home/main/repo/README.md')).toBe('# cloned project');
     // No `parent` executor: the head reads the workspace tree directly instead of forwarding over Durable Object RPC.
     expect(rt.executionRouter?.listExecutors().map((executor) => executor.name))
       .not.toContain('parent');
@@ -116,7 +114,7 @@ describe('a head forks its parent workspace', () => {
 
     const names = v.parse(
       v.array(v.string()),
-      await workspacePlane(rt).tools.readdir.execute('/home/user/repo'),
+      await workspacePlane(rt).tools.readdir.execute('/home/main/repo'),
     );
 
     expect(names.sort()).toEqual(['package.json', 'src']);
@@ -125,7 +123,7 @@ describe('a head forks its parent workspace', () => {
   test("searching the workspace is one real shell call in the head's own shell", async () => {
     const { rt, head, home } = await hostedHead({ 'repo/a.ts': 'needle here', 'repo/b.ts': 'nothing' });
 
-    const found = await workspacePlane(rt).tools.exec.execute('grep -rl needle /home/user/repo');
+    const found = await workspacePlane(rt).tools.exec.execute('grep -rl needle /home/main/repo');
     expect(v.parse(v.string(), found)).toContain('repo/a.ts');
 
     const shell = rt.shell;
@@ -184,13 +182,13 @@ describe('a head forks its parent workspace', () => {
     const { rt, home, workspace } = await hostedHead({ 'repo/parser.ts': 'one\ntwo\n' });
     const plane = workspacePlane(rt);
 
-    expect(await plane.tools.readFile.execute('/home/user/repo/parser.ts')).toBe('one\ntwo\n');
+    expect(await plane.tools.readFile.execute('/home/main/repo/parser.ts')).toBe('one\ntwo\n');
     await rt.storage.vfs.writeFile(`${home}/notes.md`, 'visible');
     expect(await workspace.agent.readWorkspaceFile(`${home}/notes.md`))
       .toMatchObject({ ok: true });
-    await expect(rt.storage.vfs.writeFile('/home/user/repo/parser.ts', 'one\ntwo\nthree\n'))
+    await expect(rt.storage.vfs.writeFile('/home/main/repo/parser.ts', 'one\ntwo\nthree\n'))
       .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
-    expect(await workspace.agent.readWorkspaceFile('/home/user/repo/parser.ts'))
+    expect(await workspace.agent.readWorkspaceFile('/home/main/repo/parser.ts'))
       .toMatchObject({ ok: true, value: new TextEncoder().encode('one\ntwo\n') });
   });
 

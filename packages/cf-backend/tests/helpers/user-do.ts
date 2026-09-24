@@ -171,6 +171,8 @@ export interface DeviceFrame {
   deviceId?: string;
   /** Sandbox frame the daemon enforces; rides beside id/method/params because `DeviceTunnel` spreads `extra`. */
   sandbox?: JsonValue;
+  /** The checkpoint hint the daemon snapshots under, on a mutating frame. */
+  checkpoint?: JsonValue;
 }
 
 const DeviceFrameSchema = v.object({
@@ -178,6 +180,7 @@ const DeviceFrameSchema = v.object({
   method: v.string(),
   params: v.optional(v.array(JsonValueSchema)),
   sandbox: v.optional(JsonValueSchema),
+  checkpoint: v.optional(JsonValueSchema),
   deviceId: v.optional(v.string()),
 });
 
@@ -316,6 +319,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       const call: DeviceFrame = { id: frame.output.id, method: frame.output.method, params: frame.output.params ?? [] };
 
       if (frame.output.sandbox !== undefined) call.sandbox = frame.output.sandbox;
+
+      if (frame.output.checkpoint !== undefined) call.checkpoint = frame.output.checkpoint;
 
       if (frame.output.deviceId !== undefined) call.deviceId = frame.output.deviceId;
       deviceFrames.push(call);
@@ -574,6 +579,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
           };
 
           if (frame.output.sandbox !== undefined) call.sandbox = frame.output.sandbox;
+
+          if (frame.output.checkpoint !== undefined) call.checkpoint = frame.output.checkpoint;
 
           if (frame.output.deviceId !== undefined) call.deviceId = frame.output.deviceId;
           frames.push(call);

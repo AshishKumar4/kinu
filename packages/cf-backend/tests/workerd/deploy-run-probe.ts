@@ -12,7 +12,7 @@ import { serveFamily } from '../helpers/api';
 import type { AuthIdentity } from '../../src/auth/session';
 import type { DeployRunPhase, DeploySnapshot } from '@kinu.run/core/deploy';
 import {
-  DeployFakeStateSchema,
+  DEPLOY_FAKE_CREDENTIALS, DeployFakeStateSchema,
   type DeployFakeRefusal, type DeployFakeServedBuild, type DeployFakeStall, type DeployFakeState,
   type DeployFakeWeight,
 } from './deploy-fake';
@@ -24,9 +24,11 @@ export class DeployRunProbeDO extends DeployRunDO {
   private fires = 0;
   private armedAtMs = 0;
 
-  /** The vault's keys (never values) via the production port; a finished run must answer none. */
-  async heldSecretNames(): Promise<readonly string[]> {
-    return await this.vault().names();
+  /** The plane's credentials this object still stores, read off its storage: a finished run holds none. */
+  async heldCredentials(): Promise<readonly string[]> {
+    const stored = [...(await this.ctx.storage.list<unknown>()).values()];
+
+    return DEPLOY_FAKE_CREDENTIALS.filter((credential) => stored.includes(credential));
   }
 
   /** Drops all storage: the self-update ledger has a fixed id, and an inherited finished ledger would

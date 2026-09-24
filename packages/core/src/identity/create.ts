@@ -49,6 +49,7 @@ function buildComponents(components: WorkspaceComponents) {
 
   return buildRuntime({
     actor,
+    workspaceIsMachine: false,
     sql, execRaw, transactionSync: write => db.transaction(write)(), vfs, llm, executor, schedule, shell: workspace.shell,
     memory, craftStore,
     // Birth-only runtime: a fake exploration result would be indistinguishable from a real one,

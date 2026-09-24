@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { stepCountIs, tool, type ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
-import { createTestRuntime, present } from '@kinu.run/test-utils';
+import { createTestRuntime, present, unobservedSpend } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
@@ -53,7 +53,7 @@ function newTurn(): AgentOrchestrator {
   initEventsHubTables(sql);
 
   return new AgentOrchestrator({
-    host, engine: new EvolutionEngine(rt, stores.history, { enabled: false }),
+    host, engine: new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend, enabled: false }),
     eventLog: new EventLog(sql, rt.actor),
   });
 }

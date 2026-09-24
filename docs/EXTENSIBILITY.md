@@ -230,12 +230,11 @@ pending version missing a live capability would be judged at a handicap.
 ## Reasoning-effort budgets
 
 Levels come from `REASONING_EFFORTS`: `none`, `minimal`, `low`, `medium`,
-`high`, `xhigh`, `max`. `/effort` sets `tiers.default.reasoningEffort` in the
+`high`, `xhigh`, `max`. `/effort` in chat and `kinu effort <name> [level]` set
+that one workspace's `agent_config.reasoning_effort`, on either backend. A
+workspace without its own setting runs `tiers.default.reasoningEffort` from the
 active profile (the account catalog when signed in, the local profile
-otherwise), so it moves every workspace without its own setting.
-`kinu effort <name> [level]` on a cloud workspace sets that one workspace's
-`agent_config.reasoning_effort`. On a local workspace it edits the active
-profile's default tier, the same as `/effort`.
+otherwise), which the TUI home screen's Defaults and the web's Model tiers card change.
 `reasoningEffortOptions(effort, providerFamily)` in
 `packages/core/src/strategy/effort.ts` translates the level to each provider's
 native option.
@@ -276,9 +275,10 @@ Effort is the cheapness lever on most paths, not an output-token cap.
 native and codemode-only capabilities and their namespaces. `BUILTIN_TOOLS`
 holds its 8 native tools: `eval`, `shell`, `file`, `agents`, `memory`, `tasks`,
 `web`, `report`. `actorActiveTools()` narrows them per actor. `release`,
-`agent`, `db` and `slate` are codemode-only. `skills` is neither: a SKILL.md is
-an ordinary `/workspace/skills/` path on the VFS that `workspace.*` already
-addresses, and a dedicated surface would be a third path to the same bytes.
+`agent`, `db` and `slate` are codemode-only. `skills` is neither: every skill is
+an ordinary file at `/skills/<name>/SKILL.md`, a read-only view the `file` tool
+and `workspace.*` already address, and a dedicated surface would be a second
+path to the same bytes.
 See [TOOLS.md](./TOOLS.md) for the full list and the owner-facing `experience`
 RPC.
 
@@ -343,12 +343,13 @@ truncates useful "when to use" guidance.
   Non-replayable bodies pass through untouched. Do not cap attempts and count
   on the SDK for the rest: `PROVIDER_SDK_RETRIES` is 2, and a cap under a
   real cooldown turns a wait into a failed turn.
-- Request starts are paced per provider host. `ProviderPacer.admit`
-  (`packages/core/src/providers/pacing.ts`) spaces starts and holds callers behind a
-  host cooldown. Without it a swarm level sends N simultaneous first requests
-  on one credential. It holds the lane only through headers. A request
-  sleeping for `Retry-After` frees capacity, and streaming bodies run
-  unthrottled.
+- Requests wait out a provider host's declared cooldown. `ProviderPacer.admit`
+  (`packages/core/src/providers/pacing.ts`) holds a caller until the cooldown a
+  sibling declared has passed, so a `Retry-After` handed to one swarm node holds
+  the rest. Do not add a request count here. Workers bounds connections per
+  invocation and queues the seventh itself; an isolate-wide count made one
+  request wait on another request's release, and workerd cancels that request
+  as hung (HTTP 500 `error code: 1101` on kinu.run, 2026-09-23).
 - OAuth error sanitization. `sanitizeErrorBody`
   (`packages/core/src/providers/codex-oauth.ts`) strips token-shaped text from upstream
   error bodies before they go into thrown errors, in case an OAuth server

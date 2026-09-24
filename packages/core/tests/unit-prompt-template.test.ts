@@ -2,8 +2,6 @@
 // refuses to render silently-wrong bytes.
 import { describe, expect, test } from 'bun:test';
 import { definePromptSection, templateContract, type TemplateSlots } from '../src/prompting/template';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { buildSystemPromptSync } from '../src/prompt';
 import { BUILTIN_TOOL_LINE } from '../src/prompting/section-templates';
 import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS, type BuiltinToolName } from '../src/tools/registry';
@@ -383,14 +381,17 @@ describe('BUILTIN_TOOL_LINE — live in the system prompt', () => {
     for (const name of present) expect(prompt).toContain(expectedLine(name));
   });
 
-  // Byte identity cannot tell a live template from a reverted inline literal; assert the builder uses the section.
-  test('the builder renders the tool line THROUGH the template, not inline', () => {
-    const source = readFileSync(join(import.meta.dir, '..', 'src', 'prompt.ts'), 'utf8');
-    const start = source.indexOf('function renderBuiltinToolLine(');
-    expect(start).toBeGreaterThan(-1);
-    const body = source.slice(start, source.indexOf('\n}', start));
-    expect(body).toContain('render(BUILTIN_TOOL_LINE,');
-    expect(body).not.toContain('- **${name}**');
-    expect(source).toContain('BUILTIN_TOOL_LINE,');
+  // Byte identity cannot tell a live template from a reverted inline literal; a promoted override can.
+  test('a promoted override of the tool line reaches the built prompt', () => {
+    const { rt } = createTestRuntime();
+    const promoted = '- tool {{name}}, called as {{example}}';
+    const prompt = buildSystemPromptSync(rt, { sectionOverrides: { [BUILTIN_TOOL_LINE.id]: promoted } });
+    const rendered = BUILTIN_TOOLS.filter((name) => prompt.includes(`- tool ${name}, called as `));
+    expect(rendered.length).toBeGreaterThan(0);
+
+    for (const name of rendered) {
+      expect(prompt).toContain(`- tool ${name}, called as ${BUILTIN_TOOL_SPECS[name].example}`);
+      expect(prompt).not.toContain(expectedLine(name));
+    }
   });
 });

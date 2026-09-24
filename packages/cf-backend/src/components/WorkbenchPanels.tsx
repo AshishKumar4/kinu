@@ -3,25 +3,15 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { SidebarSimpleIcon } from "@phosphor-icons/react";
-import type { PendingAction, PendingConsent, PinnedPreviewPort, PlanReview, SlateSummary } from "@kinu.run/core";
+import { needsTheUser, type PersonAsks } from "@kinu.run/core";
 
 import { useInspectorLayout } from "@/hooks/use-inspector-layout";
-
-/** Produced outputs are absent: every command run would otherwise open the pane. */
-export interface WorkbenchContents {
-  readonly pendingActions: readonly PendingAction[];
-  readonly pendingConsents: readonly PendingConsent[];
-  readonly slates: readonly SlateSummary[];
-  readonly previewFocus: string | null;
-  readonly pinnedPorts: readonly PinnedPreviewPort[];
-  readonly activePlan: PlanReview | null;
-}
 
 export interface WorkbenchPanelsProps {
   /** `undefined` for a sample workbench: the policy decides on every mount. */
   readonly workspace: string | undefined;
   readonly scope?: string;
-  readonly contents: WorkbenchContents;
+  readonly contents: PersonAsks;
   readonly chat: (inspector: InspectorControl | null) => ReactNode;
   readonly inspector: ReactNode;
 }
@@ -64,19 +54,12 @@ export function WorkbenchPanels({ workspace, scope, contents, chat, inspector }:
     return () => media.removeEventListener("change", sync);
   }, []);
 
-  const worthShowing = contents.pendingActions.length > 0
-    || contents.pendingConsents.length > 0
-    || contents.slates.length > 0
-    || contents.previewFocus !== null
-    || contents.pinnedPorts.length > 0
-    || contents.activePlan !== null;
-
   const layout = useInspectorLayout({
     desktopPanels,
     workspace,
     scope,
     mobileDefault: mobilePane === "workspace" ? "100%" : "0%",
-    worthShowing,
+    needsUser: needsTheUser(contents),
   });
 
   const waiting = contents.pendingActions.length;

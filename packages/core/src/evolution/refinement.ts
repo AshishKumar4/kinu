@@ -19,6 +19,7 @@ import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
 import { NEGATIVE_TURN_OUTCOMES, listTurnOutcomes } from './outcomes';
+import { workspaceSkillPath } from '../skills/discover';
 
 export const REFINEMENT_TRIGGERS = ['explicit', 'evolution_debt'] as const;
 
@@ -139,7 +140,7 @@ export const REFINEMENT_PROPOSAL_EXAMPLE: RefinementProposal = {
     },
     {
       kind: 'skill',
-      path: '/workspace/skills/<name>.md',
+      path: workspaceSkillPath('<name>'),
       source: '<the whole file>',
       rationale: RATIONALE_SLOT,
     },
@@ -226,7 +227,7 @@ export interface RefinementRequestView {
 
 /**
  * Staged under `.kinu/`, read by nothing that builds a prompt, so a proposal influences nothing before
- * the owner decides; under SKILLS_DIR it would reach the next turn's prompt. Derived, never stored.
+ * the owner decides; in the skills root it would reach the next turn's prompt. Derived, never stored.
  */
 export function refinementStagingPath(requestId: string, skillName: string): string {
   return `${REFINEMENT_STAGED_ROOT}/${requestId}/${skillName}.md`;

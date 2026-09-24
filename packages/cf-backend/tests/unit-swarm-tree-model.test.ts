@@ -34,7 +34,7 @@ describe('principalVariation', () => {
     expect([...principalVariation(root)]).toEqual(['root', 'b', 'win']);
   });
 
-  test('breaks a visit tie on mean value', () => {
+  test('breaks a visit tie on score', () => {
     const root = node({
       id: 'root', visits: 4,
       children: [
@@ -87,7 +87,7 @@ describe('treeStats', () => {
 describe('stored tree fields', () => {
   test('keeps the d0 root and a journalled depth-3 node at its stored depth', () => {
     const root: MctsRow = {
-      id: 'root', parent_id: null, depth: 0, visits: 0, value: 0,
+      id: 'root', parent_id: null, depth: 0, visits: 0, value: 0, own_score: 0,
       status: 'open', action: 'root',
     };
 
