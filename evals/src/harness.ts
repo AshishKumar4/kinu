@@ -84,15 +84,24 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn): Promise<Eval
 
   const before = new Set((await session.runEvents()).map((event) => event.runId));
   const startedAt = Date.now();
+  let lost: Error | undefined;
 
-  await session.prompt(turn.prompt);
+  try {
+    await session.prompt(turn.prompt);
+  } catch (error) {
+    // A socket the deployment drops loses the turn's stream, not the turn: the run goes on up there
+    // and the ledger records its end. The history below says whether the prompt ever arrived.
+    if (!renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
+    lost = error instanceof Error ? error : new Error(renderThrownChain({ cause: error }));
+  }
+
   await settle(session);
   const turnWallMs = Date.now() - startedAt;
   const [events, history] = await Promise.all([session.runEvents(), session.history()]);
 
   // Whether it ran as its own turn or landed in one already running, a prompt that arrived is in the history.
   if (!history.some((row) => row.role === 'user' && row.text.trim() === turn.prompt.trim())) {
-    throw new Error(`${INFRA_FAILURE_MARKER} \u2014 the prompt never reached the workspace: the history has no row for it`);
+    throw new Error(`${INFRA_FAILURE_MARKER} \u2014 the prompt never reached the workspace: the history has no row for it`, { cause: lost });
   }
 
   const outcome = outcomeOf(events, before);
