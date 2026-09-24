@@ -105,12 +105,20 @@ export class ModelCatalogSession {
     return this.others.get(spec)?.cost ?? null;
   }
 
-  /** Looked up before the turn, so each step prices at its own model's rate. */
+  /** Looked up before the turn, so each step prices at its own model's rate; one the catalog refuses stays blended. */
   async warm(specs: readonly string[]): Promise<void> {
     await Promise.all(specs.filter((spec) => !this.others.has(spec)).map(async (spec) => {
-      const info = await this.lookup(spec);
+      try {
+        const info = await this.lookup(spec);
 
-      if (info !== null) this.others.set(spec, info);
+        if (info !== null) this.others.set(spec, info);
+      } catch (cause) {
+        diagnostics.failure(
+          'model.catalog_lookup_failed',
+          toKinuError({ doing: 'price a fallback model', cause, otherwise: 'unavailable' }),
+          { model: spec },
+        );
+      }
     }));
   }
 

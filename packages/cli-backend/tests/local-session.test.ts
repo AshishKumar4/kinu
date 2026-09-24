@@ -3,6 +3,7 @@
 import { describe, test, expect } from 'bun:test';
 import { createMockFetch, createTestActorsOver, createTestSql, handClock, present, readTranscriptRows, scratchDir, scratchPath, toolExecute, scriptedTurnModel, type HandClock, type TranscriptRow, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { MissionGovernor } from '@kinu.run/core';
+import { KinuError } from '@kinu.run/core/obs';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -4840,6 +4841,49 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(rows.filter((row) => row.type === 'step_finish'))
       .toMatchObject([{ usage: { input: 1_000_000, output: 0 }, usd: 20, modelId: 'fake-model' }]);
     expect(session.budget.snapshot('q3')[0]?.spent.usd).toBe(20);
+    await session.end();
+  });
+
+  test('a fallback the catalog refuses to price leaves the turn to start, and the turn\'s own model answers it', async () => {
+    const { db, rt } = workspaceRuntime();
+    const BACKUP = 'openai-compatible/backup-model';
+
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => {
+        const trimmed = spec?.trim() ?? '';
+
+        return trimmed === '' || trimmed === 'house-model' ? 'openai-compatible/house-model' : trimmed;
+      },
+      resolveModel: () => fakeModel('from the house'),
+      listProviders: async () => [],
+      listModels: async () => ({ models: [], failures: [{ provider: 'openai-compatible', reason: 'offline' }] }),
+      // A profile may name a fallback on a provider this machine has not connected.
+      modelInfo: async (spec) => {
+        if (spec === BACKUP) throw new KinuError('denied', 'the backup provider is not connected');
+
+        return { id: spec ?? '', label: 'house', capabilities: ['tools', 'streaming'], cost: { input: 2, output: 8 } };
+      },
+      ...resolverRest,
+    };
+
+    const catalog = { roles: {}, tiers: { default: { model: 'house-model', fallbacks: [BACKUP] } } };
+
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
+    };
+
+    const events: SessionEvent[] = [];
+
+    const session = new LocalAgentSession({
+      rt, db, model: fakeModel('fallback'), modelResolver: resolver, profileAuthority: () => envelope,
+      onEvent: (event) => events.push(event), noAutoEvolve: true,
+    });
+
+    await session.send('hi', { id: crypto.randomUUID() });
+    const turnEnd = events.find((event) => event.type === 'turn-end');
+
+    if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
+    expect(turnEnd.turn.assistantResponse).toBe('from the house');
     await session.end();
   });
 });
