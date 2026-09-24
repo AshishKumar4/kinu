@@ -2155,10 +2155,10 @@
         "assistant",
         "user",
         "user",
+        "user",
         "assistant",
         "tool",
         "assistant",
-        "user",
         "user"
       ]
     },
@@ -2185,10 +2185,10 @@
         "assistant",
         "user",
         "user",
+        "user",
         "assistant",
         "tool",
         "assistant",
-        "user",
         "user",
         "assistant",
         "user"
