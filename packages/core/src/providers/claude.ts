@@ -2,7 +2,7 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { APICallError, type LanguageModel } from 'ai';
 import * as v from 'valibot';
-import { listAnthropicModels, ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_FAST_MODEL } from './anthropic';
+import { listAnthropicModels, ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_FAST_MODEL, ANTHROPIC_MAX_BREAKPOINTS } from './anthropic';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { OAuthTokenError } from './oauth-token-error';
 import { quotaWindowText, withCallAccount } from './quota';
@@ -56,8 +56,6 @@ const AGENT_BETAS = [
 const EFFORT_BETA = 'effort-2025-11-24';
 
 const FALLBACK_CREDIT_BETA = 'fallback-credit-2026-06-01';
-
-const MAX_CACHE_BREAKPOINTS = 4;
 
 const STAINLESS_OS = new Map([['darwin', 'MacOS'], ['win32', 'Windows'], ['linux', 'Linux'], ['freebsd', 'FreeBSD']]);
 
@@ -237,7 +235,7 @@ function breakpointsOf(body: SdkBody): { readonly cache_control?: v.InferInput<t
 function claudeSystem(body: SdkBody, billing: string): Block[] {
   const decorated = breakpointsOf(body);
   const ttl = decorated[0]?.cache_control ?? { type: 'ephemeral' };
-  let overCap = decorated.length + 1 - MAX_CACHE_BREAKPOINTS;
+  let overCap = decorated.length + 1 - ANTHROPIC_MAX_BREAKPOINTS;
 
   const prompt = blocksOf(body.system).map((block) => {
     if (overCap <= 0 || block.cache_control === undefined) return block;

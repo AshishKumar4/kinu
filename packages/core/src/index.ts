@@ -891,7 +891,6 @@ export {
   promptCacheOptions,
   promptCachePlan,
   resolvePromptCacheStrategy,
-  ANTHROPIC_MAX_BREAKPOINTS,
   type CacheBreakpointInput,
   type CacheBreakpointPlan,
   type PromptCachePlan,

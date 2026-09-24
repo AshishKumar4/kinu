@@ -224,7 +224,6 @@
   "packages/core/src/prompt.ts#WORKSPACE_INSTRUCTIONS_HEADER (unreached-export)",
   "packages/core/src/prompt.ts#renderUnverifiedInstructions (unreached-export)",
   "packages/core/src/prompting/agents-md.ts#renderInstructionOmission (unreached-export)",
-  "packages/core/src/prompting/cache-breakpoints.ts#ANTHROPIC_MAX_BREAKPOINTS (unreached-export)",
   "packages/core/src/prompting/interrupted-tool-calls.ts#INTERRUPTED_TOOL_RESULT (unreached-export)",
   "packages/core/src/prompting/model-profile.ts#PromptModelContext.capabilities (unsupplied-field)",
   "packages/core/src/prompting/model-profile.ts#PromptModelContext.contextWindow (unsupplied-field)",

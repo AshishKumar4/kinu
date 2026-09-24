@@ -10,6 +10,7 @@
  */
 import type { ModelMessage, SystemModelMessage, ToolSet } from 'ai';
 import { DEFAULT_CACHE_RETENTION, type CacheRetention } from '../providers/types';
+import { ANTHROPIC_MAX_BREAKPOINTS } from '../providers/anthropic';
 
 /** The AI SDK's provider-options bag (not re-exported by `ai` itself). */
 type ProviderOptions = NonNullable<ModelMessage['providerOptions']>;
@@ -25,9 +26,6 @@ export type PromptCacheStrategy =
   /** `prompt_cache_key` via the provider's options namespace. `markers` adds `cache_control`
      *  breakpoints through `openaiCompatible` metadata for Claude models (OpenRouter passes them through). */
   | { kind: 'openai-compat'; bodyNamespace: string; markers: boolean; ttl?: '1h' };
-
-/** Anthropic rejects more than 4 `cache_control` blocks: tools, system, and two on the tail. */
-export const ANTHROPIC_MAX_BREAKPOINTS = 4;
 
 const TAIL_BREAKPOINTS = ANTHROPIC_MAX_BREAKPOINTS - 2;
 

@@ -5,11 +5,18 @@ export const MAIN_ACCOUNT = 'main';
 
 const ACCOUNT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
+const PROVIDER_SCOPE_RE = /^[a-z0-9][a-z0-9._:-]*$/;
+
 /** Cloudflare's login also runs AI Gateway. */
 const SINGLE_ACCOUNT_KEY_PREFIX = 'cloudflare.';
 
 export function isAccountName(name: string): boolean {
   return ACCOUNT_NAME_RE.test(name);
+}
+
+/** A provider a workspace's account choice is kept under. */
+export function isProviderScope(provider: string): boolean {
+  return PROVIDER_SCOPE_RE.test(provider);
 }
 
 /** The only `@` split of a key or a spec's provider. */

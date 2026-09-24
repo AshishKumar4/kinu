@@ -19,6 +19,9 @@ export const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-4-7';
 /** Evolution's mechanical-call tier. */
 export const ANTHROPIC_FAST_MODEL = 'claude-haiku-4-5';
 
+/** Anthropic rejects more than 4 `cache_control` blocks: tools, system, and two on the tail. */
+export const ANTHROPIC_MAX_BREAKPOINTS = 4;
+
 const FIVE: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 const FOUR: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'max'];

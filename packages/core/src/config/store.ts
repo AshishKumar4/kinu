@@ -1,7 +1,7 @@
 // AgentConfigStore: typed accessors over the `actor_config` key/value table.
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import { nameOriginOf, type NameOrigin } from '../identity/naming';
-import { isAccountName } from '../credentials/accounts';
+import { isAccountName, isProviderScope } from '../credentials/accounts';
 import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort';
 import { DEFAULT_ROLE_ID, isTierId, isValidRoleId, type RoleId, type TierId } from '../profiles/catalog';
 import {
@@ -281,7 +281,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     setModel(spec) { set(AGENT_CONFIG_KEYS.model, spec); },
     getProviderAccounts: storedProviderAccounts,
     setProviderAccount(provider, account) {
-      if (!/^[a-z0-9][a-z0-9._:-]*$/.test(provider)) throw new Error(`Invalid provider id: ${provider}`);
+      if (!isProviderScope(provider)) throw new Error(`Invalid provider id: ${provider}`);
 
       if (account !== null && !isAccountName(account)) throw new Error(`Invalid account name: ${account}`);
       const next = { ...storedProviderAccounts(), [provider]: account };
