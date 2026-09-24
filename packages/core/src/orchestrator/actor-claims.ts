@@ -38,8 +38,7 @@ export interface StoredActorClaim {
 export interface ContextRevision {
   readonly requestId: string; readonly revision: number; readonly epoch: number;
   readonly workingRevision: number; readonly workingContextId: string; readonly stepIndex: number | null;
-  /** Null: a step recorded before request lists were kept. */
-  readonly messages: readonly ModelMessage[] | null;
+  readonly messages: readonly ModelMessage[];
 }
 
 export interface ConsumedContext { readonly requestId: string; readonly revision: number }
@@ -206,18 +205,13 @@ export class ActorClaimStore {
   }
 }
 
-/** `not_kept`: the consumed step predates kept request lists. */
 export type ClaimRecovery =
-  | { readonly kind: 'verified' | 'build_unknown' | 'not_kept'; readonly claim: StoredActorClaim }
+  | { readonly kind: 'verified' | 'build_unknown'; readonly claim: StoredActorClaim }
   | { readonly kind: 'source_changed'; readonly claim: StoredActorClaim; readonly found: string | null };
 
 export async function verifyClaimedProgram(claim: StoredActorClaim, readVersionedSource: (version: number) => Promise<string | null>, digestOf: (source: string) => string,
-  loadContext: () => Promise<ContextRevision | null>): Promise<ClaimRecovery> {
-  const context = await loadContext();
-
+  context: ContextRevision | null): Promise<ClaimRecovery> {
   if (context === null) throw new KinuError('missing', 'claimed request evidence is missing');
-
-  if (context.messages === null) return { kind: 'not_kept', claim };
 
   if (claim.program.kind === 'builtin') return { kind: claim.program.build === null ? 'build_unknown' : 'verified', claim };
   const source = await readVersionedSource(claim.program.version);

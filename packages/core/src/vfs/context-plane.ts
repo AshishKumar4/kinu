@@ -16,7 +16,6 @@ import { FileRefusalError } from '../tools/file-edit';
 import { makeVfsError } from './errno';
 import type { VfsMount, VfsNativeReads } from './mounts';
 import { toolPairingGaps } from '../session/tool-pairing';
-import { requestDetailsNotKept } from '../session/requests';
 
 export interface ActorContextStores { readonly claims: ActorClaimStore; readonly events: ContextEventRecorder | null }
 
@@ -360,17 +359,9 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
 
       return { owner: resolved.stores.claims, writable: false, version: token([resolved.stores.claims.actorId, request.id]), modified: view.modified,
         chunks: async function* () {
-          const metadata = await history.messages.payloads.read(request.metadata);
           const messages = history.requests.messagesOf(request);
-          const header = `{"request":${JSON.stringify({ ...request, metadata })}`;
-
-          if (messages === null) {
-            yield `${header},"messages":null,"note":${JSON.stringify(requestDetailsNotKept(history.requests.keptSince()))}}\n`;
-
-            return;
-          }
-
-          yield `${header},"messages":[`;
+          const metadata = await history.messages.payloads.read(request.metadata);
+          yield `{"request":${JSON.stringify({ ...request, metadata })},"messages":[`;
 
           for (const [index, reference] of messages.entries()) yield `${index === 0 ? '' : ','}${JSON.stringify(await history.messages.projection(reference))}`;
           yield ']}\n';
