@@ -89,7 +89,7 @@ export function hubRoutes<Bindings extends HubEnv>(
     await next();
   };
 
-  // Resolved before the method check, as before.
+  // Resolved before the method check.
   routes.use(`${TRIGGERS}/*`, resolve);
 
   routes.on('GET', [TRIGGERS, `${TRIGGERS}/`], async (c) => json({ body: await c.get('hub').listTriggers() }));

@@ -129,7 +129,7 @@ function mcpRead<Body>(read: (stub: UserRoutesAuthority, owner: UserCaller) => P
 
 export const userRoutes = new Hono<FamilyEnv<UserRoutesEnv<unknown>, UserVariables>>();
 
-// `/api/user*`: every path starting with the text, as before.
+// `/api/user*`: every path starting with the text.
 userRoutes.use('/api/user*', ownerGate(), async (c, next) => {
   const identity = c.get('identity');
   const owner = c.get('owner');
@@ -243,7 +243,7 @@ userRoutes.delete('/api/user/devices/:id/unstopped', async (c) => {
   }
 });
 
-// `/devices/:id` also matches `/devices/consents`, as before.
+// `/devices/:id` also matches `/devices/consents`.
 userRoutes.delete('/api/user/devices/:id', async (c) => {
   try {
     const result = await c.get('stub').revokeDevice(c.get('owner'), decodeURIComponent(rawParam(c, 'id')));

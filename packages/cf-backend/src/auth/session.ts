@@ -170,10 +170,7 @@ export async function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>
   throw new AuthError(401, 'No Kinu session in request');
 }
 
-/** The dev identity's own address, or for a named eval account (`DEV_IDENTITY_ACCOUNT_HEADER`) its plus-address
- *  (`eval@x` → `eval+devices@x`): another user, so what that account holds never reaches the dev identity's
- *  workspaces. `devices` holds the machines the first-run tier attaches, apart from the account every tier's
- *  agent turns run on, whose device runtime would otherwise offer them. */
+/** `eval@x` → `eval+devices@x`: a separate user, so its machines reach no other eval account's workspaces. */
 function evalAccountEmail(email: string, account: string | null): string {
   if (account === null) return email;
   const named = v.safeParse(v.picklist(EVAL_ACCOUNTS), account);

@@ -81,12 +81,8 @@ export interface KinuSandboxExecutorOptions {
   readonly egress: Fetcher | null;
 }
 
-/**
-  * The one way Kinu builds a dynamic Worker to run a program in. No work deadline: programs mostly await long host
-  * calls (a node agent's whole scaffold loop is one), the detach window bounds them and the platform CPU limit stops
-  * runaways. codemode's own default races every program against 60 s. `egress` is the loopback Fetcher outbound
-  * requests ride, null for none; `kinuNode` lets the program import `kinu-node.js`.
-  */
+/** No work deadline, where codemode's default is 60 s: a node agent's whole scaffold loop is one program, bounded
+ *  by the detach window and the platform CPU limit. */
 function programWorker(input: { readonly loader: WorkerLoader; readonly egress: Fetcher | null; readonly kinuNode: boolean }): DynamicWorkerExecutor {
   return new DynamicWorkerExecutor({
     loader: input.loader,
@@ -127,10 +123,7 @@ export class KinuSandboxExecutor {
   }
 }
 
-/**
-  * The runtime's executor (`rt.executor`). Heads, swarm scoring, mcts and craft evaluate programs through it, and a
-  * node agent's whole scaffold loop runs as one of its programs (`scaffold/executor.ts`).
-  */
+/** `rt.executor`: heads, swarm scoring, mcts and craft run programs through it. */
 export function createRuntimeExecutor(loader: WorkerLoader): Executor {
   const dwe = programWorker({ loader, egress: null, kinuNode: false });
 

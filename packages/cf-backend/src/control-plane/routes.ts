@@ -77,10 +77,10 @@ interface ControlVariables extends ApiVariables {
 
 type ControlContextOf = Context<FamilyEnv<ControlEnv<unknown>, ControlVariables>>;
 
-/** Each section answers its whole subtree, as the first-segment dispatch did. */
+/** Each section answers its whole subtree. */
 export const controlRoutes = new Hono<FamilyEnv<ControlEnv<unknown>, ControlVariables>>();
 
-// Past the operator gate a throw is recorded and answered 500, as before.
+// Past the operator gate a throw is recorded and answered 500.
 controlRoutes.onError((cause, c) => {
   diagnostics.failure('control_plane.request_failed', toKinuError({
     doing: 'serving an admin control-plane request',

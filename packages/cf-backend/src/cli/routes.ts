@@ -203,7 +203,7 @@ cliRoutes.post('/api/cli/auth/poll', async (c) => {
 
 // No JSON approval: this family runs ahead of the CSRF check, so a cookie-only POST could mint a token.
 
-// `/api/cli*`: every path starting with the text, as before.
+// `/api/cli*`: every path starting with the text.
 cliRoutes.use('/api/cli*', cliBearer);
 
 // The agent RPC endpoint has its own per-method policy (AGENT_RPC_ACCESS), so it precedes the access-token gate.
