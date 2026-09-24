@@ -4333,11 +4333,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private turnClaimState(): TurnClaimState {
     const open = this.claims.unsettled(1)[0];
 
-    if (open === undefined) {
-      const last = this.claims.latestTurn();
-
-      return last?.outcome == null ? { kind: 'settled' } : { kind: 'settled', turnId: last.turnId, outcome: last.outcome };
-    }
+    if (open === undefined) return { kind: 'settled' };
 
     return {
       kind: this._inFlight || this.actorSession.inFlight ? 'admitted' : 'stranded',

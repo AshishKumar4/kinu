@@ -3,12 +3,11 @@
  * longer executes is stranded: it cannot end by itself, so the surface offers recovery, never Stop.
  */
 import * as v from 'valibot';
-import { CLAIM_OUTCOMES } from '../orchestrator/actor-claims';
 
 /** The durable claim, as the workspace snapshot and the `turn_claim` frame report it. */
 const TurnClaimStateSchema = v.variant('kind', [
-  /** None open; the last settled, if any. */
-  v.object({ kind: v.literal('settled'), turnId: v.optional(v.string()), outcome: v.optional(v.picklist(CLAIM_OUTCOMES)) }),
+  /** No claim this actor admitted is open. */
+  v.object({ kind: v.literal('settled') }),
   /** A claim is open and this isolate is executing it. */
   v.object({ kind: v.literal('admitted'), turnId: v.string(), claimedAt: v.number() }),
   /** Open, but the admitting isolate died mid-turn; it never settles on its own. */

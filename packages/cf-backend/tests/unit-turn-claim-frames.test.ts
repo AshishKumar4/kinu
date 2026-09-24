@@ -13,7 +13,7 @@ import {
   admittedTurnClaim, catalogTurn, chatSessionTurns, GATEWAY_CATALOG, gatewayWorkspace, historyOver, orchestratorHarness,
   reactivateOrchestratorHarness, until, workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
-import { answeringGateway, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
+import { answeringGateway } from './helpers/platform-gateway';
 
 /** Every claim the workspace's sockets are sent from here on, in order. */
 function claimsHeard(agent: HarnessOrchestratorAgent): TurnClaimState[] {
@@ -47,33 +47,14 @@ async function nextActivation(db: ActorHarness<HarnessOrchestratorAgent>['db']):
   });
 }
 
-/** The claims one turn on `gateway` sends every tab: its admission, then its settling, which names the turn. */
-async function oneTurnHeard(gateway: StubbedAiBinding): Promise<{ readonly turnId: string; readonly settled: TurnClaimState | undefined; readonly loaded: TurnClaimState }> {
-  const { agent } = gatewayWorkspace(gateway);
+test("a turn's claim reaches every tab as it is admitted and as it settles, what a tab loading now reads", async () => {
+  const { agent } = gatewayWorkspace(answeringGateway('Done.'));
   const heard = claimsHeard(agent);
 
   await catalogTurn(agent, 'Say done.');
 
-  const [admitted, settled, ...after] = heard;
-
-  if (admitted?.kind !== 'admitted' || after.length > 0) throw new Error(`the turn sent ${JSON.stringify(heard)}, not its admission then its settling`);
-
-  return { turnId: admitted.turnId, settled, loaded: (await agent.getWorkspaceSnapshot()).turnClaim };
-}
-
-test("a turn's claim reaches every tab as it is admitted and as it settles, what a tab loading now reads", async () => {
-  const { turnId, settled, loaded } = await oneTurnHeard(answeringGateway('Done.'));
-
-  expect(settled).toEqual({ kind: 'settled', turnId, outcome: 'completed' });
-  expect(settled).toEqual(loaded);
-});
-
-test('a turn that fails settles naming itself and its outcome, so no tab reads it as having answered', async () => {
-  const refusing = stubAiBinding(() => Response.json({ name: 'AiGatewayError', message: 'Invalid provider' }, { status: 400 }));
-  const { turnId, settled, loaded } = await oneTurnHeard(refusing);
-
-  expect(settled).toEqual({ kind: 'settled', turnId, outcome: 'error' });
-  expect(settled).toEqual(loaded);
+  expect(heard.map((claim) => claim.kind)).toEqual(['admitted', 'settled']);
+  expect(heard.at(-1)).toEqual((await agent.getWorkspaceSnapshot()).turnClaim);
 });
 
 test('a turn an eviction stranded is heard running again when the wake re-opens it, then settled', async () => {
@@ -86,10 +67,7 @@ test('a turn an eviction stranded is heard running again when the wake re-opens 
   await workspace.agent.terminalRetryPass();
   await until(() => heard.at(-1)?.kind === 'settled', 'the re-opened turn to settle');
 
-  expect(heard).toEqual([
-    { kind: 'admitted', turnId: loaded.turnId, claimedAt: expect.any(Number) },
-    { kind: 'settled', turnId: loaded.turnId, outcome: 'completed' },
-  ]);
+  expect(heard).toEqual([{ kind: 'admitted', turnId: loaded.turnId, claimedAt: expect.any(Number) }, { kind: 'settled' }]);
 });
 
 test("a stranded claim the wake's recovery settles reaches every tab", async () => {
@@ -109,8 +87,7 @@ test("a stranded claim the wake's recovery settles reaches every tab", async () 
 
   await workspace.agent.terminalRetryPass();
 
-  // Recovery cannot know how a turn its process lost ended, whatever its run recorded.
-  expect(heard).toEqual([{ kind: 'settled', turnId: claim.turnId, outcome: 'indeterminate' }]);
+  expect(heard).toEqual([{ kind: 'settled' }]);
 });
 
 test('recovering a stranded turn reaches every tab, so its Recover control retires', async () => {
@@ -121,5 +98,5 @@ test('recovering a stranded turn reaches every tab, so its Recover control retir
 
   await workspace.agent.recoverStrandedTurn();
 
-  expect(heard).toEqual([{ kind: 'settled', turnId: 'turn-evicted', outcome: 'indeterminate' }]);
+  expect(heard).toEqual([{ kind: 'settled' }]);
 });
