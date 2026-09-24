@@ -1,21 +1,16 @@
 import { expect, test } from 'bun:test';
-import { buildSync, transformSync } from 'esbuild';
 import { writeFileSync } from 'node:fs';
 import type { JsonValue } from '@kinu.run/core';
 import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 import { SLATE_CLIENT_MODULE } from '@kinu.run/core/slates';
 
+// bun's own transpiler, in this process: an esbuild service would be a child the file leaves running.
+const transpiler = new Bun.Transpiler({ loader: 'ts' });
+
 // The `kinu:slate` import map target: its specifiers are exactly what the shell maps, and every used name is imported.
 test('the client module imports exactly react, react-dom/client and capnweb', () => {
-  const built = buildSync({
-    stdin: { contents: SLATE_CLIENT_MODULE, loader: 'js', resolveDir: '.' },
-    bundle: true, write: false, metafile: true, format: 'esm',
-    external: ['react', 'react-dom/client', 'capnweb'],
-  });
-
-  expect(Object.keys(built.metafile.outputs)).toEqual(['stdin.js']);
-  expect(built.metafile.inputs['<stdin>'].imports.map((i) => i.path).sort())
+  expect([...new Set(transpiler.scanImports(SLATE_CLIENT_MODULE).map((entry) => entry.path))].sort())
     .toEqual(['capnweb', 'react', 'react-dom/client']);
 });
 
@@ -31,12 +26,11 @@ test('the client module evaluates and its surface answers under a DOM shim', asy
     'export const newWebSocketRpcSession = () => ({ onRpcBroken() {} });',
   ].join('\n'));
 
-  const source = transformSync(
+  const source = transpiler.transformSync(
     SLATE_CLIENT_MODULE
       .replaceAll('"react-dom/client"', '"./stubs.js"')
       .replaceAll('"react"', '"./stubs.js"')
       .replaceAll('"capnweb"', '"./stubs.js"'),
-    { format: 'esm', loader: 'ts' },
   );
 
   const seen: string[] = [];
@@ -57,7 +51,7 @@ test('the client module evaluates and its surface answers under a DOM shim', asy
     WebSocket: function () {},
   });
 
-  writeFileSync(join(dir, 'slate.js'), source.code);
+  writeFileSync(join(dir, 'slate.js'), source);
 
   try {
     const mod = await import(join(dir, 'slate.js'));

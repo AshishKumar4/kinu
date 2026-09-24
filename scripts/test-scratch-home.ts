@@ -34,12 +34,13 @@ import { releaseOnSignals, releaseScratch, SCRATCH_ROOT_PREFIX, scratchDir } fro
 import { stripAmbientCredentials } from '../packages/test-utils/src/ambient-env';
 import { currentOwner, ownerAlive, ProcessOwnerSchema } from './process-owner';
 
-const tmp = tmpdir();
+/** The temp directory the runner gave this run, before this module points TMPDIR at its own root below. */
+export const runTemp = tmpdir();
 
 // Minted through the same owner every suite uses, so `release` needs no
 // lifecycle of its own: `releaseScratch` removes this root along with
 // everything else this process owns, and a partial failure stays owned.
-const scratchRoot = scratchDir('test-home', tmp);
+const scratchRoot = scratchDir('test-home', runTemp);
 
 /** Who minted a root, so a later run judges it by whether that process still runs (below). */
 const OWNER_RECORD = 'owner.json';
@@ -159,4 +160,4 @@ export function reapAbandonedRoots(parent: string, keep: string): string[] {
   return reaped;
 }
 
-reapAbandonedRoots(tmp, scratchRoot);
+reapAbandonedRoots(runTemp, scratchRoot);
