@@ -391,10 +391,11 @@ return the following ones, or null on the last page. limit is 1 to 50; answer an
       await verifier.check('names-the-teams-over-budget', async () => {
         const books = await booksAfter(AFTER_TURN_2);
         const expected = books.status(QUESTION_MONTH).filter((row) => row.over).map((row) => row.team).join(', ') || 'none';
-        const reply = verifier.replies.at(-1)?.trim() ?? '';
-        const answer = reply.replace(/^[`"'*]+|[`"'*.]+$/g, '').split(',').map((name) => name.trim().toLowerCase()).join(', ');
+        const team = `(?:${TEAMS.join('|')})`;
+        const answer = verifier.bareAnswer(new RegExp(`^(${team}(?:\\s*,\\s*${team})*|none)$`, 'i'));
+        const named = answer?.split(',').map((name) => name.trim().toLowerCase()).join(', ') ?? null;
 
-        return { pass: answer === expected, evidence: { reply, expected } };
+        return { pass: named === expected, evidence: { answer, expected, replies: verifier.recentReplies() } };
       });
 
       await sameAsReference(verifier, 'asking-changes-nothing', { history: AFTER_TURN_2, script: readTheMonth, currency: true });

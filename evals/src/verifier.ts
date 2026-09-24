@@ -10,6 +10,19 @@ const EVIDENCE_LIMIT = 2_000;
 
 const THREW = 'verifier.threw';
 
+/**
+ * The platform's own transient Durable Object failures, verbatim from Cloudflare's error-handling
+ * guide (developers.cloudflare.com/durable-objects/best-practices/error-handling): the call never
+ * reached the slate's code, so its refusal says nothing about the build. Seen 2026-09-24 as
+ * `io: slate exchange.place: Network connection lost.` mid-check on a correct reference build.
+ */
+const TRANSIENT_PLATFORM = [
+  'Network connection lost',
+  'Cannot resolve Durable Object due to transient issue on remote node',
+  'Durable Object reset because its code was updated',
+  "The Durable Object's code has been updated",
+];
+
 /** The artifact's own surfaces. Checks read what a person could read; never the agent's ledger. */
 export type VerifierSession = {
   slateOp(operation: JsonValue): Promise<JsonValue>;
@@ -117,6 +130,28 @@ export class EvalVerifier {
     this.replies = replies;
   }
 
+  /**
+   * The agent's answer to a question turn: its last reply that `answerPattern` matches whole
+   * (anchored, the answer in its first group) once Markdown emphasis, quotes and a closing period
+   * are stripped, or null when none does. Narration before the answer and a reply after it (a
+   * sign-off, or its answer to the product's own reminder about open tasks) are not answers, so
+   * neither replaces it.
+   */
+  bareAnswer(answerPattern: RegExp): string | null {
+    for (const reply of [...this.replies].reverse()) {
+      const found = answerPattern.exec(reply.trim().replace(/^[*_`"']+|[*_`"'.]+$/g, '').trim());
+
+      if (found !== null) return found[1] ?? found[0];
+    }
+
+    return null;
+  }
+
+  /** The last replies, clipped: what a question check shows as its evidence. */
+  recentReplies(): string[] {
+    return this.replies.slice(-3).map((reply) => reply.length > 500 ? `${reply.slice(0, 500)}...` : reply);
+  }
+
   async check(id: string, body: () => Promise<EvalCheckOutcome>): Promise<void> {
     if (this.#checks.some((check) => check.id === id)) throw new Error(`Duplicate eval check id ${JSON.stringify(id)} in one turn`);
     const index = this.#checks.length;
@@ -138,13 +173,21 @@ export class EvalVerifier {
     };
   }
 
-  /** One slate call. A refusal throws {@link SlateRefusal}, so the check that made it fails with the product's words. */
+  /**
+   * One slate call. A refusal throws {@link SlateRefusal}, so the check that made it fails with the
+   * product's words, unless the platform lost the call before it reached the slate: that throws as
+   * infrastructure and fails the trial, never the check.
+   */
   async call(id: string, method: string, args: readonly JsonValue[]): Promise<JsonValue> {
     const answer = v.parse(SlateAnswerSchema, await this.#session.slateOp({ op: 'call', id, method, args: [...args] }));
 
-    if (!answer.ok) throw new SlateRefusal(answer.reason, answer.error);
+    if (answer.ok) return answer.value;
 
-    return answer.value;
+    if (TRANSIENT_PLATFORM.some((message) => answer.error.includes(message))) {
+      throw new Error(`${INFRA_FAILURE_MARKER} — the platform lost a call to ${id}.${method}: ${answer.error}`);
+    }
+
+    throw new SlateRefusal(answer.reason, answer.error);
   }
 
   /** A workspace file, or '' when it does not exist. */

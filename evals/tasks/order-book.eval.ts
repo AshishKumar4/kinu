@@ -417,10 +417,12 @@ usual. "WOULD_CROSS" comes after the other rules. Orders already in the book sta
       await verifier.check('answers-with-the-vwap-of-the-trades', async () => {
         const trades = (await exchangeAfter(AFTER_TURN_2)).trades(QUESTION_SYMBOL);
         const vwap = trades.reduce((sum, trade) => sum + trade.price * trade.qty, 0) / trades.reduce((sum, trade) => sum + trade.qty, 0);
-        const reply = verifier.replies.at(-1)?.trim() ?? '';
-        const answer = /^`?\$?(\d+(?:\.\d+)?)`?\.?$/.exec(reply)?.[1];
+        const answer = verifier.bareAnswer(/^\$?(\d+(?:\.\d+)?)$/);
 
-        return { pass: answer !== undefined && Math.abs(Number(answer) - vwap) <= 0.0051, evidence: { reply, expected: Number(vwap.toFixed(2)) } };
+        return {
+          pass: answer !== null && Math.abs(Number(answer) - vwap) <= 0.0051,
+          evidence: { answer, expected: Number(vwap.toFixed(2)), replies: verifier.recentReplies() },
+        };
       });
 
       await sameAsReference(verifier, 'asking-changes-nothing', AFTER_TURN_2, lookBoth);
