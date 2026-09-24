@@ -9,10 +9,10 @@ import { toolExecute } from '@kinu.run/test-utils';
 import {
   buildBuiltinTools, censusToolFailures, classifyToolFailure,
   toolFailureKey, FAILURE_WITHOUT_ERROR,
-  createDeviceTunnelExecutor, createInlineExecutor, createNimbusExecutor,
+  createDeviceTunnelExecutor, createInlineExecutor, createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell,
   createParentExecutor, createSandboxExecutor,
   DefaultExecutionRouter,
-  type ExecutorProvider, type SandboxHandle, type ToolFailureCensus, ToolOutcomeSchema, failedToolOutcome,
+  type ExecutorProvider, type NimbusSandboxHandle, type SandboxHandle, type ToolFailureCensus, ToolOutcomeSchema, failedToolOutcome,
 } from '../src/index';
 import {
   classifyErrorCode, createRecordingLogger, ERROR_CODES, KinuError,
@@ -576,17 +576,17 @@ describe('each executor tool files its own failure in the right part', () => {
     expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
   });
 
-  test('nimbus: an absent binding is a platform gap; a narrow handle is a refusal', async () => {
-    const absent = censusOf(await escalate(createNimbusExecutor()));
-    expect(absent.byKey).toEqual([['shell·unavailable', 1]]);
-    expect(parts(absent)).toEqual(onlyPart('runtimeMissing'));
-
+  test('nimbus: a narrow handle is a refusal, and one a program handles is no failure', async () => {
     // `unsupported`, so `refused`: this handle has no `runCode` and retrying cannot grow one.
-    const narrow = createNimbusExecutor({
-      box: { ready: async () => {},
-        exec: async () => ({ command: 'noop', success: true, exitCode: 0, stdout: '', stderr: '' }),
-        files: { read: async () => '', write: async () => {}, list: async () => [], exists: async () => true,
-          delete: async () => {} } },
+    const { rt } = createTestRuntime();
+
+    const box: NimbusSandboxHandle = { ready: async () => {},
+      exec: async () => ({ command: 'noop', success: true, exitCode: 0, stdout: '', stderr: '' }),
+      files: { read: async () => '', write: async () => {}, list: async () => [], exists: async () => true,
+        delete: async () => {} } };
+
+    const narrow = createNimbusWorkspaceExecutor({
+      box, inline: { vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
     });
 
     const refusal = await narrow.tools.runCode.execute('print(1)');

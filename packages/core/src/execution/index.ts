@@ -95,12 +95,10 @@ export {
   type TerminalHolder,
 } from './device-terminal';
 
-// Cloudflare composes the Nimbus session as its authoritative workspace; the standalone factory serves other backends.
+// Cloudflare composes the Nimbus session as its authoritative workspace.
 export {
-  createNimbusExecutor,
   createNimbusWorkspaceExecutor,
   nimbusSessionShell,
-  type NimbusExecutorOpts,
   type NimbusWorkspaceExecutorOpts,
   type NimbusSandboxHandle,
   type NimbusExecOptions,

@@ -3,7 +3,8 @@
  * names the observe/stop calls, and a handle that cannot start one says so.
  */
 import { describe, expect, test } from "bun:test";
-import { createNimbusExecutor, type NimbusSandboxHandle, type NimbusStartResult } from "../src/index";
+import { createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell, type NimbusSandboxHandle, type NimbusStartResult } from "../src/index";
+import { createTestRuntime } from "./helpers";
 
 const baseFiles: NimbusSandboxHandle["files"] = {
   read: async () => null,
@@ -25,6 +26,16 @@ function handleWith(start: () => Promise<NimbusStartResult>): NimbusSandboxHandl
   };
 }
 
+/** The hosted workspace over `box`, composed as cf-backend composes it. */
+function workspaceOver(box: NimbusSandboxHandle, runtimeCatalog?: boolean) {
+  const { rt } = createTestRuntime();
+
+  return createNimbusWorkspaceExecutor({
+    box, runtimeCatalog,
+    inline: { vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
+  });
+}
+
 function runningStart(overrides: Partial<NimbusStartResult> = {}): NimbusStartResult {
   return {
     command: "node server.js",
@@ -41,20 +52,18 @@ function runningStart(overrides: Partial<NimbusStartResult> = {}): NimbusStartRe
 
 describe("nimbus startProcess — the process is alive when the call returns", () => {
   test("a running server reports pid, long-running state, and the observe/stop calls", async () => {
-    const nimbus = createNimbusExecutor({ box: handleWith(async () => runningStart()) });
+    const nimbus = workspaceOver(handleWith(async () => runningStart()));
     const out = await nimbus.tools.startProcess.execute("node server.js");
 
     expect(out).toContain("started (long-running) pid=3000002");
-    expect(out).toContain("nimbus.logs(3000002)");
-    expect(out).toContain("nimbus.killProcess(3000002)");
+    expect(out).toContain("workspace.logs(3000002)");
+    expect(out).toContain("workspace.killProcess(3000002)");
     expect(out).not.toContain("exited");
     expect(out).not.toContain("exitCode");
   });
 
   test("a registered port is surfaced with the preview-URL pointer", async () => {
-    const nimbus = createNimbusExecutor({
-      box: handleWith(async () => runningStart({ ports: [{ port: 3000, pid: 3000002 }] })),
-    });
+    const nimbus = workspaceOver(handleWith(async () => runningStart({ ports: [{ port: 3000, pid: 3000002 }] })));
 
     const out = await nimbus.tools.startProcess.execute("node server.js");
 
@@ -63,24 +72,22 @@ describe("nimbus startProcess — the process is alive when the call returns", (
   });
 
   test("a process that already finished says so, with its exit code", async () => {
-    const nimbus = createNimbusExecutor({
-      box: handleWith(async () => runningStart({
-        command: "echo hi",
-        process: { pid: 7, command: "echo hi", state: "exited", exitCode: 0, longRunning: false },
-        pid: 7,
-      })),
-    });
+    const nimbus = workspaceOver(handleWith(async () => runningStart({
+      command: "echo hi",
+      process: { pid: 7, command: "echo hi", state: "exited", exitCode: 0, longRunning: false },
+      pid: 7,
+    })));
 
     const out = await nimbus.tools.startProcess.execute("echo hi");
 
     expect(out).toContain("already exited (exit 0)");
-    expect(out).toContain("nimbus.logs(7)");
+    expect(out).toContain("workspace.logs(7)");
   });
 
   test("a handle without startProcess names the class on the first attempt", async () => {
     const box = handleWith(async () => runningStart());
     Reflect.deleteProperty(box, "startProcess");
-    const nimbus = createNimbusExecutor({ box });
+    const nimbus = workspaceOver(box);
     const out = await nimbus.tools.startProcess?.execute('node server.js');
     // `unsupported`, not `unavailable`: retrying cannot add a method to this handle.
     expect(out).toEqual({
@@ -92,7 +99,7 @@ describe("nimbus startProcess — the process is alive when the call returns", (
 
 describe("nimbus capabilities — declared exactly when they run", () => {
   test("without a runtime source, python and native_binary are not claimed", () => {
-    const nimbus = createNimbusExecutor({ box: handleWith(async () => runningStart()) });
+    const nimbus = workspaceOver(handleWith(async () => runningStart()));
     expect(nimbus.capabilities.has("python")).toBe(false);
     expect(nimbus.capabilities.has("native_binary")).toBe(false);
     expect(nimbus.capabilities.has("javascript")).toBe(true);
@@ -101,10 +108,7 @@ describe("nimbus capabilities — declared exactly when they run", () => {
   });
 
   test("with the runtime catalog bound, python and native_binary are real and declared", () => {
-    const nimbus = createNimbusExecutor({
-      box: handleWith(async () => runningStart()),
-      runtimeCatalog: true,
-    });
+    const nimbus = workspaceOver(handleWith(async () => runningStart()), true);
 
     expect(nimbus.capabilities.has("python")).toBe(true);
     expect(nimbus.capabilities.has("native_binary")).toBe(true);

@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { present } from "@kinu.run/test-utils";
 import { sandboxHandleLifecycle } from "./helpers/sandbox-handle-lifecycle";
+import { createTestRuntime } from "./helpers";
 import {
   DefaultExecutionRouter,
-  createNimbusExecutor,
+  createNimbusWorkspaceExecutor,
   createSandboxExecutor,
+  nimbusSessionFiles,
+  nimbusSessionShell,
   isSandboxTransientError,
   type NimbusSandboxHandle,
   type SandboxHandle,
@@ -153,6 +156,15 @@ function nimbusBox(): NimbusSandboxHandle & { calls: string[]; execOptions: unkn
       },
     },
   };
+}
+
+/** The hosted workspace over a Nimbus box, composed as cf-backend composes it. */
+function nimbusWorkspace(box: NimbusSandboxHandle) {
+  const { rt } = createTestRuntime();
+
+  return createNimbusWorkspaceExecutor({
+    box, inline: { vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
+  });
 }
 
 describe("executor lifecycle state", () => {
@@ -317,9 +329,9 @@ describe("executor lifecycle state", () => {
     expect(out).toMatchObject({ error: expect.stringContaining('network connection lost') });
   });
 
-  test("Nimbus adapter uses the SDK sandbox handle shape", async () => {
+  test("the Nimbus workspace is idle until a session call reaches the SDK handle", async () => {
     const box = nimbusBox();
-    const executor = createNimbusExecutor({ box });
+    const executor = nimbusWorkspace(box);
 
     expect(executor.getStatus?.()).toMatchObject({
       configured: true,
@@ -328,15 +340,14 @@ describe("executor lifecycle state", () => {
       status: "idle",
     });
 
-    const output = await executor.tools.exec.execute("node -e 'console.log(2+2)'");
-    expect(output).toBe("4\n");
+    expect(await executor.tools.killProcess.execute(7)).toContain('"ok": true');
     expect(executor.getStatus?.().active).toBe(true);
-    expect(box.calls).toContain("exec:node -e 'console.log(2+2)'");
+    expect(box.calls).toContain("kill:7");
   });
 
-  test("Nimbus exec strips AbortSignal before remote SDK calls", async () => {
+  test("the Nimbus workspace shell strips AbortSignal before remote SDK calls", async () => {
     const box = nimbusBox();
-    const executor = createNimbusExecutor({ box });
+    const executor = nimbusWorkspace(box);
     const signal = new AbortController().signal;
 
     const output = await executor.tools.exec.execute("node -e 'console.log(2+2)'", { signal });
@@ -352,8 +363,7 @@ describe("executor lifecycle state", () => {
       unexpose: async () => {},
       list: async () => [],
     };
-    const executor = createNimbusExecutor({ box });
-    const result = await executor.exposePort(4321);
+    const result = await nimbusWorkspace(box).exposePort(4321);
     expect(result.supported).toBe(false);
 
     if (!result.supported) expect(result.reason).toContain("4321");

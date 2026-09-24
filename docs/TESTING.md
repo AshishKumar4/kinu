@@ -355,6 +355,8 @@ Call `parseModelSpec` or `effortFor` directly when either is the subject.
 
 ## Writing a new test
 
+Bun 1.4.0, found 2026-09-24: an asymmetric matcher inside `toMatchObject` replaces the received field with the matcher itself, so `const o = { error: 'no x' }; expect(o).toMatchObject({ error: expect.stringContaining('x') });` leaves `o.error` an object. Matching a module-level or shared object that way corrupts it for every later test in the process, so match a value built for the call.
+
 ### Unit test (pure logic)
 
 ```ts

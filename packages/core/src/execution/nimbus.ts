@@ -1,17 +1,16 @@
 /** Nimbus executor adapter: maps a backend-supplied workspace box onto Kinu's ExecutorProvider contract. */
 
 import * as v from 'valibot';
-import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
+import { raceAbort } from '@kinu.run/agent-utils';
 import type { Shell, VFS } from '../types/primitives';
 import type { MountedVfs, VfsNativeReads } from '../vfs/mounts';
 import { createInlineExecutor, type InlineExecutorDeps } from './inline';
 import { atVfsPath, makeVfsError } from '../vfs/errno';
-import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
 import { base64ToBytes } from '../utils/base64';
-import type { ExecutorCapability, ExecutorProvider, PortAnsweringExecutor, PortExposureResult, PreviewRouteCheck } from './types';
-import { readExecSignal } from './signal';
+import type { ExecutorCapability, ExecutorProvider, ExecutorStatus, PortAnsweringExecutor, PortExposureResult, PreviewRouteCheck } from './types';
 import { commandResult, exposedPortText, formatExecResult, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
@@ -165,28 +164,14 @@ export interface NimbusSandboxHandle {
   mountTable?(plane: MountedVfs, cred?: VfsCred): void;
 }
 
-export interface NimbusExecutorOpts {
-  box?: NimbusSandboxHandle;
-  root?: string;
-  namespace?: string;
+export interface NimbusWorkspaceExecutorOpts {
+  box: NimbusSandboxHandle;
+  inline: InlineExecutorDeps;
   /** Whether session ports can be published as preview URLs; false when the backend's preview origin is unconfigured. */
   inboundNetwork?: boolean;
   /** Whether interpreter runtimes (python, ruby, clang) can be installed; gates declaring `python`/`native_binary`. */
   runtimeCatalog?: boolean;
 }
-
-export interface NimbusWorkspaceExecutorOpts extends NimbusExecutorOpts {
-  box: NimbusSandboxHandle;
-  inline: InlineExecutorDeps;
-}
-
-const NOT_CONFIGURED =
-  'Nimbus executor not configured. The host must construct the workspace box and ' +
-  'pass it here — `createHostedWorkspace(...).box(shellId)` on the Cloudflare ' +
-  'backend, the embedded bundle on the CLI.';
-
-/** `unavailable`: no session binding. Nimbus is the workspace, so this touches every call; built per call. */
-const notConfigured = (): Refusal => refusalOf(new KinuError('unavailable', NOT_CONFIGURED));
 
 /** Live session, but the SDK handle lacks this surface: `unsupported`, since retrying cannot add a method (obs/error.ts). */
 function handleLacks(surface: string): Refusal {
@@ -254,8 +239,6 @@ function normalizeExec(result: NimbusExecResult): CommandResult {
 
 const StringSchema = v.string();
 
-const OptionalPathSchema = v.optional(v.string());
-
 /** Agent-facing option schemas; both omit `cred` so an invented one is stripped. Adding it would let agents choose their uid. */
 const NimbusExecOptionsSchema: v.GenericSchema<NimbusExecOptions> = v.object({
   cwd: v.optional(v.string()),
@@ -301,7 +284,7 @@ function stringifyResult(input: { value: unknown }): string {
 }
 
 /** Render a startProcess result stating the process is still running and which calls observe or stop it. */
-function formatStartResult(result: NimbusStartResult, namespace: string): CommandResult {
+function formatStartResult(result: NimbusStartResult): CommandResult {
   const running = result.process.state === 'running';
 
   const lines = [
@@ -312,17 +295,18 @@ function formatStartResult(result: NimbusStartResult, namespace: string): Comman
   ];
 
   if (result.ports.length > 0) {
-    lines.push(`listening on port${result.ports.length > 1 ? 's' : ''} ${result.ports.map((p) => p.port).join(', ')} — ${namespace}.exposePort(<port>) returns the preview URL and whether a request to it reaches the server`);
+    lines.push(`listening on port${result.ports.length > 1 ? 's' : ''} ${result.ports.map((p) => p.port).join(', ')} — workspace.exposePort(<port>) returns the preview URL and whether a request to it reaches the server`);
   }
 
-  lines.push(`output: ${namespace}.logs(${result.pid}) · stop: ${namespace}.killProcess(${result.pid})`);
+  lines.push(`output: workspace.logs(${result.pid}) · stop: workspace.killProcess(${result.pid})`);
 
   return commandResult({ stdout: lines.join('\n'), exitCode: running ? 0 : result.process.exitCode ?? 0 });
 }
 
-/** Process/port/runtime declarations shared by `createNimbusExecutor` and `createNimbusWorkspaceExecutor`. */
-const SESSION_CONTROL_TYPES =
-  `  function startProcess(command: string, options?: { cwd?: string; timeoutMs?: number; env?: Record<string,string> }): Promise<string | Refusal>;
+/** The live session's members, declared inside the workspace namespace. */
+const SESSION_TYPES = `
+  function runCode(code: string, options?: { language?: 'javascript'|'typescript'|'python'|'ruby'|'shell'; install?: 'never'|'ifMissing' }): Promise<string | Refusal>;
+  function startProcess(command: string, options?: { cwd?: string; timeoutMs?: number; env?: Record<string,string> }): Promise<string | Refusal>;
   function killProcess(pid: number | { pid: number }): Promise<string | Refusal>;
   function logs(pid: number | { pid: number; lines?: number; bytes?: number }): Promise<string | Refusal>;
   function exposePort(port: number | { port: number }): Promise<string | Refusal>; // the URL, then 'verified: …' or 'not reached: …'
@@ -331,16 +315,13 @@ const SESSION_CONTROL_TYPES =
   function installRuntime(spec: string): Promise<string | Refusal>;
   function listRuntimes(): Promise<string | Refusal>;`;
 
-export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweringExecutor {
+/** The live Nimbus session's process, port and runtime members, and the lifecycle the workspace executor reports. */
+function nimbusSession(opts: NimbusWorkspaceExecutorOpts) {
   const box = opts.box;
-  const configured = box != null;
-  const root = opts.root ?? WORKSPACE_ROOT;
-  const namespace = opts.namespace ?? 'nimbus';
   let active = false;
   let lastError: string | undefined;
 
   const touch = async <T>(fn: () => Promise<T>): Promise<T> => {
-    if (!box) throw new Error(NOT_CONFIGURED);
     active = true;
 
     try {
@@ -355,7 +336,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
   };
 
   const exposeOn = async (port: number): Promise<PortExposureResult> => {
-    const ports = box?.ports;
+    const ports = box.ports;
 
     if (!ports?.expose) return { supported: false, reason: 'Nimbus port exposure is not available' };
     const expose = ports.expose.bind(ports);
@@ -378,37 +359,9 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
   };
 
   const tools: ExecutorProvider['tools'] = {
-    exec: {
-      description: 'Run a shell command in the Nimbus development environment.',
-      execute: async (...args: unknown[]): Promise<CommandResult> => {
-        if (!box) return notConfigured();
-        const command = parseInput(StringSchema, { value: args[0] });
-
-        if (command === undefined) {
-          return refusalOf(new KinuError('bad_input', 'nimbus exec: command must be a string'));
-        }
-
-        const signal = readExecSignal({ context: args[1] });
-
-        try {
-          // No kill for an in-flight exec: abort stops the wait; the command may still finish in the sandbox.
-          return normalizeExec(await raceAbort(
-            () => touch(() => box.exec(command)),
-            signal,
-            'nimbus exec aborted — the command may still finish in the sandbox',
-          ));
-        } catch (err) {
-          if (isAbortError(err)) throw err;
-
-          return refusalOf(workspaceExecFailure({ doing: `nimbus exec \`${command}\``, cause: err, command }));
-        }
-      },
-    },
     runCode: {
       description: 'Run code in Nimbus using the requested language runtime.',
       execute: async (...args: unknown[]): Promise<CommandResult> => {
-        if (!box) return notConfigured();
-
         const runCode = box.runCode;
 
         if (!runCode) return handleLacks('runCode');
@@ -427,167 +380,9 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
         }
       },
     },
-    readFile: {
-      planAllowed: true,
-      description: 'Read a file from the Nimbus filesystem.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!box) return notConfigured();
-        const path = parseInput(StringSchema, { value: args[0] });
-
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'nimbus readFile: path must be a string'));
-        }
-
-        try {
-          const content = await touch(() => box.files.read(path));
-
-          if (content === null) return refusalOf(new KinuError('missing', `nimbus readFile ${path}: no such file or directory`));
-
-          return content;
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus readFile ${path}`, cause: err }));
-        }
-      },
-    },
-    writeFile: {
-      description: 'Write a file to the Nimbus filesystem.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!box) return notConfigured();
-        const path = parseInput(StringSchema, { value: args[0] });
-
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'nimbus writeFile: path must be a string'));
-        }
-
-        try {
-          const stringContent = v.safeParse(v.string(), args[1]);
-          const body = stringContent.success ? stringContent.output : JSON.stringify(args[1]);
-
-          if (body === undefined) {
-            return refusalOf(new KinuError('bad_input', 'nimbus writeFile: content is not serializable'));
-          }
-
-          await touch(() => box.files.write(path, body));
-
-          return `Written ${body.length} bytes to ${path}`;
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus writeFile ${path}`, cause: err }));
-        }
-      },
-    },
-    listFiles: {
-      planAllowed: true,
-      description: 'List directory contents in Nimbus.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!box) return notConfigured();
-        const path = parseInput(OptionalPathSchema, { value: args[0] });
-
-        if (args[0] !== undefined && path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'nimbus listFiles: path must be a string'));
-        }
-
-        // A path that is absent or blank names the session root.
-        const directory = path === undefined || path === '' ? root : path;
-
-        try {
-          const entries = await touch(() => box.files.list(directory));
-
-          return entries.map((f) => `${(f.isDir ?? (f.type === 'directory' || f.type === 'dir')) ? 'd' : '-'} ${f.name}${f.size != null ? ` (${f.size}b)` : ''}`).join('\n');
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus listFiles ${directory}`, cause: err }));
-        }
-      },
-    },
-    readdir: {
-      planAllowed: true,
-      description: 'Alias for listFiles.',
-      execute: async (...args: unknown[]) => tools.listFiles.execute(args[0] ?? root),
-    },
-    exists: {
-      planAllowed: true,
-      description: 'Check whether a path exists in Nimbus.',
-      execute: async (...args: unknown[]): Promise<boolean | Refusal> => {
-        if (!box) return notConfigured();
-        const path = parseInput(StringSchema, { value: args[0] });
-
-        // No boolean here: an unmade call establishes nothing about the path.
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'nimbus exists: path must be a string'));
-        }
-
-        try {
-          return await touch(() => box.files.exists(path));
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus exists ${path}`, cause: err }));
-        }
-      },
-    },
-    stat: {
-      planAllowed: true,
-      description: 'Get file or directory metadata from Nimbus.',
-      execute: async (...args: unknown[]): Promise<CommandResult> => {
-        if (!box) return notConfigured();
-        const path = parseInput(StringSchema, { value: args[0] });
-
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'nimbus stat: path must be a string'));
-        }
-
-        try {
-          const result = await touch(() => box.exec(`stat -c "%s %Y %F" ${shellQuote(path)}`));
-
-          return normalizeExec(result);
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus stat ${path}`, cause: err }));
-        }
-      },
-    },
-    mkdir: {
-      description: 'Create a directory in Nimbus.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!box) return notConfigured();
-        const path = parseInput(StringSchema, { value: args[0] });
-
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'nimbus mkdir: path must be a string'));
-        }
-
-        const mkdir = box.files.mkdir?.bind(box.files);
-
-        try {
-          if (mkdir) await touch(() => mkdir(path));
-          else await touch(() => box.exec(`mkdir -p ${shellQuote(path)}`));
-
-          return `Created ${path}`;
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus mkdir ${path}`, cause: err }));
-        }
-      },
-    },
-    rm: {
-      description: 'Delete a file or directory in Nimbus.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!box) return notConfigured();
-        const path = parseInput(StringSchema, { value: args[0] });
-
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'nimbus rm: path must be a string'));
-        }
-
-        try {
-          await touch(() => box.files.delete(path, { recursive: true }));
-
-          return `Deleted ${path}`;
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus rm ${path}`, cause: err }));
-        }
-      },
-    },
     startProcess: {
       description: 'Start a background process in Nimbus; returns while it is still running.',
       execute: async (...args: unknown[]): Promise<CommandResult> => {
-        if (!box) return notConfigured();
-
         const startProcess = box.startProcess;
 
         if (!startProcess) return handleLacks('startProcess');
@@ -600,7 +395,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
         const options = parseInput(NimbusExecOptionsSchema, { value: args[1] });
 
         try {
-          return formatStartResult(await touch(() => startProcess(command, options)), namespace);
+          return formatStartResult(await touch(() => startProcess(command, options)));
         } catch (err) {
           return refusalOf(workspaceExecFailure({ doing: `nimbus startProcess \`${command}\``, cause: err, command }));
         }
@@ -609,7 +404,6 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
     killProcess: {
       description: 'Kill a Nimbus process by pid.',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!box) return notConfigured();
         const processes = box.processes;
 
         if (!processes?.kill) return handleLacks('process control');
@@ -633,7 +427,6 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
     logs: {
       description: 'Read Nimbus process logs.',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!box) return notConfigured();
         const processes = box.processes;
 
         if (!processes?.logs) return handleLacks('process logs');
@@ -662,8 +455,6 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
         + 'request to the URL reaches the server, or "not reached" naming the preview-route gate that refused. '
         + 'The check never calls your server.',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!box) return notConfigured();
-
         if (!box.ports?.expose) return handleLacks('ports');
         const input = parseInput(PortInputSchema, { value: args[0] });
         const port = v.is(v.number(), input) ? input : input?.port;
@@ -687,7 +478,6 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
     unexposePort: {
       description: 'Stop exposing a Nimbus port.',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!box) return notConfigured();
         const ports = box.ports;
 
         if (!ports?.unexpose) return handleLacks('ports');
@@ -712,7 +502,6 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
     listPorts: {
       description: 'List Nimbus exposed ports.',
       execute: async (): Promise<string | Refusal> => {
-        if (!box) return notConfigured();
         // No port API is not the same fact as no exposed ports (AGENTS.md).
         const ports = box.ports;
 
@@ -731,7 +520,6 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
     installRuntime: {
       description: 'Install or ensure a Nimbus runtime such as python, bun, or clang.',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!box) return notConfigured();
         const spec = parseInput(StringSchema, { value: args[0] });
 
         if (spec === undefined) {
@@ -756,7 +544,6 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
     listRuntimes: {
       description: 'List Nimbus runtimes.',
       execute: async (): Promise<string | Refusal> => {
-        if (!box) return notConfigured();
         const runtimes = box.runtimes;
 
         if (!runtimes?.list) return handleLacks('runtime listing');
@@ -771,60 +558,35 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
     },
   };
 
+  // JS/TS, shell, coreutils, `node`, `npm`/`npx`, and `git` need no install. `python`/`native_binary` also need a facet
+  // host (`runtimeCatalog`); Cloudflare says false, the CLI supplies `localFacetHost()`.
+  const capabilities: ExecutorCapability[] = [
+    'javascript', 'typescript', 'shell', 'npm', 'git', 'net_outbound',
+    ...(box.ports?.expose && opts.inboundNetwork !== false ? (['net_inbound'] as const) : []),
+    'process_spawn', 'process_long', 'process_signal',
+    ...(opts.runtimeCatalog ? (['python', 'native_binary'] as const) : []),
+  ];
+
   return {
-    name: 'nimbus',
-    files: box ? nimbusSessionFiles(box) : undefined,
-    homeDir: async () => root,
-    kind: 'nimbus',
-    // JS/TS, shell, coreutils, `node`, `npm`/`npx`, and `git` need no install. `python`/`native_binary` also need a facet
-    // host (NimbusExecutorOpts.runtimeCatalog); Cloudflare says false, the CLI supplies `localFacetHost()`.
-    capabilities: new Set<ExecutorCapability>([
-      'javascript', 'typescript', 'shell', 'npm', 'git',
-      'fs_owned', 'net_outbound',
-      ...(box?.ports?.expose && opts.inboundNetwork !== false ? (['net_inbound'] as const) : []),
-      'process_spawn', 'process_long', 'process_signal',
-      ...(opts.runtimeCatalog ? (['python', 'native_binary'] as const) : []),
-    ]),
-    isAvailable: () => configured,
-    // A recorded failure outranks activity; an unbound handle reports why.
-    getStatus: () => {
-      const seen = { configured, available: configured, active };
-
-      if (!configured) return { ...seen, status: 'not_configured', reason: lastError ?? NOT_CONFIGURED };
-
-      if (lastError !== undefined) return { ...seen, status: 'error', reason: lastError };
-
-      return { ...seen, status: active ? 'active' : 'idle' };
-    },
-    connect: async () => { if (!box) throw new Error(NOT_CONFIGURED); await touch(() => box.ready()); },
-    disconnect: async () => { active = false; },
     tools,
-    types: `/** \`unsupported\` means this deployment's session lacks the surface, so a retry cannot help. */
-declare namespace ${namespace} {
-  function exec(command: string): Promise<string | Refusal>;
-  function runCode(code: string, options?: { language?: 'javascript'|'typescript'|'python'|'ruby'|'shell'; install?: 'never'|'ifMissing' }): Promise<string | Refusal>;
-  function readFile(path: string): Promise<string | Refusal>;
-  function writeFile(path: string, content: string): Promise<string | Refusal>;
-  function listFiles(path?: string): Promise<string | Refusal>;
-  function readdir(path?: string): Promise<string | Refusal>;
-  function exists(path: string): Promise<boolean | Refusal>;
-  function stat(path: string): Promise<string | Refusal>;
-  function mkdir(path: string): Promise<string | Refusal>;
-  function rm(path: string): Promise<string | Refusal>;
-${SESSION_CONTROL_TYPES}
-}`,
-    positionalArgs: true,
+    capabilities,
+    // A recorded failure outranks activity.
+    getStatus: (): ExecutorStatus => (lastError === undefined
+      ? { configured: true, available: true, active, status: active ? 'active' : 'idle' }
+      : { configured: true, available: true, active, status: 'error', reason: lastError }),
+    connect: async () => { await touch(() => box.ready()); },
+    disconnect: async () => { active = false; },
     exposePort: exposeOn,
-    async unexposePort(port: number) {
-      const ports = box?.ports;
+    unexposePort: async (port: number) => {
+      const ports = box.ports;
 
       if (!ports?.unexpose) return;
       const unexpose = ports.unexpose.bind(ports);
       await touch(() => unexpose(port));
     },
     // Exposed ports without a URL are kept, carrying the host's reason as a refusal.
-    async listExposedPorts() {
-      const ports = box?.ports;
+    listExposedPorts: async () => {
+      const ports = box.ports;
 
       if (!ports?.list) return [];
       const list = ports.list.bind(ports);
@@ -848,40 +610,16 @@ ${SESSION_CONTROL_TYPES}
 /** Kinu's durable workspace tools plus the same Nimbus session's process/runtime/port surface, registered once as `workspace`. */
 export function createNimbusWorkspaceExecutor(opts: NimbusWorkspaceExecutorOpts): PortAnsweringExecutor {
   const inline = createInlineExecutor(opts.inline);
-  const session = createNimbusExecutor({ ...opts, namespace: 'workspace' });
-
-  const {
-    exec: _sessionExec,
-    readFile: _sessionRead,
-    writeFile: _sessionWrite,
-    listFiles: _sessionList,
-    readdir: _sessionReaddir,
-    exists: _sessionExists,
-    stat: _sessionStat,
-    mkdir: _sessionMkdir,
-    rm: _sessionRm,
-    ...sessionTools
-  } = session.tools;
-
-  const sessionTypes = `
-  function runCode(code: string, options?: { language?: 'javascript'|'typescript'|'python'|'ruby'|'shell'; install?: 'never'|'ifMissing' }): Promise<string | Refusal>;
-${SESSION_CONTROL_TYPES}`;
-
-  const workspaceTools = { ...inline.tools, ...sessionTools };
+  const session = nimbusSession(opts);
 
   return {
     ...inline,
-    files: inline.files,
-    capabilities: new Set<ExecutorCapability>([
-      ...inline.capabilities,
-      ...[...session.capabilities].filter((capability) => capability !== 'fs_owned'),
-      'fs_shared',
-    ]),
+    capabilities: new Set<ExecutorCapability>([...inline.capabilities, ...session.capabilities]),
     getStatus: session.getStatus,
     connect: session.connect,
     disconnect: session.disconnect,
-    tools: workspaceTools,
-    types: (inline.types ?? '').replace(/\n}\s*$/, `${sessionTypes}\n}`),
+    tools: { ...inline.tools, ...session.tools },
+    types: (inline.types ?? '').replace(/\n}\s*$/, `${SESSION_TYPES}\n}`),
     exposePort: session.exposePort,
     unexposePort: session.unexposePort,
     listExposedPorts: session.listExposedPorts,
