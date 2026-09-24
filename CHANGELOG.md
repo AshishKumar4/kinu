@@ -14,6 +14,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- **The Diffs tab is now Changes.** It lists the changed files as a tree with their counts; a file opens to a diff
+  that keeps three lines around each change, folds the rest, marks the changed words and keeps the code's colours.
+  Expand shows every file split beside the tree (one column on a phone). A binary file or one over 2 MB says so
+  instead of "File exceeds 1000 lines", and a new binary file is listed. Mark reviewed can be undone for 10 seconds.
 - Hosted actors now use the Agents platform directly, without Think's duplicate session, workspace, inference queue or recovery boot. The shared Kinu chat loop retains the existing browser/CLI protocol and initializes the root transcript through the public session provider. Accepted sends and unfinished workspace work keep the sandbox protected across eviction.
 - **The default model lives in the profile's default tier, and nowhere else.** `kinu setup` and the first provider connect set it only while it is unset, a later connect leaves it, and Defaults on the home screen change it; `config.json` keeps no top-level `model` or `reasoningEffort`. `/model`, `/effort`, the TUI model picker, `kinu model`, `kinu effort` and the rpc `model` command set the open workspace's own model or effort, and a new workspace pins a model only when `--model` names one.
 

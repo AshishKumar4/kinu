@@ -181,14 +181,14 @@ what it could not count: calls the provider reported nothing for, and calls no
 catalog could price. So you can tell "everything reported" from "92%, with
 the embedder silent".
 
-On [kinu.run](https://kinu.run) a workspace has two views, Work and
-Supervise. Its tabs are Work (plans, jobs and decisions waiting on you),
-Diffs (the change set, when there is one), Files, Releases (deliverables and
-approvals), Swarms, Agent (identity, memory, tools and what it changed about
-itself) and Env (executors, files and terminals). Each slate the agent writes
-gets a tab of its own. The gauge beside the tab strip shows context, cost and
-cache use. Work counts the items waiting on you and opens each one where you
-decide it.
+On [kinu.run](https://kinu.run) a workspace has two views, Work and Supervise.
+Its tabs are Work (plans, jobs and decisions waiting on you), Changes (what
+changed since you last marked it reviewed, when anything did), Files, Releases
+(deliverables and approvals), Swarms, Agent (identity, memory, tools and what
+it changed about itself) and Env (executors, files and terminals). Each slate
+the agent writes gets a tab of its own. The gauge beside the tab strip shows
+context, cost and cache use. Work counts the items waiting on you and opens
+each one where you decide it.
 
 I open Swarms when the agent tried more than one thing. The `agents` tool's
 `swarm` action grows a tree of candidates. Nodes that use tools run the full

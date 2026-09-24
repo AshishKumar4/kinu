@@ -11,8 +11,8 @@ Each preview gets a titled tab at the left of the workspace surface strip. A
 slate and the workspace port it serves share one tab. The pane renders the same
 component as the chat card (`SlateFrame` is `InlineSlate` in `pane` display),
 fills the available height and shows the URL. A new preview takes focus once;
-refreshing its source or reconnecting does not take it again. Diffs keep their
-own tab, shown only when there are diffs.
+refreshing its source or reconnecting does not take it again. Changes keep their
+own tab, shown only when something changed.
 
 The Work tab lists the workspace's plans newest first, from one workspace-wide
 read (`listWorkspaceWork`), with the owning actor named on each. A new pending
