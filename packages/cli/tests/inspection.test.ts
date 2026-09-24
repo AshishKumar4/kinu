@@ -1,3 +1,4 @@
+import { runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
@@ -28,36 +29,14 @@ const repoRoot = resolve(__dirname, "../../..");
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
 
 function runCli(home: string, args: string[], extraEnv: Record<string, string> = {}) {
-  return Bun.spawnSync({
-    cmd: [process.execPath, cliBin, ...args],
+  return runToExit([process.execPath, cliBin, ...args], {
     cwd: newProjectDir(),
-    stdout: "pipe",
-    stderr: "pipe",
     env: {
       ...process.env,
       KINU_HOME: home,
       ...extraEnv,
     },
   });
-}
-
-/** Async: the HTTP server the CLI calls lives on the loop `spawnSync` would hold. */
-async function runCliServed(home: string, args: string[], extraEnv: Record<string, string> = {}) {
-  const proc = Bun.spawn({
-    cmd: [process.execPath, cliBin, ...args],
-    cwd: newProjectDir(),
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, KINU_HOME: home, ...extraEnv },
-  });
-
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-
-  return { stdout, stderr, exitCode };
 }
 
 /** The production schema via `kinu create`, not a hand-written DDL copy. */
@@ -105,22 +84,22 @@ async function createLocalAgent(home: string, name: string): Promise<void> {
   }
 }
 
-test("a genuinely unreadable workspace names its cause instead of hiding it", () => {
+test("a genuinely unreadable workspace names its cause instead of hiding it", async () => {
   const home = scratchDir("cli-unreadable");
   const dir = join(home, "broken-ws");
   mkdirSync(dir, { recursive: true });
   // Not a database: the one condition that legitimately reaches the handler.
   writeFileSync(join(dir, "agent.db"), "this is not sqlite\n");
 
-  const list = runCli(home, ["list"]);
+  const list = await runCli(home, ["list"]);
   expect(list.exitCode).toBe(0);
-  expect(list.stdout.toString()).toContain("unreadable:");
+  expect(list.stdout).toContain("unreadable:");
 
   // Assert contract fields, not rendered lines, which may change formatting.
-  const line = list.stderr.toString().trim().split('\n')
+  const line = list.stderr.trim().split('\n')
     .find((row) => row.includes('workspace.read_failed'));
 
-  if (line === undefined) throw new Error(`no workspace.read_failed diagnostic in stderr: ${list.stderr.toString()}`);
+  if (line === undefined) throw new Error(`no workspace.read_failed diagnostic in stderr: ${list.stderr}`);
 
   const diagnostic = v.parse(v.object({
     event: v.literal('workspace.read_failed'),
@@ -137,26 +116,26 @@ describe("CLI inspection commands", () => {
     const home = scratchDir("cli-inspect");
     await createLocalAgent(home, "localtest");
 
-    const memory = runCli(home, ["memory", "localtest"]);
+    const memory = await runCli(home, ["memory", "localtest"]);
     expect(memory.exitCode).toBe(0);
-    expect(memory.stdout.toString()).toContain("hello local memory");
+    expect(memory.stdout).toContain("hello local memory");
 
-    const mcts = runCli(home, ["mcts", "localtest", "--json"]);
+    const mcts = await runCli(home, ["mcts", "localtest", "--json"]);
     expect(mcts.exitCode).toBe(0);
-    expect(JSON.parse(mcts.stdout.toString())).toEqual([
+    expect(JSON.parse(mcts.stdout)).toEqual([
       expect.objectContaining({ id: "root", value: 0.7, status: "terminal" }),
     ]);
 
-    const events = runCli(home, ["events", "localtest", "--json"]);
+    const events = await runCli(home, ["events", "localtest", "--json"]);
     expect(events.exitCode).toBe(0);
-    expect(JSON.parse(events.stdout.toString())).toEqual([
+    expect(JSON.parse(events.stdout)).toEqual([
       expect.objectContaining({ id: "event-1", variant: "chat" }),
     ]);
 
-    const executors = runCli(home, ["executors", "localtest"]);
+    const executors = await runCli(home, ["executors", "localtest"]);
     expect(executors.exitCode).toBe(0);
-    expect(executors.stdout.toString()).not.toContain("device");
-    expect(executors.stdout.toString()).toContain("native_binary");
+    expect(executors.stdout).not.toContain("device");
+    expect(executors.stdout).toContain("native_binary");
   });
 
   test("kinu model normalizes specs through the provider resolver", async () => {
@@ -164,16 +143,16 @@ describe("CLI inspection commands", () => {
     await createLocalAgent(home, "localtest");
     const llmEnv = { KINU_BASE_URL: "http://localhost:1/v1", KINU_AUTH: "Bearer x" };
 
-    const bare = runCli(home, ["model", "localtest", "gpt-4o-mini"], llmEnv);
+    const bare = await runCli(home, ["model", "localtest", "gpt-4o-mini"], llmEnv);
     expect(bare.exitCode).toBe(0);
-    expect(bare.stdout.toString()).toContain("workers-ai/gpt-4o-mini");
+    expect(bare.stdout).toContain("workers-ai/gpt-4o-mini");
 
-    const cf = runCli(home, ["model", "localtest", "@cf/meta/llama-3.1-8b-instruct"], llmEnv);
+    const cf = await runCli(home, ["model", "localtest", "@cf/meta/llama-3.1-8b-instruct"], llmEnv);
     expect(cf.exitCode).toBe(0);
-    expect(cf.stdout.toString()).toContain("workers-ai/@cf/meta/llama-3.1-8b-instruct");
+    expect(cf.stdout).toContain("workers-ai/@cf/meta/llama-3.1-8b-instruct");
 
-    const stored = runCli(home, ["model", "localtest"], llmEnv);
-    expect(stored.stdout.toString()).toContain("workers-ai/@cf/meta/llama-3.1-8b-instruct");
+    const stored = await runCli(home, ["model", "localtest"], llmEnv);
+    expect(stored.stdout).toContain("workers-ai/@cf/meta/llama-3.1-8b-instruct");
     // Workspace-scoped: the global config must not gain a model here.
     const configPath = join(home, "config.json");
 
@@ -188,24 +167,24 @@ describe("CLI inspection commands", () => {
     const home = scratchDir("cli-effort");
     await createLocalAgent(home, "localtest");
 
-    const initial = runCli(home, ["effort", "localtest"]);
-    expect(initial.exitCode, initial.stderr.toString()).toBe(0);
-    expect(initial.stdout.toString()).toContain("medium");
+    const initial = await runCli(home, ["effort", "localtest"]);
+    expect(initial.exitCode, initial.stderr).toBe(0);
+    expect(initial.stdout).toContain("medium");
 
-    const set = runCli(home, ["effort", "localtest", "high"]);
+    const set = await runCli(home, ["effort", "localtest", "high"]);
     expect(set.exitCode).toBe(0);
-    expect(set.stdout.toString()).toContain("set high");
+    expect(set.stdout).toContain("set high");
 
-    const stored = runCli(home, ["effort", "localtest"]);
-    expect(stored.stdout.toString()).toContain("high");
-    const status = runCli(home, ["status", "localtest"]);
-    expect(status.exitCode, status.stderr.toString()).toBe(0);
-    expect(status.stdout.toString()).toContain("Effort:");
-    expect(status.stdout.toString()).toContain("high");
+    const stored = await runCli(home, ["effort", "localtest"]);
+    expect(stored.stdout).toContain("high");
+    const status = await runCli(home, ["status", "localtest"]);
+    expect(status.exitCode, status.stderr).toBe(0);
+    expect(status.stdout).toContain("Effort:");
+    expect(status.stdout).toContain("high");
 
-    const invalid = runCli(home, ["effort", "localtest", "extreme"]);
+    const invalid = await runCli(home, ["effort", "localtest", "extreme"]);
     expect(invalid.exitCode).toBe(1);
-    expect(invalid.stderr.toString()).toContain("none, minimal, low, medium, high, xhigh, max");
+    expect(invalid.stderr).toContain("none, minimal, low, medium, high, xhigh, max");
   });
 
   test("kinu model validates known, uncatalogued, and unknown-provider specs", async () => {
@@ -219,24 +198,24 @@ describe("CLI inspection commands", () => {
       KINU_MODEL: "@cf/moonshotai/kimi-k2.6",
     };
 
-    const known = runCli(home, ["model", "localtest", knownSpec], llmEnv);
+    const known = await runCli(home, ["model", "localtest", knownSpec], llmEnv);
     expect(known.exitCode).toBe(0);
-    expect(known.stdout.toString()).toContain(`set ${knownSpec}`);
-    expect(known.stdout.toString()).not.toContain("not in the model catalog");
+    expect(known.stdout).toContain(`set ${knownSpec}`);
+    expect(known.stdout).not.toContain("not in the model catalog");
 
-    const uncatalogued = runCli(home, ["model", "localtest", "workers-ai/@cf/meta/not-real"], llmEnv);
+    const uncatalogued = await runCli(home, ["model", "localtest", "workers-ai/@cf/meta/not-real"], llmEnv);
     expect(uncatalogued.exitCode).toBe(0);
-    expect(uncatalogued.stdout.toString()).toContain("not in the model catalog");
-    expect(uncatalogued.stdout.toString()).toContain("Close matches: workers-ai/");
-    expect(uncatalogued.stdout.toString()).toContain("kinu chat localtest");
-    expect(uncatalogued.stdout.toString()).toContain("/model");
-    expect(uncatalogued.stdout.toString()).toContain("set workers-ai/@cf/meta/not-real");
+    expect(uncatalogued.stdout).toContain("not in the model catalog");
+    expect(uncatalogued.stdout).toContain("Close matches: workers-ai/");
+    expect(uncatalogued.stdout).toContain("kinu chat localtest");
+    expect(uncatalogued.stdout).toContain("/model");
+    expect(uncatalogued.stdout).toContain("set workers-ai/@cf/meta/not-real");
 
-    const unknownProvider = runCli(home, ["model", "localtest", "unknown/model"], llmEnv);
+    const unknownProvider = await runCli(home, ["model", "localtest", "unknown/model"], llmEnv);
     expect(unknownProvider.exitCode).toBe(1);
-    expect(unknownProvider.stderr.toString()).toContain('Unknown model provider "unknown"');
-    expect(unknownProvider.stderr.toString()).toContain("workers-ai");
-    expect(unknownProvider.stdout.toString()).not.toContain("set unknown/model");
+    expect(unknownProvider.stderr).toContain('Unknown model provider "unknown"');
+    expect(unknownProvider.stderr).toContain("workers-ai");
+    expect(unknownProvider.stdout).not.toContain("set unknown/model");
   });
 
   // `jobs` and `triggers` read opts.json, so commander must accept `--json`.
@@ -245,9 +224,9 @@ describe("CLI inspection commands", () => {
     await createLocalAgent(home, "localtest");
 
     for (const args of [["jobs", "localtest"], ["triggers", "localtest", "list"]]) {
-      const run = runCli(home, [...args, "--json"]);
-      expect([args, run.exitCode, run.stderr.toString()]).toEqual([args, 0, ""]);
-      expect(JSON.parse(run.stdout.toString())).toEqual([]);
+      const run = await runCli(home, [...args, "--json"]);
+      expect([args, run.exitCode, run.stderr]).toEqual([args, 0, ""]);
+      expect(JSON.parse(run.stdout)).toEqual([]);
     }
   });
 
@@ -257,9 +236,9 @@ describe("CLI inspection commands", () => {
     await createLocalAgent(home, "localtest");
 
     const at = "2030-01-02T03:04:05Z";
-    const run = runCli(home, ["triggers", "localtest", "at", at]);
-    expect([run.exitCode, run.stderr.toString()]).toEqual([0, ""]);
-    expect(run.stdout.toString()).toContain("scheduled");
+    const run = await runCli(home, ["triggers", "localtest", "at", at]);
+    expect([run.exitCode, run.stderr]).toEqual([0, ""]);
+    expect(run.stdout).toContain("scheduled");
 
     const db = new Database(join(home, "localtest", "agent.db"), { readonly: true });
 
@@ -311,19 +290,19 @@ describe("CLI inspection commands", () => {
       db.close();
     }
 
-    const json = runCli(home, ["spend", "localtest", "--json"]);
-    expect([json.exitCode, json.stderr.toString()]).toEqual([0, ""]);
+    const json = await runCli(home, ["spend", "localtest", "--json"]);
+    expect([json.exitCode, json.stderr]).toEqual([0, ""]);
 
     const parsed = v.parse(
       v.object({ total: v.object({ unpricedCalls: v.number(), floorPricedCalls: v.number() }) }),
-      JSON.parse(json.stdout.toString()),
+      JSON.parse(json.stdout),
     );
 
     expect(parsed.total).toEqual({ unpricedCalls: 1, floorPricedCalls: 1 });
 
-    const printed = runCli(home, ["spend", "localtest"]);
-    expect([printed.exitCode, printed.stderr.toString()]).toEqual([0, ""]);
-    const out = printed.stdout.toString();
+    const printed = await runCli(home, ["spend", "localtest"]);
+    expect([printed.exitCode, printed.stderr]).toEqual([0, ""]);
+    const out = printed.stdout;
     expect(out).toContain("$0.0340");
     expect(out).toContain("The dollar total is a floor");
     expect(out).toContain("1 measured call carried no models.dev rate");
@@ -348,7 +327,7 @@ describe("kinu events rendering", () => {
     const server = Bun.serve({ port: 0, fetch: () => Response.json({ result }) });
 
     try {
-      return await runCliServed(home, ["events", "cloudtest"], {
+      return await runCli(home, ["events", "cloudtest"], {
         KINU_TOKEN: "ptc_test",
         KINU_ORIGIN: `http://localhost:${server.port}`,
       });
@@ -361,7 +340,7 @@ describe("kinu events rendering", () => {
     const home = scratchDir("cli-events");
     await createLocalAgent(home, "localtest");
 
-    const local = await runCliServed(home, ["events", "localtest"]);
+    const local = await runCli(home, ["events", "localtest"]);
     const cloud = await eventsAgainstCloud(home, [CLOUD_ROW]);
 
     expect([local.exitCode, local.stderr]).toEqual([0, ""]);

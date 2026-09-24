@@ -106,7 +106,7 @@ describe(SUITE, () => {
           // would wait for. The driver reads the SCREEN — the cell grid the
           // terminal shows — so a word the renderer painted by rewriting only
           // its changed cells still counts as shown.
-          const run = runTuiInPty(ENTRY, {
+          const run = await runTuiInPty(ENTRY, {
             env,
             steps: [
               // THE FIRST THING A FIRST RUN MEETS is the connect offer: the TUI

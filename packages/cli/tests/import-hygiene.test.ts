@@ -2,10 +2,9 @@
  * Every CLI invocation (including `kinu setup`) imports the command graph, so opentui loads only behind
  * dynamic imports: importing the graph must leave process.stdin untouched.
  */
-import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { expect, test } from "bun:test";
-import { present } from '@kinu.run/test-utils';
+import { present, runToExit } from '@kinu.run/test-utils';
 
 const srcDir = resolve(__dirname, "../src");
 
@@ -25,13 +24,10 @@ console.log(JSON.stringify({ afterCommands, controlLoaded: Boolean(require.cache
 process.exit(0);
 `;
 
-test("importing the setup/chat command graph leaves stdin untouched and opentui unloaded", () => {
-  const run = spawnSync(process.execPath, ["-e", PROBE], {
-    cwd: resolve(__dirname, ".."),
-    encoding: "utf8",
-  });
+test("importing the setup/chat command graph leaves stdin untouched and opentui unloaded", async () => {
+  const run = await runToExit([process.execPath, "-e", PROBE], { cwd: resolve(__dirname, "..") });
 
-  expect(run.status).toBe(0);
+  expect(run.exitCode).toBe(0);
   const result = JSON.parse(present(run.stdout.trim().split("\n").at(-1), 'the last line of stdout'));
   expect(result.afterCommands.stdin).toEqual({ data: 0, readable: 0, keypress: 0, isRaw: false });
   expect(result.afterCommands.opentuiLoaded).toBe(false);

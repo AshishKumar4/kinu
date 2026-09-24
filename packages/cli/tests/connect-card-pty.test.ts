@@ -13,10 +13,10 @@ import { runTuiInPty } from './helpers/pty-screen';
 const entry = resolve(import.meta.dir, 'fixtures/pty-connect-card.tsx');
 
 describe('the connect card on a real terminal', () => {
-  test('keys go to the card until it leaves, then Enter sends from the composer', () => {
+  test('keys go to the card until it leaves, then Enter sends from the composer', async () => {
     const draft = 'draft after the card';
 
-    const run = runTuiInPty(entry, {
+    const run = await runTuiInPty(entry, {
       steps: [
         { wait: 'not now', timeout: 15 },
         // No card binding among these letters, so the card swallows them.
@@ -43,8 +43,8 @@ describe('the connect card on a real terminal', () => {
     expect(run.screen).not.toContain('quirk');
   });
 
-  test('shows the whole machine and sandbox consequence at eighty columns', () => {
-    const run = runTuiInPty(entry, {
+  test('shows the whole machine and sandbox consequence at eighty columns', async () => {
+    const run = await runTuiInPty(entry, {
       cols: 80,
       steps: [{ wait: 'not now', timeout: 15 }],
     });
@@ -56,8 +56,8 @@ describe('the connect card on a real terminal', () => {
     expect(run.screen).toContain('Devices.');
   });
 
-  test('centers the connect card in the wide chat lane', () => {
-    const run = runTuiInPty(entry, { cols: 160, steps: [{ wait: 'not now', timeout: 15 }] });
+  test('centers the connect card in the wide chat lane', async () => {
+    const run = await runTuiInPty(entry, { cols: 160, steps: [{ wait: 'not now', timeout: 15 }] });
     const border = run.screen.split('\n').find((line) => line.includes('╭─Let this agent use this computer?'));
 
     if (border === undefined) throw new Error('connect card did not paint');

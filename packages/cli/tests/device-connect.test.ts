@@ -1,5 +1,6 @@
 // The stub origin serves poison at the retired /pc/daemon.js route, so a connect that fetches
 // executable bytes shows up as poison on disk.
+import { runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
@@ -261,10 +262,10 @@ function readProcessOutput(stdout: ReadableStream<Uint8Array>): ProcessOutput {
   };
 }
 
-function liveDaemons(script: string): number[] {
-  const found = Bun.spawnSync({ cmd: ['pgrep', '-f', script] });
+async function liveDaemons(script: string): Promise<number[]> {
+  const found = await runToExit(['pgrep', '-f', script]);
 
-  return new TextDecoder().decode(found.stdout).split('\n').filter(Boolean).map(Number);
+  return found.stdout.split('\n').filter(Boolean).map(Number);
 }
 
 const DAEMON_PROBE_SCHEMA = v.object({
@@ -278,7 +279,6 @@ function daemonRuntimeProbe(origin: string): string {
   const ps = Bun.which('ps') ?? '/bin/ps';
 
   return `
-    import { execFileSync } from 'node:child_process';
     import { connectDevice, daemonStatus } from './packages/cli/src/device-connect.ts';
     const result = await connectDevice({ origin: ${JSON.stringify(origin)}, token: 'ptc_test' }, { session: true });
     let pid = daemonStatus().daemonPid;
@@ -286,7 +286,9 @@ function daemonRuntimeProbe(origin: string): string {
       await Bun.sleep(50);
       pid = daemonStatus().daemonPid;
     }
-    const command = execFileSync(${JSON.stringify(ps)}, ['-p', String(pid), '-o', 'command='], { encoding: 'utf-8' }).trim();
+    const listed = Bun.spawn([${JSON.stringify(ps)}, '-p', String(pid), '-o', 'command='], { stdout: 'pipe' });
+    const command = (await new Response(listed.stdout).text()).trim();
+    if (await listed.exited !== 0) throw new Error('ps found no process ' + String(pid));
     console.log(JSON.stringify({ result, runtime: process.execPath, command }));
     process.exit(0);
   `;
@@ -887,7 +889,7 @@ describe('device-connect install hardening', () => {
 
     const settled = await outcomes;
     expect(settled.some((outcome) => outcome.status === 'fulfilled')).toBe(true);
-    const live = liveDaemons(join(home, 'pc-agent.js'));
+    const live = await liveDaemons(join(home, 'pc-agent.js'));
     expect(live).toHaveLength(1);
     expect(Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim())).toBe(live[0]);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
@@ -958,7 +960,7 @@ describe('device daemon single-instance lock', () => {
   test('a self-update hands the machine to exactly one successor; a third daemon still exits', async () => {
     // Handover: the successor takes the pidfile over and the old daemon exits.
     const newDaemon = `${DAEMON_SOURCE}\n// build 2.0.0+new\n`;
-    const hub = startUpdateHub({ served: '2.0.0+new', archive: daemonArchive({ ...DAEMON_SIBLINGS, 'pc-agent.js': newDaemon }, '2.0.0+new') });
+    const hub = startUpdateHub({ served: '2.0.0+new', archive: await daemonArchive({ ...DAEMON_SIBLINGS, 'pc-agent.js': newDaemon }, '2.0.0+new') });
     updateHubs.push(hub);
     const home = installedMachine(hub.origin);
     writeFileSync(join(home, 'pc-agent.version'), '1.0.0+old\n', { mode: 0o600 });
@@ -973,7 +975,7 @@ describe('device daemon single-instance lock', () => {
     expect(successorPid).not.toBe(oldPid);
     deviceDaemonPids.push(successorPid);
     expect(await waitForPidExit(oldPid)).toBe(true);
-    expect(liveDaemons(join(home, 'pc-agent.js'))).toEqual([successorPid]);
+    expect(await liveDaemons(join(home, 'pc-agent.js'))).toEqual([successorPid]);
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(newDaemon);
 
     const third = startDaemon(home);

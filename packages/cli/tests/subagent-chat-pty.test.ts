@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 import { initWorkspaceSchema, SubordinateRosterStore, WorkspaceActorDirectory, type LLMProviderConfig } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/identity';
 import { makeSql, makeSqlExec, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
-import { scratchDir } from '@kinu.run/test-utils';
+import { runToExit, scratchDir } from '@kinu.run/test-utils';
 
 import { runTuiInPty } from './helpers/pty-screen';
 
@@ -20,18 +20,18 @@ const cliBin = resolve(import.meta.dir, '../bin/cli.ts');
 const BIRTH_LLM: LLMProviderConfig = { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' };
 
 /** A machine with a default model, so opening the chat reaches no endpoint. */
-function kinuHome(): string {
+async function kinuHome(): Promise<string> {
   const home = scratchDir('subagent-chat-home');
   writeFileSync(join(home, 'config.json'), `${JSON.stringify({
     providers: { openaiCompat: { default: { baseURL: 'http://127.0.0.1:9/v1', apiKey: 'unused' } } },
   })}\n`, { mode: 0o600 });
 
-  const tier = Bun.spawnSync([process.execPath, '-e', `
+  const tier = await runToExit([process.execPath, '-e', `
     const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
     await updateDefaultTier({ model: 'openai-compat/fixture-model' });
-  `], { cwd: repoRoot, env: { ...process.env, KINU_HOME: home }, stdout: 'pipe', stderr: 'pipe' });
+  `], { cwd: repoRoot, env: { ...process.env, KINU_HOME: home } });
 
-  expect(tier.exitCode, tier.stderr.toString()).toBe(0);
+  expect(tier.exitCode, tier.stderr).toBe(0);
 
   return home;
 }
@@ -81,10 +81,10 @@ async function workspaceThatHired(home: string, name: string, subagent: { name: 
 }
 
 test('the Agent Hub lists a hired subagent and Enter opens its conversation', async () => {
-  const home = kinuHome();
+  const home = await kinuHome();
   await workspaceThatHired(home, 'shop', { name: 'scout', displayName: 'Scout' });
 
-  const run = runTuiInPty(cliBin, {
+  const run = await runTuiInPty(cliBin, {
     args: ['chat', 'shop'],
     cwd: scratchDir('subagent-chat-cwd'),
     cols: 120,

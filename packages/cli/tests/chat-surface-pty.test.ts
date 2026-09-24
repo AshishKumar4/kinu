@@ -8,10 +8,10 @@ import { inkBefore, runTuiInPty } from './helpers/pty-screen';
 const entry = resolve(import.meta.dir, 'fixtures/pty-chat.tsx');
 
 describe('the chat surface on a real terminal, fresh install', () => {
-  test('the default theme paints the canvas and writes assistant prose in ink', () => {
+  test('the default theme paints the canvas and writes assistant prose in ink', async () => {
     const light = createThemeRegistry(BUILTIN_TUI_THEMES).get(DEFAULT_TUI_THEME_SELECTION.themeId);
 
-    const run = runTuiInPty(entry, {
+    const run = await runTuiInPty(entry, {
       steps: [
         { wait: 'Connected to pty', timeout: 15 },
         { send: 'draft one' },

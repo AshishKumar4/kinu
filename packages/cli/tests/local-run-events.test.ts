@@ -1,3 +1,4 @@
+import { runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { mkdirSync } from 'node:fs';
 
@@ -10,7 +11,7 @@ import { createTestActor } from '../../core/tests/helpers';
 
 const repoRoot = resolve(__dirname, '../../..');
 
-function readLocal(expression: string): JsonValue {
+async function readLocal(expression: string): Promise<JsonValue> {
   const home = scratchDir('run-events');
   mkdirSync(join(home, 'jarvis'), { recursive: true });
   const db = new Database(join(home, 'jarvis', 'agent.db'));
@@ -37,35 +38,32 @@ function readLocal(expression: string): JsonValue {
     `import * as m from './packages/cli/src/local-inspection.ts';` +
     `console.log(JSON.stringify(${expression}));`;
 
-  const proc = Bun.spawnSync({
-    cmd: [process.execPath, '-e', script],
+  const proc = await runToExit([process.execPath, '-e', script], {
     cwd: repoRoot,
     env: { ...process.env, KINU_HOME: home },
-    stdout: 'pipe',
-    stderr: 'pipe',
   });
 
-  if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
+  if (proc.exitCode !== 0) throw new Error(proc.stderr);
 
-  return parseJsonValue(proc.stdout.toString());
+  return parseJsonValue(proc.stdout);
 }
 
 describe('local run-event readers', () => {
-  test('listLocalRuns reports the recorded run', () => {
-    expect(readLocal(`m.listLocalRuns('jarvis')`)).toEqual([
+  test('listLocalRuns reports the recorded run', async () => {
+    expect(await readLocal(`m.listLocalRuns('jarvis')`)).toEqual([
       { runId: 'run-1', lastTs: new Date(1_700_000_000_000 + 2 * 1000).toISOString(), eventCount: 3 },
     ]);
   });
 
-  test('listLocalRunEvents replays a run, and `since` replays only the tail', () => {
-    expect(readLocal(`m.listLocalRunEvents('jarvis', 'run-1').map(e => e.type)`))
+  test('listLocalRunEvents replays a run, and `since` replays only the tail', async () => {
+    expect(await readLocal(`m.listLocalRunEvents('jarvis', 'run-1').map(e => e.type)`))
       .toEqual(['run_start', 'tool_call_end', 'run_end']);
-    expect(readLocal(`m.listLocalRunEvents('jarvis', 'run-1', { since: 2 }).map(e => e.type)`))
+    expect(await readLocal(`m.listLocalRunEvents('jarvis', 'run-1', { since: 2 }).map(e => e.type)`))
       .toEqual(['run_end']);
   });
 
-  test('the local timeline leads with the durable run events', () => {
-    expect(readLocal(`m.listLocalTimeline('jarvis').map(r => r.kind)`))
+  test('the local timeline leads with the durable run events', async () => {
+    expect(await readLocal(`m.listLocalTimeline('jarvis').map(r => r.kind)`))
       .toEqual(['run:run_end', 'run:tool_call_end', 'run:run_start']);
   });
 });

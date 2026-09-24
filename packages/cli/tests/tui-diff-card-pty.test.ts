@@ -8,10 +8,10 @@ import { inkBefore, runTuiInPty } from './helpers/pty-screen';
 const entry = resolve(import.meta.dir, 'fixtures/pty-chat.tsx');
 
 describe('the file diff card on a real terminal', () => {
-  test('an edit result renders header and hunk lines in the well inks', () => {
+  test('an edit result renders header and hunk lines in the well inks', async () => {
     const theme = createThemeRegistry(BUILTIN_TUI_THEMES).get(DEFAULT_TUI_THEME_SELECTION.themeId);
 
-    const run = runTuiInPty(entry, {
+    const run = await runTuiInPty(entry, {
       env: { KINU_PTY_FILE_EDIT: '1' },
       steps: [
         { wait: 'Connected to pty', timeout: 15 },

@@ -1520,7 +1520,7 @@ describe("CLI distribution artifacts", () => {
     run(["model", "w1", "openai-compat/mock-model"]);
   }
 
-  function chatSurface(root: string, env: Record<string, string>): PtyRun {
+  function chatSurface(root: string, env: Record<string, string>): Promise<PtyRun> {
     return runTuiInPty(join(root, "cli.js"), {
       args: ["chat", "w1"],
       cwd: root,
@@ -1557,7 +1557,7 @@ describe("CLI distribution artifacts", () => {
 
       provisionWorkspace(root, env, `http://127.0.0.1:${String(server.modelPort)}/v1`);
 
-      const run = chatSurface(root, env);
+      const run = await chatSurface(root, env);
 
       expect(run.waits.every((w) => w.met), `PTY waits failed: ${JSON.stringify(run.waits)}`).toBe(true);
 
@@ -1615,7 +1615,7 @@ describe("CLI distribution artifacts", () => {
       try {
         provisionWorkspace(root, env, `http://127.0.0.1:${String(server.modelPort)}/v1`);
 
-        const run = chatSurface(root, env);
+        const run = await chatSurface(root, env);
 
         expect(run.screen).toContain("**two green lanes**");
         expect(run.screen).toContain("### Heading marker");

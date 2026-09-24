@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { weakLabel, type JsonObject, type JsonValue } from '@kinu.run/core';
-import { scratchDir, gitEnv } from '@kinu.run/test-utils';
+import { runToExit, scratchDir, gitEnv } from '@kinu.run/test-utils';
 import { defaultTranscriptRoot, mineTranscripts, renderMineSkips } from '../src/cc-transcript';
 import * as v from 'valibot';
 
@@ -359,7 +359,7 @@ describe('the corpus a caller asks for is the corpus they get', () => {
 });
 
 describe('mined artifacts cannot be committed', () => {
-  test('git ignores the corpus directory and the dated reports', () => {
+  test('git ignores the corpus directory and the dated reports', async () => {
     // The only mechanical guarantee that private sessions stay out of the repo. `--no-index` avoids depending
     // on file existence; `gitEnv()` because a hook-exported GIT_DIR would answer for another repository.
     for (const path of [
@@ -368,11 +368,7 @@ describe('mined artifacts cannot be committed', () => {
       'packages/core/.cc-corpus/corpus.json',
       'docs/CC-CORPUS-2026-08-07.md',
     ]) {
-      const result = Bun.spawnSync({
-        cmd: ['git', 'check-ignore', '--no-index', '-q', path],
-        cwd: repoRoot,
-        env: gitEnv(),
-      });
+      const result = await runToExit(['git', 'check-ignore', '--no-index', '-q', path], { cwd: repoRoot, env: gitEnv() });
 
       expect({ path, ignored: result.exitCode === 0 }).toEqual({ path, ignored: true });
     }
@@ -380,7 +376,7 @@ describe('mined artifacts cannot be committed', () => {
 });
 
 describe('kinu label mine', () => {
-  test('reports the corpus and its caveats, without a model', () => {
+  test('reports the corpus and its caveats, without a model', async () => {
     const root = newRoot();
     new Session()
       .user('add a cache to the token store')
@@ -393,13 +389,12 @@ describe('kinu label mine', () => {
 
     const out = join(newRoot(), 'report', 'CC-CORPUS-test.md');
 
-    const result = Bun.spawnSync({
-      cmd: [process.execPath, cliBin, 'label', 'mine', '--root', root, '--out', out],
+    const result = await runToExit([process.execPath, cliBin, 'label', 'mine', '--root', root, '--out', out], {
       cwd: repoRoot,
       env: { ...process.env, NO_COLOR: '1' },
     });
 
-    const stdout = `${result.stdout.toString()}${result.stderr.toString()}`;
+    const stdout = `${result.stdout}${result.stderr}`;
 
     expect(result.exitCode).toBe(0);
     expect(stdout).toContain('Selection bias');
@@ -410,7 +405,7 @@ describe('kinu label mine', () => {
     expect(Bun.file(out).size).toBeGreaterThan(0);
   });
 
-  test('--json prints the numbers and no report file', () => {
+  test('--json prints the numbers and no report file', async () => {
     const root = newRoot();
     new Session()
       .user('a prompt with substance in it')
@@ -418,8 +413,7 @@ describe('kinu label mine', () => {
       .user('Wait, that is wrong')
       .write(root, 'p', 's');
 
-    const result = Bun.spawnSync({
-      cmd: [process.execPath, cliBin, 'label', 'mine', '--root', root, '--json'],
+    const result = await runToExit([process.execPath, cliBin, 'label', 'mine', '--root', root, '--json'], {
       cwd: repoRoot,
       env: { ...process.env, NO_COLOR: '1' },
     });
@@ -431,7 +425,7 @@ describe('kinu label mine', () => {
       }),
       classifier: v.null(),
       cost: v.array(v.object({})),
-    }), JSON.parse(result.stdout.toString()));
+    }), JSON.parse(result.stdout));
 
     expect(result.exitCode).toBe(0);
     expect(parsed.stats.turns).toBe(2);
@@ -441,19 +435,18 @@ describe('kinu label mine', () => {
     expect(parsed.cost).toEqual([]);
   });
 
-  test('score refuses a cloud agent, because the corpus is on this machine', () => {
-    const result = Bun.spawnSync({
-      cmd: [process.execPath, cliBin, 'label', 'score', 'somewhere-else', '--root', newRoot()],
+  test('score refuses a cloud agent, because the corpus is on this machine', async () => {
+    const result = await runToExit([process.execPath, cliBin, 'label', 'score', 'somewhere-else', '--root', newRoot()], {
       cwd: repoRoot,
       env: { ...process.env, NO_COLOR: '1', KINU_HOME: newRoot() },
     });
 
-    expect(`${result.stdout.toString()}${result.stderr.toString()}`)
+    expect(`${result.stdout}${result.stderr}`)
       .toContain('is a cloud agent');
     expect(result.exitCode).not.toBe(0);
   });
 
-  test('score stops before any model call when no rule fired', () => {
+  test('score stops before any model call when no rule fired', async () => {
     // The budget is never opened on a corpus with nothing to check an answer against.
     const home = newRoot();
     mkdirSync(join(home, 'demo'), { recursive: true });
@@ -466,18 +459,17 @@ describe('kinu label mine', () => {
       .user('and another unremarkable follow-up here')
       .write(root, 'p', 's');
 
-    const result = Bun.spawnSync({
-      cmd: [process.execPath, cliBin, 'label', 'score', 'demo', '--root', root],
+    const result = await runToExit([process.execPath, cliBin, 'label', 'score', 'demo', '--root', root], {
       cwd: repoRoot,
       env: { ...process.env, NO_COLOR: '1', KINU_HOME: home },
     });
 
-    expect(`${result.stdout.toString()}${result.stderr.toString()}`)
+    expect(`${result.stdout}${result.stderr}`)
       .toContain('no rule fired on any mined turn');
     expect(result.exitCode).toBe(0);
   });
 
-  test('says so plainly when nothing fired', () => {
+  test('says so plainly when nothing fired', async () => {
     const root = newRoot();
     new Session()
       .user('a prompt with substance in it')
@@ -485,14 +477,12 @@ describe('kinu label mine', () => {
       .user('and another unremarkable follow-up here')
       .write(root, 'p', 's');
 
-    const result = Bun.spawnSync({
-      cmd: [process.execPath, cliBin, 'label', 'mine', '--root', root,
-        '--out', join(newRoot(), 'r.md')],
+    const result = await runToExit([process.execPath, cliBin, 'label', 'mine', '--root', root, '--out', join(newRoot(), 'r.md')], {
       cwd: repoRoot,
       env: { ...process.env, NO_COLOR: '1' },
     });
 
-    expect(`${result.stdout.toString()}${result.stderr.toString()}`)
+    expect(`${result.stdout}${result.stderr}`)
       .toContain('no rule fired on any mined turn');
   });
 });

@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { present } from '@kinu.run/test-utils';
+import { present, runToExit } from '@kinu.run/test-utils';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -37,19 +37,10 @@ function makeHome(): string {
 }
 
 function runDaemon(home: string, action: string) {
-  const proc = Bun.spawnSync({
-    cmd: [process.execPath, cliBin, 'daemon', action],
+  return runToExit([process.execPath, cliBin, 'daemon', action], {
     cwd: newProjectDir(),
-    stdout: 'pipe',
-    stderr: 'pipe',
     env: { ...process.env, KINU_HOME: home },
   });
-
-  return {
-    exitCode: proc.exitCode,
-    stdout: proc.stdout.toString(),
-    stderr: proc.stderr.toString(),
-  };
 }
 
 function readPid(home: string): number | null {
@@ -81,13 +72,13 @@ async function waitFor(condition: () => boolean, timeoutMs = 10_000): Promise<vo
 }
 
 describe('kinu daemon restart', () => {
-  test('replaces a running daemon and waits for the old process to exit', () => {
+  test('replaces a running daemon and waits for the old process to exit', async () => {
     const home = makeHome();
-    expect(runDaemon(home, 'start').exitCode).toBe(0);
+    expect((await runDaemon(home, 'start')).exitCode).toBe(0);
     const before = readPid(home);
     expect(before).not.toBeNull();
 
-    const restart = runDaemon(home, 'restart');
+    const restart = await runDaemon(home, 'restart');
 
     expect(restart.exitCode).toBe(0);
     expect(restart.stderr).toBe('');
@@ -98,13 +89,13 @@ describe('kinu daemon restart', () => {
     // The file still names the replacement. `kill(pid, 0)` cannot say this: a dead-but-unreaped daemon reads alive.
     expect(readPid(home)).toBe(after);
     expect(isAlive(present(after, 'the daemon pid after the restart'))).toBe(true);
-    expect(runDaemon(home, 'status').stdout).toContain(`running pid ${after}`);
+    expect((await runDaemon(home, 'status')).stdout).toContain(`running pid ${after}`);
   });
 
-  test('starts the daemon when none is running', () => {
+  test('starts the daemon when none is running', async () => {
     const home = makeHome();
 
-    const restart = runDaemon(home, 'restart');
+    const restart = await runDaemon(home, 'restart');
 
     expect(restart.exitCode).toBe(0);
     expect(restart.stdout).toContain('was not running');
@@ -113,8 +104,8 @@ describe('kinu daemon restart', () => {
     expect(isAlive(present(pid, 'the daemon pid'))).toBe(true);
   });
 
-  test('an unknown action lists restart among the usable ones', () => {
-    const proc = runDaemon(makeHome(), 'bounce');
+  test('an unknown action lists restart among the usable ones', async () => {
+    const proc = await runDaemon(makeHome(), 'bounce');
 
     expect(proc.exitCode).toBe(1);
     expect(proc.stderr).toContain('start|stop|restart|status|logs|tick');
@@ -128,12 +119,12 @@ describe('kinu daemon logs', () => {
     writeFileSync(logPath, `${'padding line to grow the log past the cap\n'.repeat(30_000)}last line before the roll\n`);
     expect(statSync(logPath).size).toBeGreaterThan(1024 * 1024);
 
-    expect(runDaemon(home, 'start').exitCode).toBe(0);
+    expect((await runDaemon(home, 'start')).exitCode).toBe(0);
     await waitFor(() => existsSync(`${logPath}.1`) && statSync(logPath).size < 1024 * 1024);
 
     expect(statSync(logPath).size).toBeLessThan(1024 * 1024);
     expect(statSync(`${logPath}.1`).size).toBeGreaterThan(1024 * 1024);
-    const logs = runDaemon(home, 'logs');
+    const logs = await runDaemon(home, 'logs');
     expect(logs.exitCode).toBe(0);
     expect(logs.stdout).toContain('last line before the roll');
     expect(logs.stdout).toContain('local scheduler daemon started');
@@ -141,19 +132,19 @@ describe('kinu daemon logs', () => {
 });
 
 describe('kinu daemon stop', () => {
-  test('reports the stopped pid, clears the pidfile, and is honest when nothing runs', () => {
+  test('reports the stopped pid, clears the pidfile, and is honest when nothing runs', async () => {
     const home = makeHome();
-    runDaemon(home, 'start');
+    await runDaemon(home, 'start');
     const pid = present(readPid(home), 'the recorded daemon pid');
 
-    const stopped = runDaemon(home, 'stop');
+    const stopped = await runDaemon(home, 'stop');
 
     expect(stopped.exitCode).toBe(0);
     expect(stopped.stdout).toContain(`pid ${pid}`);
     expect(isAlive(pid)).toBe(false);
     expect(existsSync(join(home, 'daemon.pid'))).toBe(false);
 
-    const again = runDaemon(home, 'stop');
+    const again = await runDaemon(home, 'stop');
     expect(again.exitCode).toBe(0);
     expect(again.stdout).toContain('not running');
   });
@@ -170,7 +161,7 @@ describe('a daemon-hosted agent resolves the same profile authority as an intera
    * One `kinu daemon tick <agent>` pass in a subprocess (config.ts binds KINU_HOME at import).
    * A due timer gives the pass a real turn; an idle tick resolves no profile and proves nothing.
    */
-  function tickWithDueTrigger(home: string, project: string): v.InferOutput<typeof DaemonTickRun> {
+  async function tickWithDueTrigger(home: string, project: string): Promise<v.InferOutput<typeof DaemonTickRun>> {
     const script = `
       const { createRecordingLogger, setDiagnosticsSink } = await import('@kinu.run/core/obs');
       const { createCliAgent } = await import('./packages/cli/src/agent-create.ts');
@@ -221,11 +212,8 @@ describe('a daemon-hosted agent resolves the same profile authority as an intera
       console.log(JSON.stringify(payload));
     `;
 
-    const proc = Bun.spawnSync({
-      cmd: [process.execPath, '-e', script],
+    const proc = await runToExit([process.execPath, '-e', script], {
       cwd: repoRoot,
-      stdout: 'pipe',
-      stderr: 'pipe',
       env: {
         ...process.env,
         KINU_HOME: home,
@@ -240,14 +228,14 @@ describe('a daemon-hosted agent resolves the same profile authority as an intera
     });
 
     if (proc.exitCode !== 0) {
-      throw new Error(`daemon tick scenario failed (${proc.exitCode}): ${proc.stderr.toString()}`);
+      throw new Error(`daemon tick scenario failed (${proc.exitCode}): ${proc.stderr}`);
     }
 
-    return v.parse(DaemonTickRun, JSON.parse(proc.stdout.toString()));
+    return v.parse(DaemonTickRun, JSON.parse(proc.stdout));
   }
 
-  test('the daemon-driven turn resolves the CLI profile store, not the workspace bootstrap', () => {
-    const run = tickWithDueTrigger(makeHome(), newProjectDir());
+  test('the daemon-driven turn resolves the CLI profile store, not the workspace bootstrap', async () => {
+    const run = await tickWithDueTrigger(makeHome(), newProjectDir());
 
     expect(run.printed.some((line) => line.includes('ticked daemonbot'))).toBe(true);
 

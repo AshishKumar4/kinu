@@ -1,5 +1,6 @@
 // Disk-bound scenarios run in a subprocess (config.ts binds KINU_HOME at import);
 // the cloud-api methods run in-process against a local Bun server.
+import { runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { mkdirSync, writeFileSync } from "node:fs";
 
@@ -71,10 +72,10 @@ const ParsedCacheModes = v.object({ cache: v.number(), dir: v.number() });
  * Runs one disk-bound scenario in a subprocess with its own KINU_HOME. `body` runs via `bun -e`, so module
  * references in it must stay runtime imports: a static import would bind this process's KINU_HOME.
  */
-function runScenario(body: string, opts: {
+async function runScenario(body: string, opts: {
   setup?: (home: string) => void;
   env?: Record<string, string>;
-} = {}): Record<string, StepOutcome> {
+} = {}): Promise<Record<string, StepOutcome>> {
   const kinuHome = scratchDir('cli-profiles');
   opts.setup?.(kinuHome);
 
@@ -94,19 +95,16 @@ function runScenario(body: string, opts: {
     if (!(name in (opts.env ?? {}))) delete env[name];
   }
 
-  const proc = Bun.spawnSync({
-    cmd: [process.execPath, '-e', script],
+  const proc = await runToExit([process.execPath, '-e', script], {
     cwd: resolve(__dirname, '../../..'),
     env,
-    stdout: 'pipe',
-    stderr: 'pipe',
   });
 
   if (proc.exitCode !== 0) {
-    throw new Error(`scenario subprocess failed (${proc.exitCode}): ${proc.stderr.toString()}`);
+    throw new Error(`scenario subprocess failed (${proc.exitCode}): ${proc.stderr}`);
   }
 
-  return v.parse(v.record(v.string(), StepOutcomeSchema), JSON.parse(proc.stdout.toString()));
+  return v.parse(v.record(v.string(), StepOutcomeSchema), JSON.parse(proc.stdout));
 }
 
 function expectText(step: StepOutcome | undefined): string {
@@ -183,8 +181,8 @@ describe('local profile authority', () => {
     return { roles: BUILTIN_PROFILE_CATALOG.roles, tiers: { default: { model } } };
   }
 
-  test('the first tier edit seeds version 1 under local authority and persists into config.json', () => {
-    const steps = runScenario(`
+  test('the first tier edit seeds version 1 under local authority and persists into config.json', async () => {
+    const steps = await runScenario(`
       await step('seeded', async () => {
         const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
         return updateDefaultTier({ model: 'openai/deepseek' });
@@ -209,8 +207,8 @@ describe('local profile authority', () => {
     expect(onDisk).not.toContain('"account"');
   });
 
-  test('fresh authority uses the same environment model that workspace creation accepts', () => {
-    const steps = runScenario(`
+  test('fresh authority uses the same environment model that workspace creation accepts', async () => {
+    const steps = await runScenario(`
       await step('load', async () => {
         const { loadActiveProfile } = await import('./packages/cli/src/default-model.ts');
         return loadActiveProfile();
@@ -222,8 +220,8 @@ describe('local profile authority', () => {
     expect(loaded.catalog.tiers.default.model).toBe('openai-compat/test/model');
   });
 
-  test('every writer stores a model spelled as the provider listing names it', () => {
-    const steps = runScenario(`
+  test('every writer stores a model spelled as the provider listing names it', async () => {
+    const steps = await runScenario(`
       const { adoptDefaultModel, updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
       await step('adopted', async () => adoptDefaultModel('picked/model'));
       await step('edited', async () => (await updateDefaultTier({ model: 'other/model' })).catalog.tiers.default);
@@ -233,8 +231,8 @@ describe('local profile authority', () => {
     expect(expectOk(steps.edited)).toEqual({ model: 'openai-compat/other/model' });
   });
 
-  test('a later edit supersedes the envelope wholesale and bumps its version', () => {
-    const steps = runScenario(`
+  test('a later edit supersedes the envelope wholesale and bumps its version', async () => {
+    const steps = await runScenario(`
       const { loadLocalProfileAuthority } = await import('./packages/cli/src/profiles.ts');
       const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
       await step('first', async () => updateDefaultTier({ model: 'openai/deepseek' }));
@@ -264,8 +262,8 @@ describe('account cache isolation', () => {
     ${SIGNED_OUT}
   `;
 
-  test('entries are keyed by account, live outside KinuConfig, and never bleed across', () => {
-    const steps = runScenario(`
+  test('entries are keyed by account, live outside KinuConfig, and never bleed across', async () => {
+    const steps = await runScenario(`
       ${SEED_ACCOUNTS}
       await step('configText', async () => {
         const { existsSync, readFileSync } = await import('node:fs');
@@ -290,8 +288,8 @@ describe('account cache isolation', () => {
     expect(cacheText).toContain('acc-b');
   });
 
-  test('the cache file and its directory stay owner-only', () => {
-    const steps = runScenario(`
+  test('the cache file and its directory stay owner-only', async () => {
+    const steps = await runScenario(`
       ${SEED_ACCOUNTS}
       await step('modes', async () => {
         const { statSync } = await import('node:fs');
@@ -331,8 +329,8 @@ describe('account cache isolation', () => {
     `;
   }
 
-  test('logout and account switching flip resolution without promoting or merging anything', () => {
-    const steps = runScenario(`
+  test('logout and account switching flip resolution without promoting or merging anything', async () => {
+    const steps = await runScenario(`
       ${SEED_ACCOUNTS}
       await step('signedOutSource', async () => {
         const { resolveProfileAuthority } = await import('./packages/cli/src/profiles.ts');
@@ -390,8 +388,8 @@ describe('account cache isolation', () => {
     expect(expectOk(steps.backAsB)).toEqual({ model: 'other-model' });
   });
 
-  test('an expired session resolves local even with a bare KINU_TOKEN present', () => {
-    const steps = runScenario(
+  test('an expired session resolves local even with a bare KINU_TOKEN present', async () => {
+    const steps = await runScenario(
       `
       await step('expiredSession', async () => {
         const { mkdirSync, writeFileSync } = await import('node:fs');
@@ -434,8 +432,8 @@ describe('the turn profile authority reader', () => {
     })),
   });
 
-  test('a warm cache answers when the origin is unreachable, and says which version it served', () => {
-    const steps = runScenario(`
+  test('a warm cache answers when the origin is unreachable, and says which version it served', async () => {
+    const steps = await runScenario(`
       ${cached('acc-a', catalogA(), 9)}
       ${signedIn('acc-a', DEAD_ORIGIN)}
       ${RECORD_DIAGNOSTICS}
@@ -460,8 +458,8 @@ describe('the turn profile authority reader', () => {
     expect(resolved?.fields.durationMs).toBeTypeOf('number');
   });
 
-  test('revalidates the account authority on every turn setup and refreshes its cache', () => {
-    const steps = runScenario(`
+  test('revalidates the account authority on every turn setup and refreshes its cache', async () => {
+    const steps = await runScenario(`
       ${signedIn('acc-a', 'https://kinu.test')}
       ${RECORD_DIAGNOSTICS}
       let served = ${JSON.stringify(accountEnvelope('acc-a', catalogA(), 4))};
@@ -511,8 +509,8 @@ describe('the turn profile authority reader', () => {
     expect(expectOk(steps.sources)).toEqual(['server', 'server', 'server', 'server']);
   });
 
-  test('another account\u2019s cache never answers for this one', () => {
-    const steps = runScenario(`
+  test('another account\u2019s cache never answers for this one', async () => {
+    const steps = await runScenario(`
       ${cached('acc-a', catalogA(), 9)}
       ${signedIn('acc-b', DEAD_ORIGIN)}
       ${RECORD_DIAGNOSTICS}
@@ -534,8 +532,8 @@ describe('the turn profile authority reader', () => {
     expect(expectOk(steps.leaked)).toEqual({ tierForB: null, tierForA: { model: 'deepseek' }, reported: 0 });
   });
 
-  test('no cache for this account rethrows rather than inventing a catalog', () => {
-    const steps = runScenario(`
+  test('no cache for this account rethrows rather than inventing a catalog', async () => {
+    const steps = await runScenario(`
       ${signedIn('acc-a', DEAD_ORIGIN)}
       ${RECORD_DIAGNOSTICS}
       await step('resolved', async () => {
@@ -559,8 +557,8 @@ describe('the turn profile authority reader', () => {
   });
 
   // A reader built before the edit must still see it.
-  test('signed out, a reader built over an existing authority still sees a later default model and effort', () => {
-    const steps = runScenario(`
+  test('signed out, a reader built over an existing authority still sees a later default model and effort', async () => {
+    const steps = await runScenario(`
       const { createProfileAuthorityReader } = await import('./packages/cli/src/profiles.ts');
       const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
       await updateDefaultTier({ model: 'openai/model-at-startup' });
@@ -588,8 +586,8 @@ describe('the turn profile authority reader', () => {
     expect(afterEffort.catalog.tiers.default.model).toBe('openai/model-chosen-later');
   });
 
-  test('signed out with no authority yet, the first default model becomes the next turn\u2019s tier', () => {
-    const steps = runScenario(`
+  test('signed out with no authority yet, the first default model becomes the next turn\u2019s tier', async () => {
+    const steps = await runScenario(`
       const { createProfileAuthorityReader } = await import('./packages/cli/src/profiles.ts');
       const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
       const read = createProfileAuthorityReader();
@@ -631,18 +629,18 @@ describe('malformed profile data fails loudly', () => {
     });
   `;
 
-  test('a corrupt or wrong-shaped cache file throws instead of reading as empty', () => {
-    const notJson = runScenario(LOAD_CACHE, { setup: seedCacheFile('{not json') });
+  test('a corrupt or wrong-shaped cache file throws instead of reading as empty', async () => {
+    const notJson = await runScenario(LOAD_CACHE, { setup: seedCacheFile('{not json') });
     expectError(notJson.load, 'not valid JSON');
 
-    const schemaInvalidCache = runScenario(LOAD_CACHE, {
+    const schemaInvalidCache = await runScenario(LOAD_CACHE, {
       setup: seedCacheFile(JSON.stringify({ accounts: { 'acc-a': { version: 'one' } } })),
     });
 
     expectError(schemaInvalidCache.load, 'not a valid Kinu profile cache');
   });
 
-  test('a tampered catalog fails its digest check on read', () => {
+  test('a tampered catalog fails its digest check on read', async () => {
     const envelope = accountEnvelope('acc-a', catalogA());
 
     const tampered = {
@@ -650,15 +648,15 @@ describe('malformed profile data fails loudly', () => {
       catalog: { ...envelope.catalog, tiers: { ...envelope.catalog.tiers, default: { model: 'swapped-model' } } },
     };
 
-    const steps = runScenario(LOAD_CACHE, {
+    const steps = await runScenario(LOAD_CACHE, {
       setup: seedCacheFile(JSON.stringify({ accounts: { 'acc-a': tampered } })),
     });
 
     expectError(steps.load, 'digest mismatch');
   });
 
-  test('a server answer keyed to another account is refused, never cached', () => {
-    const steps = runScenario(`
+  test('a server answer keyed to another account is refused, never cached', async () => {
+    const steps = await runScenario(`
       ${signedIn('acc-b', 'https://kinu.test')}
       const served = ${JSON.stringify(accountEnvelope('acc-a', catalogA()))};
       globalThis.fetch = async (input) => {
@@ -680,9 +678,9 @@ describe('malformed profile data fails loudly', () => {
     expect(expectOk(steps.cacheFile)).toBe(false);
   });
 
-  test('authority kinds cannot cross slots in either store', () => {
+  test('authority kinds cannot cross slots in either store', async () => {
 
-    const localKindInCache = runScenario(LOAD_CACHE, {
+    const localKindInCache = await runScenario(LOAD_CACHE, {
       setup: seedCacheFile(
         JSON.stringify({
           accounts: {
@@ -694,7 +692,7 @@ describe('malformed profile data fails loudly', () => {
 
     expectError(localKindInCache.load, 'mismatching authority');
 
-    const accountKindInConfig = runScenario(`
+    const accountKindInConfig = await runScenario(`
       await step('load', async () => {
         const { loadLocalProfileAuthority } = await import('./packages/cli/src/profiles.ts');
         return loadLocalProfileAuthority();
@@ -712,7 +710,7 @@ describe('malformed profile data fails loudly', () => {
 
     expectError(accountKindInConfig.load, 'kind "account"');
 
-    const schemaInvalidInConfig = runScenario(`
+    const schemaInvalidInConfig = await runScenario(`
       await step('loadConfig', async () => {
         const { loadConfigFile } = await import('./packages/cli/src/config.ts');
         return loadConfigFile();

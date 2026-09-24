@@ -7,7 +7,7 @@
 import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as v from 'valibot';
-import { scratchPath } from '@kinu.run/test-utils';
+import { runToExit, scratchPath } from '@kinu.run/test-utils';
 
 export type PtyStep =
   | { readonly wait: string; readonly timeout?: number }
@@ -320,7 +320,7 @@ function installDriver() {
 }
 
 /** `home` is the run's `KINU_HOME`, keeping preferences and themes off the developer's install. */
-export function runTuiInPty(entry: string, options: {
+export async function runTuiInPty(entry: string, options: {
   readonly args?: readonly string[];
   readonly cwd?: string;
   readonly steps: readonly PtyStep[];
@@ -328,7 +328,7 @@ export function runTuiInPty(entry: string, options: {
   readonly rows?: number;
   readonly env?: Readonly<Record<string, string>>;
   readonly term?: string;
-}): PtyRun {
+}): Promise<PtyRun> {
   const { python, driver } = installDriver();
   const home = join(driver, '..');
 
@@ -348,18 +348,15 @@ export function runTuiInPty(entry: string, options: {
     steps: options.steps,
   };
 
-  const proc = Bun.spawnSync({
-    cmd: [python, driver, JSON.stringify(spec)],
+  const run = await runToExit([python, driver, JSON.stringify(spec)], {
     // `import.meta.dirname`, not Bun's `import.meta.dir`, which is undefined under vitest.
     cwd: resolve(import.meta.dirname),
-    stdout: 'pipe',
-    stderr: 'pipe',
   });
 
-  const stdout = proc.stdout.toString().trim();
+  const stdout = run.stdout.trim();
 
-  if (!proc.success || !stdout.startsWith('{')) {
-    throw new Error(`pty driver failed (${String(proc.exitCode)}): ${proc.stderr.toString()}${stdout}`);
+  if (run.exitCode !== 0 || !stdout.startsWith('{')) {
+    throw new Error(`pty driver failed (${String(run.exitCode)}): ${run.stderr}${stdout}`);
   }
 
   const result = v.parse(PtyResultSchema, JSON.parse(stdout));
@@ -381,21 +378,15 @@ export function runTuiInPty(entry: string, options: {
 }
 
 /** The screen after `bytes`, via the same model every `wait` reads; pins byte patterns captured from the renderer. */
-export function screenOf(bytes: string, size: { readonly rows: number; readonly cols: number }): string {
+export async function screenOf(bytes: string, size: { readonly rows: number; readonly cols: number }): Promise<string> {
   const { python, driver } = installDriver();
+  const run = await runToExit([python, driver, '--screen', String(size.rows), String(size.cols)], { stdin: bytes });
 
-  const proc = Bun.spawnSync({
-    cmd: [python, driver, '--screen', String(size.rows), String(size.cols)],
-    stdin: Buffer.from(bytes, 'utf8'),
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-
-  if (!proc.success) {
-    throw new Error(`pty screen model failed (${String(proc.exitCode)}): ${proc.stderr.toString()}`);
+  if (run.exitCode !== 0) {
+    throw new Error(`pty screen model failed (${String(run.exitCode)}): ${run.stderr}`);
   }
 
-  return proc.stdout.toString();
+  return run.stdout;
 }
 
 const ESC = String.fromCharCode(27);

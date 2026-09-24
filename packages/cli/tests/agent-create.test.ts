@@ -1,3 +1,4 @@
+import { runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 
@@ -154,21 +155,13 @@ describe('local workspace creation publishes or leaves nothing', () => {
 
   /** config.ts binds KINU_HOME at module load, so the isolated home needs a fresh process. */
   function run(scenario: string) {
-    const result = Bun.spawnSync(['bun', '-e', scenario], {
+    return runToExit(['bun', '-e', scenario], {
       cwd: join(import.meta.dir, '../../..'),
       env: {
         ...process.env, HOME, KINU_HOME: HOME,
         KINU_BASE_URL: 'http://localhost:1/v1', KINU_AUTH: 'Bearer fixture', KINU_MODEL: 'fixture-model',
       },
-      stdout: 'pipe',
-      stderr: 'pipe',
     });
-
-    return {
-      exitCode: result.exitCode ?? -1,
-      stdout: result.stdout.toString(),
-      stderr: result.stderr.toString(),
-    };
   }
 
   const PRELUDE = `
@@ -198,8 +191,8 @@ describe('local workspace creation publishes or leaves nothing', () => {
     };
   }
 
-  test('a role the catalog refuses leaves no database, no partial and no ref', () => {
-    const result = run(`
+  test('a role the catalog refuses leaves no database, no partial and no ref', async () => {
+    const result = await run(`
       ${PRELUDE}
       let failure = null;
       try {
@@ -222,8 +215,8 @@ describe('local workspace creation publishes or leaves nothing', () => {
     expect(state).toEqual({ db: false, partial: false, wal: false, shm: false, ref: false });
   });
 
-  test('a partial left by a killed create does not block the name, and the retry publishes', () => {
-    const result = run(`
+  test('a partial left by a killed create does not block the name, and the retry publishes', async () => {
+    const result = await run(`
       ${PRELUDE}
       // Exactly what a SIGKILL mid-create leaves behind: an unpublished
       // database under the partial name, invisible to every reader.
@@ -245,8 +238,8 @@ describe('local workspace creation publishes or leaves nothing', () => {
     expect(state).toEqual({ db: true, partial: false, wal: false, shm: false, ref: true });
   });
 
-  test('the published database is a complete, openable workspace, pinned to no model it was not given', () => {
-    const result = run(`
+  test('the published database is a complete, openable workspace, pinned to no model it was not given', async () => {
+    const result = await run(`
       ${PRELUDE}
       await createCliAgent({
         name: 'published-ws', displayName: 'Published', nameOrigin: 'user',
