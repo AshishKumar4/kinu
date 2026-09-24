@@ -2,7 +2,7 @@
 #
 # One JSON object per line (blank lines and '#' comments skipped), matching the
 # eval corpus convention in tests/eval/corpus/seed.jsonl. Each task's defect is
-# tests/bench/patches/<id>.patch, applied to a pristine sandbox copy.
+# bench/corpus/patches/<id>.patch, applied to a pristine sandbox copy.
 #
 # Every task here was validated empirically: the defect makes `suite` fail, and
 # reversing it makes `suite` pass. `bun scripts/bench.ts validate` re-proves it.

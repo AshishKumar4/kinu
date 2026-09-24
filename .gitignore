@@ -102,7 +102,7 @@ CC-CORPUS-*.md
 
 # Scratch benchmark output from corpus generation — never committed. Swept into
 # a commit once by a `git add -A` in a worktree; the real artifacts live under
-# bench-artifacts/ and tests/bench/ with their own retention.
+# bench-artifacts/ and bench/corpus/ with their own retention.
 /*_benchmark.jsonl
 
 # Behaviour-eval task output. The corpus tasks (`ws-inventory`, `ws-find-todo`,

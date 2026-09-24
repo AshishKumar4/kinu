@@ -173,7 +173,7 @@ AI_GATEWAY_BASE_URL=… AI_GATEWAY_AUTH=…     # an AI Gateway, for models the 
 
 ### The bench setup is a different thing
 
-`bun scripts/bench.ts` tests whether self-evolution helps against the seeded-defect corpus in `tests/bench/patches/` (148 patches on 2026-09-24). `bun scripts/bench-corpus-gate.ts` re-checks every patch with `git apply --check`. It uses only `BENCH_BASE_URL` / `BENCH_AUTH` / `BENCH_MODEL`, not eval credentials. See [Bench](BENCH.md).
+`bun scripts/bench.ts` tests whether self-evolution helps against the seeded-defect corpus in `bench/corpus/patches/` (148 patches on 2026-09-24). `bun scripts/bench-corpus-gate.ts` re-checks every patch with `git apply --check`. It uses only `BENCH_BASE_URL` / `BENCH_AUTH` / `BENCH_MODEL`, not eval credentials. See [Bench](BENCH.md).
 
 ## Evals: whether the deployed product does the work
 
@@ -258,12 +258,14 @@ packages/
    └─ facts.ts          ── createTestFactsStore
 tests/
 ├─ live/                (the live tier: end-to-end suites that call a real model)
-├─ first-run/           (the first-run tier: post-publish checks of the deployed product)
-└─ bench/               (the seeded-defect corpus `scripts/bench.ts` measures; data, no suites)
+└─ first-run/           (the first-run tier: post-publish checks of the deployed product)
 evals/
 ├─ tasks/               (the eval suite: one `*.eval.ts` per task)
 ├─ src/                 (the framework: task, verifier, harness, session, comparison, report)
 └─ scripts/             (compare, validate, baseline, trajectories, diagnose, post-comment)
+bench/
+├─ corpus/              (the seeded-defect corpus `scripts/bench.ts` measures; data, no suites)
+└─ harbor/, clbench/    (the external-benchmark adapters, Python)
 ```
 
 `bun test tests` matches nothing. Only `./tests/` selects root suites. The `catches` text of the `bun test ./tests/` row in `scripts/ladder.ts` records that path form.

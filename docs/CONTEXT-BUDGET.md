@@ -73,6 +73,6 @@ These were recorded before any numbers existed. `M2` means (a) single-query dige
 | The per-result cap (2,000 estimated tokens) | owner-specified on 2026-09-20; unmeasured: no bench or M2 arm has run against it | n/a |
 
 The bench is the seeded-defect corpus described in [Bench](BENCH.md). Its patches under
-`tests/bench/patches/` numbered 159 on 2026-08-19, 157 on 2026-08-24 after
+`bench/corpus/patches/` numbered 159 on 2026-08-19, 157 on 2026-08-24 after
 drifted fixtures were retired, and 156 on 2026-09-22. The MDE calculation in
 [Bench](BENCH.md) sets final power.

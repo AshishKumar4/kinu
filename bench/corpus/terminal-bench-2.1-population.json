@@ -2,7 +2,7 @@
   "purpose": "Selection-only fixture for the real bench.harbor.corpus sample CLI. Tests create task.toml presence markers, not runnable tasks. No instructions, solutions or verifiers are included.",
   "provenance": {
     "source": "Read-only task-directory enumeration of the local corpus identified below; content hash independently verified with bench.harbor.corpus show. No current sampler run generated the fixture IDs or expected values; the expectation remains the unchanged historical seal entry.",
-    "expectedSampleSource": "tests/bench/seal-ledger.jsonl",
+    "expectedSampleSource": "bench/corpus/seal-ledger.jsonl",
     "expectedSampleOrdinal": 6,
     "sourceManifestSha256": "f419a14f2eee921e77b8dbe656e616c959ff84642d61e35016012c884a252a65",
     "populationSha256": "3778b86071c74c8a342222cfff41089916adb5c7338d1afa69f42c9cae21fe3e",

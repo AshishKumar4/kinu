@@ -43,7 +43,7 @@ comparable.
 
 ## The defect family
 
-`tests/bench/tasks.jsonl` holds 148 tasks and `tests/bench/patches/` the
+`bench/corpus/tasks.jsonl` holds 148 tasks and `bench/corpus/patches/` the
 matching 148 patch files (counted 2026-09-24). Each patch is the diff that
 breaks the code.
 
@@ -68,7 +68,7 @@ defect fails and the oracle passes.
 
 10 of 157 patches were stale, measured 2026-09-05 by
 `bun run gate:bench-corpus`. The gate walks both lists: the patches
-`tasks.jsonl` names and the files in `tests/bench/patches/`. It reports a file
+`tasks.jsonl` names and the files in `bench/corpus/patches/`. It reports a file
 that no task line names as an orphan, a half-finished retirement.
 
 When the gate fires, repair the task in three steps:
@@ -86,13 +86,13 @@ When the code a defect describes is gone, retire the task instead, but only
 after you establish that no live code still holds the property. Keep this
 order:
 
-1. Record it in `tests/bench/retired.jsonl` as `{id, split, retiredAt,
+1. Record it in `bench/corpus/retired.jsonl` as `{id, split, retiredAt,
    subject, removedBy, reason}`. The tests re-derive `split` from the id and
    the committed `SEAL_SALT` and refuse a line that misreports it. Recording
    first is what separates a legitimate retirement from dropping a task the
    tree got worse at.
 2. Remove its `tasks.jsonl` line.
-3. Delete `tests/bench/patches/<id>.patch`.
+3. Delete `bench/corpus/patches/<id>.patch`.
 
 Do both steps 2 and 3. A patch file left behind is an orphan, and
 `gate:bench-corpus` reports it. `scripts/bench.test.ts` checks the inverse for
@@ -124,7 +124,7 @@ Lean tasks ship yet.
 
 The defect corpus scores a repo fix. It cannot tell whether a turn drowned in
 tool output, whether a fact survived compaction, or where peak prompt tokens
-went. `tests/bench/longhorizon.jsonl` holds 24 tasks, measured 2026-08-19: four
+went. `bench/corpus/longhorizon.jsonl` holds 24 tasks, measured 2026-08-19: four
 length buckets crossed with the planted-fact count, in two modes. Corpus sizes,
 generated from the committed parameters: 35,502 / 137,361 / 548,801 /
 1,097,628 characters. The corpus file holds generator parameters only.
@@ -182,8 +182,8 @@ instead of counting as free compute.
 The seal holds back the held-out set. Held-out membership is a deterministic
 function of the task id and a committed salt (`SEAL_SALT`), so nobody picks.
 `SealedSplit` returns aggregates only: no ids, no diffs, no error text.
-`tests/bench` is excluded from every sandbox. Every opening of the seal
-appends to `tests/bench/seal-ledger.jsonl`, which is committed, so each peek is
+`bench/corpus` is excluded from every sandbox. Every opening of the seal
+appends to `bench/corpus/seal-ledger.jsonl`, which is committed, so each peek is
 permanent and public.
 
 Between the attempt and the checks, `restoreGuarded` restores every test file

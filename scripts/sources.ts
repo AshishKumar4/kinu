@@ -438,7 +438,7 @@ export const isClientDocument = (file: string): boolean => CLIENT_DOCUMENT.test(
  * silently pick one up while `tasks.jsonl` and every scored run ignore it.
  */
 export const isBenchDefectPatch = (file: string): boolean =>
-  file.startsWith('tests/bench/patches/') && file.endsWith('.patch');
+  file.startsWith('bench/corpus/patches/') && file.endsWith('.patch');
 
 /** One file's text, from `repoRoot`. The working tree when a copy exists; the
  *  INDEX blob when it does not — a tracked file deleted (or never checked out)

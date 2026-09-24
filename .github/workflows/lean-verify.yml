@@ -22,7 +22,7 @@ permissions:
 #
 # Any filter narrow enough to write down is a strict SUBSET of what the gates
 # read, and the gap is not hypothetical: Lean citations live in `docs/` (3
-# files), `scripts/` (5), `packages/core/tests/` (6) and `tests/bench/patches/`
+# files), `scripts/` (5), `packages/core/tests/` (6) and `bench/corpus/patches/`
 # (1), and the traceability manifest cites `packages/core/tests/` and
 # `scripts/fixtures/storage-matrix/` directly. Under a filter of `lean/**`,
 # `packages/**/src/**/*.ts`, `scripts/verify-lean.sh`,
