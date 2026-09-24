@@ -2362,6 +2362,15 @@ export {
 } from './cli/access-tokens';
 
 export {
+  AGENT_RPC_ACCESS,
+  isAgentRpcMethod,
+  requiredRpcAccess,
+  rpcAccessScope,
+  type AgentRpcAccess,
+  type AgentRpcMethod,
+} from './cli/agent-rpc-access';
+
+export {
   bunResolutionShell,
   cliPlatformShell,
 } from './cli/bun-runtime';

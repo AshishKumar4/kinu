@@ -10,7 +10,7 @@ import {
   sealRpcSurface,
   type UserDoRpcMethod,
 } from '../src/rpc-surface';
-import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
+import { AGENT_RPC_ACCESS } from '@kinu.run/core';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { decodeJsonValue, type JsonValue } from '@kinu.run/core';

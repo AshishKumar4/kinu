@@ -7,7 +7,7 @@ import {
   chatSessionTurns, gatewayWorkspace, orchestratorHarness, rpcReachableFrom, workspaceMainActor,
 } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
-import { isAgentRpcMethod } from '../src/cli/rpc-gate';
+import { isAgentRpcMethod } from '@kinu.run/core';
 import {
   HeadCapture,
   HeadController,
