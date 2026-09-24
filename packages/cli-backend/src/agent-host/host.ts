@@ -85,7 +85,7 @@ import {
 } from '../actor-identity';
 import { OS_LEASE_PROCESS } from './lease-process';
 import {
-  DriverLeaseHold,
+  DriverLeaseHold, REAL_CLOCK,
   type DriverKind, type DriverLeaseHolder,
 } from '@kinu.run/core';
 import {
@@ -632,6 +632,7 @@ export class LocalAgentHost {
       },
       cwd: input.ref.cwd,
       onEvent: (event) => this.onSessionEvent(input.key, event),
+      clock: REAL_CLOCK,
     };
 
     // Read at prompt time: a rename or auto-title lands on the root.

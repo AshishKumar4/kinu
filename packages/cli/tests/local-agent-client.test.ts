@@ -564,9 +564,9 @@ describe('/takes — Alternate Takes over a real local client', () => {
         VALUES (${rt.actor.actorId}, 'r', 'win', 'choose a plan', 'A', 'plan A wins', 0.9, 3, 1, 'open')`;
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
         VALUES (${rt.actor.actorId}, 'r', 'alt', 'choose a plan', 'B', 'plan B instead', 0.84, 2, 1, 'open')`;
-    // Seeded before send(), so place it inside the turn's claim window rather than rely on same-millisecond timing.
+    // Seeded before send(), so stamped past any turn's start: the claim purges unclaimed captures older than its turn.
     captureAlternateTakes(rt.storage.sql, rt.actor, {
-      rootId: 'r', task: 'choose a plan', winnerId: 'win', epsilon: 0.1, now: Date.now() + 1_000,
+      rootId: 'r', task: 'choose a plan', winnerId: 'win', epsilon: 0.1, now: Number.MAX_SAFE_INTEGER,
     });
     await client.send('solve it');
 

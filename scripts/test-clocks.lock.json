@@ -1,6 +1,6 @@
 {
   "measuredAt": "2026-09-24",
-  "total": 203,
+  "total": 197,
   "files": {
     "packages/cf-backend/tests/helpers/kv.ts": {
       "clock-compare": 1
@@ -78,8 +78,8 @@
       "sleep": 1
     },
     "packages/cli-backend/tests/local-session.test.ts": {
-      "clock-compare": 7,
-      "sleep": 8
+      "sleep": 8,
+      "clock-compare": 1
     },
     "packages/cli-backend/tests/loop-admission.test.ts": {
       "clock-compare": 1,

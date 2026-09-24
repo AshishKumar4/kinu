@@ -88,7 +88,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
   test('the takes claim, the recording, the trial and the title each run exactly once', async () => {
     const { db, rt } = workspace();
     await armShadowTrials(rt);
-    captureTakes(rt, 'root-a', Date.now() + 1_000);
+    captureTakes(rt, 'root-a');
     const { model, state } = scriptedModel('the parser is fixed');
     const events: SessionEvent[] = [];
     const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
@@ -104,7 +104,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     expect(stillOwed(rt).length).toBeGreaterThan(0);
 
     // A later turn's captures: the replay claims the take ids its row recorded, not whatever is unclaimed now.
-    captureTakes(rt, 'root-b', Date.now() + 2_000);
+    captureTakes(rt, 'root-b');
 
     const next = await restart({ rt, db, model, events });
 
@@ -706,9 +706,7 @@ describe('a terminal close that fails leaves a way back', () => {
     // Nothing is owed; only the wake the catch armed can close the sequence.
     expect(completedTurns(rt)).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
-    const closed = await waitForClose(() => openTerminalClaims(rt) === 0);
-
-    expect(closed).toBe(true);
+    await waitForClose(() => openTerminalClaims(rt) === 0);
     // Two attempts: the close's own, which threw, and the re-armed wake's.
     expect(settleAttempts).toBe(2);
     await session.end();
@@ -717,12 +715,7 @@ describe('a terminal close that fails leaves a way back', () => {
 });
 
 /** Polls for the close: production arms an unref'd five-second wake with nothing to await, and the stood-back
- *  ledger clock makes it due at once. */
-async function waitForClose(condition: () => boolean): Promise<boolean> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (condition()) return true;
-    await Bun.sleep(10);
-  }
-
-  return condition();
+ *  ledger clock makes it due at once. A close that never comes is the runner's hang, not a poll count. */
+async function waitForClose(condition: () => boolean): Promise<void> {
+  while (!condition()) await Bun.sleep(10);
 }
