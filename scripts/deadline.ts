@@ -21,9 +21,9 @@
 // and is ended. Measured 2026-09-24: `bun test` of unit-pc-agent-exec left
 // nine 30 MB supervisors and a `sleep 20`, and the run reported success.
 
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { tolerate } from '@kinu.run/core/obs';
-import { processStartTicks } from './process-owner';
+import { procFile, processStartTicks } from './process-owner';
 
 /** Seconds between SIGTERM at the deadline and SIGKILL, for a child that
  *  ignores the first — the same grace `deploy.sh` gives (`--kill-after=5s`). */
@@ -85,7 +85,7 @@ export function leftoverLine(run: Pick<DeadlineRun, 'label'>, leftovers: readonl
 
 /** Kill `pid` and describe it as `<pid> <command>`. */
 function end(pid: number): string {
-  const command = tolerate(() => readFileSync(`/proc/${String(pid)}/cmdline`, 'utf8'), 'enoent') ?? '';
+  const command = procFile(pid, 'cmdline') ?? '';
 
   tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
 
@@ -110,7 +110,7 @@ export function endLeftovers(mark: string): string[] {
     if (!Number.isSafeInteger(pid) || (processStartTicks(pid) ?? 0) < since) continue;
 
     if (statSync(`/proc/${name}/environ`, { throwIfNoEntry: false })?.uid !== uid) continue;
-    const environ = tolerate(() => readFileSync(`/proc/${name}/environ`, 'utf8'), 'enoent');
+    const environ = procFile(pid, 'environ');
 
     if (environ !== undefined && `\0${environ}`.includes(entry)) left.push(end(pid));
   }
@@ -127,7 +127,7 @@ export function endChildren(parent: number): string[] {
   const left: string[] = [];
 
   for (const name of tolerate(() => readdirSync('/proc'), 'enoent') ?? []) {
-    const stat = /^\d+$/u.test(name) ? tolerate(() => readFileSync(`/proc/${name}/stat`, 'utf8'), 'enoent') : undefined;
+    const stat = /^\d+$/u.test(name) ? procFile(name, 'stat') : undefined;
     const [state, ppid] = stat?.slice(stat.lastIndexOf(')') + 2).split(' ') ?? [];
 
     if (Number(ppid) === parent && state !== 'Z') left.push(end(Number(name)));
