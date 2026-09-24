@@ -33,7 +33,4 @@ await runTuiChat({
   client: new CloudAgentClient({
     origin, token, agentName: workspace, cloudName: workspace,
   }),
-  // A cloud workspace keeps its conversation server-side, so opening one
-  // replays it — the same flag `chatCommand` passes for a cloud target.
-  hydrateHistory: true,
 });

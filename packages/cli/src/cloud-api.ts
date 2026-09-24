@@ -5,9 +5,11 @@ import {
   DEVICE_SANDBOX_REASONS,
   DEVICE_TIERS,
   JsonValueSchema,
+  normalizeModelMenu,
   ProfileCatalogEnvelopeSchema,
   SPEND_SOURCES,
   UsageSchema,
+  type AgentModelMenu,
   type DeviceSandboxStatus,
   type JsonValue,
   type MissionBudgetSnapshot,
@@ -61,6 +63,7 @@ export interface CloudDevice {
   lastSeenAt: number | null;
   /** Per-workspace home and roots live on the runtime status; the registry knows nothing per workspace. */
   sandbox: CloudDeviceSandbox;
+  wholeMachine: boolean;
 }
 
 export type CloudDeviceSandbox = Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'detail' | 'gpu'>;
@@ -114,21 +117,6 @@ export interface CloudBackgroundJob {
   createdAt?: number;
   settledAt?: number | null;
   error?: string | null;
-}
-
-export interface CloudModelMenuEntry {
-  spec: string;
-  label: string;
-  provider: string;
-  capabilities?: string[];
-  contextWindow?: number;
-}
-
-/** `/api/cli/models` — pickable models plus the providers the server could
- *  not reach while building them. */
-export interface CloudModelMenu {
-  models: CloudModelMenuEntry[];
-  failures: Array<{ provider: string; label?: string; reason: string }>;
 }
 
 export interface CloudWebhookTriggerInput {
@@ -185,6 +173,7 @@ const CloudDeviceSchema: v.GenericSchema<unknown, CloudDevice> = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
   connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()),
   sandbox: v.optional(CloudDeviceSandboxSchema, UNREPORTED_SANDBOX),
+  wholeMachine: v.optional(v.boolean(), false),
 });
 
 const CloudAgentConnectTicketSchema: v.GenericSchema<CloudAgentConnectTicket> = v.object({
@@ -220,14 +209,6 @@ export const CloudTriggerListSchema: v.GenericSchema<CloudTriggerList> = v.objec
 export const CloudBackgroundJobSchema: v.GenericSchema<CloudBackgroundJob> = v.object({
   id: v.string(), kind: v.string(), status: v.string(), createdAt: v.optional(v.number()),
   settledAt: v.optional(v.nullable(v.number())), error: v.optional(v.nullable(v.string())),
-});
-
-const CloudModelMenuSchema: v.GenericSchema<CloudModelMenu> = v.object({
-  models: v.array(v.object({
-    spec: v.string(), label: v.string(), provider: v.string(),
-    capabilities: v.optional(v.array(v.string())), contextWindow: v.optional(v.number()),
-  })),
-  failures: v.array(v.object({ provider: v.string(), label: v.optional(v.string()), reason: v.string() })),
 });
 
 const CloudCredentialSummarySchema: v.GenericSchema<CloudCredentialSummary> = v.object({
@@ -369,8 +350,10 @@ export async function listCloudAgents(origin: string, token: string): Promise<Cl
   return cloudJson(v.array(CloudAgentSchema), origin, '/api/cli/workspaces', { token });
 }
 
-export async function listCloudAvailableModels(origin: string, token: string): Promise<CloudModelMenu> {
-  return cloudJson(CloudModelMenuSchema, origin, '/api/cli/models', { token });
+/** Admitted by the rule both backends share, so every field the hub sends (each model's reasoning levels
+ *  included) reaches the TUI. */
+export async function listCloudAvailableModels(origin: string, token: string): Promise<AgentModelMenu> {
+  return normalizeModelMenu({ payload: await cloudJson(v.unknown(), origin, '/api/cli/models', { token }) });
 }
 
 /** Always an envelope: an uncustomized account gets version 0 over the builtin catalog. */
@@ -507,8 +490,14 @@ export async function revokeCliAccessToken(origin: string, token: string, ref: s
   return cloudJson(OkSchema, origin, `/api/cli/tokens/${encodeURIComponent(ref)}`, { method: 'DELETE', token });
 }
 
-export async function registerCloudDevice(origin: string, token: string, label?: string): Promise<CloudDeviceRegistration> {
-  const body: JsonValue = label ? { label } : {};
+export async function registerCloudDevice(
+  origin: string, token: string, label?: string, replaces?: string,
+): Promise<CloudDeviceRegistration> {
+  const body: Record<string, JsonValue> = {};
+
+  if (label) body.label = label;
+
+  if (replaces !== undefined) body.replaces = replaces;
 
   return cloudJson(CloudDeviceRegistrationSchema, origin, '/api/cli/devices', { method: 'POST', token, body });
 }

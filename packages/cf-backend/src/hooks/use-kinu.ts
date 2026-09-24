@@ -199,6 +199,7 @@ const MctsRowSchema = v.object({
   depth: v.number(),
   visits: v.number(),
   value: v.number(),
+  own_score: v.nullable(v.number()),
   status: v.picklist(["open", "pruned", "terminal", "failed", "running"]),
   action: v.string(),
   task: v.string(),

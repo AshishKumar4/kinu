@@ -6,7 +6,7 @@ import { renderThrownChain } from '../obs/index';
 import type { UserCaller } from '../safety/workspace-capability';
 import { parseJsonValue, type JsonValue } from '../utils/json';
 import {
-  CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema, FileRestoreResultSchema,
+  CHECKPOINTS_NO_DEVICE, CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema, FileRestoreResultSchema,
   type CheckpointAvailability, type FileCheckpointReads,
 } from './types';
 
@@ -44,7 +44,7 @@ export function deviceFileCheckpoints(input: DeviceCheckpointsInput): FileCheckp
         if (isWorkspaceUnattachedError({ cause })) return { available: false, reason: WORKSPACE_HAS_NO_OWNER };
 
         if (isDeviceNotConnectedError({ cause })) {
-          return { available: false, reason: 'no device connected — connect one with `kinu connect`' };
+          return { available: false, reason: CHECKPOINTS_NO_DEVICE };
         }
 
         // Several live machines: report the hub's message (it names them), never silently pick one.

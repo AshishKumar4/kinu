@@ -44,7 +44,8 @@ const FIXTURE_DIR = join(REPO_ROOT, 'scripts', 'fixtures', 'fuse-probe');
 
 const ARTIFACT_DIR = join(REPO_ROOT, 'bench-artifacts');
 
-const RESULT_MARKER = '__FUSE_PROBE_RESULT__';
+/** The probe prints its report on the line after this one. */
+export const RESULT_MARKER = '__FUSE_PROBE_RESULT__';
 
 export const PHASES = [
   ['P0', 'deployment', 'unique token-guarded Worker and one Sandbox container'],
@@ -75,7 +76,7 @@ const ExecResponseSchema = v.looseObject({
   wallMs: v.optional(v.number()),
 });
 
-type ExecResponse = v.InferOutput<typeof ExecResponseSchema>;
+export type ExecResponse = v.InferOutput<typeof ExecResponseSchema>;
 
 const ProcessStartSchema = v.strictObject({
   operationId: v.string(),
@@ -240,18 +241,28 @@ async function request<T>(call: ParsedProbeCall<T>): Promise<T> {
   return parsed;
 }
 
-async function exec(origin: string, token: string, command: string, timeoutMs: number): Promise<ExecResponse> {
-  return request({ origin, token, path: '/exec', body: { command, timeoutMs }, schema: ExecResponseSchema });
+/** One deployed fixture as the driver reaches it. */
+interface FixtureLink {
+  readonly origin: string;
+  readonly token: string;
+  readonly doFetch: FetchLike;
+  readonly sleep: (ms: number) => Promise<void>;
 }
 
-async function awaitFixtureReady(origin: string, token: string): Promise<void> {
+async function exec(fixtureLink: FixtureLink, command: string, timeoutMs: number): Promise<ExecResponse> {
+  const { origin, token, doFetch } = fixtureLink;
+
+  return request({ origin, token, path: '/exec', body: { command, timeoutMs }, schema: ExecResponseSchema, doFetch });
+}
+
+async function awaitFixtureReady(fixtureLink: FixtureLink): Promise<void> {
   const deadline = Date.now() + 180_000;
   let last = 'no response';
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(new URL('/health', origin), {
-        headers: { 'x-fuse-probe-token': token },
+      const response = await fixtureLink.doFetch(new URL('/health', fixtureLink.origin), {
+        headers: { 'x-fuse-probe-token': fixtureLink.token },
         signal: AbortSignal.timeout(15_000),
       });
 
@@ -261,26 +272,22 @@ async function awaitFixtureReady(origin: string, token: string): Promise<void> {
       last = describeThrown({ cause: error });
     }
 
-    await delay(2_000);
+    await fixtureLink.sleep(2_000);
   }
 
   throw new Error(`fixture did not accept its token: ${last}`);
 }
 
-async function setupExec(
-  origin: string,
-  token: string,
-  command: string,
-): Promise<ExecResponse> {
+async function setupExec(fixtureLink: FixtureLink, command: string): Promise<ExecResponse> {
   let last = 'setup was not attempted';
 
   for (let attempt = 1; attempt <= 4; attempt += 1) {
     try {
-      return await exec(origin, token, command, 60_000);
+      return await exec(fixtureLink, command, 60_000);
     } catch (error) {
       last = describeThrown({ cause: error });
 
-      if (attempt < 4) await delay(attempt * 5_000);
+      if (attempt < 4) await fixtureLink.sleep(attempt * 5_000);
     }
   }
 
@@ -307,14 +314,15 @@ export async function bundleFuseProbeSource(): Promise<string> {
   return output.text();
 }
 
-async function uploadProbeBundle(origin: string, token: string): Promise<void> {
+async function uploadProbeBundle(fixtureLink: FixtureLink): Promise<void> {
   const content = Buffer.from(await bundleFuseProbeSource(), 'utf8');
   await request({
-    origin,
-    token,
+    origin: fixtureLink.origin,
+    token: fixtureLink.token,
     path: '/put',
     body: { path: '/tmp/fuse-probe/probe.mjs', contentBase64: content.toString('base64') },
     schema: OkSchema,
+    doFetch: fixtureLink.doFetch,
   });
 }
 
@@ -363,7 +371,7 @@ export async function destroyRuntime(
   throw new Error(detail);
 }
 
-function parseExecReport<T>(
+export function parseExecReport<T>(
   phase: 'stage1' | 'stage2',
   result: ExecResponse,
   schema: v.GenericSchema<T>,
@@ -444,29 +452,29 @@ async function deploy(runId: string, token: string, writableImage: string): Prom
   return { workerName, containerAppName, configPath, origin, token, writableImage };
 }
 
-async function wake(origin: string, token: string): Promise<void> {
+async function wake(fixtureLink: FixtureLink): Promise<void> {
   let last: unknown;
 
   for (let attempt = 0; attempt < 6; attempt++) {
     try {
       // Exit status, not stdout: `test ! -e` prints nothing on either branch,
       // so only exitCode 0 proves a fresh instance.
-      const result = await exec(origin, token, 'test ! -e /tmp/fuse-probe-restart-marker', 60_000);
+      const result = await exec(fixtureLink, 'test ! -e /tmp/fuse-probe-restart-marker', 60_000);
 
       if (result.exitCode === 0) return;
     } catch (error) { last = error; }
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 3_000 * (attempt + 1)));
+    await fixtureLink.sleep(3_000 * (attempt + 1));
   }
 
   throw new Error(`container did not wake after stop: ${describeThrown({ cause: last })}`);
 }
 
-async function stopAndProveRestart(origin: string, token: string): Promise<void> {
+async function stopAndProveRestart(fixtureLink: FixtureLink): Promise<void> {
   const marker = `fuse-probe-restart-${randomUUID()}`;
-  await exec(origin, token, `printf %s ${JSON.stringify(marker)} >/tmp/fuse-probe-restart-marker`, 60_000);
-  await request({ origin, token, path: '/stop', body: {}, schema: OkSchema });
-  await wake(origin, token);
+  await exec(fixtureLink, `printf %s ${JSON.stringify(marker)} >/tmp/fuse-probe-restart-marker`, 60_000);
+  await request({ origin: fixtureLink.origin, token: fixtureLink.token, path: '/stop', body: {}, schema: OkSchema, doFetch: fixtureLink.doFetch });
+  await wake(fixtureLink);
 }
 
 /** How much account-side resource deletion can be driven. Injectable so the
@@ -739,12 +747,124 @@ export async function awaitWritableMmapResult(mmapRun: WritableMmapRun): Promise
   }
 }
 
-async function runWritableProbe(
-  deployment: Deployment,
-  operationId: string,
-  mutation?: WritableMmapMutation,
-): Promise<WritableMmapEvidence> {
-  return awaitWritableMmapResult({ deployment, operationId, mutation });
+/** Every mutation the writable probe can apply: each is a negative control the run must see refused. */
+export const WRITABLE_MMAP_MUTATIONS: readonly WritableMmapMutation[] =
+  Stage3ReportSchema.entries.mutation.options.filter((mutation) => mutation !== 'none');
+
+/** The fixture as a measurement drives it; `liveFixture` is the deployed Worker. Injectable so the
+ *  order the evidence depends on is provable offline. */
+export interface ProbeFixture {
+  /** Resolves once the deployed Worker accepts the run's token. */
+  ready(): Promise<void>;
+  /** Creates the probe's directory, retried while the container boots. */
+  setup(): Promise<void>;
+  prepare(): Promise<RunIdentity>;
+  /** Installs the probe bundle; a container restart wipes it. */
+  upload(): Promise<void>;
+  stage(stage: 'stage1' | 'stage2'): Promise<ExecResponse>;
+  /** Stops the container and proves the next answer comes from a fresh instance. */
+  restart(): Promise<void>;
+  writable(operationId: string, mutation?: WritableMmapMutation): Promise<WritableMmapEvidence>;
+}
+
+/** The deployed fixture Worker, over its token-guarded routes. */
+export function liveFixture(
+  deployment: Deployment, doFetch: FetchLike = fetch, sleep: (ms: number) => Promise<void> = delay,
+): ProbeFixture {
+  const fixtureLink: FixtureLink = { origin: deployment.origin, token: deployment.token, doFetch, sleep };
+
+  return {
+    ready: () => awaitFixtureReady(fixtureLink),
+    setup: async () => { await setupExec(fixtureLink, 'mkdir -p /tmp/fuse-probe'); },
+    prepare: () => request({ origin: fixtureLink.origin, token: fixtureLink.token, path: '/prepare', body: {}, schema: RunIdentitySchema, doFetch }),
+    upload: () => uploadProbeBundle(fixtureLink),
+    stage: (stage) => exec(fixtureLink, `bun /tmp/fuse-probe/probe.mjs ${stage}`, stage === 'stage1' ? 300_000 : 180_000),
+    restart: () => stopAndProveRestart(fixtureLink),
+    writable: (operationId, mutation) => awaitWritableMmapResult({ deployment, operationId, mutation, doFetch, sleep }),
+  };
+}
+
+/** What one measurement gathered, kept when a later step fails. */
+export interface Measurement {
+  identity?: RunIdentity;
+  stage1?: Stage1Report;
+  stage2?: Stage2Report;
+  stage3?: Stage3Report;
+  readonly writableControls: WritableMmapControl[];
+  failure?: string;
+}
+
+/**
+ * Prove the image, run the writable probe and every refusal it must produce, then the two read-only
+ * stages around a container restart. Each refusal is on record as soon as it is proved, so a later
+ * failure keeps it; `writableSourceDigest` is the reviewed C source every writable report must carry.
+ */
+export async function measure(runId: string, fixture: ProbeFixture, writableSourceDigest: string): Promise<Measurement> {
+  const measured: Measurement = { writableControls: [] };
+
+  try {
+    await fixture.ready();
+    await fixture.setup();
+    const identity = await fixture.prepare();
+    measured.identity = identity;
+
+    if (identity.actualVersion !== SANDBOX_IMAGE_VERSION) {
+      throw new Error(`container identity mismatch: reports SANDBOX_VERSION ${identity.actualVersion}, configured ${SANDBOX_IMAGE_VERSION}`);
+    }
+
+    // C exits 86 for a proved NO_GO; preserve that report instead of treating
+    // it as an infrastructure crash.
+    const positive = await fixture.writable(writableProbeOperationId(runId));
+    measured.stage3 = positive.report;
+
+    if (positive.report.protocol.kernelHeader?.headers.sourceSha256 !== writableSourceDigest) {
+      throw new Error('custom writable probe source digest does not match the reviewed fixture source');
+    }
+
+    for (const mutation of WRITABLE_MMAP_MUTATIONS) {
+      const evidence = await fixture.writable(writableProbeOperationId(runId, mutation), mutation);
+      const report = evidence.report;
+      const verdict = classifyWritableMmap(report);
+
+      if (evidence.exitCode !== 86 || report.mutation !== mutation || report.linearizable
+          || report.protocol.kernelHeader?.headers.sourceSha256 !== writableSourceDigest
+          || verdict.outcome !== 'no_go') {
+        throw new Error(`writable negative control ${mutation} did not produce its exit-86 refusal evidence`);
+      }
+
+      measured.writableControls.push({ mutation, exitCode: evidence.exitCode, report, verdict });
+    }
+
+    await fixture.upload();
+    measured.stage1 = parseExecReport('stage1', await fixture.stage('stage1'), Stage1ReportSchema);
+
+    if (measured.stage1.rangeReads.some((record) => !record.verified)) {
+      throw new Error('reference range read returned bytes that failed its shared-contract digest');
+    }
+
+    await fixture.restart();
+    await fixture.setup();
+    const restartedIdentity = await fixture.prepare();
+
+    if (restartedIdentity.actualVersionDigest !== identity.actualVersionDigest) {
+      throw new Error('container restart changed the measured image identity');
+    }
+
+    await fixture.upload();
+    measured.stage2 = parseExecReport('stage2', await fixture.stage('stage2'), Stage2ReportSchema);
+  } catch (error) {
+    measured.failure = describeThrown({ cause: error });
+  }
+
+  return measured;
+}
+
+/** The reviewed C source's digest, which every writable report must carry. */
+async function writableProbeSourceDigest(): Promise<string> {
+  const hasher = new Bun.CryptoHasher('sha256');
+  hasher.update(await readFile(join(FIXTURE_DIR, 'writable-probe.c')));
+
+  return hasher.digest('hex');
 }
 
 export async function run(): Promise<FuseProbeArtifact> {
@@ -752,11 +872,7 @@ export async function run(): Promise<FuseProbeArtifact> {
   const runId = randomUUID().slice(0, 12);
   const startedAt = new Date().toISOString();
   let deployment: Deployment | undefined;
-  let identity: RunIdentity | undefined;
-  let stage1: Stage1Report | undefined;
-  let stage2: Stage2Report | undefined;
-  const writableControls: WritableMmapControl[] = [];
-  let stage3: Stage3Report | undefined;
+  let measured: Measurement = { writableControls: [] };
   let writableImage: string | undefined;
   let failure: string | undefined;
   let cleanupFailure: string | undefined;
@@ -766,69 +882,7 @@ export async function run(): Promise<FuseProbeArtifact> {
     deployment = await deploy(runId, token, writableImage);
     publishTeardown(async () => { await teardown(deployment); });
     console.log(`fuse probe origin ${deployment.origin}`);
-    await awaitFixtureReady(deployment.origin, token);
-    await setupExec(deployment.origin, token, 'mkdir -p /tmp/fuse-probe');
-    identity = await request({ origin: deployment.origin, token, path: '/prepare', body: {}, schema: RunIdentitySchema });
-
-    if (identity.actualVersion !== SANDBOX_IMAGE_VERSION) {
-      throw new Error(`container identity mismatch: reports SANDBOX_VERSION ${identity.actualVersion}, configured ${SANDBOX_IMAGE_VERSION}`);
-    }
-
-    // C exits 86 for a proved NO_GO; preserve that report instead of treating
-    // it as an infrastructure crash.
-    const positive = await runWritableProbe(deployment, writableProbeOperationId(runId));
-    stage3 = positive.report;
-    const writableSource = await readFile(join(FIXTURE_DIR, 'writable-probe.c'));
-    const sourceHasher = new Bun.CryptoHasher('sha256');
-    sourceHasher.update(writableSource);
-    const expectedSourceDigest = sourceHasher.digest('hex');
-
-    if (stage3.protocol.kernelHeader?.headers.sourceSha256 !== expectedSourceDigest) {
-      throw new Error('custom writable probe source digest does not match the reviewed fixture source');
-    }
-
-    for (const mutation of [
-      'reply-before-log',
-      'fence-closes-request-loop',
-      'omit-msync',
-      'post-fence-contamination',
-      'intent-fsync-failure',
-      'result-fsync-failure',
-      'restart-truncation',
-      'skip-recovery',
-    ] as const satisfies readonly WritableMmapMutation[]) {
-      const evidence = await runWritableProbe(deployment, writableProbeOperationId(runId, mutation), mutation);
-      const report = evidence.report;
-      const verdict = classifyWritableMmap(report);
-
-      if (evidence.exitCode !== 86 || report.mutation !== mutation || report.linearizable
-          || report.protocol.kernelHeader?.headers.sourceSha256 !== expectedSourceDigest
-          || verdict.outcome !== 'no_go') {
-        throw new Error(`writable negative control ${mutation} did not produce its exit-86 refusal evidence`);
-      }
-
-      writableControls.push({ mutation, exitCode: evidence.exitCode, report, verdict });
-    }
-
-    await uploadProbeBundle(deployment.origin, token);
-    const first = await exec(deployment.origin, token, 'bun /tmp/fuse-probe/probe.mjs stage1', 300_000);
-    stage1 = parseExecReport('stage1', first, Stage1ReportSchema);
-
-    if (stage1.rangeReads.some((record) => !record.verified)) {
-      throw new Error('reference range read returned bytes that failed its shared-contract digest');
-    }
-
-    await stopAndProveRestart(deployment.origin, token);
-    await setupExec(deployment.origin, token, 'mkdir -p /tmp/fuse-probe');
-    const restartedIdentity = await request({ origin: deployment.origin, token, path: '/prepare', body: {}, schema: RunIdentitySchema });
-
-    if (restartedIdentity.actualVersionDigest !== identity.actualVersionDigest) {
-      throw new Error('container restart changed the measured image identity');
-    }
-
-    await uploadProbeBundle(deployment.origin, token);
-    const second = await exec(deployment.origin, token, 'bun /tmp/fuse-probe/probe.mjs stage2', 180_000);
-    stage2 = parseExecReport('stage2', second, Stage2ReportSchema);
+    measured = await measure(runId, liveFixture(deployment), await writableProbeSourceDigest());
   } catch (error) {
     failure = describeThrown({ cause: error });
   } finally {
@@ -840,13 +894,13 @@ export async function run(): Promise<FuseProbeArtifact> {
     startedAt,
     finishedAt: new Date().toISOString(),
     workerName: deployment?.workerName ?? `kinu-fuse-probe-${runId}`,
-    identity,
+    identity: measured.identity,
     writableImage,
-    stage1,
-    stage2,
-    stage3,
-    writableControls,
-    failure,
+    stage1: measured.stage1,
+    stage2: measured.stage2,
+    stage3: measured.stage3,
+    writableControls: measured.writableControls,
+    failure: failure ?? measured.failure,
     cleanupFailure,
   });
 

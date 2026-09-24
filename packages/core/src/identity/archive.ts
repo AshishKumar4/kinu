@@ -53,7 +53,7 @@ export function archiveSqlFromDatabase(db: AgentDatabase): SqlExec {
 }
 
 /** Bumped only when a reader would misread an older archive. */
-export const WORKSPACE_ARCHIVE_VERSION = 2;
+const WORKSPACE_ARCHIVE_VERSION = 2;
 
 export const WORKSPACE_ARCHIVE_EXTENSION = '.kinu.jsonl';
 

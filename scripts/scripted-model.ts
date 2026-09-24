@@ -330,7 +330,7 @@ const SLATE_SERVER = [
   '}',
 ].join('\n');
 
-const SLATE_ROOT = `/home/user/slates/${SLATE_ID}`;
+const SLATE_ROOT = `/home/main/slates/${SLATE_ID}`;
 
 /** The implement turn's writes, in the order the script plays them. */
 const SLATE_WRITES: readonly ScriptedAnswer[] = [

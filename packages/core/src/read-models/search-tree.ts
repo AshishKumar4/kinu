@@ -5,13 +5,16 @@ import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { NodeStatus, SearchNode } from '../types/mcts';
 
-export function readLatestSearchTree(sql: SqlExecutor, actor: ActorHandle): SearchNode[] {
+/** A drawn tree's row: the node and its own score. */
+export type SearchTreeRow = SearchNode & { readonly own_score: number | null };
+
+export function readLatestSearchTree(sql: SqlExecutor, actor: ActorHandle): SearchTreeRow[] {
   actor.assertCurrent();
 
-  return sql<SearchNode>`
+  return sql<SearchTreeRow>`
     SELECT id, parent_id, root_id, task, action, observation, code_used, code_language,
-           visits, value, depth, status, msg_id, branch_agent_key, created_at
-    FROM search_nodes
+           visits, value, own_score, depth, status, msg_id, branch_agent_key, created_at
+    FROM search_node_scores
     WHERE actor_id = ${actor.actorId} AND root_id = (
       SELECT root_id FROM search_nodes WHERE actor_id = ${actor.actorId}
       GROUP BY root_id ORDER BY MAX(created_at) DESC, root_id DESC LIMIT 1
@@ -21,13 +24,13 @@ export function readLatestSearchTree(sql: SqlExecutor, actor: ActorHandle): Sear
 
 /** One named search's tree. Canvases compose this per root from the caller's page; choosing roots by
  * recency here would disagree with the run list. */
-export function readSearchTree(sql: SqlExecutor, actor: ActorHandle, rootId: string): SearchNode[] {
+export function readSearchTree(sql: SqlExecutor, actor: ActorHandle, rootId: string): SearchTreeRow[] {
   actor.assertCurrent();
 
-  return sql<SearchNode>`
+  return sql<SearchTreeRow>`
     SELECT id, parent_id, root_id, task, action, observation, code_used, code_language,
-           visits, value, depth, status, msg_id, branch_agent_key, created_at
-    FROM search_nodes WHERE actor_id = ${actor.actorId} AND root_id = ${rootId}
+           visits, value, own_score, depth, status, msg_id, branch_agent_key, created_at
+    FROM search_node_scores WHERE actor_id = ${actor.actorId} AND root_id = ${rootId}
     ORDER BY depth, created_at`;
 }
 

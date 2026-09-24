@@ -1,9 +1,9 @@
 /**
  * Which skills are active for a turn, and which the turn can afford.
  *
- * Activation, highest precedence first: explicit `/skill-name`, keyword match
- * (opt-in via `auto_activate`), operator pin (`always_active_skills`). Resolved
- * once at turn start; no model-driven activation.
+ * Activation, highest precedence first: explicit `/skill-name` in the user's message, operator pin
+ * (`always_active_skills`). Nothing else loads a body into the prompt: the model reads any other
+ * skill from `/skills`, so ordinary words in a message never change the system prompt.
  *
  * Admission spends the turn's `stepContextLimit` allocation: the ambient index
  * first, then bodies in activation priority. An unadmitted body keeps its header
@@ -31,7 +31,6 @@ export interface LoadActiveSkillsOpts {
   available: ReadonlyArray<DiscoveredSkill>;
   /** Names invoked via `/name` in the user message. */
   explicit: ReadonlyArray<string>;
-  userMessage: string;
   alwaysActive: ReadonlyArray<string>;
 }
 
@@ -43,8 +42,7 @@ export interface ActivatedSkill {
 /** Admission spend order; must be total because it decides whose instructions survive. */
 const REASON_PRIORITY = {
   explicit: 0,
-  keyword: 1,
-  always_active: 2,
+  always_active: 1,
   // `satisfies` keeps exhaustiveness without widening entries to `number`.
 } satisfies Record<ActivationReason['kind'], number>;
 
@@ -58,30 +56,6 @@ export function resolveActiveSkills(opts: LoadActiveSkillsOpts): ActivatedSkill[
   for (const name of opts.alwaysActive) {
     if (byName.has(name) && !reasons.has(name)) {
       reasons.set(name, { kind: 'always_active', via: 'config' });
-    }
-  }
-
-  // Re-checks `disable_model_invocation` even though the parser already forced auto_activate off.
-  const lcMsg = ' ' + opts.userMessage.toLowerCase() + ' ';
-
-  for (const skill of opts.available) {
-    if (skill.disable_model_invocation) continue;
-
-    if (!skill.auto_activate || skill.keywords.length === 0) continue;
-
-    for (const kw of skill.keywords) {
-      const re = new RegExp(`\\b${escapeRe(kw)}\\b`, 'i');
-
-      if (re.test(opts.userMessage)) {
-        reasons.set(skill.name, { kind: 'keyword', matched_keyword: kw });
-        break;
-      }
-
-      // Contains fallback for keywords with non-word chars.
-      if (lcMsg.includes(' ' + kw + ' ')) {
-        reasons.set(skill.name, { kind: 'keyword', matched_keyword: kw });
-        break;
-      }
     }
   }
 
@@ -228,16 +202,7 @@ export async function admitActiveSkills(opts: {
 
 /** Re-check the activation reason against the same source whose policy reaches the prompt. */
 function reasonAllowedBySkill(skill: ParsedSkill, reason: ActivationReason): boolean {
-  switch (reason.kind) {
-    case 'always_active':
-      return true;
-    case 'explicit':
-      return skill.user_invocable;
-    case 'keyword':
-      return !skill.disable_model_invocation
-        && skill.auto_activate
-        && skill.keywords.includes(reason.matched_keyword);
-  }
+  return reason.kind === 'always_active' || skill.user_invocable;
 }
 
 /** A file is trusted only for the complete raw source the owner approved, front matter included. */
@@ -262,8 +227,4 @@ export function extractExplicitInvocations(userMessage: string): string[] {
   while ((m = re.exec(userMessage)) != null) out.push(m[1]);
 
   return out;
-}
-
-function escapeRe(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

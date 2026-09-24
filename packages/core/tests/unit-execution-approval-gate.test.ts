@@ -23,7 +23,7 @@ function fakeShellProvider(name: string, kind: ExecutorProvider['kind'] = 'nimbu
     name,
     kind,
     capabilities: new Set(['shell']),
-    homeDir: async () => '/home/user',
+    homeDir: async () => '/home/main',
     isAvailable: () => true,
     connect: async () => {},
     disconnect: async () => {},

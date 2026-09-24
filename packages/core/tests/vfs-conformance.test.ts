@@ -27,6 +27,7 @@ import {
   provisionAgentHome,
 } from '../src/vfs/agent-home';
 import { withMountTable } from '../src/vfs/mounts';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 /** NUL, a UTF-8 BOM, high bytes, and invalid-UTF-8 0x80 (forces the base64 transport). */
 const BINARY = new Uint8Array([0xef, 0xbb, 0xbf, 0x00, 0x01, 0x80, 0xff, 0xfe, 0x00, 0x42]);
@@ -183,7 +184,7 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
       return { exitCode: 0, stdout: '' };
     },
     async exposePort(port, opts) {
-      const exposed = { url: `https://preview.invalid/${port}`, port };
+      const exposed = { url: `https://preview.invalid/${port}`, port, route: { reached: true } as const };
 
       return opts.name ? { ...exposed, name: opts.name } : exposed;
     },
@@ -335,7 +336,7 @@ const cases: Case[] = [
     make: () => nimbusSessionFiles(nimbusHandle(new MemFs())), path: (s) => `/conf/${s}` },
   { name: 'device file view', statMissing: 'null',
     make: () => deviceFiles(deviceTransport(new MemFs()), {
-      consentedRoot: async () => '/', deviceHome: async () => '/', unconfined: async () => true,
+      consentedRoot: async () => '/', deviceHome: async () => '/', scope: async () => 'unconfined',
     }), path: (s) => `/conf/${s}` },
 ];
 
@@ -403,6 +404,13 @@ for (const c of cases) {
     });
   });
 }
+
+test('the workspace filesystem names the absolute path, never the storage key, when a relative listing fails', async () => {
+  // The 2048 transcript: `readdir('skills')` failed as `ENOENT: home/user/skills`, a path no tool can address.
+  const vfs = createWorkspaceBundle(new Database(':memory:')).vfs;
+
+  await expect(vfs.readdir('skills')).rejects.toThrow(`${WORKSPACE_ROOT}/skills`);
+});
 
 describe('the global workspace namespace', () => {
   test('registers private tmp by storage key while retaining one logical path', () => {
@@ -495,7 +503,7 @@ describe('the global workspace namespace', () => {
 describe('device file view — the consented subtree is a boundary', () => {
   function scoped(root: string) {
     const calls: string[] = [];
-    const consent = { consentedRoot: async () => root, deviceHome: async () => root, unconfined: async () => false };
+    const consent = { consentedRoot: async () => root, deviceHome: async () => root, scope: async () => 'root' as const };
 
     return { vfs: deviceFiles(deviceTransport(new MemFs(), calls), consent), calls };
   }
@@ -549,7 +557,7 @@ describe('device file view — bounded range reads', () => {
     const consent = {
       consentedRoot: async () => '/home/me/proj',
       deviceHome: async () => '/home/me',
-      unconfined: async () => false,
+      scope: async () => 'root' as const,
     };
 
     const vfs = deviceFiles(deviceTransport(fs, calls), consent);

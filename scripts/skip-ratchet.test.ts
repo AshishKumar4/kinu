@@ -103,6 +103,17 @@ const OPTIMIZATION_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
     </testsuite>
 </testsuites>`;
 
+const MATH_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="2" failures="0" errors="0" time="0.1">
+    <testsuite name="tests/evals/math.eval.ts" tests="2" failures="0" errors="0" skipped="1" time="0.1">
+        <testcase classname="tests/evals/math.eval.ts" name="Math evals — seeded instances, exact answers &gt; the exact verifier accepts the answer and refuses every near miss" time="0.002">
+        </testcase>
+        <testcase classname="tests/evals/math.eval.ts" name="Math evals — seeded instances, exact answers &gt; MEASURED: every seeded instance, graded exactly" time="0">
+            <skipped/>
+        </testcase>
+    </testsuite>
+</testsuites>`;
+
 /** The TRAJECTORY arm, which is CLOUD ONLY: `eval-tier.sh` runs it under
  *  `--backend cloud` alone, so a local run names no `--target` for it and this
  *  fixture is what proves the target is satisfiable when the arm DOES run. */
@@ -384,7 +395,7 @@ describe('unmatchedTargets', () => {
   test('every arm reporting satisfies every target', () => {
     const merged = mergeReports(
       [REPORT, CORE_E2E_REPORT, BENCH_EXTERNAL_REPORT,
-        VITEST_REPORT, SWARM_REPORT, RESEARCH_REPORT, OPTIMIZATION_REPORT,
+        VITEST_REPORT, SWARM_REPORT, RESEARCH_REPORT, OPTIMIZATION_REPORT, MATH_REPORT,
         TRAJECTORY_REPORT, DEVICE_REPORT, KINU_TASKS_REPORT]
         .map((xml) => parseJUnit(xml)),
     );
@@ -392,7 +403,7 @@ describe('unmatchedTargets', () => {
     expect(unmatchedTargets(merged)).toEqual([]);
   });
 
-  // ONE ARM AT A TIME, both directions, because the seven vitest arms are the set a
+  // ONE ARM AT A TIME, both directions, because the vitest arms are the set a
   // single target could not tell apart: they run under one config and differ only in
   // the file they select, so a report from any one must leave every OTHER owing one.
   test('a report from one vitest arm leaves the bun target and every other arm unmatched', () => {
@@ -401,6 +412,7 @@ describe('unmatchedTargets', () => {
       { file: './tests/evals/swarm.eval.ts', xml: SWARM_REPORT },
       { file: './tests/evals/research.eval.ts', xml: RESEARCH_REPORT },
       { file: './tests/evals/optimization.eval.ts', xml: OPTIMIZATION_REPORT },
+      { file: './tests/evals/math.eval.ts', xml: MATH_REPORT },
       { file: './tests/evals/trajectory.eval.ts', xml: TRAJECTORY_REPORT },
       { file: './tests/evals/device.eval.ts', xml: DEVICE_REPORT },
       { file: './tests/evals/kinu-tasks.eval.ts', xml: KINU_TASKS_REPORT },

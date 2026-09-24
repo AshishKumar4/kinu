@@ -1,8 +1,6 @@
 export {
   createDefaultWebSearchProvider,
   createWebCodemodeProvider,
-  TAVILY_CRED_KEY,
-  parseDuckDuckGoHtml,
   type WebSearchProvider,
   type WebSearchResult,
   type WebSearchResponse,

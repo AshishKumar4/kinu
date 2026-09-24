@@ -24,6 +24,7 @@ function createScaffoldTestRuntime(llm: LLM) {
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'scaffold-test');
 
   const rt: AgentRuntime = {
+    workspaceIsMachine: false,
     actor,
     storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory: createMemoryMemory(db, vfs),

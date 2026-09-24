@@ -3,7 +3,7 @@
  * cookie. Cross-preview cookie-site isolation remains a deployment prerequisite (below).
  */
 import { afterAll, describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   PREVIEW_SANDBOX,
@@ -541,11 +541,17 @@ describe('repairing a stale preview', () => {
   });
 
   test("the SDK's stale-preview response is still the shape we match", () => {
-    // The classification rests on this body; an upgrade that rewords it must fail here.
-    const sdk = readFileSync(
-      join(root, '../../node_modules/@cloudflare/sandbox/dist/sandbox-CPj2jsbz.js'),
-      'utf8',
-    );
+    // The classification rests on this body; an upgrade that rewords it must fail here. The
+    // chunk's name changes with every SDK release, so it is found, and exactly one must exist.
+    const dist = join(root, '../../node_modules/@cloudflare/sandbox/dist');
+    const chunks = readdirSync(dist).filter((name) => /^sandbox-.*\.js$/.test(name));
+    const [chunk, ...others] = chunks;
+
+    if (chunk === undefined || others.length > 0) {
+      throw new Error(`expected one dist/sandbox-*.js chunk, found: ${chunks.join(', ') || 'none'}`);
+    }
+
+    const sdk = readFileSync(join(dist, chunk), 'utf8');
 
     expect(sdk).toContain('Preview URL is stale because the sandbox runtime is not active');
     expect(sdk).toContain('STALE_PREVIEW_URL');

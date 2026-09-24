@@ -60,9 +60,12 @@ guess would have shown it as codemode-only.
 `packages/core/tests/unit-tool-reach.test.ts` pins the eight names and checks
 that every declared namespace has a real factory.
 
-`skills` and `release` are not on the standing list. Skills are ordinary files
-under `/workspace/skills/`, edited through `workspace.*`. The prompt lists them
-through `renderSkillsIndexSection`, and activation resolves at turn start.
+`skills` and `release` are not on the standing list. Every skill loads from the
+read-only `/skills` view as `/skills/<name>/SKILL.md` (`skills/view.ts`): a
+built-in from its source, any other name from the workspace's
+`/home/user/skills/` or the owner's `/shared/skills/`, by the one precedence in
+`skills/discover.ts`. The prompt lists them through `renderSkillsIndexSection`;
+only a user's `/name` or an operator pin loads a body at turn start.
 `release.*` keeps its `runReleaseAction` dispatcher, engine-presence gate, and
 ledger.
 
@@ -318,11 +321,13 @@ through `LOADER` (`@cloudflare/codemode`). The CLI evaluates in-process through
 
 `createInlineExecutor` registers `workspace` in `ExecutionRouter`. Native
 `file` and `workspace.*` share its `TurnFileLedger` read-before-write state.
-`SKILLS_DIR` is `/workspace/skills` on that VFS.
+Workspace skills are written at `WORKSPACE_SKILLS_DIR` (`/home/user/skills`) on
+that VFS. In an `eval` program, `process.cwd()` is the workspace root, and the
+`fs` shim resolves a relative path against it.
 
 ### Slates
 
-A slate is an authored project under `/home/user/slates/<id>/`. For the default
+A slate is an authored project under `/home/main/slates/<id>/`. For the default
 `worker` runtime, `package.json` `main` names the module that exports
 `class Slate extends SlateObject` from `kinu:slate`; every public method is
 callable from the client. A `node` runtime instead names a server `slate.port`
@@ -456,7 +461,7 @@ what hosted execution can do. Local execution uses the workspace process.
 prompt lists, and defaults to `workspace`. `sandbox` and each device have
 separate files; each device mounts at `/pc/<name>`. `ExecutionRouter` has no
 fallback: an absent runtime returns `runtime_not_provisioned`. Relative paths
-resolve against `WORKSPACE_ROOT`, `/home/user`. Containers receive
+resolve against `WORKSPACE_ROOT`, `/home/main`. Containers receive
 `/workspace`.
 
 `shell`, `eval`, and resumable `agents` spawns can run in the background.

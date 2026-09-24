@@ -145,7 +145,7 @@ import {
   runSleepTimeCompute, applySleepTimeUpdate,
   SleepTimeUpdateSchema, SLEEP_TIME_CADENCE, sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
   type SleepTimeUpdate, type SleepTimeWindow,
-  effectAlreadyDone, recordEffectDone,
+  effectAlreadyDone, recordEffectDone, oncePerTick,
   // Core owns the ingress gates; this actor owns the transports in front of them
   // (DO alarm, Worker webhook + email routes, cross-DO RPC).
   acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
@@ -914,7 +914,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected override async terminalFor(connection: Pick<Connection, 'tags'>): Promise<WorkspaceTerminal | null> {
-    return isWorkspaceTerminal(connection.tags) ? await this.hostedWorkspace().terminal() : null;
+    if (!isWorkspaceTerminal(connection.tags)) return null;
+    // Building the root runtime registers the mount table this shell serves.
+    void this.rt;
+
+    return await this.hostedWorkspace().terminal();
   }
 
   protected override workModeForMetadata(metadata: JsonObject | undefined): WorkMode {
@@ -4858,7 +4862,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       workspaceId: this.ctx.id.toString(), workspaceName: forkName, ownerUserId,
       // The target's own payload plane: carried payloads are re-rooted so the fork never reads its source.
       artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
-      writeSoulFile: (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content),
       transaction: (rows) => this.ctx.storage.transactionSync(rows),
     });
 
@@ -5031,7 +5034,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this._gepaTickRunning = true;
 
     try {
-      await this.oncePerTick(PROMPT_SECTION_LANE, lane, () => this.advancePromptSections());
+      await oncePerTick(this.boundSql, this.actorHandle(), { scope: PROMPT_SECTION_LANE, tick: lane, workspace: this.name },
+        () => this.advancePromptSections());
     } finally {
       this._gepaTickRunning = false;
     }
@@ -5039,35 +5043,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Cadence pass live in this activation; eviction clears it and the durable `running` row remains. */
   private _gepaTickRunning = false;
-
-  /**
-   * Run one non-replayable pass at most once per tick; a replay seeing entry without completion abandons it.
-   * Entry is marked in the same synchronous slice as `pass()`, so it commits with the pass's first writes.
-   */
-  protected async oncePerTick(scope: string, tick: string | undefined, pass: () => Promise<void>): Promise<void> {
-    // No tick means no durable obligation: run the pass and key nothing.
-    if (tick === undefined) {
-      await pass();
-
-      return;
-    }
-
-    if (effectAlreadyDone(this.boundSql, this.actorHandle(), scope, `${tick}:done`)) return;
-
-    if (effectAlreadyDone(this.boundSql, this.actorHandle(), scope, `${tick}:entered`)) {
-      diagnostics.event('evolution.interrupted_pass_abandoned', {
-        workspace: this.name, lane: scope, tick,
-      });
-      recordEffectDone(this.boundSql, this.actorHandle(), { scope: scope, key: `${tick}:done` });
-
-      return;
-    }
-
-    const running = pass();
-    recordEffectDone(this.boundSql, this.actorHandle(), { scope: scope, key: `${tick}:entered` });
-    await running;
-    recordEffectDone(this.boundSql, this.actorHandle(), { scope: scope, key: `${tick}:done` });
-  }
 
   /** Advance the evolved-prompt-section loop one step; policy lives in core's `advancePromptSectionLane`. */
   protected async advancePromptSections(): Promise<void> {

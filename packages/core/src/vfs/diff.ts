@@ -136,23 +136,6 @@ function statusOf(absentBefore: boolean, absentAfter: boolean): FileStatus {
   return 'changed';
 }
 
-/** Workspace baseline vs current path→content maps; unchanged files omitted, sorted by path. */
-export function computeWorkspaceDiff(baseline: Record<string, string>, current: Record<string, string>): FileDiff[] {
-  const paths = new Set([...Object.keys(baseline), ...Object.keys(current)]);
-  const out: FileDiff[] = [];
-
-  for (const path of paths) {
-    const before = baseline[path];
-    const after = current[path];
-
-    if (before === after) continue;
-    const status = statusOf(before === undefined, after === undefined);
-    out.push(fileDiff(path, status, diffLines(before ?? '', after ?? '')));
-  }
-
-  return out.sort((a, b) => a.path.localeCompare(b.path));
-}
-
 export function fileDiff(path: string, status: FileStatus, d: LineDiff): FileDiff {
   const { added, removed, lines } = d;
 

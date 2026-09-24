@@ -23,7 +23,7 @@ export function craftedToolDescription(name: string, description?: string): stri
   return description === undefined || description === '' ? `Crafted tool: ${name}` : description;
 }
 
-export function firstSentence(text: string): string {
+function firstSentence(text: string): string {
   const line = text.trim().split('\n')[0] ?? '';
   const match = /^(.+?[.!?])(\s|$)/.exec(line);
 

@@ -1,15 +1,14 @@
-/** The fork-copy pipeline end to end: snapshotWorkspaceForFork, structuredClone across the wire (as DO RPC),
- *  writeForkSnapshot. Both halves are core's, so no second definition of the copy can drift. */
+/** The fork-copy pipeline end to end: the source's frame stream, each frame structuredClone'd across the wire
+ *  (as DO RPC), the target's receiver. Both halves are core's, so no second definition of the copy can drift. */
 
 import { describe, test, expect } from 'bun:test';
-import {
-  readForkLineage, readSoul, snapshotWorkspaceForFork, writeForkSnapshot, SOUL_PATH,
-} from '../src/index';
+import { readForkLineage, readSoul } from '../src/index';
 import { createTestWorkspace as fresh, type TestWorkspace } from './helpers';
 import {
   readChain, readWorkingContext, seedForkSource, seedForkTarget,
-  SOURCE_ARTIFACTS, SPILLED_BYTES, TARGET_ARTIFACTS, type ForkConversation,
+  SPILLED_BYTES, TARGET_ARTIFACTS, type ForkConversation,
 } from './helpers/fork-conversation';
+import { deliver, reassemble, receiverFor, sourceFrames, streamFork } from './helpers/fork-stream';
 
 const TARGET = {
   workspaceId: 'FORK-DO-ID', workspaceName: 'my-fork', artifactDirectory: TARGET_ARTIFACTS, now: 88888,
@@ -29,24 +28,15 @@ async function seedSource(src: TestWorkspace): Promise<ForkConversation> {
   return chat;
 }
 
-function snapshotOf(src: TestWorkspace, untilMessageId: string) {
-  return snapshotWorkspaceForFork({
-    sql: src.sql, vfs: src.vfs, untilMessageId, artifactDirectory: SOURCE_ARTIFACTS,
-  });
-}
-
 describe('fork pipeline (end-to-end)', () => {
-  test('a cloned snapshot replays into the fork database as one conversation', async () => {
+  test('a streamed fork replays into the fork database as one conversation', async () => {
     const src = fresh();
     const tgt = fresh();
     // The fork DO's onStart bootstrap: identity and main actor exist before any frame.
     await seedForkTarget(tgt, { workspaceId: 'FORK-DO-ID', workspaceName: 'fork-bootstrap' });
     await seedSource(src);
 
-    // DO RPC uses structured clone, which preserves the canonical BLOB
-    // (Uint8Array/ArrayBuffer) vfs rows.
-    const snapshot = structuredClone(await snapshotOf(src, 'm2'));
-    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, TARGET);
+    await streamFork(src, tgt, TARGET, { untilMessageId: 'm2' });
 
     expect(tgt.sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity`)
       .toEqual([{ id: 'FORK-DO-ID', name: 'my-fork' }]);
@@ -84,32 +74,29 @@ describe('fork pipeline (end-to-end)', () => {
     const tgt = fresh();
     await seedForkTarget(tgt, { workspaceId: 'FORK-DO-ID' });
     await seedSource(src);
-    const snapshot = structuredClone(await snapshotOf(src, 'm2'));
 
-    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, TARGET);
+    const landed = await streamFork(src, tgt, TARGET, { untilMessageId: 'm2' });
 
     const marker = tgt.sql<{ id: string; parent_id: string | null; recorded_at: number }>`
       SELECT id, parent_id, recorded_at FROM conversation_entries WHERE role = 'system'`;
 
     expect(marker).toHaveLength(1);
     expect(marker[0]?.parent_id).toBe('m2');
-    expect(marker[0]?.recorded_at).toBe(snapshot.cut.createdAtMs + 1);
+    expect(marker[0]?.recorded_at).toBe(landed.forkPointMs + 1);
     const chain = await readChain(tgt);
     expect(chain.text[chain.text.length - 1]).toContain('forked from workspace');
     expect(chain.text[chain.text.length - 1]).toContain('source-agent');
   });
 
-  test('a snapshot with no crafted tools and no memory is safe', async () => {
+  test('a source with no crafted tools and no memory forks safely', async () => {
     const src = fresh();
     const tgt = fresh();
     const chat = await seedForkSource(src, { workspaceId: 'S', workspaceName: 's', memory: [] });
     await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
 
-    const snapshot = structuredClone(await snapshotOf(src, 'm1'));
-
-    await expect(writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, {
+    await expect(streamFork(src, tgt, {
       workspaceId: 'F', workspaceName: 'empty-fork', artifactDirectory: TARGET_ARTIFACTS, now: 7000,
-    })).resolves.toBeDefined();
+    }, { untilMessageId: 'm1' })).resolves.toBeDefined();
 
     expect(tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`[0]?.c).toBe(0);
     expect((await readChain(tgt)).ids[0]).toBe('m1');
@@ -123,12 +110,13 @@ describe('fork pipeline (end-to-end)', () => {
     const spilled = 's'.repeat(SPILLED_BYTES);
     await chat.say({ id: 'm1', role: 'user', text: spilled, parentId: null });
 
-    const snapshot = structuredClone(await snapshotOf(src, 'm1'));
-    expect(snapshot.artifacts.length).toBeGreaterThan(0);
+    const frames = await sourceFrames(src, 'm1');
+    const { artifacts } = reassemble(frames);
+    expect(artifacts.length).toBeGreaterThan(0);
 
-    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, TARGET);
+    await deliver(receiverFor(tgt, TARGET), frames);
 
-    for (const artifact of snapshot.artifacts) {
+    for (const artifact of artifacts) {
       expect(await tgt.vfs.exists(`${TARGET_ARTIFACTS}/${artifact.path}`)).toBe(true);
     }
 
@@ -140,58 +128,29 @@ describe('fork pipeline (end-to-end)', () => {
     const src = fresh();
     const tgt = fresh();
     await seedSource(src);
-    const snapshot = structuredClone(await snapshotOf(src, 'm2'));
 
-    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, {
+    await streamFork(src, tgt, {
       workspaceId: 'OWNED-FORK', workspaceName: 'owned-fork', artifactDirectory: TARGET_ARTIFACTS,
       ownerUserId: 'user-123', now: 9000,
-    });
+    }, { untilMessageId: 'm2' });
 
     expect(tgt.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM workspace_identity`).toEqual([
       { owner_user_id: 'user-123' },
     ]);
   });
 
-  test('hosted forks route SOUL.md through the owner-only writer on every delivery', async () => {
-    const src = fresh();
-    const tgt = fresh();
-    await seedSource(src);
-    const snapshot = structuredClone(await snapshotOf(src, 'm2'));
-    const soul = snapshot.files.find((file) => file.path === SOUL_PATH);
-
-    if (!soul) throw new Error('fork snapshot did not include SOUL.md');
-    const protectedWrites: string[] = [];
-
-    const options = {
-      workspaceId: 'PROTECTED-FORK',
-      workspaceName: 'protected-fork',
-      artifactDirectory: TARGET_ARTIFACTS,
-      ownerUserId: 'user-123',
-      now: 9000,
-      writeSoulFile: async (content: string) => {
-        protectedWrites.push(content);
-        await tgt.vfs.writeFile(SOUL_PATH, content);
-      },
-    } as const;
-
-    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, options);
-    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, options);
-
-    expect(protectedWrites).toEqual([soul.content, soul.content]);
-  });
-
   test('repeating a completed delivery converges on exactly one copied history', async () => {
     const src = fresh();
     const tgt = fresh();
     await seedSource(src);
-    const snapshot = structuredClone(await snapshotOf(src, 'm2'));
 
-    const options = {
+    const target = {
       workspaceId: 'FINAL', workspaceName: 'recovered-fork', artifactDirectory: TARGET_ARTIFACTS, now: 99999,
     } as const;
 
-    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, options);
-    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, options);
+    // A fresh activation retries a delivery whose acknowledgement was lost, under a new transfer id.
+    await streamFork(src, tgt, target, { untilMessageId: 'm2', transferId: 'first' });
+    await streamFork(src, tgt, target, { untilMessageId: 'm2', transferId: 'retry' });
 
     expect(tgt.sql<{ id: string }>`SELECT id FROM workspace_identity`).toEqual([{ id: 'FINAL' }]);
     expect(tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM fork_lineage`[0]?.c).toBe(1);

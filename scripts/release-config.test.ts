@@ -81,7 +81,7 @@ const LEAN_VERIFY = '.github/workflows/lean-verify.yml';
  * held below against the dependency that actually ships. The image itself is the
  * block layer built on that upstream base: `packages/devbox/block-lower/Dockerfile`
  * compiles `devbox-block-lower` and `devbox-squashfuse` into the upstream
- * `docker.io/cloudflare/sandbox@sha256:822501de…` base and the result is pushed
+ * `docker.io/cloudflare/sandbox@sha256:4a56a37a…` base and the result is pushed
  * to this account's registry, so `digest` is the pushed manifest's digest — the
  * same sha256 both wrangler blocks carry — rather than a tag resolution.
  *
@@ -91,8 +91,8 @@ const LEAN_VERIFY = '.github/workflows/lean-verify.yml';
  */
 const SANDBOX_IMAGE = {
   repository: 'registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer',
-  version: '0.12.8',
-  digest: 'sha256:3b11f7bf756af01664663f05fd1f3c1721dababc6a4fcf2bfa047d341d9b6a9e',
+  version: '0.12.9',
+  digest: 'sha256:c2c03bdf3b46d22633ffdeab545953d7c0caa0fb562d36e70ebdd4618898c718',
 } as const;
 
 const PINNED_IMAGE = `${SANDBOX_IMAGE.repository}@${SANDBOX_IMAGE.digest}`;

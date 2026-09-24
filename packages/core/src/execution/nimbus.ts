@@ -3,16 +3,16 @@
 import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
 import type { Shell, VFS } from '../types/primitives';
-import type { VfsNativeReads } from '../vfs/mounts';
+import type { MountedVfs, VfsNativeReads } from '../vfs/mounts';
 import { createInlineExecutor, type InlineExecutorDeps } from './inline';
-import { makeVfsError } from '../vfs/errno';
-import { workspacePath } from '../vfs/workspace-path';
+import { atVfsPath, makeVfsError } from '../vfs/errno';
+import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
 import { base64ToBytes } from '../utils/base64';
-import type { ExecutorCapability, ExecutorProvider, PortAnsweringExecutor } from './types';
+import type { ExecutorCapability, ExecutorProvider, PortAnsweringExecutor, PortExposureResult, PreviewRouteCheck } from './types';
 import { readExecSignal } from './signal';
-import { commandResult, COMMAND_RESULT_TYPE, formatExecResult, refusalText, type CommandResult } from './exec-result';
+import { commandResult, COMMAND_RESULT_TYPE, exposedPortText, formatExecResult, refusalText, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -155,12 +155,14 @@ export interface NimbusSandboxHandle {
     logs?(pid: number, options?: { lines?: number; bytes?: number }): Promise<JsonValue | undefined>;
   };
   ports?: {
-    expose?(port: number): Promise<{ port: number; url?: string; listening?: boolean; pid?: number | null; registeredAt?: number | null; capability?: string | null }>;
+    expose?(port: number): Promise<{ port: number; url?: string; route: PreviewRouteCheck; pid?: number | null; capability?: string | null }>;
     unexpose?(port: number): Promise<JsonValue | undefined>;
     /** Why an exposed port has no `url`, when known; absent when there is a URL. */
     list?(): Promise<Array<{ port: number; url?: string; unavailable?: string; pid?: number; registeredAt?: number; capability?: string }>>;
     url?(port: number): string | undefined;
   };
+  /** See `WorkspaceBundle.mountTable`; absent on a remote box. */
+  mountTable?(plane: MountedVfs, cred?: VfsCred): void;
 }
 
 export interface NimbusExecutorOpts {
@@ -230,17 +232,8 @@ function workspaceExecFailure(input: { doing: string; cause: unknown; command?: 
 const NO_LISTENER_MARK = 'No process is listening';
 
 function workspaceNoListenerReason(port: number): string {
-  return `workspace port ${port} has no server listening. `
-    + `Start an ordinary Node/Vite server in an available capable executor. `
-    + `For an authored Worker slate, use its declared preview operation when available.`;
-}
-
-function workspacePortFailure(input: { port: number; cause: unknown }): KinuError {
-  if (renderThrownChain({ cause: input.cause }).includes(NO_LISTENER_MARK)) {
-    return new KinuError('unsupported', workspaceNoListenerReason(input.port));
-  }
-
-  return nimbusFailure({ doing: `nimbus exposePort ${input.port}`, cause: input.cause });
+  return `workspace port ${port} has no server listening. Start the server with startProcess, then expose the port `
+    + `once it listens. For an authored Worker slate, use its declared preview operation when available.`;
 }
 
 /** Session RPC failures default to `io`; abort, timeout and memory-wall keep the classifier's precise code. */
@@ -319,7 +312,7 @@ function formatStartResult(result: NimbusStartResult, namespace: string): Comman
   ];
 
   if (result.ports.length > 0) {
-    lines.push(`listening on port${result.ports.length > 1 ? 's' : ''} ${result.ports.map((p) => p.port).join(', ')} — ${namespace}.exposePort(<port>) returns the preview URL`);
+    lines.push(`listening on port${result.ports.length > 1 ? 's' : ''} ${result.ports.map((p) => p.port).join(', ')} — ${namespace}.exposePort(<port>) returns the preview URL and whether a request to it reaches the server`);
   }
 
   lines.push(`output: ${namespace}.logs(${result.pid}) · stop: ${namespace}.killProcess(${result.pid})`);
@@ -332,7 +325,7 @@ const SESSION_CONTROL_TYPES =
   `  function startProcess(command: string, options?: { cwd?: string; timeoutMs?: number; env?: Record<string,string> }): Promise<${COMMAND_RESULT_TYPE}>;
   function killProcess(pid: number | { pid: number }): Promise<string>;
   function logs(pid: number | { pid: number; lines?: number; bytes?: number }): Promise<string>;
-  function exposePort(port: number | { port: number }): Promise<string>;
+  function exposePort(port: number | { port: number }): Promise<string>; // the URL, then 'verified: …' or 'not reached: …'
   function unexposePort(port: number | { port: number }): Promise<string>;
   function listPorts(): Promise<string>;
   function installRuntime(spec: string): Promise<string>;
@@ -341,7 +334,7 @@ const SESSION_CONTROL_TYPES =
 export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweringExecutor {
   const box = opts.box;
   const configured = box != null;
-  const root = opts.root ?? '/home/user';
+  const root = opts.root ?? WORKSPACE_ROOT;
   const namespace = opts.namespace ?? 'nimbus';
   let active = false;
   let lastError: string | undefined;
@@ -357,6 +350,29 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
       return result;
     } catch (err) {
       lastError = renderThrownChain({ cause: err });
+      throw err;
+    }
+  };
+
+  const exposeOn = async (port: number): Promise<PortExposureResult> => {
+    const ports = box?.ports;
+
+    if (!ports?.expose) return { supported: false, reason: 'Nimbus port exposure is not available' };
+    const expose = ports.expose.bind(ports);
+
+    try {
+      const result = await touch(() => expose(port));
+      // A blank url is the SDK declining to name one, same as omitting it.
+      const url = result.url === undefined || result.url === '' ? ports.url?.(port) : result.url;
+
+      if (!url) return { supported: false, reason: `nimbus exposePort ${port}: exposed but no preview URL is available` };
+
+      return { supported: true, port, url, route: result.route };
+    } catch (err) {
+      if (renderThrownChain({ cause: err }).includes(NO_LISTENER_MARK)) {
+        return { supported: false, reason: workspaceNoListenerReason(port) };
+      }
+
       throw err;
     }
   };
@@ -642,13 +658,13 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
       },
     },
     exposePort: {
-      description: 'Expose an HTTP-like port from Nimbus and return its preview URL.',
+      description: 'Expose a listening Nimbus port. Returns the preview URL, then one line: "verified" when a '
+        + 'request to the URL reaches the server, or "not reached" naming the preview-route gate that refused. '
+        + 'The check never calls your server.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!box) return NOT_CONFIGURED_REFUSAL;
-        const ports = box.ports;
 
-        if (!ports?.expose) return handleLacks('ports');
-        const expose = ports.expose.bind(ports);
+        if (!box.ports?.expose) return handleLacks('ports');
         const input = parseInput(PortInputSchema, { value: args[0] });
         const port = v.is(v.number(), input) ? input : input?.port;
 
@@ -658,11 +674,13 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
         }
 
         try {
-          const result = await touch(() => expose(port));
+          const exposed = await exposeOn(port);
 
-          return result.url ?? ports.url?.(port) ?? stringifyResult({ value: result });
+          return exposed.supported
+            ? exposedPortText(exposed.url, port, exposed.route)
+            : refusalText(new KinuError('unsupported', exposed.reason));
         } catch (err) {
-          return refusalText(workspacePortFailure({ port, cause: err }));
+          return refusalText(nimbusFailure({ doing: `nimbus exposePort ${port}`, cause: err }));
         }
       },
     },
@@ -803,36 +821,7 @@ declare namespace ${namespace} {
 ${SESSION_CONTROL_TYPES}
 }`,
     positionalArgs: true,
-    async exposePort(port: number) {
-      const ports = box?.ports;
-
-      if (!ports?.expose) return { supported: false, reason: 'Nimbus port exposure is not available' };
-      const expose = ports.expose.bind(ports);
-
-      try {
-        const result = await touch(() => expose(port));
-        // A blank url is the SDK declining to name one, same as omitting it.
-        const answered = result.url;
-        const url = answered === undefined || answered === '' ? ports.url?.(port) : answered;
-
-        if (!url) {
-          return { supported: false, reason: `nimbus exposePort ${port}: exposed but no preview URL is available` };
-        }
-
-        return {
-          supported: true,
-          port,
-          url,
-          verified_listening: result.listening ?? false,
-        };
-      } catch (err) {
-        if (renderThrownChain({ cause: err }).includes(NO_LISTENER_MARK)) {
-          return { supported: false, reason: workspaceNoListenerReason(port) };
-        }
-
-        throw err;
-      }
-    },
+    exposePort: exposeOn,
     async unexposePort(port: number) {
       const ports = box?.ports;
 
@@ -980,16 +969,16 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
       const absolute = workspacePath(path);
 
       if (opts?.encoding !== 'utf8' && files.readBytes) {
-        const bytes = await files.readBytes(absolute);
+        const bytes = await atVfsPath(absolute, 'open', () => files.readBytes?.(absolute) ?? null);
 
-        if (bytes === null) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
+        if (bytes === null) throw makeVfsError('ENOENT', `no such file or directory, open '${absolute}'`, absolute);
 
         return bytes;
       }
 
-      const content = await files.read(absolute);
+      const content = await atVfsPath(absolute, 'open', () => files.read(absolute));
 
-      if (content === null) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
+      if (content === null) throw makeVfsError('ENOENT', `no such file or directory, open '${absolute}'`, absolute);
 
       return opts?.encoding === 'utf8' ? content : new TextEncoder().encode(content);
     },
@@ -997,10 +986,18 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
     async readRange(path, offset, length) {
       return readNimbusOriginRange({ box, files, path, offset, length, cred });
     },
-    async writeFile(path, data) { await files.write(workspacePath(path), data); },
+    async writeFile(path, data) {
+      const absolute = workspacePath(path);
+
+      await atVfsPath(absolute, 'open', () => files.write(absolute, data));
+    },
     // No `writeFileIfRevision`: the SDK write takes no precondition and stat has no revision, so
     // `writeExecutorFileOp` answers `unsupported`.
-    async readdir(path) { return (await files.list(workspacePath(path))).map((e) => e.name); },
+    async readdir(path) {
+      const absolute = workspacePath(path);
+
+      return (await atVfsPath(absolute, 'scandir', () => files.list(absolute))).map((e) => e.name);
+    },
     async stat(path) {
       if (files.stat) {
         const st = await files.stat(workspacePath(path));

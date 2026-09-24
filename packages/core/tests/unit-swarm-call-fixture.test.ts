@@ -316,7 +316,9 @@ describe('the implementation, asserted against the shipped strategy modules', ()
     // A set assertion, not containment: an added export stays a decision.
     // `paretoObjectiveAxes`, `dominatesPareto`, `paretoFront` port
     // `Exploration/Records.lean`'s `frontier_nondominance`.
+    // The breach schemas are shared by the resume ledger and the records store's seal rows.
     expect(Object.keys(objectiveModule).sort()).toEqual([
+      'FloorBreachSchema', 'MeasuredValueSchema',
       'PUBLICATION_SURFACES', 'PUBLISHING_CARRIES', 'VERIFIER_KINDS', 'VERIFIER_KIND_DOC',
       'admitsPublication', 'carrySuppression', 'dominatesPareto', 'floorMargin', 'isBetter',
       'measuredHalf', 'normalisedScore', 'paretoFront', 'paretoObjectiveAxes',

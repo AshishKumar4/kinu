@@ -1,12 +1,22 @@
 /**
  * Out-of-process /chat/completions stub: PTY tests block the test's event loop. Also serves a
  * deny-all proxy and `/network-check`; prints `READY {"model":N,"proxy":N}` once listening.
+ * `MOCK_LLM_MODELS` (comma-separated) is the `/models` list; `MOCK_LLM_REQUEST_LOG` gets one JSON line per
+ * completion request: the model it asked for and whether it streamed (a chat turn does). Under `/blackhole/` nothing
+ * answers; `MOCK_LLM_BLACKHOLE_LOG` records each such request as `opened`, then `aborted` when its client hangs up.
  */
+import { appendFileSync } from 'node:fs';
 import * as v from 'valibot';
 
 const answer = Bun.env.MOCK_LLM_ANSWER ?? 'ok';
 
-const CompletionRequestSchema = v.object({ stream: v.optional(v.boolean()) });
+const models = (Bun.env.MOCK_LLM_MODELS ?? 'mock-model').split(',');
+
+const requestLog = Bun.env.MOCK_LLM_REQUEST_LOG;
+
+const blackholeLog = Bun.env.MOCK_LLM_BLACKHOLE_LOG;
+
+const CompletionRequestSchema = v.object({ stream: v.optional(v.boolean()), model: v.optional(v.string()) });
 
 interface CompletionChunk {
   id: string;
@@ -46,10 +56,19 @@ const server = Bun.serve({
       return Response.json({ attempted: networkAttempted });
     }
 
+    if (url.pathname.startsWith('/blackhole/')) {
+      const record = (event: string) => { if (blackholeLog !== undefined) appendFileSync(blackholeLog, `${event}\n`); };
+
+      record('opened');
+      request.signal.addEventListener('abort', () => { record('aborted'); });
+
+      return new Promise<Response>(() => {});
+    }
+
     if (url.pathname.endsWith('/models')) {
       return Response.json({
         object: 'list',
-        data: [{ id: 'mock-model', object: 'model', created: 1, owned_by: 'mock' }],
+        data: models.map((id) => ({ id, object: 'model', created: 1, owned_by: 'mock' })),
       });
     }
 
@@ -58,6 +77,8 @@ const server = Bun.serve({
     }
 
     const body = v.parse(CompletionRequestSchema, await request.json());
+
+    if (requestLog !== undefined) appendFileSync(requestLog, `${JSON.stringify({ model: body.model, stream: body.stream === true })}\n`);
 
     if (!body.stream) {
       return Response.json({

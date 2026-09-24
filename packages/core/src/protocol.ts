@@ -17,9 +17,10 @@ export interface ForkNode {
 	id: string;
 	parentId: string | null;
 	depth: number;
-	/** Branch score in [0,1]; null when the fork did not compete its branches. */
+	/** The node's own score in [0,1] (`search_node_scores`), not its rollout mean; null when the fork did
+	 *  not compete its branches or nothing scored this one. */
 	value: number | null;
-	/** Rollouts spent here; null for the same reason. */
+	/** Rollouts spent here; null when the fork did not compete its branches. */
 	visits: number | null;
 	/** Drawing vocabulary: `running` is heads only; `terminal` is the branch a competition settled on. */
 	status: "open" | "pruned" | "terminal" | "failed" | "running";

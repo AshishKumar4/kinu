@@ -16,7 +16,6 @@ import type { RunEventRecorder } from '../events/recorder';
 import type { PartialToolCall, RunEvent } from '../events/types';
 import type { CompletedTurn } from '../evolution/types';
 import { diagnostics, KinuError, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
-import type { ModelWindow } from '../prompting/step-prune';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
 import type { CacheWarmingLane } from '../providers/cache-warming';
@@ -242,7 +241,6 @@ export interface ChatSessionPorts {
   taskList(): TaskListStore;
   /** A reminder fired behind such work would race its wake. */
   hasPendingAsyncWake(): boolean;
-  modelWindow(): ModelWindow;
   /** `steerSkillsBlock`. */
   steerSkills(text: string): Promise<string | null>;
   /** A backend with no review surface refuses a plan turn at admission. */

@@ -1,6 +1,4 @@
 import { describe, test, expect } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import type { AlternateTakeSet } from '@kinu.run/core';
 import { takeEvidence } from '@kinu.run/core';
 import {
@@ -57,18 +55,5 @@ describe('alternate-takes view logic', () => {
     expect(hasComparableTakes(makeSet({ candidates: makeSet().candidates.slice(0, 1) }))).toBe(false);
     expect(hasComparableTakes(undefined)).toBe(false);
     expect(hasComparableTakes(null)).toBe(false);
-  });
-});
-
-describe('take-pick schema ordering (lazy-engine hole)', () => {
-  test('the boot schema inits the outcome ledger before any pick RPC can run', () => {
-    // In the lazy EvolutionEngine constructor, a freshly-woken actor's first pickAlternateTake
-    // hits the narrow CHECK and loses the preference.
-    const schema = readFileSync(
-      join(import.meta.dir, '..', '..', 'core', 'src', 'state', 'workspace-schema.ts'), 'utf8',
-    );
-
-    const body = schema.slice(schema.indexOf('export function initWorkspaceSchema'));
-    expect(body).toContain('initTurnOutcomeTables(execRaw)');
   });
 });

@@ -8,6 +8,7 @@ import { expect, test } from 'bun:test';
 import { parseJsonObject } from '@kinu.run/core';
 import { scratchDir } from '@kinu.run/test-utils';
 
+import type { ProviderConnectionState } from '../src/commands/provider-connect';
 import { GuidedOnboarding, type OnboardingReadiness, type TuiOnboardingOperations } from '../src/tui/onboarding';
 import { createFileTuiPreferenceStore } from '../src/tui/preferences';
 import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
@@ -71,6 +72,76 @@ test('the theme step stands until a theme is stored, and closes once one is', as
     await waitForFrame((frame) => frame.includes('Choose a keymap'));
     expect(store.read().theme).toBeDefined();
     expect(captureCharFrame()).not.toContain('Choose a theme');
+  } finally {
+    flushSync(() => { root.unmount(); });
+    renderer.destroy();
+  }
+});
+
+test('a check that never answers shows until Esc skips it, which aborts it and moves on to the question', async () => {
+  const endpoint: ProviderConnectionState = {
+    descriptor: { id: 'openai-compatible', label: 'OpenAI-compatible', blurb: 'Any /v1 endpoint.', credential: 'api-key' },
+    connected: false,
+    detail: 'kinu provider connect openai-compatible',
+  };
+
+  let abortedProbe = false;
+  let skipped: string | null = 'unsettled';
+
+  const operations: TuiOnboardingOperations = {
+    readReadiness: () => ({
+      location: 'local',
+      accountConnected: false,
+      providerConnected: false,
+      tierAliasesResolved: false,
+      themeSelected: false,
+      keymapSelected: false,
+      workspaceCount: 0,
+      skippedSteps: [],
+    }),
+    chooseLocation: () => {},
+    listProviders: async () => [endpoint],
+    connectProvider: async (_id, port) => {
+      skipped = await port.skippable('Checking http://unanswering.test/v1/models…', (signal) => new Promise<string>((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          abortedProbe = true;
+          reject(signal.reason);
+        });
+      }));
+
+      return { kind: 'connected', summary: `Connected with ${await port.ask({ label: 'Default model' })}` };
+    },
+    configureTiers: () => {},
+    selectTheme: () => {},
+    selectKeymap: () => {},
+    createWorkspace: () => {},
+    skip: () => {},
+  };
+
+  const { renderer, mockInput, waitForFrame } = await createTestRenderer({
+    width: 100,
+    height: 32,
+    useThread: false,
+    maxFps: Number.POSITIVE_INFINITY,
+  });
+
+  const root = createRoot(renderer);
+
+  try {
+    root.render(
+      <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), colorCapability: 'truecolor' }}>
+        <GuidedOnboarding operations={operations} roles={[]} onReady={() => {}} onExit={() => {}} />
+      </TuiProductProvider>,
+    );
+    renderer.start();
+    await waitForFrame((frame) => frame.includes('OpenAI-compatible'));
+    mockInput.pressEnter();
+    await waitForFrame((frame) => frame.includes('Checking http://unanswering.test/v1/models… Esc skips'));
+    expect(abortedProbe).toBe(false);
+    mockInput.pressEscape();
+    await waitForFrame((frame) => frame.includes('Default model'));
+    expect(abortedProbe).toBe(true);
+    expect(skipped).toBeNull();
   } finally {
     flushSync(() => { root.unmount(); });
     renderer.destroy();

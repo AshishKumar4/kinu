@@ -1,5 +1,7 @@
-// Models the container's one persistent session shell for every fake: `sh -n` parses each
-// command, since a string-matching fake accepts commands the real POSIX shell refuses.
+// Models the container's one persistent session shell for every fake: `bash -n` parses each
+// command, since a string-matching fake accepts commands the real shell refuses. The shell is
+// bash: the 0.12.9 container server spawns `bash --norc` per session and wraps each command in a
+// script that itself uses `[[ ]]`.
 import { spawnSync } from 'node:child_process';
 
 /** `exit` ends the SDK's persistent session shell, not the script; the SDK answers that
@@ -34,7 +36,7 @@ function sessionTerminated(exitCode: number): Error {
   );
 }
 
-/** One `sh -n` verdict per distinct command string. A suite runs the same
+/** One `bash -n` verdict per distinct command string. A suite runs the same
  *  templates thousands of times, and the parse of a string cannot change. */
 const parsed = new Map<string, string | undefined>();
 
@@ -42,17 +44,17 @@ function syntaxRefusal(command: string): string | undefined {
   const held = parsed.get(command);
 
   if (held !== undefined || parsed.has(command)) return held;
-  const checked = spawnSync('sh', ['-n', '-c', command], { encoding: 'utf8' });
+  const checked = spawnSync('bash', ['-n', '-c', command], { encoding: 'utf8' });
 
   if (checked.error !== undefined) {
-    // Missing `sh` throws rather than skipping: a parse gate that silently stops checking
+    // Missing `bash` throws rather than skipping: a parse gate that silently stops checking
     // lets broken command templates pass a green suite.
-    throw new Error(`the session-shell parse gate could not run sh: ${checked.error.message}`);
+    throw new Error(`the session-shell parse gate could not run bash: ${checked.error.message}`);
   }
 
   const refusal = checked.status === 0
     ? undefined
-    : (checked.stderr.trim() || `sh -n exited ${String(checked.status)}`);
+    : (checked.stderr.trim() || `bash -n exited ${String(checked.status)}`);
 
   parsed.set(command, refusal);
 
@@ -74,7 +76,7 @@ export function sessionShellRefusal(command: string): Error | undefined {
 
   if (refusal === undefined) return undefined;
 
-  // 2 is the POSIX shell's exit code for a parse failure, and what deployed stops reported.
+  // 2 is the shell's exit code for a parse failure, and what deployed stops reported.
   return Object.assign(sessionTerminated(2), { shellRefusal: refusal });
 }
 

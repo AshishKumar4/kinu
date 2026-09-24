@@ -5,10 +5,12 @@ import {
   lockKey,
   lockUpdate,
   parseTables,
+  parseViews,
   survey,
   tablesIn,
   type GenesisLock,
   type TableDdl,
+  viewDriftViolations,
 } from './schema-drift';
 import { readSources } from './sources';
 import { statementsOf } from './vendor-schema';
@@ -102,6 +104,32 @@ describe('schema-drift DDL census', () => {
       execRaw('CREATE TABLE IF NOT EXISTS both (id TEXT PRIMARY KEY, first INTEGER)');
       execRaw('CREATE TABLE IF NOT EXISTS both (id TEXT PRIMARY KEY, second INTEGER)');
     `)).toEqual([{ table: 'both', file: 'fixture.ts', parts: ['id TEXT PRIMARY KEY', 'first INTEGER', 'second INTEGER'] }]);
+  });
+
+  test('a view is its whole definition, read to the end of the template it opens', () => {
+    expect(parseViews('fixture.ts', `
+      execRaw(\`CREATE VIEW IF NOT EXISTS scores AS
+        SELECT *, CASE WHEN parent_id IS NULL THEN value
+          -- The root keeps its mean.
+          ELSE 0 END AS own
+        FROM nodes\`);
+    `)).toEqual([{
+      table: 'scores', file: 'fixture.ts',
+      parts: ['SELECT *, CASE WHEN parent_id IS NULL THEN value ELSE 0 END AS own FROM nodes'],
+    }]);
+  });
+
+  test('fails closed on a view definition it cannot read as text', () => {
+    expect(() => parseViews('fixture.ts', `
+      execRaw(\`CREATE VIEW IF NOT EXISTS built AS SELECT \${columns} FROM nodes\`);
+    `)).toThrow(/view built has a definition this cannot read/u);
+
+    // Outside a template the next backtick opens some other statement, so reading
+    // up to it would lock that statement's text as this view's definition.
+    expect(() => parseViews('fixture.ts', `
+      execRaw('CREATE VIEW IF NOT EXISTS quoted AS SELECT 1');
+      execRaw(\`CREATE INDEX IF NOT EXISTS idx_later ON later(id)\`);
+    `)).toThrow(/view quoted has a definition this cannot read/u);
   });
 });
 
@@ -258,6 +286,8 @@ describe('schema-drift over this tree', () => {
     // with the views DSL (8d6444f4f). A table that leaves lowers this number
     // in the same commit, with its reason here.
     expect(state.tables.length).toBeGreaterThanOrEqual(115);
+    // The three event-log views and `search_node_scores`.
+    expect(state.views.length).toBeGreaterThanOrEqual(4);
   });
 
   test('RED: a constraint planted on any table of this tree fails the gate for that table alone', () => {
@@ -274,6 +304,18 @@ describe('schema-drift over this tree', () => {
 
       expect(violations.map(({ key }) => key)).toEqual([lockKey(table.table, table.file)]);
       expect(violations[0]?.detail).toContain('a definition changed after genesis');
+    }
+  });
+
+  test('RED: a change planted in any view of this tree fails the gate for that view alone', () => {
+    const state = survey();
+
+    for (const view of state.views) {
+      const planted: TableDdl = { ...view, parts: view.parts.map((part) => `${part} LIMIT 1`) };
+      const violations = viewDriftViolations([planted], state.lock);
+
+      expect(violations.map(({ key }) => key)).toEqual([lockKey(view.table, view.file)]);
+      expect(violations[0]?.detail).toContain('CREATE VIEW IF NOT EXISTS never replaces a view');
     }
   });
 

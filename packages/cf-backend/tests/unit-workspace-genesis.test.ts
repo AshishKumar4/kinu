@@ -1,13 +1,19 @@
 // Defends the owner's complaint (2026-08-16): the creation prompt was only a mission and the agent
 // never took the first turn. Creation delivers one signal that becomes a programmatic turn.
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { SIGNAL_ID_METADATA_KEY, TERMINAL_EFFECT_RETRY_CEILING_MS, WORKSPACE_CREATED_EVENT, renderSoulMarkdown, summarizeSoul } from '@kinu.run/core';
+import {
+  RunEventRecorder, SIGNAL_ID_METADATA_KEY, TERMINAL_EFFECT_RETRY_CEILING_MS, WORKSPACE_CREATED_EVENT, renderSoulMarkdown, summarizeSoul,
+} from '@kinu.run/core';
+import { sqlOver } from '@kinu.run/test-utils';
 import { MockLanguageModelV3 } from 'ai/test';
 import { createTestUserDO, testOwner } from './helpers/user-do';
 import type { ModelMessage } from 'ai';
-import { orchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import {
+  orchestratorHarness, chatSessionTurns, storedChat, workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent,
+} from './helpers/actor-harness';
+import { joinHarnessFibers } from './helpers/agents-sdk';
 
 const MISSION = 'Audit the OAuth callback flow and report what an attacker could reach.';
 
@@ -19,8 +25,10 @@ const TurnProvenanceSchema = v.looseObject({
 });
 
 /** The loop's turns as durable user rows: opening text and metadata provenance. */
-async function turnsRun(agent: HarnessOrchestratorAgent): Promise<Array<{ text: string; provenance: v.InferOutput<typeof TurnProvenanceSchema> }>> {
-  return (await agent.harnessTranscript.history())
+async function turnsRun(
+  harness: ActorHarness<HarnessOrchestratorAgent>,
+): Promise<Array<{ text: string; provenance: v.InferOutput<typeof TurnProvenanceSchema> }>> {
+  return (await storedChat(harness))
     .filter((message) => message.role === 'user')
     .map((message) => ({
       text: message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''),
@@ -62,7 +70,7 @@ describe('the workspace takes its own first turn', () => {
     const request = await next;
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
 
-    const ran = (await turnsRun(harness.agent));
+    const ran = (await turnsRun(harness));
     expect(ran).toHaveLength(1);
     const turn = ran[0];
     expect(turn.provenance.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
@@ -82,8 +90,8 @@ describe('the workspace takes its own first turn', () => {
     const request = await next;
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
 
-    expect((await turnsRun(harness.agent))[0].text).not.toContain('OAuth');
-    expect((await turnsRun(harness.agent))[0].text).not.toContain(MISSION);
+    expect((await turnsRun(harness))[0].text).not.toContain('OAuth');
+    expect((await turnsRun(harness))[0].text).not.toContain(MISSION);
     expect(requestText(request.prompt)).not.toContain(MISSION);
     harness.db.close();
   });
@@ -93,7 +101,7 @@ describe('the workspace takes its own first turn', () => {
     seedMission(harness.db, PLACEHOLDER_MISSION);
 
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: false });
-    expect((await turnsRun(harness.agent))).toEqual([]);
+    expect((await turnsRun(harness))).toEqual([]);
     harness.db.close();
   });
 
@@ -106,7 +114,7 @@ describe('the workspace takes its own first turn', () => {
     // Answered while the turn it started is still parked at its model call.
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
     await next;
-    expect(harness.agent.harnessChatLoop.turnInFlight()).toBe(true);
+    expect(new RunEventRecorder(sqlOver(harness.db), workspaceMainActor(harness.db)).unterminatedRuns()).toHaveLength(1);
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
     harness.db.close();
   });
@@ -133,12 +141,11 @@ describe('the workspace takes its own first turn', () => {
 
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
     await turns.settle({ messageId: 'a-first', text: 'ok' });
-    await harness.agent.harnessChatLoop.pumpPromise;
     await cardWithdrawn;
 
     // The offer yielded at its slot and the ledger records why.
-    expect((await turnsRun(harness.agent)).map((turn) => turn.provenance.kinuEvent)).toEqual([undefined]);
-    expect((await turnsRun(harness.agent)).map((turn) => turn.text)).toEqual(['Summarize the incident timeline first.']);
+    expect((await turnsRun(harness)).map((turn) => turn.provenance.kinuEvent)).toEqual([undefined]);
+    expect((await turnsRun(harness)).map((turn) => turn.text)).toEqual(['Summarize the incident timeline first.']);
     expect(activityEvents(harness.db)).toContain('genesis.yielded_to_message');
     harness.db.close();
   });
@@ -153,7 +160,7 @@ describe('the workspace takes its own first turn', () => {
     await next;
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
 
-    const ran = (await turnsRun(harness.agent));
+    const ran = (await turnsRun(harness));
     expect(ran).toHaveLength(1);
     expect(ran[0].text).toContain('first turn');
     expect(ran[0].provenance.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
@@ -171,22 +178,23 @@ describe('the workspace takes its own first turn', () => {
     expect(requestText((await genesis).prompt)).toContain('first turn');
 
     // A late message while the offer holds the slot reruns as the operator's own next turn.
-    const late = harness.agent.harnessChatLoop.send('Late but admitted.');
+    await harness.agent.send('Late but admitted.', 'm-late');
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
-    expect(await late).toBe('turn');
 
     expect(activityEvents(harness.db)).not.toContain('genesis.yielded_to_message');
-    const ran = (await turnsRun(harness.agent));
+    const ran = (await turnsRun(harness));
     expect(ran).toHaveLength(2);
     expect(ran[0].provenance.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
     expect(ran[1].text).toBe('Late but admitted.');
-    expect((await harness.agent.harnessTranscript.history()).filter((message) => message.role === 'assistant')).toHaveLength(2);
+    expect((await storedChat(harness)).filter((message) => message.role === 'assistant')).toHaveLength(2);
     harness.db.close();
   });
 });
 
 /** #18: only the genesis turn's `auto_title` row may replace the 'auto' stand-in, across ledger retries. */
 describe('the genesis turn names the workspace over its stand-in', () => {
+  afterEach(() => { setSystemTime(); });
+
   const STAND_IN = 'Audit the OAuth callback flow';
 
   const USAGE = {
@@ -231,17 +239,18 @@ describe('the genesis turn names the workspace over its stand-in', () => {
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
     await next;
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
-    await harness.agent.harnessTerminalReported();
+    await joinHarnessFibers();
 
     expect(namingCalls).toHaveLength(1);
     expect(await user.userDO.getWorkspaceTitle(owner, workspace)).toEqual({ displayName: STAND_IN, nameOrigin: 'auto' });
 
-    harness.agent.harnessAdvanceTerminalClock(TERMINAL_EFFECT_RETRY_CEILING_MS);
-    await harness.agent.harnessResumeTerminalTransitions();
+    // The retry is due once its backoff has passed on the platform clock; the alarm's pass replays it.
+    setSystemTime(new Date(Date.now() + TERMINAL_EFFECT_RETRY_CEILING_MS));
+    await harness.agent.terminalRetryPass();
     expect(await user.userDO.getWorkspaceTitle(owner, workspace)).toEqual({ displayName: 'OAuth Callback Audit', nameOrigin: 'auto' });
 
     await turns.run('What did you find?');
-    await harness.agent.harnessTerminalReported();
+    await joinHarnessFibers();
     expect(namingCalls).toHaveLength(2);
     expect(await user.userDO.getWorkspaceTitle(owner, workspace)).toEqual({ displayName: 'OAuth Callback Audit', nameOrigin: 'auto' });
     harness.db.close();
@@ -255,7 +264,7 @@ describe('the genesis turn names the workspace over its stand-in', () => {
     await harness.agent.beginGenesisTurn();
     await next;
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
-    await harness.agent.harnessTerminalReported();
+    await joinHarnessFibers();
 
     expect(namingCalls).toEqual([]);
     expect(await user.userDO.getWorkspaceTitle(owner, workspace)).toEqual({ displayName: STAND_IN, nameOrigin: 'user' });

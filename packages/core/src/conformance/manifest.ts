@@ -150,6 +150,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // Created by initWorkspaceSchema on every root, so a missing table is a fault.
     alternate_takes: EVERYWHERE,
     exploration_records: EVERYWHERE,
+    exploration_seals: EVERYWHERE,
     swarm_node_records: EVERYWHERE,
     // `traces` and `facet_model_operation_outbox` are gone with the facet class;
     // no DDL creates them, so they are not plane members.
@@ -218,6 +219,11 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     },
     // Agents SDK `ResumableStream` store, created by the chat transport.
     cf_ai_chat_stream_chunks: {
+      'cf-orchestrator': LAZY_ON_FIRST_USE('the chat transport'),
+      'cf-subordinate': LAZY_ON_FIRST_USE('the chat transport'),
+      cli: { absent: 'a local session streams to an in-process client; a redial has nothing to replay from' },
+    },
+    cf_ai_chat_stream_metadata: {
       'cf-orchestrator': LAZY_ON_FIRST_USE('the chat transport'),
       'cf-subordinate': LAZY_ON_FIRST_USE('the chat transport'),
       cli: { absent: 'a local session streams to an in-process client; a redial has nothing to replay from' },
@@ -325,7 +331,8 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': LAZY_ON_FIRST_USE('registerDurableWebhook'),
       cli: { absent: NO_LOCAL_INGRESS },
     },
-    vfs_baseline: EVERYWHERE,
+    vfs_baseline_manifest: EVERYWHERE,
+    vfs_baseline_blob: EVERYWHERE,
     // Container lifecycle announcement dedupe, keyed to the workspace's container.
     sandbox_lifecycle_incidents: {
       'cf-orchestrator': WIRED,

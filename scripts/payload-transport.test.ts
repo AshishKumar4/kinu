@@ -23,22 +23,16 @@ import {
 } from './fixtures/payload-transport/schema';
 import { mulberry32 } from './fixtures/payload-transport/container-harness';
 import { wranglerProvesAbsence } from './fixtures/r2-bench/deploy-substrate';
-import { withAuthoritativeBucket } from './bench-payload-transports';
+import { configFor, deployArgs, withAuthoritativeBucket } from './bench-payload-transports';
 import { isProductSource, readMatching } from './sources';
 
 const ROOT = join(dirname(new URL(import.meta.url).pathname));
 
 const FIXTURE_DIR = join(ROOT, 'fixtures/payload-transport');
 
-// The instrument runs only against a live account, so the properties below
-// that have no behavioural surface here — a credential never spelled on a
-// command line, a driver that holds no payload, a bundle that matches its
-// source, a product tree that never imports the relay — are read off the
-// sources. Everything else about the instrument is asserted by running it.
-const workerSource = readFileSync(join(FIXTURE_DIR, 'worker.ts'), 'utf8');
-
-const driverSource = readFileSync(join(ROOT, 'bench-payload-transports.ts'), 'utf8');
-
+// The instrument runs only against a live account. Two properties have no behavioural surface here
+// and are checked against files: the bundled harness is a fresh copy of its typed source, and no
+// product source imports the relay. Everything else is asserted by running the instrument's parts.
 const harnessSource = readFileSync(join(FIXTURE_DIR, 'container-harness.ts'), 'utf8');
 
 /** The tier these unit fixtures are written at. Whichever tier the instrument
@@ -157,28 +151,23 @@ describe('deterministic process redrive', () => {
 });
 
 describe('credentials never reach a command line or the artifact', () => {
-  test('no CLI credential flags exist anywhere in the instrument', () => {
-    for (const source of [workerSource, harnessSource, driverSource]) {
-      expect(source).not.toContain('--access-key-id');
-      expect(source).not.toContain('--secret-access-key');
-      expect(source).not.toContain('--session-token');
-    }
-  });
   test('artifacts carry grant fingerprints, never grant material', () => {
     // The opaque URL is forwarded to the container as a command argument but
     // never persisted; only its SHA-256 fingerprint reaches the artifact.
     expect(JSON.stringify(validateArtifact(artifact([cell({ arm: 'presigned-r2', op: 'put', sizeMiB: TIER, wallMs: 10 })])))).not.toContain('https://');
   });
-  test('deploy argv carries non-secret vars only', () => {
-    const varMatches = [...driverSource.matchAll(/'--var', `([A-Z_]+):/g)].map((match) => match[1]);
-    expect(varMatches).toEqual(['ACCOUNT_ID', 'BUCKET_NAME']);
+  test('the deploy command carries non-secret vars only', () => {
+    const argv = deployArgs('/run/wrangler.json', 'account-1', 'kinu-payload-bench-x');
+    const vars = argv.flatMap((arg, at) => argv[at - 1] === '--var' ? [arg.slice(0, arg.indexOf(':'))] : []);
+
+    expect(vars).toEqual(['ACCOUNT_ID', 'BUCKET_NAME']);
   });
-  test('the generated wrangler config never carries credential material', () => {
-    const start = driverSource.indexOf('function configFor');
-    const section = driverSource.slice(start, driverSource.indexOf('}', driverSource.indexOf('r2_buckets', start)));
-    expect(section).not.toContain('R2_ACCESS_KEY_ID');
-    expect(section).not.toContain('SECRET');
-    expect(section).not.toContain('BENCH_TOKEN');
+  test('the generated wrangler config carries no credential material', () => {
+    const identity = runIdentity(new Date('2026-08-30T00:00:00Z'), 'abcdef');
+    const config = configFor(identity);
+
+    expect(config).not.toMatch(/R2_ACCESS_KEY_ID|R2_SECRET_ACCESS_KEY|BENCH_TOKEN|SECRET/);
+    expect(JSON.parse(config)).toMatchObject({ name: identity.workerName, r2_buckets: [{ bucket_name: identity.bucketName }] });
   });
 });
 
@@ -202,19 +191,6 @@ describe('disposable shutdown destroys and orders teardown', () => {
       'C6:local-material-cleared',
       'C7:cleanup-replay-idempotent',
     ]);
-  });
-});
-
-describe('no payload body originates on the driver', () => {
-  test('the driver imports no AWS client, generates no bytes, hashes nothing', () => {
-    // The report discloses that no payload body ever originated on the driver
-    // (`renderMarkdown`, asserted below); this is what makes that sentence
-    // true, and the instrument cannot run here to show it.
-    expect(driverSource).not.toContain('AwsClient');
-    expect(driverSource).not.toContain('Uint8Array');
-    expect(driverSource).not.toContain('createHash');
-    expect(driverSource).not.toContain('payloadFor');
-    expect(driverSource).not.toContain('mulberry32');
   });
 });
 

@@ -16,15 +16,18 @@ function bound(options: readonly string[], key: string): number {
 }
 
 describe('the store mount states its own s3fs bounds', () => {
-  test('a first checkpoint seats its base with the command session outside the workspace', async () => {
+  // Deployed run 20260923160413: the reseat failed EBUSY on the idle default shell (D10, D30).
+  test('a first quiesce seats its base though the default session rests on the workspace', async () => {
     const arm = chainBox();
     await arm.box.attachNow();
     await arm.box.writeFile('/workspace/file', 'baseline');
     await arm.box.exec('pwd');
-    expect(arm.container.sessionCwd).toBe('/workspace');
+    expect(arm.container.sessionCwds.get('default')).toBe('/workspace');
+
     expect((await arm.box.checkpointNow('quiesce')).kind).toBe('committed');
     expect(arm.container.layerMounts.size).toBe(1);
-    expect(arm.container.sessionCwd).toBe(DEVBOX_RUNTIME_DIR);
+    expect(arm.container.sequence).toContain(`cd:default:${DEVBOX_RUNTIME_DIR}`);
+    expect(arm.container.sessionCwds.get('default')).toBe('/workspace');
   });
 
   test('a publish mounts the store under connect, silence and retry bounds', async () => {
