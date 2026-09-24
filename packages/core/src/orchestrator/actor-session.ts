@@ -299,10 +299,8 @@ export class ActorSession {
     };
   }
 
-  /** Open a durable assignment against this actor's working revision. The
-   * lease's turn id is the delivery identity, not the actor's name: a re-drive
-   * keeps the admitted task once, even when two assignments have equal text.
-   * Birth context is used only before the conversation's first turn. */
+  /** Open a durable assignment. The lease's turn id is the delivery identity, so a re-drive admits a task once,
+   *  even beside an equal text. Birth context applies only before the first turn. */
   async openDelegatedTurn(lease: ActorTurnLease, input: {
     readonly messages: readonly ModelMessage[];
     readonly birthContext: () => Promise<readonly ModelMessage[]>;
@@ -544,8 +542,8 @@ export class ActorSession {
           case 'error': {
             this.orchestrator.acc.hadError = true;
 
-            // An `error` event is a failure: the scaffold loop pushes it instead of throwing (`scaffold/executor.ts`),
-            // and a claim must not settle `completed` for a turn that produced nothing. First failure wins; an abort is not one.
+            // The scaffold loop pushes an `error` event rather than throwing, so an empty turn never settles `completed`.
+            // First failure wins; an abort is not one.
             if (failure === null
               && !active.abort.signal.aborted
               && event.message !== INTERRUPTED_TURN) {
@@ -597,11 +595,7 @@ export class ActorSession {
     };
   }
 
-  /**
-   * What the turn said, and where its output holds it. Without a final answer (a stopped turn, or a last step that
-   * wrote nothing) that is the last text it streamed, not every step's text run together: each of those is narration,
-   * and the row keeps it where it streamed.
-   */
+  /** What the turn said: its answer, else the last text it streamed. */
   private async saidText(output: readonly MessageReference[], text: string, answer: string | null): Promise<{ readonly text: string; readonly reference: MessagePartReference | null }> {
     const streamed = await this.lastText(output);
     const said = answer === null && streamed !== null ? streamed.text : text;
@@ -609,7 +603,6 @@ export class ActorSession {
     return { text: said, reference: said !== '' && streamed?.text === said ? streamed.reference : null };
   }
 
-  /** The last text the turn's output holds, and where. */
   private async lastText(output: readonly MessageReference[]): Promise<{ readonly reference: MessagePartReference; readonly text: string } | null> {
     for (let index = output.length - 1; index >= 0; index--) {
       const reference = output[index];

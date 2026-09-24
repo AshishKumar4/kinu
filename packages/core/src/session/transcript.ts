@@ -51,7 +51,7 @@ interface StoredUiMessage {
   metadata?: JsonValue;
 }
 
-/** The trailing text parts `answer` is made of, last first: a final step's text and a cut step it continued. */
+/** The trailing text parts `answer` is made of, last first. */
 function answeredTexts(parts: readonly JsonObject[], answer: string): number[] {
   const covered: number[] = [];
   const whole = answer.trim();
@@ -262,7 +262,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return chain.reverse();
   }
 
-  /** What a turn said on its way, oldest first: each text part among `references`. */
+  /** Each text part among `references`, oldest first. */
   async narration(references: readonly ConversationPartReference[]): Promise<string[]> {
     return (await this.parts(references)).flatMap((part) => (part.type === 'text' ? [v.parse(v.string(), part.text)] : []));
   }
@@ -490,11 +490,7 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
       parts: parts.map(part => ({ messageId: input.message.messageId, partNo: part.partNo })) };
   }
 
-  /**
-   * The row keeps every part the turn streamed, in order, so a settled answer reads as it streamed. A recorded
-   * answer takes the place of the trailing texts it is made of, or follows the row when it is made of none (the
-   * answer written for a turn that streamed no text, a head's report); one the turn streamed stays where it is.
-   */
+  /** The row keeps every streamed part in order; a recorded answer replaces the trailing texts it is made of, else follows. */
   async prepareAssistant(input: { readonly id: string; readonly parentId: string; readonly turnId: string; readonly runId: string; readonly parts: readonly MessagePartReference[]; readonly finalText: MessagePartReference | null; readonly metadata?: JsonObject }): Promise<PreparedConversationEntry> {
     const parts = [...input.parts];
     const finalText = input.finalText;

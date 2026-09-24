@@ -210,7 +210,7 @@ export interface OwedTerminalEffectsInput {
   /** Read off the settling turn itself; undefined for a person's message. */
   readonly event: string | undefined;
   readonly assistantText: string;
-  /** Decided before the commit (`ChatSessionPorts.owedReport`); null when the turn owes its caller none. */
+  /** Decided before the commit; null when none is owed. */
   readonly owedReport: OwedReport | null;
   readonly completed: boolean;
   readonly startedAt: number;
@@ -231,7 +231,7 @@ export interface ChatSessionPorts {
   /** Runs after the opening row and run are durable; a throw ends the turn as an error with one `turn-end`. */
   prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn>;
   owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
-  /** A child's host decides the report this ending owes its caller, reading the turn's narration only when that report carries it. */
+  /** The report this ending owes its caller; narration is read only if the report carries it. */
   owedReport?(ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>): Promise<OwedReport | null>;
   /** Asked per call: the bodies close over stores built after this session. */
   terminal(): TerminalTransitions;
@@ -463,11 +463,7 @@ export class ChatSession {
     return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user');
   }
 
-  /**
-   * Send the user's message and resolve where it landed: `'mid-turn'` at a step or `'turn'` once its
-   * turn finished, never guessed at admission. Rejects when it did not land (lease refused, or handed
-   * back by an interrupt). Use {@link admit} for admission only.
-   */
+  /** Send; resolves where it landed (`'mid-turn'` or `'turn'`), never guessed at admission, and rejects if it did not land. */
   async send(input: string | { text: string; files: ReadonlyArray<PromptFile> }, opts: SendOptions): Promise<SendLanding> {
     const landing = Promise.withResolvers<SendLanding>();
 
@@ -981,8 +977,8 @@ export class ChatSession {
       overflowRetry,
     });
 
-    // Exactly once per turn, after the actor enters settling, outside every failure path. A turn whose
-    // answer never reached disk reports `completed: false` so its events are re-queued.
+    // Once per turn, after settling begins, outside every failure path; an answer that never reached disk
+    // reports `completed: false`, so its events re-queue.
     const durable = runError === null && 'committed' in commit;
     const settled = this.actorSession.orchestrator.inbox.settle({ completed: durable });
 

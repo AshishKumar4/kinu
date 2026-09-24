@@ -11,10 +11,7 @@ import type { ChatHistoryEntry } from '../types/chat';
 /** Row id = prefix + producer identity; the primary key is the idempotency mechanism. */
 export const PROGRAMMATIC_MESSAGE_ID_PREFIX = 'programmatic:';
 
-/**
- * Who wrote a turn's words, stamped by the enqueue seam. Defaults to harness so new event kinds never
- * render as the operator's words; only producers carrying real operator text say `operator`.
- */
+/** Who wrote a turn's words, stamped at enqueue. Defaults to harness, so a new event kind never renders as the operator's. */
 export const TURN_AUTHOR_METADATA_KEY = 'kinuAuthor';
 
 export type TurnAuthor = 'harness' | 'operator';
@@ -50,12 +47,7 @@ export function turnAuthor(row: { id?: string; metadata?: unknown }): TurnAuthor
   return row.id?.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX) ? 'harness' : 'operator';
 }
 
-/**
- * The one way to read what a row says: an answer's last text, anything else's text whole. Settlement puts an
- * answer's recorded text last (`prepareAssistant`) and keeps each step's narration where it streamed, so a reader that
- * joined an answer's texts would read every step's narration run into it. Projections, pages, drains and
- * announcements read it through `project`; a client holding a message's parts calls it directly.
- */
+/** What a row says: an answer's last text (its earlier texts are narration), anything else's text whole. */
 export function rowText(row: { readonly role: string; readonly parts: readonly { readonly type?: unknown; readonly text?: unknown }[] }): string {
   const texts = row.parts.flatMap((part) => part.type === 'text' ? [v.parse(v.string(), part.text)] : []);
 

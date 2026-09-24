@@ -1538,9 +1538,9 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /**
    * The agent tab: a socket on the hired actor's own chat path (not a facet hop via the SDK
-   * `sub` option, which this transport refuses), then `getActorSnapshot` and `listAgentTasks`.
+   * `sub` option, which this transport refuses), then `getActorSnapshot` and its own `listBackgroundJobs`.
    */
-  async hostedActorTab(): Promise<{ name: string; snapshot: string; tasks: string; frames: number }> {
+  async hostedActorTab(): Promise<{ name: string; snapshot: string; jobs: string; frames: number }> {
     const { target, workspace } = await this.claimQueueWorkspace('twin');
     const created = v.parse(v.object({ name: v.string() }), await target.createSubordinateAgent());
     const path = `https://probe/agents/orchestrator-agent/${workspace}/${hostedActorSocketPath(created.name)}`;
@@ -1571,13 +1571,13 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     try {
       socket.send(JSON.stringify({ type: 'rpc', id: 'tab-snapshot', method: 'getActorSnapshot', args: [created.name] }));
-      socket.send(JSON.stringify({ type: 'rpc', id: 'tab-tasks', method: 'listAgentTasks', args: [] }));
+      socket.send(JSON.stringify({ type: 'rpc', id: 'tab-jobs', method: 'listBackgroundJobs', args: [50, created.name] }));
       await arrived.promise;
 
       return {
         name: created.name,
         snapshot: answers.get('tab-snapshot') ?? '',
-        tasks: answers.get('tab-tasks') ?? '',
+        jobs: answers.get('tab-jobs') ?? '',
         frames,
       };
     } finally {

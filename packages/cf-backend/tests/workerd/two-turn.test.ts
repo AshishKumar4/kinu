@@ -285,7 +285,7 @@ describe('two real turns over the HTTP model seam', () => {
     expect(out.alive).toBe(true);
   });
 
-  it('the agent tab: a hired actor answers getActorSnapshot and listAgentTasks on its own path', async () => {
+  it('the agent tab: a hired actor answers getActorSnapshot and its own listBackgroundJobs on its own path', async () => {
     // The object serves the actor under its own segment (a facet hop is refused); these are the
     // tab's two mount reads over that socket.
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('agent-tab-driver'));
@@ -298,7 +298,7 @@ describe('two real turns over the HTTP model seam', () => {
     }), JSON.parse(out.snapshot));
 
     expect(snapshot).toEqual({ name: out.name, role: 'task', mission: '', pendingSteers: [] });
-    expect(v.parse(v.array(v.unknown()), JSON.parse(out.tasks))).toEqual([]);
+    expect(v.parse(v.array(v.unknown()), JSON.parse(out.jobs))).toEqual([]);
     expect(out.frames).toBeGreaterThanOrEqual(2);
   });
 

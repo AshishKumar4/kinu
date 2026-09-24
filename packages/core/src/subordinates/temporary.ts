@@ -1,7 +1,6 @@
 /**
- * Task-lifetime agents: a full child run inside the calling tool call, answered as the tool
- * result, then released. Same {@link SubordinateRuntime} and roster as a durable hire.
- * The in-memory waiter is only a fast path; without it the report stays a `subordinate_report` event.
+ * Task-lifetime agents: a full child run inside the calling tool call, answered as its result, then released, on a
+ * durable hire's runtime and roster. The in-memory waiter is a fast path; the report is a `subordinate_report` event.
  */
 
 import type { SubordinateReportStatus } from '../events/hub/types';
@@ -73,16 +72,13 @@ export function taskTurnEnding(completed: boolean, interrupted: boolean): TaskTu
   return interrupted ? 'interrupted' : 'errored';
 }
 
-/**
- * The one report a task child owes its caller, for every way a turn can end: always exactly
- * once, `completed` for an answer, `blocked` for any non-answer. Null for a durable child.
- */
+/** A task child's one report per ending: `completed` for an answer, else `blocked`; null for a durable child. */
 export async function terminalTaskReport(input: {
   readonly lifetime: SubordinateLifetime;
   readonly ending: TaskTurnEnding;
   /** The child's own closing words, when it had any. */
   readonly assistantText: string;
-  /** Each step's own words, oldest first (`SessionTranscriptReader.narration`); read only for a task that did not answer. */
+  /** Each step's words, oldest first; read only for a task that did not answer. */
   readonly narration: () => Promise<readonly string[]>;
 }): Promise<OwedReport | null> {
   if (input.lifetime !== TEMPORARY_LIFETIME) return null;
@@ -95,7 +91,7 @@ export async function terminalTaskReport(input: {
       : { status: 'blocked', content: TASK_ENDING_REPORT.silent };
   }
 
-  // A turn that stops or fails often found something on the way: each step's words, apart, and a repeat only once.
+  // A stopped or failed turn often found something on the way.
   const said: string[] = [];
 
   for (const step of await input.narration()) {
@@ -144,10 +140,7 @@ function renderTemporaryTaskBrief(input: {
   return parts.join('\n\n');
 }
 
-/**
- * Task-lifetime policy over the shared roster and child substrate. Adds only the in-memory
- * waiter; never stores the answer (the child's transcript and the report event hold it).
- */
+/** Task-lifetime policy over the shared roster: it adds only the in-memory waiter and never stores the answer. */
 export function createTemporaryAgentPort(deps: {
   roster: SubordinateRosterStore;
   runtime: SubordinateRuntime;

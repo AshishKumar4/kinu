@@ -1,7 +1,6 @@
 /**
- * Remote-RPC policy shared by client and server: each workspace method and the credential it needs. A CLI call
- * off the table does not compile. An unlisted method is unreachable over HTTP (`/api/cli/workspaces/:name/rpc`)
- * and session-only over WebSocket, where a scoped `pta_…` socket reaches only its scope's rows.
+ * Remote-RPC policy shared by client and server: each workspace method and the credential it needs. An unlisted
+ * method is unreachable over HTTP and session-only over WebSocket, where a `pta_…` socket reaches only its scope.
  */
 import * as v from 'valibot';
 import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from './access-tokens';
