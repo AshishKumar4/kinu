@@ -275,11 +275,12 @@ a49c1edfa hid both changes.
 
 C3. The deployed product carries one eval-only surface that ends a workspace
 object's activation: `POST /api/workspaces/<name>/eval/abort`. It answers only
-the eval-service identity (`DEV_USER_EMAIL` + `DEV_IDENTITY_SECRET`,
-`provider: 'dev'` after `authenticateRequest`) and returns 404 to every other
-caller. It calls `OrchestratorAgent.evalAbortActivation`, which is
-`ctx.abort` and nothing else, sealed in `rpc-surface.ts` as stub-reachable
-from the Worker and never `@callable`. It exists because continuing a
+the eval-service identity and its eval accounts (`DEV_USER_EMAIL` +
+`DEV_IDENTITY_SECRET`, `provider: 'dev'` after `authenticateRequest`) and
+returns 404 to every other caller. It calls
+`OrchestratorAgent.evalAbortActivation`, which is `ctx.abort` and nothing
+else, sealed in `rpc-surface.ts` as stub-reachable from the Worker and never
+`@callable`. It exists because continuing a
 multi-step turn across activations is a property of the deployed build that
 nothing else can force: every callable, the control plane and the CLI gate
 cancel a turn or delete a workspace, `abortAllDurableObjects` belongs to the

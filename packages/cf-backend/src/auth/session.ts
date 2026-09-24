@@ -1,6 +1,9 @@
 // Cookies are opaque HttpOnly session handles; KV stores only their hashes.
 
-import { DEV_IDENTITY_HEADER, DEVICE_CONNECT_PATH, timingSafeEqual } from '@kinu.run/core';
+import * as v from 'valibot';
+import {
+  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, DEVICE_CONNECT_PATH, EVAL_ACCOUNTS, timingSafeEqual,
+} from '@kinu.run/core';
 import {
   SessionAuthorityUnavailableError, deriveUserId, verifySession,
   type AuthStoreEnv, type SessionAuthority,
@@ -154,13 +157,9 @@ export async function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>
         && timingSafeEqual(presented, env.DEV_IDENTITY_SECRET));
 
     if (held) {
-      return {
-        userId: await deriveUserId(env.DEV_USER_EMAIL),
-        email: env.DEV_USER_EMAIL,
-        sub: 'dev',
-        provider: 'dev',
-        authTime: Date.now(),
-      };
+      const email = evalAccountEmail(env.DEV_USER_EMAIL, request.headers.get(DEV_IDENTITY_ACCOUNT_HEADER));
+
+      return { userId: await deriveUserId(email), email, sub: 'dev', provider: 'dev', authTime: Date.now() };
     }
   }
 
@@ -169,6 +168,20 @@ export async function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>
   }
 
   throw new AuthError(401, 'No Kinu session in request');
+}
+
+/** The dev identity's own address, or for a named eval account (`DEV_IDENTITY_ACCOUNT_HEADER`) its plus-address
+ *  (`eval@x` → `eval+devices@x`): another user, so what that account holds never reaches the dev identity's
+ *  workspaces. `devices` holds the machines the first-run tier attaches, apart from the account every tier's
+ *  agent turns run on, whose device runtime would otherwise offer them. */
+function evalAccountEmail(email: string, account: string | null): string {
+  if (account === null) return email;
+  const named = v.safeParse(v.picklist(EVAL_ACCOUNTS), account);
+
+  if (!named.success) throw new AuthError(400, `Unknown eval account "${account}": one of ${EVAL_ACCOUNTS.join(', ')}`);
+  const at = email.lastIndexOf('@');
+
+  return `${email.slice(0, at)}+${named.output}${email.slice(at)}`;
 }
 
 function assertSessionBindings<Id>(env: AuthEnv<Id>): asserts env is AuthEnv<Id> & AuthStoreEnv<Id> {
