@@ -1,7 +1,6 @@
 /**
  * Workspace fork wire. One RPC argument is capped at 32 MiB (`do.facet.rpc_bytes`), so a fork crosses as
- * bounded frames (`begin`, row batches, tree entries, file ranges, `commit`); nothing is visible on the target until `commit`.
- * The cursor lives in the target's `ForkStagingState` row so an interrupted transfer resumes across DO activations.
+ * bounded frames; nothing is visible on the target until `commit`.
  */
 
 import * as v from 'valibot';
@@ -48,7 +47,7 @@ import { ForkTargetWriter, type ForkResult } from './fork-writer';
 import type { ForkStaging, ForkStagingState } from './fork-staging';
 
 /** Fork transfer protocol version; a receiver refuses one it does not implement. Bump when an older
- *  receiver would misread the frame union. v3 carries the workspace tree. */
+ *  receiver would misread the frame union. */
 export const FORK_TRANSFER_VERSION = 3;
 
 /** Payload bytes per frame: a quarter of `do.facet.rpc_bytes`, leaving headroom for clone metadata and envelope. */
@@ -206,7 +205,7 @@ export function foldForkStream(previous: string, digest: string): string {
   return sha256Hex(`${previous}${digest}`);
 }
 
-/** Opened once per transfer, then read synchronously, so the files are one snapshot. */
+/** Opened once per transfer. */
 export interface ForkFileSource {
   open(): Promise<ForkTreeReader>;
 }

@@ -42,7 +42,6 @@ export async function writeWorkspaceSoul(
   kernel.chmod(soul, 0o444);
 }
 
-/** Range writes are staging-only; ordinary callers must not get raw range-write authority. */
 function workspaceForkPort(bundle: WorkspaceBundle): ForkNativeFilePort {
   // A fork lands on an empty tree, so staging creates parents first.
   const ensureParent = async (path: string): Promise<void> => {

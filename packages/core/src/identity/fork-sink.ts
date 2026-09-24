@@ -1,7 +1,4 @@
-/**
- * Workspace fork staged file plan: where streamed byte ranges land before a file exists.
- * Frames arrive across several DO activations, so a plan adopts an interrupted predecessor's staging.
- */
+/** Workspace fork staged file plan: where streamed byte ranges land before a file exists. */
 
 import { createHash } from 'node:crypto';
 import { FORK_FRAME_BYTES, type ForkWireEntry } from './fork-transfer';
@@ -41,7 +38,6 @@ export interface ForkProtectedPublisher {
   publish(targetPath: string, bytes: Uint8Array): Promise<ForkFileCommit>;
 }
 
-/** Fork-specific staged file port; deliberately not VFS. */
 export interface ForkFileSink {
   /** Open `path` for staging. `staged` is bytes the target already holds; a sink adopts
      *  that staging so a fork evicted mid-file continues from the next byte. */

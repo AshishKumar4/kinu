@@ -1,8 +1,4 @@
-/**
- * The fork's lineage row and the files a fork inherits. The copy itself streams: fork-transfer.ts reads the
- * source into bounded frames and fork-writer.ts lands them, since source and target may be different DOs
- * with no cross-DO SQL and one RPC argument is capped (`do.facet.rpc_bytes`). Spec: docs/WORKSPACES.md.
- */
+/** The fork's lineage row and the files a fork inherits, which fork-transfer.ts streams. Spec: docs/WORKSPACES.md. */
 
 import { KinuError } from '../obs/error';
 import { isSystemManaged } from '../vfs/workspace-path';
@@ -75,7 +71,7 @@ export interface ForkSnapshot {
 /** Re-bootstrapped at v0 in the fork. */
 const NOT_CARRIED_AT_ROOT: ReadonlySet<string> = new Set(['scaffold']);
 
-/** SOUL.md, what the Files tab shows (minus the scaffold), and the conversation's payload files, in one synchronous walk. */
+/** What the Files tab shows, minus the scaffold, in one synchronous walk. */
 export function snapshotForkFiles(
   tree: ForkTreeReader, artifacts: readonly { relative: string; path: string }[],
 ): ForkSnapshot {

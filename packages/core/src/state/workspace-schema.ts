@@ -113,7 +113,6 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
     UNIQUE (invocation_id, attempt)
   )`);
   initSlateStateTable(execRaw);
-  // Each slate file as its last capture or restore saw it (`slates/files.ts`).
   execRaw(`CREATE TABLE IF NOT EXISTS slate_file_manifest (
     slate_id    TEXT NOT NULL,
     path        TEXT NOT NULL,
