@@ -4,7 +4,6 @@
  * Continuous so a search has partial reward to climb; no LLM judge, since verifiers get only a shell.
  */
 import * as v from 'valibot';
-import { OUTPUT_LIMIT_REACHED } from '@kinu.run/core';
 import type { ExecOutcome, VFS } from '@kinu.run/core';
 import type { EvalScoreRow } from './eval-run';
 
@@ -125,55 +124,4 @@ export function ratioOutcome(
 /** Is this row a covariate? Total: everything but `task_outcome` is, so new scorers need no registration. */
 export function isCovariateRow(name: string): boolean {
   return name !== TASK_OUTCOME;
-}
-
-/** The `tool_outcomes` scorer's error rate, read off the scored row so there is one denominator. Null when unmeasured. */
-export function measuredToolErrorRate(rows: readonly EvalScoreRow[]): number | null {
-  // Scorer literal owned by `toolOutcomes.name` in agent-evals.ts; not imported, like the judge panel.
-  const row = rows.find((candidate) => candidate.name === 'tool_outcomes');
-
-  if (row === undefined || row.eligible === 0 || row.rate === null) return null;
-
-  return 1 - row.rate;
-}
-
-/** The output-cap covariate's row name; truncation explains an outcome, it is never the outcome. */
-export const OUTPUT_CAP = 'output_cap';
-
-/**
- * Whether the provider ended this episode's last step at its output limit. Anthropic's cost guidance: a
- * 16,384-token cap ended 15% of one model's attempts and 43% of another's, so the share of capped attempts
- * is the number to report. A capped attempt counts as a failure but is a row, not a throw, to keep the
- * denominator. Only the last step counts (turn loops continue once after a cut); a null `reason` is
- * `eligible: 0`. Compares the normalized {@link OUTPUT_LIMIT_REACHED}, never provider strings.
- */
-export function outputCapRow(reason: string | null): EvalScoreRow {
-  const asserts = 'the provider did not end the episode at its output limit';
-
-  if (reason === null) {
-    return {
-      name: OUTPUT_CAP,
-      asserts,
-      eligible: 0,
-      passed: 0,
-      rate: null,
-      detail: 'UNMEASURED — the episode closed no step, so it has no last finish reason to read',
-    };
-  }
-
-  const capped = reason === OUTPUT_LIMIT_REACHED;
-
-  return {
-    name: OUTPUT_CAP,
-    asserts,
-    eligible: 1,
-    passed: capped ? 0 : 1,
-    rate: capped ? 0 : 1,
-    detail: capped
-      ? `CUT AT THE OUTPUT LIMIT — the last step finished '${OUTPUT_LIMIT_REACHED}', so the `
-        + 'answer this episode is graded on is the part the provider allowed rather than the '
-        + 'part the model had. Read it as the request bounding the attempt, never as the agent '
-        + 'choosing to stop'
-      : `ok — the last step finished '${reason}', which is the model ending its own answer`,
-  };
 }

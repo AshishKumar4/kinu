@@ -22,31 +22,20 @@
  *                 and every refusal names the command or variable that would
  *                 make the run happen. A skip that says nothing is the false
  *                 green the tier was rebuilt to remove.
- *   ledger        events fetched over the public route score through the SAME
- *                 seven instruments a local episode scores through, with the
- *                 same denominators. A second scoring path would make a cloud
- *                 number incomparable with a local one, silently.
  */
 import { describe, expect, test } from 'bun:test';
-import type { ServerWebSocket } from 'bun';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import type { Server, ServerWebSocket } from 'bun';
 import * as v from 'valibot';
 
-import {
-  BEHAVIOUR_SCORERS, EPISODE_TRANSCRIPT_FILES, EVIDENCE_GRACE_MS, handClock, ledgerTotalsFromEvents,
-  projectRunEventProvenance, retainEpisodeTranscript, scratchDir, TASK_OUTCOME, withEpisodeEvidence,
-  liveModelSpend, resetLiveModelSpend,
-} from '@kinu.run/test-utils';
-import { REAL_CLOCK, renderSoulMarkdown, RunEventSchema, type RunEvent, type WorkspaceSpend, type JsonValue } from '../../packages/core/src/index';
+import { renderSoulMarkdown, type RunEvent, type JsonValue } from '../../packages/core/src/index';
 import {
   PUBLIC_IDENTITY_ENV, decodeFrame, encodeChatRequest, encodeRpcRequest,
-  recordPublicTurn, resolvePublicSessionPlan, resolveWebIdentity, scorePublicLedger,
+  recordPublicTurn, resolvePublicSessionPlan, resolveWebIdentity,
   type PublicTurnRecorder,
   KinuPublicSession, openPublicSession,
 } from './session';
 import {
-  BROADCAST_FRAME, DEGENERATE_EVENTS, FILE_TURN_CHUNKS, FIXTURE_REQUEST_ID, LEDGER_EVENTS,
+  BROADCAST_FRAME, FILE_TURN_CHUNKS, FIXTURE_REQUEST_ID,
   RECOVERY_TURN_CHUNKS, chatErrorFrame, chatTerminalFrame, chatTurnFrames, rpcReplyFrame,
   streamResumingFrame,
 } from './fixtures/session-frames';
@@ -116,18 +105,20 @@ function answerRpcs(answer: (request: v.InferOutput<typeof RpcRequestFrameSchema
   };
 }
 
+/** A fixture deployment's HTTP half: teardown's DELETE is answered, the socket upgrades, and nothing else is served. */
+function socketOnly(request: Request, server: Server<undefined>): Response | undefined {
+  if (request.method === 'DELETE') return Response.json({ ok: true });
+
+  if (server.upgrade(request)) return;
+
+  return new Response('not found', { status: 404 });
+}
+
 test('executor RPC decoding preserves refusal provenance and successful refusal-shaped stdout', async () => {
   let response: JsonValue = { stdout: 'failed', stderr: 'remote error', exitCode: 1,
     refusal: { reason: 'io', error: 'remote error', execution: { exitCode: 7 } } };
 
-  const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
-    fetch(request, upgrading) {
-      if (request.method === 'DELETE') return Response.json({ ok: true });
-
-      if (upgrading.upgrade(request)) return;
-
-      return new Response('not found', { status: 404 });
-    },
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: socketOnly,
     websocket: { message: answerRpcs(() => response) },
   });
 
@@ -584,395 +575,6 @@ describe('the browser plane names its own credential', () => {
   });
 });
 
-/** `collection.json` as a reader must be able to read it back: one row per
- *  channel, the status, and the reason a channel that did not land carries. */
-const CollectionSchema = v.array(v.object({
-  channel: v.string(), status: v.string(), reason: v.optional(v.string()),
-}));
-
-describe('route-shaped run events score through the production instruments', () => {
-  test('the ledger reduction reads the deployment\'s own events', () => {
-    const totals = ledgerTotalsFromEvents(LEDGER_EVENTS);
-    expect(totals.turns).toBe(2);
-    expect(totals.toolCalls).toBe(4);
-    expect(totals.steps).toBe(2);
-    expect(totals.tokensIn).toBe(2_700);
-    expect(totals.toolNames).toEqual(['file', 'shell', 'file', 'shell']);
-  });
-
-  test('every instrument scores, and the failing tool call is counted as one', () => {
-    const rows = scorePublicLedger(LEDGER_EVENTS);
-    const byName = new Map(rows.map((row) => [row.name, row]));
-    // Every declared scorer, over one store: this is the assertion that the
-    // bridge did not quietly narrow the panel.
-    expect(rows.map((row) => row.name).sort()).toEqual(BEHAVIOUR_SCORERS.map((scorer) => scorer.name).sort());
-    // The process exit is producer evidence, not a pattern in rendered output.
-    const outcomes = byName.get('tool_outcomes');
-    expect(outcomes?.eligible).toBe(4);
-    expect(outcomes?.passed).toBe(3);
-    expect(outcomes?.measured).toEqual({ succeeded: 3, failed: 1, unmeasured: 0, refused: 0, workFailed: 1, runtimeAbsent: 0, broke: 0 });
-    // `edit_landing` reports attempts against applied, so its rate is below 1
-    // here rather than a vacuous 1/1.
-    expect(byName.get('edit_landing')?.eligible).toBe(2);
-    expect(byName.get('edit_landing')?.passed).toBe(1);
-    // `completion_honesty` INVERTS: an unconverted gate is the honest ending.
-    expect(byName.get('completion_honesty')?.eligible).toBe(1);
-    expect(byName.get('completion_honesty')?.passed).toBe(1);
-    // A mechanism this trajectory never exercised reports ABSENT, never zero:
-    // `0/0` is a fact about the task and `0/7` is a fact about the agent.
-    expect(byName.get('craft_reuse')?.eligible).toBe(0);
-    expect(byName.get('craft_reuse')?.rate).toBeNull();
-    // And the outcome row is NOT one of these: the primary metric is the suite's
-    // own verdict over the workspace, not a covariate off the ledger.
-    expect(byName.has(TASK_OUTCOME)).toBe(false);
-  });
-
-  test('a degenerate trajectory reduces to nothing gradable', () => {
-    // The precondition the suite refuses on. Scoring is still well-defined —
-    // every instrument reports an absent denominator — which is why the REFUSAL
-    // has to be a separate decision rather than something a zero score implies.
-    const totals = ledgerTotalsFromEvents(DEGENERATE_EVENTS);
-    expect(totals.turns).toBe(1);
-    expect(totals.toolCalls).toBe(0);
-
-    for (const row of scorePublicLedger(DEGENERATE_EVENTS)) {
-      expect(row.eligible).toBe(0);
-      expect(row.rate).toBeNull();
-    }
-  });
-
-  test('an empty ledger scores nothing rather than throwing', () => {
-    // A workspace whose turn never closed answers the route with an empty array,
-    // and a bridge that threw on it would report a harness fault where the
-    // finding is "the turn wrote no row".
-    for (const row of scorePublicLedger([])) expect(row.eligible).toBe(0);
-  });
-
-  test('the record\'s provenance is the ledger\'s shape with every payload stripped', () => {
-    // Fed in REVERSE so the ordering is proven rather than inherited from the
-    // fixture: a projection that kept route order would publish a trail whose
-    // "later call of the same tool ran clean" reads backwards.
-    const provenance = projectRunEventProvenance([...LEDGER_EVENTS].reverse());
-    expect(provenance.totalEvents).toBe(LEDGER_EVENTS.length);
-    expect(provenance.events.map((event) => event.eventIndex))
-      .toEqual(LEDGER_EVENTS.map((event) => event.eventIndex));
-    // The failing `shell` keeps its CLASS and its name; the clean one keeps no class.
-    const calls = provenance.events.filter((event) => event.type === 'tool_call_end');
-    expect(calls.map((event) => event.name)).toEqual(['file', 'shell', 'file', 'shell']);
-    expect(calls.map((event) => event.failureClass ?? null)).toEqual([null, 'exit_1', null, null]);
-    expect(calls.map((event) => event.durationMs)).toEqual([12, 900, 20, 850]);
-    expect(calls[1]?.outcome).toEqual({ success: false, reason: null, execution: { exitCode: 1 } });
-    // Nothing that was SAID survives: not the command, not the result text.
-    const serialized = JSON.stringify(provenance);
-    expect(serialized).not.toContain('bun test broken.test.ts');
-    expect(serialized).not.toContain('1 fail');
-    expect(serialized).not.toContain('args');
-  });
-
-  test('the bound clips the slice and says so, never the count', () => {
-    const long = Array.from({ length: 1_203 }, (_, index): RunEvent => ({
-      type: 'step_finish', runId: 'run-9', eventIndex: index, timestamp: '2026-08-30T12:00:00.000Z', stepIndex: index,
-      reason: 'tool-calls',
-    }));
-
-    const provenance = projectRunEventProvenance(long);
-    expect(provenance.totalEvents).toBe(1_203);
-    expect(provenance.events).toHaveLength(provenance.bound);
-    expect(provenance.events.at(-1)?.eventIndex).toBe(provenance.bound - 1);
-  });
-
-  test('a retained episode is readable back as the ledger, the transcript and the verdicts', () => {
-    const root = scratchDir('public-session-retention');
-    const history = [{ role: 'user', text: 'write it' }, { role: 'assistant', text: 'DONE' }];
-    const subgoals = [{ what: 'artifact', reached: false, detail: 'the file was empty' }];
-
-    const dir = retainEpisodeTranscript(root, 'public-file-artifact', {
-      events: LEDGER_EVENTS, history, subgoals,
-    });
-
-    expect(dir).toBe(join(root, 'public-file-artifact'));
-    // ONE EVENT A LINE, every one the canonical union: a clipped or concatenated
-    // read is still a parse of what was written, and a foreign shape fails here
-    // rather than in a reader a month later.
-    const lines = readFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.events), 'utf8').trimEnd().split('\n');
-    expect(lines).toHaveLength(LEDGER_EVENTS.length);
-    const events = lines.map((line) => v.parse(RunEventSchema, JSON.parse(line)));
-    expect(ledgerTotalsFromEvents(events)).toEqual({
-      turns: 2, toolCalls: 4, toolNames: ['file', 'shell', 'file', 'shell'],
-      tokensIn: 2700, tokensOut: 520, reasoningOut: 0, steps: 2, failures: ['shell: exit_1'],
-    });
-    expect(JSON.parse(readFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.history), 'utf8'))).toEqual(history);
-    expect(JSON.parse(readFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.subgoals), 'utf8'))).toEqual(subgoals);
-    // An episode with no events leaves an EMPTY file, not a file holding one
-    // blank line that a reader would parse as a malformed event.
-    const empty = retainEpisodeTranscript(root, 'no-events', { events: [], history: [], subgoals: [] });
-    expect(existsSync(join(empty, EPISODE_TRANSCRIPT_FILES.events))).toBe(true);
-    expect(readFileSync(join(empty, EPISODE_TRANSCRIPT_FILES.events), 'utf8')).toBe('');
-  });
-
-  test('an operation failure still retains its ledger and spend exactly once', async () => {
-    resetLiveModelSpend();
-    const root = scratchDir('failed-episode-evidence');
-
-    const spend: WorkspaceSpend = {
-      total: {
-        calls: 8, callsWithoutUsage: 0, unpricedCalls: 8, floorPricedCalls: 0,
-        usage: { input: 234433, output: 29531 },
-      },
-      producers: [], missions: [], offTurnShare: null,
-      coverage: { calls: 8, measured: 8, reported: 1, silent: [], partial: [] },
-    };
-
-    const reader = {
-      async runEvents() { return LEDGER_EVENTS; },
-      async history() { return [{ role: 'assistant', text: 'partial answer' }]; },
-      async spend() { return spend; },
-    };
-
-    try {
-      await expect(withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'failure', modelCalls: 'expected', clock: REAL_CLOCK }, async () => {
-        throw new Error('failed after model work');
-      })).rejects.toThrow('failed after model work');
-      expect(liveModelSpend().calls).toBe(8);
-      expect(JSON.parse(readFileSync(join(root, 'failure/spend.json'), 'utf8'))).toEqual(spend);
-      const events = readFileSync(join(root, 'failure/events.jsonl'), 'utf8').split('\n').map((line) => v.parse(RunEventSchema, JSON.parse(line)));
-      expect(ledgerTotalsFromEvents(events).turns).toBe(2);
-      expect(readFileSync(join(root, 'failure/failure.json'), 'utf8')).toContain('failed after model work');
-
-      resetLiveModelSpend();
-      await expect(withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'assertion', modelCalls: 'expected', clock: REAL_CLOCK }, async (_reader, collect) => {
-        await collect();
-        throw new Error('subgoal missed');
-      })).rejects.toThrow('subgoal missed');
-      expect(liveModelSpend().calls).toBe(8);
-
-      resetLiveModelSpend();
-      await expect(withEpisodeEvidence(async () => ({ ...reader, async spend() { throw new Error('spend endpoint unavailable'); } }),
-        { transcripts: root, taskId: 'outage', modelCalls: 'expected', clock: REAL_CLOCK }, async () => 'finished')).rejects.toThrow('spend endpoint unavailable');
-      expect(liveModelSpend().episodesUnmeasured).toBe(1);
-      expect(readFileSync(join(root, 'outage/history.json'), 'utf8')).toContain('partial answer');
-      expect(JSON.parse(readFileSync(join(root, 'outage/collection.json'), 'utf8'))).toContainEqual({
-        channel: 'spend', status: 'failed', reason: 'spend endpoint unavailable',
-      });
-    } finally {
-      resetLiveModelSpend();
-    }
-  });
-
-  test('a spent episode budget tells the operation, retains the evidence as found, and fails on the budget', async () => {
-    resetLiveModelSpend();
-    const root = scratchDir('budget-evidence');
-
-    const spend: WorkspaceSpend = {
-      total: { calls: 3, callsWithoutUsage: 0, unpricedCalls: 3, floorPricedCalls: 0, usage: { input: 10, output: 5 } },
-      producers: [], missions: [], offTurnShare: null,
-      coverage: { calls: 3, measured: 3, reported: 1, silent: [], partial: [] },
-    };
-
-    const reader = {
-      async runEvents() { return LEDGER_EVENTS; },
-      async history() { return [{ role: 'assistant', text: 'still waiting' }]; },
-      async spend() { return spend; },
-    };
-
-    try {
-      // The operation is a wait the product never ends; the budget is the
-      // subject's own configuration, and the operation stops on its signal.
-      // The budget runs on a clock the test hands it, so "the budget was
-      // spent" is the advance below, never a sleep racing a real timer.
-      let told = false;
-      const clock = handClock();
-
-      const episode = withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'budget', modelCalls: 'expected', clock, budgetMs: 20 },
-        async (_reader, _collect, budget) => {
-          await new Promise<void>((resolve) => { budget.addEventListener('abort', () => resolve(), { once: true }); });
-          told = true;
-
-          return 'never';
-        });
-
-      await clock.whenArmed(1);
-      clock.advance(20);
-      await expect(episode).rejects.toThrow('the episode budget of 20 ms was spent');
-      expect(told).toBe(true);
-      expect(JSON.parse(readFileSync(join(root, 'budget/failure.json'), 'utf8'))).toMatchObject({ phase: 'budget' });
-      expect(readFileSync(join(root, 'budget/history.json'), 'utf8')).toContain('still waiting');
-      expect(readFileSync(join(root, 'budget/events.jsonl'), 'utf8').split('\n')).toHaveLength(LEDGER_EVENTS.length);
-      expect(JSON.parse(readFileSync(join(root, 'budget/spend.json'), 'utf8'))).toEqual(spend);
-    } finally {
-      resetLiveModelSpend();
-    }
-  });
-
-  test('a spent budget names what the turn was waiting on, off its own ledger', async () => {
-    resetLiveModelSpend();
-    const root = scratchDir('budget-waited-on');
-
-    // A turn held by the model provider: rate-limited twice and not yet ended
-    // when the case's budget ran out. The verdict names that, rather than only
-    // that time ran out.
-    const ledger: readonly RunEvent[] = [
-      { eventIndex: 0, runId: 'run-held', type: 'run_start', timestamp: '2026-09-23T14:16:15.415Z', agentId: 'orchestrator' },
-      { eventIndex: 1, runId: 'run-held', type: 'provider_wait', timestamp: '2026-09-23T14:16:17.341Z',
-        provider: 'workers-ai', waitMs: 1983, attempt: 1, status: 429, source: 'backoff' },
-      { eventIndex: 2, runId: 'run-held', type: 'provider_wait', timestamp: '2026-09-23T14:16:21.000Z',
-        provider: 'workers-ai', waitMs: 4017, attempt: 2, status: 429, source: 'backoff' },
-    ];
-
-    const reader = {
-      async runEvents() { return ledger; },
-      async history() { return []; },
-      async spend(): Promise<WorkspaceSpend> {
-        return {
-          total: { calls: 1, callsWithoutUsage: 0, unpricedCalls: 1, floorPricedCalls: 0, usage: { input: 1, output: 1 } },
-          producers: [], missions: [], offTurnShare: null,
-          coverage: { calls: 1, measured: 1, reported: 1, silent: [], partial: [] },
-        };
-      },
-    };
-
-    try {
-      const clock = handClock();
-
-      const episode = withEpisodeEvidence(async () => reader,
-        { transcripts: root, taskId: 'held', modelCalls: 'expected', clock, budgetMs: 20 },
-        async (_reader, _collect, budget) => {
-          const stopped = Promise.withResolvers<void>();
-
-          budget.addEventListener('abort', () => { stopped.resolve(); }, { once: true });
-          await stopped.promise;
-
-          return 'never';
-        });
-
-      await clock.whenArmed(1);
-      clock.advance(20);
-
-      const [outcome] = await Promise.allSettled([episode]);
-      const failure = outcome?.status === 'rejected' ? v.parse(v.instance(Error), outcome.reason).message : 'the episode ended';
-
-      for (const fact of ['provider_wait', 'had not ended', '2 provider wait(s) on workers-ai', '429', '6.0 s']) {
-        expect(failure).toContain(fact);
-      }
-
-      expect(JSON.parse(readFileSync(join(root, 'held/failure.json'), 'utf8'))).toEqual({ name: 'Error', message: failure, phase: 'budget' });
-    } finally {
-      resetLiveModelSpend();
-    }
-  });
-
-  test('a ledger the wedged product never answers ends at the grace, keeping what did answer', async () => {
-    resetLiveModelSpend();
-    const root = scratchDir('wedged-episode-evidence');
-
-    const spend: WorkspaceSpend = {
-      total: { calls: 3, callsWithoutUsage: 0, unpricedCalls: 3, floorPricedCalls: 0, usage: { input: 10, output: 5 } },
-      producers: [], missions: [], offTurnShare: null,
-      coverage: { calls: 3, measured: 3, reported: 1, silent: [], partial: [] },
-    };
-
-    // THE WEDGED SHAPE, as the deployed build answered it: the Durable Object
-    // holds the turn it never closed, so the run-event route never answers
-    // while the two routes served elsewhere still do. Before the read had an
-    // end of its own this episode never settled at all — the budget fired,
-    // the operation stopped, and the collection it was waiting on stayed
-    // pending until the runner killed the process with no verdict.
-    const reader = {
-      runEvents(): Promise<readonly RunEvent[]> { return new Promise<readonly RunEvent[]>(() => undefined); },
-      async history() { return [{ role: 'assistant', text: 'still waiting' }]; },
-      async spend() { return spend; },
-    };
-
-    try {
-      const clock = handClock();
-
-      const episode = withEpisodeEvidence(async () => reader,
-        { transcripts: root, taskId: 'wedged', modelCalls: 'expected', clock, budgetMs: 20 },
-        async (_reader, collect) => collect());
-
-      await clock.whenArmed(2);
-      clock.advance(20 + EVIDENCE_GRACE_MS);
-
-      await expect(episode).rejects.toThrow('the episode budget of 20 ms was spent');
-      expect(JSON.parse(readFileSync(join(root, 'wedged/failure.json'), 'utf8'))).toMatchObject({ phase: 'budget' });
-
-      const collection = v.parse(CollectionSchema, JSON.parse(readFileSync(join(root, 'wedged/collection.json'), 'utf8')));
-
-      expect(collection.find((row) => row.channel === 'events')?.status).toBe('failed');
-      expect(collection.find((row) => row.channel === 'events')?.reason).toContain(String(EVIDENCE_GRACE_MS));
-      expect(existsSync(join(root, 'wedged/events.jsonl'))).toBe(false);
-
-      // What DID answer is still the episode's evidence.
-      expect(collection.filter((row) => row.status === 'retained').map((row) => row.channel)).toEqual(['history', 'spend']);
-      expect(readFileSync(join(root, 'wedged/history.json'), 'utf8')).toContain('still waiting');
-      expect(JSON.parse(readFileSync(join(root, 'wedged/spend.json'), 'utf8'))).toEqual(spend);
-    } finally {
-      resetLiveModelSpend();
-    }
-  });
-
-  test('an unbudgeted episode whose socket read never answers ends at the grace, keeping what did answer', async () => {
-    resetLiveModelSpend();
-    const root = scratchDir('silent-socket-evidence');
-
-    // THE SILENT-SOCKET SHAPE, as device-link-holds met it on 2026-09-23: the
-    // runtime replaced the workspace's object mid-case and closed its socket
-    // (1006, "this Durable Object instance is no longer active"), so the spend
-    // read, the one channel that rides the socket, never answered while both
-    // REST channels did. The case set no budget, and the read had no end of its
-    // own until the tier's deadline killed the run with no verdict.
-    const reader = {
-      async runEvents() { return LEDGER_EVENTS; },
-      async history() { return [{ role: 'assistant', text: 'held' }]; },
-      spend(): Promise<WorkspaceSpend> { return Promise.withResolvers<WorkspaceSpend>().promise; },
-    };
-
-    try {
-      const clock = handClock();
-
-      const episode = withEpisodeEvidence(async () => reader,
-        { transcripts: root, taskId: 'silent', modelCalls: 'none', clock },
-        async () => 'finished');
-
-      await clock.whenArmed(1);
-      clock.advance(EVIDENCE_GRACE_MS);
-
-      await expect(episode).rejects.toThrow('the spend channel had not answered');
-
-      const collection = v.parse(CollectionSchema, JSON.parse(readFileSync(join(root, 'silent/collection.json'), 'utf8')));
-
-      expect(collection.find((row) => row.channel === 'spend')?.status).toBe('failed');
-      expect(collection.filter((row) => row.status === 'retained').map((row) => row.channel)).toEqual(['events', 'history']);
-    } finally {
-      resetLiveModelSpend();
-    }
-  });
-
-  test('an opening failure retains the cause and unavailable channels without inventing measurements', async () => {
-    resetLiveModelSpend();
-    const root = scratchDir('opening-evidence');
-    const failure = new Error('created workspace but connection failed');
-
-    try {
-      await expect(withEpisodeEvidence(async () => { throw failure; },
-        { transcripts: root, taskId: 'opening', modelCalls: 'expected', clock: REAL_CLOCK },
-        async () => { throw new Error('unreachable operation'); })).rejects.toBe(failure);
-      expect(JSON.parse(readFileSync(join(root, 'opening/failure.json'), 'utf8'))).toMatchObject({ phase: 'open', message: failure.message });
-      expect(JSON.parse(readFileSync(join(root, 'opening/collection.json'), 'utf8'))).toEqual([
-        { channel: 'events', status: 'unavailable', reason: 'session opening failed' },
-        { channel: 'history', status: 'unavailable', reason: 'session opening failed' },
-        { channel: 'spend', status: 'unavailable', reason: 'session opening failed' },
-      ]);
-      expect(existsSync(join(root, 'opening/spend.json'))).toBe(false);
-      expect(existsSync(join(root, 'opening/events.jsonl'))).toBe(false);
-      expect(liveModelSpend().episodesUnmeasured).toBe(1);
-      expect(liveModelSpend().episodesWithoutModel).toBe(0);
-    } finally {
-      resetLiveModelSpend();
-    }
-  });
-});
-
 test('an explicitly missing file is an oracle miss; authorization and server failures still throw', async () => {
   let status = 404;
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response('fixture failure', { status }) });
@@ -994,39 +596,15 @@ test('an explicitly missing file is an oracle miss; authorization and server fai
   }
 });
 
-/**
- * THE FIVE VERIFIER READS, each over the RPC it wraps.
- *
- * One row per read, because each one is a claim about a DIFFERENT product
- * surface and a shared happy path would prove only that the socket works: the
- * roster's `lifetime`, the task list's statuses, the plan view at the ROOT
- * path, the decision's queued handoff, and a preview request that carries a
- * query string. That last one is the row that would have caught the defect
- * this test was written against — assigning a path with `?` to `pathname`
- * percent-encodes the `?`, so `/tickets?status=claimed` reached a fixture app
- * as `/tickets%3Fstatus=claimed` and answered 404.
- */
-/** One RPC method → the reply this fixture answers it with. A named contract
- *  because the probes REWRITE entries mid-test (the plan view's three shapes),
- *  so the map is mutable by design rather than by omission. */
-const FixtureRpcMethodSchema = v.picklist([
-  'listSubordinates', 'listAgentTasks', 'inspectSubordinate', 'decidePlanReview',
-]);
+/** One RPC method → the reply this fixture answers it with. */
+const FixtureRpcMethodSchema = v.picklist(['listSubordinates', 'listAgentTasks']);
 
 interface FixtureRpcAnswers {
   listSubordinates: JsonValue;
   listAgentTasks: JsonValue;
-  inspectSubordinate: JsonValue;
-  decidePlanReview: JsonValue;
 }
 
 describe('the verifier reads speak the RPCs the web app is bound to', () => {
-  const PLAN_ROW = {
-    id: 'plan-7', sessionId: 'default', revision: 2, content: '1. one\n2. two\n3. three',
-    status: 'pending', annotations: [], feedback: null, handoffAccepted: true,
-    createdAt: 1_700_000_000_000, updatedAt: 1_700_000_000_001, decidedAt: null,
-  };
-
   const answers: FixtureRpcAnswers = {
     listSubordinates: [
       { name: 'alpha', status: 'dismissed', lifetime: 'task', createdBy: 'orchestrator',
@@ -1036,8 +614,6 @@ describe('the verifier reads speak the RPCs the web app is bound to', () => {
     listAgentTasks: [
       { id: 't1', parentId: null, title: 'write the doc', status: 'done', createdAt: 3, updatedAt: 4, subtasks: [] },
     ],
-    inspectSubordinate: { view: 'plans', path: [], page: { status: 'end', items: [PLAN_ROW] } },
-    decidePlanReview: { ok: true, plan: { ...PLAN_ROW, status: 'approved' }, queued: true },
   };
 
   /** Every RPC this fixture was ASKED, so a read that reached a different
@@ -1047,15 +623,7 @@ describe('the verifier reads speak the RPCs the web app is bound to', () => {
 
   const open = () => {
     const server = Bun.serve({
-      port: 0, hostname: '127.0.0.1',
-      fetch(request, upgrading) {
-        if (request.method === 'DELETE') return Response.json({ ok: true });
-
-        if (upgrading.upgrade(request)) return;
-        const url = new URL(request.url);
-
-        return Response.json({ path: url.pathname, query: url.search });
-      },
+      port: 0, hostname: '127.0.0.1', fetch: socketOnly,
       websocket: {
         message(socket, message) {
           const frame = v.parse(RpcRequestFrameSchema, JSON.parse(message.toString()));
@@ -1103,81 +671,6 @@ describe('the verifier reads speak the RPCs the web app is bound to', () => {
       ]);
 
       expect(asked).toEqual([{ method: 'listAgentTasks', args: [] }]);
-    } finally { await session.teardown(); await server.stop(true); }
-  });
-
-  test('plans() is inspectSubordinate over the ROOT path, and a missing view is an empty list', async () => {
-    const { server, session } = open();
-    asked.length = 0;
-
-    try {
-      await session.connect();
-      expect((await session.plans()).map((plan) => plan.id)).toEqual(['plan-7']);
-      // The ROOT path and the `plans` view: a request that walked into a
-      // subordinate would credit the wrong actor with the root's plan.
-      expect(asked).toEqual([{
-        method: 'inspectSubordinate', args: [{ path: [], view: 'plans', page: { limit: 50 } }],
-      }]);
-
-      answers.inspectSubordinate = { view: 'missing', path: [], reason: 'missing', error: 'no plan_reviews table' };
-      expect(await session.plans()).toEqual([]);
-
-      // Any OTHER view is a protocol disagreement, not an empty reading.
-      answers.inspectSubordinate = { view: 'children', path: [], page: { status: 'end', items: [] } };
-      await expect(session.plans()).rejects.toThrow('children');
-    } finally {
-      answers.inspectSubordinate = { view: 'plans', path: [], page: { status: 'end', items: [PLAN_ROW] } };
-      await session.teardown();
-      await server.stop(true);
-    }
-  });
-
-  test('decidePlan() is decidePlanReview, and reports the queued handoff', async () => {
-    const { server, session } = open();
-    asked.length = 0;
-
-    try {
-      await session.connect();
-      const decided = await session.decidePlan('plan-7', 2, 'approve');
-
-      if (!decided.ok) throw new Error('the fixture answered a refusal');
-      // `queued` is the fact a caller that must WAIT for the implementation
-      // turn needs; an approval whose handoff was accepted starts one.
-      expect(decided.queued).toBe(true);
-      expect(decided.plan.status).toBe('approved');
-      expect(asked).toEqual([{ method: 'decidePlanReview', args: ['plan-7', 2, 'approve'] }]);
-
-      await session.decidePlan('plan-7', 2, 'request_changes', 'needs a rollback step');
-      expect(asked.at(-1)?.args).toEqual(['plan-7', 2, 'request_changes', 'needs a rollback step']);
-    } finally { await session.teardown(); await server.stop(true); }
-  });
-
-  test('fetchPreview() keeps the query string, the exposure path prefix and the method', async () => {
-    const { server, session } = open();
-
-    try {
-      await session.connect();
-      // A bare path.
-      expect(JSON.parse((await session.fetchPreview(server.url.origin, '/health')).text))
-        .toEqual({ path: '/health', query: '' });
-
-      // A QUERY, which is the contract a slate case exercises.
-      expect(JSON.parse((await session.fetchPreview(server.url.origin, '/tickets?status=claimed&agent=ana')).text))
-        .toEqual({ path: '/tickets', query: '?status=claimed&agent=ana' });
-
-      // A preview URL that carries its own path prefix — a capability URL
-      // does — keeps it in front of the request path.
-      expect(JSON.parse((await session.fetchPreview(`${server.url.origin}/p/abc123/`, '/metrics')).text))
-        .toEqual({ path: '/p/abc123/metrics', query: '' });
-
-      // And it WRITES: an app's own contract cannot be checked with reads
-      // alone.
-      const posted = await session.fetchPreview(server.url.origin, '/tickets', {
-        method: 'POST', json: { id: 'q-1', priority: 2 },
-      });
-
-      expect(posted.status).toBe(200);
-      expect(JSON.parse(posted.text)).toEqual({ path: '/tickets', query: '' });
     } finally { await session.teardown(); await server.stop(true); }
   });
 });

@@ -10,7 +10,6 @@ import type {
   LLMProviderConfig, RunEvent, SeekCursor, VFS, WorkspaceSpend,
 } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
-import { recordWorkspaceSpend } from './live-model';
 
 /** `local`: in-process `cli-backend` (core `chat.ts` loop). `cloud`: a deployed Worker workspace, the only way to reach `@cloudflare/think`. */
 export type EvalBackend = 'local' | 'cloud';
@@ -253,38 +252,6 @@ export function absorbingRunId(
   return closed[0]?.[0] ?? null;
 }
 
-/**
- * Stop-condition evidence. `stepCountIs(n)` stops a step already filled with tool calls, so a capped turn
- * ends with last reason `tool-calls` beside `run_end: completed`; a finished turn ends with `stop`.
- */
-export interface StepBoundEvidence {
-  /** `step_finish` rows the episode closed. */
-  readonly steps: number;
-  /** The last step's finish reason, or null when the episode closed no step. */
-  readonly lastStepReason: string | null;
-  /** Every `run_end` reason, in order. */
-  readonly runEndReasons: readonly string[];
-  /** The loop stopped while the model was still calling tools; pair with the `run_end` reason (an interrupt looks the same). */
-  readonly truncated: boolean;
-}
-
-export function stepBoundEvidence(events: readonly RunEvent[]): StepBoundEvidence {
-  let steps = 0;
-  let lastStepReason: string | null = null;
-  const runEndReasons: string[] = [];
-
-  for (const event of events) {
-    if (event.type === 'step_finish') {
-      steps += 1;
-      lastStepReason = event.reason ?? null;
-    } else if (event.type === 'run_end') {
-      runEndReasons.push(event.reason ?? 'unstated');
-    }
-  }
-
-  return { steps, lastStepReason, runEndReasons, truncated: lastStepReason === 'tool-calls' };
-}
-
 /** Every run event in a workspace store, walked to `status: 'end'`; `listRuns` pages 50 runs and the recorder 200 events. */
 export function walkRunEvents(recorder: RunEventRecorder): RunEvent[] {
   const events: RunEvent[] = [];
@@ -300,12 +267,4 @@ export function walkRunEvents(recorder: RunEventRecorder): RunEvent[] {
   }
 
   return events;
-}
-
-/** Publish one episode's spend on `target` through `recordWorkspaceSpend`, the one accumulator. */
-export async function recordTargetEpisodeSpend(target: AgentEvalTarget): Promise<WorkspaceSpend> {
-  const spend = await target.spend();
-  recordWorkspaceSpend(spend);
-
-  return spend;
 }

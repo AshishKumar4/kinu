@@ -1,10 +1,9 @@
 /** Refusals matter most: a verifier bug must surface as a red run, not a plausible number. */
 import { describe, test, expect } from 'bun:test';
 import {
-  OUTCOME_SCALE, OUTPUT_CAP, TASK_OUTCOME, isCovariateRow,
-  outcomeRow, outputCapRow, ratioOutcome, subgoalOutcome,
+  OUTCOME_SCALE, TASK_OUTCOME, isCovariateRow,
+  outcomeRow, ratioOutcome, subgoalOutcome,
 } from '../src/eval-outcome';
-import { OUTPUT_LIMIT_REACHED } from '@kinu.run/core';
 import { BEHAVIOUR_SCORERS } from '../src/agent-evals';
 import { assessAdmissibility, type EvalObservation } from '../src/eval-run';
 
@@ -128,43 +127,5 @@ describe('admissibility rests on the outcome, not on mechanism coverage', () => 
     expect(verdict.mechanismsExercised).toEqual([]);
     expect(verdict.mechanismsAbsent.length).toBe(BEHAVIOUR_SCORERS.length);
     expect(verdict.failures).toEqual([]);
-  });
-});
-
-describe('outputCapRow — a cut answer is the request bounding the attempt', () => {
-  test('a last step the provider cut FAILS, and the detail says who cut it', () => {
-    const row = outputCapRow(OUTPUT_LIMIT_REACHED);
-    expect(row.name).toBe(OUTPUT_CAP);
-    expect(row.eligible).toBe(1);
-    expect(row.passed).toBe(0);
-    expect(row.rate).toBe(0);
-    // The reader this row exists for: a truncated reply must not send anyone
-    // hunting a prompt regression.
-    expect(row.detail).toContain('CUT AT THE OUTPUT LIMIT');
-    expect(row.detail).toContain('never as the agent');
-  });
-
-  test("a model that ended its own answer passes, whatever word it ended on", () => {
-    for (const reason of ['stop', 'tool-calls', 'unknown']) {
-      const row = outputCapRow(reason);
-      expect(row.eligible).toBe(1);
-      expect(row.passed).toBe(1);
-      expect(row.rate).toBe(1);
-      expect(row.detail).toContain(reason);
-    }
-  });
-
-  test('no closed step is UNMEASURED, not uncapped — eligible zero, rate null', () => {
-    // A `1` would report a clean cap verdict for an episode with no finish reason.
-    const row = outputCapRow(null);
-    expect(row.eligible).toBe(0);
-    expect(row.passed).toBe(0);
-    expect(row.rate).toBeNull();
-    expect(row.detail).toContain('UNMEASURED');
-  });
-
-  test('the cap verdict is a covariate — it explains an outcome, it is not one', () => {
-    expect(isCovariateRow(OUTPUT_CAP)).toBe(true);
-    expect(OUTPUT_CAP).not.toBe(TASK_OUTCOME);
   });
 });

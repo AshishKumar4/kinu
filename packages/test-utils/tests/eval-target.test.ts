@@ -1,14 +1,13 @@
 /**
- * `stepBoundEvidence` is tested both ways on the production signature: ten `step_finish` rows,
- * the last `tool-calls`, and `run_end: 'completed'`. `probeVerifier` is tested both ways on a
- * shell that answers without printing the marker, as the deployed Nimbus `node` shim does.
+ * `probeVerifier` is tested both ways on a shell that answers without printing the marker, as the
+ * deployed Nimbus `node` shim does.
  */
 import { describe, expect, test } from 'bun:test';
 import type { RunEvent, VFS, WorkspaceSpend } from '@kinu.run/core';
 
 import {
   EVAL_BACKEND_ENV, ledgerTotalsFromEvents, probeVerifier, resolveEvalBackend,
-  RUN_END_FAILURE_PREFIX, stepBoundEvidence, type EvalTargetWorkspace,
+  RUN_END_FAILURE_PREFIX, type EvalTargetWorkspace,
 } from '../src/eval-target';
 import { liveModelSpend, recordNoModelEpisode, recordWorkspaceSpend, resetLiveModelSpend } from '../src/live-model';
 
@@ -40,7 +39,7 @@ function event(body: EventBody): RunEvent {
   };
 }
 
-/** The production trail: ten steps, the last still calling tools, run reported completed. */
+/** A trail of ten steps, the last still calling tools, the run reported completed. */
 function cappedTrail(): RunEvent[] {
   nextIndex = 0;
   const events: RunEvent[] = [event({ type: 'turn_start', turnIndex: 0 })];
@@ -55,56 +54,6 @@ function cappedTrail(): RunEvent[] {
 
   return events;
 }
-
-/** A naturally finished run: five steps, last reason `stop`. */
-function naturalTrail(): RunEvent[] {
-  nextIndex = 0;
-  const events: RunEvent[] = [event({ type: 'turn_start', turnIndex: 0 })];
-
-  for (let step = 0; step < 4; step += 1) {
-    events.push(event({ type: 'tool_call_end', name: 'read', toolCallId: `tc-${String(step)}` }));
-    events.push(event({ type: 'step_finish', stepIndex: step, reason: 'tool-calls' }));
-  }
-
-  events.push(event({ type: 'step_finish', stepIndex: 4, reason: 'stop' }));
-  events.push(event({ type: 'turn_end', turnIndex: 0, usage: { input: 100, output: 20 } }));
-  events.push(event({ type: 'run_end', reason: 'completed' }));
-
-  return events;
-}
-
-describe('stepBoundEvidence — the divergence probe', () => {
-  test('the production signature reads as truncated beside a `completed` run_end', () => {
-    const evidence = stepBoundEvidence(cappedTrail());
-    expect(evidence.steps).toBe(10);
-    expect(evidence.lastStepReason).toBe('tool-calls');
-    expect(evidence.runEndReasons).toEqual(['completed']);
-    // `truncated` beside `completed` is the finding; either alone is unremarkable.
-    expect(evidence.truncated).toBe(true);
-  });
-
-  test('a turn that finished on its own is NOT flagged', () => {
-    // Red direction: a probe calling every run truncated would pass the case above.
-    const evidence = stepBoundEvidence(naturalTrail());
-    expect(evidence.steps).toBe(5);
-    expect(evidence.lastStepReason).toBe('stop');
-    expect(evidence.truncated).toBe(false);
-  });
-
-  test('an episode that closed no step says so rather than reporting a reason', () => {
-    nextIndex = 0;
-    const evidence = stepBoundEvidence([event({ type: 'run_end', reason: 'interrupted' })]);
-    expect(evidence.steps).toBe(0);
-    expect(evidence.lastStepReason).toBeNull();
-    expect(evidence.truncated).toBe(false);
-    expect(evidence.runEndReasons).toEqual(['interrupted']);
-  });
-
-  test('a run_end with no reason is named, not dropped', () => {
-    nextIndex = 0;
-    expect(stepBoundEvidence([event({ type: 'run_end' })]).runEndReasons).toEqual(['unstated']);
-  });
-});
 
 describe('ledgerTotalsFromEvents — one reducer, both targets', () => {
   test('it counts turns, tool calls, steps and usage off the canonical union', () => {

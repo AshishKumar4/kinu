@@ -98,21 +98,18 @@ import * as v from 'valibot';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 import {
-  DEV_IDENTITY_HEADER, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema, STEER_STEP_METADATA_KEY, initRunEventTables,
+  DEV_IDENTITY_HEADER, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema, STEER_STEP_METADATA_KEY,
   parseJsonValue, renderSoulMarkdown, CommandResultSchema,
-  PlanReviewSchema, SubordinateInspectionResultSchema,
-  type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type PlanReview,
-  type PlanReviewDecision, type RunEvent, type SubordinateInspectionRequest, type WorkspaceSpend,
+  type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent, type WorkspaceSpend,
 } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
 import { createUserUiMessage, type AgentSendResult, type AgentTurnResult } from '../../packages/cli/src/agent-client';
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
 import {
-  absorbingRunId, compareRunEventOrder, createTestSql, evalNameSlug, evalTargetVerdict, evalWorkspaceName,
-  INFRA_FAILURE_MARKER, infraBoundary, liveModelTarget, resolveEvalBackend, scoreTrajectory, testActorHandle, workerSession,
+  absorbingRunId, compareRunEventOrder, evalNameSlug, evalTargetVerdict, evalWorkspaceName,
+  INFRA_FAILURE_MARKER, infraBoundary, liveModelTarget, resolveEvalBackend, workerSession,
   EVAL_BACKEND_ENV,
-  type EvalScoreRow,
 } from '@kinu.run/test-utils';
 
 /**
@@ -563,9 +560,6 @@ function decodeSocketJson(data: SocketPayload): JsonValue | undefined {
   return tolerate(() => parseJsonValue(decoded), 'malformed-input');
 }
 
-/** What one turn produced. The SHIPPED result type, because the accumulator
- *  behind it is the shipped one: a second shape would be a second thing to keep
- *  in step with the chunk vocabulary. */
 /** What a send resolves to: the turn it opened, or the absorbing run's id
  *  when the done frame answered `mid-turn` — the run whose close the case's
  *  observation window is open until. */
@@ -624,48 +618,6 @@ export function recordPublicTurn(): PublicTurnRecorder {
     },
     settled: () => settled,
   };
-}
-
-// ── The ledger, scored by the instruments that already exist ────────
-
-/**
- * Score events fetched over the public route with the SAME instruments a local
- * episode is scored with.
- *
- * The scorers are pure over `SqlExecutor` and read the `run_events` TABLE
- * (`packages/test-utils/src/agent-evals.ts`), so the bridge is a store rather
- * than a second scorer: the fetched events are written into a fresh in-memory
- * table in the recorder's own row shape — `run_id`, `event_index`, `type`, the
- * whole stamped event as `payload`, `ts` (events/recorder.ts:330-333) — and
- * `scoreTrajectory` reads them back through `parseStoredRunEvent`, the canonical
- * parse. Nothing about the seven instruments is re-expressed here, which is what
- * makes a cloud number comparable with a local one.
- *
- * The events are written VERBATIM. `RunEventRecorder.emit` would re-stamp
- * `eventIndex` and `timestamp` (recorder.ts:158-160) and hand the scorers a
- * different log from the one the deployment recorded.
- */
-export function scorePublicLedger(events: readonly RunEvent[]): EvalScoreRow[] {
-  const store = createTestSql();
-
-  try {
-    initRunEventTables(store.execRaw);
-    // `run_events` is actor-scoped, and these rows come off the wire from a
-    // deployment whose actor id is not this process's business: one local
-    // identity is minted for the replay store, written on every row, and read
-    // back by the scorers. The comparison is between the SAME rows either way.
-    const actor = testActorHandle(store.sql);
-
-    for (const event of events) {
-      void store.sql`INSERT OR REPLACE INTO run_events (actor_id, run_id, event_index, type, payload, ts)
-        VALUES (${actor.actorId}, ${event.runId}, ${event.eventIndex}, ${event.type},
-                ${JSON.stringify(event)}, ${event.timestamp})`;
-    }
-
-    return scoreTrajectory(store.sql, actor);
-  } finally {
-    store.close();
-  }
 }
 
 // ── The session ────────────────────────────────────────────────────
@@ -798,14 +750,6 @@ const SlateListingSchema = v.object({
 
 export type PublicSlateListing = v.InferOutput<typeof SlateListingSchema>;
 
-/** A preview URL and port, or the refusal that prevented startup. */
-const SlatePreviewSchema = v.variant('ok', [
-  v.object({ ok: v.literal(true), value: v.object({ url: v.string(), port: v.number() }) }),
-  v.object({ ok: v.literal(false), reason: v.string(), error: v.string() }),
-]);
-
-export type PublicSlatePreview = v.InferOutput<typeof SlatePreviewSchema>;
-
 /** The roster rows `listSubordinates` serves (orchestrator.ts:5536), narrowed
  *  to the three facts a delegation case grades: WHO was hired, whether the row
  *  is still active, and the `lifetime` that decided it — the one column no
@@ -844,45 +788,6 @@ const TaskListSchema = v.array(TaskTreeSchema);
 
 /** One task with its subtasks, as the Work tab draws it. */
 export type PublicTask = v.InferOutput<typeof TaskTreeSchema>;
-
-/** `decidePlanReview`'s answer (actor-agent.ts:961): the plan on a decision that
- *  landed, or the error on one that did not. The accepted branch may also carry
- *  `queued`, because an approval whose handoff was accepted starts the
- *  implementation turn instead of broadcasting — which is the fact a case that
- *  waits for that turn needs. */
-const PlanDecisionSchema = v.variant('ok', [
-  v.looseObject({ ok: v.literal(true), plan: PlanReviewSchema, queued: v.optional(v.boolean()) }),
-  v.looseObject({ ok: v.literal(false), error: v.string() }),
-]);
-
-/** What a decision on a plan answered. */
-export type PublicPlanDecision = v.InferOutput<typeof PlanDecisionSchema>;
-
-/** One preview host response: the status and the body, both kept. A preview
- *  that answers 404 with HTML and one that answers 200 with the wrong title are
- *  different findings, and reducing either to a boolean loses which. */
-export interface PublicPreviewResponse {
-  readonly status: number;
-  readonly text: string;
-}
-
-/**
- * The absolute URL one preview request goes to: the exposure's own path prefix
- * (a preview URL carries its capability there) followed by `path`.
- *
- * Resolved through the URL parser rather than by assigning `pathname`, because
- * a request path legitimately carries a QUERY — `/tickets?status=claimed` is
- * the contract a slate case exercises — and assigning it to `pathname`
- * percent-encodes the `?`, so the query never reaches the app and the route
- * answers 404. Exported so a fixture server resolves its requests exactly the
- * way the live session resolves them.
- */
-export function previewTarget(url: string, path: string): URL {
-  const base = new URL(url);
-  const suffix = path.startsWith('/') ? path : `/${path}`;
-
-  return new URL(base.pathname.replace(/\/$/u, '') + suffix, base);
-}
 
 /** What `readExecutorFile` answers, exactly as `ExecutorTextFile` declares it
  *  (core/src/read-models/files.ts): the preview's text, or the reason there is
@@ -1069,20 +974,6 @@ export class KinuPublicSession {
   /** Callers waiting on one response chunk of a request: settled by the
    *  first frame body the predicate accepts, then dropped. */
   private readonly chunkWatchers = new Map<string, Array<{ readonly accept: (body: string) => boolean; readonly resolve: () => void }>>();
-  /** Turns this session never submitted that have CLOSED on the socket — the
-   *  ones the product opened by itself (a wake, a rerun, the implementation
-   *  turn an approved plan queues, `actor-agent.ts:972-978`). The DO streams
-   *  each of them to every connected client under an id it minted itself
-   *  (`chat-transport.ts:381`) and closes it with a done frame
-   *  (`chat-transport.ts:410,654-655`), which is the product's own signal that such
-   *  a turn is over. Counted, so `watchProgrammaticTurn` can take the count
-   *  BEFORE the act that queues one and settle on the count moving. */
-  private programmaticTurns = 0;
-  private readonly programmaticWatchers: {
-    readonly after: number;
-    readonly resolve: () => void;
-    readonly reject: (error: Error) => void;
-  }[] = [];
   /** Done-frame arrival instants for sends the DO answered `mid-turn` — the
    *  landing instant the absorbing run is named at, in the run events' own
    *  clock domain. Outlives the `turns` entry, which is deleted at settle. */
@@ -1416,15 +1307,6 @@ export class KinuPublicSession {
     return v.parse(SlateListingSchema, answer);
   }
 
-  /** Start the authored app through the same RPC used by its tab. */
-  async previewSlate(id: string): Promise<PublicSlatePreview> {
-    const answer = await infraBoundary(
-      'previewSlate(' + id + ') on ' + this.input.origin + '/' + this.workspace,
-      () => this.rpc('previewSlate', [id]),
-    );
-
-    return v.parse(SlatePreviewSchema, answer);
-  }
   /** One slate operation through the socket RPC the slate tab drives. */
   async slateOp(operation: JsonValue): Promise<JsonValue> {
     return infraBoundary(
@@ -1482,107 +1364,6 @@ export class KinuPublicSession {
     return v.parse(TaskListSchema, rows);
   }
 
-  /**
-   * This workspace's OWN plan reviews — `inspectSubordinate` with view `plans`
-   * at the root path, the first read `components/surfaces/WorkPlans.tsx:83-113`
-   * queues when the Work tab opens.
-   *
-   * The root path (`[]`) and nothing deeper: the Work tab walks children from
-   * there, and a case that graded a subordinate's plan as the root's would
-   * credit the wrong actor. A `missing` view is answered as an empty list —
-   * `plan_reviews` not existing is "no plan was ever submitted", which is the
-   * honest reading and the one a pre-plan subgoal needs.
-   */
-  async plans(): Promise<readonly PlanReview[]> {
-    // `satisfies` rather than an annotation: the literal keeps its own inferred
-    // type, which is what a `JsonValue` argument accepts, while the product's
-    // request type still rules on the shape at compile time.
-    const request = { path: [], view: 'plans', page: { limit: 50 } } satisfies SubordinateInspectionRequest;
-
-    const answer = await infraBoundary(
-      `inspectSubordinate(plans) on ${this.input.origin}/${this.workspace}`,
-      () => this.rpc('inspectSubordinate', [request]),
-    );
-
-    const result = v.parse(SubordinateInspectionResultSchema, answer);
-
-    if (result.view === 'missing') return [];
-
-    if (result.view !== 'plans') {
-      throw new Error(`inspectSubordinate(plans) answered the ${result.view} view instead`);
-    }
-
-    return result.page.items;
-  }
-
-  /**
-   * Decide one plan review — `decidePlanReview`, the RPC the review pane's own
-   * button calls with the same four arguments
-   * (`components/surfaces/PlanReviewView.tsx:315`).
-   *
-   * The product's own vocabulary, not a harness verb: an `approve` whose
-   * handoff is accepted QUEUES the implementation turn (actor-agent.ts:972-978)
-   * rather than broadcasting, which is why the answer is returned whole — a
-   * caller that must wait for that turn needs to know one was started.
-   */
-  async decidePlan(
-    id: string, revision: number, decision: PlanReviewDecision, feedback?: string,
-  ): Promise<PublicPlanDecision> {
-    const args: JsonValue[] = feedback === undefined
-      ? [id, revision, decision]
-      : [id, revision, decision, feedback];
-
-    const answer = await infraBoundary(
-      `decidePlanReview(${id}#${String(revision)}) on ${this.input.origin}/${this.workspace}`,
-      () => this.rpc('decidePlanReview', args),
-    );
-
-    return v.parse(PlanDecisionSchema, answer);
-  }
-
-  /**
-   * Fetch one path off a preview URL, as a person clicking the preview tab
-   * does.
-   *
-   * NOT an RPC: the URL comes from `getExposedPorts` (orchestrator.ts:6051, the
-   * read `hooks/use-kinu.ts:1759` binds the Env pane's preview tabs to) and the
-   * bytes come from the preview host itself (`server.ts:492`
-   * `routePreviewHost`), whose authority is the capability inside the URL. The
-   * web identity's header rides along anyway, for the one case where the
-   * exposure is served off the API origin rather than the preview host — a
-   * preview that 401s because the harness dropped a header it already holds is
-   * a finding about the harness.
-   *
-   * `status` and `text` are both returned: an exposure row is not evidence of a
-   * live server (docs/EXECUTION-LAYER-SPEC.md § Slate preview home), so what the port
-   * ANSWERED is the whole subject.
-   *
-   * `body` makes it a WRITE too, because an app's own contract is checked
-   * through the app: a queue that only ever answered GETs was never told to
-   * store anything. One client for both directions rather than a second
-   * fetcher beside it — the URL, the headers and the refusal handling are the
-   * same on a POST as on a GET, and two of them would be two answers to what
-   * a preview request is.
-   */
-  fetchPreview(
-    url: string, path: string,
-    body?: { readonly method: string; readonly json?: JsonValue },
-  ): Promise<PublicPreviewResponse> {
-    const target = previewTarget(url, path);
-
-    return infraBoundary(`${body?.method ?? 'GET'} ${target.origin}${target.pathname}`, async () => {
-      const response = await fetch(target, {
-        method: body?.method ?? 'GET',
-        headers: body?.json === undefined
-          ? webHeaders(this.input.identity)
-          : { ...webHeaders(this.input.identity), 'content-type': 'application/json' },
-        body: body?.json === undefined ? undefined : JSON.stringify(body.json),
-      });
-
-      return { status: response.status, text: await response.text() };
-    });
-  }
-
   /** Resolve when a response chunk of `requestId` satisfies `accept` — a
    *  wait on the socket's own output, for a row that must act while a turn
    *  is inside its work (its first tool result has streamed). */
@@ -1591,28 +1372,6 @@ export class KinuPublicSession {
     const watchers = this.chunkWatchers.get(requestId) ?? [];
     watchers.push({ accept, resolve: settled.resolve });
     this.chunkWatchers.set(requestId, watchers);
-
-    return settled.promise;
-  }
-
-  /**
-   * Watch for the next turn the PRODUCT opens by itself, and resolve when that
-   * turn closes.
-   *
-   * Called BEFORE the act that queues one — a plan approval — so the count it
-   * holds is the one taken before the turn could exist; a turn that closes
-   * between the call and the await still settles it. The bound is the done
-   * frame the DO broadcasts for that turn, the same frame the chat pane
-   * renders it from, so this waits on the product's own signal and on nothing
-   * else. No poll and no duration: a socket that dies takes the wait with it
-   * (`failInFlight`), and a wake that never lands hangs where the ladder kills
-   * a gate — at its deadline — rather than reading as a red on the subgoal
-   * behind it.
-   */
-  watchProgrammaticTurn(): Promise<void> {
-    const after = this.programmaticTurns;
-    const settled = Promise.withResolvers<void>();
-    this.programmaticWatchers.push({ after, resolve: settled.resolve, reject: settled.reject });
 
     return settled.promise;
   }
@@ -1979,14 +1738,9 @@ export class KinuPublicSession {
     if (frame.kind !== 'response') return;
     const turn = this.turns.get(frame.frame.id);
 
-    if (!turn) {
-      // A stream nobody here submitted: a turn the product opened on its own.
-      // Its done frame is the one thing a caller waiting for such a turn is
-      // waiting for; its bodies belong to no request of ours.
-      if (frame.frame.done === true) this.noteProgrammaticTurn();
-
-      return;
-    }
+    // A stream nobody here submitted: a turn the product opened on its own. Its bodies belong to no
+    // request of ours.
+    if (!turn) return;
 
     if (frame.frame.done === true && frame.frame.landed === 'mid-turn') {
       this.midTurnLandings.set(frame.frame.id, new Date().toISOString());
@@ -2014,17 +1768,6 @@ export class KinuPublicSession {
     if (done === null) return;
     this.turns.delete(frame.frame.id);
     turn.resolve(done);
-  }
-
-  /** One turn the product opened by itself has closed: settle everyone whose
-   *  count it moved past, and leave the rest waiting for the next one. */
-  private noteProgrammaticTurn(): void {
-    this.programmaticTurns += 1;
-
-    for (const watcher of this.programmaticWatchers.splice(0)) {
-      if (this.programmaticTurns > watcher.after) watcher.resolve();
-      else this.programmaticWatchers.push(watcher);
-    }
   }
 
   /**
@@ -2083,12 +1826,9 @@ export class KinuPublicSession {
     this.midTurnLandings.clear();
     const rpcs = [...this.rpcs.values()];
     this.rpcs.clear();
-    const watchers = this.programmaticWatchers.splice(0);
 
     for (const turn of turns) turn.reject(new Error(reason));
 
     for (const rpc of rpcs) rpc.reject(new Error(reason));
-
-    for (const watcher of watchers) watcher.reject(new Error(reason));
   }
 }

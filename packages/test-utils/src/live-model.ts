@@ -222,9 +222,8 @@ export function liveChatModel(llm: LLMProviderConfig): LanguageModel {
 }
 
 /**
- * Measured live-run spend. Three feeds, one meter: per call (`recordLiveModelSpend`), per episode from the
- * store (`recordLiveModelEpisode`), adopted from a prior process (`recordAdoptedLiveModelSpend`). Each process
- * appends its total to `KINU_EVAL_SPEND_FILE`. Unreported usage adds nothing to token totals, so they are a floor.
+ * Measured live-run spend. Two feeds, one meter: per call (`recordLiveModelSpend`) and per episode from the
+ * store (`recordLiveModelEpisode`). Each process appends its total to `KINU_EVAL_SPEND_FILE`. Unreported usage adds nothing to token totals, so they are a floor.
  */
 export interface LiveModelSpend {
   readonly calls: number;
@@ -308,29 +307,6 @@ export function recordNoModelEpisode(spend: WorkspaceSpend): void {
   }
 
   spendEpisodesWithoutModel += 1;
-}
-
-/** What a durable case record says a previous process spent; read back, not recomputed. */
-export interface AdoptedCaseSpend {
-  readonly calls: number;
-  readonly usage: Usage;
-}
-
-/** Whether a durable record could account for the case it belongs to. */
-export type AdoptedSpendVerdict = 'accounted' | 'unaccounted';
-
-/** Record spend a resumed run adopted; records lacking calls or usage count as unmeasured. Once-per-case is `AdoptedSpendMeter`'s job. */
-export function recordAdoptedLiveModelSpend(adopted: AdoptedCaseSpend): AdoptedSpendVerdict {
-  if (adopted.calls <= 0 || !usageReported(adopted.usage)) {
-    spendEpisodesUnmeasured += 1;
-
-    return 'unaccounted';
-  }
-
-  spendCalls += adopted.calls;
-  spendUsage = addUsage(spendUsage, adopted.usage);
-
-  return 'accounted';
 }
 
 export function liveModelSpend(): LiveModelSpend {
