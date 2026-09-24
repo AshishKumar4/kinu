@@ -1893,7 +1893,6 @@ function ChatScene({
 
       <scrollbox
         ref={(value) => { historyRef.current = value; }}
-        focused={!isProcessing}
         stickyScroll={true}
         stickyStart="bottom"
         onMouseScroll={() => queueMicrotask(scrollAnchor.remember)}

@@ -484,6 +484,18 @@ describe('ChatApp terminal interaction', () => {
     expect(alpha.state.closed).toBe(1);
   });
 
+test('when a turn ends, the next keys still land in the composer', async () => {
+  const agent = fakeClient({ name: 'keeps-typing' });
+
+  const screen = await mountChat(agent.client);
+  agent.emit({ type: 'turn-start', kind: 'user', text: 'count the notes' });
+  await screen.waitFor('the turn thinking', () => screen.frame().includes('thinking'));
+  agent.emit({ type: 'turn-end', turn: TURN });
+  await screen.waitFor('the turn to end', () => !screen.frame().includes('thinking'));
+  await screen.mockInput.typeText('and again');
+  await screen.waitFor('the next draft in the composer', () => screen.frame().includes('and again'));
+});
+
 test('a turn waiting on a rate limit names the provider, not thinking', async () => {
   const agent = fakeClient({ name: 'wait-visible' });
 
