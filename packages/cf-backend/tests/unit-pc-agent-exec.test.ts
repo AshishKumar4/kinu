@@ -107,24 +107,24 @@ function rpcId(sequence: number): string {
   return `rpc-testepoch0-${sequence}`;
 }
 
-function exec(command: string): Promise<{ reply: ExecReply; elapsed: number }> {
-  const { promise, resolve } = Promise.withResolvers<{ reply: ExecReply; elapsed: number }>();
-  const started = Date.now();
+/** Run `command` as the hub does: answered, then ACKed, so its supervisor exits with the test. */
+async function exec(command: string): Promise<ExecReply> {
+  const ws = recorder();
+  const id = rpcId(++execSequence);
 
-  const ws = {
-    send(data: string) {
-      resolve({ reply: v.parse(ExecReplySchema, JSON.parse(data)), elapsed: Date.now() - started });
-    },
-  };
+  handle({ id, method: 'exec', params: [command] }, ws.socket);
+  const reply = v.parse(ExecReplySchema, await ws.answerTo(id));
+  const ackId = rpcId(++execSequence);
 
-  handle({ id: rpcId(++execSequence), method: 'exec', params: [command] }, ws);
+  acknowledge(ackId, id, ws.socket);
+  await ws.answerTo(ackId);
 
-  return promise;
+  return reply;
 }
 
 describe('pc-agent exec RPC', () => {
   test('answers with stdout, stderr and the exit code', async () => {
-    const { reply } = await exec('echo out; echo err 1>&2; exit 4');
+    const reply = await exec('echo out; echo err 1>&2; exit 4');
 
     expect(reply.id).toStartWith('rpc-testepoch0-');
     expect(reply.error).toBeUndefined();
@@ -134,27 +134,35 @@ describe('pc-agent exec RPC', () => {
   });
 
   test('answers when the COMMAND finishes, not when a backgrounded server does', async () => {
-    const { reply, elapsed } = await exec('sleep 20 & echo started');
+    const pidFile = join(scratchDir('pc-agent-background'), 'server.pid');
+    const reply = await exec(`sleep 20 & echo $! > ${pidFile}; echo started`);
+    const server = Number(readFileSync(pidFile, 'utf8').trim());
+    // Still running: an answer that waited for the server would have come after it ended.
+    const running = alive(server);
+
+    if (running) process.kill(server, 'SIGKILL');
 
     expect(reply.result?.stdout).toContain('started');
     expect(reply.result?.exitCode).toBe(0);
-    expect(elapsed).toBeLessThan(3_000);
+    expect(running).toBe(true);
   });
 
   test('output the command wrote is complete, not cut short by the early answer', async () => {
-    const { reply } = await exec('seq 1 20000');
+    const reply = await exec('seq 1 20000');
 
     expect(reply.result?.exitCode).toBe(0);
     expect(reply.result?.stdout.trimEnd().split('\n')).toHaveLength(20_000);
   });
 
   test('answers exactly once', async () => {
-    const sends: string[] = [];
+    const ws = recorder();
     const id = rpcId(100);
-    handle({ id, method: 'exec', params: ['echo hi'] }, { send: (d) => sends.push(d) });
-    await settled(() => (sends.length === 1 ? true : undefined), 'the sole exec reply');
+    handle({ id, method: 'exec', params: ['echo hi'] }, ws.socket);
+    await ws.answerTo(id);
+    acknowledge(rpcId(101), id, ws.socket);
+    await ws.answerTo(rpcId(101));
 
-    expect(sends).toHaveLength(1);
+    expect(ws.of(id)).toHaveLength(1);
   });
 });
 
@@ -349,6 +357,7 @@ describe('pc-agent command cancellation', () => {
 
     handle({ id: runId, method: 'exec', params: [`sleep 30 & echo $! > ${pidFile}; echo started`] }, ws.socket);
     const answer = await settled(() => ws.of(runId)[0], 'the exec answer');
+    const { pid: supervisor } = await supervisorState(runId);
     expect(v.parse(ExecResultSchema, answer.result).stdout).toContain('started');
     expect(existsSync(join(requestDir, 'result'))).toBe(true);
     expect(pcAgent.inFlight.size()).toBe(sizeBefore + 1);
@@ -359,6 +368,8 @@ describe('pc-agent command cancellation', () => {
       .toEqual({ requestId: runId, acknowledged: true });
     expect(await settled(() => (!existsSync(requestDir) ? true : undefined), 'supervisor cleanup')).toBe(true);
     expect(pcAgent.inFlight.size()).toBe(sizeBefore);
+    // The command's group leader has exited; the ACK must still reach the supervisor, which then ends.
+    expect(await gone(supervisor)).toBe(true);
 
     const server = Number(readFileSync(pidFile, 'utf8').trim());
 
@@ -570,6 +581,17 @@ describe('pc-agent supervisor guards', () => {
     const pending = pcAgent.waitForSupervisorState(root, child);
     child.emit('exit', 125, null);
     await expect(pending).rejects.toThrow('exited before publishing state');
+  });
+
+  // The hammer's red (2026-09-24, run 4 of 6): the exit reached the daemon before the state watch did, so a
+  // supervisor that had published its state was reported as never started and the stop test's exec resolved.
+  test('accepts a supervisor that published its state even when its exit is dispatched first', async () => {
+    const root = scratchDir('pc-agent-startup-published');
+    const child = new EventEmitter();
+    const pending = pcAgent.waitForSupervisorState(root, child);
+    writeFileSync(join(root, 'state'), 'pid=1\n');
+    child.emit('exit', null, 'SIGKILL');
+    await expect(pending).resolves.toBeUndefined();
   });
 
   test('refuses unsupported hosts before creating a command directory', () => {

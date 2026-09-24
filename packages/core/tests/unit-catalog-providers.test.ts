@@ -10,6 +10,7 @@ import {
   getModelsDevProvider,
   listModelsDevProviders,
   modelsDevCompatBaseURL,
+  reasoningEffortOptions,
   type ProviderDeps, type AuthResolution, type ModelProvider,
 } from '../src/index';
 import { describeProviderError } from '../src/providers/util';
@@ -110,7 +111,7 @@ describe('models.dev provider metadata', () => {
 
     for (const model of ['messages', 'generated']) {
       expect(await getModelsDevModelEndpoint('mixed', model, { fetch: mock.fetch })).toEqual({
-        baseURL: 'https://mixed.test/v1', protocol: 'chat-completions',
+        baseURL: 'https://mixed.test/v1', protocol: 'chat-completions', reasoning: false,
       });
     }
   });
@@ -271,6 +272,25 @@ describe('registry with dynamic catalog source', () => {
     expect(mock.requests.filter((request) => !request.url.includes('models.dev')).map((request) => request.url)).toEqual([
       'https://responses.test/v1/responses', 'https://responses.test/v1/chat/completions',
     ]);
+  });
+
+  test('an effort chosen for an opencode-go model reaches its Chat Completions request', async () => {
+    const mock = createMockFetch([
+      { match: 'models.dev/api.json', respond: { status: 200, body: {
+        'opencode-go': {
+          id: 'opencode-go', npm: '@ai-sdk/openai-compatible', api: 'https://go.test/v1',
+          models: { glm: { id: 'glm', tool_call: true, reasoning: true } },
+        },
+      } } },
+      { match: 'https://go.test/v1/chat/completions', respond: { status: 200, body: CHAT_COMPLETION_BODY } },
+    ]);
+
+    const deps = makeDeps({ 'opencode-go.bearer': { headers: { Authorization: 'Bearer key' } } }, mock.fetch);
+    const model = makeRegistry().resolve('opencode-go/glm', deps);
+    await generateText({ model, prompt: 'hello', providerOptions: reasoningEffortOptions('high', 'opencode-go') });
+
+    const sent = mock.requests.find((request) => request.url.includes('/chat/completions'));
+    expect(JSON.parse(sent?.body ?? '{}')).toMatchObject({ reasoning_effort: 'high' });
   });
 
   test('a Responses catalog model preserves streaming text and native tool calls', async () => {

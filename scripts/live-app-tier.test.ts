@@ -210,11 +210,13 @@ interface LiveIndicatorVerdict {
 /** What a page opened during a turn drew once that turn had ended (#29): every new workspace's page opens on its
  *  first turn. */
 interface OpenedMidTurnVerdict {
-  /** Stop was offered while the turn ran: the page did open during it. */
-  readonly openedLive: boolean;
+  /** The last sample before the turn's held model call was let go: what the page drew while the turn ran. */
+  readonly held: { readonly stop: boolean; readonly task: string | null };
   /** The last sample, taken at the page's first presence read after the turn's close was answered. */
   readonly stop: boolean;
   readonly states: number;
+  /** Samples that read no word from the header's task state. */
+  readonly headerless: number;
   /** Samples where the header and the composer disagreed on whether a turn runs: Stop beside an idle header, or a
    *  working header with no Stop. The header's other words (waiting on you, on a provider) outrank both. */
   readonly disagreed: number;
@@ -376,6 +378,9 @@ const RAIL_SHUT_PX = 64;
 
 const SHUT_NAMES = 'hide|collapse|close';
 
+/** The header's task state, by the name its status carries; its text is the state's word. */
+const TASK_STATE = '[role="status"][aria-label="Task state"]';
+
 /** Every 20 ms from install: whether the chat column offers Stop, how many live states it draws, and the header's
  *  task word. A Thinking row, a live reasoning label, a caret on text that shows, and running call rows (one state
  *  however many run) are live states; a hook on an element that draws nothing is none. Held on `window` until read
@@ -396,12 +401,15 @@ const INSTALL_LIVE_SAMPLER = `(() => {
       t: Math.round(performance.now() - started),
       stop: [...chat.querySelectorAll('button[aria-label="Stop this turn"]')].some(shown),
       states: drawn('thinking').length + drawn('reasoning').length + carets + running,
-      task: document.querySelector('[data-task-state]')?.getAttribute('data-task-state') ?? null,
+      task: document.querySelector(${JSON.stringify(TASK_STATE)})?.textContent?.trim() ?? null,
     });
   }, 20);
 })()`;
 
 const READ_LIVE_SAMPLES = `(() => { clearInterval(window.__liveSampler); return window.__liveSamples; })()`;
+
+/** The newest sample, the sampler left running. */
+const LAST_LIVE_SAMPLE = 'window.__liveSamples.at(-1) ?? null';
 
 const LiveSampleSchema = v.object({ t: v.number(), stop: v.boolean(), states: v.number(), task: v.nullable(v.string()) });
 
@@ -435,7 +443,8 @@ async function measureLiveIndicator(newPage: LiveApp['newPage'], origin: string)
 
     await sendInChat(page, PACED_TURN_ASK);
     await paced;
-    await painted(page);
+    // The turn has closed on the socket; the pane ends it once its stream does.
+    await until(page, 'the pane to end the paced turn', `!(${STOP_OFFERED})`);
 
     if (!v.parse(v.boolean(), await page.evaluate(PACED_ANSWER_SHOWN))) {
       throw new Error(`waiting for the paced answer, its turn closed without it; the chat ends ${JSON.stringify(await page.evaluate(CHAT_TAIL))}`);
@@ -625,6 +634,7 @@ async function measureGeometry(newPage: LiveApp['newPage'], origin: string): Pro
   const page = await openWorkspace(newPage, origin, workspace);
 
   await openInspector(page);
+  await until(page, 'a marked tab in the inspector strip', `${MARKED_TAB} !== null`);
 
   const dark = v.parse(StripGeometrySchema, await page.evaluate(readStripGeometry));
 
@@ -633,6 +643,7 @@ async function measureGeometry(newPage: LiveApp['newPage'], origin: string): Pro
   await page.reload({ waitUntil: 'load' });
   await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
   await openInspector(page);
+  await until(page, 'a marked tab in the inspector strip', `${MARKED_TAB} !== null`);
 
   const light = v.parse(StripGeometrySchema, await page.evaluate(readStripGeometry));
 
@@ -892,11 +903,15 @@ const PresenceAnswerSchema = v.union([
   v.pipe(v.looseObject({ tabPresence: v.looseObject({ work: v.boolean() }) }), v.transform((answer) => answer.tabPresence.work)),
 ]);
 
-/** A turn's frame on the workspace socket, which every page on it gets. A `done` frame closes the turn unless it
- *  answers words a running turn took in (`landed: 'mid-turn'`); an `error` frame is the turn failing
- *  (chat-transport.ts `doneFrame`). */
+/** The chat request a send puts on the socket; its id names the turn's frames. */
+const ChatRequestSchema = v.looseObject({ type: v.literal('cf_agent_use_chat_request'), id: v.string() });
+
+/** A turn's frame on the workspace socket, which every page on it gets, under the id of the request that opened
+ *  it. The request's `done` frame closes the turn, unless it says the words landed in a turn already running
+ *  (`landed: 'mid-turn'`); an `error` frame is the turn failing (chat-transport.ts `doneFrame`). */
 const ChatResponseSchema = v.looseObject({
   type: v.literal('cf_agent_use_chat_response'),
+  id: v.string(),
   done: v.optional(v.boolean()),
   error: v.optional(v.boolean()),
   landed: v.optional(v.string()),
@@ -904,12 +919,15 @@ const ChatResponseSchema = v.looseObject({
 });
 
 /** A page's turns off its own socket, and the Work presence it reads. `afterTurn`,
- *  taken before a send, settles on the answer to the first presence read the
- *  page asks once the next turn has closed, and rejects with the failure of a
- *  turn that fails. The page asks that read from the effect that follows the
- *  turn's last render and every 5 s after (use-kinu `refreshLiveData`), so it
- *  comes whatever the turn did, after the page drew it, and it is final for
- *  that turn: a row waits on it, never on the value it hopes for. */
+ *  taken before a send, follows the chat request that send puts on the socket:
+ *  it settles on the answer to the first presence read the page asks once that
+ *  request's turn has closed, and rejects when the turn fails or the words land
+ *  in a turn already running. Only that request's frames count: the socket also
+ *  carries every other request's, a resent or a probing one included. The page
+ *  asks that read from the effect that follows the turn's last render and every
+ *  5 s after (use-kinu `refreshLiveData`), so it comes whatever the turn did,
+ *  after the page drew it, and it is final for that turn: a row waits on it,
+ *  never on the value it hopes for. */
 interface TurnWatch {
   /** Every Work presence the page was answered, in order. */
   workPresence(): readonly boolean[];
@@ -917,47 +935,72 @@ interface TurnWatch {
   stop(): Promise<void>;
 }
 
+interface TurnWaiter {
+  /** The chat request this waiter follows, once the page has sent one. */
+  requestId: string | null;
+  /** How many presence reads the page had asked when the turn closed; null while it runs. */
+  closedAtAsk: number | null;
+  readonly settle: ReturnType<typeof Promise.withResolvers<boolean>>;
+}
+
 async function watchTurns(page: Page): Promise<TurnWatch> {
   const cdp = await page.createCDPSession();
 
   await cdp.send('Network.enable');
 
-  // Each presence read the page asked, by id, with how many turns had closed when it went.
+  // Each presence read the page asked, by id, with its place among the reads asked.
   const asked = new Map<string, number>();
   const answers: boolean[] = [];
-  let closed = 0;
-  let waiters: { readonly closedBefore: number; readonly settle: ReturnType<typeof Promise.withResolvers<boolean>> }[] = [];
+  let asks = 0;
+  let waiters: TurnWaiter[] = [];
 
   cdp.on('Network.webSocketFrameSent', (event: { response?: { payloadData?: string } }) => {
-    const ask = v.safeParse(RpcAskSchema, tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input'));
+    const frame = tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input');
+    const request = v.safeParse(ChatRequestSchema, frame);
+    const unsent = waiters.find((waiter) => waiter.requestId === null);
 
-    if (ask.success && PRESENCE_READS.has(ask.output.method)) asked.set(ask.output.id, closed);
+    if (request.success && unsent !== undefined) unsent.requestId = request.output.id;
+
+    const ask = v.safeParse(RpcAskSchema, frame);
+
+    if (ask.success && PRESENCE_READS.has(ask.output.method)) {
+      asked.set(ask.output.id, asks);
+      asks += 1;
+    }
   });
   cdp.on('Network.webSocketFrameReceived', (event: { response?: { payloadData?: string } }) => {
-    const received = tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input');
-    const turn = v.safeParse(ChatResponseSchema, received);
+    const frame = tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input');
+    const turn = v.safeParse(ChatResponseSchema, frame);
 
     if (turn.success) {
+      const waiter = waiters.find((candidate) => candidate.requestId === turn.output.id);
+
+      if (waiter === undefined) return;
+
       if (turn.output.error === true) {
-        for (const waiter of waiters.splice(0)) waiter.settle.reject(new Error(`the turn failed: ${turn.output.body ?? ''}`));
-      } else if (turn.output.done === true && turn.output.landed !== 'mid-turn') {
-        closed += 1;
+        waiters = waiters.filter((candidate) => candidate !== waiter);
+        waiter.settle.reject(new Error(`the turn failed: ${turn.output.body ?? ''}`));
+      } else if (turn.output.done === true && turn.output.landed === 'mid-turn') {
+        waiters = waiters.filter((candidate) => candidate !== waiter);
+        waiter.settle.reject(new Error('the words landed in a turn already running, so no turn of their own closed'));
+      } else if (turn.output.done === true) {
+        waiter.closedAtAsk = asks;
       }
 
       return;
     }
 
-    const answer = v.safeParse(RpcAnswerSchema, received);
-    const sentAfter = answer.success ? asked.get(answer.output.id) : undefined;
+    const answer = v.safeParse(RpcAnswerSchema, frame);
+    const place = answer.success ? asked.get(answer.output.id) : undefined;
 
-    if (!answer.success || sentAfter === undefined) return;
+    if (!answer.success || place === undefined) return;
     asked.delete(answer.output.id);
     const presence = v.safeParse(PresenceAnswerSchema, answer.output.result);
 
     if (!presence.success) return;
     answers.push(presence.output);
     waiters = waiters.filter((waiter) => {
-      if (sentAfter <= waiter.closedBefore) return true;
+      if (waiter.closedAtAsk === null || place < waiter.closedAtAsk) return true;
       waiter.settle.resolve(presence.output);
 
       return false;
@@ -969,7 +1012,7 @@ async function watchTurns(page: Page): Promise<TurnWatch> {
     afterTurn: () => {
       const settle = Promise.withResolvers<boolean>();
 
-      waiters.push({ closedBefore: closed, settle });
+      waiters.push({ requestId: null, closedAtAsk: null, settle });
 
       return settle.promise;
     },
@@ -993,8 +1036,9 @@ const disagrees = (sample: v.InferOutput<typeof LiveSampleSchema>): boolean =>
   (sample.stop && sample.task === 'idle') || (!sample.stop && sample.task === 'working');
 
 /** Row 9 (#29): a new workspace's page opens on its first turn, so it loads a claim that is admitted. The turn is
- *  held at its model (`pacedFirstTurn`) while the page loads again and reads its state, then answers. Once the turn
- *  has closed and the page has asked for its live data again, nothing on that page may still say a turn runs. */
+ *  held at its model (`pacedFirstTurn`) while the page loads again and reads its state, and the page must say it
+ *  runs; then it answers. Once the turn has closed and the page has asked for its live data again, nothing on that
+ *  page may still say a turn runs, and at no sample may the header and the composer say different things. */
 async function measureOpenedMidTurn(
   newPage: LiveApp['newPage'], origin: string, firstTurn: HeldCall,
 ): Promise<OpenedMidTurnVerdict> {
@@ -1023,10 +1067,14 @@ async function measureOpenedMidTurn(
     // Loaded again now that the turn is admitted and waiting on its model: the page a new workspace opens on.
     await page.reload({ waitUntil: 'load' });
     await until(page, 'the workspace page, reloaded', `document.querySelector('textarea') !== null`);
+    await until(page, "the header's task state", `document.querySelector(${JSON.stringify(TASK_STATE)}) !== null`);
     await page.evaluate(INSTALL_LIVE_SAMPLER);
     await page.evaluate(COUNT_PRESENCE_ASKS);
     await until(page, "the reloaded page's first presence read", 'window.__presenceAsks > 0');
     await painted(page);
+
+    const held = v.parse(v.nullable(LiveSampleSchema), await page.evaluate(LAST_LIVE_SAMPLE));
+
     firstTurn.release();
     await closed;
 
@@ -1040,10 +1088,11 @@ async function measureOpenedMidTurn(
 
     await shoot(page, 'opened-mid-turn-ended');
 
-    if (last === undefined) throw new Error('the chat column was never sampled');
+    if (held === null || last === undefined) throw new Error('the chat column was never sampled');
 
     return {
-      openedLive: samples.some((sample) => sample.stop), stop: last.stop, states: last.states,
+      held: { stop: held.stop, task: held.task }, stop: last.stop, states: last.states,
+      headerless: samples.filter((sample) => sample.task === null).length,
       disagreed: samples.filter(disagrees).length,
     };
   } finally {
@@ -1210,8 +1259,8 @@ describe('a running turn draws exactly one live state', () => {
 });
 
 describe('a page opened during a turn stops showing it once the turn ends', () => {
-  test('the page opened while the turn ran', () => {
-    expect(verdictOf(observed.openedMidTurn, 'opened-mid-turn').openedLive).toBe(true);
+  test('while the turn runs, the composer offers Stop and the header says working', () => {
+    expect(verdictOf(observed.openedMidTurn, 'opened-mid-turn').held).toEqual({ stop: true, task: 'working' });
   });
 
   test('the composer offers no Stop and the thread draws no live state', () => {
@@ -1220,8 +1269,10 @@ describe('a page opened during a turn stops showing it once the turn ends', () =
     expect({ stop: ended.stop, states: ended.states }).toEqual({ stop: false, states: 0 });
   });
 
-  test('the header and the composer never disagree on whether a turn runs', () => {
-    expect(verdictOf(observed.openedMidTurn, 'opened-mid-turn').disagreed).toBe(0);
+  test('every sample reads the header, and the header never disagrees with the composer', () => {
+    const verdict = verdictOf(observed.openedMidTurn, 'opened-mid-turn');
+
+    expect({ headerless: verdict.headerless, disagreed: verdict.disagreed }).toEqual({ headerless: 0, disagreed: 0 });
   });
 });
 

@@ -42,10 +42,6 @@ function requestOf(row: RequestRow): PreparedRequest {
     source: { contextId: row.context_id, revision: row.context_revision }, metadata };
 }
 
-export function requestDetailsNotKept(keptSince: number): string {
-  return `Request details were not kept before ${new Date(keptSince).toISOString().slice(0, 16).replace('T', ' ')} UTC.`;
-}
-
 /** Immutable prepared-request evidence; never a source for working-context replay. */
 export class SessionRequests {
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle,
@@ -118,36 +114,25 @@ export class SessionRequests {
     return row === undefined ? null : requestOf(row);
   }
 
-  /** Null for a step recorded before request lists were kept. */
-  messagesOf(request: PreparedRequest): readonly MessageReference[] | null {
+  messagesOf(request: PreparedRequest): readonly MessageReference[] {
     if (request.step === null) return this.context.entries(request.source);
 
     const list = this.sql<{ context_id: string; revision: number }>`SELECT context_id,revision FROM request_renders
       WHERE actor_id=${this.actor.actorId} AND request_id=${request.id}`[0];
 
-    return list === undefined ? null : this.context.entries({ contextId: list.context_id, revision: list.revision });
+    if (list === undefined) throw new KinuError('io', `request ${request.id} has no recorded message list`);
+
+    return this.context.entries({ contextId: list.context_id, revision: list.revision });
   }
 
-  /** Now, while no list is kept. */
-  keptSince(): number {
-    this.actor.assertCurrent();
-
-    return this.sql<{ recorded_at: number }>`SELECT recorded_at FROM context_revisions
-      WHERE actor_id=${this.actor.actorId} AND context_id=${REQUEST_LINEAGE} AND revision=0`[0]?.recorded_at ?? Date.now();
-  }
-
-  async materialize(id: string): Promise<{ readonly request: PreparedRequest; readonly messages: readonly ModelMessage[] | null; readonly metadata: JsonValue }> {
+  async materialize(id: string): Promise<{ readonly request: PreparedRequest; readonly messages: readonly ModelMessage[]; readonly metadata: JsonValue }> {
     const request = this.read(id);
 
     if (request === null) throw new KinuError('missing', 'prepared request does not exist');
-    const references = this.messagesOf(request);
-    const metadata = await this.messages.payloads.read(request.metadata);
-
-    if (references === null) return { request, messages: null, metadata };
     const messages: ModelMessage[] = [];
 
-    for (const reference of references) messages.push(await this.messages.materialize(reference));
+    for (const reference of this.messagesOf(request)) messages.push(await this.messages.materialize(reference));
 
-    return { request, messages, metadata };
+    return { request, messages, metadata: await this.messages.payloads.read(request.metadata) };
   }
 }

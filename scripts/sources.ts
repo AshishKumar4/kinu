@@ -109,11 +109,9 @@ const CLIENT_DOCUMENT = /^packages\/cf-backend\/[^/]+\.html$/;
  *
  * Strictly narrower than `TEST_SUFFIX`, and the gap is load bearing. The
  * ladder's denominator is `isRunnableSuite`, which counts `.eval.` because the
- * lint rule governs those files too — so `bun test ./tests/` was CREDITED with
- * the four `tests/evals/*.eval.ts` suites bun cannot see, and `ladder.test.ts`
- * asserted that exact wrong set by equality. Four live eval suites read as
- * covered by a bun gate at the ci tier while only the eval tier's vitest arms
- * ever ran them.
+ * lint rule governs those files too — so a directory target once CREDITED a bun
+ * gate with four `.eval.ts` suites bun cannot see, and they read as covered at
+ * the ci tier while only a vitest runner ever ran them.
  */
 const BUN_DISCOVERED = /(?:\.|_)(?:test|spec)\.[jt]sx?$/;
 
@@ -262,11 +260,11 @@ export const isBunDiscoverableSuite = (file: string): boolean => BUN_DISCOVERED.
 
 /**
  * The other half, by construction rather than by a second list: a runnable
- * suite no `bun test` invocation can reach. Today that is exactly the
- * `tests/evals/*.eval.ts` family the eval tier runs under vitest.
+ * suite no `bun test` invocation can reach. Today that is exactly the eval
+ * tasks under `evals/tasks/`, which `bun run evals` runs under vitest.
  *
  * A COMPLEMENT so the partition is TOTAL. A third naming convention — a
- * `.eval.tsx`, or a `.eval.ts` outside `tests/evals/` — cannot appear in
+ * `.eval.tsx`, or a `.eval.ts` outside `evals/tasks/` — cannot appear in
  * neither set and slip past both runners' claims; it lands here and the ladder
  * demands a gate for it by name.
  */
@@ -283,11 +281,11 @@ export const isPythonSuite = (file: string): boolean => PYTHON_SUITE.test(file);
  *
  * Its own suffix and its own directory, because three runners must not be able
  * to reach each other's files. `bun test` selects only `.test.`/`.spec.`, and
- * `vitest.evals.config.ts` includes `tests/evals/**` alone, so these files are
+ * `evals/vitest.config.ts` includes `evals/tasks/**` alone, so these files are
  * disjoint from both BY CONSTRUCTION rather than by an ignore list somebody
- * keeps in step — which is what stops the eval tier being CREDITED with suites
- * it cannot run, the defect that once put four live eval files behind a bun
- * gate unable to select any of them.
+ * keeps in step — which is what stops a tier being CREDITED with suites it
+ * cannot run, the defect that once put four live eval files behind a bun gate
+ * unable to select any of them.
  *
  * Narrowed nowhere else: `tests/first-run/wiring.test.ts` holds this predicate
  * equal to the tier's own config include AND to the case list the tier
@@ -440,7 +438,7 @@ export const isClientDocument = (file: string): boolean => CLIENT_DOCUMENT.test(
  * silently pick one up while `tasks.jsonl` and every scored run ignore it.
  */
 export const isBenchDefectPatch = (file: string): boolean =>
-  file.startsWith('tests/bench/patches/') && file.endsWith('.patch');
+  file.startsWith('bench/corpus/patches/') && file.endsWith('.patch');
 
 /** One file's text, from `repoRoot`. The working tree when a copy exists; the
  *  INDEX blob when it does not — a tracked file deleted (or never checked out)

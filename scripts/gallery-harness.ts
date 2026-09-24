@@ -121,6 +121,60 @@ export function diagnosticsSettled(lines: RecordedDiagnostics, count: number): P
   return lines.settled(count);
 }
 
+/**
+ * Runs inside the page, so it closes over nothing: `page.evaluate(unruledClasses, scope, family, markers)`.
+ * Each class the elements matching `scope` carry, with `family` in its name, that no rule in the page's
+ * stylesheets selects. Tailwind generates only the utilities its sources reach, so a vendor component
+ * whose `@source` matched nothing carries classes that paint nothing. `markers` are classes a library
+ * uses as handles, never as styles.
+ */
+export function unruledClasses(scope: string, family: string, markers: readonly string[]): string[] {
+  const selectors: string[] = [];
+
+  const walk = (rules: CSSRuleList): void => {
+    for (const rule of rules) {
+      if (rule instanceof CSSStyleRule) selectors.push(rule.selectorText);
+
+      if (rule instanceof CSSGroupingRule) walk(rule.cssRules);
+    }
+  };
+
+  for (const sheet of document.styleSheets) walk(sheet.cssRules);
+
+  // `.bg-kumo-base/90` is another class than `.bg-kumo-base`: a selected name ends at an identifier boundary.
+  const selects = (selector: string, name: string): boolean => {
+    const needle = `.${CSS.escape(name)}`;
+
+    for (let at = selector.indexOf(needle); at !== -1; at = selector.indexOf(needle, at + 1)) {
+      if (!/^[\w\\-]/u.test(selector.slice(at + needle.length))) return true;
+    }
+
+    return false;
+  };
+
+  const classes = new Set([...document.querySelectorAll(scope)]
+    .flatMap((element) => [...element.classList].filter((name) => name.includes(family) && !markers.includes(name))));
+
+  return [...classes].filter((name) => !selectors.some((selector) => selects(selector, name)));
+}
+
+/** The conditions pages are being waited on, so a run ended mid-wait names them. No page wait has a clock; a
+ *  condition that never arrives is ended by the row's deadline, and this is what that end prints. A page opened
+ *  on `gallery.browser` directly, not through `newPage`, records nothing. */
+const pendingWaits = new Set<{ readonly condition: string }>();
+
+/** `wait`, with `condition` recorded while it is open. */
+async function recorded<T>(condition: string, wait: () => Promise<T>): Promise<T> {
+  const open = { condition };
+
+  pendingWaits.add(open);
+
+  try {
+    return await wait();
+  } finally {
+    pendingWaits.delete(open);
+  }
+}
 
 function chromePath(): string | undefined {
   for (const candidate of ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium']) {
@@ -339,6 +393,10 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
      * wrong, awaiting its exit hooks and never reaching its kill.
      */
     const abandonBrowser = (): void => {
+      if (pendingWaits.size > 0) {
+        process.stderr.write(`gallery-harness: ended while waiting for ${[...pendingWaits].map((open) => open.condition).join('; ')}\n`);
+      }
+
       signalGroup(group, 'SIGTERM');
       signalGroup(group, 'SIGKILL');
     };
@@ -367,9 +425,16 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
 
     const newPage = async (): Promise<Page> => {
       const page = await browser.newPage();
+      const waitForSelector = page.waitForSelector.bind(page);
+      const waitForFunction = page.waitForFunction.bind(page);
 
       page.setDefaultTimeout(0);
       page.setDefaultNavigationTimeout(0);
+      page.waitForSelector = async (selector, waitOptions) => recorded(`${selector} on ${page.url()}`, () => waitForSelector(selector, waitOptions));
+      page.waitForFunction = async (condition, waitOptions, ...args) => recorded(
+        `${String(condition).replace(/\s+/gu, ' ')} on ${page.url()}`,
+        () => waitForFunction(condition, waitOptions, ...args),
+      );
 
       return page;
     };

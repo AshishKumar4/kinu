@@ -228,8 +228,8 @@ function messagesAt(t: number): UIMessage[] {
   const preview = toolPart(t, {
     tool: 'eval', id: 'movie-preview',
     startAt: MOVIE_CUES.previewStart, doneAt: MOVIE_CUES.previewDone,
-    input: { code: "// Boot the preview and hand back its URL\nconst preview = await workspace.slate({ op: 'preview', id: 'support-queue' });\nreturn preview;" },
-    output: JSON.stringify({ ok: true, value: { url: SLATE_PREVIEW_URL, port: 8789 } }),
+    input: { code: "// Boot the preview and hand back its URL\nreturn await workspace.slates['support-queue'].$preview();" },
+    output: JSON.stringify({ url: SLATE_PREVIEW_URL, port: 8789 }),
   });
 
   if (preview !== null) build.push(preview);

@@ -238,7 +238,7 @@ export function readRetainedAttempts(dir: string): AttemptOutcome[] {
 }
 
 /** Shell runners use the same durable artifact policy as scored runs. */
-export function createEvalReportDirectory(family: 'eval' | 'first-run', backend: 'local' | 'cloud'): string {
+export function createEvalReportDirectory(family: 'live' | 'first-run', backend: 'local' | 'cloud'): string {
   const root = resolveArtifactRoot({
     flag: undefined, env: { BENCH_ARTIFACTS: process.env.BENCH_ARTIFACTS },
     repoRoot: resolve(import.meta.dirname, '..'), runRoot: tmpdir(),
@@ -252,9 +252,9 @@ export function createEvalReportDirectory(family: 'eval' | 'first-run', backend:
 if (import.meta.main) {
   const { values } = parseArgs({ options: { family: { type: 'string' }, backend: { type: 'string' } } });
 
-  if ((values.family !== 'eval' && values.family !== 'first-run')
+  if ((values.family !== 'live' && values.family !== 'first-run')
     || (values.backend !== 'local' && values.backend !== 'cloud')) {
-    throw new Error('Specify --family eval|first-run and --backend local|cloud');
+    throw new Error('Specify --family live|first-run and --backend local|cloud');
   }
 
   console.log(createEvalReportDirectory(values.family, values.backend));

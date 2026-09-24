@@ -72,10 +72,11 @@ import { AddServerCard } from "@/components/account/McpServersPanel";
 import { DevicesFrame, PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
 import { AccountProvider } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
+import { driveDesignFrame } from "@/gallery-drive-design";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
-import type { BlueprintInspection, BlueprintView, LiveShareRecord, SharedLibrary, SlateBindingDeclaration, SlateCapabilityGraph } from "@kinu.run/core";
+import type { BlueprintInspection, BlueprintView, LiveShareRecord, SlateBindingDeclaration, SlateCapabilityGraph } from "@kinu.run/core";
 import UserSettingsPage from "@/pages/UserSettingsPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
@@ -771,7 +772,7 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
 
 window.fetch = galleryFetch;
 
-if (frame === "drive" || frame === "drive-empty" || frame === "app") installDriveFixture(frame !== "drive-empty");
+installDriveFixture(frame);
 
 
 // Stands in for the runtime's terminal facet (core execution/workspace-terminal.ts): echoes input, runs a line at CR,
@@ -3663,7 +3664,7 @@ const SURFACE_STEPS = [
   ["card", "--c-surface"], ["raised", "--c-elevated"], ["overlay", "--c-overlay"],
 ] as const;
 
-/** Role names only: per-theme contrast ratios are asserted by `unit-palette-contrast`. */
+/** Role names only: per-theme contrast ratios are asserted by `scripts/palette-ux`. */
 const TEXT_STEPS = [
   ["ink", "--c-text"], ["mid", "--c-text-2"], ["dim", "--c-text-3"], ["accent-ink", "--c-accent-fg"],
 ] as const;
@@ -4238,32 +4239,6 @@ const LIVE_SHARE: LiveShareRecord = {
   ] },
   createdAt: NOW - 864e5, revokedAt: null, users: [],
 };
-
-const SHARED_LIBRARY: SharedLibrary = {
-  slates: [
-    { id: "issue-triage", title: "Issue triage", workspace: "checkout-fixes", bindings: 4, visibility: "public" },
-    { id: "lighthouse", title: "Landing perf report", workspace: "perf-audit", bindings: 1 },
-    { id: "standup", title: "Standup notes", workspace: "notes", bindings: 2 },
-  ],
-  mine: [
-    { id: "live-board-1", kind: "live", share: "live-board-1", title: "Issue triage", description: BLUEPRINT_VIEW.description, createdAt: NOW - 864e5, bindings: 4, visibility: "public", workspace: "checkout-fixes", users: [] },
-    { id: BLUEPRINT_ID, kind: "blueprint", share: "k7Qm2pV9xRt3aB4c", title: "Issue triage", description: BLUEPRINT_VIEW.description, createdAt: NOW - 3 * 864e5, bindings: 4, workspace: "checkout-fixes", users: ["pat@example.com"] },
-    { id: "perf-audit~h2Lm9sQ4dF7gJ1kP~q2wz5m7xk3rp6ha", kind: "blueprint", share: "h2Lm9sQ4dF7gJ1kP", title: "Landing perf report", description: "Runs Lighthouse against the landing page and posts the score.", createdAt: NOW - 12 * 864e5, bindings: 1, workspace: "perf-audit", users: [] },
-  ],
-  received: [
-    { id: "live-mail-9", kind: "live", share: "live-mail-9", title: "Inbox digest", description: "Summarises unread mail into one morning note, live from Sam's workspace.", createdAt: NOW - 2 * 3600e3, bindings: 2, visibility: "users", workspace: "sam-mail", owner: "sam@example.com" },
-    { id: "email-triage~z8Xc4vB2nM6qW3eR~a7bn3kd9pq2xw5ha", kind: "blueprint", share: "z8Xc4vB2nM6qW3eR", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 864e5, bindings: 2, workspace: "sam-mail", owner: "sam@example.com" },
-  ],
-  public: [
-    { id: "live-status-2", kind: "live", share: "live-status-2", title: "Deploy status board", description: "Every service, its last deploy and who shipped it.", createdAt: NOW - 5 * 864e5, bindings: 2, visibility: "public", workspace: "ops-board", owner: "lee@example.com" },
-    { id: "wordle~a1b2c3d4e5f6g7h8~zq2wm7xk3rp6hab", kind: "blueprint", share: "a1b2c3d4e5f6g7h8", title: "Standup notes", description: "Turns a channel's last day into three bullets.", createdAt: NOW - 9 * 864e5, bindings: 1, workspace: "notes", owner: "kim@example.com" },
-  ],
-  known: [
-    { id: "live-status-2", kind: "live", share: "live-status-2", title: "Deploy status board", description: "Every service, its last deploy and who shipped it.", createdAt: NOW - 5 * 864e5, bindings: 2, visibility: "public", workspace: "ops-board", owner: "lee@example.com" },
-  ],
-};
-
-const EMPTY_LIBRARY: SharedLibrary = { slates: [], mine: [], received: [], public: [], known: [] };
 
 /** Live mode with capability graph and one public share, or blueprint mode at inspection (`sharedialog-blueprint`). */
 function ShareDialogFrame({ mode }: { mode: "live" | "blueprint" }) {
@@ -4963,7 +4938,7 @@ const CLEAN_PRODUCERS: ProducerSpend[] = [
 const ACTIVITY_CONTEXT: ContextComposition = {
   segments: [
     { plane: "system", label: "Core instructions", chars: 18_400, items: 1 },
-    { plane: "system", label: "Workspace brief", chars: 3_120, items: 1 },
+    { plane: "system", label: "Code execution and learned capabilities", chars: 3_120, items: 1 },
     { plane: "tools", label: "shell", chars: 2_840, items: 1 },
     { plane: "tools", label: "edit", chars: 3_610, items: 1 },
     { plane: "tools", label: "read", chars: 2_180, items: 1 },
@@ -5799,8 +5774,9 @@ async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string
           <Route index element={<HomePage />} />
           <Route path="/user/settings" element={<UserSettingsPage />} />
           <Route path="/workspace/:agentId" element={<div className="h-full" data-gallery-blank />} />
-          <Route path={APP_ROUTES.drive} element={<DriveRoute />} />
-          <Route path={APP_ROUTES.driveFolder} element={<DriveRoute />} />
+          <Route path={APP_ROUTES.drive} element={<DriveRoute tab="mine" />} />
+          <Route path={APP_ROUTES.driveFolder} element={<DriveRoute tab="mine" />} />
+          <Route path={APP_ROUTES.shared} element={<DriveRoute tab="shared" />} />
         </Route>
       </Routes>
     ),
@@ -6102,18 +6078,11 @@ async function mount() {
     ["activitycache", { node: <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_HIT} /></div>, entries: ["/"] }],
     ["blueprint", { node: <BlueprintFrame />, entries: [`/shared/blueprint/${encodeURIComponent(BLUEPRINT_ID)}`] }],
     ["chat-slate", { node: <ChatSlateFrame />, entries: ["/"] }],
-    // Its own route, so the rail lights Drive, not Home.
-    ["shared", { node: <DrivePageFrame library={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} />, entries: [`${APP_ROUTES.drive}/blueprints`] }],
-    ["shared-empty", {
-      node: <DrivePageFrame library={EMPTY_LIBRARY} workspaces={STOCK_ROSTER.entries} />,
-      entries: [`${APP_ROUTES.drive}/blueprints`],
-    }],
-    // `&path=/projects/ops` opens a folder.
-    ["drive", {
-      node: <DrivePageFrame library={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} />,
-      entries: [`${APP_ROUTES.drive}${new URLSearchParams(location.search).get("path") ?? ""}`],
-    }],
-    ["drive-empty", { node: <DrivePageFrame library={EMPTY_LIBRARY} workspaces={STOCK_ROSTER.entries} />, entries: [APP_ROUTES.drive] }],
+    // `&path=/projects/ops` opens a folder; `shared` is the other tab; `drive-recipient` holds only what others shared.
+    ["drive", { node: <DrivePageFrame />, entries: [`${APP_ROUTES.drive}${new URLSearchParams(location.search).get("path") ?? ""}`] }],
+    ["shared", { node: <DrivePageFrame />, entries: [APP_ROUTES.shared] }],
+    ["drive-empty", { node: <DrivePageFrame />, entries: [APP_ROUTES.drive] }],
+    ["drive-recipient", { node: <DrivePageFrame />, entries: [APP_ROUTES.drive] }],
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],
     ["sharedialog", { node: <ShareDialogFrame mode="live" />, entries: ["/"] }],
     ["sharedialog-blueprint", { node: <ShareDialogFrame mode="blueprint" />, entries: ["/"] }],
@@ -6150,6 +6119,7 @@ async function mount() {
     ["settings", settingsFrame],
     ["control", controlFrame],
     ["home", homeFrame],
+    ["drive-design", () => Promise.resolve(driveDesignFrame())],
   ]);
 
   const dynamicFixture = dynamicFrames.get(frame);

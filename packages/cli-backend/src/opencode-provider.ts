@@ -4,10 +4,9 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenAI } from '@ai-sdk/openai';
 import {
-  asFetchFunction, JsonObjectSchema, withRateLimitRetry,
-  type JsonObject, type JsonValue,
+  asFetchFunction, JsonObjectSchema, statelessResponses, withRateLimitRetry,
 } from '@kinu.run/core';
-import type { LanguageModel } from 'ai';
+import { wrapLanguageModel, type LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@kinu.run/core';
 import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { existsSync, readFileSync } from 'node:fs';
@@ -296,11 +295,10 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
 
       // The metadata map is cold until loadConfig() runs (a resumed session), and
       // defaulting a reasoning model to Chat Completions breaks it; fall back to family.
-      const useResponsesAPI = metadata
-        ? metadata.reasoning === true || metadata.apiNpm === '@ai-sdk/openai'
-        : isOpenAIReasoningFamily(modelId);
+      const reasoning = metadata ? metadata.reasoning === true : isOpenAIReasoningFamily(modelId);
+      const useResponsesAPI = reasoning || metadata?.apiNpm === '@ai-sdk/openai';
 
-      return createOpenCodeModel({ modelId, resolveConfig: () => loadConfig(), invalidateCache, fetchImpl, useResponsesAPI });
+      return createOpenCodeModel({ modelId, resolveConfig: () => loadConfig(), invalidateCache, fetchImpl, useResponsesAPI, reasoning });
     },
   };
 }
@@ -312,10 +310,11 @@ interface OpenCodeModelSpec {
   invalidateCache: () => void;
   fetchImpl: typeof fetch;
   useResponsesAPI: boolean;
+  reasoning: boolean;
 }
 
 function createOpenCodeModel(spec: OpenCodeModelSpec): LanguageModel {
-  const { modelId, resolveConfig, invalidateCache, fetchImpl, useResponsesAPI } = spec;
+  const { modelId, resolveConfig, invalidateCache, fetchImpl, useResponsesAPI, reasoning } = spec;
   const slash = modelId.indexOf('/');
 
   if (slash < 0) throw new Error(`Invalid opencode model id: ${modelId}`);
@@ -355,7 +354,6 @@ function createOpenCodeModel(spec: OpenCodeModelSpec): LanguageModel {
       const parsed = v.parse(JsonObjectSchema, JSON.parse(textBody.output));
       parsed.model = upstreamModel;
 
-      if (useResponsesAPI) rewriteOpenCodeResponsesBody(parsed);
       // OpenAI Chat Completions uses max_completion_tokens instead of max_tokens.
       const maxTokens = v.safeParse(v.number(), parsed.max_tokens);
 
@@ -387,12 +385,10 @@ function createOpenCodeModel(spec: OpenCodeModelSpec): LanguageModel {
   });
 
   if (useResponsesAPI) {
-    return createOpenAI({
-      name: OPENCODE_PROVIDER_ID,
-      baseURL: placeholder,
-      apiKey: 'placeholder',
-      fetch: customFetch,
-    }).responses(modelId);
+    return wrapLanguageModel({
+      model: createOpenAI({ name: OPENCODE_PROVIDER_ID, baseURL: placeholder, apiKey: 'placeholder', fetch: customFetch }).responses(modelId),
+      middleware: statelessResponses(reasoning),
+    });
   }
 
   return createOpenAICompatible({
@@ -409,53 +405,6 @@ function isOpenAIReasoningFamily(modelId: string): boolean {
 
   return /^(gpt-[5-9]|o[0-9])/.test(upstream);
 }
-
-const SERVER_ITEM_ID = /^(rs_|msg_|fc_|item_)/;
-
-export function rewriteOpenCodeResponsesBody(body: JsonObject): void {
-  // A ModelProvider does not own per-turn call options, so enforce ZDR here.
-  body.store = false;
-  const parsedInclude = v.safeParse(v.array(v.string()), body.include);
-  const include = parsedInclude.success ? parsedInclude.output : [];
-  body.include = [...new Set([...include, 'reasoning.encrypted_content'])];
-
-  if (!Array.isArray(body.input)) return;
-  const input: JsonValue[] = [];
-
-  for (const item of body.input) {
-    const parsedItem = v.safeParse(JsonObjectSchema, item);
-
-    if (!parsedItem.success) {
-      input.push(item);
-      continue;
-    }
-
-    const object = parsedItem.output;
-
-    if (
-      object.type === 'item_reference'
-      && v.safeParse(v.pipe(v.string(), v.regex(SERVER_ITEM_ID)), object.id).success
-    ) {
-      continue;
-    }
-
-    // With store:false any server-assigned id in replayed input 404s on lookup;
-    // strip ids, keep payloads.
-    const serverId = v.safeParse(v.pipe(v.string(), v.regex(SERVER_ITEM_ID)), object.id);
-
-    if (serverId.success) {
-      const byValue: JsonObject = { ...object };
-      delete byValue.id;
-      input.push(byValue);
-      continue;
-    }
-
-    input.push(object);
-  }
-
-  body.input = input;
-}
-
 
 async function discoverModels(spawnFn: OpenCodeSpawn): Promise<OpenCodeModelInfo[]> {
   const child = spawnFn(['models', '--verbose'], {});

@@ -85,8 +85,9 @@ export default function App() {
             <Route index element={<ErrorBoundary label="home"><HomePage /></ErrorBoundary>} />
             <Route path={APP_ROUTES.userSettings} element={<ErrorBoundary label="user-settings"><UserSettingsPage /></ErrorBoundary>} />
             <Route path={APP_ROUTES.userMcp} element={<ErrorBoundary label="user-mcp"><UserMcpPage /></ErrorBoundary>} />
-            <Route path={APP_ROUTES.drive} element={<ErrorBoundary label="drive"><DrivePage /></ErrorBoundary>} />
-            <Route path={APP_ROUTES.driveFolder} element={<ErrorBoundary label="drive-folder"><DrivePage /></ErrorBoundary>} />
+            <Route path={APP_ROUTES.drive} element={<ErrorBoundary label="drive"><DrivePage tab="mine" /></ErrorBoundary>} />
+            <Route path={APP_ROUTES.driveFolder} element={<ErrorBoundary label="drive-folder"><DrivePage tab="mine" /></ErrorBoundary>} />
+            <Route path={APP_ROUTES.shared} element={<ErrorBoundary label="shared"><DrivePage tab="shared" /></ErrorBoundary>} />
             <Route path={APP_ROUTES.workspaces} element={<ErrorBoundary label="workspaces"><WorkspacesPage /></ErrorBoundary>} />
             <Route path={APP_ROUTES.plugins} element={<ErrorBoundary label="plugins"><PluginsPage /></ErrorBoundary>} />
             <Route path={APP_ROUTES.devices} element={<ErrorBoundary label="devices"><DevicesPage /></ErrorBoundary>} />

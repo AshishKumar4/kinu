@@ -1,26 +1,22 @@
 /**
- * Share-gaps rules end to end through the edge route: rate bound, consent page, fork flag, and the public index.
+ * Share-gaps rules end to end through the edge route: rate bound, consent page, fork flag, and revoking either kind.
  * Same harness as `unit-slate-live-shares.test.ts`; the per-share daily spend bound pauses a running slate's
  * calls, so it is driven in workerd (`tests/workerd/slate-share.test.ts`).
  */
 import { afterEach, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  LiveShareRecordSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE,
+  LiveShareRecordSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
   type AgentRuntime, type SlateAnswer,
 } from '@kinu.run/core';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
-import { createTestUserDO, provisionTestWorkspace, sqlExec, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
+import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
 import { makeKv } from './helpers/kv';
-import { sharedRoutes } from '../src/shared/routes';
+import { sharedPublicRoutes, sharedRoutes } from '../src/shared/routes';
 import { serveFamily } from './helpers/api';
 import { handleSlateShareHostRequest } from '../src/slate-share-route';
 import type { AuthIdentity } from '../src/auth/session';
-import type { UserCaller } from '@kinu.run/core';
-import { Database } from 'bun:sqlite';
-import { initControlPlaneSchema } from '@kinu.run/core/control-plane/store';
-import { indexPublicShare as indexRow, listPublicShares as listRows, forgetPublicShare as forgetRow } from '@kinu.run/core/control-plane';
 import { present } from '@kinu.run/test-utils';
 
 function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, schema: Schema): v.InferOutput<Schema> {
@@ -92,22 +88,12 @@ async function twoUserWorld(): Promise<World> {
   ]);
 
   const users = new Map<string, TestUserDO>([[OWNER_ID, ownerSide.user], [VIEWER_ID, viewerSide.user]]);
-  const controlDb = new Database(':memory:');
-  const controlSql = sqlExec(controlDb);
-  initControlPlaneSchema(controlSql);
-
-  const controlPlane = {
-    publicShares_put: async (_caller: UserCaller, row: Parameters<typeof indexRow>[1]) => indexRow(controlSql, row),
-    publicShares_forget: async (_caller: UserCaller, key: Parameters<typeof forgetRow>[1]) => forgetRow(controlSql, key),
-    publicShares_list: async (_caller: UserCaller) => listRows(controlSql),
-  };
 
   const partialEnv: Partial<Env> = {};
   Object.assign(partialEnv, {
     ...TEST_USER_ENV,
     PREVIEW_HOST_SUFFIX: 'share.test',
     AUTH_KV: kv,
-    ControlPlaneDO: { idFromName: (name: string) => name, get: () => controlPlane },
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (id: string) => present(agents.get(id), `the OrchestratorAgent stub ${id}`),
@@ -132,7 +118,7 @@ async function twoUserWorld(): Promise<World> {
 
   return {
     env, owner: ownerSide.agent, viewer: viewerSide.agent, ownerUser: ownerSide.user,
-    close: () => { ownerSide.user.close(); viewerSide.user.close(); controlDb.close(); resetRecordedMcp(); },
+    close: () => { ownerSide.user.close(); viewerSide.user.close(); resetRecordedMcp(); },
   };
 }
 
@@ -224,7 +210,7 @@ test('a users share refuses a viewer it does not name', async () => {
   expect((await visit(world, present(created.url, 'the share URL'), '203.0.113.5'))?.status).toBe(404);
 });
 
-test('D1: a live share forks for who it names, refuses who it does not, and honors fork:false', async () => {
+test('D1: a live share forks for who it names, refuses who it does not, honors fork:false, and its owner forks it too', async () => {
   const world = await twoUserWorld();
   cleanups.push(world.close);
 
@@ -268,11 +254,32 @@ test('D1: a live share forks for who it names, refuses who it does not, and hono
     post('/api/shared/fork', { live: created.share.id, ownerWorkspace: 'issues-owner', workspace: 'issues-owner' }));
 
   expect(ownerFork?.status).toBe(201);
+
+  // The owner's Drive row carries the switch, so it offers Fork… on the open share and not on the closed one.
+  const library = await jsonBody(present(await sharedRequest(world.env, identityOf(OWNER_ID, 'owner@example.test'),
+    new Request('https://app.test/api/shared')), 'the owner\'s library'), SharedLibrarySchema);
+
+  const forks = new Map(library.mine.map((row) => [row.id, row.fork]));
+
+  expect([forks.get(created.share.id), forks.get(closed.share.id)]).toEqual([true, false]);
 });
 
-test('D2: a public blueprint publish lands on the shared index a stranger reads', async () => {
+test('D2: one revoke route ends a public live share and a blueprint link', async () => {
   const world = await twoUserWorld();
   cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const revoke = (share: string) => sharedRequest(world.env, owner, post('/api/shared/revoke', { workspace: 'issues-owner', share }));
+
+  const liveResp = present(await sharedRequest(world.env, owner,
+    post('/api/shared/live', { workspace: 'issues-owner', slate: 'issues', visibility: 'public' })), 'the live share answer');
+
+  expect(liveResp.status).toBe(201);
+  const live = await jsonBody(liveResp, v.object({ share: v.object({ id: v.string() }), url: v.nullable(v.string()) }));
+  const url = present(live.url, 'the share URL');
+
+  expect((await visit(world, url, '203.0.113.9'))?.status).toBe(200);
+  expect((await revoke(live.share.id))?.status).toBe(200);
+  expect((await visit(world, url, '203.0.113.9'))?.status).toBe(404);
 
   const committed = await world.owner.agent.slate({ op: 'commit', id: 'issues' });
 
@@ -281,35 +288,14 @@ test('D2: a public blueprint publish lands on the shared index a stranger reads'
   const latest = present(answered(await world.owner.agent.slate({ op: 'history', id: 'issues' }),
     v.object({ versions: v.array(v.object({ id: v.string() })) })).versions.at(-1), 'the latest committed version');
 
-  const published = await sharedRequest(world.env, identityOf(OWNER_ID, 'owner@example.test'),
-    post('/api/shared/publish', { workspace: 'issues-owner', slate: 'issues', version: latest.id, public: true }));
+  const publishResp = present(await sharedRequest(world.env, owner,
+    post('/api/shared/publish', { workspace: 'issues-owner', slate: 'issues', version: latest.id })), 'the publish answer');
 
-  if (published === null) throw new Error('publish answered null');
-  expect(published.status).toBe(201);
-  const body = await jsonBody(published, v.object({ id: v.string() }));
+  expect(publishResp.status).toBe(201);
+  const blueprint = await jsonBody(publishResp, v.object({ id: v.string(), share: v.string() }));
+  const page = () => serveFamily(sharedPublicRoutes)(new Request(`https://app.test/api/shared/blueprint/${encodeURIComponent(blueprint.id)}`), world.env);
 
-  const listed = await sharedRequest(world.env, identityOf(VIEWER_ID, 'pat@example.test'),
-    new Request('https://app.test/api/shared', { method: 'GET' }));
-
-  if (listed === null) throw new Error('the library answered null');
-
-  const library = await jsonBody(listed, v.object({
-    public: v.array(v.looseObject({ id: v.string(), kind: v.string(), title: v.string() })),
-  }));
-
-  expect(library.public.some((row) => row.id === body.id && row.kind === 'blueprint' && row.title === 'Issue triage')).toBe(true);
-
-  // A row that cannot be forked is indexed but not something the public page can offer.
-  const closedResp = await sharedRequest(world.env, identityOf(OWNER_ID, 'owner@example.test'),
-    post('/api/shared/live', { workspace: 'issues-owner', slate: 'issues', visibility: 'public', fork: false }));
-
-  if (closedResp === null || closedResp.status !== 201) throw new Error(`the fork-closed share was refused: ${closedResp?.status}`);
-  const closed = (await jsonBody(closedResp, v.object({ share: v.object({ id: v.string() }) }))).share;
-
-  const relisted = await jsonBody(present(await sharedRequest(world.env, identityOf(VIEWER_ID, 'pat@example.test'),
-    new Request('https://app.test/api/shared', { method: 'GET' })), 'the /api/shared listing'), v.object({
-    public: v.array(v.looseObject({ id: v.string(), kind: v.string() })),
-  }));
-
-  expect(relisted.public.some((row) => row.id === closed.id && row.kind === 'live')).toBe(false);
+  expect((await page())?.status).toBe(200);
+  expect((await revoke(blueprint.share))?.status).toBe(200);
+  expect((await page())?.status).toBe(404);
 });

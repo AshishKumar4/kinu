@@ -200,7 +200,8 @@ interface HeroBackdropFact {
 
 interface MovieFact {
   readonly typing: boolean;
-  readonly tools: boolean;
+  /** Tool rows in the plan frame, and whether they name the file the story reads. */
+  readonly tools: { rows: number; coupon: boolean };
   readonly decisions: readonly { label: string; disabled: boolean }[];
   readonly cursorShown: boolean;
   readonly decided: boolean;
@@ -554,10 +555,14 @@ beforeAll(async () => {
         };
       });
 
-      await page.waitForFunction(() => (
-        document.querySelector('[data-landing-frame="plan"] [data-tool-group]') !== null
-        && document.querySelector('[data-landing-frame="plan"]')?.textContent?.includes('apply-coupon') === true
-      ));
+      // Read, not awaited: `seek` resolves with the beat's DOM committed (LandingMovieHandle), and a wait
+      // on a row the product stopped rendering never ended: `[data-tool-group]` went with the activity
+      // card on 2026-09-23 (9e9d2ab10) and this suite hung on it from then on.
+      const tools = await page.evaluate(() => ({
+        rows: document.querySelectorAll('[data-landing-frame="plan"] [data-tool-state]').length,
+        coupon: document.querySelector('[data-landing-frame="plan"]')?.textContent?.includes('apply-coupon') === true,
+      }));
+
       // The plan pops up in the right-hand panel with Approve live: the movie
       // submits a clean plan, so Request changes stays disabled.
       await seek(cues.planReady + 200);
@@ -637,7 +642,7 @@ beforeAll(async () => {
 
       facts.movie = {
         typing: typing.length > 0,
-        tools: true,
+        tools,
         decisions,
         cursorShown,
         decided: true,
@@ -792,15 +797,15 @@ beforeAll(async () => {
         const root = document.querySelector('[data-landing-frame="checkout"]');
 
         const assistants = [...(root?.querySelectorAll('div.animate-fade-in') ?? [])]
-          .filter((node) => node.querySelector('.prose-chat, [data-tool-group]') !== null);
+          .filter((node) => node.querySelector('.prose-chat, [data-tool-state]') !== null);
 
         // The lead is whichever content comes first in document order, not
         // the first child of some wrapper: how the blocks are boxed is layout.
-        const lead = assistants[0]?.querySelector('.prose-chat, [data-tool-group]') ?? null;
+        const lead = assistants[0]?.querySelector('.prose-chat, [data-tool-state]') ?? null;
 
         return {
           firstIsProse: lead?.classList.contains('prose-chat') === true,
-          firstIsTool: lead?.hasAttribute('data-tool-group') === true,
+          firstIsTool: lead?.hasAttribute('data-tool-state') === true,
         };
       });
       await page.close();
@@ -1295,7 +1300,8 @@ describe('the plan frame walks through the session', () => {
   });
 
   test('tool calls stream into the transcript the way a real turn renders', () => {
-    expect(required(facts.movie, 'walkthrough').tools).toBeTrue();
+    expect(required(facts.movie, 'walkthrough').tools).toEqual({ rows: expect.any(Number), coupon: true });
+    expect(required(facts.movie, 'walkthrough').tools.rows).toBeGreaterThan(0);
   });
 
   test('the plan pops up in the right panel with Approve live', () => {

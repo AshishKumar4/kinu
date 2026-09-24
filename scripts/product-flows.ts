@@ -10,7 +10,7 @@
  * by the eval plane's own resolver, so a row never asks where it runs.
  *
  * WHY THIS EXISTS. The first-run tier reads the deployment over its API and its
- * socket, the trajectory tier drives the model through the socket, and the
+ * socket, the eval suite drives the model through the socket, and the
  * `*-ux` browser tests run on the gallery's fixtures. None of them loads the
  * page a person loads, so a workspace whose agents were all present over the
  * API showed none of them after a reload (#13), and every gate stayed green.
@@ -20,11 +20,12 @@
  */
 import type { Browser, ElementHandle, Page } from 'puppeteer';
 import * as v from 'valibot';
+import { workspacePath } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
-import { webHeaders, type PublicWebIdentity } from '../tests/evals/public-session';
+import { webHeaders, type PublicWebIdentity } from '../evals/src/session';
 import { DESKTOP } from './live-app-harness';
 
 /** Where a row runs and who it runs as. */
@@ -135,14 +136,18 @@ const CHAT_IDLE = `[...document.querySelectorAll('#chat button')].some((el) => e
 /** What stops a row dead: an app script that never loaded, which leaves the
  *  page blank; a turn the socket reported ended in error, which the page may
  *  never show as ended; the welcome page, which stands in front of every route
- *  until the account finishes setup; or a danger notice, the product saying why
+ *  until the account finishes setup, once it offers its next step again (while
+ *  it saves one, Next and Finish setup are disabled, and a save that fails
+ *  enables them beside its error); or a danger notice, the product saying why
  *  the thing asked for will not come. */
 const DEAD_END = `(() => {
   const script = (window.__scriptFailures ?? []).at(-1);
   if (script !== undefined) return 'the app script ' + script + ' failed to load, which leaves the page blank';
   const failed = (window.__turnErrors ?? []).at(-1);
   if (failed !== undefined) return 'a turn that ended in error: ' + failed;
-  if (location.pathname === '/welcome') {
+  const welcomeOffers = [...document.querySelectorAll('button')].some((b) => !b.disabled && b.getClientRects().length > 0
+    && ['Next', 'Finish setup'].includes((b.textContent ?? '').trim()));
+  if (location.pathname === '/welcome' && welcomeOffers) {
     const said = [...document.querySelectorAll('.p-danger')].map((el) => (el.textContent ?? '').trim()).join(' ');
     return 'the welcome page, which the account has not finished' + (said === '' ? '' : ': ' + said);
   }
@@ -590,18 +595,26 @@ export const INSPECTOR_SHUT_PX = 40;
 
 export const OPEN_NAMES = 'show|expand|open';
 
-/** The clockless settle after a press: the measured number, equal on two
- *  consecutive animation frames. A control that does nothing settles at the
- *  number it started with, so no deadline is needed to tell an inert control
- *  from a slow one, and a panel that animates is read after it lands. */
+/** The clockless settle after a press: no finite animation running or waiting
+ *  to start, and the measured number equal on two consecutive animation frames
+ *  with none. `getAnimations()` flushes pending style, so a transition the
+ *  press has just set off is counted before it has moved a pixel: equal frames
+ *  alone read the rail as settled at its open 240 px while its collapse waited
+ *  pending (2026-09-24, 10 of 40 collapses short of the end state at 6x CPU
+ *  throttling). An infinite animation, a pulsing dot, never finishes and is not
+ *  waited on. A control that does nothing settles at the number it started
+ *  with, so no deadline is needed to tell an inert control from a slow one. */
 export async function settled(page: Page, read: string): Promise<void> {
   await page.evaluate('window.__liveSettle = undefined');
   await page.waitForFunction(
     `(() => {
       const value = ${read};
+      const moving = document.getAnimations().some((animation) =>
+        (animation.pending || animation.playState === 'running')
+        && animation.effect?.getComputedTiming().endTime !== Infinity);
       const previous = window.__liveSettle;
-      window.__liveSettle = value;
-      return previous === value;
+      window.__liveSettle = moving ? undefined : value;
+      return !moving && previous === value;
     })()`,
     { polling: 'raf' },
   );
@@ -861,11 +874,13 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
 /** The entry names the Drive list shows. */
 const DRIVE_LISTED = `[...document.querySelectorAll('[data-drive-entry]')].map((row) => row.getAttribute('data-drive-entry') ?? '')`;
 
-/** Counts, on `window`, every Drive listing the page's own fetch has had
- *  answered, body and all (or ended short of it); installed before each
- *  document's scripts run. A count at the headers is a count of nothing yet:
- *  from the edge the listing itself came 50 ms behind them (2026-09-23), and a
- *  snapshot two frames after the headers read the Drive one step late. */
+/** Counts, on `window`, every listing of the Drive's root the page's own fetch
+ *  has had answered, body and all (or ended short of it); installed before each
+ *  document's scripts run. The root also asks for /skills, to know whether to
+ *  show that folder, and that answer is not the listing a step causes. A count
+ *  at the headers is a count of nothing yet: from the edge the listing itself
+ *  came 50 ms behind them (2026-09-23), and a snapshot two frames after the
+ *  headers read the Drive one step late. */
 const COUNT_DRIVE_LISTINGS = `(() => {
   window.__driveListings = 0;
   const real = window.fetch.bind(window);
@@ -873,7 +888,7 @@ const COUNT_DRIVE_LISTINGS = `(() => {
     const response = await real(input, init);
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.href);
     const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
-    if (method === 'GET' && url.pathname === '/api/drive') {
+    if (method === 'GET' && url.pathname === '/api/drive' && url.searchParams.get('path') === '/') {
       const settled = () => { window.__driveListings += 1; };
       response.clone().arrayBuffer().then(settled, settled);
     }
@@ -918,8 +933,8 @@ export interface DriveVerdict {
 /**
  * Row: what a person does in the Drive page is kept.
  *
- * Make a folder and upload a file, rename the folder, reload, then delete both
- * through their rows' own controls. The Drive is the account's, not a
+ * Make a folder through New and upload a file, rename the folder, reload, then
+ * delete both through their tiles' own menus. The Drive is the account's, not a
  * workspace's, so the entries carry names no other run shares and are removed
  * through the Drive's own route if the row stops early.
  */
@@ -936,6 +951,7 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
     await page.evaluateOnNewDocument(COUNT_DRIVE_LISTINGS);
     await relisted(page, async () => { await page.goto(`${target.origin}/drive`, { waitUntil: 'load' }); }, true);
     await relisted(page, async () => {
+      await page.click('[data-drive-new]');
       await page.click('[data-drive-new-folder]');
       await nameInDialog(page, folder);
     });
@@ -947,6 +963,7 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
     const afterCreate = await relisted(page, () => picker.uploadFile(upload));
 
     await relisted(page, async () => {
+      await page.click(`[data-drive-entry="${folder}"] [data-drive-menu]`);
       await page.click(`[data-drive-entry="${folder}"] [data-drive-rename]`);
       await nameInDialog(page, renamed);
     });
@@ -957,6 +974,7 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
     // the verdict's finding, and the `finally` below removes what is left.
     for (const entry of [renamed, file].filter((listed) => afterRename.includes(listed))) {
       await relisted(page, async () => {
+        await page.click(`[data-drive-entry="${entry}"] [data-drive-menu]`);
         await page.click(`[data-drive-entry="${entry}"] [data-drive-delete]`);
         await until(page, 'the delete confirmation', `document.querySelector('[data-drive-delete-confirm]') !== null`);
         await page.click('[data-drive-delete-confirm]');
@@ -980,5 +998,223 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
         console.warn(`product-flows: removing Drive entry ${entry} answered ${String(left.status)}`);
       }
     }
+  }
+}
+
+/** The Drive's sections as drawn, each with the tiles in it. */
+const DRIVE_SECTIONS = `[...document.querySelectorAll('[data-drive-section]')].map((section) => ({
+  title: section.getAttribute('data-drive-section') ?? '',
+  tiles: section.querySelectorAll('[data-drive-tile-name]').length,
+}))`;
+
+/** The Drive has drawn what it holds: its sections, or its empty state. */
+const DRIVE_DRAWN = `document.querySelector('[data-drive-section], [data-drive-empty]') !== null`;
+
+export interface DriveOpensVerdict {
+  /** Where `/drive` landed: My stuff, or Shared for an account that owns nothing yet but was shared something. */
+  readonly landedAt: string;
+  readonly sections: readonly { readonly title: string; readonly tiles: number }[];
+  readonly empty: boolean;
+  /** The sidebar's Drive row is marked as the current page. */
+  readonly sidebarLit: boolean;
+}
+
+/**
+ * Row: the Drive opens and draws nothing empty.
+ *
+ * Opens `/drive` and reads what it drew: every section it shows holds at least
+ * one tile, and a Drive with nothing to show draws its empty state instead.
+ */
+export async function driveOpens(target: FlowTarget): Promise<DriveOpensVerdict> {
+  const page = await signedInPage(target.browser, target.identity);
+
+  try {
+    await page.goto(`${target.origin}/drive`, { waitUntil: 'load' });
+    await until(page, 'the Drive to draw what it holds', DRIVE_DRAWN);
+    await painted(page);
+
+    const sections = v.parse(v.array(v.object({ title: v.string(), tiles: v.number() })), await page.evaluate(DRIVE_SECTIONS));
+    const empty = v.parse(v.boolean(), await page.evaluate(`document.querySelector('[data-drive-empty]') !== null`));
+
+    const sidebarLit = v.parse(v.boolean(), await page.evaluate(
+      `[...document.querySelectorAll('a[aria-current="page"]')].some((link) => (link.textContent ?? '').trim() === 'Drive')`,
+    ));
+
+    return { landedAt: new URL(page.url()).pathname, sections, empty, sidebarLit };
+  } finally {
+    await page.close();
+  }
+}
+
+/** The slate the Drive's slate rows write into a workspace of their own: one
+ *  page and no bindings, so opening and sharing it spend no model turn. */
+export const DRIVE_SLATE = { id: 'drive-flow', title: 'Drive flow probe' } as const;
+
+/** Write one file into a workspace through the route the Files tab uploads with. */
+async function writeWorkspaceFile(target: FlowTarget, workspace: string, path: string, text: string): Promise<void> {
+  const query = new URLSearchParams({ executor: 'workspace', path });
+
+  const response = await fetch(`${target.origin}/api/workspaces/${encodeURIComponent(workspace)}/files?${query.toString()}`, {
+    method: 'PUT',
+    headers: { ...webHeaders(target.identity), 'content-type': 'application/octet-stream' },
+    body: text,
+  });
+
+  if (!response.ok) throw new Error(`writing ${path} answered ${String(response.status)}: ${(await response.text()).slice(0, 300)}`);
+}
+
+async function workspaceWithSlate(target: FlowTarget, subject: string): Promise<string> {
+  const workspace = await createFlowWorkspace(target, subject);
+  const root = workspacePath(`slates/${DRIVE_SLATE.id}`);
+
+  await writeWorkspaceFile(target, workspace, `${root}/package.json`, JSON.stringify({
+    name: DRIVE_SLATE.id, main: 'server.ts', slate: { title: DRIVE_SLATE.title, bindings: {} },
+  }));
+  await writeWorkspaceFile(target, workspace, `${root}/server.ts`, 'export default { fetch: () => new Response("drive flow") };\n');
+
+  return workspace;
+}
+
+/** The slate's tile in My stuff, found by the slate and the workspace it lives in. */
+function slateTile(workspace: string): string {
+  return `[data-drive-slate="${DRIVE_SLATE.id}"][data-drive-workspace="${workspace}"]`;
+}
+
+async function driveWithSlate(target: FlowTarget, workspace: string): Promise<Page> {
+  const page = await signedInPage(target.browser, target.identity);
+
+  await page.goto(`${target.origin}/drive`, { waitUntil: 'load' });
+  await until(page, 'the slate\'s tile in My stuff', `document.querySelector(${JSON.stringify(slateTile(workspace))}) !== null`);
+  await painted(page);
+
+  return page;
+}
+
+export interface SlateOpensVerdict {
+  readonly workspace: string;
+  /** The name the slate's tile draws. */
+  readonly tileName: string;
+  /** Where pressing the tile went. */
+  readonly landedAt: string;
+  /** The workspace strip's current tab is the slate's. */
+  readonly slateTabCurrent: boolean;
+}
+
+/**
+ * Row: a slate opens from My stuff into its workspace, on its own tab.
+ *
+ * A workspace gets a slate through the Files route; the Drive's tile for it is
+ * pressed, and the workspace page it opens must have made the slate's tab the
+ * current one. The preview frame is not read: `vite dev` serves no slate.
+ */
+export async function slateOpensFromMyStuff(target: FlowTarget): Promise<SlateOpensVerdict> {
+  const workspace = await workspaceWithSlate(target, 'drive-open');
+
+  try {
+    const page = await driveWithSlate(target, workspace);
+    const tileName = await page.$eval(`${slateTile(workspace)} [data-drive-tile-name]`, (element) => (element.textContent ?? '').trim());
+
+    await page.click(`${slateTile(workspace)} a`);
+    await until(page, 'the workspace page', CHAT_COMPOSER_LIVE);
+    await openInspector(page);
+
+    const current = `#inspector button[aria-label="${DRIVE_SLATE.title}"][aria-current="true"]`;
+    await until(page, 'the slate\'s tab', stripHas(DRIVE_SLATE.title));
+    const slateTabCurrent = v.parse(v.boolean(), await page.evaluate(`document.querySelector(${JSON.stringify(current)}) !== null`));
+    const url = new URL(page.url());
+
+    await page.close();
+
+    return { workspace, tileName, landedAt: `${url.pathname}${url.search}`, slateTabCurrent };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+/** The titles of the shares a Drive section draws. */
+function sharesIn(section: string): string {
+  return `[...document.querySelectorAll('[data-drive-section="${section}"] [data-drive-share] [data-drive-tile-name]')]
+    .map((name) => (name.textContent ?? '').trim())`;
+}
+
+export interface SlateShareVerdict {
+  readonly workspace: string;
+  /** Whether the dialog drew a Reach row for a slate that reaches nothing. */
+  readonly reachRow: boolean;
+  /** The limits line the dialog states before sharing. */
+  readonly limits: string;
+  /** What the dialog said once shared. */
+  readonly created: string;
+  /** Shared by you, once shared. */
+  readonly sharedByYou: readonly string[];
+  /** Shared by you after Stop sharing; the tab is gone when nothing else is shared. */
+  readonly afterStop: readonly string[];
+}
+
+/**
+ * Row: a slate with no bindings shares from its tile, and stops.
+ *
+ * Share… on the slate's tile opens the dialog #25 asked to be short: with
+ * nothing to reach there is no Reach row and no spend limit. The row shares it
+ * with anyone who has the link, finds it under Shared by you, and stops it
+ * there. A share the row did not stop is revoked through the route.
+ */
+export async function slateSharesWithNoBindings(target: FlowTarget): Promise<SlateShareVerdict> {
+  const workspace = await workspaceWithSlate(target, 'drive-share');
+  let share: string | null = null;
+  let stopped = false;
+
+  try {
+    const page = await driveWithSlate(target, workspace);
+
+    await page.click(`${slateTile(workspace)} [data-drive-menu]`);
+    await page.click(`${slateTile(workspace)} [data-drive-share-slate]`);
+    await until(page, 'the share dialog\'s limits', `document.querySelector('[role="dialog"] [data-share-limits]') !== null`);
+
+    const reachRow = v.parse(v.boolean(), await page.evaluate(`document.querySelector('[data-share-reach]') !== null`));
+    const limits = v.parse(v.string(), await page.$eval('[data-share-limits]', (element) => element.textContent ?? ''));
+
+    await page.click('[data-share-access]');
+    await page.click('[data-share-access-option="public"]');
+    await page.click('[data-share-submit]');
+    await until(page, 'the share to be made', `document.querySelector('[data-share-created]') !== null`);
+    const created = v.parse(v.string(), await page.$eval('[data-share-created]', (element) => (element.textContent ?? '').trim()));
+
+    await page.evaluate(`[...document.querySelectorAll('[role="dialog"] button')].find((button) => (button.textContent ?? '').trim() === 'Done')?.click()`);
+    await until(page, 'the Shared tab', `document.querySelector('[data-drive-tab="shared"]') !== null`);
+    await page.click('[data-drive-tab="shared"]');
+
+    const mine = `[data-drive-section="Shared by you"] [data-drive-share-kind="live"]`;
+    await until(page, 'the share under Shared by you', `document.querySelector(${JSON.stringify(mine)}) !== null`);
+    const sharedByYou = v.parse(v.array(v.string()), await page.evaluate(sharesIn('Shared by you')));
+
+    share = await page.$eval(mine, (element) => element.getAttribute('data-drive-share'));
+    const tile = `[data-drive-share="${share ?? ''}"]`;
+
+    await page.click(`${tile} [data-drive-menu]`);
+    await page.click(`${tile} [data-drive-stop-sharing]`);
+    await until(page, 'the stop confirmation', `document.querySelector('[data-drive-stop-confirm]') !== null`);
+    await page.click('[data-drive-stop-confirm]');
+    await until(page, 'the share to leave the Drive', `document.querySelector(${JSON.stringify(tile)}) === null`);
+    stopped = true;
+    await painted(page);
+
+    const afterStop = v.parse(v.array(v.string()), await page.evaluate(sharesIn('Shared by you')));
+
+    await page.close();
+
+    return { workspace, reachRow, limits, created, sharedByYou, afterStop };
+  } finally {
+    if (share !== null && !stopped) {
+      const left = await fetch(`${target.origin}/api/shared/revoke`, {
+        method: 'POST',
+        headers: { ...webHeaders(target.identity), 'content-type': 'application/json' },
+        body: JSON.stringify({ workspace, share }),
+      });
+
+      if (!left.ok) console.warn(`product-flows: revoking ${share} answered ${String(left.status)}`);
+    }
+
+    await removeFlowWorkspace(target, workspace);
   }
 }

@@ -1063,6 +1063,7 @@ export default function WorkspacePage() {
             slates={state.slates}
             slateReloads={state.slateReloads}
             tabPresence={state.tabPresence}
+            presencePending={state.tabPresence === undefined}
             rpc={state.rpc}
             workspace={agentId}
             unmappedSlate={unmappedSlate}

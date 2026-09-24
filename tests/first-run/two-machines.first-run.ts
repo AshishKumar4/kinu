@@ -38,7 +38,7 @@ import { afterAll, describe, test } from 'vitest';
 
 import { scratchDir, workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine } from './daemon';
-import type { DeviceAccount } from '../evals/device-session';
+import type { DeviceAccount } from './device-session';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';

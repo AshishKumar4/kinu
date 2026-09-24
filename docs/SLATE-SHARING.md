@@ -190,14 +190,18 @@ Invariants, each pinned by a test (§5 lists them):
 
 ## 4. Surfaces
 
-**Share control on the slate tab.** Each slate is its own tab in the work strip
-(`packages/cf-backend/src/components/surfaces/WorkSurface.tsx`), with the share
-control in its header. The dialog has two modes. Live: visibility "People I
-name" (a list of emails) or "Anyone with the link", the members the slate would
-reach drawn from the capability graph, and whether viewers may fork it. Read
-members are granted automatically; a mutating member is granted only when the
-owner ticks it after reading what it does and under whose credentials.
-Blueprint: publish a committed version, choosing which top-level paths ship.
+**Share control on the slate tab and the Drive.** Each slate is its own tab in
+the work strip (`packages/cf-backend/src/components/surfaces/WorkSurface.tsx`),
+with the share control in its header; the slate's tile in the Drive offers the
+same dialog from its menu. The dialog has two modes, each one sentence long.
+Live: people by email, who else can open it ("Only people you add", the
+default, or "Anyone with the link"), "Let them fork it", a Reach row folding
+the members the slate would reach (drawn only when it declares bindings), the
+limits the share runs under, and the shares already made, each with Stop
+sharing. Read members are granted automatically; a mutating member is granted
+only when the owner ticks it after reading what it does and under whose
+credentials. Blueprint: publish a committed version, choosing which top-level
+paths ship, and optionally file it in named people's Drives.
 
 **Share URL.** A live share is served on the preview host under its own
 hostname, `<handle>-<token>-<workspace>.<suffix>`: a 10-hex handle from the
@@ -213,12 +217,14 @@ for a `__Host-` cookie scoped to that origin. The cookie names a viewer of one
 slate and nothing else, so hostile slate HTML that reads it gains nothing the
 viewer did not already hold there.
 
-**Shared library** at `/drive/blueprints`: All, plus four lists (Mine, With me,
-Public, People I know). A live share opens in a new tab; a blueprint or a
-forkable live share offers "Fork into a workspace", which picks the target
-workspace, admits the slate, and opens it on its unmapped-bindings panel. That
-panel names what the forker must connect for each declared binding: an MCP
-server, a crafted tool, an available executor.
+**The Drive** at `/drive` (My stuff) and `/shared` (Shared). My stuff tiles the
+owner's slates, blueprints, folders and files; Shared tiles what others shared
+with you and what you shared, and appears only once there is one. A live share
+opens in a new tab; a blueprint on its page. Received rows offer "Fork…", which
+picks the target workspace, admits the slate, and opens it on its
+unmapped-bindings panel. That panel names what the forker must connect for each
+declared binding: an MCP server, a crafted tool, an available executor. The
+owner's rows offer Stop sharing, one route for both kinds.
 
 **A viewer without an account** sees only the app on a public live share, with
 no Kinu chrome around it. For a blueprint they see a read-only page with the
@@ -233,21 +239,22 @@ and `slate_viewer_requests` (share id, viewer, slate, path, calls, outcome,
 created, settled), all in `packages/core/src/slates/live-shares.ts`. Blueprints:
 `slate_shares` and `slate_share_users` in `packages/core/src/slates/shares.ts`,
 used by `packages/core/src/slates/blueprints.ts`. User object:
-`user_shares_received`, for "With me" and "People I know". Public listing:
-`cp_public_shares` on the control-plane object
-(`packages/core/src/control-plane/public-shares.ts`), written by
-`indexPublicShare` when a public share is created or published and re-verified
-per row on read. It is a projection, never a second authority, the same idiom
-`preview-exposures.ts` states for previews.
+`user_shares_received`, for the Drive's "Shared with you". There is no public
+index: the Drive lists only your own and what was shared with you by name, and
+the index that fed the removed Public list was deleted with its last reader.
+Deployed control-plane objects still hold a `cp_public_shares` table that
+nothing writes or reads, with rows that stopped being forgotten on revoke; a
+public gallery must build its index anew and treat every row as a projection,
+re-checked against the owner's share row, never as an authority.
 
 **Routes.** Edge: the share hostname is parsed ahead of the preview parser
 (`packages/cf-backend/src/slate-share-route.ts` `handleSlateShareHostRequest`),
 then `routeSlateShare(handle, request)` on the workspace object. Workspace
 operations `share`, `unshare`, `publish`, `inspect`, `shares`, `graph`,
 `liveShares` and `viewerRequests` in `packages/core/src/slates/rpc.ts`. App
-host: `/api/shared` (library, `publish`, `fork`, `live`, `live/revoke`,
+host: `/api/shared` (library, `publish`, `fork`, `live`, `revoke`,
 `live/open`) and `/api/shared/blueprint/:id` in
-`packages/cf-backend/src/shared/routes.ts`; pages `/drive` and
+`packages/cf-backend/src/shared/routes.ts`; pages `/drive`, `/shared` and
 `/shared/blueprint/:id`; the viewer ticket mint.
 
 **The grant.** A live share stores a `ShareGrant` (`sharing.ts`): the slates a
@@ -277,11 +284,12 @@ viewer holds the consent cookie (`consentMessage`, `slate-share-route.ts`). That
 cookie is signed over a different claim than the identity cookie, so neither can
 mint the other.
 
-**UI.** `ShareSlateDialog` (with `LiveShareForm` and `BlueprintShareForm`) on
-the slate tab, `SharedLibrary` inside the Drive's `/blueprints` folder,
-`BlueprintPage` and `ForkDialog`, `UnmappedBindingsPanel`.
+**UI.** `ShareSlateDialog` (with `LiveShareForm`, `BlueprintShareForm` and
+their shared `ShareParts`) on the slate tab and a slate's Drive tile,
+`DrivePage` (My stuff and Shared), `BlueprintPage` and `ForkDialog`,
+`UnmappedBindingsPanel`.
 
-**CLI.** The CLI backend hosts no slates: `workspace.slate` exists only when a
+**CLI.** The CLI backend hosts no slates: `workspace.slates` exists only when a
 backend supplies a host (`packages/core/src/execution/inline.ts`). There is no
 local sharing; the CLI shares through a cloud workspace.
 
@@ -296,8 +304,8 @@ local sharing; the CLI shares through a cloud workspace.
 - `packages/cf-backend/tests/unit-share-gaps.test.ts`: the S2 bounds (the
   per-viewer request counter, per viewer and on the exchange too; the per-share
   daily spend bound marking the share `paused`), the consent page and the
-  grant's `consent` flag, the public blueprint index, and a `forkable=false`
-  share absent from a public listing.
+  grant's `consent` flag, a `fork: false` share refusing a fork, and one
+  revoke route ending a public live share, its index row and a blueprint link.
 - `packages/cf-backend/tests/unit-share-forgery.test.ts`: unminted, revoked and
   wrong-token handles never resolve an object.
 - `packages/core/tests/unit-slate-project.test.ts`: `credentialedBindings` is

@@ -26,7 +26,7 @@ export async function ingressAdmitted(
   const count = (current !== null && current.windowStart === windowStart ? current.count : 0) + 1;
 
   if (count > limit) return false;
-  await writeKvJson(kv, key, { count, windowStart }, windowStart + 2 * INGRESS_WINDOW_MS);
+  await writeKvJson(kv, key, { count, windowStart }, windowStart + 2 * INGRESS_WINDOW_MS - now);
 
   return true;
 }

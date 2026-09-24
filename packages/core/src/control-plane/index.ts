@@ -62,11 +62,6 @@ export {
 } from './analytics-sql';
 
 export {
-  forgetPublicShare, indexPublicShare, listPublicShares, PublicShareRowSchema,
-  type PublicShareKey, type PublicShareRow,
-} from './public-shares';
-
-export {
   METRICS_WINDOWS,
   controlPlaneMetrics,
   type ControlMetrics,

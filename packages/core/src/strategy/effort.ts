@@ -1,7 +1,7 @@
 // Adaptive reasoning-effort budgets per inference stage.
 //
-// Workers AI constructors use @ai-sdk/openai-compatible: pass reasoningEffort and
-// the SDK serializes reasoning_effort; a wire-spelled option is overwritten.
+// Chat Completions SDKs read `reasoningEffort` under their provider's name (workers-ai, opencode-go)
+// and serialize reasoning_effort, overwriting a wire-spelled option.
 
 import type { streamText } from 'ai';
 import type { ReasoningEffort } from '../providers/reasoning-effort';
@@ -56,10 +56,12 @@ export function reasoningEffortOptions(
     case 'workers-ai':
       return workersAIEffortOption(effort).providerOptions;
     case 'openai':
-    case 'opencode':
     case 'codex':
     case 'openai-compat':
       return { openai: { reasoningEffort: effort } };
+    case 'opencode':
+    case 'opencode-go':
+      return { openai: { reasoningEffort: effort }, [family]: { reasoningEffort: effort } };
     case 'openrouter':
       return { openrouter: { reasoningEffort: effort } };
     case 'anthropic':

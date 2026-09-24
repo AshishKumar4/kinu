@@ -39,8 +39,8 @@ import { scratchDir, workerSession, type EvalObservation, type EvalSubgoal } fro
 import {
   listDevicesOverCliRoute, revokeDeviceOverUserRoute,
   type DeviceAccount, type DeviceListing, type DeviceRow,
-} from '../evals/device-session';
-import type { KinuPublicSession, PublicExecutorResult, PublicSessionPlan } from '../evals/public-session';
+} from './device-session';
+import type { KinuPublicSession, PublicExecutorResult, PublicSessionPlan } from '../../evals/src/session';
 import { attachMachine, detachMachine, readDaemonLogTail, type AttachedMachine } from './daemon';
 import { firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
@@ -300,6 +300,11 @@ describe(SUITE, () => {
         genesis: false,
         purpose: 'A probe proving a linked machine stays linked past the keepalive window.',
         async run() {
+          // Read BEFORE this machine registers, so a failing route is the route's own: on
+          // 2026-09-01 `kinu connect` failed on two machines because this list answered 500,
+          // SELECTing `unstopped_at` from a table created before the column existed.
+          const before = await listDevicesOverCliRoute(account);
+
           machine = await attachMachine({
             account, name: MACHINE, home: scratchDir(`first-run-${CASE}-holds`),
           });
@@ -344,6 +349,8 @@ describe(SUITE, () => {
             { what: 'no-socket-takeover', reached: last.replacedAt === null,
               detail: `replacedAt is ${JSON.stringify(last.replacedAt)} — a second socket `
                 + 'landing on a live slot would have stamped it' },
+            { what: 'devices-route-answers', reached: before.status === 200 && before.rows !== null,
+              detail: `GET /api/cli/devices before registering answered ${String(before.status)}: ${before.body}` },
           ] satisfies EvalSubgoal[];
         },
       }, observations);

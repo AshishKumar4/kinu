@@ -2,10 +2,10 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
-import type { LanguageModel } from 'ai';
+import { wrapLanguageModel, type LanguageModel } from 'ai';
 import type { DynamicProviderSource } from './registry';
 import type { ModelProvider, ProviderDeps } from './types';
-import { createAuthedFetch } from './util';
+import { createAuthedFetch, statelessResponses } from './util';
 import { KINU_USER_AGENT } from '../utils/user-agent';
 import {
   getModelsDevProvider,
@@ -85,7 +85,6 @@ function createCatalogProvider(providerId: string): ModelProvider {
     },
 
     createModel(modelId, deps): LanguageModel {
-      // Keep resolution synchronous: select the SDK from the same cached catalog as the menu.
       async function resolveModel(): Promise<LanguageModelV3> {
         const endpoint = await getModelsDevModelEndpoint(providerId, modelId, deps);
 
@@ -115,7 +114,10 @@ function createCatalogProvider(providerId: string): ModelProvider {
         });
 
         return endpoint.protocol === 'responses'
-          ? createOpenAI({ baseURL, apiKey: 'placeholder', fetch: customFetch }).responses(modelId)
+          ? wrapLanguageModel({
+            model: createOpenAI({ baseURL, apiKey: 'placeholder', fetch: customFetch }).responses(modelId),
+            middleware: statelessResponses(endpoint.reasoning),
+          })
           : createOpenAICompatible({ name: providerId, baseURL, fetch: customFetch }).chatModel(modelId);
       }
 

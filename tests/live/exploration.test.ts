@@ -1,0 +1,342 @@
+/**
+ * Behavioural evals for exploration: does the agent use MCTS when it should,
+ * use it PROPERLY, and does it WORK.
+ *
+ * Three questions, deliberately separated, because they fail for different
+ * reasons and conflating them is how "MCTS works" got believed while the
+ * Exploration pane was empty.
+ *
+ *   WORKS   — driven by the harness through the MCTS strategy itself, so the
+ *             model cannot decline. A pass means the mechanism produces a
+ *             branched, ranked, reader-visible search. Deterministic in shape;
+ *             the model only supplies the content. Driven at the strategy and
+ *             not through `agents.execute`, because the tool does not route
+ *             anything here — see the WORKS test for why that is the supported
+ *             path rather than a bypass.
+ *   VISIBLE — the written store and the reader the pane calls agree. The
+ *             assertion the twice-shipped empty pane needed.
+ *   USED    — the model, handed a task that warrants exploration and the tool to
+ *             do it with, reaches for it. Model-dependent by nature: this is the
+ *             eval whose number is the finding, and a recorded baseline
+ *             converted 0% of eligible turns until a mechanical nudge reached
+ *             24%. It is reported as a RATE over a stated denominator rather
+ *             than asserted per-attempt, because a single sample is not a rate.
+ *
+ * Every assertion states its denominator first. `0 of 0 searches were unranked`
+ * is the shape of a check that cannot fail, and this suite has already been the
+ * only evidence for MCTS at any commit — it does not get to be that shape.
+ */
+
+import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
+
+import {
+  DEFAULT_CONFIG,
+  type LLMProviderConfig,
+  type MCTSProgressEvent,
+} from '../../packages/core/src/index';
+import { runMCTS } from '../../packages/core/src/mcts/engine';
+import { type CLIRuntime } from '../../packages/cli-backend/src/runtime';
+import {
+  buildEvalAgentSurface, makeSessionWriter, recordRequestSurface,
+  type EvalAgentSurface,
+} from './harness';
+import { provisionLocalTarget, type LocalTarget } from './target-local';
+import {
+  liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode, recordLiveModelSpend,
+  reportLiveModelSpend, scoreExploration, scoreSettleVisibility, UNCONFIGURED_LLM,
+} from '@kinu.run/test-utils';
+
+const TARGET = liveModelTarget('Exploration Evals');
+
+const liveTest = test.skipIf(!TARGET);
+
+const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
+
+const TEST_DIR = join(tmpdir(), 'kinu-eval-exploration-' + String(Date.now()));
+
+/**
+ * A task with several genuinely different defensible approaches and no obvious
+ * winner — the shape the doctrine tells the model to fork on. Deliberately not
+ * a puzzle with one right answer: a task the model can just solve is not a task
+ * that warrants exploration, and asserting it forks on one would be asserting
+ * the wrong behaviour.
+ */
+const EXPLORATION_TASK =
+  'We need to cut the p99 latency of a read-heavy JSON API that currently reads '
+  + 'straight from SQLite on every request. There are several defensible designs '
+  + '(in-process cache, a read replica, materialised views, a CDN edge cache) and '
+  + 'the right one is not obvious — they trade freshness, memory and operational '
+  + 'cost differently. Compare the competing approaches and recommend one.';
+
+/**
+ * The driven search's shape, stated here rather than inherited from
+ * `DEFAULT_CONFIG.mcts`, and taken from the one shape in this repository that has
+ * a MEASUREMENT behind it.
+ *
+ * Production's 5 iterations x 3 branches, each branch judged over 3 samples, ran
+ * past 900s against @cf/deepseek-ai/deepseek-v4-pro-0813 and was killed with
+ * rollouts still open. So did 2 x 3. `E2E Lifecycle > MCTS evolution` drives one
+ * iteration and measured 290s, so one iteration is what this uses: a search sized
+ * by a number somebody recorded rather than by how cautious a guess felt. At that
+ * budget the whole suite measured 375s.
+ *
+ * The WIDTH stays at production's 3 and is not reduced with the depth. Width is
+ * the competition being scored — `branches > 1` is an assertion about it — and it
+ * is also what gives the judge distinct proposals to separate. Depth is what the
+ * larger shapes bought and what this suite never scores.
+ */
+const EVAL_SEARCH_BUDGET = 1;
+
+const EVAL_SEARCH_BRANCHES = 3;
+
+describe('Exploration evals — MCTS reached, ranked, and readable', () => {
+  let rt: CLIRuntime;
+  let target: LocalTarget;
+  let model: LanguageModel;
+
+  /** The eval agent's surface from the PRODUCTION actor root. Assembling
+   *  `buildActorTools` here with a hand-rolled `agents.fork` — the same shape,
+   *  minus every dep production passes — makes the surface a near-miss of the
+   *  product's and leaves this file one drift away from scoring its own
+   *  construction. */
+  let surface: EvalAgentSurface;
+
+  beforeAll(async () => {
+    // Provisioned through the seam: birth, the whole schema, open, the
+    // executor-surface and sandbox guards and the pre-turn profile — the same
+    // sequence every live suite drives, once. The runtime `createWorkspace`
+    // returns is what open.ts:49-50 calls "degraded inline
+    // VFS/Memory/Executor", and its `spawnBranch` is a HARDCODED MOCK whose
+    // every branch resolves to the literal string 'exploration result'
+    // (identity/create.ts:57-68). An MCTS suite driving that stub is scoring
+    // the stub, not exploration. `initWorkspaceSchema` is also what makes
+    // `head_journal` exist at all, which this suite's settle-visibility
+    // assertion requires of both halves. Binding no directory keeps every
+    // executor off the repo this suite launched from, asserted rather than trusted
+    // because this suite spends real money to find out.
+    target = await provisionLocalTarget({
+      dir: TEST_DIR,
+      workspace: 'exploration-eval',
+      purpose: 'An architecture advisor that compares competing designs before recommending one.',
+      llm: LLM_CONFIG,
+    });
+    rt = target.runtime;
+    // The model first, then the surface through the shared production
+    // construction (`buildEvalAgentSurface`, harness.ts): same factory, same
+    // craftedToolExecute, same codemode providers, same fork-deps shape.
+    model = liveChatModel(LLM_CONFIG);
+    surface = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG });
+    // The WORKS test below drives `runMCTS` DIRECTLY. The tree search is not
+    // reachable from the tool's own surface — `agents-tool.ts:911` dispatches
+    // `fork` to the heads engine and nothing else — and the eval harness is
+    // named in that decision: `unit-agents-tool.test.ts:71-73` records that
+    // fork-deps.ts keeps the search store wired "for the durable search store
+    // and the eval harness", so a fork that routed here would be a silent
+    // misdispatch. Driving the engine is therefore the SUPPORTED programmatic
+    // path, not a way around the tool. `createMCTSStrategy` and a
+    // `StrategyRegistry` in front of it would be adapters no production path
+    // reads: calling the engine is the same search with one less shape in the
+    // way.
+  });
+
+  afterAll(async () => {
+    reportLiveModelSpend('Exploration Evals');
+    // Teardown owns the store and the directory.
+    target?.teardown();
+  });
+
+  test('the agent is actually offered the delegation tool', () => {
+    // Credential-free, and the precondition every eval below rests on. Without
+    // it "the model did not fork" would be indistinguishable from "the model
+    // could not fork", and the delegation rate would be measuring the harness.
+    expect(Object.keys(surface.tools)).toContain('agents');
+    // And the prompt names it: a tool the model is never told about is not
+    // offered in any sense that matters (PRD §9.5 — production prompt AND tool
+    // projection). The tool index is the one prompt text about delegation.
+    const system = surface.systemPrompt();
+    expect(system).toContain('- **agents**:');
+  });
+
+  liveTest('DRIVEN (instructed): a direct mcts search branches and ranks, durably', async () => {
+    // Driven through the ENGINE, not through `agents.execute`. `settle` is not on
+    // the model-facing surface (it exists only as a stored-row translation in
+    // `resumableForkInput`, which reports that it cannot carry the RANKING), and
+    // `fork` dispatches to the heads engine alone. So `{ action:'fork',
+    // settle:'mcts' }` refuses before writing anything, and every assertion below
+    // fails on its own denominator guard in milliseconds — the guards working
+    // exactly as intended.
+    //
+    // `action:'swarm'` is the tool's tree search, and it is NOT what belongs
+    // here: it writes the same `search_nodes` rows, but it marks `terminal` per
+    // node that seals past its floor and never converges to one winner
+    // (`swarm-run.ts:980`). The durability assertion below — exactly one terminal
+    // node, so a later reader sees the winner this run picked — is an MCTS
+    // convergence property (`mcts/convergence.ts:146-153`). Re-pointing at swarm
+    // would mean deleting that assertion, which is the opposite of the job.
+    //
+    // The search's shape is STATED rather than inherited from `DEFAULT_CONFIG.mcts`
+    // — see EVAL_SEARCH_BUDGET for the measurements that set it. Nothing below is
+    // weakened by that: every assertion is the same assertion over a search that
+    // finishes, and a deploy gate that does not terminate is not a gate.
+    //
+    // `onProgress` WIRED, because without it a search that produces nothing says
+    // nothing about why. The engine reports every `branch-failed` through this
+    // sink and nowhere else (mcts/engine.ts:246, :347, :433), so an unwired eval
+    // discards the only account of a rollout that threw or a judge that broke, and
+    // is left printing `ranked: 0` over causes it never saw. `fork-deps.ts` says
+    // the same thing about production: without this a search is invisible while it
+    // runs.
+    const progress: string[] = [];
+
+    const result = await runMCTS(rt, makeSessionWriter(), EXPLORATION_TASK, {
+      mode: 'build',
+      budget: EVAL_SEARCH_BUDGET,
+      branches: EVAL_SEARCH_BRANCHES,
+      onProgress: (event: MCTSProgressEvent) => {
+        if (event.type === 'branch-failed') {
+          progress.push(`${event.stage} branch failed: ${event.error}`);
+        } else if (event.type === 'iteration-complete') {
+          progress.push(`iteration ${String(event.iteration)} scores: `
+            + `${event.scores.map((s) => s.toFixed(3)).join(', ') || '(none)'}`);
+        } else if (event.type === 'grounding-unavailable') {
+          progress.push(`grounding unavailable for ${event.language}; `
+            + `executor runs ${event.canRun.join(', ') || '(nothing)'}`);
+        }
+      },
+      reportModelCall: liveModelCallSink(rt.storage.sql, rt.actor),
+    });
+
+    for (const line of progress) console.log(`    ${line}`);
+
+    // The search's calls never reach this process as an SDK result, so the ledger
+    // the sink above wrote is the only place their usage exists. Reading it here
+    // is what stops this suite reporting `TOTAL: 0 model call(s)` over a search
+    // that spent real tokens — and if the sink ever stops being wired, this
+    // records an UNMEASURED EPISODE rather than a silent zero, which the tier's
+    // liveness verdict then refuses.
+    recordLiveModelEpisode(rt.storage.sql, rt.actor);
+
+    const score = scoreExploration(rt.storage.sql, rt.actor);
+    console.log(`    searches: ${String(score.searchRuns)}, branched: ${String(score.branchedRuns)}, `
+      + `ranked: ${String(score.rankedRuns)}, durably ranked: ${String(score.durablyRankedRuns)}`);
+
+    for (const run of score.runs) {
+      console.log(`      ${run.id}: ${String(run.branches)} branches, winner `
+        + `${String(run.winnerScore)}, terminal nodes ${String(run.terminalNodes)}`);
+    }
+
+    // WHY there is no winner, when there is no winner. `converge` refuses to crown
+    // one in exactly two states and marks no terminal node in either
+    // (mcts/convergence.ts:73-113): distinct approaches scoring BYTE-IDENTICALLY,
+    // which means the scorer is not a function of the proposal; and a best score
+    // under `minAcceptableScore`. Both abandon the tree, so both arrive at the
+    // assertions below as `ranked: 0` — indistinguishable without this line.
+    // Printed unconditionally rather than in a failure branch, because the
+    // passing run's margin over the 0.3 floor is the number that says how close
+    // this suite is to going red for a reason nobody changed. The engine's
+    // `reason` distinguishes identical candidate scores from a best score below
+    // `minAcceptableScore`. Preserve and print that reason: a candidate score
+    // alone leaves the reader inferring which refusal occurred.
+    console.log(`    winner score: ${result.winnerValue.toFixed(3)} (floor `
+      + `${String(DEFAULT_CONFIG.mcts.minAcceptableScore)}), converged: `
+      + `${String(result.converged)}${result.converged ? '' : ` (${result.reason})`}`);
+
+    // The denominator, asserted before anything about quality. A fork that
+    // never reached the store leaves every assertion below vacuously true.
+    expect(score.searchRuns).toBeGreaterThan(0);
+
+    // More than one branch: a one-branch search ranked nothing because there
+    // was no competition to win.
+    expect(score.branchedRuns).toBe(score.searchRuns);
+
+    // A ranked winner the READER can hand over — not just one the engine
+    // returned in memory. A merged mcts run with no ranked winner has shipped.
+    expect(score.rankedRuns).toBe(score.searchRuns);
+
+    // And the ranking survived into the store as exactly one terminal node, so
+    // a later reader sees the same winner this run picked.
+    expect(score.durablyRankedRuns).toBe(score.searchRuns);
+  }, 0);
+
+  liveTest('VISIBLE: every settle mode wrote where the Exploration reader reads', () => {
+    const score = scoreSettleVisibility(rt.storage.sql, rt.actor);
+
+    // PRECONDITION, before any visibility number is printed or asserted: both
+    // write stores must EXIST. Measured live — a workspace built here had
+    // `search_nodes` but no `head_journal`, and the unguarded scorer died with a
+    // raw SQLiteError mid-eval. A thrown error is not a measurement, and "0 of 0
+    // roots invisible" over a table that is not there is worse: it is a pass.
+    for (const half of score.stores) {
+      console.log(`    ${half.half} (${half.store}): present=${String(half.present)}`);
+      expect(half.present).toBe(true);
+    }
+
+    for (const half of score.stores) {
+      console.log(`    ${half.half} (${half.store}): ${String(half.rootsVisible)}/`
+        + `${String(half.rootsWritten)} roots visible`);
+    }
+
+    // Denominator: something was written. An empty store makes "nothing is
+    // invisible" true and meaningless — which is exactly how an empty pane
+    // passed review twice.
+    expect(score.rootsWritten).toBeGreaterThan(0);
+    expect(score.invisibleRoots).toEqual([]);
+  });
+
+  liveTest('AUTONOMOUS: the model reaches for exploration on a task that warrants it', async () => {
+    const calls: string[] = [];
+    // PRD §9.5: the turn runs the PRODUCTION projection and the PRODUCTION tool
+    // surface. `system: soul` — the workspace SOUL file alone, which never
+    // mentions delegation — over a ToolSet that cannot hold `agents` measures
+    // something, but not the product's conversion behaviour: it scores the model
+    // on reaching for a capability it was neither offered nor told about.
+    const recorder = recordRequestSurface(model);
+
+    const result = await generateText({
+      model: recorder.model,
+      system: surface.systemPrompt(),
+      messages: [{ role: 'user' as const, content: EXPLORATION_TASK }],
+      tools: surface.tools,
+      stopWhen: stepCountIs(12),
+      onStepFinish: (step: StepResult<ToolSet>) => {
+        for (const call of step.toolCalls ?? []) calls.push(call.toolName);
+      },
+    });
+
+    recordLiveModelSpend(result.usage);
+
+    const reached = calls.filter((name) => name === 'agents').length;
+    console.log(`    tools called: ${calls.join(', ') || '(none)'}`);
+    console.log(`    delegation-tool reaches: ${String(reached)} of ${String(calls.length)} calls`);
+
+    // REQUEST EVIDENCE, per §9.5. A zero below now arrives with the proof of
+    // what the provider was actually asked with, so "the model declined" and
+    // "the harness never asked" can never again be the same observation. The
+    // evidence itself is asserted because it is harness fact, not model
+    // behaviour: if this fails the wiring is broken and no conversion number in
+    // the run means anything.
+    const evidence = recorder.evidence();
+    console.log(`    request evidence: ${String(evidence.calls)} call(s), tools offered `
+      + `${evidence.toolsOffered.join(', ')}, agents=${String(evidence.agentsOffered)}, `
+      + `agents indexed=${String(evidence.agentsIndexed)}, `
+      + `system ${String(evidence.systemChars)} chars`);
+    expect(evidence.calls).toBeGreaterThan(0);
+    expect(evidence.toolsOffered).toEqual(Object.keys(surface.tools).sort());
+    expect(evidence.agentsOffered).toBe(true);
+    expect(evidence.agentsIndexed).toBe(true);
+
+    // The denominator is one eligible turn, stated. This is a SAMPLE of a rate,
+    // not the rate: a single turn cannot measure a conversion percentage, and
+    // the aggregate lives in the delegation eval over run_events.
+    //
+    // What is asserted is the part that is not model-dependent: the turn
+    // completed and produced observable tool traffic, so a zero above is the
+    // model declining rather than the harness failing to ask. A run where the
+    // model called nothing at all cannot distinguish those two — but with the
+    // request evidence above, at least the offer itself is proven.
+    expect(calls.length).toBeGreaterThan(0);
+  }, 0);
+});

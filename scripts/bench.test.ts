@@ -416,7 +416,7 @@ describe('artifact retention — a scored run leaves evidence or it does not run
     command: 'compare',
     runId: 'fixture01',
     family: 'defect',
-    corpus: 'tests/bench/tasks.jsonl (random 2 of 159, seed 7)',
+    corpus: 'bench/corpus/tasks.jsonl (random 2 of 159, seed 7)',
     manifestHash: 'fixture-manifest',
     seed: 7,
     repeats: 1,
@@ -451,7 +451,7 @@ describe('artifact retention — a scored run leaves evidence or it does not run
       completedAt: null,
       commit: readGitIdentity(REPO_ROOT).commit,
       model: '@cf/deepseek-ai/deepseek-v4-pro-0813',
-      corpus: 'tests/bench/tasks.jsonl (random 2 of 159, seed 7)',
+      corpus: 'bench/corpus/tasks.jsonl (random 2 of 159, seed 7)',
       evolving: true,
       taskIds: ['task-a', 'task-b'],
     });
@@ -640,7 +640,7 @@ describe('createAttemptSandbox', () => {
   /** A small repository with the shape every property below is stated over:
    *  the real defect target at its real path so the corpus patch applies, a
    *  workspace package and its hoisted scope link, a third-party dependency,
-   *  the sealed `tests/bench` beside an unsealed `tests/eval`, retained
+   *  the sealed `bench/corpus` beside unsealed checks under `tests/`, retained
    *  artifacts, and a `.git`. Copying the REAL repository here cost 5.1 s
    *  alone and timed out at 5 s under the deploy wave on 2026-09-15: the
    *  property is about what the copy excludes and re-points, and that is a
@@ -656,8 +656,8 @@ describe('createAttemptSandbox', () => {
     write('package.json', JSON.stringify({ name: 'fixture', workspaces: ['packages/*'] }));
     write('packages/core/package.json', JSON.stringify({ name: '@kinu.run/core', main: 'src/index.ts' }));
     write(target, readFileSync(join(REPO_ROOT, target), 'utf8'));
-    write('tests/bench/tasks.jsonl', '{"taskId":"a-sealed-task"}\n');
-    write('tests/eval/keep.txt', 'the unsealed checks stay');
+    write('bench/corpus/tasks.jsonl', '{"taskId":"a-sealed-task"}\n');
+    write('tests/live/keep.txt', 'the unsealed checks stay');
     write(join(ARTIFACT_DIRNAME, 'attempts.jsonl'), '{"taskId":"a-sealed-task"}\n');
     write('node_modules/ai/package.json', JSON.stringify({ name: 'ai', main: 'index.js' }));
     // Every workspace-link shape the real tree has (measured 2026-09-15):
@@ -701,17 +701,17 @@ describe('createAttemptSandbox', () => {
     const repo = fixtureRepo();
     const runRoot = tempDir('bench-seal-');
     const sandbox = createAttemptSandbox({ repoRoot: repo, runRoot, attemptId: 'a2', prepare });
-    expect(existsSync(join(repo, 'tests', 'bench', 'tasks.jsonl'))).toBe(true);
-    expect(existsSync(join(sandbox.dir, 'tests', 'bench'))).toBe(false);
-    // The rest of tests/ is still there, so the checks can run.
-    expect(existsSync(join(sandbox.dir, 'tests', 'eval'))).toBe(true);
+    expect(existsSync(join(repo, 'bench', 'corpus', 'tasks.jsonl'))).toBe(true);
+    expect(existsSync(join(sandbox.dir, 'bench', 'corpus'))).toBe(false);
+    // The checks under tests/ are still there, so they can run.
+    expect(existsSync(join(sandbox.dir, 'tests', 'live'))).toBe(true);
     sandbox.dispose();
   });
 
   test('retained evidence is absent too — the seal has a second ring now', () => {
     // A retained run holds per-trial outcomes and check output for SEALED tasks.
     // Copying bench-artifacts/ into the sandbox would hand a solver the held-out
-    // answers by a route that excluding tests/bench does not cover.
+    // answers by a route that excluding bench/corpus does not cover.
     const repo = fixtureRepo();
     const runRoot = tempDir('bench-seal-artifacts-');
     const sandbox = createAttemptSandbox({ repoRoot: repo, runRoot, attemptId: 'a7', prepare });
@@ -950,10 +950,10 @@ describe('loadBenchCorpus', () => {
 
   function fixtureRoot(line: string, opts: { patch?: string } = {}): string {
     const root = tempDir('bench-fixture-');
-    mkdirSync(join(root, 'tests', 'bench', 'patches'), { recursive: true });
-    writeFileSync(join(root, 'tests', 'bench', 'tasks.jsonl'), `${line}\n`);
+    mkdirSync(join(root, 'bench', 'corpus', 'patches'), { recursive: true });
+    writeFileSync(join(root, 'bench', 'corpus', 'tasks.jsonl'), `${line}\n`);
 
-    if (opts.patch !== undefined) writeFileSync(join(root, 'tests', 'bench', 'patches', 'demo.patch'), opts.patch);
+    if (opts.patch !== undefined) writeFileSync(join(root, 'bench', 'corpus', 'patches', 'demo.patch'), opts.patch);
 
     return root;
   }
@@ -988,8 +988,8 @@ describe('loadBenchCorpus', () => {
 
   test('refuses an empty corpus — it proves nothing', () => {
     const root = tempDir('bench-empty-');
-    mkdirSync(join(root, 'tests', 'bench', 'patches'), { recursive: true });
-    writeFileSync(join(root, 'tests', 'bench', 'tasks.jsonl'), '# only a comment\n');
+    mkdirSync(join(root, 'bench', 'corpus', 'patches'), { recursive: true });
+    writeFileSync(join(root, 'bench', 'corpus', 'tasks.jsonl'), '# only a comment\n');
     expect(() => loadBenchCorpus(root)).toThrow(/no tasks/);
   });
 
@@ -1005,7 +1005,7 @@ describe('the long-horizon corpus', () => {
   test('loads with a generator spec for every task, in both modes', () => {
     expect(corpus.dev.length + corpus.sealed.size).toBe(specs.size);
     expect(corpus.dev.length).toBeGreaterThan(0);
-    expect(path.endsWith(join('tests', 'bench', 'longhorizon.jsonl'))).toBe(true);
+    expect(path.endsWith(join('bench', 'corpus', 'longhorizon.jsonl'))).toBe(true);
     expect(new Set([...specs.values()].map((spec) => spec.mode))).toEqual(new Set(['digest', 'continuation']));
 
     for (const task of corpus.dev) expect(splitOf(task.id)).toBe('dev');
@@ -1065,8 +1065,8 @@ describe('the long-horizon corpus', () => {
 
   function longHorizonFixture(line: JsonValue): string {
     const root = tempDir('bench-lh-fixture-');
-    mkdirSync(join(root, 'tests', 'bench'), { recursive: true });
-    writeFileSync(join(root, 'tests', 'bench', 'longhorizon.jsonl'), `${JSON.stringify(line)}\n`);
+    mkdirSync(join(root, 'bench', 'corpus'), { recursive: true });
+    writeFileSync(join(root, 'bench', 'corpus', 'longhorizon.jsonl'), `${JSON.stringify(line)}\n`);
 
     return root;
   }
@@ -1081,10 +1081,10 @@ describe('the long-horizon corpus', () => {
 
   test('reports the line number for malformed JSON, and refuses an empty corpus', () => {
     const root = tempDir('bench-lh-empty-');
-    mkdirSync(join(root, 'tests', 'bench'), { recursive: true });
-    writeFileSync(join(root, 'tests', 'bench', 'longhorizon.jsonl'), '{not json\n');
+    mkdirSync(join(root, 'bench', 'corpus'), { recursive: true });
+    writeFileSync(join(root, 'bench', 'corpus', 'longhorizon.jsonl'), '{not json\n');
     expect(() => loadLongHorizonCorpus(root)).toThrow(/longhorizon\.jsonl:1/);
-    writeFileSync(join(root, 'tests', 'bench', 'longhorizon.jsonl'), '# only a comment\n');
+    writeFileSync(join(root, 'bench', 'corpus', 'longhorizon.jsonl'), '# only a comment\n');
     expect(() => loadLongHorizonCorpus(root)).toThrow(/no tasks/);
   });
 });
@@ -1180,7 +1180,7 @@ describe('the task corpus stays applicable to HEAD', () => {
   });
 
   test('every retired task is recorded, gone, and honestly split', () => {
-    const dir = join(import.meta.dir, '..', 'tests', 'bench');
+    const dir = join(import.meta.dir, '..', 'bench', 'corpus');
 
     const entries = readFileSync(join(dir, 'retired.jsonl'), 'utf8')
       .split('\n')

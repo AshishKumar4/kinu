@@ -19,17 +19,11 @@ const TaskStatusSchema = v.picklist(TASK_STATUSES);
 const STATUS_UNION = TASK_STATUSES.map((s) => `"${s}"`).join(' | ');
 
 const TYPES = `export declare const tasks: {
-  /** Write down the whole plan in one call — one title per task, in the
-   *  order you plan to do them. Pass parent to file them under a task you
-   *  already wrote. */
+  /** One title per task, in order; \`parent\` files them under an existing task. */
   add(titles: string[], parent?: string): Promise<unknown>;
-  /** Move one item to active as you start it, done as you finish it, or
-   *  dropped when it turns out not to be needed. */
   update(id: string, status: ${STATUS_UNION}): Promise<unknown>;
-  /** Read the whole list back, closed items included. */
   list(): Promise<unknown>;
-  /** Switch your durable active role, or read the current role id with no
-   *  argument. Applies from your NEXT turn. */
+  /** Switch your role from the next turn; with no argument, read it. */
   mode(role?: string): Promise<unknown>;
 };
 `;

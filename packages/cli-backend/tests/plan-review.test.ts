@@ -101,7 +101,7 @@ describe('LocalAgentSession — plan review', () => {
     ]);
 
     try {
-      await agent.send('Draft the ledger migration.', { mode: 'plan' });
+      await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
 
       expect(taken[0]).toEqual({ call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } });
       const submitted = events.find((event) => event.type === 'tool-result' && event.toolName === 'submit_plan');
@@ -114,7 +114,7 @@ describe('LocalAgentSession — plan review', () => {
 
       expect(planBroadcasts(events).map((event) => event.plan?.content)).toEqual([PLAN_BODY]);
 
-      await agent.send('Implement it now.');
+      await agent.send('Implement it now.', { id: crypto.randomUUID() });
       expect(fileResults(events)).toMatchObject([{ success: false, reason: 'denied' }]);
       expect(turnModes(agent)).toEqual(['plan', 'plan']);
 
@@ -141,7 +141,7 @@ describe('LocalAgentSession — plan review', () => {
     ]);
 
     try {
-      await agent.send('Draft the ledger migration.', { mode: 'plan' });
+      await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
       const first = await agent.getActivePlanReview();
 
       if (!first) throw new Error('the submitted plan was not stored');
@@ -177,7 +177,7 @@ describe('LocalAgentSession — plan review', () => {
     ]);
 
     try {
-      await agent.send('Write the file.');
+      await agent.send('Write the file.', { id: crypto.randomUUID() });
       expect(fileResults(events)).toMatchObject([{ success: true }]);
       expect(turnModes(agent)).toEqual(['build']);
       expect(await agent.getActivePlanReview()).toBeNull();
@@ -205,7 +205,7 @@ describe('LocalAgentSession — plan review', () => {
       await expect(agent.enqueueTurn({ text: 'Draft a plan.', metadata: { kinuMode: 'plan' } }))
         .rejects.toThrow('delegated task reports its result instead');
 
-      await agent.send('Draft the ledger migration.', { mode: 'plan' });
+      await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
       expect(events.find((event) => event.type === 'tool-result' && event.toolName === 'submit_plan'))
         .toMatchObject({ success: false });
       expect(await agent.getActivePlanReview()).toBeNull();
@@ -222,7 +222,7 @@ describe('LocalAgentSession — plan review', () => {
     ]);
 
     try {
-      await agent.send('Draft the ledger migration.', { mode: 'plan' });
+      await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
       const plan = await agent.getActivePlanReview();
 
       if (!plan) throw new Error('the submitted plan was not stored');
@@ -249,7 +249,7 @@ describe('LocalAgentSession — plan review', () => {
     ]);
 
     try {
-      await agent.send('Draft the ledger migration.', { mode: 'plan' });
+      await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
       const plan = await agent.getActivePlanReview();
 
       if (!plan) throw new Error('the submitted plan was not stored');

@@ -435,7 +435,7 @@ requirements:
     remainingEvidence:
       - The model reasons on floorMargin's numerator only, so the division and its IEEE-754 behaviour are outside the proof
       - No runtime precondition yet implements C2 against the measured baseline
-      - The majority-vote witnesses hardcode tasks.ts numbers rather than reading the corpus
+      - The majority-vote witnesses hardcode the numbers of packages/core/tests/fixtures/majority-vote.ts rather than reading it
   PR-PUBLISH-001:
     statement: From a sealed state no finite sequence of the run's own actions publishes to any member of the enumerated six-surface publication set, which is section 10.1 S7 as reachability over publication rather than over one table.
     status: proved-in-abstract-model

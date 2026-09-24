@@ -22,7 +22,7 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useToggledSet } from "@/hooks/use-toggled-set";
 import { FileViewer } from "./FileViewer";
 import {
-  PLANE, entryRevision, nextTreeCache, putFileBytes, type CachedDir,
+  PLANE, entryRevision, nextTreeCache, putFileBytes, type CachedDir, type FileText,
 } from "@kinu.run/core";
 
 interface DirectoryResponse { path?: string; entries?: DirEntry[]; error?: string }
@@ -136,6 +136,8 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
       setNotice(renderThrownChain({ cause }));
     }
   }, []);
+
+  const readPlaneFile = useCallback((full: string) => rpc<FileText>("readExecutorFile", [PLANE, full]), [rpc]);
 
   const rawUrl = useCallback((full: string, download: boolean) =>
     `/api/workspaces/${encodeURIComponent(agentName)}/files`
@@ -460,7 +462,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
 
         {preview && (
           <FileViewer
-            path={preview} rpc={rpc}
+            path={preview} read={readPlaneFile}
             revision={previewRevision}
             rawHref={rawUrl(preview, false)}
             downloadHref={rawUrl(preview, true)}

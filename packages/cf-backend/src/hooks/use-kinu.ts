@@ -1751,6 +1751,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     setPreviewError(null);
     setBackgroundJobs([]);
     setSlates([]);
+    setTabPresence(undefined);
     knownSlates.current = null;
     knownPorts.current = null;
     knownPlans.current.clear();

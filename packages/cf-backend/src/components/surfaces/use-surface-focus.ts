@@ -22,7 +22,7 @@ function focusSurfaceOf(previewFocus: string | null | undefined): SurfaceKind | 
 /** A dismissed arrival stays down until a different previewFocus arrives. */
 function readyChipSurface(
   previewFocus: string | null | undefined,
-  surface: SurfaceKind,
+  surface: SurfaceKind | null,
   dismissed: string | null,
 ): SurfaceKind | null {
   const target = focusSurfaceOf(previewFocus);
@@ -56,14 +56,14 @@ export interface ReadyChip {
 }
 
 export interface SurfaceFocus {
-  readonly surface: SurfaceKind;
+  readonly surface: SurfaceKind | null;
   readonly readyChip: ReadyChip | null;
   readonly dismissChip: () => void;
   readonly navigate: (surface: SurfaceKind) => void;
 }
 
 export function useSurfaceFocus(input: {
-  readonly surface: SurfaceKind;
+  readonly surface: SurfaceKind | null;
   readonly previewFocus: string | null | undefined;
   readonly slates: readonly SlateSummary[] | undefined;
   readonly pinnedPorts: readonly PinnedPort[];

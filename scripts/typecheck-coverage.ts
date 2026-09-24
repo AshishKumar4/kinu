@@ -3,8 +3,8 @@
  * Every runnable test is either an exact root file of a TypeScript program that
  * `bun run check` invokes, or a named exception. Directory-prefix matching is
  * deliberately not enough: a config can exclude one file inside an otherwise
- * covered directory, which was how `scripts/eval.test.ts` and the devbox
- * workspace-resolution guard went green without ever reaching the compiler.
+ * covered directory, which was how the devbox workspace-resolution guard went
+ * green without ever reaching the compiler.
  */
 
 import { readFileSync } from 'node:fs';
@@ -34,13 +34,8 @@ type TestException =
     readonly reason: string;
   };
 
-const EVAL_TEST_DEBT = 'The test and its CLI bridge incompatible eval and scaffold JudgeFn '
-  + 'shapes (TS2322 and TS2339) until those public contracts converge.';
-
 /** The only scripts/*.ts files deliberately outside every checked program. */
 export const SCRIPT_TYPECHECK_DEBT = {
-  'scripts/eval.ts': 'The CLI adapts incompatible eval and scaffold JudgeFn shapes (TS2322).',
-  'scripts/eval.test.ts': EVAL_TEST_DEBT,
   'scripts/layergate.ts':
     'The compaction-ladder substitution has a Fault<PipelineSubjects> variance error (TS2322).',
   'scripts/schema-drift.ts': 'A string index has an implicit-any error (TS7053).',
@@ -75,11 +70,6 @@ export const UNTYPECHECKED_TESTS = {
     kind: 'JavaScript test',
     runner: 'bun test packages/pc-agent/',
     reason: 'The package is plain JavaScript. `check` syntax-checks its source with node --check.',
-  },
-  'scripts/eval.test.ts': {
-    kind: 'declared compiler debt',
-    runner: 'bun test scripts/eval.test.ts',
-    reason: EVAL_TEST_DEBT,
   },
 } as const satisfies Readonly<Record<string, TestException>>;
 

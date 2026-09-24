@@ -1,7 +1,7 @@
 /** Typed client for `/api/shared/*` and the public blueprint read; the session rides the HttpOnly cookie. */
 import {
-  BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema, LiveShareRecordSchema,
-  type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility,
+  BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema,
+  type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareVisibility,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
@@ -41,7 +41,7 @@ const PublishedLink = v.object({ id: v.string(), share: v.string(), users: v.arr
 
 export type Published = v.InferOutput<typeof PublishedLink>;
 
-export function publishBlueprint(input: { workspace: string; slate: string; version: string; include?: string[]; emails?: string[]; public?: boolean }): Promise<Published> {
+export function publishBlueprint(input: { workspace: string; slate: string; version: string; include?: string[]; emails?: string[] }): Promise<Published> {
   return api(PublishedLink, 'POST', '/api/shared/publish', input);
 }
 
@@ -75,8 +75,9 @@ export function shareLive(input: {
   return api(LiveShareCreatedSchema, 'POST', '/api/shared/live', input);
 }
 
-export function revokeLiveShare(input: { workspace: string; share: string }): Promise<LiveShareRecord> {
-  return api(LiveShareRecordSchema, 'POST', '/api/shared/live/revoke', input);
+/** Ends a live share or a blueprint link. */
+export async function revokeShare(input: { workspace: string; share: string }): Promise<void> {
+  await api(v.object({}), 'POST', '/api/shared/revoke', input);
 }
 
 /** Share origin for a public share; a ticket-bearing entry for one that names people. */

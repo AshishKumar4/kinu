@@ -36,8 +36,6 @@ export interface ChatWire {
   send(input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<SendLanding>;
   interrupt(): void;
   clear(): Promise<void>;
-  /** After a turn's closing frames: the root tells its tabs the claim that turn settled. */
-  readonly turnClosed?: () => void;
 }
 
 export interface ChatRoom {
@@ -74,6 +72,8 @@ interface LiveStream {
   taken: boolean;
   /** The relay broke before the stream ended, so the accumulated parts are not the answer. */
   broken: boolean;
+  /** Why the turn failed, sent as the frame that ends it. */
+  failure: string | null;
 }
 
 /** A chunk's meaning to the loop's `partialFlushCadence`, so reconnects and continuations read the same amount. */
@@ -327,7 +327,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     const streamId = this.resume?.resumable.start(requestId, { messageId: turn.messageId }) ?? requestId;
 
-    this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), cadence: partialFlushCadence(), taken: false, broken: false };
+    this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), cadence: partialFlushCadence(), taken: false, broken: false, failure: null };
 
     if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history()));
   }
@@ -344,7 +344,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     this.resume?.resumable.complete(live.streamId);
     this.pendingResume.clear();
-    this.done(live.requestId);
+    this.done(live.requestId, live.failure === null ? {} : { error: live.failure });
 
     for (const request of live.carried) this.done(request);
     this.wire.broadcast(transcriptFrame(history));
@@ -359,7 +359,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
       case 'turn-end':
         await this.closeTurn();
-        this.wire.turnClosed?.();
 
         return;
 
@@ -372,9 +371,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         if (event.message === INTERRUPTED_TURN) return;
 
         this.resume?.resumable.markError(live.streamId);
-        this.wire.broadcast(JSON.stringify({
-          type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body: event.message, done: false, error: true,
-        }));
+        live.failure = event.message;
 
         return;
       }
@@ -420,6 +417,9 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     try {
       for await (const chunk of stream) {
+        // The provider's own words: the sender's chat would keep them as its error, and the turn's classified
+        // failure follows as the frame that ends it.
+        if (chunk.type === 'error') continue;
         const { action } = live.accumulator.applyChunk(chunk);
 
         if (!live.open.admits(chunk)) {

@@ -109,7 +109,7 @@ describe('the loop admits a send queued while the slot is held, with every one-s
     const events: SessionEvent[] = [];
     const session = new DroppedTimerSession({ rt, db, model: holdingModel(gate.promise, asked), noAutoEvolve: true, onEvent: (event) => events.push(event) });
 
-    const userTurn = session.send('hold the slot');
+    const userTurn = session.send('hold the slot', { id: crypto.randomUUID() });
     await waitFor(() => events.some((event) => event.type === 'text-delta'), 'the held turn never reached its model call');
 
     const wake = session.enqueueTurn({

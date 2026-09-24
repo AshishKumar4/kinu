@@ -392,7 +392,7 @@ describe('ladder-cache — the live ladder declares what it never caches', () =>
 
     for (const run of [
       'bun scripts/preflight.ts', 'bun run gate:hammer', 'bun run gate:infra', 'bun run gate:first-run',
-      'bun run gate:trajectory', 'bun run test:eval', 'bun run gate:dependency-advisories', 'bun run gate:commit-message',
+      'bun run test:live', 'bun run evals', 'bun run gate:dependency-advisories', 'bun run gate:commit-message',
     ]) {
       expect(live.has(run), `${run} is not declared live`).toBeTrue();
     }

@@ -10,6 +10,12 @@ import { PRIVATE_NO_STORE } from '@kinu.run/core';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
 import type { ReasoningEffort, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
+import { mockAgentsSdk } from './helpers/agents-sdk';
+
+// `agents` reaches `cloudflare:email`: mock first, then the harness.
+mockAgentsSdk();
+
+const { orchestratorHarness, stubOf } = await import('./helpers/actor-harness');
 
 const cli = serveFamily(cliRoutes);
 
@@ -410,5 +416,20 @@ describe('CLI webhook creation step-up gate', () => {
     const { env } = setupEnv({ tokenMintedAt: Date.now() - 24 * 60 * 60 * 1000 });
     const res = await cli(rpcRequest('createTimerTrigger', [{ atMs: Date.now() + 1000, trust: 'owner' }]), env);
     expect(res?.status).toBe(200);
+  });
+});
+
+describe('the send RPC names its message', () => {
+  test('a send with no message id is refused, and nothing is admitted to send twice', async () => {
+    // A real workspace object behind the binding: the refusal is the send callable's own, not a route's.
+    const workspace = orchestratorHarness(undefined, { ownerUserId: USER_ID });
+    const env = testEnv(tokenHolderUserDO(), { idFromName: (name) => name, get: () => stubOf(workspace.agent) });
+
+    const refused = await cli(rpcRequest('send', ['Name the release.']), env);
+
+    expect(refused?.status).toBe(400);
+    expect(v.parse(ErrorResponseSchema, await handled(refused).json()).error).toContain('A message id is 1 to 128 characters');
+    expect(v.parse(v.looseObject({ messageCount: v.number() }), await rpcResult(env, 'getAgentStatus')).messageCount).toBe(0);
+    expect(JSON.stringify(await rpcResult(env, 'getChatHistoryPage', [{ limit: 10 }]))).not.toContain('Name the release.');
   });
 });

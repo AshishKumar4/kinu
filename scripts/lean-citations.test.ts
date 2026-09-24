@@ -234,7 +234,7 @@ describe('the workflow that runs this gate fires on what this gate reads', () =>
    * `verify-lean` job is `push` to `main` only — so a `paths:` filter naming
    * `lean/**` and `packages/**\/src/**\/*.ts` does not cover it. This gate's corpus
    * is every tracked TEXT source, and citations really do live outside that
-   * filter: `docs/`, `scripts/`, `packages/core/tests/` and `tests/bench/patches/`.
+   * filter: `docs/`, `scripts/`, `packages/core/tests/` and `bench/corpus/patches/`.
    * A broken citation added to any of them would reach `main` with no Lean gate
    * having run, and `scripts/lean-citations.ts` itself would not be a trigger
    * path — editing the gate would not run it.

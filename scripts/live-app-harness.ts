@@ -267,18 +267,21 @@ function liveAppEnv() {
       : []),
   ]);
 
-  // Secrets reach workerd from .dev.vars on disk — a fresh worktree has none —
-  // or from process.env when the flag is on (wrangler: CLOUDFLARE_INCLUDE_
-  // PROCESS_ENV defaults false, and then a secret only ever binds from a
-  // file). The flag is how the loaded vars become bindings without copying
-  // .dev.vars into the worktree.
+  // Secrets reach workerd from packages/cf-backend/.dev.vars when the checkout
+  // has one, and only then from that file; else from process.env when the flag
+  // is on (wrangler getVarsForDev; CLOUDFLARE_INCLUDE_PROCESS_ENV defaults
+  // false). The flag is how a worktree without the file binds the vars loaded
+  // above without copying .dev.vars into it.
   env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'true';
 
   // The Drive signs its listing cursors with JWT_SECRET and is unbound without
   // one (drive/tenant.ts `driveBound`: every Drive route answers 503). .dev.vars
   // carries none, and nothing durable is sealed with it (infra-manifest.ts), so
-  // a boot on its own state gets its own.
-  env.JWT_SECRET ??= randomBytes(32).toString('base64');
+  // a boot on its own state gets its own, bound as a var by vite.config.ts: a
+  // checkout that has packages/cf-backend/.dev.vars (the primary, and a clone
+  // that links it) makes wrangler read secrets from that file alone, and one
+  // handed through process env never binds (sweep-0924d, 2026-09-24).
+  env.KINU_DEV_JWT_SECRET = randomBytes(32).toString('base64');
 
   return env;
 }

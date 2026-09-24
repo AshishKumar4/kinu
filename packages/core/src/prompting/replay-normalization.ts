@@ -6,6 +6,7 @@
 
 import type { AssistantContent, AssistantModelMessage, ModelMessage, ToolModelMessage } from 'ai';
 import { toolCallIdFor } from '../providers/tool-call-id';
+import { StableCopies } from './stable-copies';
 import * as v from 'valibot';
 
 /** Reasoning is provider-signed: replayable only to its signer. Elsewhere its prose
@@ -32,20 +33,7 @@ const AnthropicReasoningOptionsSchema = v.object({
   redactedData: v.optional(v.string()),
 });
 
-/** A frozen message's copy per rewrite: the same rewrite returns the object the request store already recorded. */
-const copies = new WeakMap<ModelMessage, { readonly rewrite: string; readonly copy: ModelMessage }>();
-
-function copied(message: ModelMessage, rewrite: readonly (string | null)[], copy: () => ModelMessage): ModelMessage {
-  if (!Object.isFrozen(message)) return copy();
-  const key = JSON.stringify(rewrite);
-  const known = copies.get(message);
-
-  if (known?.rewrite === key) return known.copy;
-  const fresh = copy();
-  copies.set(message, { rewrite: key, copy: fresh });
-
-  return fresh;
-}
+const replayed = new StableCopies();
 
 export function normalizeReplayForDestination(
   messages: readonly ModelMessage[],
@@ -80,7 +68,7 @@ export function normalizeReplayForDestination(
       if (rewrite.every((step) => step === null)) return message;
       changed = true;
 
-      return copied(message, rewrite, () => {
+      return replayed.of(message, JSON.stringify(rewrite), () => {
         const content: Exclude<AssistantContent, string> = [];
 
         for (const [index, part] of parts.entries()) {
@@ -109,7 +97,7 @@ export function normalizeReplayForDestination(
       if (rewrite.every((id) => id === null)) return message;
       changed = true;
 
-      return copied(message, rewrite, () => ({ ...message, content: parts.map((part, index) => {
+      return replayed.of(message, JSON.stringify(rewrite), () => ({ ...message, content: parts.map((part, index) => {
         const id = rewrite[index] ?? null;
 
         return id === null || part.type !== 'tool-result' ? part : { ...part, toolCallId: id };

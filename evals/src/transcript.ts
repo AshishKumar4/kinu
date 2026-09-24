@@ -1,0 +1,120 @@
+import * as v from 'valibot';
+import { decodeModelMessageValues, JsonValueSchema, projectJsonValue, TOOL_CALLS_PENDING, type RunEvent } from '@kinu.run/core';
+import type { TranscriptEvent } from 'vitest-evals';
+import { redact, redactJson } from './redact';
+import type { EvalMetrics } from './task';
+
+type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
+
+const ArgumentsSchema = v.record(v.string(), JsonValueSchema);
+
+const TextPartSchema = v.object({ type: v.literal('text'), text: v.string() });
+
+/** A call the deployment recorded as failed: an error string, or a producer outcome that says so. */
+function failed(call: ToolCallEnd): boolean {
+  return call.error !== undefined || call.outcome?.success === false;
+}
+
+/** What the model said in one step: the text parts of its assistant messages, joined. */
+function stepText(step: Extract<RunEvent, { type: 'step_finish' }>): string {
+  return decodeModelMessageValues(step.messages ?? [])
+    .filter((message) => message.role === 'assistant')
+    .flatMap((message) => v.is(v.string(), message.content)
+      ? [message.content]
+      : message.content.flatMap((part) => v.is(TextPartSchema, part) ? [part.text] : []))
+    .join('')
+    .trim();
+}
+
+/**
+ * The deployment's run ledger as a vitest-evals transcript, in ledger order: each run's opening
+ * message, then per model step what it said and every tool call with its result or error.
+ */
+export function toTranscript(events: readonly RunEvent[]): TranscriptEvent[] {
+  const transcript: TranscriptEvent[] = [];
+  let calls: ToolCallEnd[] = [];
+
+  for (const event of events) {
+    const metadata = { runId: event.runId, timestamp: event.timestamp };
+
+    if (event.type === 'run_start') {
+      const content = event.userMessage ?? `(the workspace started a run: ${event.caused_by ?? 'programmatic'})`;
+      transcript.push({ type: 'message', role: 'user', content: redact(content), metadata });
+    } else if (event.type === 'tool_call_end') {
+      calls.push(event);
+    } else if (event.type === 'step_finish') {
+      const text = stepText(event);
+
+      if (text !== '') transcript.push({ type: 'message', role: 'assistant', content: redact(text), metadata });
+
+      for (const call of calls) {
+        const args = v.safeParse(ArgumentsSchema, redactJson(projectJsonValue({ value: call.args ?? {} })));
+        const invoked: TranscriptEvent = { type: 'tool_call', id: call.toolCallId, name: call.name, metadata };
+
+        if (args.success) invoked.arguments = args.output;
+        transcript.push(invoked);
+        transcript.push(failed(call)
+          ? { type: 'tool_result', toolCallId: call.toolCallId, name: call.name, metadata,
+              error: { type: 'ToolError', message: redact(call.error ?? JSON.stringify(call.result ?? null)) } }
+          : { type: 'tool_result', toolCallId: call.toolCallId, name: call.name, metadata,
+              content: redactJson(projectJsonValue({ value: call.result ?? null })) });
+      }
+
+      calls = [];
+    } else if (event.type === 'run_end' && event.reason !== 'completed') {
+      const content = `(the run ended: ${event.reason ?? 'no reason'}${event.error === undefined ? '' : ` — ${event.error}`})`;
+      transcript.push({ type: 'message', role: 'system', content: redact(content), metadata });
+    }
+  }
+
+  return transcript;
+}
+
+/** Model steps, tool calls, failed tool calls and waits on the model provider, counted off the ledger. */
+export function measure(events: readonly RunEvent[]): EvalMetrics & { inputTokens: number; outputTokens: number } {
+  let modelTurns = 0, toolCalls = 0, toolErrors = 0, providerWaits = 0, providerWaitMs = 0, inputTokens = 0, outputTokens = 0;
+
+  for (const event of events) {
+    if (event.type === 'step_finish') {
+      modelTurns += 1;
+      inputTokens += event.usage?.input ?? 0;
+      outputTokens += event.usage?.output ?? 0;
+    } else if (event.type === 'tool_call_end') {
+      toolCalls += 1;
+
+      if (failed(event)) toolErrors += 1;
+    } else if (event.type === 'provider_wait') {
+      providerWaits += 1;
+      providerWaitMs += event.waitMs;
+    }
+  }
+
+  return { modelTurns, toolCalls, toolErrors, providerWaits, providerWaitMs, inputTokens, outputTokens };
+}
+
+/**
+ * Runs this turn opened that stopped while the model was still calling tools and were reported
+ * completed: a loop cut mid-work that said it finished. The product seals such a run `incomplete`
+ * (core `classifyRunEnd`); four capped production turns once reported `completed` instead, and no
+ * suite could see it. Read off the run ledger the web app's Activity pane reads.
+ */
+export function cutButCompleted(events: readonly RunEvent[], before: ReadonlySet<string>): { runId: string; steps: number }[] {
+  const steps = new Map<string, { count: number; last: string | undefined }>();
+  const completed: string[] = [];
+
+  for (const event of events) {
+    if (before.has(event.runId)) continue;
+
+    if (event.type === 'step_finish') {
+      steps.set(event.runId, { count: (steps.get(event.runId)?.count ?? 0) + 1, last: event.reason });
+    } else if (event.type === 'run_end' && event.reason === 'completed') {
+      completed.push(event.runId);
+    }
+  }
+
+  return completed.flatMap((runId) => {
+    const seen = steps.get(runId);
+
+    return seen?.last === TOOL_CALLS_PENDING ? [{ runId, steps: seen.count }] : [];
+  });
+}

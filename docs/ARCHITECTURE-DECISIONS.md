@@ -672,7 +672,7 @@ hold the lane are derived, never listed: the closure of tracked modules that
 reach puppeteer (`browserModules` in `scripts/ladder.ts`), intersected with
 the files each row claims. Nine rows hold it today: the two UI self-test rows,
 Public pages render, Live app in a browser, React runtime identity,
-Swarm-tree geometry, Chat infinite scroll, Root end-to-end lifecycle suites
+Swarm-tree geometry, Chat infinite scroll, Live and first-run suites (credential-free)
 and the secrets/corpus/preflight self-tests. The plan carries the lane as a
 column, and `scripts/deploy.sh` keeps one holder in flight.
 `scripts/deploy.test.ts` pins that two holders never overlap in the run's
@@ -717,6 +717,40 @@ read is record-shaped. It is the fourth member of the class
 `packages/cf-backend/src/gallery.tsx` already documents for
 `getExposedPorts`, `getExecutorDiff` and `listWorkspaceWork`. Unfixed here and
 recorded as O3.
+
+L10. Test scratch stays in the OS temp directory, and each runner chooses that
+directory. Decided 2026-09-24. The owner's rule is that no work lands in
+`/tmp`, which is tmpfs here, so every runner sets `TMPDIR` (the sweep uses
+`/var/tmp`) and runs test commands under eatmydata. The measurements rule out
+the other defaults. On ext4 SQLite's fsyncs are real: a fresh workspace plus
+one turn cost 1,200 of them (708 in `initWorkspaceSchema`, 92 to construct the
+client, 360 in one send), and one CLI file took 176 s against 1.7 s under
+eatmydata. A root under a worktree breaks Chrome, whose `SingletonSocket` lies
+71 bytes below a scratch root, while a Unix socket path holds 107. With
+`TMPDIR=/var/tmp` and eatmydata, `bun test --parallel=4 packages/cf-backend/`
+added at most 90 to 127 MB of entries to `/var/tmp`, other lanes' included,
+and left no scratch root behind (three runs, 2026-09-24). One gap: under bun
+1.4.0, `Bun.spawn` with no `env` passes the environment bun started with, not
+`process.env` as the preload changed it, so those children keep the runner's
+`TMPDIR` instead of the scratch root.
+
+L11. A run or a test file that ends with processes of its own still running
+fails, and they are ended. Decided 2026-09-24. `runUnderDeadline` gives every
+run a `KINU_RUN` value that all its processes inherit. After the exit, a live
+process still carrying that value is killed and named in the run's red. The
+`bun test` preload does the same for a file's live children when the file
+ends. The two cover each other's blind spot. The environment check finds a
+server that a shell backgrounded, after the shell has gone. The child check
+finds a child that runs under an environment of its own, like the pc-agent
+supervisors under the sandbox's allow-list. Measured: `bun test` of
+`unit-pc-agent-exec.test.ts` left nine 30 MB supervisors and a `sleep 20`, and
+it passed. Neither `bun test --parallel=4` nor the esbuild processes its
+files start leave anything at the exit on their own (14 of 14 probe runs),
+so the run check does not race them. The per-file check found esbuild services
+in `unit-slate-vendor` and `unit-slate-client-module`. Those two files now run
+esbuild's sync API one process per call. Blind: a process that rebuilt its
+environment and outlived its parent, anything off Linux, and
+`scripts/deploy.sh`'s rows, which run under coreutils `timeout`.
 
 ## Open
 

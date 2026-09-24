@@ -557,33 +557,11 @@ export function createSandboxExecutor(
 
   const types = `
 /**
- * sandbox — @cloudflare/sandbox Linux container, one per agent.
- *
- * NOT where the toolchain lives. The workspace executor already has a POSIX
- * shell, ~95 coreutils, node, npm/npx, and git; python3/pip and bash install
- * there on first use. Come here only for what the workspace cannot honour:
- *   - RUNNING a prebuilt native Linux binary (Nimbus is wasm32-wasi and JS),
- *   - real parallelism across cores (Nimbus threads are cooperative), 2 vCPU,
- *   - more than a couple of GB of RAM (this VM reports 6185 MiB / 7.3G total),
- *   - work that must not share the workspace's durable fate.
- * NOT for docker, python3, make, gcc, clang or tsc — probed ABSENT (exit 127)
- * in this image. NOT for inbound ports or long processes: the workspace has
- * both. A cold start costs ~2.8s; concurrency is refused, not queued, at 10
- * instances (503) and on a start-rate burst (429).
- * Full rule: docs/EXECUTION-LAYER-SPEC.md.
- *
- * Every call below either answers, or resolves to a refusal
- * \`{"reason":"<class>","error":"<what happened>"}\`. \`reason\` is the class —
- * bad_input, unavailable, unsupported, timeout, cancelled, oom, io — so branch on
- * it rather than matching prose. \`unavailable\` means this deployment has no
- * container; retrying a different runtime is the move.
- *
- * /workspace is the REAL working directory: every relative path in exec,
- * processes and file calls resolves against it. Absolute paths are welcome.
- *
- * Background servers MUST be started with startProcess — supervision records a
- * restart spec so the process comes back when the container restarts. A bare
- * nohup-and-background job dies with the container and is NOT restorable.
+ * A Linux container of your own (2 vCPU, about 6 GB) with its own files. Relative paths resolve in
+ * /workspace. It has no docker, python3, make, gcc, clang or tsc. It refuses past 10 instances (503)
+ * or on a burst of starts (429). A refused call resolves to \`{"reason","error"}\`: reason is bad_input,
+ * unavailable (no container on this deployment), unsupported, timeout, cancelled, oom or io. A server
+ * started with startProcess comes back when the container restarts; a nohup job does not.
  */
 declare namespace sandbox {
   function exec(command: string): Promise<${COMMAND_RESULT_TYPE}>;

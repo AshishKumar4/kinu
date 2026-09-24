@@ -182,14 +182,16 @@ export default function App() {
 }
 \`\`\`
 
-Seed the options with \`workspace.slate({ op: "call", id, method: "seed", args: [[...]] })\` (a \`seed(options)\` method that stores them), reply with the \`slate://<id>\` line, and the user's click arrives as a \`slate\` event in your next step.
+Seed the options with \`await workspace.slates.<id>.seed([...])\` (a \`seed(options)\` method that stores them), reply with the \`slate://<id>\` line, and the user's click arrives as a \`slate\` event in your next step.
 
 ## Working with a slate
 
-- \`workspace.slate({ op: "preview", id })\` compiles and boots it and returns the URL; the chat and the work surface load the same URL. The URL is durable: it is the same on every launch and keeps working after eviction. Compile errors come back as \`bad_input\` with the file and line: fix and preview again. Edits reload the running slate; \`this.storage\` and \`this.sql\` keep their data across the reload.
-- \`workspace.slate({ op: "remove", id })\` ends a slate: its process, its URL, its \`this.sql\` and its files. Committed versions stay.
-- \`workspace.slate({ op: "call", id, method, args })\` calls a method yourself, the way the client does.
-- \`commit\` freezes the source as a version, \`fork\` copies one, \`restore\` puts a version's source back.
+In \`eval\`, \`workspace.slates.<id>\` is the same stub the client gets: \`await workspace.slates.whiteboard.addStroke(stroke)\` calls \`addStroke\` on the whiteboard slate and returns its result. Members named with \`$\` are the slate's lifecycle; no class method can take such a name.
+
+- \`workspace.slates.<id>.$preview()\` compiles and boots it and returns \`{ url, port, inline }\`; the chat and the work surface load the same URL. The URL is durable: it is the same on every launch and keeps working after eviction. Compile errors come back as \`bad_input\` with the file and line: fix and preview again. Edits reload the running slate; \`this.storage\` and \`this.sql\` keep their data across the reload.
+- \`workspace.slates.<id>.$methods()\` lists the methods its class exports.
+- \`workspace.slates.<id>.$remove()\` ends a slate: its process, its URL, its \`this.sql\` and its files. Committed versions stay.
+- \`$commit()\` freezes the source as a version, \`$history()\` lists the versions, \`$restore(version)\` puts one's source back, and \`workspace.slates.$fork(version)\` copies one into a new slate. \`workspace.slates.$list()\` lists every slate.
 - Make the UI usable on a phone: one column, large touch targets. Never \`alert()\` or \`confirm()\`; the sandbox blocks them.
 - Do not import \`RpcTarget\`; pass functions, not classes.
 `;

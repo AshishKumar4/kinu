@@ -221,7 +221,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     });
 
     const session = new LocalAgentSession({ rt: parent, db: parent.db, model, noAutoEvolve: true, onEvent: () => {} });
-    const turn = session.send('Inspect the parser.');
+    const turn = session.send('Inspect the parser.', { id: crypto.randomUUID() });
 
     try {
       await entered.promise;

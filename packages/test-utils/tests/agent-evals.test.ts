@@ -10,7 +10,7 @@ import {
 import { createTestSql, testActorHandle, type TestSql } from '../src/sql';
 import { createTestActors } from '../src/actors';
 import {
-  BEHAVIOUR_SCORERS, completionHonesty, craftReuse, editLanding, parseFailureMix,
+  BEHAVIOUR_SCORERS, completionHonesty, craftReuse, editLanding,
   recoveryDurability, scoreExploration, scoreSettleVisibility,
   spillRetrieval, steeringConversion, toolOutcomes,
 } from '../src/agent-evals';
@@ -609,7 +609,7 @@ describe('toolOutcomes — structural attribution with an observed denominator',
     expect(result.eligible).toBe(3);
     expect(result.passed).toBe(0);
     expect(result.rate).toBe(0);
-    expect(parseFailureMix(result.detail)).toEqual([['file·edit·not_found', 2], ['shell·exit_1', 1]]);
+    expect(result.detail).toContain('failed: file·edit·not_found×2, shell·exit_1×1');
     store.close();
   });
 
@@ -626,7 +626,7 @@ describe('toolOutcomes — structural attribution with an observed denominator',
     const result = toolOutcomes.score(store.sql, store.actor);
     expect(result.rate).toBe(0.5);
     expect(result.measured).toEqual({ succeeded: 1, failed: 1, unmeasured: 0, refused: 0, workFailed: 0, runtimeAbsent: 0, broke: 1 });
-    expect(parseFailureMix(result.detail)).toEqual([['file·missing', 1]]);
+    expect(result.detail).toContain('failed: file·missing×1');
     store.close();
   });
 });
