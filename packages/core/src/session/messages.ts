@@ -3,6 +3,7 @@ import * as v from 'valibot';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
+import { sha256Hex } from '../safety/argument-digest';
 import { encodeModelMessage, decodeModelMessageValues } from './message-codec';
 import { JsonObjectSchema, isParsedJsonObject, jsonObjectElements, type JsonObject, type JsonValue } from '../utils/json';
 import type { SessionPayloads, SessionPayloadReader, SessionPayload } from './payload';
@@ -271,6 +272,12 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     this.sources.set(message, reference);
   }
 
+  /** Frozen, so it cannot drift from the committed row it names. */
+  remember(message: ModelMessage, reference: MessageReference): void {
+    freezeTree({ value: message });
+    this.sources.set(message, reference);
+  }
+
   async prepare(message: ModelMessage, id: string, calls: ToolCallIndex = new Map()): Promise<PreparedMessage> {
     const { role, content, ...envelope } = encodeModelMessage(message);
 
@@ -309,10 +316,24 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     return { parts: stored, payload: await this.payloads.prepare(stored) };
   }
 
-  private assertUnrecorded(messageId: string): void {
-    const existing = this.sql<{ message_id: string }>`SELECT message_id FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${messageId}`[0];
+  private recorded(messageId: string): boolean {
+    return this.sql<{ message_id: string }>`SELECT message_id FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${messageId}`.length > 0;
+  }
 
-    if (existing !== undefined) throw new KinuError('denied', 'message identity is already recorded');
+  private assertUnrecorded(messageId: string): void {
+    if (this.recorded(messageId)) throw new KinuError('denied', 'message identity is already recorded');
+  }
+
+  /** A render-only copy named by its bytes (a spilled payload by their digest), so one row serves every request. */
+  async prepareRender(message: ModelMessage): Promise<PreparedMessage> {
+    const prepared = await this.prepare(message, '');
+    const { role, contentKind, envelope, content: { payload } } = prepared;
+
+    return { ...prepared, id: `render:${sha256Hex(`${role}\n${contentKind}\n${JSON.stringify(envelope)}\n${payload.json ?? payload.digest}`)}` };
+  }
+
+  insertRender(prepared: PreparedMessage): void {
+    if (!this.recorded(prepared.id)) this.insert(prepared, 'render');
   }
 
   /** Called inside the context owner's transaction; no filesystem work occurs here. */

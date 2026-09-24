@@ -61,7 +61,7 @@ export class SessionHistory {
     this.messages = new SessionMessages(sql, actor, payloads);
     this.context = new SessionContext(sql, actor, transactionSync);
     this.proposals = new SessionProposals(sql, actor, this.context, transactionSync);
-    this.requests = new SessionRequests(sql, actor, this.messages, payloads);
+    this.requests = new SessionRequests(sql, actor, this.messages, this.context);
   }
 
   /** Seals orphaned open messages (claim settled or epoch superseded); live streams are never touched. */
