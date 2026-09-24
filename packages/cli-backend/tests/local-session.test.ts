@@ -1810,6 +1810,44 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     ]));
   });
 
+  test('a stored effort the listed model does not declare reaches the provider as one it does', async () => {
+    let sent: unknown;
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async (options) => {
+        sent = options.providerOptions;
+
+        return fakeModel('ok').doStream(options);
+      },
+    });
+
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: () => 'openai/gpt-x',
+      resolveModel: () => model,
+      listProviders: async () => [],
+      // The listing declares low, medium and high for the model, as a catalog would.
+      listModels: async () => ({
+        models: [{ provider: 'openai', id: 'gpt-x', label: 'GPT X', reasoningEfforts: ['low', 'medium', 'high'] }],
+        failures: [],
+      }),
+      modelInfo: async () => null,
+      ...resolverRest,
+    };
+
+    const catalog = { roles: {}, tiers: { default: { model: 'openai/gpt-x', reasoningEffort: 'xhigh' as const } } };
+
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
+    };
+
+    const { session } = setupWithResolver(resolver, { profileAuthority: () => envelope });
+    await session.send('hello', { id: crypto.randomUUID() });
+
+    expect(sent).toMatchObject({ openai: { reasoningEffort: 'high' } });
+  });
+
   test('an explicit tier applies to one turn and is consumed', async () => {
     const resolver: LocalModelResolver = {
       normalizeSpecSync: (spec) => namedSpec(spec) ?? 'local/a',

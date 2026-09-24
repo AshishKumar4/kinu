@@ -1,6 +1,6 @@
 /**
- * Turn-profile resolution: a resolver must never silently substitute an unavailable model, and a
- * role must never widen what a turn may do.
+ * Turn-profile resolution: a tier whose model can no longer serve runs on the account's default rather than
+ * failing, a pinned model is never swapped, and a role must never widen what a turn may do.
  */
 import { describe, expect, test } from 'bun:test';
 import {
@@ -9,6 +9,7 @@ import {
   type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
   type ResolveTurnProfileInput, type RoleDefinition, type TierAssignments,
 } from '../src/profiles';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../src/providers/workers-ai';
 
 const TIERS: TierAssignments = {
   default: { model: 'm-default' },
@@ -165,18 +166,54 @@ describe('tier resolution', () => {
   });
 });
 
-describe('provider availability', () => {
-  test('a configured but unavailable model is an error, never a silent swap', () => {
-    // Resolving to m-default instead would spend money the caller did not configure.
-    expect(() => resolve({ roleId: 'scout', explicitTier: 'fast', availableTools: [], provider: provider(['m-default']) }))
-      .toThrow(/m-fast/);
-    expect(() => resolve({ roleId: 'scout', availableTools: [], provider: provider(['m-default']) }))
-      .toThrow(/unavailable/);
+describe('declared reasoning efforts', () => {
+  const declaring = (efforts: ProviderCatalogSnapshot['reasoningEfforts']): ProviderCatalogSnapshot => ({
+    ...provider(), reasoningEfforts: efforts,
   });
 
-  test('the error names the tier and provider revision so the fix is findable', () => {
+  test('a stored effort the model does not declare is sent as its nearest declared level, never a higher one', () => {
+    const sent = (explicitEffort: NonNullable<ResolveTurnProfileInput['explicitEffort']>) => resolve({
+      explicitEffort, provider: declaring({ 'm-default': ['low', 'medium', 'high'] }),
+    }).tier.reasoningEffort;
+
+    expect(sent('xhigh')).toBe('high');
+    expect(sent('max')).toBe('high');
+    expect(sent('minimal')).toBe('low');
+    expect(sent('medium')).toBe('medium');
+  });
+
+  test('each tier slot sends what its own model declares, and a model that declares none keeps what is stored', () => {
+    // m-fast stores low and declares nothing below medium; m-default declares nothing at all.
+    const profile = resolve({ explicitEffort: 'xhigh', provider: declaring({ 'm-fast': ['medium', 'high'] }) });
+
+    expect(profile.tiers.fast.reasoningEffort).toBe('medium');
+    expect(profile.tier.reasoningEffort).toBe('xhigh');
+  });
+});
+
+describe('provider availability', () => {
+  test('a stored tier whose model a complete listing no longer holds is served by the account default tier', () => {
+    // A retired model cannot serve, so the tier's turns run on the account's default instead of failing.
+    const profile = resolve({ roleId: 'scout', explicitTier: 'fast', availableTools: [], provider: provider(['m-default']) });
+
+    expect(profile.tier).toEqual({ id: 'default', source: 'default', model: 'm-default', reasoningEffort: 'medium', fallbacks: [] });
+    expect(profile.tiers.fast.model).toBe('m-default');
+  });
+
+  test("with the account default retired too, Kinu's default model serves the tier", () => {
+    const retired = catalog({ roles: { scout: SCOUT }, tiers: { default: { model: 'm-gone' }, fast: { model: 'm-also-gone' } } });
+
+    const profile = resolve({
+      envelope: envelope(retired), roleId: 'scout', availableTools: [], provider: provider([DEFAULT_WORKERS_AI_MODEL_SPEC]),
+    });
+
+    expect(profile.tier.model).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+    expect(profile.tiers.default.model).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+  });
+
+  test('with no default listed either, the tier refuses, naming itself and the provider revision', () => {
     const message = refusalMessage(() => {
-      resolve({ explicitTier: 'fast', availableTools: [], provider: provider(['m-default']) });
+      resolve({ explicitTier: 'fast', availableTools: [], provider: provider(['m-other']) });
     });
 
     expect(message).toContain('fast');
@@ -197,27 +234,25 @@ describe('provider availability', () => {
       provider: degraded(['m-default']),
     });
 
-    // Never looked up, so nothing disproved it; substituting m-default is the swap forbidden above.
+    // Never looked up, so nothing disproved it: the tier keeps its model rather than moving to the default.
     expect(profile.tier).toEqual({
       id: 'fast', source: 'explicit', model: 'm-fast', reasoningEffort: 'low', fallbacks: [],
     });
   });
 
-  test('the SAME missing model refuses once the listing is complete', () => {
+  test('the SAME missing model moves to the default only once the listing is complete', () => {
     // Identical catalog and availableModels; only the snapshot's listing-failure admission differs.
     const clean: ProviderCatalogSnapshot = { revision: 'rev-7', availableModels: ['m-default'] };
 
-    const asking = (snapshot: ProviderCatalogSnapshot) => () => resolve({
+    const asking = (snapshot: ProviderCatalogSnapshot) => resolve({
       roleId: 'scout', explicitTier: 'fast', availableTools: [], provider: snapshot,
-    });
+    }).tier.model;
 
     // Absent and empty both mean "enumerated everything", so producers without a failure channel are
     // not treated as degraded.
-    expect(asking(clean)).toThrow(/m-fast/);
-    expect(asking({ ...clean, unavailableProviders: [] })).toThrow(/m-fast/);
-    expect(asking(degraded(['m-default']))().tier).toEqual({
-      id: 'fast', source: 'explicit', model: 'm-fast', reasoningEffort: 'low', fallbacks: [],
-    });
+    expect(asking(clean)).toBe('m-default');
+    expect(asking({ ...clean, unavailableProviders: [] })).toBe('m-default');
+    expect(asking(degraded(['m-default']))).toBe('m-fast');
   });
 
   test('a degraded listing does not refuse a turn over an unrelated tier slot', () => {

@@ -1,7 +1,7 @@
 import type { LanguageModel } from 'ai';
 import {
   agentAffinityKey, parseModelSpec, reasoningEffortOptions,
-  buildProviderCatalogSnapshot, ProviderListingCache,
+  buildProviderCatalogSnapshot, providerListingOf, ProviderListingCache,
   type ProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
   type ProviderWaitInfo,
   type WebSearchProvider,
@@ -138,7 +138,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
     }
 
     const { listing, cache } = await this.providerListings.read();
-    const snapshot = buildProviderCatalogSnapshot(listing.models, listing.failures);
+    const snapshot = buildProviderCatalogSnapshot(listing.models, listing.failures, listing.reasoningEfforts);
     diagnostics.event('profile.provider_snapshot.resolved', {
       cache,
       models: snapshot.availableModels.length,
@@ -152,12 +152,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
   private async sweepProviderListing(): Promise<ProviderListing> {
     const startedAt = Date.now();
     const { registry, deps } = this.providerRegistry();
-    const menu = await registry.listAllModels(deps);
-
-    const listing: ProviderListing = {
-      models: menu.models.map((model) => `${model.provider}/${model.id}`),
-      failures: menu.failures,
-    };
+    const listing = providerListingOf(await registry.listAllModels(deps));
 
     diagnostics.event('profile.provider_listing.swept', {
       ms: Date.now() - startedAt,

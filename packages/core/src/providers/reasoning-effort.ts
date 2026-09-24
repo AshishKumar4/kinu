@@ -37,6 +37,18 @@ export function offeredReasoningEfforts(
   return offered;
 }
 
+/** What a model is sent for `wanted`: itself when declared, else the highest declared level below it, else the lowest. */
+export function declaredReasoningEffort(
+  wanted: ReasoningEffort,
+  declared: readonly ReasoningEffort[] | undefined,
+): ReasoningEffort {
+  if (declared === undefined || declared.length === 0 || declared.includes(wanted)) return wanted;
+  const ranked = [...declared].sort((a, b) => REASONING_EFFORTS.indexOf(a) - REASONING_EFFORTS.indexOf(b));
+  const below = ranked.filter((level) => REASONING_EFFORTS.indexOf(level) < REASONING_EFFORTS.indexOf(wanted));
+
+  return below.at(-1) ?? ranked[0] ?? wanted;
+}
+
 /** Next level in the offer, wrapping; `current` itself when the offer is empty. */
 export function nextReasoningEffort(offered: readonly ReasoningEffort[], current: ReasoningEffort): ReasoningEffort {
   return offered[(offered.indexOf(current) + 1) % offered.length] ?? current;

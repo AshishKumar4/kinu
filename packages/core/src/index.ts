@@ -2142,7 +2142,7 @@ export {
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
   type FixedTierSource,
   DEFAULT_ROLE_ID,
-  buildProviderCatalogSnapshot, ProviderListingCache,
+  buildProviderCatalogSnapshot, providerListingOf, ProviderListingCache,
   type ProviderListing, type ProviderCacheOutcome, type ProviderSnapshotRead,
   changeRoleAsOwner,
   type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,

@@ -9,7 +9,7 @@ import type {
 } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, ProviderListingCache,
-  buildProviderCatalogSnapshot, loadProfileAuthorityInputs,
+  buildProviderCatalogSnapshot, loadProfileAuthorityInputs, providerListingOf,
   profileCatalogDigest, resolveAgentTurnProfile,
 } from '@kinu.run/core';
 import type { LocalModelResolver } from './model-resolver';
@@ -60,14 +60,7 @@ export function resolverModelPlane(
 ): LocalProfileModelPlane {
   const plane: LocalProfileModelPlane = {
     normalizeSpec: (spec) => resolver.normalizeSpecSync(spec),
-    async listModels() {
-      const menu = await resolver.listModels();
-
-      return {
-        models: menu.models.map((model) => `${model.provider}/${model.id}`),
-        failures: menu.failures,
-      };
-    },
+    listModels: async () => providerListingOf(await resolver.listModels()),
   };
 
   return revision ? { ...plane, revision } : plane;
@@ -151,7 +144,7 @@ export function createLocalProfileAuthority(deps: {
     const configured = normalizeSpec(deps.config.getModel());
 
     return {
-      snapshot: buildProviderCatalogSnapshot([configured, ...listing.models], listing.failures),
+      snapshot: buildProviderCatalogSnapshot([configured, ...listing.models], listing.failures, listing.reasoningEfforts),
       cache,
     };
   };

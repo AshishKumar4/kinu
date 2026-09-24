@@ -125,12 +125,12 @@ describe('exhaustive model routing', () => {
 });
 
 describe('resolver tier snapshot', () => {
-  test('unset slots alias default across all three slots', () => {
-    const p = resolveTurnProfile(baseInput());
-    expect(Object.keys(p.tiers).sort()).toEqual([...TIER_IDS].sort());
+  test('an account that never set a tier runs every role and every lane on GLM 5.3', () => {
+    for (const roleId of ['task', 'researcher', 'planner', 'auditor', 'designer']) {
+      const profile = resolveTurnProfile(baseInput({ roleId }));
 
-    for (const id of ['fast', 'deep'] as const) {
-      expect(p.tiers[id].model).toBe(BUILTIN_PROFILE_CATALOG.tiers.default.model);
+      expect(profile.tier.model).toBe('workers-ai/@cf/zai-org/glm-5.3');
+      expect(Object.values(profile.tiers).map((route) => route.model)).toEqual(TIER_IDS.map(() => 'workers-ai/@cf/zai-org/glm-5.3'));
     }
   });
 

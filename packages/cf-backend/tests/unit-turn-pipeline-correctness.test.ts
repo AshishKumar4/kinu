@@ -297,6 +297,19 @@ describe('turn-pipeline correctness wiring', () => {
     expect(unpinned.model).toEqual({ model: 'workers-ai/account-default', source: 'role' });
   });
 
+  test('an agent the owner adds by hand runs the general role on the account default model', async () => {
+    // m1421: an added agent came up on a flash model; one the owner adds inherits the general role and the default.
+    const workspace = orchestratorHarness();
+    await workspace.agent.setSoul('# Purpose\n\nShip the deploy gates.');
+
+    const added = await workspace.agent.createSubordinateAgent();
+    const snapshot = await workspace.agent.getActorSnapshot(added.name);
+
+    expect({ role: snapshot.role, model: snapshot.model }).toEqual({
+      role: 'task', model: { model: DEFAULT_WORKERS_AI_MODEL_SPEC, source: 'role' },
+    });
+  });
+
   test('hosted heads run on the registered workspace identity, never a self-named filesystem', async () => {
     // A self-named head would derive a second, empty filesystem; bytes the root wrote must be the head's.
     const workspace = orchestratorHarness();

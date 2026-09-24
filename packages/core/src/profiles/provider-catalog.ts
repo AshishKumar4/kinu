@@ -1,24 +1,49 @@
 // The one builder of provider snapshots, so every backend computes the same `revision`.
 
 import { sha256Hex } from '../safety/argument-digest';
-import type { ProviderFailure } from '../providers/registry';
+import type { ModelMenu, ProviderFailure } from '../providers/registry';
+import type { ReasoningEffort } from '../providers/reasoning-effort';
 import type { ProviderCatalogSnapshot, ProviderCacheOutcome } from './resolve';
 
 /** One credential sweep's result. `models` are joined `<provider>/<modelId>` specs, not rows. */
 export interface ProviderListing {
   readonly models: readonly string[];
   readonly failures: readonly ProviderFailure[];
+  /** The levels each model declares, by spec. */
+  readonly reasoningEfforts?: Readonly<Record<string, readonly ReasoningEffort[]>>;
+}
+
+/** A registry's menu as a listing. */
+export function providerListingOf(menu: ModelMenu): ProviderListing {
+  const reasoningEfforts: Record<string, readonly ReasoningEffort[]> = {};
+
+  const models = menu.models.map((model) => {
+    const spec = `${model.provider}/${model.id}`;
+
+    if (model.reasoningEfforts !== undefined && model.reasoningEfforts.length > 0) reasoningEfforts[spec] = model.reasoningEfforts;
+
+    return spec;
+  });
+
+  return { models, failures: menu.failures, reasoningEfforts };
 }
 
 /**
  * Both halves are sorted so answer order never changes the revision. Failures are hashed
- * because a degraded listing admits models unverified; `!` cannot begin a model spec.
+ * because a degraded listing admits models unverified; `!` and `~` cannot begin a model spec.
  */
 export function buildProviderCatalogSnapshot(
   models: Iterable<string>,
   failures: readonly ProviderFailure[],
+  declared: Readonly<Record<string, readonly ReasoningEffort[]>> = {},
 ): ProviderCatalogSnapshot {
   const availableModels = [...new Set(models)].sort();
+
+  const reasoningEfforts = Object.fromEntries(availableModels.flatMap((spec) => {
+    const levels = declared[spec];
+
+    return levels === undefined ? [] : [[spec, [...levels]]];
+  }));
 
   const unavailableProviders = failures
     .map(({ provider, label, reason }) => ({ provider, label: label ?? provider, reason }))
@@ -28,9 +53,11 @@ export function buildProviderCatalogSnapshot(
     revision: sha256Hex([
       ...availableModels,
       ...unavailableProviders.map(({ provider, reason }) => `!${provider}\t${reason}`),
+      ...Object.entries(reasoningEfforts).map(([spec, levels]) => `~${spec}\t${levels.join(',')}`),
     ].join('\n')),
     availableModels,
     unavailableProviders,
+    reasoningEfforts,
   };
 }
 

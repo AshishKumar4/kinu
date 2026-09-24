@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OwnedModelServices, type OwnedModelEnv } from '../src/owned-model-services';
 import {
-  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, asFetchFunction, profileCatalogDigest,
+  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, asFetchFunction, profileCatalogDigest,
   resolveTurnProfile,
   type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
 } from '@kinu.run/core';
@@ -260,6 +260,23 @@ describe('OwnedModelServices — the provider snapshot', () => {
     expect(degraded.revision).not.toBe(clean.revision);
   });
 
+  test("a stored effort a listed model lacks is sent as one it declares, read off the snapshot's listing", async () => {
+    catalogDown();
+    const { snapshot } = await snapshotServices(null).profileProviderSnapshot();
+    // GLM 5.3 as the platform gateway lists it; it declares low, medium and high.
+    const glm = snapshot.availableModels.find((spec) => spec.endsWith(`/${DEFAULT_WORKERS_AI_MODEL_ID}`));
+
+    if (glm === undefined) throw new Error('the platform gateway lists no GLM 5.3');
+    const catalog = { ...BUILTIN_PROFILE_CATALOG, tiers: { default: { model: glm } } };
+
+    const profile = resolveTurnProfile({
+      envelope: { authority: { kind: 'account', accountId: 'acct-1' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
+      provider: snapshot, roleId: 'task', workMode: 'build', availableTools: [], activeSkills: [], explicitEffort: 'xhigh',
+    });
+
+    expect(profile.tier).toMatchObject({ model: glm, reasoningEffort: 'high' });
+  });
+
   test('a complete listing is memoized, and only a change expires it', async () => {
     catalogDown();
     const services = snapshotServices(null);
@@ -442,12 +459,13 @@ describe('a degraded listing versus a confirmed-missing model', () => {
     expect(profile.providerRevision).toBe(degraded.revision);
   });
 
-  test('a provider that answers without the model still refuses', async () => {
+  test('a provider that answers without the model moves its tier to the account default', async () => {
     catalogDown();
     const clean = (await snapshotServices(null).profileProviderSnapshot()).snapshot;
     expect(clean.unavailableProviders).toEqual([]);
 
-    // An empty failure set asserts the listing was complete, so absence is proof.
-    expect(() => resolveWith(clean)).toThrow(/unavailable on provider revision/);
+    // An empty failure set asserts the listing was complete, so absence is proof the pinned model cannot serve.
+    const profile = resolveWith(clean);
+    expect(profile.tiers.deep.model).toBe(profile.tiers.default.model);
   });
 });

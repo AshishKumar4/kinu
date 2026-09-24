@@ -661,6 +661,14 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A model tier whose model is gone runs on your default.** A tier set to a model no provider lists any more
+  (retired, or its account disconnected) failed every turn it served. It now runs on your default tier, then on
+  GLM 5.3. A model pinned to a workspace or an agent is still refused, so you can see and fix the pin.
+
+- **Reasoning effort is always a level the model takes.** A stored effort the model does not declare (xhigh on GLM
+  5.3, which takes low, medium and high) was sent as it was. It is now sent as the nearest level the model declares,
+  never a higher one.
+
 - **An hour-long prompt-cache write is charged what Anthropic bills.** Anthropic bills a cache write kept an hour at
   twice the input rate. Spend, mission budgets and the Activity totals charged it at the five-minute rate and called
   the total a floor; they now charge the hour rate, and the floor note names only calls no rate priced.
