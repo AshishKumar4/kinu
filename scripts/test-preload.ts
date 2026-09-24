@@ -6,7 +6,6 @@
 // runner — `bun:test`'s, which throws if called under any other.
 import { afterAll, setDefaultTimeout } from 'bun:test';
 
-import { buildSlateVendor } from '../packages/cf-backend/slate-vendor';
 import { release } from './test-scratch-home';
 
 // No per-test clock. Bun's 5 s default is a wall clock racing the machine: on
@@ -113,10 +112,19 @@ Bun.plugin({
 // the package's own `buildSlateVendor` so bun tests measure the real bytes.
 // The runner calls this once per global (it caches the module), so under
 // `--parallel` that is once per importing file: about 90 ms of esbuild each
-// (measured 2026-09-24).
+// (measured 2026-09-24). Imported here, after the line below: esbuild reads it
+// once, when it loads. Its sync API then runs one esbuild per call instead of
+// keeping a worker thread and an `esbuild --service` child (median 35 MB, up
+// to 205 MB) alive until the global is collected: 55 to 78 of them per cf run.
+process.env.ESBUILD_WORKER_THREADS = '0';
+
 Bun.plugin({
   name: 'kinu-slate-vendor-for-bun-test',
   setup(build) {
-    build.module('virtual:kinu-slate-vendor', () => ({ exports: { default: buildSlateVendor() }, loader: 'object' }));
+    build.module('virtual:kinu-slate-vendor', async () => {
+      const { buildSlateVendor } = await import('../packages/cf-backend/slate-vendor');
+
+      return { exports: { default: buildSlateVendor() }, loader: 'object' };
+    });
   },
 });
