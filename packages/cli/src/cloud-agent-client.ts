@@ -267,6 +267,14 @@ const SearchNodeProjectionSchema = v.object({
 
 const ModelSpecSchema = v.object({ spec: v.nullable(v.string()) });
 
+const ActorSnapshotSchema = v.object({
+  displayName: v.string(),
+  role: v.string(),
+  mission: v.string(),
+  model: v.object({ model: v.string() }),
+  reasoningEffort: v.nullable(ReasoningEffortSchema),
+});
+
 const SetModelResultSchema = v.object({ ok: v.literal(true), spec: v.string() });
 
 const ReasoningEffortResultSchema = v.object({ effort: v.nullable(ReasoningEffortSchema) });
@@ -604,13 +612,35 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async history(): Promise<AgentTranscriptMessage[]> {
+    const name = this.subordinateName;
+
+    if (name !== null) {
+      return readConversation(async (page) => {
+        const read = await this.inspectSubordinate({ path: [name], view: 'history', page });
+
+        if (read.view !== 'history') throw new Error(read.view === 'missing' ? read.error : `the conversation read answered "${read.view}"`);
+
+        return read.page;
+      });
+    }
+
     return readConversation((request) => this.callHttp(
       'getChatHistoryPage', CloudChatPageSchema,
       [request.cursor === undefined ? {} : { cursor: { after: request.cursor.after } }],
     ));
   }
 
+  private async ownSnapshot(name: string): Promise<v.InferOutput<typeof ActorSnapshotSchema>> {
+    return v.parse(ActorSnapshotSchema, await this.callRpc('getActorSnapshot', [name]));
+  }
+
   async status(): Promise<AgentClientStatus> {
+    if (this.subordinateName !== null) {
+      const own = await this.ownSnapshot(this.subordinateName);
+
+      return { name: own.displayName, purpose: own.mission, model: own.model.model, reasoningEffort: own.reasoningEffort, roleId: own.role };
+    }
+
     const status = await this.callHttp('getAgentStatus', CloudAgentStatusSchema);
 
     return {
@@ -764,20 +794,30 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async getModelSpec(): Promise<string | null> {
+    if (this.subordinateName !== null) return (await this.ownSnapshot(this.subordinateName)).model.model;
+
     return (await this.callHttp('getStoredModelSpec', ModelSpecSchema)).spec;
   }
 
   async setModel(spec: string): Promise<{ spec: string }> {
+    const name = this.subordinateName;
+
+    if (name !== null) return { spec: v.parse(SetModelResultSchema, await this.callRpc('setActorModel', [name, spec])).spec };
+
     return { spec: (await this.callHttp('setModel', SetModelResultSchema, [spec])).spec };
   }
 
   async getReasoningEffort(): Promise<ReasoningEffort | null> {
+    if (this.subordinateName !== null) return (await this.ownSnapshot(this.subordinateName)).reasoningEffort;
+
     return (await this.callHttp('getReasoningEffort', ReasoningEffortResultSchema)).effort;
   }
 
   async setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
+    const args: JsonValue[] = this.subordinateName === null ? [effort] : [effort, this.subordinateName];
+
     return {
-      effort: (await this.callHttp('setReasoningEffort', SetReasoningEffortResultSchema, [effort])).effort,
+      effort: (await this.callHttp('setReasoningEffort', SetReasoningEffortResultSchema, args)).effort,
     };
   }
 

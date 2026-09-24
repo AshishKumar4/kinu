@@ -7,7 +7,8 @@
  * an allowlist, so a new member is unreachable until listed; native RPC has no dispatch hook to intercept.
  */
 
-import { AGENT_RPC_ACCESS } from '@kinu.run/core';
+import * as v from 'valibot';
+import { AGENT_RPC_ACCESS, type JsonValue } from '@kinu.run/core';
 import type { ActorAgent } from './actor-agent';
 import type { OrchestratorAgent } from './orchestrator';
 import type { UserDO } from './user/user-do';
@@ -328,6 +329,27 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
   ...ORCHESTRATOR_METHODS,
 ];
 
-/** Hosted actors run through root-owned objects, not stubs; their chat is governed by
- * `ORCHESTRATOR_RPC_SURFACE`. */
+export interface HostedWindowActor {
+  readonly name: string;
+  readonly id: string;
+}
+
+type HostedWindowCheck = (args: readonly JsonValue[], actor: HostedWindowActor) => boolean;
+
+/** Every callable runs on the workspace's object, so a hosted agent's window may make only these calls, each on its own
+ *  actor; the socket gate refuses the rest. */
+const HOSTED_WINDOW_RPC = {
+  getChatHistoryPage: (args, actor) => v.is(v.object({ actor: v.literal(actor.id) }), args[0]),
+  getActorSnapshot: (args, actor) => args[0] === actor.name,
+  setActorModel: (args, actor) => args[0] === actor.name,
+  setReasoningEffort: (args, actor) => args[1] === actor.name,
+  cancelCurrentWork: () => true,
+  send: () => true,
+} as const satisfies Partial<Record<keyof OrchestratorAgent, HostedWindowCheck>>;
+
+const HOSTED_WINDOW_CHECKS = new Map<string, HostedWindowCheck>(Object.entries(HOSTED_WINDOW_RPC));
+
+export function hostedWindowMay(method: string, args: readonly JsonValue[], actor: HostedWindowActor): boolean {
+  return HOSTED_WINDOW_CHECKS.get(method)?.(args, actor) ?? false;
+}
 

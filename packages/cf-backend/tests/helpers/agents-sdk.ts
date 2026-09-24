@@ -554,6 +554,8 @@ export function mockAgentsSdk(): void {
       readonly name: string = '';
     },
     callable: () => <Method>(method: Method): Method => method,
+    // No socket carries a harness call into a method, so a call has no connection, as a route's or a stub's has none.
+    getCurrentAgent: () => ({ agent: undefined, connection: undefined, request: undefined, email: undefined }),
     getAgentByName: async (namespace: DurableObjectNamespace, name: string) =>
       namespace.get(namespace.idFromName(name)),
     /** Undefined is the SDK's "not my path", which drops the request to the SPA fallback. */

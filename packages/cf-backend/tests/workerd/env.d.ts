@@ -50,6 +50,9 @@ interface SurfaceControlRpc extends Rpc.WorkerEntrypointBranded {
   holdProxyModel(): Promise<void>;
   proxyModelParked(count: number): Promise<number>;
   releaseProxyModel(): Promise<void>;
+  holdQueuedModel(): Promise<void>;
+  modelCalledWith(marker: string): Promise<void>;
+  releaseQueuedModel(): Promise<void>;
   mintCliBearer(): Promise<string>;
 }
 

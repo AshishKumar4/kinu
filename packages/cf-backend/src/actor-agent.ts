@@ -4,7 +4,7 @@
  */
 
 import {
-  Agent, callable,
+  Agent, callable, getCurrentAgent,
   type AgentContext, type Connection, type ConnectionContext,
   type FiberRecoveryContext, type FiberRecoveryResult,
   type Schedule, type WSMessage,
@@ -213,7 +213,7 @@ import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
 import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
 import { diagnostics, KinuError, refusalOf, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
-import type { UserDoRpcMethod } from "./rpc-surface";
+import { hostedWindowMay, type UserDoRpcMethod } from "./rpc-surface";
 import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import type { WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
@@ -228,6 +228,7 @@ import * as v from 'valibot';
 interface ClientRpcFrame {
   id: string;
   method: string;
+  args: readonly JsonValue[];
 }
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
@@ -302,7 +303,7 @@ function parseClientRpcFrame(message: WSMessage): ClientRpcFrame | null {
   if (json === undefined) return null;
   const frame = v.safeParse(ClientRpcFrameSchema, json);
 
-  return frame.success ? { id: frame.output.id, method: frame.output.method } : null;
+  return frame.success ? { id: frame.output.id, method: frame.output.method, args: frame.output.args } : null;
 }
 
 /** The agents SDK treats this close code as terminal (`isTerminalCloseEvent`), so a
@@ -628,6 +629,22 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Socket-only RPC policy: DO stub calls bypass onMessage, so trusted worker callers keep
    *  methods denied to client sockets. */
   protected isClientRpcMethodDenied(_method: string): boolean { return false; }
+
+  private clientRpcRefusal(connection: Connection, rpc: ClientRpcFrame): string | null {
+    if (this.isClientRpcMethodDenied(rpc.method)) return `${rpc.method} is not available from client connections.`;
+    const name = actorFromConnectionTags(connection.tags);
+
+    if (name === null) return null;
+    const id = this.hostedActorId(name);
+
+    return id !== null && hostedWindowMay(rpc.method, rpc.args, { name, id }) ? null : `${rpc.method} from ${name}'s window may act only on ${name}.`;
+  }
+
+  private addressedActor(): string | null {
+    const { connection } = getCurrentAgent();
+
+    return connection === undefined ? null : actorFromConnectionTags(connection.tags);
+  }
 
   // The concrete profile decides whether this turn may submit plan reviews: an owner-driven agent
   // does; a task delegated by its parent keeps the report lane instead.
@@ -1007,14 +1024,10 @@ export abstract class ActorAgent extends Agent<Env> {
       }
 
       const rpc = parseClientRpcFrame(message);
+      const refusal = rpc === null ? null : this.clientRpcRefusal(connection, rpc);
 
-      if (rpc && this.isClientRpcMethodDenied(rpc.method)) {
-        connection.send(JSON.stringify({
-          type: 'rpc',
-          id: rpc.id,
-          success: false,
-          error: `${rpc.method} is not available from client connections.`,
-        }));
+      if (rpc && refusal !== null) {
+        connection.send(JSON.stringify({ type: 'rpc', id: rpc.id, success: false, error: refusal }));
 
         return;
       }
@@ -1813,6 +1826,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Null when this workspace hosts no such actor; only the workspace root knows its directory. */
   protected abstract hostedChatWire(name: string): ChatWire | null;
+
+  protected abstract hostedActorId(name: string): string | null;
 
   /** Fires for any actor's connection; the root's sleep-time closed-tab trigger overrides both hooks. */
   protected connectionOpened(): void {}
@@ -3518,8 +3533,19 @@ export abstract class ActorAgent extends Agent<Env> {
   async send(text: string, id: string, files: readonly PromptFile[] = [], mode?: WorkMode): Promise<void> {
     this.ensureSchema();
     const attachments = v.parse(v.array(PromptFileSchema), files);
+    const workMode = isWorkMode(mode) ? mode : 'build';
+    const window = this.addressedActor();
 
-    await this.chatLoop.admit({ text, files: attachments }, { id, mode: isWorkMode(mode) ? mode : 'build' });
+    if (window !== null) {
+      const wire = this.hostedChatWire(window);
+
+      if (wire === null) throw new KinuError('missing', `${window} is not an agent of this workspace`);
+      await wire.send({ text, files: attachments, id, mode: workMode });
+
+      return;
+    }
+
+    await this.chatLoop.admit({ text, files: attachments }, { id, mode: workMode });
   }
 
   /** Aborts the in-flight LLM request first so stop works even if the cancel frame is lost.
@@ -3527,6 +3553,14 @@ export abstract class ActorAgent extends Agent<Env> {
   @callable()
   async cancelCurrentWork(): Promise<CancelWorkOutcome> {
     this.ensureSchema();
+    const window = this.addressedActor();
+
+    if (window !== null) {
+      this.hostedChatWire(window)?.interrupt();
+
+      return { ok: true, abortedTools: 0, deviceCommands: [] };
+    }
+
     const turnId = this.durableTurnId();
 
     return await cancelCurrentWork({

@@ -100,6 +100,7 @@ export const AGENT_RPC_ACCESS = {
   forkAgent: 'interactive',
   revertConversation: 'interactive',
   getActivitySnapshot: 'interactive',
+  getActorSnapshot: 'interactive',
   getAlwaysActiveSkills: 'interactive',
   getExecutorDiff: 'interactive',
   getExecutorFiles: 'interactive',

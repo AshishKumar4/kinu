@@ -9,7 +9,7 @@ import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
   ChatHistoryEntrySchema, ORCHESTRATOR_AGENT_SLUG, hostedActorSocketPath, pageSchema, type JsonValue,
 } from '@kinu.run/core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as v from 'valibot';
 
 /** Loopback: the one host `authenticateRequest` accepts without an identity secret (auth/session.ts:200-213). */
@@ -307,49 +307,50 @@ describe('two panes on one workspace object are two chat rooms', () => {
   });
 });
 
+/** Every socket closed again, so what follows reads durable rows only. */
+async function workspaceWithTwoChats(name: string): Promise<{ rootPath: string; actorName: string; actorPath: string }> {
+  await publicJson(`/api/user/credentials/openai-compat.default`, v.object({ ok: v.boolean() }), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(FIXTURE_CREDENTIAL),
+  });
+
+  const created = await publicJson('/api/user/workspaces', WorkspaceEntrySchema, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, displayName: name }),
+  });
+
+  const rootPath = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(created.name)}`;
+  const root = await openPane(rootPath);
+
+  root.send(rpcRequest('pin', 'setModel', [PINNED_MODEL]));
+  expect((await root.rpc('pin', SetModelSchema)).spec).toContain(PINNED_MODEL);
+  root.send(rpcRequest('hire', 'createSubordinateAgent', []));
+  const actorName = (await root.rpc('hire', CreatedActorSchema)).name;
+  const actorPath = `${rootPath}/${hostedActorSocketPath(actorName)}`;
+
+  root.send(chatRequest(ROOT_MARKER, ROOT_MARKER));
+  await root.settled(ROOT_MARKER);
+  const actor = await openPane(actorPath);
+
+  actor.send(chatRequest(ACTOR_MARKER, ACTOR_MARKER));
+  await actor.settled(ACTOR_MARKER);
+  actor.close();
+  root.close();
+
+  return { rootPath, actorName, actorPath };
+}
+
+/** One page of a chat, as text: the actor's by id, or the socket's own with none named. */
+const pageText = async (pane: Pane, id: string, actor?: string): Promise<string> => {
+  pane.send(rpcRequest(id, 'getChatHistoryPage', [{ ...(actor !== undefined && { actor }), limit: 40 }]));
+  const page = await pane.rpc(id, pageSchema(ChatHistoryEntrySchema));
+
+  return page.items.map((entry) => entry.content).join('\n');
+};
+
 describe('a hosted actor pane reads its own chat back from nothing', () => {
-  /** Every socket closed again, so what follows reads durable rows only. */
-  async function workspaceWithTwoChats(name: string): Promise<{ rootPath: string; actorName: string; actorPath: string }> {
-    await publicJson(`/api/user/credentials/openai-compat.default`, v.object({ ok: v.boolean() }), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(FIXTURE_CREDENTIAL),
-    });
-
-    const created = await publicJson('/api/user/workspaces', WorkspaceEntrySchema, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name, displayName: name }),
-    });
-
-    const rootPath = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(created.name)}`;
-    const root = await openPane(rootPath);
-
-    root.send(rpcRequest('pin', 'setModel', [PINNED_MODEL]));
-    expect((await root.rpc('pin', SetModelSchema)).spec).toContain(PINNED_MODEL);
-    root.send(rpcRequest('hire', 'createSubordinateAgent', []));
-    const actorName = (await root.rpc('hire', CreatedActorSchema)).name;
-    const actorPath = `${rootPath}/${hostedActorSocketPath(actorName)}`;
-
-    root.send(chatRequest(ROOT_MARKER, ROOT_MARKER));
-    await root.settled(ROOT_MARKER);
-    const actor = await openPane(actorPath);
-
-    actor.send(chatRequest(ACTOR_MARKER, ACTOR_MARKER));
-    await actor.settled(ACTOR_MARKER);
-    actor.close();
-    root.close();
-
-    return { rootPath, actorName, actorPath };
-  }
-
-  const pageText = async (pane: Pane, id: string, actor: string): Promise<string> => {
-    pane.send(rpcRequest(id, 'getChatHistoryPage', [{ actor, limit: 40 }]));
-    const page = await pane.rpc(id, pageSchema(ChatHistoryEntrySchema));
-
-    return page.items.map((entry) => entry.content).join('\n');
-  };
-
   it('serves the actor its own words, not the workspace\'s, on both of the pane\'s reads', async () => {
     const { actorName, actorPath } = await workspaceWithTwoChats('pool-kept-chat');
 
@@ -396,6 +397,107 @@ describe('a hosted actor pane reads its own chat back from nothing', () => {
     workspace.close();
 
     expect((await env.PUBLIC_SURFACE.fetch(`${ORIGIN}${actorPath}/get-messages`)).status).toBe(404);
+    await env.SURFACE_CONTROL.resetModelLog();
+  });
+});
+
+describe('a hosted actor\'s window acts only on its own actor', () => {
+  /**
+   * Every callable runs on the workspace's one object, so a call over an actor's socket once ran as the workspace's own
+   * agent: a read with no actor id answered the workspace's chat, and the pane's Stop stopped the workspace's turn.
+   */
+  const ActorIdSchema = v.object({ actorId: v.string() });
+
+  /** Refused by the actor's window, in words that name the method and the actor. */
+  const refused = async (pane: Pane, id: string, method: string, actor: string): Promise<void> => {
+    await expect(pane.rpc(id, v.unknown())).rejects.toThrow(new RegExp(`${method}.*${actor}`, 'u'));
+  };
+
+  it('reads only its own chat, and cannot revert the workspace\'s', async () => {
+    const { rootPath, actorName, actorPath } = await workspaceWithTwoChats('pool-window-reads');
+    const root = await openPane(rootPath);
+
+    root.send(rpcRequest('sibling', 'createSubordinateAgent', []));
+    const siblingName = (await root.rpc('sibling', CreatedActorSchema)).name;
+    const sibling = await openPane(`${rootPath}/${hostedActorSocketPath(siblingName)}`);
+
+    sibling.send(rpcRequest('sibling-id', 'getActorSnapshot', [siblingName]));
+    const siblingId = (await sibling.rpc('sibling-id', ActorIdSchema)).actorId;
+
+    sibling.close();
+    root.send(rpcRequest('opening', 'getChatHistoryPage', [{ limit: 40 }]));
+    const opening = (await root.rpc('opening', pageSchema(ChatHistoryEntrySchema))).items.find((entry) => entry.role === 'user');
+
+    const window = await openPane(actorPath);
+
+    window.send(rpcRequest('own', 'getActorSnapshot', [actorName]));
+    const actorId = (await window.rpc('own', ActorIdSchema)).actorId;
+
+    expect(await pageText(window, 'own-page', actorId)).toContain(ACTOR_MARKER);
+    window.send(rpcRequest('unnamed', 'getChatHistoryPage', [{ limit: 40 }]));
+    window.send(rpcRequest('stray', 'getChatHistoryPage', [{ actor: siblingId, limit: 40 }]));
+    window.send(rpcRequest('stray-snapshot', 'getActorSnapshot', [siblingName]));
+    window.send(rpcRequest('revert', 'revertConversation', [opening?.id ?? '']));
+    await refused(window, 'unnamed', 'getChatHistoryPage', actorName);
+    await refused(window, 'stray', 'getChatHistoryPage', actorName);
+    await refused(window, 'stray-snapshot', 'getActorSnapshot', actorName);
+    await refused(window, 'revert', 'revertConversation', actorName);
+    window.close();
+
+    expect(await pageText(root, 'root-page')).toContain(ROOT_MARKER);
+    root.close();
+    await env.SURFACE_CONTROL.resetModelLog();
+  });
+
+  it('sends into its own agent\'s turn, never the workspace\'s', async () => {
+    const SENT_MARKER = 'window-sent-marker';
+    const { rootPath, actorName, actorPath } = await workspaceWithTwoChats('pool-window-send');
+    const window = await openPane(actorPath);
+
+    window.send(rpcRequest('own', 'getActorSnapshot', [actorName]));
+    const actorId = (await window.rpc('own', ActorIdSchema)).actorId;
+    let reads = 0;
+
+    // A mid-turn send from the agent's pane: the words and the turn that answers them are the agent's.
+    window.send(rpcRequest('send', 'send', [SENT_MARKER, 'window-send', [], 'build']));
+    await window.rpc('send', v.unknown());
+    await vi.waitFor(async () => {
+      expect(await pageText(window, `actor-page-${String(++reads)}`, actorId)).toContain(`echo:${SENT_MARKER}`);
+    }, { timeout: 20_000, interval: 250 });
+    window.close();
+
+    const root = await openPane(rootPath);
+
+    expect(await pageText(root, 'root-page')).not.toContain(SENT_MARKER);
+    root.close();
+    await env.SURFACE_CONTROL.resetModelLog();
+  });
+
+  it('stops its own agent, and leaves the workspace\'s running turn alone', async () => {
+    const HELD_MARKER = 'root-held-marker';
+    const { rootPath, actorPath } = await workspaceWithTwoChats('pool-window-stop');
+    const root = await openPane(rootPath);
+
+    root.send(rpcRequest('queue', 'setModel', ['openai-compat/probe-queue']));
+    await root.rpc('queue', SetModelSchema);
+    await env.SURFACE_CONTROL.holdQueuedModel();
+
+    try {
+      root.send(chatRequest(HELD_MARKER, HELD_MARKER));
+      // The workspace's turn is running, parked in its model call.
+      await env.SURFACE_CONTROL.modelCalledWith(HELD_MARKER);
+      const window = await openPane(actorPath);
+
+      window.send(rpcRequest('stop', 'cancelCurrentWork', []));
+      await window.rpc('stop', v.unknown());
+      window.close();
+    } finally {
+      await env.SURFACE_CONTROL.releaseQueuedModel();
+    }
+
+    await root.settled(HELD_MARKER);
+    expect(await pageText(root, 'answered')).toContain(`echo:${HELD_MARKER}`);
+    root.close();
     await env.SURFACE_CONTROL.resetModelLog();
   });
 });

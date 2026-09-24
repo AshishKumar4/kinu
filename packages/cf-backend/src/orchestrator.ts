@@ -1661,11 +1661,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.actorHost().bindStores(actor).stores.history.transcript(CHAT_SESSION_ID);
   }
 
-  protected override hostedChatWire(name: string): ChatWire | null {
+  private hostedReference(name: string): ActorReference | null {
     const row = this.subordinateRoster.get(name);
 
-    if (!row || row.status === 'dismissed' || !row.actorReference) return null;
-    const reference = row.actorReference;
+    return !row || row.status === 'dismissed' || !row.actorReference ? null : row.actorReference;
+  }
+
+  protected override hostedActorId(name: string): string | null {
+    return this.hostedReference(name)?.actorId ?? null;
+  }
+
+  protected override hostedChatWire(name: string): ChatWire | null {
+    const reference = this.hostedReference(name);
+
+    if (reference === null) return null;
     const bound = this.actorHost().bindStores(reference);
     const history = bound.stores.history;
     const rows = history.transcript(CHAT_SESSION_ID);

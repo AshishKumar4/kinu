@@ -343,6 +343,47 @@ describe('CloudAgentClient protocol', () => {
     await parent.close();
   });
 
+  test('an additional agent reads and sets its own status, model and effort, never the workspace\'s', async () => {
+    const mock = startMockAgentServer();
+    const parent = newClient(mock);
+    const child = parent.openAdditionalAgent('researcher-a1b2c3');
+    const answered = new Set<JsonValue | undefined>();
+
+    /** Answers the next socket rpc named `method` with `result`, and returns its arguments. */
+    const answer = async (method: string, result: JsonValue): Promise<JsonValue> => {
+      const frame = await waitFor(() => mock.frames.find((each) => each.type === 'rpc' && each.method === method && !answered.has(each.id)), `${method} rpc`);
+
+      answered.add(frame.id);
+      mock.reply({ type: 'rpc', id: frame.id, success: true, done: true, result });
+
+      return frame.args ?? null;
+    };
+
+    const snapshot = {
+      name: 'researcher-a1b2c3', actorId: 'actor-1', displayName: 'Researcher', role: 'task', mission: 'Review the release',
+      model: { model: 'openai/gpt-own', source: 'actor' }, reasoningEffort: 'high', activePlan: null, pendingSteers: [],
+    };
+
+    const status = child.status();
+
+    expect(await answer('getActorSnapshot', snapshot)).toEqual(['researcher-a1b2c3']);
+    await expect(status).resolves.toEqual({
+      name: 'Researcher', purpose: 'Review the release', model: 'openai/gpt-own', reasoningEffort: 'high', roleId: 'task',
+    });
+
+    const model = child.setModel('openai/gpt-next');
+
+    expect(await answer('setActorModel', { ok: true, spec: 'openai/gpt-next' })).toEqual(['researcher-a1b2c3', 'openai/gpt-next']);
+    await expect(model).resolves.toEqual({ spec: 'openai/gpt-next' });
+
+    const effort = child.setReasoningEffort('low');
+
+    expect(await answer('setReasoningEffort', { ok: true, effort: 'low' })).toEqual(['low', 'researcher-a1b2c3']);
+    await expect(effort).resolves.toEqual({ effort: 'low' });
+    await child.close();
+    await parent.close();
+  });
+
   test('send transmits only the new user message and streams the reply', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);
