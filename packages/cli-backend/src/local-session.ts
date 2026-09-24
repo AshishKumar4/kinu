@@ -1081,7 +1081,7 @@ export class LocalAgentSession implements BackendHost {
   /** Send the user's message. `mode` is the composer's; a Plan message runs a Plan turn. */
   send(
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
-    opts: Pick<SendOptions, 'tier' | 'id' | 'mode'> = {},
+    opts: Pick<SendOptions, 'tier' | 'id' | 'mode'>,
   ): Promise<SendLanding> {
     return this.chat.send(input, opts);
   }

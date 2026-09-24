@@ -186,7 +186,7 @@ describe('LocalAgentSession MCP surface', () => {
 
     try {
       await session.connectMcp(mcpServers());
-      await session.send('Call the MCP tool.');
+      await session.send('Call the MCP tool.', { id: crypto.randomUUID() });
       const result = events.find((event) => event.type === 'tool-result' && event.toolName === 'mcp_echo_echo');
 
       if (fail) {
@@ -207,7 +207,7 @@ describe('LocalAgentSession MCP surface', () => {
       expect(session.toolNames()).toContain('mcp_echo_echo');
       expect(session.describeTools().some((t) => t.name === 'mcp_echo_echo' && t.description.includes('Echo'))).toBe(true);
 
-      await session.send('which tools can you see?');
+      await session.send('which tools can you see?', { id: crypto.randomUUID() });
       expect(captured).toContain('mcp_echo_echo');
     } finally {
       await session.end();
@@ -227,7 +227,7 @@ describe('LocalAgentSession MCP admission', () => {
       expect(session.toolNames()).toContain('mcp_echo_echo');
       expect(session.toolNames()).not.toContain('mcp_echo_huge');
 
-      await session.send('which tools can you see?');
+      await session.send('which tools can you see?', { id: crypto.randomUUID() });
       expect(captured).toContain('mcp_echo_echo');
       expect(captured).not.toContain('mcp_echo_huge');
 

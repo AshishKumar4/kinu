@@ -195,7 +195,7 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
       oneShot: true,
     });
 
-    await session.send(text);
+    await session.send(text, { id: crypto.randomUUID() });
     await session.settleBackgroundWork();
   }
 

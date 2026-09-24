@@ -468,7 +468,7 @@ describe('claude-cli provider — tool loop composition', () => {
     });
 
     expect(session.setModel('claude/claude-opus-4-x')).toEqual({ ok: true, spec: 'claude/claude-opus-4-x' });
-    await session.send('What is the capital of France?');
+    await session.send('What is the capital of France?', { id: crypto.randomUUID() });
 
     const turnEnd = events.find((event) => event.type === 'turn-end');
 

@@ -471,7 +471,7 @@ describe('LocalAgentHost', () => {
     ]);
 
     expect(concurrent).toBe(session);
-    await session.send('remember this');
+    await session.send('remember this', { id: crypto.randomUUID() });
     const deliveredBeforeDisconnect = delivered.length;
     unsubscribe();
 
@@ -565,9 +565,9 @@ describe('LocalAgentHost', () => {
 
       try {
         const session = await host.acquire('root');
-        await session.send(HIRE_FORK_PARENT);
+        await session.send(HIRE_FORK_PARENT, { id: crypto.randomUUID() });
         const answered = awaitTurns(host, 'root/forked-reader', 1);
-        await session.send(HIRE_FORK_REQUEST);
+        await session.send(HIRE_FORK_REQUEST, { id: crypto.randomUUID() });
         await answered;
         expect(childRequests).toHaveLength(1);
         const first = childRequests[0];
@@ -601,9 +601,9 @@ describe('LocalAgentHost', () => {
 
     try {
       const session = await host.acquire('root');
-      await session.send(HIRE_FORK_PARENT);
+      await session.send(HIRE_FORK_PARENT, { id: crypto.randomUUID() });
       const answered = awaitTurns(host, 'root/forked-reader', 1);
-      await session.send(HIRE_FORK_REQUEST);
+      await session.send(HIRE_FORK_REQUEST, { id: crypto.randomUUID() });
       await answered;
       expect(childRequests).toHaveLength(2);
     } finally {
@@ -624,7 +624,7 @@ describe('LocalAgentHost', () => {
     try {
       const session = await restored.acquire('root');
       const answered = awaitTurns(restored, 'root/forked-reader', 1);
-      await session.send(HIRE_FORK_FOLLOWUP_REQUEST);
+      await session.send(HIRE_FORK_FOLLOWUP_REQUEST, { id: crypto.randomUUID() });
       await answered;
       expect(childRequests).toHaveLength(3);
       const followup = childRequests[2];
@@ -1580,13 +1580,13 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
 
       // The prompt's runtime context is the only place a turn learns its directory.
       seen.length = 0;
-      await (await host.acquire('alpha/scout')).send('where am I working?');
+      await (await host.acquire('alpha/scout')).send('where am I working?', { id: crypto.randomUUID() });
       expect(seen.join('\n')).toContain(`Working directory: ${project}`);
 
       expect(existsSync(join(project, 'SOUL.md'))).toBe(false);
       expect(existsSync(join(project, 'MEMORY.md'))).toBe(false);
 
-      await (await host.acquire('alpha')).send('only alpha said this');
+      await (await host.acquire('alpha')).send('only alpha said this', { id: crypto.randomUUID() });
       expect(await userMessages(join(state, 'alpha', 'agent.db'))).toContain('only alpha said this');
       expect(await userMessages(join(state, 'beta', 'agent.db'))).not.toContain('only alpha said this');
       expect(await userMessages(
