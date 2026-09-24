@@ -141,6 +141,7 @@ export interface ProviderDeps {
 export interface ModelProvider {
   readonly id: string;
   readonly label?: string;
+  readonly credentialKey?: string;
   readonly defaultModel?: string;
   /** The vendor's cheap tier for mechanical work, same credential; omitted where no
    *  meaningful smaller tier exists. */

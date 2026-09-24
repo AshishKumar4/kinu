@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { present, scratchDir } from '@kinu.run/test-utils';
+import { present, requestBodyText, scratchDir } from '@kinu.run/test-utils';
 import { CODEX_CRED_KEY, createFileCodexAuthStore } from '../src/codex-auth-store';
 import { asFetchFunction, JsonObjectSchema, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -129,6 +129,49 @@ describe('createFileCodexAuthStore', () => {
     expect(() => store.hasCredential()).toThrow();
     expect(() => store.save({ kind: 'oauth', accessToken: 'a', refreshToken: 'r' })).toThrow();
     expect(readFileSync(configPath, 'utf-8')).toBe(intact.slice(0, -12));
+  });
+
+  test('refreshing one Codex account keeps the other sessions', async () => {
+    const dir = scratchDir('codex-auth-store');
+    const configPath = join(dir, 'config.json');
+    const mainToken = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+
+    writeFileSync(configPath, `${JSON.stringify({
+      providers: {
+        codex: {
+          accessToken: mainToken,
+          refreshToken: 'refresh-main',
+          accounts: { work: { accessToken: jwt({ exp: Math.floor(Date.now() / 1000) - 60 }), refreshToken: 'refresh-work' } },
+        },
+      },
+    }, null, 2)}\n`);
+
+    const refreshedWith: string[] = [];
+
+    const store = createFileCodexAuthStore(configPath, {
+      fetch: asFetchFunction(async (input, init) => {
+        refreshedWith.push(await requestBodyText(input, init));
+
+        return Response.json({
+          access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+          refresh_token: 'refresh-work-2',
+          expires_in: 3600,
+        });
+      }),
+    });
+
+    expect(store.accounts()).toEqual(['work']);
+    await store.getAuth(undefined, 'work');
+    expect(refreshedWith.join(' ')).toContain('refresh-work');
+
+    const saved = v.parse(v.object({ providers: v.object({ codex: v.object({
+      accessToken: v.string(), refreshToken: v.string(),
+      accounts: v.record(v.string(), v.object({ refreshToken: v.string() })),
+    }) }) }), JSON.parse(readFileSync(configPath, 'utf-8')));
+
+    expect(saved.providers.codex.accessToken).toBe(mainToken);
+    expect(saved.providers.codex.refreshToken).toBe('refresh-main');
+    expect(saved.providers.codex.accounts.work?.refreshToken).toBe('refresh-work-2');
   });
 
   test('a config that has never been written reads as empty', () => {

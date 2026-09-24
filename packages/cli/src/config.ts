@@ -14,7 +14,7 @@ import {
   OPENAI_BASE_URL,
   OPENAI_DEFAULT_MODEL,
   OPENROUTER_BASE_URL,
-  JsonObjectSchema, openWorkspaceMainActor, discoverOpenAICompatibleModels,
+  JsonObjectSchema, accountCredentialKey, openWorkspaceMainActor, discoverOpenAICompatibleModels, specWithoutAccount,
   ProfileCatalogEnvelopeSchema,
   type JsonObject,
   type LLMProviderConfig,
@@ -112,15 +112,10 @@ export interface KinuConfig {
   updateCheckedAt?: number;
   updateLatestSeen?: string;
   providers?: {
-    openai?: { apiKey?: string };
-    anthropic?: { apiKey?: string };
-    openrouter?: { apiKey?: string };
-    codex?: {
-      accessToken?: string;
-      refreshToken?: string;
-      expiresAt?: number;
-      metadata?: JsonObject;
-    };
+    openai?: LocalApiKeyProvider;
+    anthropic?: LocalApiKeyProvider;
+    openrouter?: LocalApiKeyProvider;
+    codex?: LocalCodexSession & { accounts?: Record<string, LocalCodexSession> };
     openaiCompat?: Record<string, {
       baseURL: string;
       apiKey?: string;
@@ -141,6 +136,18 @@ export interface KinuConfig {
   pendingRevocation?: { token: string; origin: string; at: number };
   /** Signed-out profile authority; never holds account data. */
   localProfile?: ProfileCatalogEnvelope;
+}
+
+export interface LocalApiKeyProvider {
+  apiKey?: string;
+  accounts?: Record<string, { apiKey: string }>;
+}
+
+export interface LocalCodexSession {
+  accessToken?: string;
+  refreshToken?: string;
+  expiresAt?: number;
+  metadata?: JsonObject;
 }
 
 export interface CloudAuthConfig {
@@ -179,6 +186,18 @@ const OpenAiCompatConfigSchema = v.object({
   extraHeaders: v.optional(StringMapSchema),
 });
 
+const LocalApiKeyProviderSchema = v.object({
+  apiKey: v.optional(v.string()),
+  accounts: v.optional(v.record(v.string(), v.object({ apiKey: v.string() }))),
+});
+
+const LocalCodexSessionSchema = v.object({
+  accessToken: v.optional(v.string()),
+  refreshToken: v.optional(v.string()),
+  expiresAt: v.optional(v.number()),
+  metadata: v.optional(JsonObjectSchema),
+});
+
 const KinuConfigSchema: v.GenericSchema<KinuConfig> = v.object({
   origin: v.optional(v.string()),
   accessToken: v.optional(v.string()),
@@ -194,14 +213,12 @@ const KinuConfigSchema: v.GenericSchema<KinuConfig> = v.object({
   updateCheckedAt: v.optional(v.number()),
   updateLatestSeen: v.optional(v.string()),
   providers: v.optional(v.object({
-    openai: v.optional(v.object({ apiKey: v.optional(v.string()) })),
-    anthropic: v.optional(v.object({ apiKey: v.optional(v.string()) })),
-    openrouter: v.optional(v.object({ apiKey: v.optional(v.string()) })),
+    openai: v.optional(LocalApiKeyProviderSchema),
+    anthropic: v.optional(LocalApiKeyProviderSchema),
+    openrouter: v.optional(LocalApiKeyProviderSchema),
     codex: v.optional(v.object({
-      accessToken: v.optional(v.string()),
-      refreshToken: v.optional(v.string()),
-      expiresAt: v.optional(v.number()),
-      metadata: v.optional(JsonObjectSchema),
+      ...LocalCodexSessionSchema.entries,
+      accounts: v.optional(v.record(v.string(), LocalCodexSessionSchema)),
     })),
     openaiCompat: v.optional(v.record(v.string(), OpenAiCompatConfigSchema)),
   })),
@@ -730,10 +747,12 @@ export function resolveLLMConfig(opts?: {
     ?? process.env.KINU_AUTH
     ?? process.env.AI_GATEWAY_AUTH;
 
-  const model = opts?.model
+  const named = opts?.model
     ?? process.env.KINU_MODEL
     ?? process.env.AI_GATEWAY_MODEL
     ?? opts?.defaultModel;
+
+  const model = named === undefined ? undefined : specWithoutAccount(named);
 
   if (baseURL && auth) {
     return {
@@ -808,7 +827,22 @@ export function resolveProviderCredentials(): LocalProviderCredentials {
     openrouterApiKey: process.env.OPENROUTER_API_KEY ?? file.providers?.openrouter?.apiKey,
     codexAccessToken: process.env.CODEX_ACCESS_TOKEN,
     openaiCompat: file.providers?.openaiCompat,
+    apiKeyAccounts: localApiKeyAccounts(file),
   };
+}
+
+export const API_KEY_PROVIDERS = { openai: 'openai.bearer', anthropic: 'anthropic.bearer', openrouter: 'openrouter.bearer' } as const;
+
+function localApiKeyAccounts(file: KinuConfig): LocalProviderCredentials['apiKeyAccounts'] {
+  const keys: Record<string, string> = {};
+
+  for (const provider of ['openai', 'anthropic', 'openrouter'] as const) {
+    for (const [account, stored] of Object.entries(file.providers?.[provider]?.accounts ?? {})) {
+      keys[accountCredentialKey(API_KEY_PROVIDERS[provider], account)] = stored.apiKey;
+    }
+  }
+
+  return keys;
 }
 
 export function createCodexAuthStore(fetchFn?: typeof fetch): LocalCodexAuthStore {

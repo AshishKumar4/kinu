@@ -2,6 +2,11 @@ import { createChatModel, type LLMProviderConfig } from '@kinu.run/core';
 import {
   CODEX_CRED_KEY,
   DEFAULT_WORKERS_AI_MODEL_ID,
+  MAIN_ACCOUNT,
+  accountCredentialKey,
+  accountOf,
+  baseCredentialKey,
+  credentialToHeaders,
   normalizeModelMenu,
   codexCredentialToHeaders,
   createAnthropicProvider,
@@ -72,6 +77,7 @@ export interface LocalProviderCredentials {
   openrouterApiKey?: string;
   codexAccessToken?: string;
   openaiCompat?: Record<string, LocalOpenAICompatCredential>;
+  apiKeyAccounts?: Readonly<Record<string, string>>;
 }
 
 /** Signed-in Kinu session: local agents use the user's Cloudflare AI through
@@ -833,25 +839,33 @@ function buildAuthStore(
     });
   }
 
-  const hasCodex = (): boolean => (codexAuthStore
-    ? codexAuthStore.hasCredential()
-    : Boolean(credentials.codexAccessToken));
+  for (const [key, token] of Object.entries(credentials.apiKeyAccounts ?? {})) {
+    store.set(key, { headers: credentialToHeaders(key, { kind: 'bearer', token }) });
+  }
+
+  const hasCodex = (account: string): boolean => (codexAuthStore
+    ? codexAuthStore.hasCredential(account)
+    : account === MAIN_ACCOUNT && Boolean(credentials.codexAccessToken));
+
+  const codexKeys = (): string[] => [MAIN_ACCOUNT, ...codexAuthStore?.accounts() ?? []]
+    .filter(hasCodex)
+    .map((account) => accountCredentialKey(CODEX_CRED_KEY, account));
 
   return {
     has(key: string): boolean {
-      if (key === CODEX_CRED_KEY) return hasCodex();
+      if (baseCredentialKey(key) === CODEX_CRED_KEY) return hasCodex(accountOf(key));
 
       return store.has(key);
     },
     keys(): string[] {
-      return hasCodex() ? [...store.keys(), CODEX_CRED_KEY] : [...store.keys()];
+      return [...store.keys(), ...codexKeys()];
     },
     async get(key: string, authOpts?: { forceRefresh?: boolean }): Promise<AuthResolution | null> {
-      if (key !== CODEX_CRED_KEY) return store.get(key) ?? null;
+      if (baseCredentialKey(key) !== CODEX_CRED_KEY) return store.get(key) ?? null;
 
-      if (codexAuthStore) return codexAuthStore.getAuth(authOpts);
+      if (codexAuthStore) return codexAuthStore.getAuth(authOpts, accountOf(key));
 
-      if (credentials.codexAccessToken) {
+      if (key === CODEX_CRED_KEY && credentials.codexAccessToken) {
         return {
           headers: codexCredentialToHeaders({
             kind: 'oauth',

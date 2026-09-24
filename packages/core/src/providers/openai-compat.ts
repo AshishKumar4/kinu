@@ -40,6 +40,7 @@ export function createOpenAICompatProvider(providerId = 'openai-compat'): ModelP
 
   return {
     id: providerId,
+    credentialKey: credKey,
     label: providerId === 'openai-compat'
       ? 'OpenAI-compatible (BYO base URL)'
       : `OpenAI-compatible (${providerId.slice('openai-compat:'.length)})`,

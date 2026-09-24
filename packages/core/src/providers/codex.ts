@@ -50,6 +50,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
 
   return {
     id: 'codex',
+    credentialKey: CODEX_CRED_KEY,
     label: 'ChatGPT Codex (subscription)',
     defaultModel: CODEX_DEFAULT_MODEL,
     fastModel: CODEX_FAST_MODEL,

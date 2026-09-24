@@ -1,4 +1,5 @@
 import { contextWindowForModel } from '../context-window';
+import { parseModelSpec, specWithoutAccount } from '../providers/types';
 
 export interface TextForContextEstimate {
   content: string;
@@ -8,14 +9,17 @@ export function modelDisplayName(spec: string | null | undefined): string {
   const raw = (spec ?? '').trim();
 
   if (!raw) return 'default';
-  const modelId = stripKnownProvider(raw);
+  const listed = specWithoutAccount(raw);
+  const modelId = stripKnownProvider(listed);
   const leaf = modelId.startsWith('@cf/') ? modelId.split('/').at(-1) ?? modelId : modelId;
 
-  return leaf
+  const name = leaf
     .replace(/^gpt-/, 'GPT-')
     .replace(/^kimi-k2/i, 'Kimi K2')
     .replace(/-/g, ' ')
     .replace(/\b([a-z])/g, (m) => m.toUpperCase());
+
+  return listed === raw ? name : `${name} · ${parseModelSpec(raw).account ?? ''}`;
 }
 
 export function estimateContextTokens(messages: readonly TextForContextEstimate[]): number {

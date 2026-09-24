@@ -85,10 +85,10 @@ export function buildProgram(): Command {
     .action(wrapAction(setupCommand));
 
   program
-    .command('provider [action] [name]')
+    .command('provider [action] [name] [account]')
     .alias('providers')
     .helpGroup(ACCOUNT)
-    .description('List, connect or disconnect model providers')
+    .description('List, connect or disconnect model providers and their accounts, and pick each default account')
     .option('--origin <url>', 'Kinu app origin')
     .option(`${MODEL_OPTION_FLAG} <id>`, 'Default model for the selected provider')
     .option('--local', 'Keep the provider key on this machine instead of your Kinu account')

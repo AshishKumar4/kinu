@@ -41,7 +41,7 @@ import {
 import { describePromptAttachment, resolvePromptAttachments } from '../attachments';
 import { listSidebarAgents } from '../agent-list';
 import { watchDeviceConsents } from '../consent-watch';
-import { contextWindowForSpec, EMPTY_MODEL_MENU, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
+import { contextWindowForSpec, EMPTY_MODEL_MENU, specWithoutAccount, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
 import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
 import { loadActiveProfile } from '../default-model';
 import { canonicalProjectRoot } from '../config';
@@ -860,14 +860,14 @@ function ChatScene({
     }
   }, [client]);
 
-  const selectModel = useCallback(async (model: AgentModelEntry) => {
+  const selectModel = useCallback(async (spec: string) => {
     if (selectionPendingRef.current) return;
     setReady(false);
     selectionPendingRef.current = true;
     setActiveSurface(null);
 
     try {
-      const result = await client.setModel(model.spec);
+      const result = await client.setModel(spec);
       setModelSpec(result.spec);
       addMessage({ role: 'system', content: `Model: ${result.spec}` });
     } catch (err) {
@@ -1815,6 +1815,7 @@ function ChatScene({
         <ModelPickerOverlay
           models={modelPicker.menu.models}
           failures={modelPicker.menu.failures}
+          accounts={modelPicker.menu.accounts}
           currentSpec={modelSpec}
           terminal={{ width: sceneWidth, height }}
           loading={modelPicker.loading}
@@ -2136,5 +2137,7 @@ function effortsForModel(
   spec: string,
   status: AgentClientStatus | null,
 ): ReasoningEffort[] {
-  return offeredReasoningEfforts(catalog.find((model) => model.spec === spec)?.reasoningEfforts, status?.reasoningEffort);
+  const listed = specWithoutAccount(spec);
+
+  return offeredReasoningEfforts(catalog.find((model) => model.spec === listed)?.reasoningEfforts, status?.reasoningEffort);
 }

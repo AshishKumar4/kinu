@@ -135,9 +135,9 @@ import { TierIdSchema,
   decodeJsonValue, projectJsonValue, JsonValueSchema,
   agentSelfHost, createAgentSelfProvider,
   cancelBackgroundJob, jobResult, listBackgroundJobs,
-  getAlwaysActiveSkills, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
+  getAlwaysActiveSkills, getProviderAccounts, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
   getShellApprovalGrants, revokeShellApprovalGrants, gatedGrants, type ApprovalGrant,
-  setAlwaysActiveSkills, setModel, setReasoningEffort, setShellApprovalMode,
+  setAlwaysActiveSkills, setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   getEvolutionChangelog, markChangelogSeen, pickAlternateTake,
   type EvolutionChangelogView,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
@@ -882,6 +882,14 @@ export class LocalAgentSession implements BackendHost {
       normalize: (s) => this.profiles().normalizeSpec(s),
       onChanged: () => this.rebuildToolSurface(),
     }, spec);
+  }
+
+  getProviderAccounts(): ReturnType<typeof getProviderAccounts> {
+    return getProviderAccounts(this.config);
+  }
+
+  setProviderAccount(provider: string, account: string | null): ReturnType<typeof setProviderAccount> {
+    return setProviderAccount(this.config, provider, account);
   }
 
   /** The stored setting, never the claimed tier's own effort. */

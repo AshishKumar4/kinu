@@ -25,6 +25,7 @@ export interface ProviderFailure {
 export interface ModelMenu {
   models: Array<ModelInfo & { provider: string }>;
   failures: ProviderFailure[];
+  accounts?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface ProviderRegistry {
@@ -45,7 +46,7 @@ export interface ProviderRegistry {
 /** Id for a failure of the dynamic source itself. */
 export const CATALOG_SOURCE_ID = 'catalog';
 
-/** Reads go to `named`, else `accountFor`'s, else `main`, else the only account; several unchosen is refused. */
+/** Reads go to `named`, else `accountFor`'s, else `main`, else the only account; several unchosen: refused. */
 export function accountDeps(deps: ProviderDeps, providerId: string, named?: string): ProviderDeps {
   const chosen = (): string | undefined => named ?? deps.accountFor?.(providerId);
 
@@ -57,7 +58,7 @@ export function accountDeps(deps: ProviderDeps, providerId: string, named?: stri
 
     if (others.length > 0) {
       throw new KinuError('bad_input', `${providerId} has the accounts ${accounts.join(', ')} and no default: `
-        + `choose one in the providers settings or with \`kinu accounts default ${providerId} <name>\`.`);
+        + `choose one in the providers settings or with \`kinu provider default ${providerId} <name>\`.`);
     }
 
     return accountCredentialKey(key, only);
@@ -209,6 +210,13 @@ export function createProviderRegistry(): ProviderRegistry {
       const { providers, failures: sourceFailures } = await allProviders(deps);
       const models: Array<ModelInfo & { provider: string }> = [];
       const failures = [...sourceFailures];
+      const keys = await deps.listCredentialKeys?.() ?? [];
+
+      const accounts = Object.fromEntries(providers.flatMap((p) => {
+        const stored = p.credentialKey === undefined ? [] : storedAccounts(p.credentialKey, keys);
+
+        return stored.length === 0 ? [] : [[p.id, stored]];
+      }));
 
       // `null`: unavailable, which is not a failure.
       for (const probed of await probeEach(providers, async (p) => {
@@ -230,7 +238,7 @@ export function createProviderRegistry(): ProviderRegistry {
         for (const m of probed.value) models.push({ ...m, provider: probed.provider.id });
       }
 
-      return { models, failures };
+      return { models, failures, accounts };
     },
 
     resolve(spec, deps) {

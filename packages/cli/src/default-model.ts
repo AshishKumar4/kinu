@@ -60,9 +60,20 @@ export async function updateDefaultTier(
   const current = await loadActiveProfile();
 
   const catalog = {
-    roles: current.catalog.roles,
+    ...current.catalog,
     tiers: { ...current.catalog.tiers, default: { ...current.catalog.tiers.default, ...edit } },
   };
+
+  return current.authority.kind === 'local'
+    ? writeLocalProfile(catalog)
+    : writeAccountProfile(current.authority.accountId, current.version, catalog);
+}
+
+export async function updateDefaultAccount(provider: string, account: string | null): Promise<ProfileCatalogEnvelope> {
+  const current = await loadActiveProfile();
+  const { [provider]: _previous, ...others } = current.catalog.accounts ?? {};
+  const accounts = account === null ? others : { ...others, [provider]: account };
+  const catalog = { ...current.catalog, accounts };
 
   return current.authority.kind === 'local'
     ? writeLocalProfile(catalog)

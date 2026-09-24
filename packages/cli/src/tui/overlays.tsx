@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { formatContextWindow, CHANGE_KIND_GLYPH, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry } from '@kinu.run/core';
 import { takeEvidence } from '@kinu.run/core';
 import { filterCommands, type SlashCommandInfo } from '../slash-commands';
-import { filterModels, type AgentModelEntry } from '@kinu.run/core';
+import { filterModels, formatModelSpec, parseModelSpec, specWithoutAccount, type AgentModelEntry } from '@kinu.run/core';
 import type { ProviderFailure, ShellApprovalRequest } from '@kinu.run/core';
 import type { AgentChangelogView, ForkPoint } from '../agent-client';
 import type { DeviceConnectPromptState } from './use-device-connect';
@@ -310,14 +310,103 @@ interface ModelPickerProps {
   models: readonly AgentModelEntry[];
   /** Shown under the options so missing models are not a silent gap. */
   failures?: readonly ProviderFailure[];
+  accounts?: Readonly<Record<string, readonly string[]>>;
   currentSpec: string | null;
   terminal: OverlayGeometry;
   loading?: boolean;
   error?: string | null;
+  onSelect: (spec: string) => void;
+}
+
+export function ModelPickerOverlay({ models, failures, accounts, currentSpec, terminal, loading, error, onSelect }: ModelPickerProps) {
+  const [pending, setPending] = useState<AgentModelEntry | null>(null);
+  const pendingAccounts = pending === null ? [] : accounts?.[pending.provider] ?? [];
+
+  if (pending !== null && pendingAccounts.length > 1) {
+    return <AccountPickerOverlay model={pending} accounts={pendingAccounts} terminal={terminal} onSelect={onSelect} />;
+  }
+
+  return (
+    <ModelListOverlay
+      models={models}
+      failures={failures}
+      currentSpec={currentSpec === null ? null : specWithoutAccount(currentSpec)}
+      terminal={terminal}
+      loading={loading}
+      error={error}
+      onSelect={(model) => ((accounts?.[model.provider]?.length ?? 0) > 1 ? setPending(model) : onSelect(model.spec))}
+    />
+  );
+}
+
+interface AccountPickerProps {
+  model: AgentModelEntry;
+  accounts: readonly string[];
+  terminal: OverlayGeometry;
+  onSelect: (spec: string) => void;
+}
+
+function AccountPickerOverlay({ model, accounts, terminal, onSelect }: AccountPickerProps) {
+  const { colors } = useTuiTheme();
+  const paletteWidth = boundedPaletteWidth(terminal, 0.46, 48, 72);
+  const innerWidth = Math.max(1, paletteWidth - 4);
+  const parsed = parseModelSpec(model.spec);
+
+  const options: SelectOption[] = [
+    { name: clipText('the default account', innerWidth), description: '', value: model.spec },
+    ...accounts.map((account) => ({
+      name: clipText(account, innerWidth),
+      description: '',
+      value: formatModelSpec({ ...parsed, account }),
+    })),
+  ];
+
+  const paletteHeight = Math.min(Math.max(options.length + 6, 9), Math.max(3, terminal.height - 2), 16);
+  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+
+  return (
+    <PaletteFrame title={clipText(`Run ${model.label} on`, innerWidth)} width={paletteWidth} height={paletteHeight} left={position.left} top={position.top}>
+      <PaletteLine text="↑/↓ move · Enter choose · Esc close" width={innerWidth} color={colors.text.muted} />
+      <select
+        focused={true}
+        options={options}
+        selectedIndex={0}
+        showDescription={false}
+        showScrollIndicator={true}
+        wrapSelection={true}
+        onSelect={(index) => {
+          const selected = options[index];
+
+          if (selected) onSelect(String(selected.value));
+        }}
+        style={{
+          flexGrow: 1,
+          height: Math.max(3, paletteHeight - 5),
+          backgroundColor: colors.background.overlay,
+          textColor: colors.text.primary,
+          focusedBackgroundColor: colors.background.overlay,
+          focusedTextColor: colors.text.primary,
+          selectedBackgroundColor: colors.background.selection,
+          selectedTextColor: colors.text.strong,
+          descriptionColor: colors.text.muted,
+          selectedDescriptionColor: colors.intent.accentStrong,
+        }}
+      />
+    </PaletteFrame>
+  );
+}
+
+interface ModelListProps {
+  models: readonly AgentModelEntry[];
+  failures?: readonly ProviderFailure[] | undefined;
+  currentSpec: string | null;
+  terminal: OverlayGeometry;
+  loading?: boolean | undefined;
+  error?: string | null | undefined;
   onSelect: (model: AgentModelEntry) => void;
 }
 
-export function ModelPickerOverlay({ models, failures, currentSpec, terminal, loading, error, onSelect }: ModelPickerProps) {
+function ModelListOverlay({ models, failures, currentSpec, terminal, loading, error, onSelect }: ModelListProps) {
   const { colors } = useTuiTheme();
   const [filter, setFilter] = useState('');
   const selectRef = useRef<SelectRenderable | null>(null);

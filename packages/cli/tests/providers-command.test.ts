@@ -37,7 +37,7 @@ function runProviders(
 
   const runner = `
     const { providersCommand } = await import('./packages/cli/src/commands/providers.ts');
-    await providersCommand(${argv}[0], ${argv}[1], {});
+    await providersCommand(${argv}[0], ${argv}[1], ${argv}[2], {});
   `;
 
   const proc = Bun.spawnSync({
@@ -193,6 +193,30 @@ describe('providers command — disconnect', () => {
     expect(config.providers).toEqual({ openai: { apiKey: 'sk-keep-me' } });
     expect(v.parse(DefaultModelSchema, config).localProfile.catalog.tiers.default.model).toBe('codex/gpt-5.5');
     expect(readFileSync(join(home, 'config.json'), 'utf8')).not.toContain('secret');
+  });
+
+  test('an account is picked as the default, listed as it, and taken out of the default when removed', () => {
+    const home = homeWith({ providers: { anthropic: { apiKey: 'sk-main', accounts: { work: { apiKey: 'sk-work' } } } } });
+    withDefaultModel(home, 'anthropic/claude-x');
+    const accountsLine = (out: string): string => out.split('\n').find((line) => line.includes('accounts:'))?.trim() ?? '';
+
+    expect(runProviders(['default', 'anthropic', 'work'], { home }).exitCode).toBe(0);
+    expect(accountsLine(runProviders(['list'], { home }).stdout)).toBe('accounts: main, work (default)');
+
+    const removed = runProviders(['disconnect', 'anthropic', 'work'], { home });
+    expect(removed.exitCode).toBe(0);
+    expect(removed.stdout).toContain('was the default anthropic account');
+
+    const config = readConfig(home);
+    expect(config.providers).toEqual({ anthropic: { apiKey: 'sk-main', accounts: {} } });
+    expect(v.parse(v.object({ localProfile: v.object({ catalog: v.object({ accounts: v.record(v.string(), v.string()) }) }) }), config)
+      .localProfile.catalog.accounts).toEqual({});
+  });
+
+  test('disconnecting a provider takes its main account and keeps the others', () => {
+    const home = homeWith({ providers: { openai: { apiKey: 'sk-main', accounts: { work: { apiKey: 'sk-work' } } } } });
+    expect(runProviders(['disconnect', 'openai'], { home }).exitCode).toBe(0);
+    expect(readConfig(home).providers).toEqual({ openai: { accounts: { work: { apiKey: 'sk-work' } } } });
   });
 
   test('says nothing about a default model that runs on another provider', () => {

@@ -3,6 +3,7 @@ import {
   JsonObjectSchema,
   JsonValueSchema,
   CODEX_REFRESH_LEAD_SEC,
+  MAIN_ACCOUNT,
   codexAccessTokenExpiring,
   codexCredentialToHeaders,
   createCodexOAuthClient,
@@ -24,28 +25,40 @@ const storedCodexCredentialSchema = v.object({
 
 type StoredCodexCredential = v.InferOutput<typeof storedCodexCredentialSchema>;
 
+const storedCodexSchema = v.object({
+  ...storedCodexCredentialSchema.entries,
+  accounts: v.optional(v.record(v.string(), storedCodexCredentialSchema)),
+});
+
 const kinuConfigSchema = v.objectWithRest({
   providers: v.optional(v.objectWithRest({
-    codex: v.optional(storedCodexCredentialSchema),
+    codex: v.optional(storedCodexSchema),
   }, JsonValueSchema)),
 }, JsonValueSchema);
 
 type KinuConfigFile = v.InferOutput<typeof kinuConfigSchema>;
 
 export interface LocalCodexAuthStore {
-  hasCredential(): boolean;
-  getAuth(opts?: { forceRefresh?: boolean }): Promise<AuthResolution | null>;
-  save(credential: OAuthCredential): void;
+  accounts(): string[];
+  hasCredential(account?: string): boolean;
+  getAuth(opts?: { forceRefresh?: boolean }, account?: string): Promise<AuthResolution | null>;
+  save(credential: OAuthCredential, account?: string): void;
 }
 
 export function createFileCodexAuthStore(configPath: string, opts: { fetch?: typeof fetch } = {}): LocalCodexAuthStore {
   return {
-    hasCredential(): boolean {
-      return Boolean(readCredential(configPath)?.accessToken);
+    accounts(): string[] {
+      const stored = readConfig(configPath).providers?.codex?.accounts ?? {};
+
+      return Object.keys(stored).filter((name) => Boolean(stored[name]?.accessToken)).sort();
     },
 
-    async getAuth(authOpts?: { forceRefresh?: boolean }): Promise<AuthResolution | null> {
-      const credential = readCredential(configPath);
+    hasCredential(account = MAIN_ACCOUNT): boolean {
+      return Boolean(readCredential(configPath, account)?.accessToken);
+    },
+
+    async getAuth(authOpts?: { forceRefresh?: boolean }, account = MAIN_ACCOUNT): Promise<AuthResolution | null> {
+      const credential = readCredential(configPath, account);
 
       if (!credential?.accessToken) return null;
 
@@ -53,22 +66,13 @@ export function createFileCodexAuthStore(configPath: string, opts: { fetch?: typ
         return { headers: codexCredentialToHeaders(credential) };
       }
 
-      const refreshed = await refreshUnderLock(configPath, credential, opts.fetch);
+      const refreshed = await refreshUnderLock(configPath, account, credential, opts.fetch);
 
       return { headers: codexCredentialToHeaders(refreshed) };
     },
 
-    save(credential: OAuthCredential): void {
-      withConfigLock(configPath, () => {
-        const config = readConfig(configPath);
-        writeConfig(configPath, {
-          ...config,
-          providers: {
-            ...config.providers,
-            codex: credentialToConfig(credential),
-          },
-        });
-      });
+    save(credential: OAuthCredential, account = MAIN_ACCOUNT): void {
+      withConfigLock(configPath, () => { writeCredential(configPath, account, credential); });
     },
   };
 }
@@ -77,11 +81,12 @@ export function createFileCodexAuthStore(configPath: string, opts: { fetch?: typ
  *  second caller could submit the same refresh token and race its replacement. */
 async function refreshUnderLock(
   configPath: string,
+  account: string,
   original: OAuthCredential,
   fetchFn?: typeof fetch,
 ): Promise<OAuthCredential> {
   return withConfigLockAsync(configPath, async () => {
-    const latest = readCredential(configPath);
+    const latest = readCredential(configPath, account);
 
     if (latest?.accessToken && latest.accessToken !== original.accessToken && !needsRefresh(latest)) {
       return latest;
@@ -100,17 +105,21 @@ async function refreshUnderLock(
       metadata: latest?.metadata ?? original.metadata,
     };
 
-    const config = readConfig(configPath);
-    writeConfig(configPath, {
-      ...config,
-      providers: {
-        ...config.providers,
-        codex: credentialToConfig(credential),
-      },
-    });
+    writeCredential(configPath, account, credential);
 
     return credential;
   });
+}
+
+function writeCredential(configPath: string, account: string, credential: OAuthCredential): void {
+  const config = readConfig(configPath);
+  const codex = config.providers?.codex ?? {};
+
+  const next = account === MAIN_ACCOUNT
+    ? { ...codex, ...credentialToConfig(credential) }
+    : { ...codex, accounts: { ...codex.accounts, [account]: credentialToConfig(credential) } };
+
+  writeConfig(configPath, { ...config, providers: { ...config.providers, codex: next } });
 }
 
 function needsRefresh(credential: OAuthCredential, opts?: { forceRefresh?: boolean }): boolean {
@@ -121,8 +130,9 @@ function needsRefresh(credential: OAuthCredential, opts?: { forceRefresh?: boole
   return codexAccessTokenExpiring(credential.accessToken);
 }
 
-function readCredential(configPath: string): OAuthCredential | null {
-  const codex = readConfig(configPath).providers?.codex;
+function readCredential(configPath: string, account: string): OAuthCredential | null {
+  const stored = readConfig(configPath).providers?.codex;
+  const codex = account === MAIN_ACCOUNT ? stored : stored?.accounts?.[account];
 
   if (!codex?.accessToken) return null;
 

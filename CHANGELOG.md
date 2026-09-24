@@ -12,6 +12,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ## [Unreleased]
 
+### Added
+
+- **Several accounts per provider.** `kinu provider connect anthropic work` adds an account named `work` beside the provider's first one, `main`, in your Kinu account or with `--local` on this machine; Codex accounts stay on the machine that signs them in. `kinu provider default anthropic work` picks the account a model runs on when it names none, and `kinu provider disconnect anthropic work` removes one. A model names its account as `anthropic@work/<model>`, so a tier or its fallback chain can run one model on two accounts. `/accounts use anthropic work` gives a workspace its own account, and the model picker asks which account when a provider has several.
+
 ### Changed
 
 - Hosted actors now use the Agents platform directly, without Think's duplicate session, workspace, inference queue or recovery boot. The shared Kinu chat loop retains the existing browser/CLI protocol and initializes the root transcript through the public session provider. Accepted sends and unfinished workspace work keep the sandbox protected across eviction.

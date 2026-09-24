@@ -42,6 +42,7 @@ const PREFERRED_MODEL_IDS = [
 export function createAnthropicProvider(): ModelProvider {
   return {
     id: 'anthropic',
+    credentialKey: ANTHROPIC_CRED_KEY,
     label: 'Anthropic (direct API)',
     defaultModel: ANTHROPIC_DEFAULT_MODEL,
     fastModel: ANTHROPIC_FAST_MODEL,

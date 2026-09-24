@@ -23,7 +23,7 @@ import {
 } from '../config';
 import { createConfiguredLocalModelResolver } from '../local-model-resolver';
 import { installTurnDiagnostics } from '../turn-log';
-import { EMPTY_MODEL_MENU, normalizeModelMenu, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
+import { EMPTY_MODEL_MENU, normalizeModelMenu, specWithoutAccount, type AgentModelMenu } from '@kinu.run/core';
 import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
 import { VERSION } from '../display';
 import { loadActiveProfile, updateDefaultTier } from '../default-model';
@@ -237,11 +237,11 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     }
   }, [defaultModel, keybindings, mode, opts]);
 
-  const selectModel = useCallback(async (model: AgentModelEntry) => {
+  const selectModel = useCallback(async (spec: string) => {
     try {
-      await updateDefaultTier({ model: model.spec });
+      await updateDefaultTier({ model: spec });
       modelPickerRequestRef.current += 1;
-      setDefaultModelState(model.spec);
+      setDefaultModelState(spec);
       setCatalogHint(null);
       setModelPicker(null);
       setError(null);
@@ -263,7 +263,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   // The stored level stays listed if the catalog dropped it.
   const efforts = useMemo(
     () => offeredReasoningEfforts(
-      catalog.models.find((model) => model.spec === defaultModel)?.reasoningEfforts,
+      catalog.models.find((model) => model.spec === specWithoutAccount(defaultModel))?.reasoningEfforts,
       reasoningEffort,
     ),
     [catalog, defaultModel, reasoningEffort],
@@ -630,6 +630,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         <ModelPickerOverlay
           models={modelPicker.menu.models}
           failures={modelPicker.menu.failures}
+          accounts={modelPicker.menu.accounts}
           currentSpec={defaultModel || null}
           terminal={{ width: sceneWidth, height }}
           loading={modelPicker.loading}

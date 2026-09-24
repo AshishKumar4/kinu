@@ -25,7 +25,7 @@ export function baseCredentialKey(key: string): string {
   return splitAccount(key).base;
 }
 
-function accountOf(key: string): string {
+export function accountOf(key: string): string {
   return splitAccount(key).account ?? MAIN_ACCOUNT;
 }
 

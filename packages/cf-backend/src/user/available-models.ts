@@ -25,6 +25,7 @@ export interface ModelMenuEntry {
 export interface ModelMenuResponse {
   models: ModelMenuEntry[];
   failures: ProviderFailure[];
+  accounts?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface AvailableModelsEnv<Id> extends ProviderEnv {
@@ -68,7 +69,7 @@ export async function listAvailableModels<Id>(
     });
   }
 
-  return { models: out, failures: menu.failures };
+  return { models: out, failures: menu.failures, ...(menu.accounts !== undefined && { accounts: menu.accounts }) };
 }
 
 export interface ProviderCatalogEntry {

@@ -16,7 +16,7 @@ kinu <command> [options]
 | Command | What it does |
 | --- | --- |
 | [`kinu setup`](#kinu-setup) | Sign in to Kinu and pick a model provider for local workspaces |
-| [`kinu provider [action] [name]`](#kinu-provider-action-name) | List, connect or disconnect model providers |
+| [`kinu provider [action] [name] [account]`](#kinu-provider-action-name-account) | List, connect or disconnect model providers and their accounts, and pick each default account |
 | [`kinu auth`](#kinu-auth) | Sign in to your Kinu account |
 | [`kinu whoami`](#kinu-whoami) | Show which Kinu account you are signed in to |
 | [`kinu logout`](#kinu-logout) | Sign out and revoke this CLI session |
@@ -111,9 +111,9 @@ Sign in to Kinu and pick a model provider for local workspaces.
 kinu setup --provider codex
 ```
 
-### kinu provider [action] [name]
+### kinu provider [action] [name] [account]
 
-List, connect or disconnect model providers.
+List, connect or disconnect model providers and their accounts, and pick each default account.
 
 Also: `kinu providers`
 

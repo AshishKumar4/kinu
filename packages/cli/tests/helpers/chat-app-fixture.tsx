@@ -143,6 +143,8 @@ export function fakeClient(options: FakeClientOptions) {
     setRole: async (role) => ({ role }),
     getReasoningEffort: async () => 'medium',
     setReasoningEffort: async (effort) => ({ effort }),
+    getProviderAccounts: async () => ({}),
+    setProviderAccount: async () => ({}),
     getEvolutionConfig: async () => evolution,
     setEvolutionConfig: async (next) => {
       evolution = { ...evolution, ...next };

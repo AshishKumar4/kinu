@@ -1416,6 +1416,7 @@ export {
 export {
   MAIN_ACCOUNT,
   accountCredentialKey,
+  accountOf,
   baseCredentialKey,
   isAccountName,
   splitAccount,
@@ -2064,10 +2065,10 @@ export type {
 } from './read-models/background-jobs';
 
 export {
-  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
+  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getProviderAccounts, getReasoningEffort,
   getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
   getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
-  setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
+  setMctsConfig, setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
 } from './read-models/config-plane';
 
 export type {

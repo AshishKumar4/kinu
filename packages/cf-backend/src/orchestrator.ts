@@ -181,10 +181,10 @@ import {
   jobResult, listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
   type CancelWorkOutcome, type RetryOutcome,
-  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
+  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getProviderAccounts, getReasoningEffort,
   getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
   setAlwaysActiveSkills, setEvolutionConfig,
-  setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
+  setMctsConfig, setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView, type MctsConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   workModeUnderReview,
@@ -4704,6 +4704,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable() async setReasoningEffort(effort: ReasoningEffort | null, actor?: string) {
     return setReasoningEffort(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config, effort);
+  }
+
+  @callable() async getProviderAccounts(actor?: string) {
+    return getProviderAccounts(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config);
+  }
+
+  @callable() async setProviderAccount(provider: string, account: string | null, actor?: string) {
+    return setProviderAccount(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config, provider, account);
   }
 
   /** A hosted actor's own model pin, over the workspace's for its turns. */

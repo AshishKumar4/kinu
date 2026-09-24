@@ -79,6 +79,7 @@ function createCatalogProvider(providerId: string): ModelProvider {
 
   return {
     id: providerId,
+    credentialKey: credKey,
     label: providerId,
     async isAvailable(deps) { return deps.hasCredential(credKey); },
     unavailableReason() { return `No API key for ${providerId} (cred key: \`${credKey}\`).`; },

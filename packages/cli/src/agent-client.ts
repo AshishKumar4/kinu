@@ -327,6 +327,8 @@ export interface AgentClient {
   setModel(spec: string): Promise<{ spec: string }>;
   getReasoningEffort(): Promise<ReasoningEffort | null>;
   setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }>;
+  getProviderAccounts(): Promise<Readonly<Record<string, string>>>;
+  setProviderAccount(provider: string, account: string | null): Promise<Readonly<Record<string, string>>>;
   getEvolutionConfig(): Promise<EvolutionConfigView>;
   setEvolutionConfig(view: Partial<EvolutionConfigView>): Promise<EvolutionConfigView>;
   listModels(): Promise<AgentModelMenu>;

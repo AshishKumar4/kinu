@@ -222,6 +222,31 @@ describe('createLocalModelResolver', () => {
     }
   });
 
+  test('each account of a provider on this machine is spent under its own key', async () => {
+    const sent: string[] = [];
+
+    const resolver = createLocalModelResolver({
+      llm: null,
+      credentials: { anthropicApiKey: 'sk-ant-main', apiKeyAccounts: { 'anthropic.bearer@work': 'sk-ant-work' } },
+      fetch: asFetchFunction(async (_input, init) => {
+        sent.push(new Headers(init?.headers).get('x-api-key') ?? '');
+
+        return Response.json({
+          id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-x',
+          content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn',
+          usage: { input_tokens: 1, output_tokens: 1 },
+        });
+      }),
+    });
+
+    await generateText({ model: resolver.resolveModel('anthropic@work/claude-x'), prompt: 'hi' });
+    await generateText({ model: resolver.resolveModel('anthropic/claude-x'), prompt: 'hi' });
+    const chosen = resolver.withAccountChoice?.((provider) => (provider === 'anthropic' ? 'work' : undefined));
+    await generateText({ model: (chosen ?? resolver).resolveModel('anthropic/claude-x'), prompt: 'hi' });
+
+    expect(sent).toEqual(['sk-ant-work', 'sk-ant-main', 'sk-ant-work']);
+  });
+
   test('uses Anthropic as the default provider when the resolved local config is direct Anthropic', async () => {
     const resolver = createLocalModelResolver({
       llm: {

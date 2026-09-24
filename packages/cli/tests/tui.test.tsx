@@ -329,10 +329,49 @@ describe('CLI TUI layout', () => {
     expect(withOverlay).toContain('Kimi K2.6');
   });
 
+  test('a model of a provider with several accounts asks which, and the answer names the account', async () => {
+    const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({ width: 80, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    const selected: string[] = [];
+    const claude: AgentModelEntry = { provider: 'anthropic', label: 'Claude X', spec: 'anthropic/claude-x' };
+
+    try {
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <ModelPickerOverlay
+            models={[claude, ...MODELS]}
+            accounts={{ anthropic: ['main', 'work'] }}
+            currentSpec="anthropic@work/claude-x"
+            terminal={{ width: 80, height: 24 }}
+            onSelect={(spec) => { selected.push(spec); }}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      expect(captureCharFrame()).toContain('✓ Claude X');
+
+      mockInput.pressEnter();
+      await renderSettled(renderOnce);
+      const step = captureCharFrame();
+      expect(step).toContain('Run Claude X on');
+      expect(step).toContain('the default account');
+      expect(selected).toEqual([]);
+
+      mockInput.pressArrow('down');
+      mockInput.pressArrow('down');
+      mockInput.pressEnter();
+      await renderSettled(renderOnce);
+      expect(selected).toEqual(['anthropic@work/claude-x']);
+    } finally {
+      flushSync(() => { root.unmount(); });
+      renderer.destroy();
+    }
+  });
+
   test('model picker forwards arrow and enter keys from its filter input', async () => {
     const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({ width: 80, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
-    const selected: AgentModelEntry[] = [];
+    const selected: string[] = [];
 
     try {
       root.render(
@@ -341,7 +380,7 @@ describe('CLI TUI layout', () => {
             models={MODELS}
             currentSpec={MODELS[0].spec}
             terminal={{ width: 80, height: 24 }}
-            onSelect={(model) => { selected.push(model); }}
+            onSelect={(spec) => { selected.push(spec); }}
           />
         </box>,
       );
@@ -353,7 +392,7 @@ describe('CLI TUI layout', () => {
 
       mockInput.pressEnter();
       await renderSettled(renderOnce);
-      expect(selected[0]?.spec).toBe(MODELS[1].spec);
+      expect(selected[0]).toBe(MODELS[1].spec);
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();

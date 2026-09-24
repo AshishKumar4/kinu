@@ -177,12 +177,19 @@ export async function readAccountProfile(accountId: string): Promise<AccountRead
   }
 }
 
+function readKnownProfile(): ProfileCatalogEnvelope | null {
+  const authority = resolveProfileAuthority();
+
+  return authority.kind === 'local' ? loadLocalProfileAuthority() : loadCachedAccountProfile(authority.accountId);
+}
+
 /** Never seeds or fetches. */
 export function readDefaultTier(): TierAssignment | null {
-  const authority = resolveProfileAuthority();
-  const profile = authority.kind === 'local' ? loadLocalProfileAuthority() : loadCachedAccountProfile(authority.accountId);
+  return readKnownProfile()?.catalog.tiers.default ?? null;
+}
 
-  return profile?.catalog.tiers.default ?? null;
+export function readDefaultAccounts(): Readonly<Record<string, string>> {
+  return readKnownProfile()?.catalog.accounts ?? {};
 }
 
 export function createProfileAuthorityReader(): ProfileEnvelopeSource {

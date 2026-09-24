@@ -6,11 +6,15 @@ import { type ProviderFailure } from './registry';
 import { MODEL_CAPABILITIES, specProvider, specWithoutAccount, type ModelCapability } from './types';
 import * as v from 'valibot';
 import { nonEmptyString } from '../utils/json';
+import { isAccountName } from '../credentials/accounts';
 
 const ModelMenuPayloadSchema = v.object({
   models: v.optional(v.array(v.unknown()), []),
   failures: v.optional(v.array(v.unknown()), []),
+  accounts: v.optional(v.unknown()),
 });
+
+const MenuAccountsSchema = v.record(v.string(), v.array(v.pipe(v.string(), v.check(isAccountName))));
 
 const ProviderFailureSchema = v.object({
   provider: v.string(),
@@ -42,6 +46,7 @@ export interface AgentModelEntry {
 export interface AgentModelMenu {
   models: AgentModelEntry[];
   failures: ProviderFailure[];
+  accounts?: Readonly<Record<string, readonly string[]>>;
 }
 
 export const EMPTY_MODEL_MENU: AgentModelMenu = { models: [], failures: [] };
@@ -91,9 +96,12 @@ export function normalizeModelMenu(input: { payload: unknown }): AgentModelMenu 
   const parsed = v.safeParse(ModelMenuPayloadSchema, input.payload);
   const source = parsed.success ? parsed.output : { models: [], failures: [] };
 
+  const accounts = v.safeParse(MenuAccountsSchema, source.accounts);
+
   return {
     models: dedupeModelEntries(normalizeModelEntries({ rows: source.models })),
     failures: normalizeProviderFailures({ rows: source.failures }),
+    ...(accounts.success && { accounts: accounts.output }),
   };
 }
 
@@ -188,7 +196,9 @@ export function contextWindowForSpec(models: readonly AgentModelEntry[], spec: s
 
   if (!normalized) return undefined;
 
-  return models.find((model) => model.spec === normalized)?.contextWindow;
+  const listed = specWithoutAccount(normalized);
+
+  return models.find((model) => model.spec === listed)?.contextWindow;
 }
 
 function modelRank(model: AgentModelEntry): number {

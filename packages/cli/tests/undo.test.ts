@@ -41,6 +41,7 @@ function slashClient(checkpoints: FileCheckpointSurface | null): AgentClient {
     getModelSpec: async () => null, setModel: async (spec) => ({ spec }),
     setRole: async (role) => ({ role }),
     getReasoningEffort: async () => null, setReasoningEffort: async (effort) => ({ effort }),
+    getProviderAccounts: async () => ({}), setProviderAccount: async () => ({}),
     listModels: async () => ({ models: [], failures: [] }),
     inspectSubordinate: async (request) => missingSubordinateHistory(request.path),
     getEvolutionConfig: async () => { throw new Error('not used'); },

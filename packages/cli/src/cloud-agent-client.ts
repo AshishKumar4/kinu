@@ -231,6 +231,8 @@ const ReasoningEffortResultSchema = v.object({ effort: v.nullable(ReasoningEffor
 
 const SetReasoningEffortResultSchema = v.object({ ok: v.literal(true), effort: ReasoningEffortSchema });
 
+const ProviderAccountsResultSchema = v.object({ accounts: v.record(v.string(), v.string()) });
+
 const SocketFrameSchema = v.objectWithRest({
   type: v.string(),
   id: v.optional(v.string()),
@@ -742,6 +744,14 @@ export class CloudAgentClient implements AgentClient {
     return {
       effort: (await this.callHttp('setReasoningEffort', SetReasoningEffortResultSchema, [effort])).effort,
     };
+  }
+
+  async getProviderAccounts(): Promise<Readonly<Record<string, string>>> {
+    return (await this.callHttp('getProviderAccounts', ProviderAccountsResultSchema)).accounts;
+  }
+
+  async setProviderAccount(provider: string, account: string | null): Promise<Readonly<Record<string, string>>> {
+    return (await this.callHttp('setProviderAccount', ProviderAccountsResultSchema, [provider, account])).accounts;
   }
 
   async getEvolutionConfig(): Promise<EvolutionConfigView> {

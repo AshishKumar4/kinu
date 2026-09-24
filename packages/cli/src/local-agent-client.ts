@@ -564,6 +564,14 @@ export class LocalAgentClient implements AgentClient {
     return { effort: this.session.setReasoningEffort(effort).effort };
   }
 
+  async getProviderAccounts(): Promise<Readonly<Record<string, string>>> {
+    return this.session.getProviderAccounts().accounts;
+  }
+
+  async setProviderAccount(provider: string, account: string | null): Promise<Readonly<Record<string, string>>> {
+    return this.session.setProviderAccount(provider, account).accounts;
+  }
+
   async getEvolutionConfig(): Promise<EvolutionConfigView> {
     return getEvolutionConfig(this.config);
   }

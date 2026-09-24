@@ -35,6 +35,7 @@ export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelPro
 
   return {
     id: 'openrouter',
+    credentialKey: OPENROUTER_CRED_KEY,
     label: 'OpenRouter',
     async isAvailable(deps) { return deps.hasCredential(OPENROUTER_CRED_KEY); },
     unavailableReason() { return 'No OpenRouter API key (cred key: `openrouter.bearer`).'; },
