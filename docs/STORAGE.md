@@ -383,10 +383,8 @@ revision. So a step writes only the positions that changed since the previous
 request. A message the step pipeline made or rewrote (a woven block, replayed
 tool-call ids, cache markers) is one `render` row, named by the SHA-256 of its
 stored bytes, however many requests carry it. `SessionRequests`
-(`session/requests.ts`) owns this. Steps recorded before the `requests` context
-existed kept their lists in `request_messages`, which nothing reads or writes
-now. Such a step reads as "Request details were not kept", and a turn
-interrupted on one settles `aborted` with that note in its thread.
+(`session/requests.ts`) owns this; a step without its list is an `io`
+integrity error.
 
 Readers answer from the entries: the chat pane's page walk
 (`getChatHistoryPage` in `read-models/status.ts`, over `session/page.ts`),

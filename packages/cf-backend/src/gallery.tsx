@@ -3663,7 +3663,7 @@ const SURFACE_STEPS = [
   ["card", "--c-surface"], ["raised", "--c-elevated"], ["overlay", "--c-overlay"],
 ] as const;
 
-/** Role names only: per-theme contrast ratios are asserted by `unit-palette-contrast`. */
+/** Role names only: per-theme contrast ratios are asserted by `scripts/palette-ux`. */
 const TEXT_STEPS = [
   ["ink", "--c-text"], ["mid", "--c-text-2"], ["dim", "--c-text-3"], ["accent-ink", "--c-accent-fg"],
 ] as const;

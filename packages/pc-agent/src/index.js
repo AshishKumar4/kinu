@@ -963,10 +963,10 @@ function readSupervisorState(dir) {
   return { pid, start, group, groupStart };
 }
 
-function supervisorStartMatches(entry) {
+/** Whether `pid` still runs as the process that started at `start`; false once it is gone. */
+function startedAs(pid, start) {
   try {
-    return processStartIdentity(entry.pid) === entry.start &&
-      processStartIdentity(entry.group) === entry.groupStart;
+    return processStartIdentity(pid) === start;
   } catch (err) {
     if (err && (err.code === 'ENOENT' || (process.platform === 'darwin' && err.status === 1))) {
       return false;
@@ -974,6 +974,10 @@ function supervisorStartMatches(entry) {
 
     throw err;
   }
+}
+
+function supervisorStartMatches(entry) {
+  return startedAs(entry.pid, entry.start) && startedAs(entry.group, entry.groupStart);
 }
 
 function processGroupHasLiveProcess(group) {
@@ -1575,8 +1579,10 @@ function createInFlight(root = INFLIGHT_ROOT) {
     // so writing to it when it has exited blocks that writer forever — the
     // same leak, moved into this daemon. A supervisor whose start identity no
     // longer matches is gone (its daemon died and it left the result behind),
-    // and this daemon owns the directory instead.
-    if (terminal.kind === 'exited' && supervisorStartMatches(entry)) {
+    // and this daemon owns the directory instead. The supervisor alone is
+    // asked: a finished command's group leader has exited, so the group half
+    // of the identity never matches here.
+    if (terminal.kind === 'exited' && startedAs(entry.pid, entry.start)) {
       await writeAcknowledgement(entry.dir);
       await waitForDirectoryRemoval(entry.dir);
     } else {

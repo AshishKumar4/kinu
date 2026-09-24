@@ -1081,7 +1081,7 @@ export class LocalAgentSession implements BackendHost {
   /** Send the user's message. `mode` is the composer's; a Plan message runs a Plan turn. */
   send(
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
-    opts: Pick<SendOptions, 'tier' | 'id' | 'mode'> = {},
+    opts: Pick<SendOptions, 'tier' | 'id' | 'mode'>,
   ): Promise<SendLanding> {
     return this.chat.send(input, opts);
   }
@@ -1339,7 +1339,7 @@ export class LocalAgentSession implements BackendHost {
     });
 
     diagnostics.event('actor.turns_recovered', {
-      verified: recovered.verified.length, refused: recovered.refused.length, interrupted: recovered.interrupted.length,
+      verified: recovered.verified.length, refused: recovered.refused.length, failed: recovered.failed.length,
       unreadable: recovered.unreadable.length, active: recovered.active.length,
     });
     const advisorOrphans: OrphanedFiber[] = [];

@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
-import { withGallery, type Gallery } from './gallery-harness';
+import { unruledClasses, withGallery, type Gallery } from './gallery-harness';
 
 type Mode = 'dark' | 'light';
 
@@ -10,6 +10,10 @@ type Mode = 'dark' | 'light';
  *  settled plan shows none — and the strip itself must then stop spending its
  *  margin above the first block. */
 const ACTION_STRIP = '[data-plan-document] [data-print-region="article"] > [data-print-hide]';
+
+/** Every styled element of the review. A code fence's classes are highlighter handles (`pn-code`,
+ *  `language-*`), not styles. */
+const PLAN_CLASSES = '[data-plan-review-root] [class]:not(pre > code)';
 
 interface ActionStrip {
   readonly actionStripDisplay: string;
@@ -34,6 +38,8 @@ interface DesktopPlan extends ActionStrip {
   readonly codeOverflow: string;
   readonly overflow: number;
   readonly scrimDisplay: string;
+  /** Classes the review carries, rail closed or open, that no served rule selects. */
+  readonly unruled: readonly string[];
 }
 
 interface MobilePlan {
@@ -141,8 +147,12 @@ async function observeDesktop(newPage: Gallery['newPage'], origin: string, mode:
     };
   });
 
+  const unruledClosed = await page.evaluate(unruledClasses, PLAN_CLASSES, '', []);
+
   await page.click('[data-plan-annotations-toggle]');
   await page.waitForSelector('[data-annotation-panel="true"]');
+
+  const unruledOpen = await page.evaluate(unruledClasses, PLAN_CLASSES, '', []);
 
   const opened = await page.evaluate(() => {
     const rail = document.querySelector<HTMLElement>('[data-annotation-panel="true"]');
@@ -160,7 +170,7 @@ async function observeDesktop(newPage: Gallery['newPage'], origin: string, mode:
   await page.waitForFunction(() => document.querySelector('[data-annotation-panel="true"]') === null);
   await page.close();
 
-  return { ...before, ...strip, ...opened };
+  return { ...before, ...strip, ...opened, unruled: [...new Set([...unruledClosed, ...unruledOpen])] };
 }
 
 async function observeMobile(newPage: Gallery['newPage'], origin: string): Promise<MobilePlan> {
@@ -393,6 +403,11 @@ describe('the plan review document, as a browser lays it out', () => {
     }
 
     expect(observed.desktop.dark.pageBackground).not.toBe(observed.desktop.light.pageBackground);
+  });
+
+  test('every class the review and its rail carry was generated into the served CSS, on both themes', () => {
+    // Tailwind generates only what its @source globs reach: a plannotator component they miss renders unstyled.
+    expect([observed.desktop.dark.unruled, observed.desktop.light.unruled]).toEqual([[], []]);
   });
 
   test('mobile scrolls wide blocks and opens annotations as a drawer without page overflow', () => {

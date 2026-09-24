@@ -158,7 +158,7 @@ describe('a promoted scaffold drives a local turn', () => {
       }`,
     });
 
-    await session.send('who answers?');
+    await session.send('who answers?', { id: crypto.randomUUID() });
 
     expect(streamed(events)).toBe('the scaffold answered: who answers?');
     expect(streamed(events)).not.toContain('default loop');
@@ -185,7 +185,7 @@ describe('a promoted scaffold drives a local turn', () => {
       const { rt, session, events } = await setup('the default loop answered');
       await installScaffold(rt, { version: c.version, status: 'current', code: c.code });
 
-      await session.send('who answers?');
+      await session.send('who answers?', { id: crypto.randomUUID() });
 
       expect(streamed(events)).toBe('the default loop answered');
     });
@@ -201,7 +201,7 @@ describe('a promoted scaffold drives a local turn', () => {
       }`,
     });
 
-    await session.send('use a tool');
+    await session.send('use a tool', { id: crypto.randomUUID() });
 
     // A dispatch that dropped the args would answer with an error object, not a string.
     expect(events.some((e) => e.type === 'tool-call' && e.toolName === 'memory')).toBe(true);
@@ -246,7 +246,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     expect(getPendingScaffold(rt.storage.sql, rt.actor)?.version).toBe(2);
 
     // DEFAULT_SHADOW_CONFIG needs 5 decisive trials; each turn only queues one, and runDueEvolution drains the lane.
-    for (let i = 0; i < 6; i++) await session.send(`turn ${i}`);
+    for (let i = 0; i < 6; i++) await session.send(`turn ${i}`, { id: crypto.randomUUID() });
     await session.runDueEvolution();
     await session.end();
 
@@ -272,7 +272,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     config.setShadowSampleRate(1);
     config.setAutoPromoteScaffold(true);
 
-    for (let i = 0; i < 6; i++) await session.send(`turn ${i}`);
+    for (let i = 0; i < 6; i++) await session.send(`turn ${i}`, { id: crypto.randomUUID() });
     await session.runDueEvolution();
     await session.end();
 
@@ -326,7 +326,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     rt.judgeModel = markerJudge('PENDING-SCAFFOLD');
     rt.actor.config.setShadowSampleRate(1);
 
-    await session.send('queue one trial');
+    await session.send('queue one trial', { id: crypto.randomUUID() });
 
     const queued = rt.storage.sql<{ id: string }>`SELECT id FROM scaffold_trial_queue
       WHERE actor_id = ${rt.actor.actorId}`;
@@ -356,12 +356,12 @@ test('Plan does not run a promoted native scaffold, but Build still can', async 
     code: 'const fs = await import("node:fs/promises"); await fs.writeFile(' + JSON.stringify(initialized) + ', "initializer effect"); async function run() { await fs.writeFile(' + JSON.stringify(marker) + ', "native scaffold effect"); await host.emit({type:"text_delta",text:"scaffold ran"}); }',
   });
   await session.setRole('planner');
-  await session.send('Plan only.');
+  await session.send('Plan only.', { id: crypto.randomUUID() });
   expect(existsSync(marker)).toBe(false);
   expect(existsSync(initialized)).toBe(false);
   expect(streamed(events)).toBe('the standard Plan loop answered');
   await session.setRole('task');
-  await session.send('Run the configured Build loop.');
+  await session.send('Run the configured Build loop.', { id: crypto.randomUUID() });
   expect(readFileSync(marker, 'utf8')).toBe('native scaffold effect');
   expect(readFileSync(initialized, 'utf8')).toBe('initializer effect');
   await session.end();

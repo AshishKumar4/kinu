@@ -79,7 +79,7 @@ export function sandboxPreviewExposures(
       kv,
       exposureKey(sandboxId, port),
       { tokenHash: await sha256Hex(token), publishedAt: now },
-      now + PREVIEW_EXPOSURE_TTL_MS,
+      PREVIEW_EXPOSURE_TTL_MS,
     );
   };
 
@@ -120,7 +120,7 @@ export function sandboxPreviewExposures(
         kv,
         revocationKey(sandboxId),
         { revokedBefore: now },
-        now + PREVIEW_EXPOSURE_TTL_MS,
+        PREVIEW_EXPOSURE_TTL_MS,
       );
     },
   };

@@ -589,7 +589,7 @@ export function jobsOver(db: Database): BackgroundJobStore {
 
 /** One owner message to the main actor, its turn run to the end on the models the workspace catalog routes to. */
 export async function catalogTurn(agent: HarnessOrchestratorAgent, text: string): Promise<void> {
-  await agent.harnessChatLoop.send(text);
+  await agent.harnessChatLoop.send(text, { id: crypto.randomUUID() });
   await agent.harnessChatLoop.pumpPromise;
 }
 
@@ -870,7 +870,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
 
     const admitted: Promise<void> = driving?.stamped === true
       ? agent.harnessEnqueueTurn({ text: driving.text, metadata: driving.metadata ?? {} }).then(() => agent.harnessChatLoop.pumpPromise).then(() => { waiter.resolve('turn'); })
-      : agent.harnessChatLoop.admit(text, { ...(chosenMode !== undefined && { mode: chosenMode }), ...(turnId !== undefined && { id: turnId }) }, waiter);
+      : agent.harnessChatLoop.admit(text, { id: turnId ?? crypto.randomUUID(), ...(chosenMode !== undefined && { mode: chosenMode }) }, waiter);
 
     const landed: Promise<SendLanding> = admitted.then(() => waiter.promise);
     // A refused admission is an outcome the suite reads, not an unhandled rejection.
@@ -953,7 +953,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
 
       // A suite-installed model runs the turn; the seam scripts 'ok' only when none was supplied.
       if (installed !== undefined && !seamFactories.has(installed)) {
-        const landing = await agent.harnessChatLoop.send(text);
+        const landing = await agent.harnessChatLoop.send(text, { id: crypto.randomUUID() });
         await agent.harnessChatLoop.pumpPromise;
         const last = (await agent.harnessTranscript.history()).at(-1);
 

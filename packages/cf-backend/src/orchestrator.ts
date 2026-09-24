@@ -26,12 +26,11 @@ import {
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
-import { CHAT_SESSION_ID, turnInputMessage, type SessionTranscript, type VfsRevision } from '@kinu.run/core';
+import { CHAT_SESSION_ID, turnInputMessage, type HeadReport, type SessionTranscript, type VfsRevision } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
-import type { HostedTaskResult } from './subordinate-hosting';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
@@ -1011,9 +1010,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
             await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined, carried: [] });
 
             try {
-              const result = await runHostedTask(seams, reference, task, room === null ? undefined : (chunks, call) => room.observe(chunks, call));
+              await runHostedTask(seams, reference, task, {
+                ...(room !== null && { observeStream: (chunks, call) => room.observe(chunks, call) }),
+                answered: async ({ completion, error }) => {
+                  await this.recordHostedChatAnswer(reference, answerId, completion);
 
-              await this.recordHostedChatAnswer(reference, answerId, result.canonicalCompletion);
+                  if (error !== null) await room?.deliver({ type: 'error', message: error });
+                  await room?.closeTurn();
+                },
+              });
             } catch (cause) {
               await room?.deliver({ type: 'error', message: renderThrownChain({ cause }) });
               throw cause;
@@ -1709,7 +1714,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Records a hosted turn's answer into that actor's own chat; `runHeadInference` writes only the
    *  run ledger. */
-  private async recordHostedChatAnswer(reference: ActorReference, id: string, completion: HostedTaskResult['canonicalCompletion']): Promise<void> {
+  private async recordHostedChatAnswer(reference: ActorReference, id: string, completion: HeadReport['canonicalCompletion']): Promise<void> {
     if (completion === undefined) return;
     const history = this.actorHost().bindStores(reference).stores.history;
     const transcript = history.transcript(CHAT_SESSION_ID);
@@ -2740,13 +2745,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         resumable: (limit) => host.resumable(limit),
         acquire: async (reference) => {
           const actor = await host.acquire(reference);
+          const root = reference.actorId === rootActorId;
 
           return {
             runtime: actor.runtime,
-            stores: actor.stores,
+            // The root recovers through the stores its session, resumed above, admits and settles through:
+            // its tabs are told about every claim written there.
+            stores: root ? this.stores : actor.stores,
             session: {
               get inFlight() {
-                return reference.actorId === rootActorId ? rootIsLive() : actor.session.inFlight;
+                return root ? rootIsLive() : actor.session.inFlight;
               },
             },
           };
@@ -4333,7 +4341,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** The root's tabs read the claim when they load, and hear it again here when a turn closes or is recovered. */
+  /** The root's tabs read the claim when they load, and hear every change to it here. */
   protected override turnClaimChanged(): void {
     this.broadcastToActor(null, JSON.stringify({ type: TURN_CLAIM_FRAME, claim: this.turnClaimState() }));
   }
@@ -4350,7 +4358,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (claim === null) return { recovered: 'none' };
     this.claims.settleRecovered(claim.turnId, claim.epoch, 'indeterminate');
-    this.turnClaimChanged();
     diagnostics.event('turn.claim_recovered', { turnId: claim.turnId, epoch: claim.epoch });
 
     if (!this.owedWorkExists()) return { recovered: 'sealed' };
