@@ -31,6 +31,8 @@ export function resolveEffectiveModelSpec(deps: {
 
 export class ModelCatalogSession {
   private cached: { spec: string; info: ModelInfo | null; lookup?: Promise<void> } | null = null;
+  /** Catalog entries of models other than the session's own that served a call: a tier's fallbacks. */
+  private readonly others = new Map<string, ModelInfo>();
 
   constructor(private readonly deps: {
     effectiveSpec: () => string;
@@ -96,9 +98,21 @@ export class ModelCatalogSession {
     return { contextWindow: this.contextWindow(), modelOutputLimit: this.modelOutputLimit() };
   }
 
-  /** Null when the catalog has not landed or prices nothing. */
-  pricing(): ModelPricing | null {
-    return this.info()?.cost ?? null;
+  /** Null when the catalog has not landed or prices nothing. A `spec` other than the session's own prices only once
+   *  {@link ModelCatalogSession.warm} has looked it up. */
+  pricing(spec?: string): ModelPricing | null {
+    if (spec === undefined || spec === this.deps.effectiveSpec()) return this.info()?.cost ?? null;
+
+    return this.others.get(spec)?.cost ?? null;
+  }
+
+  /** Looked up before the turn calls any of them, so a step each serves is priced at its own rate. */
+  async warm(specs: readonly string[]): Promise<void> {
+    await Promise.all(specs.filter((spec) => !this.others.has(spec)).map(async (spec) => {
+      const info = await this.lookup(spec);
+
+      if (info !== null) this.others.set(spec, info);
+    }));
   }
 
   acceptedMedia(): ReadonlySet<MediaModality> {

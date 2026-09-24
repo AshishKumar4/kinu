@@ -209,7 +209,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     actor: input.runtime.actor,
     storage: input.runtime.storage,
     // Null until the pricing lookup lands; the ledger then blends and says so.
-    pricing: () => input.session().modelPricing(),
+    pricing: (spec) => input.session().modelPricing(spec),
     onExhausted: ({ error: _error, ...refusal }) => { input.session().reportBudgetRefusal(refusal); },
   });
 
@@ -1739,8 +1739,8 @@ export class LocalAgentSession implements BackendHost {
     const historyLength = this.actorSession.history.length;
     const measured = measureCompactionTrigger(this.compactionState, cache.sessionKey, historyLength);
     // Awaited once per turn: the sync catalog reads answer from a static stand-in while the lookup is
-    // in flight, which measured a 1M-window model against 128k (#20).
-    const window = await this.modelCatalog.resolved();
+    // in flight, which measured a 1M-window model against 128k (#20). The fallbacks' rates price their steps.
+    const [window] = await Promise.all([this.modelCatalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks)]);
     const contextWindow = window.contextWindow;
 
     const liveTurn: ActorExecutionInput['chat'] = {
@@ -2437,8 +2437,8 @@ export class LocalAgentSession implements BackendHost {
   // Ports resolved at call time by `createLocalOrchestration`, which runs before this session exists.
 
   /** Same catalog session as the context window, so estimate and ledger read one rate. */
-  modelPricing(): ModelPricing | null {
-    return this.modelCatalog.pricing();
+  modelPricing(spec?: string): ModelPricing | null {
+    return this.modelCatalog.pricing(spec);
   }
 
   reportModelCall(report: ModelCallReport): void {

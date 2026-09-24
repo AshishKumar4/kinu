@@ -35,6 +35,8 @@ export interface StepLike {
   account?: CallAccount | undefined;
   /** The breakdown of the request this step sent. */
   context?: ContextComposition;
+  /** The fallback that served this step, by its spec; absent when the turn's own model did. */
+  fallback?: string | undefined;
 }
 
 /** ai-SDK v6 tool-result hook shape. */
@@ -190,7 +192,7 @@ export class TurnAccumulator {
     this.usage = addUsage(this.usage, usage);
 
     // Debit only a real report. `cacheRead`/`cacheWrite` are subsets of `input`.
-    if (reported) this.budget?.debit(usageTotal(usage) ?? 0, { calls: 1, usage });
+    if (reported) this.budget?.debit(usageTotal(usage) ?? 0, { calls: 1, usage, spec: ctx.fallback });
 
     this.noteLastRequest(ctx, usage);
 
@@ -234,10 +236,11 @@ export class TurnAccumulator {
 
     if (ctx.context) stepEvent.context = ctx.context;
 
-    // Priced with the same rate and arithmetic as the mission ledger; no rate means no `usd`.
+    // Priced with the same rate and arithmetic as the mission ledger: the rate of the model that served the step, and
+    // no rate means no `usd`.
     if (reported) {
       stepEvent.usage = usage;
-      const pricing = this.budget?.pricing() ?? null;
+      const pricing = this.budget?.pricing(ctx.fallback) ?? null;
       const price = pricing ? priceCall(usage, pricing) : undefined;
 
       if (price !== undefined) {

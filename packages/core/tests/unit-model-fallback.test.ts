@@ -102,7 +102,7 @@ describe('a failed call hands the turn down its fallback chain', () => {
     expect(events.find((event) => event.type === 'done')).toMatchObject({ text: 'from backup' });
   });
 
-  test('a model that keeps failing hands over after its retries, and the next model carries on from the kept steps', async () => {
+  test('a model that keeps failing hands over after its retries, and the next model carries on from the kept steps under its own name', async () => {
     const { events, threw, served } = await turn((model, seen) => {
       if (model === 'backup') return answer('done after the tool');
 
@@ -116,6 +116,9 @@ describe('a failed call hands the turn down its fallback chain', () => {
     expect(served.at(-1)?.body).toContain('ran: wc -l');
     expect(events.filter((event) => event.type === 'model-fallback')).toHaveLength(1);
     expect(events.find((event) => event.type === 'done')).toMatchObject({ text: 'done after the tool' });
+    // A step names the fallback that served it, and none when the turn's own model did.
+    expect(events.flatMap((event) => (event.type === 'step-finish' ? [{ fallback: event.fallback, modelId: event.modelId }] : [])))
+      .toEqual([{ fallback: undefined, modelId: 'primary' }, { fallback: 'openrouter/backup', modelId: 'backup' }]);
   });
 
   test('each failing model is announced in turn until one answers', async () => {

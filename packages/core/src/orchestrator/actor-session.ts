@@ -537,8 +537,8 @@ export class ActorSession {
             steps += 1;
             this.orchestrator.acc.recordStep({
               text: event.text, finishReason: event.finishReason, toolCalls: event.toolCalls, toolResults: event.toolResults,
-              response: { messages: event.responseMessages }, usage: event.usage, request: event.request,
-              context: event.context, account: event.account,
+              response: { messages: event.responseMessages, modelId: event.modelId }, usage: event.usage,
+              request: event.request, context: event.context, account: event.account, fallback: event.fallback,
             });
             break;
           case 'error': {

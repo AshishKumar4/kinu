@@ -299,8 +299,9 @@ export interface MissionGovernorDeps {
   actor: ActorHandle;
   /** Once per label, on its first refusal. */
   onExhausted?(refusal: MissionBudgetRefusal): void;
-  /** Read per debit, as the model can change between turns; null means the blended fallback. */
-  pricing?(): ModelPricing | null;
+  /** Read per debit, as the model can change between turns: `spec`'s rate, or the current model's when absent. Null
+   *  means the blended fallback. */
+  pricing?(spec?: string): ModelPricing | null;
   /** A property, not a method: held unbound. */
   now?: () => number;
 }
@@ -355,15 +356,16 @@ export class MissionGovernor {
     return null;
   }
 
-  /** Pass `usage` only for calls on the actor's current model; anything unpriceable is counted as blended. */
+  /** Pass `usage` only with the `spec` that served the call, or for the actor's current model; anything unpriceable
+   *  is counted as blended. */
   debit(tokens: number, opts?: {
-    labels?: readonly string[]; calls?: number; spawns?: number; usage?: Usage;
+    labels?: readonly string[]; calls?: number; spawns?: number; usage?: Usage; spec?: string;
   }): void {
     const labels = opts?.labels ?? this.active;
 
     if (labels.length === 0) return;
     const total = Math.max(0, Math.round(tokens));
-    const pricing = opts?.usage ? this.deps.pricing?.() ?? null : null;
+    const pricing = opts?.usage ? this.pricing(opts.spec) : null;
     const priced = pricing && opts?.usage ? priceCall(opts.usage, pricing) : undefined;
 
     const delta: MissionDebit = {
@@ -380,8 +382,8 @@ export class MissionGovernor {
   }
 
   /** The single pricing source for telemetry too. */
-  pricing(): ModelPricing | null {
-    return this.deps.pricing?.() ?? null;
+  pricing(spec?: string): ModelPricing | null {
+    return this.deps.pricing?.(spec) ?? null;
   }
 
   snapshot(label?: string): MissionBudgetSnapshot[] {

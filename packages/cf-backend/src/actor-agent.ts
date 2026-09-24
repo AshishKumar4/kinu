@@ -1899,7 +1899,7 @@ export abstract class ActorAgent extends Agent<Env> {
       actor: this.actorHandle(),
       storage: this.rt.storage,
       // Real USD from catalog rates; null until the lookup lands, then the ledger blends and says so.
-      pricing: () => this.modelCatalog.pricing(),
+      pricing: (spec) => this.modelCatalog.pricing(spec),
       onExhausted: ({ error: _error, ...refusal }) => {
         try {
           if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'budget_exhausted', ...refusal });
@@ -4275,7 +4275,8 @@ export abstract class ActorAgent extends Agent<Env> {
     this._turnDurableLength = rawMessages.length;
     // Must be awaited before submission: synchronous catalog reads return static stand-in values
     // while the lookup is in flight (#20).
-    const window = await this.modelCatalog.resolved();
+    // The fallbacks' rates price the steps they serve.
+    const [window] = await Promise.all([this.modelCatalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks)]);
     this._turnContextWindow = window.contextWindow;
     const measured = measureCompactionTrigger(this.compactionState, this.name, rawMessages.length);
 

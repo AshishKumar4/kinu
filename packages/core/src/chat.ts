@@ -71,6 +71,10 @@ export type ChatEvent =
     /** The breakdown of the request this step sent, taken when the SDK finished the step and before it
      *  prepares the next one: a reader that lags the model still records each step's own request. */
     context?: ContextComposition;
+    /** The fallback that served the step, by its spec; absent when the turn's own model did. */
+    fallback?: string;
+    /** The provider's own model id for the step, when it reported one. */
+    modelId?: string;
   }
   /** A failure the turn survived. `runChat` never yields this; the scaffold seam (scaffold/chat-transform.ts) does. */
   | { type: 'error'; message: string }
@@ -259,6 +263,8 @@ class ProviderCall {
    *  start (docs/research/harness/anthropic-sources.md §2). */
   private stepSentAt = Date.now();
 
+  constructor(private readonly fallback: string | undefined) {}
+
   requestStarting(): void {
     this.stepSentAt = Date.now();
   }
@@ -281,6 +287,7 @@ class ProviderCall {
     for (const part of step.content) if (part.type === 'tool-call') this.dispatchedCalls.delete(part.toolCallId);
     const usage = normalizeUsage(step.usage);
     const account = callAccountOf(step.response);
+    const { modelId } = step.response;
 
     this.pendingStepEvents.push({
       stepIndex, responseMessages: this.responseSoFar,
@@ -290,6 +297,8 @@ class ProviderCall {
       ...(usageReported(usage) && { usage }),
       ...(account !== undefined && { account }),
       ...(context && { context }),
+      ...(this.fallback !== undefined && { fallback: this.fallback }),
+      ...(modelId !== '' && { modelId }),
     });
   }
 
@@ -551,6 +560,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   };
 
   const chain = [...(opts.fallbacks ?? [])];
+  /** The fallback serving the turn, once one has taken it over. */
+  let servingFallback: string | undefined;
   let calls = 0;
 
   opts.meter?.openTurn({ system: cache.system, tools });
@@ -597,7 +608,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       { spec: current.spec },
     );
 
-    const call = new ProviderCall();
+    const call = new ProviderCall(servingFallback);
 
     const result = streamText({
       model: current.model,
@@ -722,6 +733,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     const bound = next.bind();
     current = { ...bound, spec: next.spec, providerOptions: mergeProviderOptions(cache.providerOptions, bound.providerOptions) };
+    servingFallback = next.spec;
 
     const rest = yield* callChain([...request, ...outcome.produced], stepOffset + outcome.steps.length);
 

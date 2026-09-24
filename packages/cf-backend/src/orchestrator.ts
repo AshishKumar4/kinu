@@ -494,7 +494,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       resolveProfile: (input) => this.hostedActorProfile(input),
       reportModelCall: (report) => { this.reportModelCall(report); },
       modelOperations: this.modelOperations,
-      pricing: () => this.modelCatalog.pricing(),
+      pricing: (spec) => this.modelCatalog.pricing(spec),
       broadcast: (actorId, event) => {
         // Stamped with the actor for the pane, and addressed to it so a subordinate's cards
         // stay off other sockets. An actor the directory no longer names has no pane.

@@ -7,7 +7,7 @@ import { initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { LanguageModel, ModelMessage } from 'ai';
+import { APICallError, type LanguageModel, type ModelMessage } from 'ai';
 import type { ToolExecutionOptions } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type {
@@ -4766,6 +4766,67 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const rows = session.getRunEvents(runId).filter((e) => e.type === 'model_call');
     expect(rows).toMatchObject([{ source: 'fast', spec: 'openai-compatible/house-model', usd: 2 }]);
     expect(session.getEffectiveModelSpec()).toBe('openai-compatible/house-model');
+    await session.end();
+  });
+
+  test('a step a fallback served is priced at that model\'s rate, in its row and in the mission it debits', async () => {
+    const { db, rt } = workspaceRuntime();
+
+    const refused = new TestLanguageModelV2({
+      provider: 'fake', modelId: 'house-model',
+      doStream: async () => {
+        throw new APICallError({
+          message: 'payment required', url: 'https://house.example/v1', requestBodyValues: {}, statusCode: 402, isRetryable: false,
+        });
+      },
+    });
+
+    const backup = fakeModel('from backup', { inputTokens: 1_000_000, outputTokens: 0, totalTokens: 1_000_000 });
+    const BACKUP = 'openai-compatible/backup-model';
+
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => {
+        const trimmed = spec?.trim() ?? '';
+
+        return trimmed === '' || trimmed === 'house-model' ? 'openai-compatible/house-model' : trimmed;
+      },
+      resolveModel: (spec) => (spec === BACKUP ? backup : refused),
+      listProviders: async () => [],
+      listModels: async () => ({ models: [], failures: [{ provider: 'openai-compatible', reason: 'offline' }] }),
+      // The backup costs ten times the turn's own model, so a step priced at the wrong rate is off by ten.
+      modelInfo: async (spec) => ({
+        id: spec ?? '', label: 'house', capabilities: ['tools', 'streaming'],
+        cost: spec === BACKUP ? { input: 20, output: 80 } : { input: 2, output: 8 },
+      }),
+      ...resolverRest,
+    };
+
+    const catalog = { roles: {}, tiers: { default: { model: 'house-model', fallbacks: [BACKUP] } } };
+
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
+    };
+
+    const events: SessionEvent[] = [];
+
+    const session = new LocalAgentSession({
+      rt, db, model: fakeModel('fallback'), modelResolver: resolver, profileAuthority: () => envelope,
+      onEvent: (event) => events.push(event), noAutoEvolve: true,
+    });
+
+    await waitFor(() => session.modelPricing() !== null);
+    session.budget.declare('q3', {});
+    const fireAt = Date.now() + 60_000;
+    await session.createTimerTrigger({ atMs: fireAt, label: 'nightly review', trust: 'owner', missionLabel: 'q3' });
+    await session.fireDueTriggers(fireAt);
+    await waitFor(() => events.some((event) => event.type === 'turn-end'));
+
+    const runId = session.listRuns().items[0].runId;
+    const rows = session.getRunEvents(runId);
+    expect(rows.filter((row) => row.type === 'model_fallback')).toMatchObject([{ from: 'openai-compatible/house-model', to: BACKUP }]);
+    expect(rows.filter((row) => row.type === 'step_finish'))
+      .toMatchObject([{ usage: { input: 1_000_000, output: 0 }, usd: 20, modelId: 'fake-model' }]);
+    expect(session.budget.snapshot('q3')[0]?.spent.usd).toBe(20);
     await session.end();
   });
 });
