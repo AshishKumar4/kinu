@@ -53,6 +53,8 @@ export interface ScriptedAnswer {
 export interface ScriptedRequest {
   /** Every user-role message's text, oldest first. */
   readonly userTexts: readonly string[];
+  /** The system messages' text: where a workspace's mission reaches its model. */
+  readonly system: string;
   /** Tool names already called in this conversation, in order. */
   readonly called: readonly string[];
   readonly available: readonly string[];
@@ -107,6 +109,7 @@ export function readScriptedRequest(body: string): ScriptedRequest {
 
   return {
     userTexts: messages.flatMap((message) => message.role === 'user' ? [message.content ?? ''] : []),
+    system: messages.flatMap((message) => message.role === 'system' ? [message.content ?? ''] : []).join('\n'),
     called: messages.flatMap((message) => (message.tool_calls ?? []).flatMap(
       (call) => call.function?.name === undefined ? [] : [call.function.name],
     )),
@@ -249,14 +252,8 @@ export const PACED_SILENCE_MS = 3_000;
 
 const PACED: ScriptedPace = { firstTokenMs: PACED_SILENCE_MS, lead: '\n\n', leadMs: PACED_SILENCE_MS };
 
-/**
- * A turn that streams the way a thinking model does: silence before the first token, a first token that opens
- * the answer's text with nothing to draw, silence, then a tool call; the next step the same before its closing
- * prose. Null for any request that did not ask for it, so it composes in front of another script.
- */
-export function pacedTurn(request: ScriptedRequest): ScriptedAnswer | null {
-  if (!request.userTexts.some((text) => text.includes(PACED_TURN_ASK))) return null;
-
+/** The paced steps: a tool call, then the closing prose, each behind the silences a thinking model leaves. */
+function pacedSteps(request: ScriptedRequest): ScriptedAnswer {
   if (!request.available.includes('file')) return { text: FALLBACK_ANSWER };
 
   if (!request.called.includes('file')) {
@@ -268,6 +265,23 @@ export function pacedTurn(request: ScriptedRequest): ScriptedAnswer | null {
   }
 
   return { pace: PACED, text: PACED_TURN_ANSWER };
+}
+
+/**
+ * A turn that streams the way a thinking model does: silence before the first token, a first token that opens
+ * the answer's text with nothing to draw, silence, then a tool call; the next step the same before its closing
+ * prose. Null for any request that did not ask for it, so it composes in front of another script.
+ */
+export function pacedTurn(request: ScriptedRequest): ScriptedAnswer | null {
+  return request.userTexts.some((text) => text.includes(PACED_TURN_ASK)) ? pacedSteps(request) : null;
+}
+
+/** A workspace created with this mission takes its first turn paced, long enough for its page to open during it. */
+export const PACED_FIRST_TURN_MISSION = 'Take the first turn slowly: a page opens while it runs.';
+
+/** The paced steps for every turn of a workspace made with {@link PACED_FIRST_TURN_MISSION}; its row runs only the first. */
+export function pacedFirstTurn(request: ScriptedRequest): ScriptedAnswer | null {
+  return request.system.includes(PACED_FIRST_TURN_MISSION) ? pacedSteps(request) : null;
 }
 
 /* ── The plan walkthrough ──────────────────────────────────────────────── */

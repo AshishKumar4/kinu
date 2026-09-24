@@ -71,20 +71,21 @@ function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
   );
 }
 
-// No stopped state: the runtime sends no stopped event, so not-working is only idle.
+// No stopped state: a turn nobody executes offers Recover in the composer, and nothing here says it runs.
 function TaskIndicator({ working, providerWait, waitingOnYou }: { working: boolean; providerWait: { provider: string; waitMs: number } | null; waitingOnYou: boolean }) {
-  let tone = { cls: "p-text-3 p-border p-fill", dot: "p-dot-neutral", word: "idle" };
+  let tone = { state: "idle", cls: "p-text-3 p-border p-fill", dot: "p-dot-neutral", word: "idle" };
 
   if (waitingOnYou) {
-    tone = { cls: "p-warning border p-border p-fill", dot: "p-dot-warning", word: "waiting on you" };
+    tone = { state: "waiting-on-you", cls: "p-warning border p-border p-fill", dot: "p-dot-warning", word: "waiting on you" };
   } else if (providerWait) {
-    tone = { cls: "text-[var(--c-accent)] border-[rgba(224,164,88,.28)] bg-[rgba(224,164,88,.1)]", dot: "p-dot-accent p-dot-pulse", word: `waiting on ${providerWait.provider} · ${Math.ceil(providerWait.waitMs / 1000)}s` };
+    tone = { state: "provider-wait", cls: "text-[var(--c-accent)] border-[rgba(224,164,88,.28)] bg-[rgba(224,164,88,.1)]", dot: "p-dot-accent p-dot-pulse", word: `waiting on ${providerWait.provider} · ${Math.ceil(providerWait.waitMs / 1000)}s` };
   } else if (working) {
-    tone = { cls: "text-[var(--c-accent)] border-[rgba(224,164,88,.28)] bg-[rgba(224,164,88,.1)]", dot: "p-dot-accent p-dot-pulse", word: "working" };
+    tone = { state: "working", cls: "text-[var(--c-accent)] border-[rgba(224,164,88,.28)] bg-[rgba(224,164,88,.1)]", dot: "p-dot-accent p-dot-pulse", word: "working" };
   }
 
   return (
     <span
+      data-task-state={tone.state}
       className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-[3px] text-[11.5px] font-medium ${tone.cls}`}
       title={providerWait ? `Retry in ${Math.ceil(providerWait.waitMs / 1000)}s` : undefined}
     >

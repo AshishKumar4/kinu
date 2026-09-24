@@ -59,7 +59,7 @@ import {
 import { getSandbox } from "@cloudflare/sandbox";
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
-import type { ActivitySnapshot, TabPresence, TurnClaimState } from "@kinu.run/core";
+import { TURN_CLAIM_FRAME, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from '@kinu.run/core';
@@ -4357,6 +4357,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
+  /** The root's tabs read the claim when they load, and hear it again here when a turn closes or is recovered. */
+  protected override turnClaimChanged(): void {
+    this.broadcastToActor(null, JSON.stringify({ type: TURN_CLAIM_FRAME, claim: this.turnClaimState() }));
+  }
+
   /**
    * Settle a claim nobody is executing, sealed `indeterminate` since its outcome is unknown,
    * and give any actor that still owes a wake one so the turn resumes.
@@ -4369,6 +4374,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (claim === null) return { recovered: 'none' };
     this.claims.settleRecovered(claim.turnId, claim.epoch, 'indeterminate');
+    this.turnClaimChanged();
     diagnostics.event('turn.claim_recovered', { turnId: claim.turnId, epoch: claim.epoch });
 
     if (!this.owedWorkExists()) return { recovered: 'sealed' };

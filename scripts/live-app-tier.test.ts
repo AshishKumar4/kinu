@@ -35,9 +35,9 @@ import {
   type ControlAttempt,
 } from './product-flows';
 import {
-  FALLBACK_ANSWER, KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_SILENCE_MS, PACED_TURN_ANSWER, PACED_TURN_ASK,
-  SCRIPTED_MODEL_SPEC, SLATE_TITLE,
-  keptTabProbe, pacedTurn, planWalkthrough, registerScriptedModel, startScriptedModel,
+  FALLBACK_ANSWER, KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_SILENCE_MS, PACED_TURN_ANSWER,
+  PACED_TURN_ASK, SCRIPTED_MODEL_SPEC, SLATE_TITLE,
+  keptTabProbe, pacedFirstTurn, pacedTurn, planWalkthrough, registerScriptedModel, startScriptedModel,
 } from './scripted-model';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
 
@@ -204,6 +204,19 @@ interface LiveIndicatorVerdict {
   readonly doubled: number;
 }
 
+/** What a page opened during a turn drew once that turn had ended (#29): every new workspace's page opens on its
+ *  first turn. */
+interface OpenedMidTurnVerdict {
+  /** Stop was offered while the turn ran: the page did open during it. */
+  readonly openedLive: boolean;
+  /** The last sample, taken after the turn's done frame and two of the page's own refreshes past it. */
+  readonly stop: boolean;
+  readonly states: number;
+  /** Samples where the header and the composer disagreed on whether a turn runs: Stop beside an idle header, or a
+   *  working header with no Stop. The header's other words (waiting on you, on a provider) outrank both. */
+  readonly disagreed: number;
+}
+
 interface PanelVerdict {
   readonly nodeSurvives: boolean;
   readonly scrollSurvives: boolean;
@@ -276,6 +289,7 @@ interface KeptTabVerdict {
 interface TierVerdicts {
   bootFailure: string | null;
   liveIndicator: LiveIndicatorVerdict | null;
+  openedMidTurn: OpenedMidTurnVerdict | null;
   panel: PanelVerdict | null;
   planTabs: PlanTabsVerdict | null;
   geometry: GeometryVerdict | null;
@@ -293,7 +307,7 @@ const StripGeometrySchema = v.object({
 });
 
 const observed: TierVerdicts = {
-  liveIndicator: null,
+  liveIndicator: null, openedMidTurn: null,
   bootFailure: null, panel: null, planTabs: null, geometry: null,
   controls: null, stamped: null, walkthrough: null, keptTab: null, state: null,
 };
@@ -367,11 +381,11 @@ const RAIL_SHUT_PX = 64;
 
 const SHUT_NAMES = 'hide|collapse|close';
 
-/** Every 20 ms from install: whether the chat column offers Stop, and how many live states it draws. A Thinking
- *  row, a live reasoning label, a caret on text that shows, and running call rows (one state however many run)
- *  are live states; a hook on an element that draws nothing is none. Held on `window` until read back. On the
- *  page's own clock: the defect is what the pane draws through a real silence on the model's socket, which no
- *  fake clock reaches. */
+/** Every 20 ms from install: whether the chat column offers Stop, how many live states it draws, and the header's
+ *  task word. A Thinking row, a live reasoning label, a caret on text that shows, and running call rows (one state
+ *  however many run) are live states; a hook on an element that draws nothing is none. Held on `window` until read
+ *  back. On the page's own clock: the defect is what the pane draws through a real silence on the model's socket,
+ *  which no fake clock reaches. */
 const INSTALL_LIVE_SAMPLER = `(() => {
   const samples = [];
   const started = performance.now();
@@ -387,13 +401,14 @@ const INSTALL_LIVE_SAMPLER = `(() => {
       t: Math.round(performance.now() - started),
       stop: [...chat.querySelectorAll('button[aria-label="Stop this turn"]')].some(shown),
       states: drawn('thinking').length + drawn('reasoning').length + carets + running,
+      task: document.querySelector('[data-task-state]')?.getAttribute('data-task-state') ?? null,
     });
   }, 20);
 })()`;
 
 const READ_LIVE_SAMPLES = `(() => { clearInterval(window.__liveSampler); return window.__liveSamples; })()`;
 
-const LiveSampleSchema = v.object({ t: v.number(), stop: v.boolean(), states: v.number() });
+const LiveSampleSchema = v.object({ t: v.number(), stop: v.boolean(), states: v.number(), task: v.nullable(v.string()) });
 
 const STOP_OFFERED = `document.querySelector('#chat button[aria-label="Stop this turn"]') !== null`;
 
@@ -925,6 +940,70 @@ async function watchWorkPresence(page: Page): Promise<PresenceWatch> {
   };
 }
 
+const ChatResponseFrameSchema = v.looseObject({ type: v.literal('cf_agent_use_chat_response'), done: v.optional(v.boolean()) });
+
+/** Settles once the socket has carried a turn's done frame and the page has asked for its live data twice since:
+ *  a bound in the page's own events on how long a page could still be catching up with the turn's end. */
+async function watchTurnEnd(page: Page): Promise<{ readonly ended: Promise<void>; stop(): Promise<void> }> {
+  const cdp = await page.createCDPSession();
+
+  await cdp.send('Network.enable');
+
+  const { promise, resolve } = Promise.withResolvers<void>();
+  let done = false;
+  let refreshes = 0;
+
+  cdp.on('Network.webSocketFrameReceived', (event: { response?: { payloadData?: string } }) => {
+    const frame = v.safeParse(ChatResponseFrameSchema, tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input'));
+
+    if (frame.success && frame.output.done === true) done = true;
+  });
+  cdp.on('Network.webSocketFrameSent', (event: { response?: { payloadData?: string } }) => {
+    const ask = v.safeParse(RpcAskSchema, tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input'));
+
+    if (!done || !ask.success || ask.output.method !== 'getMemoryContent') return;
+    refreshes += 1;
+
+    if (refreshes === 2) resolve();
+  });
+
+  return { ended: promise, stop: async () => { await cdp.detach(); } };
+}
+
+/** The header and the composer disagree: one says a turn runs and the other says nothing does. */
+const disagrees = (sample: v.InferOutput<typeof LiveSampleSchema>): boolean =>
+  (sample.stop && sample.task === 'idle') || (!sample.stop && sample.task === 'working');
+
+/** Row 9 (#29): a workspace created with a mission starts its first turn before its page opens, so the page
+ *  loads a claim that is admitted. When the turn ends, nothing on that page may still say it runs. */
+async function measureOpenedMidTurn(newPage: LiveApp['newPage'], origin: string): Promise<OpenedMidTurnVerdict> {
+  const workspace = await createWorkspace(
+    origin, { name: `live-row-mid-turn-${RUN_ID}`, purpose: PACED_FIRST_TURN_MISSION, model: SCRIPTED_MODEL_SPEC });
+
+  const page = await newPage();
+
+  await page.setViewport(DESKTOP);
+  const turn = await watchTurnEnd(page);
+  await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
+  await page.waitForFunction(`document.querySelector('textarea') !== null`, { polling: 100 });
+  await page.evaluate(INSTALL_LIVE_SAMPLER);
+  await turn.ended;
+
+  const samples = v.parse(v.array(LiveSampleSchema), await page.evaluate(READ_LIVE_SAMPLES));
+  const last = samples.at(-1);
+
+  await shoot(page, 'opened-mid-turn-ended');
+  await turn.stop();
+  await page.close();
+
+  if (last === undefined) throw new Error('the chat column was never sampled');
+
+  return {
+    openedLive: samples.some((sample) => sample.stop), stop: last.stop, states: last.states,
+    disagreed: samples.filter(disagrees).length,
+  };
+}
+
 /** How many times the chat column shows the scripted model's fallback answer. */
 const FALLBACK_SHOWN = `((document.querySelector('#chat')?.textContent ?? '').split(${JSON.stringify(FALLBACK_ANSWER)}).length - 1)`;
 
@@ -987,11 +1066,12 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 async function run(): Promise<void> {
   const progress = (row: string): void => { process.stderr.write(`live-app-tier: ${row}\n`); };
 
-  // The script answers the live-indicator row's paced turn, the kept-tab
-  // row's two asks, every row's throwaway turn with prose and the
-  // walkthrough's turns with the plan and the slate — one server, decided per
-  // request.
-  const model = await startScriptedModel((request) => pacedTurn(request) ?? keptTabProbe(request) ?? planWalkthrough(request));
+  // The script answers the live-indicator row's paced turn, the paced first
+  // turn of the mid-turn row, the kept-tab row's two asks, every row's
+  // throwaway turn with prose and the walkthrough's turns with the plan and
+  // the slate — one server, decided per request.
+  const model = await startScriptedModel((request) => pacedTurn(request) ?? pacedFirstTurn(request)
+    ?? keptTabProbe(request) ?? planWalkthrough(request));
 
   await withLiveApp(async (app) => {
     const { newPage, origin } = app;
@@ -999,6 +1079,8 @@ async function run(): Promise<void> {
     await registerScriptedModel(origin, model.port);
     observed.liveIndicator = await measureLiveIndicator(newPage, origin);
     progress('live-indicator done');
+    observed.openedMidTurn = await measureOpenedMidTurn(newPage, origin);
+    progress('opened-mid-turn done');
     progress('panel start');
     observed.panel = await measurePanel(newPage, origin);
     progress('panel done');
@@ -1076,6 +1158,22 @@ describe('a running turn draws exactly one live state', () => {
 
   test('Thinking never stands beside a part that draws itself live', () => {
     expect(verdictOf(observed.liveIndicator, 'live-indicator').doubled).toBe(0);
+  });
+});
+
+describe('a page opened during a turn stops showing it once the turn ends', () => {
+  test('the page opened while the turn ran', () => {
+    expect(verdictOf(observed.openedMidTurn, 'opened-mid-turn').openedLive).toBe(true);
+  });
+
+  test('the composer offers no Stop and the thread draws no live state', () => {
+    const ended = verdictOf(observed.openedMidTurn, 'opened-mid-turn');
+
+    expect({ stop: ended.stop, states: ended.states }).toEqual({ stop: false, states: 0 });
+  });
+
+  test('the header and the composer never disagree on whether a turn runs', () => {
+    expect(verdictOf(observed.openedMidTurn, 'opened-mid-turn').disagreed).toBe(0);
   });
 });
 
