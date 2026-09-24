@@ -1,4 +1,5 @@
 import { basename } from 'node:path';
+import { redact } from './redact';
 import { parseResults, trials, type Assertion } from './results';
 import { HARNESS_ERRORS } from './task';
 
@@ -293,23 +294,6 @@ export function compareEvalResults(baselineText: string | null, candidateText: s
 }
 
 // ── The results comment ─────────────────────────────────────────────
-
-/**
- * The repository is public, so text a trial produced is scrubbed before it is posted: preview
- * hosts carry a capability, and a tool error can echo a header.
- */
-const SECRETS: readonly (readonly [RegExp, string])[] = [
-  [/\b[a-z0-9]+(?:-[a-z0-9]+){2,}\.kinu\.run\b/gi, '<preview>.kinu.run'],
-  [/\bBearer\s+[\w.~+/=-]+/g, 'Bearer <redacted>'],
-  [/\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}/g, '<jwt>'],
-  [/\b(?:sk|pk|ptc|kinu|ghp|gho|github_pat)_[\w-]{12,}/g, '<token>'],
-  [/\b[0-9a-f]{32,}\b/gi, '<hex>'],
-  [/\b[\w-]{40,}\b/g, '<opaque>'],
-];
-
-export function redact(text: string): string {
-  return SECRETS.reduce((scrubbed, [pattern, replacement]) => scrubbed.replace(pattern, replacement), text);
-}
 
 /** A typographic minus for a fall, a plus for a rise, nothing for no change. */
 function sign(value: number): string {

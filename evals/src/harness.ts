@@ -7,6 +7,7 @@ import { ARMS, deployedBuild, openWorkspace, type EvalArm, type EvalTarget } fro
 import type {
   EvalCheck, EvalRunInput, EvalRunOutput, EvalTask, EvalTurn, EvalTurnOutcome, EvalTurnResult, HarnessError,
 } from './task';
+import { redact } from './redact';
 import { measure, toTranscript } from './transcript';
 import { EvalVerifier } from './verifier';
 
@@ -154,7 +155,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         const after = await deployedBuild(target);
 
         if (after !== productSha) {
-          errors.push({ name: 'EvalBuildChanged', message: `the deployment served ${productSha} then ${after} during the trial` });
+          errors.push({ name: 'EvalBuildChanged', message: `the deployment served ${productSha.slice(0, 12)} then ${after.slice(0, 12)} during the trial` });
         }
       } catch (error) {
         errors.push({ name: 'InfraError', message: renderThrownChain({ cause: error }) });
@@ -180,6 +181,9 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         transcript.push({ type: 'message', role: 'user', content: task.turns[0].prompt, metadata: { attempted: false } });
       }
 
+      // Error text can quote a URL or a header; it is scrubbed like the transcript before it is stored.
+      const scrubbed = errors.map((error) => ({ name: error.name, message: redact(error.message) }));
+
       const result = {
         output: { success, turns, metrics: { modelTurns: metrics.modelTurns, toolCalls: metrics.toolCalls, toolErrors: metrics.toolErrors } },
         events: transcript,
@@ -188,15 +192,15 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
           inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens,
           metadata: usageMetadata,
         },
-        errors,
+        errors: scrubbed,
         metadata: {
           taskId: task.id, taskVersion: identity.taskVersion, evalCommit: identity.evalCommit, productSha,
           arm: input.arm, trial: input.trial, origin: target.origin, workspace: session?.workspace ?? null,
         },
       };
 
-      if (errors.length > 0) {
-        const failure = new Error(errors.map((error) => `${error.name}: ${error.message}`).join('\n'));
+      if (scrubbed.length > 0) {
+        const failure = new Error(scrubbed.map((error) => `${error.name}: ${error.message}`).join('\n'));
         throw attachHarnessRunToError(failure, normalizeHarnessRun(input, result));
       }
 

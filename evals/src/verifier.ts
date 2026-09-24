@@ -1,6 +1,7 @@
 import * as v from 'valibot';
 import { JsonValueSchema, projectJsonValue, type JsonValue } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
+import { redact } from './redact';
 import type { EvalCheck } from './task';
 
 /** Thrown errors are cut here in the report; a stack trace is not evidence. */
@@ -160,7 +161,7 @@ export class EvalVerifier {
       await verify(this);
     } catch (error) {
       // A throw outside any check is the checker's own failure; it fails the turn and says why.
-      this.#checks.push({ id: THREW, pass: false, evidence: truncate(renderThrownChain({ cause: error })) });
+      this.#checks.push({ id: THREW, pass: false, evidence: truncate(redact(renderThrownChain({ cause: error }))) });
     }
 
     await Promise.all(this.#pending);
@@ -177,7 +178,7 @@ export class EvalVerifier {
         : { id, pass: outcome.pass, evidence: projectJsonValue({ value: outcome.evidence }) };
     } catch (error) {
       // The failure is the check's result: its error is recorded as the evidence.
-      this.#checks[index] = { id, pass: false, evidence: truncate(renderThrownChain({ cause: error })) };
+      this.#checks[index] = { id, pass: false, evidence: truncate(redact(renderThrownChain({ cause: error }))) };
     }
   }
 }

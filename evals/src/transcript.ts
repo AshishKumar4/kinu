@@ -1,6 +1,7 @@
 import * as v from 'valibot';
 import { decodeModelMessageValues, JsonValueSchema, projectJsonValue, type RunEvent } from '@kinu.run/core';
 import type { TranscriptEvent } from 'vitest-evals';
+import { redact, redactJson } from './redact';
 import type { EvalMetrics } from './task';
 
 type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
@@ -38,31 +39,31 @@ export function toTranscript(events: readonly RunEvent[]): TranscriptEvent[] {
 
     if (event.type === 'run_start') {
       const content = event.userMessage ?? `(the workspace started a run: ${event.caused_by ?? 'programmatic'})`;
-      transcript.push({ type: 'message', role: 'user', content, metadata });
+      transcript.push({ type: 'message', role: 'user', content: redact(content), metadata });
     } else if (event.type === 'tool_call_end') {
       calls.push(event);
     } else if (event.type === 'step_finish') {
       const text = stepText(event);
 
-      if (text !== '') transcript.push({ type: 'message', role: 'assistant', content: text, metadata });
+      if (text !== '') transcript.push({ type: 'message', role: 'assistant', content: redact(text), metadata });
 
       for (const call of calls) {
-        const args = v.safeParse(ArgumentsSchema, projectJsonValue({ value: call.args ?? {} }));
+        const args = v.safeParse(ArgumentsSchema, redactJson(projectJsonValue({ value: call.args ?? {} })));
         const invoked: TranscriptEvent = { type: 'tool_call', id: call.toolCallId, name: call.name, metadata };
 
         if (args.success) invoked.arguments = args.output;
         transcript.push(invoked);
         transcript.push(failed(call)
           ? { type: 'tool_result', toolCallId: call.toolCallId, name: call.name, metadata,
-              error: { type: 'ToolError', message: call.error ?? JSON.stringify(call.result ?? null) } }
+              error: { type: 'ToolError', message: redact(call.error ?? JSON.stringify(call.result ?? null)) } }
           : { type: 'tool_result', toolCallId: call.toolCallId, name: call.name, metadata,
-              content: projectJsonValue({ value: call.result ?? null }) });
+              content: redactJson(projectJsonValue({ value: call.result ?? null })) });
       }
 
       calls = [];
     } else if (event.type === 'run_end' && event.reason !== 'completed') {
       const content = `(the run ended: ${event.reason ?? 'no reason'}${event.error === undefined ? '' : ` — ${event.error}`})`;
-      transcript.push({ type: 'message', role: 'system', content, metadata });
+      transcript.push({ type: 'message', role: 'system', content: redact(content), metadata });
     }
   }
 

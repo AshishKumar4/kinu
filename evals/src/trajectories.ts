@@ -4,7 +4,7 @@
 import { basename } from 'node:path';
 import * as v from 'valibot';
 import type { JsonValue } from '@kinu.run/core';
-import { redact } from './comparison';
+import { redact } from './redact';
 import { parseResults, trials, type Assertion, type TranscriptEntry } from './results';
 
 const LINE_LIMIT = 1_900;

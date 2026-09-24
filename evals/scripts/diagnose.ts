@@ -6,7 +6,7 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { DEFAULT_MODEL } from '../src/config';
-import { redact } from '../src/comparison';
+import { redact } from '../src/redact';
 import { repliesTo, settle } from '../src/harness';
 import { openWorkspace, resolveEvalTarget } from '../src/target';
 import { renderTrajectories } from '../src/trajectories';

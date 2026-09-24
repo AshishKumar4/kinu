@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { compareEvalResults, fisherExact, redact, renderEvalComparison, validateEvalResults } from './comparison';
+import { compareEvalResults, fisherExact, renderEvalComparison, validateEvalResults } from './comparison';
+import { redact } from './redact';
 
 type Trial = { pass: boolean; infra?: boolean; productSha?: string; taskVersion?: string; failed?: string };
 
