@@ -67,6 +67,11 @@ export function PreviewTabsGallery() {
 
     if (method === 'previewSlate') return reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, inline: { height: 240 } } });
     else if (method === 'getExecutorDiff') return reply({ mode: 'vfs-baseline', files: diff ? [{ path: 'src/app.ts', status: 'changed', added: 1, removed: 0, lines: [{ kind: 'add', text: 'export const ready = true;' }] }] : [] });
+    else if (method === 'resetWorkspaceBaseline' || method === 'restoreWorkspaceBaseline') {
+      setDiff(method === 'restoreWorkspaceBaseline');
+
+      return reply({ ok: true, files: 0, capturedAt: 0 });
+    }
     else if (method === 'listWorkspaceWork') {
       // The courier plan is already listed, so the arrival hint is the auto-open trigger, not a discovery read.
       if (failHistory) throw new Error('Plan history temporarily unavailable');

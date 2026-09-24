@@ -656,7 +656,7 @@ function Scene({ params }: { params: URLSearchParams }) {
       <TabStrip label="Changes" count={reviewedAt !== null || shown?.error !== undefined ? null : shown?.files.length ?? null} />
       <div className="min-h-0 flex-1">
           <ChangesPanel sets={sets} source={source} onSource={setSource} now={NOW} file={sheet === null ? params.get("file") : null}
-            menuOpen={params.get("menu") === "source"} reviewedAt={reviewedAt} onReviewed={() => setReviewedAt(NOW)}
+            menuOpen={params.get("menu") === "source"} reviewedAt={reviewedAt} onReviewed={() => setReviewedAt(NOW)} onUndo={() => setReviewedAt(null)}
             onExpand={(file) => setSheet({ file, notes: false })} onOpenInFiles={shown?.mode === "vfs-baseline" ? () => {} : null}
             onShowNotes={() => setSheet({ file: null, notes: true })} onSend={send} />
       </div>

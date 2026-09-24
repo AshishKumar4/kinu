@@ -95,6 +95,7 @@ export interface PanelProps {
   readonly menuOpen?: boolean;
   readonly reviewedAt: number | null;
   readonly onReviewed: () => void;
+  readonly onUndo?: (() => void) | null;
   readonly onExpand: ((file: string | null) => void) | null;
   /** Null where the Files tab cannot open the source's paths: a machine's git checkout. */
   readonly onOpenInFiles: ((path: string) => void) | null;
@@ -181,7 +182,7 @@ function FileHeader({ files, at, onGo, onExpand }: {
   );
 }
 
-export function ChangesPanel({ sets, source, onSource, now, file: initialFile = null, menuOpen = false, reviewedAt, onReviewed, onExpand, onOpenInFiles, onShowNotes, onSend }: PanelProps) {
+export function ChangesPanel({ sets, source, onSource, now, file: initialFile = null, menuOpen = false, reviewedAt, onReviewed, onUndo = null, onExpand, onOpenInFiles, onShowNotes, onSend }: PanelProps) {
   const [path, setPath] = useState<string | null>(initialFile);
   const set = sets.find((each) => each.source === source) ?? sets[0];
   const files = useMemo(() => inReadingOrder(set?.files ?? []), [set]);
@@ -213,7 +214,10 @@ export function ChangesPanel({ sets, source, onSource, now, file: initialFile = 
   if (reviewedAt !== null) {
     return (
       <div className="px-4 py-4" data-changes="reviewed">
-        <p className="flex items-center gap-2 p-row-text font-medium p-text"><CheckCircleIcon size={15} weight="fill" className="p-success" />Reviewed at {sinceLabel(reviewedAt, now)}</p>
+        <p className="flex items-center gap-2 p-row-text font-medium p-text">
+          <CheckCircleIcon size={15} weight="fill" className="p-success" />Reviewed at {sinceLabel(reviewedAt, now)}
+          {onUndo !== null && <button type="button" onClick={onUndo} data-undo-reviewed className="ml-auto p-meta font-normal p-accent-fg hover:underline">Undo</button>}
+        </p>
         <p className="mt-1 pl-[23px] p-meta p-text-3">New changes show here as they happen.</p>
       </div>
     );

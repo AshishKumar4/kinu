@@ -10,6 +10,7 @@ import {
   getWorkspaceDiff,
   initWorkspaceBaselineTable,
   resetWorkspaceBaseline,
+  restoreWorkspaceBaseline,
 } from '../src/read-models/workspace-diff';
 import type { ExecutorProvider, ExecutionRouter } from '../src/execution/types';
 import type { SqlValue } from '../src/types/primitives';
@@ -270,6 +271,45 @@ describe('workspace diff lifecycle', () => {
     expect(rows.filter((r) => r.path === 'bad.txt')).toEqual([]);
     expect(rows.filter((r) => r.active === 0)).toEqual([]);
     expect(rows.find((r) => r.path === 'old.txt')).toMatchObject({ content: 'old', active: 1 });
+  });
+
+  test('Mark reviewed can be undone once: the changes it cleared come back, measured from the earlier review', async () => {
+    const { rt } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    const earlier = await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+    await resetWorkspaceBaseline(rt);
+
+    expect((await getWorkspaceDiff(rt)).files).toEqual([]);
+    expect(restoreWorkspaceBaseline(rt)).toEqual({ ok: true, capturedAt: earlier.capturedAt });
+
+    const restored = await getWorkspaceDiff(rt);
+
+    expect(restored.files.map((file) => `${file.status} ${file.path}`)).toEqual(['added notes.md']);
+    expect(restored.trackedSince).toBe(earlier.capturedAt);
+    expect(restoreWorkspaceBaseline(rt)).toMatchObject({ ok: false });
+  });
+
+  test('a review that fails leaves the one before it undoable, and keeps no older generation', async () => {
+    const { rt, db } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await rt.storage.vfs.writeFile('old.txt', 'old');
+    await resetWorkspaceBaseline(rt);
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('between.txt', 'between');
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('bad.txt', 'bad');
+    db.exec(`CREATE TRIGGER reject_bad_baseline BEFORE INSERT ON vfs_baseline_manifest
+      WHEN NEW.path = 'bad.txt' BEGIN SELECT RAISE(FAIL, 'forced baseline failure'); END`);
+
+    await expect(resetWorkspaceBaseline(rt)).rejects.toThrow('forced baseline failure');
+
+    const generations = db.query<{ generations: number }, []>('SELECT COUNT(DISTINCT generation) AS generations FROM vfs_baseline_manifest').get();
+
+    expect(generations).toEqual({ generations: 2 });
+    expect(restoreWorkspaceBaseline(rt)).toMatchObject({ ok: true });
+    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['added bad.txt', 'added between.txt']);
+    expect(restoreWorkspaceBaseline(rt)).toMatchObject({ ok: false });
   });
 
   test('a directory traversal failure is surfaced instead of becoming an empty diff', async () => {

@@ -31,7 +31,10 @@ const NOT_GIT_REPO = '__KINU_NOT_GIT_REPO__';
 /** The capture marker's `size`: 1 once binary files are in the manifest (hash null), so a new one can be told apart. */
 const MANIFEST_FORMAT = 1;
 
-/** A body is stored once per hash; `hash` is null for a binary file or one past one row. */
+/**
+ * A body is stored once per hash; `hash` is null for a binary file or one past one row. On the '' marker row, `hash`
+ * names the generation this one replaced, which is kept so a Mark reviewed can be undone.
+ */
 export function initWorkspaceBaselineTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline_manifest (
     actor_id   TEXT NOT NULL,
@@ -243,6 +246,16 @@ export async function getWorkspaceDiff(rt: AgentRuntime): Promise<WorkspaceDiffR
   return { files, trackedSince };
 }
 
+/** Drops every generation but the active one and the one it replaced, then the bodies nothing names. */
+function pruneBaselines(rt: AgentRuntime): void {
+  const actorId = rt.actor.actorId;
+
+  void rt.storage.sql`DELETE FROM vfs_baseline_manifest WHERE actor_id = ${actorId} AND active = 0
+    AND generation IS NOT (SELECT hash FROM vfs_baseline_manifest WHERE actor_id = ${actorId} AND active = 1 AND path = '')`;
+  void rt.storage.sql`DELETE FROM vfs_baseline_blob
+    WHERE hash NOT IN (SELECT hash FROM vfs_baseline_manifest WHERE hash IS NOT NULL AND path <> '')`;
+}
+
 /**
  * Mark the current workspace as the baseline. Rows go under an inactive generation, then one statement flips it
  * active, so no read sees a partial replacement. An unmoved file keeps its hash without being read.
@@ -252,6 +265,10 @@ export async function resetWorkspaceBaseline(
 ): Promise<{ ok: true; files: number; capturedAt: number }> {
   const previous = activeManifest(rt).entries;
   const actorId = rt.actor.actorId;
+
+  const replaced = rt.storage.sql<{ generation: string }>`SELECT generation FROM vfs_baseline_manifest
+    WHERE actor_id = ${actorId} AND active = 1 AND path = '' LIMIT 1`[0]?.generation ?? null;
+
   const generation = nanoid();
   const capturedAt = Date.now();
   let files = 0;
@@ -259,7 +276,7 @@ export async function resetWorkspaceBaseline(
   try {
     // The marker makes an intentionally empty snapshot representable.
     void rt.storage.sql`INSERT INTO vfs_baseline_manifest (actor_id, generation, path, size, mtime_ms, hash, active)
-      VALUES (${actorId}, ${generation}, ${''}, ${MANIFEST_FORMAT}, ${capturedAt}, ${null}, ${0})`;
+      VALUES (${actorId}, ${generation}, ${''}, ${MANIFEST_FORMAT}, ${capturedAt}, ${replaced}, ${0})`;
     await walkWorkspaceFiles(rt, async (path, st) => {
       const kept = previous.get(path);
       let hash: string | null = null;
@@ -283,13 +300,31 @@ export async function resetWorkspaceBaseline(
       SET active = CASE WHEN generation = ${generation} THEN 1 ELSE 0 END
       WHERE actor_id = ${actorId}`;
   } finally {
-    // Inactive rows are either replaced generations or this failed partial write; the error propagates.
-    void rt.storage.sql`DELETE FROM vfs_baseline_manifest WHERE actor_id = ${actorId} AND active = 0`;
-    void rt.storage.sql`DELETE FROM vfs_baseline_blob
-      WHERE hash NOT IN (SELECT hash FROM vfs_baseline_manifest WHERE hash IS NOT NULL)`;
+    // A failed partial write goes with the older generations; the error propagates.
+    pruneBaselines(rt);
   }
 
   return { ok: true, files, capturedAt };
+}
+
+/** Undoes the last Mark reviewed: the generation it replaced is the baseline again. */
+export function restoreWorkspaceBaseline(rt: AgentRuntime): { ok: true; capturedAt: number } | { ok: false; error: string } {
+  rt.actor.assertCurrent();
+  const actorId = rt.actor.actorId;
+
+  const replaced = rt.storage.sql<{ hash: string | null }>`SELECT hash FROM vfs_baseline_manifest
+    WHERE actor_id = ${actorId} AND active = 1 AND path = '' LIMIT 1`[0]?.hash ?? null;
+
+  const marker = replaced === null ? undefined : rt.storage.sql<{ mtime_ms: number }>`SELECT mtime_ms FROM vfs_baseline_manifest
+    WHERE actor_id = ${actorId} AND generation = ${replaced} AND path = '' LIMIT 1`[0];
+
+  if (replaced === null || marker === undefined) return { ok: false, error: 'There is no earlier review to go back to.' };
+  void rt.storage.sql`UPDATE vfs_baseline_manifest
+    SET active = CASE WHEN generation = ${replaced} THEN 1 ELSE 0 END
+    WHERE actor_id = ${actorId}`;
+  pruneBaselines(rt);
+
+  return { ok: true, capturedAt: marker.mtime_ms };
 }
 
 /** Tracked, staged and untracked changes without writing the index: `git diff --no-index` avoids
