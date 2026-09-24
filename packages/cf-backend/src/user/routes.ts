@@ -9,6 +9,7 @@ import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
 import { listAvailableModels, listProviderCatalog } from './available-models';
+import { readUserAccountUsage } from './account-usage';
 import {
   handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged, type CreateWorkspaceEnv,
 } from './workspace-access';
@@ -413,6 +414,10 @@ async function handleModelRoutes<Id>(route: UserRouteContext<Id>): Promise<Respo
 
   if (path === '/models' && method === 'GET') {
     return json({ body: await listAvailableModels(env, identity.userId, await ownerCaller(env)) });
+  }
+
+  if (path === '/usage' && method === 'GET') {
+    return json({ body: await readUserAccountUsage(env, stub, await ownerCaller(env)) });
   }
 
   return null;

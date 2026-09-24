@@ -20,6 +20,7 @@ import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { CliInstallCard } from "@/components/account/CliInstallCard";
 import { DeleteAccountCard } from "@/components/account/DeleteAccountCard";
 import { DevicesCard } from "@/components/devices/DevicesCard";
+import { AccountUsageCard } from "@/components/account/AccountUsageCard";
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 function ProfileNameEditor({ profile, onSaved }: {
@@ -144,6 +145,8 @@ export default function UserSettingsPage() {
         )}
 
         {section === "models" && <ProfileCatalogSettings />}
+
+        {section === "usage" && <AccountUsageCard />}
             </div>
           </div>
         </div>

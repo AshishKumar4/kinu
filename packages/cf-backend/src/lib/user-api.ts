@@ -1,7 +1,7 @@
 /** Typed client for `/api/user/*`; the session rides the HttpOnly cookie (dev synthesizes DEV_USER_EMAIL server-side). */
 import {
   DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
-  ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
+  AccountUsageSchema, ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
   type Credential,
   type DeviceSandboxStatus,
   type DeviceTier,
@@ -313,6 +313,8 @@ export const disconnectCodex  = () => api(OkSchema, 'DELETE', '/codex')
   .then((r) => { invalidateModelsCache();
 
  return r; });
+
+export const getAccountUsage = () => api(AccountUsageSchema, 'GET', '/usage');
 
 export const getProfileCatalog = (): Promise<ProfileCatalogEnvelope> =>
   api(ProfileCatalogEnvelopeSchema, 'GET', '/profile-catalog');

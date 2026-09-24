@@ -13,6 +13,7 @@ import { storedUsage } from '../heads/journal';
 import type { StoredHeadUsage } from '../heads/schema';
 import { listMissionSpend, type MissionBudgetSnapshot } from '../mission-budget';
 import type { ActorHandle } from '../identity/actor-handle';
+import { sortAccountSpend } from './account-usage';
 
 export interface ProducerSpend extends SpendTally {
   readonly source: SpendSource;
@@ -165,8 +166,7 @@ export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
       ? null
       : (measuredTokens - turnTokens) / measuredTokens,
     missions: listMissionSpend(deps.sql, deps.actor),
-    accounts: deps.events.spendByAccount().sort((a, b) => (a.provider === null ? 1 : 0) - (b.provider === null ? 1 : 0)
-      || (usageTotal(b.usage) ?? -1) - (usageTotal(a.usage) ?? -1)),
+    accounts: sortAccountSpend(deps.events.spendByAccount()),
   };
 }
 

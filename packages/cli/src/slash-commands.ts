@@ -6,6 +6,7 @@ import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentRefinemen
 import type { InstructionSourceRow } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { loadActiveProfile, updateDefaultAccount } from './default-model';
+import { readAllAccountUsage } from './account-usage';
 import { plural, renderAccountSpendLines, renderSearchTreeLines } from './display';
 
 export interface SlashCommandInfo {
@@ -224,12 +225,16 @@ async function modelCommand({ client, arg }: SlashContext): Promise<SlashOutcome
 }
 
 async function statsCommand({ client }: SlashContext): Promise<SlashOutcome> {
-  const spend = await client.workspaceSpend();
+  const [usage, spend] = await Promise.all([readAllAccountUsage(), client.workspaceSpend()]);
   const tokens = usageTotal(spend.total.usage);
   const usd = spend.total.usd === undefined ? 'unpriced' : fmtUsd(spend.total.usd);
-  const total = `Workspace total: ${tokens === undefined ? 'unmeasured' : `${tokens.toLocaleString()} tokens`}, ${usd}, ${plural(spend.total.calls, 'call')}`;
+  const here = `This workspace: ${tokens === undefined ? 'unmeasured' : `${tokens.toLocaleString()} tokens`}, ${usd}, ${plural(spend.total.calls, 'call')}`;
+  const unread = usage.unread.length === 0 ? [] : [`Not counted, could not be read: ${usage.unread.join(', ')}`];
 
-  return { kind: 'text', text: [...renderAccountSpendLines(spend.accounts, Date.now()), total].join('\n') };
+  return {
+    kind: 'text',
+    text: [`Across your ${plural(usage.workspaces, 'workspace')}`, ...renderAccountSpendLines(usage.accounts, Date.now()), ...unread, here].join('\n'),
+  };
 }
 
 async function accountsCommand({ client, rest }: SlashContext): Promise<SlashOutcome> {

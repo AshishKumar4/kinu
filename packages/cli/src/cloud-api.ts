@@ -18,8 +18,9 @@ import {
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
   type WorkspaceSpend,
-  type AccountSpend,
-  QuotaSnapshotSchema,
+  AccountSpendSchema,
+  AccountUsageSchema,
+  type AccountUsage,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -248,12 +249,6 @@ const MissionBudgetSnapshotSchema: v.GenericSchema<MissionBudgetSnapshot> = v.ob
   calls: v.number(), spawns: v.number(), exhausted: v.boolean(),
 });
 
-const AccountSpendSchema: v.GenericSchema<AccountSpend> = v.object({
-  provider: v.nullable(v.string()), account: v.nullable(v.string()), calls: v.number(), callsWithoutUsage: v.number(),
-  usage: UsageSchema, usd: v.optional(v.number()), unpricedCalls: v.number(), floorPricedCalls: v.number(),
-  quota: v.optional(QuotaSnapshotSchema),
-});
-
 const WorkspaceSpendSchema: v.GenericSchema<WorkspaceSpend> = v.object({
   producers: v.array(ProducerSpendSchema),
   total: v.object({
@@ -359,6 +354,10 @@ export async function listCloudAgents(origin: string, token: string): Promise<Cl
 
 /** Admitted by the rule both backends share, so every field the hub sends (each model's reasoning levels
  *  included) reaches the TUI. */
+export async function getCloudAccountUsage(origin: string, token: string): Promise<AccountUsage> {
+  return cloudJson(AccountUsageSchema, origin, '/api/cli/usage', { token });
+}
+
 export async function listCloudAvailableModels(origin: string, token: string): Promise<AgentModelMenu> {
   return normalizeModelMenu({ payload: await cloudJson(v.unknown(), origin, '/api/cli/models', { token }) });
 }

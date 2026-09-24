@@ -267,6 +267,7 @@ const ORCHESTRATOR_METHODS = [
   'acceptEmailDelivery',
   'acceptSandboxLifecycleFailure',
   'acceptWebhookDelivery',
+  'accountSpend',
   'announceDeviceAvailable',
   'announceDeviceUnavailable',
   'authorizeEmailSender',

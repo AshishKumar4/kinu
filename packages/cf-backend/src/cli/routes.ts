@@ -28,6 +28,7 @@ import {
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell, cliPlatformShell } from '@kinu.run/core';
 import { listAvailableModels } from '../user/available-models';
+import { readUserAccountUsage, type AccountLedgerTarget } from '../user/account-usage';
 import type { CloudWorkspaceBirth, CloudWorkspaceRegistry } from '../user/workspace-create';
 import type { CreateWorkspaceEnv, CredentialFanoutTarget } from '../user/workspace-access';
 import type { SessionAuthority } from '../auth/store';
@@ -75,7 +76,7 @@ export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWork
   | 'listCredentials' | 'setCredential' | 'deleteCredential'
 >;
 
-export type CliAgentTarget = CloudWorkspaceBirth & CredentialFanoutTarget
+export type CliAgentTarget = CloudWorkspaceBirth & CredentialFanoutTarget & AccountLedgerTarget
   & Pick<OrchestratorAgent, 'createDurableWebhook'> & AgentRpcDispatch;
 
 export interface CliRoutesEnv<Id>
@@ -301,13 +302,9 @@ export async function handleCliRequest<Id>(
     return json({ body: { ok: true } });
   }
 
-  if (path === '/workspaces' && method === 'GET') {
-    return json({ body: await cli.userDO.listActiveWorkspaces(await ownerCaller(env)) });
-  }
+  const accountRead = method === 'GET' ? await readAccountRoute(env, cli, path) : null;
 
-  if (path === '/models' && method === 'GET') {
-    return json({ body: await listAvailableModels(env, cli.userId, await ownerCaller(env)) });
-  }
+  if (accountRead !== null) return accountRead;
 
   if (path === '/workspaces' && method === 'POST') {
     return handleCreateWorkspaceRequest({ request, env, userId: cli.userId, userDO: cli.userDO });
@@ -428,6 +425,17 @@ export async function handleCliRequest<Id>(
   return err(404, `No such CLI route: ${method} ${path}`);
 }
 
+async function readAccountRoute<Id>(
+  env: CliRoutesEnv<Id>, cli: CliTokenIdentity<CliRoutesAuthority>, path: string,
+): Promise<Response | null> {
+  switch (path) {
+    case '/workspaces': return json({ body: await cli.userDO.listActiveWorkspaces(await ownerCaller(env)) });
+    case '/models': return json({ body: await listAvailableModels(env, cli.userId, await ownerCaller(env)) });
+    case '/usage': return json({ body: await readUserAccountUsage(env, cli.userDO, await ownerCaller(env)) });
+    default: return null;
+  }
+}
+
 async function cliAgent<Id>(
   env: CliRoutesEnv<Id>, cli: CliTokenIdentity<CliRoutesAuthority>, name: string,
 ): Promise<CliAgentTarget | Response> {
@@ -517,7 +525,7 @@ function accessTokenDenial(
 }
 
 function requiredAccessScope(method: string, path: string): AccessTokenScope | null {
-  if (method === 'GET' && (path === '/workspaces' || path === '/models')) return 'workspace.read';
+  if (method === 'GET' && (path === '/workspaces' || path === '/models' || path === '/usage')) return 'workspace.read';
 
   if (method === 'POST' && /^\/workspaces\/[^/]+\/connect-ticket$/.test(path)) return 'workspace.exec';
 

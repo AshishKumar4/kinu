@@ -318,6 +318,25 @@ describe('account panels', () => {
     });
   });
 
+  test('the usage section lists each account across workspaces with its quota, and names a workspace it could not read', async () => {
+    await withGallery(async (gallery) => {
+      const usage = await freshPage(gallery, 'usersettingsstate&section=usage', 'dark', 'mobile');
+
+      try {
+        await usage.waitForFunction(() => document.body.textContent?.includes('Across 4 workspaces') === true);
+        const text = await usage.evaluate(() => document.body.textContent ?? '');
+        expect(text).toContain('anthropic · work');
+        expect(text).toContain('3 of 50 requests left, resets in');
+        expect(text).toContain('41% of the 5h window used');
+        expect(text).toContain('No account recorded');
+        expect(text).toContain('could not be read: old-bot');
+        await shoot(usage, 'settings-usage-mobile-dark');
+      } finally {
+        await usage.close();
+      }
+    });
+  });
+
   test('the welcome wizard renders each step at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
       const shots: string[] = [];

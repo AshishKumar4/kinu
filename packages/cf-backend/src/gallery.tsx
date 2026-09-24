@@ -84,7 +84,7 @@ import {
   missingSubordinateHistory,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
   type AdvisorSeverity, type JsonValue, type PlanReview, type PlanReviewAnnotation,
-  type ProfileCatalogEnvelope, type SubordinateInspectionRequest,
+  type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc, ToolInfo } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
@@ -182,7 +182,7 @@ window.addEventListener("gallery:settings-heal", () => { settingsCodexHealthy = 
 
 window.addEventListener("gallery:settings-release", () => SETTINGS_GATEWAY_HOLD.resolve());
 
-function fixtureJson(body: JsonValue | ProfileCatalogEnvelope, status = 200): Response {
+function fixtureJson(body: JsonValue | ProfileCatalogEnvelope | AccountUsage, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" },
@@ -314,6 +314,10 @@ async function settingsSectionsFixture(path: string): Promise<Response | null> {
       { key: "anthropic.bearer", kind: "bearer", createdAt: NOW - 864e5, updatedAt: NOW },
       { key: "anthropic.bearer@work", kind: "bearer", createdAt: NOW - 36e5, updatedAt: NOW },
     ]);
+  }
+
+  if (path === "/api/user/usage") {
+    return fixtureJson({ accounts: ACTIVITY_ACCOUNTS, workspaces: 4, unread: ["old-bot"] });
   }
 
   if (path === "/api/user/codex") {

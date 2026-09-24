@@ -1935,6 +1935,11 @@ export type { RunListEntry, RunSummary } from './read-models/runs';
 
 export { workspaceSpend } from './read-models/workspace-spend';
 
+export {
+  AccountSpendSchema, AccountUsageSchema, mergeAccountSpend, readAccountUsage,
+  type AccountLedgerSource, type AccountUsage,
+} from './read-models/account-usage';
+
 export type {
   ProducerSpend, SpendCoverage, WorkspaceSpend, WorkspaceSpendDeps,
 } from './read-models/workspace-spend';

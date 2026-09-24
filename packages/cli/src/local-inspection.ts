@@ -93,6 +93,7 @@ import {
   type RecordObjectiveSummary,
   type SeekCursor,
   type WorkspaceSpend,
+  type AccountSpend,
 } from '@kinu.run/core';
 import { classify } from '@kinu.run/core/obs';
 import {
@@ -200,6 +201,14 @@ export function getLocalWorkspaceSpend(name: string): WorkspaceSpend {
     const actor = openWorkspaceMainActor(sql);
 
     return workspaceSpend({ events: new RunEventRecorder(sql, actor), sql, actor });
+  });
+}
+
+export function getLocalAccountSpend(name: string): AccountSpend[] {
+  return withLocalDb(name, (db) => {
+    const sql = makeSql(db);
+
+    return new RunEventRecorder(sql, openWorkspaceMainActor(sql)).spendByAccount();
   });
 }
 

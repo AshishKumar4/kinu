@@ -1,13 +1,13 @@
 {
   "measuredAt": "2026-09-24",
-  "files": 2568,
-  "functions": 63702,
-  "ceiling": 108,
+  "files": 2574,
+  "functions": 63783,
+  "ceiling": 106,
   "line": 33,
   "inventory": [
     {
       "key": "packages/cf-backend/src/cli/routes.ts#handleCliRequest",
-      "complexity": 108
+      "complexity": 106
     },
     {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",

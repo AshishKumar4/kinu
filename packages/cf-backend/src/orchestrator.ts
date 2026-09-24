@@ -59,7 +59,7 @@ import {
 import { getSandbox } from "@cloudflare/sandbox";
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
-import type { ActivitySnapshot, TabPresence, TurnClaimState } from "@kinu.run/core";
+import type { AccountSpend, ActivitySnapshot, TabPresence, TurnClaimState } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from '@kinu.run/core';
@@ -3824,6 +3824,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async getRunSummaries(request?: PageRequest): Promise<Page<RunSummary>> {
     return getRunSummaries(this.eventRecorder, request?.cursor ?? null, request?.limit);
+  }
+
+  async accountSpend(): Promise<AccountSpend[]> {
+    return this.eventRecorder.spendByAccount();
   }
 
   /**

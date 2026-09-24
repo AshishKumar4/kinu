@@ -240,6 +240,7 @@ export function workspaceObject<Built extends Partial<CliAgentTarget>>(built: Bu
     beginGenesisTurn: refuse('beginGenesisTurn'),
     reportFacetModelCall: refuse('reportFacetModelCall'),
     onCredentialsChanged: refuse('onCredentialsChanged'),
+    accountSpend: refuse('accountSpend'),
     createDurableWebhook: refuse('createDurableWebhook'),
     ...built,
   };
