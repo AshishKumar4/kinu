@@ -102,12 +102,15 @@
         "entry": [
           "scripts/*.ts!",
           "scripts/fixtures/*/worker.ts!",
-          "tools/oxlint/anti-slop/index.ts!"
+          "tools/oxlint/anti-slop/index.ts!",
+          "evals/tasks/*.eval.ts",
+          "evals/scripts/*.ts"
         ],
         "project": [
           "scripts/**/*.ts!",
           "tools/**/*.ts!",
-          "tests/**/*.ts"
+          "tests/**/*.ts",
+          "evals/**/*.ts"
         ]
       },
       "packages/cf-backend": {
@@ -147,7 +150,6 @@
     "@cloudflare/sandbox": "0.12.9",
     "@earendil-works/pi-ai": "0.84.2",
     "@earendil-works/pi-coding-agent": "0.84.2",
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "@nimbus-sh/core": "0.12.0",
     "@nimbus-sh/runtime-bash": "5.2.37",
     "@nimbus-sh/runtime-cpython": "3.13.14",

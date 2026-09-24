@@ -35,10 +35,10 @@
  * reference resolver of our own.
  *
  * The FOURTH is derived here instead, and the reason is measured rather than
- * stylistic. knip's dependency pass reports `vitest-evals` unused on this tree
- * — `evals/src/eval.ts` imports it, but knip's root `entry` is `scripts/*.ts!`,
- * top level only, so the eval suite is outside its globs and its imports do not
- * count. Deleting on that answer would break the eval suite. The census below reads the manifests and the tracked corpus
+ * stylistic. knip's dependency pass reported `vitest-evals` unused until
+ * 2026-09-24: the eval suite sat outside its root entry globs, so its imports
+ * did not count, and deleting on that answer would have broken the suite. The
+ * census below reads the manifests and the tracked corpus
  * directly, and `dead-code.test.ts` joins the two answers so the difference
  * stays a stated, single, explained row rather than a silent divergence.
  *
@@ -275,11 +275,10 @@ export const keyOf = (d: DeadExport): string => `${d.file}#${d.name} (${d.kind})
  * exists: a tool's answer is a candidate, and this one is checkable against the
  * tree directly. `dead-code.test.ts` runs knip's own `dependencies` pass over
  * the same manifests and joins the two, so the derivation stays measured
- * against a second implementation rather than trusted. The join is not an
- * equality: on this tree knip additionally reports `vitest-evals`, which
- * `evals/src/eval.ts` imports — knip's root `entry` is `scripts/*.ts!`, top level
- * only, so the eval suite is outside its entry globs. A census that had simply
- * adopted knip's answer would delete a declaration the eval suite needs.
+ * against a second implementation rather than trusted. A knip entry glob that
+ * misses a suite makes knip report that suite's dependencies unused, as it did
+ * for `vitest-evals` until 2026-09-24; a census that simply adopted knip's
+ * answer would delete a declaration a suite needs.
  */
 export interface DeadDependency {
   readonly manifest: string;

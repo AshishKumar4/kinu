@@ -363,8 +363,8 @@ describe("deploy gate", () => {
     expect(byPhase.preflight).toEqual(["bun scripts/preflight.ts"]);
     expect(byPhase.hammer).toEqual(["bun run gate:hammer"]);
     expect(byPhase.infra).toEqual(["bun run gate:infra"]);
-    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bash scripts/product-flows-tier.sh", "bun run gate:trajectory"]);
-    expect(byPhase.source?.length).toBe(PLAN.length - 6);
+    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bash scripts/product-flows-tier.sh"]);
+    expect(byPhase.source?.length).toBe(PLAN.length - 5);
 
     for (const gate of LADDER) {
       if (gate.phase === undefined) {
@@ -867,12 +867,12 @@ describe("deploy gate", () => {
     expect(REQUIRED_GATES).toContain('bun run gate:infra');
     // ITS OWN WAVE, AFTER EVERY SOURCE GATE, so an account that cannot be
     // proved never reaches Wrangler deployment; and THE LAST WAVE BEFORE THE
-    // UPLOAD, which is what the property has always meant: the trajectory
-    // tier moved after the publish on 2026-09-12, beside first-run, because a
-    // pre-publish live gate can only measure the previous build and refused
+    // UPLOAD, which is what the property has always meant: a live gate against
+    // the deployment runs after the publish, beside first-run, because a
+    // pre-publish live gate can only measure the previous build and refuses
     // the deploy carrying its fix.
     expect(PRE_PUBLISH_WAVES.at(-1)).toEqual(['bun run gate:infra']);
-    expect(POST_DEPLOY_GATES).toContain('bun run gate:trajectory');
+    expect(POST_DEPLOY_GATES).toContain('bun run gate:first-run');
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
     expect(source.indexOf('run_phase infra')).toBeLessThan(source.indexOf('Step 2: Building Kinu'));
     expect(source.indexOf('run_phase post-publish')).toBeGreaterThan(source.indexOf('Step 4: Post-deploy smoke test'));

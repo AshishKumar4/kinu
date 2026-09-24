@@ -10,7 +10,7 @@
  * by the eval plane's own resolver, so a row never asks where it runs.
  *
  * WHY THIS EXISTS. The first-run tier reads the deployment over its API and its
- * socket, the trajectory tier drives the model through the socket, and the
+ * socket, the eval suite drives the model through the socket, and the
  * `*-ux` browser tests run on the gallery's fixtures. None of them loads the
  * page a person loads, so a workspace whose agents were all present over the
  * API showed none of them after a reload (#13), and every gate stayed green.

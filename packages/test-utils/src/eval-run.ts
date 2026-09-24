@@ -21,7 +21,7 @@ import { compareRunEventOrder } from './eval-target';
 /**
  * The DeepSeek arms, read from the live model catalogue (flash is not derivable from pro: `-0813` vs
  * `-0731`). Flash for high-volume stats, pro for upper bounds. `product` is imported from core's default,
- * the arm `gate:trajectory` runs on after a deploy.
+ * the arm the first-run tier runs on after a deploy.
  */
 export const EVAL_MODELS = {
   flash: '@cf/deepseek-ai/deepseek-v4-flash-0731',

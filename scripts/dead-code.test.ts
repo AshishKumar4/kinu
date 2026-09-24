@@ -13,10 +13,10 @@
  * required on each side, because both tools were wrong about this tree in
  * opposite ways and the wrongness is the interesting part:
  *
- *   - knip alone reports `vitest-evals`, which `evals/src/eval.ts` imports.
- *     knip's root `entry` is `scripts/*.ts!` — top level only — so the eval
- *     suite is outside its entry globs and its imports do not count. Adopting
- *     knip's answer would delete a live declaration.
+ *   - knip alone reported `vitest-evals` until 2026-09-24: the eval suite sat
+ *     outside its root entry globs, so the suite's imports did not count, and
+ *     adopting knip's answer would have deleted a live declaration. The root
+ *     workspace's knip config now names `evals/` as entry and project.
  *   - knip alone SPARED four this census reports on nothing but its own
  *     reading: `oxlint-tsgolint`, `typescript`, `just-bash` and
  *     `@rolldown/plugin-babel` — all four peer-required by a package declared
@@ -337,7 +337,7 @@ describe('measured against knip', () => {
   // bound is 5 s, and a bound below the tool's own duration made this test
   // red under load and green alone. The ceiling below is a bound on a finite
   // run, not a wait on a condition.
-  test('the two agree on this tree, and the one difference is knip\'s entry-glob gap', () => {
+  test('the two agree on this tree', () => {
     const knip = knipDependencies();
     const census = new Set(live.map((d) => `${d.manifest}#${d.name}`));
     expect(knip.size).toBeGreaterThan(0);
@@ -345,9 +345,9 @@ describe('measured against knip', () => {
     const onlyKnip = [...knip].filter((key) => !census.has(key)).sort();
     const onlyCensus = [...census].filter((key) => !knip.has(key)).sort();
 
-    // `evals/src/eval.ts` imports it; knip's root entry globs stop at
-    // `scripts/*.ts!`, so it cannot see that import.
-    expect(onlyKnip).toEqual(['package.json#vitest-evals']);
+    // Equal since 2026-09-24, when the eval suite joined knip's root entry and
+    // project globs: until then knip could not see `vitest-evals` imported.
+    expect(onlyKnip).toEqual([]);
     expect(onlyCensus).toEqual([]);
   });
 });
