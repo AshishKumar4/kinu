@@ -126,7 +126,7 @@ function scriptedCounter(counts: readonly number[]) {
 }
 
 /** The error an assembly refused with, or null when it admitted the request. */
-async function refusalOf(assembly: Promise<readonly ModelMessage[]>): Promise<Error | null> {
+async function refusalOf(assembly: Promise<unknown>): Promise<Error | null> {
   try {
     await assembly;
 
@@ -145,7 +145,7 @@ describe('exact turn admission', () => {
     const { extensions, triggers } = compactionProbe();
     const counter = scriptedCounter([LIMIT]);
 
-    const out = await assembleTurnMessages({
+    const { messages: out } = await assembleTurnMessages({
       ...base(),
       extensions,
       trigger: 'auto',
@@ -161,7 +161,7 @@ describe('exact turn admission', () => {
     const { extensions, triggers } = compactionProbe();
     const counter = scriptedCounter([LIMIT + 1, LIMIT]);
 
-    const out = await assembleTurnMessages({
+    const { messages: out } = await assembleTurnMessages({
       ...base(),
       extensions,
       trigger: 'auto',
@@ -234,7 +234,7 @@ describe('exact turn admission', () => {
     const { extensions, triggers } = compactionProbe();
     let asked = 0;
 
-    const out = await assembleTurnMessages({
+    const { messages: out } = await assembleTurnMessages({
       ...base(),
       extensions,
       trigger: 'auto',
@@ -258,7 +258,7 @@ describe('exact turn admission', () => {
     // The allocation sits between the assembled and compacted estimates, so the estimate forces the compaction.
     const tight = { contextWindow: 48, modelOutputLimit: 20, windowMeasured: true };
 
-    const out = await assembleTurnMessages({
+    const { messages: out } = await assembleTurnMessages({
       ...base(),
       extensions,
       trigger: 'auto',

@@ -609,10 +609,11 @@ export function turnInputStart(messages: ReadonlyArray<ModelMessage>): number {
   return messages.at(-1)?.role === 'user' ? messages.length - 1 : messages.length;
 }
 
-/** The turn-local messages and the un-woven index of the turn's first message, which they ride right before. */
+/** The turn-local messages and the un-woven index of the turn's input, which they ride right before. */
 export interface TurnLocalPlacement {
   readonly at: number;
   readonly messages: readonly ModelMessage[];
+  readonly firstStep?: boolean | undefined;
 }
 
 export function placeTurnLocal(messages: ReadonlyArray<ModelMessage>, placement: TurnLocalPlacement): ModelMessage[] {
@@ -708,8 +709,9 @@ export class DynamicContextLedger {
 
     if (full !== previousFull) {
       const text = this.blocks.length === 0 ? full : dynamicDelta(previous ?? {}, current);
+      const birth = turnLocal?.firstStep === true ? Math.min(turnLocal.at, history.length) : turnInputStart(history);
 
-      if (text !== null) this.blocks.push(this.block(turnInputStart(history), text));
+      if (text !== null) this.blocks.push(this.block(birth, text));
     }
 
     this.currentState = current;
