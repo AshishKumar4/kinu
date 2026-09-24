@@ -2,11 +2,11 @@
  * Whole-workspace model spend by producer, read from `step_finish` (as `agent`), `model_call`,
  * and `head_journal`; nothing new is stored. Summed in SQL over the whole log, never windowed.
  * A measured head report replaces its attempt's step usage only. Coverage reports unmeasured and
- * unpriced calls. `producers` and `missions` overlap and must not be added together.
+ * unpriced calls. `producers`, `missions` and `accounts` overlap; never sum them.
  */
 
 import type { RunEventRecorder, StepSpendSource } from '../events/recorder';
-import { SPEND_SOURCES, type SpendSource, type SpendTally } from '../events/model-call';
+import { SPEND_SOURCES, type AccountSpend, type SpendSource, type SpendTally } from '../events/model-call';
 import type { SqlExecutor } from '../types/primitives';
 import { addUsage, usageReported, usageTotal, type Usage } from '../usage';
 import { storedUsage } from '../heads/journal';
@@ -38,6 +38,7 @@ export interface WorkspaceSpend {
   /** Spend per mission label from `mission_budget`, dearest first. Not additive with producers: a
    *  call sits in one producer row and every mission label above it. */
   readonly missions: readonly MissionBudgetSnapshot[];
+  readonly accounts: readonly AccountSpend[];
 }
 
 interface Tally {
@@ -164,6 +165,8 @@ export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
       ? null
       : (measuredTokens - turnTokens) / measuredTokens,
     missions: listMissionSpend(deps.sql, deps.actor),
+    accounts: deps.events.spendByAccount().sort((a, b) => (a.provider === null ? 1 : 0) - (b.provider === null ? 1 : 0)
+      || (usageTotal(b.usage) ?? -1) - (usageTotal(a.usage) ?? -1)),
   };
 }
 

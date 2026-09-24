@@ -159,6 +159,7 @@ describe('recordWorkspaceSpend — one meter, two readers', () => {
     coverage: { calls, measured: calls, reported: 1, silent: [], partial: [] },
     offTurnShare: null,
     missions: [],
+    accounts: [],
   });
 
   test('a store that accounted for nothing counts as UNMEASURED, never a silent zero', () => {

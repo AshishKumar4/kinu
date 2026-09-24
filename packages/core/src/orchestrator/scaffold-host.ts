@@ -7,6 +7,7 @@ import { ExtensionHost, type KinuExtension } from '../extension';
 import { evidenceWindow } from '../prompts/evidence-window';
 import { beginModelOperation, type ModelCallSpend } from '../events/model-call';
 import { addUsage, type Usage } from '../usage';
+import type { CallAccount } from '../providers/quota';
 import { decodeJsonValue } from '../utils/json';
 import { boundedInt } from '../utils/bounds';
 import { nanoid } from '../utils/nanoid';
@@ -71,6 +72,7 @@ async function* streamScaffoldChat(
   const operation = beginModelOperation(spend, 'stream', { spec: opts.spec });
   let usage: Usage = {};
   let modelId: string | undefined;
+  let account: CallAccount | undefined;
   const outputs = new Map<string, ScaffoldToolOutput>();
 
   const extensions = new ExtensionHost().register({ name: 'kinu.scaffold-lifetime',
@@ -98,6 +100,8 @@ async function* streamScaffoldChat(
     })) {
       if (event.type === 'step-finish' && event.usage) usage = addUsage(usage, event.usage);
 
+      if (event.type === 'step-finish' && event.account !== undefined) account = event.account;
+
       if (event.type === 'tool-result') {
         const output = event.success ? outputs.get(event.toolCallId)
           : { type: 'tool-output-error', toolCallId: event.toolCallId, errorText: event.error ?? event.result } satisfies ScaffoldToolOutput;
@@ -109,7 +113,7 @@ async function* streamScaffoldChat(
 
       if (event.type === 'done') {
         operation.completed({ usage, modelId });
-        spend?.report({ source: spend.source, usage, modelId, spec: opts.spec });
+        spend?.report({ source: spend.source, usage, modelId, spec: opts.spec, account });
       }
 
       yield event;

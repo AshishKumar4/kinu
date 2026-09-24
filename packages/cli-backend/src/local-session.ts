@@ -135,7 +135,7 @@ import { TierIdSchema,
   decodeJsonValue, projectJsonValue, JsonValueSchema,
   agentSelfHost, createAgentSelfProvider,
   cancelBackgroundJob, jobResult, listBackgroundJobs,
-  getAlwaysActiveSkills, getProviderAccounts, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
+  getAlwaysActiveSkills, getProviderAccounts, workspaceSpend, type WorkspaceSpend, callAccountOf, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
   getShellApprovalGrants, revokeShellApprovalGrants, gatedGrants, type ApprovalGrant,
   setAlwaysActiveSkills, setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   getEvolutionChangelog, markChangelogSeen, pickAlternateTake,
@@ -886,6 +886,10 @@ export class LocalAgentSession implements BackendHost {
 
   getProviderAccounts(): ReturnType<typeof getProviderAccounts> {
     return getProviderAccounts(this.config);
+  }
+
+  workspaceSpend(): WorkspaceSpend {
+    return workspaceSpend({ events: this.eventRecorder, sql: this.rt.storage.sql, actor: this.rt.actor });
   }
 
   setProviderAccount(provider: string, account: string | null): ReturnType<typeof setProviderAccount> {
@@ -2660,6 +2664,7 @@ export class LocalAgentSession implements BackendHost {
           source: resolution.source,
           spec: resolution.model,
           usage: normalizeUsage(result.usage),
+          account: callAccountOf(result.response ?? {}),
         };
 
         const modelId = result.response?.modelId;

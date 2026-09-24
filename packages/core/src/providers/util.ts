@@ -2,6 +2,7 @@
 import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
+import { withCallAccount } from './quota';
 import { evidenceWindow } from '../prompts/evidence-window';
 import * as v from 'valibot';
 import { nonEmptyString } from '../utils/json';
@@ -53,7 +54,9 @@ export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions):
     const url = input instanceof Request ? input.url : input.toString();
     const rewritten = opts.mutate?.({ url, headers, auth });
 
-    return retrying(auth.credentialKey ?? opts.credKey)(rewritten ?? input, { ...init, headers });
+    const paid = auth.credentialKey ?? opts.credKey;
+
+    return withCallAccount(await retrying(paid)(rewritten ?? input, { ...init, headers }), opts.provider, paid);
   });
 }
 

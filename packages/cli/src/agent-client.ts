@@ -13,7 +13,7 @@ import type {
   InstructionSourceRow, InstructionSourceView, Page, PageRequest,
   DeferredApproval, DeferredApprovalAnswer,
   PlanReview, PlanReviewAnnotation, PlanReviewDecision, PlanReviewResult, WorkMode,
-  SubordinateInspectionRequest, SubordinateInspectionResult, ChatHistoryEntry,
+  SubordinateInspectionRequest, SubordinateInspectionResult, ChatHistoryEntry, WorkspaceSpend,
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
@@ -327,6 +327,7 @@ export interface AgentClient {
   setModel(spec: string): Promise<{ spec: string }>;
   getReasoningEffort(): Promise<ReasoningEffort | null>;
   setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }>;
+  workspaceSpend(): Promise<WorkspaceSpend>;
   getProviderAccounts(): Promise<Readonly<Record<string, string>>>;
   setProviderAccount(provider: string, account: string | null): Promise<Readonly<Record<string, string>>>;
   getEvolutionConfig(): Promise<EvolutionConfigView>;

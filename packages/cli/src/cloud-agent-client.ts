@@ -19,9 +19,10 @@ import {
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import {
   AlternateTakeCandidateSchema, CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema,
-  FileRestoreResultSchema, type FileCheckpointListing, type PlanReviewResult,
+  FileRestoreResultSchema, type FileCheckpointListing, type PlanReviewResult, type WorkspaceSpend,
 } from '@kinu.run/core';
 import {
+  ActivitySpendSchema,
   callAgentRpc,
   CloudAgentStatusSchema,
   CloudBackgroundJobSchema,
@@ -744,6 +745,10 @@ export class CloudAgentClient implements AgentClient {
     return {
       effort: (await this.callHttp('setReasoningEffort', SetReasoningEffortResultSchema, [effort])).effort,
     };
+  }
+
+  async workspaceSpend(): Promise<WorkspaceSpend> {
+    return (await this.callHttp('getActivitySnapshot', ActivitySpendSchema)).spend;
   }
 
   async getProviderAccounts(): Promise<Readonly<Record<string, string>>> {

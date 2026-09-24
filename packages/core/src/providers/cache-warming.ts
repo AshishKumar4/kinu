@@ -8,6 +8,7 @@ import type { Usage } from '../usage';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ModelCallReport } from '../events/model-call';
+import type { CallAccount } from './quota';
 import { toKinuError } from '../obs/index';
 import * as v from 'valibot';
 import { isJsonObject, JsonObjectSchema, parseJsonObject, type JsonObject } from '../utils/json';
@@ -244,6 +245,7 @@ export class CacheWarmStore {
 export interface WarmOutcome {
   /** The provider's report for the warm request, `{}` when it said nothing. */
   readonly usage: Usage;
+  readonly account?: CallAccount | undefined;
 }
 
 /** The backend's half of warming: storage, wake arming, provider access, spend recording. */
@@ -349,7 +351,7 @@ export class CacheWarmingLane {
     }
 
     const spec = formatModelSpec(due.modelSpec);
-    this.seams.spend({ source: 'warming', usage: outcome.usage, spec, modelId: due.modelSpec.modelId });
+    this.seams.spend({ source: 'warming', usage: outcome.usage, spec, modelId: due.modelSpec.modelId, account: outcome.account });
     const refreshes = due.refreshes + 1;
 
     const next = warmingPlan({

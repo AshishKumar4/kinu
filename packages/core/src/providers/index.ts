@@ -53,6 +53,11 @@ export * from './pacing';
 
 export * from './rate-limit-retry';
 
+export {
+  callAccountOf, CallAccountSchema, QuotaSnapshotSchema, quotaWindowText,
+  type CallAccount, type QuotaSnapshot, type QuotaWindow,
+} from './quota';
+
 export * from './judge-model';
 
 export * from './workers-ai-catalog';

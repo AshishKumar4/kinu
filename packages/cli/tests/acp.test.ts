@@ -117,6 +117,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     getReasoningEffort: async () => null,
     setReasoningEffort: async (effort) => ({ effort }),
     getProviderAccounts: async () => ({}),
+    workspaceSpend: async () => { throw new Error('no spend'); },
     setProviderAccount: async () => ({}),
     getEvolutionConfig: async () => { throw new Error('no evolution config'); },
     setEvolutionConfig: async () => { throw new Error('no evolution config'); },

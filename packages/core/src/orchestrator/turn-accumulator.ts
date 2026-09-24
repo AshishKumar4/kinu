@@ -14,6 +14,7 @@ import { USAGE_FIELDS, addUsage, usageReported, usageTotal, type Usage } from '.
 import * as v from 'valibot';
 import { digestJsonValue, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { ToolOutcomeSchema, type ToolOutcome } from '../tools/outcome';
+import type { CallAccount } from '../providers/quota';
 
 const UndefinedSchema = v.undefined();
 
@@ -31,6 +32,7 @@ export interface StepLike {
   response?: { modelId?: string; messages?: readonly ModelMessage[] };
   /** The request body this step sent and when; a cache warm replays the turn's last one. */
   request?: { body?: unknown; sentAt?: number };
+  account?: CallAccount | undefined;
 }
 
 /** ai-SDK v6 tool-result hook shape. */
@@ -220,6 +222,7 @@ export class TurnAccumulator {
 
     const stepEvent: Parameters<NonNullable<TurnSinks['onStepEvent']>>[0] = {
       stepIndex: this.stepCount,
+      account: ctx.account,
     };
 
     const reason = v.safeParse(StringSchema, ctx.finishReason);
@@ -250,6 +253,7 @@ export class TurnAccumulator {
 
       if (modelId.success && modelId.output.length > 0) stepEvent.modelId = modelId.output;
     }
+
 
     this.sinks.onStepEvent?.(stepEvent);
   }

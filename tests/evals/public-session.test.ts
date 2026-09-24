@@ -598,7 +598,7 @@ describe('route-shaped run events score through the production instruments', () 
         calls: 8, callsWithoutUsage: 0, unpricedCalls: 8, floorPricedCalls: 0,
         usage: { input: 234433, output: 29531 },
       },
-      producers: [], missions: [], offTurnShare: null,
+      producers: [], missions: [], accounts: [], offTurnShare: null,
       coverage: { calls: 8, measured: 8, reported: 1, silent: [], partial: [] },
     };
 
@@ -644,7 +644,7 @@ describe('route-shaped run events score through the production instruments', () 
 
     const spend: WorkspaceSpend = {
       total: { calls: 3, callsWithoutUsage: 0, unpricedCalls: 3, floorPricedCalls: 0, usage: { input: 10, output: 5 } },
-      producers: [], missions: [], offTurnShare: null,
+      producers: [], missions: [], accounts: [], offTurnShare: null,
       coverage: { calls: 3, measured: 3, reported: 1, silent: [], partial: [] },
     };
 
@@ -689,7 +689,7 @@ describe('route-shaped run events score through the production instruments', () 
 
     const spend: WorkspaceSpend = {
       total: { calls: 3, callsWithoutUsage: 0, unpricedCalls: 3, floorPricedCalls: 0, usage: { input: 10, output: 5 } },
-      producers: [], missions: [], offTurnShare: null,
+      producers: [], missions: [], accounts: [], offTurnShare: null,
       coverage: { calls: 3, measured: 3, reported: 1, silent: [], partial: [] },
     };
 

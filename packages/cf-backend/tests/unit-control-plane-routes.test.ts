@@ -102,6 +102,7 @@ function unrunActivity(): ActivitySnapshot {
       coverage: { calls: 0, measured: 0, reported: null, silent: [], partial: [] },
       offTurnShare: null,
       missions: [],
+      accounts: [],
     },
     log: [],
   };

@@ -2,6 +2,7 @@ import { generateText, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import { beginModelOperation, type ModelCallSpend } from '../events/model-call';
 import { normalizeUsage } from '../usage';
+import { callAccountOf } from '../providers/quota';
 import { parseJsonArray, parseJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 
 const JSON_FENCE = /```json\s*([\s\S]*?)```/i;
@@ -99,7 +100,7 @@ export async function generateJson<TOutput>(opts: {
   const usage = normalizeUsage(result.totalUsage);
   const modelId = result.response.modelId;
   operation.completed({ usage, modelId });
-  spend?.report({ source: spend.source, usage, modelId });
+  spend?.report({ source: spend.source, usage, modelId, account: callAccountOf(result.response) });
 
   return v.parse(opts.schema, extractJsonObject(result.text));
 }

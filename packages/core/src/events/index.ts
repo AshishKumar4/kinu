@@ -71,6 +71,7 @@ export {
   type ModelOperationPhase,
   type ModelOperationSink,
   type SpendSource,
+  type AccountSpend,
   type SpendTally,
 } from './model-call';
 

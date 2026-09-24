@@ -1185,7 +1185,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         const deps = accountDeps(providers.deps, modelSpec.provider, modelSpec.account);
 
-        return { usage: await provider.warmCache(modelSpec.modelId, deps, body) };
+        return provider.warmCache(modelSpec.modelId, deps, body);
       },
       spend: (report) => { this.reportModelCall(report); },
       now: () => Date.now(),

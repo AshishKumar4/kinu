@@ -143,7 +143,7 @@ import {
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
-  accountDeps, parseModelSpec, catalogModelInfo, countRequestInputTokens,
+  accountDeps, callAccountOf, parseModelSpec, catalogModelInfo, countRequestInputTokens,
   ModelCatalogSession, resolveEffectiveModelSpec,
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
   measureCompactionTrigger,
@@ -3659,10 +3659,12 @@ export abstract class ActorAgent extends Agent<Env> {
       const modelId = result.response?.modelId;
       const usage = normalizeUsage(result.usage);
       operation.completed({ usage, modelId: modelId ?? spec });
+      const account = callAccountOf(result.response ?? {});
+
       this.reportModelCall(
         modelId
-          ? { source: 'fast', usage, spec, modelId }
-          : { source: 'fast', usage, spec },
+          ? { source: 'fast', usage, spec, modelId, account }
+          : { source: 'fast', usage, spec, account },
       );
 
       return result.text;

@@ -10,6 +10,7 @@ import type { EscalationSnapshot } from '../execution/escalation';
 import type { MissionBudgetRefusal } from '../mission-budget';
 import type { HeadFileChangeSet } from '../types/heads';
 import type { Usage } from '../usage';
+import type { CallAccount } from '../providers/quota';
 import type { ToolOutcome } from '../types/tool-outcome';
 import type { WorkMode } from '../types/turn';
 import type {
@@ -118,6 +119,7 @@ export type RunEvent =
       usdFloorTokens?: number;
       modelId?: string;
       context?: ContextComposition;
+      account?: CallAccount | undefined;
     })
   /** Superseded by the step's `step_finish`; the newest row of an unfinished step is where a
    *  continuation resumes. */
@@ -132,6 +134,7 @@ export type RunEvent =
       usdFloorTokens?: number;
       spec?: string;
       modelId?: string;
+      account?: CallAccount;
     })
   /** Start/end pair: a start without an end marks a dead process
    *  (`RunEventRecorder.unterminatedModelOperations`). The census reads `model_call`, not this. */

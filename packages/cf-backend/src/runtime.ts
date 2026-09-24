@@ -70,7 +70,7 @@ import {
 import { ownerCaller, type UserCaller } from "@kinu.run/core";
 import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
 import {
-  agentAffinityKey, normalizeUsage,
+  agentAffinityKey, callAccountOf, normalizeUsage,
 } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
 
@@ -663,15 +663,16 @@ function reportCall(
   report: ModelCallSink | undefined,
   source: SpendSource,
   spec: string,
-  result: { usage?: LanguageModelUsage; response?: { modelId?: string } },
+  result: { usage?: LanguageModelUsage; response?: { modelId?: string; headers?: Record<string, string> } },
 ): void {
   if (!report) return;
   const usage = normalizeUsage(result.usage);
   const modelId = result.response?.modelId;
+  const account = callAccountOf(result.response ?? {});
   // `modelId` absent has to mean absent.
   report(modelId !== undefined && modelId.length > 0
-    ? { source, spec, usage, modelId }
-    : { source, spec, usage });
+    ? { source, spec, usage, modelId, account }
+    : { source, spec, usage, account });
 }
 
 /** `resolveProfile` absent means no lane to build. */

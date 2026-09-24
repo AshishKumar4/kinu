@@ -40,6 +40,7 @@ import * as v from 'valibot';
 import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from './utils/json';
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_SDK_RETRIES, RATE_LIMIT_HANDOVER_HEADER } from './providers/rate-limit-retry';
+import { callAccountOf, type CallAccount } from './providers/quota';
 import { diagnostics, toKinuError } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
@@ -66,6 +67,7 @@ export type ChatEvent =
     /** The body this step sent and when, so a prompt-cache warm can re-send it byte-identically
      *  (providers/cache-warming.ts). */
     request?: { body?: unknown; sentAt?: number };
+    account?: CallAccount;
   }
   /** A failure the turn survived. `runChat` never yields this; the scaffold seam (scaffold/chat-transform.ts) does. */
   | { type: 'error'; message: string }
@@ -284,6 +286,7 @@ class ProviderCall {
 
     for (const part of step.content) if (part.type === 'tool-call') this.dispatchedCalls.delete(part.toolCallId);
     const usage = normalizeUsage(step.usage);
+    const account = callAccountOf(step.response);
 
     this.pendingStepEvents.push({
       stepIndex, responseMessages: this.responseSoFar,
@@ -291,6 +294,7 @@ class ProviderCall {
       toolCalls: step.toolCalls.map((call) => ({ toolName: call.toolName })), toolResults: step.toolResults,
       request: { body: step.request.body, sentAt: this.stepSentAt },
       ...(usageReported(usage) && { usage }),
+      ...(account !== undefined && { account }),
     });
   }
 

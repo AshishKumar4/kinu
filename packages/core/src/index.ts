@@ -1354,6 +1354,7 @@ export {
   type ModelOperationOutcome,
   type ModelOperationPhase,
   type ModelOperationSink,
+  type AccountSpend,
   type SpendSource,
   type SpendTally,
   type DeferredRunEvent,

@@ -473,3 +473,35 @@ describe('workspaceSpend — the breakdown', () => {
     expect(workspaceSpend({ events, sql: ws.sql, actor }).missions).toEqual([]);
   });
 });
+
+describe('workspaceSpend — by the account that paid', () => {
+  test('each account sums its own calls, keeps the newest quota it reported, and calls with no account come last', () => {
+    const { ws, events, actor } = rig();
+
+    const work = (at: number, remaining: number) => ({
+      provider: 'anthropic', name: 'work',
+      quota: { at, windows: [{ measure: 'requests', limit: 50, remaining, resetsAt: at + 60_000 }] },
+    });
+
+    events.emit('run-1', { type: 'step_finish', stepIndex: 0, usage: { input: 900, output: 100 }, usd: 0.02, account: work(1_000, 40) });
+    events.emit('run-1', { type: 'step_finish', stepIndex: 1, usage: { input: 1_900, output: 100 }, usd: 0.03, account: work(2_000, 12) });
+    events.emit('run-1', { type: 'step_finish', stepIndex: 2, usage: { input: 50, output: 5 }, account: { provider: 'anthropic', name: 'main' } });
+    events.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'judge', usage: { input: 10, output: 1 } });
+    events.emit(WORKSPACE_RUN_ID, buildModelCallEvent(
+      { source: 'compaction', usage: { input: 300, output: 20 }, spec: 'anthropic@work/m', account: { provider: 'anthropic', name: 'work' } },
+      { effectiveSpec: null, pricing: null },
+    ));
+
+    const { accounts, total } = workspaceSpend({ events, sql: ws.sql, actor });
+
+    expect(accounts.map((row) => [row.provider, row.account, row.calls])).toEqual([
+      ['anthropic', 'work', 3], ['anthropic', 'main', 1], [null, null, 1],
+    ]);
+    expect(accounts[0]?.usage).toEqual({ input: 3_100, output: 220 });
+    expect(accounts[0]?.usd).toBeCloseTo(0.05, 10);
+    expect(accounts[0]?.unpricedCalls).toBe(1);
+    expect(accounts[0]?.quota?.windows).toEqual([{ measure: 'requests', limit: 50, remaining: 12, resetsAt: 62_000 }]);
+    expect(accounts[1]?.quota).toBeUndefined();
+    expect(accounts.reduce((calls, row) => calls + row.calls, 0)).toBe(total.calls);
+  });
+});

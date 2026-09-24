@@ -6,6 +6,7 @@ import type { CountableRequest, InputTokenCount } from './input-tokens';
 import type { ReasoningEffort } from './reasoning-effort';
 import type { JsonObject } from '../utils/json';
 import type { Usage } from '../usage';
+import type { CallAccount } from './quota';
 
 /** Parsed `<provider>[@<account>]/<modelId>`. */
 export interface ModelSpec { provider: string; modelId: string; account?: string; }
@@ -163,7 +164,7 @@ export interface ModelProvider {
 
   /** Re-send a frozen body with no completion to keep its cache entry alive; only direct
    *  Anthropic implements it. Failure throws. */
-  warmCache?(modelId: string, deps: ProviderDeps, body: JsonObject): Promise<Usage>;
+  warmCache?(modelId: string, deps: ProviderDeps, body: JsonObject): Promise<{ usage: Usage; account?: CallAccount | undefined }>;
 }
 
 /** Split on the FIRST slash so slashful ids such as `@cf/deepseek-ai/deepseek-v4-pro-0813` survive

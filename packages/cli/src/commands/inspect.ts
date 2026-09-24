@@ -13,7 +13,7 @@ import {
   ActivitySpendSchema, callAgentRpc, createCloudWebhookTrigger,
   type CloudWebhookTriggerInput,
 } from '../cloud-api';
-import { ACCENT, DIM, ERR, OK, plural, printJson, printSearchTree, WARN } from '../display';
+import { ACCENT, DIM, ERR, OK, plural, printJson, printSearchTree, renderAccountSpendLines, WARN } from '../display';
 import { asRecord, normalizeWebhookAuthMode, parsePositiveInt, parseTime, stringField } from '../options';
 import {
   executeLocalExecutor,
@@ -238,6 +238,11 @@ function printSpend(spend: WorkspaceSpend): void {
         + `$${m.spent.usd.toFixed(4)}${cap}  ${DIM(`${plural(m.calls, 'call')} · ${m.pricing.source}`)}${state}`);
     }
   }
+
+  const [accountsHeading, ...accountLines] = renderAccountSpendLines(spend.accounts, Date.now());
+  console.log(DIM(accountsHeading ?? ''));
+
+  for (const line of accountLines) console.log(line);
 
   const reported = spend.coverage.reported;
 

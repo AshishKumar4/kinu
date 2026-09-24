@@ -5020,6 +5020,38 @@ const ACTIVITY_LOG: ActivitySnapshot["log"] = [
   { event: "response_complete", detail: "ok", elapsedMs: 41_602, createdAt: NOW - 90e3 },
 ];
 
+const ACTIVITY_ACCOUNTS: WorkspaceSpend["accounts"] = [
+  {
+    provider: "anthropic", account: "work", calls: 402, callsWithoutUsage: 0, unpricedCalls: 0, floorPricedCalls: 0,
+    usd: 9.4312, usage: { input: 14_220_118, output: 402_551, cacheRead: 12_880_004 },
+    quota: {
+      at: NOW - 40e3,
+      windows: [
+        { measure: "requests", limit: 50, remaining: 3, resetsAt: NOW + 22e3 },
+        { measure: "input-tokens", limit: 40_000, remaining: 31_200, resetsAt: NOW + 22e3 },
+      ],
+    },
+  },
+  {
+    provider: "codex", account: "main", calls: 214, callsWithoutUsage: 0, unpricedCalls: 0, floorPricedCalls: 0,
+    usd: 5.1204, usage: { input: 8_104_220, output: 228_101, cacheRead: 6_874_002 },
+    quota: {
+      at: NOW - 95e3,
+      windows: [
+        { measure: "300m", usedPercent: 41, resetsAt: NOW + 7_380e3 },
+        { measure: "10080m", usedPercent: 12, resetsAt: NOW + 388_800e3 },
+      ],
+    },
+  },
+  {
+    provider: "anthropic", account: "main", calls: 38, callsWithoutUsage: 0, unpricedCalls: 0, floorPricedCalls: 0,
+    usd: 1.7126, usage: { input: 1_226_706, output: 40_698 },
+  },
+  {
+    provider: null, account: null, calls: 93, callsWithoutUsage: 93, unpricedCalls: 0, floorPricedCalls: 0, usage: {},
+  },
+];
+
 /** Every qualifier live at once (truncated window, silent and partial producers, unpriced calls): the caveat line must stay one line. */
 const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
   latest: ACTIVITY_LATEST,
@@ -5046,6 +5078,7 @@ const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
     // (23_551_044 + 671_350 - 21_480_312 - 512_884) / (23_551_044 + 671_350)
     offTurnShare: 0.09203045743537984,
     missions: ACTIVITY_MISSIONS,
+    accounts: ACTIVITY_ACCOUNTS,
   },
   log: ACTIVITY_LOG,
 };
@@ -5067,6 +5100,7 @@ const ACTIVITY_CLEAN: ActivitySnapshot = {
     // (23_166_830 + 627_444 - 21_480_312 - 512_884) / (23_166_830 + 627_444)
     offTurnShare: 0.07569375724596598,
     missions: [],
+    accounts: [],
   },
 };
 
@@ -5085,6 +5119,7 @@ const ACTIVITY_FRESH: ActivitySnapshot = {
     coverage: { calls: 0, measured: 0, reported: null, silent: [], partial: [] },
     offTurnShare: null,
     missions: [],
+    accounts: [],
   },
   log: [],
 };

@@ -8,7 +8,6 @@ import { listModelsDevProviderModels } from './models-dev';
 import { countAnthropicInputTokens } from './anthropic-count';
 import { warmAnthropicCache } from './anthropic-warm';
 import type { JsonObject } from '../utils/json';
-import type { Usage } from '../usage';
 import type { ReasoningEffort } from './reasoning-effort';
 
 export const ANTHROPIC_CRED_KEY = 'anthropic.bearer';
@@ -75,7 +74,7 @@ export function createAnthropicProvider(): ModelProvider {
         missingCredentialError: 'Anthropic API key not configured',
       });
     },
-    warmCache(modelId, deps: ProviderDeps, body: JsonObject): Promise<Usage> {
+    warmCache(modelId, deps: ProviderDeps, body: JsonObject) {
       return warmAnthropicCache({
         modelId,
         deps,

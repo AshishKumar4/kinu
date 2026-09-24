@@ -30,6 +30,7 @@ import type { ModelCallSink } from '../events/model-call';
 
 import { generateText } from 'ai';
 import { normalizeUsage, type Usage } from '../usage';
+import { callAccountOf } from '../providers/quota';
 import { readProposalCode } from '../execution/code-fence';
 import { runNodeAgent, type NodeAgentDeps } from './node-agent';
 import type { RoutedNodeModel } from './swarm-setup';
@@ -459,6 +460,7 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
       source: 'swarm',
       usage: spent,
       modelId: result.response.modelId,
+      account: callAccountOf(result.response),
     });
     // Charged where the call returned, so the level guard reads a current ledger; the
         // spawning caller must not charge this spend again.

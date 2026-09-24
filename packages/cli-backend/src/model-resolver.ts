@@ -13,6 +13,7 @@ import {
   createCodexProvider,
   availableJudgeSpecs,
   accountDeps,
+  callAccountOf,
   catalogModelInfo,
   createModelsDevCatalogSource,
   createOpenAICompatProvider,
@@ -162,12 +163,14 @@ function reportCall(
   spend: ModelCallSpend,
   spec: string,
   usage: LanguageModelUsage,
-  modelId: string | undefined,
+  response: { readonly modelId?: string; readonly headers?: Record<string, string> },
 ): void {
   const reported = normalizeUsage(usage);
+  const account = callAccountOf(response);
+  const modelId = response.modelId;
   spend.report(modelId !== undefined && modelId.length > 0
-    ? { source: spend.source, spec, usage: reported, modelId }
-    : { source: spend.source, spec, usage: reported });
+    ? { source: spend.source, spec, usage: reported, modelId, account }
+    : { source: spend.source, spec, usage: reported, account });
 }
 
 /**
@@ -209,7 +212,7 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
       for await (const chunk of result.textStream) yield chunk;
 
       // Usage exists only once the stream drains; an abandoned stream reports nothing.
-      if (spend) reportCall(spend, resolved, await result.totalUsage, (await result.response).modelId);
+      if (spend) reportCall(spend, resolved, await result.totalUsage, await result.response);
     },
     async complete(prompt) {
       const resolved = spec();
@@ -224,7 +227,7 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
       if (providerOptions) request.providerOptions = providerOptions;
       const result = await generateText(request);
 
-      if (spend) reportCall(spend, resolved, result.totalUsage, result.response.modelId);
+      if (spend) reportCall(spend, resolved, result.totalUsage, result.response);
 
       return result.text.trim();
     },

@@ -7,6 +7,7 @@ import { MODEL_INPUT_MODALITIES } from './types';
 import { withRateLimitRetry } from './rate-limit-retry';
 import { authCacheKey, cloneModelInfos, positiveInteger } from './util';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
+import { withCallAccount } from './quota';
 import { nonEmptyString } from '../utils/json';
 import * as v from 'valibot';
 import { OAuthTokenError } from './oauth-token-error';
@@ -147,12 +148,14 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
 
         const requestInit = normalizeCodexResponsesRequest(init);
 
+        const paid = auth.credentialKey ?? CODEX_CRED_KEY;
+
         const send = async (headers: Record<string, string>) => {
           const merged = copyHeaders(init?.headers);
 
           for (const [name, value] of Object.entries(headers)) merged.set(name, value);
 
-          return retrying(auth.credentialKey ?? CODEX_CRED_KEY)(input, { ...requestInit, headers: merged });
+          return retrying(paid)(input, { ...requestInit, headers: merged });
         };
 
         let res = await send(auth.headers);
@@ -200,7 +203,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
           return refusedLoginResponse();
         }
 
-        return res;
+        return withCallAccount(res, 'codex', paid);
       });
 
       // apiKey is unused (customFetch sets Authorization) but the SDK requires a non-empty value.

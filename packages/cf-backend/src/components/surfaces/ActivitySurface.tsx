@@ -10,11 +10,11 @@ import {
 import { Loader } from "@cloudflare/kumo";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useAsyncResource, lastValue } from "@/hooks/use-async-resource";
-import { fmtTokens, fmtUsd, fmtPct } from "@kinu.run/core";
+import { fmtTokens, fmtUsd, fmtPct, quotaWindowText, timeAgo } from "@kinu.run/core";
 import type { ActivitySnapshot, CacheHitStats, Rpc } from "@kinu.run/core";
 import { SPEND_SOURCE_DETAIL, SPEND_SOURCE_LABEL, usageTotal } from "@kinu.run/core";
 import type {
-  ActivityLogEntry, ContextComposition, ContextPlane, ProducerSpend, SpendSource, WorkspaceSpend,
+  AccountSpend, ActivityLogEntry, ContextComposition, ContextPlane, ProducerSpend, SpendSource, WorkspaceSpend,
 } from "@kinu.run/core";
 import { breakdownView, shareOfMeasured, type BreakdownPlane, type BreakdownRow } from "@kinu.run/core";
 
@@ -471,6 +471,25 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                 ))}
               </tbody>
             )}
+            {spend.accounts.length > 0 && (
+              <tbody>
+                <tr>
+                  <th
+                    colSpan={neurons ? 5 : 4}
+                    className="text-left font-normal pt-3 pb-1 p-meta p-text-3 uppercase tracking-wide"
+                    title="Each account's calls at API rates from the models.dev catalog; a subscription is billed by its plan instead."
+                  >
+                    By account · API-equivalent cost
+                  </th>
+                </tr>
+                {spend.accounts.map((row) => (
+                  <AccountSpendRow
+                    key={`${row.provider ?? ""}@${row.account ?? ""}`}
+                    row={row} measuredTokens={measuredTokens} neurons={neurons}
+                  />
+                ))}
+              </tbody>
+            )}
           </table>
 
           <p className="p-meta p-text-3 mt-2.5 pt-2.5 border-t p-border">
@@ -511,6 +530,31 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
         </>
       )}
     </div>
+  );
+}
+
+function AccountSpendRow(
+  { row, measuredTokens, neurons }: { row: AccountSpend; measuredTokens: number | undefined; neurons: boolean },
+) {
+  const now = Date.now();
+
+  return (
+    <tr className="border-t p-border">
+      <td className="py-1 pr-2">
+        <span className="flex items-baseline gap-1">
+          <span className="p-row-text p-text truncate">
+            {row.provider === null ? "No account recorded" : `${row.provider} · ${row.account ?? ""}`}
+          </span>
+          <span className="p-row-text p-text-3 shrink-0">×{row.calls}</span>
+        </span>
+        {row.quota !== undefined && (
+          <span className="block p-meta p-text-3" title={`As the provider reported it ${timeAgo(row.quota.at)}.`}>
+            {row.quota.windows.map((window) => quotaWindowText(window, now)).join(" · ")}
+          </span>
+        )}
+      </td>
+      <SpendCells row={row} measuredTokens={measuredTokens} neurons={neurons} className="p-text" />
+    </tr>
   );
 }
 

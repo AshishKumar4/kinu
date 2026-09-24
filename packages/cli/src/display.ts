@@ -1,7 +1,8 @@
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall, TUI_MARKS } from '@kinu.run/core';
-import type { SearchNode, ReasoningEffort, JsonObject, JsonValue, ToolOutcome } from '@kinu.run/core';
+import type { AccountSpend, SearchNode, ReasoningEffort, JsonObject, JsonValue, ToolOutcome } from '@kinu.run/core';
+import { fmtUsd, quotaWindowText, timeAgo, usageTotal } from '@kinu.run/core';
 import { clipText } from '@kinu.run/core';
 import { guideFailure } from './provider-guidance';
 import cliPackage from '../package.json' with { type: 'json' };
@@ -282,6 +283,21 @@ export function renderSearchTreeLines(nodes: readonly SearchTreeNode[]): string[
 
     return `${indent}${icon} ${value} ${visits} ${DIM(action)}`;
   });
+}
+
+export function renderAccountSpendLines(accounts: readonly AccountSpend[], now: number): string[] {
+  if (accounts.length === 0) return ['No model call has been recorded yet.'];
+
+  return ['By account · API-equivalent cost', ...accounts.flatMap((row) => {
+    const tokens = usageTotal(row.usage);
+    const name = row.provider === null ? 'No account recorded' : `${row.provider} · ${row.account ?? ''}`;
+    const usd = row.usd === undefined ? 'unpriced' : `${fmtUsd(row.usd)}${row.unpricedCalls > 0 ? '+' : ''}`;
+    const line = `  ${name.padEnd(24)} ${tokens === undefined ? 'unmeasured' : `${tokens.toLocaleString()} tokens`}  ${usd}  ${plural(row.calls, 'call')}`;
+
+    if (row.quota === undefined) return [line];
+
+    return [line, `      quota as of ${timeAgo(row.quota.at)}:`, ...row.quota.windows.map((window) => `        ${quotaWindowText(window, now)}`)];
+  })];
 }
 
 export function printSearchTree(nodes: SearchNode[]): void {

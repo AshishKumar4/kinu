@@ -18,6 +18,8 @@ import {
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
   type WorkspaceSpend,
+  type AccountSpend,
+  QuotaSnapshotSchema,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -246,6 +248,12 @@ const MissionBudgetSnapshotSchema: v.GenericSchema<MissionBudgetSnapshot> = v.ob
   calls: v.number(), spawns: v.number(), exhausted: v.boolean(),
 });
 
+const AccountSpendSchema: v.GenericSchema<AccountSpend> = v.object({
+  provider: v.nullable(v.string()), account: v.nullable(v.string()), calls: v.number(), callsWithoutUsage: v.number(),
+  usage: UsageSchema, usd: v.optional(v.number()), unpricedCalls: v.number(), floorPricedCalls: v.number(),
+  quota: v.optional(QuotaSnapshotSchema),
+});
+
 const WorkspaceSpendSchema: v.GenericSchema<WorkspaceSpend> = v.object({
   producers: v.array(ProducerSpendSchema),
   total: v.object({
@@ -259,6 +267,7 @@ const WorkspaceSpendSchema: v.GenericSchema<WorkspaceSpend> = v.object({
   }),
   offTurnShare: v.nullable(v.number()),
   missions: v.array(MissionBudgetSnapshotSchema),
+  accounts: v.array(AccountSpendSchema),
 });
 
 export const ActivitySpendSchema = v.object({ spend: WorkspaceSpendSchema });

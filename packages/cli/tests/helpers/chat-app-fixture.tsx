@@ -73,6 +73,7 @@ interface FakeClientOptions {
   history?: AgentClient['history'];
   rename?: AgentClient['rename'];
   inspectSubordinate?: AgentClient['inspectSubordinate'];
+  workspaceSpend?: AgentClient['workspaceSpend'];
 }
 
 export function fakeClient(options: FakeClientOptions) {
@@ -145,6 +146,7 @@ export function fakeClient(options: FakeClientOptions) {
     setReasoningEffort: async (effort) => ({ effort }),
     getProviderAccounts: async () => ({}),
     setProviderAccount: async () => ({}),
+    workspaceSpend: options.workspaceSpend ?? (async () => { throw new Error('no spend in this fixture'); }),
     getEvolutionConfig: async () => evolution,
     setEvolutionConfig: async (next) => {
       evolution = { ...evolution, ...next };
