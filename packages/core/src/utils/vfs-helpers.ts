@@ -9,6 +9,10 @@ export function vfsDirname(path: string): string {
   return i === 0 ? '/' : path.slice(0, i);
 }
 
+export function vfsBasename(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1);
+}
+
 /** Idempotent mkdir: swallows "already exists" errors; others propagate. */
 export async function ensureDir(vfs: Pick<VFS, 'mkdir'>, dir: string): Promise<void> {
   try {

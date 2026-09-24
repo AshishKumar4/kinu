@@ -1206,7 +1206,7 @@ export {
 
 export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observe';
 
-export { ensureDir } from './utils/vfs-helpers';
+export { ensureDir, vfsBasename, vfsDirname } from './utils/vfs-helpers';
 
 export { mossaicVfs, type MossaicClient, type MossaicVfs, type MossaicStat, type MossaicChild } from './vfs/mossaic-vfs';
 
@@ -1935,10 +1935,18 @@ export {
 export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff';
 
 export {
+  changeBlocks, changeBody, changeTotals, changeTree, inReadingOrder, sideBySide,
+} from './read-models/change-view';
+
+export type {
+  ChangeBlock, ChangeBody, ChangePair, ChangeRow, ChangeSet, ChangeSpan, ChangeTreeRow,
+} from './read-models/change-view';
+
+export {
   diffLines, fileDiff, parseGitDiff, MAX_LINES_PER_FILE,
 } from './vfs/diff';
 
-export type { DiffLine, FileDiff, FileStatus, LineDiff } from './vfs/diff';
+export type { DiffLine, FileDiff, FileStatus, LineDiff, Omitted } from './vfs/diff';
 
 export {
   getExecutorFiles, readExecutorFile, sortDirEntries, writeExecutorFileOp,

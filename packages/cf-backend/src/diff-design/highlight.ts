@@ -1,4 +1,4 @@
-import type { Block, Row, Span } from "./diff";
+import type { ChangeBlock, ChangeRow, ChangeSpan } from "@kinu.run/core";
 import type { NoteSpan } from "./notes";
 
 export interface Tint {
@@ -49,11 +49,11 @@ async function highlighter(): Promise<Highlighter> {
   return loading;
 }
 
-function rowsOf(blocks: readonly Block[]): Row[] {
+function rowsOf(blocks: readonly ChangeBlock[]): ChangeRow[] {
   return blocks.flatMap((block) => (block.kind === "rest" ? rowsOf(block.blocks) : [...block.rows]));
 }
 
-async function sideOf(rows: readonly Row[], number: (row: Row) => number | null, grammar: string, shiki: Highlighter) {
+async function sideOf(rows: readonly ChangeRow[], number: (row: ChangeRow) => number | null, grammar: string, shiki: Highlighter) {
   const numbered = rows.flatMap((row) => {
     const at = number(row);
 
@@ -65,7 +65,7 @@ async function sideOf(rows: readonly Row[], number: (row: Row) => number | null,
   return new Map(numbered.map((line, index) => [line.at, tokens[index] ?? []]));
 }
 
-export async function tintsOf(path: string, blocks: readonly Block[]): Promise<Tints | null> {
+export async function tintsOf(path: string, blocks: readonly ChangeBlock[]): Promise<Tints | null> {
   const shiki = await highlighter();
   const grammar = shiki.grammarOf(path.slice(path.lastIndexOf(".") + 1).toLowerCase());
 
@@ -87,7 +87,7 @@ export interface Piece {
   readonly note: NoteSpan | null;
 }
 
-export function piecesOf(text: string, tints: readonly Tint[] | undefined, marks: readonly Span[] = [], notes: readonly NoteSpan[] = []): Piece[] {
+export function piecesOf(text: string, tints: readonly Tint[] | undefined, marks: readonly ChangeSpan[] = [], notes: readonly NoteSpan[] = []): Piece[] {
   const usable = tints !== undefined && tints.map((tint) => tint.text).join("") === text ? tints : [];
   const starts: number[] = [];
   const cuts = new Set<number>([0, text.length]);

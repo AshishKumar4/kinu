@@ -1,7 +1,8 @@
 /** Notes once sent: the card the thread draws. What the agent reads is a sample in DESIGN.md; the build writes it in core. */
 import { ChatCircleTextIcon, ListBulletsIcon, MinusCircleIcon } from "@phosphor-icons/react";
 import { AnnotationType } from "@plannotator/ui/types";
-import { sinceLabel, type ChangeSet } from "./diff";
+import type { ChangeSet } from "@kinu.run/core";
+import { sinceLabel } from "./diff";
 import { orderNotes, placeLabel, type ChangeNote } from "./notes";
 
 const TYPE_ICON: Record<AnnotationType, typeof ChatCircleTextIcon> = {

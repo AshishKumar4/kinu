@@ -2,17 +2,19 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNod
 import {
   ArrowRightIcon, ArrowsOutSimpleIcon, CaretDownIcon, CaretLeftIcon, CaretUpIcon, ChatCircleDotsIcon, CheckCircleIcon, WarningCircleIcon,
 } from "@phosphor-icons/react";
-import { blocksOf, bodyOf, ChangeMark, count, Counts, DiffBody, folderOf, nameOf, reading, sinceLabel, type ChangedFile, type ChangeSet } from "./diff";
+import { changeBlocks, changeBody, inReadingOrder, vfsBasename, vfsDirname, type ChangeSet, type FileDiff } from "@kinu.run/core";
+import { ChangeMark, count, Counts, DiffBody, sinceLabel } from "./diff";
 import { FileTree, IconButton, MarkReviewed, Since, SourceMenu, Summary, typing } from "./parts";
 import { SendFeedback, useNotes, type ChangeNote } from "./notes";
 
-function NoLines({ file, onOpenInFiles }: { file: ChangedFile; onOpenInFiles: () => void }) {
-  const body = bodyOf(file);
+function NoLines({ file, onOpenInFiles }: { file: FileDiff; onOpenInFiles: () => void }) {
+  const body = changeBody(file);
   let text: ReactNode = null;
 
   if (body.kind === "binary") text = "A binary file. It changed, but it has no lines to compare.";
-  else if (body.kind === "large") text = <>{count(file.added)} lines added and {count(file.removed)} removed: too many to show here.</>;
-  else if (body.kind === "unread") text = "Over 2 MB, so it was not compared. It changed, and the Files tab can open it.";
+  else if (body.kind === "counted") text = <>{count(file.added)} lines added and {count(file.removed)} removed: too many to show here.</>;
+  else if (body.kind === "uncompared") text = "Over 2 MB, so it was not compared. It changed, and the Files tab can open it.";
+  else if (body.kind === "empty") text = file.status === "changed" ? "No lines changed." : "An empty file.";
 
   if (text === null) return null;
 
@@ -24,8 +26,8 @@ function NoLines({ file, onOpenInFiles }: { file: ChangedFile; onOpenInFiles: ()
   );
 }
 
-function CappedNote({ file }: { file: ChangedFile }) {
-  const body = bodyOf(file);
+function CappedNote({ file }: { file: FileDiff }) {
+  const body = changeBody(file);
 
   if (body.kind !== "capped") return null;
 
@@ -37,14 +39,14 @@ function CappedNote({ file }: { file: ChangedFile }) {
 }
 
 export function FileBody({ file, git, stacked, split = false, onOpenInFiles }: {
-  file: ChangedFile;
+  file: FileDiff;
   git: boolean;
   stacked: boolean;
   split?: boolean;
   onOpenInFiles: () => void;
 }) {
-  const body = bodyOf(file);
-  const blocks = useMemo(() => (body.kind === "rows" || body.kind === "capped" ? blocksOf(file, git, stacked) : []), [body.kind, file, git, stacked]);
+  const body = changeBody(file);
+  const blocks = useMemo(() => (body.kind === "rows" || body.kind === "capped" ? changeBlocks(file, git, stacked) : []), [body.kind, file, git, stacked]);
 
   if (blocks.length === 0) return <NoLines file={file} onOpenInFiles={onOpenInFiles} />;
 
@@ -57,7 +59,7 @@ export function FileBody({ file, git, stacked, split = false, onOpenInFiles }: {
 }
 
 function NextFile({ next, reviewable, onOpen, onReviewed, onList }: {
-  next: ChangedFile | undefined;
+  next: FileDiff | undefined;
   reviewable: boolean;
   onOpen: (path: string) => void;
   onReviewed: () => void;
@@ -77,7 +79,7 @@ function NextFile({ next, reviewable, onOpen, onReviewed, onList }: {
       className="mx-3 mb-6 mt-4 flex w-[calc(100%-1.5rem)] items-center gap-2.5 rounded-lg border p-border px-3.5 py-2.5 text-left transition-colors hover:border-[var(--c-border-strong)] hover:bg-[var(--c-elevated)]">
       <span className="shrink-0 p-meta p-text-3">Next</span>
       <ChangeMark status={next.status} />
-      <span className="min-w-0 flex-1 truncate p-row-text p-text">{nameOf(next.path)}</span>
+      <span className="min-w-0 flex-1 truncate p-row-text p-text">{vfsBasename(next.path)}</span>
       <Counts added={next.added} removed={next.removed} />
       <ArrowRightIcon size={13} className="shrink-0 p-text-3" />
     </button>
@@ -151,7 +153,7 @@ export function ChangesPanel({ sets, now, source: initialSource, file: initialFi
   const [path, setPath] = useState<string | null>(initialFile);
   const [reviewedAt, setReviewedAt] = useState<number | null>(initialReviewed);
   const set = sets.find((each) => each.source === source) ?? sets[0];
-  const files = useMemo(() => reading(set?.files ?? []), [set]);
+  const files = useMemo(() => inReadingOrder(set?.files ?? []), [set]);
   const at = files.findIndex((file) => file.path === path);
   const open = files[at];
   const root = useRef<HTMLDivElement>(null);
@@ -223,7 +225,7 @@ export function ChangesPanel({ sets, now, source: initialSource, file: initialFi
           <div className="flex items-center gap-1">
             <IconButton label="All files" onClick={() => go(null)}><CaretLeftIcon size={15} /></IconButton>
             <ChangeMark status={open.status} />
-            <span className="ml-1 min-w-0 flex-1 truncate p-row-text font-medium p-text" data-open-file>{nameOf(open.path)}</span>
+            <span className="ml-1 min-w-0 flex-1 truncate p-row-text font-medium p-text" data-open-file>{vfsBasename(open.path)}</span>
             <IconButton label="Previous file (k)" onClick={() => step(-1)} disabled={at === 0}><CaretUpIcon size={14} /></IconButton>
             <IconButton label="Next file (j)" onClick={() => step(1)} disabled={at === files.length - 1}><CaretDownIcon size={14} /></IconButton>
             {onExpand !== null && (
@@ -231,7 +233,7 @@ export function ChangesPanel({ sets, now, source: initialSource, file: initialFi
             )}
           </div>
           <div className="flex items-center gap-2 pl-[34px] pr-2 p-meta p-text-3">
-            <span className="min-w-0 truncate">{folderOf(open.path) || "Top level"}</span>
+            <span className="min-w-0 truncate">{vfsDirname(open.path) || "Top level"}</span>
             <Counts added={open.added} removed={open.removed} />
             <span className="ml-auto shrink-0 tabular-nums">{at + 1} of {files.length}</span>
           </div>

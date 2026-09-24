@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { GaugeIcon } from "@phosphor-icons/react";
-import { diffLines, fileDiff, parseGitDiff, type FileStatus, type Rpc, type TurnLiveness } from "@kinu.run/core";
+import { diffLines, fileDiff, parseGitDiff, type ChangeSet, type FileDiff, type FileStatus, type Rpc, type TurnLiveness } from "@kinu.run/core";
 import Layout from "@/components/layout";
 import { WorkspaceBar } from "@/components/WorkspaceBar";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
@@ -17,13 +17,12 @@ import { ReviewBar } from "@/diff-design/ReviewBar";
 import { NotesProvider, type ChangeAnchor, type ChangeNote, type OpenDraft } from "@/diff-design/notes";
 import { FeedbackCard } from "@/diff-design/sent";
 import { AnnotationType } from "@plannotator/ui/types";
-import type { ChangeSet, ChangedFile } from "@/diff-design/diff";
 
 const WORKSPACE = "checkout-fixes";
 
 const NOW = new Date(2026, 8, 23, 16, 5).getTime();
 
-function snapshot(path: string, status: FileStatus, before: string, after: string): ChangedFile {
+function snapshot(path: string, status: FileStatus, before: string, after: string): FileDiff {
   return fileDiff(path, status, diffLines(before, after));
 }
 
@@ -298,7 +297,7 @@ const README_AFTER = lines(
   "Run `bun test packages/checkout`.",
 );
 
-const COUPON_FILES: readonly ChangedFile[] = [
+const COUPON_FILES: readonly FileDiff[] = [
   snapshot("packages/checkout/src/apply-coupon.ts", "changed", APPLY_BEFORE, APPLY_AFTER),
   snapshot("packages/checkout/src/rules.ts", "changed", RULES_BEFORE, RULES_AFTER),
   snapshot("packages/checkout/src/legacy-discount.ts", "removed", LEGACY_BEFORE, ""),
@@ -344,8 +343,8 @@ const EDGE_CHANGES: ChangeSet = {
   source: "workspace", label: "Workspace", mode: "vfs-baseline", trackedSince: NOW - 26 * 60 * 60e3,
   files: [
     { path: "packages/checkout/src/generated/schema.ts", status: "changed", added: 1214, removed: 1180, lines: [], truncated: true },
-    { path: "data/exports/orders-2026.json", status: "changed", added: 0, removed: 0, lines: [], truncated: true, omitted: "large" },
-    { path: "public/receipt-logo.png", status: "changed", added: 0, removed: 0, lines: [], truncated: true, omitted: "binary" },
+    { path: "data/exports/orders-2026.json", status: "changed", added: 0, removed: 0, lines: [], omitted: "large" },
+    { path: "public/receipt-logo.png", status: "changed", added: 0, removed: 0, lines: [], omitted: "binary" },
     snapshot("data/seed/coupons.csv", "changed", CSV_BEFORE, CSV_AFTER),
     snapshot("docs/incident-runbook.md", "added", "", RUNBOOK),
     snapshot("packages/checkout/src/old-cart.ts", "removed", OLD_CART, ""),

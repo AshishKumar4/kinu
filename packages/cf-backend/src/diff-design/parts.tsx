@@ -1,24 +1,25 @@
 import { useRef, useState, type ReactNode } from "react";
 import { CaretDownIcon, CheckIcon, FolderSimpleIcon } from "@phosphor-icons/react";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
-import { bodyOf, ChangeMark, count, Counts, fullTime, sinceLabel, totals, treeOf, type ChangedFile, type ChangeSet } from "./diff";
+import { changeBody, changeTotals, changeTree, type ChangeSet, type FileDiff } from "@kinu.run/core";
+import { ChangeMark, count, Counts, fullTime, sinceLabel } from "./diff";
 
-function Tag({ file }: { file: ChangedFile }) {
-  const body = bodyOf(file);
+function Tag({ file }: { file: FileDiff }) {
+  const body = changeBody(file);
 
   if (body.kind === "binary") return <span className="shrink-0 text-[11px] p-text-4">binary</span>;
 
-  if (body.kind === "unread") return <span className="shrink-0 text-[11px] p-text-4">too large</span>;
+  if (body.kind === "uncompared") return <span className="shrink-0 text-[11px] p-text-4">too large</span>;
 
   return <Counts added={file.added} removed={file.removed} />;
 }
 
 const INDENT = 14;
 
-export function FileTree({ files, current, onOpen }: { files: readonly ChangedFile[]; current: string | null; onOpen: (path: string) => void }) {
+export function FileTree({ files, current, onOpen }: { files: readonly FileDiff[]; current: string | null; onOpen: (path: string) => void }) {
   return (
     <ul role="list" className="py-1.5" data-file-tree>
-      {treeOf(files).map((row) => {
+      {changeTree(files).map((row) => {
         const inset = { paddingLeft: `${String(14 + row.depth * INDENT)}px` };
 
         if (row.kind === "folder") {
@@ -50,7 +51,7 @@ export function FileTree({ files, current, onOpen }: { files: readonly ChangedFi
 }
 
 export function Summary({ set }: { set: ChangeSet }) {
-  const sum = totals(set.files);
+  const sum = changeTotals(set.files);
 
   return (
     <span className="flex min-w-0 items-baseline gap-2">

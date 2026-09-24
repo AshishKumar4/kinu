@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CaretDownIcon, CaretUpIcon, ChatCircleDotsIcon, ChatCircleTextIcon, XIcon } from "@phosphor-icons/react";
 import { AnnotationPanel } from "@plannotator/ui/components/AnnotationPanel";
 import { Segmented } from "@/components/ui/Segmented";
-import { ChangeMark, Counts, count, folderOf, nameOf, reading, type ChangedFile, type ChangeSet } from "./diff";
+import { inReadingOrder, vfsBasename, vfsDirname, type ChangeSet, type FileDiff } from "@kinu.run/core";
+import { ChangeMark, Counts, count } from "./diff";
 import { FileBody } from "./ChangesPanel";
 import { FileTree, IconButton, MarkReviewed, Since, Summary, typing } from "./parts";
 import { panelNote, placeLabel, SendFeedback, useNotes, type ChangeNote } from "./notes";
@@ -29,7 +30,7 @@ function FileNotes({ path }: { path: string }) {
           <ChatCircleTextIcon size={13} weight="fill" />
         </button>
       ))}
-      <button ref={button} type="button" onClick={write} aria-label={`Note on ${nameOf(path)}`} title="Note on this file" data-note-file
+      <button ref={button} type="button" onClick={write} aria-label={`Note on ${vfsBasename(path)}`} title="Note on this file" data-note-file
         className="flex size-7 shrink-0 items-center justify-center rounded-md p-text-4 transition-colors hover:bg-[var(--c-elevated)] hover:p-text">
         <ChatCircleTextIcon size={14} />
       </button>
@@ -38,7 +39,7 @@ function FileNotes({ path }: { path: string }) {
 }
 
 function FileCard({ file, git, split, register }: {
-  file: ChangedFile;
+  file: FileDiff;
   git: boolean;
   split: boolean;
   register: (path: string, element: HTMLElement | null) => void;
@@ -53,8 +54,8 @@ function FileCard({ file, git, split, register }: {
           <CaretDownIcon size={12} className={`transition-transform ${folded ? "-rotate-90" : ""}`} />
         </IconButton>
         <ChangeMark status={file.status} />
-        <span className="shrink-0 p-row-text font-medium p-text">{nameOf(file.path)}</span>
-        <span className="min-w-0 truncate p-meta p-text-3 max-md:hidden">{folderOf(file.path)}</span>
+        <span className="shrink-0 p-row-text font-medium p-text">{vfsBasename(file.path)}</span>
+        <span className="min-w-0 truncate p-meta p-text-3 max-md:hidden">{vfsDirname(file.path)}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1 pl-2">
           <Counts added={file.added} removed={file.removed} />
           <FileNotes path={file.path} />
@@ -65,7 +66,7 @@ function FileCard({ file, git, split, register }: {
   );
 }
 
-function Stepper({ files, current, onShow }: { files: readonly ChangedFile[]; current: string | null; onShow: (path: string) => void }) {
+function Stepper({ files, current, onShow }: { files: readonly FileDiff[]; current: string | null; onShow: (path: string) => void }) {
   const at = files.findIndex((file) => file.path === current);
 
   return (
@@ -95,7 +96,7 @@ function AnnotationsToggle({ open, onToggle, compact = false }: { open: boolean;
 function Notes({ open, onClose, files, onReveal }: {
   open: boolean;
   onClose: () => void;
-  files: readonly ChangedFile[];
+  files: readonly FileDiff[];
   onReveal: (note: ChangeNote) => void;
 }) {
   const notes = useNotes();
@@ -144,7 +145,7 @@ interface SheetProps {
   readonly onSend: (notes: readonly ChangeNote[]) => void;
 }
 
-function Picker({ files, current, onPick, onClose }: { files: readonly ChangedFile[]; current: string | null; onPick: (path: string) => void; onClose: () => void }) {
+function Picker({ files, current, onPick, onClose }: { files: readonly FileDiff[]; current: string | null; onPick: (path: string) => void; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-[55] flex flex-col justify-end" data-file-picker>
       <div className="p-scrim absolute inset-0" onClick={onClose} aria-hidden="true" />
@@ -160,7 +161,7 @@ function Picker({ files, current, onPick, onClose }: { files: readonly ChangedFi
 }
 
 function useSheetKeys({ files, current, show, onClose }: {
-  files: readonly ChangedFile[];
+  files: readonly FileDiff[];
   current: string | null;
   show: (path: string) => void;
   onClose: () => void;
@@ -186,7 +187,7 @@ function useSheetKeys({ files, current, show, onClose }: {
 }
 
 function Stack({ files, set, split, register, stack, onScroll, children }: {
-  files: readonly ChangedFile[];
+  files: readonly FileDiff[];
   set: ChangeSet;
   split: boolean;
   register: (path: string, element: HTMLElement | null) => void;
@@ -208,7 +209,7 @@ export function ReviewSheet({ set, now, file, layout: initialLayout = "split", p
   const [layout, setLayout] = useState<Layout>(initialLayout);
   const [panelOpen, setPanelOpen] = useState(annotationsOpen);
   const [picking, setPicking] = useState(pickerOpen);
-  const files = useMemo(() => reading(set.files), [set]);
+  const files = useMemo(() => inReadingOrder(set.files), [set]);
   const [current, setCurrent] = useState<string | null>(file ?? files[0]?.path ?? null);
   const cards = useRef(new Map<string, HTMLElement>());
   const stack = useRef<HTMLDivElement>(null);
@@ -271,7 +272,7 @@ export function ReviewSheet({ set, now, file, layout: initialLayout = "split", p
             <button type="button" onClick={() => setPicking(true)} data-file-picker-open
               className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border p-border px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--c-elevated)]">
               {openFile !== undefined && <ChangeMark status={openFile.status} />}
-              <span className="min-w-0 truncate p-row-text font-medium p-text">{openFile === undefined ? "Files" : nameOf(openFile.path)}</span>
+              <span className="min-w-0 truncate p-row-text font-medium p-text">{openFile === undefined ? "Files" : vfsBasename(openFile.path)}</span>
               <CaretDownIcon size={11} className="ml-auto shrink-0 p-text-3" />
             </button>
             <Stepper files={files} current={current} onShow={show} />
