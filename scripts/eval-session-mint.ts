@@ -20,7 +20,7 @@ import { dirname } from 'node:path';
 import * as v from 'valibot';
 import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER } from '@kinu.run/core';
 import {
-  EVAL_DEPLOYMENT_ORIGIN, EVAL_IDENTITY_ENV, evalAccount, evalSessionPath, evalTargetVerdict,
+  EVAL_DEPLOYMENT_ORIGIN, EVAL_IDENTITY_ENV, evalAccount, evalSessionPath, evalTargetVerdict, isEvalAccountEmail,
 } from '@kinu.run/test-utils';
 import { pollCliAuth, startCliAuth } from '../packages/cli/src/cloud-api';
 
@@ -49,10 +49,22 @@ if (!webIdentity) {
   process.exit(1);
 }
 
+/** Refuses a bearer whose user is not the named account's, before it is kept or handed out. */
+function refuseOtherUser(email: string | undefined, holding: string): void {
+  if (account === undefined || (email !== undefined && isEvalAccountEmail(email, account))) return;
+  console.error(`eval-session-mint: REFUSED — ${holding} is ${email ?? 'an unnamed user'}'s, not the ${account} `
+    + `eval account's: a deployment older than x-kinu-dev-identity-account answers as the eval service itself.`);
+  process.exit(1);
+}
+
 if (existsSync(persistedPath)) {
-  const persisted = v.safeParse(v.object({ origin: v.string() }), JSON.parse(readFileSync(persistedPath, 'utf8')));
+  const persisted = v.safeParse(
+    v.object({ origin: v.string(), user: v.nullish(v.object({ email: v.string() })) }),
+    JSON.parse(readFileSync(persistedPath, 'utf8')),
+  );
 
   if (persisted.success && persisted.output.origin === target.origin) {
+    refuseOtherUser(persisted.output.user?.email, `the bearer ${persistedPath} holds`);
     console.error(`eval-session-mint: a session for ${target.origin} is already persisted`);
     process.exit(0);
   }
@@ -106,6 +118,8 @@ if (poll.status !== 'approved' || !poll.token) {
   console.error(`eval-session-mint: the flow is ${poll.status} after approval${poll.message ? `: ${poll.message}` : ''}`);
   process.exit(1);
 }
+
+refuseOtherUser(poll.user?.email, 'the approved bearer');
 
 // A named eval account is a new user the first time it is minted, and every page it opens lands on /welcome until
 // its setup is stamped (App.tsx). It is stamped before its bearer is kept, so no kept bearer's account lacks it.

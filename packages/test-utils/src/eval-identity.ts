@@ -38,6 +38,15 @@ export function evalAccount(env: EnvSource = process.env): EvalAccount | undefin
   return named.output;
 }
 
+/** Whether `email` is the named eval account's own user: the server plus-addresses the eval identity's email by
+ *  the account (`eval-service+devices@kinu.run`). A server that predates the account header answers with the eval
+ *  service's own email, whose bearer would put the account's machines back on the shared account. */
+export function isEvalAccountEmail(email: string, account: EvalAccount): boolean {
+  const at = email.lastIndexOf('@');
+
+  return at > 0 && email.slice(0, at).endsWith(`+${account}`);
+}
+
 /** Where the CLI bearer minted for `account` is kept: the eval service's own, else its named account's beside it. */
 export function evalSessionPath(account: EvalAccount | undefined): string {
   const dir = `${homedir()}/.config/kinu/eval-session`;

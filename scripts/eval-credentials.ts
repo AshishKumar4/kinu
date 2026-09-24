@@ -39,6 +39,7 @@ import {
   EVAL_IDENTITY_ENV,
   evalAccount,
   evalSessionPath,
+  isEvalAccountEmail,
   refusedEvalEndpoint,
   resolveEvalIdentity,
 } from '../packages/test-utils/src/eval-identity';
@@ -47,6 +48,7 @@ import * as v from 'valibot';
 const PersistedEvalIdentitySchema = v.object({
   origin: v.string(),
   accessToken: v.string(),
+  user: v.nullish(v.object({ email: v.string() })),
 });
 
 const account = evalAccount();
@@ -70,6 +72,15 @@ if (!identityEnv[EVAL_IDENTITY_ENV.token] && existsSync(persistedPath)) {
     PersistedEvalIdentitySchema,
     JSON.parse(readFileSync(persistedPath, 'utf8')),
   );
+
+  const email = persisted.user?.email;
+
+  // A named account's bearer that is not that account's user would act as the eval service itself.
+  if (account !== undefined && (email === undefined || !isEvalAccountEmail(email, account))) {
+    console.error(`eval-credentials: REFUSED — ${persistedPath} holds ${email ?? 'an unnamed user'}'s bearer, `
+      + `not the ${account} eval account's; move it aside and mint again.`);
+    process.exit(1);
+  }
 
   identityEnv[EVAL_IDENTITY_ENV.origin] = persisted.origin;
   identityEnv[EVAL_IDENTITY_ENV.token] = persisted.accessToken;
