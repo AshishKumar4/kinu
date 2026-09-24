@@ -74,12 +74,10 @@ export interface ExecutorDiffResult {
 /** The baseline read model reads the workspace's files and its own tables, as the actor it serves. */
 type WorkspaceBaselineRuntime = Pick<AgentRuntime, 'storage' | 'actor'>;
 
-/** `body`: the text is stored under `hash`, so the file was not binary. */
 interface ManifestEntry {
   readonly size: number;
   readonly mtimeMs: number;
   readonly hash: string | null;
-  readonly body: boolean;
 }
 
 /** Every regular file the change-set reviews, breadth-first so root files come first, by stat alone. */
@@ -156,30 +154,36 @@ interface BaselineManifest {
 function activeManifest(rt: WorkspaceBaselineRuntime): BaselineManifest | null {
   rt.actor.assertCurrent();
 
-  const rows = rt.storage.sql<{ generation: string; path: string; size: number; mtime_ms: number; hash: string | null; body: number }>`
-    SELECT m.generation, m.path, m.size, m.mtime_ms, m.hash, b.hash IS NOT NULL AS body FROM vfs_baseline_manifest m
-    LEFT JOIN vfs_baseline_blob b ON b.hash = m.hash
-    WHERE m.actor_id = ${rt.actor.actorId} AND m.active = 1`;
+  const rows = rt.storage.sql<{ generation: string; path: string; size: number; mtime_ms: number; hash: string | null }>`
+    SELECT generation, path, size, mtime_ms, hash FROM vfs_baseline_manifest
+    WHERE actor_id = ${rt.actor.actorId} AND active = 1`;
 
   const entries = new Map<string, ManifestEntry>();
   let marker: { readonly capturedAt: number; readonly generation: string } | null = null;
 
   for (const row of rows) {
     if (row.path === '') marker = { capturedAt: row.mtime_ms, generation: row.generation };
-    else entries.set(row.path, { size: row.size, mtimeMs: row.mtime_ms, hash: row.hash, body: row.body === 1 });
+    else entries.set(row.path, { size: row.size, mtimeMs: row.mtime_ms, hash: row.hash });
   }
 
   return marker === null ? null : { ...marker, entries };
 }
 
-function blobText(rt: WorkspaceBaselineRuntime, entry: ManifestEntry): string | null {
-  if (!entry.body || entry.hash === null) return null;
+/** A file's text as `generation` holds it: null past one row, or for a binary file, which has no body. */
+function blobText(rt: WorkspaceBaselineRuntime, entry: ManifestEntry, generation: string): string | null {
+  if (entry.hash === null) return null;
   const row = rt.storage.sql<{ content: string }>`SELECT content FROM vfs_baseline_blob WHERE hash = ${entry.hash} LIMIT 1`[0];
 
-  // A missing body means a re-baseline landed mid-read; assuming empty would report the file as added.
-  if (!row) throw new Error(`Workspace baseline changed while reading the change-set (body ${entry.hash})`);
+  if (row !== undefined) return row.content;
 
-  return row.content;
+  const active = rt.storage.sql<{ active: number }>`SELECT active FROM vfs_baseline_manifest
+    WHERE actor_id = ${rt.actor.actorId} AND generation = ${generation} AND path = '' LIMIT 1`[0]?.active === 1;
+
+  // While its generation is active every text body is kept, so a missing one was binary. Otherwise a re-baseline
+  // landed mid-read, and assuming empty would report the file as added.
+  if (!active) throw new Error(`Workspace baseline changed while reading the change-set (body ${entry.hash})`);
+
+  return null;
 }
 
 function unmoved(entry: ManifestEntry, st: VfsEntryStat): boolean {
@@ -240,11 +244,11 @@ export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime): Promise<Wo
     }
 
     if (now !== null && base.hash === now.digest) return;
-    admit(path, 'changed', { before: after === null ? null : blobText(rt, base), after, omitted: unread(after === null ? st.size : base.size) });
+    admit(path, 'changed', { before: after === null ? null : blobText(rt, base, manifest.generation), after, omitted: unread(after === null ? st.size : base.size) });
   });
 
   // Whatever the baseline still holds was not found in the workspace.
-  for (const [path, base] of baseline) admit(path, 'removed', { before: blobText(rt, base), after: '', omitted: unread(base.size) });
+  for (const [path, base] of baseline) admit(path, 'removed', { before: blobText(rt, base, manifest.generation), after: '', omitted: unread(base.size) });
 
   files.sort((a, b) => a.path.localeCompare(b.path));
 
@@ -299,14 +303,14 @@ async function capture(
       VALUES (${actorId}, ${generation}, ${''}, ${0}, ${capturedAt}, ${null}, ${0})`;
     await walkWorkspaceFiles(rt, async (path, st) => {
       const kept = previous.get(path);
-      let entry: ManifestEntry = { size: st.size, mtimeMs: st.mtimeMs, hash: null, body: false };
+      let entry: ManifestEntry = { size: st.size, mtimeMs: st.mtimeMs, hash: null };
 
       if (kept !== undefined && unmoved(kept, st)) {
         entry = kept;
       } else if (st.size <= BODY_MAX_BYTES) {
         const { digest, text } = await contentsOf(rt, path);
 
-        entry = { ...entry, hash: digest, body: text !== null };
+        entry = { ...entry, hash: digest };
 
         if (text !== null) void rt.storage.sql`INSERT OR IGNORE INTO vfs_baseline_blob (hash, content) VALUES (${digest}, ${text})`;
       }
