@@ -6,7 +6,7 @@ import { tool, jsonSchema } from 'ai';
 import {
   chatSessionTurns, gatewayWorkspace, hostedExplorationHarness, orchestratorHarness, rpcReachableFrom, workspaceMainActor,
 } from './helpers/actor-harness';
-import { chatCompletion, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
+import { chatCompletion, requestOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
 import { isAgentRpcMethod } from '../src/cli/rpc-gate';
 import { hostBranch } from '../src/exploration-hosting';
 import {
@@ -329,6 +329,41 @@ describe('recursive split budget', () => {
 });
 
 describe('the mission ledger bounds a hosted head', () => {
+  test('a branch of a turn under a mission budget charges that mission', async () => {
+    const task = 'check the release notes instead';
+    const liveCall = Promise.withResolvers<void>();
+    const releaseLive = Promise.withResolvers<void>();
+    let held = false;
+
+    // The live turn's first call is held until the branch starts, so the branch forks a running turn.
+    const gateway = stubAiBinding(async (run) => {
+      if (JSON.stringify(requestOf(run).messages[0]?.content ?? '').includes(task)) return chatCompletion(run, 'the branch answer');
+
+      if (!held) {
+        held = true;
+        liveCall.resolve();
+        await releaseLive.promise;
+      }
+
+      return chatCompletion(run, 'the live answer');
+    });
+
+    const { agent } = gatewayWorkspace(gateway);
+    agent.budget.declare('q3', { tokens: 1_000_000 });
+
+    // A scheduled wake is the turn a mission labels: its trigger names the label, its drain turn runs under it.
+    await agent.createTimerTrigger({ atMs: Date.now(), label: 'nightly review', trust: 'owner', missionLabel: 'q3' });
+    const wake = agent._kinuTimerTick();
+    await liveCall.promise;
+    expect(await agent.branchTurn(task)).toMatchObject({ accepted: true });
+    releaseLive.resolve();
+    await wake;
+    await agent.harnessJoinDetachedFibers();
+
+    // The live turn's call and the branch head's: a fork of a budgeted turn cannot spend outside its budget.
+    expect(agent.budget.snapshot('q3').map((mission) => mission.calls)).toEqual([2]);
+  });
+
   test('the two ledger members serve a sibling object and never a public transport', () => {
     // A spend ledger must not become writable over the public WS/HTTP transport, yet a hosted head's
     // object charges it over the DO stub.

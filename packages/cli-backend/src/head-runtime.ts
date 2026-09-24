@@ -11,7 +11,7 @@ import {
   type PublishHeadStream,
   type MissionGovernor, type ModelCallSink, type ModelOperationSink,
   type DynamicContext, type HostedActor, type ProfileAuthorityInputs, type WorkMode, type WriteObserver,
-  HeadCapture, runHeadInference, buildHeadToolSet, HeadController, REAL_CLOCK, type HeadJournal,
+  HeadCapture, runHeadInference, runHeadSplit, buildHeadToolSet, HeadController, REAL_CLOCK, type HeadJournal,
   createDbCodemodeProvider, createStateCodemodeProvider,
   headMergeLLM,
   localMissionScope,
@@ -178,29 +178,5 @@ async function runLocalSplit(
   input: HeadInput,
   deps: CLIHeadRuntimeDeps,
 ): Promise<HeadSplitResult> {
-  const controller = new HeadController(createCLIHeadRuntime(deps), deps.journal(), REAL_CLOCK);
-
-  const controllerInput: Parameters<HeadController['run']>[0] = {
-    parentHeadId: input.id,
-    parentDepth: input.depth,
-    rootId: input.rootId,
-    inheritedContext: input.inheritedContext,
-    request: { rationale: request.rationale, heads: request.heads, mergeStrategy: request.mergeStrategy },
-    parentBudget: input.budget,
-    model: input.model,
-    mode: input.mode,
-    // A subtree charges its root's mission, or splitting escapes the budget.
-  };
-
-  if (input.missionLabels?.length) controllerInput.missionLabels = input.missionLabels;
-  const result = await controller.run(controllerInput);
-
-  return {
-    narrative: result.mergedNarrative,
-    decisions: result.selectedDecisions,
-    unresolvedQuestions: result.unresolvedQuestions,
-    blindSpots: result.blindSpots,
-    childHeadIds: result.headIds,
-    headCount: result.costSummary.headCount,
-  };
+  return await runHeadSplit(new HeadController(createCLIHeadRuntime(deps), deps.journal(), REAL_CLOCK), input, request);
 }

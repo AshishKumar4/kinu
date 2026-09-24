@@ -61,6 +61,7 @@ export {
 
 export {
   HeadController,
+  runHeadSplit,
   type HeadRuntime,
   type HeadGrounding,
   type SpawnedHead,

@@ -43,7 +43,8 @@ export interface HeadInput {
   readonly model?: string;
   /** Empty = none. Undefined = all. */
   readonly allowedTools?: readonly string[];
-  /** Mission-budget labels, as strings because this input crosses a facet boundary. Absent or empty: unbudgeted, nothing is asked. */
+  /** Mission-budget labels, as strings because this input crosses a facet boundary. Absent or empty: unbudgeted, nothing is asked.
+   *  Set only by {@link forkMission}. */
   readonly missionLabels?: readonly string[];
   /** Always stated, never inferred; a head's default is `inherit` (`defaultLoopOrigin`). */
   readonly loop: LoopOrigin;
@@ -157,6 +158,15 @@ export interface HeadRunView {
   readonly heads: readonly HeadRunHeadView[];
   /** Null when no head reported any; never substituted with 0. */
   readonly merge: { narrative: string; headCount: number; totalTokens: number | null } | null;
+}
+
+/**
+ * A head charges the mission of the turn that started its tree: a steer branch the scope the live turn runs
+ * under, a split's children their parent's. An unscoped turn leaves the key absent, so its heads never reach
+ * the ledger.
+ */
+export function forkMission(labels: readonly string[] | undefined): Pick<HeadInput, 'missionLabels'> {
+  return labels === undefined || labels.length === 0 ? {} : { missionLabels: [...labels] };
 }
 
 export interface SplitRequest {

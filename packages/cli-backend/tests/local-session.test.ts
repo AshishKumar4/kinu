@@ -4005,6 +4005,25 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     expect(session.branch('nothing running')).toBe(false);
     expect(session.branch('   ')).toBe(false);
   });
+
+  test('a branch of a turn under a mission budget charges that mission', async () => {
+    const { model, release } = branchableModel('the live answer', () => 'the branch answer');
+    const { session, events } = setup('unused', model);
+    session.budget.declare('q3', { tokens: 1_000_000 });
+
+    // A scheduled wake is the turn a mission labels: its trigger names the label, its drain turn runs under it.
+    const fireAt = Date.now() + 60_000;
+    await session.createTimerTrigger({ atMs: fireAt, label: 'nightly review', trust: 'owner', missionLabel: 'q3' });
+    await session.fireDueTriggers(fireAt);
+    await waitFor(() => events.some((e) => e.type === 'text-delta'));
+    expect(session.branch('check the release notes instead')).toBe(true);
+    release();
+    await waitFor(() => branchEvents(events).some((e) => e.status === 'settled'), 5000);
+
+    // The live turn's call and the branch head's: a fork of a budgeted turn cannot spend outside its budget.
+    expect(session.budget.snapshot('q3').map((mission) => mission.calls)).toEqual([2]);
+    await session.end();
+  });
 });
 
 describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () => {

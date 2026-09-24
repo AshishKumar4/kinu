@@ -228,7 +228,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
       const journal = new HeadJournal(parent.storage.sql, parent.actor);
 
       const branch = await startBranchHead(session.headRuntime, journal, {
-        id: 'spend-branch', task: 'Inspect another angle.', inheritedContext: [],
+        id: 'spend-branch', task: 'Inspect another angle.', inheritedContext: [], missionLabels: [],
       });
 
       const report = await branch.result;

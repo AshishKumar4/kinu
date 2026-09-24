@@ -20,7 +20,9 @@ import {
   type SerializedMessage,
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
+  forkMission,
 } from './types';
+import type { HeadSplitRequest, HeadSplitResult } from './head-tools';
 import { headProducedFindings } from './head-summary';
 import { MergeOutputSchema, type MergeOutput } from './merge-schema';
 import { evaluateWithMultiModelJudging, median } from '../mcts/evaluation';
@@ -195,9 +197,9 @@ export class HeadController {
         mergeStrategy: strategy,
         // A fork explores under the loop it forks from, via the per-kind default.
         loop: defaultLoopOrigin('head'),
+        ...forkMission(opts.missionLabels),
       };
 
-      if (opts.missionLabels?.length) Object.assign(input, { missionLabels: opts.missionLabels });
       // A local journal writes the row before this returns; nothing may push that write behind a microtask.
       const spawnRecorded = this.journal.insertSpawn(input);
 
@@ -506,6 +508,33 @@ export class HeadController {
 
     return { ok: true, output: winner.sample };
   }
+}
+
+/** A head's `split_subheads` as every backend runs it: its children charge its mission, so a subtree cannot
+ *  spend outside the budget its root turn runs under. */
+export async function runHeadSplit(
+  controller: HeadController, parent: HeadInput, request: HeadSplitRequest,
+): Promise<HeadSplitResult> {
+  const result = await controller.run({
+    parentHeadId: parent.id,
+    parentDepth: parent.depth,
+    rootId: parent.rootId,
+    inheritedContext: parent.inheritedContext,
+    request: { rationale: request.rationale, heads: request.heads, mergeStrategy: request.mergeStrategy },
+    parentBudget: parent.budget,
+    model: parent.model,
+    mode: parent.mode,
+    ...forkMission(parent.missionLabels),
+  });
+
+  return {
+    narrative: result.mergedNarrative,
+    decisions: result.selectedDecisions,
+    unresolvedQuestions: result.unresolvedQuestions,
+    blindSpots: result.blindSpots,
+    childHeadIds: result.headIds,
+    headCount: result.costSummary.headCount,
+  };
 }
 
 /** Heads that changed nothing are omitted; tolerates a missing array from the RPC boundary. */

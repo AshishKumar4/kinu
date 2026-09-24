@@ -10,7 +10,7 @@ import {
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
-  createReportCodemodeProvider, HeadController, REAL_CLOCK, SubordinateRosterStore,
+  createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   recoverActorTurns, EventLog, actorReferenceOf,
   activePromptSectionOverrides,
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
@@ -20,7 +20,7 @@ import {
   type AssignedTurnFraming, type BuiltinToolName,
   type BoundActor, type DynamicContext, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
-  type LoopOrigin, type MergeResult, type NimbusSandboxHandle, type NodeHomeHost,
+  type LoopOrigin, type NimbusSandboxHandle, type NodeHomeHost,
   type SqlExec, type SqlValue, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
@@ -826,31 +826,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       throw new KinuError('missing', 'This workspace has no owner, so a head cannot split further.');
     }
 
-    const controller = new HeadController(runtimeForSplit, journal, REAL_CLOCK);
-
-    const controllerInput: Parameters<HeadController['run']>[0] = {
-      parentHeadId: parent.id,
-      parentDepth: parent.depth,
-      rootId: parent.rootId,
-      inheritedContext: parent.inheritedContext,
-      request: { rationale: request.rationale, heads: [...request.heads], mergeStrategy: request.mergeStrategy },
-      parentBudget: parent.budget,
-      mode: parent.mode,
-      model: parent.model,
-    };
-
-    // A subtree charges its root's mission, or a head escapes its budget by splitting again.
-    if (parent.missionLabels?.length) controllerInput.missionLabels = parent.missionLabels;
-    const result: MergeResult = await controller.run(controllerInput);
-
-    return {
-      narrative: result.mergedNarrative,
-      decisions: result.selectedDecisions,
-      unresolvedQuestions: result.unresolvedQuestions,
-      blindSpots: result.blindSpots,
-      childHeadIds: result.headIds,
-      headCount: result.costSummary.headCount,
-    };
+    return await runHeadSplit(new HeadController(runtimeForSplit, journal, REAL_CLOCK), parent, request);
   }
 
   /**
@@ -3232,11 +3208,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     const id = newBranchId();
+    // Read before the await: the branch charges the turn the owner redirected, not whichever runs next.
+    const missionLabels = this.budget.scope;
     const inheritedContext = await this.readInheritedContext();
     this._pendingBranches.push({
       id, task,
       handle: startBranchHead(runtime, this.headJournal, {
-        id, task, inheritedContext,
+        id, task, inheritedContext, missionLabels,
       }),
     });
     this.broadcastBranchStatus({ type: 'branch_status', status: 'running', branchId: id, task });

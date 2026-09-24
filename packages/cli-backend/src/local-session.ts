@@ -1095,9 +1095,11 @@ export class LocalAgentSession implements BackendHost {
     if (!task) return false;
     this.ensureModelState();
     const id = newBranchId();
+    // Read now: the branch charges the turn the owner redirected, not whichever runs next.
+    const missionLabels = this.budget.scope;
 
     const handle = this.readInheritedContext().then((inheritedContext) => startBranchHead(this._headRuntime, this.headJournal, {
-      id, task, inheritedContext,
+      id, task, inheritedContext, missionLabels,
     }));
 
     this.pendingBranches.push({ id, task, handle });

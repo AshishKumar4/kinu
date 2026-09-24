@@ -5,7 +5,7 @@
 
 import type { SqlExecutor } from './types/primitives';
 import type { HeadInput, HeadReport, HeadRunHeadView, SerializedMessage } from './heads/types';
-import { headStatusUnsettled, storedHeadReportStatus } from './heads/types';
+import { forkMission, headStatusUnsettled, storedHeadReportStatus } from './heads/types';
 import type { HeadRuntime } from './heads/controller';
 import type { HeadJournal } from './heads/journal';
 import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes';
@@ -47,6 +47,8 @@ export interface BranchStartInput {
   task: string;
   /** Already capped by the backend's readInheritedContext. */
   inheritedContext: SerializedMessage[];
+  /** The live turn's mission scope (`MissionGovernor.scope`), read when the owner branches. */
+  missionLabels: readonly string[];
   id?: string;
   model?: string;
 }
@@ -81,6 +83,7 @@ export async function startBranchHead(
     model: input.model,
     mergeStrategy: 'best_of',
     loop: defaultLoopOrigin('head'),
+    ...forkMission(input.missionLabels),
   };
 
   journal.recordSplit(rootId, BRANCH_RATIONALE, spawnedAt);
