@@ -527,10 +527,11 @@ it: which side owns which state, the connect-ticket exchange, the
 Model choice is per workspace, resolved through a registry
 (`packages/core/src/providers/registry.ts`) that the backends build differently
 and use identically. Cloud registers `workers-ai`, user-owned `my-gateway`, the
-platform `ai-gateway` fallback, `codex`, `openai`, `anthropic`, `openrouter`,
+platform `ai-gateway` fallback, `codex`, `claude` (a Claude Pro or Max login,
+sent as Claude Code's CLI sends it), `openai`, `anthropic`, `openrouter`,
 `openai-compat`, then the dynamic models.dev catalog source
 (`packages/cf-backend/src/providers/agent-registry.ts`). The CLI registers the
-same set plus `claude` (the local Claude Code binary), `opencode`, and one
+same set plus `opencode` and one
 `openai-compat:<name>` entry per extra compatible credential
 (`packages/cli-backend/src/model-resolver.ts`). Its `workers-ai` and
 `my-gateway` entries resolve three ways: a local gateway endpoint, a proxy

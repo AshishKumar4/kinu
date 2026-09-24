@@ -5,7 +5,7 @@ import {
 } from '@kinu.run/core';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from './runtime';
 import type { LocalProviderCredentials } from './model-resolver';
-import type { LocalCodexAuthStore } from './codex-auth-store';
+import type { LocalOAuthStore } from './oauth-store';
 import type { Database } from 'bun:sqlite';
 import type { LocalActorConfig } from './actor-identity';
 import { KinuError } from '@kinu.run/core/obs';
@@ -27,8 +27,8 @@ interface CLIOpenOptions {
   /** Default endpoint for bare ids; null when nothing derives one. */
   llm: LLMProviderConfig | null;
   providerCredentials?: LocalProviderCredentials;
-  codexAuthStore?: LocalCodexAuthStore;
-  codexConfigPath?: string;
+  oauthStore?: LocalOAuthStore;
+  oauthConfigPath?: string;
   /** See CLIRuntimeConfig.cwd. */
   cwd?: string | null;
   checkpointKeep?: number;

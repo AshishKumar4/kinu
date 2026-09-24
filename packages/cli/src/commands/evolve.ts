@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { runMCTS, createDurableMctsSession, DEFAULT_CONFIG, type MCTSProgressEvent, type SearchNode } from '@kinu.run/core';
 import { openWorkspaceCLI } from '@kinu.run/cli-backend';
-import { CONFIG_PATH, createCodexAuthStore, requireLLMConfig, resolveAgentRef, resolveProviderCredentials } from '../config';
+import { CONFIG_PATH, createOAuthStore, requireLLMConfig, resolveAgentRef, resolveProviderCredentials } from '../config';
 import { readDefaultTier } from '../profiles';
 import { requireLocalAgent } from '../local-target';
 import {
@@ -35,14 +35,14 @@ export async function evolveCommand(name: string, opts: {
   const branches = opts.branches !== undefined ? parsePositiveInt(opts.branches, 'branches') : DEFAULT_CONFIG.mcts.branches;
   const maxCostUSD = opts.maxCost !== undefined ? parsePositiveNumber(opts.maxCost, 'max-cost') : DEFAULT_CONFIG.mcts.maxCostUSD;
   const llmConfig = requireLLMConfig({ ...opts, defaultModel: readDefaultTier()?.model });
-  const codexAuthStore = createCodexAuthStore();
+  const oauthStore = createOAuthStore();
   const db = new Database(dbPath);
 
   const { rt, info } = await openWorkspaceCLI(db, dbPath, {
     llm: llmConfig,
     providerCredentials: resolveProviderCredentials(),
-    codexAuthStore,
-    codexConfigPath: CONFIG_PATH,
+    oauthStore,
+    oauthConfigPath: CONFIG_PATH,
   });
 
   console.log('');

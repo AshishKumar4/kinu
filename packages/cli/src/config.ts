@@ -26,14 +26,14 @@ import { tolerate } from '@kinu.run/core/obs';
 import {
   makeSql, CLOUD_PROXY_PROVIDER_IDS,
   cloudProxyBaseURL,
-  createFileCodexAuthStore,
+  createFileOAuthStore,
   ensureSecretDir,
   kinuHome,
   stripProvider,
   withConfigLock,
   writeSecretFile,
   type LocalCloudSession,
-  type LocalCodexAuthStore,
+  type LocalOAuthStore,
   type LocalProviderCredentials,
   type McpServerConfig,
 } from '@kinu.run/cli-backend';
@@ -115,7 +115,8 @@ export interface KinuConfig {
     openai?: LocalApiKeyProvider;
     anthropic?: LocalApiKeyProvider;
     openrouter?: LocalApiKeyProvider;
-    codex?: LocalCodexSession & { accounts?: Record<string, LocalCodexSession> };
+    codex?: LocalOAuthSession & { accounts?: Record<string, LocalOAuthSession> };
+    claude?: LocalOAuthSession & { accounts?: Record<string, LocalOAuthSession> };
     openaiCompat?: Record<string, {
       baseURL: string;
       apiKey?: string;
@@ -143,7 +144,7 @@ export interface LocalApiKeyProvider {
   accounts?: Record<string, { apiKey: string }>;
 }
 
-export interface LocalCodexSession {
+export interface LocalOAuthSession {
   accessToken?: string;
   refreshToken?: string;
   expiresAt?: number;
@@ -191,7 +192,7 @@ const LocalApiKeyProviderSchema = v.object({
   accounts: v.optional(v.record(v.string(), v.object({ apiKey: v.string() }))),
 });
 
-const LocalCodexSessionSchema = v.object({
+const LocalOAuthSessionSchema = v.object({
   accessToken: v.optional(v.string()),
   refreshToken: v.optional(v.string()),
   expiresAt: v.optional(v.number()),
@@ -217,8 +218,12 @@ const KinuConfigSchema: v.GenericSchema<KinuConfig> = v.object({
     anthropic: v.optional(LocalApiKeyProviderSchema),
     openrouter: v.optional(LocalApiKeyProviderSchema),
     codex: v.optional(v.object({
-      ...LocalCodexSessionSchema.entries,
-      accounts: v.optional(v.record(v.string(), LocalCodexSessionSchema)),
+      ...LocalOAuthSessionSchema.entries,
+      accounts: v.optional(v.record(v.string(), LocalOAuthSessionSchema)),
+    })),
+    claude: v.optional(v.object({
+      ...LocalOAuthSessionSchema.entries,
+      accounts: v.optional(v.record(v.string(), LocalOAuthSessionSchema)),
     })),
     openaiCompat: v.optional(v.record(v.string(), OpenAiCompatConfigSchema)),
   })),
@@ -779,7 +784,7 @@ export function resolveLLMConfig(opts?: {
   if (cloudConfig && (!model || isNativeCloudSpec(model))) return cloudConfig;
 
   // An explicit registry-only spec resolves to that family ahead of any credential default.
-  const family = registryFamilyMarker(model);
+  const family = registryFamilyMarker(model ?? preferredModelFromCredentials(file));
 
   if (family) return family;
 
@@ -813,7 +818,7 @@ export function requireLLMConfig(opts?: {
     'No model is set up.\n' +
     '  Run kinu auth to use Workers AI in your Cloudflare account,\n' +
     '  run kinu setup to pick a model provider,\n' +
-    '  sign in to Claude Code and pass --model claude/<model>,\n' +
+    '  run kinu provider connect claude to use your Claude subscription,\n' +
     '  or pass --base-url and --auth to use your own endpoint.'
   );
 }
@@ -845,8 +850,8 @@ function localApiKeyAccounts(file: KinuConfig): LocalProviderCredentials['apiKey
   return keys;
 }
 
-export function createCodexAuthStore(fetchFn?: typeof fetch): LocalCodexAuthStore {
-  return createFileCodexAuthStore(CONFIG_PATH, { fetch: fetchFn });
+export function createOAuthStore(fetchFn?: typeof fetch): LocalOAuthStore {
+  return createFileOAuthStore(CONFIG_PATH, { fetch: fetchFn });
 }
 
 export function resolveMcpServers(): Record<string, McpServerConfig> {
@@ -950,7 +955,7 @@ export async function firstOpenAiCompatModel(): Promise<string | null> {
   return `openai-compat/${first.id}`;
 }
 
-/** Families served by their own auth seams (claude binary login, opencode auth.json); the endpoint is only a marker. */
+/** Families the registry serves from their own logins (Claude's, opencode's auth.json); the endpoint is only a marker. */
 function registryFamilyMarker(model: string | undefined): LLMProviderConfig | null {
   if (!model) return null;
 
@@ -967,6 +972,8 @@ function registryFamilyMarker(model: string | undefined): LLMProviderConfig | nu
 
 function preferredModelFromCredentials(file: KinuConfig): string | undefined {
   if (file.providers?.codex?.accessToken || file.providers?.codex?.refreshToken || process.env.CODEX_ACCESS_TOKEN) return `codex/${CODEX_DEFAULT_MODEL}`;
+
+  if (file.providers?.claude?.accessToken) return `claude/${ANTHROPIC_DEFAULT_MODEL}`;
 
   if (file.providers?.openai?.apiKey || process.env.OPENAI_API_KEY) return `openai/${OPENAI_DEFAULT_MODEL}`;
 

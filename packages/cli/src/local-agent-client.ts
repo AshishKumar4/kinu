@@ -22,7 +22,7 @@ import {
 import {
   CONFIG_PATH,
   agentDbPath,
-  createCodexAuthStore,
+  createOAuthStore,
   loadConfigFile,
   readProviderRevision,
   resolveMcpServers,
@@ -93,11 +93,11 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
 
   const { llmConfig, resolver } = createConfiguredLocalModelResolver({ ...opts, agentName: name });
   const providerCredentials = resolveProviderCredentials();
-  const codexAuthStore = createCodexAuthStore();
+  const oauthStore = createOAuthStore();
   const db = new Database(dbPath);
 
   const openConfig = {
-    llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH,
+    llm: llmConfig, providerCredentials, oauthStore, oauthConfigPath: CONFIG_PATH,
     checkpointKeep: loadConfigFile().checkpointKeep,
     cwd: opts.cwd,
   };

@@ -13,6 +13,18 @@ export function randomToken(bytes: number): string {
   return base64Url(crypto.getRandomValues(new Uint8Array(bytes)));
 }
 
+export interface PkcePair {
+  readonly verifier: string;
+  readonly challenge: string;
+}
+
+export async function createPkcePair(): Promise<PkcePair> {
+  const verifier = randomToken(32);
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+
+  return { verifier, challenge: base64Url(new Uint8Array(digest)) };
+}
+
 /** SHA-256 digests live in `safety/argument-digest.ts` (`sha256Hex`). */
 
 /** Constant-time string comparison. */

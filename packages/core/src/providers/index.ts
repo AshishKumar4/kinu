@@ -47,6 +47,11 @@ export * from './anthropic';
 
 export { CLAUDE_CRED_KEY, createClaudeProvider } from './claude';
 
+export {
+  CLAUDE_OAUTH_CALLBACK_PORT, CLAUDE_REFRESH_LEAD_MS, claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn,
+  type ClaudeOAuthClient, type ClaudeSignIn,
+} from './claude-oauth';
+
 export * from './fetch-shim';
 
 export * from './gateway-binding-fetch';

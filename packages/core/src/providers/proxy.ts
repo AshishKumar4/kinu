@@ -40,8 +40,7 @@ export const CLOUD_PROXY_PROVIDER_IDS = ['workers-ai', 'my-gateway'] as const;
 
 export type CloudProxyProviderId = typeof CLOUD_PROXY_PROVIDER_IDS[number];
 
-/** Cloudflare keys also drive the AI Gateway management API, so only pinned endpoints
- *  get them; Codex rejects Workers egress as bot traffic (403); Claude's is Claude Code's alone. */
+/** Cloudflare keys also run the AI Gateway API; Codex refuses Workers egress (403); Claude's is Claude Code's. */
 const PROXY_DENIED_CRED_KEYS: readonly string[] = [
   'cloudflare.oauth', 'cloudflare.ai-gateway', 'codex.oauth', 'claude.oauth',
 ];
@@ -116,7 +115,7 @@ export function proxyTargetAllowed(target: string, base: string, method: string)
 }
 
 /** Secret-free marker resolution, plus the base URL when known. No proxied
- *  `forceRefresh`: its only user, codex, is refused by the proxy. */
+ *  `forceRefresh`: its users, the subscription logins, are refused by the proxy. */
 export function proxyAuthResolution(credKey: string, baseURL?: string | null): AuthResolution {
   const resolution: AuthResolution = { headers: { [PROXY_CRED_HEADER]: credKey } };
 

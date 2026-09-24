@@ -204,7 +204,7 @@ describe("resolveLLMConfig — registry-only providers", () => {
   const registryOnly = [
     {
       name: "a claude-subscription spec resolves without any other provider",
-      spec: "claude/claude-sonnet-4-x", provider: "claude", model: "claude-sonnet-4-x",
+      spec: "claude/claude-opus-4-7", provider: "claude", model: "claude-opus-4-7",
     },
     {
       name: "an opencode spec resolves through its bridge marker",

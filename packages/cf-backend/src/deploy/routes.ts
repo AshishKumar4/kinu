@@ -6,11 +6,11 @@
  */
 import {
   CLOUDFLARE_DEPLOY_SCOPES, DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_PAGE_PATH, DEPLOY_RUN_ID,
-  DEPLOY_SOCKET_PROTOCOL, DeployInputsSchema, RELEASE_MANIFEST_PATH, authorizeUrl, createPkcePair,
+  DEPLOY_SOCKET_PROTOCOL, DeployInputsSchema, RELEASE_MANIFEST_PATH, authorizeUrl,
   isDeployPath, mintDeployRun, parseReleaseManifest, promptedSecrets, runKeyDigest,
   type DeployOptions,
 } from '@kinu.run/core/deploy';
-import { err, fetchDeployedAsset, json, safeJson, sha256Hex, timingSafeEqual } from '@kinu.run/core';
+import { createPkcePair, err, fetchDeployedAsset, json, safeJson, sha256Hex, timingSafeEqual } from '@kinu.run/core';
 import * as v from 'valibot';
 import { DEPLOY_STATE_COOKIE_NAME, readCookie, setCookie } from '../auth/session';
 import type { DeployRunDO } from './deploy-do';

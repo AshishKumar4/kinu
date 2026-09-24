@@ -1,5 +1,5 @@
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
-import { checkClaudeAvailability, stripProvider } from '@kinu.run/cli-backend';
+import { stripProvider } from '@kinu.run/cli-backend';
 import { loadConfigFile } from '../config';
 import { adoptDefaultModel } from '../default-model';
 import { ACCENT, DIM, OK, WARN } from '../display';
@@ -185,10 +185,7 @@ async function chooseProvider(cloudReady: boolean): Promise<string> {
 
   if (!cloudReady) console.log(DIM('  Option 1 needs a signed-in account. Run kinu auth first.'));
 
-  // The Claude Code subscription stores no credential here; mention it only when usable on this machine.
-  if ((await checkClaudeAvailability()).loggedIn) {
-    console.log(DIM('  Claude Code is signed in here. To use your Claude subscription, pass --model claude/claude-opus-4-x.'));
-  }
+  console.log(DIM('  For your Claude Pro or Max subscription, enter claude.'));
 
   const value = await ask('Choice', '1');
 

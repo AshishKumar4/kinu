@@ -1,4 +1,4 @@
-// What an OpenRouter key has left, read live: openrouter.ai/docs/api/reference/limits (`GET /api/v1/key`).
+// openrouter.ai/docs/api/reference/limits (`GET /api/v1/key`).
 import * as v from 'valibot';
 import { KinuError } from '../obs/index';
 import { fmtUsd } from '../utils/format';
@@ -8,10 +8,10 @@ export interface AccountCredit {
   readonly provider: string;
   readonly account: string;
   readonly at: number;
-  /** USD; null: no limit on this key. */
+  /** USD; null: no limit. */
   readonly limit: number | null;
   readonly remaining: number | null;
-  /** `daily`, `weekly` or `monthly`; null when the limit never resets. */
+  /** `daily`, `weekly` or `monthly`; null: never resets. */
   readonly reset: string | null;
   readonly usedToday: number;
   readonly usedThisMonth: number;

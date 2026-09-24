@@ -46,7 +46,7 @@ export interface ProviderRegistry {
 /** Id for a failure of the dynamic source itself. */
 export const CATALOG_SOURCE_ID = 'catalog';
 
-/** Reads go to `named`, else `accountFor`'s, else `main`, else the only account; several unchosen: refused. */
+/** `named`, else `accountFor`'s, else `main`, else the only one; several unchosen: refused. */
 export function accountDeps(deps: ProviderDeps, providerId: string, named?: string): ProviderDeps {
   const chosen = (): string | undefined => named ?? deps.accountFor?.(providerId);
 

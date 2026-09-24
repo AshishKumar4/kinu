@@ -1,4 +1,4 @@
-// Codex via ChatGPT subscription (chatgpt.com/backend-api/codex/responses); auth headers from the AuthResolver.
+// Codex via ChatGPT subscription (chatgpt.com/backend-api/codex/responses).
 // `originator: codex_cli_rs` is the WAF bypass; Cloudflare may still 403 Workers' data-center IPs.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModel } from 'ai';

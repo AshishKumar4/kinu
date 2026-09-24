@@ -10,7 +10,7 @@ import * as v from 'valibot';
  * is released only once the holder's refresh is in flight, so an uncovered refresh sends a second request.
  */
 describe('two kinu processes refreshing one Codex credential', () => {
-  const STORE_TS = JSON.stringify(join(import.meta.dir, '../src/codex-auth-store.ts'));
+  const STORE_TS = JSON.stringify(join(import.meta.dir, '../src/oauth-store.ts'));
 
   const childResultSchema = v.object({
     role: v.string(),
@@ -58,7 +58,7 @@ describe('two kinu processes refreshing one Codex credential', () => {
   function spawnChild(role: string, base: string, configPath: string): Bun.Subprocess<'ignore', 'pipe', 'pipe'> {
     return Bun.spawn({
       cmd: [process.execPath, '-e', `
-        const { createFileCodexAuthStore } = await import(${STORE_TS});
+        const { createFileOAuthStore } = await import(${STORE_TS});
         const { asFetchFunction } = await import('@kinu.run/core');
         const role = ${JSON.stringify(role)};
         const base = ${JSON.stringify(base)};
@@ -66,7 +66,7 @@ describe('two kinu processes refreshing one Codex credential', () => {
         // Announce, and wait to be released. The endpoint decides the order.
         await fetch(base + '/arrive?role=' + role);
 
-        const store = createFileCodexAuthStore(${JSON.stringify(configPath)}, {
+        const store = createFileOAuthStore(${JSON.stringify(configPath)}, {
           // Every provider request goes to the endpoint this test controls.
           fetch: asFetchFunction(async (input, init) => await fetch(base + '/token', init)),
         });
@@ -76,7 +76,7 @@ describe('two kinu processes refreshing one Codex credential', () => {
         // refresh. Awaiting here would hand the holder time to finish.
         if (role === 'waiter') void fetch(base + '/armed');
 
-        const auth = await store.getAuth();
+        const auth = await store.getAuth('codex.oauth');
         console.log(JSON.stringify({ role, authorization: auth.headers.Authorization }));
       `],
       cwd: join(import.meta.dir, '../../..'),

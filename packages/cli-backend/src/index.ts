@@ -67,13 +67,7 @@ export {
   type LocalProviderCredentials, type LocalOpenAICompatCredential,
 } from './model-resolver';
 
-export { createFileCodexAuthStore, type LocalCodexAuthStore } from './codex-auth-store';
-
-export {
-  createClaudeCliProvider, checkClaudeAvailability, buildClaudePrompt,
-  CLAUDE_CLI_PROVIDER_ID,
-  type ClaudeCliProviderOptions, type ClaudeSpawn, type SpawnedClaude, type ClaudeAvailability,
-} from './claude-cli-provider';
+export { createFileOAuthStore, type LocalOAuthStore } from './oauth-store';
 
 export {
   createOpenCodeProvider, checkOpenCodeAvailability,

@@ -1,16 +1,17 @@
 // Claude Pro/Max over its OAuth login, sent as Claude Code's CLI per oh-my-pi (THIRD_PARTY_NOTICES.md).
 import { createAnthropic } from '@ai-sdk/anthropic';
-import type { LanguageModel } from 'ai';
+import { APICallError, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import { listAnthropicModels, ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_FAST_MODEL } from './anthropic';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { OAuthTokenError } from './oauth-token-error';
-import { withCallAccount } from './quota';
+import { quotaWindowText, withCallAccount } from './quota';
 import { withRateLimitRetry } from './rate-limit-retry';
 import type { AuthResolution, ModelProvider, ProviderDeps } from './types';
-import { diagnostics, KinuError } from '../obs/index';
+import { accountOf } from '../credentials/accounts';
+import { diagnostics, KinuError, tolerate } from '../obs/index';
 import { sha256Hex } from '../safety/argument-digest';
-import { JsonObjectSchema, JsonValueSchema, parseJsonObject } from '../utils/json';
+import { JsonObjectSchema, JsonValueSchema, parseJsonObject, parseJsonValue } from '../utils/json';
 import { xxHash64 } from '../utils/xxhash64';
 
 export const CLAUDE_CRED_KEY = 'claude.oauth';
@@ -20,7 +21,7 @@ const CLAUDE_MESSAGES_URL = 'https://api.anthropic.com/v1/messages?beta=true';
 /** `bun scripts/check-spoofed-versions.ts --update` bumps it. */
 const DEFAULT_CLAUDE_CODE_VERSION = '2.1.281';
 
-const CLAUDE_CODE_SDK_VERSION = '0.112.1';
+export const CLAUDE_CODE_SDK_VERSION = '0.112.1';
 
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 
@@ -229,7 +230,7 @@ function breakpointsOf(body: SdkBody): { readonly cache_control?: v.InferInput<t
   return decorated.filter((block) => block.cache_control !== undefined);
 }
 
-/** The identity block's breakpoint displaces the system prompt's when four are taken. */
+/** The identity block's breakpoint displaces the prompt's past four. */
 function claudeSystem(body: SdkBody, billing: string): Block[] {
   const decorated = breakpointsOf(body);
   const ttl = decorated[0]?.cache_control ?? { type: 'ephemeral' };
@@ -284,19 +285,16 @@ function claudeCodeBody(body: SdkBody, version: string, sessionId: string) {
 
 type WireBody = ReturnType<typeof claudeCodeBody>;
 
-function attested(body: WireBody): Uint8Array<ArrayBuffer> {
+/** A string, so the rate-limit wrapper can replay it. */
+function attested(body: WireBody): string {
   const text = JSON.stringify(body);
   const marker = text.indexOf(BILLING_MARKER);
   const placeholder = marker === -1 ? -1 : text.indexOf(CCH_PLACEHOLDER, marker + BILLING_MARKER.length);
 
   if (placeholder === -1) throw new KinuError('bad_input', 'a Claude Code body carries its billing block first in system');
-  const encoder = new TextEncoder();
-  const bytes = encoder.encode(text);
-  const cch = (xxHash64(bytes, CCH_SEED) & 0xfffffn).toString(16).padStart(5, '0');
+  const cch = (xxHash64(new TextEncoder().encode(text), CCH_SEED) & 0xfffffn).toString(16).padStart(5, '0');
 
-  bytes.set(encoder.encode(cch), encoder.encode(text.slice(0, placeholder)).byteLength + 'cch='.length);
-
-  return bytes;
+  return `${text.slice(0, placeholder)}cch=${cch}${text.slice(placeholder + CCH_PLACEHOLDER.length)}`;
 }
 
 function claudeSessionId(affinity: string): string {
@@ -397,14 +395,67 @@ function deadLogin(call: ClaudeCall, reason: string): Response {
   return refusedResponse(DEAD_LOGIN);
 }
 
+const SPENT_WINDOWS = new Map([['five_hour', { header: '5h', measure: '300m' }], ['seven_day', { header: '7d', measure: '10080m' }]]);
+
+const RefusalSchema = v.looseObject({
+  error: v.looseObject({
+    message: v.optional(v.string()),
+    details: v.optional(v.looseObject({ error_code: v.optional(v.string()) })),
+  }),
+});
+
+function spentWindowText(response: Response, message: string | undefined): string {
+  const window = SPENT_WINDOWS.get(response.headers.get('anthropic-ratelimit-unified-representative-claim') ?? '');
+  const reset = Number(response.headers.get('anthropic-ratelimit-unified-reset'));
+
+  if (window === undefined || !Number.isFinite(reset) || reset <= 0) return message ?? 'the plan refused the call';
+  const used = Number(response.headers.get(`anthropic-ratelimit-unified-${window.header}-utilization`) ?? '1');
+
+  return quotaWindowText({ measure: window.measure, usedPercent: (Number.isFinite(used) ? used : 1) * 100, resetsAt: reset * 1_000 }, Date.now());
+}
+
+/** Waiting inside the turn restores neither a spent window nor spent included usage. */
+async function usageLimitReached(call: ClaudeCall, response: Response, paid: string): Promise<APICallError | null> {
+  if (response.status !== 429) return null;
+  const text = await response.clone().text();
+  const refusal = v.safeParse(RefusalSchema, tolerate<unknown>(() => parseJsonValue(text), 'malformed-input'));
+  const error = refusal.success ? refusal.output.error : undefined;
+  const windowRejected = response.headers.get('anthropic-ratelimit-unified-status') === 'rejected';
+
+  if (!windowRejected && error?.details?.error_code !== 'credits_required') return null;
+  const account = accountOf(paid);
+  const spent = new KinuError('budget', `api.anthropic.com answered HTTP 429: the subscription's usage for ${account} is spent`);
+
+  diagnostics.failure('provider.claude_usage_limit', spent, { model: call.modelId, account });
+
+  return new APICallError({
+    message: `Claude usage limit reached on the account ${account}: ${windowRejected ? spentWindowText(response, error?.message) : error?.message ?? 'usage credits are required'}.`,
+    url: CLAUDE_MESSAGES_URL,
+    requestBodyValues: undefined,
+    statusCode: 429,
+    isRetryable: false,
+    cause: spent,
+  });
+}
+
 async function sendClaudeCode(call: ClaudeCall, request: SdkRequest, auth: AuthResolution): Promise<Response> {
   const { body } = request;
   const version = call.version.current();
   const betas = claudeCodeBetas(body, request.betas);
   const headers = claudeCodeHeaders({ authorization: authorizationOf(auth), version, betas, sessionId: call.headerSessionId });
   const paid = auth.credentialKey ?? CLAUDE_CRED_KEY;
+  const transport = call.deps.fetch ?? fetch;
 
-  const retrying = withRateLimitRetry(call.deps.fetch ?? fetch, {
+  const refusingSpentUsage = asFetchFunction(async (input, init) => {
+    const response = await transport(input, init);
+    const reached = await usageLimitReached(call, response, paid);
+
+    if (reached !== null) throw reached;
+
+    return response;
+  });
+
+  const retrying = withRateLimitRetry(refusingSpentUsage, {
     provider: 'claude',
     modelId: call.modelId,
     lane: paid,

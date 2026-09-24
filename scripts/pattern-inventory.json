@@ -260,34 +260,6 @@
       "decision": "lexical"
     },
     {
-      "file": "packages/cli-backend/src/claude-cli-provider.ts",
-      "kind": "hand-parser",
-      "owner": "parseFunctionCalls",
-      "sourceSha256": "e2600d19c706e75d871b61708eff8b4d7b56b8f5e995a4af5bf77644bdd721a7",
-      "decision": "xml"
-    },
-    {
-      "file": "packages/cli-backend/src/claude-cli-provider.ts",
-      "kind": "regex-literal",
-      "owner": "invokeRe",
-      "sourceSha256": "ad35066877f0eb7bd5619c8f37c6043c3c95bf292d8a72bc31d0df1c281a22bc",
-      "decision": "xml"
-    },
-    {
-      "file": "packages/cli-backend/src/claude-cli-provider.ts",
-      "kind": "regex-literal",
-      "owner": "paramRe",
-      "sourceSha256": "d9c3b59e7032c64a932c5c2cc4fdc0cd5652d109dc0b25c033e2a128b302dcb4",
-      "decision": "xml"
-    },
-    {
-      "file": "packages/cli-backend/src/claude-cli-provider.ts",
-      "kind": "hand-parser",
-      "owner": "parseNdjson",
-      "sourceSha256": "ddc870cb1c6c38df8bf656bcfb7d033ded66930025edc71eaf00d6b74d961d18",
-      "decision": "framing"
-    },
-    {
       "file": "packages/cli-backend/tests/local-session.test.ts",
       "kind": "regex-literal",
       "owner": "isDynamicBlock",
@@ -538,6 +510,13 @@
       "owner": "stripComment",
       "sourceSha256": "9dd04c280e68c2e0d7d1044c80a09510358855a177a9fa3eb74606e3b9eaf002",
       "decision": "frontmatter"
+    },
+    {
+      "file": "packages/core/src/utils/xxhash64.ts",
+      "kind": "hand-parser",
+      "owner": "stripes",
+      "sourceSha256": "342e5a274af0635604a0053b11ab120e95b04d6d16c2fb7542ba10417ba13e78",
+      "decision": "traversal"
     },
     {
       "file": "packages/core/src/vfs/diff.ts",

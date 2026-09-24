@@ -32,7 +32,7 @@ export interface BranchSpawnerConfig {
   /** The parent's default endpoint for bare ids, or null. */
   llm: LLMProviderConfig | null;
   providerCredentials?: LocalProviderCredentials;
-  codexConfigPath?: string;
+  oauthConfigPath?: string;
 }
 
 export interface BranchSpawner {
@@ -72,7 +72,7 @@ export function createBranchSpawner(
       KINU_ACTOR_BOOTSTRAP: JSON.stringify(localActorProcessBootstrap(config.parent, binding)),
     };
 
-    if (config.codexConfigPath) env.KINU_CONFIG_PATH = config.codexConfigPath;
+    if (config.oauthConfigPath) env.KINU_CONFIG_PATH = config.oauthConfigPath;
 
     const child = fork(workerPath, [], {
       stdio: 'pipe',

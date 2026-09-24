@@ -63,7 +63,7 @@ import {
   createLocalProfileAuthority,
   type LocalProfileAuthority, type LocalProfileModelPlane,
 } from './profile-authority';
-import type { LocalCodexAuthStore } from './codex-auth-store';
+import type { LocalOAuthStore } from './oauth-store';
 import type { FileCheckpoints } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalDatabasePath, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from './actor-identity';
@@ -81,8 +81,8 @@ interface CLIRuntimeOptions {
   llm: LLMProviderConfig | null;
   agentName?: string;
   providerCredentials?: LocalProviderCredentials;
-  codexAuthStore?: LocalCodexAuthStore;
-  codexConfigPath?: string;
+  oauthStore?: LocalOAuthStore;
+  oauthConfigPath?: string;
   /** Shadow-git checkpoints kept per working directory. */
   checkpointKeep?: number;
 }
@@ -366,7 +366,7 @@ export function createCLIRuntime(
       specResolver ??= createLocalModelResolver({
         llm: config.llm,
         credentials: config.providerCredentials,
-        codexAuthStore: config.codexAuthStore,
+        oauthStore: config.oauthStore,
       });
 
       return specResolver.normalizeSpecSync(spec);
@@ -394,7 +394,7 @@ export function createCLIRuntime(
     llm: config.llm,
     sessionAffinity: agentAffinityKey(actor.name),
     credentials: config.providerCredentials,
-    codexAuthStore: config.codexAuthStore,
+    oauthStore: config.oauthStore,
     spec: resolution.model,
     spend: { source: resolution.source, report, operations },
   });
@@ -436,7 +436,7 @@ export function createCLIRuntime(
   const { spawn: spawnBranch, abort: abortBranch } = createBranchSpawner(rootDbPath, {
     parent: actor, llm: config.llm,
     providerCredentials: config.providerCredentials,
-    codexConfigPath: config.codexConfigPath,
+    oauthConfigPath: config.oauthConfigPath,
   });
 
   const workspaceSql = nimbusSql(db);

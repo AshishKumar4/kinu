@@ -1626,7 +1626,7 @@ export { nanoid } from './utils/nanoid';
 
 export { abortCause } from './utils/abort';
 
-export { hmacSha256Hex, randomToken, timingSafeEqual } from './utils/crypto';
+export { createPkcePair, hmacSha256Hex, randomToken, timingSafeEqual, type PkcePair } from './utils/crypto';
 
 export { labelSigner, type LabelSigner, type LabelSignerEnv } from './utils/label-signer';
 

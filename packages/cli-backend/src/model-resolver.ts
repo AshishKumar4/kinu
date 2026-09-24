@@ -2,14 +2,11 @@ import { createChatModel, type LLMProviderConfig } from '@kinu.run/core';
 import {
   CODEX_CRED_KEY,
   DEFAULT_WORKERS_AI_MODEL_ID,
-  MAIN_ACCOUNT,
-  accountCredentialKey,
-  accountOf,
-  baseCredentialKey,
   credentialToHeaders,
   normalizeModelMenu,
   codexCredentialToHeaders,
   createAnthropicProvider,
+  createClaudeProvider,
   createCodexProvider,
   availableJudgeSpecs,
   accountDeps,
@@ -51,9 +48,8 @@ import {
 import { generateText, streamText } from 'ai';
 import type { LanguageModel, LanguageModelUsage } from 'ai';
 import type { LLM } from '@kinu.run/core';
-import { CLAUDE_CLI_PROVIDER_ID, createClaudeCliProvider, type ClaudeCliProviderOptions } from './claude-cli-provider';
 import { OPENCODE_PROVIDER_ID, createOpenCodeProvider } from './opencode-provider';
-import type { LocalCodexAuthStore } from './codex-auth-store';
+import { isOAuthLoginKey, type LocalOAuthStore } from './oauth-store';
 import * as v from 'valibot';
 import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 
@@ -144,14 +140,12 @@ export interface LocalModelResolverConfig {
    *  `provider/model` specs still resolve, bare ids fail with the fixes named. */
   llm: LLMProviderConfig | null;
   credentials?: LocalProviderCredentials;
-  codexAuthStore?: LocalCodexAuthStore;
+  oauthStore?: LocalOAuthStore;
   /** When present, workers-ai + my-gateway resolve through the worker's AI proxy;
    *  when absent they list as unavailable with a `kinu auth` hint. */
   cloud?: LocalCloudSession;
   sessionAffinity?: string;
   fetch?: typeof fetch;
-  /** Seam for the local Claude-subscription provider; tests inject a fake `claude` binary. */
-  claudeCli?: ClaudeCliProviderOptions;
   /** Read per call so {@link LocalModelResolver.setProviderWaitSink} can install
    *  the session's sink after construction. */
   onProviderWait?: (info: ProviderWaitInfo) => void;
@@ -242,7 +236,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const registry = createProviderRegistry();
   const localEndpoint = opts.llm;
   const credentials = opts.credentials ?? {};
-  const authStore = buildAuthStore(localEndpoint, credentials, opts.codexAuthStore);
+  const authStore = buildAuthStore(localEndpoint, credentials, opts.oauthStore);
 
   const cloud = opts.cloud;
 
@@ -309,7 +303,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     registry.register(createSignedOutCloudProvider('my-gateway', 'Your AI Gateway'));
   }
 
-  registry.register(createClaudeCliProvider(opts.claudeCli));
+  registry.register(createClaudeProvider());
   registry.register(createOpenCodeProvider());
   registry.register(createCodexProvider());
   registry.register(createOpenAIProvider());
@@ -716,7 +710,7 @@ function noDefaultModelMessage(): string {
   return 'No default model is set.'
     + ' Run kinu auth to use Workers AI in your Cloudflare account, run kinu setup to pick a model provider,'
     + ' or name a model with --model'
-    + ' (for example --model claude/claude-sonnet-4-x once you are signed in to Claude Code).';
+    + ' (for example --model claude/claude-opus-4-7 once kinu provider connect claude has signed you in).';
 }
 
 type CliProviderId =
@@ -743,7 +737,7 @@ function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null
 
   if (llm.name === OPENCODE_PROVIDER_ID) return OPENCODE_PROVIDER_ID;
 
-  if (llm.name === CLAUDE_CLI_PROVIDER_ID) return CLAUDE_CLI_PROVIDER_ID;
+  if (llm.name === 'claude') return 'claude';
 
   return 'openai-compat';
 }
@@ -776,7 +770,7 @@ interface OpenAICompatHeaders {
 function buildAuthStore(
   localEndpoint: LLMProviderConfig | null,
   credentials: LocalProviderCredentials,
-  codexAuthStore?: LocalCodexAuthStore,
+  oauthStore?: LocalOAuthStore,
 ): LocalAuthStore {
   const store = new Map<string, AuthResolution>();
 
@@ -846,27 +840,21 @@ function buildAuthStore(
     store.set(key, { headers: credentialToHeaders(key, { kind: 'bearer', token }) });
   }
 
-  const hasCodex = (account: string): boolean => (codexAuthStore
-    ? codexAuthStore.hasCredential(account)
-    : account === MAIN_ACCOUNT && Boolean(credentials.codexAccessToken));
-
-  const codexKeys = (): string[] => [MAIN_ACCOUNT, ...codexAuthStore?.accounts() ?? []]
-    .filter(hasCodex)
-    .map((account) => accountCredentialKey(CODEX_CRED_KEY, account));
+  const envCodex = credentials.codexAccessToken ? [CODEX_CRED_KEY] : [];
 
   return {
     has(key: string): boolean {
-      if (baseCredentialKey(key) === CODEX_CRED_KEY) return hasCodex(accountOf(key));
+      if (isOAuthLoginKey(key)) return oauthStore ? oauthStore.has(key) : envCodex.includes(key);
 
       return store.has(key);
     },
     keys(): string[] {
-      return [...store.keys(), ...codexKeys()];
+      return [...store.keys(), ...(oauthStore?.keys() ?? envCodex)];
     },
     async get(key: string, authOpts?: { forceRefresh?: boolean }): Promise<AuthResolution | null> {
-      if (baseCredentialKey(key) !== CODEX_CRED_KEY) return store.get(key) ?? null;
+      if (!isOAuthLoginKey(key)) return store.get(key) ?? null;
 
-      if (codexAuthStore) return codexAuthStore.getAuth(authOpts, accountOf(key));
+      if (oauthStore) return oauthStore.getAuth(key, authOpts);
 
       if (key === CODEX_CRED_KEY && credentials.codexAccessToken) {
         return {

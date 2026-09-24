@@ -109,8 +109,8 @@ function parseArgs(
 function specProviderId(name: string): string {
   const canonical = canonicalProviderName(name);
 
-  if (canonical === 'openai-compatible' || canonical === 'claude' || canonical === 'opencode' || canonical === 'cloudflare') {
-    throw new Error(`${canonical} holds one account: accounts are for openai, openrouter, anthropic, codex and API keys connected in the web app.`);
+  if (canonical === 'openai-compatible' || canonical === 'opencode' || canonical === 'cloudflare') {
+    throw new Error(`${canonical} holds one account: accounts are for openai, openrouter, anthropic, codex, claude and API keys connected in the web app.`);
   }
 
   return canonical;
@@ -141,9 +141,9 @@ async function disconnectAccount(provider: ProviderName, account: string): Promi
   });
 
   if (removed) console.log(`${OK('✓')} Removed the ${ACCENT(`${provider} ${account}`)} account from this machine.`);
-  const cloud = provider === 'codex' ? null : resolveCloudSession();
+  const cloud = provider === 'codex' || provider === 'claude' ? null : resolveCloudSession();
 
-  if (cloud && provider !== 'codex') {
+  if (cloud && provider !== 'codex' && provider !== 'claude') {
     const credKey = accountCredentialKey(API_KEY_PROVIDERS[provider], account);
 
     if ((await listCloudCredentials(cloud.origin, cloud.token)).some((c) => c.key === credKey)) {
@@ -169,6 +169,10 @@ const LOCAL_CREDENTIALS = new Map<ProviderName, LocalCredential>([
   ['codex', {
     clear: (p) => deleteMain(p, 'codex'),
     envVars: ['CODEX_ACCESS_TOKEN'],
+  }],
+  ['claude', {
+    clear: (p) => deleteMain(p, 'claude'),
+    envVars: [],
   }],
   ['openai', {
     clear: (p) => deleteMain(p, 'openai'),
@@ -202,7 +206,7 @@ function deleteKey(
   return true;
 }
 
-function deleteMain(providers: NonNullable<KinuConfig['providers']>, key: 'codex' | 'openai' | 'anthropic' | 'openrouter'): boolean {
+function deleteMain(providers: NonNullable<KinuConfig['providers']>, key: 'codex' | 'claude' | 'openai' | 'anthropic' | 'openrouter'): boolean {
   const entry = providers[key];
 
   if (entry?.accounts === undefined || Object.keys(entry.accounts).length === 0) return deleteKey(providers, key);
@@ -225,7 +229,7 @@ const MODEL_SPEC_PREFIXES = new Map<ProviderName, readonly string[]>([
   ['cloudflare', ['workers-ai/', 'my-gateway/', 'ai-gateway/', '@cf/']],
 ]);
 
-/** Only credentials Kinu stores; the account is `kinu logout`, and claude/opencode own their logins. */
+/** Only credentials Kinu stores; the account is `kinu logout`, and opencode owns its login. */
 async function disconnectProvider(provider: ProviderName): Promise<void> {
   console.log('');
 
@@ -237,11 +241,9 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
     return;
   }
 
-  if (provider === 'claude' || provider === 'opencode') {
-    const tool = provider === 'claude' ? 'Claude Code' : 'opencode';
-    const command = provider === 'claude' ? 'claude logout' : 'opencode auth logout';
-    console.log(`${WARN('!')} Kinu stores no ${tool} credential; it uses your ${tool} sign-in.`);
-    console.log(DIM(`  Sign out of ${tool} itself: ${command}`));
+  if (provider === 'opencode') {
+    console.log(`${WARN('!')} Kinu stores no opencode credential; it uses your opencode sign-in.`);
+    console.log(DIM('  Sign out of opencode itself: opencode auth logout'));
     warnDefaultModelFor(provider);
     // Kinu holds nothing here, but a resident session must re-probe that tool's login.
     bumpProviderRevision();

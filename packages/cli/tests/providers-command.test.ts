@@ -1,5 +1,5 @@
 import { scratchDir } from '../../test-utils/src/scratch';
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 import { delimiter, join, resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
@@ -8,31 +8,9 @@ import * as v from 'valibot';
 
 const repoRoot = resolve(__dirname, '../../..');
 
-/** A fake `claude` on PATH exercises the real spawn + `claude auth status` probe. */
-function runProviders(
-  args: string[],
-  opts: { claude?: 'ready' | 'logged-out'; home: string; env?: Record<string, string> },
-) {
-  const binDir = scratchDir('claude-bin');
-  // Controlled PATH excludes the real `claude`; /usr/bin + /bin keep `bash`/`env` for the fake's shebang.
-  let path = ['/usr/bin', '/bin'].join(delimiter);
-
-  if (opts.claude) {
-    const loggedIn = opts.claude === 'ready';
-
-    const script = [
-      '#!/usr/bin/env bash',
-      'if [ "$1" = "--version" ]; then echo "claude 1.0.0"; exit 0; fi',
-      `if [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo '{"loggedIn": ${loggedIn}}'; exit 0; fi`,
-      'exit 0',
-    ].join('\n');
-
-    const claudePath = join(binDir, 'claude');
-    writeFileSync(claudePath, script);
-    chmodSync(claudePath, 0o755);
-    path = `${binDir}${delimiter}${path}`;
-  }
-
+/** A controlled PATH keeps a real `opencode` on this machine out of the listing. */
+function runProviders(args: string[], opts: { home: string; env?: Record<string, string> }) {
+  const path = ['/usr/bin', '/bin'].join(delimiter);
   const argv = JSON.stringify(args);
 
   const runner = `
@@ -68,37 +46,72 @@ function freshHome(): string {
 }
 
 describe('providers command — Claude subscription', () => {
-  test('connect claude reports ready and the create command when installed + logged in', () => {
-    const res = runProviders(['connect', 'claude'], { claude: 'ready', home: freshHome() });
-    expect(res.exitCode).toBe(0);
-    expect(res.stdout).toContain('Your Claude subscription is ready');
-    expect(res.stdout).toContain('claude/claude-opus-4-x');
-    expect(res.stdout).toContain('Anthropic API key');
+  /** The token endpoint answers inside the child; the person pastes what Claude showed them. */
+  function connectClaude(home: string, account: string) {
+    const runner = `
+      const { connectProvider } = await import('./packages/cli/src/commands/provider-connect.ts');
+      const sent = [];
+      globalThis.fetch = async (input, init) => {
+        sent.push([String(input), JSON.parse(init.body)]);
+        return Response.json({
+          access_token: 'sk-ant-oat01-fresh', refresh_token: 'rt-fresh', expires_in: 28800,
+          account: { uuid: 'acct-1', email_address: 'a@example.com' }, organization: { uuid: 'org-1', name: 'Team' },
+        });
+      };
+      let opened = '';
+      const port = {
+        report: (line) => { if (line.startsWith('Open: ')) opened = line.slice('Open: '.length); },
+        ask: async (request) => request.secret ? 'code-from-claude#' + new URL(opened).searchParams.get('state') : 'claude-opus-4-7',
+        skippable: async () => null,
+      };
+      const outcome = await connectProvider('claude', port, { account: ${JSON.stringify(account)} });
+      console.log(JSON.stringify({ outcome, opened, sent }));
+    `;
+
+    const proc = Bun.spawnSync({
+      cmd: [process.execPath, '-e', runner],
+      cwd: repoRoot,
+      // An empty PATH leaves no `xdg-open` to start a real browser.
+      env: { ...process.env, KINU_HOME: home, PATH: scratchDir('no-browser'), NO_COLOR: '1' },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    expect(proc.exitCode, proc.stderr.toString()).toBe(0);
+
+    return v.parse(v.object({
+      outcome: v.object({ kind: v.string(), summary: v.string(), detail: v.optional(v.string()) }),
+      opened: v.string(),
+      sent: v.array(v.tuple([v.string(), v.record(v.string(), v.string())])),
+    }), JSON.parse(proc.stdout.toString()));
+  }
+
+  test('a pasted sign-in code is exchanged as Claude Code does and stores the login on this machine', () => {
+    const home = freshHome();
+    const run = connectClaude(home, 'main');
+    const opened = new URL(run.opened);
+
+    expect([opened.origin + opened.pathname, opened.searchParams.get('redirect_uri'), opened.searchParams.get('code')])
+      .toEqual(['https://claude.ai/oauth/authorize', 'http://localhost:54545/callback', 'true']);
+    expect(run.outcome).toEqual({ kind: 'connected', summary: 'Connected your Claude subscription', detail: 'Default model: claude/claude-opus-4-7' });
+    expect(run.sent.map(([url, body]) => [url, body.grant_type, body.code, body.state])).toEqual([
+      ['https://api.anthropic.com/v1/oauth/token', 'authorization_code', 'code-from-claude', opened.searchParams.get('state') ?? 'no state'],
+    ]);
+
+    const stored = v.parse(v.object({ providers: v.object({ claude: v.object({ accessToken: v.string(), refreshToken: v.string() }) }) }), parseJsonObject(readFileSync(join(home, 'config.json'), 'utf8')));
+
+    expect(stored.providers.claude).toMatchObject({ accessToken: 'sk-ant-oat01-fresh', refreshToken: 'rt-fresh' });
   });
 
-  test('connect claude tells an installed-but-logged-out user to sign in', () => {
-    const res = runProviders(['connect', 'claude'], { claude: 'logged-out', home: freshHome() });
-    expect(res.exitCode).toBe(0);
-    expect(res.stdout).toContain('Run `claude` once to sign in');
-    expect(res.stdout).not.toContain('Your Claude subscription is ready');
-  });
+  test('a second account signs in beside the first and is listed by name', () => {
+    const home = freshHome();
 
-  test('connect claude prints install guidance when the binary is absent', () => {
-    const res = runProviders(['connect', 'claude'], { home: freshHome() });
-    expect(res.exitCode).toBe(0);
-    expect(res.stdout).toContain('Install Claude Code');
-    expect(res.stdout).not.toContain('Your Claude subscription is ready');
-  });
+    connectClaude(home, 'main');
+    expect(connectClaude(home, 'work').outcome.summary).toBe('Connected the Claude account work');
+    const listed = runProviders(['list'], { home }).stdout.split('\n');
+    const claude = listed.findIndex((line) => line.includes('Claude subscription'));
 
-  test('list shows the Claude subscription status inline', () => {
-    const ready = runProviders(['list'], { claude: 'ready', home: freshHome() });
-    expect(ready.exitCode).toBe(0);
-    expect(ready.stdout).toContain('Claude subscription');
-    expect(ready.stdout).toContain('claude/claude-opus-4-x');
-
-    const absent = runProviders(['list'], { home: freshHome() });
-    expect(absent.stdout).toContain('Claude subscription');
-    expect(absent.stdout).toContain('kinu provider connect claude');
+    expect(listed.slice(claude, claude + 3).join('\n')).toContain('accounts: main (default), work');
   });
 });
 
@@ -128,18 +141,14 @@ describe('providers command — the provider revision', () => {
     expect(revisionOf(home)).toBe(1);
   });
 
-  test('the subscription bridges advance it too, and each command advances it once', () => {
+  test('the opencode bridge advances it too, and each command advances it once', () => {
     const home = freshHome();
-    // Kinu stores no credential for the claude bridge, but a listing sweep probes it, so availability
-    // changes bump the revision.
-    expect(runProviders(['connect', 'claude'], { claude: 'ready', home }).exitCode).toBe(0);
+    // Kinu stores no opencode credential, but a listing sweep probes that login, so a disconnect bumps the revision.
+    expect(runProviders(['disconnect', 'opencode'], { home }).exitCode).toBe(0);
     expect(revisionOf(home)).toBe(1);
 
-    expect(runProviders(['disconnect', 'claude'], { home }).exitCode).toBe(0);
-    expect(revisionOf(home)).toBe(2);
-
     expect(runProviders(['list'], { home }).exitCode).toBe(0);
-    expect(revisionOf(home)).toBe(2);
+    expect(revisionOf(home)).toBe(1);
   });
 });
 
@@ -242,11 +251,18 @@ describe('providers command — disconnect', () => {
     expect(res.stdout).toContain('OPENAI_API_KEY is still set');
   });
 
-  test('points the account and subscription bridges at the login that owns them', () => {
+  test('points the account and the opencode bridge at the login that owns them', () => {
     const home = homeWith({});
     expect(runProviders(['disconnect', 'cloudflare'], { home }).stdout).toContain('kinu logout');
-    expect(runProviders(['disconnect', 'claude'], { home }).stdout).toContain('claude logout');
     expect(runProviders(['disconnect', 'opencode'], { home }).stdout).toContain('opencode auth logout');
+  });
+
+  test('a Claude login is removed from this machine like any stored credential', () => {
+    const home = homeWith({ providers: { claude: { accessToken: 'sk-ant-oat01-secret', refreshToken: 'rt-secret' }, openai: { apiKey: 'sk' } } });
+    const res = runProviders(['disconnect', 'claude'], { home });
+
+    expect(res.stdout).toContain('Removed the claude credential from this machine');
+    expect(readConfig(home).providers).toEqual({ openai: { apiKey: 'sk' } });
   });
 
   test('remove and rm are accepted spellings', () => {

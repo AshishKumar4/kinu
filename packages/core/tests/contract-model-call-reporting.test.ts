@@ -17,8 +17,6 @@ const INVOCATIONS = [
 
 /** Each reason must be a property of the code, not a plan. */
 const EXEMPT = {
-  // A hand-rolled LanguageModelV2 transport (`claude-cli-provider.ts`) needs no entry: its driver
-  // is the producer, and the stale-exemption check rejects one.
   // A `model_call` row here would double-count every step.
   'packages/core/src/chat.ts':
     'the turn loop reports through step_finish, which the total reads as `agent`',

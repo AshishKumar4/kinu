@@ -7,6 +7,7 @@
 //   packages/ai/src/providers/claude-code-fingerprint.ts  version pattern, identity line, 64k output cap
 //   packages/ai/src/providers/anthropic-identity.ts  the `_` tool prefix and its server-tool exemptions
 //   packages/coding-agent/src/session/session-metadata.ts  metadata.user_id without a known account
+//   packages/catalog/src/compat/rules/auth/anthropic.kdl and registry/engine/oauth-code.ts  the sign-in
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { jsonSchema, streamText, tool, type ModelMessage } from 'ai';
@@ -15,10 +16,11 @@ import { createClaudeProvider, CLAUDE_CRED_KEY } from '../src/providers/claude';
 import { cacheableSystem, resolvePromptCacheStrategy } from '../src/prompting/cache-breakpoints';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import { OAuthTokenError } from '../src/providers/oauth-token-error';
-import type { AuthResolution, ProviderDeps } from '../src/providers/types';
+import type { AuthResolution, ProviderDeps, ProviderWaitInfo } from '../src/providers/types';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import { parseJsonObject, type JsonObject } from '../src/utils/json';
 import { callAccountOf, quotaWindowText } from '../src/providers/quota';
+import { claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn } from '../src/providers/claude-oauth';
 
 interface Sent {
   readonly url: string;
@@ -336,10 +338,126 @@ describe('the Claude subscription wire', () => {
     ]);
   });
 
+  test('a passing rate limit is waited out as for every provider, and the turn goes through', async () => {
+    const busy = () => new Response(JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'Rate limited.' } }), {
+      status: 429,
+      headers: { 'content-type': 'application/json', 'retry-after': '0' },
+    });
+
+    const { sent, fetchFn } = wire([busy, sse]);
+    const waits: ProviderWaitInfo[] = [];
+    const { calls } = await turn(createClaudeProvider(), { ...deps(fetchFn, [login('t')], 'kinu-agent-1'), onProviderWait: (info) => waits.push(info) });
+
+    expect([calls.length, sent.length]).toEqual([1, 2]);
+    expect(only(sent, 1).text).toBe(only(sent).text);
+    expect(waits.map((wait) => [wait.provider, wait.status, wait.source, wait.waitMs])).toEqual([['claude', 429, 'header', 0]]);
+  });
+
+  test('a spent subscription window ends the turn once as a budget failure naming its reset, with no wait and no other provider', async () => {
+    const now = Date.now();
+    const recorded = createRecordingLogger();
+    const restore = setDiagnosticsSink(recorded);
+
+    const spent = () => new Response(JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'This request would exceed your account\'s rate limit. Please try again later.' } }), {
+      status: 429,
+      headers: {
+        'content-type': 'application/json',
+        'retry-after': '7200',
+        'anthropic-ratelimit-unified-status': 'rejected',
+        'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+        'anthropic-ratelimit-unified-reset': String(Math.floor((now + 2 * 3_600_000) / 1_000)),
+        'anthropic-ratelimit-unified-5h-utilization': '1.0',
+      },
+    });
+
+    const { sent, fetchFn } = wire([spent]);
+    const providerDeps = deps(fetchFn, [{ headers: { Authorization: 'Bearer t' }, credentialKey: 'claude.oauth@work' }], 'kinu-agent-1');
+
+    try {
+      const failed = turn(createClaudeProvider(), providerDeps);
+
+      await expect(failed).rejects.toThrow(/^Claude usage limit reached on the account work: 100% of the 5h window used, resets in (1h 59m|2h)\.$/);
+      await expect(failed).rejects.toHaveProperty('cause.code', 'budget');
+    } finally {
+      restore();
+    }
+
+    expect(sent.length).toBe(1);
+    expect(recorded.emitted.filter((line) => line.event === 'provider.claude_usage_limit').map((line) => [line.code, line.fields])).toEqual([['budget', { model: 'claude-opus-4-7', account: 'work' }]]);
+  });
+
+  test('a subscription whose included usage is used up is a budget failure in the provider\'s words', async () => {
+    const credits = () => new Response(JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'Usage credits are required for this model.', details: { error_code: 'credits_required' } } }), {
+      status: 429,
+      headers: { 'content-type': 'application/json' },
+    });
+
+    const { sent, fetchFn } = wire([credits]);
+    const failed = turn(createClaudeProvider(), deps(fetchFn, [login('t')], 'kinu-agent-1'));
+
+    await expect(failed).rejects.toThrow('Claude usage limit reached on the account main: Usage credits are required for this model.');
+    await expect(failed).rejects.toHaveProperty('cause.code', 'budget');
+    expect(sent.length).toBe(1);
+  });
+
   test('a revoked refresh token is the same remedy, with nothing sent', async () => {
     const { sent, fetchFn } = wire([]);
 
     await expect(turn(createClaudeProvider(), deps(fetchFn, ['revoked'], 'kinu-agent-1'))).rejects.toThrow('Your Claude login is no longer valid.');
     expect(sent).toEqual([]);
+  });
+});
+
+describe('the Claude sign-in', () => {
+  test('the authorize address is Claude Code\'s, with a PKCE challenge of its verifier', async () => {
+    const signIn = await startClaudeSignIn();
+    const url = new URL(signIn.url);
+    const challenge = createHash('sha256').update(signIn.verifier).digest('base64url');
+
+    expect(`${url.origin}${url.pathname}`).toBe('https://claude.ai/oauth/authorize');
+    expect([...url.searchParams]).toEqual([
+      ['client_id', '9d1c250a-e61b-44d9-88ed-5944d1962f5e'],
+      ['response_type', 'code'],
+      ['redirect_uri', 'http://localhost:54545/callback'],
+      ['scope', 'org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload'],
+      ['code_challenge', challenge],
+      ['code_challenge_method', 'S256'],
+      ['state', signIn.state],
+      ['code', 'true'],
+    ]);
+    expect(signIn.state).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  test('the code is exchanged with its verifier and state, and the login keeps who signed in', async () => {
+    const signIn = await startClaudeSignIn();
+    const sent: [string, string][] = [];
+
+    const client = createClaudeOAuthClient(asFetchFunction(async (input, init) => {
+      sent.push([input instanceof Request ? input.url : input.toString(), await new Response(init?.body ?? null).text()]);
+
+      return Response.json({
+        access_token: 'sk-ant-oat01-new', refresh_token: 'rt-new', expires_in: 28_800,
+        account: { uuid: 'acct-1', email_address: 'a@example.com' }, organization: { uuid: 'org-1', name: 'Team' },
+      });
+    }));
+
+    const signedIn = await client.exchange(signIn, 'code-1');
+
+    expect(sent).toEqual([['https://api.anthropic.com/v1/oauth/token', JSON.stringify({
+      grant_type: 'authorization_code', client_id: '9d1c250a-e61b-44d9-88ed-5944d1962f5e', code: 'code-1',
+      redirect_uri: 'http://localhost:54545/callback', code_verifier: signIn.verifier, state: signIn.state,
+    })]]);
+    expect(signedIn).toMatchObject({
+      kind: 'oauth', accessToken: 'sk-ant-oat01-new', refreshToken: 'rt-new',
+      metadata: { accountUuid: 'acct-1', email: 'a@example.com', orgUuid: 'org-1', orgName: 'Team' },
+    });
+  });
+
+  test('what comes back is the address, `code#state`, or the bare code; another sign-in\'s state is refused', () => {
+    expect(claudeCodeFrom('http://localhost:54545/callback?code=abc&state=s1', 's1')).toBe('abc');
+    expect(claudeCodeFrom(' abc#s1 ', 's1')).toBe('abc');
+    expect(claudeCodeFrom('abc', 's1')).toBe('abc');
+    expect(() => claudeCodeFrom('abc#s2', 's1')).toThrow('that code belongs to another sign-in; start it again');
+    expect(() => claudeCodeFrom('http://localhost:54545/callback?error=access_denied&state=s1', 's1')).toThrow('Claude refused the sign-in: access_denied');
   });
 });

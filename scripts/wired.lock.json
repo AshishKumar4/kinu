@@ -24,7 +24,6 @@
   "packages/cli-backend/src/cgroup-limits.ts#readCgroupLimits (unreached-export)",
   "packages/cli-backend/src/checkpoints.ts#HostCheckpointsOpts.base (unsupplied-field)",
   "packages/cli-backend/src/checkpoints.ts#HostCheckpointsOpts.gitBin (unsupplied-field)",
-  "packages/cli-backend/src/claude-cli-provider.ts#buildClaudePrompt (unreached-export)",
   "packages/cli-backend/src/config-lock.ts#createConfigLock (unreached-export)",
   "packages/cli-backend/src/config-lock.ts#createProcessIdentityBoundary (unreached-export)",
   "packages/cli-backend/src/config-lock.ts#darwinStartIdentity (unreached-export)",

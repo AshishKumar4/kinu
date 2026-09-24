@@ -2,19 +2,20 @@
  * `kinu deploy`: `cloudflare` (the same run the page drives) or `local` (this machine).
  * The verifier stays local; the token pair is POSTed once over TLS to the run that spends it.
  */
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import {
   CLI_DEPLOY_REDIRECT_PORT, CLI_DEPLOY_REDIRECT_URI, CLOUDFLARE_DEPLOY_SCOPES,
   DeployFrameSchema,
-  authorizeUrl, createPkcePair, deployDoor, deployOptions, exchangeDeployCode, mintRun,
+  authorizeUrl, deployDoor, deployOptions, exchangeDeployCode, mintRun,
   type DeployDoor, type DeployInputs, type DeploySnapshot, type DeployStepRow,
 } from '@kinu.run/core/deploy';
+import { createPkcePair } from '@kinu.run/core';
 import * as v from 'valibot';
 import { defaultOrigin } from '../cloud-api';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { ask, askSecret, requireInteractiveTerminal } from '../prompt';
 import { openBrowser } from './auth';
 import { localDoor } from './deploy-local';
+import { awaitOAuthCallback } from './oauth-callback';
 
 export async function deployCommand(
   door: string | undefined,
@@ -75,11 +76,13 @@ async function authorize(door: DeployDoor, clientId: string): Promise<void> {
 
   console.log(`${DIM('Open:')} ${ACCENT(url)}`);
 
-  const waiting = awaitCode(state);
+  const waiting = awaitOAuthCallback(CLI_DEPLOY_REDIRECT_PORT, state);
 
   openBrowser(url);
 
   const code = await waiting;
+
+  if (code === null) throw new Error(`Port ${String(CLI_DEPLOY_REDIRECT_PORT)} is in use, and Cloudflare sends the sign-in back to it. Free it and run kinu deploy again.`);
 
   const token = await exchangeDeployCode({
     clientId, redirectUri: CLI_DEPLOY_REDIRECT_URI, code, verifier: pkce.verifier,
@@ -89,42 +92,6 @@ async function authorize(door: DeployDoor, clientId: string): Promise<void> {
     accessToken: token.accessToken,
     refreshToken: token.refreshToken,
     expiresInSeconds: token.expiresInSeconds,
-  });
-}
-
-/**
- * Any page can hit a loopback port, so a request without this run's `state` gets a 404 and the listener stays up.
- * Binds `127.0.0.1` only: `::` would put the leg on the LAN.
- */
-function awaitCode(state: string): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const server = createServer((request: IncomingMessage, response: ServerResponse) => {
-      const url = new URL(request.url ?? '/', CLI_DEPLOY_REDIRECT_URI);
-      const carried = url.searchParams.get('state') ?? '';
-      const code = url.searchParams.get('code') ?? '';
-      const problem = url.searchParams.get('error');
-
-      if (carried !== state) {
-        response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-        response.end('This is not the authorization this terminal started.');
-
-        return;
-      }
-
-      const good = problem === null && code !== '';
-
-      response.writeHead(good ? 200 : 400, { 'content-type': 'text/plain; charset=utf-8' });
-      response.end(good
-        ? 'Authorized. Go back to your terminal.'
-        : `That authorization did not complete${problem === null ? '' : `: ${problem}`}.`);
-      server.close();
-
-      if (good) resolve(code);
-      else reject(new Error(problem ?? 'that callback carried no authorization code'));
-    });
-
-    server.on('error', reject);
-    server.listen(CLI_DEPLOY_REDIRECT_PORT, '127.0.0.1');
   });
 }
 

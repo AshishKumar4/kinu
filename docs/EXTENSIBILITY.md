@@ -244,7 +244,7 @@ native option.
 | `workers-ai` | `{ 'workers-ai': { reasoningEffort } }` (the SDK sends `reasoning_effort` on the wire) |
 | `openai`, `opencode`, `codex`, `openai-compat` | `{ openai: { reasoningEffort } }` |
 | `openrouter` | `{ openrouter: { reasoningEffort } }` |
-| `anthropic` | `{ anthropic: { effort } }` for `low`, `medium`, `high`, `xhigh`, `max`; otherwise `undefined` |
+| `anthropic`, `claude` | `{ anthropic: { effort } }` for `low`, `medium`, `high`, `xhigh`, `max`; otherwise `undefined` |
 | anything else | `undefined` |
 
 Internal stages take their level from `REASONING_EFFORT_FOR_STAGE`, not the
@@ -449,6 +449,12 @@ codemode sandbox.
   `x-api-key`, default `claude-opus-4-7`, Sonnet 4.6, Haiku 4.5. Covered by
   `packages/core/tests/contract-providers.test.ts` and
   `packages/core/tests/contract-cache-markers.test.ts`.
+- Claude subscription provider, `packages/core/src/providers/claude.ts`: a
+  `claude.oauth[@account]` login sent as Claude Code's CLI sends it (headers,
+  betas, billing block, `cch` attestation, tool names), after oh-my-pi. The
+  sign-in and refresh are `claude-oauth.ts`; `bun scripts/check-spoofed-versions.ts`
+  reports a newer Claude Code release and `--update` moves the pin. Covered by
+  `packages/core/tests/unit-claude-subscription.test.ts`.
 - Tool Search, Voyager-style. `buildBuiltinTools({ toolSurfacing: { mode:
   'relevant', query } })` filters crafted tools to the union of FTS5 matches
   and frequently used ones. Nothing passes it: a per-turn `query` changes the
