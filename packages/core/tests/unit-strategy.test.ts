@@ -45,7 +45,7 @@ describe('reasoning_effort plumbing', () => {
   });
 
   test('maps user effort to each provider family exactly', () => {
-    for (const provider of ['openai', 'opencode', 'codex', 'openai-compat', 'openai-compat:groq'] as const) {
+    for (const provider of ['openai', 'codex', 'openai-compat', 'openai-compat:groq'] as const) {
       expect(reasoningEffortOptions('medium', provider)).toEqual({
         openai: { reasoningEffort: 'medium' },
       });

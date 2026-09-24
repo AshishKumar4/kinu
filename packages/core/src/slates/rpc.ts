@@ -34,6 +34,7 @@ const IncludedPaths = v.array(v.pipe(v.string(), v.check((name) => name !== '' &
 export const SlateOperationSchema = v.variant('op', [
   v.strictObject({ op: v.literal('list') }),
   v.strictObject({ op: v.literal('preview'), id: SlateDirectoryName }),
+  v.strictObject({ op: v.literal('methods'), id: SlateDirectoryName }),
   v.strictObject({ op: v.literal('call'), id: SlateDirectoryName, method: v.pipe(v.string(), v.check(isSlateMethodName)), args: v.optional(v.array(JsonValueSchema)) }),
   v.strictObject({ op: v.literal('commit'), id: SlateDirectoryName }),
   v.strictObject({ op: v.literal('history'), id: SlateDirectoryName }),
@@ -58,16 +59,44 @@ export const SlateOperationSchema = v.variant('op', [
 
 export type SlateOperation = v.InferOutput<typeof SlateOperationSchema>;
 
+type SlateMemberSpec = { readonly on: 'directory' | 'slate'; readonly params: readonly string[] };
+
+/** Each operation but `call` as a program member, `$<op>` on `workspace.slates` or on one slate; params are its fields in order, `...` spreads options. */
+export const SLATE_PROGRAM_MEMBERS = {
+  list: { on: 'directory', params: [] },
+  fork: { on: 'directory', params: ['version'] },
+  shares: { on: 'directory', params: [] },
+  liveShares: { on: 'directory', params: [] },
+  unshare: { on: 'directory', params: ['share'] },
+  viewerRequests: { on: 'directory', params: ['share'] },
+  preview: { on: 'slate', params: [] },
+  methods: { on: 'slate', params: [] },
+  commit: { on: 'slate', params: [] },
+  history: { on: 'slate', params: [] },
+  remove: { on: 'slate', params: [] },
+  graph: { on: 'slate', params: [] },
+  restore: { on: 'slate', params: ['version'] },
+  inspect: { on: 'slate', params: ['version', 'include'] },
+  publish: { on: 'slate', params: ['version', 'include'] },
+  share: { on: 'slate', params: ['...'] },
+} as const satisfies Record<Exclude<SlateOperation['op'], 'call'>, SlateMemberSpec>;
+
+function programMember(operation: SlateOperation): string {
+  if (operation.op === 'call') return `workspace.slates.${operation.id}.${operation.method}`;
+
+  return 'id' in operation ? `workspace.slates.${operation.id}.$${operation.op}` : `workspace.slates.$${operation.op}`;
+}
+
 const READ_ONLY_OPERATIONS: Record<SlateOperation['op'], boolean> = {
   list: true, history: true, inspect: true, shares: true,
   graph: true, liveShares: true, viewerRequests: true,
-  preview: false, call: false, commit: false, fork: false, restore: false, remove: false, publish: false, unshare: false,
+  preview: false, methods: false, call: false, commit: false, fork: false, restore: false, remove: false, publish: false, unshare: false,
   share: false,
 };
 
-/** The parsed operation contract: listing, history, inspection and the share rows read; every other operation can change resources or run authored code. */
+/** Reads run in Plan; the rest change resources or run authored code, as `methods` does by booting the slate. */
 export function requireSlateWorkMode(operation: SlateOperation, mode: WorkMode): void {
-  requireWorkModePermission(mode, READ_ONLY_OPERATIONS[operation.op], 'workspace.slate.' + operation.op);
+  requireWorkModePermission(mode, READ_ONLY_OPERATIONS[operation.op], programMember(operation));
 }
 
 export interface SlateSummary {

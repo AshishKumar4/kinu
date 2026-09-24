@@ -248,31 +248,36 @@ function StackedBar(
   );
 }
 
+/** `max-w-0`: the label column gets what the counts leave, so a long label truncates. */
+const labelCell = "w-full max-w-0 pr-2";
+
+const countCell = "text-right whitespace-nowrap pl-3";
+
 function PlaneRows({ plane, measuredChars }: { plane: BreakdownPlane; measuredChars: number }) {
   return (
     <>
       <tr className="border-t p-border">
-        <td className="py-1 pr-2">
+        <td className={`py-1 ${labelCell}`}>
           <span className="flex items-center gap-1.5">
             <span className={swatch} style={{ background: planeFill(plane.plane) }} />
-            <span className="p-row-text font-medium p-text">{PLANE_LABEL[plane.plane]}</span>
+            <span className="p-row-text font-medium p-text truncate">{PLANE_LABEL[plane.plane]}</span>
           </span>
         </td>
-        <td className="py-1 text-right w-20"><Num className="p-row-text p-text">{plane.chars.toLocaleString()} ch</Num></td>
-        <td className="py-1 text-right w-12">
+        <td className={`py-1 ${countCell}`}><Num className="p-row-text p-text">{plane.chars.toLocaleString()} ch</Num></td>
+        <td className={`py-1 ${countCell}`}>
           <Num className="p-row-text p-text-2">{fmtPct(shareOfMeasured(plane.chars, measuredChars), 1)}</Num>
         </td>
       </tr>
       {plane.rows.map((row: BreakdownRow) => (
         <tr key={`${plane.plane}:${row.label}`}>
-          <td className="py-px pr-2 pl-[14px]">
+          <td className={`py-px pl-[14px] ${labelCell}`}>
             <span className="p-row-text p-text-3 truncate block" title={row.label}>
               {row.label}
               {row.items > 1 && <span className="p-text-3"> ×{row.items}</span>}
             </span>
           </td>
-          <td className="py-px text-right"><Num className="p-row-text p-text-3">{row.chars.toLocaleString()} ch</Num></td>
-          <td className="py-px text-right">
+          <td className={`py-px ${countCell}`}><Num className="p-row-text p-text-3">{row.chars.toLocaleString()} ch</Num></td>
+          <td className={`py-px ${countCell}`}>
             <Num className="p-row-text p-text-3">{fmtPct(shareOfMeasured(row.chars, measuredChars), 1)}</Num>
           </td>
         </tr>

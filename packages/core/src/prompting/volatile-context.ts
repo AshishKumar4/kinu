@@ -33,7 +33,7 @@ import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import type { ActiveSkillSet } from '../skills/types';
 import { describeActivationReason } from '../skills/render';
 import type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
-import { renderToolsDeclaration, type CraftedDeclaration } from '../tools/sandbox-contract';
+import { renderCraftedToolsDeclaration, type CraftedDeclaration } from '../tools/sandbox-contract';
 
 export type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
 
@@ -420,7 +420,7 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, s
 
   if (ctx.craftedTools !== undefined) {
     add('craftedTools', `${DYNAMIC_SECTION_TITLES.craftedTools}\n${ctx.craftedTools.length > 0
-      ? renderToolsDeclaration({}, ctx.craftedTools)
+      ? renderCraftedToolsDeclaration(ctx.craftedTools)
       : NO_CRAFTED_TOOLS_YET}`);
   }
 

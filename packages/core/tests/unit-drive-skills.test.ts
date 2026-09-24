@@ -31,11 +31,11 @@ describe('drive paths', () => {
 });
 
 describe('listing', () => {
-  test('the root always shows the reserved folders, and a reserved folder lists empty before it exists', async () => {
+  test('the root always shows the reserved folder, and a reserved folder lists empty before it exists', async () => {
     const drive = tenant();
 
     expect((await listDrive(drive, '/')).entries.map((entry) => [entry.name, entry.kind, entry.skillProblem]))
-      .toEqual([['blueprints', 'folder', '/blueprints is a reserved Drive folder'], ['skills', 'folder', '/skills is a reserved Drive folder']]);
+      .toEqual([['skills', 'folder', '/skills is a reserved Drive folder']]);
     expect(await listDrive(drive, DRIVE_SKILLS_DIR)).toEqual({ path: DRIVE_SKILLS_DIR, entries: [] });
     await drive.writeFile('/notes/readme.md', 'x');
     expect((await listDrive(drive, '/notes')).entries).toEqual([{ name: 'readme.md', kind: 'file', size: 1, mtimeMs: expect.any(Number), skill: false }]);

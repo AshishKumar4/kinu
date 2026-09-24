@@ -249,6 +249,8 @@ const SharedRowSchema = v.object({
   workspace: v.optional(v.string()),
   users: v.optional(v.array(v.string())),
   owner: v.optional(v.string()),
+  /** A live share's fork switch: false when it is closed to forks. */
+  fork: v.optional(v.boolean()),
 });
 
 export type SharedRow = v.InferOutput<typeof SharedRowSchema>;
@@ -268,8 +270,6 @@ export const SharedLibrarySchema = v.object({
   slates: v.array(OwnedSlateSchema),
   mine: v.array(SharedRowSchema),
   received: v.array(SharedRowSchema),
-  public: v.array(SharedRowSchema),
-  known: v.array(SharedRowSchema),
 });
 
 export type SharedLibrary = v.InferOutput<typeof SharedLibrarySchema>;

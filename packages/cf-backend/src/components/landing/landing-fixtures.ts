@@ -356,7 +356,7 @@ export const SLATE_MESSAGES: UIMessage[] = [
       { type: 'tool-file', toolCallId: 'landing-slate-manifest', state: 'output-available', input: { action: 'write', path: '/home/main/slates/support-queue/package.json' }, output: 'ok' },
       { type: 'tool-file', toolCallId: 'landing-slate-server', state: 'output-available', input: { action: 'write', path: '/home/main/slates/support-queue/server.ts' }, output: 'ok' },
       { type: 'tool-file', toolCallId: 'landing-slate-client', state: 'output-available', input: { action: 'write', path: '/home/main/slates/support-queue/client.tsx' }, output: 'ok' },
-      { type: 'tool-eval', toolCallId: 'landing-slate-preview', state: 'output-available', input: { code: "// Boot the preview and hand back its URL\nconst preview = await workspace.slate({ op: 'preview', id: 'support-queue' });\nreturn preview;" }, output: JSON.stringify({ ok: true, value: { url: SLATE_PREVIEW_URL, port: 8789 } }) },
+      { type: 'tool-eval', toolCallId: 'landing-slate-preview', state: 'output-available', input: { code: "// Boot the preview and hand back its URL\nreturn await workspace.slates['support-queue'].$preview();" }, output: JSON.stringify({ url: SLATE_PREVIEW_URL, port: 8789 }) },
       { type: 'text', text: 'The dashboard is open in the Support queue tab. It reads issues through the ISSUES binding, which only reaches `list_issues` on your GitHub connection.' },
     ],
   },

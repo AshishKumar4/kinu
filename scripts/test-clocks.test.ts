@@ -71,7 +71,7 @@ describe('test-clocks gate', () => {
 
   test('every vitest config runs with no per-test clock', () => {
     for (const config of [
-      'vitest.evals.config.ts', 'vitest.first-run.config.ts',
+      'evals/vitest.config.ts', 'vitest.first-run.config.ts',
       'packages/cf-backend/vitest.config.ts', 'packages/devbox/vitest.config.ts',
     ]) {
       const text = readFileSync(join(import.meta.dir, '..', config), 'utf8');

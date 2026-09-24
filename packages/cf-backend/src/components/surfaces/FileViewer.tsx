@@ -5,17 +5,17 @@ import {
   CheckIcon, DownloadSimpleIcon, FileIcon, PencilSimpleIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import { renderThrownChain } from "@kinu.run/core/obs";
-import type { Rpc } from "@kinu.run/core";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { MarkdownContent, CodeBlock } from "./shared";
 import {
-  PLANE, FileWriteConflict, fileTextEditable, putFileBytes, sandboxedHtml, textRenderOf, viewerKindOf,
+  FileWriteConflict, fileTextEditable, putFileBytes, sandboxedHtml, textRenderOf, viewerKindOf,
   type FileText, type TextRender,
 } from "@kinu.run/core";
 
-export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved, onClose }: {
+export function FileViewer({ path, read, revision, rawHref, downloadHref, onSaved, onClose }: {
   path: string;
-  rpc: Rpc;
+  /** An answer without a revision is read-only. */
+  read: (path: string) => Promise<FileText>;
   /** A new value triggers a new read; that is the cache invalidation. */
   revision: string;
   rawHref: string;
@@ -37,8 +37,8 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
 
   /** `useAsyncResource` owns the generation, so a reply for a file the reader left cannot land on the current one. */
   const load = useCallback((): Promise<FileText> => (
-    kind === "text" ? rpc<FileText>("readExecutorFile", [PLANE, path]) : Promise.resolve({})
-  ), [kind, path, rpc]);
+    kind === "text" ? read(path) : Promise.resolve({})
+  ), [kind, path, read]);
 
   const { resource, reload } = useAsyncResource(load, undefined, `${path}\u0000${revision}`);
 

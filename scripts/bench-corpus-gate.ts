@@ -61,17 +61,17 @@ function main(): number {
       at: path,
       found: 'no tasks.jsonl line names this patch',
       silently: 'no run applies it and no score depends on it, yet the patch count includes it — '
-        + 'a half-finished retirement, which tests/bench/retired.jsonl exists to record',
-      fix: 'finish the retirement — record it in tests/bench/retired.jsonl and delete the file '
+        + 'a half-finished retirement, which bench/corpus/retired.jsonl exists to record',
+      fix: 'finish the retirement — record it in bench/corpus/retired.jsonl and delete the file '
         + '— or add back the tasks.jsonl line that measures it',
     })),
     ...unchecked.map((id) => finding({
       invariant: 'every tasks.jsonl line names a tracked patch file',
-      at: `tests/bench/patches/${id}.patch`,
+      at: `bench/corpus/patches/${id}.patch`,
       found: `task ${id} names a patch git does not track`,
       silently: 'this gate never checks it, and a fresh checkout cannot load the corpus: '
         + '`loadBenchCorpus` throws "missing defect patch" on every other machine',
-      fix: `git add tests/bench/patches/${id}.patch`,
+      fix: `git add bench/corpus/patches/${id}.patch`,
     })),
     ...stale.map((patch) => finding({
       invariant: 'every seeded defect patch applies to the tree it will be measured against',
@@ -84,7 +84,7 @@ function main(): number {
         + '(one task, two attempts, measured at 93s, no model — against ~160 attempts for the '
         + 'whole corpus). `git apply --3way` may merge it for you, but merges '
         + 'cleanly on only 4 of 15 measured cases, so read the result before keeping it. If '
-        + 'the code the defect was data about is GONE, retire it in tests/bench/retired.jsonl '
+        + 'the code the defect was data about is GONE, retire it in bench/corpus/retired.jsonl '
         + 'instead — but only after establishing that no live code still holds the property',
     })),
   ];

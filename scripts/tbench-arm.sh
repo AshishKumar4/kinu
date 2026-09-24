@@ -9,7 +9,7 @@
 # here, because an arm pair whose two commands were typed separately is an arm
 # pair that can differ in a way nobody recorded.
 #
-# The design this executes is pre-registered in tests/bench/seal-ledger.jsonl
+# The design this executes is pre-registered in bench/corpus/seal-ledger.jsonl
 # (ordinal 6) and was committed before any experimental token was spent.
 set -euo pipefail
 

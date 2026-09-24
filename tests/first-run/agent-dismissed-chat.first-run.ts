@@ -27,7 +27,7 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
-import { webHeaders } from '../evals/public-session';
+import { webHeaders } from '../../evals/src/session';
 
 const SUITE = 'First-run · agent-dismissed-chat';
 

@@ -10,6 +10,7 @@ import { createChatModel } from '../src/llm';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { decodeModelMessageValues } from '../src/session/message-codec';
 import { TurnAccumulator, type StepLike } from '../src/orchestrator/turn-accumulator';
+import { TurnContextMeter } from '../src/context-meter';
 import { makeSql, makeExecRaw } from './helpers';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
@@ -47,6 +48,7 @@ const tools: ToolSet = {
 
 function scriptedProvider(script: ReadonlyArray<() => Response>) {
   let call = 0;
+  const arrivals: Array<{ at: number; resolve: () => void }> = [];
 
   const server = Bun.serve({
     port: 0,
@@ -55,12 +57,22 @@ function scriptedProvider(script: ReadonlyArray<() => Response>) {
       const at = Math.min(call, script.length - 1);
       call += 1;
 
+      for (const waiter of arrivals.filter((w) => w.at <= call)) waiter.resolve();
+
       return script[at]?.() ?? textStep('done');
     },
   });
 
   return {
     requests: () => call,
+    /** Settles once the server has received its `n`th request. */
+    requested: (n: number): Promise<void> => {
+      if (call >= n) return Promise.resolve();
+      const { promise, resolve } = Promise.withResolvers<void>();
+      arrivals.push({ at: n, resolve });
+
+      return promise;
+    },
     model: createChatModel({
       kind: 'openai-compat', name: 'openrouter',
       baseURL: `http://localhost:${server.port}/v1`,
@@ -421,5 +433,53 @@ describe('ordering and idempotency', () => {
     acc.recordStep({ response: { messages: [first, second] } });
 
     expect(recorded).toEqual([[first], undefined, [second]]);
+  });
+});
+
+// #27. The Activity tab reads the newest step's breakdown of the request it sent. The model runs ahead
+// of a reader that does I/O per event (the page's own relay drains the stream), so the next step's
+// request is prepared before this step is recorded.
+describe('a step records the breakdown of the request it sent', () => {
+  test('with the reader behind the model, every step keeps its own breakdown', async () => {
+    const provider = scriptedProvider([
+      () => toolStep('call_a', 'git status'),
+      () => textStep('all clean'),
+    ]);
+
+    const { db, sql } = workspaceOnDisk();
+
+    try {
+      const recorder = new RunEventRecorder(sql, testActorHandle(sql));
+      const acc = backendWiring(recorder, 'run-meter');
+      const abort = new AbortController();
+      let finished = 0;
+
+      for await (const ev of runChat({
+        model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }],
+        tools, stopWhen: stepCountIs(20), signal: abort.signal,
+        meter: new TurnContextMeter(),
+        observeStream: async (stream) => { for await (const part of stream) void part; },
+      })) {
+        if (ev.type !== 'step-finish') continue;
+        finished += 1;
+
+        if (finished === 1) await provider.requested(2);
+        acc.recordStep({
+          response: { messages: ev.responseMessages },
+          ...(ev.usage && { usage: ev.usage }),
+          ...(ev.context && { context: ev.context }),
+        });
+      }
+
+      const measured = stepRows(recorder, 'run-meter').map((row) => row.context?.measuredChars);
+
+      expect(measured).toHaveLength(2);
+      expect(measured.every((chars) => chars !== undefined)).toBe(true);
+      // The second request carries the first step's call and its result, so it is the larger.
+      expect(measured[1]).toBeGreaterThan(measured[0] ?? Infinity);
+    } finally {
+      await provider.stop();
+      db.close();
+    }
   });
 });

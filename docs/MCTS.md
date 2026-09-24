@@ -13,7 +13,7 @@ Models use `action:'swarm'`, `depth`, the verifier registry, and
 
 Every caller calls `runMCTS` directly. Lifetime evolution
 (`evolution/engine.ts`, `lifetimeMCTSBudget`) is the only caller in product code;
-the rest are suites, among them `tests/evals/exploration.eval.test.ts` and
+the rest are suites, among them `tests/live/exploration.test.ts` and
 `packages/core/tests/integration-mcts.test.ts`. `mcts_search_runs`
 (`mcts/search-store.ts`) keeps config, iteration, and budget under a lease
 epoch for resume. The swarm shares that table (`engine: 'swarm'`; `findRunningSwarms` in

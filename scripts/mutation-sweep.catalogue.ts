@@ -175,7 +175,7 @@ export const CATALOGUE: readonly Mutation[] = [
   // re-pointed at the engines underneath — `runMCTS`'s own `judgeSamples`
   // precedence is defended by four `integration-mcts.test.ts` cases at the engine
   // seam and seeded as a bench defect
-  // (`tests/bench/patches/mcts-strategy-ignores-judge-samples-override.patch`,
+  // (`bench/corpus/patches/mcts-strategy-ignores-judge-samples-override.patch`,
   // re-authored onto `mcts/engine.ts` when the adapter it named was deleted),
   // which is a measurement this catalogue would only duplicate.
 

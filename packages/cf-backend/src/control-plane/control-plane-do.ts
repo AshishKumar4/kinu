@@ -23,7 +23,6 @@ import type {
 } from '@kinu.run/core/control-plane';
 import * as store from '@kinu.run/core/control-plane';
 import type { ControlFeedbackRow } from '@kinu.run/core/control-plane';
-import { forgetPublicShare, indexPublicShare, listPublicShares, type PublicShareKey, type PublicShareRow } from '@kinu.run/core/control-plane';
 
 
 export type {
@@ -79,22 +78,6 @@ export class ControlPlaneDO extends DurableObject<Env> {
     await this.gate(caller, 'feedback.write');
 
     return store.recordFeedback(this.store, row);
-  }
-
-  async publicShares_put(caller: PresentedCaller, row: PublicShareRow): Promise<void> {
-    await this.gate(caller, 'shares.index');
-    indexPublicShare(this.store, row);
-  }
-
-  async publicShares_forget(caller: PresentedCaller, key: PublicShareKey): Promise<void> {
-    await this.gate(caller, 'shares.index');
-    forgetPublicShare(this.store, key);
-  }
-
-  async publicShares_list(caller: PresentedCaller): Promise<PublicShareRow[]> {
-    await this.gate(caller, 'shares.index');
-
-    return listPublicShares(this.store);
   }
 
   /** One account's rows. The roster fan-out stays in the Worker route, where subrequests are counted. */

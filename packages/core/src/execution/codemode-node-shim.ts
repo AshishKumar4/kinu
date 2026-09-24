@@ -1,9 +1,10 @@
 /**
- * Source of the Node-convenience module loaded beside an `eval` program; plain JS because it runs inside the
- * sandbox isolate. `fs`/`child_process` are shimmed over `workspace`, and `process.cwd()` answers the working
- * root the host resolves relative paths against; `createFetch` turns the egress entrypoint's marked 502 back
- * into a rejection; `defineCrafted` isolates each crafted tool (`[crafted:<name>]` marker).
+ * The Node-convenience module beside an `eval` program, plain JS for the sandbox isolate: `fs` and
+ * `child_process` over `workspace`, `process.cwd()` at the working root, `workspace.slates` objects,
+ * a `fetch` that rejects the egress entrypoint's marked 502, and isolated crafted tools.
  */
+
+import { SLATE_PROGRAM_MEMBERS } from '../slates/rpc';
 
 export const KINU_NODE_MODULE_NAME = 'kinu-node.js';
 
@@ -290,6 +291,43 @@ export function createFetch(failureHeader) {
     }
     return response;
   };
+}
+
+/**
+ * workspace.slates: workspace.slates.<id> is that slate's server class, the stub its own client gets,
+ * and $-named members, which no class method can take, are the lifecycle. The host's one slate
+ * operation is captured here and shadowed, so a program reaches slates through these members only.
+ */
+export function bindSlates(workspace) {
+  const operate = workspace === null ? undefined : workspace.slates;
+  if (typeof operate !== 'function') return;
+  const members = ${JSON.stringify(SLATE_PROGRAM_MEMBERS)};
+  // Never a class method here: 'then' would make a slate look like a promise to await, and the rest
+  // are what a conversion to text or JSON reaches for.
+  const inert = (name) => typeof name !== 'string' || ['then', 'toJSON', 'toString', 'valueOf'].includes(name);
+  const lifecycle = (on, id, name) => {
+    const op = name.slice(1);
+    if (!Object.hasOwn(members, op) || members[op].on !== on) return undefined;
+    return (...args) => {
+      const operation = members[op].params[0] === '...' ? { ...args[0], op } : { op };
+      members[op].params.forEach((param, i) => { if (param !== '...' && args[i] !== undefined) operation[param] = args[i]; });
+      if (id !== null) operation.id = id;
+      return operate(operation);
+    };
+  };
+  const slate = (id) => new Proxy({}, {
+    get: (_, name) => {
+      if (inert(name)) return undefined;
+      if (name.startsWith('$')) return lifecycle('slate', id, name);
+      return (...args) => operate({ op: 'call', id, method: name, args });
+    },
+  });
+  workspace.slates = new Proxy({}, {
+    get: (_, name) => {
+      if (inert(name)) return undefined;
+      return name.startsWith('$') ? lifecycle('directory', null, name) : slate(name);
+    },
+  });
 }
 
 export function defineCrafted(name, factory, reportFailure) {

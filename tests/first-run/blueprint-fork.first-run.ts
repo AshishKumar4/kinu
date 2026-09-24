@@ -7,10 +7,10 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import {
-  BlueprintForkSchema, JsonValueSchema, parseSlateProject, PublishedBlueprintSchema, SlateCapabilityGraphSchema,
+  BlueprintForkSchema, JsonValueSchema, parseSlateProject, PublishedBlueprintSchema, SharedLibrarySchema, SlateCapabilityGraphSchema,
 } from '@kinu.run/core';
 import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
-import { webHeaders } from '../evals/public-session';
+import { webHeaders } from '../../evals/src/session';
 
 const SUITE = 'First-run · blueprint-fork';
 
@@ -82,6 +82,13 @@ END`));
 
         const link = v.parse(PublishedLink, JSON.parse(publishText));
 
+        // What the Drive draws: the slate in My stuff, the blueprint in My stuff and Shared by you.
+        const libraryResponse = await fetch(`${plan.origin}/api/shared`, { headers });
+        const libraryText = await libraryResponse.text();
+
+        if (!libraryResponse.ok) throw new Error(`GET /api/shared answered ${String(libraryResponse.status)}: ${libraryText.slice(0, 200)}`);
+        const library = v.parse(SharedLibrarySchema, JSON.parse(libraryText));
+
         const blueprintResponse = await fetch(`${plan.origin}/api/shared/blueprint/${encodeURIComponent(link.id)}`);
 
         const blueprintView = v.parse(v.object({
@@ -114,6 +121,12 @@ END`));
               && blueprintView.bindings.every((binding) => binding.credentialed === true)
               && !JSON.stringify(published).includes(session.workspace),
             detail: JSON.stringify({ bindings: published.inspection.bindings, link }),
+          });
+          goals.push({
+            what: 'drive-lists-the-slate-and-its-blueprint',
+            reached: library.slates.some((slate) => slate.workspace === session.workspace && slate.id === SLATE)
+              && library.mine.some((row) => row.kind === 'blueprint' && row.share === link.share),
+            detail: JSON.stringify({ slates: library.slates.length, mine: library.mine.map((row) => [row.kind, row.share]) }),
           });
           goals.push({
             what: 'fork-bindings-read-unmapped',

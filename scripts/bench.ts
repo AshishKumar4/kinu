@@ -64,7 +64,7 @@ import {
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
-const SEAL_LEDGER = join(REPO_ROOT, 'tests', 'bench', 'seal-ledger.jsonl');
+const SEAL_LEDGER = join(REPO_ROOT, 'bench', 'corpus', 'seal-ledger.jsonl');
 
 /** Extra well-formedness checks a failing task gets before it is called BAD.
  *  Bounded on purpose: retrying is for absorbing a false fail, not for hunting
@@ -628,7 +628,7 @@ function corpusLabel(path: string, limit: number | null, total: number, seed: nu
 }
 
 function appendSealLedger(entry: JsonObject): number {
-  mkdirSync(join(REPO_ROOT, 'tests', 'bench'), { recursive: true });
+  mkdirSync(join(REPO_ROOT, 'bench', 'corpus'), { recursive: true });
 
   const prior = existsSync(SEAL_LEDGER)
     ? readFileSync(SEAL_LEDGER, 'utf8').split('\n').filter((l) => l.trim() && !l.startsWith('#')).length

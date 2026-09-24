@@ -4034,7 +4034,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (assembled.reasoningOptions) liveTurn.providerOptions = assembled.reasoningOptions;
     const runtime = this.rt;
-    this.acc.composition.openTurn({ system: assembled.system, tools: assembled.tools });
 
     return {
       execution: {

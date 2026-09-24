@@ -3,7 +3,7 @@
  * Folders upload as one zip (core's `packZip`) so the object lands the whole set or none.
  */
 import {
-  DriveListingSchema, MarkedSkillSchema, packZip, type DriveListing, type JsonValue, type MarkedSkill,
+  DriveListingSchema, MarkedSkillSchema, packZip, type DriveListing, type FileText, type JsonValue, type MarkedSkill,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
@@ -106,4 +106,50 @@ export async function addSkillFolder(files: readonly PickedFile[], name: string 
 
 export function downloadUrl(path: string): string {
   return `/api/drive/files?path=${encodeURIComponent(path)}&download=1`;
+}
+
+export function inlineUrl(path: string): string {
+  return `/api/drive/files?path=${encodeURIComponent(path)}`;
+}
+
+const PREVIEW_BYTES = 256 * 1024;
+
+/** A prefix of the file's text; no revision, so the viewer is read-only. */
+export async function readDriveText(path: string, cap = PREVIEW_BYTES): Promise<FileText> {
+  const res = await fetch(inlineUrl(path), { signal: AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) });
+
+  if (!res.ok) throw await failure(res);
+
+  if (res.body === null) return { content: '' };
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let truncated = false;
+
+  while (size < cap) {
+    const { done, value } = await reader.read();
+
+    if (done) break;
+    chunks.push(value);
+    size += value.byteLength;
+  }
+
+  if (size >= cap) {
+    truncated = true;
+    await reader.cancel();
+  }
+
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  const shown = bytes.subarray(0, Math.min(size, cap));
+
+  if (shown.includes(0)) return { error: 'This file is not text. Download it to open it.' };
+
+  return { content: new TextDecoder().decode(shown), truncated };
 }

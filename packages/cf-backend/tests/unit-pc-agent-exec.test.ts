@@ -583,6 +583,17 @@ describe('pc-agent supervisor guards', () => {
     await expect(pending).rejects.toThrow('exited before publishing state');
   });
 
+  // The hammer's red (2026-09-24, run 4 of 6): the exit reached the daemon before the state watch did, so a
+  // supervisor that had published its state was reported as never started and the stop test's exec resolved.
+  test('accepts a supervisor that published its state even when its exit is dispatched first', async () => {
+    const root = scratchDir('pc-agent-startup-published');
+    const child = new EventEmitter();
+    const pending = pcAgent.waitForSupervisorState(root, child);
+    writeFileSync(join(root, 'state'), 'pid=1\n');
+    child.emit('exit', null, 'SIGKILL');
+    await expect(pending).resolves.toBeUndefined();
+  });
+
   test('refuses unsupported hosts before creating a command directory', () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
 

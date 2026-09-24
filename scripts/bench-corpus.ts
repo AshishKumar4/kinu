@@ -1,4 +1,4 @@
-// Bench corpus loading. Reads tests/bench/tasks.jsonl + tests/bench/patches/,
+// Bench corpus loading. Reads bench/corpus/tasks.jsonl + bench/corpus/patches/,
 // validates every task at load, and hands back the dev/sealed partition. Also
 // answers whether the corpus still APPLIES, which is the one property nothing
 // about the files themselves can tell you.
@@ -69,7 +69,7 @@ export interface LoadedCorpus {
 }
 
 function benchCorpusDir(repoRoot: string): string {
-  return join(repoRoot, 'tests', 'bench');
+  return join(repoRoot, 'bench', 'corpus');
 }
 
 export function loadBenchCorpus(repoRoot: string, opts: PartitionOptions = {}): LoadedCorpus {

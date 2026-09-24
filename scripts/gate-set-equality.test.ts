@@ -221,7 +221,8 @@ describe('the denominator, from both sides', () => {
     expect(deploy.filter((run) => !ladder.has(run))).toEqual([]);
     const ladderOnly = LADDER.filter((gate) => !deploy.includes(gate.run));
     expect(ladderOnly.map((gate) => gate.tier)).toEqual(ladderOnly.map(() => 'evals'));
-    expect(ladderOnly.map((gate) => gate.run)).toContain('bun run test:eval');
+    expect(ladderOnly.map((gate) => gate.run)).toContain('bun run test:live');
+    expect(ladderOnly.map((gate) => gate.run)).toContain('bun run evals');
   });
 
   test('a gate target resolving to no file throws instead of being skipped', () => {

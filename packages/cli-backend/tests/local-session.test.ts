@@ -1,7 +1,7 @@
 // LocalAgentSession loop over the real createCLIRuntime and a fake streaming model: turns stream and persist,
 // programmatic turns serialize, broadcast fans out, end() flushes.
 import { describe, test, expect } from 'bun:test';
-import { createTestActorsOver, createTestSql, present, readTranscriptRows, scratchDir, scratchPath, toolExecute, scriptedTurnModel, type TranscriptRow, unobservedSearchSeams } from '@kinu.run/test-utils';
+import { createMockFetch, createTestActorsOver, createTestSql, present, readTranscriptRows, scratchDir, scratchPath, toolExecute, scriptedTurnModel, type TranscriptRow, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { MissionGovernor } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
@@ -34,6 +34,7 @@ import {
   createAgentSelfProvider, openWorkspaceMainActor, defaultLoopOrigin,
   InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER,
   workspaceSkillPath, WORKSPACE_SKILLS_DIR, TURN_CONTEXT_HEADER, MergeOutputSchema, SWARM_PRESET_DOCTRINE,
+  createProviderRegistry, createModelsDevCatalogSource,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeExecRaw, makeSql, makeSqlExec, type CLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
@@ -1713,6 +1714,89 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(session.getReasoningEffort()).toEqual({ effort: null });
     expect(session.setReasoningEffort('low')).toEqual({ ok: true, effort: 'low' });
     expect(session.getReasoningEffort()).toEqual({ effort: 'low' });
+  });
+
+  test('a Responses catalog model replays a tool step\'s text and reasoning whole, at the chosen effort', async () => {
+    // #30: Muse restated its plan every step: its earlier steps went out as `item_reference` ids the gateway
+    // keeps nothing behind, and the Extra high effort never reached the request.
+    const said = 'Got it, you want the first line. Reading notes.md now.';
+    const usage = { input_tokens: 9, output_tokens: 9, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 3 } };
+    const created = (id: string) => ({ type: 'response.created', response: { id, created_at: 1, model: 'muse-spark-1.3-contributor' } });
+    const done = { type: 'response.completed', response: { incomplete_details: null, usage } };
+
+    const toolStep = [
+      created('resp_1'),
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning', id: 'rs_1', encrypted_content: null } },
+      { type: 'response.output_item.done', output_index: 0, item: { type: 'reasoning', id: 'rs_1', encrypted_content: 'ENCRYPTED-1' } },
+      { type: 'response.output_item.added', output_index: 1, item: { type: 'message', id: 'msg_1' } },
+      { type: 'response.output_text.delta', item_id: 'msg_1', delta: said },
+      { type: 'response.output_item.done', output_index: 1, item: { type: 'message', id: 'msg_1' } },
+      { type: 'response.output_item.added', output_index: 2, item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'file', arguments: '' } },
+      { type: 'response.function_call_arguments.delta', item_id: 'fc_1', output_index: 2, delta: '{"action":"read","path":"notes.md"}' },
+      { type: 'response.output_item.done', output_index: 2, item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'file', arguments: '{"action":"read","path":"notes.md"}', status: 'completed' } },
+      done,
+    ];
+
+    const answerStep = [
+      created('resp_2'),
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'message', id: 'msg_2' } },
+      { type: 'response.output_text.delta', item_id: 'msg_2', delta: 'The first line is hello.' },
+      { type: 'response.output_item.done', output_index: 0, item: { type: 'message', id: 'msg_2' } },
+      done,
+    ];
+
+    const requests: JsonObject[] = [];
+
+    const mock = createMockFetch([
+      { match: 'models.dev/api.json', respond: { body: { 'opencode-go': {
+        id: 'opencode-go', npm: '@ai-sdk/openai-compatible', api: 'https://opencode.test/zen/go/v1',
+        models: { 'muse-spark-1.3-contributor': { id: 'muse-spark-1.3-contributor', tool_call: true, reasoning: true, provider: { npm: '@ai-sdk/openai' } } },
+      } } } },
+      { match: '/zen/go/v1/responses', respond: (request) => {
+        requests.push(v.parse(JsonObjectSchema, JSON.parse(request.body ?? '{}')));
+        const events = requests.length === 1 ? toolStep : answerStep;
+
+        return { headers: { 'content-type': 'text/event-stream' }, body: events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') };
+      } },
+    ]);
+
+    const registry = createProviderRegistry();
+    registry.registerDynamic(createModelsDevCatalogSource());
+    const spec = 'opencode-go/muse-spark-1.3-contributor';
+
+    const model = registry.resolve(spec, {
+      env: {}, fetch: mock.fetch,
+      getAuth: async () => ({ headers: { Authorization: 'Bearer key' } }),
+      hasCredential: async () => true,
+      listCredentialKeys: async () => ['opencode-go.bearer'],
+    });
+
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: () => spec,
+      resolveModel: () => model,
+      listProviders: async () => [],
+      listModels: async () => ({ models: [], failures: [] }),
+      modelInfo: async () => null,
+      ...resolverRest,
+    };
+
+    const catalog = { roles: {}, tiers: { default: { model: spec, reasoningEffort: 'xhigh' as const } } };
+
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
+    };
+
+    const { rt, session } = setupWithResolver(resolver, { profileAuthority: () => envelope });
+    await rt.storage.vfs.writeFile('notes.md', 'hello\nworld\n');
+    await session.send('What is the first line of notes.md?', { id: crypto.randomUUID() });
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toMatchObject({ store: false, reasoning: { effort: 'xhigh' }, include: ['reasoning.encrypted_content'] });
+    expect(JSON.stringify(requests[1]?.input)).not.toContain('item_reference');
+    expect(requests[1]?.input).toEqual(expect.arrayContaining([
+      { type: 'reasoning', encrypted_content: 'ENCRYPTED-1', summary: [] },
+      { role: 'assistant', content: [{ type: 'output_text', text: said }] },
+    ]));
   });
 
   test('an explicit tier applies to one turn and is consumed', async () => {

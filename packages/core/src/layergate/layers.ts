@@ -1299,17 +1299,17 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'tool-contract',
-    owns: 'the built-in tool contract the model reads: the when-to-use doctrine carried in each schema description',
+    owns: 'the built-in tool contract the model reads: the summary and notes each schema description carries',
     subjects: ['renderToolSchemaDescription'],
     probes: [
       {
         id: 'tool-contract/description-shape',
-        asserts: 'a spec renders summary, use-when, avoid-when and returns as labelled lines',
+        asserts: 'a spec renders its summary, then one line per note',
         observe: (s) => s.renderToolSchemaDescription(BUILTIN_TOOL_SPECS.agents),
       },
       {
         id: 'tool-contract/every-builtin-renders',
-        asserts: 'every shipped built-in carries a complete doctrine block — none silently blank',
+        asserts: 'every shipped built-in renders its summary and notes — none silently blank',
         observe: (s) => BUILTIN_TOOLS.map((name) => [name, s.renderToolSchemaDescription(BUILTIN_TOOL_SPECS[name])]),
       },
     ],

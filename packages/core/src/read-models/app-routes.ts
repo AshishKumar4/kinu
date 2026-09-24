@@ -19,6 +19,7 @@ export const APP_ROUTES = {
   drive: '/drive',
   /** The Drive below its root: `*` is the folder path, any depth. */
   driveFolder: '/drive/*',
+  shared: '/shared',
   sharedBlueprint: '/shared/blueprint/:id',
   deploy: '/deploy',
   updates: '/updates',

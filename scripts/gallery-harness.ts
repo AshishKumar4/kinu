@@ -154,6 +154,23 @@ export function unruledClasses(scope: string, family: string, markers: readonly 
   return [...classes].filter((name) => !selectors.some((selector) => selects(selector, name)));
 }
 
+/** The conditions pages are being waited on, so a run ended mid-wait names them. No page wait has a clock; a
+ *  condition that never arrives is ended by the row's deadline, and this is what that end prints. A page opened
+ *  on `gallery.browser` directly, not through `newPage`, records nothing. */
+const pendingWaits = new Set<{ readonly condition: string }>();
+
+/** `wait`, with `condition` recorded while it is open. */
+async function recorded<T>(condition: string, wait: () => Promise<T>): Promise<T> {
+  const open = { condition };
+
+  pendingWaits.add(open);
+
+  try {
+    return await wait();
+  } finally {
+    pendingWaits.delete(open);
+  }
+}
 
 function chromePath(): string | undefined {
   for (const candidate of ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium']) {
@@ -366,6 +383,10 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
      * wrong, awaiting its exit hooks and never reaching its kill.
      */
     const abandonBrowser = (): void => {
+      if (pendingWaits.size > 0) {
+        process.stderr.write(`gallery-harness: ended while waiting for ${[...pendingWaits].map((open) => open.condition).join('; ')}\n`);
+      }
+
       signalGroup(group, 'SIGTERM');
       signalGroup(group, 'SIGKILL');
     };
@@ -394,9 +415,16 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
 
     const newPage = async (): Promise<Page> => {
       const page = await browser.newPage();
+      const waitForSelector = page.waitForSelector.bind(page);
+      const waitForFunction = page.waitForFunction.bind(page);
 
       page.setDefaultTimeout(0);
       page.setDefaultNavigationTimeout(0);
+      page.waitForSelector = async (selector, waitOptions) => recorded(`${selector} on ${page.url()}`, () => waitForSelector(selector, waitOptions));
+      page.waitForFunction = async (condition, waitOptions, ...args) => recorded(
+        `${String(condition).replace(/\s+/gu, ' ')} on ${page.url()}`,
+        () => waitForFunction(condition, waitOptions, ...args),
+      );
 
       return page;
     };

@@ -1,7 +1,7 @@
 [
   {
     "key": "packages/core/tests/e2e/mcts-e2e.test.ts › E2E MCTS with real LLM › full search cycle",
-    "reason": "needs a live model through AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH: one real MCTS search over a live provider and judge, gated by describe.skipIf(!isE2EConfigured()). scripts/test-scratch-home.ts strips both variables at preload unless KINU_EVAL_LIVE=1, so this skips deterministically outside the eval tier rather than depending on whose shell ran it. NO ARM RUNS IT LIVE TODAY: eval-tier.sh's bun arm is ./tests/ and does not reach packages/, so this entry records a live suite with no live tier — which is the argument someone has to answer, not a fact the exit code should hide."
+    "reason": "needs a live model through AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH: one real MCTS search over a live provider and judge, gated by describe.skipIf(!isE2EConfigured()). scripts/test-scratch-home.ts strips both variables at preload unless KINU_EVAL_LIVE=1, so this skips deterministically outside the live tier rather than depending on whose shell ran it. NO ARM RUNS IT LIVE TODAY: live-tier.sh runs ./tests/live/ and does not reach packages/, so this entry records a live suite with no live tier — which is the argument someone has to answer, not a fact the exit code should hide."
   },
   {
     "key": "packages/core/tests/e2e/scaffold-e2e.test.ts › E2E scaffold evolution › LLM generates valid scaffold code that passes 4-gate",
@@ -12,188 +12,107 @@
     "reason": "needs a live model through AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH: bootstrap, a model-authored modification, then rollback across real versions. Same preload strip and the same missing live arm as the MCTS entry above."
   },
   {
-    "key": "tests/deep-evolution.test.ts › Deep Evolution — 8 Algorithmic Challenges › scorecard and evolution summary",
-    "reason": "needs a live model: reports the 8-problem scorecard the preceding test produces. Runs in the eval tier with KINU_ORIGIN + KINU_TOKEN."
+    "key": "tests/live/deep-evolution.test.ts › Deep Evolution — 8 Algorithmic Challenges › scorecard and evolution summary",
+    "reason": "needs a live model: reports the 8-problem scorecard the preceding test produces. Runs in the live tier with KINU_ORIGIN + KINU_TOKEN."
   },
   {
-    "key": "tests/deep-evolution.test.ts › Deep Evolution — 8 Algorithmic Challenges › solve 8 algorithmic problems with native tool calling",
-    "reason": "needs a live model: 8 problems with verifiable answers, the agent must write and execute code. The most expensive single test here. Runs in the eval tier."
+    "key": "tests/live/deep-evolution.test.ts › Deep Evolution — 8 Algorithmic Challenges › solve 8 algorithmic problems with native tool calling",
+    "reason": "needs a live model: 8 problems with verifiable answers, the agent must write and execute code. The most expensive single test here. Runs in the live tier."
   },
   {
-    "key": "tests/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 3. chat turn 1: simple math question",
-    "reason": "needs a live model: multi-turn tool calling, turn 1 of 3. Runs in the eval tier."
+    "key": "tests/live/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 3. chat turn 1: simple math question",
+    "reason": "needs a live model: multi-turn tool calling, turn 1 of 3. Runs in the live tier."
   },
   {
-    "key": "tests/evals/behaviour.eval.ts › run completeness — an unfinished run is not a green one > every declared case reached one of the five states",
-    "reason": "needs live eval credentials: this is the completeness assertion over declared paid behaviour cases. Without a credential no case can run; resume and five-state classification are covered credential-free in tests/evals/harness-wiring.test.ts."
+    "key": "tests/live/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 4. chat turn 2: code execution",
+    "reason": "needs a live model: proves the agent reaches execute_tools rather than answering from memory. Runs in the live tier."
   },
   {
-    "key": "tests/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 4. chat turn 2: code execution",
-    "reason": "needs a live model: proves the agent reaches execute_tools rather than answering from memory. Runs in the eval tier."
+    "key": "tests/live/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 5. chat turn 3: save note to memory",
+    "reason": "needs a live model: writes the memory the reopen test then reads back. Runs in the live tier."
   },
   {
-    "key": "tests/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 5. chat turn 3: save note to memory",
-    "reason": "needs a live model: writes the memory the reopen test then reads back. Runs in the eval tier."
+    "key": "tests/live/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 6. close and reopen agent — verify persistence",
+    "reason": "needs a live model: the ONLY memory-across-a-reopen evidence in the repo. Depends on the three turns above having really run. Runs in the live tier."
   },
   {
-    "key": "tests/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 6. close and reopen agent — verify persistence",
-    "reason": "needs a live model: the ONLY memory-across-a-reopen evidence in the repo. Depends on the three turns above having really run. Runs in the eval tier."
+    "key": "tests/live/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 7. full database state summary",
+    "reason": "needs a live model: reports the end state of the lifecycle above. Runs in the live tier."
   },
   {
-    "key": "tests/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 7. full database state summary",
-    "reason": "needs a live model: reports the end state of the lifecycle above. Runs in the eval tier."
+    "key": "tests/live/e2e-lifecycle.test.ts › E2E Lifecycle › 5-turn conversation with native tool calling",
+    "reason": "needs a live model: the multi-turn tool-calling evidence. Runs in the live tier."
   },
   {
-    "key": "tests/e2e-lifecycle.test.ts › E2E Lifecycle › 5-turn conversation with native tool calling",
-    "reason": "needs a live model: the multi-turn tool-calling evidence. Runs in the eval tier."
+    "key": "tests/live/e2e-lifecycle.test.ts › E2E Lifecycle › MCTS evolution",
+    "reason": "needs a live model: drives runMCTS and asserts the winner is among the persisted nodes. Superseded in strength by tests/live/exploration.test.ts, which asserts branch count and a DURABLE ranked winner rather than an in-memory winnerId; kept because it exercises the lifetime-evolution entry point rather than the agents tool."
   },
   {
-    "key": "tests/e2e-lifecycle.test.ts › E2E Lifecycle › MCTS evolution",
-    "reason": "needs a live model: drives runMCTS and asserts the winner is among the persisted nodes. Superseded in strength by tests/evals/exploration.eval.test.ts, which asserts branch count and a DURABLE ranked winner rather than an in-memory winnerId; kept because it exercises the lifetime-evolution entry point rather than the agents tool."
-  },
-  {
-    "key": "tests/e2e-lifecycle.test.ts › E2E Lifecycle › evolution events fired",
+    "key": "tests/live/e2e-lifecycle.test.ts › E2E Lifecycle › evolution events fired",
     "reason": "needs a live model: asserts the EvolutionEngine emitted events for the turns above."
   },
   {
-    "key": "tests/e2e-lifecycle.test.ts › E2E Lifecycle › memory has content",
+    "key": "tests/live/e2e-lifecycle.test.ts › E2E Lifecycle › memory has content",
     "reason": "needs a live model: asserts evolution wrote memory/MEMORY.md."
   },
   {
-    "key": "tests/e2e-lifecycle.test.ts › E2E Lifecycle › persistence",
+    "key": "tests/live/e2e-lifecycle.test.ts › E2E Lifecycle › persistence",
     "reason": "needs a live model: message count and SOUL.md survive a close/reopen. Vacuous without the turns above, which is why it is not worth un-gating on its own."
   },
   {
-    "key": "tests/evals/exploration.eval.test.ts › Exploration evals — MCTS reached, ranked, and readable › AUTONOMOUS: the model reaches for exploration on a task that warrants it",
+    "key": "tests/live/exploration.test.ts › Exploration evals — MCTS reached, ranked, and readable › AUTONOMOUS: the model reaches for exploration on a task that warrants it",
     "reason": "needs a live model by definition: it measures whether the model autonomously reaches for exploration. This is the eval whose number is the finding."
   },
   {
-    "key": "tests/evals/exploration.eval.test.ts › Exploration evals — MCTS reached, ranked, and readable › VISIBLE: every settle mode wrote where the Exploration reader reads",
+    "key": "tests/live/exploration.test.ts › Exploration evals — MCTS reached, ranked, and readable › VISIBLE: every settle mode wrote where the Exploration reader reads",
     "reason": "needs a live model transitively: its denominator is the search the DRIVEN test writes, and it must assert a non-zero rootsWritten. The reader/writer agreement is covered credential-free at packages/test-utils/tests/agent-evals.test.ts."
   },
   {
-    "key": "tests/evals/exploration.eval.test.ts › Exploration evals — MCTS reached, ranked, and readable › DRIVEN (instructed): a direct mcts search branches and ranks, durably",
+    "key": "tests/live/exploration.test.ts › Exploration evals — MCTS reached, ranked, and readable › DRIVEN (instructed): a direct mcts search branches and ranks, durably",
     "reason": "needs a live model: an MCTS search consists of branch rollouts and judge calls. The test drives the strategy directly, but it cannot replace the model work."
   },
   {
-    "key": "tests/evolution-proof.test.ts › Evolution Proof › evolution artifacts exist after session 1",
+    "key": "tests/live/evolution-proof.test.ts › Evolution Proof › evolution artifacts exist after session 1",
     "reason": "needs a live model: asserts session 1 produced crafted tools / patterns."
   },
   {
-    "key": "tests/evolution-proof.test.ts › Evolution Proof › evolution summary: compare session 1 vs session 2",
+    "key": "tests/live/evolution-proof.test.ts › Evolution Proof › evolution summary: compare session 1 vs session 2",
     "reason": "needs a live model: the cross-session transfer comparison, and the only such evidence in the repo."
   },
   {
-    "key": "tests/evolution-proof.test.ts › Evolution Proof › session 1, turn 1: RSA challenge (learn the pattern)",
-    "reason": "needs a live model: session 1 of the cross-session transfer proof. Runs in the eval tier."
+    "key": "tests/live/evolution-proof.test.ts › Evolution Proof › session 1, turn 1: RSA challenge (learn the pattern)",
+    "reason": "needs a live model: session 1 of the cross-session transfer proof. Runs in the live tier."
   },
   {
-    "key": "tests/evolution-proof.test.ts › Evolution Proof › session 1, turn 2: Dijkstra challenge (learn algorithm pattern)",
+    "key": "tests/live/evolution-proof.test.ts › Evolution Proof › session 1, turn 2: Dijkstra challenge (learn algorithm pattern)",
     "reason": "needs a live model: session 1 of the cross-session transfer proof."
   },
   {
-    "key": "tests/evolution-proof.test.ts › Evolution Proof › session 1, turn 3: cipher challenge + session reflection",
+    "key": "tests/live/evolution-proof.test.ts › Evolution Proof › session 1, turn 3: cipher challenge + session reflection",
     "reason": "needs a live model: closes session 1 and triggers session reflection."
   },
   {
-    "key": "tests/evolution-proof.test.ts › Evolution Proof › session 2, turn 1: similar RSA challenge with inherited artifacts",
+    "key": "tests/live/evolution-proof.test.ts › Evolution Proof › session 2, turn 1: similar RSA challenge with inherited artifacts",
     "reason": "needs a live model: session 2 must solve the checked RSA task and the final comparison now requires reuse of a crafted tool from session 1."
   },
   {
-    "key": "tests/evolution-proof.test.ts › Evolution Proof › session 2, turn 2: similar graph challenge with inherited artifacts",
+    "key": "tests/live/evolution-proof.test.ts › Evolution Proof › session 2, turn 2: similar graph challenge with inherited artifacts",
     "reason": "needs a live model: session 2 must solve the checked graph task and contributes to the asserted crafted-tool reuse result."
   },
   {
-    "key": "tests/live-smoke.test.ts › Live Smoke — one real turn per backend › hosted backend: one real turn through the deployed worker",
-    "reason": "needs the deployed Worker: creates a throwaway cloud workspace, drives one turn through the OrchestratorAgent over the ticket-authenticated WebSocket used by `kinu chat`, asserts a real tool call and durable chat rows, then deletes the workspace. Workerd tests cannot prove the deployed route and bindings. Runs in the eval tier."
+    "key": "tests/live/live-smoke.test.ts › Live Smoke — one real turn per backend › hosted backend: one real turn through the deployed worker",
+    "reason": "needs the deployed Worker: creates a throwaway cloud workspace, drives one turn through the OrchestratorAgent over the ticket-authenticated WebSocket used by `kinu chat`, asserts a real tool call and durable chat rows, then deletes the workspace. Workerd tests cannot prove the deployed route and bindings. Runs in the live tier."
   },
   {
-    "key": "tests/live-smoke.test.ts › Live Smoke — one real turn per backend › signed-in web app: create, rename, run, inspect, and use mobile panels",
+    "key": "tests/live/live-smoke.test.ts › Live Smoke — one real turn per backend › signed-in web app: create, rename, run, inspect, and use mobile panels",
     "reason": "needs the deployed staging Worker and a live model: drives the signed-in React app through workspace creation, rename propagation, one tool turn, exact file inspection, a real sandbox command, mobile panel switching, and touch controls. Local gallery fixtures cannot prove any authenticated RPC or deployed binding."
   },
   {
-    "key": "tests/live-smoke.test.ts › Live Smoke — one real turn per backend › cli backend: one real turn through the local session spine",
-    "reason": "needs a live model: drives ONE turn through the same LocalAgentSession spine as `kinu exec` and asserts a real tool call plus a durable messages row. A mock model chooses no tools, so both assertions would be vacuous against one — 'does the agent reach for a tool' IS the measurement. Measured at 15.3s. Runs in the eval tier."
+    "key": "tests/live/live-smoke.test.ts › Live Smoke — one real turn per backend › cli backend: one real turn through the local session spine",
+    "reason": "needs a live model: drives ONE turn through the same LocalAgentSession spine as `kinu exec` and asserts a real tool call plus a durable messages row. A mock model chooses no tools, so both assertions would be vacuous against one — 'does the agent reach for a tool' IS the measurement. Measured at 15.3s. Runs in the live tier."
   },
   {
-    "key": "tests/live-smoke.test.ts › Live Smoke — one real turn per backend › deployed backend: the device registry answers the CLI bearer",
-    "reason": "needs the deployed Worker and the tier's CLI bearer: reads GET /api/cli/devices on the deployed origin and parses the thirteen fields listDevices declares with v.strictObject. It exists because that route answered 500 in production for weeks (`no such column: unstopped_at`, 2026-09-01) while every local suite built a fresh schema — only a deployed read against a UserDO that predates the columns can see it. Runs in the eval tier (evals:cloud) and after a staging deploy."
-  },
-  {
-    "key": "tests/evals/behaviour.eval.ts › Agent behaviour over the run-event ledger",
-    "reason": "needs a live model: 34 full agent episodes — the eval corpus (17 tasks: 6 environment-handover cases, 4 tool-using seed cases, 7 hard tasks with machine-checkable ground truth) times 2 repetitions, each a real multi-turn session whose run_events ledger the eight behaviour scorers grade. Declared as one FAMILY rather than 34 keys because every case comes from one `it.for(CASES)` behind one `skipIf(TARGET === null)`, so no case can begin skipping alone, and the corpus's own size floor is asserted credential-free by `the corpus is large enough for significance to be reachable` in the same file. Runs in the eval tier: `bun run test:eval`.",
-    "family": true
-  },
-  {
-    "key": "tests/evals/behaviour.eval.ts › corpus quality — can this corpus rank anything at all > the corpus is not saturated — arms could disagree on it",
-    "reason": "needs a live model: reads the task_outcome rows the 34 episodes above produced and refuses a corpus that every attempt swept or every attempt failed. Skipped rather than passed without a model on purpose — an empty observation list must never read as a satisfied property. Its sibling in the same describe (`the corpus is large enough for significance to be reachable`) is static and runs at every tier."
-  },
-  {
-    "key": "tests/evals/swarm.eval.ts › Swarm evals — a live measured search through the settled tool surface > MEASURED: a live swarm crowns a winner that beats its own measured baseline",
-    "reason": "needs a live model BY DEFINITION: it drives agents({action:'swarm'}) through the real tool surface and grades the tree on the caller's own exec-ratio verifier — a winner crowned, its artifact measured against the run's own measured baseline, exploration_records rows reachable under the objective's key, and the judgeEnsemble/fanIn/carry disclosures consistent with the axes in force. A mock model writes whatever the fixture scripts, so 'did a real search beat the reference' is not a question one can answer. It is IN-PROCESS by nature — it reads the tool's own return value over a CLIRuntime, which a deployed workspace does not hand out — so under KINU_EVAL_BACKEND=cloud it skips and prints that reason rather than measuring the local loop under a cloud banner. The credential-free half of the same file — the action is offered, and the strict parse refuses an unknown field naming the field it meant — runs at every tier, and the engine's own tree, arbiter, DAG and records behaviour is covered credential-free at packages/core/tests/unit-swarm-depth.test.ts. Runs in the eval tier's own live swarm arm, which is held to its own liveness assertion."
-  },
-  {
-    "key": "tests/evals/research.eval.ts › Research evals — a live retrieval from a controlled MCP source > MEASURED: the agent reads the archive and its report carries the planted facts and the canary",
-    "reason": "needs a live model BY DEFINITION: it drives one real agent episode whose only source for a fictional topic is the controlled MCP archive this suite serves, and scores the structured reply by exact match against the planted numbers and the canary token — a mock model would be this eval answering itself. The credential-free half of the same file runs at every tier: the corpus-integrity test (facts in the archive, none in the prompt, the canary in exactly one entry) and the MCP handshake through the product's own connectMcpServers client. Runs in the eval tier: `bun run evals:full`."
-  },
-  {
-    "key": "tests/evals/optimization.eval.ts › Optimization evals — a measured challenge with a pre-registered threshold > MEASURED: the agent attains the threshold on the metered instrument",
-    "reason": "needs a live model BY DEFINITION: one real agent episode against the metered hard-majority-vote instrument, held to the pre-registered task_outcome threshold of 0.5 on the exec-ratio log scale, with swarm use recorded off the episode's own store rather than dictated. A mock model cannot attain or miss a measured oracle-call bar. The threshold's own sanity (a bar something can clear and something can miss) is asserted credential-free in the same file. Runs in the eval tier: `bun run evals:full`."
-  },
-  {
-    "key": "tests/evals/math.eval.ts › Math evals — seeded instances, exact answers > MEASURED: every seeded instance, graded exactly",
-    "reason": "needs a live model BY DEFINITION: one spawned `kinu exec` episode per seeded math instance, each answer.txt compared exactly against the instance's own answer — a mock model cannot solve or miss a fresh seeded problem. The credential-free half of the same file runs at every tier: every fast solver against an independent brute force, the per-seed determinism, the brute-force barriers, and the exact verifier's green and red fixtures. Runs in the eval tier: `bun run evals:full`."
-  },
-  {
-    "key": "tests/evals/swarm.eval.ts › Swarm evals — a live measured search through the settled tool surface > MEASURED: the agent reaches a search through the turn loop it runs on",
-    "reason": "needs a live model BY DEFINITION: it sends one real user turn asking the agent to run a search, then grades what the workspace RECORDED — the step count and last-step finish reason against the run_end reason, and the five search-ledger reads that establish whether any node spawned. A mock model reaches the rung only if the fixture scripts it, so 'did the agent choose the search through the loop it actually runs on' is unanswerable without a real one. It is the TARGET-AGNOSTIC arm, and the only one in this suite: it provisions its OWN workspace through resolveEvalTarget, so the same test drives the in-process cli-backend runtime under KINU_EVAL_BACKEND=local and a real staging workspace under =cloud — the only way in this tree to reach @cloudflare/think — the loop that carries the stepCountIs(10) cap this arm's step-count assertion exists to surface, and which no suite in this tree could previously enter. Runs in the eval tier: `bun run test:eval` (local) or `bun run evals:cloud`."
-  },
-  {
-    "key": "tests/evals/trajectory.eval.ts › Trajectory evals — multi-turn episodes through the public API > MEASURED: public-file-artifact",
-    "reason": "needs BOTH a live model AND the deployed public API: this case drives a multi-turn episode through the surfaces the WEB CLIENT speaks — `POST /api/user/workspaces`, the agents-SDK chat frames on the workspace socket, the public run-event and file routes, and `removeWorkspace` on the way out — so it can only run under `KINU_EVAL_BACKEND=cloud` against a deployment. `resolvePublicSessionPlan` refuses every other backend before it consults a credential and prints the remedy, and the browser plane needs the deployment's own synthetic-identity secret (KINU_EVAL_WEB_IDENTITY) which the tier's CLI bearer cannot substitute for. Runs in the eval tier: `bun run evals:cloud`. WHAT THIS ONE MEASURES: turn one writes a file, turn two reads it back, and the score is the artifact off the files route plus the transcript rows that prove the conversation carried. A mock model cannot answer 'does a deployed workspace keep a conversation'. The frame codec, the ledger bridge and the skip remedies are covered credential-free in tests/evals/public-session.test.ts, and the corpus/admissibility/degenerate-refusal properties in the same file as this case."
-  },
-  {
-    "key": "tests/evals/trajectory.eval.ts › Trajectory evals — multi-turn episodes through the public API > MEASURED: public-steer-correction",
-    "reason": "needs BOTH a live model AND the deployed public API: this case drives a multi-turn episode through the surfaces the WEB CLIENT speaks — `POST /api/user/workspaces`, the agents-SDK chat frames on the workspace socket, the public run-event and file routes, and `removeWorkspace` on the way out — so it can only run under `KINU_EVAL_BACKEND=cloud` against a deployment. `resolvePublicSessionPlan` refuses every other backend before it consults a credential and prints the remedy, and the browser plane needs the deployment's own synthetic-identity secret (KINU_EVAL_WEB_IDENTITY) which the tier's CLI bearer cannot substitute for. Runs in the eval tier: `bun run evals:cloud`. WHAT THIS ONE MEASURES: a correction submitted through the composer's own `steerTurn` WHILE the first turn is running, scored on whether it reached the work. The race it drives — `mid-turn` against `queued` — is a property of a real model's pace, so a scripted one would measure the fixture's timing rather than the product's. The RPC frame codec is covered credential-free in tests/evals/public-session.test.ts."
-  },
-  {
-    "key": "tests/evals/trajectory.eval.ts › Trajectory evals — multi-turn episodes through the public API > MEASURED: public-failure-recovery",
-    "reason": "needs BOTH a live model AND the deployed public API: this case drives a multi-turn episode through the surfaces the WEB CLIENT speaks — `POST /api/user/workspaces`, the agents-SDK chat frames on the workspace socket, the public run-event and file routes, and `removeWorkspace` on the way out — so it can only run under `KINU_EVAL_BACKEND=cloud` against a deployment. `resolvePublicSessionPlan` refuses every other backend before it consults a credential and prints the remedy, and the browser plane needs the deployment's own synthetic-identity secret (KINU_EVAL_WEB_IDENTITY) which the tier's CLI bearer cannot substitute for. Runs in the eval tier: `bun run evals:cloud`. WHAT THIS ONE MEASURES: turn one runs a seeded command that FAILS, turn two repairs the cause, and the recovery is read off the public run-event route — a failed tool call, then a later call of the same tool that ran clean. `classifyToolFailure`'s own reading of that pair is covered credential-free in tests/evals/public-session.test.ts over recorded route-shaped events."
-  },
-  {
-    "key": "tests/evals/device.eval.ts › Device evals — one machine, linked and driven through the deployed API > MEASURED: device-connect-e2e",
-    "reason": "needs a DEPLOYMENT and this machine: the case links the host it runs on to the target through `connectDevice` — registering the device, installing the daemon the CLI ships under a throwaway KINU_HOME, and starting it — then reads `GET /api/cli/devices`, grants a workspace consent through `PUT /api/user/devices/:id/consent`, runs one command on the machine through `executeInExecutor('laptop', …)`, revokes the device and checks the next command refuses with a class. No in-process runtime has a device plane to link to, so `KINU_EVAL_BACKEND=cloud` is the only backend that can run it, and `deviceArmGate` skips every other one before it consults a credential. Under cloud a missing credential is a FAILURE rather than this skip: the arm needs both the CLI bearer (for /api/cli/devices) and the deployment's synthetic-identity secret KINU_EVAL_WEB_IDENTITY (for the consent and revoke routes). It calls NO model, so the tier gives it `self` liveness instead of holding it to model spend. Runs in the eval tier: `bun run evals:cloud`."
-  },
-  {
-    "key": "tests/evals/trajectory.eval.ts › Trajectory evals — multi-turn episodes through the public API > MEASURED: public-memory-across-turns",
-    "reason": "needs BOTH a live model AND the deployed public API: this case drives a multi-turn episode through the surfaces the WEB CLIENT speaks — `POST /api/user/workspaces`, the agents-SDK chat frames on the workspace socket, the public run-event and file routes, and `removeWorkspace` on the way out — so it can only run under `KINU_EVAL_BACKEND=cloud` against a deployment. `resolvePublicSessionPlan` refuses every other backend before it consults a credential and prints the remedy, and the browser plane needs the deployment's own synthetic-identity secret (KINU_EVAL_WEB_IDENTITY) which the tier's CLI bearer cannot substitute for. Runs in the eval tier: `bun run evals:cloud`. WHAT THIS ONE MEASURES: turn one writes a file, turn two reads it back, and the score is the artifact off the files route plus the transcript rows that prove the conversation carried. A mock model cannot answer 'does a deployed workspace keep a conversation'. The frame codec, the ledger bridge and the skip remedies are covered credential-free in tests/evals/public-session.test.ts, and the corpus/admissibility/degenerate-refusal properties in the same file as this case."
-  },
-  {
-    "key": "tests/evals/trajectory.eval.ts › Trajectory evals — multi-turn episodes through the public API > MEASURED: public-tasks-across-turns",
-    "reason": "needs BOTH a live model AND the deployed public API: this case drives a multi-turn episode through the surfaces the WEB CLIENT speaks — `POST /api/user/workspaces`, the agents-SDK chat frames on the workspace socket, the public run-event and file routes, and `removeWorkspace` on the way out — so it can only run under `KINU_EVAL_BACKEND=cloud` against a deployment. `resolvePublicSessionPlan` refuses every other backend before it consults a credential and prints the remedy, and the browser plane needs the deployment's own synthetic-identity secret (KINU_EVAL_WEB_IDENTITY) which the tier's CLI bearer cannot substitute for. Runs in the eval tier: `bun run evals:cloud`. WHAT THIS ONE MEASURES: turn one writes a file, turn two reads it back, and the score is the artifact off the files route plus the transcript rows that prove the conversation carried. A mock model cannot answer 'does a deployed workspace keep a conversation'. The frame codec, the ledger bridge and the skip remedies are covered credential-free in tests/evals/public-session.test.ts, and the corpus/admissibility/degenerate-refusal properties in the same file as this case."
-  },
-  {
-    "key": "tests/evals/trajectory.eval.ts › Trajectory evals — multi-turn episodes through the public API > MEASURED: public-delegation-across-turns",
-    "reason": "needs BOTH a live model AND the deployed public API: this case drives a multi-turn episode through the surfaces the WEB CLIENT speaks — `POST /api/user/workspaces`, the agents-SDK chat frames on the workspace socket, the public run-event route, and `removeWorkspace` on the way out — so it can only run under `KINU_EVAL_BACKEND=cloud` against a deployment. `resolvePublicSessionPlan` refuses every other backend before it consults a credential and prints the remedy, and the browser plane needs the deployment's own synthetic-identity secret (KINU_EVAL_WEB_IDENTITY) which the tier's CLI bearer cannot substitute for. Runs in the eval tier: `bun run evals:cloud`. WHAT THIS ONE MEASURES: turn one hires a helper to research one fact and turn two asks the root what the helper said, so the score is the settled `agents` call off the run-event route plus the relayed answer in the transcript — delegation is the one mechanism no single-turn row and no fixture-driven unit can answer, because a mock model cannot answer 'does a deployed lead actually get its helper's words back a turn later'. The frame codec, the ledger bridge and the skip remedies are covered credential-free in tests/evals/public-session.test.ts, and the corpus/admissibility/degenerate-refusal properties in the same file as this case."
-  },
-  {
-    "key": "tests/evals/kinu-tasks.eval.ts › Kinu task evals — measured > MEASURED: slate-ledger",
-    "reason": "needs BOTH a live model AND the deployed public API: the Kinu task family drives a four-turn episode through the surfaces the WEB CLIENT speaks, opened per episode and asked after EVERY turn against references the verifier computes between those turns, so it can only run under `KINU_EVAL_BACKEND=cloud` against a deployment. `resolvePublicSessionPlan` refuses every other backend before it consults a credential and prints the remedy (tests/evals/kinu-tasks.eval.ts:184-192 turns that refusal into `PLAN === null` and this `skipIf`), and the browser plane needs the deployment's own synthetic-identity secret (KINU_EVAL_WEB_IDENTITY) which the tier's CLI bearer cannot substitute for. Declared one key per case rather than as a family: the four cases are hand-written, each with its own verifier and subgoal list, so one could begin skipping while the others ran. The credential-free half of the same file runs at every tier — each case's minimal CORRECT fixture plus one mutation per subgoal, each proved to flip exactly that subgoal. Runs in the eval tier: `bun run evals:cloud`. WHAT THIS ONE MEASURES: a TypeScript queue slate built, served and kept intact across a rule change — 12 subgoals: previewed, seeded, errors, order-and-filters and metrics on turn 1, plus survives-reconnect across a plain socket disconnect/connect (the durability the product promises; an eviction would test what the in-memory contract explicitly does not carry); document and read-not-recalled on turn 2; preserved — the `/tickets` body compared BYTE-FOR-BYTE against its pre-change capture — with new-rules and still-serving on turn 3; and bare-number on turn 4."
-  },
-  {
-    "key": "tests/evals/kinu-tasks.eval.ts › Kinu task evals — measured > MEASURED: delegate-and-build",
-    "reason": "needs BOTH a live model AND the deployed public API: the Kinu task family drives a four-turn episode through the surfaces the WEB CLIENT speaks, opened per episode and asked after EVERY turn against references the verifier computes between those turns, so it can only run under `KINU_EVAL_BACKEND=cloud` against a deployment. `resolvePublicSessionPlan` refuses every other backend before it consults a credential and prints the remedy (tests/evals/kinu-tasks.eval.ts:184-192 turns that refusal into `PLAN === null` and this `skipIf`), and the browser plane needs the deployment's own synthetic-identity secret (KINU_EVAL_WEB_IDENTITY) which the tier's CLI bearer cannot substitute for. Declared one key per case rather than as a family: the four cases are hand-written, each with its own verifier and subgoal list, so one could begin skipping while the others ran. The credential-free half of the same file runs at every tier — each case's minimal CORRECT fixture plus one mutation per subgoal, each proved to flip exactly that subgoal. Runs in the eval tier: `bun run evals:cloud`. WHAT THIS ONE MEASURES: a lead who delegates in parallel, plans while the helpers work, and reports exactly what they answered — 12 subgoals: two-hires-settled and parallel-delegation, the latter read off the ledger's own step boundaries (the turn's two `agents` hire `tool_call_end` rows share a `runId` with no `step_finish` row between their `eventIndex` values, so one assistant message issued both), then files, answers-relayed, plan-submitted, roster-retired, no-card-leak, tasks-linked, tasks-closed, slates-built, reply-matches-ledger and attribution."
-  },
-  {
-    "key": "tests/evals/kinu-tasks.eval.ts › Kinu task evals — measured > MEASURED: clone-and-serve",
-    "reason": "needs BOTH a live model AND the deployed public API: the Kinu task family drives a four-turn episode through the surfaces the WEB CLIENT speaks, opened per episode and asked after EVERY turn against references the verifier computes between those turns, so it can only run under `KINU_EVAL_BACKEND=cloud` against a deployment. `resolvePublicSessionPlan` refuses every other backend before it consults a credential and prints the remedy (tests/evals/kinu-tasks.eval.ts:184-192 turns that refusal into `PLAN === null` and this `skipIf`), and the browser plane needs the deployment's own synthetic-identity secret (KINU_EVAL_WEB_IDENTITY) which the tier's CLI bearer cannot substitute for. Declared one key per case rather than as a family: the four cases are hand-written, each with its own verifier and subgoal list, so one could begin skipping while the others ran. The credential-free half of the same file runs at every tier — each case's minimal CORRECT fixture plus one mutation per subgoal, each proved to flip exactly that subgoal. Runs in the eval tier: `bun run evals:cloud`. WHAT THIS ONE MEASURES: an engineer who runs services where they can actually run and says where — 9 subgoals: git, served-workspace, reply, served-sandbox, both-urls, workspace-still-up, routed, and the boundary-discovered / reason-stated pair, which needs the agent to meet the hosted `workspace` runtime's codegen refusal and NAME it (`/compil/iu`, from packages/core/src/vfs/workspace-runtimes.ts:372-378). That boundary is a platform fact measured on the deployment 2026-09-18T04:55Z against https://kinu.run serving 0.2.0+cba44dcb9: `npm i` of a vite project exits 0, every route into Vite exits 127 on the codegen refusal, and `npm --version` in the sandbox control exits 0 (kinu-logs/evals-0917/hosted-vite-measurement.log)."
-  },
-  {
-    "key": "tests/evals/kinu-tasks.eval.ts › Kinu task evals — measured > MEASURED: durable-continuity",
-    "reason": "needs BOTH a live model AND the deployed public API: the Kinu task family drives a four-turn episode through the surfaces the WEB CLIENT speaks, opened per episode and asked after EVERY turn against references the verifier computes between those turns, so it can only run under `KINU_EVAL_BACKEND=cloud` against a deployment. `resolvePublicSessionPlan` refuses every other backend before it consults a credential and prints the remedy (tests/evals/kinu-tasks.eval.ts:184-192 turns that refusal into `PLAN === null` and this `skipIf`), and the browser plane needs the deployment's own synthetic-identity secret (KINU_EVAL_WEB_IDENTITY) which the tier's CLI bearer cannot substitute for. Declared one key per case rather than as a family: the four cases are hand-written, each with its own verifier and subgoal list, so one could begin skipping while the others ran. The credential-free half of the same file runs at every tier — each case's minimal CORRECT fixture plus one mutation per subgoal, each proved to flip exactly that subgoal. Runs in the eval tier: `bun run evals:cloud`. WHAT THIS ONE MEASURES: an assistant whose memory and task list outlive the process — 10 subgoals: saved, tasks-cut, first-done and honest-stop before the eviction, then recalled, files, tasks-done, reply, no-question and answer-from-data after it. Subgoal 4 reads FINAL STATE and says so in its own detail, because the turn-end task reminder is not on main: neither `owedTaskReminder` nor `listWorkspaceWork` exists in the tree, so there is no awaiting-user rule to grade."
-  },
-  {
-    "key": "tests/evals/kinu-tasks.eval.ts › Kinu task evals — measured > MEASURED: game-as-slate",
-    "reason": "needs BOTH a live model AND the deployed public API: the Kinu task family drives a four-turn episode through the surfaces the WEB CLIENT speaks, opened per episode and asked after EVERY turn against references the verifier computes between those turns, so it can only run under `KINU_EVAL_BACKEND=cloud` against a deployment. `resolvePublicSessionPlan` refuses every other backend before it consults a credential and prints the remedy (tests/evals/kinu-tasks.eval.ts:184-192 turns that refusal into `PLAN === null` and this `skipIf`), and the browser plane needs the deployment's own synthetic-identity secret (KINU_EVAL_WEB_IDENTITY) which the tier's CLI bearer cannot substitute for. Declared one key per case rather than as a family: the four cases are hand-written, each with its own verifier and subgoal list, so one could begin skipping while the others ran. The credential-free half of the same file runs at every tier — each case's minimal CORRECT fixture plus one mutation per subgoal, each proved to flip exactly that subgoal. Runs in the eval tier: `bun run evals:cloud`. WHAT THIS ONE MEASURES: an assistant whose memory and task list outlive the process — 10 subgoals: saved, tasks-cut, first-done and honest-stop before the eviction, then recalled, files, tasks-done, reply, no-question and answer-from-data after it. Subgoal 4 reads FINAL STATE and says so in its own detail, because the turn-end task reminder is not on main: neither `owedTaskReminder` nor `listWorkspaceWork` exists in the tree, so there is no awaiting-user rule to grade."
+    "key": "tests/live/live-smoke.test.ts › Live Smoke — one real turn per backend › deployed backend: the device registry answers the CLI bearer",
+    "reason": "needs the deployed Worker and the tier's CLI bearer: reads GET /api/cli/devices on the deployed origin and parses the thirteen fields listDevices declares with v.strictObject. It exists because that route answered 500 in production for weeks (`no such column: unstopped_at`, 2026-09-01) while every local suite built a fresh schema — only a deployed read against a UserDO that predates the columns can see it. Runs in the live tier (evals:cloud) and after a staging deploy."
   }
 ]

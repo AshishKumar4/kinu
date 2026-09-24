@@ -21,7 +21,7 @@ import * as v from 'valibot';
 
 import { formatFailureMix, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import {
-  BUILTIN_TOOLS, DEPS_GATED_TOOLS, censusToolFailures, normalizeFactKey, toolFailurePartOfKey, type JsonValue, type RunEvent,
+  BUILTIN_TOOLS, DEPS_GATED_TOOLS, censusToolFailures, normalizeFactKey, toolFailureKey, type JsonValue, type RunEvent,
 } from '../../packages/core/src/index';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
@@ -157,7 +157,13 @@ function everyToolDetail(calls: readonly ToolCallEnd[], offenders: readonly Tool
 
 /** A scripted task runs clean: no failure the census calls unexpected (`broke`), codemode calls included. */
 function unexpectedFailures(calls: readonly ToolCallEnd[]): EvalSubgoal {
-  const broke = censusToolFailures(calls).byKey.filter(([key]) => toolFailurePartOfKey(key) === 'broke');
+  const census = censusToolFailures(calls);
+
+  const brokeKeys = new Set(census.failures
+    .filter((failure) => !failure.refused && !failure.workFailed && !failure.runtimeMissing)
+    .map(toolFailureKey));
+
+  const broke = census.byKey.filter(([key]) => brokeKeys.has(key));
 
   return {
     what: 'no-unexpected-tool-failure', reached: broke.length === 0,
