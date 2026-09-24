@@ -173,7 +173,7 @@ export function makeSqlExec(db: Pick<Database, 'prepare'>): SqlExec {
 
 /** All onto one database, so no caller can pair a DDL handle with another file's reads. */
 export function makeWorkspaceSchemaSql(db: LocalDb): WorkspaceSchemaSql {
-  return { execRaw: makeExecRaw(db), sql: makeSql(db), exec: makeSqlExec(db) };
+  return { execRaw: makeExecRaw(db), sql: makeSql(db), exec: makeSqlExec(db), transactionSync: (write) => db.transaction(write)() };
 }
 
 /** The tail reads via the plane's stat + ranged read, which MemoryStore's seam lacks. */

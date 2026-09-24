@@ -72,7 +72,7 @@ export function hostedSeatsOver(input: {
   const { sql, execRaw } = rt.storage;
   const exec = makeSqlExec(db);
   // `createTestRuntime` seeds the actor directory but not the claim ledger.
-  initWorkspaceSchema({ execRaw, sql, exec });
+  initWorkspaceSchema({ execRaw, sql, exec, transactionSync: (write) => rt.storage.transactionSync(write) });
   initEventsHubTables(exec);
 
   const directory = new WorkspaceActorDirectory(sql, { workspaceId: rt.actor.workspaceId, ownerUserId: '' });

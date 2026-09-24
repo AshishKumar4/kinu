@@ -27,7 +27,7 @@ interface Fixture {
 function setup(): Fixture {
   const { rt, testSql } = createTestRuntime();
   initWorkspaceSchema({
-    execRaw: testSql.execRaw, sql: testSql.sql, exec: makeSqlExec(testSql.db),
+    execRaw: testSql.execRaw, sql: testSql.sql, exec: makeSqlExec(testSql.db), transactionSync: (write) => rt.storage.transactionSync(write),
   });
   rt.craftStore = createInlineCraftStore(testSql.db);
   const actors = createTestActors(testSql.sql, testSql.execRaw);

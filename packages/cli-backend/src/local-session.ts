@@ -493,7 +493,9 @@ export class LocalAgentSession implements BackendHost {
 
     // Ensure every workspace table exists: the database may be untouched (benchmark harness, fresh clone).
     const hubSql = makeSqlExec(opts.db);
-    initWorkspaceSchema({ execRaw: this.rt.storage.execRaw, sql: this.rt.storage.sql, exec: hubSql });
+    initWorkspaceSchema({
+      execRaw: this.rt.storage.execRaw, sql: this.rt.storage.sql, exec: hubSql, transactionSync: (write) => this.rt.storage.transactionSync(write),
+    });
 
     // One engine, governor and event rail per logical actor: hosted, the root's host built them.
     const own = opts.hosted ? null : createLocalOrchestration({

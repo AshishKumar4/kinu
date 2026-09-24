@@ -14,6 +14,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- **A new workspace syncs the disk far less while it is created.** Its tables, the row naming it and its main agent are written in one transaction instead of one per statement: `kinu create` went from 269 fsyncs to 88, and creating the tables alone from 708 to 4. A hosted workspace creates its tables in one Durable Object transaction too, so a failure partway leaves none.
 - Hosted actors now use the Agents platform directly, without Think's duplicate session, workspace, inference queue or recovery boot. The shared Kinu chat loop retains the existing browser/CLI protocol and initializes the root transcript through the public session provider. Accepted sends and unfinished workspace work keep the sandbox protected across eviction.
 - **The default model lives in the profile's default tier, and nowhere else.** `kinu setup` and the first provider connect set it only while it is unset, a later connect leaves it, and Defaults on the home screen change it; `config.json` keeps no top-level `model` or `reasoningEffort`. `/model`, `/effort`, the TUI model picker, `kinu model`, `kinu effort` and the rpc `model` command set the open workspace's own model or effort, and a new workspace pins a model only when `--model` names one.
 

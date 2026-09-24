@@ -62,7 +62,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false): F
   const execRaw = (ddl: string): void => { db.exec(ddl); };
 
   const exec = makeSqlExec(db);
-  initWorkspaceSchema({ execRaw, sql, exec });
+  initWorkspaceSchema({ execRaw, sql, exec, transactionSync: (write) => db.transaction(write)() });
   initEventsHubTables(exec);
   initCompletedTurnTable(execRaw);
   const existing = sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`[0];

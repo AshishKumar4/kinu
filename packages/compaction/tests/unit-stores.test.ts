@@ -38,6 +38,7 @@ function initCompactionStateTable(db: Database): void {
     execRaw: (ddl) => db.exec(ddl),
     sql: sqliteSql(db),
     exec,
+    transactionSync: (write) => db.transaction(write)(),
   });
 }
 

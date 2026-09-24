@@ -2601,7 +2601,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (this._schemaReady) return;
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
 
-    initWorkspaceSchema({ execRaw, sql: this.boundSql, exec: this.ctx.storage.sql });
+    initWorkspaceSchema({
+      execRaw, sql: this.boundSql, exec: this.ctx.storage.sql, transactionSync: (write) => this.ctx.storage.transactionSync(write),
+    });
     initWorkspaceBaselineTable(execRaw);
     initWorkspaceActorTable(execRaw);
 

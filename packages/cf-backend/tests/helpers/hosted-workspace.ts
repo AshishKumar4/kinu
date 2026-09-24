@@ -74,7 +74,7 @@ export async function hostedWorkspace(
   const sql = sqlOver(db);
   const workspaceId = 'harness-workspace';
   const exec = makeSqlExec(db);
-  initWorkspaceSchema({ execRaw: makeExecRaw(db), sql, exec });
+  initWorkspaceSchema({ execRaw: makeExecRaw(db), sql, exec, transactionSync: (write) => db.transaction(write)() });
   db.exec(`INSERT INTO workspace_identity (id, name, created_at, owner_user_id)
     VALUES ('${workspaceId}', 'harness', ${String(Date.now())}, 'harness-owner')`);
   /** Loop origins a caller named for a child, read by the host at first acquire. */

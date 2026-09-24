@@ -56,9 +56,8 @@ export interface TestWorkspace {
 /** A workspace database with the production schema: a subset would test a shape no workspace has. */
 export function createTestWorkspace(): TestWorkspace {
   const db = new Database(':memory:');
-  const sql = makeSql(db);
-  const execRaw = makeExecRaw(db);
-  initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db) });
+  const { sql, execRaw, transactionSync } = wrapDatabase(db);
+  initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db), transactionSync });
 
   return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs };
 }
@@ -219,8 +218,7 @@ export function createTestRuntime(opts?: {
   llmResponses?: Record<string, string>;
 }) {
   const db = new Database(':memory:');
-  const sql = makeSql(db);
-  const execRaw = makeExecRaw(db);
+  const { sql, execRaw, transactionSync } = wrapDatabase(db);
   // One workspace, so the shell and the VFS are two views of the same bytes.
   const workspace = createWorkspaceBundle(db);
 
@@ -230,7 +228,7 @@ export function createTestRuntime(opts?: {
       .then(() => workspace.vfs.writeFile('scaffold/agent.js', 'initial')));
 
   // Production schema first: a helper's own copy of an actor-scoped table would win `IF NOT EXISTS`.
-  initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db) });
+  initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db), transactionSync });
   const actor = createTestActor(sql, execRaw, 'test-agent-id', 'test-agent');
   // The memory's tail reads through the plane's ranged read; `storage.vfs` stays the seven base methods.
   const memory = createMemoryMemory(db, { ...vfs, readRange });
@@ -254,7 +252,7 @@ export function createTestRuntime(opts?: {
   const rt: AgentRuntime = {
     workspaceIsMachine: false,
     actor,
-    storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
+    storage: { vfs, sql, execRaw, transactionSync },
     memory,
     executor,
     llm,
