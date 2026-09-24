@@ -7,7 +7,7 @@
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { RawSqlExec, VfsEntryStat } from '../types/primitives';
 import { PLATFORM_CATALOG } from '../platform-catalog';
-import { diffLines, fileDiff, parseGitDiff, type FileDiff, type FileStatus } from '../vfs/diff';
+import { diffLines, fileDiff, parseGitDiff, type FileDiff, type FileStatus, type Omitted } from '../vfs/diff';
 import { nanoid } from '../utils/nanoid';
 import * as v from 'valibot';
 import { CommandResultSchema } from '../execution/exec-result';
@@ -28,7 +28,10 @@ const SNAPSHOT_IGNORED_DIRECTORIES = new Set([
 
 const NOT_GIT_REPO = '__KINU_NOT_GIT_REPO__';
 
-/** A body is stored once per hash; `hash` is null for a file past one row. */
+/** The capture marker's `size`: 1 once binary files are in the manifest (hash null), so a new one can be told apart. */
+const MANIFEST_FORMAT = 1;
+
+/** A body is stored once per hash; `hash` is null for a binary file or one past one row. */
 export function initWorkspaceBaselineTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline_manifest (
     actor_id   TEXT NOT NULL,
@@ -126,9 +129,10 @@ async function reviewableText(rt: AgentRuntime, path: string): Promise<string | 
   return text.includes(String.fromCharCode(0)) ? null : text;
 }
 
-/** The '' marker row carries the capture time; null means this actor has no baseline yet. */
+/** The '' marker row carries the capture time and format; null means this actor has no baseline yet. */
 interface BaselineManifest {
   readonly capturedAt: number | null;
+  readonly format: number;
   readonly entries: Map<string, ManifestEntry>;
 }
 
@@ -142,13 +146,18 @@ function activeManifest(rt: AgentRuntime): BaselineManifest {
 
   const entries = new Map<string, ManifestEntry>();
   let capturedAt: number | null = null;
+  let format = 0;
 
   for (const row of rows) {
-    if (row.path === '') capturedAt = row.mtime_ms;
-    else entries.set(row.path, { size: row.size, mtimeMs: row.mtime_ms, hash: row.hash });
+    if (row.path === '') {
+      capturedAt = row.mtime_ms;
+      format = row.size;
+    } else {
+      entries.set(row.path, { size: row.size, mtimeMs: row.mtime_ms, hash: row.hash });
+    }
   }
 
-  return { capturedAt, entries };
+  return { capturedAt, format, entries };
 }
 
 function blobText(rt: AgentRuntime, hash: string | null): string | null {
@@ -165,18 +174,31 @@ function unmoved(entry: ManifestEntry, st: VfsEntryStat): boolean {
   return entry.size === st.size && entry.mtimeMs === st.mtimeMs;
 }
 
+/** Why a side of this size has no text: past one row, or binary. */
+function unread(size: number): Omitted {
+  return size > BODY_MAX_BYTES ? 'large' : 'binary';
+}
+
+/** A file's two texts, null where a side could not be read, and the reason to give if one could not. */
+interface Sides {
+  readonly before: string | null;
+  readonly after: string | null;
+  readonly omitted: Omitted;
+}
+
 /** Cumulative change-set since the baseline. A file whose size and mtime match its manifest row is never read. */
 export async function getWorkspaceDiff(rt: AgentRuntime): Promise<WorkspaceDiffResult> {
   const held = activeManifest(rt);
   // Without a baseline, tracking starts now: the same capture a new workspace takes at creation.
   const trackedSince = held.capturedAt ?? (await resetWorkspaceBaseline(rt)).capturedAt;
-  const baseline = held.capturedAt === null ? activeManifest(rt).entries : held.entries;
+  const manifest = held.capturedAt === null ? activeManifest(rt) : held;
+  const baseline = manifest.entries;
   const files: FileDiff[] = [];
   let bodyChars = 0;
 
-  const admit = (path: string, status: FileStatus, before: string | null, after: string | null): void => {
+  const admit = (path: string, status: FileStatus, { before, after, omitted }: Sides): void => {
     if (before === null || after === null) {
-      files.push(fileDiff(path, status, { lines: [], added: 0, removed: 0, truncated: true }));
+      files.push({ path, status, added: 0, removed: 0, lines: [], omitted });
 
       return;
     }
@@ -201,18 +223,20 @@ export async function getWorkspaceDiff(rt: AgentRuntime): Promise<WorkspaceDiffR
     const after = st.size > BODY_MAX_BYTES ? null : await reviewableText(rt, path);
 
     if (base === undefined) {
-      // A binary file the baseline never held is not a reviewable change.
-      if (after !== null || st.size > BODY_MAX_BYTES) admit(path, 'added', '', after);
+      // A manifest older than binary files held none, so a binary file missing from it may have been there all along.
+      const tracked = after !== null || st.size > BODY_MAX_BYTES || manifest.format >= MANIFEST_FORMAT;
+
+      if (tracked) admit(path, 'added', { before: '', after, omitted: unread(st.size) });
 
       return;
     }
 
     if (after !== null && base.hash !== null && base.hash === sha256Hex(after)) return;
-    admit(path, 'changed', blobText(rt, base.hash), after);
+    admit(path, 'changed', { before: blobText(rt, base.hash), after, omitted: unread(after === null ? st.size : base.size) });
   });
 
   // Whatever the baseline still holds was not found in the workspace.
-  for (const [path, base] of baseline) admit(path, 'removed', blobText(rt, base.hash), '');
+  for (const [path, base] of baseline) admit(path, 'removed', { before: blobText(rt, base.hash), after: '', omitted: unread(base.size) });
 
   files.sort((a, b) => a.path.localeCompare(b.path));
 
@@ -235,7 +259,7 @@ export async function resetWorkspaceBaseline(
   try {
     // The marker makes an intentionally empty snapshot representable.
     void rt.storage.sql`INSERT INTO vfs_baseline_manifest (actor_id, generation, path, size, mtime_ms, hash, active)
-      VALUES (${actorId}, ${generation}, ${''}, ${0}, ${capturedAt}, ${null}, ${0})`;
+      VALUES (${actorId}, ${generation}, ${''}, ${MANIFEST_FORMAT}, ${capturedAt}, ${null}, ${0})`;
     await walkWorkspaceFiles(rt, async (path, st) => {
       const kept = previous.get(path);
       let hash: string | null = null;
@@ -245,9 +269,10 @@ export async function resetWorkspaceBaseline(
       } else if (st.size <= BODY_MAX_BYTES) {
         const text = await reviewableText(rt, path);
 
-        if (text === null) return;
-        hash = sha256Hex(text);
-        void rt.storage.sql`INSERT OR IGNORE INTO vfs_baseline_blob (hash, content) VALUES (${hash}, ${text})`;
+        if (text !== null) {
+          hash = sha256Hex(text);
+          void rt.storage.sql`INSERT OR IGNORE INTO vfs_baseline_blob (hash, content) VALUES (${hash}, ${text})`;
+        }
       }
 
       void rt.storage.sql`INSERT INTO vfs_baseline_manifest (actor_id, generation, path, size, mtime_ms, hash, active)

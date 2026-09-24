@@ -112,10 +112,15 @@ export function diffLines(before: string, after: string): LineDiff {
 
 export type FileStatus = 'added' | 'removed' | 'changed';
 
+/** Why a file has no lines: `binary` (a NUL byte, or git says so) or `large` (past one stored row). */
+export type Omitted = 'binary' | 'large';
+
 export interface FileDiff {
   path: string; status: FileStatus; added: number; removed: number; lines: DiffLine[];
   /** Body bounded; `added`/`removed` still count the whole file. */
   truncated?: boolean;
+  /** Not compared, so it has no lines and no counts. */
+  omitted?: Omitted;
 }
 
 function carry(file: FileDiff, l: DiffLine): void {
@@ -211,7 +216,7 @@ export function parseGitDiff(unified: string): FileDiff[] {
     if (line.startsWith('index ') || line.startsWith('old mode') || line.startsWith('new mode')
       || line.startsWith('similarity index') || line.startsWith('\\ No newline')) continue;
 
-    if (line.startsWith('Binary files')) { carry(cur, { kind: 'ctx', text: '(binary file differs)' }); continue; }
+    if (line.startsWith('Binary files')) { cur.omitted = 'binary'; continue; }
 
     if (line.startsWith('@@')) { carry(cur, { kind: 'ctx', text: line }); continue; }
 

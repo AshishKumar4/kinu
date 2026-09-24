@@ -20,6 +20,9 @@ import { commandResult, type CommandResult } from '../src/execution/exec-result'
 
 const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
 
+/** A PNG signature and a NUL byte: binary to the change-set. */
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
+
 describe('workspace diff lifecycle', () => {
   test('workspace birth captures seed files before any agent work', async () => {
     const db = new Database(':memory:');
@@ -92,7 +95,7 @@ describe('workspace diff lifecycle', () => {
     expect(read).toEqual(['s/f-7.txt']);
   });
 
-  test('a file past one row is listed as changed without a body', async () => {
+  test('a file past one row is listed as changed and large, without a body', async () => {
     const { rt } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
     const row = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value;
@@ -101,8 +104,39 @@ describe('workspace diff lifecycle', () => {
     await rt.storage.vfs.writeFile('big.log', 'y'.repeat(row + 1));
 
     expect((await getWorkspaceDiff(rt)).files).toEqual([
-      { path: 'big.log', status: 'changed', added: 0, removed: 0, lines: [], truncated: true },
+      { path: 'big.log', status: 'changed', added: 0, removed: 0, lines: [], omitted: 'large' },
     ]);
+  });
+
+  test('binary files the agent adds, overwrites or deletes are listed as binary; an untouched one is not', async () => {
+    const { rt } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await rt.storage.vfs.writeFile('logo.png', PNG);
+    await rt.storage.vfs.writeFile('old.png', PNG);
+    await rt.storage.vfs.writeFile('notes.txt', 'plain\n');
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('chart.png', PNG);
+    await rt.storage.vfs.writeFile('notes.txt', PNG);
+    await rt.storage.vfs.unlink('old.png');
+
+    expect((await getWorkspaceDiff(rt)).files).toEqual([
+      { path: 'chart.png', status: 'added', added: 0, removed: 0, lines: [], omitted: 'binary' },
+      { path: 'notes.txt', status: 'changed', added: 0, removed: 0, lines: [], omitted: 'binary' },
+      { path: 'old.png', status: 'removed', added: 0, removed: 0, lines: [], omitted: 'binary' },
+    ]);
+  });
+
+  test('a baseline captured before binary files were recorded does not list the ones already there', async () => {
+    const { rt } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await rt.storage.vfs.writeFile('logo.png', PNG);
+    await resetWorkspaceBaseline(rt);
+    // What that capture wrote: format 0 on the marker, and no row for a binary file.
+    void rt.storage.sql`UPDATE vfs_baseline_manifest SET size = 0 WHERE path = ''`;
+    void rt.storage.sql`DELETE FROM vfs_baseline_manifest WHERE path = 'logo.png'`;
+    await rt.storage.vfs.writeFile('hello.py', 'print(42)\n');
+
+    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['added hello.py']);
   });
 
   test('a workspace without a baseline starts tracking at its first read, then shows exactly what it writes', async () => {
