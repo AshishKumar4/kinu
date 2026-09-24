@@ -76,7 +76,7 @@ function outcomeOf(events: readonly RunEvent[], before: ReadonlySet<string>): Ev
 
   if (failed?.type !== 'run_end') return { status: 'completed' };
 
-  return { status: 'error', message: failed.error ?? `a run ended ${failed.reason ?? 'without a reason'}` };
+  return { status: 'error', message: redact(failed.error ?? `a run ended ${failed.reason ?? 'without a reason'}`) };
 }
 
 async function runTurn(session: KinuPublicSession, turn: EvalTurn): Promise<EvalTurnResult> {

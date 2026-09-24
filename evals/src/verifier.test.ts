@@ -71,6 +71,16 @@ describe('EvalVerifier', () => {
     expect(JSON.stringify(checks[1]?.evidence)).toContain('no method missing');
   });
 
+  test('a check\'s own evidence is stored scrubbed: what the agent built and said can carry a capability', async () => {
+    const leaky = 'served at https://library-0000000000-fixture.kinu.run/ with x-kinu-dev-identity-secret: abc123';
+
+    const [check] = await new EvalVerifier(session({}), [leaky]).collect(async (verifier) => {
+      await verifier.check('answers', () => Promise.resolve({ pass: false, evidence: { replies: verifier.recentReplies() } }));
+    });
+
+    expect(check?.evidence).toEqual({ replies: ['served at https://<preview>.kinu.run/ with x-kinu-dev-identity-secret: <secret>'] });
+  });
+
   test('the answer is the last bare reply: narration and a reply to the product\'s reminder do not replace it', () => {
     const answered = new EvalVerifier(session({}), [
       'Let me count the overdue loans in the library first.',

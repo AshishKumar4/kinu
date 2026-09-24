@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test';
 import { compareEvalResults, fisherExact, renderEvalComparison, validateEvalResults } from './comparison';
-import { redact } from './redact';
 
 type Trial = { pass: boolean; infra?: boolean; productSha?: string; taskVersion?: string; failed?: string; trial?: number };
 
@@ -101,15 +100,5 @@ describe('validateEvalResults', () => {
 
     expect(validateEvalResults(report('t', [...block(1), ...block(6)], BASE), 10)).toHaveLength(1);
     expect(() => validateEvalResults(report('t', [...block(1), ...block(1)], BASE), 10)).toThrow(/expected 1 to 10 once each/);
-  });
-});
-
-describe('redact', () => {
-  test('scrubs what a public comment must not carry', () => {
-    // Built from parts, as the repo's other redaction fixtures are, so no token-shaped literal sits in the tree.
-    const syntheticKey = ['sk', 'live', '0123456789abcdef'].join('_');
-    const text = `GET https://preview-0000000000-fixture.kinu.run/ Bearer abc.def-123 ${syntheticKey}`;
-
-    expect(redact(text)).toBe('GET https://<preview>.kinu.run/ Bearer <redacted> <token>');
   });
 });

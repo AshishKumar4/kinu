@@ -2,7 +2,7 @@ import * as v from 'valibot';
 import { JsonValueSchema, projectJsonValue, type JsonValue } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
-import { redact } from './redact';
+import { redact, redactJson } from './redact';
 import type { EvalCheck } from './task';
 
 /** Thrown errors are cut here in the report; a stack trace is not evidence. */
@@ -219,9 +219,10 @@ export class EvalVerifier {
     try {
       const outcome = await body();
 
+      // Evidence quotes what the agent built and said, which can carry a preview host or an echoed header.
       this.#checks[index] = outcome.evidence === undefined
         ? { id, pass: outcome.pass }
-        : { id, pass: outcome.pass, evidence: projectJsonValue({ value: outcome.evidence }) };
+        : { id, pass: outcome.pass, evidence: redactJson(projectJsonValue({ value: outcome.evidence })) };
     } catch (error) {
       // The deployment failing to answer is not the build's failure: the trial fails as infrastructure.
       if (renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
