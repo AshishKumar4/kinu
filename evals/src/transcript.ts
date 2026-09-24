@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import { decodeModelMessageValues, JsonValueSchema, projectJsonValue, type RunEvent } from '@kinu.run/core';
+import { decodeModelMessageValues, JsonValueSchema, projectJsonValue, TOOL_CALLS_PENDING, type RunEvent } from '@kinu.run/core';
 import type { TranscriptEvent } from 'vitest-evals';
 import { redact, redactJson } from './redact';
 import type { EvalMetrics } from './task';
@@ -90,4 +90,31 @@ export function measure(events: readonly RunEvent[]): EvalMetrics & { inputToken
   }
 
   return { modelTurns, toolCalls, toolErrors, providerWaits, providerWaitMs, inputTokens, outputTokens };
+}
+
+/**
+ * Runs this turn opened that stopped while the model was still calling tools and were reported
+ * completed: a loop cut mid-work that said it finished. The product seals such a run `incomplete`
+ * (core `classifyRunEnd`); four capped production turns once reported `completed` instead, and no
+ * suite could see it. Read off the run ledger the web app's Activity pane reads.
+ */
+export function cutButCompleted(events: readonly RunEvent[], before: ReadonlySet<string>): { runId: string; steps: number }[] {
+  const steps = new Map<string, { count: number; last: string | undefined }>();
+  const completed: string[] = [];
+
+  for (const event of events) {
+    if (before.has(event.runId)) continue;
+
+    if (event.type === 'step_finish') {
+      steps.set(event.runId, { count: (steps.get(event.runId)?.count ?? 0) + 1, last: event.reason });
+    } else if (event.type === 'run_end' && event.reason === 'completed') {
+      completed.push(event.runId);
+    }
+  }
+
+  return completed.flatMap((runId) => {
+    const seen = steps.get(runId);
+
+    return seen?.last === TOOL_CALLS_PENDING ? [{ runId, steps: seen.count }] : [];
+  });
 }

@@ -8,7 +8,7 @@ import type {
   EvalCheck, EvalRunInput, EvalRunOutput, EvalTask, EvalTurn, EvalTurnOutcome, EvalTurnResult, HarnessError,
 } from './task';
 import { redact } from './redact';
-import { measure, toTranscript } from './transcript';
+import { cutButCompleted, measure, toTranscript } from './transcript';
 import { EvalVerifier } from './verifier';
 
 /** How often an unsettled workspace is looked at. A poll, not a deadline: nothing here ends a turn. */
@@ -16,6 +16,9 @@ const IDLE_POLL_MS = 3_000;
 
 /** Polls in a row the deployment's transport may fail before the trial fails as infrastructure. */
 const DROPPED_POLLS = 3;
+
+/** The check a turn fails when the deployment cut a run mid-work and reported it completed. */
+const CUT_REPORTED_COMPLETED = 'deployment.cut-reported-completed';
 
 
 export type TrialIdentity = { readonly taskVersion: string; readonly evalCommit: string };
@@ -110,7 +113,9 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn): Promise<Eval
 
   const replies = repliesTo(history, turn.prompt);
   const verifiedAt = Date.now();
-  const checks: EvalCheck[] = await new EvalVerifier(session, replies).collect(turn.verify);
+  const cut = cutButCompleted(events, before);
+  const checks: EvalCheck[] = cut.length === 0 ? [] : [{ id: CUT_REPORTED_COMPLETED, pass: false, evidence: { runs: cut } }];
+  checks.push(...await new EvalVerifier(session, replies).collect(turn.verify));
 
   if (turn.verifyAfterEviction !== undefined && checks.every((check) => check.pass)) {
     await session.abortActivation();
