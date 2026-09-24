@@ -310,7 +310,10 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
 
 async function settingsSectionsFixture(path: string): Promise<Response | null> {
   if (path === "/api/user/credentials") {
-    return fixtureJson([{ key: "anthropic.bearer", kind: "bearer", createdAt: NOW - 864e5, updatedAt: NOW }]);
+    return fixtureJson([
+      { key: "anthropic.bearer", kind: "bearer", createdAt: NOW - 864e5, updatedAt: NOW },
+      { key: "anthropic.bearer@work", kind: "bearer", createdAt: NOW - 36e5, updatedAt: NOW },
+    ]);
   }
 
   if (path === "/api/user/codex") {

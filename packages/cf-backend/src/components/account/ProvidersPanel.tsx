@@ -11,19 +11,23 @@ import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotic
 import {
   listCredentials, setCredential, deleteCredential,
   codexStatus, startCodexFlow, pollCodexFlow, disconnectCodex,
-  listAvailableModels, listProviderCatalog,
+  listAvailableModels, listProviderCatalog, getProfileCatalog, updateProfileCatalog,
   listCloudflareGateways, selectCloudflareGateway,
   listCloudflareAccounts, selectCloudflareAccount,
   type CredentialSummary, type CodexStatus,
   type ProviderCatalogEntry, type DeviceFlowStart,
   type CloudflareGatewayStatus, type CloudflareAccountStatus,
 } from "@/lib/user-api";
+import type { ProfileCatalogEnvelope } from '@kinu.run/core';
 import { Card, Choice, Field, inputCls } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { renderThrownChain } from '@kinu.run/core/obs';
+import {
+  MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, storedAccounts,
+} from '@kinu.run/core';
 
 function ConnectedBadge({ detail }: { detail?: ReactNode }) {
   return (
@@ -283,33 +287,42 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
   const remove = useCallback(async (key: string, name: string) => {
     if (!confirm(`Remove the saved API key for "${name}"?`)) return;
 
-    try { await deleteCredential(key); onChanged(); } catch (e) { alert(renderThrownChain({ cause: e })); }
+    try {
+      await deleteCredential(key);
+      await forgetDefaultAccount(key);
+      onChanged();
+    } catch (e) {
+      alert(renderThrownChain({ cause: e }));
+    }
   }, [onChanged]);
 
   const byCredKey = new Map(catalog.map((p) => [p.credKey, p]));
 
   const storedKeys = creds
-    .filter((c) => /^[a-z0-9][a-z0-9._-]*\.bearer$/.test(c.key))
-    .map((c) => ({ key: c.key, provider: byCredKey.get(c.key) }));
+    .filter((c) => catalogProviderOfKey(c.key) !== null)
+    .map((c) => ({ key: c.key, account: accountOf(c.key), provider: byCredKey.get(baseCredentialKey(c.key)) }));
 
   const [selected, setSelected] = useState<ProviderCatalogEntry | null>(null);
   const [apiKey, setApiKey] = useState('');
+  const [accountName, setAccountName] = useState('');
+  const named = accountName.trim().toLowerCase();
 
   const saveSelected = useCallback(async () => {
     if (!selected || !apiKey.trim()) return;
     setSavingKey(selected.credKey);
 
     try {
-      await setCredential(selected.credKey, { kind: 'bearer', token: apiKey.trim() });
+      await setCredential(named === '' ? selected.credKey : accountCredentialKey(selected.credKey, named), { kind: 'bearer', token: apiKey.trim() });
       setSelected(null);
       setApiKey('');
+      setAccountName('');
       onChanged();
     } catch (e) {
       alert(renderThrownChain({ cause: e }));
     } finally {
       setSavingKey(null);
     }
-  }, [selected, apiKey, onChanged]);
+  }, [selected, apiKey, named, onChanged]);
 
   const [compatName, setCompatName] = useState('');
   const [compatBaseURL, setCompatBaseURL] = useState('');
@@ -336,16 +349,19 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
   }, [compatName, compatBaseURL, compatApiKey, onChanged]);
 
   const compatKeys = creds.filter((c) => c.key.startsWith('openai-compat.'));
-  const saveWord = selected?.connected === true ? 'Replace' : 'Save';
+  const target = selected === null ? null : formKey(selected.credKey, named);
+  const saveWord = creds.some((c) => c.key === target) ? 'Replace' : 'Save';
 
   return (
     <div className="space-y-5">
       {storedKeys.length > 0 && (
         <div className="p-group">
-          {storedKeys.map(({ key, provider }) => (
+          {storedKeys.map(({ key, account, provider }) => (
             <div key={key} className="flex items-center gap-2 px-4 py-2.5 text-xs">
               <CheckIcon size={13} className="p-success shrink-0" />
-              <span className="p-row-text font-medium p-text">{provider?.name ?? key}</span>
+              <span className="p-row-text font-medium p-text">
+                {provider?.name ?? key}{account === MAIN_ACCOUNT ? '' : ` · ${account}`}
+              </span>
               {provider?.doc && (
                 <a href={provider.doc} target="_blank" rel="noopener noreferrer" className="p-text-3 hover:p-accent" title="Provider docs">
                   <ArrowSquareOutIcon size={12} />
@@ -387,10 +403,18 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
           <div className="space-y-2">
             <div className="flex gap-2">
               <input
+                value={accountName}
+                onChange={(e) => setAccountName(e.target.value)}
+                placeholder="account (blank: main)"
+                aria-label="Account name"
+                className={`${inputCls} max-w-44`}
+              />
+              <input
                 type="password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder={selected.connected ? '••••••• (stored, paste to replace)' : `${selected.name} API key`}
+                placeholder={saveWord === 'Replace' ? '••••••• (stored, paste to replace)' : `${selected.name} API key`}
+                aria-label="API key"
                 className={inputCls}
               />
               <button
@@ -402,6 +426,8 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
           </div>
         )}
       </Field>
+
+      <DefaultAccounts keys={creds.map((c) => c.key)} catalog={catalog} />
 
       <Field label="OpenAI-compatible (Groq, Together, …)">
         <div className="grid gap-2 sm:grid-cols-[1fr_1.6fr_1fr]">
@@ -447,5 +473,73 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
         )}
       </Field>
     </div>
+  );
+}
+
+function formKey(baseKey: string, name: string): string | null {
+  if (name === '') return baseKey;
+
+  return isAccountName(name) ? accountCredentialKey(baseKey, name) : null;
+}
+
+async function forgetDefaultAccount(key: string): Promise<void> {
+  const provider = catalogProviderOfKey(key);
+
+  if (provider === null || accountOf(key) === MAIN_ACCOUNT) return;
+  const envelope = await getProfileCatalog();
+  const { [provider]: chosen, ...others } = envelope.catalog.accounts ?? {};
+
+  if (chosen === accountOf(key)) await updateProfileCatalog({ ...envelope.catalog, accounts: others }, envelope.version);
+}
+
+/** Per provider with several accounts: the one a model naming none runs on. */
+function DefaultAccounts({ keys, catalog }: { keys: readonly string[]; catalog: readonly ProviderCatalogEntry[] }) {
+  const profile = useAsyncResource(getProfileCatalog);
+  const [saving, setSaving] = useState(false);
+
+  const held = catalog.flatMap((entry) => {
+    const provider = catalogProviderOfKey(entry.credKey);
+    const accounts = storedAccounts(entry.credKey, keys);
+
+    return provider === null || accounts.length < 2 ? [] : [{ name: entry.name, provider, accounts }];
+  });
+
+  if (held.length === 0) return null;
+
+  const choose = async (envelope: ProfileCatalogEnvelope, provider: string, account: string) => {
+    setSaving(true);
+
+    try {
+      await updateProfileCatalog({ ...envelope.catalog, accounts: { ...envelope.catalog.accounts, [provider]: account } }, envelope.version);
+      profile.reload();
+    } catch (e) {
+      alert(renderThrownChain({ cause: e }));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Field label="Default account">
+      <CardSlot resource={profile.resource} what="your default accounts" onRetry={profile.reload}>
+        {(envelope) => (
+          <div className="space-y-2">
+            {held.map(({ name, provider, accounts }) => (
+              <div key={provider} className="flex items-center gap-3">
+                <span className="p-row-text p-text w-32 shrink-0 truncate">{name}</span>
+                <Choice
+                  label={`${name} default account`}
+                  value={envelope.catalog.accounts?.[provider] ?? (accounts.includes(MAIN_ACCOUNT) ? MAIN_ACCOUNT : '')}
+                  options={accounts.map((account) => ({ value: account, label: account }))}
+                  onChange={(account) => choose(envelope, provider, account)}
+                  disabled={saving}
+                  size="sm"
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </CardSlot>
+    </Field>
   );
 }

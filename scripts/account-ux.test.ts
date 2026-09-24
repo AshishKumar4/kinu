@@ -297,6 +297,27 @@ describe('account panels', () => {
     });
   });
 
+  test('a second account of a provider is listed by name and offered as the default', async () => {
+    await withGallery(async (gallery) => {
+      const settings = await freshPage(gallery, 'usersettingsstate&section=providers', 'light', 'desktop');
+
+      try {
+        await settings.waitForSelector('[aria-label="Anthropic default account"]');
+        const text = await settings.evaluate(() => document.body.textContent ?? '');
+        expect(text).toContain('Anthropic · work');
+        expect(text).toContain('anthropic.bearer@work');
+
+        await settings.click('[aria-label="Anthropic default account"]');
+        await settings.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((node) => node.checkVisibility()));
+
+        const offered = await settings.$$eval('[role="option"]', (nodes) => nodes.filter((node) => node.checkVisibility()).map((node) => node.textContent?.trim()));
+        expect(offered).toEqual(['main', 'work']);
+      } finally {
+        await settings.close();
+      }
+    });
+  });
+
   test('the welcome wizard renders each step at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
       const shots: string[] = [];
