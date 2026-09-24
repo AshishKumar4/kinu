@@ -1,9 +1,9 @@
 /** Isolate-scoped pacer: sibling requests to one provider host share its declared cooldown.
  *
- *  It counts no requests. Workers bounds connections awaiting headers per invocation and queues past the bound
- *  itself (`worker.simultaneous_connections`). A count shared by the isolate's requests parked one request on a
- *  promise only another request's release settled; workerd cancels such a request as hung, and a holder the runtime
- *  cancelled never released (HTTP 500 1101 on kinu.run, 2026-09-23). */
+ *  It counts no requests: Workers bounds connections awaiting headers per invocation and queues past the bound
+ *  (`worker.simultaneous_connections`). A shared count parked a request on a promise only another request's release
+ *  settled; workerd cancels such a request as hung, and a cancelled holder never released (HTTP 500 1101 on
+ *  kinu.run, 2026-09-23). */
 
 import { abortCause } from '../utils/abort';
 

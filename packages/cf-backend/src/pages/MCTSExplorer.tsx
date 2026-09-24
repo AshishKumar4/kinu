@@ -56,7 +56,7 @@ export default function MCTSExplorer() {
 
   const { resource, reload, runs, hasActiveWork } = useLiveForkRuns(
     state.rpc,
-    state.isStreaming,
+    state.liveness.kind === "live",
     state.backgroundJobs,
   );
 

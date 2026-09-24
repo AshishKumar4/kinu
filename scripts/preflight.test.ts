@@ -15,7 +15,8 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { PROJECT_MARKERS, engineBoundsTempWalk, judge, type Environment } from './preflight';
+import { assertMeasured } from './gate-ratchet';
+import { PROJECT_MARKERS, engineBoundsTempWalk, judge, measuredCounts, type Environment } from './preflight';
 
 const REPO_ROOT = new URL('..', import.meta.url).pathname;
 
@@ -98,5 +99,16 @@ describe('a temp directory this user cannot write to', () => {
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain('EDQUOT');
     expect(problems[0]).toContain(`${String((40 * 1024 ** 3) >> 20)} MiB free`);
+  });
+});
+
+describe('a private temp directory with nothing in it', () => {
+  test('is a clean reading, not a scan that measured nothing', () => {
+    // Since 2026-09-24 every lane's TMPDIR is a directory of its own, and a fresh one holds nothing:
+    // the gate refused every commit made that way.
+    const empty = { ...HEALTHY, temp: '/home/dev/kinu-logs/tmp/lane', tempEntries: 0, scratchOrphans: 0 };
+
+    expect(judge(empty)).toEqual([]);
+    expect(assertMeasured('preflight', measuredCounts(empty))).toContain('free inodes');
   });
 });

@@ -17,6 +17,7 @@ import type {
 } from './deploy-fake';
 import type { DeployInputs, DeployRunPhase, DeploySnapshot } from '@kinu.run/core/deploy';
 import type { FilesEioProbeDO } from './files-eio-probe';
+import type { ComplexityProbeDO } from './complexity/complexity-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
@@ -256,6 +257,7 @@ declare global {
       STREAM_LIFECYCLE: DurableObjectNamespace<StreamLifecycleDO>;
       DEVICE_LEDGER_PROBE: DurableObjectNamespace<DeviceLedgerProbeDO>;
       FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
+      COMPLEXITY_PROBE: DurableObjectNamespace<ComplexityProbeDO>;
       PREVIEW_PORT_PROBE: DurableObjectNamespace<PreviewPortProbeDO>;
       SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeRpc>;
       SLATE_SHARE_PROBE: DurableObjectNamespace<SlateShareProbeRpc>;

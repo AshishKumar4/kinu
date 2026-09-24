@@ -1023,6 +1023,15 @@
     "FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id)",
     "FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id)"
   ],
+  "request_renders@packages/core/src/session/schema.ts": [
+    "actor_id TEXT NOT NULL",
+    "request_id TEXT NOT NULL",
+    "context_id TEXT NOT NULL",
+    "revision INTEGER NOT NULL",
+    "PRIMARY KEY(actor_id,request_id)",
+    "FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id)",
+    "FOREIGN KEY(actor_id,context_id,revision) REFERENCES context_revisions(actor_id,context_id,revision)"
+  ],
   "run_event_v@packages/core/src/events/hub/schema.ts": [
     "SELECT actor_id, id, turn_id, step_idx, kind, parent_id, payload, received_at FROM agent_log WHERE kind IN ('step', 'tool_call', 'tool_result', 'reactor_decision') ORDER BY actor_id, turn_id, step_idx, id"
   ],

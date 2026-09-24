@@ -1339,7 +1339,7 @@ export class LocalAgentSession implements BackendHost {
     });
 
     diagnostics.event('actor.turns_recovered', {
-      verified: recovered.verified.length, refused: recovered.refused.length,
+      verified: recovered.verified.length, refused: recovered.refused.length, interrupted: recovered.interrupted.length,
       unreadable: recovered.unreadable.length, active: recovered.active.length,
     });
     const advisorOrphans: OrphanedFiber[] = [];

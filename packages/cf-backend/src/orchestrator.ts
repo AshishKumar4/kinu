@@ -58,7 +58,7 @@ import {
 } from "@kinu.run/core";
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
-import type { ActivitySnapshot, TabPresence, TurnClaimState } from "@kinu.run/core";
+import { TURN_CLAIM_FRAME, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from '@kinu.run/core';
@@ -2740,13 +2740,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         resumable: (limit) => host.resumable(limit),
         acquire: async (reference) => {
           const actor = await host.acquire(reference);
+          const root = reference.actorId === rootActorId;
 
           return {
             runtime: actor.runtime,
-            stores: actor.stores,
+            // The root recovers through the stores its session, resumed above, admits and settles through:
+            // its tabs are told about every claim written there.
+            stores: root ? this.stores : actor.stores,
             session: {
               get inFlight() {
-                return reference.actorId === rootActorId ? rootIsLive() : actor.session.inFlight;
+                return root ? rootIsLive() : actor.session.inFlight;
               },
             },
           };
@@ -4331,6 +4334,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       kind: this._inFlight || this.actorSession.inFlight ? 'admitted' : 'stranded',
       turnId: open.turnId, claimedAt: open.claimedAt,
     };
+  }
+
+  /** The root's tabs read the claim when they load, and hear every change to it here. */
+  protected override turnClaimChanged(): void {
+    this.broadcastToActor(null, JSON.stringify({ type: TURN_CLAIM_FRAME, claim: this.turnClaimState() }));
   }
 
   /**

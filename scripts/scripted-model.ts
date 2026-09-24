@@ -17,7 +17,7 @@
  */
 import { createServer as createHttpServer, type ServerResponse } from 'node:http';
 import * as v from 'valibot';
-import { parseJsonValue } from '@kinu.run/core';
+import { DYNAMIC_CONTEXT_OPEN_TAG, TURN_CONTEXT_HEADER, parseJsonValue, workspacePath } from '@kinu.run/core';
 
 import { apiJson } from './live-app-harness';
 
@@ -38,6 +38,8 @@ export interface ScriptedPace {
   readonly firstTokenMs: number;
   readonly lead: string;
   readonly leadMs: number;
+  /** A first silence of unknown length, ended by the row that holds it ({@link heldCall}). */
+  readonly hold?: Promise<void>;
 }
 
 /** One answer: prose, or a tool call with its complete arguments. Unpaced, it is written in one piece. */
@@ -51,8 +53,12 @@ export interface ScriptedAnswer {
  *  a titling call carries no tools at all, and a script that ignored that
  *  would answer it with a tool call the request never offered. */
 export interface ScriptedRequest {
-  /** Every user-role message's text, oldest first. */
+  /** What was said to the agent, oldest first: every user-role message's text but the runtime state the
+   *  product sends in that role after the words (a `<dynamic_context>` block, the turn-local context), so
+   *  the last entry is the latest ask. */
   readonly userTexts: readonly string[];
+  /** The system messages' text: where a workspace's mission reaches its model. */
+  readonly system: string;
   /** Tool names already called in this conversation, in order. */
   readonly called: readonly string[];
   readonly available: readonly string[];
@@ -100,13 +106,24 @@ const OutboundBodySchema = v.object({
   }))),
 });
 
+/** A user-role message the product wrote: its live state, sent after the words it describes
+ *  (`prompting/volatile-context.ts`). */
+function isRuntimeState(text: string): boolean {
+  return text.startsWith(DYNAMIC_CONTEXT_OPEN_TAG) || text.startsWith(TURN_CONTEXT_HEADER);
+}
+
 /** The request body as a script reads it. */
 export function readScriptedRequest(body: string): ScriptedRequest {
   const parsed = v.parse(OutboundBodySchema, parseJsonValue(body));
   const messages = parsed.messages ?? [];
 
   return {
-    userTexts: messages.flatMap((message) => message.role === 'user' ? [message.content ?? ''] : []),
+    userTexts: messages.flatMap((message) => {
+      const text = message.content ?? '';
+
+      return message.role === 'user' && !isRuntimeState(text) ? [text] : [];
+    }),
+    system: messages.flatMap((message) => message.role === 'system' ? [message.content ?? ''] : []).join('\n'),
     called: messages.flatMap((message) => (message.tool_calls ?? []).flatMap(
       (call) => call.function?.name === undefined ? [] : [call.function.name],
     )),
@@ -155,10 +172,13 @@ function writePaced(response: ServerResponse, answer: ScriptedAnswer, pace: Scri
     `data: ${JSON.stringify({ ...CHUNK, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`;
 
   response.write(frame({ role: 'assistant' }));
-  setTimeout(() => {
-    response.write(frame({ content: pace.lead }));
-    setTimeout(() => { response.end(streamOf(answer)); }, pace.leadMs);
-  }, pace.firstTokenMs);
+  // A hold that fails cuts the call, as a provider that drops the socket does.
+  (pace.hold ?? Promise.resolve()).then(() => {
+    setTimeout(() => {
+      response.write(frame({ content: pace.lead }));
+      setTimeout(() => { response.end(streamOf(answer)); }, pace.leadMs);
+    }, pace.firstTokenMs);
+  }, () => { response.destroy(); });
 }
 
 export interface ScriptedModelServer {
@@ -249,14 +269,8 @@ export const PACED_SILENCE_MS = 3_000;
 
 const PACED: ScriptedPace = { firstTokenMs: PACED_SILENCE_MS, lead: '\n\n', leadMs: PACED_SILENCE_MS };
 
-/**
- * A turn that streams the way a thinking model does: silence before the first token, a first token that opens
- * the answer's text with nothing to draw, silence, then a tool call; the next step the same before its closing
- * prose. Null for any request that did not ask for it, so it composes in front of another script.
- */
-export function pacedTurn(request: ScriptedRequest): ScriptedAnswer | null {
-  if (!request.userTexts.some((text) => text.includes(PACED_TURN_ASK))) return null;
-
+/** The paced steps: a tool call, then the closing prose, each behind the silences a thinking model leaves. */
+function pacedSteps(request: ScriptedRequest): ScriptedAnswer {
   if (!request.available.includes('file')) return { text: FALLBACK_ANSWER };
 
   if (!request.called.includes('file')) {
@@ -268,6 +282,55 @@ export function pacedTurn(request: ScriptedRequest): ScriptedAnswer | null {
   }
 
   return { pace: PACED, text: PACED_TURN_ANSWER };
+}
+
+/**
+ * A turn that streams the way a thinking model does: silence before the first token, a first token that opens
+ * the answer's text with nothing to draw, silence, then a tool call; the next step the same before its closing
+ * prose. Null for any request that did not ask for it, so it composes in front of another script.
+ */
+export function pacedTurn(request: ScriptedRequest): ScriptedAnswer | null {
+  return request.userTexts.some((text) => text.includes(PACED_TURN_ASK)) ? pacedSteps(request) : null;
+}
+
+/** A model call a row holds open: its turn is admitted and its model silent until the row lets it answer. */
+export interface HeldCall {
+  /** Settles once the held call has reached the scripted server. */
+  readonly arrived: Promise<void>;
+  /** Lets the call answer. The row releases on every path, or the server's `stop()` waits on the open response. */
+  release(): void;
+  /** The script's side: marks the call arrived and returns what its first silence waits on. */
+  hold(): Promise<void>;
+}
+
+export function heldCall(): HeldCall {
+  const arrived = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
+
+  return {
+    arrived: arrived.promise,
+    release: () => { released.resolve(); },
+    hold: () => {
+      arrived.resolve();
+
+      return released.promise;
+    },
+  };
+}
+
+/** A workspace created with this mission takes its first turn paced, its first call held until its page is open. */
+export const PACED_FIRST_TURN_MISSION = 'Take the first turn slowly: a page opens while it runs.';
+
+/** The paced steps for every turn of a workspace made with {@link PACED_FIRST_TURN_MISSION}; the call that opens
+ *  them waits on `held`. Its row runs only the first turn. */
+export function pacedFirstTurn(request: ScriptedRequest, held: HeldCall): ScriptedAnswer | null {
+  if (!request.system.includes(PACED_FIRST_TURN_MISSION)) return null;
+
+  const answer = pacedSteps(request);
+
+  return answer.pace === undefined || request.called.includes('file')
+    ? answer
+    : { ...answer, pace: { ...answer.pace, hold: held.hold() } };
 }
 
 /* ── The plan walkthrough ──────────────────────────────────────────────── */
@@ -330,7 +393,7 @@ const SLATE_SERVER = [
   '}',
 ].join('\n');
 
-const SLATE_ROOT = `/home/main/slates/${SLATE_ID}`;
+const SLATE_ROOT = workspacePath(`slates/${SLATE_ID}`);
 
 /** The implement turn's writes, in the order the script plays them. */
 const SLATE_WRITES: readonly ScriptedAnswer[] = [
@@ -391,13 +454,14 @@ export const KEPT_TAB_NOTE = 'Kept-tab probe: save one note.';
 
 export const KEPT_TAB_FORGET = 'Kept-tab probe: forget every note.';
 
-/** The workspace's notes file, as the agent's file tool addresses it. */
-const NOTES_FILE = '/home/user/memory/MEMORY.md';
+/** The workspace's notes file, where the agent's file tool finds it. */
+const NOTES_FILE = workspacePath('memory/MEMORY.md');
 
 /**
  * The kept-tab row's turns, or null for any other request: the first saves a
- * note, which gives the Work tab content; the second rewrites the notes file
- * with no note in it, which takes that content away again.
+ * note, which gives the Work tab content; the second reads the notes file and
+ * rewrites it with no note in it, which takes that content away again (the
+ * file tool refuses to overwrite a file the turn has not read).
  */
 export function keptTabProbe(request: ScriptedRequest): ScriptedAnswer | null {
   const last = request.userTexts.at(-1) ?? '';
@@ -411,9 +475,13 @@ export function keptTabProbe(request: ScriptedRequest): ScriptedAnswer | null {
   }
 
   if (last.includes(KEPT_TAB_FORGET)) {
-    return request.called.includes('file')
-      ? { text: 'Forgotten.' }
-      : { toolCall: { name: 'file', arguments: { action: 'write', path: NOTES_FILE, content: '# Memory\n' } } };
+    const edits = request.called.filter((name) => name === 'file').length;
+
+    if (edits === 0) return { toolCall: { name: 'file', arguments: { action: 'read', path: NOTES_FILE } } };
+
+    if (edits === 1) return { toolCall: { name: 'file', arguments: { action: 'write', path: NOTES_FILE, content: '# Memory\n' } } };
+
+    return { text: 'Forgotten.' };
   }
 
   return null;

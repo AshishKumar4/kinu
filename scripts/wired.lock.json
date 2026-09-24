@@ -239,7 +239,6 @@
   "packages/core/src/prompting/surface.ts#uniqueExternalTools (unreached-export)",
   "packages/core/src/prompting/surface.ts#uniquePromptExecutors (unreached-export)",
   "packages/core/src/prompting/volatile-context.ts#DYNAMIC_CONTEXT_HEADER (unreached-export)",
-  "packages/core/src/prompting/volatile-context.ts#TURN_CONTEXT_HEADER (unreached-export)",
   "packages/core/src/prompting/volatile-context.ts#TurnLocalContext.activeSkills (unsupplied-field)",
   "packages/core/src/prompting/volatile-context.ts#executorAvailabilityLabel (unreached-export)",
   "packages/core/src/prompting/volatile-context.ts#renderTurnLocalContext (unreached-export)",
