@@ -233,7 +233,12 @@ export async function relayHostedReport(
 export interface HostedTaskResult {
   readonly text: string;
   readonly relayed: SubordinateEventResult | null;
-  readonly canonicalCompletion: HeadReport['canonicalCompletion'];
+}
+
+/** The actor's chat room, told the answer before the title model and the parent relay run. */
+export interface HostedChatSink {
+  readonly observeStream?: ObserveStream;
+  answered(outcome: { readonly completion: HeadReport['canonicalCompletion']; readonly error: string | null }): Promise<void>;
 }
 
 /** Only completion answers; abort is resumable; spent budget and throws are errors. */
@@ -253,7 +258,7 @@ export async function runHostedTask(
     readonly sequenceId: string;
     readonly inheritedContext?: SubordinateInheritedContext;
   },
-  observeStream?: ObserveStream,
+  chat?: HostedChatSink,
 ): Promise<HostedTaskResult> {
   return await seams.host.run(reference, async (actor) => {
     // `ActorHostDeps.runtimeFor` is `createCFRuntime` here, but core types it `AgentRuntime`; narrow locally.
@@ -308,7 +313,7 @@ export async function runHostedTask(
 
     if (mission !== null) inference.mission = mission;
 
-    if (observeStream !== undefined) inference.observeStream = observeStream;
+    if (chat?.observeStream !== undefined) inference.observeStream = chat.observeStream;
 
     // The run bracket the local host writes via `ChatSession.processTurn`; `runHeadInference` bypasses
     // it (measured 2026-09-17 in the workerd pool: a hire's child ledger held only `step_finish`).
@@ -333,6 +338,13 @@ export async function runHostedTask(
       }),
     });
 
+    const ending: TaskTurnEnding = TASK_TURN_ENDING[report.status];
+
+    await chat?.answered({
+      completion: report.canonicalCompletion,
+      error: ending === 'errored' ? report.errorMessage ?? report.summary : null,
+    });
+
     // Title upgrade (#18): no `auto_title` effect on a hosted actor, so name it after the run.
     // A failed titling model keeps the stand-in; the turn does not fail over its name.
     try {
@@ -344,8 +356,6 @@ export async function runHostedTask(
         doing: 'deriving a hosted actor title from its brief', cause, otherwise: 'unavailable',
       }), { workspace: actor.record.workspaceId });
     }
-
-    const ending: TaskTurnEnding = TASK_TURN_ENDING[report.status];
 
     const owed = reports.settled
       ? null
@@ -359,11 +369,10 @@ export async function runHostedTask(
         : null
     );
 
-    if (relayed === null) return { text: report.summary, relayed: null, canonicalCompletion: report.canonicalCompletion };
+    if (relayed === null) return { text: report.summary, relayed: null };
 
     return {
       text: report.summary,
-      canonicalCompletion: report.canonicalCompletion,
       relayed: await relayHostedReport(seams, actor, {
         status: relayed.status, content: relayed.content, origin: 'turn_end',
         mode: task.mode, sequenceId: task.sequenceId,
