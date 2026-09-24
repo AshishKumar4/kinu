@@ -5,7 +5,7 @@ import {
   assertLongHorizonSpec, buildLongHorizonAsks, buildLongHorizonQuestions,
   decodeLongHorizonSpec, encodeLongHorizonSpec, generateLongHorizonEntries,
   generateLongHorizonFiles, longHorizonAnswerMatches, longHorizonAsksLeakAnswer,
-  longHorizonCorpusChars, longHorizonPartDir, parseLongHorizonAnswerFile,
+  longHorizonPartDir, parseLongHorizonAnswerFile,
   renderLongHorizonAnswerFile, scoreLongHorizonAnswers,
   type LongHorizonSpec,
 } from '../src/index';
@@ -49,9 +49,12 @@ describe('the corpus is a pure function of the spec', () => {
   });
 
   test('the length bucket scales with entries and filler', () => {
-    const small = longHorizonCorpusChars(digest);
-    const long = longHorizonCorpusChars({ ...digest, filler: digest.filler * 4 });
-    const many = longHorizonCorpusChars({ ...digest, entries: digest.entries * 4 });
+    const corpusChars = (spec: LongHorizonSpec): number =>
+      generateLongHorizonFiles(spec).reduce((sum, file) => sum + file.text.length, 0);
+
+    const small = corpusChars(digest);
+    const long = corpusChars({ ...digest, filler: digest.filler * 4 });
+    const many = corpusChars({ ...digest, entries: digest.entries * 4 });
     expect(long).toBeGreaterThan(small * 2);
     expect(many).toBeGreaterThan(small * 3);
   });

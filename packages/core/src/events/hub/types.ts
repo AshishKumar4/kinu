@@ -381,52 +381,6 @@ export type IngressDescriptor =
       payload: ReplyRequestPayload;
     };
 
-export type HeadOp =
-  | { kind: 'keep' }
-  | { kind: 'abort_one'; head_id: HeadId; reason: string }
-  | { kind: 'abort_all'; reason: string }
-  | { kind: 'add'; spec: SpawnHeadSpec }
-  | { kind: 'merge_now'; reason: string };
-
-export type EventOp =
-  | { kind: 'handle' }
-  | { kind: 'defer'; revisit_at: RevisitCondition }
-  | { kind: 'drop'; reason: string };
-
-export interface ReactorDecision {
-  head_op: HeadOp;
-  event_op: EventOp;
-  reasoning: string;       // 3-5 sentence CoT; recorded for offline eval
-}
-
-export function isLegalDecision(d: ReactorDecision, ctx: {
-  reactor_head_trust: TrustLevel;
-  events_trust_class: TrustLevel;
-  current_phase: Phase;
-}): boolean {
-  if (d.event_op.kind === 'drop') {
-    if (TRUST_ORDER[ctx.reactor_head_trust] < TRUST_ORDER.authenticated) return false;
-
-    if (ctx.events_trust_class !== 'external') return false;
-  }
-
-  if ((d.head_op.kind === 'abort_one' || d.head_op.kind === 'abort_all' || d.head_op.kind === 'add')
-    && d.event_op.kind !== 'handle') return false;
-
-  if (d.head_op.kind === 'merge_now' && d.event_op.kind === 'drop') return false;
-
-  if (d.head_op.kind === 'add' && ctx.current_phase === 'merging') return false;
-
-  return true;
-}
-
-export interface SpawnHeadSpec {
-  task: string;
-  rationale: string;
-  bound_event_ids: EventId[];
-  budget?: { max_steps?: number; max_tokens?: number };
-}
-
 /** No free-form predicates: the Hub evaluates these without an LLM. */
 export type RevisitCondition =
   | { kind: 'at'; ts: number }
@@ -496,13 +450,6 @@ export interface ToolSurfaceContext {
   head_trust: TrustLevel;
   phase: Phase;
   role: Role;
-}
-
-export class TrustViolationError extends Error {
-  constructor(public readonly attempted: TrustLevel, public readonly required: TrustLevel) {
-    super(`Trust violation: have ${attempted}, need ${required}`);
-    this.name = 'TrustViolationError';
-  }
 }
 
 export class IngressRejectedError extends Error {

@@ -14,6 +14,7 @@
  * once, by opening a preview host and accepting it.
  */
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { request } from 'node:http';
 import { createServer } from 'node:https';
@@ -24,9 +25,14 @@ import type { Plugin, ViteDevServer } from 'vite';
 
 export const DEV_PREVIEW_SUFFIX = 'preview.localhost';
 
-/** The zone's https port: `KINU_DEV_PREVIEW_PORT` when a harness picks one, else a fixed port for a person's browser. */
-export function devPreviewPort(): number {
-  return Number(process.env.KINU_DEV_PREVIEW_PORT ?? '5443');
+/** The zone's https port: `KINU_DEV_PREVIEW_PORT` when a harness picks one, else one derived from the
+ *  checkout, below the kernel's ephemeral range, so dev servers in different worktrees never share one. */
+export function devPreviewPort(root: string): number {
+  const chosen = process.env.KINU_DEV_PREVIEW_PORT;
+
+  if (chosen !== undefined) return Number(chosen);
+
+  return 20_000 + (createHash('sha256').update(root).digest().readUInt16BE(0) % 10_000);
 }
 
 /** Where this checkout keeps the zone's key and certificate. */
@@ -66,15 +72,15 @@ function vitePort(server: ViteDevServer): number | null {
 }
 
 /** Serves the zone on its https port for as long as vite serves, forwarding requests and socket upgrades. */
-export function devPreviewZone(tlsDir: string): Plugin {
+export function devPreviewZone(tlsDir: string, port: number): Plugin {
   return {
     name: 'kinu:dev-preview-zone',
     apply: 'serve',
     configureServer(server) {
       const zone = createServer(devPreviewCertificate(tlsDir), (incoming, outgoing) => {
-        const port = vitePort(server);
+        const target = vitePort(server);
 
-        if (port === null) {
+        if (target === null) {
           outgoing.writeHead(503).end('vite is not listening yet');
 
           return;
@@ -84,7 +90,7 @@ export function devPreviewZone(tlsDir: string): Plugin {
         // without it every preview request reads as plain http and is upgraded away from the zone's port.
         const headers = { ...incoming.headers, 'x-forwarded-proto': 'https' };
 
-        const upstream = request({ host: '127.0.0.1', port, method: incoming.method, path: incoming.url, headers },
+        const upstream = request({ host: '127.0.0.1', port: target, method: incoming.method, path: incoming.url, headers },
           (answer) => {
             outgoing.writeHead(answer.statusCode ?? 502, answer.headers);
             answer.pipe(outgoing);
@@ -95,15 +101,15 @@ export function devPreviewZone(tlsDir: string): Plugin {
       });
 
       zone.on('upgrade', (incoming, socket, head) => {
-        const port = vitePort(server);
+        const target = vitePort(server);
 
-        if (port === null) {
+        if (target === null) {
           socket.destroy();
 
           return;
         }
 
-        const upstream = connect(port, '127.0.0.1', () => {
+        const upstream = connect(target, '127.0.0.1', () => {
           const lines = [`${incoming.method ?? 'GET'} ${incoming.url ?? '/'} HTTP/1.1`];
 
           for (let at = 0; at < incoming.rawHeaders.length; at += 2) lines.push(`${incoming.rawHeaders[at] ?? ''}: ${incoming.rawHeaders[at + 1] ?? ''}`);
@@ -118,7 +124,12 @@ export function devPreviewZone(tlsDir: string): Plugin {
         socket.on('error', () => { upstream.destroy(); });
       });
 
-      zone.listen(devPreviewPort(), '127.0.0.1');
+      // A port another server holds leaves this one without previews, not without a dev server.
+      zone.on('error', (error) => {
+        server.config.logger.error(`kinu: the dev preview zone cannot serve on ${String(port)} (${error.message}); `
+          + 'previews from this server will not load. Set KINU_DEV_PREVIEW_PORT to a free port.');
+      });
+      zone.listen(port, '127.0.0.1');
       server.httpServer?.on('close', () => { zone.close(); });
     },
   };

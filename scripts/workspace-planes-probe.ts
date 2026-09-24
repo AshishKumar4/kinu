@@ -44,7 +44,7 @@ try {
       { name: 'subordinate', actor: subordinate, workspace: await provision(subordinateAgentName(subordinate.storageKey)) },
     ];
 
-    if (generation === 1) await runtime.storage.vfs.writeFile('/home/user/shared.txt', 'one workspace');
+    if (generation === 1) await runtime.storage.vfs.writeFile('/home/main/shared.txt', 'one workspace');
     const planes: { name: string; runtime: AgentRuntime }[] = [{ name: 'main', runtime }];
 
     for (const identity of identities) planes.push({ name: identity.name, runtime: await nodeRuntime(identity.workspace, identity.actor, runtime) });
@@ -55,10 +55,10 @@ try {
       if (!shell) throw new Error(`${plane.name} has no shell`);
 
       if (generation === 1) await writePrivateMarker(shell, plane.name);
-      const result = await shell.exec('echo HOME=$HOME TMPDIR=$TMPDIR; cat /tmp/private.txt; cat /home/user/shared.txt');
+      const result = await shell.exec('echo HOME=$HOME TMPDIR=$TMPDIR; cat /tmp/private.txt; cat /home/main/shared.txt');
 
       if (result.exitCode !== 0) throw new Error(result.stderr);
-      const shared = await plane.runtime.storage.vfs.readFile('/home/user/shared.txt', { encoding: 'utf8' });
+      const shared = await plane.runtime.storage.vfs.readFile('/home/main/shared.txt', { encoding: 'utf8' });
 
       if (shared !== 'one workspace' || !result.stdout.includes(`\n${plane.name}\n`)) throw new Error('workspace planes diverged');
       console.log(`generation=${generation} kind=${plane.name} ${result.stdout.trim().replaceAll('\n', ' | ')}`);

@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
-import { scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
+import { scriptedTurnModel, toolExecute, unobservedSearchSeams } from '@kinu.run/test-utils';
 import type { Database } from 'bun:sqlite';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
@@ -72,7 +72,7 @@ function swarmDeps(
   model: CapturingModel,
   overrides: Partial<AgentsSwarmDeps> = {},
 ): AgentsSwarmDeps {
-  return { rt: world.rt, hostNode: hostedSeatsOver(world).hostNode, model, ...overrides };
+  return { rt: world.rt, hostNode: hostedSeatsOver(world).hostNode, model, ...unobservedSearchSeams(), ...overrides };
 }
 
 function agentsTool(deps: AgentsToolDeps) {

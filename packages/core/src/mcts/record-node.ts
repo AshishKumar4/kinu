@@ -57,7 +57,7 @@ export interface RecordNodeOpts {
   codeUsed: string | null;
   codeLanguage?: string | null;
   depth: number;
-  /** Null/absent when the node was never evaluated (the root; a swarm node). */
+  /** Null/absent for the root, a failed evaluation and a swarm node. */
   evaluation?: NodeEvaluationDiagnostics | null;
 }
 

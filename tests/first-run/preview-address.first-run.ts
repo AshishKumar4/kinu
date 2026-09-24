@@ -34,11 +34,11 @@ describe(SUITE, () => {
 
         if (created.status !== 201 || created.name !== maxName) throw new Error('Valid boundary creation failed: ' + JSON.stringify(created));
 
-        const setup = v.parse(Exec, await session.rpcAt(maxName, 'executeInExecutor', ['workspace', `mkdir -p /home/user/slates/address
-cat > /home/user/slates/address/package.json <<'END'
+        const setup = v.parse(Exec, await session.rpcAt(maxName, 'executeInExecutor', ['workspace', `mkdir -p /home/main/slates/address
+cat > /home/main/slates/address/package.json <<'END'
 {"main":"server.js","slate":{"port":65535}}
 END
-cat > /home/user/slates/address/server.js <<'END'
+cat > /home/main/slates/address/server.js <<'END'
 export default { fetch() { return new Response('first-run-preview-address-ok'); } };
 END`]));
 

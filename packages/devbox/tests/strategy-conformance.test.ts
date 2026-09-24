@@ -231,6 +231,22 @@ for (const [name, open] of armEntries) {
       }
     });
 
+    // Standalone run s20260923160514: a file deleted after a tick's first base came back (D31).
+    for (const second of ['quiesce', 'tick'] as const) {
+      test(`a file deleted after a tick committed the first base stays deleted through a ${second} and a wake`, async () => {
+        const arm = open();
+        await attach(arm);
+
+        for (const [path, text] of Object.entries(OLD)) await arm.workspace.write(path, text);
+        expectCommitted(await arm.storage().checkpoint('tick'), 'the tick that commits the first base');
+        await arm.workspace.remove('src.txt');
+        expectCommitted(await arm.storage().checkpoint(second), `the ${second} after the deletion`);
+
+        expect((await wake(arm)).kind).toBe('attached');
+        expect(await tree(arm)).toEqual({ 'notes.txt': OLD['notes.txt'] });
+      });
+    }
+
     test('every declared commit seam is reached by an ordinary commit', async () => {
       const arm = open();
       await attach(arm);

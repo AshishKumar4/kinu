@@ -137,6 +137,8 @@ export function GuidedOnboarding(props: {
   const [question, setQuestion] = useState<ProviderQuestion | null>(null);
   const [answer, setAnswer] = useState('');
   const answerRef = useRef<((value: string) => void) | null>(null);
+  const [waiting, setWaiting] = useState<string | null>(null);
+  const skipRef = useRef<AbortController | null>(null);
   const missionRef = useRef<TextareaRenderable | null>(null);
   const derived = readiness === null ? null : deriveOnboardingState(readiness);
   const activeStep = derived?.activeStep ?? null;
@@ -193,6 +195,21 @@ export function GuidedOnboarding(props: {
       };
 
       return promise;
+    },
+    skippable: async (label, work) => {
+      const controller = new AbortController();
+      skipRef.current = controller;
+      setWaiting(label);
+
+      try {
+        return await work(controller.signal);
+      } catch (cause) {
+        if (controller.signal.aborted) return null;
+        throw cause;
+      } finally {
+        skipRef.current = null;
+        setWaiting(null);
+      }
     },
   }), []);
 
@@ -314,6 +331,13 @@ export function GuidedOnboarding(props: {
   }, [activeStep, choices, loadProviders, mission, port, props.operations, props.roles, providers, readiness, roleIndex, run, runConnect, selectedIndex, themeChoices]);
 
   useKeyboard((event) => {
+    if (skipRef.current !== null && event.name === 'escape') {
+      event.preventDefault();
+      skipRef.current.abort();
+
+      return;
+    }
+
     if (question !== null) {
       event.preventDefault();
 
@@ -440,6 +464,12 @@ export function GuidedOnboarding(props: {
             {progress.map((line, index) => (
               <text key={`${String(index)}-${line}`}><span fg={colors.intent.info}>{line}</span></text>
             ))}
+            {waiting !== null && (
+              <text>
+                <span fg={colors.intent.info}>{waiting} </span>
+                <span fg={colors.text.muted}>Esc skips</span>
+              </text>
+            )}
             {question !== null && (
               <text>
                 <span fg={colors.text.muted}>{question.label}: </span>

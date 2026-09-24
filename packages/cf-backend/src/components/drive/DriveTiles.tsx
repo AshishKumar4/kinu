@@ -48,7 +48,7 @@ export function TileMenu({ name, items, initiallyOpen = false, className }: {
         <>
           <div aria-hidden="true" className="p-scrim fixed inset-0 z-40 sm:hidden" onClick={close} />
           <div role="menu" aria-label={name}
-            className="fixed inset-x-3 bottom-3 z-50 p-card border p-border p-1.5 p-shadow-overlay animate-fade-in sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:z-20 sm:mt-1 sm:w-52 sm:p-shadow-menu">
+            className="fixed inset-x-3 bottom-3 z-50 p-card border p-border p-1.5 p-shadow-overlay animate-fade-in sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:z-20 sm:mt-1 sm:w-52">
             <p className="truncate px-2.5 pb-1.5 pt-1 p-meta font-medium p-text-3 sm:hidden">{name}</p>
             {items.map((item) => (
               <div key={item.label}>

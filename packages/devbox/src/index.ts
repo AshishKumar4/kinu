@@ -1,7 +1,6 @@
-/** Public surface of @kinu.run/devbox; durability contracts live only at their own subpath.
- *  Export a type only when a caller must write its name; structural reads need no export. */
+/** Export a type only when a caller must write its name. */
 
-export { Devbox } from './devbox';
+export { Devbox, devboxSyncHandlers } from './devbox';
 
 export type { RestoreClockPhase } from './devbox';
 

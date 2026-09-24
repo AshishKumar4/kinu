@@ -12,6 +12,7 @@ import {
   InstructionApprovalStore,
   initInstructionApprovalsTable,
   instructionDigest,
+  workspaceSkillPath,
   type ActiveSkill,
   type ActiveSkillSet,
   type AgentsMdSources,
@@ -25,7 +26,7 @@ const DOCTRINE = 'Run the checkout suite before claiming a fix.';
 
 const AGENTS_PATH = '/repo/AGENTS.md';
 
-const SKILL_PATH = '/workspace/skills/deploy.md';
+const SKILL_PATH = workspaceSkillPath('deploy');
 
 function store(scope = 'test-scope') {
   const db = new Database(':memory:');
@@ -47,9 +48,6 @@ function skill(overrides: Partial<ActiveSkill> = {}): ActiveSkill {
     name: 'deploy',
     description: 'How this project deploys.',
     allowed_tools: [],
-    keywords: [],
-    auto_activate: false,
-    disable_model_invocation: false,
     user_invocable: true,
     ext: {},
     source: 'vfs',

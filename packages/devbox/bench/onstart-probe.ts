@@ -35,9 +35,16 @@
  *   error string. `destroyProbe` tears the probe's container identity down
  *   after a run; gate rows are namespaced per `op` and exec rows per `box`,
  *   so runs never share state.
+ *
+ * `probeReentry` is D8's control (D26): the start block reopens on a running
+ * container while one timer set outside it is pending (`pending`): the control
+ * connection's own timers after an exec, the alarm loop's wait, or a stray timer.
+ * The hook execs once, races the reply against `windowMs`, holds `holdMs`, and
+ * stamps each edge.
  */
 import { DurableObject } from 'cloudflare:workers';
 import { Sandbox } from '@cloudflare/sandbox';
+import type { ReentryPending, ReentryStamp } from './reentry';
 
 export interface ProbeBindings {
   GateProbe: DurableObjectNamespace<GateProbe>;
@@ -106,7 +113,12 @@ export interface ExecProbeStamp {
 
 const EXEC_KEY = 'probe:exec';
 
+const REENTRY_KEY = 'probe:reentry';
+
 export class OnStartExecProbe extends Sandbox<ProbeBindings> {
+  /** A reply the window missed, stamped once the start returns. */
+  #lateReply: Promise<number> | undefined;
+
   /** The exec the hook runs — the chain's own first command, so the probe
    *  reproduces the shape that measured resets, nothing larger. */
   private async runProbeExec(): Promise<void> {
@@ -135,7 +147,119 @@ export class OnStartExecProbe extends Sandbox<ProbeBindings> {
   }
 
   override async onStart(): Promise<void> {
+    const reentry = await this.ctx.storage.get<ReentryStamp>(REENTRY_KEY);
+
+    if (reentry?.armed === true) {
+      await this.runReentryHook(reentry);
+
+      return;
+    }
+
     await this.runProbeExec();
+  }
+
+  /** Merges, so concurrent stamps never overwrite each other. */
+  private async stampReentry(fields: Partial<ReentryStamp>): Promise<ReentryStamp | null> {
+    const current = await this.ctx.storage.get<ReentryStamp>(REENTRY_KEY);
+
+    if (current === undefined) return null;
+    const next = { ...current, ...fields };
+    await this.ctx.storage.put(REENTRY_KEY, next);
+
+    return next;
+  }
+
+  /** Each edge is durable before the next wait, so a platform reset leaves the edge it stopped at. */
+  private async runReentryHook(run: ReentryStamp): Promise<void> {
+    await this.stampReentry({ armed: false, hookEntered: Date.now() });
+    const sent = Date.now();
+
+    const reply = (async () => {
+      try {
+        await this.exec('cat /proc/uptime');
+
+        return { at: Date.now(), error: null };
+      } catch (error) {
+        return { at: Date.now(), error: error instanceof Error ? error.message : String(error) };
+      }
+    })();
+
+    const answered = await Promise.race([
+      reply,
+      new Promise<null>((resolve) => { setTimeout(() => { resolve(null); }, run.windowMs); }),
+    ]);
+
+    if (answered === null) {
+      this.#lateReply = reply.then(({ at }) => at);
+    } else {
+      await this.stampReentry({ hookExecMs: answered.at - sent, hookExecError: answered.error });
+    }
+
+    await new Promise<void>((resolve) => { setTimeout(resolve, run.holdMs); });
+    await this.stampReentry({ hookExited: Date.now() });
+  }
+
+  /** A schedule row for `pending: 'alarm'`: the alarm loop waits between rows. */
+  probeNoop(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  /** Leaves one timer set outside the next start block, due while its hook holds. */
+  private async armPending(pending: ReentryPending): Promise<void> {
+    if (pending === 'connection') {
+      await this.exec('true');
+
+      return;
+    }
+
+    if (pending === 'stray') {
+      setTimeout(() => undefined, 1_000);
+
+      return;
+    }
+
+    // The alarm runs the first row, then waits for the second: that wait is the pending timer.
+    await this.schedule(1, 'probeNoop');
+    await this.schedule(3, 'probeNoop');
+    const rows = () => this.ctx.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM container_schedules').one().n;
+
+    for (let polls = 0; polls < 50 && rows() > 1; polls += 1) await scheduler.wait(100);
+  }
+
+  async probeReentry(windowMs: number, holdMs: number, pending: ReentryPending): Promise<ReentryStamp | null> {
+    await this.ctx.storage.put(REENTRY_KEY, {
+      windowMs, holdMs, pending, started: Date.now(), armed: false, firstStartMs: null, openerExecMs: null,
+      hookEntered: null, hookExecMs: null, hookExecError: null, lateReplyAt: null, hookExited: null,
+      reentryReturned: null, error: null,
+    } satisfies ReentryStamp);
+
+    try {
+      const first = Date.now();
+      await this.startAndWaitForPorts({ ports: this.defaultPort });
+      const opener = Date.now();
+      await this.armPending(pending);
+      await this.stampReentry({ firstStartMs: opener - first, openerExecMs: Date.now() - opener, armed: true });
+      await this.startAndWaitForPorts({ ports: this.defaultPort });
+      const late = this.#lateReply;
+      this.#lateReply = undefined;
+
+      if (late !== undefined) await this.stampReentry({ lateReplyAt: await late });
+
+      return await this.stampReentry({ reentryReturned: Date.now() });
+    } catch (error) {
+      return await this.stampReentry({
+        reentryReturned: Date.now(), error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Delivery times during the hook show whether the input gate held. */
+  touch(): number {
+    return Date.now();
+  }
+
+  async reentryReport(): Promise<ReentryStamp | null> {
+    return (await this.ctx.storage.get<ReentryStamp>(REENTRY_KEY)) ?? null;
   }
 
   /** `mode` is 'start' | 'ports' | 'bench'. A reset leaves the row in storage

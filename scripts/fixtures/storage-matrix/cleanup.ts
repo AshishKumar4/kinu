@@ -14,8 +14,10 @@
  * number.
  */
 
+import { tolerate } from '@kinu.run/core/obs';
+import { currentOwner, ownerAlive, ProcessOwnerSchema, type ProcessOwner } from '../../process-owner';
 import { STORAGE_CLEANUP_GATES } from './manifest';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import * as v from 'valibot';
 
@@ -46,6 +48,9 @@ export interface TeardownEntry {
 export interface TeardownManifest {
   readonly schema: typeof TEARDOWN_MANIFEST_SCHEMA;
   readonly runId: string;
+  /** The driver process whose run this records. Null for a manifest written before owners were
+   *  recorded, or where `/proc` cannot say: such a run can only be judged abandoned. */
+  readonly owner: ProcessOwner | null;
   createdAt: string;
   updatedAt: string;
   entries: TeardownEntry[];
@@ -73,6 +78,7 @@ const TeardownEntrySchema = v.object({
 const TeardownManifestSchema = v.object({
   schema: v.literal(TEARDOWN_MANIFEST_SCHEMA),
   runId: v.string(),
+  owner: v.optional(v.nullable(ProcessOwnerSchema), null),
   createdAt: v.string(),
   updatedAt: v.string(),
   entries: v.array(TeardownEntrySchema),
@@ -92,7 +98,7 @@ export function manifestPath(repoRoot: string, runId: string): string {
 }
 
 /**
- * Persist the manifest, ATOMICALLY.
+ * Persist the manifest, ATOMICALLY, and only as its own run.
  *
  * A plain `writeFileSync` is not atomic, and the one event this file exists to
  * survive — a signal that kills the driver — can land between the truncate and
@@ -101,14 +107,47 @@ export function manifestPath(repoRoot: string, runId: string): string {
  * them is on disk, and nothing can read it. Write a sibling temp file and
  * rename it over the target instead; rename within one directory is atomic, so
  * a reader sees either the previous manifest or the new one.
+ *
+ * Two benches started in the same second get the same run id and would deploy
+ * the same names. The first write therefore claims the id, and a write over a
+ * manifest whose owner still runs is refused.
  */
 export function writeManifest(repoRoot: string, manifest: TeardownManifest): void {
   const path = manifestPath(repoRoot, manifest.runId);
   mkdirSync(dirname(path), { recursive: true });
   manifest.updatedAt = new Date().toISOString();
-  const staging = `${path}.writing`;
+  const staging = `${path}.${String(process.pid)}.writing`;
   writeFileSync(staging, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  // The first write claims the run id: `link` refuses a path another run created in the meantime,
+  // where a rename would silently replace that run's record of its resources.
+  const claimed = !existsSync(path) && tolerate(() => {
+    linkSync(staging, path);
+
+    return true;
+  }, 'eexist') === true;
+
+  if (claimed) {
+    rmSync(staging);
+
+    return;
+  }
+
+  const holder = loadManifest(repoRoot, manifest.runId)?.owner ?? null;
+
+  if (holder !== null && !sameOwner(holder, manifest.owner) && ownerAlive(holder)) {
+    rmSync(staging);
+    throw new Error(
+      `run ${manifest.runId} is held by a running bench (pid ${String(holder.pid)}); `
+      + 'a second run under its id would share and then delete its resources',
+    );
+  }
+
   renameSync(staging, path);
+}
+
+function sameOwner(a: ProcessOwner, b: ProcessOwner | null): boolean {
+  return b !== null && a.bootId === b.bootId && a.pid === b.pid && a.startTicks === b.startTicks;
 }
 
 export function loadManifest(repoRoot: string, runId: string): TeardownManifest | null {
@@ -125,12 +164,18 @@ export interface ManifestEntryInput {
   detail?: string;
 }
 
-export function createManifest(runId: string, entries: readonly ManifestEntryInput[]): TeardownManifest {
+/** Owned by the calling process unless told otherwise: a manifest names the run that is live now. */
+export function createManifest(
+  runId: string,
+  entries: readonly ManifestEntryInput[],
+  owner: ProcessOwner | null = currentOwner(),
+): TeardownManifest {
   const now = new Date().toISOString();
 
   return {
     schema: TEARDOWN_MANIFEST_SCHEMA,
     runId,
+    owner,
     createdAt: now,
     updatedAt: now,
     entries: entries.map((entry) => ({
@@ -198,6 +243,8 @@ export async function replayTeardown(
 export interface ManifestScan {
   /** Manifests still naming resources nobody deleted, oldest run first. */
   readonly unfinished: readonly TeardownManifest[];
+  /** Unfinished manifests whose driver still runs: their resources are in use, not stranded. */
+  readonly inFlight: readonly TeardownManifest[];
   /** Manifest files that could not be decoded. Their resources are real and
    *  their list is unreadable, so they are reported rather than dropped. */
   readonly unreadable: readonly string[];
@@ -218,8 +265,9 @@ export interface ManifestScan {
 export function scanUnfinishedManifests(repoRoot: string, exclude: string): ManifestScan {
   const directory = manifestDirectory(repoRoot);
 
-  if (!existsSync(directory)) return { unfinished: [], unreadable: [] };
+  if (!existsSync(directory)) return { unfinished: [], inFlight: [], unreadable: [] };
   const unfinished: TeardownManifest[] = [];
+  const inFlight: TeardownManifest[] = [];
   const unreadable: string[] = [];
 
   for (const file of readdirSync(directory).sort()) {
@@ -236,10 +284,13 @@ export function scanUnfinishedManifests(repoRoot: string, exclude: string): Mani
       continue;
     }
 
-    if (manifest.entries.some((entry) => !entry.done)) unfinished.push(manifest);
+    if (!manifest.entries.some((entry) => !entry.done)) continue;
+
+    if (manifest.owner !== null && ownerAlive(manifest.owner)) inFlight.push(manifest);
+    else unfinished.push(manifest);
   }
 
-  return { unfinished, unreadable };
+  return { unfinished, inFlight, unreadable };
 }
 
 /** What the startup scan did about one abandoned run. */
@@ -271,6 +322,10 @@ export async function recoverAbandonedRuns(
 
   for (const problem of scan.unreadable) {
     report(`abandoned teardown manifest cannot be decoded, so its resources must be swept by hand — ${problem}`);
+  }
+
+  for (const running of scan.inFlight) {
+    report(`run ${running.runId} is still running (pid ${String(running.owner?.pid)}); its resources are its own to delete`);
   }
 
   const recovered: RecoveredRun[] = [];

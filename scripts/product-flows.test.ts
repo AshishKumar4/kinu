@@ -9,7 +9,6 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { SHARE_VIEWER_REQUESTS_PER_MINUTE } from '@kinu.run/core';
-import { renderThrownChain } from '@kinu.run/core/obs';
 import { resolveWebIdentity } from '../tests/evals/public-session';
 import { withBrowser } from './live-app-harness';
 import {
@@ -19,6 +18,7 @@ import {
   type AgentReturnVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict, type WrittenFileVerdict,
 } from './product-flows';
+import { rowVerdicts } from './row-verdicts';
 
 interface FlowVerdicts {
   welcome: WelcomeVerdict | null;
@@ -40,26 +40,7 @@ const observed: FlowVerdicts = {
 /** Why no row could start: no origin, or no identity for it. */
 let setup: string | null = null;
 
-/** Each row that threw, with the account of why, so one broken flow cannot
- *  hide the others. */
-const broke = new Map<string, string>();
-
-async function attempt<Value>(row: string, flow: () => Promise<Value>): Promise<Value | null> {
-  const started = performance.now();
-
-  process.stderr.write(`product-flows: ${row} started\n`);
-
-  try {
-    return await flow();
-  } catch (cause) {
-    broke.set(row, renderThrownChain({ cause }));
-    process.stderr.write(`product-flows: ${row} broke: ${broke.get(row) ?? ''}\n`);
-
-    return null;
-  } finally {
-    process.stderr.write(`product-flows: ${row} ended after ${((performance.now() - started) / 1000).toFixed(0)} s\n`);
-  }
-}
+const { attempt, verdictOf, broken } = rowVerdicts('product-flows', () => setup);
 
 beforeAll(async () => {
   const origin = process.env.KINU_ORIGIN;
@@ -94,19 +75,12 @@ beforeAll(async () => {
     observed.slateShare = await attempt('slate-share', () => slateSharesWithNoBindings(target));
   });
 
-  process.stderr.write(`product-flows at ${origin}: ${JSON.stringify({ observed, broke: Object.fromEntries(broke) }, null, 2)}\n`);
+  process.stderr.write(`product-flows at ${origin}: ${JSON.stringify({ observed, broke: broken() }, null, 2)}\n`);
 });
 
 afterAll(() => {
   if (setup !== null) throw new Error(setup);
 });
-
-/** A row's verdict, or the failure that it never produced one. */
-function verdictOf<Value>(value: Value | null, row: string): Value {
-  if (value === null) throw new Error(`the ${row} row produced no verdict: ${broke.get(row) ?? setup ?? 'it never ran'}`);
-
-  return value;
-}
 
 describe('the product reaches its home page', () => {
   test('through setup when the account has not done it, and straight there when it has', () => {

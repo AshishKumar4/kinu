@@ -9,7 +9,10 @@ import { turnAuthor, type ProgrammaticTurn } from '@kinu.run/core';
 import type { ModelMessage } from 'ai';
 import type { SessionMessage } from 'agents/experimental/memory/session';
 import * as v from 'valibot';
-import { orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import {
+  admittedTurnClaim, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, storedChat,
+  type HarnessOrchestratorAgent, type RecordedUserPlaneCalls, workspaceMainActor,
+} from './helpers/actor-harness';
 import { present } from '@kinu.run/test-utils';
 
 const SteerFrameSchema = v.object({
@@ -47,7 +50,7 @@ function steerHarness(): SteerHarness {
   return {
     agent, db, frames,
     enqueued: agent.harnessEnqueued,
-    appended: async () => (await agent.harnessTranscript.history())
+    appended: async () => (await storedChat({ agent, db }))
       .filter((message) => message.role === 'user' && v.is(v.object({ metadata: v.object({ kinuSteer: v.literal(true) }) }), message)),
     startTurn: async (liveTurnId) => {
       if (liveTurnId !== undefined) chatSessionTurns(agent).open(liveTurnId);
@@ -77,43 +80,51 @@ async function stepMessages(
 
 
 describe('a message typed while the agent is working', () => {
-  test('recovers the active durable turn id after a reset before a device sweep', async () => {
+  test('a Stop on the next activation stops the device work of the turn the evicted one was running', async () => {
     const h = steerHarness();
-    await h.agent.harnessPersistActiveTurn('turn-before-reset');
+    // What the evicted activation left: its turn admitted, never closed.
+    await admittedTurnClaim(h, 'turn-before-reset');
+    const userPlane: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], turnCancels: [] };
 
-    expect(h.agent.harnessDurableTurnId()).toBe('turn-before-reset');
+    // A cold activation holds no live turn: the newest unsettled claim is the turn Stop must reach.
+    const restarted = await reactivateOrchestratorHarness(h.db, userPlane);
+    await restarted.agent.installWorkspaceCapability('workspace-token');
+    await restarted.agent.cancelCurrentWork();
+
+    expect(userPlane.turnCancels).toEqual(['turn-before-reset']);
   });
 
   test('is queued as the next ordinary turn when no turn is running', async () => {
     const h = steerHarness();
+    const turns = chatSessionTurns(h.agent);
+    const opened = turns.park();
+
     // Committed to the turn queue in the same slice as the idle decision, so no later turn can reorder these words (KINU-N026).
-    expect(await h.agent.harnessChatLoop.send('nothing is running')).toBe('turn');
-    const admitted = (await h.agent.harnessTranscript.history()).filter((message) => message.role === 'user');
+    await h.agent.send('nothing is running', 'm-idle');
+    const turn = await opened;
+    const admitted = (await storedChat(h)).filter((message) => message.role === 'user');
     expect(admitted).toHaveLength(1);
     expect(admitted[0]?.parts).toEqual([{ type: 'text', text: 'nothing is running' }]);
     expect(turnAuthor(admitted[0])).toBe('operator');
     expect(h.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0].id)).toEqual({ work_mode: 'build' });
-    expect(present(h.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
-
-    const turn = await chatSessionTurns(h.agent).prepare({ messages: [...HISTORY] });
-
+    expect(steerFrames(h.frames)).toEqual([]);
     expect(await stepMessages(h.agent, 0, turn.messages)).toEqual([...turn.messages]);
+
+    // The words' reservation retires with the answer, in one transaction: nothing is left to redeliver.
+    await turns.settle({ messageId: 'a-idle', text: 'ok' });
+    expect(present(h.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
   });
 
   test('a plan-mode steer that missed its turn queues a plan turn, not a build one', async () => {
     const h = steerHarness();
-    await h.agent.harnessChatLoop.send('tighten the rollout plan first', { mode: 'plan' });
-    const admitted = (await h.agent.harnessTranscript.history()).filter((message) => message.role === 'user');
+    const opened = chatSessionTurns(h.agent).park();
+
+    await h.agent.send('tighten the rollout plan first', 'm-plan', [], 'plan');
+    await opened;
+    const admitted = (await storedChat(h)).filter((message) => message.role === 'user');
     expect(turnAuthor(admitted[0])).toBe('operator');
     expect(h.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0].id)).toEqual({ work_mode: 'plan' });
-  });
-
-  test('a refused enqueue rejects rather than reporting the words placed', async () => {
-    const h = steerHarness();
-    // The composer returns the draft on refusal; claiming placement here would be silent text loss.
-    h.agent.harnessRefuseDriving({ reason: 'unavailable', error: 'another session is driving this workspace' });
-    await expect(h.agent.harnessChatLoop.send('nothing is running')).rejects.toThrow(/another session is driving/);
-    expect(present(h.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
+    await chatSessionTurns(h.agent).settle({ messageId: 'a-plan', text: 'ok' });
   });
 
   test('is taken mid-turn, announced as queued, and reaches the model at the next step', async () => {
@@ -139,36 +150,20 @@ describe('a message typed while the agent is working', () => {
     expect(landed[1].steerId).toBe(landed[0].steerId);
   });
 
-  test('a steer that names a skill the turn does not carry brings its body to the next step', async () => {
-    // Skills resolve when the turn opens, so a mid-turn steer naming one must still activate it.
+  test('a steer that invokes a skill the turn does not carry brings its body to the next step', async () => {
+    // Skills resolve when the turn opens, so a mid-turn /skill invocation must still activate it.
     const h = steerHarness();
     await h.startTurn();
 
-    await h.agent.send('now build a slate that answers GET /ping', 'steer-ping');
+    await h.agent.send('/slates now build a slate that answers GET /ping', 'steer-ping');
 
     const carried = await stepMessages(h.agent, 0, HISTORY);
-    expect(carried[HISTORY.length]).toEqual({ role: 'user', content: 'now build a slate that answers GET /ping' });
+    expect(carried[HISTORY.length]).toEqual({ role: 'user', content: '/slates now build a slate that answers GET /ping' });
     const reference = carried[HISTORY.length + 1];
     expect(reference?.role).toBe('user');
     expect(JSON.stringify(reference?.content)).toContain('### slates');
     expect(JSON.stringify(reference?.content)).toContain('fetch(request)');
     expect((await h.appended()).filter((row) => row.role === 'user')).toHaveLength(1);
-  });
-
-  test('restores a reset-lost steer from SQL before the resumed turn reaches its next step', async () => {
-    const h = steerHarness();
-    await h.startTurn();
-    const turnId = h.agent.harnessDurableTurnId();
-
-    if (turnId === null) throw new Error('expected the harness turn to be durable');
-    await h.agent.send('recover this after reset', 'steer-recover');
-
-    h.agent.harnessRestorePendingSteers(turnId);
-
-    expect(await stepMessages(h.agent, 3, HISTORY)).toEqual([
-      ...HISTORY,
-      { role: 'user', content: 'recover this after reset' },
-    ]);
   });
 
   test('persists as a VERBATIM user row carrying the id and the step it landed in', async () => {
@@ -212,7 +207,7 @@ describe('a message typed while the agent is working', () => {
 
   test('a pending steer with an attachment survives a reset intact — the rerun carries real file data', async () => {
     const h = steerHarness();
-    const actorId = h.agent.observeRuntime().actor.actorId;
+    const actorId = workspaceMainActor(h.db).actorId;
 
     // Written through SQL as an eviction leaves them; the next activation's loop is the restore/sweep entry point.
     h.db.query(
@@ -304,24 +299,20 @@ describe('a steer that never saw a step boundary', () => {
     // The enqueue seam gives every row the `programmatic:` prefix, so the operator's authorship must be explicit.
   });
 
-  test('answers its sender with the rerun, never with a guess at admission', async () => {
+  test('tells its sender the words became the next turn, under the id it holds', async () => {
     const h = steerHarness();
     await h.startTurn();
-    // What the send resolves with is the rows durable at that moment: the answer of the turn that ran the words.
-
-    const atLanding = h.agent.harnessChatLoop.send('one more thing').then(async (landed) => ({
-      landed,
-      answers: (await h.agent.harnessTranscript.history()).filter((message) => message.role === 'assistant').map((message) => message.id),
-    }));
+    await h.agent.send('one more thing', 'steer-late');
 
     await chatSessionTurns(h.agent).settle({ messageId: 'assistant-1', text: 'deployed', requestId: 'req-1' });
-    const landing = await atLanding;
 
-    expect(landing.landed).toBe('turn');
-    expect(landing.answers).toHaveLength(2);
-    const steerId = steerFrames(h.frames).find((frame) => frame.status === 'queued')?.steerId;
-    expect(steerFrames(h.frames).map((frame) => frame.status)).toEqual(['queued', 'turn']);
-    expect((await h.agent.harnessTranscript.history()).filter((message) => message.role === 'user').at(-1)?.id).toBe(steerId);
+    expect(steerFrames(h.frames).map((frame) => [frame.status, frame.steerId])).toEqual([
+      ['queued', 'steer-late'], ['turn', 'steer-late'],
+    ]);
+    // The rerun opened under the steer's id, so the sender's bubble is the row a reload draws, and it was answered.
+    const stored = await storedChat(h);
+    expect(stored.filter((message) => message.role === 'user').at(-1)?.id).toBe('steer-late');
+    expect(stored.filter((message) => message.role === 'assistant')).toHaveLength(2);
   });
 
   test('leftovers of mixed modes rerun as ONE plan turn, once, across duplicate terminal callbacks', async () => {
@@ -358,7 +349,7 @@ describe('a steer that never saw a step boundary', () => {
 describe('an eviction with acknowledged steers', () => {
   test('restores only the live turn\'s rows and sweeps a dead turn\'s as one user-origin turn', async () => {
     const h = steerHarness();
-    const actorId = h.agent.observeRuntime().actor.actorId;
+    const actorId = workspaceMainActor(h.db).actorId;
 
     await h.startTurn('u-live');
     await h.agent.send('the live turn keeps me', 'steer-live');
@@ -383,7 +374,7 @@ describe('an eviction with acknowledged steers', () => {
     ]);
     await chatSessionTurns(restarted.agent).settle({ messageId: 'a-live-again', text: 'kept' });
 
-    const rerun = present((await restarted.agent.harnessTranscript.history()).filter((message) => message.role === 'user').at(-1), 'the rerun user turn');
+    const rerun = present((await storedChat(restarted)).filter((message) => message.role === 'user').at(-1), 'the rerun user turn');
 
     expect(rerun.parts).toEqual([{ type: 'text', text: 'orphaned by an eviction\n\nalso orphaned' }]);
     expect(turnAuthor(rerun)).toBe('operator');

@@ -1,0 +1,30 @@
+// A Worker that uses Devbox with no Kinu code (DBX-9). `scripts/bench-devbox-standalone.ts`
+// deploys it under a run's own name and bucket and deletes both afterwards; nothing else deploys it.
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "kinu-devbox-example",
+  "main": "worker.ts",
+  // `ctx.exports`, which the SDK's outbound interception is built on, starts at this date.
+  "compatibility_date": "2025-12-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [{ "class_name": "ExampleBox", "name": "Box" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ExampleBox"] }],
+  // The image Devbox's storage needs: squashfuse, the block lower and the container's sync
+  // (`packages/devbox/block-lower`), pinned by digest like the product's.
+  "containers": [
+    {
+      "class_name": "ExampleBox",
+      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:c2c03bdf3b46d22633ffdeab545953d7c0caa0fb562d36e70ebdd4618898c718",
+      "max_instances": 1,
+      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
+    }
+  ],
+  // The chain streams archives with `readFile(…, { encoding: 'none' })`, which only the `rpc`
+  // transport serves.
+  "vars": { "SANDBOX_TRANSPORT": "rpc" },
+  "r2_buckets": [{ "binding": "WORKSPACES", "bucket_name": "kinu-devbox-example" }]
+}

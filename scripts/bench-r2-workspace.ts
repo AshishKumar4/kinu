@@ -1302,7 +1302,7 @@ async function main(): Promise<number> {
       `readOnly mount refuses writes: ${readOnly.holds ? 'yes' : 'NO'} — ${readOnly.detail}`,
     );
     conditions.push(
-      'node_modules is patched: patches/@cloudflare%2Fsandbox@0.12.8.patch rewrites the '
+      'node_modules is patched: patches/@cloudflare%2Fsandbox@0.12.9.patch rewrites the '
       + 'outbound-handler registry assignment from replace to merge. `bun scripts/patch-parity.ts` '
       + 'is what makes installed==patched checkable rather than assumed.',
     );

@@ -1,0 +1,20 @@
+diff --git a/dist/workerd-facet-host.js b/dist/workerd-facet-host.js
+index 7d1eacbc606137517c93b782dd6ec4a5ee70df13..3e0b435ad895eb58945c20ac02649e93c48963ee 100644
+--- a/dist/workerd-facet-host.js
++++ b/dist/workerd-facet-host.js
+@@ -264,6 +264,15 @@ function spawnResident(ctx, env, disk, supervisor, params) {
+     };
+     let facet;
+     try {
++        // Every spawn is a new class (the Worker Loader key carries the pid), and a running facet
++        // keeps the class it started with. The name can outlive the activation that started it:
++        // the platform can end an activation and keep its facets, and the next activation's `get`
++        // then resets the whole object ("Durable Object reset because its code was updated").
++        // Cloudflare's facet contract for a class change: "abort the facet running the old version,
++        // then call get() with a callback that returns the new class"
++        // (https://developers.cloudflare.com/dynamic-workers/usage/durable-object-facets/#abort).
++        // With nothing running under the name, abort is a no-op, and storage is kept either way.
++        facets.abort(name, new Error('Nimbus: a new resident process takes this facet name'));
+         facet = facets.get(name, start);
+     }
+     catch (error) {

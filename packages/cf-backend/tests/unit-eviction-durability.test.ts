@@ -4,17 +4,23 @@
  */
 import { describe, expect, test } from 'bun:test';
 import {
-  BACKGROUND_FIBER_PREFIX, ChatSession, PendingSendStore, SEARCH_FIBER_NAME,
-  type AdvisorRecoverySnapshot, type AgentSignal, type EnqueueTurnResult, type JsonValue, type ProgrammaticTurn,
+  BACKGROUND_FIBER_PREFIX, CHAT_SESSION_ID, PendingSendStore, PROGRAMMATIC_MESSAGE_ID_PREFIX, SEARCH_FIBER_NAME,
+  type AdvisorRecoverySnapshot, type JsonValue,
 } from '@kinu.run/core';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
-import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import {
+  catalogTurn, chatSessionTurns, gatewayWorkspace, historyOver, jobsOver, orchestratorHarness, workspaceMainActor,
+  type ActorHarness, type HarnessOrchestratorAgent,
+} from './helpers/actor-harness';
+import { answeringGateway, chatCompletion, stubAiBinding } from './helpers/platform-gateway';
 import { makeSql } from '../../core/tests/helpers';
 import {
   SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
 } from '../src/sandbox-lifecycle';
 // Relative path, not `@kinu.run/devbox`: the barrel reaches `cloudflare:workers`, which does not exist under bun.
 import { INCIDENT_STAGES } from '../../devbox/src/lifecycle';
+
+type Harness = ActorHarness<HarnessOrchestratorAgent>;
 
 function interrupted(
   name: string, snapshot: JsonValue | AdvisorRecoverySnapshot,
@@ -39,39 +45,17 @@ async function recover(
   return result;
 }
 
-/** Recorded at the seam `enqueueTurn` reaches, and called through so the turn still runs. */
-function recordAdmissions(agent: HarnessOrchestratorAgent): string[] {
-  const seen: string[] = [];
-  const loop = agent.harnessChatLoop;
-  const admit = ChatSession.prototype.enqueueTurn.bind(loop);
+/** The programmatic turns the workspace ran, as its conversation stores them, once the queue drains. */
+async function programmaticTurns(harness: Harness): Promise<{ id: string; text: string }[]> {
+  await chatSessionTurns(harness.agent).drainEnqueued();
+  const stored = await historyOver(harness).transcript(CHAT_SESSION_ID).history();
 
-  Object.defineProperty(loop, 'enqueueTurn', {
-    configurable: true,
-    value: async (input: ProgrammaticTurn) => {
-      seen.push(input.idempotencyKey ?? input.text);
-
-      return admit(input);
-    },
-  });
-
-  return seen;
-}
-
-function recordAdmittedTexts(agent: HarnessOrchestratorAgent): string[] {
-  const texts: string[] = [];
-  const loop = agent.harnessChatLoop;
-  const admit = ChatSession.prototype.enqueueTurn.bind(loop);
-
-  Object.defineProperty(loop, 'enqueueTurn', {
-    configurable: true,
-    value: async (input: ProgrammaticTurn) => {
-      texts.push(input.text);
-
-      return admit(input);
-    },
-  });
-
-  return texts;
+  return stored
+    .filter((message) => message.role === 'user' && message.id.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX))
+    .map((message) => ({
+      id: message.id,
+      text: message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''),
+    }));
 }
 
 function advisorSnapshot(turnId: string): AdvisorRecoverySnapshot {
@@ -92,51 +76,32 @@ function advisorSnapshot(turnId: string): AdvisorRecoverySnapshot {
   };
 }
 
-interface AdvisorObservation {
-  readonly notes: string[];
-  readonly signals: AgentSignal[];
+const ADVISOR_REPLY = JSON.stringify({
+  note: 'The migration ran before the suite. Confirm a backup exists.',
+  severity: 'blocker',
+  class: 'wrong-work',
+});
+
+interface HeldAdvisor {
+  readonly harness: Harness;
   readonly entered: Promise<void>;
   readonly release: () => void;
 }
 
-/** The model is parked until `release`, so "the re-drive is detached" is assertable rather than raced. */
-function observeAdvisor(agent: HarnessOrchestratorAgent): AdvisorObservation {
-  const notes: string[] = [];
-  const signals: AgentSignal[] = [];
+/** The workspace's models answer through the gateway, parked until `release`, so "the re-drive is detached" is
+ *  assertable rather than raced. The first call is the review's. */
+function heldAdvisor(): HeldAdvisor {
   const arrived = Promise.withResolvers<void>();
   const held = Promise.withResolvers<void>();
 
-  const reply = JSON.stringify({
-    note: 'The migration ran before the suite. Confirm a backup exists.',
-    severity: 'blocker',
-    class: 'wrong-work',
+  const gateway = stubAiBinding(async (run) => {
+    arrived.resolve();
+    await held.promise;
+
+    return chatCompletion(run, ADVISOR_REPLY);
   });
 
-  Object.defineProperty(agent.observeRuntime(), 'advisorLlm', {
-    configurable: true,
-    get: () => ({
-      complete: async () => {
-        arrived.resolve();
-        await held.promise;
-        notes.push(reply);
-
-        return reply;
-      },
-      stream: () => { throw new Error('the advisor lane completes, it does not stream'); },
-    }),
-  });
-  const inbox = agent.observeOrch().inbox;
-  const send = inbox.send.bind(inbox);
-  Object.defineProperty(inbox, 'send', {
-    configurable: true,
-    value: async (signal: AgentSignal) => {
-      signals.push(signal);
-
-      return await send(signal);
-    },
-  });
-
-  return { notes, signals, entered: arrived.promise, release: () => { held.resolve(); } };
+  return { harness: gatewayWorkspace(gateway), entered: arrived.promise, release: () => { held.resolve(); } };
 }
 
 interface Recovering {
@@ -162,13 +127,13 @@ function recovering(agent: HarnessOrchestratorAgent, ctx: FiberRecoveryContext):
 
 describe('a background job whose executor died', () => {
   test('the recovery hands the re-drive to a carrier and terminalizes the old fiber', async () => {
-    const { agent } = orchestratorHarness();
-    agent.harnessJobs().create({
+    const { agent, db } = orchestratorHarness();
+    jobsOver(db).create({
       id: 'bgjob-evicted', kind: 'search', workMode: 'build',
       input: JSON.stringify({ task: 'keep going' }), now: Date.now(), label: 'keep going',
     });
 
-    expect(agent.harnessJobs().get('bgjob-evicted')?.status).toBe('running');
+    expect(jobsOver(db).get('bgjob-evicted')?.status).toBe('running');
 
     const result = await recover(agent, interrupted(
       `${BACKGROUND_FIBER_PREFIX}search`,
@@ -187,21 +152,23 @@ describe('a background job whose executor died', () => {
 
   /** A wake delivered on an idle agent resolves only when its turn ends; the hook must answer without awaiting it inside `blockConcurrencyWhile`. */
   test("a settled job's wake is delivered DETACHED, not awaited by the hook", async () => {
-    const { agent } = orchestratorHarness();
-    const jobs = agent.harnessJobs();
+    const queued = Promise.withResolvers<void>();
+    const arrived = Promise.withResolvers<void>();
+
+    // The wake's turn runs on the model the platform gateway serves, and holds there until released.
+    const { agent, db } = gatewayWorkspace(stubAiBinding(async (run) => {
+      arrived.resolve();
+      await queued.promise;
+
+      return chatCompletion(run, 'Read the answer.');
+    }));
+
+    const jobs = jobsOver(db);
     jobs.create({
       id: 'bgjob-settled', kind: 'search', workMode: 'build',
       input: JSON.stringify({ task: 'done already' }), now: Date.now(), label: 'done already',
     });
     jobs.settle('bgjob-settled', jobs.epochOf('bgjob-settled') ?? 0, '"answer"', Date.now());
-    const queued = Promise.withResolvers<void>();
-    const arrived = Promise.withResolvers<void>();
-    agent.harnessSetSignalDeliverer(async () => {
-      arrived.resolve();
-      await queued.promise;
-
-      return 'queued';
-    });
 
     const recovery = recovering(agent, interrupted(
       `${BACKGROUND_FIBER_PREFIX}search`,
@@ -222,11 +189,17 @@ describe('a background job whose executor died', () => {
 
 describe('the post-turn lanes', () => {
   test('the evolution lane leaves a durable row and hands the re-entry to a carrier', async () => {
-    const { agent } = orchestratorHarness();
+    const { agent, db } = gatewayWorkspace(answeringGateway('Done.'));
+    // The first turn creates the platform's fiber table; the second's lanes run under the recorder.
+    await catalogTurn(agent, 'Tidy the notes.');
+    db.run('CREATE TABLE fiber_starts (name TEXT NOT NULL)');
+    db.run('CREATE TRIGGER record_fiber_start AFTER INSERT ON cf_agents_runs BEGIN INSERT INTO fiber_starts VALUES (NEW.name); END');
+    await catalogTurn(agent, 'Tidy them again.');
+    await agent.harnessJoinDetachedFibers();
 
-    agent.harnessSettleEvolution();
     // `runFiber` writes the row before the body runs; a bare `keepAliveWhile` leaves nothing for a later activation.
-    expect(agent.harnessOpenFiberRows().map((row) => row.name)).toContain('evolution:settle');
+    expect(db.query<{ name: string }, []>('SELECT name FROM fiber_starts').all().map((row) => row.name))
+      .toContain('evolution:settle');
 
     const result = await recover(agent, interrupted('evolution:settle', { lane: 'evolution:settle' }));
 
@@ -241,9 +214,9 @@ describe('the post-turn lanes', () => {
 
   /** The review is a model call, so the hook classifies and the carrier reviews; an in-gate review queues every fetch behind `blockConcurrencyWhile`. */
   test('the advisor review runs DETACHED and still lands exactly one note', async () => {
-    const harness = orchestratorHarness();
+    const advisor = heldAdvisor();
+    const { harness } = advisor;
     const agent = harness.agent;
-    const advisor = observeAdvisor(agent);
 
     const recovery = recovering(agent, interrupted('advisor:review', advisorSnapshot('turn-42')));
 
@@ -261,17 +234,16 @@ describe('the post-turn lanes', () => {
     await agent.harnessJoinDetachedFibers();
 
     // The signal is keyed on the turn so a re-delivery collapses onto the row it already opened.
-    expect(advisor.notes).toHaveLength(1);
-    expect(advisor.signals).toHaveLength(1);
-    expect(advisor.signals[0]).toMatchObject({ idempotencyKey: 'advisor:turn-42' });
     expect(agent.harnessNotesForTurn('turn-42')).toBe(1);
+    expect((await programmaticTurns(harness)).map((turn) => turn.id))
+      .toEqual([`${PROGRAMMATIC_MESSAGE_ID_PREFIX}advisor:turn-42`]);
     expect(agent.harnessOpenFiberRows()).toEqual([]);
   });
 
   test('a review that had already landed is NOT re-run, so recovery cannot double it', async () => {
-    const harness = orchestratorHarness();
+    const advisor = heldAdvisor();
+    const { harness } = advisor;
     const agent = harness.agent;
-    const advisor = observeAdvisor(agent);
     advisor.release();
 
     // The note was recorded before eviction; re-running would write a second note and speak it twice.
@@ -285,9 +257,9 @@ describe('the post-turn lanes', () => {
     });
     // The guard is synchronous and runs before any carrier, so the refused re-drive leaves no second fiber row.
     expect(agent.harnessOpenFiberRows()).toEqual([]);
-    expect(advisor.notes).toHaveLength(1);
-    expect(advisor.signals).toHaveLength(1);
     expect(agent.harnessNotesForTurn('turn-42')).toBe(1);
+    expect((await programmaticTurns(harness)).map((turn) => turn.id))
+      .toEqual([`${PROGRAMMATIC_MESSAGE_ID_PREFIX}advisor:turn-42`]);
   });
 
   test('a snapshot that will not parse is terminal, because there is no turn to review', async () => {
@@ -321,8 +293,7 @@ describe('the post-turn lanes', () => {
     expect(events[0].message).toContain('mcts');
 
     await agent.harnessJoinDetachedFibers();
-    expect(await agent.observeRuntime().memory.read('memory/MEMORY.md'))
-      .toContain('Fiber "mcts" was interrupted');
+    expect(await agent.getMemoryContent()).toContain('Fiber "mcts" was interrupted');
   });
 });
 
@@ -367,8 +338,8 @@ describe('a sandbox lifecycle failure', () => {
   };
 
   test('becomes ONE blocker turn however many times the container retries', async () => {
-    const { agent } = orchestratorHarness();
-    const submitted = recordAdmissions(agent);
+    const harness = orchestratorHarness();
+    const { agent } = harness;
 
     const first = await agent.acceptSandboxLifecycleFailure(incident);
     const second = await agent.acceptSandboxLifecycleFailure(incident);
@@ -377,32 +348,31 @@ describe('a sandbox lifecycle failure', () => {
     expect(first).toMatchObject({ status: 'queued', incidentId: 'inc-1', duplicate: false });
     expect(second).toMatchObject({ status: 'queued', duplicate: true });
     expect(third).toMatchObject({ status: 'queued', duplicate: true });
-    expect(submitted).toHaveLength(1);
-    expect(submitted[0]).toContain('inc-1');
+    const turns = await programmaticTurns(harness);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.id).toContain('inc-1');
   });
 
   test('a delivery that never landed is re-deliverable, which is what ends the retry loop', async () => {
-    const { agent } = orchestratorHarness();
-    const loop = agent.harnessChatLoop;
-    Object.defineProperty(loop, 'enqueueTurn', {
-      configurable: true,
-      value: async (): Promise<EnqueueTurnResult> => ({ status: 'skipped' }),
-    });
+    const harness = orchestratorHarness();
+    const { agent } = harness;
+    // Another activation drives the conversation, so the turn the incident needs cannot run here.
+    agent.harnessRefuseDriving({ reason: 'unavailable', error: 'another activation is driving' });
 
     const refused = await agent.acceptSandboxLifecycleFailure(incident);
     // `undelivered`, not `queued`: the box maps `queued` to `deliveredAt` and stops offering the row.
     expect(refused).toMatchObject({ status: 'undelivered', duplicate: false });
 
-    const submitted = recordAdmissions(agent);
+    agent.harnessRefuseDriving(null);
     const retried = await agent.acceptSandboxLifecycleFailure(incident);
 
     expect(retried).toMatchObject({ status: 'queued', duplicate: false });
-    expect(submitted).toHaveLength(1);
+    expect(await programmaticTurns(harness)).toHaveLength(1);
   });
 
   test('the agent is told what the stage costs it, and the incident id, and nothing else', async () => {
-    const { agent } = orchestratorHarness();
-    const texts = recordAdmittedTexts(agent);
+    const harness = orchestratorHarness();
+    const { agent } = harness;
 
     await agent.acceptSandboxLifecycleFailure({
       version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
@@ -412,6 +382,7 @@ describe('a sandbox lifecycle failure', () => {
       attempts: 1,
     });
 
+    const texts = (await programmaticTurns(harness)).map((turn) => turn.text);
     expect(texts).toHaveLength(1);
     const text = texts[0];
     expect(text).toContain('attach stage');
@@ -421,8 +392,8 @@ describe('a sandbox lifecycle failure', () => {
   });
 
   test('an envelope that invents a field is REFUSED, not silently stripped', async () => {
-    const { agent } = orchestratorHarness();
-    const submitted = recordAdmissions(agent);
+    const harness = orchestratorHarness();
+    const { agent } = harness;
 
     // Stripping it would let the caller believe the agent had read it.
     const rejected = await agent.acceptSandboxLifecycleFailure({
@@ -432,13 +403,13 @@ describe('a sandbox lifecycle failure', () => {
     });
 
     expect(rejected.status).toBe('rejected');
-    expect(submitted).toEqual([]);
+    expect(await programmaticTurns(harness)).toEqual([]);
   });
 
   test('every stage the CONTAINER can emit is queued, not rejected', async () => {
     // Driven from the producer's list: iterating the consumer's list would agree with itself when Devbox adds a stage.
-    const { agent } = orchestratorHarness();
-    const texts = recordAdmittedTexts(agent);
+    const harness = orchestratorHarness();
+    const { agent } = harness;
 
     for (const stage of INCIDENT_STAGES) {
       const answer = await agent.acceptSandboxLifecycleFailure({
@@ -450,6 +421,7 @@ describe('a sandbox lifecycle failure', () => {
     }
 
     // A stage with no consequence written for it would render as `undefined` in the agent's turn.
+    const texts = (await programmaticTurns(harness)).map((turn) => turn.text);
     expect(texts).toHaveLength(INCIDENT_STAGES.length);
 
     for (const text of texts) expect(text).not.toContain('undefined');
@@ -475,7 +447,7 @@ describe('whether the container may be disturbed', () => {
 
   test('an admitted send protects the container until its reservation retires', async () => {
     const { agent, db } = orchestratorHarness();
-    const sends = new PendingSendStore(makeSql(db), agent.observeRuntime().actor.actorId);
+    const sends = new PendingSendStore(makeSql(db), workspaceMainActor(db).actorId);
     sends.reserve({ id: 'accepted-before-reset', turnId: null, mode: 'build', text: 'inspect the container' });
 
     expect(await agent.hasSandboxBackgroundWork()).toBe(true);
@@ -484,8 +456,8 @@ describe('whether the container may be disturbed', () => {
   });
 
   test('a running detached job counts, because it may hold the container', async () => {
-    const { agent } = orchestratorHarness();
-    agent.harnessJobs().create({
+    const { agent, db } = orchestratorHarness();
+    jobsOver(db).create({
       id: 'bgjob-live', kind: 'shell', workMode: 'build',
       input: JSON.stringify({ command: 'npm test' }), now: Date.now(), label: 'npm test',
     });
@@ -493,8 +465,8 @@ describe('whether the container may be disturbed', () => {
   });
 
   test('a settled job does not', async () => {
-    const { agent } = orchestratorHarness();
-    const jobs = agent.harnessJobs();
+    const { agent, db } = orchestratorHarness();
+    const jobs = jobsOver(db);
     jobs.create({
       id: 'bgjob-done', kind: 'shell', workMode: 'build',
       input: JSON.stringify({ command: 'npm test' }), now: Date.now(), label: 'npm test',

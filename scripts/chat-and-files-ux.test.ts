@@ -114,7 +114,7 @@ interface Observed {
   readonly filesPreviewText: string;
   /** The edit buffer a whole file opens with. */
   readonly filesEditorSeedsFromTheFile: string;
-  /** /home/user rows after renaming SOUL.md → CREDO.md, then after deleting
+  /** /home/main rows after renaming SOUL.md → CREDO.md, then after deleting
    *  AGENTS.md — both against the frame's stateful fixture. */
   readonly filesAfterRename: string[];
   readonly filesAfterDelete: string[];
@@ -126,10 +126,6 @@ interface Observed {
   readonly envCapabilityChips: number;
   readonly envCapabilityAbsences: number;
   readonly envFilesJumpLandsOnDrive: boolean;
-  /** The line terminal's rendered rows after one typed command and one pasted
-   *  two-line command. Rows, not a string: the defect was which row a
-   *  character lands on. */
-  readonly terminalRows: string[];
   /** Every `input` frame the pane sent the workspace shell, in order. */
   readonly terminalInput: string[];
   /** Exploration's run-node rows on the mixed-status run, by node id. */
@@ -475,24 +471,24 @@ async function run(): Promise<Observed> {
     await files.click('[data-files-crumb]');
     await waitForRow('sandbox');
     await files.click(rowSelector('home'));
-    await waitForRow('user');
-    await files.click(rowSelector('user'));
+    await waitForRow('main');
+    await files.click(rowSelector('main'));
     await waitForRow('notes.md');
 
     // The parent row goes UP ONE LEVEL — to /home, never straight to the root.
     await files.waitForSelector('[data-files-up-row]');
     await files.click('[data-files-up-row]');
-    await waitForRow('user');
+    await waitForRow('main');
     const filesAfterUp = await crumbs();
 
     // The tree carries FILES, not only folders — a recursion that drops file
     // entries leaves the sidebar unable to reach one. Each level is expanded
     // through its own caret.
-    await files.click(rowSelector('user'));
+    await files.click(rowSelector('main'));
     await waitForRow('notes.md');
     await files.click('[data-files-tree-node="/home"] button');
-    await files.waitForSelector('[data-files-tree-node="/home/user"]');
-    await files.click('[data-files-tree-node="/home/user"] button');
+    await files.waitForSelector('[data-files-tree-node="/home/main"]');
+    await files.click('[data-files-tree-node="/home/main"] button');
     await files.waitForSelector('[data-files-tree-file]');
 
     const treeFileNames = await files.$$eval(
@@ -580,12 +576,11 @@ async function run(): Promise<Observed> {
     const envCapabilityChips = await env.$$eval('[data-capability-chip]', (els) => els.length);
     const envCapabilityAbsences = await env.$$eval('[data-capability-absences]', (els) => els.length);
 
-    // The workspace shell, as the browser lays it out: the pane sends what is
-    // typed as `input` frames over the terminal socket and paints what comes
-    // back. Two commands: one typed, one pasted with a newline in it. What is
-    // read back is the rendered rows, because the whole defect class is which
-    // row a character lands on, and the frames the pane sent, because a paste
-    // that reaches the shell as one frame cannot lose its second line.
+    // The workspace shell: the pane sends what is typed as `input` frames over
+    // the terminal socket. Two commands: one typed, one pasted with a newline in
+    // it. What is read back is the frames the pane sent, because a paste that
+    // reaches the shell as one frame cannot lose its second line; what the shell
+    // prints is the fixture's own echo and proves nothing about the pane.
     await env.waitForSelector('.xterm-rows');
     await terminalSettled(env, '$ ');
     await env.click('.xterm-screen');
@@ -594,11 +589,6 @@ async function run(): Promise<Observed> {
     await terminalSettled(env, 'ran: one');
     await pasteIntoTerminal(env, 'two\nthree\n');
     await terminalSettled(env, 'ran: three');
-
-    const terminalRows = await env.$$eval(
-      '.xterm-rows > div',
-      (rows) => rows.map((line) => (line.textContent ?? '').replace(/\u00a0/gu, ' ').trimEnd()).filter((line) => line !== ''),
-    );
 
     const terminalInput = await env.evaluate(() => window.__kinuTerminalInput ?? []);
 
@@ -624,7 +614,7 @@ async function run(): Promise<Observed> {
       filesMarkdownRendered, filesPreviewText, filesEditorSeedsFromTheFile,
       filesAfterRename, filesAfterDelete, filesFiltered, filesOfflineRow,
       envCards, envCapabilityChips, envCapabilityAbsences, envFilesJumpLandsOnDrive,
-      terminalRows, terminalInput,
+      terminalInput,
       runNodes,
     };
   });
@@ -933,25 +923,11 @@ describe('the Environment tab, as a user reads it', () => {
     expect(observed.envFilesJumpLandsOnDrive).toBe(true);
   });
 
-  // Measured in the same browser against a live workspace executor before the
-  // fix (2026-09-01): `printf 'a\nb\nc\n'` drew `a`, ` b`, `  c` — one column
-  // further right per line, because a program's LF moves down without
-  // returning to column 0 and xterm writes what it is handed.
-  test('every line of a command output starts at column zero', () => {
-    expect(observed.terminalRows).toContain('ran: one');
-    expect(observed.terminalRows).toContain('ran: two');
-    expect(observed.terminalRows).toContain('ran: three');
-  });
-
-  // The same session: a pasted `echo first-line\necho second-line\n` ran the
-  // first line and dropped the second with no echo and no error.
-  test('a pasted two-line command reaches the shell as one frame and runs whole', () => {
-    const echoed = observed.terminalRows.filter((line) => line.startsWith('ran: '));
-    expect(echoed).toEqual(['ran: one', 'ran: two', 'ran: three']);
+  // A pasted `echo first-line\necho second-line\n` once ran the first line and dropped the second.
+  test('a pasted two-line command reaches the shell as one frame', () => {
     // One frame carries the whole paste, its newlines as the CR the shell
     // runs at; the pane never re-submits the second line as its own keys.
     expect(observed.terminalInput).toContain('two\rthree\r');
-    expect(observed.terminalRows).toContain('$ three');
   });
 });
 
@@ -1856,8 +1832,8 @@ describe('file preview request generation at the actual FilesSurface boundary', 
       const row = (name: string) => `[data-files-entry][title="${name}"]`;
       await page.waitForSelector(row('home'));
       await page.click(row('home'));
-      await page.waitForSelector(row('user'));
-      await page.click(row('user'));
+      await page.waitForSelector(row('main'));
+      await page.click(row('main'));
       await page.waitForSelector(row('notes.md'));
       await page.click(row('notes.md'));
       await page.waitForSelector('[data-files-preview-body] [class*="Loader"], [data-files-preview-body]');
@@ -3471,6 +3447,21 @@ describe('the Work tab reads the workspace, not the actor', () => {
  * border token: the earlier `--c-border-subtle` was never defined, so every
  * tier row drew its border in the text colour.
  */
+/** Opens the themed choice named `label`, reads its options, and closes it; a closed popup stays mounted, hidden. */
+async function choiceOptions(page: Page, label: string): Promise<string[]> {
+  await page.click(`[aria-label="${label}"]`);
+  await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((node) => node.checkVisibility()));
+
+  const options = await page.$$eval('[role="option"]', (nodes) => nodes
+    .filter((node) => node.checkVisibility())
+    .map((node) => node.textContent?.trim() ?? ''));
+
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => ![...document.querySelectorAll('[role="option"]')].some((node) => node.checkVisibility()));
+
+  return options;
+}
+
 describe('model tiers are the owner\'s to add, and each offers its model\'s own levels', () => {
   test('an added tier renders, takes its model\'s levels, and is offered to roles', async () => {
     await withGallery(async ({ newPage, origin }) => {
@@ -3479,10 +3470,9 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
       await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=models`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[aria-label="New tier id"]');
 
-      const rowBorder = await page.$eval('[aria-label="default reasoning effort"]', (select) => {
-        const row = select.closest('div.grid');
-        const border = row === null ? '' : getComputedStyle(row).borderTopColor;
-        const text = row === null ? '' : getComputedStyle(row).color;
+      const rowBorder = await page.$eval('[data-tier="default"]', (row) => {
+        const border = getComputedStyle(row).borderTopColor;
+        const text = getComputedStyle(row).color;
         const token = getComputedStyle(document.documentElement).getPropertyValue('--c-border').trim();
 
         return { border, text, token };
@@ -3494,35 +3484,29 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
       await page.type('[aria-label="New tier id"]', 'review');
       await page.keyboard.press('Enter');
       await page.waitForSelector('[aria-label="review reasoning effort"]');
-      // A new tier starts as a copy of default (a Workers AI model, no levels).
-      expect(await page.$$eval('[aria-label="review reasoning effort"] option', (options) => options.map((option) => option.textContent)))
-        .toEqual(['Model default']);
+      // A new tier starts as a copy of default (a Workers AI model, no levels): nothing to pick.
+      expect(await page.$eval('[aria-label="review reasoning effort"]', (choice) => [
+        choice.textContent, choice.hasAttribute('disabled') || choice.hasAttribute('data-disabled'),
+      ])).toEqual(['Model default', true]);
 
-      // Point it at a model that documents five levels: the select offers
-      // exactly those, in the model's order. The picker is the same combobox
-      // every tier row carries; the new row's is the last one on the page.
-      const pickers = await page.$$('[aria-label$=" reasoning effort"]');
-      const reviewRow = await pickers[pickers.length - 1]?.evaluateHandle((select) => select.closest('div.grid'));
-      const reviewPicker = await reviewRow?.asElement()?.$('input');
-      expect(reviewPicker).toBeDefined();
+      // Point it at a model that documents five levels: the choice offers
+      // exactly those, in the model's order, through the combobox every tier row carries.
+      const reviewPicker = await page.$('[data-tier="review"] input');
+      expect(reviewPicker).not.toBeNull();
       await reviewPicker?.click();
       await reviewPicker?.type('Opus');
       await page.waitForSelector('[role="option"]');
       await page.click('[role="option"]');
       await page.waitForFunction(() => {
-        const select = document.querySelector('[aria-label="review reasoning effort"]');
+        const choice = document.querySelector('[aria-label="review reasoning effort"]');
 
-        return select !== null && select.querySelectorAll('option').length > 1;
+        return choice !== null && !choice.hasAttribute('disabled') && !choice.hasAttribute('data-disabled');
       });
-      expect(await page.$$eval('[aria-label="review reasoning effort"] option', (options) => options.map((option) => option.textContent)))
-        .toEqual(['Model default', 'low', 'medium', 'high', 'xhigh', 'max']);
+      expect(await choiceOptions(page, 'review reasoning effort'))
+        .toEqual(['Model default', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
 
       // The role editor lists the new tier.
-      const roleTiers = await page.$$eval('select', (selects) => selects
-        .map((select) => [...select.options].map((option) => option.value))
-        .find((values) => values.includes('fast') && values.includes('deep')) ?? []);
-
-      expect(roleTiers).toContain('review');
+      expect(await choiceOptions(page, 'Default tier')).toContain('review');
 
       // Removing it is one click, and only a non-builtin offers it.
       expect(await page.$('[aria-label="Remove tier default"]')).toBeNull();

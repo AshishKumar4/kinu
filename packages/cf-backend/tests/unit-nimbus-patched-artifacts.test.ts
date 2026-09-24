@@ -65,7 +65,7 @@ describe('installed Nimbus dependency integrity', () => {
       sql: workspaceSql(db),
       transactions: { storage: { transactionSync: <T,>(fn: () => T): T => db.transaction(fn)() } },
       generation: 1,
-      cwd: '/home/user',
+      cwd: '/home/main',
     });
 
     const result = await workspace.exec('xargs -0 -n 1 echo', { stdin: ' leading\0second\0' });

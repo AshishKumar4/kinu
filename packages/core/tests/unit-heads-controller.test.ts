@@ -18,7 +18,7 @@ import {
 import type { SqlValue } from '../src/types/primitives';
 import { makeSql, makeExecRaw, createTestActor } from './helpers';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
-import { handClock, present } from '@kinu.run/test-utils';
+import { present } from '@kinu.run/test-utils';
 
 function newJournal() {
   const db = new Database(':memory:');
@@ -61,24 +61,23 @@ function fakeMergeOutput(narrative: string): MergeOutput {
 
 function buildRuntime(opts: {
   reports?: Record<string, HeadReport>;
-  heldTasks?: readonly string[];
+  failedTasks?: readonly string[];
   mergeOutput?: MergeOutput;
   mergeThrows?: Error;
   spawnedInputs?: HeadInput[];
 }): HeadRuntime {
-  const { reports = {}, heldTasks = [], mergeOutput, mergeThrows, spawnedInputs } = opts;
+  const { reports = {}, failedTasks = [], mergeOutput, mergeThrows, spawnedInputs } = opts;
 
   return {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       spawnedInputs?.push(input);
       const id = input.id;
-      // A held head never reports; the deadline's rejection ends the race, as for a real head running past its abort.
-      const held = heldTasks.includes(input.task) ? Promise.withResolvers<void>() : undefined;
 
       return {
         id,
         async run() {
-          await held?.promise;
+          // A failed head never reports, as when a real head runtime's call is lost.
+          if (failedTasks.includes(input.task)) throw new Error(`the runtime lost head ${id}`);
 
           return reports[input.task] ?? fakeReport(id, { summary: `Default for ${input.task}` });
         },
@@ -200,8 +199,7 @@ describe('HeadController.run', () => {
     expect(cached.costSummary.headCount).toBe(result.costSummary.headCount);
   });
 
-  test('a head with no authored wall clock runs to completion — no default deadline is invented', async () => {
-    // `maxWallClockMs` is opt-in: without it a slow head finishes and the run is `completed`.
+  test('a slow head runs to completion: the controller sets no deadline', async () => {
     const { sql, journal } = newJournal();
     const gate = Promise.withResolvers<void>();
     const runtime = buildRuntime({});
@@ -228,7 +226,7 @@ describe('HeadController.run', () => {
       parentHeadId: null,
       inheritedContext: baseContext,
       request: baseRequest,
-      parentBudget: { maxDepth: 2, spawnedAt: Date.now() },   // no maxWallClockMs
+      parentBudget: { maxDepth: 2, spawnedAt: Date.now() },
     }).then(() => { settled = true; });
 
     await Promise.resolve();
@@ -249,9 +247,7 @@ describe('HeadController.run', () => {
       parentHeadId: null,
       inheritedContext: baseContext,
       request: baseRequest,
-      parentBudget: {
-        maxDepth: 0, maxWallClockMs: 1000, spawnedAt: Date.now(),
-      },
+      parentBudget: { maxDepth: 0, spawnedAt: Date.now() },
     })).rejects.toThrow(/max depth/i);
   });
 
@@ -269,57 +265,21 @@ describe('HeadController.run', () => {
     })).rejects.toThrow(/no head tasks/i);
   });
 
-  test('aborts heads that exceed wall-clock budget; records budget_exceeded', async () => {
+  /** A head that failed before reporting has unknown usage, not zero; every layer down to SQL must say so. */
+  test('a head that failed before reporting carries no usage, and its reporting sibling still counts', async () => {
     const { sql, journal } = newJournal();
+    // 'angle A' fails; 'angle B' reports 100 + 80 under its own spawn id so the usage reaches the journal columns.
+    const runtime = buildRuntime({ failedTasks: ['angle A'] });
+    const controller = new HeadController(runtime, journal);
 
-    const runtime = buildRuntime({ heldTasks: ['angle A'] });
-    const clock = handClock();
-    const controller = new HeadController(runtime, journal, clock);
-
-    const run = controller.run({
-      mode: 'build',
-      parentHeadId: null,
-      inheritedContext: baseContext,
-      request: { rationale: 'tight budget test', heads: [{ task: 'angle A', rationale: 'slow' }] },
-      parentBudget: {
-        maxDepth: 2, maxWallClockMs: 50,
-        spawnedAt: clock.now(),
-      },
-    });
-
-    await clock.whenArmed(1);
-    clock.advance(51);
-    const result = await run;
-
-    expect(result.costSummary.headCount).toBe(1);
-
-    const rows = sql<{ status: string; error_message: string | null }>`
-      SELECT status, error_message FROM head_journal`;
-
-    expect(rows[0]?.status).toBe('budget_exceeded');
-    expect(rows[0]?.error_message).toMatch(/wall-clock/i);
-  });
-
-  /** A head aborted before reporting has unknown usage, not zero; every layer down to SQL must say so. */
-  test('a head aborted before reporting carries no usage, and its reporting sibling still counts', async () => {
-    const { sql, journal } = newJournal();
-    // 'angle A' misses the 50ms budget; 'angle B' reports 100 + 80 under its own spawn id so the usage reaches the journal columns.
-    const runtime = buildRuntime({ heldTasks: ['angle A'] });
-    const clock = handClock();
-    const controller = new HeadController(runtime, journal, clock);
-
-    const run = controller.run({
+    const result = await controller.run({
       mode: 'build',
       parentHeadId: null,
       rootId: 'root-mixed',
       inheritedContext: baseContext,
       request: baseRequest,
-      parentBudget: { maxDepth: 2, maxWallClockMs: 50, spawnedAt: clock.now() },
+      parentBudget: { maxDepth: 2, spawnedAt: Date.now() },
     });
-
-    await clock.whenArmed(2);
-    clock.advance(51);
-    const result = await run;
 
     expect(result.costSummary.totalTokens).toBe(180);
 
@@ -327,34 +287,29 @@ describe('HeadController.run', () => {
     const rows = sql<{ status: string; token_input: number | null; token_output: number | null }>`
       SELECT status, token_input, token_output FROM head_journal`;
 
-    const aborted = rows.find((r) => r.status === 'budget_exceeded');
-    expect(aborted?.token_input).toBeNull();
-    expect(aborted?.token_output).toBeNull();
+    const failed = rows.find((r) => r.status === 'errored');
+    expect(failed?.token_input).toBeNull();
+    expect(failed?.token_output).toBeNull();
 
     const view = journal.readRun('root-mixed');
-    expect(view?.heads.find((h) => h.status === 'budget_exceeded')?.usage).toEqual({});
+    expect(view?.heads.find((h) => h.status === 'errored')?.usage).toEqual({});
     expect(view?.heads.find((h) => h.status === 'completed')?.usage).toEqual({ input: 100, output: 80 });
   });
 
   test('a split no head reported on has undefined tokens, never 0 — through the cache too', async () => {
     const { journal } = newJournal();
-    // Both heads cut off before reporting, so the split settles down the deterministic empty-split path.
-    const runtime = buildRuntime({ heldTasks: ['angle A', 'angle B'] });
-    const clock = handClock();
-    const controller = new HeadController(runtime, journal, clock);
+    // Both heads fail before reporting, so the split settles down the deterministic empty-split path.
+    const runtime = buildRuntime({ failedTasks: ['angle A', 'angle B'] });
+    const controller = new HeadController(runtime, journal);
 
-    const run = controller.run({
+    const result = await controller.run({
       mode: 'build',
       parentHeadId: null,
       rootId: 'root-blank',
       inheritedContext: baseContext,
       request: baseRequest,
-      parentBudget: { maxDepth: 2, maxWallClockMs: 50, spawnedAt: clock.now() },
+      parentBudget: { maxDepth: 2, spawnedAt: Date.now() },
     });
-
-    await clock.whenArmed(2);
-    clock.advance(51);
-    const result = await run;
 
     expect(result.costSummary.headCount).toBe(2);
     expect(result.costSummary.totalTokens).toBeUndefined();
@@ -670,7 +625,7 @@ describe('HeadJournal.listLive — the live fork roster', () => {
     id, parentId: null, rootId, depth: 1, task: `t-${id}`, rationale: 'why',
     mode: 'build',
     inheritedContext: [], mergeStrategy: 'consensus',
-    budget: { maxDepth: 2, maxWallClockMs: 10, spawnedAt: Date.now() },
+    budget: { maxDepth: 2, spawnedAt: Date.now() },
     loop: defaultLoopOrigin('head'),
   });
 
@@ -843,7 +798,7 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
     expect(journal.readRun('missing')).toBeNull();
   });
 
-  test('child budget is derived from parent: depth-1, envelope undivided', async () => {
+  test('child budget is derived from parent: one level less deep', async () => {
     const { journal } = newJournal();
     const spawns: HeadInput[] = [];
 
@@ -867,17 +822,13 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
       parentHeadId: null,
       inheritedContext: baseContext,
       request: baseRequest, // 2 heads
-      parentBudget: { maxDepth: 3, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+      parentBudget: { maxDepth: 3, spawnedAt: Date.now() },
     });
 
     const firstSpawn = present(spawns[0], 'the first spawned head input');
 
     expect(firstSpawn.budget.maxDepth).toBe(2);     // depth - 1
     expect(firstSpawn.depth).toBe(1);               // 3 - 2 = 1
-    // Fan-out does not divide a child's room. A range, since the derivation subtracts elapsed wall clock:
-    // half would be 30_000, and the upper bound stops a child exceeding its parent.
-    expect(firstSpawn.budget.maxWallClockMs).toBeGreaterThan(59_000);
-    expect(firstSpawn.budget.maxWallClockMs).toBeLessThanOrEqual(60_000);
   });
 });
 

@@ -118,8 +118,6 @@ function fixture(over: {
 
   const deps: NodeAgentDeps = {
     hostNode: seats.hostNode, model: over.model, journal,
-
-    maxWallClockMs: 60_000,
     logger: createRecordingLogger(),
   };
 

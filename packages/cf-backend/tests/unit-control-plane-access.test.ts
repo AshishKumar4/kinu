@@ -15,8 +15,9 @@ import {
 } from '../src/control-plane/admin-caller';
 import { requestUrl } from '@kinu.run/core';
 
-/** Spelled independently of the production constant, so a rename of the wire name fails here. */
-const ASSERTION_HEADER = 'cf-access-jwt-assertion';
+/** As Cloudflare Access sends it ("Validate JWTs", Cloudflare One docs): the platform's spelling, not the
+ *  product's, so a renamed wire name fails here and a case-sensitive read would too. */
+const ASSERTION_HEADER = 'Cf-Access-Jwt-Assertion';
 
 /** Distinct hostnames: production caches one key set per team origin for the life of the isolate. */
 const TEAM = 'https://kinu.cloudflareaccess.com';

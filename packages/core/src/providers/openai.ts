@@ -12,8 +12,8 @@ export const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
 export const OPENAI_DEFAULT_MODEL = 'gpt-5.5';
 
-/** The small tier the evolution engine's mechanical calls run on. */
-export const OPENAI_FAST_MODEL = 'gpt-5.4-mini';
+/** Evolution's mechanical-call tier. */
+const OPENAI_FAST_MODEL = 'gpt-5.4-mini';
 
 /** Offline levels per model (from https://developers.openai.com/api/docs/models/<id>),
  *  shared with codex.ts; live lists read models.dev. */

@@ -1,9 +1,9 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult } from '@kinu.run/core';
+import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
-import { applyWorkspaceTitle, persistAutoTitle, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
+import { applyWorkspaceTitle, getChatHistoryPage, persistAutoTitle, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import {
   DriverLeaseHold,
@@ -33,12 +33,11 @@ import {
   suggestAgentIdentityFromMission,
   type SuggestAgentIdentityOptions,
 } from './agent-create';
+import { inspectLocalSubordinate } from './local-inspection';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
 import { createProfileAuthorityReader } from './profiles';
 import {
   createCliSession,
-  readCliSessionTranscript,
-  transcriptMessages,
   type CliSession,
   type CliSessionOptions,
 } from './session';
@@ -46,6 +45,7 @@ import { SessionRecorder } from './session-recorder';
 import { normalizeModelMenu, type AgentModelMenu } from '@kinu.run/core';
 import {
   findForkPivot,
+  readConversation,
   promptFiles,
   promptText,
 } from './agent-client';
@@ -396,16 +396,7 @@ export class LocalAgentClient implements AgentClient {
   /** A fresh transcript artifact takes the entries recorded after the walk-back. */
   async fork(point: ForkPoint): Promise<AgentForkResult> {
     if (this.awaiting.size > 0) throw new Error('Cannot fork while a turn is running.');
-    const transcript = this.deps.rt.stores.history.transcript(this.canonicalConversation);
-    const rows: Array<{ id: string; role: string; content: string }> = [];
-
-    for (const entry of transcript.ancestry()) {
-      if (entry.role !== 'user' && entry.role !== 'assistant') continue;
-      const projected = await transcript.project(entry.id);
-
-      if (projected !== null) rows.push({ id: entry.id, role: entry.role, content: projected.content });
-    }
-
+    const rows = await this.history();
     const pivotRow = rows[findForkPivot(rows, point)];
 
     if (pivotRow === undefined) throw new Error('Could not locate that message in the durable conversation.');
@@ -455,10 +446,9 @@ export class LocalAgentClient implements AgentClient {
   }
 
   async history(): Promise<AgentTranscriptMessage[]> {
-    if (this.activeCliSession.mode !== 'record') return [];
-    const transcript = readCliSessionTranscript(this.agentName, this.activeCliSession.id, this.deps.transcript);
+    const transcript = this.deps.rt.stores.history.transcript(this.canonicalConversation);
 
-    return transcriptMessages(transcript.entries);
+    return readConversation((request) => getChatHistoryPage(transcript, request));
   }
 
   async status(): Promise<AgentClientStatus> {
@@ -529,6 +519,10 @@ export class LocalAgentClient implements AgentClient {
 
   async setRole(roleId: string): Promise<{ role: string }> {
     return this.session.setRole(roleId);
+  }
+
+  async inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
+    return inspectLocalSubordinate(this.agentName, request);
   }
 
   async readMemory(): Promise<string> {

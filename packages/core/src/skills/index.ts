@@ -1,6 +1,5 @@
 /**
- * Skills barrel. Claude-Code SKILL.md compatible; skills are ordinary files under
- * /workspace/skills/ with no dedicated LLM tool.
+ * Skills barrel. Claude-Code SKILL.md compatible; every skill is an ordinary file under `/skills`.
  */
 
 export * from './types';
@@ -10,13 +9,14 @@ export {
 } from './parse';
 
 export {
-  discoverSkills, readSkillFile, readSkillBody, skillPath, compareSkillNames,
-  BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES, SKILL_FOLDER_FILE,
+  discoverSkills, readSkillFile, readSkillBody, workspaceSkillPath, compareSkillNames,
+  BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES,
   type SkillsVfs, type DiscoverOpts, type SkillsDiscovery, type UnreadSkillFile,
 } from './discover';
 
-export { BUILTIN_SKILLS } from './builtins';
+export { BUILTIN_SKILLS, BUILTIN_SKILL_FILES } from './builtins';
 
+export { skillsMount } from './view';
 
 export {
   resolveActiveSkills,

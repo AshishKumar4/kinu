@@ -391,6 +391,18 @@ export function reclaim(temp: string, olderThanMs: number): ReclaimResult {
   return { removed, kept };
 }
 
+/** What the gate must have read to have read anything: the temp filesystem's
+ *  statfs, and the markers each ancestor is probed for. Not the temp
+ *  directory's entries: a private one (every lane's TMPDIR since 2026-09-24)
+ *  is legitimately empty, and a temp root that is not there fails `statfsSync`
+ *  before anything is counted. */
+export function measuredCounts(env: Environment): readonly (readonly [string, number])[] {
+  return [
+    ['free inodes', env.freeInodes],
+    ['project markers probed per ancestor', PROJECT_MARKERS.length],
+  ];
+}
+
 if (import.meta.main) {
   const env = observe();
 
@@ -404,17 +416,11 @@ if (import.meta.main) {
     process.exit(0);
   }
 
-  // Zero leaked scratch is the HEALTHY reading — a clean boot or a fresh
-  // reclaim both produce it — so it is stated as text, not fed to
-  // assertMeasured: a count that is legitimately zero would make the throw
-  // fire on a clean machine. The scan itself is still proven: tempEntries
-  // and free inodes stay in the must-be-measured set, so a broken path or
-  // glob cannot read as an empty temp directory.
-  const measured = assertMeasured('preflight', [
-    ['free inodes', env.freeInodes],
-    ['entries in the temp directory', env.tempEntries],
-    ['project markers probed per ancestor', PROJECT_MARKERS.length],
-  ]);
+  // Zero leaked scratch and an empty temp directory are HEALTHY readings — a
+  // clean boot, a fresh reclaim or a private TMPDIR produce them — so they are
+  // stated as text, not fed to assertMeasured: a count that is legitimately
+  // zero would make the throw fire on a clean machine.
+  const measured = assertMeasured('preflight', measuredCounts(env));
 
   // On the SUCCESS path, because a limitation visible only in red output is
   // invisible exactly when the tree is green: markers above a shared temp
@@ -433,7 +439,7 @@ if (import.meta.main) {
   const problems = judge(env);
 
   if (problems.length === 0) {
-    console.log(`preflight: ok — ${measured}, `
+    console.log(`preflight: ok — ${measured}, ${String(env.tempEntries)} entries in the temp directory, `
       + `${String(env.scratchOrphans)} of them our own leaked test scratch, no merge in progress; `
       + `a ${String(PROBE_BYTES / 2 ** 20)} MiB write succeeded, so a per-user quota is not exhausted `
       + '(its remaining headroom is unmeasured: statfs reports the filesystem, not the user)');

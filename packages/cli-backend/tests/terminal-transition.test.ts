@@ -257,7 +257,6 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
  */
 test('a managed context edit reaches the local request and retained trial together', async () => {
   const { db, rt } = workspace();
-  await armShadowTrials(rt);
   const requests: string[] = [];
 
   const { model } = scriptedModel('answer', { onStream: async (prompt) => { requests.push(JSON.stringify(prompt)); } });
@@ -266,6 +265,9 @@ test('a managed context edit reaches the local request and retained trial togeth
   try {
     await session.send('use the OLD premise');
     await session.settleBackgroundWork();
+    // Armed after the first turn: a drain still running that turn's trial re-reads the queue between laps and
+    // would take the follow-up's trial with it, however fast the workspace files answer.
+    await armShadowTrials(rt);
     const document = v.parse(v.string(), await rt.storage.vfs.readFile('/context/working.jsonl', { encoding: 'utf8' }));
     await rt.storage.vfs.writeFile('/context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
     await expect(rt.storage.vfs.writeFile('/context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);

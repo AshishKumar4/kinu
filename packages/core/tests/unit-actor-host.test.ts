@@ -3,7 +3,7 @@
 // only their own rows, through the production binder and directory.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { sqlOver, createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
+import { sqlOver, createMemoryVfs, createTestRuntime, unobservedSpend } from '@kinu.run/test-utils';
 import { makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
@@ -23,6 +23,7 @@ import type { ActorProgramIdentity, ActorTurnClaim } from '../src/orchestrator/a
 import type { ContextSelection } from '../src/session/context';
 import { agentArtifactDirectory } from '../src/vfs/agent-home';
 import { sha256Hex } from '../src/safety/argument-digest';
+import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 
 const BUILTIN: ActorProgramIdentity = { kind: 'builtin', version: 0, digest: null, build: 'test-build' };
 
@@ -83,7 +84,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false): F
       // Nothing here arms a drain, so an armed timer is a fault to surface.
       setTimer: () => { throw new Error(`${bound.record.name} armed a drain timer outside a turn`); },
     },
-    engine: new EvolutionEngine(bound.runtime, bound.stores.history, { enabled: automatic }),
+    engine: new EvolutionEngine(bound.runtime, bound.stores.history, { reportModelCall: unobservedSpend, enabled: automatic }),
     eventLog: new EventLog(exec, bound.handle),
   });
 
@@ -411,7 +412,7 @@ describe('one workspace database, many logical actors', () => {
     });
 
     const recovered = await recoverActorTurns(fx.host);
-    expect(recovered).toEqual({ verified: ['turn-a'], refused: [], unreadable: [], active: [] });
+    expect(recovered).toEqual({ verified: ['turn-a'], refused: [], failed: [], unreadable: [], active: [] });
     expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'admitted', outcome: null, epoch: admitted.epoch });
     expect(await recoverActorTurns(fx.host)).toEqual(recovered);
     fx.host.releaseAll();
@@ -425,7 +426,7 @@ describe('one workspace database, many logical actors', () => {
     const cold = build(fx.db, 'alpha');
 
     const first = await recoverActorTurns(cold.host);
-    expect(first).toEqual({ verified: [], refused: [], unreadable: ['turn-a'], active: [] });
+    expect(first).toEqual({ verified: [], refused: [], failed: [], unreadable: ['turn-a'], active: [] });
     expect(await recoverActorTurns(cold.host)).toEqual(first);
     expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'admitted', outcome: null, epoch: 1 });
     cold.host.releaseAll();
@@ -441,13 +442,13 @@ describe('one workspace database, many logical actors', () => {
       program: { kind: 'scaffold', version: 1, digest: sha256Hex('missing'), build: null },
     });
     const lease = actor.session.beginTurn({ runId: 'run-a', turnId: 'turn-a' }, 'build', 0);
-    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: [], unreadable: [], active: ['turn-a'] });
+    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: [], failed: [], unreadable: [], active: ['turn-a'] });
     expect(actor.stores.claims.read('turn-a')?.status).toBe('admitted');
     actor.session.finishTurn(lease);
 
-    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: ['turn-a'], unreadable: [], active: [] });
+    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: ['turn-a'], failed: [], unreadable: [], active: [] });
     expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'indeterminate', epoch: 1 });
-    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: [], unreadable: [], active: [] });
+    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: [], failed: [], unreadable: [], active: [] });
     fx.host.releaseAll();
     fx.db.close();
   });
@@ -478,14 +479,39 @@ describe('one workspace database, many logical actors', () => {
     await reading.promise;
     const lease = actor.session.beginTurn({ runId: 'run-a', turnId: 'turn-a' }, 'build', 0);
     release.resolve();
-    expect(await recovering).toEqual({ verified: [], refused: [], unreadable: [], active: ['turn-a'] });
+    expect(await recovering).toEqual({ verified: [], refused: [], failed: [], unreadable: [], active: ['turn-a'] });
     expect(actor.stores.claims.read('turn-a')?.status).toBe('admitted');
     actor.session.finishTurn(lease);
 
-    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: ['turn-a'], unreadable: [], active: [] });
+    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: ['turn-a'], failed: [], unreadable: [], active: [] });
     expect(actor.stores.claims.read('turn-a')?.outcome).toBe('indeterminate');
     fx.host.releaseAll();
     fx.db.close();
+  });
+
+  test('a claim whose consumed step has lost its list settles error once, and the failure names the request', async () => {
+    const fx = build();
+    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'subordinate'));
+    const claim = await actor.stores.claims.admit({ runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor), program: BUILTIN });
+    const step = await actor.stores.claims.consume(claim, { index: 0, messages: [{ role: 'user', content: 'go' }] });
+    // The row naming the step's list, which no request written before the requests lineage has.
+    void fx.sql`DELETE FROM request_renders WHERE actor_id=${claim.actorId} AND request_id=${step.requestId}`;
+    const log = createRecordingLogger();
+    const restore = setDiagnosticsSink(log);
+
+    try {
+      expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: [], failed: ['turn-a'], unreadable: [], active: [] });
+      expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'error', epoch: claim.epoch });
+      // Settled, so the next wake's sweep neither retries it nor logs it again.
+      expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: [], failed: [], unreadable: [], active: [] });
+      expect(log.emitted.filter((line) => line.event === 'actor.turn_record_unreadable').map(({ code, cause }) => ({ code, cause }))).toEqual([
+        { code: 'io', cause: expect.stringContaining(`request ${step.requestId} has no recorded message list`) },
+      ]);
+    } finally {
+      restore();
+      fx.host.releaseAll();
+      fx.db.close();
+    }
   });
 
   test('a retirement purge sweeps a table the schema grew, and nothing that carries no actor', async () => {

@@ -7,9 +7,9 @@ import { seededRandom } from '../utils/stats';
 
 export const DEFAULT_ALPHA = 0.05;
 
-export const DEFAULT_POWER = 0.8;
+const DEFAULT_POWER = 0.8;
 
-export const DEFAULT_BOOTSTRAP_ITERATIONS = 10_000;
+const DEFAULT_BOOTSTRAP_ITERATIONS = 10_000;
 
 /** Inverse standard-normal CDF (Acklam's rational approximation, |ε| < 1.15e-9). */
 export function normalQuantile(p: number): number {

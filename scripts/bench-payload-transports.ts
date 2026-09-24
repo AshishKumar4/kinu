@@ -504,13 +504,22 @@ function fixtureBucketBinding(): string {
   return binding;
 }
 
-function configFor(identity: RunIdentity): string {
+/** The deployed fixture's wrangler config: the checked-in fixture with this run's names. */
+export function configFor(identity: RunIdentity): string {
   return JSON.stringify({
     ...fixtureConfig(),
     main: join(FIXTURE_DIR, 'worker.ts'),
     name: identity.workerName,
     r2_buckets: [{ binding: fixtureBucketBinding(), bucket_name: identity.bucketName }],
   }, null, 2);
+}
+
+/**
+ * The deploy command. Only non-secret vars ride argv; the bearer token and the R2 credentials go
+ * through stdin-only `wrangler secret put` after it.
+ */
+export function deployArgs(configPath: string, account: string, bucketName: string): string[] {
+  return ['deploy', '--config', configPath, '--var', `ACCOUNT_ID:${account}`, '--var', `BUCKET_NAME:${bucketName}`];
 }
 
 async function main(): Promise<number> {
@@ -703,10 +712,7 @@ async function main(): Promise<number> {
       wrangler(['r2', 'bucket', 'create', identity.bucketName]);
     }
 
-    // Deploy NON-SECRET vars only. Bearer token and parent R2 credentials are
-    // injected afterwards through stdin-only `wrangler secret put` — never as
-    // command arguments, never into the generated config.
-    const deployed = wrangler(['deploy', '--config', configPath, '--var', `ACCOUNT_ID:${accountId(ROOT)}`, '--var', `BUCKET_NAME:${identity.bucketName}`]);
+    const deployed = wrangler(deployArgs(configPath, accountId(ROOT), identity.bucketName));
     putSecret('BENCH_TOKEN', token, configPath);
 
     if (r2AccessKeyId !== undefined && r2SecretAccessKey !== undefined) {

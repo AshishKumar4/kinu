@@ -46,7 +46,7 @@ const leanRoot = join(repoRoot, 'lean');
 
 /** A cited path, in the three spellings the tree uses. `Foo` here is a placeholder
  *  for any module: `MCTS/Foo.lean`, `lean/Kinu/MCTS/Foo.lean`, bare `Foo.lean`,
- *  or the brace form `Execution/{Capabilities,ToolSystem}.lean`. */
+ *  or the brace form `{A,B}/x.lean`. */
 const LEAN_PATH = /(?:[A-Za-z0-9_./-]|\{[A-Za-z0-9_,]+\})+\.lean/g;
 
 /** A citation naming a LINE rather than a theorem. For example `Foo.lean:470`, or a
@@ -97,7 +97,7 @@ const CITED_NAMES_LEADING =
 /** Theorem names this scanner cannot see, because they carry no underscore. The
  *  set is asserted against the declarations, so a NEW one fails the gate naming
  *  itself instead of quietly joining the blind spot. */
-const CITATION_OPAQUE = { 'Kinu.Execution.Capabilities.chain': true } as const;
+const CITATION_OPAQUE: Readonly<Record<string, true>> = {};
 
 /**
  * Citations presented as ILLUSTRATIONS rather than as references — the declared
@@ -216,8 +216,7 @@ const DOCUMENTING_PROSE =
   /\b(?:red-green|red->green|would fail|now fails|fails when|placeholder\w*|illustrat\w*|for example|example|past the module|does not exist|proven against|spelling\w*)\b/i;
 
 /** A brace form names two modules — for example the placeholder `{A,B}/x.lean`.
- *  Expanded rather than skipped: it is how `Execution/{Capabilities,ToolSystem}.lean`
- *  is spelled, and skipping it would leave a real citation unchecked. */
+ *  Expanded rather than skipped, so each module it names is checked. */
 function expandBraces(path: string): string[] {
   const match = path.match(/\{([A-Za-z0-9_,]+)\}/);
 

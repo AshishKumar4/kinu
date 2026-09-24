@@ -6,6 +6,6 @@
     "lib": ["ES2022"],
     "types": ["bun", "@cloudflare/workers-types"]
   },
-  "include": ["src", "tests", "bench"],
+  "include": ["src", "tests", "bench", "example"],
   "exclude": ["tests/workerd"]
 }

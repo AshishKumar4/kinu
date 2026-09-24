@@ -103,7 +103,7 @@ describe('remote executor exec abort', () => {
       writeFile: async () => {},
       listFiles: async () => ({ files: [] }),
       deleteFile: async () => {},
-      exposePort: async (port) => ({ url: `https://preview.example.com/${port}`, port }),
+      exposePort: async (port) => ({ url: `https://preview.example.com/${port}`, port, route: { reached: true } }),
       unexposePort: async () => {},
       getExposedPorts: async () => [],
       ...sandboxHandleLifecycle,

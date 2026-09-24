@@ -45,16 +45,16 @@ describe(SUITE, () => {
           return v.parse(Answer, await session.rpc('slate', [{ op: 'call', id: 'gate', method: 'exec', args: [command] }]));
         };
 
-        const setup = await exec(`mkdir -p /home/user/slates/gate
-cat > /home/user/slates/gate/package.json <<'END'
+        const setup = await exec(`mkdir -p /home/main/slates/gate
+cat > /home/main/slates/gate/package.json <<'END'
 {"main":"server.js","slate":{"bindings":{"FILES":{"kind":"namespace","namespace":"workspace","members":["exec"]}}}}
 END
-cat > /home/user/slates/gate/server.js <<'END'
+cat > /home/main/slates/gate/server.js <<'END'
 export default { async fetch(request, env) { const [command] = await request.json(); return Response.json(await env.FILES.exec(command)); } };
 END`);
 
         if (setup.exitCode !== 0) throw new Error('Could not author test slate: ' + setup.stdout);
-        const command = 'printf executed > /home/user/first-run-command-effect; npm publish --dry-run';
+        const command = 'printf executed > /home/main/first-run-command-effect; npm publish --dry-run';
         const goals: EvalSubgoal[] = [];
 
         for (const policy of ['deny_all', 'strict']) {
@@ -62,7 +62,7 @@ END`);
           const expected = policy === 'deny_all' ? 'denied' : 'unavailable';
           const direct = await exec(command);
           const binding = await call(command);
-          const marker = await exec('if test -e /home/user/first-run-command-effect; then printf present; else printf absent; fi');
+          const marker = await exec('if test -e /home/main/first-run-command-effect; then printf present; else printf absent; fi');
           goals.push(
             { what: policy + '-executor-class', reached: direct.refusal?.reason === expected && direct.exitCode !== 0,
               detail: JSON.stringify({ deployedSha: session.deployedSha, expected, actual: direct }) },
@@ -78,9 +78,9 @@ END`);
 
         // Ordinary command failure is distinct from refusal before execution.
         // Side effects before false prove these commands actually reached the shell.
-        const failedDirect = await exec('printf ran > /home/user/first-run-direct-ran; printf actual-stdout; printf actual-stderr >&2; false');
-        const failedBinding = await call('printf ran > /home/user/first-run-binding-ran; printf actual-stdout; printf actual-stderr >&2; false');
-        const ran = await exec('cat /home/user/first-run-direct-ran /home/user/first-run-binding-ran');
+        const failedDirect = await exec('printf ran > /home/main/first-run-direct-ran; printf actual-stdout; printf actual-stderr >&2; false');
+        const failedBinding = await call('printf ran > /home/main/first-run-binding-ran; printf actual-stdout; printf actual-stderr >&2; false');
+        const ran = await exec('cat /home/main/first-run-direct-ran /home/main/first-run-binding-ran');
         goals.push(
           { what: 'executed-failure-class', reached: failedDirect.exitCode !== 0 && failedDirect.refusal?.reason === 'io'
               && failedDirect.refusal.error.includes('actual-stdout') && failedDirect.refusal.error.includes('actual-stderr'), detail: JSON.stringify(failedDirect) },

@@ -11,8 +11,12 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { auditScratchOwnership, readScannableSources } from './scratch-ownership';
-import { SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX } from '@kinu.run/test-utils';
+import { SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX, scratchDir } from '@kinu.run/test-utils';
+import { currentOwner, type ProcessOwner } from './process-owner';
+import { reapAbandonedRoots } from './test-scratch-home';
 
 /** One file, as the gate reads its corpus. */
 function audit(path: string, source: string) {
@@ -195,5 +199,43 @@ describe('the tree it governs', () => {
     for (const prefix of audited.prefixes) {
       expect(SCRATCH_PREFIXES.some((known) => prefix.startsWith(known))).toBe(true);
     }
+  });
+});
+
+describe('the scratch reaper judges a root by its owner, never by its age', () => {
+  const parent = scratchDir('reaper-fixture');
+  const self = currentOwner();
+
+  if (self === null) throw new Error('these cases read /proc; this host cannot say who owns a process');
+
+  /** A root two hours old, past the 30-minute bound the reaper used to apply. */
+  const root = (name: string, owner?: ProcessOwner): string => {
+    const path = join(parent, `kinu-scratch-${name}`);
+    mkdirSync(path);
+
+    if (owner !== undefined) writeFileSync(join(path, 'owner.json'), JSON.stringify(owner));
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(path, twoHoursAgo, twoHoursAgo);
+
+    return path;
+  };
+
+  test('a live suite older than 30 minutes keeps its root while another run starts', () => {
+    const live = root('live', self);
+
+    expect(reapAbandonedRoots(parent, join(parent, 'kinu-scratch-another-run'))).toEqual([]);
+    expect(existsSync(live)).toBe(true);
+  });
+
+  test("a crashed owner's root is reaped, whether its pid ended, was reused, or the machine rebooted", () => {
+    const ended = Bun.spawnSync(['true']).pid;
+    const gone = root('gone', { ...self, pid: ended, startTicks: 1 });
+    const reused = root('reused', { ...self, startTicks: self.startTicks + 1 });
+    const rebooted = root('rebooted', { ...self, bootId: 'an-earlier-boot' });
+    const unrecorded = root('unrecorded');
+
+    expect(reapAbandonedRoots(parent, join(parent, 'kinu-scratch-another-run')).sort()).toEqual([gone, rebooted, reused].sort());
+    // No record says nothing about its owner, so it is left to `preflight --reclaim`, not guessed at.
+    expect(existsSync(unrecorded)).toBe(true);
   });
 });

@@ -9,12 +9,28 @@ import {
   minimumPairsForSignificance, pairedBinaryComparison, pairedBootstrapCI, requiredPairs,
   type BootstrapOptions, type Interval, type PairedBinaryStats, type PairedOutcome,
 } from '@kinu.run/core';
-import { observationKey, type EvalObservation, type EvalRunRecord } from './eval-run';
+import { observationKey, type EvalArmState, type EvalObservation, type EvalRunRecord } from './eval-run';
 import { TASK_OUTCOME, isCovariateRow } from './eval-outcome';
 
 type ScoredObservation = Extract<EvalObservation, { outcome: 'scored' }>;
 
-export type ComparisonOptions = BootstrapOptions & { power?: number };
+/** `treatment`: the one arm field an A/B varies; the rest must match. */
+export type ComparisonOptions = BootstrapOptions & { power?: number; treatment?: ArmTreatment };
+
+/** Below this, pass^k is pass@1 again or too coarse to read. */
+export const PASS_HAT_K_FLOOR = 3;
+
+const ARM_FIELDS = {
+  evolution: (arm) => (arm.evolution ? 'ON' : 'OFF'),
+  settle: (arm) => arm.settle,
+  tools: (arm) => [...arm.tools].sort().join(', '),
+  prompt: (arm) => arm.prompt ?? 'as written',
+  effort: (arm) => arm.effort ?? 'model default',
+} satisfies Record<string, (arm: EvalArmState) => string>;
+
+export type ArmTreatment = keyof typeof ARM_FIELDS;
+
+const ARM_TREATMENTS = Object.keys(ARM_FIELDS).filter((key): key is ArmTreatment => Object.hasOwn(ARM_FIELDS, key));
 
 /** Differing pairs below which no exact paired test reaches p ≤ alpha, taken from the primitive. */
 const MINIMUM_DIFFERING_PAIRS = minimumPairsForSignificance();
@@ -22,7 +38,6 @@ const MINIMUM_DIFFERING_PAIRS = minimumPairsForSignificance();
 /** What counts as solving a task for the binary headline: the reliability view of the verifier's verdict. */
 export const SOLVED_PREDICATE = `${TASK_OUTCOME} rate === 1 — every subgoal reached`;
 
-/** True when the attempt solved the task outright, false when not, null when no verdict was recorded. */
 function fullySolved(o: ScoredObservation): boolean | null {
   const row = o.scores.find((s) => s.name === TASK_OUTCOME);
 
@@ -117,7 +132,6 @@ export interface EvalCostComparison {
   readonly ms: PairedDelta;
 }
 
-/** Two runs the harness refused to compare. Carries reasons and no numbers. */
 export interface RefusedComparison {
   readonly comparable: false;
   readonly baselineRunId: string;
@@ -131,6 +145,7 @@ export interface AttributableComparison {
   readonly candidateRunId: string;
   readonly modelId: string;
   readonly repeats: number;
+  readonly treatment: { readonly field: ArmTreatment; readonly baseline: string; readonly candidate: string } | null;
   readonly totalPairs: number;
   readonly eligiblePairs: number;
   readonly diagnostics: readonly PairDiagnostic[];
@@ -155,7 +170,9 @@ interface TaskPairs {
 }
 
 /** Facts whose difference makes a delta unattributable. Returned, not thrown, so it is not mistaken for a harness bug. */
-function refusalsFor(baseline: EvalRunRecord, candidate: EvalRunRecord): ComparisonRefusal[] {
+function refusalsFor(
+  baseline: EvalRunRecord, candidate: EvalRunRecord, treatment: ArmTreatment | undefined,
+): ComparisonRefusal[] {
   const refusals: ComparisonRefusal[] = [];
 
   if (baseline.modelId !== candidate.modelId) {
@@ -174,32 +191,22 @@ function refusalsFor(baseline: EvalRunRecord, candidate: EvalRunRecord): Compari
     });
   }
 
-  if (baseline.arm.evolution !== candidate.arm.evolution) {
-    refusals.push({
-      field: 'arm.evolution',
-      detail: `evolution was ${baseline.arm.evolution ? 'ON' : 'OFF'} in the baseline and `
-        + `${candidate.arm.evolution ? 'ON' : 'OFF'} in the candidate — such a delta measures `
-        + 'the mechanism, not the change under test',
-    });
-  }
+  for (const field of ARM_TREATMENTS) {
+    const before = ARM_FIELDS[field](baseline.arm);
+    const after = ARM_FIELDS[field](candidate.arm);
 
-  if (baseline.arm.settle !== candidate.arm.settle) {
-    refusals.push({
-      field: 'arm.settle',
-      detail: `settle policy ${baseline.arm.settle} in the baseline vs ${candidate.arm.settle} `
-        + 'in the candidate',
-    });
-  }
+    if (field === treatment) {
+      if (before === after) {
+        refusals.push({
+          field: `arm.${field}`,
+          detail: `declared as the treatment, but both runs have ${before}: there is no treatment to attribute`,
+        });
+      }
 
-  const baselineOnly = baseline.arm.tools.filter((t) => !candidate.arm.tools.includes(t));
-  const candidateOnly = candidate.arm.tools.filter((t) => !baseline.arm.tools.includes(t));
+      continue;
+    }
 
-  if (baselineOnly.length > 0 || candidateOnly.length > 0) {
-    refusals.push({
-      field: 'arm.tools',
-      detail: `tool surfaces differ — only in baseline: [${baselineOnly.join(', ')}], `
-        + `only in candidate: [${candidateOnly.join(', ')}]`,
-    });
+    if (before !== after) refusals.push({ field: `arm.${field}`, detail: armDifference(field, baseline, candidate) });
   }
 
   for (const [side, record] of [['baseline', baseline], ['candidate', candidate]] as const) {
@@ -213,6 +220,19 @@ function refusalsFor(baseline: EvalRunRecord, candidate: EvalRunRecord): Compari
   }
 
   return refusals;
+}
+
+function armDifference(field: ArmTreatment, baseline: EvalRunRecord, candidate: EvalRunRecord): string {
+  if (field === 'tools') {
+    const baselineOnly = baseline.arm.tools.filter((t) => !candidate.arm.tools.includes(t));
+    const candidateOnly = candidate.arm.tools.filter((t) => !baseline.arm.tools.includes(t));
+
+    return `tool surfaces differ — only in baseline: [${baselineOnly.join(', ')}], `
+      + `only in candidate: [${candidateOnly.join(', ')}]`;
+  }
+
+  return `${field} ${ARM_FIELDS[field](baseline.arm)} in the baseline vs ${ARM_FIELDS[field](candidate.arm)} `
+    + 'in the candidate — undeclared, so the delta would measure it rather than the change under test';
 }
 
 function scorerNames(record: EvalRunRecord): string[] {
@@ -405,11 +425,10 @@ function compareScorer(
   };
 }
 
-/** Compare a candidate run against a baseline: refuse first, pair second, compute only then. */
 export function compareRuns(
   baseline: EvalRunRecord, candidate: EvalRunRecord, opts: ComparisonOptions = {},
 ): EvalComparison {
-  const refusals = refusalsFor(baseline, candidate);
+  const refusals = refusalsFor(baseline, candidate, opts.treatment);
 
   if (refusals.length > 0) {
     return {
@@ -506,6 +525,11 @@ export function compareRuns(
     candidateRunId: candidate.runId,
     modelId: baseline.modelId,
     repeats: baseline.repeats,
+    treatment: opts.treatment === undefined ? null : {
+      field: opts.treatment,
+      baseline: ARM_FIELDS[opts.treatment](baseline.arm),
+      candidate: ARM_FIELDS[opts.treatment](candidate.arm),
+    },
     totalPairs: keys.length,
     eligiblePairs,
     diagnostics,
@@ -521,7 +545,6 @@ export function compareRuns(
   };
 }
 
-/** Refusals first, then the headline with its interval, per-scorer verdicts, then cost. */
 export function formatComparison(comparison: EvalComparison): string {
   const head = `comparison: ${comparison.baselineRunId} → ${comparison.candidateRunId}`;
 
@@ -535,9 +558,14 @@ export function formatComparison(comparison: EvalComparison): string {
 
   const h = comparison.headline;
 
+  const treated = comparison.treatment;
+
   const lines = [
     head,
     `  ${comparison.modelId}, ${String(comparison.repeats)} repeats`,
+    treated === null
+      ? '  treatment: none declared — every arm field matches'
+      : `  treatment: arm.${treated.field} ${treated.baseline} → ${treated.candidate}`,
     `  pairs: ${String(comparison.eligiblePairs)} eligible of ${String(comparison.totalPairs)} `
       + '— both sides scored',
   ];
@@ -547,6 +575,11 @@ export function formatComparison(comparison: EvalComparison): string {
   lines.push(`    pass@1 ${h.passAtOneA.toFixed(3)} → ${h.passAtOneB.toFixed(3)}, `
     + `effect ${fmtPp(h.effect)} [CI ${fmtPp(h.ci.lo)}..${fmtPp(h.ci.hi)}, `
     + `${String(h.discordant)} of ${String(h.pairs)} tasks differed]`);
+  lines.push(comparison.repeats >= PASS_HAT_K_FLOOR
+    ? `    pass^${String(comparison.repeats)} ${h.passAllA.toFixed(3)} → ${h.passAllB.toFixed(3)} `
+      + `(solved in all ${String(comparison.repeats)} attempts)`
+    : `    pass^k not reported: ${String(comparison.repeats)} repeat(s) is below the floor of `
+      + `${String(PASS_HAT_K_FLOOR)}`);
   lines.push(`    ${h.verdict}`);
 
   for (const t of comparison.raggedTasks) {

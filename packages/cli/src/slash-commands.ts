@@ -4,7 +4,7 @@ import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECI
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentRefinementView } from './agent-client';
 import type { InstructionSourceRow } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { loadActiveProfile, updateDefaultTier } from './profiles';
+import { loadActiveProfile } from './default-model';
 import { renderSearchTreeLines } from './display';
 
 export interface SlashCommandInfo {
@@ -37,8 +37,8 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/help', description: 'List commands and keys', run: helpCommand },
   { name: '/status', description: 'Show this agent\'s mission, model and counts', run: statusCommand },
   { name: '/tools', description: 'List the tools this agent can use', run: toolsCommand },
-  { name: '/model', description: 'Show or set the default model', usage: '/model [spec]', run: modelCommand },
-  { name: '/effort', description: 'Show or set the default tier\'s reasoning effort', usage: '/effort [level]', run: effortCommand },
+  { name: '/model', description: 'Show or set this workspace\'s model', usage: '/model [spec]', run: modelCommand },
+  { name: '/effort', description: 'Show or set this workspace\'s reasoning effort', usage: '/effort [level]', run: effortCommand },
   { name: '/role', description: 'Show or choose this agent\'s role', usage: '/role [id]', run: roleCommand },
   { name: '/rename', description: 'Rename this agent. Kinu never renames over a name you chose', usage: '/rename <name>', requires: 'rename', run: renameCommand },
   { name: '/settings', description: 'Open interactive settings', run: settingsCommand },
@@ -213,7 +213,7 @@ async function toolsCommand({ client }: SlashContext): Promise<SlashOutcome> {
 
 async function modelCommand({ client, arg }: SlashContext): Promise<SlashOutcome> {
   if (!arg) return { kind: 'model-picker' };
-  const result = await setModelPreference(client, arg);
+  const result = await client.setModel(arg);
 
   return { kind: 'model-set', spec: result.spec };
 }
@@ -691,44 +691,31 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
   return entry.run({ client, command, arg: rest.join(' ').trim(), rest });
 }
 
-/** Writes the canonical store; the session re-resolves authority per turn, so the client is not called. */
-export async function setModelPreference(
-  _client: Pick<AgentClient, 'setModel'>,
-  spec: string,
-): Promise<{ spec: string }> {
-  const envelope = await updateDefaultTier({ model: spec });
-
-  return { spec: envelope.catalog.tiers.default.model };
-}
-
-export async function setReasoningEffortPreference(
-  _client: Pick<AgentClient, 'setReasoningEffort'>,
-  effort: ReasoningEffort,
-): Promise<{ effort: ReasoningEffort }> {
-  const envelope = await updateDefaultTier({ reasoningEffort: effort });
-
-  return { effort: envelope.catalog.tiers.default.reasoningEffort ?? 'medium' };
-}
-
 async function effortCommand({ client, arg }: SlashContext): Promise<SlashOutcome> {
   if (!arg) {
-    const tier = (await loadActiveProfile()).catalog.tiers.default;
-    const current = tier.reasoningEffort ?? 'medium';
+    const [stored, spec, tier] = await Promise.all([
+      client.getReasoningEffort(),
+      client.getModelSpec(),
+      loadActiveProfile().then((profile) => profile.catalog.tiers.default),
+    ]);
+
+    const current = stored ?? tier.reasoningEffort ?? 'medium';
+    const model = spec ?? tier.model;
     // Levels come from the model's catalog entry (#9); unreadable falls back to the whole vocabulary.
     let levels: string;
 
     try {
-      const declared = (await client.listModels()).models.find((model) => model.spec === tier.model)?.reasoningEfforts;
+      const declared = (await client.listModels()).models.find((entry) => entry.spec === model)?.reasoningEfforts;
       levels = declared === undefined
-        ? `${REASONING_EFFORTS.join(', ')} (the catalog does not say which ${tier.model} accepts)`
-        : offeredReasoningEfforts(declared, tier.reasoningEffort).join(', ') || 'none; the model takes no effort setting';
+        ? `${REASONING_EFFORTS.join(', ')} (the catalog does not say which ${model} accepts)`
+        : offeredReasoningEfforts(declared, current).join(', ') || 'none; the model takes no effort setting';
     } catch (cause) {
       levels = `${REASONING_EFFORTS.join(', ')} (catalog unavailable: ${renderThrownChain({ cause })})`;
     }
 
     return {
       kind: 'text',
-      text: `Default-tier reasoning effort: ${current}\nLevels for ${tier.model}: ${levels}\nSet with /effort <level>.`,
+      text: `Reasoning effort: ${current}${stored === null ? ' (the default tier\'s)' : ''}\nLevels for ${model}: ${levels}\nSet this workspace's with /effort <level>.`,
     };
   }
 
@@ -736,7 +723,7 @@ async function effortCommand({ client, arg }: SlashContext): Promise<SlashOutcom
     return { kind: 'text', text: `Usage: /effort <${REASONING_EFFORTS.join('|')}>` };
   }
 
-  const result = await setReasoningEffortPreference(client, arg);
+  const result = await client.setReasoningEffort(arg);
 
   return { kind: 'effort-set', effort: result.effort };
 }

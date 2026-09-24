@@ -1,9 +1,9 @@
 {
-  "measuredAt": "2026-09-23",
-  "files": 2575,
-  "functions": 63573,
+  "measuredAt": "2026-09-24",
+  "files": 2627,
+  "functions": 64767,
   "ceiling": 108,
-  "line": 33,
+  "line": 32,
   "inventory": [
     {
       "key": "packages/cf-backend/src/cli/routes.ts#handleCliRequest",
@@ -26,10 +26,6 @@
       "complexity": 58
     },
     {
-      "key": "packages/core/src/strategy/swarm-setup.ts#seedResumedSearch",
-      "complexity": 51
-    },
-    {
       "key": "scripts/fixtures/r2-bench/report.ts#renderMarkdown",
       "complexity": 51
     },
@@ -38,19 +34,7 @@
       "complexity": 49
     },
     {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
-      "complexity": 48
-    },
-    {
       "key": "lean/check-traceability.mjs#tsScan",
-      "complexity": 46
-    },
-    {
-      "key": "packages/core/src/strategy/swarm-scoring.ts#scoreExpansion",
-      "complexity": 46
-    },
-    {
-      "key": "packages/pc-agent/src/index.js#handle",
       "complexity": 46
     },
     {
@@ -62,7 +46,15 @@
       "complexity": 46
     },
     {
+      "key": "packages/pc-agent/src/index.js#handle",
+      "complexity": 44
+    },
+    {
       "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
+      "complexity": 43
+    },
+    {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
       "complexity": 43
     },
     {
@@ -86,14 +78,6 @@
       "complexity": 42
     },
     {
-      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
-      "complexity": 41
-    },
-    {
-      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
-      "complexity": 41
-    },
-    {
       "key": "packages/cli/src/tui/home-app.tsx#HomeScene",
       "complexity": 41
     },
@@ -114,6 +98,10 @@
       "complexity": 40
     },
     {
+      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
+      "complexity": 40
+    },
+    {
       "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
       "complexity": 40
     },
@@ -126,19 +114,15 @@
       "complexity": 40
     },
     {
+      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
+      "complexity": 39
+    },
+    {
       "key": "scripts/axis-ergonomics/report.ts#score",
       "complexity": 39
     },
     {
-      "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
-      "complexity": 38
-    },
-    {
       "key": "packages/core/src/delegation/agents-tool.ts#dispatchAgentsAction",
-      "complexity": 38
-    },
-    {
-      "key": "packages/core/src/strategy/swarm-resume.ts#harvestSwarm",
       "complexity": 38
     },
     {
@@ -166,15 +150,15 @@
       "complexity": 36
     },
     {
+      "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
+      "complexity": 36
+    },
+    {
       "key": "packages/core/src/identity/archive.ts#readWorkspaceArchivePage",
       "complexity": 36
     },
     {
       "key": "packages/core/src/tui/input-state.ts#reduceInput",
-      "complexity": 36
-    },
-    {
-      "key": "packages/devbox/bench/measure-first/worker.ts#fetch",
       "complexity": 36
     },
     {
@@ -195,10 +179,6 @@
     },
     {
       "key": "packages/core/src/release/engine.ts#ReleaseEngine.rollback",
-      "complexity": 35
-    },
-    {
-      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>checkpoint",
       "complexity": 35
     },
     {
@@ -254,10 +234,6 @@
       "complexity": 33
     },
     {
-      "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
-      "complexity": 33
-    },
-    {
       "key": "packages/devbox/src/chunked-delta.ts#planDeltaPublication",
       "complexity": 33
     },
@@ -268,6 +244,62 @@
     {
       "key": "tests/evals/kinu-tasks.eval.ts#slateFixtureServer>fetch",
       "complexity": 33
+    },
+    {
+      "key": "packages/cf-backend/src/components/Composer.tsx#Composer",
+      "complexity": 32
+    },
+    {
+      "key": "packages/cf-backend/src/drive/routes.ts#handleDriveRequest",
+      "complexity": 32
+    },
+    {
+      "key": "packages/cf-backend/src/pages/MCTSExplorer.tsx#ExplorerBody",
+      "complexity": 32
+    },
+    {
+      "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
+      "complexity": 32
+    },
+    {
+      "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
+      "complexity": 32
+    },
+    {
+      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
+      "complexity": 32
+    },
+    {
+      "key": "packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.recordStep",
+      "complexity": 32
+    },
+    {
+      "key": "packages/core/src/prompting/tool-error-feedback.ts#projectToolErrorFeedback",
+      "complexity": 32
+    },
+    {
+      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>attachChainOnce",
+      "complexity": 32
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#observeChunkedAbsorption",
+      "complexity": 32
+    },
+    {
+      "key": "scripts/coverage-lcov.ts#parseLcov",
+      "complexity": 32
+    },
+    {
+      "key": "tests/first-run/agent-chats-persist.first-run.ts#describe>liveTest>run",
+      "complexity": 32
+    },
+    {
+      "key": "tests/first-run/agent-dismissed-chat.first-run.ts#describe>liveTest>run",
+      "complexity": 32
+    },
+    {
+      "key": "tests/first-run/deploy-door.first-run.ts#authorizeHandoff",
+      "complexity": 32
     }
   ]
 }

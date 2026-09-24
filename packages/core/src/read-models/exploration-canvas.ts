@@ -5,12 +5,11 @@
 
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import type { SearchNode } from '../types/mcts';
 import { HeadJournal } from '../heads/journal';
 import type { HeadRunView } from '../heads/types';
 import { listForkRuns, readForkRun, type ForkRunSummary } from './fork-runs';
 import { readForkRunParams, type ForkRunParams } from './fork-params';
-import { readSearchTree } from './search-tree';
+import { readSearchTree, type SearchTreeRow } from './search-tree';
 import { paretoFront, type ParetoAxis, type ParetoEvidence } from '../strategy/objective';
 import { readSwarmNodeRecords } from '../strategy/swarm-resume';
 import { mapPage, type Page, type SeekCursor } from '../session/page';
@@ -20,7 +19,7 @@ export interface ExplorationCanvasRun {
   /** Null when dispatch parameters are no longer recorded; the surface says so rather than showing defaults. */
   readonly params: ForkRunParams | null;
   /** Non-empty exactly when {@link ForkRunSummary.hasSearchTree}. */
-  readonly tree: readonly SearchNode[];
+  readonly tree: readonly SearchTreeRow[];
   /** Null unless the run durably recorded complete Pareto evidence. */
   readonly frontier: ParetoFrontier | null;
   readonly head: HeadRunView | null;

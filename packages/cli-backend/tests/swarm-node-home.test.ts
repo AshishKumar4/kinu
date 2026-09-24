@@ -20,7 +20,7 @@ import {
   type JsonValue,
   type LLMProviderConfig,
 } from '@kinu.run/core';
-import { scriptedTurnModel, scratchPath, toolExecute } from '@kinu.run/test-utils';
+import { scriptedTurnModel, scratchPath, toolExecute, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
 import { openLocalActor, registerLocalNode } from '../src/actor-identity';
 import { nodeSeatFactory } from './actor-fixture';
@@ -161,14 +161,14 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
 
     if (!before.shell) throw new Error('node shell missing');
     expect(await before.shell.exec('echo private > /tmp/note; echo answer > "$HOME/answer"')).toMatchObject({ exitCode: 0 });
-    await first.storage.vfs.writeFile('/home/user/shared', 'shared');
+    await first.storage.vfs.writeFile('/home/main/shared', 'shared');
     const second = createCLIRuntime(database, config);
 
     if (!second.nodeRuntime) throw new Error('reset node plane missing');
     const after = await second.nodeRuntime(home, registerLocalNode(second.actor, { nodeId: 'reset', rootId: 'reset', depth: 1 }), second);
 
     if (!after.shell) throw new Error('reset node shell missing');
-    expect(await after.shell.exec('echo $HOME $TMPDIR; cat /tmp/note; cat "$HOME/answer"; cat /home/user/shared'))
+    expect(await after.shell.exec('echo $HOME $TMPDIR; cat /tmp/note; cat "$HOME/answer"; cat /home/main/shared'))
       .toMatchObject({ exitCode: 0, stdout: `${home.home} ${home.tmp}\nprivate\nanswer\nshared` });
     expect(await second.storage.vfs.exists('/tmp/note')).toBe(false);
     await expect(second.storage.vfs.writeFile(`${home.home}/answer`, 'stolen')).rejects.toThrow();
@@ -177,7 +177,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     const rt = cliRuntime('swarm-node-home-private');
     const { provisionNodeHome } = nodeHomeWiring(rt);
 
-    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), provisionNodeHome });
+    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams(), provisionNodeHome });
 
     expect(settled).toHaveLength(IDEATE_BRANCHES);
     expect(settled.map((node) => node.isolation))
@@ -188,7 +188,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     const rt = cliRuntime('swarm-node-home-inodes');
     const { nodeHome, provisionNodeHome } = nodeHomeWiring(rt);
 
-    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), provisionNodeHome });
+    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams(), provisionNodeHome });
 
     expect(settled).toHaveLength(IDEATE_BRANCHES);
     // Through `rt.storage.vfs`, the origin's own view: a home the origin could not see would be a second tree.
@@ -212,7 +212,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
   test('the same call with no home host reports the shared plane instead', async () => {
     const rt = cliRuntime('swarm-node-home-absent');
 
-    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt) });
+    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams() });
 
     expect(settled).toHaveLength(IDEATE_BRANCHES);
     expect(settled.map((node) => node.isolation))

@@ -4,7 +4,9 @@ import {
   createCodexOAuthClient,
   decodeCodexAccountId,
   decodeJsonValue,
+  discoverOpenAICompatibleModels,
   tokensToCredential,
+  type ModelInfo,
   waitForAnswer,
 } from '@kinu.run/core';
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
@@ -13,10 +15,11 @@ import {
   bumpProviderRevision,
   loadConfigFile,
   resolveCloudSession,
-  setDefaultModel,
   updateConfigFile,
   type KinuConfig,
 } from '../config';
+import { adoptDefaultModel } from '../default-model';
+import { readDefaultTier } from '../profiles';
 import { authenticateCli, openBrowser } from './auth';
 
 export type ProviderConnectId =
@@ -41,6 +44,8 @@ export interface ProviderAsk {
 export interface ProviderConnectPort {
   report(line: string): void;
   ask(request: ProviderAsk): Promise<string>;
+  /** Null when the person skips, which aborts `work`. */
+  skippable<T>(label: string, work: (signal: AbortSignal) => Promise<T>): Promise<T | null>;
 }
 
 export type ProviderConnectOutcome =
@@ -140,6 +145,7 @@ export async function readProviderConnections(): Promise<ProviderConnections> {
   const held = 'credentials' in account ? account.credentials : [];
   const inAccount = (credKey: string): boolean => held.some((credential) => credential.key === credKey);
   const providers = config.providers ?? {};
+  const defaultModel = readDefaultTier()?.model;
   const [claude, opencode] = await Promise.all([checkClaudeAvailability(), checkOpenCodeAvailability()]);
 
   const states = PROVIDER_CONNECTORS.map((descriptor): ProviderConnectionState => {
@@ -157,10 +163,10 @@ export async function readProviderConnections(): Promise<ProviderConnections> {
       case 'codex':
         return providers.codex?.accessToken === undefined && providers.codex?.refreshToken === undefined
           ? { descriptor, connected: false, detail: hint }
-          : { descriptor, connected: true, detail: currentModel(config.model, 'codex') ?? 'your subscription' };
+          : { descriptor, connected: true, detail: currentModel(defaultModel, 'codex') ?? 'your subscription' };
       case 'opencode':
         if (opencode.binary && opencode.authenticated) {
-          return { descriptor, connected: true, detail: currentModel(config.model, 'opencode') ?? 'your opencode install' };
+          return { descriptor, connected: true, detail: currentModel(defaultModel, 'opencode') ?? 'your opencode install' };
         }
 
         return { descriptor, connected: false, detail: opencode.binary ? LOGIN_HINT_OPENCODE : hint };
@@ -170,7 +176,7 @@ export async function readProviderConnections(): Promise<ProviderConnections> {
       case 'openai-compatible': {
         const localKey = localApiKey(providers, descriptor.id);
         const credKey = ACCOUNT_CREDENTIAL_KEYS[descriptor.id];
-        const model = currentModel(config.model, descriptor.id === 'openai-compatible' ? 'openai-compat' : descriptor.id);
+        const model = currentModel(defaultModel, descriptor.id === 'openai-compatible' ? 'openai-compat' : descriptor.id);
 
         if (localKey) return { descriptor, connected: true, detail: [model, 'this machine'].filter(Boolean).join(' · ') };
 
@@ -252,10 +258,7 @@ export async function connectProvider(
         defaultModel: 'gpt-4o-mini',
         model: opts.model,
         local: opts.local ?? false,
-        store: (key, spec) => updateConfigFile((config) => withProvider(config, {
-          model: spec,
-          providers: { openai: { apiKey: key } },
-        })),
+        store: (key) => updateConfigFile((config) => withProvider(config, { openai: { apiKey: key } })),
         clear: () => updateConfigFile((config) => { delete config.providers?.openai; }),
       });
     case 'openrouter':
@@ -266,10 +269,7 @@ export async function connectProvider(
         defaultModel: 'openai/gpt-4o-mini',
         model: opts.model,
         local: opts.local ?? false,
-        store: (key, spec) => updateConfigFile((config) => withProvider(config, {
-          model: spec,
-          providers: { openrouter: { apiKey: key } },
-        })),
+        store: (key) => updateConfigFile((config) => withProvider(config, { openrouter: { apiKey: key } })),
         clear: () => updateConfigFile((config) => { delete config.providers?.openrouter; }),
       });
     case 'anthropic':
@@ -280,10 +280,7 @@ export async function connectProvider(
         defaultModel: 'claude-sonnet-4-5',
         model: opts.model,
         local: opts.local ?? false,
-        store: (key, spec) => updateConfigFile((config) => withProvider(config, {
-          model: spec,
-          providers: { anthropic: { apiKey: key } },
-        })),
+        store: (key) => updateConfigFile((config) => withProvider(config, { anthropic: { apiKey: key } })),
         clear: () => updateConfigFile((config) => { delete config.providers?.anthropic; }),
       });
     case 'openai-compatible': return await connectOpenAiCompatible(port, opts.model, opts.local ?? false);
@@ -324,25 +321,20 @@ async function connectClaude(port: ProviderConnectPort): Promise<ProviderConnect
 }
 
 async function connectCodex(port: ProviderConnectPort, requestedModel: string | undefined): Promise<ProviderConnectOutcome> {
-  const config = loadConfigFile();
-  const current = config.model?.startsWith('codex/') === true ? config.model.slice('codex/'.length) : 'gpt-5.5';
+  const current = currentModel(readDefaultTier()?.model, 'codex') ?? 'gpt-5.5';
   const answered = requestedModel ?? await port.ask({ label: 'Default Codex model', fallback: current });
   const model = answered.startsWith('codex/') ? answered.slice('codex/'.length) : answered;
   const credential = await runCodexDeviceFlow(port);
-  const spec = `codex/${model}`;
   updateConfigFile((next) => withProvider(next, {
-    model: spec,
-    providers: {
-      codex: {
-        accessToken: credential.accessToken,
-        refreshToken: credential.refreshToken,
-        expiresAt: credential.expiresAt,
-        metadata: credential.metadata,
-      },
+    codex: {
+      accessToken: credential.accessToken,
+      refreshToken: credential.refreshToken,
+      expiresAt: credential.expiresAt,
+      metadata: credential.metadata,
     },
   }));
 
-  return { kind: 'connected', summary: 'Connected ChatGPT Codex subscription', detail: `Default model: ${spec}` };
+  return { kind: 'connected', summary: 'Connected ChatGPT Codex subscription', detail: defaultModelDetail(`codex/${model}`) };
 }
 
 async function runCodexDeviceFlow(port: ProviderConnectPort) {
@@ -381,7 +373,7 @@ interface ApiKeyProvider {
   readonly defaultModel: string;
   readonly model: string | undefined;
   readonly local: boolean;
-  store(key: string, spec: string): void;
+  store(key: string): void;
   clear: () => void;
 }
 
@@ -392,11 +384,7 @@ async function connectApiKeyProvider(port: ProviderConnectPort, provider: ApiKey
     return { kind: 'blocked', reason: `No ${provider.label} key was given.`, hint: `Run kinu provider connect ${provider.prefix} when you have one.` };
   }
 
-  const config = loadConfigFile();
-
-  const current = config.model?.startsWith(`${provider.prefix}/`) === true
-    ? config.model.slice(provider.prefix.length + 1)
-    : provider.defaultModel;
+  const current = currentModel(readDefaultTier()?.model, provider.prefix) ?? provider.defaultModel;
 
   const model = provider.model ?? await port.ask({ label: 'Default model', fallback: current });
   const spec = `${provider.prefix}/${model}`;
@@ -405,9 +393,8 @@ async function connectApiKeyProvider(port: ProviderConnectPort, provider: ApiKey
     local: provider.local,
     credKey: provider.credKey,
     credential: { kind: 'bearer', token: key },
-    storeLocally: () => provider.store(key, spec),
+    storeLocally: () => provider.store(key),
     clearLocally: provider.clear,
-    model: spec,
   });
 
   return {
@@ -415,26 +402,31 @@ async function connectApiKeyProvider(port: ProviderConnectPort, provider: ApiKey
     summary: where === 'account'
       ? `Connected ${provider.label} to your Kinu account. No key stored on this machine.`
       : `Saved ${provider.label} credentials to this machine.`,
-    detail: `Default model: ${spec}`,
+    detail: defaultModelDetail(spec),
   };
 }
 
 async function connectOpenAiCompatible(port: ProviderConnectPort, requestedModel: string | undefined, local: boolean): Promise<ProviderConnectOutcome> {
   const baseURL = await port.ask({ label: 'Base URL', fallback: 'http://localhost:11434/v1' });
   const apiKey = await port.ask({ label: 'API key (use any non-empty value for local servers)', fallback: 'local', secret: true });
-  const model = requestedModel ?? await port.ask({ label: 'Default model', fallback: 'gpt-oss:20b' });
+  const model = requestedModel ?? await askEndpointModel(port, baseURL, apiKey);
+
+  if (model === '') {
+    return {
+      kind: 'blocked',
+      reason: `No model named, and ${baseURL} lists none at /models.`,
+      hint: 'Connect again and type the id of a model your server serves.',
+    };
+  }
+
   const spec = `openai-compat/${model}`;
 
   const where = await storeProviderSecret({
     local,
     credKey: 'openai-compat.default',
     credential: { kind: 'openai-compat', baseURL, apiKey },
-    storeLocally: () => updateConfigFile((config) => withProvider(config, {
-      model: spec,
-      providers: { openaiCompat: { default: { baseURL, apiKey } } },
-    })),
+    storeLocally: () => updateConfigFile((config) => withProvider(config, { openaiCompat: { default: { baseURL, apiKey } } })),
     clearLocally: () => updateConfigFile((config) => { delete config.providers?.openaiCompat?.default; }),
-    model: spec,
     // Usually Ollama or vLLM on this machine; the proxy is https-only and a Worker cannot reach loopback.
     endpoint: baseURL,
   });
@@ -444,8 +436,25 @@ async function connectOpenAiCompatible(port: ProviderConnectPort, requestedModel
     summary: where === 'account'
       ? 'Connected the OpenAI-compatible endpoint to your Kinu account. No key stored on this machine.'
       : 'Saved the OpenAI-compatible endpoint credentials to this machine.',
-    detail: `Default model: ${spec}`,
+    detail: defaultModelDetail(spec),
   };
+}
+
+async function askEndpointModel(port: ProviderConnectPort, baseURL: string, apiKey: string): Promise<string> {
+  let listed: ModelInfo[] = [];
+
+  try {
+    const auth = { baseURL, headers: { Authorization: `Bearer ${apiKey}` } };
+    listed = await port.skippable(`Checking ${baseURL}/models…`, (signal) => discoverOpenAICompatibleModels(auth, fetch, signal)) ?? [];
+  } catch (cause) {
+    port.report(`Could not list the models at ${baseURL}: ${renderThrownChain({ cause })}`);
+  }
+
+  if (listed.length > 0) port.report(`${baseURL} serves: ${listed.map((entry) => entry.id).join(', ')}`);
+  const first = listed[0];
+  const answer = await port.ask(first === undefined ? { label: 'Default model' } : { label: 'Default model', fallback: first.id });
+
+  return answer.trim();
 }
 
 async function connectOpenCode(port: ProviderConnectPort, requestedModel: string | undefined): Promise<ProviderConnectOutcome> {
@@ -481,12 +490,12 @@ async function connectOpenCode(port: ProviderConnectPort, requestedModel: string
     model = first.id;
   }
 
-  updateConfigFile((config) => withProvider(config, { model: `opencode/${model}`, providers: {} }));
+  updateConfigFile((config) => withProvider(config, {}));
 
   return {
     kind: 'connected',
     summary: 'Connected OpenCode',
-    detail: `Default model: opencode/${model}. Kinu reads models and auth from your local opencode install at request time.`,
+    detail: `${defaultModelDetail(`opencode/${model}`)} Kinu reads models and auth from your local opencode install at request time.`,
   };
 }
 
@@ -498,7 +507,6 @@ async function storeProviderSecret(opts: {
   storeLocally: () => void;
   /** Runs after an account write: a local key wins at resolution and would shadow it. */
   clearLocally: () => void;
-  model: string;
   /** An endpoint the proxy cannot reach (loopback, private range, plain http) forces local storage. */
   endpoint?: string;
 }): Promise<'account' | 'local'> {
@@ -523,7 +531,6 @@ async function storeProviderSecret(opts: {
   }
 
   opts.clearLocally();
-  setDefaultModel(opts.model);
   bumpProviderRevision();
 
   return 'account';
@@ -566,18 +573,27 @@ function isCgnat(host: string): boolean {
 }
 
 /** Every local provider write goes through here, so the provider revision bump cannot be skipped. */
-function withProvider(config: KinuConfig, patch: Pick<KinuConfig, 'model' | 'providers'>): KinuConfig {
+function withProvider(config: KinuConfig, providers: NonNullable<KinuConfig['providers']>): KinuConfig {
   return {
     ...config,
-    model: patch.model,
     providerRevision: (config.providerRevision ?? 0) + 1,
     providers: {
       ...config.providers,
-      ...patch.providers,
+      ...providers,
       openaiCompat: {
         ...config.providers?.openaiCompat,
-        ...patch.providers?.openaiCompat,
+        ...providers.openaiCompat,
       },
     },
   };
+}
+
+function defaultModelDetail(spec: string): string {
+  const current = adoptDefaultModel(spec)?.model;
+
+  if (current === spec) return `Default model: ${spec}`;
+
+  if (current === undefined) return `${spec} is connected; your account's default model is unchanged.`;
+
+  return `Default model stays ${current}; to use ${spec}, pick it under Defaults on kinu's home screen.`;
 }

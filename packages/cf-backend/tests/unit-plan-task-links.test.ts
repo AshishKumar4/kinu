@@ -1,13 +1,14 @@
 import { expect, test } from 'bun:test';
 import { createTestRuntime } from '../../core/tests/helpers';
-import { PlanReviewStore, TaskListStore, withTaskPlan, bindTaskPlan, initPlanReviewTable } from '@kinu.run/core';
+import {
+  actorScaffoldPath, MAIN_AGENT, PlanReviewStore, TaskListStore, withTaskPlan, bindTaskPlan, initPlanReviewTable,
+} from '@kinu.run/core';
 import { readPlanTasks } from '../../core/src/tasks/store';
 import { createTasksDispatcher } from '../../core/src/tools/tasks-tool';
 import { createTasksCodemodeProvider } from '../../core/src/tools/tasks-codemode';
 import { jsonSchema, tool } from 'ai';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
-import { orchestratorHarness, chatSessionTurns } from './helpers/actor-harness';
-import { createSandboxedExecutor } from '../../cli-backend/src/executor';
+import { scriptedTurnModel, sqlOver } from '@kinu.run/test-utils';
+import { orchestratorHarness, chatSessionTurns, workspaceFiles, workspaceMainActor } from './helpers/actor-harness';
 
 function fixture() {
   const { rt, db } = createTestRuntime();
@@ -89,18 +90,18 @@ test('actual owner approval admits the real Think program and attributes its nat
     usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
   }) });
   await agent.onStart();
-  const rt = agent.observeRuntime();
-  rt.executor = createSandboxedExecutor();
-  const files = rt.agentStateVfs ?? rt.storage.vfs;
-  await files.mkdir('scaffold', { recursive: true });
+  // The program runs on the Worker Loader binding, in this process.
+  const files = workspaceFiles(agent);
+  const scaffold = actorScaffoldPath({ kind: 'main', storageKey: MAIN_AGENT });
   const source = "async function run() { await host.callTool(\"tasks\", { action: \"add\", titles: [\"host task\"] }); }";
-  await files.writeFile(rt.identity.scaffold.path, source);
-  await files.writeFile(rt.identity.scaffold.path + '.v1', source);
+  await files.writeFile(scaffold, source);
+  await files.writeFile(`${scaffold}.v1`, source);
+  const actor = workspaceMainActor(db);
   db.query("UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND status = 'current'")
-    .run(rt.actor.actorId);
+    .run(actor.actorId);
   db.query("INSERT INTO scaffold_versions(actor_id,version,written_at,rationale,status) VALUES(?,1,1,'plan scope regression','current')")
-    .run(rt.actor.actorId);
-  const plans = new PlanReviewStore(rt.storage.sql, rt.actor);
+    .run(actor.actorId);
+  const plans = new PlanReviewStore(sqlOver(db), actor);
   const submitted = plans.submit('default', [{ start: 1, content: '# Implement the two tasks' }]);
 
   if (!submitted.ok) throw new Error(submitted.error);

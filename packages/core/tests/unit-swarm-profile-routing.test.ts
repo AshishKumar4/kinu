@@ -1,7 +1,7 @@
 // A delegation's resolved role and tier reach the work, and the ledger row names the model
 // that actually ran, including on re-drive from the frozen snapshot.
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
+import { createJSONLLM, createTestRuntime, toolExecute, scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { hostedSeatsOver } from './helpers-actor-host';
 import type { MockLanguageModelV3 } from 'ai/test';
 import type { ToolExecutionOptions } from 'ai';
@@ -108,7 +108,7 @@ function harness(input: {
   readonly envelope: ProfileCatalogEnvelope;
   readonly roleId: string;
 }): Harness {
-  const { rt, testSql } = createTestRuntime();
+  const { rt, testSql } = createTestRuntime({ llm: createJSONLLM('a verdict in prose, not a score') });
   const caller = countingModel('m-default');
   const deepV1 = countingModel('m-deep-v1');
   const deepV2 = countingModel('m-deep-v2');
@@ -118,6 +118,7 @@ function harness(input: {
     rt,
     hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
     model: caller.model,
+    ...unobservedSearchSeams(),
     resolveModel: (spec) => {
       resolvedSpecs.push(spec);
 
@@ -265,7 +266,7 @@ describe('a delegated tier routes the model its nodes run', () => {
 
     const entry = createAgentsTool({
       mode: 'build',
-      swarm: { rt, hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode, model: caller.model },
+      swarm: { rt, hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode, model: caller.model, ...unobservedSearchSeams() },
     });
 
     if (!entry) throw new Error('Expected the agents tool to be created');
@@ -355,6 +356,7 @@ function perNodeHarness() {
     rt,
     hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
     model: caller.model,
+    ...unobservedSearchSeams(),
     resolveModel: (spec) => {
       resolvedSpecs.push(spec);
 

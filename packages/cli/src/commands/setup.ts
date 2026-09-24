@@ -1,8 +1,9 @@
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
 import { checkClaudeAvailability } from '@kinu.run/cli-backend';
-import { loadConfigFile, setDefaultModel, updateConfigFile } from '../config';
+import { loadConfigFile } from '../config';
+import { adoptDefaultModel } from '../default-model';
 import { ACCENT, DIM, OK, WARN } from '../display';
-import { ask, askSecret, canPrompt, confirm } from '../prompt';
+import { ask, askSecret, canPrompt, confirm, skippableOnEnter } from '../prompt';
 import { authCommand } from './auth';
 import {
   connectProvider,
@@ -18,6 +19,7 @@ function consoleProviderPort(): ProviderConnectPort {
     ask: async (request) => (request.secret === true
       ? await askSecret(request.label, request.fallback)
       : await ask(request.label, request.fallback)),
+    skippable: skippableOnEnter,
   };
 }
 
@@ -155,19 +157,13 @@ export async function setupCommand(opts: {
       return;
     }
 
-    if (opts.model) {
-      const spec = `workers-ai/${stripProviderPrefix(opts.model, 'workers-ai')}`;
-      setDefaultModel(spec);
-      console.log(`${OK('✓')} Using Cloudflare Workers AI`);
-      console.log(DIM(`Default model: ${spec}`));
-
-      return;
-    }
-
-    // Unset on purpose: the platform default lives in @kinu.run/core and is read at resolve time.
-    updateConfigFile((stored) => { delete stored.model; });
+    const named = opts.model === undefined ? DEFAULT_WORKERS_AI_MODEL_SPEC : `workers-ai/${stripProviderPrefix(opts.model, 'workers-ai')}`;
+    const current = adoptDefaultModel(named)?.model;
     console.log(`${OK('✓')} Using Cloudflare Workers AI`);
-    console.log(DIM(`Default model: ${DEFAULT_WORKERS_AI_MODEL_SPEC}`));
+
+    if (current !== undefined) console.log(DIM(`Default model: ${current}`));
+
+    if (opts.model !== undefined && current !== named) console.log(DIM(`To use ${named}, pick it under Defaults on kinu's home screen.`));
     console.log(DIM('No API key on this machine. Requests go through your Kinu account.'));
 
     return;

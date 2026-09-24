@@ -272,9 +272,6 @@ function nodeFixture(over?: { readonly runtimeForWorkspace?: NodeAgentDeps['runt
     hostNode: hostedSeatsOver({ rt, db }).hostNode,
     model: RAISING_MODEL,
     journal,
-
-    // Never reached here, but a node with no deadline has no clock; taken from the shared derivation.
-    maxWallClockMs: 60_000,
     logger: createRecordingLogger(),
   };
 

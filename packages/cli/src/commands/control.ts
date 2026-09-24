@@ -8,8 +8,11 @@ import {
   getLocalToolSurface,
   listLocalJobs,
   listLocalTriggers,
+  readLocalWorkspacePins,
+  setLocalWorkspaceModel,
+  setLocalWorkspaceReasoningEffort,
 } from '../local-inspection';
-import { loadActiveProfile, updateDefaultTier } from '../profiles';
+import { readDefaultTier } from '../profiles';
 import {
   callAgentRpc,
   CloudBackgroundJobSchema,
@@ -17,7 +20,6 @@ import {
   CloudTriggerListSchema,
   createCloudWebhookTrigger,
   listCloudAvailableModels,
-  type CloudModelMenu,
   type CloudWebhookTrigger,
   type CloudWebhookTriggerInput,
 } from '../cloud-api';
@@ -29,6 +31,7 @@ import {
   normalizeModelMenu,
   validateModelSpec,
   type AgentModelEntry,
+  type AgentModelMenu,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
@@ -46,6 +49,10 @@ interface ControlOpts {
 const EffortSetResultSchema = v.object({ ok: v.literal(true), effort: v.picklist(['low', 'medium', 'high']) });
 
 const StoredEffortSchema = v.object({ effort: v.nullable(v.picklist(['low', 'medium', 'high'])) });
+
+const ModelSetResultSchema = v.object({ ok: v.literal(true), spec: v.string() });
+
+const StoredModelSchema = v.object({ spec: v.nullable(v.string()) });
 
 const CancelTriggerSchema = v.object({ ok: v.literal(true), changed: v.boolean() });
 
@@ -79,14 +86,33 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
     }
   }
 
-  // Fresh turns resolve the profile envelope over the actor's model hint, so every model command edits the
-  // default tier that unresolved roles read.
-  const envelope = resolvedSpec
-    ? await updateDefaultTier({ model: resolvedSpec })
-    : await loadActiveProfile();
+  let stored: string | null;
 
-  const result = { spec: envelope.catalog.tiers.default.model };
-  console.log(spec ? `${OK('set')} ${result.spec}` : `${DIM('model')} ${result.spec ?? '(default)'}`);
+  if (target.mode === 'cloud') {
+    const auth = requireAuthConfig();
+
+    stored = resolvedSpec
+      ? (await callAgentRpc({
+        origin: auth.origin, token: auth.token, name: target.cloudName,
+        method: 'setModel', schema: ModelSetResultSchema, args: [resolvedSpec],
+      })).spec
+      : (await callAgentRpc({
+        origin: auth.origin, token: auth.token, name: target.cloudName,
+        method: 'getStoredModelSpec', schema: StoredModelSchema,
+      })).spec;
+  } else {
+    stored = resolvedSpec
+      ? (await setLocalWorkspaceModel(target.localName, resolvedSpec)).spec
+      : (await readLocalWorkspacePins(target.localName)).model;
+  }
+
+  if (spec) {
+    console.log(`${OK('set')} ${stored}`);
+
+    return;
+  }
+
+  console.log(`${DIM('model')} ${stored ?? `${readDefaultTier()?.model ?? 'none named'} (the default tier's)`}`);
 }
 
 interface EffortResult {
@@ -121,22 +147,24 @@ export async function effortCommand(name: string, level: string | undefined): Pr
         schema: StoredEffortSchema,
       });
   } else {
-    const envelope = level
-      ? await updateDefaultTier({ reasoningEffort: level })
-      : await loadActiveProfile();
-
-    result = { effort: envelope.catalog.tiers.default.reasoningEffort ?? null };
+    result = level
+      ? await setLocalWorkspaceReasoningEffort(target.localName, level)
+      : { effort: (await readLocalWorkspacePins(target.localName)).reasoningEffort };
   }
 
-  console.log(level
-    ? `${OK('set')} ${result.effort}`
-    : `${DIM('reasoning effort')} ${result.effort ?? 'medium (chat default)'}`);
+  if (level) {
+    console.log(`${OK('set')} ${result.effort}`);
+
+    return;
+  }
+
+  console.log(`${DIM('reasoning effort')} ${result.effort ?? `${readDefaultTier()?.reasoningEffort ?? 'medium'} (the default tier's)`}`);
 }
 
 /** Validation is advisory: an unreachable catalog must say why rather than read as an empty menu. */
 type ModelCatalog = { readonly models: readonly AgentModelEntry[] } | { readonly unreadable: string };
 
-async function loadModelCatalog(load: () => Promise<ModelMenu | CloudModelMenu>): Promise<ModelCatalog> {
+async function loadModelCatalog(load: () => Promise<ModelMenu | AgentModelMenu>): Promise<ModelCatalog> {
   try {
     return { models: normalizeModelMenu({ payload: await load() }).models };
   } catch (error) {

@@ -13,10 +13,11 @@ import type {
   InstructionSourceRow, InstructionSourceView, Page, PageRequest,
   DeferredApproval, DeferredApprovalAnswer,
   PlanReview, PlanReviewAnnotation, PlanReviewDecision, PlanReviewResult, WorkMode,
+  SubordinateInspectionRequest, SubordinateInspectionResult, ChatHistoryEntry,
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
-import type { AgentModelMenu } from '@kinu.run/core';
+import { isSteeredMessage, type AgentModelMenu } from '@kinu.run/core';
 import * as v from 'valibot';
 
 export type AgentClientMode = 'local' | 'cloud';
@@ -150,6 +151,25 @@ export interface AgentForkResult {
   /** Callers switch and close the old client when a different instance is returned. */
   client: AgentClient;
   label: string;
+}
+
+/** A durable conversation, oldest first, over either backend's `getChatHistoryPage`. Never capped: a fork
+ *  pivot past a cap would read as not found. */
+export async function readConversation(
+  page: (request: PageRequest) => Promise<Page<ChatHistoryEntry>>,
+): Promise<AgentTranscriptMessage[]> {
+  const messages: AgentTranscriptMessage[] = [];
+  let request: PageRequest = {};
+
+  for (;;) {
+    const read = await page(request);
+    messages.unshift(...read.items.map(({ id, role, content, metadata }) => (isSteeredMessage({ metadata })
+      ? { id, role, content, metadata, steered: true }
+      : { id, role, content, metadata })));
+
+    if (read.status === 'end') return messages;
+    request = { cursor: read.next };
+  }
 }
 
 /** -1 when the point cannot be located (the surface's view drifted from the store). */
@@ -310,6 +330,7 @@ export interface AgentClient {
   getEvolutionConfig(): Promise<EvolutionConfigView>;
   setEvolutionConfig(view: Partial<EvolutionConfigView>): Promise<EvolutionConfigView>;
   listModels(): Promise<AgentModelMenu>;
+  inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult>;
 }
 
 export interface AgentUiMessage {

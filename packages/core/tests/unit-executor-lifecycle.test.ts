@@ -43,7 +43,7 @@ function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknow
     async exposePort(port: number) {
       calls.push(`expose:${port}`);
 
-      return { url: `https://${port}.example.test`, port };
+      return { url: `https://${port}.example.test`, port, route: { reached: true } };
     },
     async unexposePort(port: number) {
       calls.push(`unexpose:${port}`);
@@ -140,7 +140,7 @@ function nimbusBox(): NimbusSandboxHandle & { calls: string[]; execOptions: unkn
       async expose(port: number) {
         calls.push(`expose:${port}`);
 
-        return { port, url: `https://nimbus.example/s/test/port/${port}/` };
+        return { port, url: `https://nimbus.example/s/test/port/${port}/`, route: { reached: true } };
       },
       async unexpose(port: number) {
         calls.push(`unexpose:${port}`);
@@ -351,7 +351,7 @@ describe("executor lifecycle state", () => {
   test("Nimbus exposePort with no preview URL answers unsupported, not an empty URL", async () => {
     const box = nimbusBox();
     box.ports = {
-      expose: async (port: number) => ({ port }),
+      expose: async (port: number) => ({ port, route: { reached: true } }),
       unexpose: async () => {},
       list: async () => [],
     };

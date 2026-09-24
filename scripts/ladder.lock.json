@@ -1,9 +1,9 @@
 {
-  "reason": "five static gates join the commit tier at their measured seconds (complexity 2.5, silent-drop 1, test-clocks 1.5, pattern-inventory 2.5, test-census --ratchet 4.1): at push, lanes had already committed what they refuse; skip-ratchet re-measured at 18s stays at push",
+  "reason": "the complexity gate joins the push tier at 32s (bun run test:workerd:cf-complexity, measured 29-32s at load 7 on 2026-09-24; Main placed it at push), and the ladder self-test row also runs gate-cost.test.ts",
   "tiers": {
     "commit": {
       "seconds": 91.38,
-      "measuredAt": "2026-09-23",
+      "measuredAt": "2026-09-24",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,
@@ -42,8 +42,8 @@
       }
     },
     "push": {
-      "seconds": 404.78,
-      "measuredAt": "2026-09-23",
+      "seconds": 436.78,
+      "measuredAt": "2026-09-24",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,
@@ -80,7 +80,7 @@
         "bun scripts/schema-drift.ts": 0.23,
         "bun test --timeout=0 scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts": 24,
         "bun test --timeout=0 scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts": 0.1,
-        "bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts": 1.3,
+        "bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts": 1.3,
         "bun test --timeout=0 scripts/deploy.test.ts": 87,
         "bun test --timeout=0 scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts": 19,
         "bun test --timeout=0 scripts/gate-set-equality.test.ts": 1.1,
@@ -93,6 +93,7 @@
         "bun test --timeout=0 --parallel=4 packages/cf-backend/": 13,
         "bun run gate:scanner-bundle": 0.3,
         "bun run gate:capability-parity": 1.7,
+        "bun run test:workerd:cf-complexity": 32,
         "bun run gate:policy-drift": 0.9,
         "bun run gate:scratch-ownership": 0.42,
         "bun run gate:agents-fields": 0.34,

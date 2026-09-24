@@ -18,7 +18,7 @@
  * Waits are conditions, never clocks: the page's own socket frames (read over
  * CDP) and its own controls say when it has settled.
  */
-import type { Browser, Page } from 'puppeteer';
+import type { Browser, ElementHandle, Page } from 'puppeteer';
 import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
 import { writeFileSync } from 'node:fs';
@@ -46,16 +46,25 @@ export async function signedInPage(browser: Browser, identity: PublicWebIdentity
 
   if (Object.keys(headers).length > 0) await page.setExtraHTTPHeaders(headers);
 
-  await page.evaluateOnNewDocument(RECORD_TURN_ERRORS);
+  await page.evaluateOnNewDocument(RECORD_DEAD_ENDS);
 
   return page;
 }
 
-/** Records, on `window`, every turn the workspace's socket reports ended in
- *  error: the frame the chat renders its error from. Installed before each
- *  document's scripts run, so the socket the app opens is the recorded one. */
-const RECORD_TURN_ERRORS = `(() => {
+/** Records, on `window`, what ends a page's chances for good: every turn the
+ *  workspace's socket reports ended in error (the frame the chat renders its
+ *  error from), and every app script that failed to load, which leaves the page
+ *  blank (2026-09-24: the host's network changed mid-load, Chrome aborted the
+ *  module graph with net::ERR_NETWORK_CHANGED, and a row waited on a page that
+ *  would never draw). Installed before each document's scripts run, so the
+ *  socket and the scripts the app loads are the recorded ones. */
+export const RECORD_DEAD_ENDS = `(() => {
   window.__turnErrors = [];
+  window.__scriptFailures = [];
+  // A module the entry imports that fails to fetch fails the entry script itself.
+  window.addEventListener('error', (event) => {
+    if (event.target instanceof HTMLScriptElement) window.__scriptFailures.push(event.target.src || 'an inline script');
+  }, true);
   const Socket = window.WebSocket;
   window.WebSocket = class extends Socket {
     constructor(url, protocols) {
@@ -123,11 +132,14 @@ export const NEW_AGENT = `(() => {
 const CHAT_IDLE = `[...document.querySelectorAll('#chat button')].some((el) => el.getClientRects().length > 0
   && /send$/iu.test((el.getAttribute('aria-label') ?? '').trim()))`;
 
-/** What stops a row dead: a turn the socket reported ended in error, which
- *  the page may never show as ended; the welcome page, which stands in front of
- *  every route until the account finishes setup; or a danger notice, the
- *  product saying why the thing asked for will not come. */
+/** What stops a row dead: an app script that never loaded, which leaves the
+ *  page blank; a turn the socket reported ended in error, which the page may
+ *  never show as ended; the welcome page, which stands in front of every route
+ *  until the account finishes setup; or a danger notice, the product saying why
+ *  the thing asked for will not come. */
 const DEAD_END = `(() => {
+  const script = (window.__scriptFailures ?? []).at(-1);
+  if (script !== undefined) return 'the app script ' + script + ' failed to load, which leaves the page blank';
   const failed = (window.__turnErrors ?? []).at(-1);
   if (failed !== undefined) return 'a turn that ended in error: ' + failed;
   if (location.pathname === '/welcome') {
@@ -140,18 +152,20 @@ const DEAD_END = `(() => {
 })()`;
 
 /** Wait until `condition` holds in the page, or fail at once naming the dead end
- *  the page shows instead. Each wait is logged by what it waits for, so a run the
- *  tier's deadline ends still names the step it was in. */
-async function until(page: Page, what: string, condition: string): Promise<void> {
+ *  the page shows instead (a page opened without {@link RECORD_DEAD_ENDS}
+ *  cannot show a failed turn or a script that never loaded). Each wait is
+ *  logged by what it waits for, so a run the tier's deadline ends still names
+ *  the step it was in. */
+export async function until(page: Page, what: string, condition: string): Promise<void> {
   const started = performance.now();
 
-  process.stderr.write(`product-flows: waiting for ${what}\n`);
+  process.stderr.write(`  waiting for ${what}\n`);
 
   const outcome = await (await page.waitForFunction(`(${condition}) ? 'reached' : ${DEAD_END}`, { polling: 100 })).jsonValue();
 
   if (outcome !== 'reached') throw new Error(`waiting for ${what}, the page showed ${String(outcome)}`);
 
-  process.stderr.write(`product-flows: ${what} after ${((performance.now() - started) / 1000).toFixed(1)} s\n`);
+  process.stderr.write(`  ${what} after ${((performance.now() - started) / 1000).toFixed(1)} s\n`);
 }
 
 async function openWorkspacePage(target: FlowTarget, path: string): Promise<Page> {
@@ -165,25 +179,33 @@ async function openWorkspacePage(target: FlowTarget, path: string): Promise<Page
   return page;
 }
 
+/** Put `text` into the chat column's live composer and read it back; the
+ *  composer, to press Send on. One insertion, the way a paste lands: typed key
+ *  by key at machine speed, the live composer dropped characters on 41494531d
+ *  ("flow-pobe.txt") and under the 2026-09-24 sweep's load ("say whatis"). */
+export async function typeIntoComposer(page: Page, text: string): Promise<ElementHandle<Element>> {
+  const composer = await page.$('#chat textarea:not([disabled])');
+
+  if (composer === null) throw new Error('no live composer in the chat column');
+
+  await composer.focus();
+  await page.keyboard.sendCharacter(text);
+
+  // Keys the page sent elsewhere never arrive, and a send of nothing never
+  // shows: the composer is read back before anything is sent.
+  const typed = v.parse(v.string(), await composer.evaluate((box) => (box instanceof HTMLTextAreaElement ? box.value : '')));
+
+  if (typed !== text) throw new Error(`the composer holds ${JSON.stringify(typed)}, not the words typed into it`);
+
+  return composer;
+}
+
 /** Type into the chat column's live composer and press its Send; resolves once
  *  the pane shows the words and the turn they started has ended. */
 async function sendAndSettle(page: Page, text: string): Promise<void> {
   await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
 
-  const composer = await page.$('#chat textarea:not([disabled])');
-
-  if (composer === null) throw new Error('no live composer in the chat column');
-
-  // One insertion, the way a paste lands: typed key by key at machine speed,
-  // the live composer dropped characters on 41494531d ("flow-pobe.txt").
-  await composer.focus();
-  await page.keyboard.sendCharacter(text);
-
-  // Keys the page sent elsewhere never arrive, and a send of nothing never
-  // shows: read the composer back before pressing Enter.
-  const typed = v.parse(v.string(), await composer.evaluate((box) => (box instanceof HTMLTextAreaElement ? box.value : '')));
-
-  if (typed !== text) throw new Error(`the composer holds ${JSON.stringify(typed)}, not the words typed into it`);
+  const composer = await typeIntoComposer(page, text);
 
   await composer.press('Enter');
   await until(page, 'the sent words in the chat column',
@@ -293,7 +315,7 @@ async function settledAfter(page: Page, ledger: FrameLedger, ...methods: readonl
 }
 
 /** Two animation frames: whatever the last answer set in motion has painted. */
-async function painted(page: Page): Promise<void> {
+export async function painted(page: Page): Promise<void> {
   await page.evaluate(() => new Promise<void>((resolve) => {
     requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
   }));

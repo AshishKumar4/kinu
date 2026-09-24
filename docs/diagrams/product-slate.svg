@@ -25,7 +25,7 @@
 </text>
 <text x="68" y="229" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
 <tspan x="68" dy="0">Workspace files under</tspan>
-<tspan x="68" dy="30">/home/user/slates/&lt;id&gt;/</tspan>
+<tspan x="68" dy="30">/home/main/slates/&lt;id&gt;/</tspan>
 <tspan x="68" dy="30">TypeScript entry + package.json</tspan>
 </text>
 </g>

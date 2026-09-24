@@ -61,7 +61,7 @@ test('agent, ai and path-scoped bindings parse, and only the workspace namespace
         INBOX: { kind: 'agent' },
         MODEL: { kind: 'ai' },
         TUNED: { kind: 'ai', tier: 'fast' },
-        FILES: { kind: 'namespace', namespace: 'workspace', paths: ['/home/user/notes'] },
+        FILES: { kind: 'namespace', namespace: 'workspace', paths: ['/home/main/notes'] },
       },
     },
   });
@@ -69,7 +69,7 @@ test('agent, ai and path-scoped bindings parse, and only the workspace namespace
   expect(project.slate.bindings.INBOX).toEqual({ kind: 'agent' });
   expect(project.slate.bindings.MODEL).toEqual({ kind: 'ai' });
   expect(project.slate.bindings.TUNED).toEqual({ kind: 'ai', tier: 'fast' });
-  expect(project.slate.bindings.FILES).toEqual({ kind: 'namespace', namespace: 'workspace', paths: ['/home/user/notes'] });
+  expect(project.slate.bindings.FILES).toEqual({ kind: 'namespace', namespace: 'workspace', paths: ['/home/main/notes'] });
 
   expect(() => parseSlateProject({ main: 'server.js', slate: { bindings: { X: { kind: 'namespace', namespace: 'memory', paths: ['/a'] } } } }))
     .toThrow('paths scope only a workspace namespace binding');

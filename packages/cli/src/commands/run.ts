@@ -4,7 +4,7 @@ import { listConfiguredAgentRefs, requireAuthConfig } from '../config';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
 import { createAgentClient, type AgentClientFlags } from '../client-factory';
 import type { AgentClient, AgentClientEvent } from '../agent-client';
-import { decodeJsonValue, JsonValueSchema, parseJsonObject, projectJsonValue, usageReported, ToolOutcomeSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
+import { decodeJsonValue, JsonValueSchema, parseJsonObject, projectJsonValue, usageReported, ToolOutcomeSchema, type AgentRpcMethod, type JsonObject, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { CliSessionOptions } from '../session';
 import { chatCommand } from './chat';
@@ -34,7 +34,6 @@ import {
 } from '../local-inspection';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { installTurnDiagnostics } from '../turn-log';
-import { loadActiveProfile, updateDefaultTier } from '../profiles';
 
 /** `--no-transcript` arrives as `transcript: false`, not `noTranscript: true`. */
 interface TranscriptFlags {
@@ -229,13 +228,21 @@ function askLineOnce(question: string, signal: AbortSignal): Promise<string | nu
   });
 }
 
+/** Both backends answer `model` through the AgentClient contract. */
+async function modelRpcCommand(cmd: JsonObject, client: AgentClient): Promise<JsonValue> {
+  const spec = stringField(cmd, 'spec');
+
+  return decodeJsonValue({ value: spec ? await client.setModel(spec) : { spec: await client.getModelSpec() } });
+}
+
 async function respondToRpcCommand(
   cmd: JsonObject,
+  client: AgentClient,
   output: (input: { value: unknown }) => void,
   run: () => Promise<JsonValue>,
 ): Promise<void> {
   try {
-    const data = await run();
+    const data = await (cmd.type === 'model' ? modelRpcCommand(cmd, client) : run());
     output({ value: { id: cmd.id, type: 'response', command: cmd.type, success: true, data } });
   } catch (err) {
     output({ value: { id: cmd.id, type: 'response', command: cmd.type, success: false, error: renderThrownChain({ cause: err }) } });
@@ -266,7 +273,7 @@ async function runRpc(
         if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
 
         if (cmd.value.type !== 'prompt') {
-          await respondToRpcCommand(cmd.value, output, () => runCloudRpcCommand(auth.origin, auth.token, target.cloudName, cmd.value));
+          await respondToRpcCommand(cmd.value, client, output, () => runCloudRpcCommand(auth.origin, auth.token, target.cloudName, cmd.value));
           continue;
         }
 
@@ -317,7 +324,7 @@ async function runRpc(
       if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
 
       if (cmd.value.type !== 'prompt') {
-        await respondToRpcCommand(cmd.value, output, () => runLocalRpcCommand(target.localName, cmd.value, client));
+        await respondToRpcCommand(cmd.value, client, output, () => runLocalRpcCommand(target.localName, cmd.value, client));
         continue;
       }
 
@@ -341,21 +348,10 @@ async function runRpc(
   }
 }
 
-/** Edits the canonical profile tier; per-agent `setModel` is only a bootstrap hint that turn profile resolution overrides. */
-async function runModelProfileCommand(cmd: JsonObject): Promise<JsonValue> {
-  const spec = stringField(cmd, 'spec');
-
-  const envelope = spec
-    ? await updateDefaultTier({ model: spec })
-    : await loadActiveProfile();
-
-  return decodeJsonValue({ value: { spec: envelope.catalog.tiers.default.model } });
-}
-
 const commandType = (cmd: JsonObject): string => stringField(cmd, 'type') ?? '';
 
 async function runCloudRpcCommand(origin: string, token: string, name: string, cmd: JsonObject): Promise<JsonValue> {
-  const rpc = async (method: string, args: JsonValue[] = []): Promise<JsonValue> =>
+  const rpc = async (method: AgentRpcMethod, args: JsonValue[] = []): Promise<JsonValue> =>
     callAgentRpc({ origin, token, name, method, schema: JsonValueSchema, args });
 
   const type = commandType(cmd);
@@ -368,8 +364,6 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
       return rpc('getAgentStatus');
     case 'tools':
       return rpc('getToolDescriptions');
-    case 'model':
-      return runModelProfileCommand(cmd);
     case 'triggers':
       return rpc('listTriggers');
     case 'jobs':
@@ -472,8 +466,6 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
       return decodeJsonValue({ value: getLocalAgentState(name) });
     case 'tools':
       return decodeJsonValue({ value: await client.describeTools() });
-    case 'model':
-      return runModelProfileCommand(cmd);
     case 'triggers':
       return decodeJsonValue({ value: listLocalTriggers(name) });
     case 'jobs':

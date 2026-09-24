@@ -291,6 +291,23 @@ describe('turn_outcomes ledger', () => {
     expect(listTurnOutcomes(sql, actor, { outcomes: ['corrected', 'frustrated'] })).toHaveLength(1);
   });
 
+  test('of two verdicts recorded in one millisecond, the later is the effective one', () => {
+    // An owner who accepts a take and then corrects it can do both inside one millisecond. Ids are random,
+    // so across forty turns an order that is not insertion order gets some of them wrong.
+    const { sql, actor } = setup();
+    const turnIds = Array.from({ length: 40 }, (_, turn) => `m${String(turn)}`);
+
+    for (const turnId of turnIds) {
+      for (const outcome of ['accepted', 'corrected'] as const) {
+        recordTurnOutcome(sql, actor, {
+          turnId, outcome, confidence: 1, source: 'explicit', userMessage: 't', assistantResponse: 'a', now: 100,
+        });
+      }
+    }
+
+    expect(new Set(listTurnOutcomes(sql, actor, { limit: -1 }).map((row) => row.outcome))).toEqual(new Set(['corrected']));
+  });
+
   test('explicit feedback replaces the classifier verdict for the same turn', () => {
     const { sql, actor } = setup();
     recordTurnOutcome(sql, actor, {

@@ -21,7 +21,7 @@ import {
 import type {
   ChatOptions,
   TurnContinuity, FiberCtx,
-  LLM, ModelCallSink, ModelRouteResolution, HeadMergeModelBinding,
+  LLM, ModelCallReport, ModelCallSink, ModelRouteResolution, HeadMergeModelBinding,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions,
   ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
@@ -42,7 +42,7 @@ import { TierIdSchema,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
   backgroundJobNotice,
-  DeferredApprovalQueue, DeferredApprovalStore,
+  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore,
@@ -143,7 +143,7 @@ import { TierIdSchema,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
-  admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode,
+  admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode, toolSchemaDialect, withToolSchemaDialect,
   createActorHost, defaultLoopOrigin, createDbCodemodeProvider,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
@@ -161,7 +161,7 @@ import { localActorDirectory, registerLocalActor, retireLocalActor, registerLoca
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
-import { createCLIHeadRuntime, type CLIHeadRuntimeDeps, type HostedHeadSeat } from './head-runtime';
+import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps, type HostedHeadSeat } from './head-runtime';
 import { detectOrphanedFibers, type OrphanedFiber } from '@kinu.run/core';
 import { connectMcpServers, type McpServerConfig } from './mcp';
 import type { LocalModelResolver } from './model-resolver';
@@ -217,6 +217,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     enabled: input.noAutoEvolve !== true,
     // Review calls debit the reviewed turn's mission.
     governor: budget,
+    reportModelCall: (report) => { input.session().reportModelCall(report); },
     // Local replay runs with tools disabled: re-running tools would re-execute shell work on the
     // user's machine, so CLI replay measures prompt/model config only.
     replayTaskRunner: (task) => input.session().runReplayTask(task),
@@ -616,7 +617,6 @@ export class LocalAgentSession implements BackendHost {
         driverGate: () => this.driverGate?.() ?? null,
         // No durable wake: this process is the wake, and a crashed turn re-arms from the ledger on restart.
         armTurnWake: async () => {},
-        modelWindow: () => this.modelCatalog.window(),
         steerSkills: (text) => steerSkillsBlock({
           vfs: this.rt.storage.vfs,
           config: this.config,
@@ -815,9 +815,7 @@ export class LocalAgentSession implements BackendHost {
   async decideDeferredApprovals(
     ids: string[], decision: DeferredApprovalAnswer,
   ): Promise<{ decided: string[] }> {
-    const decided = await this.deferrals.decide(ids, decision);
-
-    return { decided: decided.map((action) => action.id) };
+    return decideDeferredApprovals(this.deferrals, ids, decision);
   }
 
   /** `allow_always` grants exactly the rules asked about on that executor, never a whole-agent
@@ -1097,9 +1095,11 @@ export class LocalAgentSession implements BackendHost {
     if (!task) return false;
     this.ensureModelState();
     const id = newBranchId();
+    // Read now: the branch charges the turn the owner redirected, not whichever runs next.
+    const missionLabels = this.budget.scope;
 
     const handle = this.readInheritedContext().then((inheritedContext) => startBranchHead(this._headRuntime, this.headJournal, {
-      id, task, inheritedContext,
+      id, task, inheritedContext, missionLabels,
     }));
 
     this.pendingBranches.push({ id, task, handle });
@@ -1165,7 +1165,7 @@ export class LocalAgentSession implements BackendHost {
           source: `MCP server "${d.server}"`,
           reason: d.reason ?? 'failed to start, so its tools are missing from this turn',
         })),
-      ...admission.deferred.map((d) => ({
+      ...[...conn.refused, ...admission.deferred].map((d) => ({
         source: `MCP server "${d.server}"`,
         reason: d.reason,
       })),
@@ -1339,7 +1339,7 @@ export class LocalAgentSession implements BackendHost {
     });
 
     diagnostics.event('actor.turns_recovered', {
-      verified: recovered.verified.length, refused: recovered.refused.length,
+      verified: recovered.verified.length, refused: recovered.refused.length, failed: recovered.failed.length,
       unreadable: recovered.unreadable.length, active: recovered.active.length,
     });
     const advisorOrphans: OrphanedFiber[] = [];
@@ -1637,8 +1637,9 @@ export class LocalAgentSession implements BackendHost {
       Object.entries(this.filterToolsBySkills(activeSkills)).filter(([name]) => toolAllowed(name)),
     );
 
-    const filteredExternal = Object.fromEntries(
-      Object.entries(this.extraTools).filter(([name]) => toolAllowed(name)),
+    const filteredExternal = withToolSchemaDialect(
+      Object.fromEntries(Object.entries(this.extraTools).filter(([name]) => toolAllowed(name))),
+      toolSchemaDialect(this.effectiveModelSpec()),
     );
 
     const turnTools = toolsInWorkMode(this.actorSession.workMode, { ...filteredBuiltins, ...filteredExternal });
@@ -2410,6 +2411,10 @@ export class LocalAgentSession implements BackendHost {
     return this.modelCatalog.pricing();
   }
 
+  reportModelCall(report: ModelCallReport): void {
+    this.modelCallSink(report);
+  }
+
   reportBudgetRefusal(refusal: Omit<Extract<RunEventInput, { type: 'budget_exhausted' }>, 'type'>): void {
     this.recordRunEvent({ type: 'budget_exhausted', ...refusal });
   }
@@ -2520,6 +2525,9 @@ export class LocalAgentSession implements BackendHost {
       announceHeadActivity: () => this.headActivity,
       reportNodeDelta: () => this.publishHeadStream,
       model: this.cachedModel ?? this.defaultModel("an agents swarm"),
+      reportModelCall: this.modelCallSink,
+      nodeCodemode: (actor) => hostedCodemodeTool(actor, this.headCodemodeExtras()),
+      webSearch: this.getWebSearchProvider(),
       originContext: () => this.actorSession.history,
       costModel: () => ({
         spec: this.effectiveModelSpec(),

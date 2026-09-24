@@ -11,7 +11,7 @@ import {
   type McpPresetAvailability, type McpServerSummary, type McpTransport,
 } from "@/lib/user-api";
 import { McpPresetCards } from "@/components/plugins/McpPresetCards";
-import { inputCls } from "@/components/ui/form";
+import { Choice, inputCls } from "@/components/ui/form";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import * as v from "valibot";
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -239,11 +239,7 @@ export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onA
         </div>
         <div className="space-y-1">
           <label className="text-xs p-text-3">Transport</label>
-          <select value={transport} onChange={(e) => setTransport(v.parse(McpTransportSchema, e.target.value))} className={inputCls}>
-            <option value="auto">auto (recommended)</option>
-            <option value="streamable-http">streamable-http</option>
-            <option value="sse">sse</option>
-          </select>
+          <Choice label="Transport" value={transport} onChange={setTransport} options={MCP_TRANSPORTS} />
         </div>
       </div>
       <div className="space-y-1">
@@ -278,4 +274,8 @@ export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onA
   );
 }
 
-const McpTransportSchema = v.picklist(['auto', 'sse', 'streamable-http']);
+const MCP_TRANSPORTS: ReadonlyArray<{ value: McpTransport; label: string }> = [
+  { value: 'auto', label: 'auto (recommended)' },
+  { value: 'streamable-http', label: 'streamable-http' },
+  { value: 'sse', label: 'sse' },
+];

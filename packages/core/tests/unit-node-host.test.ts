@@ -172,9 +172,6 @@ async function fixture(opts?: {
     model: opts?.model
       ?? scriptedReporter(opts?.answer ?? 'sort once instead of comparing every pair', opts?.offered),
     journal,
-
-    // Without its own deadline a node's only clock is the search abort, which cuts a whole wave.
-    maxWallClockMs: 60_000,
     logger: createRecordingLogger(),
   };
 

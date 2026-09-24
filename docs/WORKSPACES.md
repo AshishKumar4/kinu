@@ -83,7 +83,11 @@ A workspace holds the state. Agents are the actors that work inside it.
   the directory on the agent's ref (`CLIRuntimeConfig.cwd`, never
   `process.cwd()`). With no directory bound, both planes are the one in-SQLite
   tree an isolated fixture or eval episode gets. Relative paths resolve at
-  `/home/user` (`WORKSPACE_ROOT`, `packages/core/src/vfs/workspace-path.ts:2`).
+  `/home/main` (`WORKSPACE_ROOT`, `packages/core/src/vfs/workspace-path.ts:2`). A
+  workspace made when the root was `/home/user` has its tree moved there on its
+  first boot, and `/home/user` stays a link to `/home/main`, so a path written
+  before still reaches its file (`settleWorkspaceRoot`, `core/src/vfs/agent-home.ts`).
+  `git clone` refuses a destination reached through that link; name `/home/main`.
   The mount table adds each connected device at `/pc/<name>`, a container at
   `/sandbox`, and each actor's own working context at `/context`.
 
@@ -186,7 +190,7 @@ A workspace holds the state. Agents are the actors that work inside it.
     the spec for the six axes, presets, report contract and isolation states.
 
     Only the workspace tree is one view. A path under the workspace root,
-    relative or under `/home/user`, names the same file on every surface
+    relative or under `/home/main`, names the same file on every surface
     (measured 2026-09-05 in both directions). A path at the filesystem root
     outside it does not: the shell and the file surface keep separate roots
     there, and each hides the other's root writes.
@@ -208,9 +212,8 @@ A workspace holds the state. Agents are the actors that work inside it.
     do it: a fresh workspace is the root of its own delegation tree, so a
     subordinate that could call it could not be its child. The hire names a
     fresh workspace and records `fork_lineage` (`source_workspace_id/name`).
-    `forkWorkspaceStorage`
-    (`packages/core/src/identity/fork.ts#forkWorkspaceStorage`) does the copy
-    in one process; `deliverCloudFork`
+    `forkTransferFrames` (`packages/core/src/identity/fork-transfer.ts`) streams
+    the copy as bounded frames and `ForkTransferReceiver` lands them; `deliverCloudFork`
     (`packages/cf-backend/src/user/workspace-fork.ts#deliverCloudFork`) is the
     hosted entry point. The roster the UI shows comes from `listSubordinates()`
     (RPC, plus the `subordinates_changed` socket event) and holds this
@@ -256,7 +259,7 @@ A workspace holds the state. Agents are the actors that work inside it.
 | CLI | `kinu create <name>`, `kinu exec --workspace <name>`, `/api/cli/workspaces/*` |
 | Access-token scopes | `ACCESS_TOKEN_SCOPES`: `workspace.read`, `workspace.exec`, `ai.proxy` |
 | MCP resources | `kinu://workspace/<name>/memory` |
-| Identity API (core) | `createWorkspace` / `openWorkspaceMainActor` / `forkWorkspaceStorage` |
+| Identity API (core) | `createWorkspace` / `openWorkspaceMainActor` / `forkWorkspace` |
 | Registry (UserDO) | `user_workspaces` plus `listWorkspaces` / `hasWorkspace` / ... |
 
 Some names keep the actor sense. `OrchestratorAgent` is the one exported agent

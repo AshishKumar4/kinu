@@ -48,7 +48,7 @@ describe('a terminal sequence on real Durable Object storage', () => {
     const stub = probe('claim-first');
 
     expect(await stub.settle('u-head', 'a-head', ANSWER, {
-      cutAt: { name: 'takes', phase: 'before' },
+      cut: { name: 'takes', phase: 'before' },
     })).toMatch(/interrupted before its side effect/u);
 
     const rows = await stub.effectRows('u-head', 'a-head');
@@ -69,7 +69,7 @@ describe('an eviction part-way through a terminal sequence', () => {
     const stub = probe('interrupted-suffix');
 
     expect(await stub.settle('u-cut', 'a-cut', ANSWER, {
-      cutAt: { name: 'turn_record', phase: 'before' },
+      cut: { name: 'turn_record', phase: 'before' },
     })).toMatch(/interrupted before its side effect/u);
     expect(await stub.executions()).toEqual([
       { key: terminalEffectKey('takes', 'a-cut'), runs: 1 },
@@ -124,7 +124,7 @@ describe('an eviction part-way through a terminal sequence', () => {
     const stub = probe('indeterminate');
 
     expect(await stub.settle('u-after', 'a-after', ANSWER, {
-      cutAt: { name: 'turn_record', phase: 'after' },
+      cut: { name: 'turn_record', phase: 'after' },
     })).toMatch(/interrupted after its side effect/u);
     expect((await stub.effectRows('u-after', 'a-after'))
       .find((row) => row.name === 'turn_record')?.status).toBe('pending');
@@ -177,7 +177,7 @@ describe('two responses interrupted before one sweep', () => {
 
     for (const messageId of ['a-one', 'a-two']) {
       expect(await stub.settle('u-both', messageId, ANSWER, {
-        cutAt: { name: 'turn_record', phase: 'before' },
+        cut: { name: 'turn_record', phase: 'before' },
       })).toMatch(/interrupted before its side effect/u);
     }
 

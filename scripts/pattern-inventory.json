@@ -4,7 +4,7 @@
       "file": "lean/check-traceability.mjs",
       "kind": "hand-parser",
       "owner": "parseTraceability",
-      "sourceSha256": "ff6b08f40f9f74cb7e394f1494b9885f39e0c716c6cac21bdd4c85984cbd9df2",
+      "sourceSha256": "fd260257a56471ccddf5440d51695cd4e88ea9d719e42f6f49d513e7908c7d59",
       "decision": "traceability"
     },
     {
@@ -92,13 +92,6 @@
       "decision": "bundleResolver"
     },
     {
-      "file": "packages/cf-backend/tests/helpers/declared-members.ts",
-      "kind": "regex-literal",
-      "owner": "DECLARATION",
-      "sourceSha256": "989cc0adf11c151a7f1c704c737beff9eb1a92f8d7d923232e414c68e02c8bb8",
-      "decision": "sourceGate"
-    },
-    {
       "file": "packages/cf-backend/tests/unit-activity-cache-pane.test.ts",
       "kind": "regex-literal",
       "owner": "<module>",
@@ -132,13 +125,6 @@
       "owner": "<module>",
       "sourceSha256": "14fe31c3bb7f2fa8d97ac50a4eb181b58b55460455b9453d15eb157593ce22d5",
       "decision": "lexical"
-    },
-    {
-      "file": "packages/cf-backend/tests/unit-backend-twins.test.ts",
-      "kind": "hand-parser",
-      "owner": "scanTwins",
-      "sourceSha256": "8276f3adc5a54bf80c1baf771d70052a195ac822a870ee207f904d498db4c44b",
-      "decision": "sourceGate"
     },
     {
       "file": "packages/cf-backend/tests/unit-composer.test.ts",
@@ -190,13 +176,6 @@
       "decision": "lexical"
     },
     {
-      "file": "packages/cf-backend/tests/unit-do-init-gate.test.ts",
-      "kind": "regex-literal",
-      "owner": "<module>",
-      "sourceSha256": "4d8976162fa06737d980478989a73abafa77564df2fff3f622ec064474d82cf4",
-      "decision": "lexical"
-    },
-    {
       "file": "packages/cf-backend/tests/unit-egress-interception.test.ts",
       "kind": "regex-literal",
       "owner": "<module>",
@@ -243,13 +222,6 @@
       "kind": "regex-literal",
       "owner": "cliInvokedNames",
       "sourceSha256": "5a62d7e4409fe693bbaff8aa68d7ce20735abe2e26edab542a59e141054fdf03",
-      "decision": "sourceGate"
-    },
-    {
-      "file": "packages/cf-backend/tests/unit-rpc-surface.test.ts",
-      "kind": "regex-literal",
-      "owner": "classes",
-      "sourceSha256": "db2cf43738adefdbee11ecad0cb0ef5c0252e50c6f0740bb7af77fb4948c42ce",
       "decision": "sourceGate"
     },
     {
@@ -321,13 +293,6 @@
       "owner": "parseStroke",
       "sourceSha256": "acce03a5d4be2dccd5b10e1e0cdbbe95efe209a6a3b8488b42b55eeec6682e7e",
       "decision": "cli"
-    },
-    {
-      "file": "packages/cli/tests/device-connect.test.ts",
-      "kind": "regex-literal",
-      "owner": "REQUIRED_SIBLINGS",
-      "sourceSha256": "aa650df96fcdfb8765ac6962799234120eecaf9c8a44ebfc06dbad010f442327",
-      "decision": "daemon"
     },
     {
       "file": "packages/core/src/bench/longhorizon.ts",
@@ -508,7 +473,7 @@
       "file": "packages/core/src/skills/parse.ts",
       "kind": "hand-parser",
       "owner": "parseSkillFile",
-      "sourceSha256": "d491b0105005b496c1fba3c401f78b5c01db05db220f3d65ba96ed3e4a7657ee",
+      "sourceSha256": "127508da4c12dfdd6ee5c3cda6f8b28ff6043632b99950472b55683e2bb8dfef",
       "decision": "lexical"
     },
     {
@@ -684,13 +649,6 @@
       "kind": "regex-literal",
       "owner": "segments",
       "sourceSha256": "d6c1fe6d126597f07fc9dc85817d6b91ed34d7792f980d39a2d6bf1094ac55c7",
-      "decision": "sourceGate"
-    },
-    {
-      "file": "packages/core/tests/unit-backend-host-contract.test.ts",
-      "kind": "regex-literal",
-      "owner": "declaredMembers",
-      "sourceSha256": "94032a9e5135358c895c460e56223f45784f593cf6418ef8a6b1251d143d80df",
       "decision": "sourceGate"
     },
     {
@@ -1177,13 +1135,6 @@
       "decision": "lexical"
     },
     {
-      "file": "scripts/scanner-bundle-gate.ts",
-      "kind": "regex-literal",
-      "owner": "BARE_IMPORT",
-      "sourceSha256": "e0f62d097d94772e566b2c52befe579422eb625f039a8f30786456b92cd9d537",
-      "decision": "sourceGate"
-    },
-    {
       "file": "scripts/schema-drift.ts",
       "kind": "hand-parser",
       "owner": "parseParts",
@@ -1195,6 +1146,13 @@
       "kind": "hand-parser",
       "owner": "parseTables",
       "sourceSha256": "f44cef3dd50ce15d0987fa7c1ddd6e353db57444efafa7ba32418475dbefba1a",
+      "decision": "schema"
+    },
+    {
+      "file": "scripts/schema-drift.ts",
+      "kind": "hand-parser",
+      "owner": "parseViews",
+      "sourceSha256": "e509f7961875dcad058318b159e048df93c97a2b7abb5e7adeec368994c5d021",
       "decision": "schema"
     },
     {

@@ -83,15 +83,16 @@ This is the terminal `evals` tier, never a commit, push, CI, or deploy gate. A d
 
 ### The arms
 
-The local backend runs five arms. `bun test` matches `*.test.ts` / `*_test.*` / `*.spec.*`, never `*.eval.ts`, so the bun suites and the vitest behaviour arm are two runners. The other three arms are single vitest files, split out because `scripts/eval-spend.ts --expect-live` checks one spend file per arm. A paid subject sharing a file could stop reaching a model while the shared total still passed. On its own file, its zero fails under the printed `EXPECT_LIVE`.
+The local backend runs six arms. `bun test` matches `*.test.ts` / `*_test.*` / `*.spec.*`, never `*.eval.ts`, so the bun suites and the vitest behaviour arm are two runners. The other four arms are single vitest files, split out because `scripts/eval-spend.ts --expect-live` checks one spend file per arm. A paid subject sharing a file could stop reaching a model while the shared total still passed. On its own file, its zero fails under the printed `EXPECT_LIVE`.
 
 | Arm | Command | What it measures |
 |---|---|---|
 | bun suites | `bun test ./tests/` | end-to-end lifecycle (a five-turn conversation with a threaded history, judged on content per turn), evolution across sessions, MCTS reached and durably ranked, delegation conversion, one real turn per backend |
-| behaviour evals | `vitest --config vitest.evals.config.ts`, excluding the three single-family files | 25 corpus tasks × 2 repetitions = 50 full agent episodes (6 workspace, 4 seed tool-use, 7 hard, 8 behaviour probes), graded by nine judges over the `run_events` ledger. Every case declares a spend budget (steps, tokens, tool error rate, wall time) scored as the `budget_adherence` covariate. Probes add ground-truth subgoals for file refusals, codemode handled/unhandled errors, memory notes/facts and task lists (`tests/evals/behaviour-probes.ts`) |
+| behaviour evals | `vitest --config vitest.evals.config.ts`, excluding the single-family files | the 7 verifier-graded hard tasks × 2 repetitions = 14 full agent episodes. Judged on the outcome (`task_outcome`) and cost (`budget_adherence`) only, per m303; the mechanism rows (steering, crafting, edits, recovery, spill, tool outcomes) stay in the record as evidence and are not judged. `KINU_EVAL_ARM` picks the arm (below) |
 | live swarm | `vitest … tests/evals/swarm.eval.ts` | one `agents({action:'swarm'})` call through the real tool surface: a `depth:2 branches:3` verifier-scored search with `expand:'aggregate'`, graded on the caller's own `exec-ratio` instrument |
 | research | `vitest … tests/evals/research.eval.ts` | one agent episode whose only source for a fictional topic is a controlled MCP archive this repo serves (`tests/evals/fixtures/`). It is scored by exact match on planted numbers and a canary token. That proves reading, names fabrication, and needs no LLM judge |
 | optimization | `vitest … tests/evals/optimization.eval.ts` | one agent episode against the swarm arm's own metered instrument (`hard-majority-vote`), full tool surface offered, held to a pre-registered `task_outcome ≥ 0.5`. Swarm use and tree shape recorded, never dictated |
+| math | `vitest … tests/evals/math.eval.ts` | nine problem kinds (a linear recurrence, a divisor sum, Pell, spanning trees, dice, blocked lattice paths, a prime sum, a totient sum, a squarefree count), each a fresh instance drawn from a per-run seed (`KINU_EVAL_SEED` pins one), one spawned `kinu exec` episode per instance, `answer.txt` compared exactly. A wrong answer is recorded, not failed. The credential-free half checks every solver against a brute force, the brute-force barriers, and the verifier's green and red fixtures |
 
 The swarm arm requires a winner, oracle calls against its baseline,
 `exploration_records` read through the reader under the objective identity and
@@ -163,7 +164,7 @@ An arm that attempts a task writes `run-record.json` (schema 1, `EvalRunRecord` 
 
 `publishRunRecord` is the only writer and writes nothing without observations. Without credentials, arm `afterAll` handlers once wrote 81 of the first 89 records with zero observations. The writer guard protects future families. Records can show outcome movement, swarm use versus attainment (the report 2×2), family time/spend, called tools, and transcripts. They cannot yet show single-observation significance, causal swarm benefit, or per-step time.
 
-Behaviour knobs (`tests/evals/behaviour.eval.ts:88-92,119-120`; `KINU_EVAL_RECORD` in `packages/test-utils/src/eval-run.ts:971`; research and optimization use the same tier and record knobs):
+Behaviour knobs (`tests/evals/behaviour.eval.ts`; `KINU_EVAL_RECORD` in `packages/test-utils/src/eval-run.ts`; research and optimization use the same tier and record knobs):
 
 | Variable | Effect |
 |---|---|
@@ -171,6 +172,7 @@ Behaviour knobs (`tests/evals/behaviour.eval.ts:88-92,119-120`; `KINU_EVAL_RECOR
 | `KINU_EVAL_REPEATS` | repetitions per task; default 2 for flash, 1 for pro |
 | `KINU_EVAL_SEED` | the run seed; default 1 |
 | `KINU_EVAL_EVOLUTION=0` | turns evolution off |
+| `KINU_EVAL_ARM` | `baseline` (default); `solo` withholds the `agents` tool and its swarm search; `codemode` leaves `eval` as the only native tool; `caveman` and `use-swarm` rewrite the mission text (`tests/evals/prompt-style.ts`). The harness applies the tool arms through the session's role allowlist, and `compareRuns(…, { treatment })` admits exactly the one field an A/B moves |
 | `KINU_EVAL_RECORD` | where the run record is written; default beside the retained transcripts under `bench-artifacts/` |
 
 ### Triaging after `bun run evals:full`
@@ -220,9 +222,9 @@ Earlier attempts: camelCase floor input was refused as `Invalid key: Expected "b
 
 ### Sizing before you run it
 
-`runSwarmAction` (`packages/core/src/delegation/agents-tool.ts:1544`) sets no node budget. There is no step cap (owner ruling 2026-08-21). `runNodeLoop` ends when tools stop. A wall clock applies only when the caller supplies `deps.maxWallClockMs`; `runHeadInference` then checks it between steps.
+`runSwarmAction` (`packages/core/src/delegation/agents-tool.ts:1544`) sets no node budget. There is no step cap (owner ruling 2026-08-21). `runNodeLoop` ends when tools stop. No wall clock applies.
 
-`LLM_CALL_TIMEOUT_MS` and `LLM_CALL_MAX_RETRIES` are gone. The only code reference asserts their absence (`packages/core/tests/unit-call-bounds.test.ts:52-53`); `packages/core/tests/unit-swarm-node-envelope.test.ts` covers a node under a deadline. A rate-limited request waits indefinitely (`packages/core/src/providers/rate-limit-retry.ts:130`: `for (let attempt = 1; ; attempt++)`). `PROVIDER_SDK_RETRIES = 2` (`packages/core/src/providers/rate-limit-retry.ts:14`) is the transport retry at `streamText`. A call ends when the provider answers, fails definitively, or is cancelled. A turn ends on completion, user stop, or throw. `classifyRunEnd` names the result. `AGENTS_ACTION_FIELDS.swarm` (`packages/core/src/delegation/agents-tool.ts:723`) records the deliberately absent iteration and wall-clock inputs.
+`LLM_CALL_TIMEOUT_MS` and `LLM_CALL_MAX_RETRIES` are gone. The only code reference asserts their absence (`packages/core/tests/unit-call-bounds.test.ts:52-53`); `packages/core/tests/unit-swarm-node-envelope.test.ts` covers a node whose one step takes 26 minutes. A rate-limited request waits indefinitely (`packages/core/src/providers/rate-limit-retry.ts:130`: `for (let attempt = 1; ; attempt++)`). `PROVIDER_SDK_RETRIES = 2` (`packages/core/src/providers/rate-limit-retry.ts:14`) is the transport retry at `streamText`. A call ends when the provider answers, fails definitively, or is cancelled. A turn ends on completion, user stop, or throw. `classifyRunEnd` names the result. `AGENTS_ACTION_FIELDS.swarm` (`packages/core/src/delegation/agents-tool.ts:723`) records the deliberately absent iteration and wall-clock inputs.
 
 One wave had three nodes: 22, 25, 26 steps; 25, 27, 27 tool calls; 1,216-1,337 s each; ~2.45M input tokens; no candidate. No node finished, so 26 is a floor, not a typical demand. `depth × branches` bounds shape. Inside a turn only `abortSignal` bounds work. That wave recorded all three as `aborted` when the 20-minute envelope fired. That envelope cut healthy nodes before any real job completed, so no default node clock remains (owner ruling 2026-08-21). `packages/core/src/strategy/node-agent.ts:788` builds the `isAborted` poll the loop reads between steps. That is why a 26-minute in-process step ignored both that timer and vitest `testTimeout`.
 

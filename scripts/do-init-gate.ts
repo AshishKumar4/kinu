@@ -1,10 +1,22 @@
 /**
  * Container startup may restore only after the control listener is proven,
- * under the hook's raced budget. Per-request and recovery hooks keep their
- * own narrower rules. The September 13 probe disproved timer starvation.
+ * under the hook's raced budget, inside the SDK start block (R1, D26). Per-request
+ * and recovery hooks keep their own narrower rules.
+ *
+ * The block rule rests on dated measurements (D26, P4, P5 in DEVBOX-DECISIONS).
+ * Deployed 2026-09-13 (D8, trace b20260913105359): a start block's boot-id RPC
+ * over the control connection opened before the block never answered, and the
+ * object reset at the 30 s cap. Deployed 2026-09-23 on the tree that ships
+ * (@cloudflare/sandbox 0.12.9, image kinu-devbox-block-layer@sha256:85615586…):
+ * with a timer set before the block left pending, upstream's block got no reply
+ * or never ended its hook, 9 of 9 (run s20260923032104), and this rule's shape
+ * answered and returned with the gate held, 6 of 6 for the SDK's own timers
+ * (connection poll, alarm wait, port pings; run s20260923033729). A timer
+ * another event leaves pending still stalls the hook, 3 of 3: the rule's residual.
  */
 
 import { readFileSync } from 'node:fs';
+import type { Expression, Super } from 'oxc-parser';
 import * as v from 'valibot';
 
 import { readContainerInputBlockSources, readSources } from './sources';
@@ -705,26 +717,222 @@ export function audit(sources: ReadonlyMap<string, string>): InitGateAudit {
   return { inspected, violations, classifier, arms };
 }
 
-/** 2026-09-13 cloud trace b20260913105359: container.js:641 held onStart
- * at :644 while Devbox's boot-id RPC (:3495) never received its reply.
- * Follow named local methods, including the virtual SDK onStart edge. */
-export function auditBlockBodies(sources: ReadonlyMap<string, string>): Violation[] {
+/** The containers start block's one call into the hook (the containers patch). */
+const START_HOOK_EDGE = 'callOnStart';
+
+/** The container-start methods whose input block must run the hook (R1, D26). */
+const START_METHODS: readonly string[] = ['start', 'startAndWaitForPorts'];
+
+/** Where the installed SDK isolates the start hook inside the start block (D26). */
+export interface HookIsolation {
+  readonly file: string;
+  readonly line: number;
+}
+
+export interface BlockAudit {
+  readonly violations: readonly Violation[];
+  /** Start methods whose input block runs the hook through `callOnStart`. */
+  readonly hookBlocks: readonly string[];
+  /** The `callOnStart` that suspends the outer client's timers, then runs the hook on a client
+   *  opened in the block. */
+  readonly hookConnection: HookIsolation | null;
+  /** The `callOnStart` that ends the alarm loop's wait before it runs `onStart`. */
+  readonly alarmWait: HookIsolation | null;
+}
+
+/** Offsets of the first call to each callee in one `callOnStart` body, and of its first await of
+ *  `super.callOnStart()`. */
+interface HookOffsets {
+  readonly calls: ReadonlyMap<string, number>;
+  readonly superHook: number | undefined;
+}
+
+function firstOffsets(body: SyntaxNode): HookOffsets {
+  const calls = new Map<string, number>();
+  let superHook: number | undefined;
+
+  walk(body, (inner) => {
+    const name = memberCalleeName(inner) ?? identifierCalleeName(inner);
+
+    if (name !== undefined && !calls.has(name)) calls.set(name, inner.start);
+    const raw = inner.raw;
+
+    if (raw.type === 'AwaitExpression' && raw.argument.type === 'CallExpression' && raw.argument.callee.type === 'MemberExpression'
+      && raw.argument.callee.object.type === 'Super' && raw.argument.callee.property.type === 'Identifier'
+      && raw.argument.callee.property.name === START_HOOK_EDGE) superHook ??= inner.start;
+  });
+
+  return { calls, superHook };
+}
+
+/** A `callOnStart` that suspends the outer client's timers and assigns `this.client` a client from
+ *  `createClientForTransport`, both before it awaits `super.callOnStart()`. */
+function hookConnectionOf(file: string, tree: Parsed): HookIsolation | null {
+  let found: HookIsolation | null = null;
+
+  walk(tree.root, (node) => {
+    if (found !== null || node.type !== 'MethodDefinition' || declaredName(node) !== START_HOOK_EDGE) return;
+    const body = blockBodyOf(functionOf(node) ?? node);
+
+    if (body === undefined) return;
+    const fresh = new Set<string>();
+    let assignedAt: number | undefined;
+
+    walk(body, (inner) => {
+      const raw = inner.raw;
+
+      if (raw.type === 'VariableDeclarator' && raw.id.type === 'Identifier' && raw.init?.type === 'CallExpression'
+        && raw.init.callee.type === 'MemberExpression' && raw.init.callee.property.type === 'Identifier'
+        && raw.init.callee.property.name === 'createClientForTransport') fresh.add(raw.id.name);
+
+      if (raw.type === 'AssignmentExpression' && raw.left.type === 'MemberExpression' && raw.left.object.type === 'ThisExpression'
+        && raw.left.property.type === 'Identifier' && raw.left.property.name === 'client'
+        && raw.right.type === 'Identifier' && fresh.has(raw.right.name)) assignedAt ??= inner.start;
+    });
+
+    const { calls, superHook } = firstOffsets(body);
+    const suspendedAt = calls.get('suspendTimers');
+
+    if (assignedAt === undefined || suspendedAt === undefined || superHook === undefined) return;
+
+    if (assignedAt < superHook && suspendedAt < superHook) found = { file, line: tree.lineAt(node.start) };
+  });
+
+  return found;
+}
+
+/** A `callOnStart` that clears the alarm loop's wait (`clearTimeout(this.timeout)`) before it calls
+ *  `this.onStart()`. */
+function alarmWaitOf(file: string, tree: Parsed): HookIsolation | null {
+  let found: HookIsolation | null = null;
+
+  walk(tree.root, (node) => {
+    if (found !== null || node.type !== 'MethodDefinition' || declaredName(node) !== START_HOOK_EDGE) return;
+    const body = blockBodyOf(functionOf(node) ?? node);
+
+    if (body === undefined) return;
+    let clearedAt: number | undefined;
+
+    walk(body, (inner) => {
+      const raw = inner.raw;
+      const argument = raw.type === 'CallExpression' ? raw.arguments[0] : undefined;
+
+      if (identifierCalleeName(inner) === 'clearTimeout' && argument?.type === 'MemberExpression'
+        && argument.object.type === 'ThisExpression' && argument.property.type === 'Identifier'
+        && argument.property.name === 'timeout') clearedAt ??= inner.start;
+    });
+
+    const hookAt = firstOffsets(body).calls.get('onStart');
+
+    if (clearedAt !== undefined && hookAt !== undefined && clearedAt < hookAt) found = { file, line: tree.lineAt(node.start) };
+  });
+
+  return found;
+}
+
+/** Every `addTimeoutSignal` result is cleared in a `finally` of its own block: the containers
+ *  package leaves each port ping's 5 s timer pending otherwise, and one falling due inside the
+ *  start block holds every timer the hook sets (P5). */
+function leakedPingTimers(file: string, tree: Parsed): Violation[] {
+  const leaks: Violation[] = [];
+
+  walk(tree.root, (node) => {
+    const raw = node.raw;
+
+    if (raw.type !== 'VariableDeclarator' || raw.id.type !== 'Identifier' || raw.init?.type !== 'CallExpression'
+      || raw.init.callee.type !== 'Identifier' || raw.init.callee.name !== 'addTimeoutSignal') return;
+    const name = raw.id.name;
+    let block = node.parent;
+
+    while (block !== undefined && block.type !== 'BlockStatement') block = block.parent;
+    let cleared = false;
+
+    if (block !== undefined) walk(block, (inner) => {
+      const statement = inner.raw;
+
+      if (cleared || statement.type !== 'TryStatement' || statement.finalizer === null) return;
+      const finalizer = inner.children.find((child) => child.start === statement.finalizer?.start);
+
+      if (finalizer !== undefined) walk(finalizer, (call) => {
+        const callee = call.raw.type === 'CallExpression' ? call.raw.callee : undefined;
+
+        if (callee?.type === 'MemberExpression' && callee.object.type === 'Identifier' && callee.object.name === name
+          && callee.property.type === 'Identifier' && callee.property.name === 'clear') cleared = true;
+      });
+    });
+
+    if (!cleared) {
+      leaks.push({ file, line: tree.lineAt(node.start), owner: 'addTimeoutSignal', member: name, reason: `\`${name}\`'s timeout timer is never cleared when its ping settles; it falls due later, maybe inside the start block, and holds every timer the hook sets` });
+    }
+  });
+
+  return leaks;
+}
+
+/** Calls that carry a callback the block runs as part of itself. */
+const CALLBACK_CARRIERS: ReadonlySet<string> = new Set(['transaction', 'then', 'blockConcurrencyWhile']);
+
+/** Container-reaching methods that are the start hook's own restore steps. */
+const HOOK_STEPS: ReadonlySet<string> = new Set(['adoptOrTurnOver', 'restoreNow', 'stampBootId']);
+
+function reachesContainer(called: string): boolean {
+  return CONTAINER_REACHES.includes(called) && !HOOK_STEPS.has(called);
+}
+
+/** A member call inside an input block: SQLite's `exec` (not a container command), the start
+ *  hook's edge, a call on this object, or anything else. */
+function blockEdge(called: string, receiver: Expression | Super): 'sql' | 'hook' | 'self' | 'other' {
+  if (receiver.type === 'MemberExpression' && !receiver.computed
+    && receiver.property.type === 'Identifier' && receiver.property.name === 'sql') return 'sql';
+
+  if (receiver.type !== 'ThisExpression' && receiver.type !== 'Super') return 'other';
+
+  return called === START_HOOK_EDGE ? 'hook' : 'self';
+}
+
+/** The method a node sits in, by its declared name. */
+function enclosingMethod(node: SyntaxNode): string | undefined {
+  for (let at = node.parent; at !== undefined; at = at.parent) {
+    if (at.type === 'MethodDefinition') return declaredName(at);
+  }
+
+  return undefined;
+}
+
+/**
+ * Measured 2026-09-23 (D26). A WebSocket delivers its messages under the input gate it was
+ * accepted under, so a hook RPC over the control connection opened before a start block never
+ * answers inside it (D8's trace b20260913105359: container.js:641 held onStart; the boot-id RPC
+ * never returned), and one over a connection opened inside the block does. Timers fire in due
+ * order, each under the gate it was set under, so one set outside the block that falls due inside
+ * it holds every timer the hook sets. So the start block runs the hook only through `callOnStart`,
+ * which suspends the outer client's timers, ends the alarm loop's wait and opens the hook's client
+ * inside the block; every port ping clears its timeout timer when it settles; no other input block
+ * reaches a container RPC. Follows named local methods and the virtual `onStart` edge.
+ */
+export function auditBlockBodies(sources: ReadonlyMap<string, string>): BlockAudit {
   const methods = new Map<string, SyntaxNode[]>();
   const parameters = new Map<string, readonly (string | undefined)[]>();
   const parsed = [...sources].map(([file, text]) => ({ file, text, tree: parse(file, text) }));
+  let hookConnection: HookIsolation | null = null;
+  let alarmWait: HookIsolation | null = null;
 
-  for (const { tree } of parsed) walk(tree.root, node => {
-    if (node.type !== 'MethodDefinition' && node.type !== 'FunctionDeclaration') return;
-    const name = (declaredName(node) ?? '').replace(/^#/, '');
-    const body = blockBodyOf(functionOf(node) ?? node);
+  for (const { file, tree } of parsed) {
+    hookConnection ??= hookConnectionOf(file, tree);
+    alarmWait ??= alarmWaitOf(file, tree);
+    walk(tree.root, node => {
+      if (node.type !== 'MethodDefinition' && node.type !== 'FunctionDeclaration') return;
+      const name = (declaredName(node) ?? '').replace(/^#/, '');
+      const body = blockBodyOf(functionOf(node) ?? node);
 
-    if (name && body) methods.set(name, [...methods.get(name) ?? [], body]);
-    const fn = functionOf(node)?.raw;
+      if (name && body) methods.set(name, [...methods.get(name) ?? [], body]);
+      const fn = functionOf(node)?.raw;
 
-    if (name && fn && (fn.type === 'FunctionExpression' || fn.type === 'FunctionDeclaration')) {
-      parameters.set(name, fn.params.map(param => param.type === 'Identifier' ? param.name : undefined));
-    }
-  });
+      if (name && fn && (fn.type === 'FunctionExpression' || fn.type === 'FunctionDeclaration')) {
+        parameters.set(name, fn.params.map(param => param.type === 'Identifier' ? param.name : undefined));
+      }
+    });
+  }
 
   // A recovery write passes its storage transaction as `apply`. That callback
   // is part of the block body too; follow every direct argument at its calls.
@@ -741,7 +949,9 @@ export function auditBlockBodies(sources: ReadonlyMap<string, string>): Violatio
       if (body) methods.set(parameter, [...methods.get(parameter) ?? [], body]);
     }
   });
-  const violations: Violation[] = [];
+  const violations: Violation[] = parsed.flatMap(({ file, tree }) => leakedPingTimers(file, tree));
+  const hookBlocks = new Set<string>();
+  const startMethods = new Set<string>();
 
   for (const { file, tree } of parsed) walk(tree.root, node => {
     if (node.raw.type !== 'CallExpression' || memberCalleeName(node) !== 'blockConcurrencyWhile') return;
@@ -751,6 +961,7 @@ export function auditBlockBodies(sources: ReadonlyMap<string, string>): Violatio
     if (!argument) return;
     const visited = new Set<SyntaxNode>();
     const reached = new Set<string>();
+    let runsHook = false;
 
     const inspect = (body: SyntaxNode): void => {
       if (visited.has(body)) return;
@@ -762,19 +973,22 @@ export function auditBlockBodies(sources: ReadonlyMap<string, string>): Violatio
         const raw = call.raw;
 
         if (raw.type === 'CallExpression' && raw.callee.type === 'MemberExpression') {
-          const receiver = raw.callee.object;
+          const edge = blockEdge(called, raw.callee.object);
 
-          // SQLite's exec is not a container command.
-          if (receiver.type === 'MemberExpression' && !receiver.computed
-            && receiver.property.type === 'Identifier' && receiver.property.name === 'sql') return;
+          if (edge === 'sql') return;
 
-          if (CONTAINER_REACHES.includes(called) && called !== 'adoptOrTurnOver' && called !== 'restoreNow' && called !== 'stampBootId') reached.add(called);
+          // The start hook's own edge: its container calls are judged by `hookConnection`.
+          if (edge === 'hook') {
+            runsHook = true;
 
-          if (receiver.type === 'ThisExpression' || receiver.type === 'Super') {
-            for (const target of methods.get(called) ?? []) inspect(target);
+            return;
           }
 
-          if (called === 'transaction' || called === 'then' || called === 'blockConcurrencyWhile') {
+          if (reachesContainer(called)) reached.add(called);
+
+          if (edge === 'self') for (const target of methods.get(called) ?? []) inspect(target);
+
+          if (CALLBACK_CARRIERS.has(called)) {
             for (const child of call.children) if (isFunctionLike(child)) inspect(child);
           }
         } else if (called) {
@@ -792,11 +1006,33 @@ export function auditBlockBodies(sources: ReadonlyMap<string, string>): Violatio
     };
 
     inspect(argument);
+    const line = tree.lineAt(node.start);
 
-    for (const sink of reached) violations.push({ file, line: tree.lineAt(node.start), owner: 'blockConcurrencyWhile', member: sink, reason: `input block reaches container RPC \`${sink}\`; release the storage block before container work` });
+    for (const sink of reached) violations.push({ file, line, owner: 'blockConcurrencyWhile', member: sink, reason: `input block reaches container RPC \`${sink}\` outside the start hook; only the start block may reach the container, and only through \`${START_HOOK_EDGE}\`` });
+    const method = enclosingMethod(node);
+
+    if (method !== undefined && START_METHODS.includes(method)) {
+      startMethods.add(method);
+
+      if (runsHook) hookBlocks.add(method);
+    }
+
+    if (runsHook && hookConnection === null) {
+      violations.push({ file, line, owner: 'blockConcurrencyWhile', member: START_HOOK_EDGE, reason: `the start block runs the hook, and no \`${START_HOOK_EDGE}\` suspends the outer client's timers and opens the hook's control client inside it; a reply over a connection opened before the block never arrives inside it, and a timer set before it holds every timer the hook sets` });
+    }
+
+    if (runsHook && alarmWait === null) {
+      violations.push({ file, line, owner: 'blockConcurrencyWhile', member: 'clearTimeout', reason: `the start block runs the hook, and no \`${START_HOOK_EDGE}\` ends the alarm loop's wait first; that timer, set outside the block, holds every timer the hook sets once it falls due` });
+    }
   });
 
-  return violations;
+  for (const method of startMethods) {
+    if (!hookBlocks.has(method)) {
+      violations.push({ file: '(installed SDK)', line: 0, owner: method, member: 'onStart', reason: `\`${method}\` runs the start hook outside its input block; restore belongs inside it (R1, D26)` });
+    }
+  }
+
+  return { violations, hookBlocks: [...hookBlocks].sort(), hookConnection, alarmWait };
 }
 
 /** Product corpus comes from sources.ts; SDK files come from the installed
@@ -812,7 +1048,7 @@ export function containerBlockSources(sources: ReadonlyMap<string, string>): Rea
 if (import.meta.main) {
   const sources = readSources();
   const { inspected, violations, classifier, arms } = audit(sources);
-  const blockViolations = auditBlockBodies(containerBlockSources(sources));
+  const blocks = auditBlockBodies(containerBlockSources(sources));
 
   // Denominator. A gate that finds nothing because it looked nowhere is the
   // failure this whole exercise is about.
@@ -829,7 +1065,14 @@ if (import.meta.main) {
 
   const problems: string[] = [];
 
-  for (const found of blockViolations) problems.push(`${found.file}:${found.line}: ${found.reason}`);
+  for (const found of blocks.violations) problems.push(`${found.file}:${found.line}: ${found.reason}`);
+
+  // The start rule's denominator: an SDK whose start methods this gate never saw would pass
+  // "every start block runs the hook" vacuously.
+  if (blocks.hookBlocks.join() !== START_METHODS.join()) {
+    problems.push(`the installed SDK's start blocks run the hook in ${blocks.hookBlocks.join(', ') || 'none'} of `
+      + `${START_METHODS.join(', ')}; restore belongs inside each (R1, D26)`);
+  }
 
   if (inspected.length === 0) {
     problems.push('found 0 governed hooks — the matcher is not matching');
@@ -897,8 +1140,13 @@ if (import.meta.main) {
       + `container-start onStart, ${counted('recovery')} SDK-awaited recovery); `
       + `${ours.length}/${declared.length} wrangler-declared DO classes defined here and parsed`
       + (vendor.length > 0 ? `; not ours: ${vendor.join(', ')}` : '')
-      + '; input blocks reach no named container RPC through local/virtual methods'
-      + '\n  block-call graph is blind to computed names, imported helpers and indirectly passed callbacks'
+      + `; the SDK start blocks (${blocks.hookBlocks.join(', ')}) run the hook through \`${START_HOOK_EDGE}\`, which`
+      + ` suspends the outer client's timers and opens the hook's client inside the block (${blocks.hookConnection?.file ?? '(unknown)'}:${blocks.hookConnection?.line ?? 0})`
+      + ` and ends the alarm loop's wait (${blocks.alarmWait?.file ?? '(unknown)'}:${blocks.alarmWait?.line ?? 0});`
+      + ' no other input block reaches a named container RPC through local/virtual methods'
+      + '\n  block-call graph is blind to computed names, imported helpers and indirectly passed callbacks;'
+      + ` it proves \`${START_HOOK_EDGE}\` suspends and swaps before the hook, not that it resumes and restores after;`
+      + '\n  it does not see a timer another event sets before the block, which still holds every timer the hook sets (D26)'
       // The blind spots, on the SUCCESS path, because a limitation visible only
       // in red output is invisible exactly when the tree is green.
       + `\ndo-init-gate: blind to — what \`${RECOVERY_CLASSIFIER}\``

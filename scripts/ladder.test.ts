@@ -87,6 +87,7 @@ const AFTER_CI_SUITES = {
   'tests/evals/behaviour.eval.ts': 'bun run test:eval',
   'tests/evals/device.eval.ts': 'bun run test:eval',
   'tests/evals/optimization.eval.ts': 'bun run test:eval',
+  'tests/evals/math.eval.ts': 'bun run test:eval',
   'tests/evals/research.eval.ts': 'bun run test:eval',
   'tests/evals/swarm.eval.ts': 'bun run test:eval',
   'tests/evals/trajectory.eval.ts': 'bun run test:eval',
@@ -405,9 +406,9 @@ describe('the ladder measures something', () => {
     // monotonicity- and reachability-checked like every bun suite.
     expect(claims('bun run test:workerd', tracked).length).toBeGreaterThan(0);
 
-    // The three rows partition the script's set: no workerd file is in two
+    // The four rows partition the script's set: no workerd file is in two
     // rows or in none.
-    const rows = ['bun run test:workerd:cf', 'bun run test:workerd:cf-long', 'bun run test:workerd:devbox']
+    const rows = ['bun run test:workerd:cf', 'bun run test:workerd:cf-long', 'bun run test:workerd:devbox', 'bun run test:workerd:cf-complexity']
       .map((run) => claims(run, tracked));
 
     expect(rows.every((files) => files.length > 0)).toBe(true);
@@ -738,8 +739,8 @@ describe('every test file is claimed by some runner', () => {
     // Each arm's target must be spelled from the one variable that also names the
     // path vitest selects, so a rename moves both at once.
     for (const name of [
-      'BEHAVIOUR_EVAL', 'SWARM_EVAL', 'RESEARCH_EVAL', 'OPTIMIZATION_EVAL', 'TRAJECTORY_EVAL',
-      'DEVICE_EVAL', 'KINU_TASKS_EVAL',
+      'BEHAVIOUR_EVAL', 'SWARM_EVAL', 'RESEARCH_EVAL', 'OPTIMIZATION_EVAL', 'MATH_EVAL',
+      'TRAJECTORY_EVAL', 'DEVICE_EVAL', 'KINU_TASKS_EVAL',
     ]) {
       expect(script).toContain(`"./$${name}"`);
     }

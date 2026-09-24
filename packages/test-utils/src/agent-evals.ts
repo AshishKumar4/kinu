@@ -3,7 +3,7 @@
  * and report a denominator separately from passes so a caller can assert it is non-zero.
  */
 import {
-  censusToolFailures, listForkRuns, parseStoredRunEvent, STEER_BRANCH_RUN_ID_PREFIX,
+  censusToolFailures, classifyToolFailure, listForkRuns, parseStoredRunEvent, STEER_BRANCH_RUN_ID_PREFIX,
   tableExists,
   type ActorHandle, type ForkRunSummary, type RunEvent, type SqlExecutor,
 } from '@kinu.run/core';
@@ -374,31 +374,37 @@ export function parseFailureMix(detail: string): readonly (readonly [string, num
   });
 }
 
-/** Tool health is attributed by producer outcome, not returned text; a row with no outcome suppresses the rate. */
+/** A call fails if its outcome or an inner call failed; a row with no outcome suppresses the rate. */
+export function scoreToolOutcomes(events: readonly RunEvent[]): BehaviourScore {
+  const rows = events.filter((event): event is Extract<RunEvent, { type: 'tool_call_end' }> => event.type === 'tool_call_end');
+  const census = censusToolFailures(rows);
+  const failed = rows.filter((row) => classifyToolFailure(row) !== null).length;
+  const succeeded = rows.filter((row) => row.outcome?.success === true && !row.outcome.failures?.length).length;
+  const unmeasured = rows.length - succeeded - failed;
+
+  const detail = [
+    `${String(succeeded)} succeeded, ${String(failed)} failed, ${String(unmeasured)} unmeasured / ${String(rows.length)} observed calls`,
+    `${String(census.failures.length)} failures: ${String(census.refused)} refused, ${String(census.workFailed)} work failed, `
+      + `${String(census.runtimeMissing)} runtime absent, ${String(census.broke)} broke or unclassified`,
+  ];
+
+  if (census.byKey.length > 0) detail.push(formatFailureMix(census.byKey));
+
+  return {
+    eligible: rows.length, passed: succeeded,
+    rate: rows.length === 0 || unmeasured > 0 ? null : succeeded / rows.length,
+    detail: detail.join('; '),
+    measured: {
+      succeeded, failed, unmeasured,
+      refused: census.refused, workFailed: census.workFailed, runtimeAbsent: census.runtimeMissing, broke: census.broke,
+    },
+  };
+}
+
 export const toolOutcomes: BehaviourScorer = {
   name: 'tool_outcomes',
-  asserts: 'producer-attributed tool outcomes, with complete attribution required for a rate',
-  score(sql, actor) {
-    const rows = eventsOfType(sql, actor, 'tool_call_end');
-    const census = censusToolFailures(rows);
-    const succeeded = rows.filter((row) => row.outcome?.success === true).length;
-    const failed = census.failures.length;
-    const unmeasured = rows.length - succeeded - failed;
-
-    const detail = [
-      `${String(succeeded)} succeeded, ${String(failed)} failed, ${String(unmeasured)} unmeasured / ${String(rows.length)} observed calls`,
-      `${String(census.refused)} refused, ${String(census.workFailed)} work failed, `
-        + `${String(census.runtimeMissing)} runtime absent, ${String(census.broke)} broke or unclassified`,
-    ];
-
-    if (census.byKey.length > 0) detail.push(formatFailureMix(census.byKey));
-
-    return {
-      eligible: rows.length, passed: succeeded,
-      rate: rows.length === 0 || unmeasured > 0 ? null : succeeded / rows.length,
-      detail: detail.join('; '), measured: { succeeded, failed, unmeasured },
-    };
-  },
+  asserts: 'producer-attributed tool outcomes, codemode calls included, with complete attribution required for a rate',
+  score: (sql, actor) => scoreToolOutcomes(eventsOfType(sql, actor, 'tool_call_end')),
 };
 
 /** The behavioural panel, in reporting order; the single list run records, suites and comparison iterate. */

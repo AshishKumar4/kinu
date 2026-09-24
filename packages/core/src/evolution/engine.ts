@@ -247,7 +247,9 @@ export class EvolutionEngine {
   readonly recordsTurns: boolean;
   private recoveryPending = true;
 
-  constructor(rt: AgentRuntime, history: SessionHistory, config?: Partial<EvolutionConfig>) {
+  constructor(
+    rt: AgentRuntime, history: SessionHistory, config: Partial<EvolutionConfig> & Pick<EvolutionConfig, 'reportModelCall'>,
+  ) {
     this.rt = rt;
     this.history = history;
     this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };
@@ -276,9 +278,8 @@ export class EvolutionEngine {
   }
 
   /**
-     * The fast tier for mechanical calls (classification, pathology labels,
-     * reflections, pattern extraction); falls back to the chat model. The scaffold
-     * proposal deliberately stays on the chat model.
+     * The fast tier for mechanical calls, else the chat model. The scaffold proposal
+     * deliberately stays on the chat model.
      */
   private get fastLlm(): LLM {
     return this.rt.fastLlm ?? this.rt.llm;
@@ -337,10 +338,10 @@ export class EvolutionEngine {
   }
 
   /**
-     * The advisor's row on the audit stream. Lives here because `emit` is the one
-     * `evolution_events` writer that also reaches the engine's listeners. The row
-     * carries the note's class and graded turn id; `advisorNegatives` resolves it
-     * through the transcript, so neither message nor response is copied here.
+     * The advisor's row on the audit stream, here because `emit` is the one
+     * `evolution_events` writer that also reaches the engine's listeners.
+     * `advisorNegatives` resolves the graded turn through the transcript, so neither
+     * message nor response is copied here.
      */
   recordAdvisorNote(note: AdvisorNote, turnId?: string): void {
     const data: AdvisorRowData = {
@@ -958,6 +959,7 @@ export class EvolutionEngine {
         judgeSamples: overrides.judgeSamples,
         maxEvalLLMCalls: overrides.maxEvalLLMCalls,
         onProgress: this.config.onMctsProgress,
+        reportModelCall: this.config.reportModelCall,
       });
 
       this.emit({

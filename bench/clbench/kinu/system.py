@@ -223,6 +223,9 @@ class KinuSystem(ContinualLearningSystem):
             ],
             cwd=str(self._cwd),
             env=self._env(),
+            # The prompt travels on argv. An inherited open stdin made every
+            # `kinu exec` wait out its 250 ms grace and print a note (2026-09-23).
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout,

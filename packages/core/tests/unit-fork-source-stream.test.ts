@@ -1,12 +1,11 @@
-/** Frames must reassemble to the in-process snapshot, stay within the frame budget, and carry an oversized row alone. */
+/** Frames must carry the cut's conversation, stay within the frame budget, and carry an oversized row alone. */
 
 import { describe, expect, test } from 'bun:test';
 import { createTestWorkspace, type TestWorkspace } from './helpers';
 import {
   seedForkSource, SOURCE_ARTIFACTS, SPILLED_BYTES, INLINE_PAYLOAD_BYTES, type ForkConversation,
 } from './helpers/fork-conversation';
-import { snapshotWorkspaceForFork } from '../src/identity/fork';
-import type { ForkFile, ForkSnapshot } from '../src/identity/fork-rows';
+import { reassemble } from './helpers/fork-stream';
 import {
   FORK_ROW_SECTIONS, forkTransferFrames, type ForkFileFrame, type ForkFrame, type ForkRowFrame,
 } from '../src/identity/fork-transfer';
@@ -42,41 +41,6 @@ function framesFor(ws: TestWorkspace, frameBytes = 2048, untilMessageId = 'm3'):
   }));
 }
 
-function reassemble(frames: ForkFrame[]): ForkSnapshot {
-  const begin = frames[0];
-
-  if (begin?.kind !== 'begin') throw new Error('missing begin frame');
-  const files = new Map<string, Uint8Array[]>();
-  const artifacts = new Map<string, Uint8Array[]>();
-
-  for (const frame of frames) {
-    if (!isFileFrame(frame)) continue;
-    const into = frame.artifact ? artifacts : files;
-    const ranges = into.get(frame.path) ?? [];
-    ranges.push(frame.bytes);
-    into.set(frame.path, ranges);
-  }
-
-  const decoder = new TextDecoder();
-
-  const decode = (carried: Map<string, Uint8Array[]>): ForkFile[] => [...carried]
-    .map(([path, ranges]) => ({ path, content: decoder.decode(Bun.concatArrayBuffers(ranges)) }));
-
-  return {
-    source: begin.head.source,
-    cut: begin.head.cut,
-    agentConfig: frames.flatMap((frame) => (frame.kind === 'agentConfig' ? frame.rows : [])),
-    craftedTools: frames.flatMap((frame) => (frame.kind === 'craftedTools' ? frame.rows : [])),
-    memoryChunks: frames.flatMap((frame) => (frame.kind === 'memoryChunks' ? frame.rows : [])),
-    sessionMessages: frames.flatMap((frame) => (frame.kind === 'sessionMessages' ? frame.rows : [])),
-    conversationEntries: frames.flatMap((frame) => (frame.kind === 'conversationEntries' ? frame.rows : [])),
-    conversationEntryParts: frames.flatMap((frame) => (frame.kind === 'conversationEntryParts' ? frame.rows : [])),
-    contextMembers: frames.flatMap((frame) => (frame.kind === 'contextMembers' ? frame.rows : [])),
-    files: decode(files),
-    artifacts: decode(artifacts),
-  };
-}
-
 function rowPayloadBytes(frame: ForkFrame): number {
   const bytes = (value: string | null): number => (value === null ? 0 : Buffer.byteLength(value));
 
@@ -109,18 +73,17 @@ function rowPayloadBytes(frame: ForkFrame): number {
 }
 
 describe('forkTransferFrames source streamer', () => {
-  test('reassembles exactly to the in-process snapshot', async () => {
+  test('carries the cut\'s conversation whole, however small the frames', async () => {
     const ws = createTestWorkspace();
     await seedChain(ws);
 
-    const snapshot = await snapshotWorkspaceForFork({
-      sql: ws.sql, vfs: ws.vfs, untilMessageId: 'm3', artifactDirectory: SOURCE_ARTIFACTS,
-    });
+    const carried = reassemble(await framesFor(ws, 24));
 
-    expect(snapshot.sessionMessages.length).toBe(3);
-    expect(snapshot.conversationEntries.map((row) => row.id)).toEqual(['m1', 'm2', 'm3']);
-    expect(snapshot.contextMembers.map((row) => row.entry_id)).toEqual(['m1', 'm2', 'm3']);
-    expect(reassemble(await framesFor(ws, 24))).toEqual(snapshot);
+    expect(carried.sessionMessages.length).toBe(3);
+    expect(carried.conversationEntries.map((row) => row.id)).toEqual(['m1', 'm2', 'm3']);
+    expect(carried.contextMembers.map((row) => row.entry_id)).toEqual(['m1', 'm2', 'm3']);
+    // Frame size decides only how the rows are cut, never which rows cross.
+    expect(carried).toEqual(reassemble(await framesFor(ws)));
   });
 
   test('sections cross contiguously in the protocol order, and files follow them', async () => {

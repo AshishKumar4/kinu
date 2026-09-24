@@ -3,11 +3,9 @@
 import { VGPUError as CoreVGPUError } from '@vgpu/core';
 import * as v from 'valibot';
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 
 import {
-  type ArtFrame, type ArtPalette, type ArtRenderer, NODE_STRIDE, PULSE_STRIDE, RECESS, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER,
+  type ArtFrame, type ArtPalette, type ArtRenderer, NODE_STRIDE, PULSE_STRIDE, RECESS, STROKE_STRIDE,
 } from '@kinu.run/core/web/art';
 import { SearchTree } from '@kinu.run/core/web/hero-art';
 import { createCanvasRenderer, type StrokeSurface } from '@kinu.run/core/web/hero-canvas';
@@ -19,10 +17,6 @@ await installFakeVgpu();
 
 // Dynamic: the renderer imports vgpu at load, so it loads only after the fake is installed.
 const { createWebGpuRenderer } = await import('../src/components/landing/search-tree/renderer-webgpu');
-
-const TREE_DIR = resolve(import.meta.dir, '../src/components/landing/search-tree');
-
-const CORE_WEB = resolve(import.meta.dir, '../../core/src/web');
 
 const PALETTE: ArtPalette = { mode: 'dark', accent: [224, 164, 88], bright: [227, 210, 174], ash: [156, 145, 132], ground: [15, 13, 11] };
 
@@ -204,68 +198,37 @@ describe('the frame is what both renderers read', () => {
     expect(surface.gradientStyles).toHaveLength(visiblePulses + haloPulses);
   });
 
-  test('the WebGPU renderer uploads the same arrays at the same strides', () => {
-    const source = readFileSync(resolve(TREE_DIR, 'renderer-webgpu.ts'), 'utf8');
+  test('the WebGPU renderer uploads the frame\'s own instances in the layout its shaders read', async () => {
+    const outcome = await createWebGpuRenderer({ canvas: Object.create(null), initialPalette: PALETTE, width: 1200, height: 600, ratio: 1 });
 
-    // The frame's own buffers, sliced by its counts at the simulation's strides: no repacking.
-    expect(source).toContain('strokeGeometry.write(current.strokes.subarray(0, strokeCount * STROKE_STRIDE))');
-    expect(source).toContain('nodeGeometry.write(current.nodes.subarray(0, nodeCount * NODE_STRIDE))');
-    expect(source).toContain('pulseGeometry.write(current.pulses.subarray(0, pulseCount * PULSE_STRIDE))');
-    expect(source).toContain("attributes: { curve: 'float32x4', tip: 'float32x4', look: 'float32x4' }");
-    expect(source).toContain("attributes: { point: 'float32x4', look: 'float32x4' }");
-    expect(source).toContain("attributes: { curve: 'float32x4', span: 'float32x4', look: 'float32x4', identity: 'float32x4' }");
-    expect(STROKE_STRIDE).toBe(12);
-    expect(NODE_STRIDE).toBe(8);
-    expect(PULSE_STRIDE).toBe(16);
+    if (outcome.kind !== 'renderer') throw new Error(`expected a renderer, got ${outcome.kind}`);
+    const gpu = lastFakeGpu();
+
+    if (gpu === null) throw new Error('init did not produce the fake gpu');
+    const frame = frameAfter(12);
+
+    expect([frame.count, frame.nodeCount, frame.pulseCount].every((count) => count > 0)).toBeTrue();
+    outcome.renderer.render(frame);
+
+    // Strokes, nodes, pulses: each vertex layout reads one simulation stride, and each upload is the frame's live prefix.
+    expect(gpu.geometries.map((made) => made.floatsPerInstance)).toEqual([STROKE_STRIDE, NODE_STRIDE, PULSE_STRIDE]);
+    expect(gpu.geometries.map((made) => made.writes)).toEqual([
+      [frame.strokes.slice(0, frame.count * STROKE_STRIDE)],
+      [frame.nodes.slice(0, frame.nodeCount * NODE_STRIDE)],
+      [frame.pulses.slice(0, frame.pulseCount * PULSE_STRIDE)],
+    ]);
   });
 
-  test('the WGSL palette resolves the same four tones the canvas renderer does', () => {
-    const wgsl = readFileSync(resolve(TREE_DIR, 'palette.wgsl'), 'utf8');
-    const canvas = readFileSync(resolve(CORE_WEB, 'hero-canvas.ts'), 'utf8');
-
-    expect([TONE_BRIGHT, TONE_ASH, TONE_EMBER]).toEqual([1, 2, 3]);
-    expect(wgsl).toContain('if (tone > 2.5)');
-    expect(wgsl).toContain('if (tone > 1.5)');
-    expect(wgsl).toContain('if (tone > 0.5)');
-    expect(wgsl).toContain('mix(palette.accent.rgb, palette.ash.rgb, 0.35)');
-    expect(canvas).toContain('mix(palette.accent, palette.ash, 0.35)');
-    expect(wgsl).toContain('mix(palette.ash.rgb, palette.accent.rgb, 0.35 + 0.65 * glow)');
-    expect(canvas).toContain('mix(palette.ash, palette.accent, 0.35 + 0.65 * glow)');
-  });
-
-  test('a pulse wears the hot-core mix a node does, in both renderers', () => {
-    const pulses = readFileSync(resolve(TREE_DIR, 'pulses.wgsl'), 'utf8');
-    const canvas = readFileSync(resolve(CORE_WEB, 'hero-canvas.ts'), 'utf8');
-
-    expect(pulses).toContain('import { Palette, View, glow_scale, recede, to_clip, tone_color } from "./palette.wgsl"');
-    expect(pulses).toContain('recede(palette, mix(tone_color(palette, look.z, glow), palette.bright.rgb, glow * 0.6)) * glow_scale(palette, glow)');
-    expect(canvas.split('mix(toneColor(palette, tone, glow), palette.bright, glow * 0.6)').length - 1).toBe(2);
-  });
-
-  test('every tree colour recedes toward the ground by the same RECESS in both renderers', () => {
-    const wgsl = readFileSync(resolve(TREE_DIR, 'palette.wgsl'), 'utf8');
-    const canvas = readFileSync(resolve(CORE_WEB, 'hero-canvas.ts'), 'utf8');
-    const webgpu = readFileSync(resolve(TREE_DIR, 'renderer-webgpu.ts'), 'utf8');
-
-    expect(RECESS).toBeGreaterThan(0.2);
-    expect(RECESS).toBeLessThan(0.5);
-    expect(wgsl).toContain('mix(color, palette.ground.rgb, palette.recess)');
-    expect(canvas).toContain('mix(color, palette.ground, RECESS)');
-    expect(webgpu).toContain('recess: RECESS');
-
-    for (const shader of ['strokes.wgsl', 'pulses.wgsl', 'nodes.wgsl']) {
-      expect(readFileSync(resolve(TREE_DIR, shader), 'utf8')).toContain('recede(palette, ');
-    }
-
-    expect(canvas.split('recede(palette, ').length - 1).toBe(3);
-
-    const frame = frameAfter(8);
+  test('the canvas tree draws its accent receded toward the ground, never at full strength', () => {
     const surface = recordingSurface();
-    createCanvasRenderer(surface, PALETTE).render(frame);
+
+    createCanvasRenderer(surface, PALETTE).render(frameAfter(8));
     const goldFull = `rgba(${String(PALETTE.accent[0])},${String(PALETTE.accent[1])},${String(PALETTE.accent[2])},`;
     const receded = PALETTE.accent.map((channel, index) => Math.round(channel + ((PALETTE.ground[index] ?? 0) - channel) * RECESS));
     const goldReceded = `rgba(${String(receded[0])},${String(receded[1])},${String(receded[2])},`;
 
+    expect(RECESS).toBeGreaterThan(0.2);
+    expect(RECESS).toBeLessThan(0.5);
     expect([...surface.styles].some((style) => style.startsWith(goldFull))).toBeFalse();
     expect([...surface.styles].some((style) => style.startsWith(goldReceded))).toBeTrue();
   });

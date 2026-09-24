@@ -1173,7 +1173,6 @@ describe('carry admission', () => {
         margin: 0.2,
         hypotheses: ['floor_wrong', 'verifier_gameable'],
       },
-      clearedBy: null,
     };
 
     expect(admitCarry({
@@ -1182,33 +1181,6 @@ describe('carry admission', () => {
     expect(admitCarry({
       carry: { kind: 'elites' }, score: 1, publication: sealed,
     })).toEqual({ kind: 'refused', cause: 'sealed' });
-  });
-
-  test('a recorded re-derivation reopens publication for the carry', () => {
-    const cleared: PublicationState = {
-      kind: 'sealed',
-      breach: {
-        floor: {
-          value: 100, kind: 'certificate', bestKnownHonest: 120,
-          proof: 'every correct answer must compare each pair at least once on this instance',
-        },
-        measured: { kind: 'measured', value: 40, detail: 'comparisons counted by the meter' },
-        margin: 0.2,
-        hypotheses: ['floor_wrong', 'verifier_gameable'],
-      },
-      clearedBy: {
-        floor: {
-          value: 40, kind: 'adversary', bestKnownHonest: 41,
-          proof: 'an adversary holding one duplicate halves every comparison bound',
-        },
-        adjudication: 'floor_wrong — the original proof ignored duplicated keys',
-        at: Date.now(),
-      },
-    };
-
-    expect(admitCarry({
-      carry: { kind: 'artifacts', threshold: 0.5 }, score: 0.9, publication: cleared,
-    })).toEqual({ kind: 'admitted' });
   });
 
   test('settleCarry emits one named event per member with its score and threshold', () => {

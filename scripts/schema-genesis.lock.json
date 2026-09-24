@@ -495,6 +495,9 @@
     "recorded_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, scope, key)"
   ],
+  "events_v@packages/core/src/events/hub/schema.ts": [
+    "SELECT actor_id, id, turn_id, parent_id AS caused_by, trace_id, ingress, variant, trust, priority, payload_visibility, payload, received_at, schema_version, dedupe_key FROM agent_log WHERE kind = 'event'"
+  ],
   "evolution_events@packages/core/src/identity/schema.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL DEFAULT (lower(hex(randomblob(9))))",
@@ -556,6 +559,14 @@
     "scale TEXT",
     "verifier_digest TEXT",
     "PRIMARY KEY (actor_id, record_key)"
+  ],
+  "exploration_seals@packages/core/src/strategy/records.ts": [
+    "actor_id TEXT NOT NULL",
+    "objective_id TEXT NOT NULL",
+    "floor_digest TEXT NOT NULL",
+    "breach_json TEXT NOT NULL",
+    "sealed_at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, objective_id, floor_digest)"
   ],
   "fibers@packages/core/src/identity/schema.ts": [
     "actor_id TEXT NOT NULL",
@@ -1012,6 +1023,18 @@
     "FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id)",
     "FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id)"
   ],
+  "request_renders@packages/core/src/session/schema.ts": [
+    "actor_id TEXT NOT NULL",
+    "request_id TEXT NOT NULL",
+    "context_id TEXT NOT NULL",
+    "revision INTEGER NOT NULL",
+    "PRIMARY KEY(actor_id,request_id)",
+    "FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id)",
+    "FOREIGN KEY(actor_id,context_id,revision) REFERENCES context_revisions(actor_id,context_id,revision)"
+  ],
+  "run_event_v@packages/core/src/events/hub/schema.ts": [
+    "SELECT actor_id, id, turn_id, step_idx, kind, parent_id, payload, received_at FROM agent_log WHERE kind IN ('step', 'tool_call', 'tool_result', 'reactor_decision') ORDER BY actor_id, turn_id, step_idx, id"
+  ],
   "run_events@packages/core/src/events/recorder.ts": [
     "actor_id TEXT NOT NULL",
     "run_id TEXT NOT NULL",
@@ -1071,6 +1094,9 @@
     "parent_version INTEGER",
     "pathology TEXT",
     "PRIMARY KEY (actor_id, version)"
+  ],
+  "search_node_scores@packages/core/src/mcts/schemas.ts": [
+    "SELECT n.*, CASE WHEN n.parent_id IS NULL THEN n.value WHEN r.record_json IS NOT NULL THEN json_extract(r.record_json, '$.outcome.score') ELSE COALESCE(json_extract(n.evaluation_json, '$.score'), 0) END AS own_score FROM search_nodes n LEFT JOIN swarm_node_records r ON r.actor_id = n.actor_id AND r.node_id = n.id"
   ],
   "search_nodes@packages/core/src/mcts/schemas.ts": [
     "actor_id TEXT NOT NULL",
@@ -1366,6 +1392,9 @@
     "evidence TEXT",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "turn_phase_log_v@packages/core/src/events/hub/schema.ts": [
+    "SELECT actor_id, id, turn_id, payload, received_at FROM agent_log WHERE kind = 'phase' ORDER BY actor_id, received_at"
+  ],
   "user_access_tokens@packages/core/src/cli/access-tokens.ts": [
     "token_hash TEXT PRIMARY KEY",
     "name TEXT NOT NULL",
@@ -1425,6 +1454,12 @@
     "version TEXT",
     "update_check INTEGER NOT NULL DEFAULT 1",
     "reported_at INTEGER NOT NULL"
+  ],
+  "user_device_retired_tokens@packages/core/src/state/user-schema.ts": [
+    "token_hash TEXT PRIMARY KEY",
+    "device_id TEXT NOT NULL REFERENCES user_devices(id) ON DELETE CASCADE",
+    "retired_at INTEGER NOT NULL",
+    "reuse_detected_at INTEGER"
   ],
   "user_devices@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",
@@ -1514,6 +1549,20 @@
     "delete_pending INTEGER NOT NULL DEFAULT 0",
     "create_pending INTEGER NOT NULL DEFAULT 0",
     "fork_lease_expires_at INTEGER"
+  ],
+  "vfs_baseline_blob@packages/core/src/read-models/workspace-diff.ts": [
+    "hash TEXT PRIMARY KEY",
+    "content TEXT NOT NULL"
+  ],
+  "vfs_baseline_manifest@packages/core/src/read-models/workspace-diff.ts": [
+    "actor_id TEXT NOT NULL",
+    "generation TEXT NOT NULL",
+    "path TEXT NOT NULL",
+    "size INTEGER NOT NULL",
+    "mtime_ms INTEGER NOT NULL",
+    "hash TEXT",
+    "active INTEGER NOT NULL CHECK (active IN (0, 1))",
+    "PRIMARY KEY (actor_id, generation, path)"
   ],
   "vfs_baseline@packages/core/src/read-models/workspace-diff.ts": [
     "actor_id TEXT NOT NULL",

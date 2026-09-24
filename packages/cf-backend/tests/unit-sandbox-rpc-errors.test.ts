@@ -11,7 +11,7 @@ import type { KinuSandbox } from '../src/kinu-sandbox';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import { present } from '@kinu.run/test-utils';
 
-/** The SDK's thrown shape (sandbox-CPj2jsbz.js:15-17, :59-63); the classes are not exported from the package
+/** The SDK's thrown shape (sandbox-D0rNqxlr.js:15-17, :59-63); the classes are not exported from the package
  *  index, so the double carries the shape. */
 function sdkThrown(name: string, code: string, message: string): Error {
   const error = new Error(message);

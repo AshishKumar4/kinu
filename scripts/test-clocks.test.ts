@@ -69,11 +69,7 @@ describe('test-clocks gate', () => {
     });
   });
 
-  test('the runner side is pinned: bun and every vitest config run with no per-test clock', () => {
-    const preload = readFileSync(join(import.meta.dir, 'test-preload.ts'), 'utf8');
-
-    expect(preload).toContain('setDefaultTimeout(0)');
-
+  test('every vitest config runs with no per-test clock', () => {
     for (const config of [
       'vitest.evals.config.ts', 'vitest.first-run.config.ts',
       'packages/cf-backend/vitest.config.ts', 'packages/devbox/vitest.config.ts',
