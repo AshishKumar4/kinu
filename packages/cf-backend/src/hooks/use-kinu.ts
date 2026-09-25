@@ -71,7 +71,6 @@ const KinuActorAddressSchema = v.object({
   subordinate: v.optional(v.string()),
 });
 
-/** Driven entirely by the server's branch_status broadcasts. */
 export interface BranchRun {
   branchId: string;
   task: string;
@@ -409,7 +408,6 @@ function admitsActorFrame(
   return pane.isSubordinate && pane.ownActorId === msg.actorId;
 }
 
-/** A branch as the pane draws it: settled, failed, or still running. */
 function branchRunStatus(status: string | undefined): "settled" | "error" | "running" {
   if (status === "settled") return "settled";
 
@@ -856,7 +854,6 @@ export function useKinu(target?: string | KinuActorAddress) {
   const ownActorIdRef = useRef<string | null>(null);
   const [paneActorId, setPaneActorId] = useState<string | null>(null);
   const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
-  // The slates_changed broadcast re-lists at once and bumps the remount counter of open tabs among its ids.
   const [slates, setSlates] = useState<SlateSummary[]>([]);
   const sendLandings = useRef(new Map<string, SendLandingResolvers>());
   const knownSlates = useRef<Set<string> | null>(null);
@@ -870,7 +867,6 @@ export function useKinu(target?: string | KinuActorAddress) {
   const claimedWorkspacePlans = useRef(new Set<string>());
   const knownPlans = useRef(new Set<string>());
   const [slateReloads, setSlateReloads] = useState<ReadonlyMap<string, number>>(new Map());
-  /** Counts `changes_moved` frames: Changes reads again on each, shown or not. */
   const [changesMoved, setChangesMoved] = useState(0);
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
   /** A connect clears it. */
@@ -1327,7 +1323,6 @@ export function useKinu(target?: string | KinuActorAddress) {
       }
     };
 
-    // A pending plan seen for the first time takes focus; a later revision of it does not.
     const adoptPlan = (plan: PlanReview | null): void => {
       if (!plan) return;
       const key = `${plan.id}:${plan.revision}`;
@@ -1377,7 +1372,6 @@ export function useKinu(target?: string | KinuActorAddress) {
         } else if (msg.type === "pending_actions_changed") {
           await reread('pending_actions', refreshPendingActions);
         } else if (msg.type === SLATES_CHANGED_EVENT) {
-          // Re-list now and remount changed tabs so their preview URLs re-read.
           setSlateReloads((previous) => {
             const next = new Map(previous);
 

@@ -631,10 +631,9 @@ export const CHANGES_MOVED_EVENT = 'changes_moved';
 export class ChangeSetCache {
   private generation = 0;
   private held: { readonly generation: number; readonly result: WorkspaceDiffResult } | null = null;
-  /**
-   * A move was announced and no read has settled since. A burst of writes is one frame, and a page told re-reads one
-   * walk at a time: a frame per read started would let each write start a walk beside the last.
-   */
+  /** The one walk running; every read waits on it rather than starting its own. */
+  private walk: Promise<void> | null = null;
+  /** A frame went out and no walk has finished since: each finished walk earns at most one more. */
   private announced = false;
 
   /** `announce` tells the workspace's pages that the change-set moved. */
@@ -650,32 +649,31 @@ export class ChangeSetCache {
     this.move();
   }
 
+  /** The change-set as of this call or later, from the walk running if it started after the last move. */
   async read(load: () => Promise<WorkspaceDiffResult>): Promise<WorkspaceDiffResult> {
-    const { generation } = this;
+    const wanted = this.generation;
 
+    for (;;) {
+      if (this.held !== null && this.held.generation >= wanted) return this.held.result;
+      this.walk ??= this.walkAt(this.generation, load);
+      await this.walk;
+    }
+  }
+
+  private async walkAt(generation: number, load: () => Promise<WorkspaceDiffResult>): Promise<void> {
     try {
-      if (this.held?.generation === generation) return this.held.result;
-      const result = await load();
-
-      // A slower read of an older generation never replaces a newer one.
-      if (this.held === null || this.held.generation < generation) this.held = { generation, result };
-
-      return result;
+      this.held = { generation, result: await load() };
     } finally {
-      this.settled(generation);
+      this.walk = null;
+      this.announced = false;
+
+      if (this.generation !== generation) this.tell();
     }
   }
 
   private move(): void {
     this.generation += 1;
     this.tell();
-  }
-
-  /** A read of `generation` settled: a move it did not see is news again. */
-  private settled(generation: number): void {
-    this.announced = false;
-
-    if (this.generation !== generation) this.tell();
   }
 
   private tell(): void {

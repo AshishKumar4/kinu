@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  executorLabel, executorSortKey, isActiveExecutionDevice, keepUnchanged, pickDefaultExecutor,
+  executorLabel, executorSortKey, isActiveExecutionDevice, keepUnchanged, oneAtATime, pickDefaultExecutor,
   workspacePath, type ChangeNotesResult, type ChangeSet, type ExecutorDiffResult, type ExecutorInfo, type ReviewAnnotation, type Rpc,
 } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -108,7 +108,6 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
   focus?: ChangesFocus | null;
   /** Whether Changes is the surface shown: only then does it poll. */
   active: boolean;
-  /** Counts the workspace's word that its change-set moved: a hire's, a job's or a slate server's write, or a review. */
   moved?: number;
   /** Whether the workspace's turn is running: its writes are all in once it closes. */
   turnLive: boolean;
@@ -157,12 +156,12 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
   // Unseen, it reads only when the workspace says its change-set moved, a turn closes, it comes into view or the
   // window takes focus.
   const revalidate = useCallback(() => (seen ? 2_000 : null), [seen]);
-  const { resource, reload } = useAsyncResource(load, revalidate);
+  const serialLoad = useMemo(() => oneAtATime(load), [load]);
+  const { resource, reload } = useAsyncResource(serialLoad, revalidate);
   const wasLive = useRef(turnLive);
   const wasSeen = useRef(seen);
   const wasMoved = useRef(moved);
 
-  // Shown or not: the tab and its count come from this read.
   useEffect(() => {
     if (moved !== wasMoved.current) reload();
     wasMoved.current = moved;

@@ -399,10 +399,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Shared across boot retries. */
   private _workspace: HostedWorkspace | undefined;
 
-  /**
-   * The change-set the Changes poll reads, held until a file event or a baseline move makes it stale. A move tells the
-   * workspace's pages, so a Changes tab no one is looking at reads a hire's, a job's or a slate server's write too.
-   */
+  /** A move tells every page, so an unseen Changes tab reads a hire's write too. */
   private readonly changes = new ChangeSetCache(() => {
     this.broadcastToActor(null, JSON.stringify({ type: CHANGES_MOVED_EVENT }));
   });

@@ -71,7 +71,6 @@ export interface WorkSurfaceProps {
   onRetryLoad: () => void;
   onSearchMemory: (q: string) => void;
   mctsTrees: ReadonlyMap<string, ForkNode>;
-  /** Per-branch journal-write counter, pushed by `head_activity`. */
   headActivity: ReadonlyMap<string, number>;
   /** Live deltas, drawn under the durable steps until each one lands. */
   headDeltas?: HeadDeltas;
@@ -82,15 +81,12 @@ export interface WorkSurfaceProps {
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
   backgroundJobs: BackgroundJob[];
   onRefreshJobs: () => void;
-  /** One read feeds both the Work queue and the strip's accent badge. */
   pendingActions: PendingAction[];
   /** Called after a decision so the decided row leaves on click, not on the next poll. */
   onRefreshQueue?: () => void;
   onChangelogSeen?: () => void;
   slates?: readonly SlateSummary[];
-  /** Per-Slate remount counter from `slates_changed`; makes an open frame re-read its URL. */
   slateReloads?: ReadonlyMap<string, number>;
-  /** Counter from `changes_moved`; absent in fixture frames, which have no workspace to hear. */
   changesMoved?: number;
   /** Absent in fixture frames, which keeps every tab visible: unknown is not empty. */
   tabPresence?: TabPresence;

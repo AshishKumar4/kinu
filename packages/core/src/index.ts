@@ -1148,6 +1148,8 @@ export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observ
 
 export { ensureDir, vfsBasename, vfsDirname } from './utils/vfs-helpers';
 
+export { oneAtATime } from './utils/one-at-a-time';
+
 export { mossaicVfs, type MossaicClient, type MossaicVfs, type MossaicStat, type MossaicChild } from './vfs/mossaic-vfs';
 
 export {
