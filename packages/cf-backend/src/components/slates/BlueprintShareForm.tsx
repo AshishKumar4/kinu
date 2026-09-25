@@ -182,7 +182,11 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
             )}
           </dl>
         )}
-        {inspection !== null && <SecretWarning warnings={inspection.warnings} />}
+        {inspection !== null && (
+          <SecretWarning warnings={inspection.warnings}>
+            A blueprint carries its source as written, so these lines would go out with it. Remove them before you publish.
+          </SecretWarning>
+        )}
         <EmailsField value={emails} onChange={setEmails} disabled={busy} placeholder="Add people by email (optional)" />
         <p className="p-meta p-text-3">Anyone with the link can read it; a fork needs a Kinu account.</p>
         {shares.length > 0 && (

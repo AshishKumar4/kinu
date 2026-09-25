@@ -740,6 +740,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - **A Markdown file opens as a document.** In the file viewer, in the Drive and in a workspace's Files, a heading
   was body-sized text and a list lost its bullets or numbers. Rendered Markdown now reads as the chat's prose
   does: headings above the text, lists with their markers.
+- **Publishing a blueprint, the secrets warning speaks to you.** It told the publisher to "check them before you
+  use this blueprint", the advice meant for someone forking it. It now says the lines go out with the blueprint
+  and to remove them before you publish; the blueprint's own page keeps its advice for readers.
 - **Hired agents make slates.** Slates lived in the main agent's home, so an agent you hired could not create one
   ("can't promote to /home/main/slates/widgets (EACCES)"). They now live at `/slates`, the workspace's own
   directory. Every chat in the workspace makes, edits, previews and removes slates there as the main chat does, and
