@@ -107,6 +107,18 @@ describe('checkMisevolution — judged on the syntax tree, not the spelling', ()
   });
 
   test.each([
+    ['a parameter', 'const f = (self) => self; return self[args.key]'],
+    ['a catch variable', 'try { run(); } catch (globalThis) { void globalThis; } return globalThis[args.key]'],
+  ])('a global object shadowed only by %s elsewhere is still the global where it is read', (_binding, body) => {
+    const code = `async (args) => { const run = () => {}; ${body}; }`;
+
+    for (const surface of ['scaffold', 'craft', 'import'] as const) {
+      expect(checkMisevolutionForSurface({ code }, surface)).toMatchObject({ ok: false, criterionId: 'unanalysable-code' });
+    }
+  });
+
+  test.each([
+    'return typeof window === "undefined" && typeof globalThis === "object"',
     'await tools.eval({ code: args.code })',
     'return args.cb instanceof Function',
     'return { require: args.x }',
@@ -114,6 +126,14 @@ describe('checkMisevolution — judged on the syntax tree, not the spelling', ()
     'const self = args; return self[args.key]',
   ])('a property, key or local named like a guarded construct passes: `%s`', (body) => {
     expect(checkMisevolutionForSurface({ code: `async (args) => { ${body}; }` }, 'craft')).toEqual({ ok: true });
+  });
+
+  test('the audited web tool is the approved path: asking it to fetch is not egress', () => {
+    const code = 'async (args) => { return tools.web({ action: "fetch", url: args.url }); }';
+
+    for (const surface of ['scaffold', 'craft', 'import'] as const) {
+      expect(checkMisevolutionForSurface({ code }, surface)).toEqual({ ok: true });
+    }
   });
 
   test('a comment is not code: naming a guarded construct there passes', () => {

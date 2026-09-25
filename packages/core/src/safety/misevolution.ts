@@ -6,7 +6,7 @@
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type * as acorn from 'acorn';
-import { constantString, isNameOnly, nodesOf, parseEvolvedCode, placedNodesOf, type PlacedNode } from './evolved-code';
+import { childrenOf, constantString, isNameOnly, parseEvolvedCode, type PlacedNode } from './evolved-code';
 
 export type MisevolutionSurface = 'scaffold' | 'craft' | 'craft_tool' | 'import';
 
@@ -26,7 +26,6 @@ export interface EvolvedArtifact {
 interface ArtifactFacts {
   readonly names: ReadonlySet<string>;
   readonly words: ReadonlySet<string>;
-  readonly strings: ReadonlySet<string>;
   readonly paths: readonly string[];
   readonly hidden: readonly string[];
 }
@@ -59,7 +58,7 @@ function namesScaffoldFile(path: string): boolean {
 const CRITERIA: readonly MisevolutionCriterion[] = [
   {
     id: 'network-egress',
-    trips: (facts) => [...EGRESS_NAMES].some((name) => facts.names.has(name) || facts.strings.has(name)),
+    trips: (facts) => [...EGRESS_NAMES].some((name) => facts.names.has(name)),
     reason: 'direct network egress — evolved code must reach the outside world only through the audited tool surface (host.callTool / sandbox tools)',
   },
   {
@@ -149,21 +148,73 @@ function patternNames(pattern: acorn.AnyNode | null | undefined): string[] {
   return [];
 }
 
-function declaredNames(program: acorn.Program): Set<string> {
-  const declared = new Set<string>();
+const isFunctionNode = (node: acorn.AnyNode): boolean =>
+  node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression' || node.type === 'ArrowFunctionExpression';
 
-  const bind = (names: readonly string[]): void => { for (const name of names) declared.add(name); };
+function* nodesWithin(root: acorn.AnyNode): Generator<acorn.AnyNode> {
+  for (const { node } of childrenOf(root)) {
+    yield node;
 
-  for (const node of nodesOf(program)) {
-    if (node.type === 'VariableDeclarator') bind(patternNames(node.id));
-    else if (node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression' || node.type === 'ArrowFunctionExpression') {
-      bind([...patternNames('id' in node ? node.id : null), ...node.params.flatMap((param) => patternNames(param))]);
-    } else if (node.type === 'ClassDeclaration' || node.type === 'ClassExpression') bind(patternNames(node.id));
-    else if (node.type === 'CatchClause') bind(patternNames(node.param));
+    if (!isFunctionNode(node)) yield* nodesWithin(node);
+  }
+}
+
+function scopeBindings(scope: acorn.AnyNode): Set<string> {
+  const bound = new Set<string>();
+  const bind = (names: readonly string[]): void => { for (const name of names) bound.add(name); };
+
+  const statements = (list: readonly acorn.AnyNode[]): void => {
+    for (const statement of list) {
+      if (statement.type === 'VariableDeclaration' && statement.kind !== 'var') {
+        for (const declarator of statement.declarations) bind(patternNames(declarator.id));
+      } else if (statement.type === 'FunctionDeclaration' || statement.type === 'ClassDeclaration') {
+        bind(patternNames(statement.id));
+      }
+    }
+  };
+
+  const hoisted = (root: acorn.AnyNode): void => {
+    for (const node of nodesWithin(root)) {
+      if (node.type === 'VariableDeclaration' && node.kind === 'var') {
+        for (const declarator of node.declarations) bind(patternNames(declarator.id));
+      }
+    }
+  };
+
+  if (scope.type === 'Program') {
+    statements(scope.body);
+    hoisted(scope);
+  } else if (scope.type === 'FunctionDeclaration' || scope.type === 'FunctionExpression' || scope.type === 'ArrowFunctionExpression') {
+    bind(scope.params.flatMap((param) => patternNames(param)));
+
+    if (scope.type === 'FunctionExpression') bind(patternNames(scope.id));
+
+    if (scope.body.type === 'BlockStatement') statements(scope.body.body);
+    hoisted(scope.body);
+  } else if (scope.type === 'BlockStatement' || scope.type === 'StaticBlock') {
+    statements(scope.body);
+  } else if (scope.type === 'CatchClause') {
+    bind(patternNames(scope.param));
+  } else if ((scope.type === 'ForStatement' && scope.init?.type === 'VariableDeclaration')
+    || ((scope.type === 'ForInStatement' || scope.type === 'ForOfStatement') && scope.left.type === 'VariableDeclaration')) {
+    const declaration = scope.type === 'ForStatement' ? scope.init : scope.left;
+
+    if (declaration?.type === 'VariableDeclaration') statements([declaration]);
+  } else if (scope.type === 'ClassExpression') {
+    bind(patternNames(scope.id));
   }
 
-  return declared;
+  return bound;
 }
+
+const SCOPES: ReadonlySet<string> = new Set([
+  'Program', 'FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression', 'BlockStatement', 'StaticBlock',
+  'CatchClause', 'ForStatement', 'ForInStatement', 'ForOfStatement', 'ClassExpression',
+]);
+
+const KEYED_ACCESSORS: ReadonlySet<string> = new Set([
+  'Reflect.get', 'Reflect.getOwnPropertyDescriptor', 'Object.getOwnPropertyDescriptor',
+]);
 
 /** `.constructor` kept in place: a property of it read, or it compared. */
 function constructorStaysPut({ parent, field }: PlacedNode): boolean {
@@ -172,9 +223,30 @@ function constructorStaysPut({ parent, field }: PlacedNode): boolean {
   return parent?.type === 'BinaryExpression' && ['===', '!==', '==', '!='].includes(parent.operator);
 }
 
+/** `globalThis.x`, `self["x"]`, `typeof window`. */
 function readsGlobalByName({ parent, field }: PlacedNode): boolean {
+  if (parent?.type === 'UnaryExpression') return parent.operator === 'typeof';
+
   return parent?.type === 'MemberExpression' && field === 'object'
     && (!parent.computed || (parent.property.type !== 'PrivateIdentifier' && constantString(parent.property) !== null));
+}
+
+function keyNamed({ node, parent }: PlacedNode): string | null {
+  if (node.type === 'MemberExpression' && node.computed && node.property.type !== 'PrivateIdentifier') {
+    return constantString(node.property);
+  }
+
+  if (node.type === 'Property' && node.computed && parent?.type === 'ObjectPattern') return constantString(node.key);
+
+  if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' && !node.callee.computed
+    && node.callee.object.type === 'Identifier' && node.callee.property.type === 'Identifier'
+    && KEYED_ACCESSORS.has(`${node.callee.object.name}.${node.callee.property.name}`)) {
+    const key = node.arguments[1];
+
+    return key === undefined || key.type === 'SpreadElement' ? null : constantString(key);
+  }
+
+  return null;
 }
 
 function codeFacts(source: string, into: MutableFacts): void {
@@ -186,10 +258,9 @@ function codeFacts(source: string, into: MutableFacts): void {
     return;
   }
 
-  const declared = declaredNames(program);
-
-  for (const placed of placedNodesOf(program)) {
+  const visit = (placed: PlacedNode, enclosing: readonly Set<string>[]): void => {
     const { node, parent } = placed;
+    const scopes = SCOPES.has(node.type) ? [...enclosing, scopeBindings(node)] : enclosing;
 
     if (node.type === 'Identifier') {
       into.names.add(node.name);
@@ -201,39 +272,41 @@ function codeFacts(source: string, into: MutableFacts): void {
         into.hidden.push('references Function');
       }
 
-      if (reads && GLOBAL_OBJECTS.has(node.name) && !declared.has(node.name) && !readsGlobalByName(placed)) {
+      if (reads && GLOBAL_OBJECTS.has(node.name) && !scopes.some((bound) => bound.has(node.name)) && !readsGlobalByName(placed)) {
         into.hidden.push(`hands ${node.name} on or reads it by a computed key`);
       }
     } else if (node.type === 'ImportExpression' || node.type === 'ImportDeclaration') {
       into.hidden.push('imports a module');
     } else if (node.type === 'WithStatement') {
       into.hidden.push('uses a with statement');
-    } else if (node.type === 'MemberExpression') {
-      let key: string | null = null;
+    }
 
-      if (!node.computed && node.property.type === 'Identifier') key = node.property.name;
-      else if (node.computed && node.property.type !== 'PrivateIdentifier') key = constantString(node.property);
+    const key = keyNamed(placed);
 
-      if (node.computed && key !== null) into.names.add(key);
+    if (key !== null) into.names.add(key);
 
-      if (key === 'constructor' && !constructorStaysPut(placed)) into.hidden.push('takes a constructor out of an object');
+    if (node.type === 'MemberExpression') {
+      const property = !node.computed && node.property.type === 'Identifier' ? node.property.name : key;
+
+      if (property === 'constructor' && !constructorStaysPut(placed)) into.hidden.push('takes a constructor out of an object');
     }
 
     const text = constantString(node);
 
-    if (text !== null) {
-      into.strings.add(text);
-      addText(text, into);
-    }
-  }
+    if (text !== null) addText(text, into);
+
+    for (const child of childrenOf(node)) visit(child, scopes);
+  };
+
+  visit({ node: program, parent: null, field: '' }, []);
 }
 
-interface MutableFacts { names: Set<string>; words: Set<string>; strings: Set<string>; paths: string[]; hidden: string[] }
+interface MutableFacts { names: Set<string>; words: Set<string>; paths: string[]; hidden: string[] }
 
 function artifactFacts(artifact: EvolvedArtifact): ArtifactFacts {
   const paths: string[] = [];
   const hidden: string[] = [];
-  const facts: MutableFacts = { names: new Set<string>(), words: new Set<string>(), strings: new Set<string>(), paths, hidden };
+  const facts: MutableFacts = { names: new Set<string>(), words: new Set<string>(), paths, hidden };
 
   if (artifact.code !== undefined) codeFacts(artifact.code, facts);
 
@@ -259,7 +332,7 @@ export function checkMisevolution(code: string): MisevolutionVerdict {
   return checkMisevolutionForSurface({ code }, 'scaffold');
 }
 
-/** Record a veto in `evolution_events`; a write failure here is real and must surface. */
+/** A write failure here is real and must surface. */
 export function recordMisevolutionVeto(
   sql: SqlExecutor,
   actor: ActorHandle,

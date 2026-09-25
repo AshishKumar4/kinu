@@ -29,18 +29,18 @@ export interface PlacedNode {
   readonly field: string;
 }
 
-export function* placedNodesOf(root: acorn.AnyNode, parent: acorn.AnyNode | null = null, field = ''): Generator<PlacedNode> {
-  yield { node: root, parent, field };
-
-  for (const [key, value] of Object.entries(root)) {
+export function* childrenOf(node: acorn.AnyNode): Generator<PlacedNode> {
+  for (const [field, value] of Object.entries(node)) {
     for (const child of Array.isArray(value) ? value : [value]) {
-      if (v.is(AcornNodeSchema, child)) yield* placedNodesOf(child, root, key);
+      if (v.is(AcornNodeSchema, child)) yield { node: child, parent: node, field };
     }
   }
 }
 
 export function* nodesOf(root: acorn.AnyNode): Generator<acorn.AnyNode> {
-  for (const { node } of placedNodesOf(root)) yield node;
+  yield root;
+
+  for (const { node } of childrenOf(root)) yield* nodesOf(node);
 }
 
 /** `x.eval`, `{ require: 1 }`: a name, not a read of a binding. */
@@ -57,7 +57,7 @@ export function isNameOnly({ parent, field }: PlacedNode): boolean {
     || parent.type === 'MetaProperty';
 }
 
-/** The string an expression evaluates to when every part of it is a literal, else null. */
+/** A literal-only expression's string value, else null. */
 export function constantString(node: acorn.AnyNode): string | null {
   if (node.type === 'Literal') return v.is(v.string(), node.value) ? node.value : null;
 
