@@ -58,10 +58,12 @@ it('a public share serves the slate, admits the granted member, refuses the rest
   expect(rows[2]?.calls).toEqual([]);
 });
 
-it('a hired agent previews a slate it made where slates live', async () => {
-  const preview = await subject('hire-preview').previewAsHire();
+it('a hired agent previews a slate it made where slates live, then removes it as the main agent would', async () => {
+  const { preview, removed, left } = await subject('hire-preview').previewAsHire();
 
   expect(preview, JSON.stringify(preview)).toMatchObject({ ok: true, value: { url: expect.stringMatching(/^https:\/\/\d+\.preview\.test\/$/) } });
+  expect(removed, JSON.stringify(removed)).toMatchObject({ ok: true, value: { id: 'widgets', removed: true } });
+  expect(left).toBe(false);
 });
 
 it('a revoked share refuses the route and stops the process it carried', async () => {

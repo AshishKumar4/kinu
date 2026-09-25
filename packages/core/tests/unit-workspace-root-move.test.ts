@@ -280,6 +280,19 @@ describe('slates', () => {
     expect(kernel.readFileString('/slates/gauges/assets/logo.svg')).toBe('<svg/>');
   });
 
+  test('every agent renames and removes a slate, whichever agent made it', async () => {
+    const { kernel, user, builder } = await withHire(await legacyWorkspace());
+
+    builder.mkdir('/slates/widgets/src', { recursive: true });
+    builder.writeFile('/slates/widgets/src/app.tsx', 'export default null;\n');
+    user.rename('/slates/widgets', '/slates/gadgets');
+    builder.rename('/slates/queue', '/slates/backlog');
+    user.removeRecursive('/slates/gadgets');
+    builder.removeRecursive('/slates/backlog');
+
+    expect(kernel.readdir('/slates')).toEqual([]);
+  });
+
   test('no agent changes who shares /slates, and a /slates an agent made is the workspace\'s on the next boot', async () => {
     const database = await legacyWorkspace();
     const { kernel, user, builder } = await withHire(database);
