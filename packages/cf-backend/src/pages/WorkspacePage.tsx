@@ -1,4 +1,3 @@
-import type { UIMessage } from "ai";
 import { startTransition, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
@@ -31,7 +30,7 @@ import { RevertTurnDialog, type DeviceRestorePlan } from "@/components/RevertTur
 import { ChatLiveTail, DeviceOfflineRow, MessageView, ModelFallbackRows, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@kinu.run/core";
-import { classifyProgrammaticTurn, messageSignalId, threadLiveTail } from "@kinu.run/core";
+import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, threadLiveTail, turnRows } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import type { ChangesFocus } from "@/components/surfaces/ChangesSurface";
 import { SlateInlineContext } from "@/components/slates/context";
@@ -235,13 +234,6 @@ function SubordinateEventCard({ event, workspace }: { event: SubordinateActivity
       </Link>
     </div>
   );
-}
-
-/** The store's count less the loaded rows; a fork copies all. */
-function messagesUpTo(shown: readonly UIMessage[], id: string, stored: number | undefined): number {
-  const unloaded = Math.max(0, (stored ?? shown.length) - shown.length);
-
-  return unloaded + shown.findIndex((message) => message.id === id) + 1;
 }
 
 function ForkModal({
@@ -1095,7 +1087,7 @@ export default function WorkspacePage() {
       {forkFor && (
         <ForkModal
           sourceName={shownTitle}
-          messagesUpToHere={messagesUpTo(transcript, forkFor, state.agentStatus?.messageCount)}
+          messagesUpToHere={messagesUpTo(transcript, forkFor, state.agentStatus?.messageCount, { exhausted: history.exhausted, inFlight: turnRows(transcript, live) })}
           onCancel={() => setForkFor(null)}
           onSubmit={async (name) => {
             try {
