@@ -20,6 +20,7 @@ import { specWithoutAccount } from '../providers/types';
 import { declaredReasoningEffort } from '../providers/reasoning-effort';
 import { currentOperationProfile } from './operation';
 import type { ActorReference } from '../identity/actor-handle';
+import type { AgentConfigStore } from '../config/store';
 
 const DEFAULT_TURN_REASONING_EFFORT: ReasoningEffort = REASONING_EFFORT_FOR_STAGE.chat;
 
@@ -98,6 +99,8 @@ export interface ResolveTurnProfileInput {
   actorModel?: string | null | undefined;
   /** A stored effort for this actor or workspace: over the tier's. */
   explicitEffort?: ReasoningEffort | null | undefined;
+  /** The effort a hire's parent runs at ({@link parentReasoningEffort}): under the tier's own, over the default. */
+  inheritedEffort?: ReasoningEffort | null | undefined;
   workMode: string;
   availableTools: readonly string[];
   activeSkills: readonly string[];
@@ -349,7 +352,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     });
   };
 
-  const wantedEffort = input.explicitEffort ?? assignment.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT;
+  const wantedEffort = input.explicitEffort ?? assignment.reasoningEffort ?? input.inheritedEffort ?? DEFAULT_TURN_REASONING_EFFORT;
   const tierIds = tierIdsOf(envelope.catalog);
   const tiers: Record<TierId, TierRoute> = {};
 
@@ -392,6 +395,39 @@ export function resolveAgentTurnProfile(
   const { activeRoleId, ...turn } = input;
 
   return resolveTurnProfile({ ...turn, roleId: activeRoleId });
+}
+
+/** What an actor's own configuration pins, which its turn resolves from. */
+export type PinnedProfile = Pick<AgentConfigStore, 'getRoleSelection' | 'getAssignedTier' | 'getModel' | 'getReasoningEffort'>;
+
+/**
+ * The effort a hire's parent runs at: each ancestor resolved as its own turn resolves, from the root down, so a
+ * tier that declares an effort keeps it and one that does not takes its parent's. `ancestors` runs nearest first
+ * and ends at the root, whose model pin is the workspace's.
+ */
+export function parentReasoningEffort(authority: ProfileAuthorityInputs, ancestors: readonly PinnedProfile[]): ReasoningEffort | null {
+  const workspaceModel = ancestors.at(-1)?.getModel() ?? null;
+  let inherited: ReasoningEffort | null = null;
+
+  for (let index = ancestors.length - 1; index >= 0; index -= 1) {
+    const actor = ancestors[index];
+
+    if (actor === undefined) break;
+    inherited = resolveTurnProfile({
+      ...authority,
+      roleId: actor.getRoleSelection(),
+      explicitTier: actor.getAssignedTier() ?? undefined,
+      workspaceModel,
+      actorModel: index === ancestors.length - 1 ? null : actor.getModel(),
+      explicitEffort: actor.getReasoningEffort(),
+      inheritedEffort: inherited,
+      workMode: 'build',
+      availableTools: [],
+      activeSkills: [],
+    }).tier.reasoningEffort;
+  }
+
+  return inherited;
 }
 
 /** Detached work inherits its issuer; new work reads current authority. */

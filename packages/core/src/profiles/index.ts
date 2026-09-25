@@ -14,11 +14,11 @@ export type {
 } from './catalog';
 
 export {
-  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile,
+  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort,
 } from './resolve';
 
 export type {
-  ProfileAuthorityInputs, ProviderCatalogSnapshot, TierSource,
+  ProfileAuthorityInputs, ProviderCatalogSnapshot, TierSource, PinnedProfile,
   ProviderCacheOutcome, ProviderSnapshotRead,
   ResolveTurnProfileInput, ResolveAgentTurnProfileInput, ResolvedTurnProfile,
 } from './resolve';

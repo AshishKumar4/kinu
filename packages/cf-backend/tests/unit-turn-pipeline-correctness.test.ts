@@ -297,6 +297,28 @@ describe('turn-pipeline correctness wiring', () => {
     expect(unpinned.model).toEqual({ model: 'workers-ai/account-default', source: 'role' });
   });
 
+  test("a hire runs at its tier's own effort, else at the effort its parent runs at", async () => {
+    // Before, the workspace's effort overrode a hire's tier; a tier that declares an effort is the owner's choice for the role.
+    const workspace = orchestratorHarness();
+    workspace.agent.harnessInstallCatalog({
+      tiers: { default: { model: 'workers-ai/account-default' }, fast: { model: 'workers-ai/account-default', reasoningEffort: 'medium' } },
+      availableModels: ['workers-ai/account-default'],
+    });
+    await workspace.agent.setSoul('# Purpose\n\nShip the deploy gates.');
+    await workspace.agent.setReasoningEffort('xhigh');
+
+    const effortAs = async (role: string) => {
+      const added = await workspace.agent.createSubordinateAgent();
+      workspace.db.prepare("INSERT OR REPLACE INTO actor_config (actor_id, key, value) VALUES (?, 'role_selection', ?)")
+        .run(added.subordinate.actorId, role);
+
+      return (await workspace.agent.getActorSnapshot(added.name)).reasoningEffort;
+    };
+
+    expect(await effortAs('task')).toBe('xhigh');
+    expect(await effortAs('researcher')).toBe('medium');
+  });
+
   test('an agent the owner adds by hand runs the general role on the account default model', async () => {
     // m1421: an added agent came up on a flash model; one the owner adds inherits the general role and the default.
     const workspace = orchestratorHarness();
