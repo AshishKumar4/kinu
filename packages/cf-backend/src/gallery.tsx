@@ -1631,6 +1631,19 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     return new Promise<T>(() => {});
   }
 
+  if (new URLSearchParams(location.search).get("snapshot") === "held" && method === "getWorkspaceSnapshot"
+      && document.documentElement.dataset.snapshotReleased !== "1") {
+    await new Promise<void>((resolve) => {
+      const released = new MutationObserver(() => {
+        if (document.documentElement.dataset.snapshotReleased !== "1") return;
+        released.disconnect();
+        resolve();
+      });
+
+      released.observe(document.documentElement, { attributes: true, attributeFilter: ["data-snapshot-released"] });
+    });
+  }
+
   const roster = galleryRosterRpc(method, args);
 
   if (roster) return rpcResult(v.parse(JsonValueSchema, roster.value)).json<T>();

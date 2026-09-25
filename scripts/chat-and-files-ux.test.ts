@@ -3656,52 +3656,23 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
-      // The first visit mounts the column collapsed — worth-showing state is a
-      // resource read, so the collapse lasts only until the snapshot lands,
-      // and under load that whole window fits inside one rAF: no selector or
-      // polling wait can catch it. The observer is installed before the page's
-      // own scripts run and records the mount itself, so the insertion record
-      // — not the element's presence at sample time — is the observable state.
-      await page.evaluateOnNewDocument(() => {
-        const record: InspectorMountSample[] = [];
-
-        window.__inspectorMount = record;
-        new MutationObserver((mutations) => {
-          if (record.length >= 500) return;
-
-          const containsExpand = (node: Node): boolean => node instanceof Element
-            && (node.hasAttribute('data-inspector-expand') || node.querySelector('[data-inspector-expand]') !== null);
-
-          const panel = document.querySelectorAll('[data-panel]')[1];
-
-          record.push({
-            inserted: mutations.some((m) => [...m.addedNodes].some(containsExpand)),
-            expand: document.querySelector('[data-inspector-expand]') !== null,
-            width: panel === undefined ? -1 : Math.round(panel.getBoundingClientRect().width),
-          });
-        }).observe(document, {
-          childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'],
-        });
-      });
-      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      // The first visit has nothing worth showing only until its snapshot lands, and a fixture answers in
+      // microseconds, so the snapshot is held: the collapsed state lasts until the gate releases it.
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&snapshot=held`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
       await page.waitForSelector('[aria-label="Work"]');
 
       const inspectorWidth = () => page.$$eval('[data-panel]', (panels) => Math.round(panels[1]?.getBoundingClientRect().width ?? -1));
 
-      // A first visit with nothing to show collapses the column behind its
-      // expand handle — the insertion proves the collapsed render committed,
-      // and a zero-width panel sample proves it committed as a layout. The
-      // signal has not arrived yet, so nothing reopens it.
-      await page.waitForFunction(
-        () => {
-          const record = window.__inspectorMount;
+      // The first layout commit is the definite event: a collapsed column behind its handle is asserted, never
+      // waited for, so a first visit that opens fails here at once.
+      await page.waitForSelector('[data-inspector-commits]');
+      expect(await page.$('[data-inspector-expand]')).not.toBeNull();
+      expect(await inspectorWidth()).toBeLessThanOrEqual(2);
 
-          return record !== undefined
-            && record.some((sample) => sample.inserted || sample.expand)
-            && record.some((sample) => sample.width >= 0 && sample.width <= 2);
-        },
-      );
+      // The snapshot's pending plan needs the person, so its arrival opens the column.
+      await page.evaluate(() => { document.documentElement.dataset.snapshotReleased = '1'; });
+      await waitForInspectorWidth(page, 'open');
 
       // The passive arrival is the something worth seeing: the column opens
       // on the workspace's behalf AND raises the chip where the reader is —
@@ -4241,22 +4212,11 @@ interface CreateProbe {
   release: (() => void) | null;
 }
 
-/** One sample the inspector-mount observer took: whether that mutation inserted
- *  the expand handle, whether the handle is on the page, and the trailing
- *  panel's rounded width (-1 when there is no panel yet). */
-interface InspectorMountSample {
-  inserted: boolean;
-  expand: boolean;
-  width: number;
-}
-
 declare global {
   interface Window {
     __createProbe: CreateProbe;
     /** Every `input` frame the pane sent the gallery's workspace shell (`gallery-terminal.ts`). */
     __kinuTerminalInput?: string[];
-    /** Installed by the inspector suite's MutationObserver at document start. */
-    __inspectorMount?: InspectorMountSample[];
     /** Listener counts by target and type, kept by the patched `EventTarget`. */
     __liveListeners?: Map<string, number>;
   }
