@@ -1,5 +1,5 @@
 {
-  "reason": "the census plant proofs join the push tier: packages/ at 9.6 s and scripts/ at 5.0 s (bun scripts/census-plants.ts, measured 2026-09-25)",
+  "reason": "the parser self-tests row adds syntax.test.ts, which proves a syntax tree dies with its caller's last reference; the row stays at 0.2 s",
   "tiers": {
     "commit": {
       "seconds": 91.47,
@@ -48,7 +48,7 @@
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,
-        "bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts": 0.2,
+        "bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts": 0.2,
         "bun scripts/pattern-inventory.ts": 2.5,
         "bun run lint": 21.4,
         "bun test --timeout=0 packages/agent-core/drift.test.ts scripts/mossaic-sdk.test.ts": 0.2,

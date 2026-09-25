@@ -1131,7 +1131,7 @@
       "file": "scripts/syntax.ts",
       "kind": "hand-parser",
       "owner": "parse",
-      "sourceSha256": "2d672ba9b500d507ec45ca4bcee0f9ec0f927288855e757cda4ca4b51ab19a41",
+      "sourceSha256": "1b3d473d320f0f0d72a97d6eb491e90e4b101d791c404ad5089b2aa646a17ac3",
       "decision": "traversal"
     },
     {
@@ -1188,6 +1188,13 @@
       "kind": "regex-literal",
       "owner": "CJS_IMPORT",
       "sourceSha256": "35649bf934923ae7e10df35684af94ba865b4eefc387701406e8629df4dda392",
+      "decision": "lexical"
+    },
+    {
+      "file": "scripts/ladder-audit.ts",
+      "kind": "regex-literal",
+      "owner": "openedPaths",
+      "sourceSha256": "83399019e07399a366423eae08c28803c6599ad60acb08b8d75ca6752a00fd45",
       "decision": "lexical"
     }
   ]

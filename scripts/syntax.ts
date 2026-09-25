@@ -56,6 +56,43 @@ interface Building {
   readonly children: SyntaxNode[];
 }
 
+/** The tree `TREE_VISITOR` is building, as the nodes it has entered and not yet left, and its finished root:
+ *  `parse` resets both before each walk and takes the root after. */
+let entered: Building[] = [];
+
+let built: SyntaxNode | undefined;
+
+function enter(raw: Node): void {
+  const parent = entered.at(-1);
+  const node: Building = { raw, type: raw.type, start: raw.start, end: raw.end, parent, children: [] };
+  parent?.children.push(node);
+  entered.push(node);
+}
+
+function exit(): void {
+  const done = entered.pop();
+
+  if (entered.length === 0 && done !== undefined) built = done;
+}
+
+/* Every `VisitorObject` field is an optional callback taking one member of
+   `Node`, so a handler accepting the whole union is assignable to all of
+   them; the keys are `visitorKeys`' own, so they are exactly the type names
+   `VisitorObject` declares. Naming 165 node types here instead would be the
+   schema copy this module exists to avoid. */
+const TREE_HANDLERS: VisitorObject = Object.fromEntries(
+  Object.keys(visitorKeys).flatMap((type) => [[type, enter], [`${type}:exit`, exit]]),
+);
+
+/**
+ * One visitor for every parse. oxc's `Visitor` keeps each visitor it compiles
+ * for the life of the process (its enter/exit cache is appended to and never
+ * reset), and with it everything the handlers reach, so a visitor per parse
+ * kept every tree ever built: 7.4 GB live once the ladder had derived its 77
+ * closures.
+ */
+const TREE_VISITOR = new Visitor(TREE_HANDLERS);
+
 export function parse(file: string, text: string): Parsed {
   const { program, errors } = parseSync(file, text, {
     lang: file.endsWith('.tsx') ? 'tsx' : 'ts',
@@ -74,32 +111,11 @@ export function parse(file: string, text: string): Parsed {
     );
   }
 
-  const open: Building[] = [];
-  let root: SyntaxNode | undefined;
-
-  const enter = (raw: Node): void => {
-    const parent = open.at(-1);
-    const node: Building = { raw, type: raw.type, start: raw.start, end: raw.end, parent, children: [] };
-    parent?.children.push(node);
-    open.push(node);
-  };
-
-  const exit = (): void => {
-    const done = open.pop();
-
-    if (open.length === 0 && done !== undefined) root = done;
-  };
-
-  /* Every `VisitorObject` field is an optional callback taking one member of
-     `Node`, so a handler accepting the whole union is assignable to all of
-     them; the keys are `visitorKeys`' own, so they are exactly the type names
-     `VisitorObject` declares. Naming 165 node types here instead would be the
-     schema copy this module exists to avoid. */
-  const handlers: VisitorObject = Object.fromEntries(
-    Object.keys(visitorKeys).flatMap((type) => [[type, enter], [`${type}:exit`, exit]]),
-  );
-
-  new Visitor(handlers).visit(program);
+  entered = [];
+  built = undefined;
+  TREE_VISITOR.visit(program);
+  const root = built;
+  built = undefined;
 
   if (root === undefined) throw new Error(`${file}: oxc-parser produced no root node.`);
 

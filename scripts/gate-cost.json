@@ -14,17 +14,6 @@
       "loadAtStart": 3.57,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts": {
-      "wallSeconds": 0.22,
-      "cpuSeconds": 0.11,
-      "peakRssMb": 58.36,
-      "peakRunnable": 3,
-      "peakCpuThreads": 0,
-      "meanThreads": 0.5,
-      "samples": 3,
-      "loadAtStart": 3.4,
-      "exit": 0
-    },
     "bun scripts/pattern-inventory.ts": {
       "wallSeconds": 2.35,
       "cpuSeconds": 3.26,
@@ -213,14 +202,14 @@
       "exit": 1
     },
     "bun run gate:dead-code": {
-      "wallSeconds": 38.45,
-      "cpuSeconds": 55.45,
-      "peakRssMb": 15950.48,
+      "wallSeconds": 12.17,
+      "cpuSeconds": 19.74,
+      "peakRssMb": 1297.81,
       "peakRunnable": 8,
-      "peakCpuThreads": 7.78,
-      "meanThreads": 1.44,
-      "samples": 168,
-      "loadAtStart": 5.69,
+      "peakCpuThreads": 3.28,
+      "meanThreads": 1.62,
+      "samples": 83,
+      "loadAtStart": 11.57,
       "exit": 0
     },
     "bun run gate:undeclared-imports": {
@@ -873,14 +862,25 @@
       "exit": 0
     },
     "bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts": {
-      "wallSeconds": 48.1,
-      "cpuSeconds": 86.92,
-      "peakRssMb": 15310.7,
-      "peakRunnable": 29,
-      "peakCpuThreads": 14.65,
-      "meanThreads": 1.81,
-      "samples": 192,
-      "loadAtStart": 2.12,
+      "wallSeconds": 49.24,
+      "cpuSeconds": 74.37,
+      "peakRssMb": 4427.58,
+      "peakRunnable": 21,
+      "peakCpuThreads": 8.45,
+      "meanThreads": 1.51,
+      "samples": 210,
+      "loadAtStart": 8.22,
+      "exit": 0
+    },
+    "bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts": {
+      "wallSeconds": 0.36,
+      "cpuSeconds": 0.17,
+      "peakRssMb": 50.86,
+      "peakRunnable": 1,
+      "peakCpuThreads": 0,
+      "meanThreads": 0.48,
+      "samples": 5,
+      "loadAtStart": 9.07,
       "exit": 0
     },
     "bun scripts/census-plants.ts packages/": {

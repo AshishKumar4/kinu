@@ -110,7 +110,9 @@ export function endLeftovers(mark: string): string[] {
     if (!Number.isSafeInteger(pid) || (processStartTicks(pid) ?? 0) < since) continue;
 
     if (statSync(`/proc/${name}/environ`, { throwIfNoEntry: false })?.uid !== uid) continue;
-    const environ = procFile(pid, 'environ');
+    // A process this user owns that holds a capability this one lacks refuses the read (the kernel's ptrace check):
+    // the user manager, which holds CAP_WAKE_ALARM, and its children between fork and exec. It is no run's.
+    const environ = tolerate(() => procFile(pid, 'environ'), 'eacces');
 
     if (environ !== undefined && `\0${environ}`.includes(entry)) left.push(end(pid));
   }

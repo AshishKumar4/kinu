@@ -33,6 +33,9 @@ import {
 } from './sources';
 import { SKIP_RATCHET_TARGETS } from './skip-ratchet';
 import { declaredName, parse, walk } from './syntax';
+import { auditClosure } from './ladder-audit';
+import { gateEnvironment } from './ladder-cache';
+import { deriveClosure, repoAt } from './ladder-closure';
 import { QUIET_LOAD, readCosts } from './gate-cost';
 
 const root = resolve(import.meta.dir, '..');
@@ -1151,5 +1154,24 @@ describe('a gate the runner cannot spawn is a gate that does not exist', () => {
       .map((gate) => gate.run);
 
     expect(shellSyntax).toEqual([]);
+  });
+});
+
+// 2026-09-24: every row a package script wraps (`bun scripts/ladder.ts --run …`) was keyed on the whole tree,
+// because the wrapper's graph reaches `sources.ts`; the workerd suites alone reran 680 s on any change. The
+// closure now holds the wrapper's graph as loaded, not what it can enumerate, which is sound only while loading
+// the ladder and taking `--run` read no tracked file beyond the modules (`RUNNER_SCRIPT`, ladder-closure.ts).
+describe('the deadline wrapper reads only what its closure holds', () => {
+  test('a wrapped command, traced, opens no tracked file its closure lacks', () => {
+    // The wrapped command is a module that reads nothing, so every tracked file the trace holds is the wrapper's.
+    const run = 'bun scripts/ladder.ts --run bun scripts/jsonc.ts';
+    const closure = deriveClosure(run, { kind: 'derived' }, repoAt(`${root}/`, (command, files) => claims(command, files)));
+
+    if (closure.kind !== 'derived') throw new Error(`${run} has no derived closure: ${closure.why}`);
+
+    const audit = auditClosure(run.split(' '), root, closure, gateEnvironment(closure));
+
+    expect(closure.corpus).toBe(false);
+    expect(audit.undeclared).toEqual([]);
   });
 });

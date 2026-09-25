@@ -3,7 +3,8 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 
 import { classify, tolerate, tolerateAsync, type ExpectedFailure } from '../src/obs/expected-failure';
@@ -113,6 +114,8 @@ describe('tolerate', () => {
     const db = new Database(':memory:');
     db.run('CREATE TABLE t (id TEXT PRIMARY KEY, a TEXT)');
     db.run('CREATE TABLE u (id TEXT)');
+    const unreadable = join(scratchDir('expected-failure-eacces'), 'unreadable');
+    writeFileSync(unreadable, 'x', { mode: 0o000 });
 
     const provoked: Array<{ name: ExpectedFailure; cause: Error }> = [
       { name: 'sqlite-missing-table', cause: thrown(() => db.query('SELECT 1 FROM absent').all()) },
@@ -121,11 +124,12 @@ describe('tolerate', () => {
       { name: 'enoent', cause: thrown(() => readFileSync('/proc/self/absent-91827364')) },
       { name: 'eexist', cause: thrown(() => mkdirSync(scratchDir('expected-failure-eexist'))) },
       { name: 'esrch', cause: thrown(() => process.kill(0x7fffffff, 0)) },
+      { name: 'eacces', cause: thrown(() => readFileSync(unreadable)) },
       { name: 'malformed-input', cause: thrown(() => JSON.parse('{oops')) },
     ];
 
     // Every registered name must have a provoked error.
-    expect(provoked.length).toBe(7);
+    expect(provoked.length).toBe(8);
 
     for (const { name, cause } of provoked) {
       expect(classify({ cause })).toBe(name);
