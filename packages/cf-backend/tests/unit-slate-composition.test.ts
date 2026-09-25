@@ -228,7 +228,7 @@ test('the agent slate operation commits, forks and restores its authored source'
   expect(await actor.agent.slate({ op: 'commit', id: '../outside' })).toMatchObject({ ok: false, reason: 'bad_input' });
 });
 
-test('a hired agent makes a slate where slates live, restores it with the main agent, and cannot make it live', async () => {
+test('a hired agent makes a slate where slates live, restores it with the main agent, and cannot share it', async () => {
   const parent = orchestratorHarness();
 
   const child = await hostedSubordinateHarness(parent, {

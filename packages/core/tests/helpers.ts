@@ -272,7 +272,7 @@ export function createTestRuntime(opts?: {
     abortBranch: async () => {},
   };
 
-  return { rt, db, stores: storesFor(rt) };
+  return { rt, db, workspace, stores: storesFor(rt) };
 }
 
 /** The store bundle over an already-built runtime. */

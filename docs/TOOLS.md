@@ -328,8 +328,8 @@ that VFS. In an `eval` program, `process.cwd()` is the workspace root, and the
 ### Slates
 
 A slate is an authored project under `/slates/<id>/`. `/slates` is the
-workspace's, not one agent's: every agent, hired ones too, makes, edits and
-previews slates there, and only the workspace root makes one live. For the default
+workspace's, not one agent's: every agent, hired ones too, makes, edits,
+previews and removes slates there, and only the workspace root shares one with other people. For the default
 `worker` runtime, `package.json` `main` names the module that exports
 `class Slate extends SlateObject` from `kinu:slate`; every public method is
 callable from the client. A `node` runtime instead names a server `slate.port`

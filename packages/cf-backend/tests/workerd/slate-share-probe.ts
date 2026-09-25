@@ -166,9 +166,10 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
   /**
    * A hired agent's slate, made with its own credential where slates live: its manifest in place, its server built
-   * in its home and moved in, as a hire promotes a draft. The main agent changes both, then the hire previews it.
+   * in its home and moved in, as a hire promotes a draft. The main agent changes both, then the hire previews it
+   * and, as the main agent would, removes it.
    */
-  async previewAsHire(): Promise<SlateCallResult> {
+  async previewAsHire(): Promise<{ preview: SlateCallResult; removed: SlateCallResult; left: boolean }> {
     await adoptGeneration(this.gen);
     this.processes.setPidBase(generation(this.gen) * PID_GEN_STRIDE);
     const identity = { uid: 2001, gid: 2001 };
@@ -192,8 +193,10 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     files.rename(`${home}/server.ts`, `${dir}/server.ts`);
     main.writeFile(`${dir}/package.json`, manifest('Widgets, reviewed'));
     main.writeFile(`${dir}/server.ts`, server(4));
+    const preview = await this.host.operation(hire, { op: 'preview', id: 'widgets' });
+    const removed = await this.host.operation(hire, { op: 'remove', id: 'widgets' });
 
-    return await this.host.operation(hire, { op: 'preview', id: 'widgets' });
+    return { preview, removed, left: this.vfs.as(CRED_KERNEL).exists(dir) };
   }
 
   /** `approved` names members granted beyond the graph's read members. */

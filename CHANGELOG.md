@@ -704,9 +704,14 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 - **Hired agents make slates.** Slates lived in the main agent's home, so an agent you hired could not create one
   ("can't promote to /home/main/slates/widgets (EACCES)"). They now live at `/slates`, the workspace's own
-  directory: every agent makes, edits and previews slates there, and a slate one agent made the others can change.
-  Making a slate live, with its stable URL and bindings, is still the workspace's main agent's alone. Existing slates
-  move there on the next start; a CLI workspace keeps them in the project's own `slates/` folder.
+  directory. Every chat in the workspace makes, edits, previews and removes slates there as the main chat does, and
+  a slate one chat made the others can change. Sharing one with other people or the public is still the main
+  chat's alone. Existing slates move there on the next start; a CLI workspace keeps them in the project's own
+  `slates/` folder.
+- **Changes shows the whole workspace again.** It listed only the main agent's home, so a slate at `/slates` or a
+  file a hired agent wrote in its own home never appeared. It now lists every change to the workspace's own files:
+  every agent's home by path, the slates, and the rest of the filesystem. Mounted drives (`/pc`, `/shared`,
+  `/sandbox`, `/context`) and the platform's own state stay out.
 
 - **A workspace's card shows the owner's words, never Kinu's own.** A new workspace's card showed the prompt Kinu
   starts its first turn with as the owner's latest task, and a background event after the owner's message did the
