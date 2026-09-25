@@ -2203,29 +2203,27 @@ export const LADDER: readonly Gate[] = [
     run: 'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts',
     label: 'Product flows in a browser, on the local dev server',
     deadline: {
-      seconds: 900,
-      why: 'six rows, four of them waiting on a real model turn over the shared account: 209s '
-        + 'and 273s on 2026-09-23, the slate turn alone 121s, and the same turn took 240s against the '
-        + 'deployment that day. About three times the wall, so a slow model answers rather than '
-        + 'being killed as a hang.',
+      seconds: 500,
+      why: 'nine rows on the flows\' scripted model: 166s on 2026-09-25, the dev server\'s boot '
+        + 'included. About three times the wall.',
     },
     tier: 'deploy',
-    // 209s on 2026-09-23 (gate-cost-measure, load 3.4 at start, above the quiet
-    // line, so an upper figure): the dev server's boot, then six rows, four of
-    // them waiting on a real model turn and the slate's the longest.
-    seconds: 209,
+    // 166s on 2026-09-25 (load 1.5 at start): the dev server's boot, then nine
+    // rows on the scripted model, agent-return the longest at 31s.
+    seconds: 166,
     catches: 'a flow a person runs in the page that breaks while every API, socket and '
       + 'fixture-backed browser gate stays green: the owner\'s #13, where every agent a '
       + 'workspace held was present over the API and the reloaded page showed none of them. '
       + 'Each row drives real Chrome through the product\'s own controls against `vite dev` '
       + '(the real Worker and Durable Objects, no fixtures) and asserts only what the page '
-      + 'shows. The rows are the same file the deployment runs after the publish, with the '
-      + 'origin the only difference, so a flow red here is red before it ships.',
+      + 'shows. The rows are the same file the deployment runs after the publish, here on the '
+      + 'flows\' scripted model (`flowsModel`), so a flow red here is red before it ships.',
     blind: 'what `vite dev` is not: the production isolate, the edge and its preview zone (a '
       + 'slate\'s frame loads through vite-preview-zone.ts on loopback), the deployed assets and '
       + 'the real identity, which are the post-publish row\'s. One viewport, one theme. The '
-      + 'model is real, so a row that needs an answer reads that one arrived, never its words.',
-    inputs: { kind: 'live', why: 'boots `vite dev` on an ephemeral port with this box\'s `.dev.vars` credentials, drives Chrome against it and spends real model turns; a hash over the tracked tree stands for none of them.' },
+      + 'model is a script, so a row tests what the product does with a known answer and never '
+      + 'what a real model writes; the deployment\'s run of the same rows is on its real model.',
+    inputs: { kind: 'live', why: 'boots `vite dev` on an ephemeral port with this box\'s `.dev.vars` credentials and drives Chrome against it, on a local scripted model; a hash over the tracked tree stands for none of them.' },
   },
   {
     run: 'bun run gate:infra',

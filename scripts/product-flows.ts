@@ -3,10 +3,12 @@
  *
  * Every row here drives real Chrome against a real product origin and asserts
  * only what the page shows: a tab, a link, an answer, a preview. The same rows
- * run twice with nothing but the origin changed (`KINU_ORIGIN`): before the
- * deploy against the local dev server (`scripts/with-dev-server.ts`, the real
- * Worker and Durable Objects in workerd) and after it against the deployment
- * (`scripts/product-flows-tier.sh`). The identity is resolved from that origin
+ * run twice: before the deploy against the local dev server
+ * (`scripts/with-dev-server.ts`: the real Worker and Durable Objects in workerd,
+ * on the scripted model `flowsModel` below, so they test the product and not a
+ * model's compliance) and after it against the deployment on its real model
+ * (`scripts/product-flows-tier.sh`). The origin arrives as `KINU_ORIGIN`, the
+ * model is the account's default, and the identity is resolved from that origin
  * by the eval plane's own resolver, so a row never asks where it runs.
  *
  * WHY THIS EXISTS. The first-run tier reads the deployment over its API and its
@@ -20,7 +22,7 @@
  */
 import type { Browser, ElementHandle, Page } from 'puppeteer';
 import * as v from 'valibot';
-import { SLATES_ROOT } from '@kinu.run/core';
+import { SLATES_ROOT, workspacePath } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -28,6 +30,7 @@ import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
 import { webHeaders, type PublicWebIdentity } from '../evals/src/session';
 import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
+import { FALLBACK_ANSWER, type ScriptedAnswer, type ScriptedModel } from './scripted-model';
 
 /** Where a row runs and who it runs as. */
 export interface FlowTarget {
@@ -700,19 +703,18 @@ export async function workspaceGetsFirstAnswer(target: FlowTarget): Promise<Firs
 
     workspace = decodeURIComponent(landedAt.slice('/workspace/'.length).split('/')[0] ?? '');
     await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
-    // The mission's turn has ended once the pane shows the mission and its
-    // Send control is back, answered or not: the row reads what was drawn.
-    await until(page, 'the mission in the chat column', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(MISSION)})`);
-    // The answer, not Send: this turn is the workspace's own, so the page never
-    // sent it and returns to Send only when its turn claim refreshes.
+    // The workspace's own first turn opens on the product's words, not the
+    // mission's, so the row waits for its reply, then for Send, which returns
+    // once the turn's claim settles. The page may join after the turn has
+    // closed, and then hears the settled claim as it connects.
     await until(page, "the mission's answer in the chat column", `${ANSWERS}.length > 0`);
+    await until(page, "the mission's turn to close, Send offered", CHAT_IDLE);
 
     const answers = v.parse(v.array(v.string()), await page.evaluate(ANSWERS));
 
     // #21: the inspector opened once a "hello" turn ended, with nothing asking
-    // the person for anything. Read it after the turn has closed and the page
-    // has re-read what waits on the person (every 5 s while connected).
-    await ledger.turnClosed();
+    // the person for anything. Read it after the page has re-read what waits
+    // on the person (every 5 s while connected).
     ledger.restart();
     await settledAfter(page, ledger, 'listPendingActions');
 
@@ -896,6 +898,10 @@ const CHANGED_PATHS = `[...document.querySelectorAll('#inspector [data-file-row]
 /** A file name no scaffold file can carry. */
 export const FLOW_PROBE = 'flow-probe.txt';
 
+/** The written-file row's one turn. */
+export const WRITE_FILE_ASK = `Use your file tool to write a new file named ${FLOW_PROBE} in the workspace, `
+  + 'containing exactly the words browser flow probe. Then reply with one line: DONE.';
+
 export interface WrittenFileVerdict {
   readonly workspace: string;
   /** Every entry the Files tab listed once its listing settled. */
@@ -919,8 +925,7 @@ export async function writtenFileShowsInFilesAndChanges(target: FlowTarget): Pro
   try {
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
 
-    await sendAndSettle(page, `Use your file tool to write a new file named ${FLOW_PROBE} in the workspace, `
-      + 'containing exactly the words browser flow probe. Then reply with one line: DONE.');
+    await sendAndSettle(page, WRITE_FILE_ASK);
     await openInspector(page);
     await page.evaluate(stripTab('Files'));
     await until(page, "the Files tab's listing", FILES_SETTLED);
@@ -953,6 +958,60 @@ export async function writtenFileShowsInFilesAndChanges(target: FlowTarget): Pro
  *  words its page serves that no scaffold carries. */
 export const FLOW_SLATE = { title: 'Flow probe', id: 'flow', page: 'browser flow slate' } as const;
 
+/** The slate row's one turn. */
+export const SLATE_ASK = `Use the file tool to create a slate at ${SLATES_ROOT}/${FLOW_SLATE.id}/. `
+  + `Write package.json with main "server.ts" and slate {"title":"${FLOW_SLATE.title}","port":8788,"bindings":{}}. `
+  + `Write server.ts so the slate answers GET / with an HTML page whose body is <h1>${FLOW_SLATE.page}</h1>. `
+  + 'Start its preview. Reply with the preview URL.';
+
+/** The slate turn's calls, in the order the scripted model plays them: the two files the ask names, then its preview. */
+const FLOW_SLATE_CALLS: readonly ScriptedAnswer[] = [
+  {
+    text: 'Writing the slate.',
+    toolCall: { name: 'file', arguments: { action: 'write', path: `${SLATES_ROOT}/${FLOW_SLATE.id}/package.json`, content: JSON.stringify({
+      name: FLOW_SLATE.id, main: 'server.ts', slate: { title: FLOW_SLATE.title, port: 8788, bindings: {} },
+    }, null, 2) } },
+  },
+  {
+    toolCall: { name: 'file', arguments: { action: 'write', path: `${SLATES_ROOT}/${FLOW_SLATE.id}/server.ts`, content: [
+      'import { SlateObject } from "kinu:slate";',
+      '',
+      'export class Slate extends SlateObject {',
+      '  async fetch() {',
+      `    return new Response("<h1>${FLOW_SLATE.page}</h1>", { headers: { "content-type": "text/html" } });`,
+      '  }',
+      '}',
+      '',
+    ].join('\n') } },
+  },
+  {
+    text: 'Starting its preview.',
+    toolCall: { name: 'eval', arguments: { code: `return await workspace.slates.${FLOW_SLATE.id}.$preview();` } },
+  },
+];
+
+/**
+ * The model the rows run on before the deploy (`with-dev-server.ts`), so they test the product and not a model's
+ * compliance: asked for a slate at /slates/flow/, the real model wrote none, or wrote a React slate the ask did not
+ * name, in 2 of 6 runs (2026-09-25). Each ask gets the calls it names, in order; every other request (titles, the
+ * mission, a one-word reply) gets the fallback answer. After the deploy the same rows run on the real model.
+ */
+export const flowsModel: ScriptedModel = (request) => {
+  const asked = (ask: string): boolean => request.userTexts.some((text) => text.includes(ask));
+
+  if (asked(WRITE_FILE_ASK) && request.available.includes('file')) {
+    return request.called.includes('file')
+      ? { text: 'DONE' }
+      : { text: 'Writing the file.', toolCall: { name: 'file', arguments: { action: 'write', path: workspacePath(FLOW_PROBE), content: 'browser flow probe' } } };
+  }
+
+  if (asked(SLATE_ASK) && request.available.includes('file')) {
+    return FLOW_SLATE_CALLS[request.called.length] ?? { text: `The ${FLOW_SLATE.title} slate is running in its tab.` };
+  }
+
+  return { text: FALLBACK_ANSWER };
+};
+
 export interface SlatePreviewVerdict {
   readonly workspace: string;
   /** Whether the strip drew a tab under the slate's title once the turn ended. */
@@ -977,10 +1036,7 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
     const ledger = await frameLedger(page);
 
-    await sendAndSettle(page, `Use the file tool to create a slate at ${SLATES_ROOT}/${FLOW_SLATE.id}/. `
-      + `Write package.json with main "server.ts" and slate {"title":"${FLOW_SLATE.title}","port":8788,"bindings":{}}. `
-      + `Write server.ts so the slate answers GET / with an HTML page whose body is <h1>${FLOW_SLATE.page}</h1>. `
-      + 'Start its preview. Reply with the preview URL.');
+    await sendAndSettle(page, SLATE_ASK);
     await settledAfter(page, ledger);
     await openInspector(page);
 
@@ -1282,10 +1338,12 @@ export interface SlateShareVerdict {
   readonly workspace: string;
   /** Whether the dialog drew a Reach row for a slate that reaches nothing. */
   readonly reachRow: boolean;
-  /** The limits line the dialog states before sharing. */
-  readonly limits: string;
-  /** What the dialog said once shared. */
-  readonly created: string;
+  /** Every number the dialog's limits line states before sharing. */
+  readonly limitsStated: readonly number[];
+  /** The link the dialog gave once shared; null when it gave none. */
+  readonly link: string | null;
+  /** What pressing the link's copy control put on the clipboard. */
+  readonly copied: string | null;
   /** Shared by you, once shared. */
   readonly sharedByYou: readonly string[];
   /** Shared by you after Stop sharing; the tab is gone when nothing else is shared. */
@@ -1313,13 +1371,31 @@ export async function slateSharesWithNoBindings(target: FlowTarget): Promise<Sla
     await until(page, 'the share dialog\'s limits', `document.querySelector('[role="dialog"] [data-share-limits]') !== null`);
 
     const reachRow = v.parse(v.boolean(), await page.evaluate(`document.querySelector('[data-share-reach]') !== null`));
-    const limits = v.parse(v.string(), await page.$eval('[data-share-limits]', (element) => element.textContent ?? ''));
+
+    const limitsStated = v.parse(v.array(v.number()), await page.$eval('[data-share-limits]',
+      (element) => [...(element.textContent ?? '').matchAll(/\d+(?:\.\d+)?/gu)].map((number) => Number(number[0]))));
 
     await page.click('[data-share-access]');
     await page.click('[data-share-access-option="public"]');
     await page.click('[data-share-submit]');
     await until(page, 'the share to be made', `document.querySelector('[data-share-created]') !== null`);
-    const created = v.parse(v.string(), await page.$eval('[data-share-created]', (element) => (element.textContent ?? '').trim()));
+    const link = v.parse(v.nullable(v.string()), await page.evaluate(`document.querySelector('[role="dialog"] a[href]')?.href ?? null`));
+    let copied: string | null = null;
+
+    if (link !== null) {
+      // Chrome's writeText asks for the sanitized-write grant, not clipboard-write (measured on Chrome 151).
+      await target.browser.defaultBrowserContext().overridePermissions(target.origin, ['clipboard-read', 'clipboard-sanitized-write']);
+      await page.bringToFront();
+      copied = v.parse(v.string(), await waitOn(page, 'the share link on the clipboard', page.evaluate(`(async () => {
+        await navigator.clipboard.writeText('');
+        document.querySelector('[role="dialog"] a[href]').parentElement.querySelector('button').click();
+        for (;;) {
+          const held = await navigator.clipboard.readText();
+          if (held !== '') return held;
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+      })()`)));
+    }
 
     await page.evaluate(`[...document.querySelectorAll('[role="dialog"] button')].find((button) => (button.textContent ?? '').trim() === 'Done')?.click()`);
     await until(page, 'the Shared tab', `document.querySelector('[data-drive-tab="shared"]') !== null`);
@@ -1344,7 +1420,7 @@ export async function slateSharesWithNoBindings(target: FlowTarget): Promise<Sla
 
     await page.close();
 
-    return { workspace, reachRow, limits, created, sharedByYou, afterStop };
+    return { workspace, reachRow, limitsStated, link, copied, sharedByYou, afterStop };
   } finally {
     if (share !== null && !stopped) {
       const left = await fetch(`${target.origin}/api/shared/revoke`, {
