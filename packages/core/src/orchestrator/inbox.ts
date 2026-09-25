@@ -408,8 +408,8 @@ export class Inbox implements AgentInbox {
   }
 
   /**
-   * Turn over: everything that did not reach the model re-delivers (users as one turn the events ride); an aborted
-   * turn also requeues its absorbed events. Call exactly once per turn, before anything that can throw.
+   * Turn over: everything that did not reach the model re-delivers; an aborted turn also requeues its absorbed events.
+   * Call exactly once per turn, before anything that can throw.
    * Re-delivery is detached so a turn never blocks on the next one's queue slot.
    */
   settle(opts: { completed: boolean }): SettledSignals {

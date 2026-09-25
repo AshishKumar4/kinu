@@ -395,7 +395,6 @@ function FileDrawer({ path, entry, onClose }: { path: string; entry: DriveEntry;
   );
 }
 
-/** Each built-in's SKILL.md at its `/skills` path, read only. */
 const BUILTIN_SKILL_TEXT: ReadonlyMap<string, string> = new Map(
   Object.entries(BUILTIN_SKILL_FILES).map(([name, text]) => [skillViewPath(name), text]),
 );
@@ -600,7 +599,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
       meta={<span className="truncate">Built in</span>} menu={[]} attributes={{ "data-drive-builtin": name }} />
   );
 
-  /** The /skills view's order: by name, a built-in first. */
+  /** By name, a built-in first. */
   const skillTiles = (): ReactNode[] => [
     ...contents.builtins.map((name) => ({ name, tile: builtinTile(name) })),
     ...contents.folders.map((entry) => ({ name: entry.name, tile: folderTile(entry) })),
