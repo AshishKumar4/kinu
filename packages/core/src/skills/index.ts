@@ -9,7 +9,7 @@ export {
 } from './parse';
 
 export {
-  discoverSkills, readSkillFile, readSkillBody, workspaceSkillPath, compareSkillNames, refusedSkillFiles,
+  discoverSkills, readSkillFile, workspaceSkillPath, compareSkillNames, refusedSkillFiles,
   BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES,
   type SkillsVfs, type DiscoverOpts, type SkillsDiscovery, type UnreadSkillFile, type SkillFileRefusal,
 } from './discover';

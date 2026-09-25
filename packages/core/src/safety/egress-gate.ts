@@ -8,9 +8,6 @@ import type { ApprovalGrant, ApprovalResult } from './approval-gate';
 /** Version tag, so a stored binding from an older build is not mistaken for a secret. */
 export const EGRESS_PLACEHOLDER_PREFIX = 'pxs1_';
 
-/** Randomness per placeholder; sized against collisions between bindings, since placeholders are public to the container. */
-export const EGRESS_PLACEHOLDER_BYTES = 32;
-
 /** Exported for the vault's mint, whose output length the scanner below is the contract over. */
 export const PLACEHOLDER_BODY_LENGTH = 43;
 
@@ -56,7 +53,7 @@ export function parseEgressSecretRule(rule: string): string | null {
 }
 
 /** Executor egress grants are scoped to; the grant writer and the binding filter must agree on this string. */
-export const EGRESS_EXECUTOR = 'sandbox';
+const EGRESS_EXECUTOR = 'sandbox';
 
 /** Bindings `grants` allow; a vaulted binding without a grant is invisible to the container. */
 export function grantedEgressBindings(
@@ -99,13 +96,6 @@ export function reviewEgressBinding(
         + `request it makes to ${binding.host} can carry the owner's credential.`,
     }],
   };
-}
-
-/** The approval card's action text; fills `ShellApprovalRequest.command`. */
-export function egressBindingAction(
-  binding: Pick<EgressSecretBinding, 'label' | 'host'>,
-): string {
-  return `bind secret "${binding.label}" for egress to ${binding.host}`;
 }
 
 /** What the adapter observed about one outbound request; bodies are absent (see {@link planEgress}). */

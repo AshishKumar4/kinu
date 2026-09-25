@@ -5,11 +5,11 @@ import { KeySchema, type ProgramStateStore } from '../identity/program-state';
 import { JsonValueSchema } from '../utils/json';
 import { KinuError, refusalOf } from '../obs/error';
 
-export const STATE_NAMESPACE = 'state';
+const STATE_NAMESPACE = 'state';
 
 const PrefixSchema = v.optional(v.string());
 
-export const STATE_TYPES = `type StateValue = null | boolean | number | string | StateValue[] | { [key: string]: StateValue };
+const STATE_TYPES = `type StateValue = null | boolean | number | string | StateValue[] | { [key: string]: StateValue };
 export declare const state: {
   get(key: string): Promise<StateValue | Refusal>;
   set(key: string, value: StateValue): Promise<{ ok: true } | Refusal>;

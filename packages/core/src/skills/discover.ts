@@ -4,7 +4,6 @@
  */
 import { admissionBytes, estimateTokens } from '../llm';
 import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
-import { parseMarkdownFrontmatter } from '../utils/markdown-frontmatter';
 import type { VfsEntryStat } from '../types/primitives';
 
 import { parseSkillFile, skillNameProblem } from './parse';
@@ -262,15 +261,6 @@ export async function readSkillFile(
   return ref.kind === 'builtin'
     ? ref.text
     : readTextFile(vfs, ref.path, admissionBytes(admissionTokens));
-}
-
-/** Fetch one admitted body: a module constant or parsed from the bounded read. */
-export async function readSkillBody(
-  vfs: SkillsVfs,
-  ref: SkillBodyRef,
-  admissionTokens: number,
-): Promise<string> {
-  return parseMarkdownFrontmatter(await readSkillFile(vfs, ref, admissionTokens)).body;
 }
 
 /** Where the workspace writes its own skill of this name. */

@@ -27,7 +27,7 @@ export interface SerializableToolDescriptor {
   readOnly?: true;
 }
 
-export const SerializableToolDescriptorSchema = v.object({
+const SerializableToolDescriptorSchema = v.object({
   serverId: v.string(),
   serverName: v.string(),
   name: v.string(),

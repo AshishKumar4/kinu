@@ -54,11 +54,8 @@ import {
   chainBackupOptions,
   CHAIN_EXCLUDES,
   deltaObjectKey,
-  isChainId,
-  layerIntegrityFailure,
   metadataObjectKey,
   normalizeChainState,
-  type ChainLayer,
 } from '../src/snapshot-chain';
 
 const CHAIN_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
@@ -889,14 +886,16 @@ printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%
 
 describe('chain identity — UUID keys refuse traversal by construction', () => {
   test('only a UUID is a chain id', () => {
+    const STORE_ROOT = chainStoreRoot('boxes/box-under-test');
+
     for (const bad of [
       '../../etc', '', 'backups/x/data.sqsh', 'a/b/c/d-e-f-g-h',
       'ZZZZZZZZ-0000-4000-8000-000000000009', `${CHAIN_ID}/..`, ` ${CHAIN_ID}`,
     ]) {
-      expect(isChainId(bad)).toBe(false);
+      expect(() => baseObjectKey(STORE_ROOT, bad)).toThrow(/is not a UUID/);
     }
 
-    expect(isChainId(CHAIN_ID)).toBe(true);
+    expect(baseObjectKey(STORE_ROOT, CHAIN_ID)).toStartWith(`${STORE_ROOT}/${CHAIN_ID}/`);
   });
 
   test('every key builder validates, so no path can be assembled from a guess', () => {
@@ -971,105 +970,6 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
     expect(normalizeChainState({ ...sound, fallback: { base: { id: 'nope', bytes: 7 } } }))
       .toBeNull();
   });
-});
-
-describe('integrity probe — each unsound shape names itself', () => {
-  /** A layer known only by its size: the shape of a row stored without digest or store version. */
-  const sized = (bytes: number | undefined): ChainLayer | undefined =>
-    (bytes === undefined ? undefined : { bytes, digest: undefined, objectVersion: undefined });
-
-  test('the four ways a stored layer can be unusable', () => {
-    const bySize = (declared: number | undefined, stored: number | undefined, label: string) =>
-      layerIntegrityFailure({ declared: sized(declared), stored: sized(stored), label });
-
-    expect(bySize(undefined, 1, 'base')).toContain('declares no size');
-    expect(bySize(1, undefined, 'base')).toContain('missing from the store');
-    expect(bySize(0, 0, 'delta')).toContain('declares 0 bytes');
-    expect(bySize(10, 11, 'delta')).toContain('11 bytes, state declares 10');
-    expect(bySize(10, 10, 'base')).toBeNull();
-  });
-
-  test('KINU-N025: a matching size with a different digest is a DIFFERENT archive', () => {
-    // The gap a byte count cannot close: same length, different content, still a
-    // valid squashfs image. It mounts and serves the wrong workspace.
-    const digest = 'a'.repeat(64);
-    const other = 'b'.repeat(64);
-
-    const refusal = layerIntegrityFailure({
-      declared: { bytes: 4_096, digest, objectVersion: undefined },
-      stored: { bytes: 4_096, digest: other, objectVersion: undefined },
-      label: 'delta',
-    });
-
-    expect(refusal).toContain('different archive of the same length');
-    expect(refusal).toContain(other);
-    expect(refusal).toContain(digest);
-    // R2 reports a digest only for objects uploaded with a checksum; a missing one must pass,
-    // or every multipart archive would be refused.
-    expect(layerIntegrityFailure({
-      declared: { bytes: 4_096, digest, objectVersion: undefined },
-      stored: { bytes: 4_096, digest, objectVersion: undefined },
-      label: 'delta',
-    })).toBeNull();
-    expect(layerIntegrityFailure({
-      declared: { bytes: 4_096, digest, objectVersion: undefined },
-      stored: { bytes: 4_096, digest: undefined, objectVersion: undefined },
-      label: 'base',
-    })).toBeNull();
-    // A declared record without a digest is also UNKNOWN, and such rows are live: `Devbox.strategy`
-    // defaults to the chain, so refusing them would break deployed sandboxes.
-    expect(layerIntegrityFailure({
-      declared: { bytes: 4_096, digest: undefined, objectVersion: undefined },
-      stored: { bytes: 4_096, digest: other, objectVersion: undefined },
-      label: 'base',
-    })).toBeNull();
-  });
-
-  test('KINU-N025: with no digest to compare, a different store version is a DIFFERENT '
-    + 'upload', () => {
-      // The Workers multipart API takes no checksum, so R2 reports no digest for a large archive;
-      // the upload-minted version is what catches a same-length replacement.
-      const big = 512 * 1024 * 1024;
-
-      const refusal = layerIntegrityFailure({
-        declared: { bytes: big, digest: undefined, objectVersion: 'upload-one' },
-        stored: { bytes: big, digest: undefined, objectVersion: 'upload-two' },
-        label: 'base',
-      });
-
-      expect(refusal).toContain('written by a different upload');
-      expect(refusal).toContain('upload-one');
-      expect(refusal).toContain('upload-two');
-      // No digest on either side is what a sound multipart archive looks like, so size plus version must pass.
-      expect(layerIntegrityFailure({
-        declared: { bytes: big, digest: undefined, objectVersion: 'upload-one' },
-        stored: { bytes: big, digest: undefined, objectVersion: 'upload-one' },
-        label: 'base',
-      })).toBeNull();
-      // A row with no recorded `objectVersion` is unknown, not unsound, so it passes.
-      expect(layerIntegrityFailure({
-        declared: { bytes: 4_096, digest: undefined, objectVersion: undefined },
-        stored: { bytes: 4_096, digest: undefined, objectVersion: 'upload-two' },
-        label: 'base',
-      })).toBeNull();
-    });
-
-  test('KINU-N025: agreeing content outranks a new store version, because a re-upload '
-    + 'is not a replacement', () => {
-      // A version is minted per upload: a lost state write can leave the store a version ahead
-      // with identical content, so matching digests win and the version decides only without one.
-      const digest = 'a'.repeat(64);
-      expect(layerIntegrityFailure({
-        declared: { bytes: 4_096, digest, objectVersion: 'upload-one' },
-        stored: { bytes: 4_096, digest, objectVersion: 'upload-two' },
-        label: 'delta',
-      })).toBeNull();
-      expect(layerIntegrityFailure({
-        declared: { bytes: 4_096, digest, objectVersion: 'upload-one' },
-        stored: { bytes: 4_096, digest: 'b'.repeat(64), objectVersion: 'upload-one' },
-        label: 'delta',
-      })).toContain('different archive of the same length');
-    });
 });
 
 describe('archive options', () => {

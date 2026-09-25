@@ -10,6 +10,8 @@ export interface SecretPattern {
   /** Shapes that cannot be a live credential. Keep narrow: widening loses detections. */
   benign?: RegExp;
   message: string;
+  /** What redaction writes in place of a match; `<redacted>` when absent. */
+  mask?: string;
 }
 
 // Built in parts so this source never matches its own detector.
@@ -83,6 +85,35 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
     regex: /(?:mongodb|postgres|mysql|redis|amqp):\/\/[^:\s]+:[^@\s]{8,}@/g,
     benign: /<your-|localhost/,
     message: 'connection string with embedded credentials',
+  },
+];
+
+/** Shapes redaction masks but a source scan does not flag: a fixture or a doc legitimately
+ *  spells them, while a stored transcript or a debug bundle never should. */
+export const REDACTION_ONLY_PATTERNS: readonly SecretPattern[] = [
+  {
+    // A device token's body is base64url from its first character, so `kinu-token`'s hex body
+    // misses it; the scan keeps the hex shape because fixtures spell whole-token placeholders.
+    id: 'kinu-token-any-body',
+    regex: /\bp(?:ta|tc|dt)_[A-Za-z0-9_-]{16,}/g,
+    message: 'Kinu access/CLI/device token',
+  },
+  {
+    id: 'openai-key',
+    regex: /\bsk-[A-Za-z0-9]{20,}\b/g,
+    message: 'OpenAI-shaped API key',
+  },
+  {
+    id: 'bearer-token',
+    regex: /\bBearer\s+[A-Za-z0-9._-]{15,}/gi,
+    message: 'bearer credential',
+  },
+  {
+    // A JSON pair written as text, the shape a logged request body carries.
+    id: 'json-secret-pair',
+    regex: /("(?:token|secret|password|api[_-]?key|credential|access[_-]?token|refresh[_-]?token)"\s*:\s*")[^"]{4,}(")/gi,
+    message: 'secret-named JSON field in free text',
+    mask: '$1<redacted>$2',
   },
 ];
 

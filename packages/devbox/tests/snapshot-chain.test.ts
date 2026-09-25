@@ -26,7 +26,6 @@ import {
   chainStoreRoot,
   CHAIN_EXCLUDES,
   deltaObjectKey,
-  isChainId,
   metadataObjectKey,
   normalizeChainState,
   publishCommand,
@@ -169,7 +168,7 @@ function publishedDeltaId(state: ChainState | null): string {
   const id = state?.delta?.id;
 
   if (id === undefined) throw new Error('published delta lacks its immutable identity');
-  expect(isChainId(id)).toBe(true);
+  expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   expect(id).not.toBe(state?.base.id);
 
   return id;
@@ -3671,6 +3670,32 @@ describe('an archive replaced at the same length is refused', () => {
       expect(record.objects.get(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(BASE_BYTES);
       expect(record.calls.filter(call => call.startsWith('deleteObjects'))).toEqual([]);
     });
+
+  test('agreeing content outranks a new store version, because a re-upload is not a replacement',
+    async () => {
+      // A version is minted per upload: a lost state write can leave the store a version ahead with
+      // identical content, so a matching digest wins and the version decides only without one.
+      const calls: string[] = [];
+      const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
+      record.versions.set(baseObjectKey(STORE_ROOT, CHAIN_ID), REPLACED_VERSION);
+
+      expect((await attachOf(record)).kind).toBe('attached');
+      expect(record.state?.lastFailure).toBeUndefined();
+    });
+
+  test('a record declaring a zero-byte base is refused, and the fallback serves', async () => {
+    const calls: string[] = [];
+
+    const record = harness({
+      state: withFallback({ base: { id: CHAIN_ID, bytes: 0 } }), mounts: mountsAfterAttach(calls), calls,
+    });
+
+    record.objects.set(baseObjectKey(STORE_ROOT, CHAIN_ID), 0);
+
+    expect((await attachOf(record)).detail).toContain('recovered');
+    expect(record.state?.base.id).toBe(FALLBACK_ID);
+    expect(record.state?.lastFailure?.reason).toContain('declares 0 bytes');
+  });
 
   test('the SAME multipart object attaches, so the version check is not a false alarm',
     async () => {

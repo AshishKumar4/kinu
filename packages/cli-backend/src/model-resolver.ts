@@ -765,10 +765,7 @@ function buildAuthStore(
 
   if (credentials.anthropicApiKey) {
     store.set('anthropic.bearer', {
-      headers: {
-        'x-api-key': credentials.anthropicApiKey,
-        'anthropic-version': '2023-06-01',
-      },
+      headers: credentialToHeaders('anthropic.bearer', { kind: 'bearer', token: credentials.anthropicApiKey }),
     });
   }
 

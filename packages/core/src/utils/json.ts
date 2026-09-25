@@ -124,7 +124,7 @@ export function projectJsonValue(input: { value: unknown }): JsonValue {
 }
 
 /** One truncation limit so durable records of the same call agree. */
-export const DIGEST_LIMIT = 800;
+const DIGEST_LIMIT = 800;
 
 /** Bounded projection for durable records; oversized values degrade to a truncated JSON string ending in `…`. */
 export function digestJsonValue(input: { value: unknown }): JsonValue | undefined {

@@ -85,7 +85,7 @@ export interface DeviceConsentRegistryDeps {
   now?: () => number;
 }
 
-export const DEVICE_CONSENT_TIMEOUT_MS = 5 * 60_000;
+const DEVICE_CONSENT_TIMEOUT_MS = 5 * 60_000;
 
 /** The row is the card, so an activation that never saw the raise still owes the owner this. */
 export interface PendingConsentRow extends PendingDeviceConsent {

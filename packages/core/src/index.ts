@@ -171,7 +171,7 @@ export {
   outcomeToFeedback, outcomeQuality, feedbackToQuality, isTrivialTurn,
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, takePickOutcome,
   realOutcomeScaffoldRates, blendRealOutcomeRates,
-  describeSplitDegeneracy, CRITIC_PROSE,
+  describeSplitDegeneracy,
   recordLesson, recordedTurnVerdict, listLessons, corroborateLessonsForTurn,
   isNegativeOutcome, isUserVerdictSource, executionVerdict, executionVerdictOutcome,
   isPureLookupCall, TURN_OUTCOME_SOURCES,
@@ -543,7 +543,7 @@ export {
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
 
-export { STATE_NAMESPACE, STATE_TYPES, createStateCodemodeProvider } from './tools/state-codemode';
+export { createStateCodemodeProvider } from './tools/state-codemode';
 
 export { initCodemodeStateTable, createProgramStateStore, type ProgramStateStore } from './identity/program-state';
 
@@ -590,7 +590,7 @@ export { toolSchemaDialect, withToolSchemaDialect, type ToolSchemaDialect } from
 export {
   describeMcpTool, admitMcpDescriptors, toolSurfaceTokens, omitEmptyOptionalArgs,
   buildMcpToolSet, listMcpToolsLeniently,
-  SerializableToolDescriptorSchema, McpToolSurfaceSchema,
+  McpToolSurfaceSchema,
   type SerializableToolDescriptor, type RemoteMcpTool, type McpToolRefusal, type ListedMcpTools,
   type McpSurfaceBudget, type McpDescriptorAdmission, type McpToolBuild,
 } from './tools/mcp-surface';
@@ -598,7 +598,7 @@ export {
 export {
   createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableAgentsInput,
   parseAgentsToolInput, agentsProfileContext,
-  AGENTS_ACTION_FIELDS, AGENTS_ACTION_REQUIRED_FIELDS, AGENTS_FIELD_TS_TYPES,
+  AGENTS_ACTION_FIELDS, AGENTS_FIELD_TS_TYPES,
   type AgentsToolInput, type AgentsProfileContext, type DelegatedProfile,
 } from './delegation/agents-tool';
 
@@ -755,7 +755,6 @@ export {
   splitPromptSections,
   DYNAMIC_CONTEXT_OPEN_TAG,
   WORKSPACE_INSTRUCTIONS_TAG,
-  SOUL_SECTION_TITLE,
   type PromptSection,
 } from './utils/prompt-sections';
 
@@ -776,8 +775,6 @@ export {
   executorIsSelectable,
   turnReasonForMetadata,
   workModeForTurnMetadata,
-  uniqueBuiltinTools,
-  uniqueExternalTools,
   uniquePromptExecutors,
   type PromptBackend,
   type PromptExecutorInfo,
@@ -1467,17 +1464,14 @@ export {
   type DeferredApprovalChannel,
   type ApprovalSpend,
   EGRESS_PLACEHOLDER_PREFIX,
-  EGRESS_PLACEHOLDER_BYTES,
   PLACEHOLDER_BODY_LENGTH,
   isEgressPlaceholder,
-  EGRESS_EXECUTOR,
   grantedEgressBindings,
   findEgressPlaceholders,
   egressSecretRule,
   parseEgressSecretRule,
   egressHostMatches,
   reviewEgressBinding,
-  egressBindingAction,
   planEgress,
   scrubText,
   createScrubStream,
@@ -1545,7 +1539,6 @@ export {
   initDeviceConsentRequestsTable,
   DEVICE_CONSENT_DENIED,
   DEVICE_CONSENT_UNANSWERED,
-  DEVICE_CONSENT_TIMEOUT_MS,
   DEVICE_CONNECT_DISCLOSURE,
   summarizeDeviceAction,
   type DeviceConsentDecision,
@@ -1760,7 +1753,7 @@ export {
 // Skills
 export {
   parseSkillFile, stringifySkillFile, skillNameProblem,
-  discoverSkills, readSkillFile, readSkillBody, workspaceSkillPath, compareSkillNames, skillBodyChars,
+  discoverSkills, readSkillFile, workspaceSkillPath, compareSkillNames, skillBodyChars,
   BUILTIN_SKILLS, BUILTIN_SKILL_FILES, BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES, skillsMount,
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, skillIndexLine, unreadSkillLine,
