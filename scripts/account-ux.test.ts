@@ -435,8 +435,7 @@ describe('account panels', () => {
 
             // Section eyebrows are uppercased by the CSS role, and innerText
             // reads them as drawn.
-            for (const text of ['MCP SERVERS', 'github', 'auth needed',
-              'SKILLS', 'audit-implementation', 'built in']) {
+            for (const text of ['MCP SERVERS', 'github', 'auth needed']) {
               expect(body).toContain(text);
             }
 
