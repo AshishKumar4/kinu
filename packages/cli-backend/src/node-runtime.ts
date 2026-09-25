@@ -44,7 +44,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       const plane = await deps.workspace.asAgent({ cred: node.cred, home: node.home, tmp: node.tmp });
       requireLocalActorWorkspace(origin.actor, actor);
       // A private home is a plane of the in-SQLite workspace, never the user's directory.
-      const reach = { filesOwner: 'agent', userRoots: () => mounted.userRoots(), home: node.home } as const;
+      const reach = { filesOwner: 'agent', userRoots: () => mounted.userRoots(), home: node.home, keepsCwd: true } as const;
       shell = withApprovalGatedShell(plane.shell, reach, deps.approvalPolicy);
       const ownRouter = new DefaultExecutionRouter(deps.approvalPolicy);
       const files = observer ? observeWrites(plane.vfs, observer) : plane.vfs;

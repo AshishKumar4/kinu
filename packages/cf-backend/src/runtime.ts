@@ -324,6 +324,8 @@ export function createCFRuntime(
     filesOwner: 'agent',
     userRoots: () => agentFileVfs.userRoots(),
     home: hooks.workspaceExecution?.home ?? WORKSPACE_ROOT,
+    // A hosted node's box pins every call's cwd to its home (withHostedNodeExecution).
+    keepsCwd: hooks.workspaceExecution === undefined,
   }, approvalPolicy);
 
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);

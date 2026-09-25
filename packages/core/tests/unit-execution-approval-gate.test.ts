@@ -238,25 +238,25 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
   });
 });
 
+/** A strict policy that records every request put to the user and refuses it. */
+function askingRouter() {
+  const asked: ShellApprovalRequest[] = [];
+
+  const router = new DefaultExecutionRouter({
+    mode: () => 'strict',
+    requestApproval: async (req) => {
+      asked.push(req);
+
+      return 'deny';
+    },
+  });
+
+  return { router, asked };
+}
+
 /** `gateProviderExec` hands the provider to `gateExec`; these differ only in whose files the provider declares. */
 describe('the executor reaches the gate', () => {
   const HOUSEKEEPING = 'rm -rf node_modules';
-
-  /** A strict policy that records every request put to the user and refuses it. */
-  function askingRouter() {
-    const asked: ShellApprovalRequest[] = [];
-
-    const router = new DefaultExecutionRouter({
-      mode: () => 'strict',
-      requestApproval: async (req) => {
-        asked.push(req);
-
-        return 'deny';
-      },
-    });
-
-    return { router, asked };
-  }
 
   test("cf's sandbox holds the agent's own files: commands that could wreck a user's machine are not put to them", async () => {
     const { router, asked } = askingRouter();
@@ -398,7 +398,7 @@ function workspaceOverDevice() {
   workspace.mountTable(mounted);
   const asked: string[] = [];
 
-  const shell = withApprovalGatedShell(workspace.shell, { filesOwner: 'agent', userRoots: () => mounted.userRoots(), home: WORKSPACE_ROOT }, {
+  const shell = withApprovalGatedShell(workspace.shell, { filesOwner: 'agent', userRoots: () => mounted.userRoots(), home: WORKSPACE_ROOT, keepsCwd: true }, {
     mode: () => 'strict',
     requestApproval: async (request) => {
       asked.push(request.command);
@@ -439,5 +439,92 @@ describe('a workspace shell over the user\'s mounts', () => {
     } finally {
       db.close();
     }
+  });
+});
+
+/** The agent's own workspace executor over a table holding the user's machine and Drive, recording what it runs. */
+function mountedWorkspaceProvider() {
+  const ran: string[] = [];
+
+  const record = (label: string) => async (...args: unknown[]) => {
+    ran.push(`${label} ${String(args[0])}`);
+
+    return 'ok';
+  };
+
+  const provider: ExecutorProvider = {
+    name: 'workspace',
+    kind: 'workspace',
+    capabilities: new Set(['shell']),
+    filesOwner: 'agent',
+    userRoots: () => ['/pc', '/shared'],
+    homeDir: async () => WORKSPACE_ROOT,
+    isAvailable: () => true,
+    connect: async () => {},
+    disconnect: async () => {},
+    tools: {
+      startProcess: { description: 'Start a background process', execute: record('start') },
+      runCode: { description: 'Run a program', execute: record('code') },
+    },
+  };
+
+  return { provider, ran };
+}
+
+describe('codemode calls on a workspace over the user\'s mounts', () => {
+  const DENIED = { error: expect.stringContaining('Denied by the owner') };
+
+  test('a background process started on the user\'s machine is put to them first', async () => {
+    const { router, asked } = askingRouter();
+    const { provider, ran } = mountedWorkspaceProvider();
+    router.register(provider);
+    const start = present(router.getProvider('workspace'), 'the workspace executor').tools.startProcess;
+
+    expect(await start.execute('rm -rf build', { cwd: '/pc/laptop/proj' })).toMatchObject(DENIED);
+    expect(await start.execute('rm -rf build')).toBe('ok');
+
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf build']);
+    expect(ran).toEqual(['start rm -rf build']);
+  });
+
+  test('a shell program is reviewed as a shell command, and one in another language that names the user\'s files asks', async () => {
+    const { router, asked } = askingRouter();
+    const { provider, ran } = mountedWorkspaceProvider();
+    router.register(provider);
+    const run = present(router.getProvider('workspace'), 'the workspace executor').tools.runCode;
+    const python = "import shutil; shutil.rmtree('/shared/notes')";
+
+    expect(await run.execute('rm -rf /pc/laptop/proj', { language: 'shell' })).toMatchObject(DENIED);
+    expect(await run.execute(python, { language: 'python' })).toMatchObject(DENIED);
+    expect(await run.execute('rm -rf build', { language: 'shell' })).toBe('ok');
+    expect(await run.execute("print('hi')", { language: 'python' })).toBe('ok');
+
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf /pc/laptop/proj', python]);
+    expect(ran).toEqual(['code rm -rf build', "code print('hi')"]);
+  });
+
+  test('a hosted node\'s shell, whose box starts every call at its home, reads each command from there', async () => {
+    const asked: string[] = [];
+    const ran: string[] = [];
+
+    const shell = withApprovalGatedShell({
+      exec: async (command) => {
+        ran.push(command);
+
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+    }, { filesOwner: 'agent', userRoots: () => ['/pc'], home: '/home/agents/n1', keepsCwd: false }, {
+      mode: () => 'strict',
+      requestApproval: async (request) => {
+        asked.push(request.command);
+
+        return 'deny';
+      },
+    });
+
+    for (const command of ['cd /pc/proj && ls', 'rm -rf build', 'cd sub && ls', 'rm -rf ../../../pc/x']) await shell.exec(command);
+
+    expect(asked).toEqual(['rm -rf ../../../pc/x']);
+    expect(ran).toEqual(['cd /pc/proj && ls', 'rm -rf build', 'cd sub && ls']);
   });
 });

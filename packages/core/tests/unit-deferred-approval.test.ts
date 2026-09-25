@@ -34,7 +34,7 @@ function approvalsDb() {
 }
 
 /** A workspace shell over the agent's own files, with no mount of the user's. */
-const AGENTS_OWN = { filesOwner: 'agent', userRoots: () => [], home: WORKSPACE_ROOT } as const;
+const AGENTS_OWN = { filesOwner: 'agent', userRoots: () => [], home: WORKSPACE_ROOT, keepsCwd: true } as const;
 
 /** Gated on every executor, workspace included: a force-push harms a remote beyond this machine. */
 const GATED = 'git push --force origin main';
@@ -93,7 +93,7 @@ function setup(opts: {
   if (opts.approve) policy.requestApproval = opts.approve;
 
   if (!opts.noQueue) policy.deferrals = queue.channel;
-  const shell = withApprovalGatedShell(rawShell, { filesOwner, userRoots: () => [], home: WORKSPACE_ROOT }, policy);
+  const shell = withApprovalGatedShell(rawShell, { ...AGENTS_OWN, filesOwner }, policy);
   const { rt } = createTestRuntime();
   const runtime: AgentRuntime = { ...rt, shell };
   const tools = buildBuiltinTools({ rt: runtime, history: storesFor(runtime).history });

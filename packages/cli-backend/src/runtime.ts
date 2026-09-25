@@ -391,13 +391,13 @@ export function createCLIRuntime(
       checkpoints,
       cwd,
     ),
-    { filesOwner, userRoots, home: cwd },
+    { filesOwner, userRoots, home: cwd, keepsCwd: false },
     approvalPolicy,
   );
 
   const shell: Shell = facetShell
     ? facetShell(config.facet)
-    : withApprovalGatedShell(workspace.shell, { filesOwner, userRoots, home: WORKSPACE_ROOT }, approvalPolicy);
+    : withApprovalGatedShell(workspace.shell, { filesOwner, userRoots, home: WORKSPACE_ROOT, keepsCwd: true }, approvalPolicy);
 
   const executionRouter = new DefaultExecutionRouter(approvalPolicy);
 

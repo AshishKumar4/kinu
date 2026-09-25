@@ -1,7 +1,7 @@
 /**
- * Approval gate: 'allow' | 'warn' | 'gate' (owner decides) | 'deny' (never, on any executor).
- * A decision depends on the rule and whose files the executor holds; binary-scoped rules fire only on invoked
- * binaries, else on the whole line under an interpreter. Guardrail against accidents, not an adversary model.
+ * Approval gate: 'allow', 'warn', 'gate' (the owner decides) or 'deny' (never). A decision depends on the rule and
+ * whose files the executor holds; binary-scoped rules fire only on invoked binaries, or on the whole line under an
+ * interpreter. Against accidents, not an adversary.
  */
 
 import { CODE_WORK_DID_NOT_START, diagnostics, KinuError, type ErrorCode } from '../obs/index';
@@ -89,8 +89,7 @@ interface Rule {
   name: string;
   why: string;
   harm: ApprovalHarm;
-  /** Binaries this rule is about; when present the rule fires only if one is invoked ({@link invokedBinaries}).
-   *  Absent: the pattern matches the whole line. Deny rules carry none. */
+  /** When present, the rule fires only if one of these is invoked; absent, on the whole line. Deny rules carry none. */
   binaries?: readonly string[];
 }
 
@@ -314,10 +313,8 @@ interface CommandScan {
   readonly unquoted: string;
 }
 
-/**
- * One quote-aware pass: programs in command position (after env assignments and prefix words) and the
- * unquoted text. Over-collection is safe; under-collection is not.
- */
+/** One quote-aware pass: programs in command position (after env assignments and prefix words) and the unquoted
+ *  text. Over-collection is safe; under-collection is not. */
 function scanCommand(command: string): CommandScan {
   const invoked = new Set<string>();
   let unquoted = '';
@@ -470,10 +467,8 @@ function cdTarget(step: ShellStep, cwd: string, home: string): string | null | u
   return target === '-' ? null : shellPath(target, cwd, home);
 }
 
-/**
- * Known when every step ran (`&&`, exit 0) or it ends on the `cd`; else a `cd` that may enter the user's files
- * marks the session. `cd "$DIR"` moves nothing: an obfuscated path is not caught.
- */
+/** Known when every step ran (`&&`, exit 0) or it ends on the `cd`; else a `cd` that may enter the user's files
+ *  marks the session. `cd "$DIR"` moves nothing: an obfuscated path is not caught. */
 export function nextShellCwd(at: ShellCwd, command: string, exitCode: number, userRoots: readonly string[]): ShellCwd {
   const steps = shellSteps(command);
   let cwd = at.cwd;
@@ -511,15 +506,21 @@ function namesRoot(command: string, root: string): boolean {
   return new RegExp(`(?<![\\w.~/-])${escaped}(?![\\w.-])`).test(command);
 }
 
+/** A call's session from its `cwd` option; an unresolvable one may be the user's. */
+export function sessionAt(home: string, cwd: string | undefined): ShellCwd {
+  const at = cwd === undefined ? home : shellPath(cwd, home, home);
+
+  return at === null ? { cwd: home, home, mayBeUsers: true } : { cwd: at, home, mayBeUsers: false };
+}
+
 /** The executor's own, or the user's when the command names one of their roots, reaches under one from its
  *  session's directory, or that session may already be there. */
-export function commandFilesOwner(executor: GatedExecutor, command: string): FilesOwner {
+export function commandFilesOwner(executor: GatedExecutor, command: string, session = executor.session?.()): FilesOwner {
   const roots = executor.userRoots?.() ?? [];
 
   if (executor.filesOwner === 'user' || roots.length === 0) return executor.filesOwner;
 
   if (roots.some((root) => namesRoot(command, root))) return 'user';
-  const session = executor.session?.();
 
   if (session === undefined) return 'agent';
 
@@ -534,6 +535,16 @@ export function commandFilesOwner(executor: GatedExecutor, command: string): Fil
   }
 
   return 'agent';
+}
+
+/** `runCode` in another language: its text cannot show what it does to the user's files, so it asks there. */
+export function reviewProgram(code: string, filesOwner: FilesOwner): ApprovalResult {
+  const review = reviewCommand(code, filesOwner);
+
+  if (filesOwner === 'agent') return review;
+  const hits = [...review.hits, { decision: 'gate', rule: 'program-on-user-files', explanation: 'Runs a program over the user\'s files.' } as const];
+
+  return { decision: dominant(hits), hits };
 }
 
 /** Review a command for an executor holding `filesOwner`'s files. No default: no caller silently picks a trust tier. */
@@ -575,15 +586,15 @@ export function formatApproval(result: ApprovalResult): string {
 
 const APPROVAL_DENIED = 'Denied';
 
-/** Plain union, not imported from config/store.ts: this file is a layergate subject source and stays import-free. */
+/** Not imported from config/store.ts: a layergate subject source stays import-free. */
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 
-/** The live policy each gated exec boundary reads at call time, so mode and channel changes apply to the next command. */
+/** Read at call time, so a mode or channel change applies to the next command. */
 export interface ShellApprovalPolicy {
   mode(): ShellApprovalMode;
   /** Whether the owner granted this rule on this executor; consulted before asking. */
   granted?(grant: ApprovalGrant): boolean;
-  /** Interactive channel for 'gate' under 'strict'. Null means nobody is listening: falls through to `deferrals`, else refuses. Read live. */
+  /** The 'gate' channel under 'strict', read live; null: nobody listens, so `deferrals`, else a refusal. */
   requestApproval?: ((req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>) | null;
   /** Where an unanswered 'gate' decision is parked on the owner. */
   deferrals?: DeferredApprovalChannel;
@@ -630,12 +641,14 @@ function afterGrants(review: ApprovalResult, policy: ShellApprovalPolicy, execut
 }
 
 /**
- * The one approval gate for every boundary that reaches a shell. `denyResult` writes a refusal into the result
- * shape; `refusalCode` reads its classification back, never prose. A proven not-run code refunds a spent grant.
+ * The one gate for every boundary that reaches a shell. `denyResult` writes a refusal into the result; `refusalCode`
+ * reads its classification back, and a proven not-run code refunds a spent grant.
  */
 export interface ExecGateTuning<R> {
   readonly policy?: ShellApprovalPolicy;
   readonly refusalCode?: (result: R) => ErrorCode | null;
+  /** Absent: a shell command from the executor's session. */
+  readonly review?: (command: string, rest: readonly unknown[]) => Promise<ApprovalResult>;
 }
 
 export function gateExec<R>(
@@ -652,9 +665,8 @@ export function gateExec<R>(
     const [command, ...rest] = args;
     const cmd = String(command);
 
-    const decision = await decideApproval(
-      { command: cmd, executor: executor.name }, reviewCommand(cmd, commandFilesOwner(executor, cmd)), policy,
-    );
+    const review = tuning.review === undefined ? reviewCommand(cmd, commandFilesOwner(executor, cmd)) : await tuning.review(cmd, rest);
+    const decision = await decideApproval({ command: cmd, executor: executor.name }, review, policy);
 
     if (!decision.run) return denyResult(decision.error);
     const result = await execute(cmd, ...rest);
@@ -671,8 +683,7 @@ export function gateExec<R>(
   };
 }
 
-/** The mode/grant/channel/deferral ladder over any reviewable action. A `run: true` from a replayed park carries
- *  its spend, which the caller settles once the outcome is known. */
+/** The mode/grant/channel/deferral ladder; a `run: true` from a replayed park carries a spend the caller settles. */
 async function decideApproval(
   subject: { readonly command: string; readonly executor: string },
   rawReview: ApprovalResult,
@@ -781,8 +792,8 @@ export interface InheritedApprovalSource {
 }
 
 /**
- * A facet's approval policy: no `remember` or `requestApproval`, so a facet cannot widen its own reach.
- * Fails closed (`strict`, nothing granted) until the first resolve lands.
+ * A facet's policy: no `remember` or `requestApproval`, so it cannot widen its reach; `strict` with nothing
+ * granted until the first resolve.
  */
 export function createInheritedApprovalPolicy(
   source: InheritedApprovalSource,
