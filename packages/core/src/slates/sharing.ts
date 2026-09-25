@@ -255,7 +255,6 @@ const SharedRowSchema = v.object({
 
 export type SharedRow = v.InferOutput<typeof SharedRowSchema>;
 
-/** No user-level slate index exists: each owned workspace is asked for its own. */
 const OwnedSlateSchema = v.object({
   id: v.string(),
   title: v.string(),

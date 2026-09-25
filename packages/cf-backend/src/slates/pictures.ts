@@ -103,11 +103,16 @@ export class SlatePictures {
     }));
   }
 
+  /** Left open: a shot whose put lands between this listing and the row's removal keeps its object; rare, and teardown reclaims it. */
   async forget(workspace: string, slate: string, bucket: PictureBucket | undefined): Promise<void> {
     try {
       if (bucket !== undefined) await deletePictures(bucket, picturePrefix(workspace, slate));
       this.db.exec(`DELETE FROM slate_pictures WHERE slate = ?`, slate);
     } catch (cause) {
+      this.db.exec(
+        `UPDATE slate_pictures SET due_at = ? + ? * (1 << MIN(attempts, 7)), due_since = NULL, attempts = attempts + 1 WHERE slate = ?`,
+        Date.now(), RETRY_MS, slate,
+      );
       diagnostics.failure('slate.picture_delete_failed', toKinuError({
         doing: `deleting the pictures of removed slate ${slate}`, cause, otherwise: 'unavailable',
       }), { workspace, slate });
@@ -118,19 +123,28 @@ export class SlatePictures {
     const due = this.due(now);
 
     if (due.length === 0) return false;
+    const live = await capture.slates();
+
+    for (const picture of due) {
+      if (!live.has(picture.slate)) await this.forget(capture.workspace, picture.slate, capture.bucket);
+    }
+
+    const shots = due.filter((picture) => live.has(picture.slate));
+
+    if (shots.length === 0) return false;
     let camera: Camera;
 
     try {
       camera = await capture.camera();
     } catch (cause) {
-      for (const picture of due) this.failed(picture, Date.now());
+      for (const picture of shots) this.failed(picture, Date.now());
       throw cause;
     }
 
     let changed = false;
 
     try {
-      for (const picture of due.slice(0, SHOTS_PER_TICK)) {
+      for (const picture of shots.slice(0, SHOTS_PER_TICK)) {
         try {
           changed = await this.shoot(camera, capture, picture) || changed;
         } catch (cause) {
@@ -197,6 +211,8 @@ export interface PictureCapture {
   readonly workspace: string;
   readonly bucket: PictureBucket;
   url(port: number, token: string): Promise<string | null>;
+  /** Broken ones included. */
+  slates(): Promise<ReadonlySet<string>>;
   camera(): Promise<Camera>;
 }
 

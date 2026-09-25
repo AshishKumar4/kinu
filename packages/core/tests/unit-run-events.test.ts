@@ -785,6 +785,26 @@ describe('RunEventRecorder.latestRunHeader', () => {
 
     expect(recorder.latestRunHeader()).toEqual({ status: null, userMessage: 'Sort the receipts' });
   });
+
+  test("the person's words outlast any run of automation after them", () => {
+    const { recorder } = setup();
+
+    recorder.emit('run-person', asked('Reconcile March'));
+
+    for (let index = 0; index < 120; index++) {
+      const id = `drain-${String(index)}`;
+
+      recorder.emit(`run-${id}`, {
+        type: 'run_start', agentId: 'a', caused_by: 'background_jobs', userMessage: 'Two jobs finished.',
+        turn: {
+          turnId: `programmatic:${id}`, messageId: `msg-${id}`, kind: 'programmatic', text: 'Two jobs finished.',
+          metadata: { kinuEvent: 'background_jobs', kinuAuthor: 'harness' },
+        },
+      });
+    }
+
+    expect(recorder.latestRunHeader()?.userMessage).toBe('Reconcile March');
+  });
 });
 
 describe('RunEventRecorder.openTurn — the continuation ledger', () => {

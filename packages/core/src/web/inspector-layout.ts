@@ -52,7 +52,6 @@ export function newInspectorGroup(state: InspectorState): InspectorState {
 /** `choice`: `true` opened here, `false` closed here, null means the first-visit policy decides. */
 export interface StoredInspectorLayout { readonly width: number | null; readonly choice: boolean | null }
 
-/** Width is per account. */
 function readInspectorWidth(account: string): number | null {
   const raw = localStorage.getItem(`kinu.inspector.${account}`);
   const width = raw === null ? NaN : Number(raw);

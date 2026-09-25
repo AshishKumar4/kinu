@@ -18,7 +18,7 @@ import {
   type BlueprintBundle, type BlueprintFork, type JsonValue, type SlateAnswer, type SlateProject, type SlateShareRecord,
   type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateOperation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
   type SlateBindingCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim,
-  type MissionGovernor,
+  type MissionGovernor, type WorkspaceOverviewShare,
 } from '@kinu.run/core';
 import { canonicalWorkspacePath, workspacePath, WORKSPACE_ROOT } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
@@ -48,6 +48,7 @@ export interface SlateHostDeps extends ResidentSlateDeps {
   budget?(): MissionGovernor;
   ownerTitle?(): Promise<string>;
   forgetPicture?(slate: string): Promise<void>;
+  sharesChanged?(): Promise<void>;
 }
 
 interface ViewerAdmission {
@@ -111,6 +112,8 @@ export class SlateHost {
   private readonly starting = new Map<string, Promise<RunningSlate>>();
   private readonly revisions = new Map<string, number>();
   private readonly live: SlateLiveShareStore;
+  /** A published blueprint never changes. */
+  private readonly blueprintHeadings = new Map<string, { title: string; description: string; bindings: number }>();
 
   constructor(private readonly deps: SlateHostDeps) {
     this.resident = new ResidentSlateProcesses({ session: deps.session, facetManager: deps.facetManager });
@@ -376,8 +379,8 @@ export class SlateHost {
   }
 
   /** The projection each user reads is written by the caller. */
-  shareBlueprintWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<SlateShareRecord>> {
-    return this.blueprintAnswer('sharing blueprint ' + share, (blueprints) => blueprints.shareWith(share, users));
+  async shareBlueprintWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<SlateShareRecord>> {
+    return this.changedShares(await this.blueprintAnswer('sharing blueprint ' + share, (blueprints) => blueprints.shareWith(share, users)));
   }
 
   /** Never starts its process. */
@@ -385,8 +388,39 @@ export class SlateHost {
     return this.blueprintAnswer('admitting a blueprint', (blueprints) => blueprints.admit(this.deps.workspace, bundle));
   }
 
-  shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
-    return this.blueprintAnswer('sharing slate ' + share, () => this.live.addUsers(share, users));
+  async shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
+    return this.changedShares(await this.blueprintAnswer('sharing slate ' + share, () => this.live.addUsers(share, users)));
+  }
+
+  private async changedShares<Answer extends { readonly ok: boolean }>(answer: Answer): Promise<Answer> {
+    if (answer.ok) await this.deps.sharesChanged?.();
+
+    return answer;
+  }
+
+  /** A live share goes by its slate's title. */
+  async shareCards(titles: ReadonlyMap<string, string>): Promise<WorkspaceOverviewShare[]> {
+    const blueprints = await this.blueprints();
+    const cards: WorkspaceOverviewShare[] = [];
+
+    for (const record of blueprints.list()) {
+      if (record.revokedAt !== null) continue;
+      const heading = this.blueprintHeadings.get(record.id) ?? blueprints.heading(record.id);
+      this.blueprintHeadings.set(record.id, heading);
+      cards.push({ kind: 'blueprint', share: record.id, slate: record.slate, ...heading, createdAt: record.createdAt, users: [...record.users] });
+    }
+
+    for (const record of this.live.list()) {
+      if (record.revokedAt !== null) continue;
+
+      cards.push({
+        kind: 'live', share: record.id, slate: record.slate, title: titles.get(record.slate) ?? record.slate, description: '',
+        createdAt: record.createdAt, bindings: record.grant.members.length, users: [...record.users],
+        visibility: record.visibility, fork: record.grant.fork !== false,
+      });
+    }
+
+    return cards;
   }
 
   liveShareAdmitsUser(share: string, userId: string): boolean {
@@ -494,12 +528,12 @@ export class SlateHost {
 
           switch (operation.op) {
             case 'inspect': return { ok: true, value: projectJsonValue({ value: blueprints.inspect(operation.id, operation.version, operation.include) }) };
-            case 'publish': return { ok: true, value: projectJsonValue({ value: await blueprints.publish(operation.id, operation.version, operation.include) }) };
-            case 'unshare': return await this.unshare(operation.share, blueprints);
+            case 'publish': return await this.changedShares({ ok: true, value: projectJsonValue({ value: await blueprints.publish(operation.id, operation.version, operation.include) }) });
+            case 'unshare': return await this.changedShares(await this.unshare(operation.share, blueprints));
 
             case 'shares': return { ok: true, value: projectJsonValue({ value: blueprints.list() }) };
             case 'share': {
-              return { ok: true, value: projectJsonValue({ value: await (await this.liveShares()).share(operation.id, operation.visibility, operation.approved, operation.fork) }) };
+              return await this.changedShares({ ok: true, value: projectJsonValue({ value: await (await this.liveShares()).share(operation.id, operation.visibility, operation.approved, operation.fork) }) });
             }
 
             case 'liveShares': return { ok: true, value: projectJsonValue({ value: this.live.list().map((row) => ({ ...row, paused: this.sharePaused(row) })) }) };

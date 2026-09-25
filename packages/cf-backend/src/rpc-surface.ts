@@ -207,6 +207,7 @@ const USER_DO_METHODS = [
   'sharesReceived_add',
   'sharesReceived_forget',
   'sharesReceived_list',
+  'libraryTiles',
   'drive_list',
   'drive_mkdir',
   'drive_rename',

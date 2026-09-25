@@ -50,8 +50,11 @@ const failing: Camera = {
   async close() {},
 };
 
-function capture(lens: Camera, bucket: MemoryBucket = memoryBucket()): PictureCapture {
-  return { workspace: 'ledger', bucket, url: async (port, token) => `https://${String(port)}-${token}.preview.test/`, camera: async () => lens };
+function capture(lens: Camera, bucket: MemoryBucket = memoryBucket(), live: readonly string[] = ['board']): PictureCapture {
+  return {
+    workspace: 'ledger', bucket, url: async (port, token) => `https://${String(port)}-${token}.preview.test/`,
+    slates: async () => new Set(live), camera: async () => lens,
+  };
 }
 
 const A = new Uint8Array([1, 2, 3]);
@@ -161,7 +164,7 @@ describe('a shot', () => {
     const bucket = memoryBucket();
 
     for (const [index, slate] of ['a', 'b', 'c', 'd'].entries()) store.rendered(slate, PORT + index, T0 + index);
-    await store.captureDue(capture(shooting(A, B, new Uint8Array([7]), new Uint8Array([8])), bucket), T0 + 40_000);
+    await store.captureDue(capture(shooting(A, B, new Uint8Array([7]), new Uint8Array([8])), bucket, ['a', 'b', 'c', 'd']), T0 + 40_000);
 
     expect([...store.digests().keys()].sort()).toEqual(['a', 'b', 'c']);
     expect(store.nextDueAt()).toBe(T0 + 30_003);
@@ -214,5 +217,20 @@ describe("a removed slate's pictures", () => {
     await store.forget('ledger', 'board', refusing);
 
     expect(store.digests().get('board')).toBe(sha256Hex(A));
+  });
+
+  test('that R2 refused go on a later pass, which deletes rather than shoots a slate that is gone', async () => {
+    const bucket = memoryBucket();
+    const store = await pictured(bucket);
+    setSystemTime(T0 + 60_000);
+
+    await store.forget('ledger', 'board', { ...bucket, delete: async () => { throw new Error('R2 is unavailable'); } });
+    expect(store.nextDueAt()).toBe(T0 + 90_000);
+
+    const unshot: PictureCapture = { ...capture(failing, bucket, []), camera: async () => { throw new Error('a gone slate was photographed'); } };
+
+    expect(await store.captureDue(unshot, T0 + 90_000)).toBe(false);
+    expect([...bucket.objects.keys()]).toEqual([]);
+    expect(store.nextDueAt()).toBeNull();
   });
 });

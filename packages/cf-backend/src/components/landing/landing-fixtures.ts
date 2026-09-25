@@ -46,14 +46,14 @@ export const LANDING_SUBORDINATES: readonly SubordinateRosterEntry[] = [
 ];
 
 /** Served by the `landing.tsx` fetch shim; the frame's workspace is first so the rail marks it open. */
-const QUIET = { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [] } as const;
+const QUIET = { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null } as const;
 
 export const LANDING_ROSTER = {
   entries: [
     { name: 'checkout-fixes', displayName: 'Checkout coupon bug', createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
     { name: 'perf-audit', displayName: 'Perf audit — landing', createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5, archivedAt: null },
     { name: 'email-triage', displayName: 'Email triage automation', createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
-  ].map((entry) => ({ ...entry, overview: { ...QUIET, slates: [] }, decisions: 0 })),
+  ].map((entry) => ({ ...entry, overview: { ...QUIET, slates: [], shares: [] }, decisions: 0 })),
   total: 3,
   nextCursor: null,
   counts: { all: 3, needs: 0, working: 0, idle: 3, unreported: 0, decisions: 0 },

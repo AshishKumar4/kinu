@@ -111,6 +111,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'workspaces.read', name: 'listWorkspaces', run: (u, c) => u.listWorkspaces(c) },
   { capability: 'workspaces.read', name: 'listActiveWorkspaces', run: (u, c) => u.listActiveWorkspaces(c) },
   { capability: 'workspaces.read', name: 'hasWorkspace', run: (u, c) => u.hasWorkspace(c, OTHER_WORKSPACE) },
+  { capability: 'workspaces.read', name: 'libraryTiles', run: (u, c) => u.libraryTiles(c) },
 
   { capability: 'workspaces.write', name: 'registerWorkspace', run: (u, c) => u.registerWorkspace(c, 'spawned') },
   { capability: 'workspaces.write', name: 'reserveWorkspace', run: (u, c) => u.reserveWorkspace(c, 'reserved') },
@@ -124,7 +125,7 @@ const GATED_CALLS: GatedCall[] = [
   {
     capability: 'workspaces.overview_self',
     name: 'putWorkspaceOverview',
-    run: (u, c) => u.putWorkspaceOverview(c, WORKSPACE, { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [] }),
+    run: (u, c) => u.putWorkspaceOverview(c, WORKSPACE, { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] }),
   },
 
   { capability: 'peers.grants', name: 'hasPeerGrant', run: (u, c) => u.hasPeerGrant(c, 'scout', 'b'.repeat(32)) },

@@ -326,7 +326,6 @@ async function sandboxPreflight(call: TerminalCall): Promise<Response | null> {
     const ready = await agent.prepareTerminal(executor);
 
     if ("error" in ready) {
-      // Already a rendered chain from the RPC's other side, so it rides as the cause.
       diagnostics.failure("terminal.not_ready", toKinuError({
         doing: "preparing this workspace's container for a terminal",
         cause: ready.error,

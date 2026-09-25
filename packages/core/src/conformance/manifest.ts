@@ -160,6 +160,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     reply_channels: EVERYWHERE,
     triggers: EVERYWHERE,
     run_events: EVERYWHERE,
+    operator_requests: EVERYWHERE,
 
     // Actor-private: the world model is the agent's own key space.
     agent_facts: EVERYWHERE,

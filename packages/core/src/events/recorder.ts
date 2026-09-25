@@ -227,6 +227,11 @@ export function initRunEventTables(execRaw: RawSqlExec): void {
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_run_ts ON run_events(actor_id, run_id, ts)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_type ON run_events(actor_id, type, ts DESC)`);
+  // One row per actor: a person's newest words stay one read however much automation follows.
+  execRaw(`CREATE TABLE IF NOT EXISTS operator_requests (
+    actor_id TEXT PRIMARY KEY,
+    text TEXT NOT NULL
+  )`);
 }
 
 export interface StepSpendSource {
@@ -291,6 +296,8 @@ export class RunEventRecorder {
     const event = stampRunEvent(input, this.allocateIndex(runId), runId);
     this.persist(event);
 
+    if (event.type === 'run_start') this.noteOperatorRequest(event);
+
     return {
       event,
       publish: () => {
@@ -332,6 +339,14 @@ export class RunEventRecorder {
     this.actor.assertCurrent();
     void this.sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
       VALUES (${this.actorId}, ${ev.runId}, ${ev.eventIndex}, ${ev.type}, ${JSON.stringify(ev)}, ${ev.timestamp})`;
+  }
+
+  private noteOperatorRequest(start: Extract<RunEvent, { type: 'run_start' }>): void {
+    if (start.turn === undefined || start.userMessage === undefined) return;
+
+    if (turnAuthor({ id: start.turn.turnId, metadata: start.turn.metadata }) !== 'operator') return;
+    void this.sql`INSERT INTO operator_requests (actor_id, text) VALUES (${this.actorId}, ${start.userMessage})
+      ON CONFLICT (actor_id) DO UPDATE SET text = excluded.text`;
   }
 
   /** Only a finite positive limit reaches SQL: SQLite treats a negative LIMIT as unbounded and
@@ -450,10 +465,7 @@ export class RunEventRecorder {
     return events.filter((event) => event.phase === 'start' && !ended.has(event.operationId));
   }
 
-  /**
-   * The latest run's end (null if unsealed, never success) and the person's newest words: `turnAuthor` of a run's
-   * recorded turn, so no harness run or turn-less row. Excludes WORKSPACE_RUN_ID.
-   */
+  /** The latest run's end (null if unsealed, never success) and the person's newest words. Excludes WORKSPACE_RUN_ID. */
   latestRunHeader(): { status: string | null; userMessage: string | null } | null {
     this.actor.assertCurrent();
 
@@ -472,25 +484,9 @@ export class RunEventRecorder {
       ORDER BY event_index DESC LIMIT 1`;
 
     const sealed = end === undefined ? null : parseStoredRunEvent(end.payload);
+    const [asked] = this.sql<{ text: string }>`SELECT text FROM operator_requests WHERE actor_id = ${this.actorId}`;
 
-    return { status: sealed?.type === 'run_end' ? sealed.reason ?? null : null, userMessage: this.operatorWords() };
-  }
-
-  private operatorWords(window = 50): string | null {
-    const starts = this.sql<{ payload: string }>`
-      SELECT payload FROM run_events
-      WHERE actor_id = ${this.actorId} AND type = ${'run_start'}
-      ORDER BY ts DESC, rowid DESC LIMIT ${window}`;
-
-    for (const row of starts) {
-      const start = parseStoredRunEvent(row.payload);
-
-      if (start.type !== 'run_start' || start.turn === undefined) continue;
-
-      if (turnAuthor({ id: start.turn.turnId, metadata: start.turn.metadata }) === 'operator') return start.userMessage ?? null;
-    }
-
-    return null;
+    return { status: sealed?.type === 'run_end' ? sealed.reason ?? null : null, userMessage: asked?.text ?? null };
   }
 
   /** Auto-GEPA's durable denominator. Rows without `workMode` count nothing; a turn in the same

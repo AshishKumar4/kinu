@@ -151,7 +151,7 @@ import {
   type McpPresetAvailability, type McpServerSummary, type McpToolListing, type McpTransport,
 } from './mcp';
 import {
-  acceptRosterSocket, isRosterSocket, rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame, unreportedWorkspaces,
+  acceptRosterSocket, isRosterSocket, libraryTiles, rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame, unreportedWorkspaces,
   ROSTER_SOCKET_PATH, type RosterPage, type RosterQuery,
 } from './roster';
 import { deletePictures, picturePrefix } from '../slates/pictures';
@@ -4202,6 +4202,12 @@ export class UserDO extends Agent<Env> {
        ON CONFLICT (owner_user_id, workspace, share_id) DO UPDATE SET title = excluded.title, owner_email = excluded.owner_email`,
       row.ownerUserId, row.ownerEmail, row.workspace, row.shareId, row.title,
     );
+  }
+
+  async libraryTiles(caller: UserCaller): Promise<Array<{ workspace: string; overview: WorkspaceOverview }>> {
+    await this.requireTier(caller, 'workspaces.read');
+
+    return libraryTiles(this.ctx.storage.sql);
   }
 
   async sharesReceived_list(caller: UserCaller): Promise<SharedBlueprintReceipt[]> {
