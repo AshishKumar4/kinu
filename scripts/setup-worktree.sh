@@ -15,8 +15,8 @@
 #   bash scripts/setup-worktree.sh
 #
 # Dependencies themselves still come from the main checkout, so a branch that
-# CHANGED package.json/bun.lock must run `bun install` in the worktree instead;
-# this script says so rather than lying about it.
+# CHANGED package.json, bun.lock or patches/ must run `bun install` in the
+# worktree instead; this script says so rather than lying about it.
 
 set -euo pipefail
 
@@ -34,6 +34,11 @@ fi
 if ! cmp -s "$TREE/bun.lock" "$MAIN/bun.lock"; then
   echo "bun.lock differs from the main checkout: this branch changed dependencies." >&2
   echo "Borrowed modules would be the wrong ones — run 'bun install' in $TREE instead." >&2
+  exit 1
+fi
+if ! diff -rq "$TREE/patches" "$MAIN/patches" >/dev/null 2>&1; then
+  echo "patches/ differs from the main checkout: this branch patches a dependency differently." >&2
+  echo "Borrowed modules would carry the main checkout's patch — run 'bun install' in $TREE instead." >&2
   exit 1
 fi
 
@@ -60,6 +65,11 @@ mirror() {
     [ -e "$entry" ] || continue
     name="$(basename "$entry")"
     case " $SCOPES " in *" $name "*) continue ;; esac
+    # Tool caches (vite's optimizer, bundler state) hold paths of the tree that wrote them; each tree keeps its own.
+    if [ "$name" = .cache ]; then
+      [ -L "$dst/.cache" ] && rm -f "$dst/.cache"
+      continue
+    fi
     # Replace rather than link-into: `ln -sfn` onto an existing real directory
     # would nest the link inside it.
     rm -rf "${dst:?}/$name"
