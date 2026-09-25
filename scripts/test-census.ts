@@ -12,10 +12,11 @@
  * numbers before any rewrite list, because "the worst 30" over an unmeasured
  * corpus is "the 30 someone happened to open".
  *
- * WHAT IT IS NOW: a gate. `--ratchet` refuses a NEW instance of a ratcheted
- * axis, and it runs in the ladder's commit tier. Every run still prints what it
- * CANNOT see, because a blind spot visible only in red output is invisible
- * exactly when the tree is green.
+ * WHAT IT IS NOW: a gate. `--ratchet` refuses any instance of a banned axis and
+ * a NEW instance of a ratcheted one, and it runs in the ladder's commit tier.
+ * `--lock` only shrinks the lock: it refuses to record a key the lock lacks.
+ * Every run still prints what it CANNOT see, because a blind spot visible only
+ * in red output is invisible exactly when the tree is green.
  *
  * THE ONE RULE THIS TOOL AND `wired.ts` SHARE, stated in both headers in the
  * same words. A constant a test needs is EITHER a public contract — exported
@@ -79,6 +80,8 @@ import { fileURLToPath } from 'node:url';
 import type { Node } from 'oxc-parser';
 import * as v from 'valibot';
 
+import { MIN_NODES, unitsOf, type Unit } from './ast-duplication';
+import { parseLock, type Plant } from './census-plants';
 import { claims, deployGates, LADDER, packageScripts } from './ladder';
 import {
   ANTI_SLOP_ROOT, ANTI_SLOP_RULES, isAntiSlopRuleSuite, isBunDiscoverableSuite, isParseable,
@@ -115,13 +118,18 @@ export const CATEGORIES = [
 
 export type Category = (typeof CATEGORIES)[number];
 
-/** The axes a ratchet would pin: a NEW instance fails by name. The three left
- *  out are debt a reviewer reads rather than debt a commit adds — a declared
- *  skip is already governed by `skip-ratchet`, and a golden regeneration is a
- *  deliberate act with its own command. */
-export const RATCHETED: readonly Category[] = [
-  'source_text', 'mirror', 'tautology_suspect', 'private_reach', 'internal_mock',
-];
+/** The axes with no allowance: a finding fails `--ratchet` whatever the lock
+ *  holds, and `--lock` refuses to run while one exists. A test that reads product
+ *  source, restates product code, reaches a private member or mocks the tree's own
+ *  module is rewritten at a public boundary or deleted; there is no deliberate
+ *  exception to record. */
+export const BANNED: readonly Category[] = ['source_text', 'mirror', 'private_reach', 'internal_mock'];
+
+/** The axis the lock pins, which only shrinks: a NEW instance fails by name. The
+ *  three left out of both lists are debt a reviewer reads rather than debt a
+ *  commit adds — a declared skip is already governed by `skip-ratchet`, and a
+ *  golden regeneration is a deliberate act with its own command. */
+export const RATCHETED: readonly Category[] = ['tautology_suspect'];
 
 export interface Finding {
   readonly file: string;
@@ -199,6 +207,8 @@ function chainText(node: Node | null | undefined): string {
   if (node.type === 'Identifier') return node.name;
 
   if (node.type === 'ThisExpression') return 'this';
+
+  if (node.type === 'MetaProperty') return `${node.meta.name}.${node.property.name}`;
 
   if (node.type === 'MemberExpression') {
     const named = node.property.type === 'Identifier' ? `.${node.property.name}` : '.?';
@@ -367,10 +377,9 @@ const FS_READ = /^(readFileSync|readFile)$/u;
 
 const FS_OBJECT = /^(fs|fsp|promises|node:fs)$/u;
 
-/** The repo's own source-reading assertion helpers. Named rather than
- *  re-detected: `packages/test-utils/src/source.ts` exists to make these
- *  non-vacuous, and its own docstring records three tests that had drifted into
- *  asserting against whole files. */
+/** The source-reading assertion helpers `packages/test-utils/src/source.ts`
+ *  exported until its last caller moved to behaviour tests (2026-09-23). Named,
+ *  so a helper brought back under the same name is a finding at once. */
 const SOURCE_HELPERS: ReadonlySet<string> = new Set(['memberBody', 'anchor', 'between']);
 
 /**
@@ -416,6 +425,53 @@ function productFileNamed(
     && (isParseable(path) || isStylesheet(path)));
 }
 
+/** Every directory holding product source, for a listing that walks one. */
+const productDirsOf = new WeakMap<ReadonlySet<string>, ReadonlySet<string>>();
+
+/**
+ * The product directory a CLIMBING path names: `join(import.meta.dir, '..',
+ * 'src')` handed to a tree walker, or `'../..'` as the root of a scan. Only a
+ * path that climbs out of the suite's own directory counts, because a
+ * directory a test builds for itself (`join(tmp, 'src')`) shares the names.
+ */
+function productDirNamed(
+  path: string, from: string, tracked: ReadonlySet<string>,
+): string | undefined {
+  if (!path.startsWith('..')) return undefined;
+  let dirs = productDirsOf.get(tracked);
+
+  if (dirs === undefined) {
+    const built = new Set<string>();
+
+    for (const file of tracked) {
+      if (isTestFile(file) || !(isParseable(file) || isStylesheet(file))) continue;
+      const parts = file.split('/');
+
+      for (let depth = parts.length - 1; depth >= 0; depth -= 1) built.add(parts.slice(0, depth).join('/'));
+    }
+
+    dirs = built;
+    productDirsOf.set(tracked, dirs);
+  }
+
+  const dir = collapsePath(`${from.split('/').slice(0, -1).join('/')}/${path}`);
+
+  return dirs.has(dir) ? `${dir === '' ? '.' : dir}/` : undefined;
+}
+
+/** What a file's own code knows about paths into the product before any read. */
+interface PathScope {
+  /** Local functions that list a directory and read what they find: a tree walker. */
+  readonly treeReaders: ReadonlySet<string>;
+  /** `const root = join(import.meta.dir, '..', '..')`: variables naming a product path. */
+  readonly pathValues: ReadonlyMap<string, string>;
+  /** The same variables as the file spells them, relative to the suite: what a later
+   *  `join(root, 'src', 'x.ts')` builds on. */
+  readonly spelledPaths: ReadonlyMap<string, string>;
+}
+
+const NO_PATHS: PathScope = { treeReaders: new Set(), pathValues: new Map(), spelledPaths: new Map() };
+
 interface LocalFacts {
   /** Functions that assert, transitively — through a helper, or by throwing. */
   readonly asserting: ReadonlySet<string>;
@@ -423,41 +479,221 @@ interface LocalFacts {
    *  or call something that does. `source('src/cli/routes.ts')` is the shape,
    *  and it is why an assertion on `routes` is an assertion on source. */
   readonly sourceReaders: ReadonlySet<string>;
-  /** Variables holding source text, from a source read or a `?raw` import. */
-  readonly sourceValues: ReadonlySet<string>;
+  /** Whether a reference resolves to a binding holding source text: a source
+   *  read, a `?raw` import, or a value derived from one. */
+  readonly isSourceRef: (reference: SyntaxNode) => boolean;
+  /** Whether a read sits in a mutation harness: a function that writes what it
+   *  read out as a module and hands back no text. The mutant is executed, so what
+   *  is asserted is behaviour. */
+  readonly copiesSource: (read: SyntaxNode) => boolean;
+  readonly paths: PathScope;
 }
 
-/** Which product file this call reads off disk, or `undefined` when it reads
- *  none. The path is the finding's own detail, so the question "does it read
- *  one" and the answer "which one" are one traversal. */
+/** Calls that write a file: a mutation harness's copy of the module it mutates. */
+const FILE_WRITES = new Set(['writeFileSync', 'writeFile', 'write']);
+
+/** What a function hands back: each `return` argument of its own body, or an
+ *  arrow's expression body. A nested function's returns are its own. */
+function returnsOf(fn: SyntaxNode): SyntaxNode[] {
+  const body = fn.raw.type === 'MethodDefinition' ? fn.children.find(isFunctionLike) ?? fn : fn;
+  const { raw } = body;
+
+  if (raw.type === 'ArrowFunctionExpression' && raw.expression) {
+    const expression = nodeAt(body, raw.body.start, raw.body.end);
+
+    return expression === undefined ? [] : [expression];
+  }
+
+  const found: SyntaxNode[] = [];
+
+  const visit = (node: SyntaxNode): void => {
+    for (const child of node.children) {
+      if (isFunctionLike(child)) continue;
+
+      if (child.raw.type === 'ReturnStatement' && child.raw.argument) {
+        const argument = nodeAt(child, child.raw.argument.start, child.raw.argument.end);
+
+        if (argument !== undefined) found.push(argument);
+      }
+
+      visit(child);
+    }
+  };
+
+  visit(body);
+
+  return found;
+}
+
+const FS_LIST = /^(readdirSync|readdir)$/u;
+
+function isFsCall(chain: string, pattern: RegExp): boolean {
+  const bare = chain.split('.').pop() ?? '';
+
+  return pattern.test(chain) || (pattern.test(bare) && FS_OBJECT.test(chain.split('.')[0] ?? ''));
+}
+
+/**
+ * The product file or directory a path expression names, if any, resolved by `named`. A path
+ * whose every segment is known is judged as that one path; one with a computed segment (a
+ * reader's parameter) is judged by the product path it is built on.
+ */
+function productPathNamed(
+  argument: SyntaxNode, paths: PathScope, named: (path: string) => string | undefined,
+): string | undefined {
+  const joined = joinedSegments(argument, paths);
+
+  if (joined !== undefined) return named(joined);
+  let found: string | undefined;
+  walk(argument, (inner) => {
+    if (found !== undefined) return;
+
+    if (inner.raw.type === 'Identifier' && !isPropertyName(inner)) {
+      found = paths.pathValues.get(inner.raw.name);
+
+      return;
+    }
+
+    const text = literalText(inner);
+
+    if (text !== undefined) found = named(text);
+  });
+
+  return found;
+}
+
+/** Which product file (or, for a listing, directory) this call reads off
+ *  disk, or `undefined` when it reads none. The path is the finding's own
+ *  detail, so the question "does it read one" and the answer "which one" are
+ *  one traversal. */
 function productPathRead(
-  node: SyntaxNode, from: string, tracked: ReadonlySet<string>,
+  node: SyntaxNode, from: string, tracked: ReadonlySet<string>, paths: PathScope = NO_PATHS,
 ): string | undefined {
   const r = node.raw;
 
   if (r.type !== 'CallExpression') return undefined;
   const chain = chainText(r.callee);
-  const bare = chain.split('.').pop() ?? '';
+  const isFsRead = isFsCall(chain, FS_READ) || chain === 'Bun.file' || chain === 'readRepositoryFile';
+  const isListing = isFsCall(chain, FS_LIST) || paths.treeReaders.has(chain);
 
-  const isFsRead = (FS_READ.test(chain) || (FS_READ.test(bare) && FS_OBJECT.test(chain.split('.')[0] ?? '')))
-    || chain === 'Bun.file' || chain === 'readRepositoryFile';
+  if (!isFsRead && !isListing) return undefined;
 
-  if (!isFsRead) return undefined;
-  let named: string | undefined;
+  const named = (path: string): string | undefined => productFileNamed(path, from, tracked)
+    ?? (isListing ? productDirNamed(path, from, tracked) : undefined);
 
   for (const argument of argumentNodes(node)) {
-    walk(argument, (inner) => {
-      if (named !== undefined) return;
-      const text = literalText(inner);
+    const found = productPathNamed(argument, paths, named);
 
-      if (text === undefined) return;
-      named = productFileNamed(text, from, tracked);
-    });
-
-    if (named !== undefined) return named;
+    if (found !== undefined) return found;
   }
 
   return undefined;
+}
+
+/** Tree walkers and product path variables, read before any read is judged. */
+function pathScope(parsed: ParsedFile, tracked: ReadonlySet<string>): PathScope {
+  const treeReaders = new Set<string>();
+  const pathValues = new Map<string, string>();
+  const spelledPaths = new Map<string, string>();
+  const scope: PathScope = { treeReaders, pathValues, spelledPaths };
+
+  walk(parsed.tree, (node) => {
+    if (isFunctionLike(node) || node.raw.type === 'ArrowFunctionExpression') {
+      const name = functionName(node);
+      let lists = false;
+      let reads = false;
+      walk(node, (inner) => {
+        if (inner.raw.type !== 'CallExpression') return;
+        const chain = chainText(inner.raw.callee);
+
+        if (isFsCall(chain, FS_LIST)) lists = true;
+
+        if (isFsCall(chain, FS_READ) || chain === 'Bun.file') reads = true;
+      });
+
+      if (name !== undefined && lists && reads) treeReaders.add(name);
+
+      return;
+    }
+
+    if (node.raw.type !== 'VariableDeclarator') return;
+    const name = declaredName(node);
+    const init = node.raw.init;
+
+    if (name === undefined || init === null || init === undefined) return;
+    const initNode = nodeAt(node, init.start, init.end);
+    // Declarations are met in source order, so `LANDING = resolve(ROOT, ...)` builds on `ROOT`.
+    const joined = initNode === undefined ? undefined : joinedSegments(initNode, scope);
+
+    const named = joined === undefined ? undefined
+      : productFileNamed(joined, parsed.file, tracked) ?? productDirNamed(joined, parsed.file, tracked);
+
+    if (named === undefined || joined === undefined) return;
+    pathValues.set(name, named);
+    spelledPaths.set(name, joined);
+  });
+
+  return scope;
+}
+
+/** The suite's own directory, where a relative climb starts. */
+const SUITE_DIR = new Set(['import.meta.dir', 'import.meta.dirname', '__dirname']);
+
+/**
+ * The path a path-building expression spells, relative to the suite, when every segment is
+ * known: `join(import.meta.dir, '..', 'src', 'actor-agent.ts')`, `join(import.meta.dir, '..')`,
+ * `new URL('../', import.meta.url)` (bare, through `.pathname`, or handed to `fileURLToPath`), and
+ * a join on a variable already known to name a product path. No single segment of
+ * `join(import.meta.dir, '..', 'src', 'x.ts')` names a file, so reading them one at a time missed
+ * 8 whole-file reads in `unit-turn-pipeline-correctness.test.ts` alone, and a root held in a
+ * variable (`const root = join(import.meta.dir, '..')`) hid every `source('src/x.ts')` helper built
+ * on it (measured 2026-09-23).
+ *
+ * Only a path anchored where resolution starts: the suite's directory, a literal, or a known
+ * product path. `join(tmp, 'src', 'budget.ts')` is a file the test wrote, and its segments name a
+ * product path by coincidence.
+ */
+function joinedSegments(node: SyntaxNode, paths: PathScope = NO_PATHS): string | undefined {
+  const r = node.raw;
+
+  if (r.type === 'MemberExpression' && !r.computed && chainText(r.property) === 'pathname') {
+    const url = nodeAt(node, r.object.start, r.object.end);
+
+    return url === undefined ? undefined : joinedSegments(url, paths);
+  }
+
+  if (r.type === 'NewExpression' && chainText(r.callee) === 'URL') {
+    const [relative, base] = argumentNodes(node);
+
+    return relative !== undefined && base !== undefined && chainText(base.raw) === 'import.meta.url'
+      ? literalText(relative) : undefined;
+  }
+
+  if (r.type !== 'CallExpression') return undefined;
+  const name = chainText(r.callee).split('.').pop();
+
+  if (name === 'fileURLToPath') {
+    const [url] = argumentNodes(node);
+
+    return url === undefined ? undefined : joinedSegments(url, paths);
+  }
+
+  if (name !== 'join' && name !== 'resolve') return undefined;
+  const [base, ...rest] = argumentNodes(node);
+
+  if (base === undefined) return undefined;
+  const known = base.raw.type === 'Identifier' ? paths.spelledPaths.get(base.raw.name) : undefined;
+  // The suite's directory is where a relative path already starts, so it adds no segment.
+  const head = SUITE_DIR.has(chainText(base.raw)) ? [] : [known ?? literalText(base)];
+  const segments = [...head, ...rest.map((argument) => literalText(argument))];
+
+  // A computed segment leaves the file unknown; the caller judges the product path it is built on.
+  if (segments.length === 0 || segments.some((segment) => segment === undefined)) return undefined;
+
+  // A lone literal is read as itself by the caller.
+  if (segments.length === 1 && head.length === 1 && known === undefined) return undefined;
+
+  return segments.join('/');
 }
 
 /** Where a function's name comes from: its own declaration, or the binding an
@@ -489,8 +725,16 @@ function functionName(node: SyntaxNode): string | undefined {
  * a file read".
  */
 function localFacts(parsed: ParsedFile, tracked: ReadonlySet<string>): LocalFacts {
-  interface Fn { readonly direct: boolean; readonly reads: boolean; readonly calls: Set<string> }
+  interface Fn {
+    readonly node: SyntaxNode;
+    readonly direct: boolean;
+    readonly reads: boolean;
+    readonly writes: boolean;
+    readonly calls: Set<string>;
+    readonly returns: readonly SyntaxNode[];
+  }
 
+  const paths = pathScope(parsed, tracked);
   const fns = new Map<string, Fn>();
 
   walk(parsed.tree, (node) => {
@@ -500,6 +744,7 @@ function localFacts(parsed: ParsedFile, tracked: ReadonlySet<string>): LocalFact
     if (name === undefined) return;
     let direct = false;
     let reads = false;
+    let writes = false;
     const calls = new Set<string>();
     walk(node, (inner) => {
       if (inner.raw.type === 'ThrowStatement') direct = true;
@@ -512,14 +757,17 @@ function localFacts(parsed: ParsedFile, tracked: ReadonlySet<string>): LocalFact
       if (called === 'expect' || called === 'assert' || ASSERTING_IMPORT.test(called)) direct = true;
 
       if (SOURCE_HELPERS.has(called)
-        || productPathRead(inner, parsed.file, tracked) !== undefined) reads = true;
+        || productPathRead(inner, parsed.file, tracked, paths) !== undefined) reads = true;
+
+      if (FILE_WRITES.has(called)) writes = true;
       calls.add(called);
     });
-    fns.set(name, { direct, reads, calls });
+    fns.set(name, { node, direct, reads, writes, calls, returns: returnsOf(node) });
   });
 
   const asserting = new Set([...fns].filter(([, f]) => f.direct).map(([name]) => name));
-  const sourceReaders = new Set([...fns].filter(([, f]) => f.reads).map(([name]) => name));
+  // Grown below with the values, since each feeds the other.
+  const sourceReaders = new Set<string>();
 
   for (let pass = 0; pass < 8; pass += 1) {
     let grew = false;
@@ -527,11 +775,6 @@ function localFacts(parsed: ParsedFile, tracked: ReadonlySet<string>): LocalFact
     for (const [name, fn] of fns) {
       for (const called of fn.calls) {
         if (!asserting.has(name) && asserting.has(called)) { asserting.add(name); grew = true; }
-
-        if (!sourceReaders.has(name) && sourceReaders.has(called)) {
-          sourceReaders.add(name);
-          grew = true;
-        }
       }
     }
 
@@ -539,39 +782,162 @@ function localFacts(parsed: ParsedFile, tracked: ReadonlySet<string>): LocalFact
   }
 
   // Variables holding source text: `const routes = source('src/cli/routes.ts')`,
-  // `const src = readFileSync(...)`, and a `?raw` import binding.
-  const sourceValues = new Set<string>();
+  // `const src = readFileSync(...)`, a `?raw` import binding, and anything
+  // DERIVED from one: `const run = loop.slice(loop.indexOf('runTurn('))` is the
+  // same file text, and missing it hid 274 of the tree's 425 source_text
+  // findings (measured 2026-09-23). Resolved per binding, not per name: a
+  // `source` read in one test says nothing about another test's `source`.
+  const bindings = bindingsOf(parsed);
+  const sourceValues = new Set<SyntaxNode>();
+  const declarators: { readonly node: SyntaxNode; readonly init: SyntaxNode }[] = [];
   walk(parsed.tree, (node) => {
     if (node.raw.type === 'ImportDeclaration' && String(node.raw.source.value).includes('?raw')) {
-      for (const bound of importBindings(node)) sourceValues.add(bound.local);
+      sourceValues.add(node);
 
       return;
     }
 
     if (node.raw.type !== 'VariableDeclarator') return;
-    const name = declaredName(node);
     const init = node.raw.init;
 
-    if (name === undefined || init === null || init === undefined) return;
+    if (declaredName(node) === undefined || init === null || init === undefined) return;
     const initNode = nodeAt(node, init.start, init.end);
 
-    if (initNode === undefined) return;
-    let fromSource = false;
-    walk(initNode, (inner) => {
+    if (initNode !== undefined) declarators.push({ node, init: initNode });
+  });
+
+  const isSourceRef = (reference: SyntaxNode): boolean => {
+    const bound = bindings.resolve(reference);
+
+    return bound !== undefined && sourceValues.has(bound);
+  };
+
+  /** A mutation harness: it writes what it read out as a module and hands back no text. */
+  const isHarness = (fn: Fn): boolean => fn.writes && !fn.returns.some((returned) => holdsSource(returned));
+
+  /** A read, a reader's call, or a reference to a value holding source text. */
+  const holdsSource = (node: SyntaxNode): boolean => {
+    let found = false;
+    walk(node, (inner) => {
+      if (found) return;
+
+      if (inner.raw.type === 'Identifier' && !isPropertyName(inner) && isSourceRef(inner)) {
+        found = true;
+
+        return;
+      }
+
       const called = calleeName(inner);
 
       if (called === undefined) return;
 
       if (SOURCE_HELPERS.has(called) || sourceReaders.has(called)
-        || productPathRead(inner, parsed.file, tracked) !== undefined) {
-        fromSource = true;
+        || productPathRead(inner, parsed.file, tracked, paths) !== undefined) {
+        found = true;
       }
     });
 
-    if (fromSource) sourceValues.add(name);
+    return found;
+  };
+
+  for (let grew = true; grew;) {
+    grew = false;
+
+    for (const { node, init } of declarators) {
+      if (sourceValues.has(node) || !holdsSource(init)) continue;
+      sourceValues.add(node);
+      grew = true;
+    }
+
+    for (const [name, fn] of fns) {
+      if (sourceReaders.has(name) || isHarness(fn)) continue;
+
+      if (fn.reads || [...fn.calls].some((called) => sourceReaders.has(called))) {
+        sourceReaders.add(name);
+        grew = true;
+      }
+    }
+  }
+
+  const harnesses = [...fns.values()].filter(isHarness);
+
+  const copiesSource = (read: SyntaxNode): boolean =>
+    harnesses.some((fn) => fn.node.start <= read.start && read.end <= fn.node.end);
+
+  return { asserting, sourceReaders, isSourceRef, copiesSource, paths };
+}
+
+/** A non-computed member property is a NAME, never a variable reference:
+ *  `agent.beforeTurn(turn)` reads no `beforeTurn` binding. */
+function isPropertyName(node: SyntaxNode): boolean {
+  const parent = node.parent?.raw;
+
+  return parent?.type === 'MemberExpression' && !parent.computed
+    && parent.property.start === node.start && parent.property.end === node.end;
+}
+
+/** Where each name in a file is bound, per function scope (block scope is read as its function's). */
+interface Bindings {
+  /** The declaration a reference resolves to: its nearest enclosing binding of that name. */
+  resolve(reference: SyntaxNode): SyntaxNode | undefined;
+}
+
+function isScope(node: SyntaxNode): boolean {
+  return isFunctionLike(node) || node.raw.type === 'ArrowFunctionExpression' || node.parent === undefined;
+}
+
+function bindingsOf(parsed: ParsedFile): Bindings {
+  const byScope = new Map<SyntaxNode, Map<string, SyntaxNode>>();
+
+  const declare = (scope: SyntaxNode, name: string, node: SyntaxNode): void => {
+    const names = byScope.get(scope) ?? new Map<string, SyntaxNode>();
+    names.set(name, node);
+    byScope.set(scope, names);
+  };
+
+  const enclosing = (node: SyntaxNode): SyntaxNode => {
+    let up = node.parent;
+
+    while (up !== undefined && !isScope(up)) up = up.parent;
+
+    return up ?? parsed.tree;
+  };
+
+  walk(parsed.tree, (node) => {
+    const r = node.raw;
+
+    if (r.type === 'VariableDeclarator' || r.type === 'ImportDeclaration') {
+      const names = r.type === 'ImportDeclaration' ? importBindings(node).map((bound) => bound.local) : [declaredName(node)];
+
+      for (const name of names) if (name !== undefined) declare(enclosing(node), name, node);
+
+      return;
+    }
+
+    if (!isFunctionLike(node) && r.type !== 'ArrowFunctionExpression') return;
+    const params = 'params' in r ? r.params : [];
+
+    for (const param of params) {
+      const target = param.type === 'AssignmentPattern' ? param.left : param;
+
+      if (target.type === 'Identifier') declare(node, target.name, node);
+    }
   });
 
-  return { asserting, sourceReaders, sourceValues };
+  return {
+    resolve(reference) {
+      if (reference.raw.type !== 'Identifier') return undefined;
+      const name = reference.raw.name;
+
+      for (let up = reference.parent; up !== undefined; up = up.parent) {
+        const bound = byScope.get(up)?.get(name);
+
+        if (bound !== undefined) return bound;
+      }
+
+      return undefined;
+    },
+  };
 }
 
 /* ── Expectations ────────────────────────────────────────────────────── */
@@ -657,9 +1023,9 @@ function sourceText(
       return;
     }
 
-    const read = productPathRead(node, parsed.file, tracked);
+    const read = productPathRead(node, parsed.file, tracked, facts.paths);
 
-    if (read !== undefined) found.push(at(node, 'reads a source file', read));
+    if (read !== undefined && !facts.copiesSource(node)) found.push(at(node, 'reads a source file', read));
   });
 
   for (const expectation of expectations(parsed)) {
@@ -670,17 +1036,10 @@ function sourceText(
     let overSource: string | undefined;
     walk(actual, (inner) => {
       if (overSource !== undefined) return;
-      // A non-computed member property is a NAME, never a variable reference:
-      // `agent.beforeTurn(turn)` reads no `beforeTurn` binding even when the
-      // file slices a source value under that name for another test.
-      const parent = inner.parent?.raw;
+      // A method name is not a read of a source binding that happens to share it.
+      const name = inner.raw.type === 'Identifier' && !isPropertyName(inner) ? inner.raw.name : undefined;
 
-      const isPropertyName = parent?.type === 'MemberExpression' && !parent.computed
-        && parent.property.start === inner.start && parent.property.end === inner.end;
-
-      const name = inner.raw.type === 'Identifier' && !isPropertyName ? inner.raw.name : undefined;
-
-      if (name !== undefined && facts.sourceValues.has(name)) {
+      if (name !== undefined && facts.isSourceRef(inner)) {
         overSource = name;
 
         return;
@@ -895,29 +1254,60 @@ function arrowBodies(parsed: ParsedFile): Map<string, string> {
   return bodies;
 }
 
-/** The author's own declaration of a mirror. Deliberately counted: "mirrors the
- *  private 4096 budget; drift fails these tests" IS the finding, and it is the
- *  one form no value comparison reaches when the two numbers are written
- *  differently. */
-const MIRROR_COMMENT = /\/[/*][^\n]*\b(mirrors?|mirrored|mirroring|drift fails|kept in step with)\b/iu;
+/** Product function bodies at `ast-duplication.ts`'s floor, by fingerprint: node kinds with
+ *  identifiers reduced to their order of first use and literal text kept. The first body in path
+ *  order stands for a fingerprint several product files share. */
+export function productUnitsOf(sources: ReadonlyMap<string, string>): Map<string, Unit> {
+  const units = new Map<string, Unit>();
+
+  for (const file of [...sources.keys()].sort()) {
+    const text = sources.get(file) ?? '';
+    const parsed = parseFile(file, text);
+
+    for (const unit of unitsOf(file, { root: parsed.tree, lineAt: parsed.lineAt })) {
+      if (unit.size >= MIN_NODES && !units.has(unit.hash)) units.set(unit.hash, unit);
+    }
+  }
+
+  return units;
+}
+
+/**
+ * The third mirror shape, and the one a comment used to stand for: a test function whose body is a
+ * product function's with the names changed. It agrees with the product by construction, so it
+ * cannot catch the product being wrong, and it keeps agreeing with the old code after the product
+ * moves. Any product file counts, imported or not: a probe that re-implements an adapter it never
+ * imports is the common case. A body nested in a matched body is the same copy, reported once.
+ */
+function mirroredFunctions(
+  parsed: ParsedFile,
+  spans: readonly TestSpan[],
+  productUnits: ReadonlyMap<string, Unit>,
+): Finding[] {
+  const matched = unitsOf(parsed.file, { root: parsed.tree, lineAt: parsed.lineAt })
+    .flatMap((unit) => {
+      const original = productUnits.get(unit.hash);
+
+      return unit.size >= MIN_NODES && original !== undefined ? [{ unit, original }] : [];
+    });
+
+  return matched
+    .filter(({ unit }) => !matched.some(({ unit: outer }) =>
+      outer !== unit && outer.start <= unit.start && outer.end >= unit.end))
+    .map(({ unit, original }) => ({
+      file: parsed.file, line: unit.line, test: titleAt(spans, unit.line),
+      what: 'mirrored function',
+      detail: `${unit.name} restates ${original.file}:${String(original.line)} ${original.name}`,
+    }));
+}
 
 function mirrors(
   parsed: ParsedFile,
   spans: readonly TestSpan[],
   imported: readonly string[],
-  sources: ReadonlyMap<string, string>,
+  inputs: Pick<CensusInputs, 'sources' | 'productUnits'>,
 ): Finding[] {
-  const found: Finding[] = [];
-  const lines = parsed.text.split('\n');
-
-  for (const [index, line] of lines.entries()) {
-    if (!MIRROR_COMMENT.test(line)) continue;
-    found.push({
-      file: parsed.file, line: index + 1, test: titleAt(spans, index + 1),
-      what: 'declared mirror',
-      detail: line.trim().slice(0, 90),
-    });
-  }
+  const found = mirroredFunctions(parsed, spans, inputs.productUnits);
 
   if (imported.length === 0) return found;
 
@@ -927,7 +1317,7 @@ function mirrors(
   if (testValues.length === 0 && testArrows.size === 0) return found;
 
   for (const module of imported) {
-    const text = sources.get(module);
+    const text = inputs.sources.get(module);
 
     if (text === undefined) continue;
     // No `try` here on purpose: `parse` already refuses loudly and names the
@@ -1024,12 +1414,15 @@ export function nonPublicMembers(sources: ReadonlyMap<string, string>): Map<stri
 export interface ClassMembers {
   /** `Class#member` production declares non-public -> the file declaring it. */
   readonly nonPublic: ReadonlyMap<string, string>;
+  /** `Class#member` production declares public: a test class overriding one of these adds no door. */
+  readonly declaredPublic: ReadonlySet<string>;
   /** `Class -> the class it extends`, for walking a helper's chain. */
   readonly base: ReadonlyMap<string, string>;
 }
 
 export function classNonPublicMembers(sources: ReadonlyMap<string, string>): ClassMembers {
   const nonPublic = new Map<string, string>();
+  const declaredPublic = new Set<string>();
   const base = new Map<string, string>();
 
   for (const [file, text] of sources) {
@@ -1044,19 +1437,26 @@ export function classNonPublicMembers(sources: ReadonlyMap<string, string>): Cla
       if (parent !== undefined) base.set(owner, parent);
 
       for (const member of classMembers(node)) {
-        const r = member.raw;
-        const accessibility = 'accessibility' in r ? r.accessibility : undefined;
-        const isPrivateName = 'key' in r && r.key !== null && r.key.type === 'PrivateIdentifier';
-
-        if (accessibility !== 'private' && accessibility !== 'protected' && !isPrivateName) continue;
         const name = declaredName(member);
 
-        if (name !== undefined) nonPublic.set(`${owner}#${name}`, file);
+        if (name === undefined) continue;
+
+        if (isNonPublicMember(member)) nonPublic.set(`${owner}#${name}`, file);
+        else declaredPublic.add(`${owner}#${name}`);
       }
     });
   }
 
-  return { nonPublic, base };
+  return { nonPublic, declaredPublic, base };
+}
+
+/** `private`, `protected` or a `#name`: a member a caller outside the class cannot reach. */
+function isNonPublicMember(member: SyntaxNode): boolean {
+  const r = member.raw;
+  const accessibility = 'accessibility' in r ? r.accessibility : undefined;
+  const isPrivateName = 'key' in r && r.key !== null && r.key.type === 'PrivateIdentifier';
+
+  return accessibility === 'private' || accessibility === 'protected' || isPrivateName;
 }
 
 /** Bracket access to a member production declares non-public, `as any`,
@@ -1106,118 +1506,143 @@ function privateReaches(
   return found;
 }
 
-/* ── Harness bridges ─────────────────────────────────────────────────── */
+/* ── Test-helper bridges ─────────────────────────────────────────────── */
 
-/** A `harness*` method on a test helper class that republishes a member the
- *  helper does not declare — so it came from the production base. Each is a door
- *  a test enters through that production has not got. */
+/**
+ * A public member of a test-side class, whatever it is called, that republishes
+ * a member its production base declares non-public: directly, through another
+ * member of the same class, or by widening a protected member to public on
+ * override. Each is a door a test enters through that production has not got.
+ *
+ * The name is not the signal. This detector once matched `harness*` names only,
+ * and measured on b2c60d09f (2026-09-23) that left 21 bridges unseen, 190 reaches
+ * across 35 files: `observeRuntime()` alone reached the protected runtime 80
+ * times. A member that overrides a PUBLIC production member adds no door, so
+ * `getModel()` on a harness that scripts its model is not one.
+ */
 export interface Bridge {
   readonly name: string;
   readonly file: string;
   readonly line: number;
-  /** Members it forwards to that the helper does not declare. */
+  /** Members of the production chain it reaches, directly or through its own class. */
   readonly forwards: readonly string[];
-  /** Of those, the ones production declares `private`/`protected`, with the
-   *  file that declares each — the evidence the bridge crosses a boundary. */
+  /** Of those, the ones production declares `private`/`protected`: the evidence
+   *  the bridge crosses a boundary. */
   readonly nonPublic: readonly string[];
 }
 
-function bridgesOf(parsed: ParsedFile, classes: ClassMembers): Bridge[] {
+/** The classes above `cls`, nearest first, as far as product source declares them. */
+function baseChain(cls: SyntaxNode, classes: ClassMembers): string[] {
+  const chain: string[] = [];
+  let up = superClassName(cls);
+
+  for (let hop = 0; up !== undefined && hop < 16; hop += 1) {
+    chain.push(up);
+    up = classes.base.get(up);
+  }
+
+  return chain;
+}
+
+/** `this.x` and `super.x` names a member body reads, and the `#x` names it reads. */
+function selfReferences(fn: SyntaxNode): Set<string> {
+  const names = new Set<string>();
+  walk(fn, (inner) => {
+    const r = inner.raw;
+
+    if (r.type !== 'MemberExpression' || r.computed) return;
+
+    if (r.object.type !== 'ThisExpression' && r.object.type !== 'Super') return;
+
+    if (r.property.type === 'PrivateIdentifier') names.add(`#${r.property.name}`);
+    else if (r.property.type === 'Identifier') names.add(r.property.name);
+  });
+
+  return names;
+}
+
+/** Every public member of every class in one test file whose base chain product source declares. */
+export function bridgesOf(file: string, text: string, classes: ClassMembers): Bridge[] {
+  const parsed = parseFile(file, text);
   const found: Bridge[] = [];
-  walk(parsed.tree, (node) => {
-    if (node.raw.type !== 'MethodDefinition') return;
-    const name = declaredName(node);
+  walk(parsed.tree, (cls) => {
+    if (cls.raw.type !== 'ClassDeclaration' && cls.raw.type !== 'ClassExpression') return;
+    const chain = baseChain(cls, classes);
 
-    if (name === undefined || !name.startsWith('harness')) return;
-    const fn = node.children.find(isFunctionLike);
+    if (chain.length === 0) return;
 
-    if (fn === undefined) return;
+    const inChain = (member: string, table: ReadonlySet<string> | ReadonlyMap<string, string>): boolean =>
+      chain.some((owner) => table.has(`${owner}#${member}`));
 
-    const own = new Set<string>();
-    let cls: SyntaxNode | undefined = node.parent;
+    const members = new Map<string, { readonly node: SyntaxNode; readonly reads: Set<string> }>();
 
-    while (cls !== undefined && cls.raw.type !== 'ClassDeclaration') cls = cls.parent;
+    for (const member of classMembers(cls)) {
+      const name = declaredName(member);
+      const raw = member.raw;
 
-    if (cls !== undefined) {
-      for (const member of classMembers(cls)) {
-        const memberName = declaredName(member);
+      const fn = raw.type === 'PropertyDefinition'
+        ? member.children.find((child) => child.raw === raw.value && isFunctionLike(child))
+        : member.children.find(isFunctionLike);
 
-        if (memberName !== undefined) own.add(memberName);
-      }
+      if (name === undefined || name === 'constructor' || fn === undefined) continue;
+      members.set(name, { node: member, reads: selfReferences(fn) });
     }
 
-    // The helper's OWN chain, so `this.x` is judged against the class that
-    // really declares it: see {@link classNonPublicMembers}. A chain that
-    // leaves product source (an `agents` base) contributes nothing, which is
-    // correct — a member declared in a dependency is that dependency's public
-    // surface as far as this tree can tell.
-    const chain: string[] = [];
-    let up = cls === undefined ? undefined : superClassName(cls);
+    const reached = (name: string, seen: Set<string>): Set<string> => {
+      const out = new Set<string>();
 
-    for (let hop = 0; up !== undefined && hop < 16; hop += 1) {
-      chain.push(up);
-      up = classes.base.get(up);
-    }
+      for (const read of members.get(name)?.reads ?? []) {
+        out.add(read);
 
-    const declaredNonPublic = (member: string): string | undefined => {
-      for (const owner of chain) {
-        const declaring = classes.nonPublic.get(`${owner}#${member}`);
+        if (read === name || !members.has(read) || seen.has(read)) continue;
+        seen.add(read);
 
-        if (declaring !== undefined) return declaring;
+        for (const deeper of reached(read, seen)) out.add(deeper);
       }
 
-      return undefined;
+      return out;
     };
 
-    const forwards = new Set<string>();
-    walk(fn, (inner) => {
-      const r = inner.raw;
+    for (const [name, { node }] of members) {
+      if (isNonPublicMember(node) || inChain(name, classes.declaredPublic)) continue;
+      const forwards = reached(name, new Set([name]));
 
-      if (r.type !== 'MemberExpression' || r.computed) return;
-
-      if (r.object.type !== 'ThisExpression') return;
-
-      if (r.property.type === 'PrivateIdentifier') {
-        forwards.add(`#${r.property.name}`);
-
-        return;
-      }
-
-      if (r.property.type !== 'Identifier' || own.has(r.property.name)) return;
-      forwards.add(r.property.name);
-    });
-    found.push({
-      name,
-      file: parsed.file,
-      line: parsed.lineAt(node.start),
-      forwards: [...forwards].sort(),
-      nonPublic: [...forwards].filter((member) => declaredNonPublic(member) !== undefined).sort(),
-    });
+      // An override that widens a protected member to public is itself the door.
+      if (inChain(name, classes.nonPublic)) forwards.add(name);
+      found.push({
+        name,
+        file: parsed.file,
+        line: parsed.lineAt(node.start),
+        forwards: [...forwards].sort(),
+        nonPublic: [...forwards].filter((member) => inChain(member, classes.nonPublic)).sort(),
+      });
+    }
   });
 
   return found;
 }
 
-/** Calls to a bridge that really crosses the boundary, counted only OUTSIDE the
- *  helper that declares it — inside, they are the bridge's own plumbing. */
-function bridgeCalls(
+/** Reaches of a bridge that really crosses the boundary, a call or a getter
+ *  read, counted only OUTSIDE the file that declares it: inside, they are the
+ *  helper's own plumbing, which the blind spots measure. */
+function bridgeReaches(
   parsed: ParsedFile,
   spans: readonly TestSpan[],
   bridges: ReadonlyMap<string, Bridge>,
 ): Finding[] {
   const found: Finding[] = [];
   walk(parsed.tree, (node) => {
-    const called = calleeName(node);
+    const r = node.raw;
 
-    if (called === undefined) return;
-    const bridge = bridges.get(called);
+    if (r.type !== 'MemberExpression' || r.computed || r.property.type !== 'Identifier') return;
+    const bridge = bridges.get(r.property.name);
 
     if (bridge === undefined || bridge.file === parsed.file || bridge.nonPublic.length === 0) return;
     const line = parsed.lineAt(node.start);
     found.push({
       file: parsed.file, line, test: titleAt(spans, line),
       what: 'harness bridge to a non-public member',
-      detail: `${called}() -> ${bridge.nonPublic.join(', ')} (${bridge.file}:${String(bridge.line)})`,
+      detail: `${bridge.name} -> ${bridge.nonPublic.join(', ')} (${bridge.file}:${String(bridge.line)})`,
     });
   });
 
@@ -1682,6 +2107,10 @@ export interface RunnerClaim {
  * per-rule suites dynamically, so `isAntiSlopRuleSuite` IS the claim. Those
  * files sit outside the census corpus, which the table states rather than hides.
  */
+const LADDER_SOURCE = 'scripts/ladder.ts LADDER';
+
+const DEPLOY_SOURCE = 'scripts/deploy.sh roster';
+
 export function runnerClaims(tracked: readonly string[]): RunnerClaim[] {
   const testFiles = new Set(tracked.filter((file) => isTestFile(file) || isPythonSuite(file)));
   const out: RunnerClaim[] = [];
@@ -1693,14 +2122,14 @@ export function runnerClaims(tracked: readonly string[]): RunnerClaim[] {
   };
 
   for (const gate of LADDER) {
-    add(gate.run, gate.tier, 'scripts/ladder.ts LADDER', claims(gate.run, tracked));
+    add(gate.run, gate.tier, LADDER_SOURCE, claims(gate.run, tracked));
   }
 
   const declared = new Set(LADDER.map((gate) => gate.run));
 
   for (const run of deployGates()) {
     if (declared.has(run)) continue;
-    add(run, 'deploy', 'scripts/deploy.sh roster', claims(run, tracked));
+    add(run, 'deploy', DEPLOY_SOURCE, claims(run, tracked));
     declared.add(run);
   }
 
@@ -1739,6 +2168,16 @@ export function runnerClaims(tracked: readonly string[]): RunnerClaim[] {
     tracked.filter(isAntiSlopRuleSuite));
 
   return out;
+}
+
+/**
+ * The ladder's own gate tests: every `scripts/` suite a ladder or deploy row runs, resolved through
+ * {@link runnerClaims}. `scripts/` holds the gate programs, so these suites' subject is the tree.
+ */
+export function gateTests(runners: readonly RunnerClaim[]): Set<string> {
+  const gates = runners.filter((claim) => claim.source === LADDER_SOURCE || claim.source === DEPLOY_SOURCE);
+
+  return new Set(gates.flatMap((claim) => claim.files).filter((file) => file.startsWith('scripts/')));
 }
 
 /* ── The census ──────────────────────────────────────────────────────── */
@@ -1795,6 +2234,10 @@ export interface Census {
     readonly suites: number;
     readonly support: number;
     readonly tests: number;
+    /** Member names product source declares non-public: what a private reach is judged against. */
+    readonly productNonPublic: number;
+    /** Product function bodies at the mirror floor: what a mirrored function is judged against. */
+    readonly productFunctions: number;
   };
   readonly files: readonly FileRow[];
   readonly findings: Findings;
@@ -1892,14 +2335,17 @@ function resolveImports(parsed: ParsedFile, tracked: ReadonlySet<string>, scope:
 /**
  * Everything a single file's measurement needs that comes from OUTSIDE that
  * file: which values production names, which members it declares non-public,
- * which fixtures a generator writes, which bridges exist, and what the tracked
- * set is. Built once per run.
+ * which function bodies it holds, which fixtures a generator writes, which
+ * bridges exist, and what the tracked set is. Built once per run.
  */
 export interface CensusInputs {
+  /** A gate program's own test: its subject is the tree, so reading source is its input, not a coupling. */
+  readonly gateTests: ReadonlySet<string>;
   readonly sources: ReadonlyMap<string, string>;
   readonly nonPublic: ReadonlyMap<string, string>;
   readonly generators: ReadonlyMap<string, string>;
   readonly bridges: ReadonlyMap<string, Bridge>;
+  readonly productUnits: ReadonlyMap<string, Unit>;
   readonly tracked: ReadonlySet<string>;
   readonly scope: string;
 }
@@ -1927,12 +2373,12 @@ export function measureFile(file: string, text: string, inputs: CensusInputs): M
   const { internal, external } = mocks(parsed, spans, inputs.scope, localNames);
 
   const findings: Findings = {
-    source_text: sourceText(parsed, spans, facts, inputs.tracked),
-    mirror: mirrors(parsed, spans, local, inputs.sources),
+    source_text: inputs.gateTests.has(file) ? [] : sourceText(parsed, spans, facts, inputs.tracked),
+    mirror: mirrors(parsed, spans, local, inputs),
     tautology_suspect: tautologies(parsed, spans, localNames),
     private_reach: [
       ...privateReaches(parsed, spans, inputs.nonPublic),
-      ...bridgeCalls(parsed, spans, inputs.bridges),
+      ...bridgeReaches(parsed, spans, inputs.bridges),
     ],
     internal_mock: internal,
     assertion_free: assertionFree(parsed, spans, facts.asserting),
@@ -1984,23 +2430,26 @@ export function measureFile(file: string, text: string, inputs: CensusInputs): M
  * `require()` rather than by `import`, which `resolveImports` never resolved,
  * so no finding on this tree depended on any of the seven.
  */
-export function censusInputs(tracked: readonly string[]): CensusInputs {
+export function censusInputs(tracked: readonly string[], runners: readonly RunnerClaim[]): CensusInputs {
   const sources = readSources();
   const nonPublic = nonPublicMembers(sources);
   const classes = classNonPublicMembers(sources);
   const bridges = new Map<string, Bridge>();
 
   for (const file of tracked.filter(isCensusFile)) {
-    const parsed = parseFile(file, readRepositoryFile(root, file));
-
-    for (const bridge of bridgesOf(parsed, classes)) bridges.set(bridge.name, bridge);
+    // One name, two helper classes: the crossing one is the door a call may open.
+    for (const bridge of bridgesOf(file, readRepositoryFile(root, file), classes)) {
+      if (bridge.nonPublic.length > 0 || !bridges.has(bridge.name)) bridges.set(bridge.name, bridge);
+    }
   }
 
   return {
+    gateTests: gateTests(runners),
     sources,
     nonPublic,
     generators: fixtureGenerators(tracked),
     bridges,
+    productUnits: productUnitsOf(sources),
     tracked: new Set(tracked),
     scope: workspaceScope(),
   };
@@ -2017,7 +2466,8 @@ export function noFindings(): Findings {
 export function runCensus(): Census {
   const tracked = trackedFiles();
   const corpus = tracked.filter(isCensusFile);
-  const inputs = censusInputs(tracked);
+  const claimsTable = runnerClaims(tracked);
+  const inputs = censusInputs(tracked, claimsTable);
 
   const findings = noFindings();
   const publicSurface: Finding[] = [];
@@ -2035,7 +2485,6 @@ export function runCensus(): Census {
     rows.push(measured.row);
   }
 
-  const claimsTable = runnerClaims(tracked);
   const claimedBy = new Map<string, string[]>();
 
   for (const claim of claimsTable) {
@@ -2088,6 +2537,8 @@ export function runCensus(): Census {
       suites: joined.filter((row) => row.kind !== 'support').length,
       support: supportOnly.length,
       tests: totalTests,
+      productNonPublic: inputs.nonPublic.size,
+      productFunctions: inputs.productUnits.size,
     },
     files: joined,
     findings,
@@ -2123,15 +2574,22 @@ export const BLIND_SPOTS: readonly string[] = [
   + '`join`, or a template with an expression is invisible to every literal comparison here',
   'tests generated at runtime: a `for (const case of CASES) test(...)` loop counts ONE test '
   + 'per `test(` call site, so a 40-row table reads as one test',
+  'a mutation harness is trusted to execute what it copies: a function that writes a product '
+  + 'file out and returns no text is not a reader, so text written out and read back is not traced',
   'mirrors by DERIVATION: a test that recomputes a formula instead of restating its constant '
   + 'is caught only when a NAMED literal value is shared',
+  'a mirrored function is matched by structure with names in first-use order, so a copy that '
+  + 'reorders statements, changes a literal, or renames a local that shares a property\'s name '
+  + `(\`salt\` beside \`opts.salt\`) reads as other code; a copy under ${String(MIN_NODES)} nodes is not compared`,
+  'a MOCK ECHO: a test asserting the value a stand-in was scripted to return, passed through '
+  + 'unchanged, is not detected; an external seam mock is allowed, and what flows out of it is not traced',
   'tautology through a stored value: `expect(actual).toEqual(expected)` where `expected` was '
   + 'produced earlier by the code under test and held in a variable',
   'private reach through destructuring, `Object.entries` over a private map, a public getter '
   + 'over private state, or a cast TypeScript erases',
-  'SHAPE GATES are not separated from coupled tests: whether a source-text assertion guards a '
-  + 'rule no behavioural test can express is a judgement, and this census reports the reach and '
-  + 'leaves the ruling to the reviewer',
+  'a SHAPE GATE written as a product suite: a `scripts/` suite a ladder row runs is exempt from '
+  + 'source_text, since the tree is its subject; a product suite that pins code shape is reported, '
+  + 'and whether it guards a rule no behavioural test can express is left to the reviewer',
   'whether an external seam mock is FAITHFUL: `devbox/tests/support/devbox-harness.ts` '
   + 're-implements a container, and a stand-in that diverges from the SDK passes checks the real '
   + 'SDK fails',
@@ -2277,11 +2735,11 @@ export function markdown(census: Census): string {
   for (const file of unclaimedSupport) p(`- \`${file}\``);
   p();
 
-  p('## Harness bridges');
+  p('## Test-helper bridges');
   p();
   const crossing = census.bridges.filter((bridge) => bridge.nonPublic.length > 0);
-  p(`${String(census.bridges.length)} \`harness*\` bridges exist; ${String(crossing.length)} forward `
-    + 'to a member production declares `private` or `protected`.');
+  p(`${String(census.bridges.length)} public members of test classes over a product base exist; `
+    + `${String(crossing.length)} reach a member production declares \`private\` or \`protected\`.`);
   p();
 
   if (crossing.length > 0) {
@@ -2353,29 +2811,30 @@ export function markdown(census: Census): string {
 export const ratchetKey = (category: Category, finding: Finding): string =>
   `${category} :: ${finding.file} :: ${finding.test} :: ${finding.what}`;
 
-const LockSchema = v.object({
-  measured: v.string(),
-  entries: v.array(v.object({ key: v.string(), count: v.number() })),
-});
 
 export interface RatchetVerdict {
+  /** Findings in a banned category, the lock notwithstanding. */
+  readonly banned: readonly string[];
   /** Keys in the tree and absent from the lock — new coupling. */
   readonly added: readonly string[];
   /** Keys whose count GREW: the same test acquired more of the same coupling. */
   readonly grown: readonly string[];
   /** Locked keys that no longer reproduce — the lock needs rewriting. */
   readonly stale: readonly string[];
+  /** Locked keys that name no plant: a suspect nothing has shown can fail. */
+  readonly unproven: readonly string[];
 }
 
-/** The ratcheted findings, keyed and counted. Takes the findings record rather
- *  than a whole census, so the suite can ratchet a measurement it seeded from
- *  text without a Census — and therefore without touching the tree. */
-export function ratchetCounts(
+/** The findings of `categories`, keyed and counted. Takes the findings record
+ *  rather than a whole census, so the suite can ratchet a measurement it seeded
+ *  from text without a Census — and therefore without touching the tree. */
+function keyCounts(
   findings: Readonly<Record<Category, readonly Finding[]>>,
+  categories: readonly Category[],
 ): Map<string, number> {
   const counts = new Map<string, number>();
 
-  for (const category of RATCHETED) {
+  for (const category of categories) {
     for (const finding of findings[category]) {
       const key = ratchetKey(category, finding);
       counts.set(key, (counts.get(key) ?? 0) + 1);
@@ -2385,13 +2844,19 @@ export function ratchetCounts(
   return counts;
 }
 
+export const ratchetCounts = (findings: Readonly<Record<Category, readonly Finding[]>>): Map<string, number> =>
+  keyCounts(findings, RATCHETED);
+
+/** Every banned finding, by key: what `--lock` refuses over and `--ratchet` fails on. */
+export const bannedKeys = (findings: Readonly<Record<Category, readonly Finding[]>>): string[] =>
+  [...keyCounts(findings, BANNED).keys()].sort();
+
 export function checkRatchet(
   findings: Readonly<Record<Category, readonly Finding[]>>,
   lock: string,
 ): RatchetVerdict {
-  const locked = new Map(
-    v.parse(LockSchema, JSON.parse(lock)).entries.map((entry) => [entry.key, entry.count]),
-  );
+  const entries = parseLock(lock).entries;
+  const locked = new Map(entries.map((entry) => [entry.key, entry.count]));
 
   const today = ratchetCounts(findings);
   const added: string[] = [];
@@ -2405,19 +2870,23 @@ export function checkRatchet(
   }
 
   return {
+    banned: bannedKeys(findings),
     added: added.sort(),
     grown: grown.sort(),
     stale: [...locked.keys()].filter((key) => !today.has(key)).sort(),
+    unproven: entries.filter((entry) => (entry.plants ?? []).length === 0).map((entry) => entry.key).sort(),
   };
 }
 
+/** The lock over `findings`, each entry keeping the plants `plants` holds for its key. */
 export function lockText(
   findings: Readonly<Record<Category, readonly Finding[]>>,
   measured: string,
+  plants: ReadonlyMap<string, readonly Plant[]> = new Map(),
 ): string {
   const entries = [...ratchetCounts(findings)]
     .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([key, count]) => ({ key, count }));
+    .map(([key, count]) => ({ key, count, ...(plants.has(key) && { plants: plants.get(key) }) }));
 
   return `${JSON.stringify({ measured, entries }, null, 2)}\n`;
 }
@@ -2447,7 +2916,8 @@ function assertMeasured(census: Census): string {
     ['runnable suites', census.tree.suites],
     ['tests', census.tree.tests],
     ['runners', census.runnerClaims.length],
-    ['non-public product members', census.bridges.length],
+    ['non-public product members', census.tree.productNonPublic],
+    ['product function bodies', census.tree.productFunctions],
   ];
 
   const empty = counts.filter(([, count]) => count <= 0).map(([label]) => label);
@@ -2464,44 +2934,62 @@ function main(argv: readonly string[]): number {
   const census = runCensus();
   const measured = assertMeasured(census);
 
-  if (argv.includes('--lock')) {
-    writeFileSync(LOCK, lockText(census.findings, `${census.tree.sha}: ${measured}`));
-    console.log(`test-census: locked ${String(ratchetCounts(census.findings).size)} keys — ${measured}`);
+  const banned = bannedKeys(census.findings);
 
-    return 0;
+  for (const key of banned) console.error(`test-census: BANNED   ${key}`);
+
+  if (banned.length > 0) {
+    console.error('\ntest-census: a test that reads product source, restates product code, reaches a '
+      + 'private member or mocks an internal module has no allowance. Rewrite it at a public boundary, '
+      + 'or delete it and state the failure it could not catch; no lock records one.');
   }
 
-  if (argv.includes('--ratchet')) {
-    let lock: string;
-
-    try {
-      lock = readFileSync(LOCK, 'utf8');
-    } catch {
-      console.error('test-census: no lock file. Run `bun scripts/test-census.ts --lock` first.');
-
-      return 1;
-    }
-
+  if (argv.includes('--lock') || argv.includes('--ratchet')) {
+    const lock = readFileSync(LOCK, 'utf8');
     const verdict = checkRatchet(census.findings, lock);
-
-    if (verdict.added.length === 0 && verdict.grown.length === 0 && verdict.stale.length === 0) {
-      console.log(`test-census: ratchet ok — ${measured}`);
-
-      for (const spot of census.blindSpots) console.log(`  blind: ${spot}`);
-
-      return 0;
-    }
 
     for (const key of verdict.added) console.error(`test-census: NEW      ${key}`);
 
     for (const key of verdict.grown) console.error(`test-census: MORE     ${key}`);
 
-    for (const key of verdict.stale) console.error(`test-census: RESOLVED ${key}`);
-    console.error('\ntest-census: a new coupled test is debt this ratchet refuses. Enter through the '
-      + 'public surface instead, or run `bun scripts/test-census.ts --lock` to record a deliberate '
-      + 'exception and say why in the commit.');
+    if (verdict.added.length > 0 || verdict.grown.length > 0) {
+      console.error('\ntest-census: a new tautology suspect is debt no lock records. '
+        + 'Assert a value computed apart from the code under test, or delete the test and state the '
+        + 'failure it could not catch; the lock only shrinks.');
+    }
 
-    return 1;
+    if (banned.length > 0 || verdict.added.length > 0 || verdict.grown.length > 0) return 1;
+
+    if (argv.includes('--lock')) {
+      const plants = new Map(parseLock(lock).entries.map((entry) => [entry.key, entry.plants ?? []]));
+      writeFileSync(LOCK, lockText(census.findings, `${census.tree.sha}: ${measured}`, plants));
+      console.log(`test-census: locked ${String(ratchetCounts(census.findings).size)} keys — ${measured}`);
+
+      return 0;
+    }
+
+    for (const key of verdict.stale) console.error(`test-census: RESOLVED ${key}`);
+
+    if (verdict.stale.length > 0) {
+      console.error('\ntest-census: run `bun scripts/test-census.ts --lock` to drop the resolved keys.');
+
+      return 1;
+    }
+
+    for (const key of verdict.unproven) console.error(`test-census: UNPROVEN ${key}`);
+
+    if (verdict.unproven.length > 0) {
+      console.error('\ntest-census: a locked suspect names the plant that turns it red, or it is fixed; '
+        + '`bun scripts/census-plants.ts` runs every plant.');
+
+      return 1;
+    }
+
+    console.log(`test-census: ratchet ok — ${measured}`);
+
+    for (const spot of census.blindSpots) console.log(`  blind: ${spot}`);
+
+    return 0;
   }
 
   const json = JSON.stringify(census, null, 2);

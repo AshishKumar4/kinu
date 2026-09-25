@@ -1,209 +1,501 @@
 {
-  "measured": "e67977c0f: 1190 test files, 1033 runnable suites, 12988 tests, 43 runners, 35 non-public product members",
+  "measured": "5844ee98e3: 1202 test files, 1043 runnable suites, 13173 tests, 43 runners, 1437 non-public product members, 8550 product function bodies",
   "entries": [
     {
-      "key": "mirror :: packages/cf-backend/tests/unit-codemode-sandbox.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/cf-backend/tests/unit-last-event-id.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/cf-backend/tests/workerd/slate-share-probe.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/cli-backend/tests/local-session.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/cli/tests/project-refs.test.ts :: a new display name leaves the database, the placement and the identity alone :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/core/tests/unit-core-adapter-seams.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/core/tests/unit-craft-executor.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/core/tests/unit-experience.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/core/tests/unit-prompt-template.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/core/tests/unit-run-events.test.ts :: step_finish is the turn loop; every other producer names itself :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/core/tests/unit-usage.test.ts :: an unreported cache write is ABSENT, not the zero the SDK fabricates :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/devbox/tests/decisions.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/devbox/tests/delta-shell-parity.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/devbox/tests/delta-shell-parity.test.ts :: the base stat, the block hashes and the plan agree :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/devbox/tests/restore-after-start.test.ts :: a schedule row naming a callback this class cannot call is dropped at activation :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/devbox/tests/snapshot-chain.test.ts :: (file scope) :: declared mirror",
-      "count": 2
-    },
-    {
-      "key": "mirror :: packages/devbox/tests/support/devbox-harness.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/devbox/tests/support/session-shell.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/devbox/tests/support/strategy-machine.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: scripts/bench.test.ts :: (file scope) :: declared mirror",
-      "count": 2
-    },
-    {
-      "key": "mirror :: scripts/test-census.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: scripts/test-census.test.ts :: RED: the author s own declaration of the mirror :: declared mirror",
-      "count": 1
-    },
-    {
       "key": "tautology_suspect :: packages/cf-backend/tests/unit-copy-label.test.ts :: only a resolved write reads as copied :: expected side computed by the code under test",
-      "count": 3
+      "count": 3,
+      "plants": [
+        {
+          "defect": "a failed write labelled as copied",
+          "file": "packages/cf-backend/src/hooks/use-copy.ts",
+          "edits": [
+            [
+              "if (status === \"failed\") return \"Could not copy\";",
+              "if (status === \"failed\") return \"Copied\";"
+            ]
+          ]
+        },
+        {
+          "defect": "a failed write labelled as if nothing had happened",
+          "file": "packages/cf-backend/src/hooks/use-copy.ts",
+          "edits": [
+            [
+              "if (status === \"failed\") return \"Could not copy\";",
+              "if (status === \"failed\") return idle;"
+            ]
+          ]
+        },
+        {
+          "defect": "a resolved write not acknowledged",
+          "file": "packages/cf-backend/src/hooks/use-copy.ts",
+          "edits": [
+            [
+              "if (status === \"copied\") return \"Copied\";",
+              "if (status === \"copied\") return idle;"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/cf-backend/tests/unit-copy-label.test.ts :: the idle label is the caller's, the outcome labels are not :: expected side computed by the code under test",
-      "count": 2
+      "count": 2,
+      "plants": [
+        {
+          "defect": "the copied label taken from the caller's idle label",
+          "file": "packages/cf-backend/src/hooks/use-copy.ts",
+          "edits": [
+            [
+              "if (status === \"copied\") return \"Copied\";",
+              "if (status === \"copied\") return idle === \"Copy\" ? \"Copied\" : idle;"
+            ]
+          ]
+        },
+        {
+          "defect": "the failed label built from the caller's idle label",
+          "file": "packages/cf-backend/src/hooks/use-copy.ts",
+          "edits": [
+            [
+              "if (status === \"failed\") return \"Could not copy\";",
+              "if (status === \"failed\") return idle === \"Copy\" ? \"Could not copy\" : `${idle} failed`;"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/cf-backend/tests/unit-user-mcp.test.ts :: a bigger window admits more of the same catalog :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "MCP admission sized for one fixed window",
+          "file": "packages/core/src/tools/mcp-surface.ts",
+          "edits": [
+            [
+              "const total = Math.max(0, stepContextLimit(budget) - budget.nativeToolTokens);",
+              "const total = Math.max(0, stepContextLimit({ ...budget, contextWindow: 32_000 }) - budget.nativeToolTokens);"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/src/skills/skills.test.ts :: render order is name order, so the same active set is byte-identical however it was activated :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "skills rendered in activation order",
+          "file": "packages/core/src/skills/render.ts",
+          "edits": [
+            [
+              ".sort((a, b) => compareSkillNames(a.name, b.name))",
+              ".sort(() => 0)"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: a single-byte change in the arguments changes the digest :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "a digest blind to spaces",
+          "file": "packages/core/src/safety/argument-digest.ts",
+          "edits": [
+            [
+              "return sha256Hex(stableStringify(args));",
+              "return sha256Hex(stableStringify(args).replaceAll(' ', ''));"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: changes when the command changes (argument swap) :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "the command left out of the approval digest",
+          "file": "packages/core/src/release/approval-digest.ts",
+          "edits": [
+            [
+              "command: binding.command ?? null,",
+              "command: null,"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: changes when the environment/approval type changes :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "the approval type left out",
+          "file": "packages/core/src/release/approval-digest.ts",
+          "edits": [
+            [
+              "approvalType: binding.approvalType,",
+              "approvalType: 'deploy_production',"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: changes when the patch changes (artifact swap) :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "the patch left out of the approval digest",
+          "file": "packages/core/src/release/approval-digest.ts",
+          "edits": [
+            [
+              "patch: binding.patch ?? null,",
+              "patch: null,"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: null command and null patch are bound distinctly (not conflated) :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "an empty patch conflated with none",
+          "file": "packages/core/src/release/approval-digest.ts",
+          "edits": [
+            [
+              "patch: binding.patch ?? null,",
+              "patch: binding.patch || null,"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-bench-longhorizon.test.ts :: a different seed generates a different corpus and different answers :: expected side computed by the code under test",
-      "count": 2
+      "count": 2,
+      "plants": [
+        {
+          "defect": "the corpus ignoring its seed",
+          "file": "packages/core/src/bench/longhorizon.ts",
+          "edits": [
+            [
+              "export function generateLongHorizonFiles(spec: LongHorizonSpec): LongHorizonFile[] {",
+              "export function generateLongHorizonFiles(input: LongHorizonSpec): LongHorizonFile[] {\n  const spec = { ...input, seed: 0 };"
+            ]
+          ]
+        },
+        {
+          "defect": "the questions ignoring the seed",
+          "file": "packages/core/src/bench/longhorizon.ts",
+          "edits": [
+            [
+              "  const entries = generateLongHorizonEntries(spec);\n  const component = pick(COMPONENTS, unitHash(`${spec.seed}:question:component`));",
+              "  const entries = generateLongHorizonEntries({ ...spec, seed: 0 });\n  const component = pick(COMPONENTS, unitHash('0:question:component'));"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-bench-longhorizon.test.ts :: the same spec generates byte-identical files :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "a clock read in the generated corpus",
+          "file": "packages/core/src/bench/longhorizon.ts",
+          "edits": [
+            [
+              "text: chunk.map((e) => renderLongHorizonEntry(spec, e)).join('\\n'),",
+              "text: chunk.map((e) => renderLongHorizonEntry(spec, e)).join('\\n') + String(performance.now()),"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-bench-report.test.ts :: changes when the budget changes — two envelopes are not comparable :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "the token budget left out of the config hash",
+          "file": "packages/core/src/bench/report.ts",
+          "edits": [
+            [
+              "config.corpus, config.budget.wallClockMs, config.budget.maxTokens,",
+              "config.corpus, config.budget.wallClockMs,"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-bench-report.test.ts :: changes when the corpus manifest changes :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "the manifest left out",
+          "file": "packages/core/src/bench/report.ts",
+          "edits": [
+            [
+              "config.seed, config.variantA, config.variantB, config.repeats, config.manifestHash,",
+              "config.seed, config.variantA, config.variantB, config.repeats,"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-bench-report.test.ts :: changes when the repeat count changes — pass^3 is not pass^1 :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "the repeat count left out",
+          "file": "packages/core/src/bench/report.ts",
+          "edits": [
+            [
+              "config.seed, config.variantA, config.variantB, config.repeats, config.manifestHash,",
+              "config.seed, config.variantA, config.variantB, config.manifestHash,"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-calibration.test.ts :: is deterministic, and an empty ledger draws nothing :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "an unseeded shuffle",
+          "file": "packages/core/src/evolution/calibration.ts",
+          "edits": [
+            [
+              "return shuffled(drawn, SHUFFLE_SEED).map(labelingItem);",
+              "return shuffled(drawn, Math.floor(Math.random() * 2 ** 31)).map(labelingItem);"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-diversity.test.ts :: the first six branches read exactly as they always did :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "a wide wave rewording the first six angles",
+          "file": "packages/core/src/mcts/diversity.ts",
+          "edits": [
+            [
+              "if (i < DIVERSITY_APPROACHES.length) return approach;",
+              "if (i < DIVERSITY_APPROACHES.length && n <= DIVERSITY_APPROACHES.length) return approach;"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: different bodies → different keys :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "the webhook key blind to the body",
+          "file": "packages/core/src/events/hub/dedupe.ts",
+          "edits": [
+            [
+              "const bodyHash = sha256Hex(stableStringify(decodeJsonValue({ value: p.body })), 24);",
+              "const bodyHash = sha256Hex(stableStringify(decodeJsonValue({ value: p.webhook_id })), 24);"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: different time buckets → different keys :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "the webhook key blind to time",
+          "file": "packages/core/src/events/hub/dedupe.ts",
+          "edits": [
+            [
+              "return `webhook:${p.webhook_id}:${bodyHash}:${bucket}`;",
+              "return `webhook:${p.webhook_id}:${bodyHash}`;"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: different webhook_id → different keys even for same body :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "the webhook key blind to its hook",
+          "file": "packages/core/src/events/hub/dedupe.ts",
+          "edits": [
+            [
+              "return `webhook:${p.webhook_id}:${bodyHash}:${bucket}`;",
+              "return `webhook:${bodyHash}:${bucket}`;"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-tool-call-id.test.ts :: the same native id in two responses cannot produce the same key :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "native ids keyed without their response",
+          "file": "packages/core/src/providers/tool-call-id.ts",
+          "edits": [
+            [
+              "return portable ? `${scope}-n-${trimmed}` : `${scope}-i-${index + 1}`;",
+              "return portable ? `n-${trimmed}` : `${scope}-i-${index + 1}`;"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-turn-outcomes.test.ts :: an execution verdict never reaches a user verdict's poles :: expected side computed by the code under test",
-      "count": 2
+      "count": 2,
+      "plants": [
+        {
+          "defect": "a tool run priced at a user's approval",
+          "file": "packages/core/src/evolution/outcomes.ts",
+          "edits": [
+            [
+              "const EXECUTION_QUALITY = { accepted: 0.7, negative: 0.3 } as const;",
+              "const EXECUTION_QUALITY = { accepted: 0.9, negative: 0.3 } as const;"
+            ]
+          ]
+        },
+        {
+          "defect": "a failed tool run priced at a user's correction",
+          "file": "packages/core/src/evolution/outcomes.ts",
+          "edits": [
+            [
+              "const EXECUTION_QUALITY = { accepted: 0.7, negative: 0.3 } as const;",
+              "const EXECUTION_QUALITY = { accepted: 0.7, negative: 0.2 } as const;"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-turn-outcomes.test.ts :: outcomeQuality ties to the explicit-feedback constants :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "frustration priced above a correction",
+          "file": "packages/core/src/evolution/outcomes.ts",
+          "edits": [
+            [
+              "if (outcome === 'frustrated') return 0.1;",
+              "if (outcome === 'frustrated') return 0.25;"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-volatile-context.test.ts :: nothing in the block is clock-derived: the same state fingerprints identically :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "a clock read in the dynamic block",
+          "file": "packages/core/src/prompting/volatile-context.ts",
+          "edits": [
+            [
+              "  return dynamicBody([...sections.values()].map((section) => section.text));",
+              "  return dynamicBody([...sections.values()].map((section) => section.text).concat(String(performance.now())));"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-volatile-context.test.ts :: two consecutive builds with unchanged state are byte-identical :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "a clock read in the system prefix",
+          "file": "packages/core/src/prompt.ts",
+          "edits": [
+            [
+              "    renderRuntimeContext(opts),\n  ].filter(Boolean).join",
+              "    renderRuntimeContext(opts),\n    String(performance.now()),\n  ].filter(Boolean).join"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: scripts/bench-r2-workspace.test.ts :: the plan is a pure function of the run id :: expected side computed by the code under test",
-      "count": 2
+      "count": 2,
+      "plants": [
+        {
+          "defect": "a clock read in the bench plan",
+          "file": "scripts/fixtures/r2-bench/layouts.ts",
+          "edits": [
+            [
+              "root: `${NATIVE_ROOT}/bench-${runId}`,",
+              "root: `${NATIVE_ROOT}/bench-${runId}-${performance.now()}`,"
+            ]
+          ]
+        },
+        {
+          "defect": "the plan ignoring its run id",
+          "file": "scripts/fixtures/r2-bench/layouts.ts",
+          "edits": [
+            [
+              "  const prefix = mountPrefixFor(runId);\n",
+              "  const prefix = mountPrefixFor('run');\n"
+            ],
+            [
+              "root: `${NATIVE_ROOT}/bench-${runId}`,",
+              "root: `${NATIVE_ROOT}/bench`,"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: scripts/bench.test.ts :: regenerating a task at a different size changes the manifest :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "the manifest blind to check arguments",
+          "file": "packages/core/src/bench/split.ts",
+          "edits": [
+            [
+              "task.checks.map((c) => [c.id, [...c.command], c.cwd ?? '', c.timeoutMs ?? 0]),",
+              "task.checks.map((c) => [c.id, c.cwd ?? '', c.timeoutMs ?? 0]),"
+            ]
+          ]
+        }
+      ]
     },
     {
       "key": "tautology_suspect :: scripts/infra.test.ts :: the confirmation names the worker :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: tests/live/evolution-proof.test.ts :: (file scope) :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: tests/live/evolution-proof.test.ts :: the plaintext encodes back to the ciphertext, and Atbash is its own inverse :: expected side computed by the code under test",
-      "count": 1
+      "count": 1,
+      "plants": [
+        {
+          "defect": "a fork's teardown phrase that also destroys the base worker",
+          "file": "scripts/infra-teardown.ts",
+          "edits": [
+            [
+              "return `destroy ${workerName}`;",
+              "return `destroy ${workerName.split('-')[0]}`;"
+            ]
+          ]
+        }
+      ]
     }
   ]
 }

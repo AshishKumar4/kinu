@@ -28,12 +28,15 @@
 // measures while it runs.
 
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import {
-  BLIND_SPOTS, CATEGORIES, type Category, type CensusInputs, checkRatchet, type Finding,
-  isCensusFile, lockText, measureFile, mergeFindings, noFindings, nonPublicMembers, ratchetKey,
-  runnerClaims, runCensus,
+  BLIND_SPOTS, bannedKeys, bridgesOf, CATEGORIES, type Category, type CensusInputs, checkRatchet,
+  classNonPublicMembers, type Finding, gateTests, isCensusFile, lockText, measureFile, mergeFindings,
+  noFindings, nonPublicMembers, productUnitsOf, ratchetCounts, ratchetKey, runnerClaims, runCensus,
 } from './test-census';
+import { parseLock, type Plant } from './census-plants';
 import { isParseable, isRunnableSuite, isTestFile, trackedFiles } from './sources';
 
 /* ── The seam ──────────────────────────────────────────────────────────── */
@@ -42,16 +45,49 @@ const PROBE = 'packages/probe/tests/unit-probe.test.ts';
 
 const MODULE = 'packages/probe/src/budget.ts';
 
-/** The module under test, as text. Its private members and its named constants
- *  are what the mirror and private-reach classifiers resolve against. */
+/** The module under test, as text. Its private members, its named constants and
+ *  its function bodies are what the mirror and private-reach classifiers resolve
+ *  against. */
 const MODULE_TEXT = `
 export const PROMPT_BUDGET = 4096;
 export const MARKER = 'kinu-prompt-marker';
 export const clampToBudget = (text: string): string => text.slice(0, PROMPT_BUDGET);
+export function pendingIds(ids: readonly string[], done: ReadonlySet<string>): string[] {
+  const pending: string[] = [];
+
+  for (const id of ids) {
+    if (done.has(id)) continue;
+    pending.push(id.trim().toLowerCase());
+  }
+
+  return pending;
+}
 export class Orchestrator {
   private settleTurn(id: string): void { void id; }
   protected wakeAt = 1_800_000;
+  protected armWake(): void { this.wakeAt += 1; }
   publicRead(): number { return this.wakeAt; }
+}
+`;
+
+const HELPER = 'packages/probe/tests/helpers/harness.ts';
+
+/** A ladder gate program's own test, whose subject is the tree. */
+const GATE_TEST = 'scripts/probe-gate.test.ts';
+
+/** A test helper over the module's class, one member per bridge shape. The
+ *  detector reads it the way it reads every helper in the tree. */
+const HELPER_TEXT = `
+import { Orchestrator } from '../../src/budget';
+export class ProbeHarness extends Orchestrator {
+  harnessSettle(id: string): void { this.settleTurn(id); }
+  observeWake(): number { return this.wakeAt; }
+  get observedWake(): number { return this.wakeAt; }
+  observeThroughOwn(): number { return this.observeWake(); }
+  readPublic(): number { return this.publicRead(); }
+  override publicRead(): number { return super.publicRead(); }
+  override armWake(): void { super.armWake(); }
+  protected ownHelper(): number { return this.wakeAt; }
 }
 `;
 
@@ -59,19 +95,16 @@ export class Orchestrator {
  *  measured against a module a reader can hold in their head. */
 function probeInputs(): CensusInputs {
   const sources = new Map([[MODULE, MODULE_TEXT]]);
+  const bridges = bridgesOf(HELPER, HELPER_TEXT, classNonPublicMembers(sources));
 
   return {
+    gateTests: new Set([GATE_TEST]),
     sources,
     nonPublic: nonPublicMembers(sources),
     generators: new Map([['prompt-golden.json', 'scripts/prompt-golden.ts']]),
-    bridges: new Map([['harnessSettle', {
-      name: 'harnessSettle',
-      file: 'packages/probe/tests/helpers/harness.ts',
-      line: 12,
-      forwards: ['settleTurn'],
-      nonPublic: ['settleTurn'],
-    }]]),
-    tracked: new Set([MODULE, PROBE]),
+    bridges: new Map(bridges.map((bridge) => [bridge.name, bridge])),
+    productUnits: productUnitsOf(sources),
+    tracked: new Set([MODULE, PROBE, HELPER]),
     scope: '@kinu.run',
   };
 }
@@ -82,6 +115,11 @@ const inputs = probeInputs();
 function found(category: Category, body: string): readonly string[] {
   return measureFile(PROBE, body, inputs).findings[category]
     .map((finding) => `${finding.what}`);
+}
+
+/** The source_text findings that are assertions, leaving the reads aside. */
+function sourceAssertions(body: string): readonly string[] {
+  return found('source_text', body).filter((what) => what.startsWith('expect('));
 }
 
 /** One fixture for a category: the shape, and exactly what the census must say
@@ -105,6 +143,23 @@ function describeCategory(category: Category, cases: readonly CategoryCase[]): v
 /* ── 1 + 2: red on the shape, green on its corrected form ─────────────── */
 
 describe('source_text', () => {
+  test('a gate program\'s own test reads the tree it governs, so its reads are its input', () => {
+    const body = `
+      import { readFileSync } from 'node:fs';
+      test('the gate sees the wake', () => {
+        expect(readFileSync('packages/probe/src/budget.ts', 'utf8')).toContain('this.wakeAt');
+      });
+    `;
+
+    expect(measureFile(GATE_TEST, body, inputs).findings.source_text).toEqual([]);
+    expect(measureFile(GATE_TEST, body, { ...inputs, gateTests: new Set() }).findings.source_text)
+      .not.toEqual([]);
+  });
+
+  test('the gate tests are the `scripts/` suites a ladder row runs', () => {
+    expect(gateTests(runnerClaims(trackedFiles()))).toContain('scripts/dead-code.test.ts');
+  });
+
   test('RED: an assertion over a member body read out of the module', () => {
     expect(found('source_text', `
       import { readFileSync } from 'node:fs';
@@ -118,6 +173,144 @@ describe('source_text', () => {
       'memberBody() over source text',
       'expect(<source text>).toContain',
     ]);
+  });
+
+  test('RED: a read whose path is built from segments, none of which names the file', () => {
+    expect(found('source_text', `
+      import { readFileSync } from 'node:fs';
+      import { join } from 'node:path';
+      const budget = readFileSync(join(import.meta.dir, '..', 'src', 'budget.ts'), 'utf8');
+      test('the budget is not restated', () => {
+        expect(budget).not.toContain('8192');
+      });
+    `)).toEqual(['reads a source file', 'expect(<source text>).not.toContain']);
+  });
+
+  test('RED: a reader helper built on a root the suite climbs to', () => {
+    expect(found('source_text', `
+      import { readFileSync } from 'node:fs';
+      import { join } from 'node:path';
+      const root = join(import.meta.dir, '..');
+      function source(path: string): string {
+        return readFileSync(join(root, path), 'utf8');
+      }
+      test('the budget is not restated', () => {
+        expect(source('src/budget.ts')).not.toContain('8192');
+      });
+    `)).toEqual(['reads a source file', 'expect(<source text>).not.toContain']);
+  });
+
+  test('a mutation harness executes the copy it writes: its read and the mutant\'s behaviour are not text', () => {
+    expect(found('source_text', `
+      import { readFileSync, writeFileSync } from 'node:fs';
+      async function mutate(find: string, replace: string) {
+        const source = readFileSync('../src/budget.ts', 'utf8');
+        const path = '/tmp/budget.mutant.ts';
+        writeFileSync(path, source.replace(find, replace));
+        return await import(path);
+      }
+      test('RED: without the wake the budget never settles', async () => {
+        const mutant = await mutate('this.wakeAt', 'null');
+        expect(mutant.settle()).toBe('open');
+      });
+    `)).toEqual([]);
+  });
+
+  test('RED: a harness that also hands the text back is a reader', () => {
+    expect(found('source_text', `
+      import { readFileSync, writeFileSync } from 'node:fs';
+      function copy() {
+        const source = readFileSync('../src/budget.ts', 'utf8');
+        writeFileSync('/tmp/budget.copy.ts', source);
+        return source;
+      }
+      test('the copy keeps the wake', () => {
+        expect(copy()).toContain('this.wakeAt');
+      });
+    `)).toEqual(['reads a source file', 'expect(<source text>).toContain']);
+  });
+
+  test('RED: a root spelled as a URL, read through a template', () => {
+    expect(found('source_text', `
+      import { readFileSync } from 'node:fs';
+      const root = new URL('../', import.meta.url).pathname;
+      const read = (path: string): string => readFileSync(\`\${root}\${path}\`, 'utf8');
+      test('the budget is exported', () => {
+        expect(read('src/budget.ts')).toContain('PROMPT_BUDGET');
+      });
+    `)).toEqual(['reads a source file', 'expect(<source text>).toContain']);
+  });
+
+  test('SILENT: a file under a known root that is not product source', () => {
+    expect(found('source_text', `
+      import { readFileSync } from 'node:fs';
+      import { join } from 'node:path';
+      const root = join(import.meta.dir, '..');
+      test('the package names itself', () => {
+        expect(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).name).toBe('@kinu.run/probe');
+      });
+    `)).toEqual([]);
+  });
+
+  test('RED: an assertion over a slice of the file text', () => {
+    expect(found('source_text', `
+      import { readFileSync } from 'node:fs';
+      const budget = readFileSync('../src/budget.ts', 'utf8');
+      test('the settle runs before the wake', () => {
+        const settle = budget.slice(budget.indexOf('settleTurn('));
+        expect(settle.indexOf('wakeAt')).toBeGreaterThan(-1);
+      });
+    `)).toEqual(['reads a source file', 'expect(<source text>).toBeGreaterThan']);
+  });
+
+  test('RED: a local tree walker handed the product source directory', () => {
+    expect(found('source_text', `
+      import { readdirSync, readFileSync } from 'node:fs';
+      import { join } from 'node:path';
+      function mentions(needle: string): string[] {
+        const hits: string[] = [];
+        const scan = (dir: string) => {
+          for (const entry of readdirSync(dir)) {
+            if (readFileSync(join(dir, entry), 'utf8').includes(needle)) hits.push(entry);
+          }
+        };
+        scan(join(import.meta.dir, '..', 'src'));
+        return hits;
+      }
+      test('one module names the budget', () => {
+        expect(mentions('PROMPT_BUDGET')).toEqual(['budget.ts']);
+      });
+    `)).toEqual(['reads a source file', 'expect(<source text>).toEqual']);
+  });
+
+  test('SILENT: a listing of a directory the test built for itself', () => {
+    expect(found('source_text', `
+      import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+      import { join } from 'node:path';
+      declare const exported: string;
+      test('the export writes one file', () => {
+        writeFileSync(join(exported, 'src', 'budget.ts'), 'x');
+        const names = readdirSync(join(exported, 'src'));
+        expect(readFileSync(join(exported, 'src', names[0]), 'utf8')).toBe('x');
+      });
+    `)).toEqual([]);
+  });
+
+  test('SILENT: a name one test binds to a read says nothing about another test', () => {
+    // Resolved per binding: `source` is a file read in one test and a template in the next.
+    expect(sourceAssertions(`
+      import { readFileSync } from 'node:fs';
+      import { compile } from '../src/budget';
+      test('the builder renders through the template', () => {
+        const source = readFileSync('../src/budget.ts', 'utf8');
+        expect(source.length).toBeGreaterThan(0);
+      });
+      test('a template renders its slots', () => {
+        const source = 'A {{x}}';
+        const section = compile(source);
+        expect(section.render({ x: 'y' })).toBe('A y');
+      });
+    `)).toEqual(['expect(<source text>).toBeGreaterThan']);
   });
 
   test('GREEN: the same invariant asserted through the value the code produces', () => {
@@ -145,7 +338,7 @@ describe('source_text', () => {
   test('SILENT: a method name that a source slice elsewhere also binds', () => {
     // `beforeTurn` is a source-slice variable in one test and a METHOD NAME in
     // another; the member property is a name, not a read of that binding.
-    expect(found('source_text', `
+    expect(sourceAssertions(`
       import { readFileSync } from 'node:fs';
       import { memberBody } from '@kinu.run/test-utils';
       import { Orchestrator } from '@kinu.run/probe/budget';
@@ -158,7 +351,7 @@ describe('source_text', () => {
         const agent = new Orchestrator();
         await expect(agent.beforeTurn({})).rejects.toMatchObject({ code: 'denied' });
       });
-    `).filter((what) => what.startsWith('expect('))).toEqual(['expect(<source text>).toContain']);
+    `)).toEqual(['expect(<source text>).toContain']);
   });
 
   test('SILENT: a workspace file read inside the system under test', () => {
@@ -183,11 +376,41 @@ describe('mirror', () => {
     `)).toEqual(['mirrored constant']);
   });
 
-  test('RED: the author s own declaration of the mirror', () => {
+  test('RED: a test function restating a product function with its names changed', () => {
+    expect(found('mirror', `
+      function stillOpen(items: readonly string[], finished: ReadonlySet<string>): string[] {
+        const open: string[] = [];
+
+        for (const item of items) {
+          if (finished.has(item)) continue;
+          open.push(item.trim().toLowerCase());
+        }
+
+        return open;
+      }
+      test('a settled id is not pending', () => {
+        expect(stillOpen(['a', 'b'], new Set(['a']))).toEqual(['b']);
+      });
+    `)).toEqual(['mirrored function']);
+  });
+
+  test('GREEN: the product function called rather than restated', () => {
+    expect(found('mirror', `
+      import { pendingIds } from '../src/budget';
+      test('a settled id is not pending', () => {
+        expect(pendingIds([' A ', 'b'], new Set(['b']))).toEqual(['a']);
+      });
+    `)).toEqual([]);
+  });
+
+  test('SILENT: a comment that says "mirrors" is prose, not a copy', () => {
+    // The axis this replaced was a regex over comments: about half its 31 hits on
+    // b2c60d09f were prose ("never mirrored into config.json"), and rewording a
+    // comment cleared a hit without changing any code.
     expect(found('mirror', `
       // Mirrors the private 4096 budget; drift fails these tests.
       test('clamped', () => { expect(1).toBe(1); });
-    `)).toEqual(['declared mirror']);
+    `)).toEqual([]);
   });
 
   test('RED: a test-local reimplementation of the module s one-liner', () => {
@@ -233,7 +456,7 @@ describeCategory('private_reach', [
     expected: ['bracket reach to a non-public member'],
   },
   {
-    name: 'RED: a harness bridge that forwards to a protected member',
+    name: 'RED: a harness bridge that forwards to a private member',
     source: `
       import { harness } from './helpers/harness';
       test('a settled turn clears its checkpoint', async () => {
@@ -243,6 +466,50 @@ describeCategory('private_reach', [
       });
     `,
     expected: ['harness bridge to a non-public member'],
+  },
+  {
+    name: 'RED: the same bridge under any other name, called or read as a getter',
+    source: `
+      import { harness } from './helpers/harness';
+      test('the wake moves', () => {
+        const agent = harness();
+        expect(agent.observeWake()).toBe(agent.observedWake);
+      });
+    `,
+    expected: ['harness bridge to a non-public member', 'harness bridge to a non-public member'],
+  },
+  {
+    name: 'RED: a bridge that reaches through another member of its own class',
+    source: `
+      import { harness } from './helpers/harness';
+      test('the wake moves', () => {
+        expect(harness().observeThroughOwn()).toBe(1_800_000);
+      });
+    `,
+    expected: ['harness bridge to a non-public member'],
+  },
+  {
+    name: 'RED: an override that widens a protected member to public',
+    source: `
+      import { harness } from './helpers/harness';
+      test('arming moves the wake', () => {
+        const agent = harness();
+        agent.armWake();
+        expect(agent.publicRead()).toBe(1_800_001);
+      });
+    `,
+    expected: ['harness bridge to a non-public member'],
+  },
+  {
+    name: 'SILENT: a helper accessor over the public surface, and a public override',
+    source: `
+      import { harness } from './helpers/harness';
+      test('the wake is readable', () => {
+        const agent = harness();
+        expect(agent.readPublic()).toBe(agent.publicRead());
+      });
+    `,
+    expected: [],
   },
   {
     name: 'GREEN: the same state read through the public method',
@@ -490,6 +757,8 @@ describe('kind and test counting', () => {
 /* ── 3: the ratchet, red in both directions ───────────────────────────── */
 
 describe('the ratchet', () => {
+  const PLANT: Plant = { defect: 'the clamp keeps the whole prompt', file: MODULE, edits: [['text.slice(0, PROMPT_BUDGET)', 'text']] };
+
   const clean = measureFile(PROBE, `
     import { clampToBudget } from '../src/budget';
     test('a long prompt is cut', () => {
@@ -501,26 +770,32 @@ describe('the ratchet', () => {
 
   test('a clean tree against its own lock is silent', () => {
     const verdict = checkRatchet(clean, lock);
-    expect(verdict).toEqual({ added: [], grown: [], stale: [] });
+    expect(verdict).toEqual({ banned: [], added: [], grown: [], stale: [], unproven: [] });
   });
 
-  test('RED: an injected mirror test fails the ratchet BY NAME', () => {
-    const injected = measureFile(PROBE, `
-      import { clampToBudget } from '../src/budget';
-      const PROMPT_BUDGET = 4096;
-      test('a long prompt is cut', () => {
-        expect(clampToBudget('x'.repeat(9000)).length).toBeLessThan(9000);
-      });
-      test('the budget is 4096', () => {
-        expect(PROMPT_BUDGET).toBe(4096);
-      });
-    `, inputs).findings;
+  const reaching = measureFile(PROBE, `
+    import { Orchestrator } from '../src/budget';
+    test('settles', () => {
+      new Orchestrator()['settleTurn']('a');
+      expect(1).toBe(1);
+    });
+  `, inputs).findings;
 
-    const verdict = checkRatchet(injected, lock);
-    expect(verdict.added).toHaveLength(1);
-    expect(verdict.added[0]).toContain('mirror ::');
-    expect(verdict.added[0]).toContain(PROBE);
-    expect(verdict.stale).toEqual([]);
+  test('RED: a banned finding fails BY NAME, and no lock can hold it', () => {
+    const verdict = checkRatchet(reaching, lockText(reaching, 'probe'));
+    expect(verdict.banned).toHaveLength(1);
+    expect(verdict.banned[0]).toContain('private_reach ::');
+    expect(verdict.banned[0]).toContain(PROBE);
+    expect(lockText(reaching, 'probe')).not.toContain('private_reach ::');
+  });
+
+  test('RED: a lock written before the ban does not excuse a finding it lists', () => {
+    const [key = ''] = bannedKeys(reaching);
+    const old = JSON.stringify({ measured: 'before the ban', entries: [{ key, count: 1 }] });
+    const verdict = checkRatchet(reaching, old);
+    expect(verdict.banned).toEqual([key]);
+    // The old entry goes stale, so the next lock drops it.
+    expect(verdict.stale).toEqual([key]);
   });
 
   test('GREEN: a new PUBLIC-SURFACE test passes the ratchet', () => {
@@ -541,23 +816,38 @@ describe('the ratchet', () => {
     expect(verdict.stale).toEqual([]);
   });
 
-  test('RED: a second coupling inside the SAME test is a growth, not a silence', () => {
-    const once = measureFile(PROBE, `
-      import { Orchestrator } from '../src/budget';
-      test('settles', () => {
-        new Orchestrator()['settleTurn']('a');
-        expect(1).toBe(1);
+  const selfCompared = (checks: readonly string[]): string => `
+    import { clampToBudget } from '../src/budget';
+    test('the clamp is deterministic', () => {
+      ${checks.join('\n      ')}
+    });
+  `;
+
+  test('RED: an injected tautology fails the ratchet BY NAME', () => {
+    const injected = measureFile(PROBE, `
+      import { clampToBudget } from '../src/budget';
+      test('a long prompt is cut', () => {
+        expect(clampToBudget('x'.repeat(9000)).length).toBeLessThan(9000);
+      });
+      test('the clamp is deterministic', () => {
+        expect(clampToBudget('abc')).toBe(clampToBudget('abc'));
       });
     `, inputs).findings;
 
-    const twice = measureFile(PROBE, `
-      import { Orchestrator } from '../src/budget';
-      test('settles', () => {
-        new Orchestrator()['settleTurn']('a');
-        new Orchestrator()['settleTurn']('b');
-        expect(1).toBe(1);
-      });
-    `, inputs).findings;
+    const verdict = checkRatchet(injected, lock);
+    expect(verdict.added).toHaveLength(1);
+    expect(verdict.added[0]).toContain('tautology_suspect ::');
+    expect(verdict.added[0]).toContain(PROBE);
+    expect(verdict.stale).toEqual([]);
+  });
+
+  test('RED: a second self-comparison inside the SAME test is a growth, not a silence', () => {
+    const once = measureFile(PROBE, selfCompared(["expect(clampToBudget('a')).toBe(clampToBudget('a'));"]), inputs).findings;
+
+    const twice = measureFile(PROBE, selfCompared([
+      "expect(clampToBudget('a')).toBe(clampToBudget('a'));",
+      "expect(clampToBudget('b')).toBe(clampToBudget('b'));",
+    ]), inputs).findings;
 
     const verdict = checkRatchet(twice, lockText(once, 'probe'));
     expect(verdict.added).toEqual([]);
@@ -565,41 +855,33 @@ describe('the ratchet', () => {
     expect(verdict.grown[0]).toContain('(1 -> 2)');
   });
 
-  test('a removed coupling goes STALE rather than passing quietly', () => {
-    const before = measureFile(PROBE, `
-      import { Orchestrator } from '../src/budget';
-      test('settles', () => {
-        new Orchestrator()['settleTurn']('a');
-        expect(1).toBe(1);
-      });
-    `, inputs).findings;
-
-    const after = measureFile(PROBE, `
-      import { Orchestrator } from '../src/budget';
-      test('settles', () => {
-        expect(new Orchestrator().publicRead()).toBe(1_800_000);
-      });
-    `, inputs).findings;
+  test('a removed suspect goes STALE rather than passing quietly', () => {
+    const before = measureFile(PROBE, selfCompared(["expect(clampToBudget('a')).toBe(clampToBudget('a'));"]), inputs).findings;
+    const after = measureFile(PROBE, selfCompared(["expect(clampToBudget('a')).toBe('a');"]), inputs).findings;
 
     const verdict = checkRatchet(after, lockText(before, 'probe'));
     expect(verdict.stale).toHaveLength(1);
-    expect(verdict.stale[0]).toContain('private_reach ::');
+    expect(verdict.stale[0]).toContain('tautology_suspect ::');
   });
 
   test('the key survives a line move, because it carries the test title', () => {
-    const body = (padding: string): string => `
-      ${padding}
-      import { Orchestrator } from '../src/budget';
-      test('settles', () => {
-        new Orchestrator()['settleTurn']('a');
-        expect(1).toBe(1);
-      });
-    `;
+    const body = selfCompared(["expect(clampToBudget('a')).toBe(clampToBudget('a'));"]);
+    const top = measureFile(PROBE, body, inputs).findings;
+    const moved = measureFile(PROBE, `\n\n\n// twenty lines lower\n\n\n${body}`, inputs).findings;
+    const plants = new Map([...ratchetCounts(top).keys()].map((key) => [key, [PLANT]]));
+    expect(checkRatchet(moved, lockText(top, 'probe', plants)))
+      .toEqual({ banned: [], added: [], grown: [], stale: [], unproven: [] });
+  });
 
-    const top = measureFile(PROBE, body(''), inputs).findings;
-    const moved = measureFile(PROBE, body('\n\n\n// twenty lines lower\n\n\n'), inputs).findings;
-    expect(checkRatchet(moved, lockText(top, 'probe')))
-      .toEqual({ added: [], grown: [], stale: [] });
+  test('RED: a locked suspect that names no plant is unproven, and a relock keeps the plants it had', () => {
+    const suspect = measureFile(PROBE, selfCompared(["expect(clampToBudget('a')).toBe(clampToBudget('a'));"]), inputs).findings;
+    const [key = ''] = ratchetCounts(suspect).keys();
+    expect(checkRatchet(suspect, lockText(suspect, 'probe')).unproven).toEqual([key]);
+
+    const relocked = lockText(suspect, 'relocked', new Map(parseLock(lockText(suspect, 'probe', new Map([[key, [PLANT]]])))
+      .entries.map((entry) => [entry.key, entry.plants ?? []])));
+
+    expect(parseLock(relocked).entries).toEqual([{ key, count: 1, plants: [PLANT] }]);
   });
 });
 
@@ -630,7 +912,8 @@ describe('this repository', () => {
     expect(census.tree.files).toBeGreaterThan(700);
     expect(census.tree.tests).toBeGreaterThan(9000);
     expect(census.runnerClaims.length).toBeGreaterThan(20);
-    expect(census.bridges.length).toBeGreaterThan(10);
+    expect(census.tree.productNonPublic).toBeGreaterThan(100);
+    expect(census.tree.productFunctions).toBeGreaterThan(1000);
     expect(census.publicSurface.length).toBeGreaterThan(100);
   });
 
@@ -711,10 +994,10 @@ describe('this repository', () => {
     }
   });
 
-  test('the ratchet over the live tree is stable across two runs', () => {
-    const lock = lockText(census.findings, 'live');
+  test('the live tree holds no banned finding, and the committed lock is exact and proven', () => {
+    const lock = readFileSync(join(import.meta.dir, 'test-census.lock.json'), 'utf8');
     expect(checkRatchet(census.findings, lock))
-      .toEqual({ added: [], grown: [], stale: [] });
+      .toEqual({ banned: [], added: [], grown: [], stale: [], unproven: [] });
   });
 
   test('it prints its blind spots on the success path', () => {

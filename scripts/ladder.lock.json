@@ -1,5 +1,5 @@
 {
-  "reason": "worker-bundle-reach.test.ts joins the Gate self-tests row beside the advisory gate's self-tests; the row stays 24 s",
+  "reason": "the census plant proofs join the push tier: packages/ at 9.6 s and scripts/ at 5.0 s (bun scripts/census-plants.ts, measured 2026-09-25)",
   "tiers": {
     "commit": {
       "seconds": 91.47,
@@ -43,7 +43,7 @@
       }
     },
     "push": {
-      "seconds": 436.87,
+      "seconds": 451.47,
       "measuredAt": "2026-09-25",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
@@ -75,6 +75,8 @@
         "bun run gate:core-layering": 1,
         "bun run gate:vendor-schema": 1,
         "bun scripts/test-census.ts --ratchet": 4.1,
+        "bun scripts/census-plants.ts packages/": 9.6,
+        "bun scripts/census-plants.ts scripts/": 5,
         "bun run gate:complexity": 2.5,
         "bun run gate:silent-drop": 1,
         "bun run gate:test-clocks": 1.5,
