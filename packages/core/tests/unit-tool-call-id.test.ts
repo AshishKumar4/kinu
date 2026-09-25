@@ -56,8 +56,7 @@ describe('toolCallIdFor', () => {
     const keys = natives.map((native, index) => toolCallIdFor({ scope: FIRST, native, index }));
     expect(new Set(keys).size).toBe(keys.length);
     // Two unnamed calls in one response are told apart by position alone.
-    expect(toolCallIdFor({ scope: FIRST, index: 0 }))
-      .not.toBe(toolCallIdFor({ scope: FIRST, index: 1 }));
+    expect(toolCallIdFor({ scope: FIRST, index: 1 })).toBe(`${FIRST}-i-2`);
   });
 
   test('every key is portable, whatever the native id carried', () => {

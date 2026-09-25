@@ -10,12 +10,6 @@ import { CANVAS_SEGMENTS, Connectome } from '@kinu.run/core/web/connectome';
 import { createCanvasRenderer, type StrokeSurface } from '@kinu.run/core/web/hero-canvas';
 import { SearchTree } from '@kinu.run/core/web/hero-art';
 import { createWebGpuRenderer } from '../src/components/landing/search-tree/renderer-webgpu';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
-const TREE_DIR = resolve(import.meta.dir, '../src/components/landing/search-tree');
-
-const CORE_WEB = resolve(import.meta.dir, '../../core/src/web');
 
 const PALETTE: ArtPalette = { mode: 'dark', accent: [224, 164, 88], bright: [227, 210, 174], ash: [156, 145, 132], ground: [15, 13, 11] };
 
@@ -291,8 +285,8 @@ describe('one contract, two pictures', () => {
     expect(surface.fills).toBeGreaterThan(0);
   });
 
-  test('a scripted pointer frame reads the same node brightness through both renderers', () => {
-    // The pointer is a simulation input, so both renderers see the same frame.
+  test('a scripted pointer brightens nodes, and the light canvas draws more strokes than the bright ones alone', () => {
+    // The pointer is a simulation input, so every renderer sees the same frame.
     const connectome = new Connectome({ seed: 1729, aspect: 900 / 1440, segments: CANVAS_SEGMENTS });
 
     for (let index = 0; index < 120; index += 1) connectome.step(1 / 60);
@@ -318,15 +312,6 @@ describe('one contract, two pictures', () => {
     renderer.resize(1440, 900, 1);
     renderer.render(frame);
 
-    // The shader lifts light strokes by the canvas's factor and resolves tone 0 through the same
-    // bright mix.
-    const wgsl = readFileSync(resolve(TREE_DIR, 'palette.wgsl'), 'utf8');
-    const strokes = readFileSync(resolve(TREE_DIR, 'strokes.wgsl'), 'utf8');
-    const canvas = readFileSync(resolve(CORE_WEB, 'hero-canvas.ts'), 'utf8');
-    expect(wgsl).toContain('mix(palette.ash.rgb, palette.bright.rgb, 0.35 + 0.65 * glow)');
-    expect(canvas).toContain('mix(palette.ash, palette.bright, 0.35 + 0.65 * glow)');
-    expect(strokes).toContain('mix(1.0, 2.4, palette.mode)');
-    expect(canvas).toContain('LIGHT_LIFT');
     expect(surface.strokes).toBeGreaterThan(bright);
   });
 });

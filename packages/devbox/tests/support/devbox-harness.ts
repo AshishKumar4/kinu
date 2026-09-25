@@ -1170,8 +1170,18 @@ export class FakeSandbox {
     return Promise.resolve();
   }
 
+  /** Each renewal of the SDK's activity timeout: a heartbeat that stops renewing lets `sleepAfter` end the
+   *  SDK alarm chain, and with it every scheduled callback. */
+  activityRenewals = 0;
+
   renewActivityTimeout(): void {
-    // The activity clock is the platform's; nothing here reads it.
+    this.activityRenewals += 1;
+  }
+
+  /** The SDK base without keepAlive (`Sandbox.onActivityExpired` over `Container.onActivityExpired`, 0.12.9):
+   *  a running container is stopped. The class never enables keepAlive, and this fake has no `setKeepAlive`. */
+  async onActivityExpired(): Promise<void> {
+    if (this.running.running) await this.stop();
   }
 
   listSchedules(callback?: string): Promise<readonly { time: number }[]> {

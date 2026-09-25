@@ -254,8 +254,9 @@ Suppression is disclosed over `PUBLISHING_CARRIES`, since other carries write
 nothing later runs read.
 
 Implemented by `PublicationState`, `PUBLICATION_SURFACES`, `admitsPublication`,
-and `carrySuppression`; `packages/core/tests/contract-publication-seal.test.ts` holds writer
-census and set equality in both directions.
+and `carrySuppression`; `packages/core/tests/contract-publication-seal.test.ts` holds the set
+equality in both directions, and the `scripts/publication-egress.ts` gate holds the settle path's
+writer census.
 
 ## The records store
 
