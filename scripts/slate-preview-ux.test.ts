@@ -531,3 +531,33 @@ test('a note on a changed line stands in for Mark reviewed, leaves the diff when
     } finally { await page.close(); }
   });
 });
+
+test('a mouse wheel over the inspector strip scrolls it sideways, so a tab past its edge is reachable', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+
+    try {
+      // The default inspector width, with three slates' tabs ahead of the workspace's own.
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('.p-tabstrip button[aria-label="Tally"]');
+      const strip = await page.$('.p-tabstrip:has(button[aria-label="Tally"])');
+      const box = await strip?.boundingBox();
+
+      if (strip === null || strip === undefined || box === null || box === undefined) throw new Error('the inspector strip is not drawn');
+
+      // Whether the strip's last tab ends inside the strip's visible edge.
+      const lastTabShown = (): Promise<boolean> => strip.evaluate((element) => {
+        const last = [...element.querySelectorAll('button[aria-label]')].at(-1)?.getBoundingClientRect();
+
+        return last !== undefined && last.right <= element.getBoundingClientRect().right + 1;
+      });
+
+      expect(await lastTabShown()).toBe(false);
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.wheel({ deltaY: 2000 });
+
+      expect(await lastTabShown()).toBe(true);
+    } finally { await page.close(); }
+  });
+});

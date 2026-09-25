@@ -33,6 +33,7 @@ import {
   type SlateSurfaceKind, type SurfaceKind,
 } from "@kinu.run/core";
 import { useSurfaceFocus } from "./use-surface-focus";
+import { useWheelScrollsSideways } from "@/hooks/use-wheel-scrolls-sideways";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
 const slateSurface = (id: string): SlateSurfaceKind => `${SLATE_PREFIX}${id}`;
@@ -209,19 +210,18 @@ export function WorkSurface(props: WorkSurfaceProps) {
     ? undefined
     : props.slates?.find((slate) => slate.id === openSlate);
 
-  // One connect dialog owned here: three surfaces in this column request it, and only
-  // one is mounted at a time.
+  // One connect dialog for the three surfaces in this column that ask for it.
   const [connecting, setConnecting] = useState(false);
   const openConnect = useCallback(() => setConnecting(true), []);
   const closeConnect = useCallback(() => setConnecting(false), []);
 
   useSelectedTabInView(strip, surface);
+  useWheelScrollsSideways(strip);
   const bodyFit = previewSelected ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6";
 
   return (
     <div className="@container flex flex-col h-full p-sidebar">
-      {/* Activity sits outside the scrolling strip: appended tabs overflow it, and an
-          `ml-auto` button inside would scroll away. */}
+      {/* Activity sits outside the strip so it does not scroll away. */}
       <div className={`border-b p-border shrink-0 flex items-stretch ${tabStripH}`}>
         {/* Scroll covers use this column's `p-sidebar` ground, not the canvas's. */}
         <div ref={strip} className={`p-tabstrip [--scroll-ground:var(--c-sidebar)] flex items-center min-w-0 flex-1 px-3 gap-0.5 -mb-px ${tabStripH}`}>

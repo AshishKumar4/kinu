@@ -1460,7 +1460,12 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
 
     return { ...snapshot, activePlan: galleryAgentPlan };
   },
-  listSlates: () => ({ slates: [], problems: [] }),
+  // `&slates=3`: three slates, whose tabs overflow the strip.
+  listSlates: () => ({
+    slates: ["Board", "Notes", "Tally"].slice(0, Number(new URLSearchParams(location.search).get("slates") ?? 0))
+      .map((title) => ({ id: title.toLowerCase(), title, bindings: [] })),
+    problems: [],
+  }),
   getActivePlanReview: () => galleryAgentPlan,
   // The Work tab draws this read, not `getActivePlanReview`. The owner is the workspace's name: `createMain({ name: this.name })` registers it, never "main".
   listWorkspaceWork: () => ({

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
@@ -9,6 +9,7 @@ import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { codenameFor } from "@kinu.run/core";
 import { Modal } from "./ui/Modal";
 import { diagnostics, toKinuError, renderThrownChain } from "@kinu.run/core/obs";
+import { useWheelScrollsSideways } from "@/hooks/use-wheel-scrolls-sideways";
 
 
 const ADD_AGENT_LABEL = "New agent";
@@ -20,7 +21,7 @@ export function agentTitle(entry: Pick<SubordinateRosterEntry, "name" | "display
 
 interface SubordinateTabsProps {
   workspace: string;
-  /** Every retained agent, dismissed included: a dismissed child keeps its conversation, so its tab must stay reachable. */
+  /** Every retained agent, dismissed ones included, since their conversations stay reachable. */
   subordinates: readonly SubordinateRosterEntry[];
   activeName?: string;
   /** WorkspacePage owns the action and its failure banner: the sidebar can invoke it while this strip is unmounted. */
@@ -56,19 +57,22 @@ export function SubordinateTabs({
   const [dismissError, setDismissError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  // Open on a dismissed agent so a deep link does not land on a collapsed section hiding its tab.
+  // Open on a dismissed agent, so a deep link finds its tab.
   const dismissed = subordinates.filter((entry) => entry.status === "dismissed");
   const employable = subordinates.filter((entry) => entry.status !== "dismissed");
   const [showDismissed, setShowDismissed] = useState(false);
   const dismissedOpen = showDismissed || dismissed.some((entry) => entry.name === activeName);
 
   const mainPath = `/workspace/${workspace}`;
+  const strip = useRef<HTMLElement>(null);
+
+  useWheelScrollsSideways(strip);
 
   return (
     <>
-      {/* The row owns the bottom rule: the strip clips vertically, so a bar drawn past its edge is clipped. Trailing controls sit outside the strip so they do not scroll away. */}
+      {/* The row draws the bottom rule, which the strip would clip; trailing controls sit outside the strip so they stay put. */}
       <div className={`flex shrink-0 items-stretch border-b p-border ${tabStripH}`}>
-        <nav aria-label="Workspace agents" className={`p-tabstrip -mb-px flex min-w-0 flex-1 items-stretch gap-2 px-2 ${tabStripH}`}>
+        <nav ref={strip} aria-label="Workspace agents" className={`p-tabstrip -mb-px flex min-w-0 flex-1 items-stretch gap-2 px-2 ${tabStripH}`}>
           <Link
             to={mainPath}
             data-agent-tab="main"
@@ -146,7 +150,7 @@ export function SubordinateTabs({
               try {
                 await onCreate();
               } catch (cause) {
-                // WorkspacePage shows the banner; catching here keeps a rejection from going unhandled.
+                // WorkspacePage shows the banner; this keeps the rejection handled.
                 diagnostics.failure("subordinates.create_failed", toKinuError({
                   doing: "create a subordinate agent", cause, otherwise: "io",
                 }));
