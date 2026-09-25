@@ -3,10 +3,10 @@
  * a fold that changed nothing is not pushed at all.
  */
 import { sqlOver } from '@kinu.run/test-utils';
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, setSystemTime, test } from 'bun:test';
 import { RunEventRecorder, WORKSPACE_RUN_ID, DeferredApprovalStore, formatApproval, type WorkspaceOverview } from '@kinu.run/core';
 import {
-  orchestratorHarness, hostedSubordinateHarness, until, workspaceMainActor, type RecordedUserPlaneCalls,
+  nextTurn, orchestratorHarness, hostedSubordinateHarness, until, workspaceMainActor, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
@@ -142,6 +142,36 @@ describe('the pushed tile', () => {
     await agent.installWorkspaceCapability('workspace-capability-token');
     await until(() => overviews.length === 1, 'the first tile is pushed');
     expect(overviews[0]).toMatchObject({ activity: 'idle', decisionsWaiting: 0 });
+  });
+
+  test('a refused push is owed: a wake carries its retry, a tick before it is due waits, and the tick once due lands it', async () => {
+    const { plane, overviews } = recordingOwner();
+    const { agent } = orchestratorHarness({ ...plane, refuseOverviews: 1 });
+
+    const retryArmed = async (): Promise<boolean> =>
+      (await agent.listSchedules()).some((row) => row.callback === '_kinuTerminalRetryTick');
+
+    try {
+      expect(await retryArmed()).toBe(false);
+      await agent.installWorkspaceCapability('workspace-capability-token');
+
+      for (let lap = 0; lap < 100 && !await retryArmed(); lap++) await nextTurn();
+      expect(await retryArmed()).toBe(true);
+
+      await agent.terminalRetryPass();
+
+      for (let lap = 0; lap < 20; lap++) await nextTurn();
+      expect(overviews).toEqual([]);
+      expect(await retryArmed()).toBe(true);
+
+      setSystemTime(new Date(Date.now() + 10 * 60_000));
+      await agent.terminalRetryPass();
+      await until(() => overviews.length === 1, 'the owed tile lands');
+      // The owed push is not the workspace's own work.
+      expect(overviews[0]?.activity).toBe('idle');
+    } finally {
+      setSystemTime();
+    }
   });
 
   test('a turn reads Working from its admission until its leftovers close, then the tile it leaves', async () => {

@@ -194,7 +194,7 @@ import {
   type WorkMode,
   resolveModelRoute,
   WORKSPACE_RUN_ID,
-  buildWorkspaceOverview, type WorkspaceOverview, type ReleaseBoard,
+  buildWorkspaceOverview, recoveryBackoffMs, type WorkspaceOverview, type ReleaseBoard,
   projectJsonValue,
   type AgentSignal,
 } from "@kinu.run/core";
@@ -965,6 +965,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Soonest instant a timed ledger (terminal retry, deferred job resume) owes a wake, or null.
    * Untimed owed work is excluded; it is {@link owedUntimedWork}. */
   protected override nextOwedAt(): number | null {
+    const at = Math.min(this.workOwedAt() ?? Infinity, this.overviewRetry?.at ?? Infinity);
+
+    return Number.isFinite(at) ? at : null;
+  }
+
+  /** Without a tile push owed, which would read Unfinished. */
+  private workOwedAt(): number | null {
     const at = Math.min(this.terminal.nextRetryAt() ?? Infinity, this.jobRunner.nextResumeAt() ?? Infinity);
 
     return Number.isFinite(at) ? at : null;
@@ -4408,7 +4415,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { recovered: 'requeued' };
   }
 
-  /** Release approvals live in the owner's object, which counts them. Reads `hosted`, never `acquire`. */
+  /** The owner's object adds its release approvals. Reads `hosted`, never `acquire`. */
   async foldOverview(): Promise<WorkspaceOverview> {
     const [pendingConsents, activePlan, listing] = await Promise.all([
       this.listPendingConsents(),
@@ -4424,7 +4431,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return buildWorkspaceOverview({
       // A settled turn's leftovers still closing are its work, not a durable leftover.
       working: this._inFlight || hostedBusy || this.terminalClosing,
-      unfinished: this.owedWorkExists(),
+      unfinished: this.owedUntimedWork() || this.workOwedAt() !== null,
       pendingActions: this.pendingActions(null),
       pendingConsents,
       activePlan,
@@ -4434,10 +4441,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** In memory: the owner's object ignores a repeat, so a new activation's first push is cheap. */
+  /** In memory: the owner's object ignores a repeat. */
   private pushedOverview: string | null = null;
   private overviewDirty = false;
   private overviewPushing = false;
+  /** Until a push lands; changes meanwhile ride it. */
+  private overviewRetry: { readonly at: number; readonly attempts: number } | null = null;
 
   async requestOverviewPush(): Promise<void> {
     this.overviewChanged();
@@ -4448,6 +4457,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.overviewDirty = true;
 
     if (this.overviewPushing || this.getOwnerUserId() === null) return;
+
+    if (this.overviewRetry !== null && Date.now() < this.overviewRetry.at) return;
     this.overviewPushing = true;
     this.detachOwned(async () => {
       try {
@@ -4461,10 +4472,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           await stub.putWorkspaceOverview(caller, this.name, overview);
           this.pushedOverview = pushed;
         }
+
+        this.overviewRetry = null;
       } catch (cause) {
+        this.overviewDirty = true;
+        const attempts = (this.overviewRetry?.attempts ?? 0) + 1;
+        this.overviewRetry = { at: Date.now() + recoveryBackoffMs(attempts), attempts };
+
         diagnostics.failure('workspace.overview_push_failed', toKinuError({
           doing: "pushing this workspace's tile to its owner's roster", cause, otherwise: 'unavailable',
-        }), { workspace: this.name });
+        }), { workspace: this.name, attempts });
+
+        await this.scheduleTerminalRetry(this.overviewRetry.at);
       } finally {
         this.overviewPushing = false;
       }
