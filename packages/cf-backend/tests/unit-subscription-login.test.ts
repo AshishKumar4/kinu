@@ -176,3 +176,70 @@ describe('UserDO Claude subscription login', () => {
     }
   });
 });
+
+describe('UserDO subscription login renewed by two calls at once', () => {
+  /** Anthropic rotates a refresh token on use: of two requests spending one, the first renews and a later one is
+   *  rejected. The held requests are answered in the order a race could land them. */
+  const raceRenewal = async (order: 'rejection lands first' | 'renewal lands first') => {
+    const originalFetch = globalThis.fetch;
+    const held: { token: string; answer: (response: Response) => void }[] = [];
+    let answerNow: (() => Response) | null = null;
+    let arrived: () => void = () => {};
+
+    const firstArrival = new Promise<void>((resolve) => { arrived = resolve; });
+
+    globalThis.fetch = asFetchFunction(async (input, init) => {
+      expect(requestUrl(input)).toBe(CLAUDE_TOKEN_URL);
+      const token = v.parse(ClaudeRefreshSchema, JSON.parse(await requestBodyText(input, init))).refresh_token;
+
+      if (answerNow !== null) return answerNow();
+
+      return new Promise<Response>((answer) => {
+        held.push({ token, answer });
+        arrived();
+      });
+    });
+
+    // Every step a call can take without an answer from Anthropic runs before the test answers.
+    const idle = async () => {
+      for (let turn = 0; turn < 50; turn++) await new Promise((resolve) => { setImmediate(resolve); });
+    };
+
+    const renewed = () => Response.json({ access_token: 'fresh', refresh_token: 'rt-2', expires_in: 3600 });
+    const reused = () => Response.json({ error: 'invalid_grant', error_description: 'refresh token already used' }, { status: 400 });
+
+    try {
+      const harness = createTestUserDO();
+      const owner = await testOwner();
+      await harness.userDO.setCredential(owner, 'claude.oauth', { kind: 'oauth', accessToken: 'old', refreshToken: 'rt-1', expiresAt: Date.now() - 1_000 });
+
+      const calls = [harness.userDO.getAuthHeaders(owner, 'claude.oauth'), harness.userDO.getAuthHeaders(owner, 'claude.oauth')];
+      await firstArrival;
+      await idle();
+      const [first, ...later] = held.map((request, index) => ({ request, response: index === 0 ? renewed : reused }));
+      const landing = order === 'rejection lands first' ? [...later, first] : [first, ...later];
+
+      for (const answered of landing) {
+        answered?.request.answer(answered.response());
+        await idle();
+      }
+
+      // A request sent after the race spends a token Anthropic already rotated.
+      answerNow = reused;
+      const headers = (await Promise.all(calls)).map((sent) => sent?.Authorization ?? null);
+      answerNow = () => Response.json({ access_token: 'renewed-again', refresh_token: 'rt-3', expires_in: 3600 });
+      const next = (await harness.userDO.getAuthHeaders(owner, 'claude.oauth'))?.Authorization ?? null;
+      harness.close();
+
+      return { headers, spent: held.map((request) => request.token), next };
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  };
+
+  for (const order of ['rejection lands first', 'renewal lands first'] as const) {
+    test(`both calls get the one renewal, and the renewed login stays stored, when the ${order.replace(' lands first', '')} lands first`, async () => {
+      expect(await raceRenewal(order)).toEqual({ headers: ['Bearer fresh', 'Bearer fresh'], spent: ['rt-1'], next: 'Bearer fresh' });
+    });
+  }
+});
