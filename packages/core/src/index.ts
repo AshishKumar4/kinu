@@ -1150,7 +1150,7 @@ export {
   DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE, DEVICE_PTY_CLOSE,
   DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_MAX_AXIS,
   type DeviceCancelResult,
-  DeviceSocketHub, deviceIdFromSocket,
+  DeviceSocketHub, deviceIdFromSocket, WS_OPEN,
   DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG,
   type DeviceSocket, type DeviceSocketCtx,
   DeviceRequestLedger, initDeviceInflightTable,
@@ -2051,9 +2051,9 @@ export type { TurnAuthor } from './utils/ui-message';
 
 export type { PendingAction, PendingActionKind, PendingActionInputs, PersonAsks } from './read-models/pending-actions';
 
-export { buildWorkspaceOverview, overviewHeadline, rosterActivity, WorkspaceOverviewSchema } from './read-models/workspace-overview';
+export { buildWorkspaceOverview, overviewHeadline, rosterBucket, rosterMatches, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
-export type { RosterActivity, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewSlate, WorkspaceStatus } from './read-models/workspace-overview';
+export type { RosterBucket, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewSlate, WorkspaceStatus } from './read-models/workspace-overview';
 
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,

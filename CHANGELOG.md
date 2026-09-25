@@ -14,6 +14,11 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- **Home and the Workspaces page no longer ask every workspace for its state.** Each workspace tells its owner's
+  account when its tile changes (working, needs you, its last run, its slates), and an open page hears the change over
+  one socket, so a page left open wakes no workspace. The Workspaces page reads 50 workspaces at a time as you scroll,
+  and its filters and search are answered by the account, so they cover every workspace. A tile no longer runs its
+  slate live.
 - While a sandbox starts, the workspace says "Sandbox starting…" in a quiet line under the tab, where a failed preview listing reports, and keeps the previews it already had.
 - The Worker's `/api` routes are served by one Hono app whose route order is the old dispatch order, gate for gate. An error no route catches is now answered as JSON with its class's status and a message naming only that class (the cause goes to the log), never cached, instead of the platform's error page; the run-event routes read the workspace whose ownership was just proven, even when the request spells its name with escapes.
 - **The Diffs tab is now Changes.** It lists the changed files as a tree with their counts; a file opens to a diff

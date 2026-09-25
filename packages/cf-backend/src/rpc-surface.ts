@@ -148,6 +148,7 @@ const USER_DO_METHODS = [
   'publishWorkspaceReservation',
   'putEgressSecret',
   'putProfileCatalog',
+  'putWorkspaceOverview',
   'recordReleaseCheck',
   'recordReleaseDeployment',
   'registerBrowserSession',

@@ -76,7 +76,7 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
 
 /** A `Pick` intersection: the full stub type instantiates too deeply to compile. */
 type ResetTarget = Pick<Fetcher, 'fetch'>
-  & Pick<ProductionOrchestrator, 'claimOwner' | 'getWorkspaceOverview' | 'exportWorkspaceArchive'>
+  & Pick<ProductionOrchestrator, 'claimOwner' | 'exportWorkspaceArchive'>
   & Pick<OrchestratorAgent, 'plantPreResetSessionMessages' | 'wakeOnce'>;
 
 const NamedSchema = v.object({ name: v.string() });
@@ -131,14 +131,6 @@ export class StoreResetProbeRoot extends DurableObject<ProbeRootEnv> {
       .fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}/get-messages`));
 
     return { status: response.status, body: await response.text() };
-  }
-
-  async overview(workspace: string): Promise<string> {
-    try {
-      return JSON.stringify(await (await this.target(workspace)).getWorkspaceOverview());
-    } catch (cause) {
-      return renderThrownChain({ cause });
-    }
   }
 
   /** The owner's tab: the frame it gets on connect, then the answer to a message it sends. */

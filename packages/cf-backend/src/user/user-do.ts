@@ -123,7 +123,7 @@ import { tenantDrive } from '../drive/tenant';
 import { deriveUserId } from '../auth/store';
 import { isModelInferenceCredentialKey } from '@kinu.run/core';
 import { randomToken, sha256Hex } from '@kinu.run/core';
-import { resolveWorkspaceTitle } from '@kinu.run/core';
+import { resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview } from '@kinu.run/core';
 import { displayNameProblem } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { recordReleaseTransition } from '@kinu.run/core/analytics';
@@ -150,6 +150,10 @@ import {
   mcpListingRefusals,
   type McpPresetAvailability, type McpServerSummary, type McpToolListing, type McpTransport,
 } from './mcp';
+import {
+  acceptRosterSocket, isRosterSocket, rosterCounts, rosterEntry, rosterPage, rosterSockets, sendRosterFrame, ROSTER_SOCKET_PATH,
+  type RosterPage, type RosterQuery, type RosterRow,
+} from './roster';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
@@ -253,10 +257,6 @@ function consentAgentFor(
 const CLI_AGENT_CONNECT_TICKET_TTL_MS = 60 * 1000;
 
 const CLI_AGENT_WEBSOCKET_CAPABILITY = 'agent.websocket' as const;
-
-/** Roster page cap; past it, the newest rows plus the whole-roster total are returned.
- *  Equal to core's MAX_HISTORY_LIMIT by coincidence only. */
-const WORKSPACE_LIST_LIMIT = 200;
 
 /** Single per-user OAuth callback path (not the SDK's per-agent default); the full URL is
  *  built from the request origin at add-time. */
@@ -474,13 +474,6 @@ export interface SharedBlueprintReceipt {
   createdAt?: number;
 }
 
-/** `total` is the whole active roster; `nextCursor` is null past the end. */
-export interface WorkspaceList {
-  entries: WorkspaceEntry[];
-  total: number;
-  nextCursor: string | null;
-}
-
 export interface WorkspaceRegistrationSource {
   purpose?: string;
   nameOrigin?: NameOrigin;
@@ -531,12 +524,6 @@ const StoredProfileCatalogRowSchema: v.GenericSchema<StoredProfileCatalogRow> = 
   value: v.string(),
   version: v.pipe(v.number(), v.integer(), v.minValue(0)),
 });
-
-/** `limit` clamps to [1, WORKSPACE_LIST_LIMIT]. */
-export interface WorkspaceListPageQuery {
-  cursor?: string | null;
-  limit?: number;
-}
 
 export interface CredentialSummary {
   key: string;
@@ -619,38 +606,6 @@ function parseCapabilityList(value: string): string[] {
   const parsed = v.safeParse(v.array(v.string()), tolerate(() => JSON.parse(value), 'malformed-input'));
 
   return parsed.success ? parsed.output : [];
-}
-
-/** Cursor is the last row's `(last_visited, name)` ordering key, URL-encoded JSON. */
-function encodeRosterCursor(entry: Pick<WorkspaceEntry, 'name' | 'lastVisited'>): string {
-  return encodeURIComponent(JSON.stringify({ v: entry.lastVisited, n: entry.name }));
-}
-
-const RosterCursorSchema = v.strictObject({ v: v.number(), n: v.string() });
-
-function decodeRosterCursor(cursor?: string | null): { v: number; n: string } | null {
-  if (cursor == null || cursor === '') return null;
-  let raw: unknown;
-
-  try {
-    raw = JSON.parse(decodeURIComponent(cursor));
-  } catch (e) {
-    throw new Error('Invalid workspace roster cursor; start from page one.', { cause: e });
-  }
-
-  const parsed = v.safeParse(RosterCursorSchema, raw);
-
-  if (!parsed.success) throw new Error('Invalid workspace roster cursor; start from page one.');
-
-  return parsed.output;
-}
-
-function clampRosterLimit(limit?: number): number {
-  if (limit === undefined) return WORKSPACE_LIST_LIMIT;
-
-  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('Workspace roster limit must be a positive integer.');
-
-  return Math.min(limit, WORKSPACE_LIST_LIMIT);
 }
 
 /**
@@ -910,45 +865,62 @@ export class UserDO extends Agent<Env> {
     return profile;
   }
 
-  async listWorkspaces(caller: UserCaller, page?: WorkspaceListPageQuery): Promise<WorkspaceList> {
+  async listWorkspaces(caller: UserCaller, query?: RosterQuery): Promise<RosterPage> {
     await this.requireTier(caller, 'workspaces.read');
     // This read is the retry for unfinished teardowns and for stale fork reservations nothing else frees.
     await this.resumePendingDeletions();
     await this.reclaimStaleForkReservations();
-    const limit = clampRosterLimit(page?.limit);
-    const cursor = decodeRosterCursor(page?.cursor);
 
-    const rows = this.sqlx<{ name: string; display_name: string; created_at: number; last_visited: number; archived_at: number | null }>(
-      cursor
-        ? `SELECT name, display_name, created_at, last_visited, archived_at
-           FROM user_workspaces
-           WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0
-             AND (last_visited < ? OR (last_visited = ? AND name > ?))
-           ORDER BY last_visited DESC, name ASC LIMIT ${limit + 1}`
-        : `SELECT name, display_name, created_at, last_visited, archived_at
-           FROM user_workspaces WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0
-           ORDER BY last_visited DESC, name ASC LIMIT ${limit + 1}`,
-      ...(cursor ? [cursor.v, cursor.v, cursor.n] : []),
+    return rosterPage(this.rosterRows(), query);
+  }
+
+  /** A workspace's decisions add the owner's pending release approvals, which live here. */
+  private rosterRows(): RosterRow[] {
+    return this.sqlx<RosterRow & SqlRow>(
+      `SELECT w.name, w.display_name AS displayName, w.created_at AS createdAt, w.last_visited AS lastVisited,
+              w.archived_at AS archivedAt, o.overview, o.activity,
+              COALESCE(o.decisions, 0) + COALESCE(a.pending, 0) AS decisions
+       FROM user_workspaces w
+       LEFT JOIN workspace_overviews o ON o.name = w.name
+       LEFT JOIN (SELECT c.agent_name, COUNT(*) AS pending FROM release_approvals p
+                  JOIN release_changes c ON c.id = p.change_id
+                  WHERE p.decision = 'pending' GROUP BY c.agent_name) a ON a.agent_name = w.name
+       WHERE w.archived_at IS NULL AND w.delete_pending = 0 AND w.create_pending = 0
+       ORDER BY w.last_visited DESC, w.name ASC`,
+    );
+  }
+
+  /** With no page open, nothing is read. */
+  private rosterChanged(name: string): void {
+    const sockets = rosterSockets(this.ctx);
+
+    if (sockets.length === 0) return;
+    const rows = this.rosterRows();
+    const row = rows.find((each) => each.name === name);
+    sendRosterFrame(sockets, { type: 'workspace', name, entry: row === undefined ? null : rosterEntry(row), counts: rosterCounts(rows) });
+  }
+
+  /** A repeat writes and sends nothing. */
+  async putWorkspaceOverview(caller: UserCaller, name: string, overview: WorkspaceOverview): Promise<void> {
+    const resolved = await this.requireTier(caller, 'workspaces.overview_self');
+    validateWorkspaceName(name);
+
+    if (resolved.kind === 'workspace' && resolved.workspace !== name) {
+      throw new Error(`Workspace "${resolved.workspace}" may only push its own overview.`);
+    }
+
+    const parsed = v.parse(WorkspaceOverviewSchema, overview);
+
+    const changed = this.sqlx(
+      `INSERT INTO workspace_overviews (name, overview, activity, decisions, changed_at) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (name) DO UPDATE SET overview = excluded.overview, activity = excluded.activity,
+         decisions = excluded.decisions, changed_at = excluded.changed_at
+       WHERE workspace_overviews.overview <> excluded.overview
+       RETURNING name`,
+      name, JSON.stringify(parsed), parsed.activity, parsed.decisionsWaiting, Date.now(),
     );
 
-    const hasMore = rows.length > limit;
-
-    const entries = rows.slice(0, limit).map((r) => ({
-      name: r.name,
-      displayName: r.display_name,
-      createdAt: r.created_at,
-      lastVisited: r.last_visited,
-      archivedAt: r.archived_at,
-    }));
-
-    const { n } = this.sqlx<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM user_workspaces
-       WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0`,
-    )[0];
-
-    const last = entries.at(-1);
-
-    return { entries, total: n, nextCursor: hasMore && last ? encodeRosterCursor(last) : null };
+    if (changed.length > 0) this.rosterChanged(name);
   }
 
   /** Uncapped enumeration of the active roster for server-side fans, where a page would drop targets. */
@@ -995,6 +967,7 @@ export class UserDO extends Agent<Env> {
         `UPDATE user_workspaces SET last_visited = ?, archived_at = NULL WHERE name = ?`,
         now, name,
       );
+      this.rosterChanged(name);
 
       return {
         status: 'active',
@@ -1020,6 +993,7 @@ export class UserDO extends Agent<Env> {
        VALUES (?, ?, ?, ?, ?, 0)`,
       name, title, origin, now, now,
     );
+    this.rosterChanged(name);
 
     return {
       status: 'created',
@@ -1184,6 +1158,7 @@ export class UserDO extends Agent<Env> {
         name, createdAt,
       );
     });
+    this.rosterChanged(name);
   }
 
   /** Drop only the exact row a failed fork reservation inserted; never contacts the target DO
@@ -1216,6 +1191,7 @@ export class UserDO extends Agent<Env> {
        WHERE name = ? AND delete_pending = 0 AND create_pending = 0`,
       Date.now(), name,
     );
+    this.rosterChanged(name);
   }
 
   /**
@@ -1238,6 +1214,7 @@ export class UserDO extends Agent<Env> {
   private async tearDownWorkspace(name: string, ownerUserId: string): Promise<void> {
     this.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ?`, name);
     revokeWorkspaceCapability(this.ctx.storage.sql, name);
+    this.rosterChanged(name);
     // Grants are read by name, so a surviving row would grant full_filesystem to a same-name recreate.
     this.sqlx(`DELETE FROM device_consent WHERE agent_name = ?`, name);
 
@@ -1250,6 +1227,7 @@ export class UserDO extends Agent<Env> {
     }
 
     this.sqlx(`DELETE FROM user_workspaces WHERE name = ?`, name);
+    this.sqlx(`DELETE FROM workspace_overviews WHERE name = ?`, name);
     // Re-run for a resumed row whose identity a pre-fence delete could have left registered.
     revokeWorkspaceCapability(this.ctx.storage.sql, name);
   }
@@ -1330,6 +1308,7 @@ export class UserDO extends Agent<Env> {
       `UPDATE user_workspaces SET display_name = ?, name_origin = ? WHERE name = ?`,
       displayName, origin, name,
     );
+    this.rosterChanged(name);
 
     return { applied: true };
   }
@@ -1834,6 +1813,8 @@ export class UserDO extends Agent<Env> {
 
     if (url.pathname === DEVICE_TERMINAL_PATH) return this.acceptTerminalSocket(request, url);
 
+    if (url.pathname === ROSTER_SOCKET_PATH) return acceptRosterSocket(this.ctx, request);
+
     return super.fetch(request);
   }
 
@@ -1983,6 +1964,7 @@ export class UserDO extends Agent<Env> {
   /* These hibernation handlers are declared here, so `Lifecycle.installHandlers` skips them and there
    * is no `super`; foreign sockets are delegated to the lifecycle directly, as `Agent.fetch` does. */
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer | ArrayBufferView): Promise<void> {
+    if (isRosterSocket(ws)) return;
     // Pane bytes are raw keystrokes; decoding them as text would corrupt them.
     const terminal = terminalFromSocket(ws);
 
@@ -2203,6 +2185,7 @@ export class UserDO extends Agent<Env> {
   }
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
+    if (isRosterSocket(ws)) return;
     // A pane's socket closing hangs up the shell rather than leaving it running with no window.
     const terminal = terminalFromSocket(ws);
 
@@ -2234,7 +2217,7 @@ export class UserDO extends Agent<Env> {
     const [ws] = call;
 
     // Device sockets clean up in webSocketClose, which the runtime fires next.
-    if (!deviceIdFromSocket(ws)) return this.lifecycle.webSocketError(...call);
+    if (!deviceIdFromSocket(ws) && !isRosterSocket(ws)) return this.lifecycle.webSocketError(...call);
   }
 
   /** The raw token is returned once to the CLI; only its hash is stored. 'Your PC' is the default
@@ -3220,13 +3203,21 @@ export class UserDO extends Agent<Env> {
   async requestReleaseApproval(caller: UserCaller, changeId: string, approvalType: ReleaseApproval['approvalType']): Promise<ReleaseApproval> {
     await this.requireTier(caller, 'release');
 
-    return this.releases().requestApproval(changeId, approvalType);
+    return this.approvalChanged(this.releases().requestApproval(changeId, approvalType));
   }
 
   async decideReleaseApproval(caller: UserCaller, input: ReleaseApprovalDecision): Promise<ReleaseApproval> {
     await this.requireTier(caller, 'release');
 
-    return this.releases().decideApproval(input.approvalId, input.decision, input.approvedBy, input.note);
+    return this.approvalChanged(this.releases().decideApproval(input.approvalId, input.decision, input.approvedBy, input.note));
+  }
+
+  private approvalChanged(approval: ReleaseApproval): ReleaseApproval {
+    const [change] = this.sqlx<{ agent_name: string }>(`SELECT agent_name FROM release_changes WHERE id = ?`, approval.changeId);
+
+    if (change !== undefined) this.rosterChanged(change.agent_name);
+
+    return approval;
   }
 
   async recordReleaseDeployment(

@@ -1062,7 +1062,9 @@ export abstract class ActorAgent extends Agent<Env> {
         if (await room.onMessage(connection, message)) return;
       }
 
-      return await dispatchMessage(connection, message);
+      await dispatchMessage(connection, message);
+
+      if (rpc !== null && requiredRpcAccess(rpc.method) !== 'workspace.read') this.overviewChanged();
     };
 
     const baseOnConnect = this.onConnect.bind(this);
@@ -1361,6 +1363,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
       if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);
     }
+
+    // A turn a deploy cut short reads right by the next tick of the wake it armed.
+    this.overviewChanged();
   }
 
   /**
@@ -1421,6 +1426,11 @@ export abstract class ActorAgent extends Agent<Env> {
   protected _terminalReported: Promise<void> = Promise.resolve();
   private _terminalReportedOwner: AsyncTaskOwner | null = null;
 
+  /** A settled turn's detached leftovers are still closing in this isolate. */
+  protected get terminalClosing(): boolean {
+    return this._terminalReportedOwner !== null;
+  }
+
   /**
    * Keep this isolate alive for a terminal close via a durable fiber, since a bare promise is not a
    * wake; the fiber's run row hands leftovers to {@link classifyRecoveredFiber}. Order: hold, join, dispose.
@@ -1446,6 +1456,8 @@ export abstract class ActorAgent extends Agent<Env> {
           this._terminalReportedOwner = null;
           this._terminalReported = Promise.resolve();
         }
+
+        this.overviewChanged();
       }
     })();
 
@@ -1755,6 +1767,7 @@ export abstract class ActorAgent extends Agent<Env> {
           // Arm the turn's own wake at its open, so a kill mid-turn leaves both the run row and the wake
           // that re-drives what it owed.
           armTurnWake: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
+          quiet: () => { this.overviewChanged(); },
           steerSkills: (text) => steerSkillsBlock({
             vfs: this.rt.storage.vfs,
             config: this.config,
@@ -1857,6 +1870,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Fires after each committed change to the root actor's turn claims. */
   protected abstract turnClaimChanged(): void;
+
+  protected abstract overviewChanged(): void;
 
   protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
 

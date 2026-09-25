@@ -1660,5 +1660,12 @@
     "owner_user_id TEXT NOT NULL DEFAULT ''",
     "mission TEXT NOT NULL DEFAULT ''",
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
+  ],
+  "workspace_overviews@packages/core/src/state/user-schema.ts": [
+    "name TEXT PRIMARY KEY",
+    "overview TEXT NOT NULL",
+    "activity TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle'))",
+    "decisions INTEGER NOT NULL",
+    "changed_at INTEGER NOT NULL"
   ]
 }

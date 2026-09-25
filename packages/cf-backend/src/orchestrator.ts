@@ -194,7 +194,7 @@ import {
   type WorkMode,
   resolveModelRoute,
   WORKSPACE_RUN_ID,
-  buildWorkspaceOverview, type WorkspaceOverview,
+  buildWorkspaceOverview, type WorkspaceOverview, type ReleaseBoard,
   projectJsonValue,
   type AgentSignal,
 } from "@kinu.run/core";
@@ -381,7 +381,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       onFilesChanged: (paths) => {
         const ids = this.slates.filesChanged(paths);
 
-        if (ids.length !== 0) this.broadcastToActor(null, JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
+        if (ids.length === 0) return;
+        this.broadcastToActor(null, JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
+        this.overviewChanged();
       },
       ensureSlate: (owner) => this.slates.ensureDurable(owner),
       slateInvocation: (port, socket) => this.slates.slateInvocation(port, socket),
@@ -506,6 +508,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (name === undefined) return;
         this.broadcastToActor(name, JSON.stringify({ ...event, actorId }));
       },
+      turnClaimChanged: () => { this.overviewChanged(); },
       enqueueTurn: (actor, input) => this.enqueueHostedTurn(actor, input),
       // Use the reference the host issued, never one rebuilt from an id: the root's parent is
       // null, and a synthesized reference makes `hosted()` refuse the root's liveness read.
@@ -2226,6 +2229,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   protected override connectionOpened(): void {
     this.config.delete(SLEEP_TIME_CLOSED_AT);
+    this.overviewChanged();
   }
 
   private async runSleepTimeCompute(window: SleepTimeWindow): Promise<void> {
@@ -2490,6 +2494,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         newId: () => `cons-${nanoid(10)}`,
         // Wire shapes stay inline: the broadcast-wiring gate reads `broadcast({ type: … })` off source.
         announce: (notice) => {
+          this.overviewChanged();
+
           if (notice.kind === 'raised') {
             const { consent } = notice;
             this.logActivity('device_consent_requested', `${consent.deviceLabel}: ${consent.command.slice(0, 80)}`);
@@ -2585,6 +2591,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // The needs-you queue is polled, not pushed; this frame tells clients to re-read it.
     this.broadcastToActor(null, JSON.stringify({ type: 'pending_actions_changed' }));
+    this.overviewChanged();
   }
 
   /** Read by the needs-you queue; also callable alone so a surface can render just this. */
@@ -3135,7 +3142,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Only an unclaimed workspace yields no approvals; other read failures must throw, never look empty.
    */
   @callable() async listPendingActions(): Promise<PendingAction[]> {
-    const board = this.getOwnerUserId() ? await this.getReleaseBoard(20) : null;
+    return this.pendingActions(this.getOwnerUserId() ? await this.getReleaseBoard(20) : null);
+  }
+
+  private pendingActions(board: ReleaseBoard | null): PendingAction[] {
     // The queue row needs the unseen count, newest time, and how many entries offer keep/revert.
     const unseen = getUnseenChangelog(this.boundSql, this.rt.actor);
 
@@ -4030,7 +4040,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       dispatch: (caller, route) => this.slateBindingDispatch(caller.path, route, caller.workMode),
       apps: {
         ensure: (input) => this.hostedWorkspace().apps.ensure(input),
-        reserved: (owner) => this.hostedWorkspace().apps.reserved(owner),
         remove: (owner) => this.hostedWorkspace().apps.remove(owner),
         url: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
       },
@@ -4378,6 +4387,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** The root's tabs read the claim when they load, and hear every change to it here. */
   protected override turnClaimChanged(): void {
     this.broadcastToActor(null, JSON.stringify({ type: TURN_CLAIM_FRAME, claim: this.turnClaimState() }));
+    this.overviewChanged();
   }
 
   /**
@@ -4400,16 +4410,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { recovered: 'requeued' };
   }
 
-  /**
-   * Home card read, folded from the workspace's own read models. Reads `hosted`, never `acquire`,
-   * so it boots nothing; a failed read propagates rather than zeroing the needs-you count.
-   */
-  @callable() async getWorkspaceOverview(): Promise<WorkspaceOverview> {
-    const [pendingActions, pendingConsents, activePlan, slates] = await Promise.all([
-      this.listPendingActions(),
+  /** Release approvals live in the owner's object, which counts them. Reads `hosted`, never `acquire`. */
+  async foldOverview(): Promise<WorkspaceOverview> {
+    const [pendingConsents, activePlan, listing] = await Promise.all([
       this.listPendingConsents(),
       this.getActivePlanReview(),
-      this.slates.addressed(ROOT_SLATE_CALLER),
+      this.slates.list(ROOT_SLATE_CALLER),
     ]);
 
     const hostedBusy = this.actorHost().list()
@@ -4418,15 +4424,48 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const header = this.eventRecorder.latestRunHeader();
 
     return buildWorkspaceOverview({
-      observedAt: Date.now(),
-      working: this._inFlight || hostedBusy,
+      // A settled turn's leftovers still closing are its work, not a durable leftover.
+      working: this._inFlight || hostedBusy || this.terminalClosing,
       unfinished: this.owedWorkExists(),
-      pendingActions,
+      pendingActions: this.pendingActions(null),
       pendingConsents,
       activePlan,
       scaffoldAutoApply: this.config.getAutoPromoteScaffold(),
       latestRun: header === null ? null : { status: header.status, task: header.userMessage },
-      slates,
+      slates: listing.slates.map((slate) => ({ id: slate.id, title: slate.title, picture: null })),
+    });
+  }
+
+  /** In memory: the owner's object ignores a repeat, so a new activation's first push is cheap. */
+  private pushedOverview: string | null = null;
+  private overviewDirty = false;
+  private overviewPushing = false;
+
+  /** A burst of changes folds once more after the push in flight. */
+  protected override overviewChanged(): void {
+    this.overviewDirty = true;
+
+    if (this.overviewPushing || this.getOwnerUserId() === null) return;
+    this.overviewPushing = true;
+    this.detachOwned(async () => {
+      try {
+        while (this.overviewDirty) {
+          this.overviewDirty = false;
+          const overview = await this.foldOverview();
+          const pushed = JSON.stringify(overview);
+
+          if (pushed === this.pushedOverview) continue;
+          const { stub, caller } = await this.userHub();
+          await stub.putWorkspaceOverview(caller, this.name, overview);
+          this.pushedOverview = pushed;
+        }
+      } catch (cause) {
+        diagnostics.failure('workspace.overview_push_failed', toKinuError({
+          doing: "pushing this workspace's tile to its owner's roster", cause, otherwise: 'unavailable',
+        }), { workspace: this.name });
+      } finally {
+        this.overviewPushing = false;
+      }
     });
   }
 

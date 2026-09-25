@@ -1,4 +1,4 @@
-/** Home-page background driven by the overview read model via `useRosterActivity`. */
+/** Home-page background driven by the roster's counts via `useRosterActivity`. */
 import { useEffect, useRef, type ReactElement } from 'react';
 import { useLocation } from 'react-router-dom';
 
@@ -7,7 +7,7 @@ import type { ArtFrame, KeepOut } from '@kinu.run/core/web/art';
 import { CANVAS_SEGMENTS, Connectome, type ConnectomeActivity, type ConnectomeMode, MESH_SEGMENTS } from '@kinu.run/core/web/connectome';
 import { groundTextElements } from '@kinu.run/core/web/ground-text';
 import { useMediaQuery } from '@/hooks/use-media-query';
-import { useRosterActivity } from '@/hooks/use-workspace-overviews';
+import { useRosterActivity } from '@/hooks/use-workspace-roster';
 import { mountLivingCanvas, type LivingCanvas, type RendererKind } from './landing/search-tree/living-canvas';
 import { keepOutOf, type FrameTimes } from './landing/search-tree/stage';
 

@@ -373,13 +373,6 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
 
         return { port: reserved.port, capability: reserved.capability };
       },
-      async reserved(owner) {
-        const held = await readPortReservationByOwner(deps.ctx, owner);
-
-        return held === null || held.reservation.capability === null
-          ? null
-          : { port: held.port, capability: held.reservation.capability };
-      },
       async remove(owner) {
         const removed = await (await runtime()).removeApp({ owner });
 

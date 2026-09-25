@@ -65,6 +65,7 @@ export interface WorkspaceHostSeams {
   pricing(): ModelPricing | null;
   /** Client fan-out, stamped with the actor so panes never share one stream. */
   broadcast(actorId: string, event: BroadcastEvent): void;
+  turnClaimChanged(): void;
   enqueueTurn(actor: BoundActor, input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
   /**
    * Is this actor mid-turn. Takes the bound actor, not an id: the host checks the
@@ -277,6 +278,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
     /** The actor's own event log, engine, governor and broadcast, never the root's objects. */
     orchestrationFor: (bound): AgentOrchestratorDeps => {
       const { runtime, stores, handle } = bound;
+      stores.claims.observe(() => { seams.turnClaimChanged(); });
 
       const budget = new MissionGovernor({
         storage: runtime.storage,

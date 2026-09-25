@@ -121,6 +121,11 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'workspaces.write', name: 'removeWorkspace', run: (u, c) => u.removeWorkspace(c, OTHER_WORKSPACE, USER_ID) },
 
   { capability: 'workspaces.rename_self', name: 'setWorkspaceDisplayName', run: (u, c) => u.setWorkspaceDisplayName(c, WORKSPACE, 'Renamed', 'user') },
+  {
+    capability: 'workspaces.overview_self',
+    name: 'putWorkspaceOverview',
+    run: (u, c) => u.putWorkspaceOverview(c, WORKSPACE, { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [] }),
+  },
 
   { capability: 'peers.grants', name: 'hasPeerGrant', run: (u, c) => u.hasPeerGrant(c, 'scout', 'b'.repeat(32)) },
 

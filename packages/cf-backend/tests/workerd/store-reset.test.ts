@@ -15,7 +15,6 @@ it('a store created before the conversation store reset is refused with one mess
 
   expect(await probe.plantRefusedWorkspace(workspace)).toContain('the pre-reset store is planted');
   expect(await probe.seed(workspace)).toEqual({ status: 415, body: JSON.stringify({ reason: 'unsupported', error: REFUSED }) });
-  expect(await probe.overview(workspace)).toContain(REFUSED);
 
   // The page shows a failed turn's answer from these frames, so the refusal is seen the moment the tab opens.
   const chat = await probe.chat(workspace);

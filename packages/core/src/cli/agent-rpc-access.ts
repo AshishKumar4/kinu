@@ -120,8 +120,6 @@ export const AGENT_RPC_ACCESS = {
   listCurriculumTasks: 'interactive',
   // An aggregate is as open as its strictest input (changelog, scaffold archive, curriculum).
   listPendingActions: 'interactive',
-  // `decisionsWaiting` counts interactive reads, so the aggregate is interactive too.
-  getWorkspaceOverview: 'interactive',
   listScaffoldVersions: 'interactive',
   listTurnFeedback: 'interactive',
   markChangelogSeen: 'interactive',

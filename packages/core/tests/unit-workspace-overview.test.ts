@@ -14,7 +14,6 @@ function action(kind: PendingAction['kind'], id = kind): PendingAction {
 }
 
 const EMPTY: WorkspaceOverviewInputs = {
-  observedAt: NOW,
   working: false,
   unfinished: false,
   pendingActions: [],
@@ -89,24 +88,6 @@ describe('buildWorkspaceOverview', () => {
     expect(v.is(WorkspaceOverviewSchema, overview)).toBe(true);
     expect(overview.latestRun?.task?.length).toBe(240);
     expect(overview.latestRun?.status).toBe('aborted');
-  });
-
-  test('the tile draws the first slate already addressed; an unaddressed one is not a picture', () => {
-    expect(buildWorkspaceOverview(EMPTY).primarySlate).toBeNull();
-
-    // An unreserved slate URL is skipped, not waited for: the card read starts no process.
-    const overview = buildWorkspaceOverview({
-      ...EMPTY,
-      slates: [
-        { id: 'sketch', title: 'Sketch', url: null },
-        { id: 'board', title: 'Coupon board', url: 'https://board.preview.test/' },
-        { id: 'ledger', title: 'Ledger', url: 'https://ledger.preview.test/' },
-      ],
-    });
-
-    expect(overview.primarySlate).toEqual({ id: 'board', title: 'Coupon board', url: 'https://board.preview.test/' });
-    expect(v.is(WorkspaceOverviewSchema, overview)).toBe(true);
-    expect(buildWorkspaceOverview({ ...EMPTY, slates: [{ id: 'sketch', title: 'Sketch', url: null }] }).primarySlate).toBeNull();
   });
 });
 

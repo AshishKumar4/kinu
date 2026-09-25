@@ -365,6 +365,17 @@ export function initUserTables(sql: SqlExec): void {
 
   initExperienceLibraryTables(sql);
 
+  // `activity` and `decisions` repeat the JSON's, so a filter parses none.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS workspace_overviews (
+      name       TEXT PRIMARY KEY,
+      overview   TEXT NOT NULL,
+      activity   TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle')),
+      decisions  INTEGER NOT NULL,
+      changed_at INTEGER NOT NULL
+    )
+  `);
+
   // A projection: every read re-asks the owner's workspace, so a stale row can only list something that refuses.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_shares_received (

@@ -1,3 +1,4 @@
+/** The owner's roster, read in pages from the owner's own object and kept current by one socket per tab. */
 import * as v from "valibot";
 import {
   createContext,
@@ -7,133 +8,277 @@ import {
   useMemo,
   useRef,
   useState,
-  useTransition,
   type ReactNode,
 } from "react";
 
+import { rosterBucket, rosterMatches, type RosterBucket } from "@kinu.run/core";
 import {
-  listWorkspaces,
-  type WorkspaceEntry,
+  listWorkspaces, RosterFrameSchema, ROSTER_SOCKET_ROUTE,
+  type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry,
 } from "@/lib/user-api";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, tolerate } from "@kinu.run/core/obs";
 
-interface WorkspaceRosterValue {
-  readonly entries: readonly WorkspaceEntry[];
+const ROSTER_PAGE = 50;
+
+export const RECENT_WORKSPACES = 5;
+
+const NO_COUNTS: RosterCounts = { all: 0, needs: 0, working: 0, idle: 0, decisions: 0 };
+
+type FrameListener = (frame: RosterFrame) => void;
+
+export interface RosterFilter {
+  readonly bucket?: RosterBucket;
+  readonly q?: string;
+}
+
+export interface RosterPages {
+  readonly entries: readonly RosterEntry[];
+  /** What the filter matches. */
   readonly total: number;
+  readonly counts: RosterCounts;
+  readonly hasMore: boolean;
+  /** No answer for this filter has landed yet. */
+  readonly loading: boolean;
   readonly error: string | null;
+  readonly loadMore: () => void;
+}
+
+interface WorkspaceRosterValue extends RosterPages {
   readonly pending: boolean;
   readonly refresh: () => void;
   readonly upsert: (entry: WorkspaceEntry) => void;
   readonly rename: (name: string, displayName: string) => void;
   readonly remove: (name: string) => void;
+  readonly subscribe: (listener: FrameListener) => () => void;
+  /** Moves on each socket open, since frames missed while it was down are not replayed. */
+  readonly epoch: number;
 }
+
+const WorkspaceRosterContext = createContext<WorkspaceRosterValue | null>(null);
 
 const WorkspaceRenameSchema = v.object({
   name: v.string(),
   displayName: v.string(),
 });
 
-const WorkspaceRosterContext = createContext<WorkspaceRosterValue | null>(null);
+function matchesFilter(entry: RosterEntry, filter: RosterFilter): boolean {
+  const bucket = rosterBucket(entry.overview?.activity ?? null, entry.overview?.decisionsWaiting ?? 0);
 
-export function WorkspaceRosterProvider({ children }: { readonly children: ReactNode }) {
-  const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
-  const [total, setTotal] = useState(0);
+  return (filter.bucket === undefined || bucket === filter.bucket) && rosterMatches(entry, filter.q ?? "");
+}
+
+function comesBefore(entry: RosterEntry, other: RosterEntry): boolean {
+  return entry.lastVisited > other.lastVisited || (entry.lastVisited === other.lastVisited && entry.name < other.name);
+}
+
+/** A change that falls past the loaded pages is left to the page that brings it. */
+function applyFrame(entries: readonly RosterEntry[], frame: RosterFrame, filter: RosterFilter, complete: boolean): RosterEntry[] {
+  const rest = entries.filter((entry) => entry.name !== frame.name);
+  const changed = frame.entry;
+
+  if (changed === null || !matchesFilter(changed, filter)) return rest;
+  const at = rest.findIndex((other) => comesBefore(changed, other));
+
+  if (at < 0) return complete ? [...rest, changed] : rest;
+
+  return [...rest.slice(0, at), changed, ...rest.slice(at)];
+}
+
+/** A search's total moves only with what the loaded pages saw enter or leave. */
+function totalAfter(before: Pick<PagesState, 'entries' | 'total'>, frame: RosterFrame, filter: RosterFilter, entries: readonly RosterEntry[]): number {
+  if ((filter.q ?? "").trim() === "") return filter.bucket === undefined ? frame.counts.all : frame.counts[filter.bucket];
+  const was = before.entries.some((entry) => entry.name === frame.name);
+  const is = entries.some((entry) => entry.name === frame.name);
+
+  return before.total + (is ? 1 : 0) - (was ? 1 : 0);
+}
+
+interface PagesState {
+  readonly filter: RosterFilter | null;
+  readonly entries: readonly RosterEntry[];
+  readonly total: number;
+  readonly counts: RosterCounts;
+  readonly nextCursor: string | null;
+}
+
+const EMPTY_PAGES: PagesState = { filter: null, entries: [], total: 0, counts: NO_COUNTS, nextCursor: null };
+
+/** A frame that lands during a read is applied again over its answer, which may predate it. */
+function useRosterPages(filter: RosterFilter | null, subscribe: WorkspaceRosterValue["subscribe"], epoch: number) {
+  const [state, setState] = useState<PagesState>(EMPTY_PAGES);
   const [error, setError] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
-  const knownNames = useRef(new Set<string>());
+  /** A retired read counts until its reply is consumed. */
+  const [reading, setReading] = useState(0);
   /** Bumped by every read and every local edit, so an older reply never publishes over either. */
   const generation = useRef(0);
+  const framesDuringRead = useRef<RosterFrame[]>([]);
+  const loaded = useRef(0);
+  const active = filter !== null;
+  const bucket = filter?.bucket;
+  const q = filter?.q;
+  const stable = useMemo<RosterFilter>(() => ({ bucket, q }), [bucket, q]);
 
-  type RosterRead =
-    | { readonly kind: "roster"; readonly roster: { readonly entries: WorkspaceEntry[]; readonly total: number } }
-    | { readonly kind: "failure"; readonly cause: unknown };
+  const publish = useCallback((current: number, answer: RosterPage, merge: (answer: RosterPage) => PagesState): void => {
+    if (current !== generation.current) return;
+    const merged = merge(answer);
+    let { entries, total, counts } = merged;
 
-  const readRoster = useCallback(async (): Promise<{
-    readonly generation: number;
-    readonly outcome: RosterRead;
-  }> => {
-    const current = ++generation.current;
-
-    try {
-      return { generation: current, outcome: { kind: "roster", roster: await listWorkspaces() } };
-    } catch (cause) {
-      return { generation: current, outcome: { kind: "failure", cause } };
-    }
-  }, []);
-
-
-  const loadRoster = useCallback(async (): Promise<void> => {
-    const read = await readRoster();
-
-    if (read.generation !== generation.current) return;
-
-    if (read.outcome.kind === "failure") {
-      setError(renderThrownChain({ cause: read.outcome.cause }));
-
-      return;
+    for (const frame of framesDuringRead.current) {
+      const moved = applyFrame(entries, frame, stable, merged.nextCursor === null);
+      total = totalAfter({ entries, total }, frame, stable, moved);
+      entries = moved;
+      counts = frame.counts;
     }
 
-    knownNames.current = new Set(read.outcome.roster.entries.map((entry) => entry.name));
-    setEntries(read.outcome.roster.entries);
-    setTotal(read.outcome.roster.total);
+    loaded.current = entries.length;
+    setState({ ...merged, entries, total, counts });
     setError(null);
-  }, [readRoster]);
+  }, [stable]);
 
-  const refresh = useCallback((): void => {
-    startTransition(async () => { await loadRoster(); });
-  }, [loadRoster, startTransition]);
+  const read = useCallback((cursor: string | null, limit: number, merge: (answer: RosterPage) => PagesState): void => {
+    const current = ++generation.current;
+    framesDuringRead.current = [];
+    setReading((count) => count + 1);
 
-  // A local edit retires any in-flight read; publishing it would undo the edit.
-  const retireReads = useCallback((): void => { generation.current += 1; }, []);
+    // Dropped in the publish's batch, so `pending` never falls before the answer shows.
+    listWorkspaces({ cursor, limit, bucket: stable.bucket, q: stable.q }).then(
+      (answer) => {
+        publish(current, answer, merge);
+        setReading((count) => count - 1);
+      },
+      (...failure: [unknown]) => {
+        if (current === generation.current) setError(renderThrownChain({ cause: failure[0] }));
+        setReading((count) => count - 1);
+      },
+    );
+  }, [stable, publish]);
 
-  const upsert = useCallback((entry: WorkspaceEntry): void => {
-    retireReads();
-    const added = !knownNames.current.has(entry.name);
-    knownNames.current.add(entry.name);
-    setEntries((current) => {
-      const existing = current.findIndex((item) => item.name === entry.name);
+  // Everything loaded, in one read the object clamps, so a reconnect keeps the reader's place.
+  const reload = useCallback((): void => {
+    read(null, Math.max(ROSTER_PAGE, loaded.current), (answer) => ({
+      filter: stable, entries: answer.entries, total: answer.total, counts: answer.counts, nextCursor: answer.nextCursor,
+    }));
+  }, [read, stable]);
 
-      if (existing < 0) return [entry, ...current];
+  const loadMore = useCallback((): void => {
+    if (state.nextCursor === null) return;
+    const known = new Set(state.entries.map((entry) => entry.name));
 
-      return current.map((item, index) => index === existing ? entry : item);
-    });
-
-    if (added) setTotal((current) => current + 1);
-  }, [retireReads]);
-
-  const rename = useCallback((name: string, displayName: string): void => {
-    retireReads();
-    setEntries((current) => current.map((entry) => (
-      entry.name === name ? { ...entry, displayName } : entry
-    )));
-  }, [retireReads]);
-
-  const remove = useCallback((name: string): void => {
-    retireReads();
-    const removed = knownNames.current.delete(name);
-    setEntries((current) => current.filter((entry) => entry.name !== name));
-
-    if (removed) setTotal((current) => Math.max(0, current - 1));
-  }, [retireReads]);
+    read(state.nextCursor, ROSTER_PAGE, (answer) => ({
+      filter: stable, entries: [...state.entries, ...answer.entries.filter((entry) => !known.has(entry.name))],
+      total: answer.total, counts: answer.counts, nextCursor: answer.nextCursor,
+    }));
+  }, [read, state, stable]);
 
   useEffect(() => {
-    const sync = (): void => {
-      if (document.visibilityState !== "visible") return;
-      refresh();
+    if (active && epoch > 0) reload();
+  }, [active, epoch, reload]);
+
+  useEffect(() => active ? subscribe((frame) => {
+    framesDuringRead.current.push(frame);
+    setState((current) => {
+      const entries = applyFrame(current.entries, frame, stable, current.nextCursor === null);
+
+      return { ...current, entries, total: totalAfter(current, frame, stable, entries), counts: frame.counts };
+    });
+  }) : undefined, [active, subscribe, stable]);
+
+  /** A local edit retires any in-flight read; publishing it would undo the edit. */
+  const edit = useCallback((change: (entries: readonly RosterEntry[]) => readonly RosterEntry[]): void => {
+    generation.current += 1;
+    setState((current) => ({ ...current, filter: stable, entries: change(current.filter === stable ? current.entries : []) }));
+  }, [stable]);
+
+  const pages = useMemo<RosterPages>(() => {
+    const current = state.filter === stable;
+
+    return {
+      entries: current ? state.entries : [], total: current ? state.total : 0, counts: state.counts,
+      hasMore: current && state.nextCursor !== null, loading: !current, error, loadMore,
+    };
+  }, [state, stable, error, loadMore]);
+
+  return { pages, reload, edit, pending: reading > 0 };
+}
+
+function rosterSocketUrl(): string {
+  return `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${ROSTER_SOCKET_ROUTE}`;
+}
+
+const ALL: RosterFilter = {};
+
+export function WorkspaceRosterProvider({ children }: { readonly children: ReactNode }) {
+  const listeners = useRef(new Set<FrameListener>());
+  const [epoch, setEpoch] = useState(0);
+
+  const subscribe = useCallback((listener: FrameListener): () => void => {
+    listeners.current.add(listener);
+
+    return () => { listeners.current.delete(listener); };
+  }, []);
+
+  const { pages, reload: refresh, edit, pending } = useRosterPages(ALL, subscribe, epoch);
+
+  // A socket that cannot open still owes the page its first read.
+  useEffect(() => {
+    let stopped = false;
+    let attempts = 0;
+    let timer: number | undefined;
+    let socket: WebSocket | null = null;
+
+    const connect = (): void => {
+      const opened = new WebSocket(rosterSocketUrl());
+      let open = false;
+      socket = opened;
+
+      opened.addEventListener("open", () => {
+        open = true;
+        attempts = 0;
+        setEpoch((current) => current + 1);
+      });
+
+      opened.addEventListener("message", (event: MessageEvent) => {
+        const text = v.is(v.string(), event.data) ? event.data : "";
+        const frame = v.safeParse(RosterFrameSchema, tolerate(() => JSON.parse(text), "malformed-input"));
+
+        if (!frame.success) return;
+
+        for (const listener of listeners.current) listener(frame.output);
+      });
+
+      opened.addEventListener("close", () => {
+        if (stopped || socket !== opened) return;
+
+        if (!open) setEpoch((current) => Math.max(current, 1));
+        timer = window.setTimeout(connect, Math.min(30_000, 1_000 * 2 ** attempts));
+        attempts += 1;
+      });
     };
 
-    refresh();
-    const interval = window.setInterval(sync, 30_000);
-    window.addEventListener("focus", sync);
-    document.addEventListener("visibilitychange", sync);
+    connect();
 
     return () => {
-      generation.current += 1;
-      window.clearInterval(interval);
-      window.removeEventListener("focus", sync);
-      document.removeEventListener("visibilitychange", sync);
+      stopped = true;
+      window.clearTimeout(timer);
+      socket?.close();
     };
-  }, [refresh]);
+  }, []);
+
+  const upsert = useCallback((entry: WorkspaceEntry): void => {
+    const added: RosterEntry = { ...entry, overview: null };
+
+    edit((entries) => entries.some((each) => each.name === entry.name)
+      ? entries.map((each) => each.name === entry.name ? { ...each, ...entry } : each)
+      : [added, ...entries]);
+  }, [edit]);
+
+  const rename = useCallback((name: string, displayName: string): void => {
+    edit((entries) => entries.map((entry) => entry.name === name ? { ...entry, displayName } : entry));
+  }, [edit]);
+
+  const remove = useCallback((name: string): void => {
+    edit((entries) => entries.filter((entry) => entry.name !== name));
+  }, [edit]);
 
   useEffect(() => {
     const handleRename = (event: Event): void => {
@@ -155,15 +300,8 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
   }, [refresh, rename]);
 
   const value = useMemo<WorkspaceRosterValue>(() => ({
-    entries,
-    total,
-    error,
-    pending,
-    refresh,
-    upsert,
-    rename,
-    remove,
-  }), [entries, total, error, pending, refresh, upsert, rename, remove]);
+    ...pages, total: pages.counts.all, pending, refresh, upsert, rename, remove, subscribe, epoch,
+  }), [pages, pending, refresh, upsert, rename, remove, subscribe, epoch]);
 
   return <WorkspaceRosterContext.Provider value={value}>{children}</WorkspaceRosterContext.Provider>;
 }
@@ -174,4 +312,18 @@ export function useWorkspaceRoster(): WorkspaceRosterValue {
   if (roster === null) throw new Error("useWorkspaceRoster requires WorkspaceRosterProvider");
 
   return roster;
+}
+
+/** Null for a null filter. */
+export function useFilteredRoster(filter: RosterFilter | null): RosterPages | null {
+  const { subscribe, epoch } = useWorkspaceRoster();
+  const { pages } = useRosterPages(filter, subscribe, epoch);
+
+  return filter === null ? null : pages;
+}
+
+export function useRosterActivity() {
+  const { counts } = useWorkspaceRoster();
+
+  return { working: counts.working > 0, decisions: counts.decisions };
 }

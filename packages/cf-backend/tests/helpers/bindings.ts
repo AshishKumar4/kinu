@@ -252,6 +252,7 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
   const refuse = (member: string) => unreached('UserDO', member);
 
   return {
+    fetch: refuse('fetch'),
     ensureProfile: refuse('ensureProfile'),
     getProfile: refuse('getProfile'),
     getProfileCatalog: refuse('getProfileCatalog'),
