@@ -1,7 +1,7 @@
 // The Node `eval` factory must match the CF codemode sandbox: capture console.* as `logs` (stdout is the
 // `kinu exec --json` event stream) and implicit-return a trailing expression.
 import { describe, expect, test } from 'bun:test';
-import { jsonSchema, tool } from 'ai';
+import { asSchema, jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
 import type { CodemodeProvider, CraftedToolSet, JsonValue, SlateOperation } from '@kinu.run/core';
 import { CODEMODE_CODE_DESCRIPTION, SlateOperationSchema, WORKSPACE_ROOT, createInlineExecutor } from '@kinu.run/core';
@@ -26,7 +26,7 @@ function makeTool(): ExecuteTool {
 }
 
 describe('createNodeCodemodeToolFactory — the code field the model reads', () => {
-  test('the input schema describes a script body, not an arrow function', () => {
+  test('the input schema describes a script body, not an arrow function', async () => {
     const built = createNodeCodemodeToolFactory()({ native: {}, craftedTools: () => ({}), providers: [] });
 
     const schema = v.parse(v.object({
@@ -34,7 +34,7 @@ describe('createNodeCodemodeToolFactory — the code field the model reads', () 
         properties: v.object({ code: v.object({ description: v.string() }) }),
         required: v.array(v.string()),
       }),
-    }), built.inputSchema).jsonSchema;
+    }), { jsonSchema: await asSchema(built.inputSchema).jsonSchema }).jsonSchema;
 
     expect(schema.properties.code.description).toBe(CODEMODE_CODE_DESCRIPTION);
     expect(schema.required).toEqual(['code']);

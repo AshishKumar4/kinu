@@ -2,8 +2,10 @@
 // strategy/node-agent.ts). Every turn is a claimed actor turn on `ActorSession`.
 // Inherited context: docs/EXPLORATION.md "Inherited context".
 
+import { z } from 'zod';
+import { invalidToolCallRefusal, oneOf } from '../tools/tool-schema';
 import {
-  tool, jsonSchema,
+  tool,
   type ToolSet, type LanguageModel, type ModelMessage, type StepResult, type ToolExecutionOptions,
 } from 'ai';
 import type { ObserveStream } from '../chat';
@@ -13,6 +15,7 @@ import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
 import type { DynamicContext } from '../prompting/volatile-context';
 import type { PromptModelContext } from '../prompting/model-profile';
 import {
+  EVIDENCE_KINDS,
   type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
   type Evidence, type Decision, type ArtifactRef,
 } from './types';
@@ -70,19 +73,26 @@ export interface HeadToolCall extends ToolCallRecord {
 import { permitInPlan } from '../execution/work-mode';
 import type { Clock } from '../types/clock';
 
+const RecordEvidenceInputSchema = z.object({
+  kind: oneOf(EVIDENCE_KINDS),
+  body: z.string(),
+  ref: z.string().optional(),
+  confidence: z.number().meta({ minimum: 0, maximum: 1 }).optional(),
+});
+
+const RecordDecisionInputSchema = z.object({
+  question: z.string(),
+  choice: z.string(),
+  rationale: z.string(),
+  supportingEvidence: z.array(z.string()).optional(),
+});
+
 export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
   return {
     record_evidence: permitInPlan(tool({
       description:
         "Record a piece of evidence you've gathered. Use this for facts you want surfaced in the merge synthesis.",
-      inputSchema: jsonSchema<{ kind: Evidence['kind']; body: string; ref?: string; confidence?: number }>({
-        type: 'object', required: ['kind', 'body'],
-        properties: {
-          kind: { type: 'string', enum: ['tool_output', 'fact', 'citation', 'artifact'] },
-          body: { type: 'string' }, ref: { type: 'string' },
-          confidence: { type: 'number', minimum: 0, maximum: 1 },
-        },
-      }),
+      inputSchema: RecordEvidenceInputSchema,
       execute: async ({ kind, body, ref, confidence }) => {
         const ev: Evidence = { id: `ev-${nanoid(6)}`, kind, body, ref, confidence };
         capture.recordEvidence(ev);
@@ -92,13 +102,7 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
     })),
     record_decision: permitInPlan(tool({
       description: 'Record a decision the head considered.',
-      inputSchema: jsonSchema<{ question: string; choice: string; rationale: string; supportingEvidence?: string[] }>({
-        type: 'object', required: ['question', 'choice', 'rationale'],
-        properties: {
-          question: { type: 'string' }, choice: { type: 'string' }, rationale: { type: 'string' },
-          supportingEvidence: { type: 'array', items: { type: 'string' } },
-        },
-      }),
+      inputSchema: RecordDecisionInputSchema,
       execute: async ({ question, choice, rationale, supportingEvidence }) => {
         const d: Decision = { question, choice, rationale, supportingEvidence };
         capture.recordDecision(d);
@@ -118,6 +122,22 @@ export function withHeadCaptureRecording(tools: ToolSet, capture: HeadCapture): 
   }
 
   return out;
+}
+
+/** A schema-refused call never reaches {@link recordingTool}. */
+function recordRefusedCalls(step: StepResult<ToolSet>, capture: HeadCapture): void {
+  for (const part of step.content) {
+    if (part.type !== 'tool-call') continue;
+    const refusal = invalidToolCallRefusal(part);
+
+    if (refusal === undefined) continue;
+    const value = projectJsonValue({ value: part.input });
+
+    capture.recordToolCall({
+      name: part.toolName, args: isJsonObject(value) ? value : { input: value }, result: renderThrownChain({ cause: refusal }),
+      outcome: failedToolOutcome({ cause: refusal }), toolCallId: part.toolCallId,
+    });
+  }
 }
 
 function recordingTool<Entry extends ToolSet[string]>(
@@ -635,6 +655,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
 
   const onStep = async (step: StepResult<ToolSet>): Promise<void> => {
     if (step.reasoningText?.trim()) lastReasoning = step.reasoningText;
+    recordRefusedCalls(step, capture);
     const traced = toHeadStep(step);
 
     if (traced) {

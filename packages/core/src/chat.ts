@@ -43,6 +43,7 @@ import { callAccountOf, type CallAccount } from './providers/quota';
 import { classifyErrorCode, diagnostics, toKinuError } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
+import { invalidToolCallRefusal, toolSchemaDialect, withToolSchemaDialect } from './tools/tool-schema';
 import { ToolOutcomeSchema } from './types/tool-outcome';
 
 export type ChatEvent =
@@ -297,6 +298,9 @@ class ProviderCall {
   private stepHadOutput = false;
   /** The in-flight step's content: the SDK records only finished steps, so a cut would otherwise lose it. */
   private stepContent: Array<TextPart | ToolCallPart> = [];
+
+  /** Schema-refused calls, until their tool-error arrives. */
+  private readonly refusedCalls = new Map<string, Error>();
   /** A call can run before `fullStream` publishes it; kept until its step completes so a cut keeps admitted work. */
   private readonly dispatchedCalls = new Map<string, { readonly call: ToolCallPart; readonly startedAt: number }>();
   private responseSoFar: readonly ModelMessage[] = [];
@@ -371,6 +375,9 @@ class ProviderCall {
       case 'tool-call': {
         this.stepHadOutput = true;
         this.stepContent.push({ type: 'tool-call', toolCallId: chunk.toolCallId, toolName: chunk.toolName, input: chunk.input });
+        const refusal = invalidToolCallRefusal(chunk);
+
+        if (refusal !== undefined) this.refusedCalls.set(chunk.toolCallId, refusal);
 
         return { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args: parseToolArgs(chunk.input) };
       }
@@ -386,12 +393,14 @@ class ProviderCall {
       }
 
       case 'tool-error': {
-        // A tool threw: the error text is the durable outcome and the extension seam's result.
-        const error = describeProviderError({ cause: chunk.error });
+        // A tool threw or its schema refused: the error text is the durable outcome and the seam's result.
+        const cause = this.refusedCalls.get(chunk.toolCallId) ?? chunk.error;
+        this.refusedCalls.delete(chunk.toolCallId);
+        const error = describeProviderError({ cause });
 
         return {
           type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: error, error,
-          ...this.toolDuration(chunk.toolCallId), ...failedToolOutcome({ cause: chunk.error }),
+          ...this.toolDuration(chunk.toolCallId), ...failedToolOutcome({ cause }),
         };
       }
 
@@ -534,6 +543,11 @@ function turnText(streamed: string, steps: readonly StepResult<ToolSet>[], answe
   return allText;
 }
 
+/** The serving model as `provider/model`, which the tool-schema dialect reads. */
+function dialectSpec(current: { readonly spec: string; readonly provider: string | undefined }): string {
+  return current.spec.includes('/') || current.provider === undefined ? current.spec : `${current.provider}/${current.spec}`;
+}
+
 /** One chat turn; callers append its response messages to history. A cut turn yields `done`, then throws
  *  {@link INTERRUPTED_TURN}; a dead provider stream throws without `done`. */
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
@@ -668,7 +682,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // Ours, not the vendor's default: see PROVIDER_SDK_RETRIES.
       maxRetries: PROVIDER_SDK_RETRIES,
       messages: [...request],
-      tools,
+      tools: withToolSchemaDialect(tools, toolSchemaDialect(dialectSpec(current))),
       ...offeredTools,
       stopWhen: [opts.stopWhen ?? UNBOUNDED_STEPS, () => call.stepFailure !== null],
       // Settled rewrites only (name case, fenced or double-encoded args); otherwise the model retries.

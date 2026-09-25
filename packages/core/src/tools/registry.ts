@@ -230,16 +230,6 @@ export const FILE_TOOL_ACTIONS = ['read', 'write', 'edit', 'list', 'stat', 'sear
 
 export type FileToolAction = (typeof FILE_TOOL_ACTIONS)[number];
 
-/** Shared unknown-discriminant error: lists the vocabulary and JSON-quotes what arrived. */
-export function unknownActionError(
-  tool: string,
-  field: string,
-  received: string,
-  allowed: readonly string[],
-): string {
-  return `${tool} requires \`${field}\` — one of ${allowed.join(', ')}; got ${JSON.stringify(received)}`;
-}
-
 // `tasks` is separate from `memory`: live plan state for current work, not durable recall.
 
 export const TASKS_TOOL_ACTIONS = ['add', 'update', 'list', 'mode'] as const;

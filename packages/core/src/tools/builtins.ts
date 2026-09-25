@@ -4,28 +4,25 @@
  * Skills are plain files and `release` is a codemode namespace, not native tools.
  */
 
-import { tool, jsonSchema } from 'ai';
+import { tool } from 'ai';
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
+import { z } from 'zod';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { SessionHistory } from '../session/history';
 import type { ExecutorProviderSurface } from '../execution/types';
 import {
-  BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription,
-  memoryActionsFor, TASKS_TOOL_ACTIONS, WEB_TOOL_ACTIONS, unknownActionError, keepBuiltins, type WebToolAction,
+  BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription, WEB_TOOL_ACTIONS, keepBuiltins,
 } from './registry';
-import { TaskListStore, TASK_STATUSES } from './task-store';
+import { TaskListStore } from './task-store';
 import { clampToolResult, withClampedToolResult, type ClampToolResultOptions } from './clamp';
-import { withCheckedInput, withCheckedInputs } from './tool-schema';
+import { oneOf, withCheckedInput, withCheckedInputs } from './tool-schema';
 import { codemodeInputSchema } from './sandbox-contract';
 import { connectedDevices } from '../execution/device-status';
 import { deviceMountSegment } from '../execution/device-tunnel-executor';
 import { referenceRoots } from '../vfs/references';
-import { dispatchReport, reportHandoffProperties, type ReportToolInput } from './report-tool';
-import {
-  SUBORDINATE_REPORT_STATUSES,
-  type SubordinateReportHandoff, type SubordinateReportStatus,
-} from '../events/hub/types';
+import { dispatchReport, ReportBodySchema, ReportToolInputSchema } from './report-tool';
+import type { SubordinateReportHandoff, SubordinateReportStatus } from '../events/hub/types';
 import { createFileToolSteer } from './shell-file-steer';
 import { createFileTool } from './file-tool';
 import { TurnFileLedger } from '../vfs/file-ledger';
@@ -36,10 +33,10 @@ import { attributeCraftedFailure } from '../craft/attribution';
 import { DEFAULT_CONFIG } from '../config';
 import { commandResult, CommandResultSchema, type CommandResult } from '../execution/exec-result';
 import { TurnEscalationLedger } from '../execution/escalation';
-import { createMemoryDispatcher, type MemoryToolInput } from './memory-tool';
-import { createTasksDispatcher, type RoleSwitch, type TasksToolInput } from './tasks-tool';
+import { createMemoryDispatcher, memoryToolInputSchema } from './memory-tool';
+import { createTasksDispatcher, TasksToolInputSchema, type RoleSwitch } from './tasks-tool';
 import { type WebSearchProvider, type WebSearchResponse } from '../web/index';
-import type { PlanEdit, SubmitPlanToolDeps } from '../types/plans';
+import { PlanEditSchema, type SubmitPlanToolDeps } from '../types/plans';
 import type { JsonValue } from '../utils/json';
 import { diagnostics, KinuError, toKinuError, type Logger } from '../obs/index';
 // heads/types.ts holds no runtime import, so this edge cannot close a ring.
@@ -183,13 +180,25 @@ function memoizeCraftedExecute(factory: CraftedToolExecute): CraftedToolExecute 
   };
 }
 
-const WebActionSchema = v.picklist(WEB_TOOL_ACTIONS);
+const WebToolInputSchema = z.object({
+  action: oneOf(WEB_TOOL_ACTIONS),
+  query: z.string().describe('For search.').optional(),
+  limit: z.number().describe('For search: max results (default 5, max 20).').optional(),
+  url: z.string().describe('For fetch: an absolute http(s) URL.').optional(),
+});
 
-interface WebToolInput {
-  action: WebToolAction;
-  query?: string;
-  limit?: number;
-  url?: string;
+const PlanEditsInputSchema = z.object({ edits: z.array(PlanEditSchema).min(1) });
+
+/** Device nicknames are not in the enum, so it stays advisory: any string passes, and an unknown one is a device. */
+function shellInputSchema(runtimes: readonly string[]) {
+  return z.object({
+    command: z.string(),
+    runtime: z.string().meta({
+      enum: [...runtimes],
+      description: 'Default: workspace. A user\'s machine goes by its nickname from the execution status, which is required when several are connected.',
+    }).optional(),
+    why: z.string().describe('Required for any runtime but workspace: what it gives that the workspace shell lacks (a long-running process, an inbound port, parallelism, resources). Recorded with the outcome.').optional(),
+  });
 }
 
 /** Log event names; constants so emitter and query spell them identically. Only refusals and handled failures. */
@@ -221,7 +230,6 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const router = rt.executionRouter;
   const shell = rt.shell;
 
-  // Device nicknames are not in the enum; any unknown value routes to the device executor.
   const shellRuntimes = [...new Set(['workspace', ...(router?.listExecutors().map(({ name }) => name) ?? [])])];
 
   const budget = deps.contextBudget ?? new TurnContextBudget();
@@ -255,23 +263,8 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // No fallback chain: an unready runtime returns a structured error, never silently routes elsewhere.
   tools.shell = tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.shell,
-    inputSchema: jsonSchema<{ command: string; runtime?: string; why?: string }>({
-      type: 'object',
-      properties: {
-        command: { type: 'string' },
-        runtime: {
-          type: 'string',
-          enum: shellRuntimes,
-          description: 'Default: workspace. A user\'s machine goes by its nickname from the execution status, which is required when several are connected.',
-        },
-        why: {
-          type: 'string',
-          description: 'Required for any runtime but workspace: what it gives that the workspace shell lacks (a long-running process, an inbound port, parallelism, resources). Recorded with the outcome.',
-        },
-      },
-      required: ['command'],
-    }),
-    execute: async (args: { command: string; runtime?: string; why?: string }, options?: ToolExecutionOptions) => {
+    inputSchema: shellInputSchema(shellRuntimes),
+    execute: async (args, options?: ToolExecutionOptions) => {
       requireBuild('Native shell execution');
       const signal = options?.abortSignal;
       // Approval lives at the execution seam (execution/approval.ts), not here.
@@ -388,56 +381,16 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
 
   tools.memory = permitInPlan(tool({
     description: renderToolSchemaDescription(memoryToolSpec(facts !== undefined)),
-    inputSchema: jsonSchema<MemoryToolInput>({
-      type: 'object',
-      properties: {
-        action: {
-          type: 'string',
-          enum: [...memoryActionsFor(facts !== undefined)],
-          description: facts
-            ? 'remember, recall, forget: a keyed fact. save: a note. search: notes and facts. conversations: your past conversations.'
-            : 'save: a note. search: notes. conversations: your past conversations.',
-        },
-        key: { type: 'string', description: 'For remember, recall, forget: a stable name such as "deploy.target".' },
-        value: { description: 'For remember: any JSON value.' },
-        confidence: { type: 'number', minimum: 0, maximum: 1, description: 'For remember; default 1.' },
-        content: { type: 'string', description: 'For save.' },
-        query: {
-          type: 'string',
-          description: 'For search. For conversations: every term must match; omit it to browse archived conversations.',
-        },
-        around_message_id: { type: 'string', description: 'For conversations: read around this message instead of searching.' },
-        window: { type: 'number', description: 'For conversations around a message: messages each side (default 5, max 20).' },
-        max_chars: { type: 'number', description: 'For conversations around a message: characters per message (default 700).' },
-        limit: { type: 'number', description: 'For conversations: max hits (default 5, max 10), or archived conversations (default 10, max 20).' },
-      },
-      required: ['action'],
-    }),
-    execute: async (args: MemoryToolInput) => runMemoryAction(args),
+    inputSchema: memoryToolInputSchema(facts !== undefined),
+    execute: async (args) => runMemoryAction(args),
   }));
 
   const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync);
   const runTasksAction = createTasksDispatcher(taskList, rt.actor.config, deps.roleSwitch);
   tools.tasks = permitInPlan(tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.tasks,
-    inputSchema: jsonSchema<TasksToolInput>({
-      type: 'object',
-      properties: {
-        action: {
-          type: 'string',
-          enum: [...TASKS_TOOL_ACTIONS],
-          description: 'add, update or list tasks; mode reads or switches your role.',
-        },
-        titles: { type: 'array', items: { type: 'string' }, description: 'For add: one title per task, in order.' },
-        parent: { type: 'string', description: 'For add: the task id these are subtasks of; one level only.' },
-        id: { type: 'string', description: 'For update: the task id, such as "t3".' },
-        status: { type: 'string', enum: [...TASK_STATUSES], description: 'For update.' },
-        note: { type: ['string', 'null'], description: 'For update: a one-line note beside the item; null clears it. Update needs `status` or `note`.' },
-        role: { type: 'string', description: 'For mode: the role id to switch to from your next turn; omit it to read the active role.' },
-      },
-      required: ['action'],
-    }),
-    execute: async (args: TasksToolInput) => runTasksAction(args),
+    inputSchema: TasksToolInputSchema,
+    execute: async (args) => runTasksAction(args),
   }));
 
   const webSearch = deps.webSearch;
@@ -445,28 +398,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   if (webSearch) {
     tools.web = permitInPlan(tool({
       description: BUILTIN_TOOL_DESCRIPTIONS.web,
-      inputSchema: jsonSchema<WebToolInput>({
-        type: 'object',
-        properties: {
-          action: {
-            type: 'string',
-            enum: [...WEB_TOOL_ACTIONS],
-          },
-          query: { type: 'string', description: 'For search.' },
-          limit: { type: 'number', description: 'For search: max results (default 5, max 20).' },
-          url: { type: 'string', description: 'For fetch: an absolute http(s) URL.' },
-        },
-        required: ['action'],
-      }),
-      execute: async (args: WebToolInput) => {
-        // The AI SDK does not validate jsonSchema-declared inputs; refuse with the vocabulary.
-        const action = v.safeParse(WebActionSchema, args.action);
-
-        if (!action.success) {
-          throw new KinuError('bad_input', unknownActionError('web', 'action', args.action, WEB_TOOL_ACTIONS));
-        }
-
-        switch (action.output) {
+      inputSchema: WebToolInputSchema,
+      execute: async (args) => {
+        switch (args.action) {
           case 'search': {
             if (!args.query) throw new KinuError('bad_input', 'web.search requires `query`');
             const res = await webSearch.search(args.query, args.limit !== undefined ? { limit: args.limit } : undefined);
@@ -491,24 +425,12 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
 
   if (deps.report) {
     const report = deps.report;
-    tools.report = permitInPlan(tool({
-      description: BUILTIN_TOOL_DESCRIPTIONS.report,
-      inputSchema: jsonSchema<ReportToolInput>({
-        type: 'object',
-        properties: {
-          status: {
-            type: 'string',
-            enum: [...SUBORDINATE_REPORT_STATUSES],
-            description: 'completed: the assignment is done. blocked: you need input. progress: a mid-task update.',
-          },
-          content: { type: 'string', maxLength: 20000, description: 'The result, or what blocks you.' },
-          ...reportHandoffProperties(report),
-        },
-        required: ['status', 'content'],
-      }),
-      // Same dispatcher as `report.*` in codemode, so validation matches.
-      execute: async (args: ReportToolInput) => dispatchReport(report, args),
-    }));
+    const description = BUILTIN_TOOL_DESCRIPTIONS.report;
+
+    // A `bodyOnly` destination is offered no handoff.
+    tools.report = permitInPlan(report.bodyOnly
+      ? tool({ description, inputSchema: ReportBodySchema, execute: async (args) => dispatchReport(report, args) })
+      : tool({ description, inputSchema: ReportToolInputSchema, execute: async (args) => dispatchReport(report, args) }));
   }
 
   // Outside BUILTIN_TOOLS: exists only on Plan turns.
@@ -521,27 +443,8 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         'On the first call, write the full plan with one edit starting at line 1. After changes are requested, use the line numbers in the feedback turn to make targeted edits.',
         'Line numbers are one-indexed and inclusive; omit end to replace through the end of the plan. Do not implement after submission — end the turn and await the owner decision.',
       ].join('\n'),
-      inputSchema: jsonSchema<{ edits: PlanEdit[] }>({
-        type: 'object',
-        properties: {
-          edits: {
-            type: 'array', minItems: 1, maxItems: 100,
-            items: {
-              type: 'object',
-              properties: {
-                start: { type: 'integer', minimum: 1, description: 'First affected line, one-indexed.' },
-                end: { type: ['integer', 'null'], minimum: 1, description: 'Last affected line, inclusive. Omit to replace through end of plan.' },
-                content: { type: 'string', description: 'Replacement Markdown. Empty with an explicit end deletes the range.' },
-              },
-              required: ['start', 'content'],
-              additionalProperties: false,
-            },
-          },
-        },
-        required: ['edits'],
-        additionalProperties: false,
-      }),
-      execute: async ({ edits }: { edits: PlanEdit[] }) => {
+      inputSchema: PlanEditsInputSchema,
+      execute: async ({ edits }) => {
         const result = await submitPlan.submit(edits);
 
         if (!result.ok) return result;

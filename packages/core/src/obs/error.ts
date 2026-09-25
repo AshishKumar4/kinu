@@ -3,6 +3,7 @@
  * nothing outside `obs/`; OOM signatures below are pinned to platform-catalog.ts by a test.
  */
 
+import { z } from 'zod';
 import { classify, errnoCode, scalarText } from './expected-failure';
 
 /**
@@ -138,10 +139,12 @@ const CODE_BY_ERROR_NAME = new Map<string, ErrorCode>([
   ['AbortError', 'cancelled'],
   ['TimeoutError', 'timeout'],
   ['CapabilityDeniedError', 'denied'],
+  // The SDK refusing a model's tool call against its schema.
+  ['AI_InvalidToolInputError', 'bad_input'],
 ]);
 
 /** Refused by another object, a shape was our bad input. */
-const CODE_BY_REMOTE_NAME = new Map<string, ErrorCode>([...CODE_BY_ERROR_NAME, ['ValiError', 'bad_input']]);
+const CODE_BY_REMOTE_NAME = new Map<string, ErrorCode>([...CODE_BY_ERROR_NAME, ['ValiError', 'bad_input'], ['ZodError', 'bad_input']]);
 
 /** A DO's RPC rethrows a custom error as a `remote` Error named in its message. */
 // As trustworthy as the thrower: a slate facet or codemode guest can forge the name. A label, never an authorization.
@@ -222,4 +225,26 @@ export function toKinuError(
   const code = classifyErrorCode({ cause: input.cause }) ?? input.otherwise;
 
   return new KinuError(code, input.doing, { cause: input.cause });
+}
+
+/** The zod refusal under the SDK's wrappers. */
+function zodErrorIn(error: Error): z.ZodError | undefined {
+  const seen = new Set<Error>();
+
+  for (let link: unknown = error; link instanceof Error && !seen.has(link); link = link.cause) {
+    if (link instanceof z.ZodError) return link;
+    seen.add(link);
+  }
+
+  return undefined;
+}
+
+/** `call` refused as `bad_input` in zod's rendering; not its cause, whose message is the issues as JSON. */
+export function refusedInput(call: string, error: Error): KinuError {
+  const refusal = zodErrorIn(error);
+
+  if (refusal === undefined) return new KinuError('bad_input', call, { cause: error });
+  const problems = z.prettifyError(refusal).split('\n').map((line) => line.trim()).filter((line) => line !== '').join(' ');
+
+  return new KinuError('bad_input', `${call}: ${problems}`);
 }

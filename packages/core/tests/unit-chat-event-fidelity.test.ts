@@ -139,12 +139,12 @@ describe('ChatEvent tool success/error fidelity', () => {
     const model = toolThenTextModel({ toolName: 'shell', input: '{}' });
     const events = await collect(model, buildBuiltinTools({ rt: { ...rt, shell }, history: storesFor(rt).history }));
     expect(runs).toBe(0);
-    expect(events.find((event) => event.type === 'tool-result')).toMatchObject({ success: false, reason: 'bad_input', result: expect.stringContaining('`command`') });
+    expect(events.find((event) => event.type === 'tool-result')).toMatchObject({ success: false, reason: 'bad_input', result: expect.stringContaining('command') });
 
     // The model reads the refusal as data it can branch on.
     expect(model.doStreamCalls[1]?.prompt).toEqual(expect.arrayContaining([expect.objectContaining({
       role: 'tool', content: expect.arrayContaining([expect.objectContaining({
-        type: 'tool-result', toolCallId: 'tc1', output: { type: 'error-json', value: { reason: 'bad_input', error: expect.stringContaining('`command`') } },
+        type: 'tool-result', toolCallId: 'tc1', output: { type: 'error-json', value: { reason: 'bad_input', error: expect.stringContaining('command') } },
       })]),
     })]));
   });

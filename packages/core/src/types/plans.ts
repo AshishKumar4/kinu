@@ -1,10 +1,15 @@
 /** Plan-review contract shared by the builtins tool surface without importing the review store. */
+import { z } from 'zod';
 
-export interface PlanEdit {
-  readonly start: number;
-  readonly end?: number | null;
-  readonly content: string;
-}
+/** One edit to a submitted plan: the `submit_plan` tool's input item, and what the review store applies. */
+export const PlanEditSchema = z.object({
+  start: z.number().int().min(1).describe('First affected line, one-indexed.'),
+  end: z.number().int().min(1).nullable().optional()
+    .describe('Last affected line, inclusive. Omit to replace through end of plan.'),
+  content: z.string().describe('Replacement Markdown. Empty with an explicit end deletes the range.'),
+});
+
+export type PlanEdit = z.infer<typeof PlanEditSchema>;
 
 export type PlanReviewStatus = 'pending' | 'changes_requested' | 'approved' | 'superseded';
 

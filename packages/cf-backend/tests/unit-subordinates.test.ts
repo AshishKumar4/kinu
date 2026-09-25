@@ -97,8 +97,8 @@ describe('subordinate wiring', () => {
     expect(subKeys).not.toContain('record_evidence');
     expect(subKeys).not.toContain('record_decision');
     // `hire scope=workspace` mints a fresh tree root, so holding it would let a subordinate escape its depth cap.
-    expect(observedActionEnum(subTools.get('agents'))).not.toContain('reply');
-    expect(observedActionEnum(subTools.get('agents'))).toContain('hire');
+    expect(observedActionEnum(subTools.get('agents')?.inputSchema)).not.toContain('reply');
+    expect(observedActionEnum(subTools.get('agents')?.inputSchema)).toContain('hire');
     expect(subTools.get('eval')?.description).toContain('declare const report:');
     expect(orchTools.eval?.description).not.toContain('declare const report:');
   });

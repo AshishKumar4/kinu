@@ -2,6 +2,7 @@
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime, toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
+import { asSchema } from 'ai';
 import {
   agentRoleSwitch, buildBuiltinTools, initAllTables, initTaskListTable, BUILTIN_TOOL_SPECS,
   createTasksCodemodeProvider, TaskListStore, initAgentConfigTable,
@@ -116,10 +117,9 @@ describe('tasks tool', () => {
     const tasks = setup();
     await expect(tasks({ action: 'add', titles: [] })).rejects.toThrow('tasks.add requires `titles` — one or more task titles');
     await expect(tasks({ action: 'update', status: 'done' })).rejects.toThrow('tasks.update requires `id`');
-    await expect(tasks({ action: 'update', id: 't1', status: 'finished' })).rejects.toThrow('tasks.update requires `status` — one of open, active, done, dropped');
+    await expect(tasks({ action: 'update', id: 't1', status: 'finished' })).rejects.toThrow('one of open, active, done, dropped; got "finished"');
     await expect(tasks({ action: 'update', id: 't9', status: 'done' })).rejects.toThrow('no task t9');
-    // The refusal names the vocabulary and echoes what arrived (registry.unknownActionError), like every native dispatcher.
-    await expect(tasks({ action: 'sort' })).rejects.toThrow('tasks requires `action` — one of add, update, list, mode; got "sort"');
+    await expect(tasks({ action: 'sort' })).rejects.toThrow('one of add, update, list, mode; got "sort"');
   });
 
   test('a refused title is reported beside the ones that landed', async () => {
@@ -155,7 +155,7 @@ describe('tasks tool', () => {
 
     const schema = v.parse(v.object({ jsonSchema: v.object({
       properties: v.record(v.string(), v.unknown()), required: v.array(v.string()),
-    }) }), entry.inputSchema).jsonSchema;
+    }) }), { jsonSchema: await asSchema(entry.inputSchema).jsonSchema }).jsonSchema;
 
     for (const key of Object.keys(args)) expect(Object.keys(schema.properties)).toContain(key);
 
@@ -166,7 +166,7 @@ describe('tasks tool', () => {
     expect(res.added.map((t) => t.id)).toEqual(['t1', 't2', 't3']);
   });
 
-  // The AI SDK does not validate jsonSchema-declared tool input, so `action` is whatever the model emitted.
+  // A program's call reaches the entry unchecked by the SDK, so `action` is whatever it passed.
   describe('a model-supplied action outside the vocabulary is answered WITH the vocabulary', () => {
     test('the exact production payload is refused by naming all four actions', async () => {
       const tasks = setup();
@@ -195,7 +195,7 @@ describe('tasks tool', () => {
     test('titles of the wrong type are refused, not fed to `raw.trim()`', async () => {
       // TaskListStore.add trims each title: a non-string element must be refused, not thrown as a TypeError.
       const tasks = setup();
-      await expect(tasks({ action: 'add', titles: [1, 2] })).rejects.toThrow('array of task titles');
+      await expect(tasks({ action: 'add', titles: [1, 2] })).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('titles[0]') });
     });
   });
 });

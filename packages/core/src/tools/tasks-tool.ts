@@ -9,32 +9,35 @@ import {
   type TaskStatus,
 } from './task-store';
 import type { AgentConfigStore } from '../config/store';
-import * as v from 'valibot';
-import {
-  TASKS_TOOL_ACTIONS, unknownActionError,
-  type TasksToolAction,
-} from './registry';
+import { z } from 'zod';
+import { oneOf } from './tool-schema';
+import { TASKS_TOOL_ACTIONS } from './registry';
 import { isValidRoleId, type RoleId } from '../types/profile';
 import { KinuError } from '../obs/index';
 
-const TaskStatusSchema = v.picklist(TASK_STATUSES);
+/** Fields `tasks.*` in eval takes positionally. */
+export const TaskTitlesSchema = z.array(z.string()).describe('For add: one title per task, in order.').optional();
 
-const TasksActionSchema = v.picklist(TASKS_TOOL_ACTIONS);
+export const TaskParentSchema = z.string().describe('For add: the task id these are subtasks of; one level only.').optional();
 
-const TitlesSchema = v.array(v.string());
+export const TaskStatusSchema = oneOf(TASK_STATUSES).describe('For update.').optional();
 
-/** The task-list tool's one input shape. */
-export interface TasksToolInput {
-  action: TasksToolAction;
-  titles?: string[];
-  id?: string;
-  status?: TaskStatus;
-  /** For action=update: set, replace, or clear (null) the item's note. `status` or `note` is required. */
-  note?: string | null;
-  parent?: string | null;
-  /** For action=mode: the role id to switch to. Omit to read the current one. */
-  role?: string;
-}
+export const TaskRoleSchema = z.string()
+  .describe('For mode: the role id to switch to from your next turn; omit it to read the active role.').optional();
+
+/** Input of the native tool and of `tasks.*` in eval. */
+export const TasksToolInputSchema = z.object({
+  action: oneOf(TASKS_TOOL_ACTIONS).describe('add, update or list tasks; mode reads or switches your role.'),
+  titles: TaskTitlesSchema,
+  parent: TaskParentSchema,
+  id: z.string().describe('For update: the task id, such as "t3".').optional(),
+  status: TaskStatusSchema,
+  note: z.string().nullable()
+    .describe('For update: a one-line note beside the item; null clears it. Update needs `status` or `note`.').optional(),
+  role: TaskRoleSchema,
+});
+
+export type TasksToolInput = z.infer<typeof TasksToolInputSchema>;
 
 interface AddedTask {
   id: string;
@@ -76,12 +79,10 @@ export type TasksToolResult = TasksAdded | TaskUpdated | TasksListed | RoleSet;
 
 /** `tasks.add` — one title row per task, rejections carried alongside. */
 function addTasks(taskList: TaskListStore, args: TasksToolInput, now: number): TasksAdded {
-  const titles = v.safeParse(TitlesSchema, args.titles ?? []);
+  const titles = args.titles ?? [];
 
-  if (!titles.success) throw new KinuError('bad_input', 'tasks.add requires `titles` — an array of task titles');
-
-  if (titles.output.length === 0) throw new KinuError('bad_input', 'tasks.add requires `titles` — one or more task titles');
-  const { added, rejected } = taskList.add(titles.output, args.parent ?? null, now);
+  if (titles.length === 0) throw new KinuError('bad_input', 'tasks.add requires `titles` — one or more task titles');
+  const { added, rejected } = taskList.add(titles, args.parent ?? null, now);
 
   const result: TasksAdded = {
     added: added.map((task) => ({ id: task.id, title: task.title, parent: task.parentId })),
@@ -92,35 +93,20 @@ function addTasks(taskList: TaskListStore, args: TasksToolInput, now: number): T
   return result;
 }
 
-/** `note` is three-valued: absent leaves it, `null` clears it, a string sets it. */
-function readNote(note: string | null | undefined): string | null | undefined {
-  if (note === undefined || note === null) return note;
-  const parsed = v.safeParse(v.string(), note);
-
-  if (!parsed.success) throw new KinuError('bad_input', 'tasks.update requires `note` — a string, or null to clear');
-
-  return parsed.output;
-}
-
-/** `tasks.update` — a status move, a note write, or both on one task. */
+/** `tasks.update` — a status move, a note write, or both on one task. `note` is three-valued: absent leaves it,
+ *  `null` clears it, a string sets it. */
 function updateTask(taskList: TaskListStore, args: TasksToolInput, now: number): TaskUpdated {
   if (!args.id) throw new KinuError('bad_input', 'tasks.update requires `id`');
-  const status = args.status === undefined ? undefined : v.safeParse(TaskStatusSchema, args.status);
 
-  if (status !== undefined && !status.success) {
-    throw new KinuError('bad_input', 'tasks.update requires `status` — one of ' + TASK_STATUSES.join(', '));
-  }
-
-  if (status === undefined && args.note === undefined) {
+  if (args.status === undefined && args.note === undefined) {
     throw new KinuError('bad_input', 'tasks.update requires `status` or `note`');
   }
 
-  const note = readNote(args.note);
-  const task = taskList.update(args.id, { status: status?.output, note }, now);
+  const task = taskList.update(args.id, { status: args.status, note: args.note }, now);
 
   if (!task) throw new KinuError('missing', 'no task ' + args.id);
   // Warn about still-open children when closing a parent.
-  const openSubtasks = status?.output === 'done' ? taskList.countOpenSubtasks(task.id) : 0;
+  const openSubtasks = args.status === 'done' ? taskList.countOpenSubtasks(task.id) : 0;
   const result: TaskUpdated = { id: task.id, title: task.title, status: task.status };
 
   if (openSubtasks > 0) result.open_subtasks = openSubtasks;
@@ -146,14 +132,8 @@ export function createTasksDispatcher(
 ): (input: TasksToolInput) => TasksToolResult {
   return (args: TasksToolInput) => {
     const now = Date.now();
-    // The AI SDK does not validate jsonSchema tool input; answer an unknown action with the vocabulary.
-    const action = v.safeParse(TasksActionSchema, args.action);
 
-    if (!action.success) {
-      throw new KinuError('bad_input', unknownActionError('tasks', 'action', args.action, TASKS_TOOL_ACTIONS));
-    }
-
-    switch (action.output) {
+    switch (args.action) {
       case 'add':
         return addTasks(taskList, args, now);
 

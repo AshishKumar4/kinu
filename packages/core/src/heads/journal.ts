@@ -11,6 +11,7 @@ import type {
   HeadId, HeadInput, HeadReport, HeadStep, Evidence,
   HeadFileChangeSet, MergeResult, MergeStrategy, HeadRunView, HeadRunHeadView,
 } from './types';
+import { EVIDENCE_KINDS } from './types';
 import { DecisionSchema } from './merge-schema';
 import { headProducedFindings } from './head-summary';
 import { USAGE_FIELDS, type Usage } from '../usage';
@@ -24,7 +25,7 @@ export interface StepTotals {
   readonly toolCalls: number;
 }
 
-const EvidenceKindSchema = v.picklist(['tool_output', 'fact', 'citation', 'artifact']);
+const EvidenceKindSchema = v.picklist(EVIDENCE_KINDS);
 
 const ToolCallSchema = v.object({
   toolCallId: v.optional(v.string()),

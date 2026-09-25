@@ -3,8 +3,8 @@
  * roots and hand the sets here; core only judges.
  */
 
+import type { JSONSchema7 } from 'ai';
 import * as v from 'valibot';
-import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import { isBuiltinToolName } from '../tools/registry';
 import {
   BACKEND_CONFORMANCE,
@@ -127,20 +127,15 @@ export function normalizeObservedTables(names: Iterable<string>): Set<string> {
   return out;
 }
 
-const ToolSchema = v.object({ inputSchema: v.optional(v.unknown()) });
-
 const ActionEnumSchema = v.object({
   properties: v.object({
     action: v.object({ enum: v.array(v.string()) }),
   }),
 });
 
-export function observedActionEnum(tool: { inputSchema?: unknown } | undefined): Set<string> {
-  const parsedTool = v.safeParse(ToolSchema, tool);
-
-  if (!parsedTool.success) return new Set();
-  const raw = schemaJson({ schema: parsedTool.output.inputSchema });
-  const parsedAction = v.safeParse(ActionEnumSchema, raw);
+/** The `action` enum in the JSON Schema a provider is sent. */
+export function observedActionEnum(sent: JSONSchema7 | undefined): Set<string> {
+  const parsedAction = v.safeParse(ActionEnumSchema, sent);
 
   return new Set(parsedAction.success ? parsedAction.output.properties.action.enum : []);
 }
@@ -156,16 +151,6 @@ export function wiredProducers(rt: {
   if (rt.advisorLlm !== undefined) wired.add('advisor');
 
   return wired;
-}
-
-/** Unwrap an AI-SDK `jsonSchema(...)` wrapper; a plain object schema is already raw. */
-function schemaJson(input: { schema: unknown }): JsonObject | null {
-  const wrapped = v.safeParse(v.object({ jsonSchema: JsonObjectSchema }), input.schema);
-
-  if (wrapped.success) return wrapped.output.jsonSchema;
-  const direct = v.safeParse(JsonObjectSchema, input.schema);
-
-  return direct.success ? direct.output : null;
 }
 
 /** Call-shaped names in LLM-facing text (`name(...)`) absent from the real callables. */

@@ -4,10 +4,12 @@
  * over the head's real vocabulary. Nodes: docs/EXPLORATION.md "A node is an agent".
  */
 
-import { jsonSchema, tool, type ToolSet } from 'ai';
+import { tool, type ToolSet } from 'ai';
+import { z } from 'zod';
+import { oneOf } from '../tools/tool-schema';
 import { buildToolSurface } from '../tools/builtins';
 import { buildHeadAccumulatorTools, HeadCapture, withHeadCaptureRecording } from './head-inference';
-import { HEAD_BUILTIN_TOOLS } from './types';
+import { HEAD_BUILTIN_TOOLS, MERGE_STRATEGIES } from './types';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { SessionHistory } from '../session/history';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
@@ -43,6 +45,12 @@ export interface HeadToolDeps {
   split(request: HeadSplitRequest): Promise<HeadSplitResult>;
 }
 
+const SplitSubheadsInputSchema = z.object({
+  rationale: z.string(),
+  heads: z.array(z.object({ task: z.string(), rationale: z.string() })).meta({ minItems: 2, maxItems: 4 }),
+  merge_strategy: oneOf(MERGE_STRATEGIES).optional(),
+});
+
 export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
   const { input, capture } = deps;
 
@@ -57,24 +65,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
         `Spawn 2-4 child heads recursively to explore narrower sub-questions. ` +
         `Children's findings merge into a single narrative. ` +
         `You may nest ${input.budget.maxDepth} more level(s).`,
-      inputSchema: jsonSchema<{
-        rationale: string;
-        heads: Array<{ task: string; rationale: string }>;
-        merge_strategy?: MergeStrategy;
-      }>({
-        type: 'object', required: ['rationale', 'heads'],
-        properties: {
-          rationale: { type: 'string' },
-          heads: {
-            type: 'array', minItems: 2, maxItems: 4,
-            items: {
-              type: 'object', required: ['task', 'rationale'],
-              properties: { task: { type: 'string' }, rationale: { type: 'string' } },
-            },
-          },
-          merge_strategy: { type: 'string', enum: ['synthesize', 'best_of', 'consensus'] },
-        },
-      }),
+      inputSchema: SplitSubheadsInputSchema,
       execute: async ({ rationale, heads, merge_strategy }): Promise<string> => {
         const result = await deps.split({
           rationale, heads, mergeStrategy: merge_strategy ?? input.mergeStrategy,
