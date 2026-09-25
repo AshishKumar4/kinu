@@ -57,6 +57,8 @@ export interface VFS {
   stat(path: string): Promise<VfsEntryStat | null>;
   /** The entry itself, a symbolic link not followed; absent on a plane that cannot tell a link from its target. */
   lstat?(path: string): Promise<VfsLinkStat | null>;
+  /** A link's target text, never followed; present wherever `lstat` reports links. */
+  readlink?(path: string): Promise<string>;
   unlink(path: string): Promise<void>;
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
   exists(path: string): Promise<boolean>;

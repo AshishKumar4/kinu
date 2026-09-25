@@ -36,8 +36,8 @@ afterEach(() => { setSystemTime(); });
 /** One millisecond for a write, a capture and a same-size rewrite, as one request's frozen clock gives them. */
 const ONE_MILLISECOND = Date.parse('2026-09-24T00:00:00.000Z');
 
-/** A sandbox executor whose shell is real bash in `cwd`, in the clean git environment: under a git hook the
- *  inherited GIT_DIR points at the developer's checkout. */
+/** A sandbox executor whose shell is `/bin/sh` in `cwd` (dash here, as the CLI runs it), in the clean git environment:
+ *  under a git hook the inherited GIT_DIR points at the developer's checkout. */
 function shellIn(cwd: string): ExecutionRouter {
   const provider: ExecutorProvider = {
     name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']), filesOwner: 'agent',
@@ -48,7 +48,7 @@ function shellIn(cwd: string): ExecutionRouter {
         description: 'test shell',
         execute: async (...args) => {
           const [command] = v.parse(v.tuple([v.string()]), args);
-          const result = Bun.spawnSync(['bash', '-lc', command], { cwd, env: gitEnv(), stdout: 'pipe', stderr: 'pipe' });
+          const result = Bun.spawnSync(['/bin/sh', '-lc', command], { cwd, env: gitEnv(), stdout: 'pipe', stderr: 'pipe' });
 
           return commandResult({ stdout: result.stdout.toString(), stderr: result.stderr.toString(), exitCode: result.exitCode });
         },
@@ -318,7 +318,7 @@ describe('workspace diff lifecycle', () => {
     ]);
   });
 
-  test('a symbolic link is never followed: not into hidden files, a hire\'s home or back into its own folder', async () => {
+  test('a symbolic link is listed as itself, its target as its text, and never followed', async () => {
     const { rt, workspace } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
     const identity = { uid: 2001, gid: 2001 };
@@ -326,6 +326,7 @@ describe('workspace diff lifecycle', () => {
     const session = await workspace.session();
     const builder = session.vfs.as(agentCred(identity));
     const user = session.vfs.as(CRED_SESSION_USER);
+    await rt.storage.vfs.writeFile('notes.md', 'one\n');
     await resetWorkspaceBaseline(rt);
 
     await rt.storage.vfs.mkdir('.config', { recursive: true });
@@ -335,9 +336,20 @@ describe('workspace diff lifecycle', () => {
     user.symlink(`${WORKSPACE_ROOT}/.config`, `${WORKSPACE_ROOT}/cfg`);
     user.symlink(`${home}/node_modules`, `${WORKSPACE_ROOT}/deps`);
     user.symlink(WORKSPACE_ROOT, `${WORKSPACE_ROOT}/loop`);
-    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+    user.symlink('notes.md', `${WORKSPACE_ROOT}/alias.md`);
 
-    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['added notes.md']);
+    const listed = (await getWorkspaceDiff(rt)).files;
+    expect(listed.map((file) => `${file.status} ${file.path}: ${file.lines.map((line) => line.text).join('|')}`)).toEqual([
+      'added alias.md: notes.md',
+      `added cfg: ${WORKSPACE_ROOT}/.config`,
+      `added deps: ${home}/node_modules`,
+      `added loop: ${WORKSPACE_ROOT}`,
+    ]);
+
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.unlink('alias.md');
+    await rt.storage.vfs.writeFile('alias.md', 'notes.md');
+    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['changed alias.md']);
   });
 
   test('hidden files a baseline recorded before they were left out are not listed as removed', async () => {
@@ -742,5 +754,72 @@ describe('workspace diff lifecycle', () => {
 
     rt.executionRouter = shellIn(join(cwd, 'notes'));
     expect(await getExecutorDiff(rt, 'sandbox')).toEqual({ files: [], mode: 'git', notGitRepo: true });
+  });
+
+  test('a working directory inside a repository shows that repository, and the ones below it', async () => {
+    const mono = join(scratchDir('git-enclosing'), 'mono');
+    mkdirSync(join(mono, 'sub/inner'), { recursive: true });
+    initRepo(mono);
+    writeFileSync(join(mono, 'root.txt'), 'one\n');
+    writeFileSync(join(mono, 'sub/f.txt'), 'one\n');
+    git(mono, 'add', '-A');
+    git(mono, 'commit', '-qm', 'seed');
+    initRepo(join(mono, 'sub/inner'));
+    writeFileSync(join(mono, 'root.txt'), 'two\n');
+    writeFileSync(join(mono, 'sub/f.txt'), 'two\n');
+    writeFileSync(join(mono, 'sub/inner/in.txt'), 'new\n');
+
+    const { rt } = createTestRuntime();
+    rt.executionRouter = shellIn(join(mono, 'sub'));
+    const view = await getExecutorDiff(rt, 'sandbox');
+
+    expect(view.error).toBeUndefined();
+    expect(view.repositories).toEqual(['mono', 'mono/sub/inner']);
+    expect(view.files.map((file) => `${file.status} ${file.path}`)).toEqual([
+      'changed mono/root.txt', 'changed mono/sub/f.txt', 'added mono/sub/inner/in.txt',
+    ]);
+  });
+
+  test('a file name with quotes, spaces, a newline or non-ASCII letters is shown as it is on disk', async () => {
+    const cwd = scratchDir('git-names');
+    const odd = ['a b.txt', 'naïve.txt', 'qu"o\'te.txt', 'back\\slash.txt', 'tab\there.txt', 'line\nbreak.txt'];
+    const repo = join(cwd, 'r');
+    mkdirSync(repo, { recursive: true });
+    initRepo(repo);
+
+    for (const name of odd) writeFileSync(join(repo, name), 'one\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'seed');
+
+    for (const name of odd) {
+      writeFileSync(join(repo, name), 'two\n');
+      writeFileSync(join(repo, `new ${name}`), 'new\n');
+    }
+
+    const { rt } = createTestRuntime();
+    rt.executionRouter = shellIn(cwd);
+    const view = await getExecutorDiff(rt, 'sandbox');
+
+    expect(view.error).toBeUndefined();
+    expect(view.files.map((file) => `${file.status} ${file.path} +${String(file.added)}`).sort()).toEqual([
+      ...odd.map((name) => `changed r/${name} +1`),
+      ...odd.map((name) => `added r/new ${name} +1`),
+    ].sort());
+  });
+
+  test('a folder name with a newline is one folder, never two phantom repositories', async () => {
+    const cwd = scratchDir('git-newline');
+    const repo = join(cwd, 'nl\nname', 'r2');
+    mkdirSync(repo, { recursive: true });
+    initRepo(repo);
+    writeFileSync(join(repo, 'x.txt'), 'new\n');
+
+    const { rt } = createTestRuntime();
+    rt.executionRouter = shellIn(cwd);
+    const view = await getExecutorDiff(rt, 'sandbox');
+
+    expect(view.error).toBeUndefined();
+    expect(view.repositories).toEqual(['nl\nname/r2']);
+    expect(view.files.map((file) => `${file.status} ${file.path}`)).toEqual(['added nl\nname/r2/x.txt']);
   });
 });

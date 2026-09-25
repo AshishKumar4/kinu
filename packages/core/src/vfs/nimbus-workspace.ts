@@ -54,6 +54,7 @@ function shellExecOptions(input: { value: unknown }): ShellExecOptions | undefin
 
 export interface WorkspaceVFS extends VFS {
   lstat(path: string): Promise<VfsLinkStat | null>;
+  readlink(path: string): Promise<string>;
   removeRecursive(path: string): Promise<void>;
   rename(oldPath: string, newPath: string): Promise<void>;
   /** Reads only the chunk rows covering the window; for callers that must not hold a whole file. */
@@ -68,6 +69,7 @@ interface VendorFiles {
   readdir(path: string): readonly { readonly name: string }[] | Promise<readonly { readonly name: string }[]>;
   stat(path: string): VendorStat | Promise<VendorStat>;
   lstat(path: string): VendorStat | Promise<VendorStat>;
+  readlink(path: string): string | Promise<string>;
   remove(path: string, recursive: boolean): void | Promise<void>;
   mkdir(path: string, opts?: { recursive?: boolean }): void | Promise<void>;
   exists(path: string): boolean | Promise<boolean>;
@@ -113,6 +115,7 @@ function workspaceFiles(vendor: VendorFiles): WorkspaceVFS {
         throw error;
       }
     },
+    readlink: (path) => at(path, 'readlink', (absolute) => vendor.readlink(absolute)),
     unlink: (path) => at(path, 'unlink', (absolute) => vendor.remove(absolute, false)),
     mkdir: (path, opts) => at(path, 'mkdir', (absolute) => vendor.mkdir(absolute, opts)),
     exists: (path) => at(path, 'access', (absolute) => vendor.exists(absolute)),
@@ -132,6 +135,7 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceVFS {
     readdir: async (path) => (await fs()).readdir(path),
     stat: async (path) => (await fs()).stat(path),
     lstat: async (path) => (await open()).vfs.as(CRED_SESSION_USER).lstat(path),
+    readlink: async (path) => (await open()).vfs.as(CRED_SESSION_USER).readlink(path),
     remove: async (path, recursive) => (await fs()).rm(path, recursive ? { recursive } : undefined),
     mkdir: async (path, opts) => (await fs()).mkdir(path, opts),
     exists: async (path) => (await fs()).exists(path),
@@ -184,6 +188,7 @@ function agentVfs(vfs: CredentialedVfs): WorkspaceVFS {
     readdir: (path) => vfs.readdir(path),
     stat: (path) => vfs.stat(path),
     lstat: (path) => vfs.lstat(path),
+    readlink: (path) => vfs.readlink(path),
     remove: (path, recursive) => { if (recursive) vfs.removeRecursive(path); else vfs.unlink(path); },
     mkdir: (path, opts) => vfs.mkdir(path, opts),
     exists: (path) => vfs.exists(path),

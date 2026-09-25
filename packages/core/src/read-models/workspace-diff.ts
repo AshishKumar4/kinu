@@ -12,6 +12,7 @@ import * as v from 'valibot';
 import { CommandResultSchema } from '../execution/exec-result';
 import { KinuError, renderThrownChain, tolerateAsync } from '../obs/index';
 import { sha256Hex } from '../safety/argument-digest';
+import { shellQuote } from '../utils/shell';
 import type { VfsMountRouting } from '../vfs/mounts';
 import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { unmovedSince } from '../vfs/unmoved';
@@ -44,7 +45,7 @@ const REVIEWED_UNDER_ROOT = ['home', SLATES_ROOT.slice(1)];
 /** How far below an executor's working directory the git view looks for repositories, as VS Code bounds its scan. */
 const REPOSITORY_SCAN_DEPTH = 3;
 
-/** Opens each line of the git view's framing: the directory's name, each repository's section, then the end. */
+/** Opens each record of the git view, at a line start. */
 const MARK = '\u0001';
 
 const HeadCommitSchema = v.pipe(v.string(), v.hexadecimal(), v.minLength(40), v.maxLength(64));
@@ -106,13 +107,13 @@ interface ManifestEntry {
 }
 
 /**
- * Every regular file the change-set reviews, breadth-first so root files come first, by stat alone. The walk runs
- * while turns write, so an entry can vanish between its directory's listing and its own read: it is absent, as a
- * snapshot of a file that is gone does not contain it.
+ * Every file and symbolic link the change-set reviews, breadth-first so root files come first, by stat alone. A link
+ * is an entry, never followed. The walk runs while turns write, so an entry can vanish between its directory's
+ * listing and its own read: it is absent, as a snapshot of a file that is gone does not contain it.
  */
 async function walkWorkspaceFiles(
   rt: WorkspaceBaselineRuntime,
-  visit: (path: string, stat: VfsEntryStat) => void | Promise<void>,
+  visit: (path: string, stat: VfsEntryStat | VfsLinkStat) => void | Promise<void>,
 ): Promise<void> {
   const routed: VFS & Partial<Pick<VfsMountRouting, 'mountOf'>> = rt.storage.vfs;
   const roots = ['', PLANE_ROOT];
@@ -132,9 +133,9 @@ async function walkWorkspaceFiles(
       if (UNREVIEWED_PATHS.has(full) || (routed.mountOf?.(full) ?? null) !== null) continue;
       const st = await statOf(rt, full);
 
-      if (st === undefined || st === null || ('isSymlink' in st && st.isSymlink)) continue;
+      if (st === undefined || st === null) continue;
 
-      if (st.isDir) {
+      if (st.isDir && !isLink(st)) {
         children.push(full);
         continue;
       }
@@ -176,25 +177,41 @@ async function statOf(rt: WorkspaceBaselineRuntime, path: string): Promise<VfsLi
   }
 }
 
+function isLink(st: VfsEntryStat | VfsLinkStat): boolean {
+  return 'isSymlink' in st && st.isSymlink;
+}
+
 /** A digest of a file's bytes, and the text a line diff shows unless the file is binary (NUL-bearing). */
 interface Contents {
   readonly digest: string;
   readonly text: string | null;
 }
 
-async function contentsOf(rt: WorkspaceBaselineRuntime, path: string): Promise<Contents | undefined> {
+/** A link's contents are its target text, digested apart from a file holding the same text, so a swap is a change. */
+const LINK_DIGEST_PREFIX = new TextEncoder().encode('symlink\0');
+
+async function contentsOf(rt: WorkspaceBaselineRuntime, path: string, st: VfsEntryStat | VfsLinkStat): Promise<Contents | undefined> {
+  const { vfs } = rt.storage;
   let content: string | Uint8Array | undefined;
 
   try {
-    content = await whileThere(() => rt.storage.vfs.readFile(path));
+    if (!isLink(st)) {
+      content = await whileThere(() => vfs.readFile(path));
+    } else if (vfs.readlink === undefined) {
+      throw new Error('this plane reports links but reads none');
+    } else {
+      const readlink = vfs.readlink.bind(vfs);
+      content = await whileThere(() => readlink(path));
+    }
   } catch (error) {
     throw new Error(`Workspace snapshot could not read ${JSON.stringify(path)}`, { cause: error });
   }
 
   if (content === undefined) return undefined;
   const bytes = content instanceof Uint8Array ? content : new TextEncoder().encode(content);
+  const digested = isLink(st) ? new Uint8Array([...LINK_DIGEST_PREFIX, ...bytes]) : bytes;
 
-  return { digest: sha256Hex(bytes), text: bytes.includes(0) ? null : new TextDecoder().decode(bytes) };
+  return { digest: sha256Hex(digested), text: bytes.includes(0) ? null : new TextDecoder().decode(bytes) };
 }
 
 /** The '' marker row carries the capture time. */
@@ -297,7 +314,7 @@ export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime): Promise<Wo
     baseline.delete(path);
 
     if (base !== undefined && unmovedSince(base, manifest.capturedAt, st)) return;
-    const now = st.size > BODY_MAX_BYTES ? null : await contentsOf(rt, path);
+    const now = st.size > BODY_MAX_BYTES ? null : await contentsOf(rt, path, st);
 
     if (now === undefined) return;
     const after = now?.text ?? null;
@@ -373,7 +390,7 @@ async function capture(rt: WorkspaceBaselineRuntime, held: BaselineManifest | nu
       if (kept !== undefined && held !== null && unmovedSince(kept, held.capturedAt, st)) {
         entry = kept;
       } else if (st.size <= BODY_MAX_BYTES) {
-        const contents = await contentsOf(rt, path);
+        const contents = await contentsOf(rt, path, st);
 
         if (contents === undefined) return;
         const { digest, text } = contents;
@@ -418,26 +435,101 @@ export function restoreWorkspaceBaseline(rt: WorkspaceBaselineRuntime): { ok: tr
   return { ok: true, capturedAt: marker.mtime_ms };
 }
 
+/** One changed file of a repository: $1 the repository, $2 `tracked` or `untracked`, $3 the path from git's -z list. */
+const GIT_FILE_SCRIPT = [
+  // xargs runs once on empty input; `/` is the list's own failure; `dir/` is a nested repository, its own section.
+  'case "${3-}" in "") exit 0;; /) exit 1;; */) exit 0;; esac',
+  `printf '\\001F%s\\000\\n' "$3"`,
+  'if [ "$2" = tracked ]; then exec git -C "$1" --no-pager diff --no-ext-diff --no-renames HEAD -- ":(literal)$3"; fi',
+  'git -C "$1" --no-pager diff --no-index --no-ext-diff --no-renames -- /dev/null "$3" || test "$?" -eq 1',
+].join('\n');
+
+/** One repository's section: $1 the folder git runs in, $2 its label (empty for the one enclosing the working directory). */
+const GIT_REPOSITORY_SCRIPT = [
+  'head=$(git -C "$1" rev-parse --verify --quiet HEAD 2>/dev/null) || head=',
+  `printf '\\001R%s\\000%s\\000\\n' "$2" "$head"`,
+  `scope='--cached --others'`,
+  'if [ -n "$head" ]; then',
+  `  { git -C "$1" diff --name-only -z --no-renames HEAD -- || printf '/\\000'; } | xargs -0 -n 1 sh -c "$KINU_GIT_FILE" sh "$1" tracked || printf '\\n\\001X\\n'`,
+  '  scope=--others',
+  'fi',
+  `{ git -C "$1" ls-files $scope --exclude-standard -z || printf '/\\000'; } | xargs -0 -n 1 sh -c "$KINU_GIT_FILE" sh "$1" untracked || printf '\\n\\001X\\n'`,
+].join('\n');
+
+/** The repositories find hands over, `./.git` excepted: the enclosing section already holds it. */
+const GIT_SCAN_SCRIPT = 'exec 2>&3; for dotgit; do [ "$dotgit" = ./.git ] || sh -c "$KINU_GIT_REPO" sh "${dotgit%/.git}" "${dotgit%/.git}"; done';
+
 /**
- * One exec that finds every repository within {@link REPOSITORY_SCAN_DEPTH} of the working directory, skipping hidden
- * folders and node_modules, and prints each one's changes since HEAD: tracked, staged and untracked, .gitignore
- * honoured. `git diff --no-index` reads untracked files without writing the index. A nested repository is listed by
- * its parent as an untracked folder (`dir/`), which is skipped: it is its own section.
+ * One exec, in POSIX sh, that shows the repository enclosing the working directory, as VS Code does, and every one
+ * within {@link REPOSITORY_SCAN_DEPTH} below it, skipping hidden folders and node_modules: tracked, staged and
+ * untracked changes since HEAD, .gitignore honoured. Every path travels NUL-delimited, from `find -exec` and git's
+ * `-z` lists into records the parser reads by NUL, so no name is split or quoted. `git diff --no-index` reads
+ * untracked files without writing the index.
  */
 function gitViewScript(): string {
-  const untracked = 'case "$2" in ""|*/) exit 0;; esac; git -C "$1" --no-pager diff --no-index --no-ext-diff --no-renames -- /dev/null "$2" || test "$?" -eq 1';
-
   return [
-    `printf '\\001%s\\n' "$(basename "$(pwd -P)")"`,
-    `find . -maxdepth ${String(REPOSITORY_SCAN_DEPTH + 1)} \\( -name node_modules -o \\( -name '.?*' ! -name .git \\) \\) -prune -o -name .git -print -prune 2>/dev/null | LC_ALL=C sort | while IFS= read -r dotgit; do`,
-    '  repo=${dotgit%/.git}',
-    '  head=$(git -C "$repo" rev-parse --verify --quiet HEAD 2>/dev/null) || head=',
-    `  printf '\\001%s\\001%s\\n' "$repo" "$head"`,
-    '  if [ -n "$head" ]; then git -C "$repo" --no-pager diff --no-ext-diff --no-renames HEAD -- || exit $?; scope=--others; else scope=\'--cached --others\'; fi',
-    `  git -C "$repo" ls-files $scope --exclude-standard -z | xargs -0 -n 1 sh -c '${untracked}' sh "$repo" || exit $?`,
-    'done || exit $?',
-    `printf '\\001\\n'`,
+    `export KINU_GIT_FILE=${shellQuote(GIT_FILE_SCRIPT)} KINU_GIT_REPO=${shellQuote(GIT_REPOSITORY_SCRIPT)}`,
+    'if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = true ]; then',
+    `  printf '\\001N'; git rev-parse --show-toplevel; printf '\\000'; git rev-parse --show-prefix; printf '\\000\\n'`,
+    '  cdup=$(git rev-parse --show-cdup)',
+    `  sh -c "$KINU_GIT_REPO" sh "\${cdup:-.}" ''`,
+    'fi',
+    // find's own complaints (an unreadable folder) are dropped; the sections' stderr goes out on fd 3.
+    `find . -maxdepth ${String(REPOSITORY_SCAN_DEPTH + 1)} \\( -name node_modules -o \\( -name '.?*' ! -name .git \\) \\) -prune -o -name .git -prune -exec sh -c ${shellQuote(GIT_SCAN_SCRIPT)} sh {} + 3>&2 2>/dev/null`,
+    `printf '\\001E\\n'`,
   ].join('\n');
+}
+
+/** A record's tag and its NUL-ended field count: N the enclosing repository's top and the working directory's
+ *  prefix in it, R a repository's label and HEAD, F one file's path, X a failed git command, E the end. */
+const RECORD_FIELDS = new Map([['N', 2], ['R', 2], ['F', 1], ['X', 0], ['E', 0]]);
+
+interface GitRecord {
+  readonly tag: string;
+  readonly fields: string[];
+  readonly body: string;
+}
+
+interface GitRecords {
+  readonly records: GitRecord[];
+  readonly stderr: string;
+}
+
+/**
+ * The records, each at a line start. A patch line never starts with the mark: its lines are prefixed, and git
+ * quotes a control character in a header path. What follows the end record is stderr.
+ */
+function gitRecords(output: string): GitRecords {
+  const records: GitRecord[] = [];
+  let at = output.startsWith(MARK) ? 0 : output.indexOf(`\n${MARK}`) + 1;
+
+  while (at > 0 || (at === 0 && output.startsWith(MARK))) {
+    const tag = output.charAt(at + 1);
+    const count = RECORD_FIELDS.get(tag);
+
+    if (count === undefined) throw new KinuError('io', `Unexpected git view record ${JSON.stringify(tag)}`);
+    const fields: string[] = [];
+    let next = at + 2;
+
+    for (let i = 0; i < count; i++) {
+      const end = output.indexOf('\0', next);
+
+      if (end === -1) throw new KinuError('io', `Truncated git view record ${tag}`);
+      fields.push(output.slice(next, end));
+      next = end + 1;
+    }
+
+    if (output.charAt(next) !== '\n') throw new KinuError('io', `Malformed git view record ${tag}`);
+    next++;
+
+    if (tag === 'E') return { records, stderr: output.slice(next) };
+    const following = output.indexOf(`\n${MARK}`, next - 1);
+    const bodyEnd = following === -1 ? output.length : following + 1;
+    records.push({ tag, fields, body: output.slice(next, bodyEnd) });
+    at = following === -1 ? -1 : bodyEnd;
+  }
+
+  throw new KinuError('io', `The git view ended early: ${output.slice(-2000)}`);
 }
 
 interface GitView {
@@ -446,49 +538,54 @@ interface GitView {
   readonly heads: string[];
 }
 
+/** One line git printed, without its newline. */
+function printedLine(field: string): string {
+  return field.endsWith('\n') ? field.slice(0, -1) : field;
+}
+
 /**
- * The script's output read back: each repository's files under its folder, the working directory's own name when it
- * is itself a repository, so every repository is a folder of the list. What follows the end mark is stderr.
+ * The records read back: each repository's files under its folder. Inside a repository the list is framed at its
+ * top, under the top's name, so the enclosing repository and the ones below the working directory share one tree.
  */
 function gitView(output: string): GitView {
-  const lines = output.split('\n');
-  const name = lines[0]?.startsWith(MARK) === true ? lines[0].slice(MARK.length) : '';
-  const sections: { repo: string; head: string; lines: string[] }[] = [];
+  const { records, stderr } = gitRecords(output);
 
-  for (const line of lines.slice(1)) {
-    if (line === MARK) break;
+  if (records.some((record) => record.tag === 'X')) throw new KinuError('io', `A git command failed: ${stderr.trim()}`);
+  const enclosing = records.find((record) => record.tag === 'N');
+  const top = enclosing === undefined ? '' : printedLine(enclosing.fields[0] ?? '');
+  const base = top.slice(top.lastIndexOf('/') + 1);
+  const prefix = enclosing === undefined ? '' : printedLine(enclosing.fields[1] ?? '');
 
-    if (!line.startsWith(MARK)) {
-      sections.at(-1)?.lines.push(line);
-      continue;
-    }
+  const folderOf = (label: string): string => {
+    if (label === '') return base;
+    const relative = `${prefix}${label.replace(/^\.\//, '')}`;
 
-    const [repo = '.', head = ''] = line.slice(MARK.length).split(MARK);
-    sections.push({ repo, head, lines: [] });
-  }
-
-  const rooted = sections.some((section) => section.repo === '.');
-
-  const folderOf = (repo: string): string => {
-    const relative = repo === '.' ? '' : repo.replace(/^\.\//, '');
-
-    if (!rooted) return relative;
-
-    return relative === '' ? name : `${name}/${relative}`;
+    return base === '' ? relative : `${base}/${relative}`;
   };
 
+  const sections: { label: string; head: string; files: FileDiff[] }[] = [];
+
+  for (const record of records) {
+    const [first = '', second = ''] = record.fields;
+
+    if (record.tag === 'R') sections.push({ label: first, head: second, files: [] });
+    else if (record.tag === 'F') for (const file of parseGitDiff(record.body)) sections.at(-1)?.files.push({ ...file, path: first });
+  }
+
+  // find hands repositories over in directory order; the list reads in code-unit order, so the enclosing one ('') first.
+  sections.sort((a, b) => (a.label < b.label ? -1 : Number(a.label > b.label)));
   const view: GitView = { files: [], repositories: [], heads: [] };
 
   for (const section of sections) {
     if (section.head !== '' && !v.safeParse(HeadCommitSchema, section.head).success) {
-      throw new KinuError('io', `Unexpected git HEAD in ${section.repo}: ${section.head}`);
+      throw new KinuError('io', `Unexpected git HEAD in ${section.label || top}: ${section.head}`);
     }
 
-    const folder = folderOf(section.repo);
+    const folder = folderOf(section.label);
     view.repositories.push(folder);
     view.heads.push(`${folder}@${section.head}`);
 
-    for (const file of parseGitDiff(section.lines.join('\n'))) view.files.push({ ...file, path: folder === '' ? file.path : `${folder}/${file.path}` });
+    for (const file of section.files) view.files.push({ ...file, path: folder === '' ? file.path : `${folder}/${file.path}` });
   }
 
   return view;
