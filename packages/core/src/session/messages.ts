@@ -47,7 +47,9 @@ export interface StreamPartInput {
 // UTF-16 units per segment; at most three UTF-8 bytes each keeps a row under the inline bound.
 const STREAM_SEGMENT_CHARS = 262_144;
 
-interface MessageRow { role: string; native_content_kind: 'string' | 'parts'; envelope_json: string; sealed_at: number | null; content_json: string | null; content_path: string | null; content_digest: string | null }
+interface MessageRow { origin: MessageOrigin; role: string; native_content_kind: 'string' | 'parts'; envelope_json: string; sealed_at: number | null; content_json: string | null; content_path: string | null; content_digest: string | null }
+
+interface SealedMessage { readonly message: ModelMessage; readonly origin: MessageOrigin }
 
 interface StreamPartRow { part_no: number; segment: number; kind: string; stream_order: number; descriptor_json: string | null; descriptor_path: string | null; descriptor_digest: string | null; text: string }
 
@@ -119,14 +121,14 @@ export interface ActorReadAuthority {
 /** Reads retain the caller's authorization across asynchronous payload access. */
 export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthority, P extends SessionPayloadReader = SessionPayloadReader> {
   /** Sealed rows never change, so each is read once per reader. */
-  private sealed = new Map<string, ModelMessage>();
+  private sealed = new Map<string, SealedMessage>();
 
   constructor(protected readonly sql: SqlExecutor, protected readonly actor: A, readonly payloads: P) {}
 
   protected row(messageId: string): MessageRow {
     this.actor.assertCurrent();
 
-    const row = this.sql<MessageRow>`SELECT role,native_content_kind,envelope_json,sealed_at,content_json,content_path,content_digest FROM session_messages
+    const row = this.sql<MessageRow>`SELECT origin,role,native_content_kind,envelope_json,sealed_at,content_json,content_path,content_digest FROM session_messages
       WHERE actor_id=${this.actor.actorId} AND message_id=${messageId}`[0];
 
     if (row === undefined) throw new KinuError('missing', 'session message does not exist');
@@ -197,7 +199,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     if (cached !== undefined) {
       this.actor.assertCurrent();
 
-      return cached;
+      return cached.message;
     }
 
     const { row, parts } = await this.stored(reference);
@@ -213,21 +215,34 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
 
     if (row.sealed_at === null) return decoded;
     freezeTree({ value: decoded });
-    this.sealed.set(reference.messageId, decoded);
+    this.sealed.set(reference.messageId, { message: decoded, origin: row.origin });
 
     return decoded;
+  }
+
+  originOf(reference: MessageReference): MessageOrigin {
+    const cached = this.sealed.get(reference.messageId);
+
+    if (cached !== undefined) return cached.origin;
+    this.actor.assertCurrent();
+    const row = this.sql<{ origin: MessageOrigin }>`SELECT origin FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${reference.messageId}`[0];
+
+    if (row === undefined) throw new KinuError('missing', 'session message does not exist');
+
+    return row.origin;
   }
 
   /** Asserts the actor once, after the last await; keeps only the messages this context names. */
   async materializeAll(references: readonly MessageReference[]): Promise<ModelMessage[]> {
     const messages: ModelMessage[] = [];
-    const named = new Map<string, ModelMessage>();
+    const named = new Map<string, SealedMessage>();
 
     for (const reference of references) {
-      const message = this.sealed.get(reference.messageId) ?? await this.materialize(reference);
+      const message = this.sealed.get(reference.messageId)?.message ?? await this.materialize(reference);
+      const sealed = this.sealed.get(reference.messageId);
       messages.push(message);
 
-      if (this.sealed.get(reference.messageId) === message) named.set(reference.messageId, message);
+      if (sealed?.message === message) named.set(reference.messageId, sealed);
     }
 
     this.actor.assertCurrent();

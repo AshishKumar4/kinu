@@ -88,7 +88,7 @@ function stagedEntries(history: SessionHistory, selection: ContextSelection | nu
     }
   }
 
-  return { entries: selection === null ? entries : history.context.conversationOf(selection.contextId, entries), blocked, staged };
+  return { entries: selection === null ? entries : history.context.conversationOf(entries), blocked, staged };
 }
 
 interface WorkingVersionFacts {
@@ -112,7 +112,7 @@ function headerStatus(staged: boolean, selection: ContextSelection | null): Cont
 function revisionEntries(history: SessionHistory, selection: ContextSelection | null, stagedProposalId: string | null): readonly ContextEntry[] {
   if (selection === null) return [];
 
-  return history.context.conversationOf(selection.contextId, stagedProposalId === null
+  return history.context.conversationOf(stagedProposalId === null
     ? history.context.entries(selection) : history.proposals.previewAt(stagedProposalId, selection));
 }
 
@@ -332,7 +332,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
       const metadata = history.context.revisions(view.selection.contextId).find(row => row.revision === revision);
 
       if (metadata === undefined) return null;
-      const entries = history.context.conversationOf(view.selection.contextId, history.context.entries({ contextId: view.selection.contextId, revision }));
+      const entries = history.context.conversationOf(history.context.entries({ contextId: view.selection.contextId, revision }));
 
       return { owner: resolved.stores.claims, writable: false, version: token([resolved.stores.claims.actorId, view.selection.contextId, revision]), modified: metadata.recorded_at,
         chunks: async function* () { yield `{"context":${JSON.stringify({ ...metadata, contextId: view.selection?.contextId })},"entries":[`; yield* entryChunks(view, entries, false); yield ']}\n'; } };
@@ -344,7 +344,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
       if (inspected === null) return null;
 
       return { owner: resolved.stores.claims, writable: false, version: token(v.parse(JsonValueSchema, inspected.metadata)), modified: inspected.metadata.recorded_at,
-        chunks: async function* () { yield `{"proposal":${JSON.stringify(inspected.metadata)},"entries":[`; yield* entryChunks(view, history.context.conversationOf(inspected.metadata.context_id, inspected.entries), false); yield ']}\n'; } };
+        chunks: async function* () { yield `{"proposal":${JSON.stringify(inspected.metadata)},"entries":[`; yield* entryChunks(view, history.context.conversationOf(inspected.entries), false); yield ']}\n'; } };
     }
 
     if (head === 'requests' && second !== undefined && third !== undefined && resolved.segments.length === 3) {

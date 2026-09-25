@@ -1,7 +1,7 @@
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
-import type { MessageReference } from './messages';
+import type { MessageReference, SessionMessageReader } from './messages';
 
 export interface ContextSelection { readonly contextId: string; readonly revision: number }
 
@@ -29,7 +29,8 @@ export interface ContextCommitRequest {
 
 /** Interval membership is both the current selection and its historical record. */
 export class SessionContext {
-  constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle, private readonly atomic: <T>(operation: () => T) => T) {}
+  constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle, private readonly atomic: <T>(operation: () => T) => T,
+    private readonly messages: Pick<SessionMessageReader, 'originOf'>) {}
 
   selected(): ContextSelection | null {
     this.actor.assertCurrent();
@@ -77,19 +78,8 @@ export class SessionContext {
     return rows.map(row => ({ entryId: row.entry_id, position: row.position, messageId: row.message_id }));
   }
 
-  /** A render is runtime context, never conversation. */
-  renderMessages(contextId: string): ReadonlySet<string> {
-    this.actor.assertCurrent();
-
-    return new Set(this.sql<{ message_id: string }>`SELECT DISTINCT m.message_id FROM context_memberships m
-      JOIN session_messages s ON s.actor_id=m.actor_id AND s.message_id=m.message_id
-      WHERE m.actor_id=${this.actor.actorId} AND m.context_id=${contextId} AND s.origin='render'`.map(row => row.message_id));
-  }
-
-  conversationOf(contextId: string, members: readonly ContextEntry[]): ContextEntry[] {
-    const rendered = this.renderMessages(contextId);
-
-    return members.filter(member => !rendered.has(member.messageId));
+  conversationOf(members: readonly ContextEntry[]): ContextEntry[] {
+    return members.filter(member => this.messages.originOf(member) !== 'render');
   }
 
   /** The mutation callback publishes message rows under the same transaction as their membership. */
@@ -135,7 +125,7 @@ export class SessionContext {
       request.assertEpoch();
       const selected = this.selected() ?? this.initialize();
       const current = this.entries(selected);
-      const kept = at.replaces ? this.conversationOf(selected.contextId, current) : current;
+      const kept = at.replaces ? this.conversationOf(current) : current;
       const anchor = kept.findIndex(entry => entry.entryId === at.before);
       const index = anchor < 0 ? kept.length : anchor;
       const added = { entryId: crypto.randomUUID(), messageId: reference.messageId, position: index };

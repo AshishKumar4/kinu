@@ -73,7 +73,7 @@ export class SessionHistory {
     this.atomic = transactionSync;
     const payloads = new SessionPayloads(files);
     this.messages = new SessionMessages(sql, actor, payloads);
-    this.context = new SessionContext(sql, actor, transactionSync);
+    this.context = new SessionContext(sql, actor, transactionSync, this.messages);
     this.proposals = new SessionProposals(sql, actor, this.context, transactionSync);
     this.requests = new SessionRequests(sql, actor, this.messages, this.context);
   }
@@ -158,10 +158,10 @@ export class SessionHistory {
   async materialize(): Promise<MaterializedContext & { readonly selection: ContextSelection }> {
     const selection = this.context.selected() ?? this.context.initialize();
 
-    return { selection, ...await this.partition(this.context.entries(selection), this.context.renderMessages(selection.contextId)) };
+    return { selection, ...await this.partition(this.context.entries(selection)) };
   }
 
-  private async partition(members: readonly ContextEntry[], rendered: ReadonlySet<string>): Promise<MaterializedContext> {
+  private async partition(members: readonly ContextEntry[]): Promise<MaterializedContext> {
     const all = await this.messages.materializeAll(members);
     const entries: ContextEntry[] = [];
     const messages: ModelMessage[] = [];
@@ -172,7 +172,7 @@ export class SessionHistory {
 
       if (message === undefined) throw new KinuError('io', 'a context member did not materialize');
 
-      if (rendered.has(member.messageId)) renders.push({ message, at: messages.length });
+      if (this.messages.originOf(member) === 'render') renders.push({ message, at: messages.length });
       else { entries.push(member); messages.push(message); }
     }
 
@@ -270,7 +270,7 @@ export class SessionHistory {
       return { ...current, changed: false };
     }
 
-    const staged = await this.partition(candidate, this.context.renderMessages(current.selection.contextId));
+    const staged = await this.partition(candidate);
     const before = toolPairingGaps(current.messages);
     const after = toolPairingGaps(staged.messages);
     const refusal = before.calls.size > 0 || after.calls.size > 0 || after.results.size > 0 ? 'unpaired_tool_call' : null;
