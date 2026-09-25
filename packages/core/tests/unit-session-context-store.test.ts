@@ -148,7 +148,7 @@ test('reverting a context selects an isolated branch that survives reader recons
   } finally { s.testSql.close(); }
 });
 
-test('a context reads what is stored: another reader\'s revision, and one written again after a rolled-back write', async () => {
+test('a context reads what is stored: another reader\'s revision, and one written again by the same turn after a rollback', async () => {
   const s = setup();
   // One millisecond for every write, as one request's frozen clock gives them.
   setSystemTime(Date.parse('2026-09-25T00:00:00.000Z'));
@@ -170,14 +170,26 @@ test('a context reads what is stored: another reader\'s revision, and one writte
     expect(await read(second)).toEqual(['one', 'two']);
     const three = await said('three');
 
-    expect(() => s.rt.storage.transactionSync(() => {
-      s.context.commit(second, { cause: 'input', turnId: 'failed', assertEpoch: assertOwner, mutate: three });
-      throw new Error('rolled back after its revision');
-    })).toThrow('rolled back after its revision');
-    const third = other.commit(second, { cause: 'input', turnId: 'next', assertEpoch: assertOwner, mutate: await said('four') });
+    const rolledBack = (write: () => ContextSelection): void => {
+      expect(() => s.rt.storage.transactionSync(() => {
+        write();
+        throw new Error('rolled back after its revision');
+      })).toThrow('rolled back after its revision');
+    };
+
+    rolledBack(() => s.context.commit(second, { cause: 'input', turnId: 'third', assertEpoch: assertOwner, mutate: three }));
+    const third = other.commit(second, { cause: 'input', turnId: 'third', assertEpoch: assertOwner, mutate: await said('four') });
 
     expect(third.revision).toBe(second.revision + 1);
     expect(await read(third)).toEqual(['one', 'two', 'four']);
+
+    // Both writes open the same row; the retry also drops the last entry.
+    const five = s.messages.insert(await s.messages.prepare({ role: 'user', content: 'five' }, 'five'), 'input');
+    const replaced = (entries: readonly ContextEntry[]) => entries.map((entry, position) => (position === 0 ? { ...five, entryId: 'five', position } : entry));
+    rolledBack(() => s.context.commit(third, { cause: 'edit', turnId: 'fourth', assertEpoch: assertOwner, mutate: replaced }));
+    const fourth = other.commit(third, { cause: 'edit', turnId: 'fourth', assertEpoch: assertOwner, mutate: (entries) => replaced(entries).slice(0, 2) });
+
+    expect(await read(fourth)).toEqual(['five', 'two']);
   } finally {
     setSystemTime();
     s.testSql.close();
