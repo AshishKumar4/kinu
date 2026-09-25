@@ -232,8 +232,8 @@ describe('the declared boundaries are the instrumented boundaries', () => {
     }
   });
 
-  test('the family set is exactly the pinned five', () => {
-    expect([...BOUNDARY_FAMILIES]).toEqual(['error', 'turn', 'provider', 'job', 'release']);
+  test('the family set is exactly the pinned four', () => {
+    expect([...BOUNDARY_FAMILIES]).toEqual(['error', 'turn', 'provider', 'job']);
     const declared = new Set<string>(FLEET_BOUNDARIES.map((b) => b.family));
     expect([...declared].sort()).toEqual([...BOUNDARY_FAMILIES].sort());
   });
