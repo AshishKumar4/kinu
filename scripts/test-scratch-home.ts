@@ -25,14 +25,12 @@
 // vitest into every `bun test` process or sniff an environment variable that
 // vitest is free to rename, and a teardown that silently registers with the
 // wrong runner is the failure this module exists to prevent.
-import { tolerate } from '@kinu.run/core/obs';
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import * as v from 'valibot';
-import { releaseOnSignals, releaseScratch, SCRATCH_ROOT_PREFIX, scratchDir } from '../packages/test-utils/src/scratch';
+import { releaseOnSignals, releaseScratch, scratchDir } from '../packages/test-utils/src/scratch';
 import { stripAmbientCredentials } from '../packages/test-utils/src/ambient-env';
-import { currentOwner, ownerAlive, ProcessOwnerSchema } from './process-owner';
+import { reapAbandonedRoots, recordOwner } from './process-owner';
 
 /** The temp directory the runner gave this run, before this module points TMPDIR at its own root below. */
 export const runTemp = tmpdir();
@@ -42,12 +40,8 @@ export const runTemp = tmpdir();
 // everything else this process owns, and a partial failure stays owned.
 const scratchRoot = scratchDir('test-home', runTemp);
 
-/** Who minted a root, so a later run judges it by whether that process still runs (below). */
-const OWNER_RECORD = 'owner.json';
-
-const owner = currentOwner();
-
-if (owner !== null) writeFileSync(join(scratchRoot, OWNER_RECORD), JSON.stringify(owner));
+// Who minted it, so a later run judges it by whether this process still runs (below).
+recordOwner(scratchRoot);
 
 const home = join(scratchRoot, 'home');
 
@@ -131,33 +125,5 @@ releaseOnSignals();
 //
 // A root is abandoned when the process that minted it no longer runs, which its
 // owner record says (process-owner.ts: boot, pid and start tick, so a reused pid
-// is not the owner). Age said nothing: an eval episode runs 30 minutes by design
-// and an eval tier for hours, and the 30-minute bound this replaced reaped live
-// roots out from under them. A root with no readable record (minted before
-// records existed, or killed mid-write) is left to `scripts/preflight.ts
-// --reclaim` rather than guessed at.
-/** Remove every scratch root under `parent` whose recorded owner has ended; `keep` is this run's own. */
-export function reapAbandonedRoots(parent: string, keep: string): string[] {
-  const reaped: string[] = [];
-
-  for (const name of readdirSync(parent)) {
-    const path = join(parent, name);
-
-    if (!name.startsWith(SCRATCH_ROOT_PREFIX) || path === keep) continue;
-
-    // A root is a directory; `kinu-scratch-held.json`, the release report, shares the prefix.
-    if (statSync(path, { throwIfNoEntry: false })?.isDirectory() !== true) continue;
-    // Absent, or taken by a racing peer: nothing to judge.
-    const text = tolerate(() => readFileSync(join(path, OWNER_RECORD), 'utf8'), 'enoent');
-    const recorded = text === undefined ? undefined : v.safeParse(v.pipe(v.string(), v.parseJson(), ProcessOwnerSchema), text);
-
-    if (!recorded?.success || ownerAlive(recorded.output)) continue;
-    // A racing peer may remove it between the read and the rm; `force` covers that.
-    rmSync(path, { recursive: true, force: true });
-    reaped.push(path);
-  }
-
-  return reaped;
-}
-
+// is not the owner).
 reapAbandonedRoots(runTemp, scratchRoot);
