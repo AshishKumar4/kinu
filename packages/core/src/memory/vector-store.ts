@@ -3,7 +3,6 @@
 import * as v from 'valibot';
 import type { IndexedChunk } from '@kinu.run/agent-utils/memory';
 import { renderIssues, type JsonObject } from '../utils/json';
-import type { ModelCallSink } from '../events/model-call';
 import { diagnostics, toKinuError } from '../obs/index';
 
 /** Duck-typed so core stays dependency-free. */
@@ -201,53 +200,6 @@ export function createCloudflareVectorStore(opts: {
           }];
         });
       });
-    },
-  };
-}
-
-/**
- * `env.AI` embedder, default `@cf/baai/bge-small-en-v1.5`. The binding returns no usage, so each
- * request reports `usage: {}` to keep the producer visible; one report per request, not per chunk.
- */
-export function createWorkersAIEmbedder(opts: {
-  aiBinding: { run: (model: string, input: { text: string | string[] }) => Promise<{ data?: number[][] }> };
-  model?: string;
-  dimensions?: number;
-  reportModelCall?: ModelCallSink;
-}): Embedder {
-  const model = opts.model ?? '@cf/baai/bge-small-en-v1.5';
-  const dimensions = opts.dimensions ?? 384;
-
-  const report = (): void => opts.reportModelCall?.({
-    source: 'platform', usage: {}, spec: `workers-ai/${model}`, modelId: model,
-  });
-
-  async function runOne(text: string): Promise<number[]> {
-    const result = await opts.aiBinding.run(model, { text });
-    report();
-    const vec = result?.data?.[0];
-
-    if (!vec || vec.length === 0) {
-      throw new Error(`Workers AI embed returned no vector for model ${model}`);
-    }
-
-    return vec;
-  }
-
-  return {
-    dimensions,
-    async embed(text: string) { return runOne(text); },
-    async embedBatch(texts: readonly string[]) {
-      const result = await opts.aiBinding.run(model, { text: [...texts] });
-      report();
-      const vectors = result?.data ?? [];
-
-      if (vectors.length !== texts.length) {
-        // Each single request reports itself, so counts stay one per request.
-        return Promise.all(texts.map((t) => runOne(t)));
-      }
-
-      return vectors;
     },
   };
 }

@@ -3,19 +3,19 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { testOwner } from './helpers/user-do';
 import { generateText } from 'ai';
-import { createMockFetch } from '@kinu.run/test-utils';
+import { createMockFetch, createTestActors, createTestSql, unobservedSpend } from '@kinu.run/test-utils';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OwnedModelServices, type OwnedModelEnv } from '../src/owned-model-services';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, asFetchFunction, profileCatalogDigest,
-  resolveTurnProfile,
+  resolveTurnProfile, RunEventRecorder, initRunEventTables, unpricedLedgerSink,
   type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
 import type { CredentialHeaders } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
-import { platformGatewayEnv } from './helpers/platform-gateway';
+import { platformGatewayEnv, stubAiBinding } from './helpers/platform-gateway';
 import type { ProviderEnv } from '@kinu.run/core';
 
 /** `LanguageModel` is `string | LanguageModelV3`; resolvers hand back the object half. */
@@ -81,6 +81,7 @@ describe('OwnedModelServices', () => {
       getOwnerUserId: () => null,
       getUserCaller: async () => await testOwner(),
       getCredentialsRevision: async () => 0,
+      reportModelCall: unobservedSpend,
     });
 
     expect(() => services.providerRegistry()).toThrow(
@@ -97,6 +98,7 @@ describe('OwnedModelServices', () => {
       getOwnerUserId: () => null,
       getUserCaller: async () => await testOwner(),
       getCredentialsRevision: async () => 0,
+      reportModelCall: unobservedSpend,
     });
 
     expect(services.providerRegistry().registry.list().map((provider) => provider.id)).toEqual([
@@ -117,6 +119,7 @@ describe('OwnedModelServices', () => {
       getUserCaller: async () => ({ workspaceToken: 'wt' }),
       getOwnerUserId: () => 'owner-1',
       getCredentialsRevision: async () => 0,
+      reportModelCall: unobservedSpend,
     });
 
     const model = resolved(services.resolveModel('openrouter/anthropic/claude-sonnet-4'));
@@ -145,6 +148,7 @@ describe('OwnedModelServices', () => {
       getUserCaller: async () => ({ workspaceToken: 'wt' }),
       getOwnerUserId: () => 'owner-1',
       getCredentialsRevision: async () => 0,
+      reportModelCall: unobservedSpend,
     });
 
     // The mock response fails the AI SDK decoder; asserted so a mock that decodes cleanly fails
@@ -182,6 +186,7 @@ describe('OwnedModelServices', () => {
       getUserCaller: async () => ({ workspaceToken: 'wt' }),
       getOwnerUserId: () => owner,
       getCredentialsRevision: async () => 0,
+      reportModelCall: unobservedSpend,
     });
 
     const web = services.getWebSearchProvider();
@@ -193,6 +198,37 @@ describe('OwnedModelServices', () => {
     expect(services.providerRegistry()).not.toBe(beforeRegistry);
     expect(services.getWebSearchProvider()).toBe(web);
     expect((await web.search('after claim')).source).toBe('tavily');
+  });
+
+  test('a page the web provider converts through Workers AI lands in the workspace ledger as platform spend', async () => {
+    const mock = createMockFetch([
+      { match: 'example.test', respond: { status: 200, body: '<html><body><h1>Raw</h1></body></html>', headers: { 'content-type': 'text/html' } } },
+    ]);
+
+    globalThis.fetch = mock.fetch;
+    const store = createTestSql();
+    initRunEventTables(store.execRaw);
+    const ledger = new RunEventRecorder(store.sql, createTestActors(store.sql, store.execRaw).main);
+
+    const services = new OwnedModelServices({
+      env: {
+        ...fakeEnv(),
+        AI: { ...stubAiBinding().binding, toMarkdown: async () => [{ format: 'markdown', data: '# Converted' }] },
+      },
+      agentName: () => 'actor',
+      appTitle: 'Kinu',
+      ownerRequired: false,
+      getOwnerUserId: () => null,
+      getUserCaller: async () => await testOwner(),
+      getCredentialsRevision: async () => 0,
+      reportModelCall: unpricedLedgerSink(ledger),
+    });
+
+    const page = await services.getWebSearchProvider().fetch('https://example.test/');
+
+    expect(page.markdown).toContain('# Converted');
+    // The binding returns no usage: one call, counted and unmeasured, never free.
+    expect(ledger.spendByProducer().get('platform')).toMatchObject({ calls: 1, callsWithoutUsage: 1 });
   });
 });
 
@@ -214,6 +250,7 @@ function snapshotServices(
     getOwnerUserId: () => owner,
     getUserCaller: async () => ({ workspaceToken: 'wt' }),
     getCredentialsRevision,
+    reportModelCall: unobservedSpend,
   });
 }
 

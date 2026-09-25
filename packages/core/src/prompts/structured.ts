@@ -1,8 +1,7 @@
-import { generateText, type LanguageModel } from 'ai';
+import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
-import { beginModelOperation, type ModelCallSpend } from '../events/model-call';
-import { normalizeUsage } from '../usage';
-import { callAccountOf } from '../providers/quota';
+import type { ModelCallSpend } from '../events/model-call';
+import { generateReported, type GenerateRequest } from '../providers/model-invocation';
 import { parseJsonArray, parseJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 
 const JSON_FENCE = /```json\s*([\s\S]*?)```/i;
@@ -76,31 +75,15 @@ export async function generateJson<TOutput>(opts: {
   model: LanguageModel;
   schema: v.GenericSchema<unknown, TOutput>;
   prompt: string;
-  providerOptions?: Parameters<typeof generateText>[0]['providerOptions'];
-  /** Four producers share this seam, so the label travels with the sink; absent means unattributed. */
-  spend?: ModelCallSpend;
+  providerOptions?: GenerateRequest['providerOptions'];
+  spend: ModelCallSpend;
 }): Promise<TOutput> {
-  const spend = opts.spend;
-  // Opened before the request so a judge killed mid-call still leaves a ledger trace.
-  const operation = beginModelOperation(spend, 'generate_json');
-  let result;
-
-  try {
-    result = await generateText({
-      model: opts.model,
-      prompt: `${opts.prompt}\n\n${jsonObjectOnlyInstruction()}`,
-      providerOptions: opts.providerOptions,
-    });
-  } catch (err) {
-    operation.failed({ cause: err });
-    throw err;
-  }
-
   // Reported before validation: the call was billed even if its output fails the schema.
-  const usage = normalizeUsage(result.totalUsage);
-  const modelId = result.response.modelId;
-  operation.completed({ usage, modelId });
-  spend?.report({ source: spend.source, usage, modelId, account: callAccountOf(result.response) });
+  const result = await generateReported({
+    model: opts.model,
+    prompt: `${opts.prompt}\n\n${jsonObjectOnlyInstruction()}`,
+    providerOptions: opts.providerOptions,
+  }, { spend: opts.spend }, 'generate_json');
 
   return v.parse(opts.schema, extractJsonObject(result.text));
 }

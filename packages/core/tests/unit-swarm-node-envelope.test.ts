@@ -3,7 +3,7 @@
  * `unit-turn-envelope.test.ts`). No measured node finished, so only the cost of a step is derivable.
  */
 import { expect, test, spyOn } from 'bun:test';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
@@ -27,6 +27,7 @@ test('a node finishes after a 26-minute step: nothing times it out', async () =>
       messages: [{ role: 'user', content: 'Answer the task.' }],
       inherited: [], context: 'fresh', mode: 'build', settle: 'best', arbitrate: null,
     }, {
+      reportModelCall: unobservedSpend,
       hostNode: seats.hostNode,
       model: scriptedTurnModel({
         provider: 'fake', modelId: 'fake-long-step',

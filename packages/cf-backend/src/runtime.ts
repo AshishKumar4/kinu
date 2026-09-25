@@ -11,7 +11,7 @@ import type {
   TurnAccumulator,
   DeferredApprovalChannel,
   WriteObserver,
-  ModelCallSink, SpendSource, ResolvedTurnProfile,
+  ModelCallSink, ResolvedTurnProfile, GenerateRequest,
   SlateCallResult, SlateOperation,
   ActorClaimStore, ChildContextResolver, ContextEventRecorder,
 } from "@kinu.run/core";
@@ -27,7 +27,7 @@ import {
   type EgressSecretBinding,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
   type NimbusSandboxHandle,
-  createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
+  createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, generateReported,
   decodeJsonValue,
   initAgentConfigTable, initActorTables,
   parseModelSpec, reasoningEffortOptions, createRoutedModelLane,
@@ -50,7 +50,6 @@ import { SANDBOX_TRANSPORT, sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore, craftStoreView } from "@kinu.run/agent-utils/stores";
-import { generateText, type LanguageModelUsage } from "ai";
 import { createRuntimeExecutor } from "./codemode-sandbox";
 import type { Agent } from "agents";
 import {
@@ -66,9 +65,7 @@ import {
 } from "./providers/agent-registry";
 import { ownerCaller, type UserCaller } from "@kinu.run/core";
 import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
-import {
-  agentAffinityKey, callAccountOf, normalizeUsage,
-} from "@kinu.run/core";
+import { agentAffinityKey } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
 
 /**
@@ -210,8 +207,8 @@ export interface CFRuntimeHooks {
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
   workspaceObserver?: WriteObserver;
   /** Where non-turn model seams (judge, fast tier, reflection, embedder) report cost; turn spend arrives
-     *  as `step_finish`. Optional: unattributed spend shows in the coverage fraction. */
-  reportModelCall?: ModelCallSink;
+     *  as `step_finish`. */
+  reportModelCall: ModelCallSink;
   resolveProfile?: () => Promise<ResolvedTurnProfile>;
   /** The actor's uid on both planes, or neither: split credentials measured `EACCES` on its own home
      *  and could write a sibling's. */
@@ -235,7 +232,7 @@ export function createCFRuntime(
   agent: AgentHost,
   access: CFRuntimeAccess,
   actor: ActorRuntimeIdentity,
-  hooks: CFRuntimeHooks = {},
+  hooks: CFRuntimeHooks,
 ): CFRuntime {
   const sql = bindAgentSql(agent);
   const execRaw: RawSqlExec = (ddl: string) => access.ctx.storage.sql.exec(ddl);
@@ -543,20 +540,16 @@ const EMBEDDING_MODEL = '@cf/baai/bge-small-en-v1.5';
 function buildVectorStore(
   env: Env,
   actor: ActorRuntimeIdentity,
-  reportModelCall?: ModelCallSink,
+  reportModelCall: ModelCallSink,
 ): VectorStore {
-  const aiBinding = env.AI;
+  const embedder = createWorkersAIEmbedder({ env, model: EMBEDDING_MODEL, dimensions: 384, report: reportModelCall });
   const vectorizeBinding = env.MEMORY_VECTORS;
 
-  if (!aiBinding || !vectorizeBinding) {
+  if (!embedder || !vectorizeBinding) {
     return createNoopVectorStore();
   }
 
   try {
-    const embedder = reportModelCall
-      ? createWorkersAIEmbedder({ aiBinding, model: EMBEDDING_MODEL, dimensions: 384, reportModelCall })
-      : createWorkersAIEmbedder({ aiBinding, model: EMBEDDING_MODEL, dimensions: 384 });
-
     const store = createCloudflareVectorStore({
       index: vectorizeBinding,
       embedder,
@@ -596,22 +589,6 @@ function actorProviderRegistry(
   });
 }
 
-function reportCall(
-  report: ModelCallSink | undefined,
-  source: SpendSource,
-  spec: string,
-  result: { usage?: LanguageModelUsage; response?: { modelId?: string; headers?: Record<string, string> } },
-): void {
-  if (!report) return;
-  const usage = normalizeUsage(result.usage);
-  const modelId = result.response?.modelId;
-  const account = callAccountOf(result.response ?? {});
-  // `modelId` absent has to mean absent.
-  report(modelId !== undefined && modelId.length > 0
-    ? { source, spec, usage, modelId, account }
-    : { source, spec, usage, account });
-}
-
 /** `resolveProfile` absent means no lane to build. */
 export interface ProfileLaneOptions {
   readonly agent: AgentHost;
@@ -619,7 +596,7 @@ export interface ProfileLaneOptions {
   readonly actor: ActorRuntimeIdentity;
   readonly resolveProfile: (() => Promise<ResolvedTurnProfile>) | undefined;
   readonly source: FixedTierSource;
-  readonly report?: ModelCallSink;
+  readonly report: ModelCallSink;
 }
 
 /** Only a completed call reports: a thrown seam was not billed. */
@@ -640,16 +617,14 @@ function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
           parseModelSpec(route.model).provider,
         );
 
-        const request: Parameters<typeof generateText>[0] = {
+        const request: GenerateRequest = {
           model: registry.resolveModel(route.model),
           prompt,
         };
 
         if (providerOptions) request.providerOptions = providerOptions;
-        const result = await generateText(request);
-        reportCall(report, source, route.model, result);
 
-        return result.text.trim();
+        return (await generateReported(request, { spend: { source, report }, spec: route.model })).text.trim();
       },
     }),
   });

@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import * as v from 'valibot';
-import { scriptedTurnModel, createTestActorsOver, unobservedSearchSeams } from '@kinu.run/test-utils';
+import { scriptedTurnModel, createTestActorsOver, unobservedSearchSeams, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
 import { MissionGovernor } from '../src/mission-budget';
 import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
@@ -744,7 +744,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     const first = nodeModel({ freezeFromStart: 3 });
 
     const frozen = runSwarm(
-      { rt, hostNode: activation(), model: first.model, mode: 'build', logger: log },
+      { reportModelCall: unobservedSpend, rt, hostNode: activation(), model: first.model, mode: 'build', logger: log },
       resolved(),
     );
 
@@ -908,7 +908,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     const first = nodeModel({ freezeFromStart: 1, frozenNodes: FLAT_SEARCH.branches });
 
     const frozen = runSwarm(
-      { rt, hostNode: activation(), model: first.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode: activation(), model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(FLAT_SEARCH),
     );
 
@@ -1027,7 +1027,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const first = nodeModel({ freezeFromStart: 3 });
 
     const frozen = runSwarm(
-      { rt, hostNode: activation(), model: first.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode: activation(), model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
 
@@ -1103,7 +1103,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const first = nodeModel({ freezeFromStart: 3 });
 
     const frozen = runSwarm(
-      { rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
 
@@ -1140,7 +1140,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const first = nodeModel({ freezeFromStart: 3 });
 
     const frozen = runSwarm(
-      { rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
 
@@ -1211,7 +1211,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     const first = nodeModel({ freezeFromStart: 3 });
 
     const frozen = runSwarm(
-      { rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
 
@@ -1242,7 +1242,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     const first = nodeModel({ freezeFromStart: 3 });
 
     const frozen = runSwarm(
-      { rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
 
@@ -1340,7 +1340,7 @@ describe('a named swarm is called by its name', () => {
     if ('reason' in named) throw new Error(`the suite's own composition does not resolve: ${named.error}`);
     const model = nodeModel();
     await runSwarm(
-      { rt, hostNode, model: model.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode, model: model.model, mode: 'build', logger: createRecordingLogger() },
       named,
     );
 
@@ -1357,7 +1357,7 @@ describe('a named swarm is called by its name', () => {
     const sql = rt.storage.sql;
     const model = nodeModel();
     await runSwarm(
-      { rt, hostNode, model: model.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode, model: model.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
     const rootId = firstRoot(sql)?.root_id ?? '';
@@ -1419,7 +1419,7 @@ describe('a second search over a task already running is refused', () => {
     const second = nodeModel();
 
     const result = await runSwarm(
-      { rt, hostNode, model: second.model, mode: 'build', logger: log },
+      { reportModelCall: unobservedSpend, rt, hostNode, model: second.model, mode: 'build', logger: log },
       resolved(),
     );
 
