@@ -490,6 +490,21 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         },
       },
       {
+        id: 'volatile-context/list-changes-by-row',
+        asserts: 'a changed task list rides a delta that names only its added, changed and removed rows',
+        observe: (s) => {
+          const ledger = new s.DynamicContextLedger();
+          const task = (id: string, status: string) => ({ id, title: `step ${id}`, status, parentId: null });
+          ledger.weave(shortHistory(), { tasks: { items: [task('t1', 'open'), task('t2', 'open'), task('t3', 'open')], total: 3 } });
+
+          const later = ledger.weave([...shortHistory(), { role: 'assistant', content: 'ok' }], {
+            tasks: { items: [task('t1', 'active'), task('t3', 'open'), task('t4', 'open')], total: 3 },
+          });
+
+          return v.parse(v.string(), later.at(-1)?.content);
+        },
+      },
+      {
         id: 'volatile-context/frozen-blocks-hold-their-position',
         asserts: 'a block born mid-run stays at its birth index while later messages accumulate after it',
         observe: (s) => {

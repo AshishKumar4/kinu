@@ -22,6 +22,7 @@ import {
   DYNAMIC_CONTEXT_HEADER,
   composePrepareStep,
   TURN_CONTEXT_HEADER,
+  type DynamicContext,
   type PromptExecutorInfo,
 } from '../src/index';
 import { Fnv1a64 } from '../src/utils/fnv1a';
@@ -927,6 +928,99 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     expect(delta).not.toContain('## World model');
     ledger.dropSuperseded();
     expect(ledger.weave(history, current).at(-1)?.content).toBe(renderDynamicContextBlock(current) ?? '');
+  });
+
+  describe('row deltas and keyframes', () => {
+    const task = (i: number, status = 'open', parentId: string | null = null) => ({ id: `t${i}`, title: `step ${i}`, status, parentId });
+    const blockKind = (text: string) => (text.includes('kind="delta"') ? 'delta' : 'full');
+
+    const deltaAfter = (before: DynamicContext, after: DynamicContext): string => {
+      const ledger = new DynamicContextLedger();
+      const history: ModelMessage[] = [{ role: 'user', content: 'plan the work' }];
+      ledger.weave(history, before);
+      history.push({ role: 'assistant', content: 'working' });
+
+      return messageText(present(ledger.weave(history, after).at(-1), 'the newest block'));
+    };
+
+    test('a task list states only the rows that changed: added, changed and removed', () => {
+      const delta = deltaAfter(
+        { tasks: roster([task(1), task(2), task(3), task(4), task(5)]) },
+        { tasks: roster([task(1), task(2, 'active'), task(3), task(5), task(6), task(7, 'open', 't6')]) },
+      );
+
+      expect(blockKind(delta)).toBe('delta');
+      expect(delta).toContain('(you keep this with the `tasks` tool) (changed rows)');
+      expect(delta).toContain('- t2 [active] step 2');
+      expect(delta).toContain('- removed: t4');
+      expect(delta).toContain('- t6 [open] step 6');
+      // Out of the list's context, a new subtask names the task it sits under.
+      expect(delta).toContain('- t7 [open] step 7 (subtask of t6)');
+
+      for (const unchanged of ['t1', 't3', 't5']) expect(delta).not.toContain(`- ${unchanged} [`);
+    });
+
+    test('a row the cap hid comes back as added, and the elision line says every row is shown', () => {
+      const sixteen = Array.from({ length: 16 }, (_, i) => task(i + 1));
+      const delta = deltaAfter({ tasks: roster(sixteen) }, { tasks: roster(sixteen.slice(1)) });
+
+      expect(delta).toContain('- removed: t1');
+      expect(delta).toContain('- t16 [open] step 16');
+      expect(delta).toContain('- …every row is shown now');
+      expect(delta).not.toContain('- t2 [');
+    });
+
+    test('a memory tail that grew is continued, even as its window slides past the oldest notes', () => {
+      const notes = Array.from({ length: 8 }, (_, i) => `### Note ${String(i)}\nLesson ${String(i)}: keep the build green.`);
+      const before = notes.join('\n');
+      const after = `${notes.slice(2).join('\n')}\n### Note 8\nLesson 8: retry the upload once.`;
+      const delta = deltaAfter({ memoryTail: before }, { memoryTail: after });
+
+      expect(delta).toContain('## Memory (newest MEMORY.md lessons and reflections) (appended)\n### Note 8\nLesson 8: retry the upload once.');
+      expect(delta).not.toContain('Lesson 7');
+    });
+
+    test('state that shrank below its delta is restated as one full block', () => {
+      const busy: DynamicContext = {
+        factsBlock: '- k = v',
+        tasks: roster([task(1)]),
+        jobs: roster([{ id: 'job-1', kind: 'shell', label: 'build' }]),
+        delegates: roster([{ kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey' }]),
+        approvals: roster([{ id: 'cons-1', kind: 'device consent', detail: 'git push' }]),
+        recoveries: ['`pip install` failed until `uv pip install` ran clean'],
+        missingCapabilities: [{ source: 'mcp: github', reason: 'not connected' }],
+      };
+
+      expect(deltaAfter(busy, { factsBlock: '- k = v' })).toBe(renderDynamicContextBlock({ factsBlock: '- k = v' }) ?? '');
+    });
+
+    test('once the deltas outweigh the full state a few times over, a full block is appended; nothing before it moves', () => {
+      const ledger = new DynamicContextLedger(true);
+      const history: ModelMessage[] = [{ role: 'user', content: 'work through the list' }];
+      const births: { kind: string; replaces: boolean; chars: number }[] = [];
+      const requests: ModelMessage[][] = [];
+
+      ledger.adopt([]);
+
+      for (let step = 0; step < 200 && births.filter((birth) => birth.kind === 'full').length < 2; step++) {
+        requests.push(ledger.weave(history, { tasks: roster(Array.from({ length: 10 }, (_, i) => task(step + i))) }));
+        births.push(...ledger.takeBirths().map((birth) => ({ kind: blockKind(birth.text), replaces: birth.replaces, chars: birth.text.length })));
+        history.push({ role: 'assistant', content: `finished step ${String(step)}` });
+      }
+
+      const keyframe = births.findIndex((birth, i) => i > 0 && birth.kind === 'full');
+      const chain = births.slice(1, keyframe);
+
+      expect(keyframe).toBeGreaterThan(2);
+      expect(chain.every((birth) => birth.kind === 'delta')).toBe(true);
+      expect(chain.reduce((chars, birth) => chars + birth.chars, 0)).toBeGreaterThan(present(births[keyframe], 'the keyframe').chars);
+      expect(births[keyframe]).toMatchObject({ replaces: false });
+
+      const [previous, current] = [present(requests[keyframe - 1], 'the request before'), present(requests[keyframe], 'the keyframe request')];
+
+      expect(current.slice(0, previous.length)).toEqual(previous);
+      expect(current).toHaveLength(previous.length + 2);
+    });
   });
 
   test('(a) empty ledger + first turn → exactly one block, right before the turn\'s input', () => {

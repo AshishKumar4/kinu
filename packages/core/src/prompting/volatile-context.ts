@@ -3,10 +3,11 @@
  * agent events; the rest rides in messages.
  *
  * Dynamic context (DynamicContextLedger): each step renders live state into a `<dynamic_context>` block, added only
- * when it differs from the newest: before the turn's input at its first step, at the tail after. Blocks freeze
- * where born (moving one invalidates every later cache breakpoint); only `dropSuperseded`, under measured pressure,
- * removes any. They are stored in the working context: a turn the provider's cache still holds re-weaves them where
- * they were, one it no longer holds starts over with one block. Nothing clock-derived may render.
+ * when it changed: before the turn's input at its first step, at the tail after. A change is a delta (lists by row,
+ * after a full block, which states the grammar) unless a full block is no longer or the deltas pass KEYFRAME_SHARE.
+ * Blocks freeze where born (moving one invalidates every later cache breakpoint); only `dropSuperseded`, under
+ * measured pressure, removes any. Stored in the working context, they are re-woven while the provider's cache holds
+ * them and collapse into one block once it does not. Nothing clock-derived may render.
  *
  * Turn-local state (skill activation reasons, device notice, provenance) is one user message right before the
  * turn's input, this turn only, never fingerprinted, so the request stays the last user-role content: news after
@@ -58,13 +59,13 @@ export interface DynamicDelegate {
   readonly task?: string | null;
 }
 
-/** Items passing the store's open filter plus the true count; the renderer states any elision from `total`. */
+/** `total` counts past the page, so the renderer states elision. */
 export interface ActiveRoster<T> {
   readonly items: readonly T[];
   readonly total: number;
 }
 
-/** Live state at one model step, read from existing sources. Callers order lists; the renderer caps them. */
+/** Callers order lists; the renderer caps them. */
 export interface DynamicContext {
   mode?: { readonly workMode: WorkMode; readonly planSubmission: boolean };
   /** Empty renders a "none yet" line: the model checks `workspace.listTools()` before building. */
@@ -138,12 +139,7 @@ export interface DynamicContextSources {
    readonly missingCapabilities: readonly MissingCapability[];
 }
 
-/**
- * The agent's live state for one model step, shared by both backends. This
- * function alone decides which planes exist; an absent plane renders nothing
- * (never "(none)"), so a backend that cannot read one passes it absent.
- * Nothing clock-derived.
- */
+/** Both backends' live state for one step: this alone decides which planes exist; an absent one renders nothing. */
 export function agentDynamicContext(sources: DynamicContextSources): DynamicContext {
   const subordinateDelegates = sources.subordinateDelegates ?? [];
   const headDelegates = searchDelegates(sources.liveHeadRuns.items);
@@ -193,9 +189,18 @@ export interface TurnLocalContext {
   provenance?: TurnProvenance;
 }
 
+const CHANGED_ROWS = '(changed rows)';
+
+const REMOVED_ROW = 'removed:';
+
+const APPENDED = '(appended)';
+
 export const DYNAMIC_CONTEXT_HEADER =
-  'Kinu runtime state, not conversation or user text. Full blocks replace prior state.\n'
-  + 'Delta sections replace named sections; omitted sections stay. Execution deltas update named runtimes. Cleared means empty.';
+  'Kinu runtime state, not conversation or user text. A full block replaces prior state; a delta changes only what it names.\n'
+  + `A delta section replaces its section. Under "${CHANGED_ROWS}", each row replaces or adds the row with its id, and `
+  + `"${REMOVED_ROW} <id>" drops one.\n"${APPENDED}" continues its section. Execution deltas update named runtimes. Cleared means empty.`;
+
+const DYNAMIC_DELTA_HEADER = 'Kinu runtime state update, not conversation or user text.';
 
 export const TURN_CONTEXT_HEADER =
   '[Turn context: live state maintained by the Kinu runtime, not written by the user.]';
@@ -311,8 +316,7 @@ function executorSandboxSuffix(exec: PromptExecutorInfo): string {
   }
 }
 
-/** Live devices add mount, grant, run mode and toolchain; nothing clock- or order-derived (`probedAt`). The
- *  mount segment is the file plane's own routing. */
+/** Live devices add mount, grant, run mode and toolchain; nothing clock- or order-derived (`probedAt`). */
 function renderDeviceLine(device: DeviceFleetEntry, fleet: readonly DeviceFleetEntry[]): string {
   const platform = device.os ? ` (${device.os})` : '';
 
@@ -336,7 +340,7 @@ function renderDeviceLine(device: DeviceFleetEntry, fleet: readonly DeviceFleetE
   return parts.join(', ');
 }
 
-/** Per-list caps: the block rides every request, so rosters state a head and an honest tail count. */
+/** The block rides every request: rosters state a head and an honest tail count. */
 const MAX_JOBS = 8;
 
 /** Rows, not tasks. Larger than other caps: a plan cut off early stops being a plan. */
@@ -361,20 +365,41 @@ function clip(text: string, max = ENTRY_CHARS): string {
   return oneLine.length > max ? `${oneLine.slice(0, max - 1).trimEnd()}…` : oneLine;
 }
 
+/** `id` names a row in a delta's removal; `delta`: the row as a delta prints it. */
+interface SectionRow {
+  readonly id: string;
+  readonly line: string;
+  readonly delta?: string;
+}
+
+interface RenderedSection {
+  readonly text: string;
+  readonly rows?: readonly SectionRow[];
+  readonly log?: string;
+}
+
+const ELIDED_ROW = '\u0000more';
+
 /** Elision is counted from the roster's true total, never the returned page. Null when empty. */
 function rosterSection<T>(
   title: string,
   roster: ActiveRoster<T>,
   cap: number,
-  row: (item: T) => string,
-): string | null {
+  row: (item: T) => SectionRow,
+): RenderedSection | null {
   if (roster.total === 0) return null;
-  const lines = roster.items.slice(0, cap).map(row);
-  const elided = roster.total - lines.length;
+  const rows = roster.items.slice(0, cap).map(row);
+  const elided = roster.total - rows.length;
 
-  if (elided > 0) lines.push(`- …and ${elided} more, not shown`);
+  if (elided > 0) rows.push({ id: ELIDED_ROW, line: `- …and ${elided} more, not shown` });
 
-  return [title, ...lines].join('\n');
+  return { text: [title, ...rows.map((r) => r.line)].join('\n'), rows };
+}
+
+function textSection(title: string, body: string): RenderedSection {
+  const rows = body.split('\n').map((line) => ({ id: line, line }));
+
+  return { text: `${title}\n${body}`, rows };
 }
 
 /** An absent plane renders nothing, never "(none)". */
@@ -399,45 +424,48 @@ const DYNAMIC_SECTION_TITLES = {
 const NO_CRAFTED_TOOLS_YET =
   'No crafted tools exist in this workspace yet. `workspace.listTools()` returns an empty list; `workspace.createTool` adds the first.';
 
-/** `fingerprint` digests the block body, so re-statements and stale blocks are visible. */
-function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, string> {
-  const sections = new Map<keyof DynamicContext, string>();
+function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, RenderedSection> {
+  const sections = new Map<keyof DynamicContext, RenderedSection>();
 
-  const add = (key: keyof DynamicContext, section: string | null): void => {
+  const add = (key: keyof DynamicContext, section: RenderedSection | null): void => {
     if (section !== null) sections.set(key, section);
   };
 
-  if (ctx.mode) add('mode', renderWorkMode(ctx.mode));
+  if (ctx.mode) add('mode', { text: renderWorkMode(ctx.mode) });
 
   if (ctx.craftedTools !== undefined) {
-    add('craftedTools', `${DYNAMIC_SECTION_TITLES.craftedTools}\n${ctx.craftedTools.length > 0
+    add('craftedTools', { text: `${DYNAMIC_SECTION_TITLES.craftedTools}\n${ctx.craftedTools.length > 0
       ? renderCraftedToolsDeclaration(ctx.craftedTools)
-      : NO_CRAFTED_TOOLS_YET}`);
+      : NO_CRAFTED_TOOLS_YET}` });
   }
 
   const facts = ctx.factsBlock?.trim();
 
-  if (facts) add('factsBlock', `${DYNAMIC_SECTION_TITLES.factsBlock}\n${facts}`);
+  if (facts) add('factsBlock', textSection(DYNAMIC_SECTION_TITLES.factsBlock, facts));
 
   const memoryTail = ctx.memoryTail?.trim();
 
-  if (memoryTail) add('memoryTail', `${DYNAMIC_SECTION_TITLES.memoryTail}\n${memoryTail}`);
+  if (memoryTail) add('memoryTail', { text: `${DYNAMIC_SECTION_TITLES.memoryTail}\n${memoryTail}`, log: memoryTail });
 
   add('recoveries', rosterSection(
     DYNAMIC_SECTION_TITLES.recoveries,
     { items: ctx.recoveries ?? [], total: (ctx.recoveries ?? []).length }, MAX_RECOVERIES,
-    (finding) => `- ${clip(finding, RECOVERY_ENTRY_CHARS)}`,
+    (finding) => {
+      const id = clip(finding, RECOVERY_ENTRY_CHARS);
+
+      return { id, line: `- ${id}` };
+    },
   ));
 
   const executors = (ctx.executors ?? []).filter(executorIsSelectable);
 
   if (executors.length > 0) {
-    add('executors', [
+    add('executors', { text: [
       DYNAMIC_SECTION_TITLES.executors,
       'Live availability for the runtimes described in the system prompt, and what each one declares it can run:',
       ...executors.map(renderExecutorStatus),
       ...renderExecutionLegend(executors),
-    ].join('\n'));
+    ].join('\n') });
   }
 
   const fleet = ctx.devices ?? [];
@@ -450,51 +478,62 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, s
       ? 'Several machines are connected: name the machine each `shell { runtime: "<nickname>" }` call is for. The runtime refuses a call that names none.'
       : 'One machine is connected: `shell { runtime: "<nickname>" }` reaches it, and `shell { runtime: "device" }` reaches the sole machine.';
 
-    add('devices', [
+    add('devices', { text: [
       DYNAMIC_SECTION_TITLES.devices,
       doctrine,
       ...fleet.map((device) => renderDeviceLine(device, fleet)),
-    ].join('\n'));
+    ].join('\n') });
   }
 
   add('tasks', rosterSection(
     DYNAMIC_SECTION_TITLES.tasks,
     ctx.tasks ?? EMPTY_ROSTER, MAX_TASK_ROWS,
-    (task) => `${task.parentId ? '  - ' : '- '}${task.id} [${task.status}] ${clip(task.title)}`,
+    (task) => {
+      const row = `${task.id} [${task.status}] ${clip(task.title)}`;
+
+      // Out of the list, a subtask names its task.
+      return task.parentId
+        ? { id: task.id, line: `  - ${row}`, delta: `- ${row} (subtask of ${task.parentId})` }
+        : { id: task.id, line: `- ${row}` };
+    },
   ));
 
   add('jobs', rosterSection(
     DYNAMIC_SECTION_TITLES.jobs,
     ctx.jobs ?? EMPTY_ROSTER, MAX_JOBS,
-    (job) => `- ${job.id} (${job.kind})${job.label ? `: ${clip(job.label)}` : ''}`,
+    (job) => ({ id: job.id, line: `- ${job.id} (${job.kind})${job.label ? `: ${clip(job.label)}` : ''}` }),
   ));
 
   add('delegates', rosterSection(
     DYNAMIC_SECTION_TITLES.delegates,
     ctx.delegates ?? EMPTY_ROSTER, MAX_DELEGATES,
-    (d) => `- ${d.name} (${d.kind}), ${clip(d.phase, 40)}${d.task ? `: ${clip(d.task)}` : ''}`,
+    (d) => ({ id: d.name, line: `- ${d.name} (${d.kind}), ${clip(d.phase, 40)}${d.task ? `: ${clip(d.task)}` : ''}` }),
   ));
 
   add('approvals', rosterSection(
     DYNAMIC_SECTION_TITLES.approvals,
     ctx.approvals ?? EMPTY_ROSTER, MAX_APPROVALS,
-    (a) => `- ${clip(a.kind, 40)}: ${clip(a.detail)}`,
+    (a) => {
+      const id = `${clip(a.kind, 40)}: ${clip(a.detail)}`;
+
+      return { id, line: `- ${id}` };
+    },
   ));
 
   add('missingCapabilities', rosterSection(
     DYNAMIC_SECTION_TITLES.missingCapabilities,
     { items: ctx.missingCapabilities ?? [], total: (ctx.missingCapabilities ?? []).length }, MAX_MISSING_CAPABILITIES,
-    (m) => `- ${clip(m.source, 60)}: ${clip(m.reason)}`,
+    (m) => ({ id: clip(m.source, 60), line: `- ${clip(m.source, 60)}: ${clip(m.reason)}` }),
   ));
 
   return sections;
 }
 
-function dynamicBody(sections: readonly string[]): string | null {
+function dynamicBody(sections: readonly string[], header = DYNAMIC_CONTEXT_HEADER): string | null {
   if (sections.length === 0) return null;
 
   return sealDelimiters(
-    [DYNAMIC_CONTEXT_HEADER, ...sections].join('\n\n'),
+    [header, ...sections].join('\n\n'),
     DYNAMIC_CONTEXT_DELIMITER, 'dynamic_context',
   );
 }
@@ -505,8 +544,12 @@ function dynamicBlock(body: string, established: { readonly kind: 'full' } | { r
   return `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="${fnv1a64(body)}" kind="${established.kind}"${state}>\n${body}\n</dynamic_context>`;
 }
 
+function fullBody(sections: ReadonlyMap<keyof DynamicContext, RenderedSection>): string | null {
+  return dynamicBody([...sections.values()].map((section) => section.text));
+}
+
 export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
-  const body = dynamicBody([...renderDynamicSections(ctx).values()]);
+  const body = fullBody(renderDynamicSections(ctx));
 
   return body === null ? null : dynamicBlock(body, { kind: 'full' });
 }
@@ -543,8 +586,50 @@ function executionDelta(before: readonly PromptExecutorInfo[], after: readonly P
 }
 
 interface ToldSections {
-  readonly sections: ReadonlyMap<keyof DynamicContext, string>;
+  readonly sections: ReadonlyMap<keyof DynamicContext, RenderedSection>;
   readonly executors: readonly PromptExecutorInfo[];
+}
+
+/** Null when an id repeats. */
+function rowDelta(title: string, before: readonly SectionRow[], after: readonly SectionRow[]): string | null {
+  const previous = new Map(before.map((row) => [row.id, row.delta ?? row.line]));
+  const current = new Set(after.map((row) => row.id));
+
+  if (previous.size !== before.length || current.size !== after.length) return null;
+
+  const lines = after.filter((row) => previous.get(row.id) !== (row.delta ?? row.line)).map((row) => row.delta ?? row.line);
+
+  for (const id of previous.keys()) {
+    if (!current.has(id)) lines.push(id === ELIDED_ROW ? '- …every row is shown now' : `- ${REMOVED_ROW} ${id}`);
+  }
+
+  return [`${title} ${CHANGED_ROWS}`, ...lines].join('\n');
+}
+
+/** What `after` appends to `before`, if it keeps at least half of it: a window over an append-only file. */
+function appendedText(before: string, after: string): string | null {
+  for (let cut = 0; cut <= before.length / 2; cut++) {
+    const kept = before.slice(cut);
+
+    if (after.startsWith(kept)) return after.length > kept.length ? after.slice(kept.length).trim() || null : null;
+  }
+
+  return null;
+}
+
+function sectionDelta(key: keyof DynamicContext, before: RenderedSection, after: RenderedSection): string {
+  const title = DYNAMIC_SECTION_TITLES[key];
+  let partial: string | null = null;
+
+  if (before.rows !== undefined && after.rows !== undefined) partial = rowDelta(title, before.rows, after.rows);
+
+  if (before.log !== undefined && after.log !== undefined) {
+    const appended = appendedText(before.log, after.log);
+
+    partial = appended === null ? null : `${title} ${APPENDED}\n${appended}`;
+  }
+
+  return partial !== null && partial.length < after.text.length ? partial : after.text;
 }
 
 function deltaSections(previous: ToldSections, current: ToldSections): string[] {
@@ -553,8 +638,10 @@ function deltaSections(previous: ToldSections, current: ToldSections): string[] 
   for (const [key, section] of current.sections) {
     const before = previous.sections.get(key);
 
-    if (before === section) continue;
-    changed.push(key === 'executors' && before !== undefined ? executionDelta(previous.executors, current.executors) : section);
+    if (before?.text === section.text) continue;
+
+    if (before === undefined) changed.push(section.text);
+    else changed.push(key === 'executors' ? executionDelta(previous.executors, current.executors) : sectionDelta(key, before, section));
   }
 
   for (const key of previous.sections.keys()) {
@@ -592,8 +679,7 @@ export function renderTurnLocalContext(ctx: TurnLocalContext): string | null {
   return [TURN_CONTEXT_HEADER, ...sections].join('\n\n');
 }
 
-/** This turn's only, never persisted: placed after the transformContext seam, out of compaction's sight, right
- *  before the turn's input ({@link turnInputStart}). */
+/** This turn's only, never persisted: placed past the transformContext seam, right before the turn's input. */
 export function turnLocalContextMessage(ctx: TurnLocalContext): ModelMessage | null {
   const text = renderTurnLocalContext(ctx);
 
@@ -623,6 +709,7 @@ interface LedgerBlock {
   /** Un-woven position at birth, kept forever; a slot since taken by a tool result renders after it. */
   readonly index: number;
   readonly text: string;
+  readonly kind: 'full' | 'delta';
   /** Chars/4 cost, priced once at birth for the step pruner and `dropSuperseded`. */
   readonly tokens: number;
   readonly message: ModelMessage;
@@ -652,6 +739,10 @@ export interface DynamicBlockBirth {
   readonly replaces: boolean;
 }
 
+/** Deltas since the newest full block, in full blocks' chars, past which the next change is stated whole. The
+ *  longest chain measured: 20 row deltas, 6.2 full blocks' worth, read back right 10/10 on glm-5.3. */
+const KEYFRAME_SHARE = 6;
+
 const BLOCK_TAG = new RegExp(`^${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="([^"]*)" kind="(full|delta)"(?: state="([^"]*)")?>`, 'u');
 
 function blockTag(text: string): { readonly kind: 'full' | 'delta'; readonly state: string } | null {
@@ -663,11 +754,8 @@ function blockTag(text: string): { readonly kind: 'full' | 'delta'; readonly sta
   return kind === 'full' ? { kind, state: fingerprint } : { kind: 'delta', state };
 }
 
-/**
- * `weave` adds a block only when the render changed and re-inserts every frozen block at its position. `history`
- * never includes the blocks or turn-local messages, so positions are durable history's. `reset()` when the durable
- * stream is rewritten (compaction) or the provider's cache expired: the next block starts the ledger over.
- */
+/** `history` excludes the blocks and turn-local messages, so positions are durable history's. `reset()` when the
+ *  durable stream is rewritten (compaction) or the provider's cache expired. */
 export class DynamicContextLedger {
   private blocks: LedgerBlock[] = [];
   /** The state the model holds (a delta's `state`); sections once rendered here. */
@@ -723,7 +811,7 @@ export class DynamicContextLedger {
 
     if (newest === undefined || sections === null) return 0;
     const before = this.overheadTokens;
-    const body = dynamicBody([...sections.sections.values()]);
+    const body = fullBody(sections.sections);
     this.blocks = body === null ? [] : [this.born(newest.index, dynamicBlock(body, { kind: 'full' }), true)];
 
     return before - this.overheadTokens;
@@ -741,7 +829,7 @@ export class DynamicContextLedger {
     let previousIndex = -1;
 
     for (const block of this.blocks) {
-      // History rewrites invalidate frozen positions even when their caller forgot to reset the ledger.
+      // A rewritten history invalidates frozen positions, reset or not.
       if (block.index > history.length || block.index < previousIndex) {
         this.reset();
         break;
@@ -752,7 +840,7 @@ export class DynamicContextLedger {
 
     const current = Object.freeze(structuredClone(state));
     const rendered: ToldSections = { sections: renderDynamicSections(current), executors: current.executors ?? [] };
-    const body = dynamicBody([...rendered.sections.values()]);
+    const body = fullBody(rendered.sections);
     const established = fnv1a64(body ?? '');
 
     if (established !== (this.told?.state ?? fnv1a64(''))) {
@@ -797,12 +885,20 @@ export class DynamicContextLedger {
   }
 
   private statement(rendered: ToldSections, body: string | null, established: string): string | null {
+    const full = body === null ? null : dynamicBlock(body, { kind: 'full' });
     const known = this.blocks.length === 0 ? null : this.told?.sections ?? null;
-    const delta = known === null ? null : dynamicBody(deltaSections(known, rendered));
+    const changes = known === null ? null : dynamicBody(deltaSections(known, rendered), DYNAMIC_DELTA_HEADER);
 
-    if (delta !== null) return dynamicBlock(delta, { kind: 'delta', state: established });
+    if (changes === null) return full;
+    const delta = dynamicBlock(changes, { kind: 'delta', state: established });
 
-    return body === null ? null : dynamicBlock(body, { kind: 'full' });
+    if (full === null) return delta;
+
+    // Appended: a warm cache keeps every byte before it.
+    const since = this.blocks.map((block) => block.kind).lastIndexOf('full');
+    const pending = this.blocks.slice(since + 1).reduce((chars, block) => chars + block.text.length, 0);
+
+    return full.length <= delta.length || pending + delta.length > KEYFRAME_SHARE * full.length ? full : delta;
   }
 
   /** A neighbour a fold took places none. */
@@ -829,7 +925,10 @@ export class DynamicContextLedger {
   }
 
   private block(index: number, text: string): LedgerBlock {
-    return Object.freeze({ index, text, tokens: Math.round(text.length / 4), message: Object.freeze({ role: 'user', content: text }) });
+    return Object.freeze({
+      index, text, kind: blockTag(text)?.kind ?? 'full', tokens: Math.round(text.length / 4),
+      message: Object.freeze({ role: 'user', content: text }),
+    });
   }
 }
 

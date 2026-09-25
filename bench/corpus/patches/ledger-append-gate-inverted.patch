@@ -1,9 +1,9 @@
 diff --git a/packages/core/src/prompting/volatile-context.ts b/packages/core/src/prompting/volatile-context.ts
-index dff16a6ee..c8cb313a8 100644
+index 230415176..3dabd1caa 100644
 --- a/packages/core/src/prompting/volatile-context.ts
 +++ b/packages/core/src/prompting/volatile-context.ts
-@@ -762,7 +762,7 @@ export class DynamicContextLedger {
-     const body = dynamicBody([...rendered.sections.values()]);
+@@ -842,7 +842,7 @@ export class DynamicContextLedger {
+     const body = fullBody(rendered.sections);
      const established = fnv1a64(body ?? '');
  
 -    if (established !== (this.told?.state ?? fnv1a64(''))) {
