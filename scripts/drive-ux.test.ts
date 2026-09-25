@@ -338,12 +338,17 @@ describe('the Drive', () => {
 
       try {
         const deploy = '[data-drive-entry="deploy"]';
+        const markOf = (tile: string): Promise<string> => page.$eval(`${tile} svg`, (svg) => svg.outerHTML);
+        const skillMark = await markOf(deploy);
         expect((await menuOf(page, deploy)).find((item) => item.label === 'Mark as skill')).toEqual({ label: 'Mark as skill', refused: null });
         await page.click(`${deploy} [data-drive-mark]`);
 
         // Marking links it under /skills; the folder stays where it was.
         await page.click('[data-drive-crumb]');
         await waitForEntry(page, 'skills');
+        // The Skills folder holds skills without being one, and wears their mark; a plain folder does not.
+        expect(await markOf('[data-drive-entry="skills"]')).toBe(skillMark);
+        expect(await markOf('[data-drive-entry="projects"]')).not.toBe(skillMark);
         await page.click('[data-drive-entry="skills"] a');
         await waitForEntry(page, 'deploy');
         expect(await entries(page)).toEqual([

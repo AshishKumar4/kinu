@@ -635,9 +635,9 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     const full = joinDir(path, entry.name);
     const opens = entry.kind === "symlink" && entry.target !== undefined ? entry.target : full;
     const attributes = { "data-drive-entry": entry.name, "data-drive-kind": entry.kind, "data-drive-skill": entry.skill ? "true" : "false" };
-    let icon = entry.skill ? SKILLS_ICON : FOLDER_ICON;
+    let icon = entry.kind === "symlink" ? LINK_ICON : FOLDER_ICON;
 
-    if (entry.kind === "symlink") icon = entry.skill ? SKILLS_ICON : LINK_ICON;
+    if (entry.skill || full === DRIVE_SKILLS_DIR) icon = SKILLS_ICON;
 
     if (inSkills && entry.skill) {
       return (

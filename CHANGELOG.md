@@ -729,6 +729,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - **You can open your own people-only share.** Open on a live share you gave to named people answered "Not
   found", because the share let in only the people it names. It now lets in its owner too, as forking it
   already did; nobody else gets in.
+- **The Skills folder wears the skills' mark.** In the Drive, the Skills folder showed a plain folder icon; it now
+  shows the green book the skills in it wear, as the design has it.
 - **Hired agents make slates.** Slates lived in the main agent's home, so an agent you hired could not create one
   ("can't promote to /home/main/slates/widgets (EACCES)"). They now live at `/slates`, the workspace's own
   directory. Every chat in the workspace makes, edits, previews and removes slates there as the main chat does, and
