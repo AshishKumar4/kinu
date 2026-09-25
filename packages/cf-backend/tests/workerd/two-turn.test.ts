@@ -226,48 +226,36 @@ describe('two real turns over the HTTP model seam', () => {
   it('drains an external event that reached an idle object, on the wake its arrival armed', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('reactor-wake-driver'));
 
-    // The shipped cross-DO receiver runs both ingress halves: the in-memory debounce and the durable arm.
+    // The shipped cross-DO receiver runs both ingress halves, the in-memory debounce and the durable arm,
+    // and the probe evicts the object in the arrival's own call. The platform then delivers what the
+    // eviction left armed; a chain only the live isolate held would never tick.
     const { workspace, owner } = await root.claimReactorWakeWorkspace();
-    const armed = await root.publishPeerEvent(workspace, owner, 'REACTOR-WAKE');
+    const wake = await root.reactorWake(workspace, owner, 'REACTOR-WAKE');
 
-    // Only the frame behind the armed callback runs; asserting the armed chain keeps the drive from
-    // measuring a frame the platform would never deliver.
-    expect(armed.map((row) => row.callback)).toContain('_kinuTimerTick');
+    // The arrival armed the chain: no Kinu timer before it, one once its detached arm landed.
+    expect(wake.armedBefore).not.toContain('_kinuTimerTick');
+    expect(wake.armedAfter).toContain('_kinuTimerTick');
 
-    // The eviction drops scheduleDrain's debounce, leaving the durable half alone.
-    await abortAllDurableObjects();
+    // Pending at the eviction, which dropped scheduleDrain's debounce: a debounce that beat it would
+    // green this on the wrong evidence.
+    expect(wake.evictedWith).toEqual([expect.objectContaining({ turnId: null, consumedAt: null })]);
 
-    const coldRoot = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('reactor-wake-driver'));
-
-    // The row must still be pending, or a debounce that beat the abort would green this on the wrong evidence.
-    const pending = (await coldRoot.agentLogEventsFor(workspace)).filter((row) => row.variant === 'peer_agent');
-
-    expect(pending).toHaveLength(1);
-    expect(pending[0]?.turnId).toBeNull();
-
-    // The armed callback is re-read after the reset, so a chain only the live isolate held shows as an empty drive.
-    const driven = await coldRoot.driveArmedWakesFor(workspace);
-
-    expect(driven).toContain('_kinuTimerTick');
-
-    // Only markConsumed writes an `evt-` turn id, so the row says whether the drain happened:
-    // pending (null, null), leased (evt-, number), answered (evt-, null).
-    const consumed = (await coldRoot.agentLogEventsFor(workspace)).filter((row) => row.variant === 'peer_agent');
-
-    expect(consumed).toHaveLength(1);
-    expect(consumed[0]).toEqual(expect.objectContaining({
+    // Only markConsumed writes an `evt-` turn id, so the row says whether the fresh activation's first tick
+    // drained it: pending (null, null), leased (evt-, number), answered (evt-, null).
+    expect(wake.drained).toEqual([expect.objectContaining({
       turnId: expect.stringMatching(/^evt-/),
       consumedAt: null,
-    }));
-
-    await coldRoot.awaitWireMarker('REACTOR-WAKE');
-    expect(await coldRoot.runStartCausesFor(workspace)).toContain('event_drain');
+    })]);
+    expect(wake.causes).toContain('event_drain');
   });
 
   it('two clients delivering the same message at once are one turn, one provider request, one row', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('twin-driver'));
     const out = await root.twinSends();
-    const calls = v.parse(HttpSchema, out.http).filter((call) => call.model === 'probe-queue');
+
+    // The fake's log is shared by every workspace in this process; this message's requests carry it.
+    const calls = v.parse(HttpSchema, out.http)
+      .filter((call) => call.model === 'probe-queue' && call.users.includes('TWIN'));
 
     expect(calls).toHaveLength(1);
     expect(out.transcript.filter((row) => row.role === 'user' && row.id === 'input-TWIN')).toHaveLength(1);
