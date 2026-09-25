@@ -1,13 +1,14 @@
 /** D30: the container's sync reaches its box only through `serveSync`, which holds every request to
  * the box's own record: its restored container generation, its store prefix, layers the store holds,
  * and the fenced write. `syncWorker` keeps a flush from overlapping a tick. */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test, vi } from 'bun:test';
 import {
   ChainRecordAdvanced, baseObjectKey, deltaObjectKey, type ChainState, type SnapshotChainPorts,
 } from '../src/snapshot-chain';
 import type { CheckpointKind, CheckpointOutcome } from '../src/storage';
 import { DEVBOX_SYNC_HANDLER, DEVBOX_SYNC_HOST, serveSync, syncCaller, syncWorker } from '../src/sync';
 import { ChainTestBox, chainBox } from './support/chain-box';
+import { wakeWhileArmed } from './support/devbox-harness';
 
 const ROOT = 'boxes/one/backups';
 
@@ -212,6 +213,26 @@ test('a restored box runs its sync in the container, not on its own alarm, and a
   expect((await box.devboxIncidentReasons()).map((row) => row.reason)).toContain(
     'the container\'s sync had stopped, so nothing was committed since; restarting it',
   );
+});
+
+test('a beat over a running sync reads the container the box restored: one start, and idle it stops and arms nothing', async () => {
+  let now = Date.now();
+  const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+  try {
+    const { box, container } = chainBox(SyncingBox);
+    await box.devboxStartup();
+    await box.writeFile('/workspace/notes.md', 'the last thing a caller did');
+
+    // The shipped policy stops an idle box after its idle window and the quiet that confirms it,
+    // about forty beats; a box that re-read its container as replaced would never get there.
+    await wakeWhileArmed(container, (to) => { now = Math.max(now, to); }, 120);
+
+    expect({ starts: container.startHooks, running: container.running.running, alarm: container.alarmAt })
+      .toEqual({ starts: 1, running: false, alarm: null });
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 test('a stop ends the container\'s sync before it releases the work directory, so no tick races the detach', async () => {

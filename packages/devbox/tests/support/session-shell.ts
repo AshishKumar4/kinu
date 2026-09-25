@@ -1,7 +1,8 @@
 // Models the container's one persistent session shell for every fake: `bash -n` parses each
-// command, since a string-matching fake accepts commands the real shell refuses. The shell is
-// bash: the 0.12.9 container server spawns `bash --norc` per session and wraps each command in a
-// script that itself uses `[[ ]]`.
+// command, since a string-matching fake accepts commands the real shell refuses, and the output
+// comes back by lines, as the container server re-reads it. The shell is bash: the 0.12.9
+// container server spawns `bash --norc` per session and wraps each command in a script that
+// itself uses `[[ ]]`.
 import { spawnSync } from 'node:child_process';
 
 /** `exit` ends the SDK's persistent session shell, not the script; the SDK answers that
@@ -86,4 +87,18 @@ export function requireSessionShellAccepts(command: string): void {
   if (refused !== undefined) {
     throw new Error(`the container's session shell would refuse this command: ${refused.message}\n${command}`);
   }
+}
+
+/** A session command's output as `exec` answers it: the container server re-reads the command's
+ *  output with bash `while IFS= read -r line` and joins the lines with `\n` (0.12.9 container
+ *  server, `buildFIFOScript` and `parseLogFile`). So every NUL byte is dropped, the final newline
+ *  goes, and an empty line inside the output stays. Measured 2026-09-25 against the production
+ *  image's own server (`/api/execute`): `a\0b` answered `ab`, `a\nb\n` answered `a\nb`, and
+ *  `a\n\nb` answered `a\n\nb` (docs/DEVBOX-DECISIONS.md P6). */
+export function sessionShellOutput(raw: string): string {
+  const lines = raw.replaceAll('\0', '').split('\n');
+
+  if (lines.at(-1) === '') lines.pop();
+
+  return lines.join('\n');
 }

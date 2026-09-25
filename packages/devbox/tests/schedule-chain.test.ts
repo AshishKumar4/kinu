@@ -6,7 +6,7 @@ import { describe, expect, test, vi } from 'bun:test';
 
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
 import { chainBox, chainHead } from './support/chain-box';
-import { Devbox, harness, type FakeSandbox } from './support/devbox-harness';
+import { Devbox, harness, wakeWhileArmed, type FakeSandbox } from './support/devbox-harness';
 
 class TestBox extends Devbox<unknown> {
   protected override get policy(): DevboxPolicy {
@@ -30,36 +30,35 @@ describe('the schedule a started box holds', () => {
     expect(callbacks(container)).toEqual(['devboxCheckpoint', 'devboxHeartbeat']);
   });
 
-  test('a stopped box\'s own schedule never starts its container again', async () => {
-    let now = Date.now();
-    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+  // Waste, 2026-09-25: stopped boxes' heartbeats kept waking their objects, 10,141 alarms in an hour
+  // across 174 boxes. However the container stopped, and however many overdue beats a reset object
+  // owes, each row the stop left runs once, starts nothing, and the object is left with no alarm.
+  for (const [how, stop] of [
+    ['quiesced', async (box: TestBox) => { await box.quiesce(); }],
+    ['was stopped under it', async (box: TestBox) => { await box.stop(); }],
+    ['outlived its activity lease', async (box: TestBox) => { await box.onActivityExpired(); }],
+  ] as const) {
+    test(`a box that ${how} is woken for what the stop left, then never again`, async () => {
+      let now = Date.now();
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
 
-    try {
-      const { box, container } = harness(TestBox);
-      await box.devboxStartup();
-      await box.quiesce();
-      const starts = container.containerStarts;
+      try {
+        const { box, container } = harness(TestBox);
+        await box.devboxStartup();
+        await stop(box);
+        const starts = container.containerStarts;
 
-      // The alarm loop delivers every row the stop left, each once it falls due; the callbacks re-arm into
-      // the table while it is walked, so the walk is over what the stop left.
-      const left = container.scheduleRows.slice();
+        for (const late of [3, 2, 1]) container.scheduleRows.push({ callback: 'devboxHeartbeat', time: now / 1000 - late });
 
-      for (const row of left) {
-        now = Math.max(now, Math.ceil(row.time) * 1000 + 500);
+        await wakeWhileArmed(container, (to) => { now = Math.max(now, to); }, 20);
 
-        if (row.callback === 'devboxHeartbeat') await box.devboxHeartbeat();
-        else if (row.callback === 'devboxCheckpoint') await box.devboxCheckpoint();
-        else if (row.callback === 'devboxIncidents') await box.devboxIncidents();
-        else if (row.callback === 'devboxStartup') await box.devboxStartup();
-        else throw new Error(`the stop left a row no callback of the box answers: ${row.callback}`);
+        expect({ starts: container.containerStarts, running: container.running.running, rows: callbacks(container), alarm: container.alarmAt })
+          .toEqual({ starts, running: false, rows: [], alarm: null });
+      } finally {
+        clock.mockRestore();
       }
-
-      expect({ starts: container.containerStarts, running: container.running.running })
-        .toEqual({ starts, running: false });
-    } finally {
-      clock.mockRestore();
-    }
-  });
+    });
+  }
 });
 
 describe('every self-re-arming chain keeps its successor', () => {

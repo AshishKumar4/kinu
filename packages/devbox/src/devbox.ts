@@ -812,11 +812,16 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return value.length > 0 ? value : undefined;
   }
 
+  /** One container call, one line per field: the server drops NUL bytes (P6). */
   async #readBeat(): Promise<{ readonly bootId: string | undefined; readonly syncAlive: boolean }> {
-    const read = await this.#rawExec(`cat ${BOOT_ID_PATH} 2>/dev/null; printf '\\0'; ${SYNC_ALIVE_PROBE}`, DEVBOX_RUNTIME_DIR);
-    const [bootId = '', sync = ''] = read.stdout.split('\0');
+    const read = await this.#rawExec(
+      `# devbox-beat-v1\nprintf '%s\\n' "$(cat ${BOOT_ID_PATH} 2>/dev/null)"; ${SYNC_ALIVE_PROBE}`,
+      DEVBOX_RUNTIME_DIR,
+    );
 
-    return { bootId: bootId.trim() || undefined, syncAlive: !this.#syncRuns() || sync.includes('alive') };
+    const [bootId = '', sync = ''] = read.stdout.split('\n');
+
+    return { bootId: bootId.trim() || undefined, syncAlive: !this.#syncRuns() || sync === 'alive' };
   }
 
   /** A box that may extract runs in local `wrangler dev`, whose container cannot reach it. */
@@ -2275,7 +2280,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   }
 
   /** Never calls `stampInteraction()`: a box's own maintenance traffic is not use.
-   *  Quiesce needs all three gates and quiet confirmed across heartbeats; a stop arms no successor. */
+   *  Quiesce needs all three gates and quiet confirmed across heartbeats; a stopped container
+   *  arms no successor, its next start does. */
   async devboxHeartbeat(): Promise<void> {
     const beat = this.policy.heartbeatSeconds;
     await this.#scheduled(HEARTBEAT_CALLBACK, beat, async () => {
@@ -2284,11 +2290,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       this.renewActivityTimeout();
 
       if (this.ctx.container?.running !== true) {
-        // A stopped box still writes a tick and arms a successor: returning without arming ends the
-        // chain for good and hides when the box stopped (quiesced on purpose vs slept).
-        await this.#tick({ running: false, ping: 'skipped', armedNext: true });
+        // The last tick records when the stop was noticed.
+        await this.#tick({ running: false, ping: 'skipped', armedNext: false });
 
-        return beat;
+        return null;
       }
 
       await this.#resolveAdoption();

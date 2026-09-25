@@ -91,6 +91,21 @@ With the hold past 5 s, the hook's timers stalled locally, 4 of 4 (run
 `s20260923031614`), and fired once each ping cleared its timer on settling,
 4 of 4 (`s20260923031930`).
 
+P6. The container server hands a command's output back by lines, not bytes.
+It runs the command with stdout and stderr redirected to files, re-reads each
+file with bash `while IFS= read -r line` into one log, and `exec` answers with
+the log's lines joined by `\n`. So every NUL byte is dropped, the final newline
+is dropped, and an empty line inside the output is kept. A program the
+container runs on its own shell, as the image's `sync.js` does, gets bash's
+bytes unchanged. Source, read 2026-09-25: the 0.12.9 container server in the
+production image (`buildFIFOScript`, `parseLogFile`). Measured 2026-09-25
+against that image's own server, run locally (`kinu-devbox-block-layer@sha256:c2c03bdf…`,
+`/api/execute`): `printf 'a\0b'` answered `ab`, `printf 'a\nb\n'` answered
+`a\nb`, and `printf 'a\n\nb'` answered `a\n\nb`. Production showed it the same
+day (Workers Logs, `containers` dataset): the heartbeat's read of a boot id, a
+NUL and a running sync's `alive` came back as one 41-character line
+(`stdoutLen 41`) on both running boxes (D33).
+
 ## Decisions
 
 D1. Admission is port-proven. The container-start path proves the control
@@ -1220,13 +1235,12 @@ and the sync's log go to the container's stdout, which Workers Logs carries
 (DBX-7). Both redirect through bash process substitution; the session shell
 is `bash --norc` (read from the 0.12.9 container server), so the tests' parse
 gate now models bash where it modelled POSIX `sh`. The image and the box move
-together: `block-lower/upstream.json` pins the bundle's sha256
-(`b982beb4…`, image `kinu-devbox-block-layer@sha256:c2c03bdf…`), and
-`tests/block-image.test.ts` bundles the tree again and fails on any other
-bytes, so a change to the sync's code fails until the image is rebuilt and
-re-pinned. The flush's own session left the default session's shell on the
-work directory: the container server returns a shell to where it rests after
-each command given a `cwd`, and keeps only a bare `cd`. So a first base's
+together: `block-lower/upstream.json` pins the bundle's sha256 and the image
+digest, and `tests/block-image.test.ts` bundles the tree again and fails on
+any other bytes, so a change to the sync's code fails until the image is
+rebuilt and re-pinned. The flush's own session left the default session's
+shell on the work directory: the container server returns a shell to where it
+rests after each command given a `cwd`, and keeps only a bare `cd`. So a first base's
 reseat inside the container failed EBUSY, D10's defect again (strategies run
 `20260923160413`: "reseating it failed: ... failed to unmount /workspace:
 Device or resource busy"). The box now parks that shell in the runtime
@@ -1294,6 +1308,57 @@ is not established; the sweep should observe a bucket absent before marking
 it done. The account still lists `kinu-devbox-bench-*` resources from
 2026-08-31 to 2026-09-11 (9 Workers, 2 container applications, 11 buckets),
 created before manifests recorded owners and by none of these runs.
+
+D33. A read through `exec` separates its fields by lines (2026-09-25). The
+heartbeat's one container call (D28) read the boot id, a NUL, then the sync's
+liveness probe (D30), and split on the NUL. The container server drops NUL
+bytes (P6), so on a box whose sync ran, the boot id arrived with `alive`
+appended; the box took its container for a replaced one, invalidated its
+generation and ran its start hook again. From the first deploy that carried
+D30 (2026-09-24 17:13Z) to 2026-09-25 13:12Z, production ran 2,097 start hooks
+on 11 boxes. Boxes `deabd3bb…` and `bcac5302…` each ran it 622 times in 10.4
+hours, once a minute (median gap 60.0 s). The heartbeat returned before its
+quiesce decision, so those containers never stopped: `deabd3bb…` took no
+request after 04:15Z and still ran at 13:10Z. The loop did not fence out the
+sync's commits, which the box checks against the boot id, not the generation
+(`devboxSync`). No test could see it: the harness answered the read with the
+NUL intact. It now hands every session command's output back as the server
+does (`tests/support/session-shell.ts`, `sessionShellOutput`). The heartbeat
+reads one line per field (`# devbox-beat-v1`). The checkpoint gate's probe
+misread its mark the same way on a box that drives its own ticks; it now puts
+the upper's fingerprint on its first line and the mount table after it
+(`# devbox-tick-probe-v2`). Measured 2026-09-25 on the rebuilt image
+(`kinu-devbox-block-layer@sha256:d04e2bee…`, sync bundle `1311ddcc…`), through
+its own server with its own sync running: the heartbeat's read answered the
+boot id and `alive` on two lines, the gate's probe a 64-character mark and then
+the mount table, and an unreadable upper an empty first line. Tests: a box
+with a running sync starts once and, idle, stops after the policy's idle
+window and quiet confirmation, then holds no alarm (`tests/sync.test.ts`). It
+was red before the fix (60 start hooks in 120 alarm passes, still running)
+and is green after. The gate's probe, run by bash, reads the same mark on the
+sync's own shell and through the server (`tests/snapshot-chain.test.ts`); it
+was red through the server before the fix. Deployed re-proof owed: start
+hooks per wake and idle stops in Workers Logs after the next deploy.
+
+D34. A stopped box arms no heartbeat (2026-09-25). A heartbeat that found the
+container stopped wrote a tick and armed the next beat. So every box whose
+container stopped other than by a heartbeat's own quiesce (a direct
+`quiesce`, a stop under it, an activity expiry) woke its object once a minute
+for as long as the object lived, to record that the container was still
+stopped. Measured 2026-09-25 in Workers Logs, the hour to 13:10Z: 174 stopped
+boxes ran 10,141 heartbeat alarms, while 2 boxes ran containers. Each wake
+also shows as a `canceled` alarm delivery a second before the one that runs
+the beat, which fits the containers base's constructor moving the alarm a
+second out (`scheduleNextAlarm`, containers 0.3.7), as in D14. A stopped container now
+ends the chain with one last tick (`running: false`, `armedNext: false`), and
+the next start arms it again: every start runs the start hook, which arms the
+heartbeat (`#armContainerSchedules`). With no row owed, the SDK deletes the
+object's alarm (`container.js:1594-1603`). Tests: a box stopped each of those
+three ways, owing three overdue beats, runs what the stop left once, starts
+nothing, and holds no row and no alarm (`tests/schedule-chain.test.ts`). It
+was red before (a heartbeat row and an alarm remained after 20 passes) and is
+green after. Deployed re-proof owed: alarms per stopped box after the next
+deploy.
 
 ## Measurement contract for a strategy comparison
 
