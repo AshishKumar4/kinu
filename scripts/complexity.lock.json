@@ -22,10 +22,6 @@
       "complexity": 48
     },
     {
-      "key": "lean/check-traceability.mjs#tsScan",
-      "complexity": 46
-    },
-    {
       "key": "scripts/literature-citations.ts#auditProse",
       "complexity": 46
     },
