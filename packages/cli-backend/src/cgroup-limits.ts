@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import type { ResourceLimits } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 
-export interface CgroupSource {
+interface CgroupSource {
   root?: string;
   procSelfCgroup?: string;
 }

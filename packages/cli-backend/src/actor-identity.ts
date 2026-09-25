@@ -7,7 +7,7 @@ import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
   ActorReferenceSchema, SubordinateIdentityStore, readMission, WorkspaceActorDirectory, bindActorHandle, explorationActorKey,
-  type ActorHandle, type ActorReference, type SqlExec, type SqlExecutor,
+  type ActorHandle, type ActorReference, type CreateWorkspaceActor, type SqlExec, type SqlExecutor,
   type WorkspaceActor, type NodeIdentity,
 } from '@kinu.run/core';
 import type { AgentRuntime } from '@kinu.run/core';
@@ -43,7 +43,7 @@ export const LocalActorProcessBootstrapSchema = v.strictObject({
   parentStoragePath: v.array(v.string()), name: v.string(), storageKey: v.string(),
 });
 
-export type LocalActorProcessBootstrap = v.InferOutput<typeof LocalActorProcessBootstrapSchema>;
+type LocalActorProcessBootstrap = v.InferOutput<typeof LocalActorProcessBootstrapSchema>;
 
 /**
  * Binding for a local actor in another OS process. `rootDbPath` is the workspace's one database;
@@ -160,10 +160,9 @@ export function bindLocalActorReference(caller: ActorHandle, reference: ActorRef
   return bindScoped(scopeFor(caller), reference);
 }
 
-export function registerLocalActor(
-  parent: ActorHandle,
-  input: { name: string; creationId: string; kind: Exclude<WorkspaceActor['kind'], 'main'>; lifetime: WorkspaceActor['lifetime'] },
-): LocalActorBinding {
+type LocalActorCreation = Omit<CreateWorkspaceActor, 'parent'>;
+
+export function registerLocalActor(parent: ActorHandle, input: LocalActorCreation): LocalActorBinding {
   const scope = scopeFor(parent);
   const entry = scope.directory.apply(parent, scope.path, { action: 'register', creationId: input.creationId, name: input.name, kind: input.kind, lifetime: input.lifetime });
 
@@ -179,32 +178,22 @@ export function openLocalActor(parent: ActorHandle, name: string): LocalActorBin
   return bindChild(scope, entry.reference, name);
 }
 
+/** The one caller wanting a handle without a binding; others use `registerLocalActor` + `bindLocalActor`. */
 export function registerLocalNode(parent: ActorHandle, node: NodeIdentity): ActorHandle {
-  return registerLocalActorState(parent, { name: explorationActorKey(node.nodeId), creationId: node.nodeId, kind: 'head', lifetime: 'task' });
-}
-
-/** Module-local: only `registerLocalNode` wants a handle without a binding; others use `registerLocalActor` + `bindLocalActor`. */
-function registerLocalActorState(parent: ActorHandle, input: { name: string; creationId: string; kind: Exclude<WorkspaceActor['kind'], 'main'>; lifetime: WorkspaceActor['lifetime'] }): ActorHandle {
   const scope = scopeFor(parent);
-  const entry = scope.directory.apply(parent, scope.path, { action: 'register', ...input });
+  const entry = scope.directory.apply(parent, scope.path, { action: 'register', name: explorationActorKey(node.nodeId), creationId: node.nodeId, kind: 'head', lifetime: 'task' });
   const actor = scope.directory.open(entry.reference.actorId);
   actors.set(actor, { ...scope, path: scope.directory.storagePath(entry.reference) });
 
   return actor;
 }
 
-function requireBinding(binding: LocalActorBinding): LocalActorScope {
+/** Bind a handle to an actor this root issued; the directory row is the binding authority. */
+export function bindLocalActor(sql: SqlExecutor, binding: LocalActorBinding): ActorHandle {
   const scope = bindings.get(binding);
 
   if (!scope) throw new KinuError('denied', 'The actor binding was not issued by a local root.');
   scope.directory.validate(binding.reference, scope.path);
-
-  return scope;
-}
-
-/** Bind a handle to an actor this root issued; the directory row is the binding authority. */
-export function bindLocalActor(sql: SqlExecutor, binding: LocalActorBinding): ActorHandle {
-  const scope = requireBinding(binding);
   const validate = () => { scope.directory.validate(binding.reference, scope.path); };
 
   const actor = bindActorHandle(sql, { ...binding.reference, name: binding.name, storageKey: binding.storageKey }, validate);
@@ -264,10 +253,7 @@ export async function retireLocalActor(parent: ActorHandle, name: string, refere
  * Cancel a failed birth via `cancelCreation`, never register-then-destroy: `register` accepts
  * mismatched name/kind/lifetime and its row passes through `active`, visible to concurrent reads.
  */
-export function cancelLocalCreation(
-  parent: ActorHandle,
-  input: { name: string; creationId: string; kind: Exclude<WorkspaceActor['kind'], 'main'>; lifetime: WorkspaceActor['lifetime'] },
-): ActorReference {
+export function cancelLocalCreation(parent: ActorHandle, input: LocalActorCreation): ActorReference {
   const scope = scopeFor(parent);
 
   return scope.directory.apply(parent, scope.path, { action: 'cancelCreation', ...input }).reference;
