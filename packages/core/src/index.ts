@@ -1415,7 +1415,8 @@ export {
   PlanReviewActions,
   PlanReviewStore,
   PlanReviewSchema,
-  admitPlanReviewAnnotations,
+  admitReviewAnnotations,
+  DiffAnchorSchema,
   applyPlanEdits,
   formatPlanWithLineNumbers,
   initPlanReviewTable,
@@ -1429,7 +1430,9 @@ export {
   type PlanAnnotationMathTarget,
   type PlanAnnotationTextPosition,
   type PlanReview,
-  type PlanReviewAnnotation,
+  type ReviewAnnotation,
+  type DiffAnchor,
+  type DiffSide,
   type PlanReviewDecision,
   type PlanReviewResult,
   type PlanReviewStatus,
@@ -1937,8 +1940,14 @@ export {
 export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff';
 
 export {
-  changeBlocks, changeBody, changeTotals, changeTree, inReadingOrder, keepUnchanged, sideBySide,
+  anchoredText, changeBlocks, changeBody, changeTotals, changeTree, comparePaths, inReadingOrder, keepUnchanged, sideBySide,
 } from './read-models/change-view';
+
+export {
+  ALL_CHANGES_BLOCK, changeNotesCard, initChangeNotesTable, inNoteOrder, readChangeNotes, saveChangeNotes, sendChangeNotes,
+} from './read-models/change-notes';
+
+export type { ChangeNotesCard, ChangeNotesResult, NotedChanges } from './read-models/change-notes';
 
 export type {
   ChangeBlock, ChangeBody, ChangePair, ChangeRow, ChangeSet, ChangeSpan, ChangeTreeRow,

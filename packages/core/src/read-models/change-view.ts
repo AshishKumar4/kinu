@@ -4,6 +4,7 @@
  */
 import { vfsBasename, vfsDirname } from '../utils/vfs-helpers';
 import { diffLines, type DiffLine, type FileDiff } from '../vfs/diff';
+import type { DiffAnchor } from '../types/plans';
 
 export interface ChangeSet {
   readonly source: string;
@@ -281,7 +282,7 @@ function preview(blocks: readonly ChangeBlock[], limit: number, id: string): Cha
   return out;
 }
 
-/** `stacked`: one card among many, so previews are shorter and a deleted file starts folded. */
+/** `stacked`: one card of many: shorter previews, and a deleted file folded. */
 export function changeBlocks(file: FileDiff, stacked = false): ChangeBlock[] {
   const items = numbered(file);
   const limits = stacked ? PREVIEW.stacked : PREVIEW.alone;
@@ -385,8 +386,7 @@ function sameFile(a: FileDiff, b: FileDiff): boolean {
     && a.lines.every((line, index) => line.kind === b.lines[index]?.kind && line.text === b.lines[index]?.text);
 }
 
-/** A poll's files, each one whose content is unchanged since `previous` kept as the earlier object, so what is
- *  worked out from a file (its blocks, word marks and highlighted tokens) is not redone on every poll. */
+/** A poll's files, each unchanged one kept as `previous`'s object, so its blocks and tokens are not redone. */
 export function keepUnchanged(previous: readonly FileDiff[], next: readonly FileDiff[]): FileDiff[] {
   const held = new Map(previous.map((file) => [file.path, file]));
 
@@ -395,6 +395,53 @@ export function keepUnchanged(previous: readonly FileDiff[], next: readonly File
 
     return before !== undefined && sameFile(before, file) ? before : file;
   });
+}
+
+export function comparePaths(a: string, b: string): number {
+  const left = a.split('/');
+  const right = b.split('/');
+
+  for (let at = 0; at < Math.min(left.length, right.length); at++) {
+    const leftFolder = at < left.length - 1;
+    const rightFolder = at < right.length - 1;
+
+    if (left[at] === right[at] && leftFolder && rightFolder) continue;
+
+    if (leftFolder !== rightFolder) return leftFolder ? -1 : 1;
+
+    return (left[at] ?? '').localeCompare(right[at] ?? '');
+  }
+
+  return left.length - right.length;
+}
+
+/** What a note on `anchor` quotes; null when a line is outside the diff's hunks. */
+export function anchoredText(file: FileDiff, anchor: DiffAnchor): string | null {
+  if (anchor.scope === 'file') return '';
+  const byLine = new Map<number, string>();
+
+  for (const item of numbered(file)) {
+    if (item.kind !== 'row') continue;
+    const at = anchor.side === 'old' ? item.row.oldNo : item.row.newNo;
+
+    if (at !== null) byLine.set(at, item.row.text);
+  }
+
+  const texts: string[] = [];
+
+  for (let line = anchor.lineStart; line <= anchor.lineEnd; line++) {
+    const text = byLine.get(line);
+
+    if (text === undefined) return null;
+    texts.push(text);
+  }
+
+  if (anchor.scope === 'text') {
+    texts[texts.length - 1] = (texts.at(-1) ?? '').slice(0, anchor.charEnd);
+    texts[0] = (texts[0] ?? '').slice(anchor.charStart);
+  }
+
+  return texts.join('\n');
 }
 
 export function inReadingOrder(files: readonly FileDiff[]): FileDiff[] {

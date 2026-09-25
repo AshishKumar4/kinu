@@ -1,8 +1,11 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { GaugeIcon } from "@phosphor-icons/react";
-import { diffLines, fileDiff, parseGitDiff, type ChangeSet, type FileDiff, type FileStatus, type TurnLiveness } from "@kinu.run/core";
+import {
+  diffLines, fileDiff, inNoteOrder, parseGitDiff, type ChangeNotesCard, type ChangeSet, type DiffAnchor, type FileDiff, type FileStatus,
+  type ReviewAnnotation, type TurnLiveness,
+} from "@kinu.run/core";
 import Layout from "@/components/layout";
 import { WorkspaceBar } from "@/components/WorkspaceBar";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
@@ -13,9 +16,8 @@ import { tabCls, tabStripH } from "@/components/ui/form";
 import { ChangesPanel } from "@/components/surfaces/changes/ChangesPanel";
 import { ReviewSheet } from "@/components/surfaces/changes/ReviewSheet";
 import { ReviewBar } from "@/diff-design/ReviewBar";
-import type { ChangeAnchor, ChangeNote } from "@/components/surfaces/changes/notes";
-import { NotesProvider, type OpenDraft } from "@/components/surfaces/changes/notes-provider";
-import { FeedbackCard } from "@/diff-design/sent";
+import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
+import { NotesProvider, noteOf, type NotesStore, type OpenDraft } from "@/components/surfaces/changes/notes-provider";
 import { AnnotationType } from "@plannotator/ui/types";
 
 const WORKSPACE = "checkout-fixes";
@@ -434,37 +436,44 @@ const CLAMP_AT = (APPLY_AFTER.split("\n")[26] ?? "").indexOf(CLAMP);
 
 const BASELINE = "snapshot 4f1c9a";
 
-function anchor(fields: Omit<ChangeAnchor, "baseline">): ChangeAnchor {
-  return { ...fields, baseline: BASELINE };
-}
+const CLAMP_ANCHOR: DiffAnchor = {
+  scope: "text", path: APPLY, side: "new", lineStart: 27, lineEnd: 27, charStart: CLAMP_AT, charEnd: CLAMP_AT + CLAMP.length, baseline: BASELINE,
+};
 
-const CLAMP_ANCHOR = anchor({ path: APPLY, scope: "text", side: "new", lineStart: 27, lineEnd: 27, charStart: CLAMP_AT, charEnd: CLAMP_AT + CLAMP.length });
-
-const NOTES: readonly ChangeNote[] = [
-  {
-    id: "clamp", type: AnnotationType.COMMENT, createdA: NOW - 9 * 60e3, anchor: CLAMP_ANCHOR, originalText: CLAMP,
+const NOTES: readonly ReviewAnnotation[] = [
+  noteOf({
+    id: "clamp", type: AnnotationType.COMMENT, createdA: NOW - 9 * 60e3, anchor: CLAMP_ANCHOR, quote: CLAMP,
     text: "Clamp it, but log it too: a 90% coupon is a data error someone should hear about.",
-  },
-  {
+  }),
+  noteOf({
     id: "label-test", type: AnnotationType.DELETION, createdA: NOW - 7 * 60e3,
-    anchor: anchor({ path: "packages/checkout/tests/coupon-kind.test.ts", scope: "lines", side: "new", lineStart: 27, lineEnd: 29 }),
-    originalText: (TEST_AFTER.split("\n").slice(26, 29)).join("\n"),
-  },
-  {
+    anchor: { scope: "lines", path: "packages/checkout/tests/coupon-kind.test.ts", side: "new", lineStart: 27, lineEnd: 29, baseline: BASELINE },
+    quote: (TEST_AFTER.split("\n").slice(26, 29)).join("\n"),
+  }),
+  noteOf({
     id: "legacy", type: AnnotationType.COMMENT, createdA: NOW - 5 * 60e3,
-    anchor: anchor({ path: "packages/checkout/src/legacy-discount.ts", scope: "file", side: "new", lineStart: 0, lineEnd: 0 }),
-    originalText: "packages/checkout/src/legacy-discount.ts",
+    anchor: { scope: "file", path: "packages/checkout/src/legacy-discount.ts", baseline: BASELINE },
+    quote: "packages/checkout/src/legacy-discount.ts",
     text: "Keep this until the old carts are migrated; they still price through it.",
-  },
+  }),
 ];
 
-const SENT: readonly ChangeNote[] = [
+const SENT: readonly ReviewAnnotation[] = [
   ...NOTES,
-  {
-    id: "all", type: AnnotationType.GLOBAL_COMMENT, createdA: NOW - 3 * 60e3, originalText: "",
+  noteOf({
+    id: "all", type: AnnotationType.GLOBAL_COMMENT, createdA: NOW - 3 * 60e3, quote: "",
     text: "Good fix. After these, run the checkout tests again and tell me what changed.",
-  },
+  }),
 ];
+
+function cardOf(notes: readonly ReviewAnnotation[]): ChangeNotesCard {
+  return {
+    source: "workspace", label: "Workspace",
+    notes: inNoteOrder(notes).map((note) => ({
+      id: note.id, type: note.type, ...(note.text !== undefined && { text: note.text }), ...(note.anchor !== undefined && { anchor: note.anchor }),
+    })),
+  };
+}
 
 const WRITING: OpenDraft = {
   anchor: CLAMP_ANCHOR, quote: CLAMP,
@@ -476,7 +485,7 @@ const REPLY: UIMessage = {
   parts: [{ type: "text", text: "On it. I'll log a clamped percentage, drop the label test, and keep `legacy-discount.ts` until the old carts are migrated. Then I'll rerun the checkout tests." }],
 };
 
-function ChatColumn({ wide, sent, onOpenNote }: { wide: boolean; sent: readonly ChangeNote[] | null; onOpenNote: (note: ChangeNote) => void }) {
+function ChatColumn({ wide, sent, onOpenNote }: { wide: boolean; sent: readonly ReviewAnnotation[] | null; onOpenNote: (anchor: DiffAnchor | undefined) => void }) {
   const [value, setValue] = useState("");
   const [mode, setMode] = useState<ChatMode>("build");
   const [model, setModel] = useState("anthropic/claude-opus-4");
@@ -489,7 +498,7 @@ function ChatColumn({ wide, sent, onOpenNote }: { wide: boolean; sent: readonly 
       )}
       <div className="flex-1 space-y-5 overflow-y-auto px-4 py-6 lg:px-8 [&>*]:mx-auto [&>*]:max-w-[780px]">
         {MESSAGES.map((message) => <div key={message.id}><MessageView message={message} /></div>)}
-        {sent !== null && <FeedbackCard notes={sent} set={COUPON_CHANGES} sentAt={NOW - 60e3} now={NOW} onOpen={onOpenNote} />}
+        {sent !== null && <FeedbackCard card={cardOf(sent)} sentAt={NOW - 60e3} now={NOW} onOpen={onOpenNote} />}
         {sent !== null && <div><MessageView message={REPLY} /></div>}
       </div>
       <div className="border-t p-border p-sidebar">
@@ -636,19 +645,32 @@ function Scene({ params }: { params: URLSearchParams }) {
   const [source, setSource] = useState(params.get("source") ?? sets[0]?.source ?? "workspace");
 
   const [reviewedAt, setReviewedAt] = useState<number | null>(params.get("reviewed") === "1" ? NOW - 60e3 : null);
-  const [sent, setSent] = useState<readonly ChangeNote[] | null>(params.get("sent") === "1" ? SENT : null);
+  const [sent, setSent] = useState<readonly ReviewAnnotation[] | null>(params.get("sent") === "1" ? SENT : null);
   const [chatPane, setChatPane] = useState(params.get("pane") === "chat");
   const shown = sets.find((set) => set.source === source) ?? sets[0];
 
-  const send = (notes: readonly ChangeNote[]): void => {
-    setSent(notes);
-    setSheet(null);
-    setChatPane(true);
-  };
+  const initial = params.get("notes") === "1" && sent === null ? NOTES : [];
+  const latest = useRef<readonly ReviewAnnotation[]>(initial);
 
-  const openNote = (note: ChangeNote): void => {
+  const store = useMemo<NotesStore>(() => ({
+    load: () => Promise.resolve({ ok: true, notes: [...latest.current] }),
+    save: (notes) => {
+      latest.current = notes;
+
+      return Promise.resolve({ ok: true, notes: [...notes] });
+    },
+    send: () => {
+      setSent(latest.current);
+      setSheet(null);
+      setChatPane(true);
+
+      return Promise.resolve({ ok: true, notes: [] });
+    },
+  }), []);
+
+  const openNote = (anchor: DiffAnchor | undefined): void => {
     setSource("workspace");
-    setSheet({ file: note.anchor?.path ?? null, notes: false });
+    setSheet({ file: anchor?.path ?? null, notes: false });
   };
 
   const panel = (
@@ -658,20 +680,20 @@ function Scene({ params }: { params: URLSearchParams }) {
           <ChangesPanel sets={sets} source={source} onSource={setSource} now={NOW} file={sheet === null ? params.get("file") : null}
             menuOpen={params.get("menu") === "source"} reviewedAt={reviewedAt} onReviewed={() => setReviewedAt(NOW)} onUndo={() => setReviewedAt(null)}
             onExpand={(file) => setSheet({ file, notes: false })} onOpenInFiles={shown?.mode === "vfs-baseline" ? () => {} : null}
-            onShowNotes={() => setSheet({ file: null, notes: true })} onSend={send} />
+            onShowNotes={() => setSheet({ file: null, notes: true })} />
       </div>
     </>
   );
 
   return (
-    <NotesProvider key={sent === null ? "open" : "sent"} baseline={shown?.baseline ?? BASELINE} now={() => NOW}
-      initial={params.get("notes") === "1" && sent === null ? NOTES : []} writing={params.get("comment") === "1" ? WRITING : undefined}>
+    <NotesProvider key={sent === null ? "open" : "sent"} baseline={shown?.baseline ?? BASELINE} files={shown?.files ?? []} now={() => NOW} store={store}
+      initial={initial} writing={params.get("comment") === "1" ? WRITING : undefined}>
       <Workspace wide={wide} chatPane={chatPane} panel={panel}
         chat={<ChatColumn wide={wide} sent={sent} onOpenNote={openNote} />} />
       {sheet !== null && shown !== undefined && (
         <ReviewSheet set={shown} now={NOW} file={sheet.file} layout={params.get("layout") === "unified" ? "unified" : "split"}
           annotationsOpen={sheet.notes} pickerOpen={params.get("picker") === "1"} onOpenInFiles={shown.mode === "vfs-baseline" ? () => {} : null}
-          onClose={() => setSheet(null)} onReviewed={() => { setSheet(null); setReviewedAt(NOW); }} onSend={send} />
+          onClose={() => setSheet(null)} onReviewed={() => { setSheet(null); setReviewedAt(NOW); }} />
       )}
       <DesignSelection kind={params.get("select")} />
     </NotesProvider>

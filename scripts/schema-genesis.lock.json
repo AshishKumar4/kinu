@@ -178,6 +178,13 @@
     "retention TEXT",
     "body TEXT"
   ],
+  "change_notes@packages/core/src/read-models/change-notes.ts": [
+    "actor_id TEXT NOT NULL",
+    "source TEXT NOT NULL",
+    "notes_json TEXT NOT NULL",
+    "updated_at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, source)"
+  ],
   "cli_agent_connect_tickets@packages/core/src/state/user-schema.ts": [
     "ticket_hash TEXT PRIMARY KEY",
     "user_id TEXT NOT NULL",

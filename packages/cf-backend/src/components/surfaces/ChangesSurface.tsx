@@ -1,17 +1,48 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   executorLabel, executorSortKey, isActiveExecutionDevice, keepUnchanged, pickDefaultExecutor,
-  workspacePath, type ChangeSet, type ExecutorDiffResult, type ExecutorInfo, type Rpc,
+  workspacePath, type ChangeNotesResult, type ChangeSet, type ExecutorDiffResult, type ExecutorInfo, type ReviewAnnotation, type Rpc,
 } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { ChangesPanel } from "./changes/ChangesPanel";
+import { NotesProvider, type NotesStore } from "./changes/notes-provider";
 import { ReviewSheet } from "./changes/ReviewSheet";
 
 function changeSetOf(source: string, result: ExecutorDiffResult): ChangeSet {
   const error = result.error ?? (result.notGitRepo === true ? "Its folder is not a git repository, so there is nothing to compare." : undefined);
 
-  return { source, label: executorLabel(source), mode: result.mode, files: result.files, trackedSince: result.trackedSince, error };
+  return { source, label: executorLabel(source), mode: result.mode, files: result.files, trackedSince: result.trackedSince, baseline: result.baseline, error };
+}
+
+async function answered(call: () => Promise<ChangeNotesResult>): Promise<ChangeNotesResult> {
+  try {
+    return await call();
+  } catch (cause) {
+    return { ok: false, error: describeError({ cause }) };
+  }
+}
+
+/** `current` is read at send time. */
+function notesStore(rpc: Rpc, source: string, current: () => ChangeSet | undefined): NotesStore {
+  return {
+    load: () => answered(async () => ({ ok: true, notes: await rpc<ReviewAnnotation[]>("getChangeNotes", [source]) })),
+    save: (notes) => answered(() => rpc<ChangeNotesResult>("saveChangeNotes", [source, notes])),
+    send: () => answered(() => {
+      const set = current();
+
+      if (set === undefined) return Promise.resolve({ ok: false, error: "the change-set is no longer listed" });
+
+      return rpc<ChangeNotesResult>("sendChangeNotes", [{ source, label: set.label, mode: set.mode, ...(set.trackedSince !== undefined && { trackedSince: set.trackedSince }) }]);
+    }),
+  };
+}
+
+/** `nonce` lets the same place open twice. */
+export interface ChangesFocus {
+  readonly source: string;
+  readonly path: string | null;
+  readonly nonce: number;
 }
 
 function sourcesOf(executors: readonly ExecutorInfo[]): string[] {
@@ -55,10 +86,11 @@ type Restored = { readonly ok: true } | { readonly ok: false; readonly error: st
 
 const UNDO_MS = 10_000;
 
-export function ChangesSurface({ executors, lastActiveExecutor, rpc, onOpenFile, onCount }: {
+export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = null, onOpenFile, onCount }: {
   executors: ExecutorInfo[];
   lastActiveExecutor?: string | null;
   rpc: Rpc;
+  focus?: ChangesFocus | null;
   onOpenFile: (path: string) => void;
   onCount: (count: number | null) => void;
 }) {
@@ -70,12 +102,19 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, onOpenFile,
   const [reviewed, setReviewed] = useState<Reviewed | null>(null);
   const [undoable, setUndoable] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const [sheet, setSheet] = useState<{ readonly file: string | null } | null>(null);
+  const [sheet, setSheet] = useState<{ readonly file: string | null; readonly notes?: boolean } | null>(null);
 
   // Executor status arrives after mount: follow the default until the reader picks a source.
   useEffect(() => {
     if (!picked.current && sources.includes(defaultSource)) setSource(defaultSource);
   }, [defaultSource, sourceKey]);
+
+  useEffect(() => {
+    if (focus === null) return;
+    picked.current = true;
+    setSource(focus.source);
+    setSheet({ file: focus.path });
+  }, [focus]);
 
   const load = useCallback(async (): Promise<Read> => {
     const results = await Promise.all(sourceKey.split("\n").map(async (name) =>
@@ -102,6 +141,11 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, onOpenFile,
   const live = useRef({ sets, reload });
   live.current = { sets, reload };
   const shown = sets?.find((set) => set.source === source) ?? sets?.[0];
+  const shownSource = shown?.source ?? null;
+
+  const store = useMemo(() => (shownSource === null ? null
+    : notesStore(rpc, shownSource, () => live.current.sets?.find((set) => set.source === shownSource))), [rpc, shownSource]);
+
   const shownFiles = shown?.files.length ?? 0;
   // Mark reviewed moves the workspace's baseline; a machine's changes are measured from its own commit.
   const reviewedAt = shown?.mode === "vfs-baseline" ? reviewedAtOf(reviewed, sets, shownFiles) : null;
@@ -166,17 +210,20 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, onOpenFile,
   const now = Date.now();
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      {failure !== null && <p role="alert" className="mx-3 mt-3 rounded-md px-3 py-2 text-xs p-notice-danger">{failure}</p>}
-      {resource.status === "error" && <LoadFailure what="the latest change-set" message={resource.message} onRetry={reload} className="mx-3 mt-3" />}
-      <div className="min-h-0 flex-1">
-        <ChangesPanel sets={sets} source={shown.source} onSource={(next) => { picked.current = true; setSource(next); }} now={now}
-          reviewedAt={reviewedAt} onReviewed={() => void markReviewed()} onUndo={undoable ? () => void undoReviewed() : null}
-          onExpand={(file) => setSheet({ file })} onOpenInFiles={openInFiles} />
+    <NotesProvider key={shown.source} baseline={shown.baseline ?? ""} files={shown.files} store={store} now={Date.now}>
+      <div className="flex h-full min-h-0 flex-col">
+        {failure !== null && <p role="alert" className="mx-3 mt-3 rounded-md px-3 py-2 text-xs p-notice-danger">{failure}</p>}
+        {resource.status === "error" && <LoadFailure what="the latest change-set" message={resource.message} onRetry={reload} className="mx-3 mt-3" />}
+        <div className="min-h-0 flex-1">
+          <ChangesPanel sets={sets} source={shown.source} onSource={(next) => { picked.current = true; setSource(next); }} now={now}
+            reviewedAt={reviewedAt} onReviewed={() => void markReviewed()} onUndo={undoable ? () => void undoReviewed() : null}
+            onExpand={(file) => setSheet({ file })} onOpenInFiles={openInFiles} onShowNotes={() => setSheet({ file: null, notes: true })} />
+        </div>
+        {sheet !== null && (
+          <ReviewSheet set={shown} now={now} file={sheet.file} annotationsOpen={sheet.notes === true} onClose={() => setSheet(null)}
+            onReviewed={() => void markReviewed()} onOpenInFiles={openInFiles} />
+        )}
       </div>
-      {sheet !== null && (
-        <ReviewSheet set={shown} now={now} file={sheet.file} onClose={() => setSheet(null)} onReviewed={() => void markReviewed()} onOpenInFiles={openInFiles} />
-      )}
-    </div>
+    </NotesProvider>
   );
 }

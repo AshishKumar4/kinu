@@ -148,7 +148,7 @@ import { TierIdSchema,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
   PlanReviewActions, SUBMIT_PLAN_TOOL, workModeUnderReview,
-  type PlanDecisionOutcome, type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
+  type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
   ChatSession, CHAT_SESSION_ID, CHECKPOINTS_UNCONFIGURED, checkpointAvailability, fileCheckpointListing,
   type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
@@ -991,7 +991,7 @@ export class LocalAgentSession implements BackendHost {
   async savePlanReviewAnnotations(
     id: string,
     revision: number,
-    annotations: PlanReviewAnnotation[],
+    annotations: ReviewAnnotation[],
   ): Promise<PlanReviewResult> {
     return this.planActions.saveAnnotations(id, revision, { value: annotations });
   }
