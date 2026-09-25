@@ -103,7 +103,7 @@ import {
   type ScaffoldVersionView, type ShadowStatus,
   getPendingScaffold,
   readScaffoldVersion, readShadowVerdict, type ShadowVerdict,
-  type RunEvent, type RunEventQuery,
+  type RunEvent, type RunEventQuery, type StoredRunEvent,
   AGENT_CONFIG_KEYS,
   listProposedTasks, updateProposedTaskStatus,
   hybridSearch, memorySnippetRehydrator, type HybridHit,
@@ -168,7 +168,7 @@ import {
   buildPendingActions, listPendingPlanReviews, type PendingAction,
   type Page, type PageRequest,
   getRunTimeline, type TimelineSpan,
-  getRunEvents, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
+  getRunEvents, getRunEventText, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
   getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceDiffResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes,
@@ -3840,6 +3840,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** For resume, pass the last seen `since` index; returns events strictly after it. */
   async getRunEvents(runId: string, opts?: RunEventQuery): Promise<RunEvent[]> {
     return getRunEvents(this.eventRecorder, runId, opts);
+  }
+
+  /** Not @callable: serves the run-event routes. */
+  async getRunEventText(runId: string, opts?: RunEventQuery): Promise<StoredRunEvent[]> {
+    return getRunEventText(this.eventRecorder, runId, opts);
   }
 
   /** Not @callable: the web UI uses `getRunSummaries`; serves `/runs`, MCP and CLI. */

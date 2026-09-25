@@ -1,17 +1,15 @@
 /**
  * HTTP routes for the durable run-event log: list runs, page events, and an SSE
- * stream with Last-Event-ID resume. The stream polls the DO's @callable RPCs; DO RPC
- * cannot hold a persistent server-push channel here.
+ * stream with Last-Event-ID resume. The stream polls the DO over RPC, which cannot
+ * hold a persistent server-push channel here. Both forward the stored text, in
+ * pages PLATFORM_CATALOG `run_events.page_bytes` bounds.
  */
 
 import { Hono } from 'hono';
 import type { OrchestratorAgent } from "./orchestrator";
-import { boundRunEventQuery, RUN_EVENT_LIMIT_DEFAULT, RUN_EVENT_LIMIT_MAX,
-  type RunEventType } from "@kinu.run/core";
+import { boundRunEventQuery, RUN_EVENT_LIMIT_MAX, type RunEventType, type StoredRunEvent } from "@kinu.run/core";
 import * as v from 'valibot';
-import {
-  resumeIndexFromLastEventId, type RunEvent,
-} from '@kinu.run/core';
+import { resumeIndexFromLastEventId } from '@kinu.run/core';
 import { waitOn, type Clock } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { rawParam, type FamilyEnv } from './api/context';
@@ -44,7 +42,7 @@ const ALLOWED_TYPES = [
   'turn_end', 'run_end',
 ] as const satisfies readonly RunEventType[];
 
-export type RunEventsTarget = Pick<OrchestratorAgent, 'listRuns' | 'getRunEvents'>;
+export type RunEventsTarget = Pick<OrchestratorAgent, 'listRuns' | 'getRunEventText'>;
 
 /** A resolver, not the namespace binding: the SDK's `getAgentByName` (agents@0.22.0,
  *  `dist/agent-routing.js:176-183`, read 2026-09-22) awaits `__unsafe_ensureInitialized`. */
@@ -101,9 +99,23 @@ export function runEventsRoutes<Bindings extends object>(
 
     try {
       const stub = await resolverFor(c.env)(c.get('workspace').name);
-      const events = await stub.getRunEvents(rawParam(c, 'run'), opts);
+      const runId = rawParam(c, 'run');
+      const events: string[] = [];
+      let since = opts.since;
 
-      return Response.json(events);
+      // Joined from the object's bounded pages.
+      while (events.length < opts.limit) {
+        const page = await stub.getRunEventText(runId, { ...opts, since, limit: opts.limit - events.length });
+
+        if (page.length === 0) break;
+
+        for (const event of page) {
+          events.push(event.payload);
+          since = event.eventIndex + 1;
+        }
+      }
+
+      return new Response(`[${events.join(',')}]`, { headers: { 'content-type': 'application/json' } });
     } catch (cause) {
       return reportRouteFailure({ surface: 'events', cause });
     }
@@ -169,50 +181,34 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
         });
       };
 
-      const send = (ev: RunEvent) => {
-        const lines = [
-          `id: ${ev.eventIndex}`,
-          `event: ${ev.type}`,
-          `data: ${JSON.stringify(ev)}`,
-          '', // blank line ends the SSE message
-          '',
-        ];
-
-        controller.enqueue(encoder.encode(lines.join('\n')));
+      // Stored JSON holds no raw newline: one `data:` line.
+      const send = (ev: StoredRunEvent) => {
+        controller.enqueue(encoder.encode(`id: ${ev.eventIndex}\nevent: ${ev.type}\ndata: ${ev.payload}\n\n`));
         cursor = Math.max(cursor, ev.eventIndex);
         heartbeatAt = clock.now();
       };
 
       try {
-        let backlog = await stub.getRunEvents(runId, { since: cursor + 1, limit: RUN_EVENT_LIMIT_MAX });
+        // Pages drain back to back; an empty one means caught up. The client's EventSource auto-reconnects with Last-Event-ID.
+        for (;;) {
+          const page = await stub.getRunEventText(runId, { since: cursor + 1, limit: RUN_EVENT_LIMIT_MAX });
 
-        for (const ev of backlog) send(ev);
-        // Reported even when the replay is empty, or the measurement would only count backlogged streams.
-        reportFirstByte(backlog.length);
+          for (const ev of page) send(ev);
+          // Reported even when the replay is empty, or the measurement would only count backlogged streams.
+          reportFirstByte(page.length);
 
-        // The poll loop only tests batches it fetched, so a run_end in the replay must end the stream here.
-        if (backlog.some((e) => e.type === 'run_end')) {
-          controller.close();
+          if (page.some((e) => e.type === 'run_end') || closed || clock.now() - startedAt >= SSE_TIMEOUT_MS) break;
 
-          return;
-        }
-
-        // The client's EventSource auto-reconnects with Last-Event-ID.
-        while (!closed && clock.now() - startedAt < SSE_TIMEOUT_MS) {
-          await waitOn(clock, SSE_POLL_MS);
-
-          if (closed) break;
-          backlog = await stub.getRunEvents(runId, { since: cursor + 1, limit: RUN_EVENT_LIMIT_DEFAULT });
-
-          for (const ev of backlog) send(ev);
-          const hasRunEnd = backlog.some((e) => e.type === 'run_end');
-
-          if (hasRunEnd) break;
+          if (page.length > 0) continue;
 
           if (clock.now() - heartbeatAt >= SSE_HEARTBEAT_MS) {
             controller.enqueue(encoder.encode(`:heartbeat ${clock.now()}\n\n`));
             heartbeatAt = clock.now();
           }
+
+          await waitOn(clock, SSE_POLL_MS);
+
+          if (closed) break;
         }
 
         if (!cancelled) controller.close();

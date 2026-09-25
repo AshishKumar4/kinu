@@ -700,6 +700,37 @@ export const PLATFORM_CATALOG = {
       + 'Mossaic-scale project, which is why PRE_BUNDLE_CONCURRENCY is 1.',
   },
 
+  'run_events.page_bytes': {
+    subject: 'Stored run-event text one page may carry out of the workspace object',
+    limit: { value: 256 * KiB, unit: 'bytes' },
+    origin: 'self-imposed',
+    bounds: 'response',
+    evidence: 'proven-by-source',
+    provenance: 'packages/core/src/events/recorder.ts:367-386',
+    date: '2026-09-24',
+    trigger: 'the next event would take a run-event page\'s stored text past 256 KiB',
+    onBreach: 'the page ends before that event and the reader asks again from it; a first event larger than the bound comes alone',
+    observable: [],
+    firstPartySignal: true,
+    measurements: [
+      { scenario: 'Worker code live in the isolate before any workspace (deployed bundle, wrangler dev)', value: 57_500_000, unit: 'bytes' },
+      { scenario: 'one 500-event page read as parsed events, peak added', value: 11_900_000, unit: 'bytes' },
+      { scenario: '20 SSE followers resuming at event 350 of a 2.35 MB ledger, peak added', value: 33_300_000, unit: 'bytes' },
+    ],
+    notes:
+      'Stands for do.isolate.transient_alloc_reset and worker.memory_kill_is_burst_sensitive: '
+      + 'the object dies of allocation bursts, and 47 of the 71 OrchestratorAgent exceededMemory '
+      + 'kills between 2026-09-22 and 09-24 landed on getRunEvents during reader storms. A page '
+      + 'read as parsed events cost about eight times its text (the row, JSON.parse, the valibot '
+      + 'copy, the RPC clone, the re-stringify for SSE), so a follower resuming on a trial-sized '
+      + 'ledger allocated megabytes per poll. Forwarded as stored text, a page costs about its '
+      + 'text twice (the row and the RPC clone). At 256 KiB, 20 followers draining at once put '
+      + 'at most 20 x 256 KiB x 2 = 10 MiB in flight, under a fifth of the 70 MB the transient '
+      + 'wall leaves above the Worker code, so the turn that is writing the ledger keeps the '
+      + 'rest. A first event larger than the bound comes alone (do.sqlite.row_bytes caps it), '
+      + 'so a reader still passes it.',
+  },
+
   'rpc.clone_refused': {
     subject: 'Values that cannot cross a worker boundary at all, at any size',
     limit: null,

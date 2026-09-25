@@ -966,6 +966,10 @@ export class KinuPublicSession {
    *  landing instant the absorbing run is named at, in the run events' own
    *  clock domain. Outlives the `turns` entry, which is deleted at settle. */
   private readonly midTurnLandings = new Map<string, string>();
+  /** One follower per run, however many sends it absorbed: each waiter on the run's end awaits the same stream.
+   *  A follower per waiter was nineteen SSE streams on one run of a trial on 2026-09-24, and the object died under
+   *  their reads. */
+  private readonly runEnds = new Map<string, Promise<void>>();
   /** Steers awaiting their landing, by the id each was admitted under. */
   private readonly steerLandings = new Map<string, {
     resolve: (landing: 'mid-turn' | 'turn') => void;
@@ -1115,12 +1119,22 @@ export class KinuPublicSession {
 
     if (own.some((event) => event.type === 'run_end')) return runId;
     const cursor = own.reduce((last, event) => Math.max(last, event.eventIndex), 0);
-
-    for await (const event of this.followRun(runId, cursor)) {
-      if (event.type === 'run_end') break;
-    }
+    const following = this.runEnds.get(runId) ?? this.followToEnd(runId, cursor);
+    await following;
 
     return runId;
+  }
+
+  private followToEnd(runId: string, cursor: number): Promise<void> {
+    const following = (async () => {
+      for await (const event of this.followRun(runId, cursor)) {
+        if (event.type === 'run_end') break;
+      }
+    })().finally(() => { this.runEnds.delete(runId); });
+
+    this.runEnds.set(runId, following);
+
+    return following;
   }
 
   /** One user turn, awaited to settle. Every ledger row a suite reads is written

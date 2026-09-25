@@ -14,6 +14,7 @@ import { boundedInt, boundPageQuery } from '../utils/bounds';
 import { USAGE_FIELDS, UsageSchema, type Usage } from '../usage';
 import { ESCALATION_OUTCOMES } from '../execution/escalation';
 import { APP_MUTATIONS, APP_TABLE_SCOPES } from '../types/app-store';
+import { PLATFORM_CATALOG } from '../platform-catalog';
 import {
   SPEND_SOURCES, WORKSPACE_RUN_ID,
   MODEL_OPERATION_KINDS, MODEL_OPERATION_PHASES, MODEL_OPERATION_OUTCOMES,
@@ -188,11 +189,19 @@ export interface BoundedRunEventQuery extends RunEventQuery {
   limit: number;
 }
 
-export const RUN_EVENT_LIMIT_DEFAULT = 200;
+const RUN_EVENT_LIMIT_DEFAULT = 200;
 
 /** Ceiling for untrusted callers only; in-object folds (e.g. `getRunSummaries`) state their own
  *  window, since a narrowed window would be a truncated denominator. */
 export const RUN_EVENT_LIMIT_MAX = 500;
+
+const RUN_EVENT_PAGE_BYTES = PLATFORM_CATALOG['run_events.page_bytes'].limit.value;
+
+export interface StoredRunEvent {
+  readonly eventIndex: number;
+  readonly type: string;
+  readonly payload: string;
+}
 
 /** Absent and non-finite mean unstated and take the default. Applied by the HTTP route and
  *  {@link getRunEvents}; same policy as `boundEventQuery`, via {@link boundPageQuery}. */
@@ -353,6 +362,27 @@ export class RunEventRecorder {
     if (turnAuthor({ id: start.turn.turnId, metadata: start.turn.metadata }) !== 'operator') return;
     void this.sql`INSERT INTO operator_requests (actor_id, text) VALUES (${this.actorId}, ${start.userMessage})
       ON CONFLICT (actor_id) DO UPDATE SET text = excluded.text`;
+  }
+
+  readText(runId: string, opts: BoundedRunEventQuery): StoredRunEvent[] {
+    this.actor.assertCurrent();
+    const types = opts.types !== undefined && opts.types.length > 0 ? JSON.stringify(opts.types) : null;
+
+    const rows = this.sql<{ event_index: number; type: string; payload: string }>`
+      SELECT event_index, type, payload FROM (
+        SELECT event_index, type, payload, size, SUM(size) OVER (ORDER BY event_index) AS running FROM (
+          SELECT event_index, type, payload, length(CAST(payload AS BLOB)) AS size
+          FROM run_events
+          WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND event_index >= ${opts.since}
+            AND (${types} IS NULL OR type IN (SELECT value FROM json_each(${types})))
+          ORDER BY event_index ASC
+          LIMIT ${opts.limit}
+        )
+      )
+      WHERE running <= ${RUN_EVENT_PAGE_BYTES} OR running = size
+      ORDER BY event_index ASC`;
+
+    return rows.map((row) => ({ eventIndex: row.event_index, type: row.type, payload: row.payload }));
   }
 
   /** Only a finite positive limit reaches SQL: SQLite treats a negative LIMIT as unbounded and
@@ -527,7 +557,7 @@ export class RunEventRecorder {
     return rows[0]?.n ?? 0;
   }
 
-  /** No live caller; SSE resume goes through `getRunEventsWire`. */
+  /** No live caller; SSE resume goes through {@link readText}. */
   readSince(runId: string, afterIndex: number, limit = RUN_EVENT_LIMIT_MAX): RunEvent[] {
     this.actor.assertCurrent();
     const capped = boundedInt(limit, RUN_EVENT_LIMIT_MAX, 1, Number.MAX_SAFE_INTEGER);

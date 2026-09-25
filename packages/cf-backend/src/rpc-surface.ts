@@ -280,6 +280,7 @@ const ORCHESTRATOR_METHODS = [
   'getActorSnapshot',
   'getEmailIngress',
   'getRunEvents',
+  'getRunEventText',
   'getShadowStatus',
   'getToolList',
   'getWorkspaceCapabilityHash',
