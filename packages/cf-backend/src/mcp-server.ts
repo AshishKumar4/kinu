@@ -16,9 +16,6 @@ import type {
   Page,
   PageRequest,
   PeerSendOutcome,
-  ReleaseBoard,
-  ReleaseChange,
-  ReleaseStatus,
   RunEvent,
   RunEventQuery,
   RunListEntry,
@@ -26,7 +23,7 @@ import type {
   ShadowStatus,
   ToolListEntry,
 } from "@kinu.run/core";
-import { RELEASE_STATUSES, isEngineOwnedTransitionTarget, RUN_EVENT_LIMIT_MAX } from "@kinu.run/core";
+import { RUN_EVENT_LIMIT_MAX } from "@kinu.run/core";
 import type { OrchestratorAgent } from "./orchestrator";
 import { AuthError, authenticateRequest } from "./auth/session";
 import { authenticateCliToken, readBearer, type CliAuthAuthority } from "./cli/auth-store";
@@ -69,13 +66,6 @@ export interface McpAgentClient {
   runTaskFromMcp(text: string): Promise<EnqueueTurnResult>;
   sendPeerFromMcp(input: PeerMessageInput): Promise<PeerSendOutcome>;
   listPeersFromMcp(): Promise<Array<{ name: string; displayName?: string }>>;
-  getReleaseBoard(limit: number): Promise<ReleaseBoard>;
-  createReleaseChange(input: {
-    bindingId: string;
-    userPrompt: string;
-    plan?: string | null;
-  }): Promise<ReleaseChange>;
-  transitionReleaseChange(changeId: string, status: ReleaseStatus): Promise<ReleaseChange>;
   getMemoryContent(): Promise<string>;
 }
 
@@ -99,9 +89,6 @@ async function mcpClient(resolveAgent: McpResolver, agentName: string): Promise<
     runTaskFromMcp: (text) => stub.runTaskFromMcp(text),
     sendPeerFromMcp: (input) => stub.sendPeerFromMcp(input),
     listPeersFromMcp: () => stub.listPeersFromMcp(),
-    getReleaseBoard: (limit) => stub.getReleaseBoard(limit),
-    createReleaseChange: (input) => stub.createReleaseChange(input),
-    transitionReleaseChange: (changeId, status) => stub.transitionReleaseChange(changeId, status),
     getMemoryContent: () => stub.getMemoryContent(),
   };
 }
@@ -369,67 +356,6 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: `list_peers error: ${renderThrownChain({ cause: err })}` }] };
-      }
-    },
-  );
-
-  server.registerTool(
-    "release",
-    {
-      description:
-        "Drive the agent's release board. Actions: `list` (recent changes + bindings), " +
-        "`create` (open a change against a bound release source — needs bindingId + prompt), " +
-        "`advance` (transition a change to a new status — the lifecycle validates the move).",
-      inputSchema: {
-        action: z.enum(["list", "create", "advance"]),
-        bindingId: z.string().optional().describe("create: the release source to change (see list)."),
-        prompt: z.string().optional().describe("create: what to change, in the owner's words."),
-        plan: z.string().optional().describe("create: an optional up-front plan."),
-        changeId: z.string().optional().describe("advance: the change to transition."),
-        status: z.enum(RELEASE_STATUSES).optional().describe("advance: the target status (e.g. planning, patching, awaiting_approval)."),
-      },
-    },
-    async ({ action, bindingId, prompt, plan, changeId, status }) => {
-      try {
-        const agent = await mcpClient(resolveAgent, agentName);
-
-        if (action === "list") {
-          const board: ReleaseBoard = await agent.getReleaseBoard(20);
-
-          return { content: [{ type: "text", text: JSON.stringify(board, null, 2) }] };
-        }
-
-        if (action === "create") {
-          if (!bindingId || !prompt) {
-            return { content: [{ type: "text", text: "release create requires bindingId and prompt." }] };
-          }
-
-          const change: ReleaseChange = await agent.createReleaseChange({ bindingId, userPrompt: prompt, plan: plan ?? null });
-
-          return { content: [{ type: "text", text: `Created change ${change.id} (${change.status}) for binding ${change.bindingId}.` }] };
-        }
-
-        if (!changeId || !status) {
-          return { content: [{ type: "text", text: "release advance requires changeId and status." }] };
-        }
-
-        // Same gate as the builtin release tool: execution-owned states are never asserted by an external MCP actor.
-        if (isEngineOwnedTransitionTarget(status)) {
-          return {
-            content: [{
-              type: "text",
-              text:
-                `release advance refused: status '${status}' is earned by execution, not asserted — ` +
-                `use the agent's release tool actions apply / run_checks / deploy / rollback to get there for real.`,
-            }],
-          };
-        }
-
-        const advanced: ReleaseChange = await agent.transitionReleaseChange(changeId, status);
-
-        return { content: [{ type: "text", text: `Change ${advanced.id} → ${advanced.status}.` }] };
-      } catch (err) {
-        return { content: [{ type: "text", text: `release error: ${renderThrownChain({ cause: err })}` }] };
       }
     },
   );

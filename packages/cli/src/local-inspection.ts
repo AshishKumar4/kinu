@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
-  createReleaseStore,
   BackgroundJobStore,
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOLS,
@@ -36,7 +35,6 @@ import {
   listRuns,
   listScaffoldVersions,
   loadGepaCandidates,
-  releaseSqlFromExec,
   createTimerTrigger,
   tableExists as coreTableExists,
   workspaceSpend,
@@ -68,7 +66,6 @@ import {
   type EventVariant,
   type KinuEvent,
   type QueryFilter,
-  type ReleaseBoard,
   type RunEvent,
   type ScaffoldVersionView,
   readSearchNodeDetail,
@@ -182,7 +179,6 @@ export interface LocalAgentState {
   mcts: SearchNode[];
   timeline: JsonObject[];
   executors: LocalExecutorInfo[];
-  release: ReleaseBoard;
 }
 
 export function getLocalAgentState(name: string): LocalAgentState {
@@ -193,7 +189,6 @@ export function getLocalAgentState(name: string): LocalAgentState {
     mcts: listLocalMcts(name),
     timeline: listLocalTimeline(name, 250),
     executors: listLocalExecutors(),
-    release: getLocalReleaseBoard(name, 20),
   }));
 }
 
@@ -791,18 +786,6 @@ export async function executeLocalExecutor(name: string, executorId: string, com
   const result = await createHostShell(process.cwd()).exec(command);
 
   return { executor: executorId, command, ...result };
-}
-
-export function getLocalReleaseBoard(name: string, limit = 20): ReleaseBoard {
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'release_sources') || !tableExists(db, 'release_changes')) {
-      return { bindings: [], changes: [], checks: [], approvals: [], deployments: [] };
-    }
-
-    const store = createReleaseStore(releaseSqlFromExec(hubSql(db)));
-
-    return store.board(name, limit);
-  });
 }
 
 export async function markLocalBackgroundJobsCancelled(name: string): Promise<string[]> {

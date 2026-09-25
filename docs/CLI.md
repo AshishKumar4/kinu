@@ -77,7 +77,6 @@ kinu <command> [options]
 | [`kinu gepa <name> [runId]`](#kinu-gepa-name-runid) | Show GEPA optimisation runs, or run one pass with --run |
 | [`kinu alignment <name>`](#kinu-alignment-name) | Show K_align: corrections per 100 graded turns for each scaffold version, with 95% intervals |
 | [`kinu label [action] [name] [file]`](#kinu-label-action-name-file) | Label turn outcomes by hand to measure and correct the classifier (export, ingest, ensemble, report), or build a corpus from Claude Code transcripts (mine, score) |
-| [`kinu release <name>`](#kinu-release-name) | Show a workspace's release board: sources, changes, checks, approvals and deployments |
 
 ### This computer
 
@@ -664,19 +663,6 @@ Label turn outcomes by hand to measure and correct the classifier (export, inges
 
 ```bash
 kinu label export jarvis --size 20
-```
-
-### kinu release <name>
-
-Show a workspace's release board: sources, changes, checks, approvals and deployments.
-
-| Option | What it does |
-| --- | --- |
-| `--limit <n>` | Change limit |
-| `--json` | Print raw JSON |
-
-```bash
-kinu release jarvis
 ```
 
 ### kinu connect

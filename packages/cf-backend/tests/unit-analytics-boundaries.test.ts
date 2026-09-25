@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { boundaryOf, eventFamily } from '@kinu.run/core/analytics';
-import { AGENT_METRICS_SCHEMA, CONTROL_PLANE_OPS_SCHEMA } from '@kinu.run/core/analytics';
+import { AGENT_METRICS_SCHEMA } from '@kinu.run/core/analytics';
 import * as record from '@kinu.run/core/analytics';
 import type { AnalyticsEnv } from '@kinu.run/core/analytics';
 
@@ -52,7 +52,6 @@ describe('the registry is read at runtime', () => {
 describe('a writer boundary emits the event and boundary it declares', () => {
   const eventSlot = AGENT_METRICS_SCHEMA.blobs.findIndex((slot) => slot.name === 'event');
   const boundarySlot = AGENT_METRICS_SCHEMA.blobs.findIndex((slot) => slot.name === 'boundary');
-  const opsOperationSlot = CONTROL_PLANE_OPS_SCHEMA.blobs.findIndex((s) => s.name === 'operation');
 
   test('turn.settled', () => {
     const captured = captureEnv();
@@ -108,16 +107,5 @@ describe('a writer boundary emits the event and boundary it declares', () => {
     });
     expect(captured.agent[0].blobs?.[eventSlot]).toBe('sandbox.recovery_settled');
     expect(captured.agent[0].blobs?.[boundarySlot]).toBe('sandbox.recovery');
-  });
-
-  test('release.transitioned', () => {
-    const captured = captureEnv();
-    record.recordReleaseTransition(captured.env, {
-      actor: 'u', operation: 'transition', reason: 'merged', target: 'c',
-      outcome: 'ok', code: '',
-    });
-    // The audit dataset has no `event` slot; its rows are identified by operation.
-    expect(captured.agent).toHaveLength(0);
-    expect(captured.ops[0].blobs?.[opsOperationSlot]).toBe('release_transition');
   });
 });

@@ -3,7 +3,7 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import type { JsonObject, JsonValue, ReleaseChange } from '@kinu.run/core';
+import type { JsonObject, JsonValue } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { mcpAccount, unreachableKv } from './helpers/bindings';
 import type { McpAgentClient, McpEnv } from '../src/mcp-server';
@@ -23,20 +23,6 @@ interface AgentCall { method: string; args: JsonValue[]; }
 /** A write tool that reached a read surface must fail, not resolve against a stand-in. */
 function unreached(member: string) {
   return (): never => { throw new Error(`OrchestratorAgent.${member}: not reachable in this test`); };
-}
-
-function releaseChange(
-  built: Pick<ReleaseChange, 'id' | 'status' | 'bindingId' | 'userPrompt' | 'plan'>,
-): ReleaseChange {
-  return {
-    agentName: 'jarvis',
-    summary: null,
-    patch: null,
-    previewUrl: null,
-    createdAt: 1,
-    updatedAt: 1,
-    ...built,
-  };
 }
 
 function mcpWorkspace() {
@@ -91,26 +77,6 @@ function mcpWorkspace() {
       record('listPeersFromMcp');
 
       return [{ name: 'atlas', displayName: 'Atlas' }];
-    },
-    async getReleaseBoard(limit) {
-      record('getReleaseBoard', limit);
-
-      return { bindings: [], changes: [], checks: [], approvals: [], deployments: [] };
-    },
-    async createReleaseChange(input) {
-      record('createReleaseChange', { ...input });
-
-      return releaseChange({
-        id: 'pc_1', status: 'draft', bindingId: input.bindingId,
-        userPrompt: input.userPrompt, plan: input.plan ?? null,
-      });
-    },
-    async transitionReleaseChange(changeId, status) {
-      record('transitionReleaseChange', changeId, status);
-
-      return releaseChange({
-        id: changeId, status, bindingId: 'bind_1', userPrompt: 'add a button', plan: null,
-      });
     },
   };
 
@@ -200,85 +166,6 @@ describe('MCP write tools → real @callables', () => {
     expect(res?.status).toBe(200);
     expect(await resultText(res)).toContain('atlas');
     expect(calls.some((c) => c.method === 'listPeersFromMcp')).toBe(true);
-  });
-
-  test('release list invokes getReleaseBoard', async () => {
-    const { env, calls, resolveAgent } = mcpWorkspace();
-
-    const res = await handleMcpRequest(
-      toolCall('jarvis', 'release', { action: 'list' }, SESSION_TOKEN), env, resolveAgent,
-    );
-
-    expect(res?.status).toBe(200);
-    await resultText(res);
-    expect(calls.some((c) => c.method === 'getReleaseBoard')).toBe(true);
-  });
-
-  test('release create invokes createReleaseChange with mapped args', async () => {
-    const { env, calls, resolveAgent } = mcpWorkspace();
-
-    const res = await handleMcpRequest(
-      toolCall('jarvis', 'release', { action: 'create', bindingId: 'bind_1', prompt: 'add a button' }, SESSION_TOKEN),
-      env, resolveAgent,
-    );
-
-    expect(res?.status).toBe(200);
-    expect(await resultText(res)).toContain('pc_1');
-    expect(calls.find((c) => c.method === 'createReleaseChange')?.args).toEqual([{ bindingId: 'bind_1', userPrompt: 'add a button', plan: null }]);
-  });
-
-  test('release advance invokes transitionReleaseChange', async () => {
-    const { env, calls, resolveAgent } = mcpWorkspace();
-
-    const res = await handleMcpRequest(
-      toolCall('jarvis', 'release', { action: 'advance', changeId: 'pc_1', status: 'planning' }, SESSION_TOKEN),
-      env, resolveAgent,
-    );
-
-    expect(res?.status).toBe(200);
-    await resultText(res);
-    expect(calls.find((c) => c.method === 'transitionReleaseChange')?.args).toEqual(['pc_1', 'planning']);
-  });
-
-  test('release create without required args does not call the @callable', async () => {
-    const { env, calls, resolveAgent } = mcpWorkspace();
-
-    const res = await handleMcpRequest(
-      toolCall('jarvis', 'release', { action: 'create' }, SESSION_TOKEN), env, resolveAgent,
-    );
-
-    expect(res?.status).toBe(200);
-    expect(await resultText(res)).toContain('requires bindingId and prompt');
-    expect(calls.some((c) => c.method === 'createReleaseChange')).toBe(false);
-  });
-
-  test('release advance into an engine-owned state is refused — same gate as the builtin tool', async () => {
-    const { env, calls, resolveAgent } = mcpWorkspace();
-
-    for (const status of ['validating', 'preview_ready', 'applying', 'deployed', 'rolled_back']) {
-      const res = await handleMcpRequest(
-        toolCall('jarvis', 'release', { action: 'advance', changeId: 'pc_1', status }, SESSION_TOKEN),
-        env, resolveAgent,
-      );
-
-      expect(res?.status).toBe(200);
-      expect(await resultText(res)).toContain('earned by execution');
-    }
-
-    expect(calls.some((c) => c.method === 'transitionReleaseChange')).toBe(false);
-  });
-
-  test('release advance with a status outside the real enum is refused by the schema', async () => {
-    const { env, calls, resolveAgent } = mcpWorkspace();
-
-    const res = await handleMcpRequest(
-      toolCall('jarvis', 'release', { action: 'advance', changeId: 'pc_1', status: 'shipped' }, SESSION_TOKEN),
-      env, resolveAgent,
-    );
-
-    expect(res?.status).toBe(200);
-    expect(await resultText(res)).toContain('Invalid');
-    expect(calls.some((c) => c.method === 'transitionReleaseChange')).toBe(false);
   });
 });
 

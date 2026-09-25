@@ -13,8 +13,7 @@ import { MessageView } from "@/components/MessageView";
 import { Composer, type ChatMode } from "@/components/Composer";
 import { ModelPicker } from "@/components/ModelPicker";
 import { tabCls, tabStripH } from "@/components/ui/form";
-import { ChangesPanel } from "@/components/surfaces/changes/ChangesPanel";
-import { ReviewSheet } from "@/components/surfaces/changes/ReviewSheet";
+import { ChangesPanel, LAYOUT_KEY } from "@/components/surfaces/changes/ChangesPanel";
 import { ReviewBar } from "@/diff-design/ReviewBar";
 import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import { NotesProvider, noteOf, type NotesStore, type OpenDraft } from "@/components/surfaces/changes/notes-provider";
@@ -610,7 +609,7 @@ function DesignSelection({ kind }: { kind: string | null }) {
   return null;
 }
 
-function Workspace({ wide, chatPane, chat, panel }: { wide: boolean; chatPane: boolean; chat: ReactNode; panel: ReactNode }) {
+function Workspace({ wide, chatPane, inspector, chat, panel }: { wide: boolean; chatPane: boolean; inspector: number; chat: ReactNode; panel: ReactNode }) {
   return (
     <div className="flex h-full flex-col">
       <WorkspaceBar title="Checkout coupon bug" onRename={async (name) => name} connectionStatus="connected" working={false} altitude="run" onAltitude={() => {}} />
@@ -620,7 +619,7 @@ function Workspace({ wide, chatPane, chat, panel }: { wide: boolean; chatPane: b
       </div>
       <div className="flex min-h-0 flex-1">
         {(wide || chatPane) && chat}
-        {(wide || !chatPane) && <div className="flex w-full shrink-0 flex-col p-sidebar md:w-[340px]">{panel}</div>}
+        {(wide || !chatPane) && <div className="flex w-full shrink-0 flex-col p-sidebar" style={wide ? { width: inspector } : undefined}>{panel}</div>}
       </div>
     </div>
   );
@@ -637,12 +636,8 @@ function setsFor(params: URLSearchParams): readonly ChangeSet[] {
 function Scene({ params }: { params: URLSearchParams }) {
   const wide = useWide();
   const sets = setsFor(params);
-
-  const [sheet, setSheet] = useState<{ file: string | null; notes: boolean } | null>(
-    params.get("sheet") === "1" ? { file: params.get("file"), notes: params.get("annotations") === "1" } : null,
-  );
-
   const [source, setSource] = useState(params.get("source") ?? sets[0]?.source ?? "workspace");
+  const [opened, setOpened] = useState<{ readonly file: string | null; readonly n: number }>({ file: params.get("file"), n: 0 });
 
   const [reviewedAt, setReviewedAt] = useState<number | null>(params.get("reviewed") === "1" ? NOW - 60e3 : null);
   const [sent, setSent] = useState<readonly ReviewAnnotation[] | null>(params.get("sent") === "1" ? SENT : null);
@@ -661,7 +656,6 @@ function Scene({ params }: { params: URLSearchParams }) {
     },
     send: () => {
       setSent(latest.current);
-      setSheet(null);
       setChatPane(true);
 
       return Promise.resolve({ ok: true, notes: [] });
@@ -670,17 +664,18 @@ function Scene({ params }: { params: URLSearchParams }) {
 
   const openNote = (anchor: DiffAnchor | undefined): void => {
     setSource("workspace");
-    setSheet({ file: anchor?.path ?? null, notes: false });
+    setChatPane(false);
+    setOpened((prior) => ({ file: anchor?.path ?? null, n: prior.n + 1 }));
   };
 
   const panel = (
     <>
       <TabStrip label="Changes" count={reviewedAt !== null || shown?.error !== undefined ? null : shown?.files.length ?? null} />
       <div className="min-h-0 flex-1">
-          <ChangesPanel sets={sets} source={source} onSource={setSource} now={NOW} file={sheet === null ? params.get("file") : null}
-            menuOpen={params.get("menu") === "source"} reviewedAt={reviewedAt} onReviewed={() => setReviewedAt(NOW)} onUndo={() => setReviewedAt(null)}
-            onExpand={(file) => setSheet({ file, notes: false })} onOpenInFiles={shown?.mode === "vfs-baseline" ? () => {} : null}
-            onShowNotes={() => setSheet({ file: null, notes: true })} />
+        <ChangesPanel key={opened.n} sets={sets} source={source} onSource={setSource} now={NOW} file={opened.file}
+          menuOpen={params.get("menu") === "source"} notesOpen={params.get("annotations") === "1"}
+          reviewedAt={reviewedAt} onReviewed={() => setReviewedAt(NOW)} onUndo={() => setReviewedAt(null)}
+          onOpenInFiles={shown?.mode === "vfs-baseline" ? () => {} : null} />
       </div>
     </>
   );
@@ -688,13 +683,8 @@ function Scene({ params }: { params: URLSearchParams }) {
   return (
     <NotesProvider key={sent === null ? "open" : "sent"} baseline={shown?.baseline ?? BASELINE} files={shown?.files ?? []} now={() => NOW} store={store}
       initial={initial} writing={params.get("comment") === "1" ? WRITING : undefined}>
-      <Workspace wide={wide} chatPane={chatPane} panel={panel}
+      <Workspace wide={wide} chatPane={chatPane} inspector={Number(params.get("inspector") ?? 340)} panel={panel}
         chat={<ChatColumn wide={wide} sent={sent} onOpenNote={openNote} />} />
-      {sheet !== null && shown !== undefined && (
-        <ReviewSheet set={shown} now={NOW} file={sheet.file} layout={params.get("layout") === "unified" ? "unified" : "split"}
-          annotationsOpen={sheet.notes} pickerOpen={params.get("picker") === "1"} onOpenInFiles={shown.mode === "vfs-baseline" ? () => {} : null}
-          onClose={() => setSheet(null)} onReviewed={() => { setSheet(null); setReviewedAt(NOW); }} />
-      )}
       <DesignSelection kind={params.get("select")} />
     </NotesProvider>
   );
@@ -709,6 +699,8 @@ export default function diffDesignFrame() {
     document.documentElement.setAttribute("data-mode", theme);
     document.documentElement.style.colorScheme = theme;
   }
+
+  localStorage.setItem(LAYOUT_KEY, params.get("layout") === "unified" ? "unified" : "split");
 
   return {
     entries: [`/workspace/${WORKSPACE}`],

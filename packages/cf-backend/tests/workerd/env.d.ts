@@ -14,6 +14,7 @@ import type { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
 import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { ChatAnswers, SeedAnswer } from './store-reset-shapes';
+import type { AddressedAnswers } from './addressed-name-shapes';
 import type {
   DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState, DeployFakeWeight,
 } from './deploy-fake';
@@ -144,6 +145,11 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
   freshProfile(): Promise<{ email: string; displayName: string | null; onboardedAt: number | null; workspaceCount: number } | null>;
 }
 
+interface AddressedNameProbeRpc extends Rpc.DurableObjectBranded {
+  claimAndEvict(workspace: string): Promise<string>;
+  idThenNamed(workspace: string): Promise<AddressedAnswers>;
+}
+
 interface StoreResetProbeRpc extends Rpc.DurableObjectBranded {
   plantRefusedWorkspace(workspace: string): Promise<string>;
   seed(workspace: string): Promise<SeedAnswer>;
@@ -179,7 +185,7 @@ type ProbeAnswer = { ok: true; value: unknown } | { ok: false; reason: string; e
 
 interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   start(): Promise<void>;
-  previewAsHire(): Promise<ProbeAnswer>;
+  previewAsHire(): Promise<{ preview: ProbeAnswer; removed: ProbeAnswer; left: boolean }>;
   share(approved?: readonly { binding: string; member: string }[]): Promise<ProbeAnswer>;
   liveShares(): Promise<ProbeAnswer>;
   importBlueprint(): Promise<{ fork: string; running: number }>;
@@ -293,6 +299,7 @@ declare global {
       SLATE_DURABILITY_PROBE: DurableObjectNamespace<SlateDurabilityProbeRpc>;
       ACCOUNT_RESET_PROBE: DurableObjectNamespace<AccountResetProbeRpc>;
       STORE_RESET_PROBE: DurableObjectNamespace<StoreResetProbeRpc>;
+      ADDRESSED_NAME_PROBE: DurableObjectNamespace<AddressedNameProbeRpc>;
   // Readiness refusal must serialise over Workers RPC as data, not a thrown class name; not a sandbox stub.
   DEVBOX_NOT_READY_PROBE: DurableObjectNamespace<DevboxNotReadyProbeDO>;
       LOADER: WorkerLoader;

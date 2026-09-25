@@ -5,6 +5,7 @@ import { SlateId } from '@agent-core/core/slates';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SlateFiles, slateDirectory, type SlateFileTree } from '../src/slates/files';
 import { WorkspaceSlateContentStore } from '../src/slates/content';
+import { settleWorkspaceSlates } from '../src/vfs/agent-home';
 import { createTestWorkspace, createWorkspaceBundle, makeSqlExec } from './helpers';
 
 afterEach(() => { setSystemTime(); });
@@ -32,7 +33,7 @@ async function slatePlane() {
   const content = new WorkspaceSlateContentStore(session.vfs.as(CRED_KERNEL));
   const files = new SlateFiles(tree, content, makeSqlExec(ws.db), (body) => session.vfs.withTransaction(body));
 
-  return { ws, vfs, files, counts };
+  return { ws, vfs, kernel: session.vfs.as(CRED_KERNEL), files, counts };
 }
 
 /** Moves the clock on, as between two requests: a write and a version never share a millisecond. */
@@ -61,22 +62,57 @@ test('a Slate tree restores binaries, executable modes, symlinks and empty direc
     vfs.mkdir(`${directory}/protected`);
     vfs.writeFile(`${directory}/protected/config`, 'read-only source');
     vfs.chmod(`${directory}/protected`, 0o555);
+    const runMode = vfs.stat(`${directory}/run`).mode & 0o7777;
+    const protectedMode = vfs.stat(`${directory}/protected`).mode & 0o7777;
     const version = files.capture(id);
     vfs.writeFile(`${directory}/run`, 'changed');
     vfs.writeFile(`${directory}/extra`, 'remove on restore');
     files.transaction(() => files.restore(id, version));
     expect(vfs.readFile(`${directory}/run`)).toEqual(new Uint8Array([0, 255, 3]));
-    expect(vfs.stat(`${directory}/run`).mode & 0o777).toBe(0o755);
+    expect(vfs.stat(`${directory}/run`).mode & 0o7777).toBe(runMode);
     expect(vfs.readlink(`${directory}/link`)).toBe('shell');
     expect(vfs.isDirectory(`${directory}/empty`)).toBe(true);
     expect(vfs.readFileString(`${directory}/protected/config`)).toBe('read-only source');
-    expect(vfs.stat(`${directory}/protected`).mode & 0o777).toBe(0o555);
+    expect(vfs.stat(`${directory}/protected`).mode & 0o7777).toBe(protectedMode);
+    expect(protectedMode & 0o222).toBe(0);
     expect(vfs.exists(`${directory}/extra`)).toBe(false);
     expect(files.capture(id).value).toBe(version.value);
     const fork = new SlateId('fork');
     files.restore(fork, version);
     vfs.writeFile(`${slateDirectory(fork)}/run`, 'fork changes');
     expect(vfs.readFile(`${directory}/run`)).toEqual(new Uint8Array([0, 255, 3]));
+  } finally {
+    ws.db.close();
+  }
+});
+
+test('a version taken before slates were shared restores and forks into a shared tree', async () => {
+  const { ws, vfs, kernel, files } = await slatePlane();
+
+  try {
+    const id = new SlateId('ledger');
+    const directory = slateDirectory(id);
+    vfs.mkdir(`${directory}/src`, { recursive: true });
+    vfs.writeFile(`${directory}/src/app.ts`, 'export const rows = 1;\n');
+
+    for (const [path, mode] of [[directory, 0o755], [`${directory}/src`, 0o755], [`${directory}/src/app.ts`, 0o644]] as const) {
+      kernel.chmod(path, mode);
+    }
+
+    const version = files.capture(id);
+    kernel.chmod('/slates', 0o755);
+    settleWorkspaceSlates(kernel);
+    vfs.writeFile(`${directory}/src/app.ts`, 'export const rows = 2;\n');
+    files.transaction(() => files.restore(id, version));
+    const fork = new SlateId('ledger-copy');
+    files.transaction(() => files.restore(fork, version));
+
+    for (const root of [directory, slateDirectory(fork)]) {
+      expect(vfs.readFileString(`${root}/src/app.ts`)).toBe('export const rows = 1;\n');
+      expect(vfs.stat(root).mode & 0o7777).toBe(0o2775);
+      expect(vfs.stat(`${root}/src`).mode & 0o7777).toBe(0o2775);
+      expect(vfs.stat(`${root}/src/app.ts`).mode & 0o7777).toBe(0o664);
+    }
   } finally {
     ws.db.close();
   }

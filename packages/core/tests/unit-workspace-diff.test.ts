@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { git, gitEnv, initRepo, scratchDir } from '@kinu.run/test-utils';
+import { fakeMossaic, git, gitEnv, initRepo, scratchDir } from '@kinu.run/test-utils';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createWorkspace } from '../src/workspace-birth';
@@ -18,6 +19,10 @@ import { MAX_LINES_PER_FILE } from '../src/vfs/diff';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
 import { createTestRuntime } from './helpers';
 import { commandResult, type CommandResult } from '../src/execution/exec-result';
+import { agentCred, provisionAgentHome, subordinateAgentName } from '../src/vfs/agent-home';
+import { withMountTable } from '../src/vfs/mounts';
+import { mossaicVfs } from '../src/vfs/mossaic-vfs';
+import { sharedDriveMount } from '../src/vfs/shared-drive';
 
 const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
 
@@ -227,6 +232,68 @@ describe('workspace diff lifecycle', () => {
     await rt.storage.vfs.writeFile('app.ts', 'export const visible = true;');
 
     expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['added app.ts']);
+  });
+
+  test('the change-set is every agent\'s home and the slates: never /usr, /tmp, a mount or platform state', async () => {
+    const { rt, workspace } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    const drive = mossaicVfs(fakeMossaic().tenant('owner'));
+    rt.storage.vfs = withMountTable(rt.storage.vfs, [sharedDriveMount(() => drive, () => 'no Drive in this test')]);
+    const identity = { uid: 2001, gid: 2001 };
+    const home = provisionAgentHome((await workspace.privileged()).root, subordinateAgentName('builder'), identity);
+    const session = await workspace.session();
+    const builder = session.vfs.as(agentCred(identity));
+    const kernel = session.vfs.as(CRED_KERNEL);
+    await resetWorkspaceBaseline(rt);
+
+    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+    builder.writeFile(`${home}/draft.md`, 'draft\n');
+    builder.writeFile(`${home}/.kinu/context/run.json`, '{}');
+    builder.mkdir(`${home}/private`, { mode: 0o700 });
+    builder.writeFile(`${home}/private/key`, 'secret');
+    builder.mkdir('/slates/board', { recursive: true });
+    builder.writeFile('/slates/board/app.tsx', 'export default null;\n');
+    await drive.writeFile('/notes.md', 'from the Drive\n');
+    kernel.mkdir('/etc/kinu-slate-content', { recursive: true });
+    kernel.writeFile('/etc/kinu-slate-content/blob', 'stored');
+    kernel.mkdir('/tmp', { recursive: true });
+    kernel.writeFile('/tmp/build.log', 'scratch\n');
+    kernel.mkdir('/usr/local/lib', { recursive: true });
+    kernel.writeFile('/usr/local/lib/tool.py', 'installed\n');
+
+    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual([
+      `added ${home}/draft.md`, 'added /slates/board/app.tsx', 'added notes.md',
+    ]);
+  });
+
+  test('a baseline taken while slates lived in the home finds them at /slates, so their move is no change', async () => {
+    const { rt, db } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await rt.storage.vfs.mkdir('/slates/board', { recursive: true });
+    await rt.storage.vfs.writeFile('/slates/board/app.tsx', 'export const rows = 1;\n');
+    await rt.storage.vfs.writeFile('/slates/board/style.css', 'table { width: 100%; }\n');
+    await resetWorkspaceBaseline(rt);
+    db.exec(`UPDATE vfs_baseline_manifest SET path = 'slates/' || substr(path, 9) WHERE path LIKE '/slates/%'`);
+    db.exec(`DELETE FROM vfs_baseline_manifest WHERE path = '/'`);
+    await rt.storage.vfs.writeFile('/slates/board/app.tsx', 'export const rows = 2;\n');
+
+    const listed = async (): Promise<string[]> => (await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`);
+
+    expect(await listed()).toEqual(['changed /slates/board/app.tsx']);
+    await resetWorkspaceBaseline(rt);
+    expect(await listed()).toEqual([]);
+    expect(restoreWorkspaceBaseline(rt)).toMatchObject({ ok: true });
+    expect(await listed()).toEqual(['changed /slates/board/app.tsx']);
+  });
+
+  test('a slates/ folder the working directory holds after the move stays its own', async () => {
+    const { rt } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await rt.storage.vfs.mkdir('slates', { recursive: true });
+    await rt.storage.vfs.writeFile('slates/todo.md', 'mine\n');
+    await resetWorkspaceBaseline(rt);
+
+    expect((await getWorkspaceDiff(rt)).files).toEqual([]);
   });
 
   test('the change-set never holds more than one baseline body at a time', async () => {

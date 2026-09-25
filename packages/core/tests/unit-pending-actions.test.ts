@@ -13,7 +13,7 @@ import { SLATE_READ_MODELS } from '../src/slates/read-models';
 import type { DeferredApproval } from '../src/safety/deferred-approval';
 
 const EMPTY: PendingActionInputs = {
-  approvals: [], changes: [], scaffoldVersions: [], deferredActions: [],
+  scaffoldVersions: [], deferredActions: [],
   unseenChanges: { count: 0, revertable: 0, latestAt: 0 }, curriculum: [], pendingPlans: [],
 };
 
@@ -28,32 +28,6 @@ function parked(over: Partial<DeferredApproval> = {}): DeferredApproval {
 describe('buildPendingActions', () => {
   test('nothing waiting is an empty queue', () => {
     expect(buildPendingActions(EMPTY)).toEqual([]);
-  });
-
-  test('a pending release approval is named by the change it authorises', () => {
-    const [action] = buildPendingActions({
-      ...EMPTY,
-      approvals: [{ id: 'apr_1', changeId: 'chg_4f2', approvalType: 'deploy_production', decision: 'pending', createdAt: 5000 }],
-      changes: [{ id: 'chg_4f2', userPrompt: 'Warm up the empty-state copy' }],
-    });
-
-    expect(action).toEqual({
-      id: 'apr_1',
-      kind: 'release_approval',
-      title: 'Approve: deploy to production',
-      detail: 'Warm up the empty-state copy',
-      at: 5000,
-    });
-  });
-
-  test('a decided approval has stopped needing anyone', () => {
-    expect(buildPendingActions({
-      ...EMPTY,
-      approvals: [
-        { id: 'a1', changeId: 'c1', approvalType: 'apply', decision: 'approved', createdAt: 1 },
-        { id: 'a2', changeId: 'c1', approvalType: 'apply', decision: 'rejected', createdAt: 2 },
-      ],
-    })).toEqual([]);
   });
 
   test('a scaffold version under trial is a decision, not a status', () => {
@@ -153,8 +127,6 @@ describe('buildPendingActions', () => {
 
   test('the queue is newest-first across every kind', () => {
     const actions = buildPendingActions({
-      approvals: [{ id: 'apr', changeId: 'c', approvalType: 'apply', decision: 'pending', createdAt: 3000 }],
-      changes: [{ id: 'c', userPrompt: 'a change' }],
       scaffoldVersions: [{ version: 8, status: 'pending', rationale: 'r', written_at: 5000 }],
       deferredActions: [parked({ requestedAt: 6000 })],
       unseenChanges: { count: 2, revertable: 2, latestAt: 4000 },
@@ -163,8 +135,7 @@ describe('buildPendingActions', () => {
     });
 
     expect(actions.map((a) => a.kind)).toEqual([
-      'deferred_action', 'scaffold_version', 'unseen_changes', 'release_approval',
-      'curriculum_task',
+      'deferred_action', 'scaffold_version', 'unseen_changes', 'curriculum_task',
     ]);
   });
 });
@@ -224,7 +195,7 @@ describe('what the inspector opens for on its own', () => {
   const consent: PendingConsent = { consentId: 'c-1', deviceLabel: 'laptop', method: 'exec', command: 'ls', createdAt: 1 };
 
   test('an action or a consent to approve, or a plan to review, opens it', () => {
-    for (const kind of ['deferred_action', 'release_approval', 'plan_review'] as const) {
+    for (const kind of ['deferred_action', 'plan_review'] as const) {
       expect(needsTheUser({ ...nothing, pendingActions: [{ ...action, kind }] })).toBe(true);
     }
 

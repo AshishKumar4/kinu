@@ -37,7 +37,6 @@ export {
 export {
   recordJobSettled,
   recordModelRow,
-  recordReleaseTransition,
   recordSandboxRecovery,
   recordToolRow,
   recordTtftRow,
@@ -47,7 +46,6 @@ export {
   type JobRowInput,
   type ModelRowInput,
   type RecoveryRowInput,
-  type ReleaseRowInput,
   type RowOutcome,
   type ToolRowInput,
   type TtftRowInput,

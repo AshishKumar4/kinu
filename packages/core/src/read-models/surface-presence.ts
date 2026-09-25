@@ -4,7 +4,7 @@ import type { SlateSummary } from "../slates/rpc";
 
 export const SLATE_PREFIX = "slate:";
 
-export const SURFACES = ["Work", "Changes", "Files", "Releases", "Swarms", "Agent", "Environment"] as const;
+export const SURFACES = ["Work", "Changes", "Files", "Swarms", "Agent", "Environment"] as const;
 
 export const ACTIVITY_SURFACE = "Activity";
 
@@ -22,8 +22,6 @@ export interface SurfaceContent {
 /** Changes gates on the change-set the tab has read, not `TabPresence`. */
 export function surfaceHasContent(surface: SurfaceKind, content: SurfaceContent): boolean {
 	if (surface === "Work") return content.tabPresence?.work ?? true;
-
-	if (surface === "Releases") return content.tabPresence?.releases ?? true;
 
 	if (surface === "Swarms") return (content.tabPresence?.explorations ?? true) || content.mctsTrees.size > 0;
 

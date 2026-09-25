@@ -23,7 +23,7 @@ import {
   type AnalyticsEnv,
 } from '@kinu.run/core/analytics';
 import {
-  recordJobSettled, recordModelRow, recordReleaseTransition, recordToolRow,
+  recordJobSettled, recordModelRow, recordToolRow,
   recordTtftRow, recordTurnRow,
 } from '@kinu.run/core/analytics';
 import { feedbackRouteFamily, writeFeedbackMarker } from '@kinu.run/core/analytics';
@@ -314,25 +314,29 @@ describe('the writer holds the limits the platform enforces silently', () => {
 
   test('the budget is shared across datasets, because the platform counts every call', () => {
     const plane = fakeEnv();
+    // Installing opens the invocation's window and spends one write on its announcement.
+    const restore = installSink(plane);
     const window = analyticsPlane(plane.env).window;
+    const opened = window.remaining;
 
-    for (let at = 0; at < 100; at += 1) {
-      recordToolRow(plane.env, {
-        workspace: 'w', agentKind: 'orchestrator', tool: 'read', failed: false, durationMs: 1,
-      });
+    try {
+      for (let at = 0; at < 100; at += 1) {
+        recordToolRow(plane.env, {
+          workspace: 'w', agentKind: 'orchestrator', tool: 'read', failed: false, durationMs: 1,
+        });
+      }
+
+      expect(window.remaining).toBe(opened - 100);
+
+      for (let at = 0; at < 100; at += 1) diagnostics.event('control_plane.workspace_remove', { actor: 'u', outcome: 'ok' });
+    } finally {
+      restore();
     }
 
-    expect(window.remaining).toBe(MAX_WRITES_PER_INVOCATION - 100);
+    expect(plane.ops.points).toHaveLength(100);
 
-    for (let at = 0; at < 100; at += 1) {
-      recordReleaseTransition(plane.env, {
-        actor: 'u', operation: 'transition', reason: 'merged', target: 'c',
-        outcome: 'ok', code: '',
-      });
-    }
-
-    // Two datasets, one budget: 200 spent, not 100 out of 250 twice.
-    expect(window.remaining).toBe(MAX_WRITES_PER_INVOCATION - 200);
+    // Two datasets, one budget: 200 spent, not 100 out of the budget twice.
+    expect(window.remaining).toBe(opened - 200);
   });
 
   test('opening a window replaces the budget rather than topping it up', () => {
@@ -443,19 +447,6 @@ describe('nothing a person said reaches the dataset', () => {
     // Absent stays visibly absent, not one bucket that looks like a real workspace.
     expect(analyticsDigest('')).toBe('');
     expect(analyticsDigest('alpha')).toMatch(/^[0-9a-f]{16}$/);
-  });
-
-  test('an admin address is digested on the audit dataset, never published', () => {
-    const plane = fakeEnv();
-    recordReleaseTransition(plane.env, {
-      actor: 'owner@example.com', operation: 'transition', reason: 'merged',
-      target: 'change-7', outcome: 'ok', code: '',
-    });
-    const point = onlyPoint(plane.ops);
-    expect(JSON.stringify(point)).not.toContain('owner@example.com');
-    expect(point.indexes?.[0]).toBe(analyticsDigest('owner@example.com'));
-    // One user's work, so digested too.
-    expect(point.blobs?.[6]).toBe(analyticsDigest('change-7'));
   });
 
   test('a diagnostic\'s reserved fields never reach a data point', () => {
@@ -825,18 +816,6 @@ describe('the record adapters write the rows their boundaries promise', () => {
     expect(blobAt(point, AGENT_METRICS_SCHEMA, 'boundary')).toBe('job.settled');
   });
 
-  test('a release transition lands on the audit dataset, not the agent one', () => {
-    const plane = fakeEnv();
-    recordReleaseTransition(plane.env, {
-      actor: 'user-42', operation: 'deployment', reason: 'production',
-      target: 'change-9', outcome: 'ok', code: '',
-    });
-    expect(plane.agent.points).toHaveLength(0);
-    const point = onlyPoint(plane.ops);
-    expect(point.blobs?.[1]).toBe('release_deployment');
-    expect(point.blobs?.[4]).toBe('release_change');
-    expect(point.blobs?.[5]).toBe('production');
-  });
 });
 
 describe('a feedback marker carries no report', () => {

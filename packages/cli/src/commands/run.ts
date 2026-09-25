@@ -19,7 +19,6 @@ import {
   getLocalAgentState,
   getLocalGepaRun,
   getLocalMctsNode,
-  getLocalReleaseBoard,
   getLocalToolSurface,
   listLocalEvents,
   listLocalExecutors,
@@ -418,8 +417,6 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
       return rpc('executeInExecutor', [executor, command]);
     }
 
-    case 'product':
-      return rpc('getReleaseBoard', [numberField(cmd, 'limit') ?? 20]);
     case 'stop':
       return rpc('cancelCurrentWork');
     case 'webhook': {
@@ -511,8 +508,6 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
       return decodeJsonValue({ value: await executeLocalExecutor(name, executor, command) });
     }
 
-    case 'product':
-      return decodeJsonValue({ value: getLocalReleaseBoard(name, numberField(cmd, 'limit') ?? 20) });
     case 'stop':
       client.stop();
 

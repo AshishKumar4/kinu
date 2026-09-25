@@ -117,7 +117,7 @@ describe('Plan mode tool lifecycle', () => {
     await turns.settle({ messageId: 'a-plan', text: 'planned' });
   });
 
-  test('adds submit_plan and mechanically removes release.* without losing ordinary tools', async () => {
+  test('adds submit_plan without losing ordinary tools', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
 
@@ -125,11 +125,9 @@ describe('Plan mode tool lifecycle', () => {
     expect(Object.keys(planTools)).toEqual(expect.arrayContaining([
       'eval', 'shell', 'file', 'agents', 'memory', 'tasks', 'web', 'submit_plan',
     ]));
-    expect(planTools.eval?.description).not.toContain('export declare const release:');
 
     const buildTools = await toolsIn(agent, 'build', 'a-build');
     expect(buildTools.submit_plan).toBeUndefined();
-    expect(buildTools.eval?.description).toContain('export declare const release:');
     expect(buildTools.eval).not.toBe(planTools.eval);
 
     // A programmatic turn with no mode of its own runs in build.
@@ -138,7 +136,6 @@ describe('Plan mode tool lifecycle', () => {
     const { tools: unlabelled } = await turns.prepare({ messages: [{ role: 'user', content: 'a wake with no mode' }] });
     await turns.settle({ messageId: 'a-wake', text: 'done' });
     expect(unlabelled.submit_plan).toBeUndefined();
-    expect(unlabelled.eval?.description).toContain('export declare const release:');
   });
 
   // No additional-agent Plan surface exists (`submitPlan` is root-only; `announceSubordinatePlan` has no

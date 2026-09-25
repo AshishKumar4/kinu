@@ -33,7 +33,6 @@ export const TOOL_REACH = {
   web: { native: true, codemode: 'web', replay: 'safe' },
   report: { native: true, codemode: 'report', replay: 'claimed' },
   // Codemode-only by decision: occasional lanes that do not earn a standing choice.
-  release: { native: false, codemode: 'release', replay: 'claimed' },
   agent: { native: false, codemode: 'agent', replay: 'claimed' },
   // A replayed insert is a second row.
   db: { native: false, codemode: 'db', replay: 'claimed' },
@@ -254,31 +253,6 @@ export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
       ? "memory({action:'remember', key:'deploy.target', value:'staging'})"
       : "memory({action:'save', content:'Staging deploys need the tunnel up first.'})",
   };
-}
-
-// Release: record_* actions only without an execution engine, engine actions only with one.
-// Codemode-only (release/codemode.ts).
-
-const RELEASE_LEDGER_ACTIONS = [
-  'board', 'bind_source', 'create', 'update', 'transition', 'request_approval',
-] as const;
-
-/** Results asserted rather than earned. Only without an execution engine. */
-const RELEASE_RECORD_ACTIONS = ['record_check', 'record_deployment'] as const;
-
-/** Results driven for real in the working copy. Only with an engine. */
-const RELEASE_ENGINE_ACTIONS = ['apply', 'run_checks', 'preview', 'deploy', 'rollback'] as const;
-
-export type ReleaseToolAction =
-  | (typeof RELEASE_LEDGER_ACTIONS)[number]
-  | (typeof RELEASE_RECORD_ACTIONS)[number]
-  | (typeof RELEASE_ENGINE_ACTIONS)[number];
-
-/** The actions a runtime with (or without) an execution engine exposes. */
-export function releaseToolActions(hasEngine: boolean): readonly ReleaseToolAction[] {
-  return hasEngine
-    ? [...RELEASE_LEDGER_ACTIONS, ...RELEASE_ENGINE_ACTIONS]
-    : [...RELEASE_LEDGER_ACTIONS, ...RELEASE_RECORD_ACTIONS];
 }
 
 /**

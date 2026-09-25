@@ -1,19 +1,19 @@
 /**
- * Change-set read model per executor: read-only git diff where a repo exists, else a snapshot
- * baseline manifest (`vfs_baseline_manifest`, bodies by hash in `vfs_baseline_blob`). Reads never mutate the
- * baseline; "mark reviewed" re-baselines.
+ * Change-set read model: the workspace's own plane against a baseline manifest (`vfs_baseline_manifest`, bodies
+ * by hash in `vfs_baseline_blob`); other executors by read-only git diff. Reads never mutate the baseline.
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { RawSqlExec, VfsEntryStat } from '../types/primitives';
+import type { RawSqlExec, VFS, VfsEntryStat } from '../types/primitives';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { diffLines, fileDiff, parseGitDiff, type FileDiff, type FileStatus, type Omitted } from '../vfs/diff';
 import { nanoid } from '../utils/nanoid';
 import * as v from 'valibot';
 import { CommandResultSchema } from '../execution/exec-result';
-import { KinuError, renderThrownChain } from '../obs/index';
+import { KinuError, renderThrownChain, tolerateAsync } from '../obs/index';
 import { sha256Hex } from '../safety/argument-digest';
-import { isSystemManaged } from '../vfs/workspace-path';
+import type { VfsMountRouting } from '../vfs/mounts';
+import { isSystemManaged, LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { unmovedSince } from '../vfs/unmoved';
 
 /** `do.sqlite.row_bytes` caps a body's row, which also holds its 64-hex key. */
@@ -26,6 +26,16 @@ const MAX_CHANGESET_BODY_CHARS = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.va
 const SNAPSHOT_IGNORED_DIRECTORIES = new Set([
   '.git', '.cache', '.mypy_cache', '.pnpm-store', '.pytest_cache', '.venv', '__pycache__', 'node_modules', 'venv',
 ]);
+
+const WORKING_DIRECTORY_NAMES = [WORKSPACE_ROOT, LEGACY_WORKSPACE_ROOT];
+
+const UNREVIEWED_PATHS: ReadonlySet<string> = new Set(WORKING_DIRECTORY_NAMES);
+
+/** Also a manifest row: a generation that holds it walked the plane root, so its slates are already at /slates. */
+const PLANE_ROOT = '/';
+
+/** Under the plane root the change-set reviews every agent's home and the slates, and nothing else (owner, 2026-09-25). */
+const REVIEWED_UNDER_ROOT = ['home', SLATES_ROOT.slice(1)];
 
 const NOT_GIT_REPO = '__KINU_NOT_GIT_REPO__';
 
@@ -90,31 +100,26 @@ async function walkWorkspaceFiles(
   rt: WorkspaceBaselineRuntime,
   visit: (path: string, stat: VfsEntryStat) => void | Promise<void>,
 ): Promise<void> {
-  const directories = [''];
+  const routed: VFS & Partial<Pick<VfsMountRouting, 'mountOf'>> = rt.storage.vfs;
+  const directories = ['', PLANE_ROOT];
 
   for (let next = 0; next < directories.length; next++) {
     const dir = directories[next];
+    const names = await namesIn(rt, dir);
     const children: string[] = [];
-    let names: string[];
 
-    try {
-      names = (await rt.storage.vfs.readdir(dir)).sort();
-    } catch (error) {
-      throw new Error(`Workspace snapshot could not read directory ${JSON.stringify(dir || '.')}`, { cause: error });
-    }
-
-    for (const name of names) {
+    for (const name of names ?? []) {
       if (isSystemManaged(name) || SNAPSHOT_IGNORED_DIRECTORIES.has(name)) continue;
-      const full = dir === '' ? name : `${dir}/${name}`;
-      let st: VfsEntryStat | null;
 
-      try {
-        st = await rt.storage.vfs.stat(full);
-      } catch (error) {
-        throw new Error(`Workspace snapshot could not stat ${JSON.stringify(full)}`, { cause: error });
-      }
+      if (dir === PLANE_ROOT && !REVIEWED_UNDER_ROOT.includes(name)) continue;
+      const full = dir === '' ? name : `${dir === PLANE_ROOT ? '' : dir}/${name}`;
 
-      if (!st) throw new Error(`Workspace changed while snapshotting ${JSON.stringify(full)}`);
+      if (UNREVIEWED_PATHS.has(full) || (routed.mountOf?.(full) ?? null) !== null) continue;
+      const st = await statOf(rt, full);
+
+      if (st === undefined) continue;
+
+      if (st === null) throw new Error(`Workspace changed while snapshotting ${JSON.stringify(full)}`);
 
       if (st.isDir) {
         children.push(full);
@@ -128,21 +133,38 @@ async function walkWorkspaceFiles(
   }
 }
 
+async function namesIn(rt: WorkspaceBaselineRuntime, dir: string): Promise<string[] | undefined> {
+  try {
+    return (await tolerateAsync(() => rt.storage.vfs.readdir(dir), 'eacces'))?.sort();
+  } catch (error) {
+    throw new Error(`Workspace snapshot could not read directory ${JSON.stringify(dir || '.')}`, { cause: error });
+  }
+}
+
+async function statOf(rt: WorkspaceBaselineRuntime, path: string): Promise<VfsEntryStat | null | undefined> {
+  try {
+    return await tolerateAsync(() => rt.storage.vfs.stat(path), 'eacces');
+  } catch (error) {
+    throw new Error(`Workspace snapshot could not stat ${JSON.stringify(path)}`, { cause: error });
+  }
+}
+
 /** A digest of a file's bytes, and the text a line diff shows unless the file is binary (NUL-bearing). */
 interface Contents {
   readonly digest: string;
   readonly text: string | null;
 }
 
-async function contentsOf(rt: WorkspaceBaselineRuntime, path: string): Promise<Contents> {
-  let content: string | Uint8Array;
+async function contentsOf(rt: WorkspaceBaselineRuntime, path: string): Promise<Contents | undefined> {
+  let content: string | Uint8Array | undefined;
 
   try {
-    content = await rt.storage.vfs.readFile(path);
+    content = await tolerateAsync(() => rt.storage.vfs.readFile(path), 'eacces');
   } catch (error) {
     throw new Error(`Workspace snapshot could not read ${JSON.stringify(path)}`, { cause: error });
   }
 
+  if (content === undefined) return undefined;
   const bytes = content instanceof Uint8Array ? content : new TextEncoder().encode(content);
 
   return { digest: sha256Hex(bytes), text: bytes.includes(0) ? null : new TextDecoder().decode(bytes) };
@@ -165,13 +187,25 @@ function activeManifest(rt: WorkspaceBaselineRuntime): BaselineManifest | null {
 
   const entries = new Map<string, ManifestEntry>();
   let marker: { readonly capturedAt: number; readonly generation: string } | null = null;
+  let planeWalked = false;
 
   for (const row of rows) {
     if (row.path === '') marker = { capturedAt: row.mtime_ms, generation: row.generation };
+    else if (row.path === PLANE_ROOT) planeWalked = true;
     else entries.set(row.path, { size: row.size, mtimeMs: row.mtime_ms, hash: row.hash });
   }
 
-  return marker === null ? null : { ...marker, entries };
+  if (marker === null) return null;
+
+  return { ...marker, entries: planeWalked ? entries : slatesMovedToRoot(entries) };
+}
+
+function slatesMovedToRoot(entries: Map<string, ManifestEntry>): Map<string, ManifestEntry> {
+  const moved = new Map<string, ManifestEntry>();
+
+  for (const [path, entry] of entries) moved.set(path.startsWith('slates/') ? `${SLATES_ROOT}/${path.slice('slates/'.length)}` : path, entry);
+
+  return moved;
 }
 
 /** A file's text as `generation` holds it: null past one row, or for a binary file, which has no body. */
@@ -236,6 +270,8 @@ export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime): Promise<Wo
 
     if (base !== undefined && unmovedSince(base, manifest.capturedAt, st)) return;
     const now = st.size > BODY_MAX_BYTES ? null : await contentsOf(rt, path);
+
+    if (now === undefined) return;
     const after = now?.text ?? null;
 
     if (base === undefined) {
@@ -297,8 +333,11 @@ async function capture(rt: WorkspaceBaselineRuntime, held: BaselineManifest | nu
 
   try {
     // The marker makes an intentionally empty snapshot representable.
-    void rt.storage.sql`INSERT INTO vfs_baseline_manifest (actor_id, generation, path, size, mtime_ms, hash, active)
-      VALUES (${actorId}, ${generation}, ${''}, ${0}, ${capturedAt}, ${null}, ${0})`;
+    for (const marker of ['', PLANE_ROOT]) {
+      void rt.storage.sql`INSERT INTO vfs_baseline_manifest (actor_id, generation, path, size, mtime_ms, hash, active)
+        VALUES (${actorId}, ${generation}, ${marker}, ${0}, ${capturedAt}, ${null}, ${0})`;
+    }
+
     await walkWorkspaceFiles(rt, async (path, st) => {
       const kept = held?.entries.get(path);
       let entry: ManifestEntry = { size: st.size, mtimeMs: st.mtimeMs, hash: null };
@@ -306,8 +345,10 @@ async function capture(rt: WorkspaceBaselineRuntime, held: BaselineManifest | nu
       if (kept !== undefined && held !== null && unmovedSince(kept, held.capturedAt, st)) {
         entry = kept;
       } else if (st.size <= BODY_MAX_BYTES) {
-        const { digest, text } = await contentsOf(rt, path);
+        const contents = await contentsOf(rt, path);
 
+        if (contents === undefined) return;
+        const { digest, text } = contents;
         entry = { ...entry, hash: digest };
 
         if (text !== null) void rt.storage.sql`INSERT OR IGNORE INTO vfs_baseline_blob (hash, content) VALUES (${digest}, ${text})`;
@@ -406,14 +447,6 @@ async function getGitDiff(rt: AgentRuntime, executorId: string): Promise<Executo
 
 export async function getExecutorDiff(rt: AgentRuntime, executorId: string): Promise<ExecutorDiffResult> {
   if (executorId === 'workspace') {
-    const provider = rt.executionRouter?.getProvider('workspace');
-
-    if (provider?.tools.exec && provider.capabilities.has('git')) {
-      const git = await getGitDiff(rt, 'workspace');
-
-      if (!git.notGitRepo) return git;
-    }
-
     const r = await getWorkspaceDiff(rt);
 
     return { files: r.files, mode: 'vfs-baseline', trackedSince: r.trackedSince, baseline: r.baseline };

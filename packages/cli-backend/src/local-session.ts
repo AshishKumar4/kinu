@@ -30,7 +30,7 @@ import type {
   AgentsSwarmDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps,
   MissingCapability, DynamicApproval,
   RunEvent, RunEventInput, RunEventQuery,
-  ReleaseStore, ReleaseToolDeps, BuiltinToolName,
+  BuiltinToolName,
   FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   CheckpointAvailability,
   WorkMode, JsonValue, SessionHistory,
@@ -87,7 +87,7 @@ import { TierIdSchema,
   ADVISOR_LANE_FIBER, reviewRecordedTurn,
   advisorWorkspaceGuidance,
   createDefaultWebSearchProvider, createWebCodemodeProvider, REAL_CLOCK, type Clock, type WebSearchProvider,
-  createAgentsCodemodeProvider, createReleaseCodemodeProvider, createStateCodemodeProvider,
+  createAgentsCodemodeProvider, createStateCodemodeProvider,
   type CodemodeProvider,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider,
   createReportCodemodeProvider, REPORT_TOOL, type ReportToolDeps,
@@ -95,7 +95,6 @@ import { TierIdSchema,
   DynamicContextLedger, renderUnverifiedInstructions,
   observeSystemPromptHash,
   type DynamicContext,
-  createReleaseStore, initReleaseTables, releaseSqlFromExec,
   initWorkspaceBaselineTable, initWorkspaceSchema, initPendingSendTables, PendingSendStore,
   InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
@@ -429,7 +428,6 @@ export class LocalAgentSession {
     () => currentOperationProfile(this.rt.actor)?.runId ?? this.chat.currentRunId ?? WORKSPACE_RUN_ID,
   );
   private readonly triggerRegistry: TriggerRegistry;
-  private readonly releases: ReleaseStore;
   private _webSearchProvider: WebSearchProvider | null = null;
   private _planActions: PlanReviewActions | null = null;
   private alarmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -558,13 +556,6 @@ export class LocalAgentSession {
     this.factsStore = stores.facts;
     this.eventRecorder = stores.eventRecorder;
 
-    // The release board is local-only; on cf it lives in UserDO (core/conformance/manifest.ts).
-    initReleaseTables(hubSql);
-    this.releases = createReleaseStore(releaseSqlFromExec(hubSql), {
-      validateAgentName: (name) => {
-        if (!/^[A-Za-z0-9_-]{1,80}$/.test(name)) throw new Error('invalid agent name');
-      },
-    });
     this.actorHost = opts.hosted?.host ?? this.buildOwnActorHost(hubSql);
 
     const alarmScheduler: AlarmScheduler = {
@@ -2203,19 +2194,6 @@ export class LocalAgentSession {
     }
   }
 
-  private releaseToolDeps(): ReleaseToolDeps {
-    return {
-      board: async () => this.releases.board(this.agentName(), 20),
-      bindSource: async (input) => this.releases.upsertSourceBinding(input),
-      create: async (input) => this.releases.createChange(this.agentName(), input),
-      update: async (changeId, patch) => this.releases.updateChange(changeId, patch),
-      transition: async (changeId, status) => this.releases.transitionChange(changeId, status),
-      recordCheck: async (changeId, input) => this.releases.recordCheck(changeId, input),
-      requestApproval: async (changeId, approvalType) => this.releases.requestApproval(changeId, approvalType),
-      recordDeployment: async (changeId, input) => this.releases.recordDeployment(changeId, input),
-    };
-  }
-
   /** Key-less by default (DuckDuckGo + local HTML→markdown); a stored `tavily` credential upgrades search. */
   private getWebSearchProvider(): WebSearchProvider {
     if (this._webSearchProvider) return this._webSearchProvider;
@@ -2764,8 +2742,7 @@ export class LocalAgentSession {
     this.cachedModelSpec = null;
   }
 
-  /** One list for both the turn resolver and the tool builder, so they cannot disagree.
-   *  `release` is build-mode only. */
+  /** One list for both the turn resolver and the tool builder, so they cannot disagree. */
   private codemodeProviders(mode: WorkMode): CodemodeProvider[] {
     const report = this.reportGateOpen() ? this.reportDeps : null;
 
@@ -2796,7 +2773,6 @@ export class LocalAgentSession {
         this.config,
         agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null),
       ),
-      ...(mode === 'build' ? [createReleaseCodemodeProvider(() => this.releaseToolDeps())] : []),
       // Same gate as the native `report` tool.
       ...(report ? [createReportCodemodeProvider(() => report)] : []),
     ];

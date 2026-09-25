@@ -126,8 +126,6 @@ import {
   headStatusUnsettled, storedHeadReportStatus,
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
-  type ReleaseStatus, type ReleaseToolDeps, type ReleaseLedger,
-  ReleaseEngine, createSandboxReleaseExec,
   readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
@@ -195,7 +193,7 @@ import {
   type WorkMode,
   resolveModelRoute,
   WORKSPACE_RUN_ID,
-  buildWorkspaceOverview, recoveryBackoffMs, type WorkspaceOverview, type ReleaseBoard,
+  buildWorkspaceOverview, recoveryBackoffMs, type WorkspaceOverview,
   projectJsonValue,
   type AgentSignal,
 } from "@kinu.run/core";
@@ -212,7 +210,6 @@ import { recordJobSettled, recordSandboxRecovery, type AgentKind } from "@kinu.r
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
 import {
   agentSelfHost, createAgentSelfProvider,
-  createReleaseCodemodeProvider,
   DeviceConsentRegistry, DeviceConsentStore,
   type DeviceConsentAnswer, type DeviceConsentDecision,
   type DeviceConsentRequest, type PendingDeviceConsent,
@@ -360,11 +357,38 @@ function clampLimit(requested: number | undefined, max: number): number {
   return Math.min(Math.max(Math.floor(requested), 1), max);
 }
 
+/** agents 0.22 reads this key back at start when `ctx.id` has no name. */
+const PERSISTED_NAME_KEY = '__ps_name';
+
 export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
+  private readonly addressedName: string;
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
+    const name = ctx.id.name ?? this.recordedName();
+
+    if (name === undefined) {
+      throw new Error('This workspace object was reached by id before any named start recorded its name; address it by name.');
+    }
+
+    this.addressedName = name;
     sealRpcSurface(this, ORCHESTRATOR_RPC_SURFACE);
+  }
+
+  /** Nimbus enters by `idFromString`, and the platform fixes `ctx.id` for the activation, so it has no name. */
+  private recordedName(): string | undefined {
+    if (!tableExists(this.boundSql, 'workspace_identity')) return undefined;
+    const name = this.sql<{ name: string }>`SELECT name FROM workspace_identity LIMIT 1`[0]?.name;
+
+    if (name !== undefined && this.ctx.storage.kv.get(PERSISTED_NAME_KEY) !== name) {
+      this.ctx.storage.kv.put(PERSISTED_NAME_KEY, name);
+    }
+
+    return name;
+  }
+
+  override get name(): string {
+    return this.addressedName;
   }
 
   protected actorKind(): AgentKind {
@@ -460,10 +484,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Pid, writer incarnation and lease owner are stamped by the supervisor entrypoint, never the
-   * facet. Answers under every name (Nimbus siblings like `nbf:npm-resolve-fanout:<doId>:<n>`),
-   * bypassing the `onStart` lifecycle gate. Not `@callable`: `sealRpcSurface` keeps it off the
-   * public transport, since a browser could otherwise run any op under any pid.
+   * Pid, writer incarnation and lease owner are stamped by the supervisor entrypoint, never the facet. Skips
+   * `onStart`. Not `@callable`: a browser could otherwise run any op under any pid.
    */
   async supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult> {
     return await this.hostedWorkspace().supervisorOp(envelope);
@@ -1848,107 +1870,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** release.* is built once per DO lifetime and cannot re-check ownership per call, so an unclaimed
-   *  workspace gets deps that all reject with the same reason. */
-  private unclaimedReleaseDeps(): ReleaseToolDeps {
-    const reject = async (): Promise<never> => {
-      throw new Error('This agent has no owner yet, so there is no release lane to reach. Open it through the authenticated app or CLI first.');
-    };
-
-    return {
-      board: reject, bindSource: reject, create: reject, update: reject,
-      transition: reject, recordCheck: reject, requestApproval: reject, recordDeployment: reject,
-    };
-  }
-
-  private releaseLedgerWrites(): Omit<ReleaseLedger, 'detail'> {
-    return {
-      update: async (changeId, patch) => {
-        const { stub, caller } = await this.userHub();
-
-        return stub.updateReleaseChange(caller, changeId, patch);
-      },
-      transition: async (changeId, to) => {
-        const { stub, caller } = await this.userHub();
-
-        return stub.transitionReleaseChange(caller, changeId, to);
-      },
-      recordCheck: async (changeId, input) => {
-        const { stub, caller } = await this.userHub();
-
-        return stub.recordReleaseCheck(caller, changeId, input);
-      },
-      recordDeployment: async (changeId, input) => {
-        const { stub, caller } = await this.userHub();
-
-        return stub.recordReleaseDeployment(caller, changeId, input);
-      },
-    };
-  }
-
-  private getReleaseToolDeps(): ReleaseToolDeps | undefined {
-    if (!this.getOwnerUserDO()) return undefined;
-    const hub = () => this.userHub();
-
-    return {
-      ...this.releaseLedgerWrites(),
-      board: async () => {
-        const { stub, caller } = await hub();
-
-        return stub.getReleaseBoard(caller, this.name, 20);
-      },
-      bindSource: async (input) => {
-        const { stub, caller } = await hub();
-
-        return stub.upsertReleaseSource(caller, input);
-      },
-      create: async (input) => {
-        const { stub, caller } = await hub();
-
-        return stub.createReleaseChange(caller, this.name, input);
-      },
-      requestApproval: async (changeId, approvalType) => {
-        const { stub, caller } = await hub();
-
-        return stub.requestReleaseApproval(caller, changeId, approvalType);
-      },
-      engine: this.getReleaseEngine(),
-    };
-  }
-
-  private _releaseEngine: ReleaseEngine | null = null;
-  private getReleaseEngine(): ReleaseEngine {
-    if (this._releaseEngine) return this._releaseEngine;
-    const handle = this.rt.sandboxHandle;
-    const provider = this.rt.executionRouter?.getProvider('sandbox');
-    const hub = () => this.userHub();
-    this._releaseEngine = new ReleaseEngine({
-      exec: handle && provider ? createSandboxReleaseExec(handle, provider) : null,
-      signal: () => this.currentTurnSignal(),
-      ledger: {
-        ...this.releaseLedgerWrites(),
-        detail: async (changeId) => {
-          const { stub, caller } = await hub();
-
-          return stub.getReleaseDetail(caller, changeId);
-        },
-      },
-      // A stored `github` credential authorizes clone/push for github source bindings; null otherwise.
-      gitHubAuth: async () => {
-        const { stub, caller } = await this.userHub();
-        const headers = await stub.getAuthHeaders(caller, 'github');
-
-        return headers?.Authorization ?? null;
-      },
-    });
-
-    return this._releaseEngine;
-  }
-
   protected actorToolDeps(): ActorToolDeps {
     return {
       ...this.teamProfile(),
-      releases: this.getReleaseToolDeps(),
       peers: this.getPeersToolDeps(),
       submitPlan: { submit: (edits) => this.submitPlanEdits(edits) },
     };
@@ -1973,7 +1897,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
         armCompactNow: () => { this.compactionState.armForceCompaction(this.name); },
       })),
-      createReleaseCodemodeProvider(() => this.getReleaseToolDeps() ?? this.unclaimedReleaseDeps()),
     ];
   }
 
@@ -3087,43 +3010,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  @callable()
-  async getReleaseBoard(limit = 20) {
-    const { stub, caller } = await this.userHub();
-
-    return stub.getReleaseBoard(caller, this.name, limit);
-  }
-
-  @callable()
-  async createReleaseChange(input: { bindingId: string; userPrompt: string; plan?: string | null }) {
-    const { stub, caller } = await this.userHub();
-
-    return stub.createReleaseChange(caller, this.name, input);
-  }
-
-  async transitionReleaseChange(changeId: string, status: ReleaseStatus) {
-    const { stub, caller } = await this.userHub();
-
-    return stub.transitionReleaseChange(caller, changeId, status);
-  }
-
-  @callable()
-  async decideReleaseApproval(approvalId: string, decision: 'approved' | 'rejected', note?: string | null) {
-    const { stub, caller } = await this.userHub();
-
-    const decided = await stub.decideReleaseApproval(caller, {
-      approvalId, decision, approvedBy: this.getOwnerUserId() ?? this.name, note,
-    });
-
-    // Refusing a rollback leaves the change deployed (`deployed -> rejected` is illegal); refusing any
-    // other approval rejects the change.
-    if (decision === 'rejected' && decided.approvalType !== 'rollback') {
-      await stub.transitionReleaseChange(caller, decided.changeId, 'rejected');
-    }
-
-    return decided;
-  }
-
   async getAgentStatus() {
     const profile = this.resolvedTurnProfile();
 
@@ -3200,21 +3086,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return readRecordCell(this.boundSql, this.actorHandle(), request, { cursor: request.cursor ?? null, limit: request.limit });
   }
 
-  /**
-   * Host-owned: SLATE_READ_MODELS excludes this queue so a preview cannot counterfeit approvals.
-   * Only an unclaimed workspace yields no approvals; other read failures must throw, never look empty.
-   */
+  /** Host-owned: SLATE_READ_MODELS excludes this queue so a preview cannot counterfeit approvals. */
   @callable() async listPendingActions(): Promise<PendingAction[]> {
-    return this.pendingActions(this.getOwnerUserId() ? await this.getReleaseBoard(20) : null);
+    return this.pendingActions();
   }
 
-  private pendingActions(board: ReleaseBoard | null): PendingAction[] {
+  private pendingActions(): PendingAction[] {
     // The queue row needs the unseen count, newest time, and how many entries offer keep/revert.
     const unseen = getUnseenChangelog(this.boundSql, this.rt.actor);
 
     return buildPendingActions({
-      approvals: board?.approvals ?? [],
-      changes: board?.changes ?? [],
       scaffoldVersions: listScaffoldVersions(this.boundSql, this.rt.actor, 20),
       deferredActions: this.deferrals.list(),
       unseenChanges: {
@@ -4050,7 +3931,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       getHeadRuns: () => this.getHeadRuns(),
       getMctsTree: () => this.getMctsTree(),
       getOutcomeCalibration: () => this.getOutcomeCalibration(),
-      getReleaseBoard: () => this.getReleaseBoard(),
       getRunTimeline: () => this.getRunTimeline(),
       getToolDescriptions: () => this.getToolDescriptions(),
       getWorkspaceSnapshot: () => this.getWorkspaceSnapshot(),
@@ -4391,9 +4271,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Asks each lane's own read path at limit 1, since presence is a boolean. */
   @callable() async getWorkspaceTabPresence(): Promise<TabPresence> {
-    // Same owner guard as `listPendingActions`: no owner means no release lane.
-    const board = this.getOwnerUserId() ? await this.getReleaseBoard(1) : null;
-
     // Same reads the Work tab mounts. A live turn is not content: streaming with
     // nothing renderable keeps the tab hidden.
     const [pendingActions, jobs, workspaceWork, changelog, memoryContent] = await Promise.all([
@@ -4409,7 +4286,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         work: workspaceWork, pending: pendingActions, jobs,
         changes: changelog.entries, notes: parseMemoryNotes(memoryContent ?? ''),
       }),
-      releases: (board?.changes.length ?? 0) > 0,
       explorations: listForkRuns(this.boundSql, this.actorHandle(), null, 1).items.length > 0,
     };
   }
@@ -4493,7 +4369,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { recovered: 'requeued' };
   }
 
-  /** The owner's object adds its release approvals. Reads `hosted`, never `acquire`. */
+  /** Reads `hosted`, never `acquire`. */
   async foldOverview(): Promise<WorkspaceOverview> {
     const [pendingConsents, activePlan, listing] = await Promise.all([
       this.listPendingConsents(),
@@ -4512,7 +4388,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // A settled turn's leftovers still closing are its work, not a durable leftover.
       working: this._inFlight || hostedBusy || this.terminalClosing,
       unfinished: this.owedUntimedWork() || this.workOwedAt() !== null,
-      pendingActions: this.pendingActions(null),
+      pendingActions: this.pendingActions(),
       pendingConsents,
       activePlan,
       scaffoldAutoApply: this.config.getAutoPromoteScaffold(),

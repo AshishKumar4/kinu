@@ -575,13 +575,6 @@
       "decision": "protected"
     },
     {
-      "file": "packages/core/tests/unit-release-engine.test.ts",
-      "kind": "regex-literal",
-      "owner": "reset",
-      "sourceSha256": "14dc5f92c09b35388294d1380626edaafdbe1e4faf8b76e9f7d2fd965838fb5c",
-      "decision": "lexical"
-    },
-    {
       "file": "packages/core/tests/unit-volatile-context.test.ts",
       "kind": "regex-literal",
       "owner": "BLOCK_OPEN",

@@ -3,22 +3,28 @@
  * The proofs behind the test census lock. A locked tautology suspect is a relational check
  * (`f(a) !== f(b)`, `f(x) === f(x)`) kept because it is the honest form of a determinism or
  * sensitivity test; its entry names the plants that show it catches something. Each plant is a
- * defect in the code the test covers, and this program runs the test by its title three ways: as
- * the tree holds it (green), under each plant (red), and restored.
+ * defect in the code the test covers, and this program runs the test by its title as the tree holds
+ * it (green) and under each plant (red). A plant is served to that test's process alone
+ * (`census-plant-preload.ts`) and never written into the tree: written there, it reached every gate
+ * running beside the proof, and reloaded the live-app tier's pages mid-row (deploy 3, 2026-09-25).
  *
  * A plant whose `from` text no longer occurs exactly once is stale and fails, so a refactor of the
  * planted code forces the proof to be re-made rather than silently skipped.
  *
- * Its ladder row is keyed by the lock, each planted file, and each planted test with the module
- * graph it runs (`plantedInputs`).
+ * Its ladder row is keyed by the lock, the preload, each planted file, and each planted test with
+ * the module graph it runs (`plantedInputs`).
  */
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import * as v from 'valibot';
 
 const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = 'scripts/test-census.lock.json';
+
+/** Loads a plant into the one test process it is proven in. */
+const PLANT_PRELOAD = 'scripts/census-plant-preload.ts';
 
 const PlantSchema = v.object({
   defect: v.string(),
@@ -59,22 +65,37 @@ const plantedUnder = (lock: CensusLock, under: ProofRoot): CensusLock['entries']
   lock.entries.filter((entry) => (entry.plants ?? []).length > 0 && keyedTest(entry.key).file.startsWith(under));
 
 /** What one root's proofs run and read: each planted test, as a suite whose graph is walked, and
- *  the lock with each planted file, read by path. */
+ *  the lock, the preload and each planted file, read by path. */
 export function plantedInputs(lock: CensusLock, under: ProofRoot) {
   const entries = plantedUnder(lock, under);
 
   return {
     suites: [...new Set(entries.map((entry) => keyedTest(entry.key).file))].sort(),
-    reads: [...new Set([LOCK, ...entries.flatMap((entry) => (entry.plants ?? []).map((plant) => plant.file))])].sort(),
+    reads: [...new Set([LOCK, PLANT_PRELOAD, ...entries.flatMap((entry) => (entry.plants ?? []).map((plant) => plant.file))])].sort(),
   };
 }
 
-/** Whether the named test failed in one `bun test` run of its file. */
-function failed(file: string, title: string): boolean {
-  const run = Bun.spawnSync(['bun', 'test', '--timeout=0', file, '-t', title.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')], { cwd: root });
+/** Whether the named test failed in one `bun test` run of its file; `preload` and `env` go to that run. */
+function failed(file: string, title: string, preload: readonly string[] = [], env: Record<string, string | undefined> = process.env): boolean {
+  const run = Bun.spawnSync(['bun', 'test', '--timeout=0', ...preload, file, '-t', title.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')], { cwd: root, env });
 
   return `${run.stdout.toString()}${run.stderr.toString()}`.split('\n')
     .some((line) => line.startsWith('(fail)') && line.includes(title));
+}
+
+/** Whether the named test failed with `source` loaded in place of the tree's file at `path`, which stays as it is. */
+export function failedPlanted(file: string, title: string, path: string, source: string): boolean {
+  const scratch = mkdtempSync(join(tmpdir(), 'kinu-census-plant-'));
+
+  try {
+    const planted = join(scratch, basename(path));
+    writeFileSync(planted, source);
+
+    return failed(file, title, ['--preload', join(root, PLANT_PRELOAD)],
+      { ...process.env, KINU_CENSUS_PLANT_FILE: path, KINU_CENSUS_PLANT_SOURCE: planted });
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 function prove(lock: CensusLock, under: ProofRoot): number {
@@ -105,14 +126,7 @@ function prove(lock: CensusLock, under: ProofRoot): number {
         continue;
       }
 
-      writeFileSync(path, plant.edits.reduce((text, [from, to]) => text.replace(from, () => to), original));
-      let red: boolean;
-
-      try {
-        red = failed(file, title);
-      } finally {
-        writeFileSync(path, original);
-      }
+      const red = failedPlanted(file, title, path, plant.edits.reduce((text, [from, to]) => text.replace(from, () => to), original));
 
       console.log(`census-plants: ${red ? 'red     ' : 'GREEN   '} ${plant.defect} -> ${file} :: ${title}`);
 

@@ -24,7 +24,6 @@ import {
   getLocalGepaRun,
   getLocalMctsNode,
   getLocalActorInfo,
-  getLocalReleaseBoard,
   listLocalActors,
   listLocalEvents,
   listLocalExecutors,
@@ -526,18 +525,6 @@ export async function alignmentCommand(name: string, opts: InspectOpts = {}): Pr
   console.log(renderAlignmentConvergence(data));
   console.log('');
   console.log(renderCalibrationReport(calibration));
-}
-
-export async function releaseCommand(name: string, opts: InspectOpts = {}): Promise<void> {
-  const target = resolveAgentTarget(name);
-  const limit = parseLimit(opts.limit, 20);
-
-  const data = await readTarget(target, {
-    cloud: (auth) => cloudRead(auth, target, 'getReleaseBoard', [limit]),
-    local: () => decodeJsonValue({ value: getLocalReleaseBoard(target.localName, limit) }),
-  });
-
-  printData(data, opts);
 }
 
 export async function webhookCommand(name: string, label: string | undefined, opts: InspectOpts & {

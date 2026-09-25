@@ -67,7 +67,7 @@ export function SlateFallbackFrame({ rpc }: { rpc: Rpc }) {
           onRefreshJobs={() => {}}
           pendingActions={[]}
           slates={slates}
-          tabPresence={{ releases: true, explorations: true, work: true }}
+          tabPresence={{ explorations: true, work: true }}
           rpc={frameRpc}
         />
       </div>

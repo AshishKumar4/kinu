@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { WorkspacePlanReferenceSchema, JsonValueSchema, type JsonValue, type PlanReview, type SlateSummary } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { ExecutorInfo, Rpc } from '@kinu.run/core';
+import { INSPECTOR_DEFAULT_PX } from '@kinu.run/core/web/inspector-layout';
 import { useKinu, WorkspacePlanUpdatedFrameSchema } from '@/hooks/use-kinu';
 import { galleryServerPush } from '@/gallery-agent-stub';
 import type { SurfaceKind } from '@kinu.run/core';
@@ -75,6 +76,7 @@ export function PreviewTabsGallery() {
   const [broken, setBroken] = useState(false);
   const [machine, setMachine] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [narrow, setNarrow] = useState(false);
   const keptNotes = useRef<JsonValue[]>([]);
   const brokenReads = useRef(0);
   const [failHistory, setFailHistory] = useState(false);
@@ -178,12 +180,13 @@ export function PreviewTabsGallery() {
       <button data-revert-diff onClick={() => setEdited(null)}>Revert file</button>
       <button data-break-diff onClick={() => setBroken(true)}>Break read</button>
       <button data-add-machine onClick={() => setMachine(true)}>Connect a machine</button>
+      <button data-narrow-pane onClick={() => setNarrow(on => !on)}>Narrow pane</button>
       <button data-sandbox-starting onClick={() => setStarting(on => !on)}>Sandbox starting</button>
       <button data-notify-plan onClick={() => notify(ARRIVAL_REFERENCE)}>Notify courier plan</button>
       <button data-notify-stale onClick={() => notify(STALE_REFERENCE)}>Notify stale plan</button>
       <button data-notify-malformed onClick={() => notify(MALFORMED_REFERENCE)}>Notify malformed plan</button>
     </div>
-    <div data-preview-surface className="flex-1 min-h-0">
+    <div data-preview-surface className="flex-1 min-h-0" style={narrow ? { width: INSPECTOR_DEFAULT_PX } : undefined}>
       <WorkSurface planRpc={owner === "main" ? rpc : workerRpc} planOwner={owner} onReviewActor={setOwner} surface={surface} onSurface={setSurface} previewFocus={focus} planFocus={planFocus}
         workspacePlanArrival={workspacePlanArrival}
         pinnedPorts={[{ executor: 'workspace', port: 8789, url: SLATE_GALLERY_URL, name: 'Duplicate dashboard port' }, { executor: 'sandbox', port: 8080, url: SANDBOX_URL, name: 'Sandbox app' }, { executor: 'device', port: 3000, url: DEVICE_URL, name: 'Device app' }]}
@@ -191,7 +194,7 @@ export function PreviewTabsGallery() {
         previewError={null} previewStarting={starting ? ['sandbox'] : []} onRefreshPorts={NOTHING} plan={owner === "main" ? plan : workerPlan} snapshot={{ status: 'loading' }} onRetryLoad={NOTHING}
         tools={[]} memory={[]} memoryContent="" onSearchMemory={NOTHING} mctsTrees={new Map()} headActivity={new Map()} isStreaming={false}
         executors={machine ? [MACHINE] : []} executorOutputs={new Map()} onExecute={async () => ({})} backgroundJobs={[]} onRefreshJobs={NOTHING} pendingActions={[]}
-        tabPresence={{ releases: false, explorations: false, work: true }} rpc={rpc} />
+        tabPresence={{ explorations: false, work: true }} rpc={rpc} />
     </div>
   </div>;
 }

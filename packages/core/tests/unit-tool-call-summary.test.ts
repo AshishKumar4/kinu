@@ -117,24 +117,8 @@ describe('tool call summaries — builtins', () => {
     expect(describeToolCall('agents', { action: 'hire', agent: 'scout' })).toBe('Asked scout');
   });
 
-  test('release distinguishes its thirteen actions', () => {
-    expect(summarizeToolCall('release', { action: 'create', userPrompt: 'dark mode toggle' }))
-      .toBe('create — "dark mode toggle"');
-    expect(summarizeToolCall('release', { action: 'run_checks', checks: [{ name: 'build' }, { name: 'test' }] }))
-      .toBe('run_checks — build, test');
-    expect(summarizeToolCall('release', { action: 'transition', changeId: 'abcdef1234', status: 'deployed' }))
-      .toBe('transition abcdef12 → deployed');
-    expect(summarizeToolCall('release', { action: 'deploy', changeId: 'abcdef1234', deployment: { environment: 'staging' } }))
-      .toBe('deploy abcdef12 staging');
-    expect(summarizeToolCall('release', { action: 'preview', changeId: 'abcdef1234', port: 3000 }))
-      .toBe('preview abcdef12 :3000');
-    expect(summarizeToolCall('release', { action: 'board' })).toBe('board');
-  });
-
   test('retired tool names still render, so stored transcripts do not degrade', () => {
     // Persisted transcripts carry these names; each must keep summarizing.
-    expect(summarizeToolCall('product_change', { action: 'create', userPrompt: 'dark mode toggle' }))
-      .toBe('create — "dark mode toggle"');
     expect(summarizeToolCall('think', { task: 'compare the two designs' })).not.toBe('');
     expect(summarizeToolCall('web_search', { query: 'valibot strict object' })).not.toBe('');
   });

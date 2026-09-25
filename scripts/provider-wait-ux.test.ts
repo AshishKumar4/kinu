@@ -25,15 +25,16 @@ test('a turn sleeping out a provider wait says who it is waiting on, not working
 
     if (chip === null) throw new Error("no provider-wait chip in the workspace header");
 
-    const indicator = await chip.evaluate((el) => el.textContent ?? '');
+    // The frame's wait ends 45 s after it renders and the chip counts down, so a loaded
+    // machine reads 44s or less. Text and title are read together so no tick falls between.
+    const { text, title } = await chip.evaluate((el) => ({ text: el.textContent ?? '', title: el.getAttribute('title') }));
+    const said = 'waiting on anthropic · ';
+    const left = Number(text.slice(said.length, -1));
 
-    expect(indicator).toContain('waiting on anthropic');
-    expect(indicator).toContain('45s');
-    expect(indicator).not.toContain('working');
-
-    const chipTitle = await chip.evaluate((el) => el.getAttribute('title'));
-
-    expect(chipTitle).toBe('Retry in 45s');
+    expect(text).toBe(`${said}${String(left)}s`);
+    expect(left).toBeGreaterThan(0);
+    expect(left).toBeLessThanOrEqual(45);
+    expect(title).toBe(`Retry in ${String(left)}s`);
 
     await page.close();
   });

@@ -7,7 +7,6 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { ChangesPanel } from "./changes/ChangesPanel";
 import { NotesProvider, type NotesStore } from "./changes/notes-provider";
-import { ReviewSheet } from "./changes/ReviewSheet";
 
 function changeSetOf(source: string, result: ExecutorDiffResult): ChangeSet {
   const error = result.error ?? (result.notGitRepo === true ? "Its folder is not a git repository, so there is nothing to compare." : undefined);
@@ -101,7 +100,6 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
   const [reviewed, setReviewed] = useState<Reviewed | null>(null);
   const [undoable, setUndoable] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const [sheet, setSheet] = useState<{ readonly file: string | null; readonly notes?: boolean } | null>(null);
 
   // Executor status arrives after mount: follow the default until the reader picks a source.
   useEffect(() => {
@@ -112,7 +110,6 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
     if (focus === null) return;
     picked.current = true;
     setSource(focus.source);
-    setSheet({ file: focus.path });
   }, [focus]);
 
   const load = useCallback(async (): Promise<Read> => {
@@ -163,7 +160,6 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
   const markReviewed = async (): Promise<void> => {
     const at = Date.now();
     setFailure(null);
-    setSheet(null);
     setReviewed({ at, on: null });
 
     try {
@@ -202,9 +198,7 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
     return resource.status === "error" ? <div className="p-4"><LoadFailure what="the change-set" message={resource.message} onRetry={reload} /></div> : null;
   }
 
-  const openInFiles = shown.mode === "vfs-baseline"
-    ? (path: string): void => { setSheet(null); onOpenFile(workspacePath(path)); }
-    : null;
+  const openInFiles = shown.mode === "vfs-baseline" ? (path: string): void => onOpenFile(workspacePath(path)) : null;
 
   const now = Date.now();
 
@@ -214,14 +208,11 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
         {failure !== null && <p role="alert" className="mx-3 mt-3 rounded-md px-3 py-2 text-xs p-notice-danger">{failure}</p>}
         {resource.status === "error" && <LoadFailure what="the latest change-set" message={resource.message} onRetry={reload} className="mx-3 mt-3" />}
         <div className="min-h-0 flex-1">
-          <ChangesPanel sets={sets} source={shown.source} onSource={(next) => { picked.current = true; setSource(next); }} now={now}
+          <ChangesPanel key={focus?.nonce ?? 0} file={focus?.path ?? null} sets={sets} source={shown.source}
+            onSource={(next) => { picked.current = true; setSource(next); }} now={now}
             reviewedAt={reviewedAt} onReviewed={() => void markReviewed()} onUndo={undoable ? () => void undoReviewed() : null}
-            onExpand={(file) => setSheet({ file })} onOpenInFiles={openInFiles} onShowNotes={() => setSheet({ file: null, notes: true })} />
+            onOpenInFiles={openInFiles} />
         </div>
-        {sheet !== null && (
-          <ReviewSheet set={shown} now={now} file={sheet.file} annotationsOpen={sheet.notes === true} onClose={() => setSheet(null)}
-            onReviewed={() => void markReviewed()} onOpenInFiles={openInFiles} />
-        )}
       </div>
     </NotesProvider>
   );

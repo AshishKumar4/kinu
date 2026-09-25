@@ -30,8 +30,8 @@ describe('buildWorkspaceOverview', () => {
     const overview = buildWorkspaceOverview({
       ...EMPTY,
       pendingActions: [
-        action('release_approval'),
         action('deferred_action'),
+        action('plan_review'),
         action('unseen_changes'),
         action('curriculum_task'),
       ],
@@ -97,7 +97,7 @@ describe('rosterHeadline', () => {
   const headline = (tile: WorkspaceOverview) => rosterHeadline(tile, tile.decisionsWaiting);
 
   test('a waiting decision outranks live work, and its count rides the label', () => {
-    expect(headline(buildWorkspaceOverview({ ...EMPTY, working: true, pendingActions: [action('release_approval')] })))
+    expect(headline(buildWorkspaceOverview({ ...EMPTY, working: true, pendingActions: [action('deferred_action')] })))
       .toEqual({ label: 'Needs you · 1', status: 'needs' });
   });
 

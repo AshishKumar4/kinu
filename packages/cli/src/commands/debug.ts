@@ -26,7 +26,7 @@ import {
   getLocalScaffoldVersions, listLocalGepaRuns, listLocalHeads, listLocalJobs,
   listLocalMcts, listLocalMctsSearchRuns, listLocalRecordCells, listLocalRecordObjectives,
   listLocalRunEvents, listLocalRuns, listLocalTriggers, readLocalMemory, readLocalRecordCell,
-  getLocalReleaseBoard, getLocalToolSurface,
+  getLocalToolSurface,
 } from '../local-inspection';
 
 interface DebugOpts {
@@ -231,7 +231,6 @@ interface DebugSource {
   changelog(limit: number): Promise<DebugChangelogView>;
   scaffoldVersions(limit: number): Promise<JsonObject[]>;
   gepaRuns(limit: number): Promise<JsonObject[]>;
-  releaseBoard(limit: number): Promise<JsonValue>;
   triggers(): Promise<JsonValue>;
   toolDescriptions(): Promise<JsonValue>;
   facts(limit: number): Promise<JsonObject[]>;
@@ -267,7 +266,6 @@ function cloudDebugSource(cloudName: string, auth: { origin: string; token: stri
     changelog: (limit) => rpc('getEvolutionChangelog', DebugChangelogViewSchema, [{ limit }]),
     scaffoldVersions: (limit) => rpc('listScaffoldVersions', JsonRowsSchema, [limit]),
     gepaRuns: (limit) => rpc('getGepaRuns', JsonRowsSchema, [limit]),
-    releaseBoard: (limit) => rpc('getReleaseBoard', JsonValueSchema, [limit]),
     triggers: () => rpc('listTriggers', JsonValueSchema),
     toolDescriptions: () => rpc('getToolDescriptions', JsonValueSchema),
     facts: (limit) => rpc('getFacts', JsonRowsSchema, [limit]),
@@ -312,7 +310,6 @@ function localDebugSource(localName: string): DebugSource {
     changelog: async (limit) => parseLocal(DebugChangelogViewSchema, { value: getLocalChangelog(localName, limit) }),
     scaffoldVersions: async (limit) => parseLocal(JsonRowsSchema, { value: getLocalScaffoldVersions(localName, limit) }),
     gepaRuns: async (limit) => parseLocal(JsonRowsSchema, { value: listLocalGepaRuns(localName, limit) }),
-    releaseBoard: async (limit) => decodeJsonValue({ value: getLocalReleaseBoard(localName, limit) }),
     triggers: async () => decodeJsonValue({ value: listLocalTriggers(localName) }),
     toolDescriptions: async () => decodeJsonValue({ value: getLocalToolSurface(localName) }),
     facts: async (limit) => parseLocal(JsonRowsSchema, { value: getLocalFacts(localName, limit) }),
@@ -697,10 +694,6 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
     summary.gepaRunCount = gepaRuns.length;
 
     for (const g of gepaRuns) writer.write({ t: 'gepa_run', ...g });
-
-    const releaseBoard = await safe('release_board', source.releaseBoard(sectionLimit), null);
-
-    if (releaseBoard) writer.write({ t: 'release_board', ...asRecord({ value: releaseBoard }, 'value') });
 
     const triggers = await safe('triggers', source.triggers(), null);
 

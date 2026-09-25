@@ -23,7 +23,6 @@ import { ExplorationSurface } from "./ExplorationSurface";
 import { WorkTab } from "./WorkTab";
 import { EnvironmentSurface } from "./EnvironmentSurface";
 import { FilesSurface } from "./FilesSurface";
-import { ReleasesSurface } from "./ReleasesSurface";
 import { ActivitySurface } from "./ActivitySurface";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ShareSlateControl } from "@/components/slates/ShareSlateControl";
@@ -45,7 +44,6 @@ const SURFACE_LABEL = {
   Changes: "Changes",
   Work: "Work",
   Files: "Files",
-  Releases: "Releases",
   Swarms: "Swarms",
   Agent: "Agent",
   Environment: "Env",
@@ -303,7 +301,6 @@ export function WorkSurface(props: WorkSurfaceProps) {
           {surface === "Files" && (
             <FilesSurface rpc={props.rpc} executors={props.executors} jump={filesJump} onConnectDevice={openConnect} />
           )}
-          {surface === "Releases" && <ReleasesSurface rpc={props.rpc} executors={props.executors} />}
           {surface === "Swarms" && (
             <ExplorationSurface
               liveTrees={props.mctsTrees}

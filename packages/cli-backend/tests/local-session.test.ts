@@ -5299,10 +5299,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
 
   test('a standalone local Plan turn is admitted and its codemode sandbox is closed', async () => {
     const probeCode = (path: string) => `
-      await workspace.writeFile('${path}', JSON.stringify({
-        releaseType: typeof release,
-        workspaceType: typeof workspace,
-      }));
+      await workspace.writeFile('${path}', JSON.stringify({ workspaceType: typeof workspace }));
       return 'probed';
     `;
 
@@ -5322,7 +5319,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
       { encoding: 'utf8' },
     )));
 
-    expect(buildProbe).toEqual({ releaseType: 'object', workspaceType: 'object' });
+    expect(buildProbe).toEqual({ workspaceType: 'object' });
     await build.session.end();
   });
 });

@@ -16,12 +16,6 @@ function str(input: JsonObject, key: string): string {
   return v.is(v.string(), value) ? value.trim() : "";
 }
 
-function nested(input: JsonObject, key: string): JsonObject {
-  const value = input[key];
-
-  return v.is(JsonObjectSchema, value) ? value : {};
-}
-
 export type ToolCallEffect = 'read' | 'mutate' | 'unknown';
 
 const MUTATING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
@@ -30,14 +24,6 @@ const MUTATING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['memory', new Set(['save', 'set', 'delete', 'remember', 'forget'])],
   ['agents', new Set(['swarm', 'fork', 'hire', 'msg', 'ask', 'send', 'reply', 'dismiss'])],
   ['web', new Set(['fetch'])],
-  ['release', new Set([
-    'create', 'bind_source', 'transition', 'record_check', 'run_checks',
-    'deploy', 'rollback', 'record_deployment', 'request_approval',
-  ])],
-  ['product_change', new Set([
-    'create', 'bind_source', 'transition', 'record_check', 'run_checks',
-    'deploy', 'rollback', 'record_deployment', 'request_approval',
-  ])],
   ['fact', new Set(['set', 'delete'])],
   ['team', new Set(['spawn', 'assign', 'message'])],
   ['peers', new Set(['send', 'reply', 'spawn_workspace'])],
@@ -50,8 +36,6 @@ const READING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['agents', new Set(['list', 'status'])],
   ['web', new Set(['search'])],
   ['fact', new Set(['get', 'list'])],
-  ['release', new Set(['list', 'status', 'preview'])],
-  ['product_change', new Set(['list', 'status', 'preview'])],
 ]);
 
 /** Only declared native operations are classified; shell and codemode programs have no effect receipt. */
@@ -250,59 +234,6 @@ function summarizeTasks(input: JsonObject): string {
   return action;
 }
 
-function summarizeRelease(input: JsonObject): string {
-  const action = str(input, "action");
-  const changeId = str(input, "changeId").slice(0, 8);
-
-  switch (action) {
-    case "create":
-      return actionOn(action, undefined, str(input, "userPrompt"));
-    case "bind_source": {
-      const binding = nested(input, "binding");
-
-      return actionOn(action, str(binding, "label") || str(binding, "kind"));
-    }
-
-    case "transition":
-      return words(actionOn(action, changeId), str(input, "status") ? `→ ${str(input, "status")}` : undefined);
-    case "record_check": {
-      const check = nested(input, "check");
-
-      return words(actionOn(action, str(check, "name") || changeId), str(check, "status") || undefined);
-    }
-
-    case "run_checks": {
-      const checks = Array.isArray(input.checks) ? input.checks : [];
-
-      const names = checks
-        .map((check) => (v.is(JsonObjectSchema, check) ? str(check, "name") : ""))
-        .filter(Boolean)
-        .join(", ");
-
-      return names ? `${action} — ${clip(names, 48)}` : actionOn(action, changeId);
-    }
-
-    case "preview": {
-      const port = v.is(v.number(), input.port) ? `:${input.port}` : "";
-
-      return words(actionOn(action, changeId), port || undefined);
-    }
-
-    case "deploy":
-    case "rollback":
-    case "record_deployment": {
-      const environment = str(nested(input, "deployment"), "environment");
-
-      return words(actionOn(action, changeId), environment || undefined);
-    }
-
-    case "request_approval":
-      return words(actionOn(action, changeId), str(input, "approvalType") || undefined);
-    default:
-      return actionOn(action, changeId);
-  }
-}
-
 type ToolSummarizer = (input: JsonObject) => string;
 
 const SUMMARIZERS = new Map<string, ToolSummarizer>(Object.entries({
@@ -324,8 +255,6 @@ const SUMMARIZERS = new Map<string, ToolSummarizer>(Object.entries({
   web_fetch: (input) => clip(str(input, "url")),
   report: (input) => actionOn(str(input, "status"), undefined, str(input, "content")),
   skills: (input) => actionOn(str(input, "action"), str(input, "name")),
-  release: summarizeRelease,
-  product_change: summarizeRelease,
 } satisfies Record<string, ToolSummarizer>));
 
 /* What the call does, as opposed to what it was passed. Returns "" rather than guessing. */
@@ -474,21 +403,7 @@ const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
     return heads > 0 ? `Explored with ${heads} heads` : "Explored the problem";
   },
   skills: (input) => (str(input, "action") === "shell" ? "Ran a skill" : ""),
-  release: (input) => {
-    const action = str(input, "action");
 
-    if (action === "create") return "Opened a change";
-
-    if (action === "run_checks" || action === "record_check") return "Checked a change";
-
-    if (action === "deploy") return "Deployed a change";
-
-    if (action === "rollback") return "Rolled a change back";
-
-    if (action === "request_approval") return "Asked you to approve";
-
-    return "";
-  },
   report: (input) => (str(input, "status") ? `Reported ${str(input, "status")}` : "Reported back"),
 } satisfies Record<string, ToolDescriber>));
 

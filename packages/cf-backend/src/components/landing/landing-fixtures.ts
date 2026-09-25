@@ -37,8 +37,8 @@ export const LANDING_MODELS: ModelMenuEntry[] = [
 
 export const LANDING_WORKSPACE = 'checkout-fixes';
 
-/** No release lane and no exploration runs, so `surfaceHasContent` hides Releases and Swarms. */
-export const LANDING_TAB_PRESENCE: TabPresence = { releases: false, explorations: false, work: true };
+/** No exploration runs, so `surfaceHasContent` hides Swarms. */
+export const LANDING_TAB_PRESENCE: TabPresence = { explorations: false, work: true };
 
 export const LANDING_SUBORDINATES: readonly SubordinateRosterEntry[] = [
   { name: 'coupon-tester', actorId: 'actor-coupon-tester', displayName: 'Coupon tester', role: 'QA', createdBy: 'orchestrator', status: 'working', currentTask: 'Running the checkout regression suite', createdAt: NOW - 36e5, dismissedAt: null },
@@ -125,7 +125,7 @@ const CHECKOUT_JOBS: BackgroundJob[] = [
 ];
 
 const CHECKOUT_PENDING: PendingAction[] = [
-  { id: 'rel-coupon-kind', kind: 'release_approval', at: NOW - 3e5, title: 'Approve: deploy to production', detail: 'Fix the SAVE20 coupon 500 — migration 0042 patched, 14 tests green' },
+  { id: 'defer-coupon-kind', kind: 'deferred_action', at: NOW - 3e5, title: 'Approve: a command the agent wants to run on device', detail: 'bun run db:migrate 0042' },
 ];
 
 export interface WorkFixture {

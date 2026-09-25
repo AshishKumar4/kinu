@@ -49,7 +49,6 @@ export const STRIP_ROWS = {
   Work: ['approve-clears', 'background-settle', 'background-wake'],
   Changes: ['workspace-panes'],
   Files: ['files-outside-tree', 'drive', 'every-tool'],
-  Releases: ['workspace-panes'],
   Swarms: ['exploration'],
   Agent: ['snapshot-after-turn', 'every-tool'],
   Environment: ['sandbox-mount-write', 'device-link'],

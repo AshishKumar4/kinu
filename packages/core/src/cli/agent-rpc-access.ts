@@ -27,7 +27,6 @@ export const AGENT_RPC_ACCESS = {
   getMemoryContent: 'workspace.read',
   getOutcomeCalibration: 'workspace.read',
   getOutcomeEnsemble: 'workspace.read',
-  getReleaseBoard: 'workspace.read',
   getRunTimeline: 'workspace.read',
   getSearchTree: 'workspace.read',
   getActivePlanReview: 'workspace.read',
@@ -67,9 +66,7 @@ export const AGENT_RPC_ACCESS = {
   listMounts: 'interactive',
   planFileRestore: 'interactive',
   clearBackgroundJobs: 'interactive',
-  createReleaseChange: 'interactive',
   createTimerTrigger: 'interactive',
-  decideReleaseApproval: 'interactive',
   // The call is the approval: a scoped token would bypass the gate.
   decideDeferredApprovals: 'interactive',
   // Authored code acts through the agent's bindings, behind the ordinary side-effect gates.

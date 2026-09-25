@@ -142,27 +142,6 @@ const GATED_CALLS: GatedCall[] = [
     }),
   },
 
-  {
-    capability: 'release',
-    name: 'upsertReleaseSource',
-    run: (u, c) => u.upsertReleaseSource(c, {
-      kind: 'github', label: 'o/r', repoUrl: 'https://github.com/o/r',
-    }),
-  },
-  { capability: 'release', name: 'createReleaseChange', run: (u, c) => u.createReleaseChange(c, WORKSPACE, { bindingId: 'b1', userPrompt: 'x' }) },
-  { capability: 'release', name: 'updateReleaseChange', run: (u, c) => u.updateReleaseChange(c, 'pc_1', { plan: 'x' }) },
-  { capability: 'release', name: 'transitionReleaseChange', run: (u, c) => u.transitionReleaseChange(c, 'pc_1', 'planning') },
-  { capability: 'release', name: 'recordReleaseCheck', run: (u, c) => u.recordReleaseCheck(c, 'pc_1', { name: 'test', status: 'passed' }) },
-  { capability: 'release', name: 'requestReleaseApproval', run: (u, c) => u.requestReleaseApproval(c, 'pc_1', 'deploy_production') },
-  {
-    capability: 'release',
-    name: 'decideReleaseApproval',
-    run: (u, c) => u.decideReleaseApproval(c, { approvalId: 'ap_1', decision: 'approved', approvedBy: USER_ID }),
-  },
-  { capability: 'release', name: 'recordReleaseDeployment', run: (u, c) => u.recordReleaseDeployment(c, 'pc_1', { environment: 'production' }) },
-  { capability: 'release', name: 'getReleaseBoard', run: (u, c) => u.getReleaseBoard(c, WORKSPACE) },
-  { capability: 'release', name: 'getReleaseDetail', run: (u, c) => u.getReleaseDetail(c, 'pc_1') },
-
   { capability: 'profile', name: 'getProfile', run: (u, c) => u.getProfile(c) },
   { capability: 'profile', name: 'ensureProfile', run: (u, c) => u.ensureProfile(c, 'owner@example.com') },
 
@@ -352,7 +331,6 @@ describe('a registered workspace reaches the whole surface', () => {
     expect(kept).toContain('credentials.other:getAuthHeaders(github)');
     expect(kept).toContain('workspaces.read:listWorkspaces');
     expect(kept).toContain('workspaces.write:registerWorkspace');
-    expect(kept).toContain('release:getReleaseBoard');
     expect(kept).toContain('experience.read:searchExperience');
     expect(kept).toContain('experience.write:publishExperience');
     expect(kept).toContain('profile:getProfile');

@@ -378,8 +378,9 @@ test('a change-set read that fails raises the Changes tab, which says what faile
   });
 });
 
-/** Opens the Changes tab of the preview-tabs frame with two edited workspace files, and a machine when asked. */
-async function openChanges(newPage: () => Promise<Page>, origin: string, machine: boolean): Promise<Page> {
+/** Opens the Changes tab of the preview-tabs frame with two edited workspace files, and a machine when asked.
+ *  `narrow` holds the surface at the inspector's default width; otherwise it spans the window. */
+async function openChanges(newPage: () => Promise<Page>, origin: string, machine: boolean, narrow = false): Promise<Page> {
   const page = await newPage();
 
   await page.setViewport({ width: 1280, height: 850 });
@@ -388,6 +389,8 @@ async function openChanges(newPage: () => Promise<Page>, origin: string, machine
   await page.click('[data-add-diff]');
 
   if (machine) await page.click('[data-add-machine]');
+
+  if (narrow) await page.click('[data-narrow-pane]');
   await page.waitForSelector('[aria-label="Changes"]');
   await page.click('[aria-label="Changes"]');
 
@@ -402,20 +405,79 @@ async function pickSource(page: Page, scope: string, label: string): Promise<voi
   }, label);
 }
 
-test('the review sheet takes the keys while it is open, and Escape returns to the file it was expanded from', async () => {
+/**
+ * Resolves once the pane's own observer, made before this one, has measured the pane as it stands.
+ * The rows can land in a commit before the pane's first measurement, which comes at the next frame.
+ */
+async function measuredPane(page: Page): Promise<void> {
+  await page.$eval('[data-changes]', (pane) => new Promise<void>((resolve) => {
+    const observer = new ResizeObserver(() => {
+      observer.disconnect();
+      resolve();
+    });
+
+    observer.observe(pane);
+  }));
+}
+
+/** Resolves after the pane's own observer, made before this one, has taken the new width. */
+async function resizePane(page: Page): Promise<void> {
+  // Boxed, so the handle comes back before the promise settles.
+  const resized = await page.evaluateHandle(() => ({ done: new Promise<void>((resolve) => {
+    const pane = document.querySelector('[data-changes]');
+
+    if (pane === null) throw new Error('no Changes pane to resize');
+
+    const before = pane.clientWidth;
+
+    const observer = new ResizeObserver(() => {
+      if (pane.clientWidth === before) return;
+
+      observer.disconnect();
+      resolve();
+    });
+
+    observer.observe(pane);
+  }) }));
+
+  await page.click('[data-narrow-pane]');
+  await resized.evaluate((box) => box.done);
+}
+
+async function drawn(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); }));
+}
+
+test('a wide pane shows every file expanded beside the tree, with no expand button; narrowed, it opens one file at a time', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await openChanges(newPage, origin, false);
+    const cards = (): Promise<string[]> => page.$$eval('[data-file-card]', (all) => all.map((card) => card.getAttribute('data-file-card') ?? ''));
 
     try {
-      await page.click('[data-file-row="src/app.ts"]');
-      await page.click('[data-changes="file"] [aria-label="Expand: every file side by side"]');
-      await page.waitForSelector('[data-review-sheet] [data-file-row="src/app.ts"][aria-current="true"]');
+      // Wide, both diffs are drawn without a click once the read lands, and the tree marks the first file.
+      await page.waitForSelector('[data-changes] [data-file-row="src/ready.ts"]');
+      await measuredPane(page);
+      expect(await page.$eval('[data-changes]', (pane) => pane.getAttribute('data-changes'))).toBe('expanded');
+      expect(await cards()).toEqual(['src/app.ts', 'src/ready.ts']);
+      expect(await page.$('[data-changes] button[aria-label^="Expand"]')).toBeNull();
+      expect(await page.$eval('[data-file-row][aria-current="true"]', (row) => row.getAttribute('data-file-row'))).toBe('src/app.ts');
+      await page.focus('[data-review-stack]');
       await page.keyboard.press('j');
-      await page.waitForSelector('[data-review-sheet] [data-file-row="src/ready.ts"][aria-current="true"]');
-      expect(await page.$eval('[data-changes="file"] [data-open-file]', (el) => el.textContent)).toBe('app.ts');
-      await page.keyboard.press('Escape');
-      await page.waitForFunction(() => document.querySelector('[data-review-sheet]') === null);
-      expect(await page.$eval('[data-changes] [data-open-file]', (el) => el.textContent)).toBe('app.ts');
+      await drawn(page);
+      expect(await page.$eval('[data-file-row][aria-current="true"]', (row) => row.getAttribute('data-file-row'))).toBe('src/ready.ts');
+
+      // At the inspector's default width the same pane lists the files, and a row opens one.
+      await resizePane(page);
+      expect(await page.$eval('[data-changes]', (pane) => pane.getAttribute('data-changes'))).toBe('list');
+      expect(await cards()).toEqual([]);
+      await page.click('[data-file-row="src/ready.ts"]');
+      await drawn(page);
+      expect(await page.$eval('[data-open-file]', (el) => el.textContent)).toBe('ready.ts');
+
+      // Widened again, the pane expands at the file it had open, not the first.
+      await resizePane(page);
+      expect(await page.$eval('[data-changes]', (pane) => pane.getAttribute('data-changes'))).toBe('expanded');
+      expect(await page.$eval('[data-file-row][aria-current="true"]', (row) => row.getAttribute('data-file-row'))).toBe('src/ready.ts');
     } finally { await page.close(); }
   });
 });
@@ -469,7 +531,7 @@ test('a workspace switch clears the sandbox-starting line of the workspace left 
 
 test('a note on a changed line stands in for Mark reviewed, leaves the diff when its code moves, and clears once sent', async () => {
   await withGallery(async ({ newPage, origin }) => {
-    const page = await openChanges(newPage, origin, false);
+    const page = await openChanges(newPage, origin, false, true);
     const text = (selector: string): Promise<string> => page.$eval(selector, (element) => element.textContent ?? '');
 
     try {
@@ -508,26 +570,34 @@ test('a note on a changed line stands in for Mark reviewed, leaves the diff when
       await page.click('[data-changes] [aria-label="Previous file (k)"]');
       await page.waitForSelector('[data-changes="file"] [data-note-row][data-new="1"]');
 
-      await page.click('[data-changes="file"] [aria-label="Expand: every file side by side"]');
-      await page.click('[data-annotations-toggle]');
-      await page.waitForFunction(() => (document.querySelector('[data-review-sheet]')?.textContent ?? '').includes('Read it from the config instead.'));
-      expect(await text('[data-review-sheet]')).toContain('app.ts · line 1, newexport const ready = true;');
-      expect(await text('[data-review-sheet]')).toContain('ready.ts · lines 1–2, newexport const shown = true;');
-      expect(await text('[data-review-sheet]')).not.toContain('changed since');
+      // The bar that counts the notes opens their list over the pane.
+      await page.click('[data-notes-bar] button');
+      await page.waitForFunction(() => (document.querySelector('[data-notes-page]')?.textContent ?? '').includes('Read it from the config instead.'));
+      expect(await text('[data-notes-page]')).toContain('app.ts · line 1, newexport const ready = true;');
+      expect(await text('[data-notes-page]')).toContain('ready.ts · lines 1–2, newexport const shown = true;');
+      expect(await text('[data-notes-page]')).not.toContain('changed since');
+
+      // Picked from the list, a note opens its file, and the list closes.
+      await page.$$eval('[data-notes-page] [data-annotation-id]', (cards) => {
+        cards.find((card) => card.textContent?.includes('Both flags belong in one place.'))?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+      await page.waitForFunction(() => document.querySelector('[data-notes-page]') === null);
+      expect(await page.$eval('[data-open-file]', (el) => el.textContent)).toBe('ready.ts');
+      await page.click('[data-changes] [aria-label="Previous file (k)"]');
+      await page.waitForFunction(() => document.querySelector('[data-open-file]')?.textContent === 'app.ts');
 
       // The agent rewrites the line: the note's mark leaves the diff, and the list says its code moved.
-      await page.keyboard.press('Escape');
-      await page.waitForFunction(() => document.querySelector('[data-review-sheet]') === null);
       await page.click('[data-edit-again]');
       await page.waitForFunction(() => (document.querySelector('[data-changes="file"]')?.textContent ?? '').includes('isReady()'));
       expect(await page.$$('[data-note-mark]')).toHaveLength(0);
       await page.click('[data-notes-bar] button');
-      await page.waitForFunction(() => (document.querySelector('[data-review-sheet]')?.textContent ?? '').includes('changed since'));
+      await page.waitForFunction(() => (document.querySelector('[data-notes-page]')?.textContent ?? '').includes('changed since'));
 
-      // Sent, the notes clear and Mark reviewed is back.
-      await page.click('[data-review-sheet] [data-send-feedback]');
-      await page.waitForFunction(() => document.querySelectorAll('[data-send-feedback]').length === 0);
-      await page.waitForSelector('[data-review-sheet] [data-mark-reviewed]');
+      // Sent, the notes and their list clear, and the list of files offers Mark reviewed again.
+      await page.click('[data-notes-bar] [data-send-feedback]');
+      await page.waitForFunction(() => document.querySelectorAll('[data-send-feedback], [data-notes-page]').length === 0);
+      await page.click('[data-changes] [aria-label="All files"]');
+      await page.waitForSelector('[data-changes="list"] [data-mark-reviewed]');
     } finally { await page.close(); }
   });
 });

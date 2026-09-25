@@ -38,8 +38,6 @@ import {
   ORCHESTRATOR_AGENT_SLUG,
   nanoid,
   createExperienceLibrary,
-  createReleaseStore,
-  releaseSqlFromExec,
   BUILTIN_PROFILE_CATALOG,
   profileCatalogDigest,
   validateProfileCatalog,
@@ -49,15 +47,6 @@ import {
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
   type PublishableCandidate,
-  type ReleaseBoard,
-  type ReleaseApproval,
-  type ReleaseCheck,
-  type ReleaseDetail,
-  type ReleaseChange,
-  type ReleaseStatus,
-  type ReleaseDeployment,
-  type ReleaseSource,
-  type ReleaseSourceInput,
   CLAUDE_CRED_KEY,
   CODEX_CRED_KEY,
   OAuthTokenError,
@@ -130,7 +119,6 @@ import { randomToken, sha256Hex } from '@kinu.run/core';
 import { recoveryBackoffMs, resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview } from '@kinu.run/core';
 import { displayNameProblem } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
-import { recordReleaseTransition } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 import {
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
@@ -187,13 +175,6 @@ export interface DriveChunkWrite {
   offset: number;
   chunk: Uint8Array;
   final: boolean;
-}
-
-export interface ReleaseApprovalDecision {
-  approvalId: string;
-  decision: 'approved' | 'rejected';
-  approvedBy: string;
-  note?: string | null;
 }
 
 interface DeviceConsentCheck {
@@ -773,12 +754,6 @@ export class UserDO extends Agent<Env> {
     return this.sqlx(
       `SELECT 1 AS x FROM user_workspaces WHERE name = ? AND delete_pending = 0`, name,
     ).length > 0;
-  }
-
-  private releases() {
-    this.ensureInit();
-
-    return createReleaseStore(releaseSqlFromExec(this.ctx.storage.sql), { validateAgentName: validateWorkspaceName });
   }
 
   private onboardingCompletedAt(): number | null {
@@ -3196,106 +3171,6 @@ export class UserDO extends Agent<Env> {
     this.sqlx(`UPDATE user_devices SET unstopped_at = NULL WHERE id = ?`, deviceId);
 
     return { ok: this.deleteRevokedDeviceWithoutIncident(deviceId) };
-  }
-
-  async upsertReleaseSource(caller: UserCaller, input: ReleaseSourceInput & { id?: string }): Promise<ReleaseSource> {
-    await this.requireTier(caller, 'release');
-
-    return this.releases().upsertSourceBinding(input);
-  }
-
-  async createReleaseChange(caller: UserCaller, agentName: string, input: { bindingId: string; userPrompt: string; plan?: string | null }): Promise<ReleaseChange> {
-    await this.requireTier(caller, 'release');
-
-    return this.releases().createChange(agentName, input);
-  }
-
-  async updateReleaseChange(
-    caller: UserCaller,
-    changeId: string,
-    patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null },
-  ): Promise<ReleaseChange> {
-    await this.requireTier(caller, 'release');
-
-    return this.releases().updateChange(changeId, patch);
-  }
-
-  async transitionReleaseChange(caller: UserCaller, changeId: string, to: ReleaseStatus): Promise<ReleaseChange> {
-    await this.requireTier(caller, 'release');
-    const change = this.releases().transitionChange(changeId, to);
-    // Control-plane operation: recorded on the audit dataset, not the agent one. The change id is
-    // digested because it identifies one user's work.
-    recordReleaseTransition(this.env, {
-      actor: this.name,
-      operation: 'transition',
-      reason: to,
-      target: changeId,
-      outcome: 'ok',
-      code: '',
-    });
-
-    return change;
-  }
-
-  async recordReleaseCheck(
-    caller: UserCaller,
-    changeId: string,
-    input: { name: string; status: ReleaseCheck['status']; stdout?: string | null; stderr?: string | null; durationMs?: number | null },
-  ): Promise<ReleaseCheck> {
-    await this.requireTier(caller, 'release');
-
-    return this.releases().recordCheck(changeId, input);
-  }
-
-  async requestReleaseApproval(caller: UserCaller, changeId: string, approvalType: ReleaseApproval['approvalType']): Promise<ReleaseApproval> {
-    await this.requireTier(caller, 'release');
-
-    return this.approvalChanged(this.releases().requestApproval(changeId, approvalType));
-  }
-
-  async decideReleaseApproval(caller: UserCaller, input: ReleaseApprovalDecision): Promise<ReleaseApproval> {
-    await this.requireTier(caller, 'release');
-
-    return this.approvalChanged(this.releases().decideApproval(input.approvalId, input.decision, input.approvedBy, input.note));
-  }
-
-  private approvalChanged(approval: ReleaseApproval): ReleaseApproval {
-    const [change] = this.sqlx<{ agent_name: string }>(`SELECT agent_name FROM release_changes WHERE id = ?`, approval.changeId);
-
-    if (change !== undefined) this.rosterChanged(change.agent_name);
-
-    return approval;
-  }
-
-  async recordReleaseDeployment(
-    caller: UserCaller,
-    changeId: string,
-    input: { environment: ReleaseDeployment['environment']; workerVersionId?: string | null; deploymentId?: string | null; rollbackTarget?: string | null },
-  ): Promise<ReleaseDeployment> {
-    await this.requireTier(caller, 'release');
-    const deployment = this.releases().recordDeployment(changeId, input);
-    recordReleaseTransition(this.env, {
-      actor: this.name,
-      operation: 'deployment',
-      reason: input.environment,
-      target: changeId,
-      outcome: 'ok',
-      code: '',
-    });
-
-    return deployment;
-  }
-
-  async getReleaseBoard(caller: UserCaller, agentName?: string, limit = 20): Promise<ReleaseBoard> {
-    await this.requireTier(caller, 'release');
-
-    return this.releases().board(agentName, limit);
-  }
-
-  async getReleaseDetail(caller: UserCaller, changeId: string): Promise<ReleaseDetail> {
-    await this.requireTier(caller, 'release');
-
-    return this.releases().detail(changeId);
   }
 
   private experienceLibrary() {

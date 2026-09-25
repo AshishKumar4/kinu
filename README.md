@@ -51,8 +51,8 @@ You can use it for:
   under `/slates/<id>/` that opens in its own tab on a preview URL.
   A slate reads live data through bindings you declare, such as workspace
   files, a workspace read model, or an MCP connection narrowed to named tools.
-- Engineering. A real shell, git, package installs, a Linux container for heavy
-  jobs, and a release lane with approvals. In Plan mode the agent reads and
+- Engineering. A real shell, git, package installs and a Linux container for
+  heavy jobs. In Plan mode the agent reads and
   researches without touching project code, then hands you a plan to review
   before a Build turn starts.
 - Schedules and triggers. A cron timer, a one-shot timer or a webhook starts a

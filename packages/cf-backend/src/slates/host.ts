@@ -614,10 +614,9 @@ export class SlateHost {
     return running.app;
   }
 
-  /** Ends processes, the durable application and the authored tree; committed versions stay. Root only. */
+  /** Ends processes, the durable application and the authored tree; committed versions stay. */
   async remove(caller: SlateCaller, id: string): Promise<SlateCallResult> {
     try {
-      if (caller.path.length > 0) throw new KinuError('denied', 'Only the workspace root removes a slate');
       const session = await this.deps.session();
       const root = slateDirectory(new SlateId(id));
 

@@ -6,7 +6,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useS
 import { Badge, Button, Loader } from "@cloudflare/kumo";
 import {
   ClockIcon, PulseIcon, WarningCircleIcon, GitBranchIcon,
-  RocketLaunchIcon, PackageIcon, SparkleIcon, CaretRightIcon, ShieldWarningIcon,
+  PackageIcon, SparkleIcon, CaretRightIcon, ShieldWarningIcon,
   NotePencilIcon, ArrowLeftIcon, DatabaseIcon,
 } from "@phosphor-icons/react";
 import { hasWorkspaceWork, timeAgo } from "@kinu.run/core";
@@ -38,7 +38,6 @@ const FILTERS: Array<{ id: JournalFilter; label: string }> = [
 
 /** Where each pending kind is decided; tab names stay out of core. `deferred_action` is absent: the queue is its home. */
 const PENDING_HOME = {
-  release_approval: { surface: "Releases", cta: "decide in Releases" },
   scaffold_version: { surface: "Agent", cta: "decide in Agent → Evolution" },
   unseen_changes: { surface: null, cta: null },
   curriculum_task: { surface: null, cta: "decide in Supervise" },
@@ -47,7 +46,6 @@ const PENDING_HOME = {
 } satisfies Record<Exclude<PendingActionKind, "deferred_action">, { surface: SurfaceKind | null; cta: string | null }>;
 
 const PENDING_ICON = {
-  release_approval: RocketLaunchIcon,
   scaffold_version: GitBranchIcon,
   unseen_changes: SparkleIcon,
   curriculum_task: PackageIcon,

@@ -141,7 +141,7 @@ describe('what it must NOT fire on', () => {
   });
 
   test("a /tmp/ path on the SANDBOX's filesystem, not this box's", () => {
-    // core/release/engine.ts writes `/tmp/${changeId}.gitauth` through
+    // A sandbox writer puts `/tmp/${changeId}.gitauth` through
     // `exec.writeFile` INSIDE the sandbox and removes it there; sandbox.ts
     // mentions `/tmp/srv-${p}.log` in an error message telling the model what to
     // run in there. Neither is a directory on this machine.

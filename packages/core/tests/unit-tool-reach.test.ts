@@ -12,7 +12,6 @@ import {
   createAppDataStore,
   createDbCodemodeProvider,
   createMemoryCodemodeProvider,
-  createReleaseCodemodeProvider,
   createReportCodemodeProvider,
   createTasksCodemodeProvider,
   createWebCodemodeProvider,
@@ -21,9 +20,6 @@ import {
   TaskListStore,
   type AgentSelfHost,
   type CodemodeProvider,
-  type ReleaseToolDeps,
-  type ReleaseSource,
-  type ReleaseChange,
   type AgentRuntime,
 } from '../src/index';
 import { refuseHostNode } from './helpers-actor-host';
@@ -47,36 +43,6 @@ function agentSelfHost(
     armCompactNow: () => {},
   };
 }
-
-const releaseSource: ReleaseSource = {
-  id: 'src-1', kind: 'github', label: 'app', repoUrl: null, defaultBranch: null,
-  localDeviceId: null, localRoot: null, deployTarget: null, createdAt: 1, updatedAt: 1,
-};
-
-const releaseChange: ReleaseChange = {
-  id: 'chg-1', agentName: 'a', bindingId: 'src-1', status: 'draft', userPrompt: 'p',
-  plan: null, summary: null, patch: null, previewUrl: null, createdAt: 1, updatedAt: 1,
-};
-
-const releaseDeps: ReleaseToolDeps = {
-  board: async () => ({ bindings: [], changes: [], checks: [], approvals: [], deployments: [] }),
-  bindSource: async () => releaseSource,
-  create: async () => releaseChange,
-  update: async () => releaseChange,
-  transition: async () => releaseChange,
-  requestApproval: async () => ({
-    id: 'apr-1', changeId: 'chg-1', approvalType: 'apply', decision: 'pending',
-    approvedBy: null, note: null, argumentDigest: 'digest', createdAt: 1, decidedAt: null,
-  }),
-  recordCheck: async () => ({
-    id: 'chk-1', changeId: 'chg-1', name: 'tests', status: 'passed',
-    stdout: null, stderr: null, durationMs: null, createdAt: 1, updatedAt: 1,
-  }),
-  recordDeployment: async () => ({
-    id: 'dep-1', changeId: 'chg-1', environment: 'local',
-    workerVersionId: null, deploymentId: null, rollbackTarget: null, deployedAt: 1,
-  }),
-};
 
 describe('the reach declaration', () => {
   test('the native surface is exactly the rows declared native, and there are 8', () => {
@@ -116,7 +82,6 @@ describe('the reach declaration', () => {
         fetch: async (url: string) => ({ url, retrievedAt: new Date(0).toISOString(), markdown: '' }),
       }),
       report: () => createReportCodemodeProvider(() => ({ report: async () => ({ delivered: true }) })),
-      release: () => createReleaseCodemodeProvider(() => releaseDeps),
       agent: () => createAgentSelfProvider(agentSelfHost(rt.storage, rt.actor)),
       // Real deps: an unbuildable factory is indistinguishable from an unwired namespace.
       db: () => createDbCodemodeProvider(createAppDataStore({

@@ -48,24 +48,6 @@ export interface ExecutorAvailability {
   status?: "not_configured" | "idle" | "active" | "disconnected" | "error";
 }
 
-/** The release engine runs in the sandbox container, so the sandbox row is the substrate verdict:
- * absent means changes can be drafted and approved, never applied. `unknown` until executors load. */
-export type ReleaseSubstrate =
-  | { state: "unknown" }
-  | { state: "unavailable"; reason: string }
-  | { state: "ready"; note: string | null };
-
-export function releaseSubstrate(executors: ExecutorInfo[]): ReleaseSubstrate {
-  if (executors.length === 0) return { state: "unknown" };
-  const sandbox = executors.find((e) => e.name === "sandbox");
-
-  if (!sandbox?.available) {
-    return { state: "unavailable", reason: sandbox?.reason ?? "the sandbox executor is unavailable on this deployment" };
-  }
-
-  return { state: "ready", note: sandbox.reason ?? null };
-}
-
 const STATIC_PRIORITY = ["device", "sandbox"];
 
 export function pickDefaultExecutor(executors: ExecutorAvailability[], lastActive?: string | null): string {
