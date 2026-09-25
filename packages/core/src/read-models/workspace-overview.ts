@@ -111,7 +111,6 @@ export function rosterBucket(activity: WorkspaceOverview['activity'] | null, dec
   return activity === 'working' ? 'working' : 'idle';
 }
 
-/** The Workspaces page's search: the title a reader sees, or the name in the URL. */
 export function rosterMatches(entry: { readonly name: string; readonly displayName: string }, query: string): boolean {
   const needle = query.trim().toLowerCase();
 

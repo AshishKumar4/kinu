@@ -106,6 +106,11 @@ describe('the folded tile', () => {
   });
 });
 
+/** The owed-work wake rows armed now. */
+async function retryWakes(agent: ReturnType<typeof orchestratorHarness>['agent']) {
+  return (await agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
+}
+
 describe('the pushed tile', () => {
   /** A recording owner object; only the tiles this workspace pushes are read. */
   function recordingOwner() {
@@ -146,10 +151,8 @@ describe('the pushed tile', () => {
 
   test('a refused push is owed: a wake carries its retry, a tick before it is due waits, and the tick once due lands it', async () => {
     const { plane, overviews } = recordingOwner();
-    const { agent } = orchestratorHarness({ ...plane, refuseOverviews: 1 });
-
-    const retryArmed = async (): Promise<boolean> =>
-      (await agent.listSchedules()).some((row) => row.callback === '_kinuTerminalRetryTick');
+    const { agent } = orchestratorHarness({ ...plane, refuseOverviews: [new Error('the owner object is unavailable')] });
+    const retryArmed = async (): Promise<boolean> => (await retryWakes(agent)).length > 0;
 
     try {
       expect(await retryArmed()).toBe(false);
@@ -172,6 +175,52 @@ describe('the pushed tile', () => {
     } finally {
       setSystemTime();
     }
+  });
+
+  test('a retry in flight owes the wake its failure would arm, not one at once', async () => {
+    const { plane, overviews } = recordingOwner();
+    const hold = Promise.withResolvers<void>();
+    const owner = { ...plane, refuseOverviews: [new Error('the owner object is unavailable')], holdOverviews: Promise.resolve() };
+    const { agent } = orchestratorHarness(owner);
+
+    try {
+      await agent.installWorkspaceCapability('workspace-capability-token');
+
+      for (let lap = 0; lap < 100 && (await retryWakes(agent)).length === 0; lap++) await nextTurn();
+      owner.holdOverviews = hold.promise;
+      setSystemTime(new Date(Date.now() + 10 * 60_000));
+      // The due retry starts its push, which the owner's object holds.
+      await agent.terminalRetryPass();
+
+      // The next tick, as the runtime runs it: the row that fired is gone.
+      for (const row of await retryWakes(agent)) await agent.cancelSchedule(row.id);
+      await agent.terminalRetryPass();
+      const [next] = await retryWakes(agent);
+      expect((next?.time ?? 0) * 1000).toBeGreaterThanOrEqual(Date.now() + 3_000);
+
+      hold.resolve();
+      await until(() => overviews.length === 1, 'the held push lands');
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('a push the owner refuses arms no wake, and the next change pushes the tile', async () => {
+    const { plane, overviews } = recordingOwner();
+    // A revoked token, as the owner's object's refusal arrives across its RPC.
+    const denied = Object.assign(new Error('CapabilityDeniedError: Unrecognized workspace capability token.'), { remote: true });
+    const refusals = [denied];
+    const { agent } = orchestratorHarness({ ...plane, refuseOverviews: refusals });
+
+    await agent.installWorkspaceCapability('workspace-capability-token');
+    await until(() => refusals.length === 0, 'the push is refused');
+
+    for (let lap = 0; lap < 20; lap++) await nextTurn();
+    expect(await retryWakes(agent)).toEqual([]);
+    expect(overviews).toEqual([]);
+
+    await agent.requestOverviewPush();
+    await until(() => overviews.length === 1, 'the next change pushes');
   });
 
   test('a turn reads Working from its admission until its leftovers close, then the tile it leaves', async () => {

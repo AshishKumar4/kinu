@@ -970,7 +970,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return Number.isFinite(at) ? at : null;
   }
 
-  /** Without a tile push owed, which would read Unfinished. */
+  /** A tile push owed would read Unfinished. */
   private workOwedAt(): number | null {
     const at = Math.min(this.terminal.nextRetryAt() ?? Infinity, this.jobRunner.nextResumeAt() ?? Infinity);
 
@@ -2532,7 +2532,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.consents.request(req);
   }
 
-  /** Not {@link callable}. */
   async announceDeviceUnavailable(
     devices: Array<{ id: string; label: string; lastSeenAt: number | null }>,
   ): Promise<{ ok: boolean }> {
@@ -2541,7 +2540,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { ok: true };
   }
 
-  /** Not {@link callable}. */
   async announceDeviceAvailable(device: { id: string; label: string }): Promise<{ ok: boolean }> {
     this.broadcast(JSON.stringify({ type: 'device_available', deviceId: device.id, label: device.label }));
 
@@ -4441,25 +4439,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** In memory: the owner's object ignores a repeat. */
+  /** The owner's object ignores a repeat. */
   private pushedOverview: string | null = null;
   private overviewDirty = false;
   private overviewPushing = false;
-  /** Until a push lands; changes meanwhile ride it. */
+  /** Changes meanwhile ride its push. */
   private overviewRetry: { readonly at: number; readonly attempts: number } | null = null;
 
   async requestOverviewPush(): Promise<void> {
     this.overviewChanged();
   }
 
-  /** A burst of changes folds once more after the push in flight. */
   protected override overviewChanged(): void {
     this.overviewDirty = true;
 
     if (this.overviewPushing || this.getOwnerUserId() === null) return;
 
-    if (this.overviewRetry !== null && Date.now() < this.overviewRetry.at) return;
+    const retry = this.overviewRetry;
+
+    if (retry !== null && Date.now() < retry.at) return;
     this.overviewPushing = true;
+
+    // In flight, it owes the wake a failure would arm.
+    if (retry !== null) this.overviewRetry = { at: Date.now() + recoveryBackoffMs(retry.attempts + 1), attempts: retry.attempts };
     this.detachOwned(async () => {
       try {
         while (this.overviewDirty) {
@@ -4468,6 +4470,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           const pushed = JSON.stringify(overview);
 
           if (pushed === this.pushedOverview) continue;
+
+          // Installing a token pushes.
+          if (this.workspaceCapabilityToken() === null) {
+            this.overviewDirty = true;
+            break;
+          }
+
           const { stub, caller } = await this.userHub();
           await stub.putWorkspaceOverview(caller, this.name, overview);
           this.pushedOverview = pushed;
@@ -4476,14 +4485,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.overviewRetry = null;
       } catch (cause) {
         this.overviewDirty = true;
+        const failure = toKinuError({ doing: "pushing this workspace's tile to its owner's roster", cause, otherwise: 'unavailable' });
         const attempts = (this.overviewRetry?.attempts ?? 0) + 1;
-        this.overviewRetry = { at: Date.now() + recoveryBackoffMs(attempts), attempts };
+        // A refusal meets the next push.
+        const retrying = failure.code === 'unavailable' || failure.code === 'timeout';
+        this.overviewRetry = retrying ? { at: Date.now() + recoveryBackoffMs(attempts), attempts } : null;
+        diagnostics.failure('workspace.overview_push_failed', failure, { workspace: this.name, attempts, retrying });
 
-        diagnostics.failure('workspace.overview_push_failed', toKinuError({
-          doing: "pushing this workspace's tile to its owner's roster", cause, otherwise: 'unavailable',
-        }), { workspace: this.name, attempts });
-
-        await this.scheduleTerminalRetry(this.overviewRetry.at);
+        if (this.overviewRetry !== null) await this.scheduleTerminalRetry(this.overviewRetry.at);
       } finally {
         this.overviewPushing = false;
       }

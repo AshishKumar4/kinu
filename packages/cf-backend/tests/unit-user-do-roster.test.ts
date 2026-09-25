@@ -162,6 +162,26 @@ describe('workspaces from before tiles existed', () => {
     }
   });
 
+  test('a workspace that never answers is asked six times, then left to its own next visit', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID, overviewNudge: async () => { throw new Error('the workspace is unavailable'); } });
+    const owner = await testOwner();
+    await workspace(harness, 'ledger');
+
+    try {
+      for (let read = 0; read < 8; read++) {
+        await harness.userDO.listWorkspaces(owner);
+
+        for (let lap = 0; lap < 10; lap++) await nextTurn();
+        setSystemTime(new Date(Date.now() + 10 * 60_000));
+      }
+
+      expect(harness.overviewNudges).toHaveLength(6);
+    } finally {
+      setSystemTime();
+      harness.close();
+    }
+  });
+
   test('a workspace deleted while the asks ahead of it are held is never woken', async () => {
     const answer = Promise.withResolvers<void>();
     const harness: TestUserDO = createTestUserDO({ durableObjectId: USER_ID, overviewNudge: async () => { await answer.promise; } });
