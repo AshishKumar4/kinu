@@ -72,7 +72,7 @@ export class ContainerStartInterrupted extends Error {
 
 /** Every post-attach step (restart, listener proof, expose, boot stamp) draws on this one budget;
  *  each allowance is the remainder divided by the steps still declared, nothing reserved. */
-export interface StartBudget {
+interface StartBudget {
   /** The window this budget was opened with; carried so a refusal names the budget it spent
    *  and the call site holds no second copy of the number. */
   readonly budgetMs: number;
@@ -301,7 +301,7 @@ export function classifyRecovery(thrown: { readonly cause: unknown }): RecoveryC
 
 /** Stages are actions: retry the same identity, then replace it; a failure at `replace` is
  *  terminal. Stored durably: `onStart` is a container hook, so an alarm-woken object skips it. */
-export const RECOVERY_STAGES = ['retry', 'replace'] as const;
+const RECOVERY_STAGES = ['retry', 'replace'] as const;
 
 export type RecoveryStage = (typeof RECOVERY_STAGES)[number];
 
@@ -316,7 +316,7 @@ export type RecoveryRow = v.InferOutput<typeof RecoveryRowSchema>;
 
 /** `malformed` is not `absent`: absent leads to a retry, so treating an unreadable row as
  *  absent restarts the ladder every time and could destroy an identity repeatedly. */
-export type StoredRecovery =
+type StoredRecovery =
   | { readonly kind: 'absent' }
   | { readonly kind: 'row'; readonly row: RecoveryRow }
   | { readonly kind: 'malformed' };
@@ -330,7 +330,7 @@ export function parseRecoveryRow(stored: StoredValue): StoredRecovery {
   return parsed.success ? { kind: 'row', row: parsed.output } : { kind: 'malformed' };
 }
 
-export interface RecoveryAdmission {
+interface RecoveryAdmission {
   readonly admit: boolean;
   /** The stage the claim must carry: preserved for an admitted attempt, and the
    *  most conservative readable value for a refused one. */
@@ -345,7 +345,7 @@ export function admissionStep(stored: StoredRecovery): RecoveryAdmission {
   return { admit: true, stage: stored.kind === 'row' ? stored.row.stage : undefined };
 }
 
-export type RecoveryAction =
+type RecoveryAction =
   /** A newer attempt owns the lifecycle. Change nothing, tell no one, arm
    *  nothing, destroy nothing. */
   | 'inert'
@@ -357,7 +357,7 @@ export type RecoveryAction =
   /** Stop. Nothing this box can do next changes the answer. */
   | 'refuse';
 
-export interface RecoveryInput {
+interface RecoveryInput {
   readonly owned: boolean;
   readonly failure: RecoveryClass;
   /** Read once, at admission: the claim proves ownership of the row, and a re-read may see
@@ -365,7 +365,7 @@ export interface RecoveryInput {
   readonly stage: RecoveryStage | undefined;
 }
 
-export interface RecoveryDecision {
+interface RecoveryDecision {
   readonly action: RecoveryAction;
   /** Never deletes the row: only a succeeded attempt may, or the next eviction resets a
    *  destructive stage and the box could destroy an identity again. */
@@ -398,7 +398,7 @@ export function recoveryStep(input: RecoveryInput): RecoveryDecision {
 // A devbox serving a caller must not sleep: the disk is ephemeral (P1), so idle expiry costs
 // an attach. `renewActivityTimeout()` calls become one durable stamp the heartbeat reads.
 
-export interface QuiesceInput {
+interface QuiesceInput {
   readonly now: number;
   readonly containerRunning: boolean;
   readonly lastInteractionAt: number;
@@ -412,7 +412,7 @@ export interface QuiesceInput {
 
 export type QuiesceAction = 'hold' | 'quiesce';
 
-export interface QuiesceDecision {
+interface QuiesceDecision {
   readonly action: QuiesceAction;
   /** What the caller must persist for the next tick. `undefined` means the
    *  quiet stretch ended and the stored value must be deleted. */
@@ -438,7 +438,7 @@ export function quiesceStep(input: QuiesceInput): QuiesceDecision {
   return { action: confirmed ? 'quiesce' : 'hold', quietSince };
 }
 
-export interface MountLine {
+interface MountLine {
   readonly source: string;
   readonly fstype: string;
   readonly options: string;
@@ -603,7 +603,7 @@ export function awaitListenerCommand(port: number, attempts: number, intervalMs:
 
 /** Two phases: every process starts before any port is exposed, and a port is exposed only
  *  after its own listener answers, so the shape cannot express "expose without a listener". */
-export interface RestartPlan {
+interface RestartPlan {
   readonly start: readonly SupervisedProcessSpec[];
   /** Ascending and deduplicated so every restart is identical and reproducible when it fails.
    *  A second spec for one port resolves to the storage's last write. */
@@ -663,7 +663,7 @@ export function scopesOverlap(
   return left.some(a => right.some(b => scopesTouch(a, b)));
 }
 
-export interface ResourceLane {
+interface ResourceLane {
   /** A streamed read keeps the lane busy until its body drains or is cancelled. */
   busy(): boolean;
   /** Strict FIFO per resource, no shared reads; the whole scope set is claimed in one step,
@@ -797,7 +797,7 @@ export function canonicalPath(path: string): string {
   return `/${out.join('/')}`;
 }
 
-export interface CheckpointLane {
+interface CheckpointLane {
   busy(): boolean;
   /** Same kind in flight joins it; a different kind queues, so a quiesce never inherits a tick's
    *  `skipped` and stops over just-landed work. */
