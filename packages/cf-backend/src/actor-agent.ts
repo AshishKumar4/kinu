@@ -4070,9 +4070,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (assembled.reasoningOptions) liveTurn.providerOptions = assembled.reasoningOptions;
 
-    liveTurn.fallbacks = assembled.profile.tier.fallbacks.map((spec) => ({
+    liveTurn.fallbacks = assembled.profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
       spec,
-      bind: () => this.ownedModelServices.resolveModelWithEffort(spec, assembled.profile.tier.reasoningEffort),
+      bind: () => this.ownedModelServices.resolveModelWithEffort(spec, reasoningEffort),
     }));
 
     const runtime = this.rt;
@@ -4307,7 +4307,7 @@ export abstract class ActorAgent extends Agent<Env> {
     this._turnDurableLength = rawMessages.length;
     // Must be awaited before submission: synchronous catalog reads return static stand-in values
     // while the lookup is in flight (#20).
-    const [window] = await Promise.all([this.modelCatalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks)]);
+    const [window] = await Promise.all([this.modelCatalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model))]);
     this._turnContextWindow = window.contextWindow;
     const measured = measureCompactionTrigger(this.compactionState, this.name, rawMessages.length);
 

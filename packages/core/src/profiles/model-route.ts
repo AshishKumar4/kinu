@@ -4,7 +4,7 @@
 import { SPEND_SOURCES, type SpendSource } from '../events/model-call';
 import type { ReasoningEffort } from '../strategy/effort';
 import type { TierId } from './catalog';
-import type { ResolvedTurnProfile, TierRoute } from './resolve';
+import type { ResolvedTurnProfile, TierFallback, TierRoute } from './resolve';
 
 export type ModelRoutePolicy =
   | { readonly kind: 'invocation' }
@@ -47,8 +47,8 @@ export interface ModelRouteResolution {
   readonly source: ProfileRoutedSource;
   readonly tier: TierId;
   readonly model: string;
-  readonly reasoningEffort: ReasoningEffort;
-  readonly fallbacks: readonly string[];
+  readonly reasoningEffort: ReasoningEffort | null;
+  readonly fallbacks: readonly TierFallback[];
 }
 
 function tierResolution(profile: ResolvedTurnProfile, tier: TierId): TierRoute {

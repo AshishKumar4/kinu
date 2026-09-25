@@ -670,13 +670,16 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
-- **A model tier whose model is gone runs on your default.** A tier set to a model no provider lists any more
+- **A model tier whose model is gone runs on your default.** A tier set to a model its provider no longer lists
   (retired, or its account disconnected) failed every turn it served. It now runs on your default tier, then on
-  GLM 5.3. A model pinned to a workspace or an agent is still refused, so you can see and fix the pin.
+  GLM 5.3, on the CLI as on the web. A provider that lists no models (an OpenAI-compatible endpoint whose `/models`
+  answers an empty list) proves nothing, so its models still serve. A model pinned to a workspace or an agent is
+  still refused, so you can see and fix the pin.
 
 - **Reasoning effort is always a level the model takes.** A stored effort the model does not declare (xhigh on GLM
-  5.3, which takes low, medium and high) was sent as it was. It is now sent as the nearest level the model declares,
-  never a higher one.
+  5.3, which takes low, medium and high) was sent as it was. It is now sent as the nearest level the model declares
+  below it, or the lowest the model takes when none is below, and a model that takes no level (Claude Haiku 4.5) is
+  sent none. Each fallback in a tier's chain gets the level as that fallback declares it, not the first model's.
 
 - **An hour-long prompt-cache write is charged what Anthropic bills.** Anthropic bills a cache write kept an hour at
   twice the input rate. Spend, mission budgets and the Activity totals charged it at the five-minute rate and called

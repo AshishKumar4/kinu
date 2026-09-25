@@ -1850,6 +1850,120 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(sent).toMatchObject({ openai: { reasoningEffort: 'high' } });
   });
 
+  test('a fallback is sent the level the tier wants as the fallback declares it, and a model declaring none is sent none', async () => {
+    const sent = new Map<string, string | null>();
+    const OpenAIOptions = v.object({ openai: v.object({ reasoningEffort: v.optional(v.string()) }) });
+
+    const listening = (modelId: string, refuse: boolean) => new TestLanguageModelV2({
+      provider: 'fake',
+      modelId,
+      doStream: async (options) => {
+        sent.set(modelId, v.parse(OpenAIOptions, options.providerOptions).openai.reasoningEffort ?? null);
+
+        if (!refuse) return fakeModel('ok').doStream(options);
+
+        throw new APICallError({ message: 'payment required', url: 'https://x.example/v1', requestBodyValues: {}, statusCode: 402, isRetryable: false });
+      },
+    });
+
+    const models = new Map([
+      ['openai/gpt-x', listening('gpt-x', true)], ['openai/gpt-y', listening('gpt-y', true)], ['openai/gpt-z', listening('gpt-z', false)],
+    ]);
+
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => spec?.trim() ?? 'openai/gpt-x',
+      resolveModel: (spec) => models.get(spec ?? '') ?? listening('unknown', true),
+      listProviders: async () => [],
+      listModels: async () => ({
+        models: [
+          { provider: 'openai', id: 'gpt-x', reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] },
+          { provider: 'openai', id: 'gpt-y', reasoningEfforts: ['low', 'medium', 'high'] },
+          { provider: 'openai', id: 'gpt-z', reasoningEfforts: [] },
+        ],
+        failures: [],
+      }),
+      modelInfo: async () => null,
+      ...resolverRest,
+    };
+
+    const catalog = { roles: {}, tiers: { default: { model: 'openai/gpt-x', reasoningEffort: 'xhigh' as const, fallbacks: ['openai/gpt-y', 'openai/gpt-z'] } } };
+
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
+    };
+
+    const { session } = setupWithResolver(resolver, { profileAuthority: () => envelope });
+    await session.send('hello', { id: crypto.randomUUID() });
+
+    expect(Object.fromEntries(sent)).toEqual({ 'gpt-x': 'xhigh', 'gpt-y': 'high', 'gpt-z': null });
+  });
+
+  /** A session over a resolver whose complete listing is `models`, with the machine's Defaults at `defaults` and
+   *  the workspace pinned to `pin`; `sent` names every model a request went to. */
+  const listedAs = (
+    models: Awaited<ReturnType<LocalModelResolver['listModels']>>['models'],
+    placement: { readonly pin?: string; readonly defaults?: string },
+  ) => {
+    const sent: string[] = [];
+
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => spec?.trim() ?? DEFAULT_WORKERS_AI_MODEL_SPEC,
+      resolveModel: (spec) => {
+        sent.push(spec ?? '');
+
+        return fakeModel('answered');
+      },
+      listProviders: async () => [],
+      listModels: async () => ({ models, failures: [] }),
+      modelInfo: async () => null,
+      ...resolverRest,
+    };
+
+    const catalog = { roles: {}, tiers: { default: { model: placement.defaults ?? DEFAULT_WORKERS_AI_MODEL_SPEC } } };
+
+    const opened = setupWithResolver(resolver, {
+      profileAuthority: () => ({ authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog }),
+    });
+
+    if (placement.pin !== undefined) opened.rt.actor.config.setModel(placement.pin);
+
+    return { ...opened, sent };
+  };
+
+  const errorsOf = (events: readonly SessionEvent[]) => events.flatMap((event) => (event.type === 'error' ? [event.message] : []));
+
+  test('a workspace pinned to a model its provider no longer lists is refused, naming the pin, and nothing is sent to it', async () => {
+    const { session, events, sent } = listedAs([{ provider: 'openai', id: 'gpt-live' }], { pin: 'openai/retired' });
+    await session.send('hello', { id: crypto.randomUUID() });
+
+    expect(errorsOf(events)).toEqual([expect.stringContaining('model "openai/retired" configured for the default tier is unavailable')]);
+    expect(sent).not.toContain('openai/retired');
+    await session.end();
+  });
+
+  test('a default model its provider no longer lists runs on Kinu\'s default, and the person is told which model runs and why', async () => {
+    const { session, events, sent } = listedAs([{ provider: 'openai', id: 'gpt-live' }], { defaults: 'openai/retired' });
+    await session.send('hello', { id: crypto.randomUUID() });
+
+    const told = events.flatMap((event) => (event.type === 'broadcast' && event.event.type === 'model_fallback' ? [event.event] : []));
+
+    expect(told).toEqual([{ type: 'model_fallback', message: `${DEFAULT_WORKERS_AI_MODEL_SPEC} took over from openai/retired: its provider no longer lists it` }]);
+    expect(session.getRunEvents(session.listRuns().items[0].runId).filter((row) => row.type === 'model_fallback'))
+      .toMatchObject([{ from: 'openai/retired', to: DEFAULT_WORKERS_AI_MODEL_SPEC }]);
+    expect(sent).toContain(DEFAULT_WORKERS_AI_MODEL_SPEC);
+    expect(sent).not.toContain('openai/retired');
+    await session.end();
+  });
+
+  test('a model on an endpoint whose listing is empty is sent, as an empty listing proves nothing', async () => {
+    const { session, events, sent } = listedAs([], { pin: 'openai-compatible/house-model' });
+    await session.send('hello', { id: crypto.randomUUID() });
+
+    expect(errorsOf(events)).toEqual([]);
+    expect(sent).toContain('openai-compatible/house-model');
+    await session.end();
+  });
+
   test('an explicit tier applies to one turn and is consumed', async () => {
     const resolver: LocalModelResolver = {
       normalizeSpecSync: (spec) => namedSpec(spec) ?? 'local/a',

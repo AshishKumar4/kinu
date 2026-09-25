@@ -24,8 +24,7 @@ export function knownReasoningEfforts(values: readonly unknown[]): ReasoningEffo
   return values.filter((value): value is ReasoningEffort => isReasoningEffort(value));
 }
 
-/** The model's declared levels plus a stored level it no longer lists, so the row
- *  shows what it holds. */
+/** Declared levels plus a stored one no longer listed, so the row shows what it holds. */
 export function offeredReasoningEfforts(
   declared: readonly ReasoningEffort[] | undefined,
   stored: ReasoningEffort | null | undefined,
@@ -37,12 +36,15 @@ export function offeredReasoningEfforts(
   return offered;
 }
 
-/** `wanted` if declared, else the highest declared level below it, else the lowest. */
+/** `wanted` if declared, else the highest declared level below it, else the lowest, a floor above it. Null when none
+ *  is declared; `wanted` when unknown. */
 export function declaredReasoningEffort(
   wanted: ReasoningEffort,
   declared: readonly ReasoningEffort[] | undefined,
-): ReasoningEffort {
-  if (declared === undefined || declared.length === 0 || declared.includes(wanted)) return wanted;
+): ReasoningEffort | null {
+  if (declared === undefined || declared.includes(wanted)) return wanted;
+
+  if (declared.length === 0) return null;
   const ranked = [...declared].sort((a, b) => REASONING_EFFORTS.indexOf(a) - REASONING_EFFORTS.indexOf(b));
   const below = ranked.filter((level) => REASONING_EFFORTS.indexOf(level) < REASONING_EFFORTS.indexOf(wanted));
 

@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   BUILTIN_ROLE_DEFINITIONS,
-  profileCatalogDigest, resolveTurnProfile,
+  profileCatalogDigest, providerListingOf, providerSnapshotOf, resolveTurnProfile,
   type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
   type ResolveTurnProfileInput, type RoleDefinition, type TierAssignments,
 } from '../src/profiles';
@@ -85,13 +85,13 @@ function refusalMessage(operation: () => void): string {
 describe('tier resolution', () => {
   test('an explicit tier resolves itself and says so', () => {
     expect(resolve({ explicitTier: 'fast' }).tier).toEqual({
-      id: 'fast', source: 'explicit', model: 'm-fast', reasoningEffort: 'low', fallbacks: [],
+      id: 'fast', source: 'explicit', model: 'm-fast', reasoningEffort: 'low', fallbacks: [], replaced: null,
     });
   });
 
   test('a role-declared tier resolves itself and says so', () => {
     expect(resolve({ roleId: 'scout', availableTools: [] }).tier).toEqual({
-      id: 'fast', source: 'role', model: 'm-fast', reasoningEffort: 'low', fallbacks: [],
+      id: 'fast', source: 'role', model: 'm-fast', reasoningEffort: 'low', fallbacks: [], replaced: null,
     });
   });
 
@@ -103,7 +103,7 @@ describe('tier resolution', () => {
     });
 
     expect(profile.tier).toEqual({
-      id: 'fast', source: 'workspace', model: 'm-pinned', reasoningEffort: 'low', fallbacks: [],
+      id: 'fast', source: 'workspace', model: 'm-pinned', reasoningEffort: 'low', fallbacks: [], replaced: null,
     });
     // Catalog slots stay the account's: fixed-tier lanes never route through the pin.
     expect(profile.tiers.fast.model).toBe('m-fast');
@@ -111,10 +111,10 @@ describe('tier resolution', () => {
 
   test("a null workspace model leaves the tier's model", () => {
     expect(resolve({ roleId: 'scout', availableTools: [] }).tier).toEqual({
-      id: 'fast', source: 'role', model: 'm-fast', reasoningEffort: 'low', fallbacks: [],
+      id: 'fast', source: 'role', model: 'm-fast', reasoningEffort: 'low', fallbacks: [], replaced: null,
     });
     expect(resolve({ roleId: 'scout', availableTools: [], workspaceModel: null }).tier).toEqual({
-      id: 'fast', source: 'role', model: 'm-fast', reasoningEffort: 'low', fallbacks: [],
+      id: 'fast', source: 'role', model: 'm-fast', reasoningEffort: 'low', fallbacks: [], replaced: null,
     });
   });
 
@@ -141,7 +141,7 @@ describe('tier resolution', () => {
 
       expect(profile.tier).toEqual({
         id: 'default', source: 'default', model: 'm-default',
-        reasoningEffort: 'medium', fallbacks: [],
+        reasoningEffort: 'medium', fallbacks: [], replaced: null,
       });
     }
   });
@@ -171,7 +171,7 @@ describe('declared reasoning efforts', () => {
     ...provider(), reasoningEfforts: efforts,
   });
 
-  test('a stored effort the model does not declare is sent as its nearest declared level, never a higher one', () => {
+  test('a stored effort the model does not declare is sent as the nearest declared level below it, or as its lowest level when none is below', () => {
     const sent = (explicitEffort: NonNullable<ResolveTurnProfileInput['explicitEffort']>) => resolve({
       explicitEffort, provider: declaring({ 'm-default': ['low', 'medium', 'high'] }),
     }).tier.reasoningEffort;
@@ -182,12 +182,46 @@ describe('declared reasoning efforts', () => {
     expect(sent('medium')).toBe('medium');
   });
 
-  test('each tier slot sends what its own model declares, and a model that declares none keeps what is stored', () => {
-    // m-fast stores low and declares nothing below medium; m-default declares nothing at all.
+  test('each tier slot sends what its own model declares, and a model whose levels are unknown keeps what is stored', () => {
+    // m-fast stores low and declares nothing below medium; m-default's levels are unknown.
     const profile = resolve({ explicitEffort: 'xhigh', provider: declaring({ 'm-fast': ['medium', 'high'] }) });
 
     expect(profile.tiers.fast.reasoningEffort).toBe('medium');
     expect(profile.tier.reasoningEffort).toBe('xhigh');
+  });
+
+  test('a model that declares no level is sent none, its empty list kept by the listing', () => {
+    const listing = providerListingOf({
+      models: [{ provider: 'anthropic', id: 'claude-haiku-4-5', reasoningEfforts: [] }, { provider: 'anthropic', id: 'claude-opus-4-7' }],
+      failures: [],
+    });
+
+    const snapshot = providerSnapshotOf(listing);
+    const tiers: TierAssignments = { default: { model: 'anthropic/claude-haiku-4-5', reasoningEffort: 'high' }, fast: { model: 'anthropic/claude-opus-4-7' } };
+
+    const profile = resolveTurnProfile({
+      envelope: envelope(catalog({ tiers })), provider: snapshot,
+      roleId: 'task', workMode: 'build', availableTools: [], activeSkills: [],
+    });
+
+    expect(profile.tier.reasoningEffort).toBeNull();
+    expect(profile.tiers.fast.reasoningEffort).toBe('medium');
+  });
+
+  test('each fallback is sent the level the tier wants as that fallback declares it, like the model it stands in for', () => {
+    const tiers: TierAssignments = { ...TIERS, default: { model: 'm-default', reasoningEffort: 'xhigh', fallbacks: ['m-backup', 'm-last'] } };
+
+    const profile = resolveTurnProfile({
+      envelope: envelope(catalog({ tiers })),
+      provider: { ...provider(['m-default', 'm-fast', 'm-backup', 'm-last']), reasoningEfforts: {
+        'm-default': ['low', 'medium', 'high', 'xhigh'], 'm-backup': ['low', 'medium', 'high'], 'm-last': [],
+      } },
+      roleId: 'task', workMode: 'build', availableTools: [], activeSkills: [],
+    });
+
+    expect(profile.tier.reasoningEffort).toBe('xhigh');
+    expect(profile.tier.fallbacks).toEqual([{ model: 'm-backup', reasoningEffort: 'high' }, { model: 'm-last', reasoningEffort: null }]);
+    expect(profile.tiers.default.fallbacks).toEqual(profile.tier.fallbacks);
   });
 });
 
@@ -196,12 +230,14 @@ describe('provider availability', () => {
     // A retired model cannot serve, so the tier's turns run on the account's default instead of failing.
     const profile = resolve({ roleId: 'scout', explicitTier: 'fast', availableTools: [], provider: provider(['m-default']) });
 
-    expect(profile.tier).toEqual({ id: 'default', source: 'default', model: 'm-default', reasoningEffort: 'medium', fallbacks: [] });
+    // The swap names what it replaced, so the person is told which model runs and why.
+    expect(profile.tier).toEqual({ id: 'default', source: 'default', model: 'm-default', reasoningEffort: 'medium', fallbacks: [], replaced: 'm-fast' });
     expect(profile.tiers.fast.model).toBe('m-default');
   });
 
   test("with the account default retired too, Kinu's default model serves the tier", () => {
-    const retired = catalog({ roles: { scout: SCOUT }, tiers: { default: { model: 'm-gone' }, fast: { model: 'm-also-gone' } } });
+    // Retired from the provider that serves Kinu's default, so its listing proves them gone.
+    const retired = catalog({ roles: { scout: SCOUT }, tiers: { default: { model: 'workers-ai/m-gone' }, fast: { model: 'workers-ai/m-also-gone' } } });
 
     const profile = resolve({
       envelope: envelope(retired), roleId: 'scout', availableTools: [], provider: provider([DEFAULT_WORKERS_AI_MODEL_SPEC]),
@@ -212,8 +248,9 @@ describe('provider availability', () => {
   });
 
   test('with no default listed either, the tier refuses, naming itself and the provider revision', () => {
+    // Kinu's default is on a provider that lists another model, so it is proven gone too.
     const message = refusalMessage(() => {
-      resolve({ explicitTier: 'fast', availableTools: [], provider: provider(['m-other']) });
+      resolve({ explicitTier: 'fast', availableTools: [], provider: provider(['m-other', 'workers-ai/@cf/other']) });
     });
 
     expect(message).toContain('fast');
@@ -236,7 +273,7 @@ describe('provider availability', () => {
 
     // Never looked up, so nothing disproved it: the tier keeps its model rather than moving to the default.
     expect(profile.tier).toEqual({
-      id: 'fast', source: 'explicit', model: 'm-fast', reasoningEffort: 'low', fallbacks: [],
+      id: 'fast', source: 'explicit', model: 'm-fast', reasoningEffort: 'low', fallbacks: [], replaced: null,
     });
   });
 
@@ -253,6 +290,21 @@ describe('provider availability', () => {
     expect(asking(clean)).toBe('m-default');
     expect(asking({ ...clean, unavailableProviders: [] })).toBe('m-default');
     expect(asking(degraded(['m-default']))).toBe('m-fast');
+  });
+
+  test('a model moves only when its own provider lists models and leaves it out; a provider that lists nothing proves nothing', () => {
+    // An OpenAI-compatible endpoint whose `/models` answers an empty list is complete and names nothing.
+    const tiers: TierAssignments = {
+      default: { model: 'openai/gpt-live' }, fast: { model: 'openai/retired' }, deep: { model: 'openai-compatible/house-model' },
+    };
+
+    const profile = resolveTurnProfile({
+      envelope: envelope(catalog({ tiers })), provider: provider(['openai/gpt-live']),
+      roleId: 'task', workMode: 'build', availableTools: [], activeSkills: [],
+    });
+
+    expect(profile.tiers.fast.model).toBe('openai/gpt-live');
+    expect(profile.tiers.deep.model).toBe('openai-compatible/house-model');
   });
 
   test('a degraded listing does not refuse a turn over an unrelated tier slot', () => {
@@ -277,28 +329,31 @@ describe('fallback chains', () => {
     roleId: 'task', workMode: 'build', availableTools: [], activeSkills: [], ...extra,
   });
 
+  // No model here declares its levels, so each entry is sent the tier's own.
+  const chainOf = (...models: string[]) => models.map((model) => ({ model, reasoningEffort: 'medium' as const }));
+
   test("the turn and every tier slot carry the tier's fallbacks in order", () => {
     const profile = run({});
 
-    expect(profile.tier).toMatchObject({ id: 'default', model: 'm-default', fallbacks: ['m-backup', 'm-last'] });
-    expect(profile.tiers.default?.fallbacks).toEqual(['m-backup', 'm-last']);
+    expect(profile.tier).toMatchObject({ id: 'default', model: 'm-default', fallbacks: chainOf('m-backup', 'm-last') });
+    expect(profile.tiers.default?.fallbacks).toEqual(chainOf('m-backup', 'm-last'));
     expect(profile.tiers.fast?.fallbacks).toEqual([]);
     // An unconfigured slot aliases default, chain included.
-    expect(profile.tiers.deep?.fallbacks).toEqual(['m-backup', 'm-last']);
+    expect(profile.tiers.deep?.fallbacks).toEqual(chainOf('m-backup', 'm-last'));
   });
 
   test('a workspace pin runs first; the fallbacks follow it, never repeating it', () => {
-    expect(run({ workspaceModel: 'm-backup' }).tier).toMatchObject({ model: 'm-backup', fallbacks: ['m-last'] });
+    expect(run({ workspaceModel: 'm-backup' }).tier).toMatchObject({ model: 'm-backup', fallbacks: chainOf('m-last') });
   });
 
   test('an unlisted model with a listed fallback resolves: its call fails and yields to the fallback', () => {
     const profile = run({ provider: provider(['m-fast', 'm-last']) });
 
-    expect(profile.tier).toMatchObject({ model: 'm-default', fallbacks: ['m-backup', 'm-last'] });
+    expect(profile.tier).toMatchObject({ model: 'm-default', fallbacks: chainOf('m-backup', 'm-last') });
   });
 
   test('a chain none of whose models is listed refuses, naming the tier model and its fallbacks', () => {
-    expect(refusalMessage(() => run({ provider: provider(['m-fast']) })))
+    expect(refusalMessage(() => run({ provider: provider(['m-fast', 'workers-ai/@cf/other']) })))
       .toContain('model "m-default" configured for the default tier is unavailable on provider revision "rev-7", as is each of its fallbacks');
   });
 });
@@ -353,8 +408,8 @@ describe('role validation', () => {
       workMode: 'build', availableTools: [], activeSkills: [], ...extra,
     });
 
-    expect(run({ explicitTier: 'review' }).tier).toEqual({ id: 'review', source: 'explicit', model: 'm-review', reasoningEffort: 'high', fallbacks: [] });
-    expect(run({ roleId: 'critic' }).tier).toEqual({ id: 'review', source: 'role', model: 'm-review', reasoningEffort: 'high', fallbacks: [] });
+    expect(run({ explicitTier: 'review' }).tier).toEqual({ id: 'review', source: 'explicit', model: 'm-review', reasoningEffort: 'high', fallbacks: [], replaced: null });
+    expect(run({ roleId: 'critic' }).tier).toEqual({ id: 'review', source: 'role', model: 'm-review', reasoningEffort: 'high', fallbacks: [], replaced: null });
     expect(Object.keys(run({}).tiers)).toEqual(['fast', 'default', 'deep', 'review']);
   });
 

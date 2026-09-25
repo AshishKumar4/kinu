@@ -1739,7 +1739,7 @@ export class LocalAgentSession implements BackendHost {
     const measured = measureCompactionTrigger(this.compactionState, cache.sessionKey, historyLength);
     // Awaited once per turn: the sync catalog reads answer from a static stand-in while the lookup is
     // in flight, which measured a 1M-window model against 128k (#20). The fallbacks' rates price their steps.
-    const [window] = await Promise.all([this.modelCatalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks)]);
+    const [window] = await Promise.all([this.modelCatalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model))]);
     const contextWindow = window.contextWindow;
 
     const liveTurn: ActorExecutionInput['chat'] = {
@@ -1776,16 +1776,12 @@ export class LocalAgentSession implements BackendHost {
       liveTurn.countInputTokens = (request: CountableRequest) =>
         resolver.countInputTokens(this.effectiveModelSpec(), request);
 
-      liveTurn.fallbacks = profile.tier.fallbacks.map((spec) => ({
+      liveTurn.fallbacks = profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
         spec,
         bind: () => {
           const { provider } = parseModelSpec(this.profiles().normalizeSpec(spec));
 
-          return {
-            model: resolver.resolveModel(spec),
-            provider,
-            providerOptions: reasoningEffortOptions(profile.tier.reasoningEffort, provider),
-          };
+          return { model: resolver.resolveModel(spec), provider, providerOptions: reasoningEffortOptions(reasoningEffort, provider) };
         },
       }));
     }

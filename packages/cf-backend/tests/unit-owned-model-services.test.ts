@@ -277,6 +277,26 @@ describe('OwnedModelServices — the provider snapshot', () => {
     expect(profile.tier).toMatchObject({ model: glm, reasoningEffort: 'high' });
   });
 
+  test('a tier model moves only when its own provider lists models and leaves it out; a provider listing nothing proves nothing', async () => {
+    catalogDown();
+    const { snapshot } = await snapshotServices(null).profileProviderSnapshot();
+    const glm = snapshot.availableModels.find((spec) => spec.endsWith(`/${DEFAULT_WORKERS_AI_MODEL_ID}`));
+
+    if (glm === undefined) throw new Error('the platform gateway lists no GLM 5.3');
+
+    // The platform gateway lists its Workers AI models; no OpenAI-compatible endpoint is connected, so it lists nothing.
+    const tiers = { default: { model: glm }, fast: { model: `${glm.slice(0, glm.indexOf('/'))}/@cf/retired/model` }, deep: { model: 'openai-compatible/house-model' } };
+    const catalog = { ...BUILTIN_PROFILE_CATALOG, tiers };
+
+    const profile = resolveTurnProfile({
+      envelope: { authority: { kind: 'account', accountId: 'acct-1' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
+      provider: snapshot, roleId: 'task', workMode: 'build', availableTools: [], activeSkills: [],
+    });
+
+    expect(profile.tiers.fast.model).toBe(glm);
+    expect(profile.tiers.deep.model).toBe('openai-compatible/house-model');
+  });
+
   test('a complete listing is memoized, and only a change expires it', async () => {
     catalogDown();
     const services = snapshotServices(null);
@@ -464,8 +484,9 @@ describe('a degraded listing versus a confirmed-missing model', () => {
     const clean = (await snapshotServices(null).profileProviderSnapshot()).snapshot;
     expect(clean.unavailableProviders).toEqual([]);
 
-    // An empty failure set asserts the listing was complete, so absence is proof the pinned model cannot serve.
-    const profile = resolveWith(clean);
+    // An empty failure set asserts the listing was complete, and Groq answering with another model is proof the
+    // pinned one cannot serve.
+    const profile = resolveWith({ ...clean, availableModels: [...clean.availableModels, 'groq/llama-3.1-8b-instant'] });
     expect(profile.tiers.deep.model).toBe(profile.tiers.default.model);
   });
 });

@@ -497,6 +497,11 @@ export class ActorSession {
 
       active.claim = claim;
       admittedMessages = admitted.messages;
+
+      if (profile.tier.replaced !== null) {
+        await emit({ type: 'model-fallback', from: profile.tier.replaced, to: profile.tier.model, reason: 'its provider no longer lists it' });
+      }
+
       durableOutput = new SessionStream(this.canonical, lease.turnId, claim.epoch);
       const stream = durableOutput;
       // Activation names the input's entry after its message; an edit keeps the entry.

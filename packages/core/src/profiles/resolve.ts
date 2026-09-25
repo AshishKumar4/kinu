@@ -1,5 +1,5 @@
-// Envelope, provider snapshot and role to a turn's profile. A missing tier aliases `default`; a stored tier no
-// complete listing holds runs on the account default, then Kinu's; an unlisted pin is an error.
+// Envelope, provider snapshot and role to a turn's profile. A missing tier aliases `default`; a stored tier its
+// provider no longer lists runs on the account default, then Kinu's; an unlisted pin is an error.
 
 import * as v from 'valibot';
 
@@ -22,12 +22,11 @@ import type { ActorReference } from '../identity/actor-handle';
 
 const DEFAULT_TURN_REASONING_EFFORT: ReasoningEffort = REASONING_EFFORT_FOR_STAGE.chat;
 
-/** `availableModels` is positive-only: absence proves nothing unless the listing had no failures. `revision`
- *  changes with availability, failures included. */
+/** Absence from `availableModels` proves nothing unless no listing failed; `revision` changes with availability. */
 const ProviderCatalogSnapshotSchema = v.looseObject({
   revision: v.string(),
   availableModels: v.array(v.string()),
-  /** Failed listings as `providers/registry.ts` reports them; empty asserts the listing was complete. */
+  /** Failed listings (`providers/registry.ts`); empty: the listing was complete. */
   unavailableProviders: v.optional(v.array(v.strictObject({
     provider: v.string(),
     label: v.string(),
@@ -54,7 +53,7 @@ export interface ProviderSnapshotRead {
   readonly cache: ProviderCacheOutcome;
 }
 
-/** Loads both inputs concurrently and emits the `profile_resolution` evidence row here, guarded, if `record` is given. */
+/** Loads both inputs at once; `record` gets the `profile_resolution` row, guarded. */
 export async function loadProfileAuthorityInputs(input: {
   envelope(): ProfileCatalogEnvelope | Promise<ProfileCatalogEnvelope>;
   provider(): ProviderSnapshotRead | Promise<ProviderSnapshotRead>;
@@ -107,10 +106,15 @@ export type ResolveAgentTurnProfileInput = Omit<ResolveTurnProfileInput, 'roleId
   activeRoleId: string;
 };
 
+export interface TierFallback {
+  readonly model: string;
+  readonly reasoningEffort: ReasoningEffort | null;
+}
+
 export interface TierRoute {
   readonly model: string;
-  readonly reasoningEffort: ReasoningEffort;
-  readonly fallbacks: readonly string[];
+  readonly reasoningEffort: ReasoningEffort | null;
+  readonly fallbacks: readonly TierFallback[];
 }
 
 export interface ResolvedTurnProfile {
@@ -124,8 +128,10 @@ export interface ResolvedTurnProfile {
     readonly id: TierId;
     readonly source: TierSource;
     readonly model: string;
-    readonly reasoningEffort: ReasoningEffort;
-    readonly fallbacks: readonly string[];
+    readonly reasoningEffort: ReasoningEffort | null;
+    readonly fallbacks: readonly TierFallback[];
+    /** The configured model its provider no longer lists, which `model` stands in for. */
+    readonly replaced: string | null;
   };
   readonly tiers: Readonly<Record<TierId, TierRoute>>;
   readonly workMode: WorkMode;
@@ -136,6 +142,12 @@ export interface ResolvedTurnProfile {
   readonly catalogVersion: number;
   readonly providerRevision: string;
   readonly digest: string;
+}
+
+function providerOf(spec: string): string {
+  const slash = spec.indexOf('/');
+
+  return slash < 1 ? '' : spec.slice(0, slash);
 }
 
 function normalizeNames(lists: ReadonlyArray<readonly string[]>): string[] {
@@ -215,11 +227,18 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
   }
 
   const provider = parsedProvider.output;
-  // Claim absence only when nothing failed: failure rows do not name every spec they cost. While degraded,
-  // a mistyped model on a healthy provider fails at call time instead.
+  // Failure rows do not name every spec they cost; while degraded, a typo fails at call time.
   const listingComplete = provider.unavailableProviders.length === 0;
 
-  const listed = (spec: string): boolean => provider.availableModels.includes(specWithoutAccount(spec));
+  // A provider that lists nothing proves nothing.
+  const listing = new Set(provider.availableModels.map(providerOf));
+
+  const listed = (spec: string): boolean => {
+    const bare = specWithoutAccount(spec);
+
+    return provider.availableModels.includes(bare) || !listing.has(providerOf(bare));
+  };
+
   const servable = (model: string, fallbacks: readonly string[]): boolean => !listingComplete || [model, ...fallbacks].some(listed);
 
   const unavailable = (model: string, fallbacks: readonly string[], id: TierId): Error => new Error(
@@ -238,7 +257,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
 
   if (!defaultAssignment) throw new Error('profile catalog has no default tier assignment');
 
-  /** A stored tier no complete listing holds cannot serve: the account default runs it, then Kinu's. */
+  /** A stored tier that cannot serve runs on the account default, then Kinu's. */
   const serving = (id: TierId, stored: TierAssignment): TierAssignment => {
     if (servable(stored.model, stored.fallbacks ?? [])) return stored;
 
@@ -251,8 +270,12 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     return replacement;
   };
 
-  const effortFor = (spec: string, wanted: ReasoningEffort): ReasoningEffort =>
+  const effortFor = (spec: string, wanted: ReasoningEffort): ReasoningEffort | null =>
     declaredReasoningEffort(wanted, provider.reasoningEfforts[specWithoutAccount(spec)]);
+
+  const chainOf = (specs: readonly string[], wanted: ReasoningEffort): readonly TierFallback[] => Object.freeze(
+    specs.map((spec) => Object.freeze({ model: spec, reasoningEffort: effortFor(spec, wanted) })),
+  );
 
   const roles = effectiveRoleCatalog(envelope.catalog);
 
@@ -281,10 +304,12 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
   }
 
   const assignment = serving(tierId, stored);
+  let replaced: string | null = null;
 
   if (assignment !== stored) {
     tierId = 'default';
     source = 'default';
+    replaced = stored.model;
   }
 
   const tierFallbacks = assignment.fallbacks ?? [];
@@ -295,12 +320,14 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     requireAvailable(input.workspaceModel, tierFallbacks, tierId);
     model = input.workspaceModel;
     source = 'workspace';
+    replaced = null;
   }
 
   if (input.actorModel !== undefined && input.actorModel !== null) {
     requireAvailable(input.actorModel, tierFallbacks, tierId);
     model = input.actorModel;
     source = 'actor';
+    replaced = null;
   }
 
   const availableTools = role.allowedTools === undefined
@@ -312,15 +339,16 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
 
   const tierSlot = (id: TierId): TierRoute => {
     const slot = serving(id, id === 'default' ? defaultAssignment : (envelope.catalog.tiers[id] ?? defaultAssignment));
-    const fallbacks = slot.fallbacks ?? [];
+    const wanted = slot.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT;
 
     return Object.freeze({
       model: slot.model,
-      reasoningEffort: effortFor(slot.model, slot.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT),
-      fallbacks: Object.freeze([...fallbacks]),
+      reasoningEffort: effortFor(slot.model, wanted),
+      fallbacks: chainOf(slot.fallbacks ?? [], wanted),
     });
   };
 
+  const wantedEffort = input.explicitEffort ?? assignment.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT;
   const tierIds = tierIdsOf(envelope.catalog);
   const tiers: Record<TierId, TierRoute> = {};
 
@@ -338,8 +366,9 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
       id: tierId,
       source,
       model,
-      reasoningEffort: effortFor(model, input.explicitEffort ?? assignment.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT),
-      fallbacks: Object.freeze(tierFallbacks.filter((spec) => spec !== model)),
+      reasoningEffort: effortFor(model, wantedEffort),
+      fallbacks: chainOf(tierFallbacks.filter((spec) => spec !== model), wantedEffort),
+      replaced,
     }),
     workMode,
     skills: Object.freeze(skills),

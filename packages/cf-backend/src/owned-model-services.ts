@@ -1,7 +1,7 @@
 import type { LanguageModel } from 'ai';
 import {
   agentAffinityKey, parseModelSpec, reasoningEffortOptions,
-  buildProviderCatalogSnapshot, providerListingOf, ProviderListingCache,
+  providerSnapshotOf, providerListingOf, ProviderListingCache,
   type ProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
   type ProviderWaitInfo,
   type WebSearchProvider,
@@ -109,7 +109,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
     return model;
   }
 
-  resolveModelWithEffort(spec: string | null | undefined, effort: ReasoningEffort) {
+  resolveModelWithEffort(spec: string | null | undefined, effort: ReasoningEffort | null) {
     const registry = this.providerRegistry();
     const normalized = registry.normalizeSpecSync(spec);
     const { provider } = parseModelSpec(normalized);
@@ -138,7 +138,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
     }
 
     const { listing, cache } = await this.providerListings.read();
-    const snapshot = buildProviderCatalogSnapshot(listing.models, listing.failures, listing.reasoningEfforts);
+    const snapshot = providerSnapshotOf(listing);
     diagnostics.event('profile.provider_snapshot.resolved', {
       cache,
       models: snapshot.availableModels.length,

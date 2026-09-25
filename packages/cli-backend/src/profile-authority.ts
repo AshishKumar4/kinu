@@ -9,7 +9,7 @@ import type {
 } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, ProviderListingCache,
-  buildProviderCatalogSnapshot, loadProfileAuthorityInputs, providerListingOf,
+  loadProfileAuthorityInputs, providerListingOf, providerSnapshotOf,
   profileCatalogDigest, resolveAgentTurnProfile,
 } from '@kinu.run/core';
 import type { LocalModelResolver } from './model-resolver';
@@ -135,16 +135,13 @@ export function createLocalProfileAuthority(deps: {
     listings.invalidate();
   };
 
-  /**
-   * The configured spec is folded in here, not in the cache, so a stored model
-   * change alters the snapshot's identity with no invalidation to miss.
-   */
+  /** The configured spec pins the revision here, so a stored change has no invalidation to miss. */
   const providerSnapshot = async (): Promise<ProviderSnapshotRead> => {
     const { listing, cache } = await listings.read();
     const configured = normalizeSpec(deps.config.getModel());
 
     return {
-      snapshot: buildProviderCatalogSnapshot([configured, ...listing.models], listing.failures, listing.reasoningEfforts),
+      snapshot: providerSnapshotOf(listing, [configured]),
       cache,
     };
   };

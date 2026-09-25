@@ -414,7 +414,7 @@ describe('turn-pipeline correctness wiring', () => {
   test('an auxiliary call binds the route it resolved — the model AND that route\'s own effort', async () => {
     // Driven twice under routes that differ on both axes, so a constant effort that matches the
     // first route still fails.
-    const asked: Array<{ spec: string | null | undefined; effort: ReasoningEffort }> = [];
+    const asked: Array<{ spec: string | null | undefined; effort: ReasoningEffort | null }> = [];
     let profile = mergePolicyProfile();
 
     const runtime = createHeadRuntime({

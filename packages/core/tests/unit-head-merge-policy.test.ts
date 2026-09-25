@@ -37,7 +37,7 @@ function scriptedModel(text: string, prompts: string[]): MockLanguageModelV3 {
 }
 
 function policyWith(text: string, profile: () => Promise<ResolvedTurnProfile>) {
-  const asked: Array<{ spec: string; effort: string; tier: string; source: string }> = [];
+  const asked: Array<{ spec: string; effort: string | null; tier: string; source: string }> = [];
   const prompts: string[] = [];
   const reports: ModelCallReport[] = [];
   const operations: ModelOperationEvent[] = [];
