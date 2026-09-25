@@ -120,7 +120,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
 
       if (share.kind === 'live') {
         mine.push({
-          ...row, id: share.share, kind: 'live',
+          ...row, id: share.share, kind: 'live', slate: share.slate,
           ...(share.visibility !== undefined && { visibility: share.visibility }), ...(share.fork !== undefined && { fork: share.fork }),
         });
         continue;

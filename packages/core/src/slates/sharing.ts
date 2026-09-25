@@ -247,6 +247,8 @@ const SharedRowSchema = v.object({
   bindings: v.number(),
   visibility: v.optional(LiveShareVisibilitySchema),
   workspace: v.optional(v.string()),
+  /** A live share's slate, so a share of yours can show that slate's picture. */
+  slate: v.optional(v.string()),
   users: v.optional(v.array(v.string())),
   owner: v.optional(v.string()),
   /** A live share's fork switch: false when it is closed to forks. */

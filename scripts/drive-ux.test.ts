@@ -178,38 +178,55 @@ describe('the Drive', () => {
     });
   });
 
+  /** Opens `frame` with Issue triage's picture answering, every other picture missing, and reads what each tile under
+   *  `selector` drew once every picture has answered and a frame has drawn the answer. */
+  async function drawnPictures(gallery: Gallery, frame: string, selector: string, key: string): Promise<[string | null, string][]> {
+    const page = await gallery.newPage();
+
+    try {
+      await page.setRequestInterception(true);
+      page.on('request', async (request) => {
+        const { pathname } = new URL(request.url());
+
+        if (!pathname.startsWith('/api/user/pictures/')) await request.continue();
+        else if (pathname.startsWith('/api/user/pictures/checkout-fixes/issue-triage/')) await request.respond({ status: 200, contentType: 'image/png', body: PIXEL });
+        else await request.respond({ status: 404, body: 'No such picture.' });
+      });
+      await page.setViewport(VIEWPORTS.desktop);
+      await page.goto(`${gallery.origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector(selector);
+      await page.waitForFunction((tiles: string) => [...document.querySelectorAll(`${tiles} img`)].every((img) => img instanceof HTMLImageElement && img.complete), {}, selector);
+      await page.evaluate(() => new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); }));
+
+      return await page.$$eval(selector, (tiles, attribute) => tiles.map((tile): [string | null, string] => {
+        const img = tile.querySelector('img');
+        let drawn = 'cover';
+
+        if (img !== null) drawn = img.naturalWidth > 0 ? 'picture' : 'broken';
+
+        return [tile.getAttribute(attribute), drawn];
+      }), key);
+    } finally {
+      await page.close();
+    }
+  }
+
   test('a slate tile shows its picture, and its cover while it has none or when the picture fails', async () => {
     await withGallery(async (gallery) => {
-      const page = await gallery.newPage();
+      // Issue triage's picture answers; Landing perf report's is missing; Standup notes has none yet.
+      expect(await drawnPictures(gallery, 'drive', '[data-drive-slate]', 'data-drive-slate'))
+        .toEqual([['issue-triage', 'picture'], ['lighthouse', 'cover'], ['standup', 'cover']]);
+    });
+  });
 
-      try {
-        // Issue triage's picture answers; Landing perf report's is missing; Standup notes has none yet.
-        await page.setRequestInterception(true);
-        page.on('request', async (request) => {
-          const { pathname } = new URL(request.url());
+  test('a live share of yours shows its slate\'s picture; a blueprint and a share you received keep their covers', async () => {
+    await withGallery(async (gallery) => {
+      const drawn = await drawnPictures(gallery, 'shared', '[data-drive-share]', 'data-drive-share');
 
-          if (!pathname.startsWith('/api/user/pictures/')) await request.continue();
-          else if (pathname.startsWith('/api/user/pictures/checkout-fixes/issue-triage/')) await request.respond({ status: 200, contentType: 'image/png', body: PIXEL });
-          else await request.respond({ status: 404, body: 'No such picture.' });
-        });
-        await page.setViewport(VIEWPORTS.desktop);
-        await page.goto(`${gallery.origin}/gallery.html?frame=drive`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[data-drive-slate]');
-        // Every picture has answered, and a frame has drawn what its tile made of the answer.
-        await page.waitForFunction(() => [...document.querySelectorAll('[data-drive-slate] img')].every((img) => img instanceof HTMLImageElement && img.complete));
-        await page.evaluate(() => new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); }));
-
-        expect(await page.$$eval('[data-drive-slate]', (tiles) => tiles.map((tile) => {
-          const img = tile.querySelector('img');
-          let drawn = 'cover';
-
-          if (img !== null) drawn = img.naturalWidth > 0 ? 'picture' : 'broken';
-
-          return [tile.getAttribute('data-drive-slate'), drawn];
-        }))).toEqual([['issue-triage', 'picture'], ['lighthouse', 'cover'], ['standup', 'cover']]);
-      } finally {
-        await page.close();
-      }
+      // Only a live share of yours has a slate of yours to show; the others, two blueprints and a live share someone
+      // gave you, keep their covers.
+      expect(drawn.filter(([, how]) => how === 'picture').map(([id]) => id)).toEqual(['live-board-1']);
+      expect(drawn.length).toBe(4);
     });
   });
 

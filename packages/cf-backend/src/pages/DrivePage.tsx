@@ -554,9 +554,13 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     }
 
     const meta = mine ? whoCanOpen(row) : [row.kind === "live" ? "Live" : "Blueprint", row.owner, shortAge(row.createdAt)].filter(Boolean).join(" · ");
+    const cover = <Cover title={row.title} seed={row.share} />;
+    // A live share of yours shows the picture of the slate it shares.
+    const slate = mine && row.kind === "live" ? shared?.slates.find((each) => each.workspace === row.workspace && each.id === row.slate) : undefined;
 
     return (
-      <Tile key={`${row.kind}:${row.id}`} title={row.title} picture={<Cover title={row.title} seed={row.share} />} icon={SHARE_ICON[row.kind]}
+      <Tile key={`${row.kind}:${row.id}`} title={row.title} icon={SHARE_ICON[row.kind]}
+        picture={slate === undefined ? cover : <SlatePicture workspace={slate.workspace} slate={slate} className="absolute inset-0 size-full object-cover object-top" fallback={cover} />}
         href={row.kind === "blueprint" ? blueprintPagePath(row.id) : undefined} onOpen={row.kind === "live" ? () => openLive(row) : undefined}
         meta={<span className="truncate">{meta}</span>} menu={menu}
         attributes={{ "data-drive-share": row.id, "data-drive-share-kind": row.kind }} />

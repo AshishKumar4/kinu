@@ -344,7 +344,7 @@ test("the owner's Drive lists its slates and shares from the tiles its workspace
   expect(after.slates[0]?.visibility).toBeUndefined();
 });
 
-test("a slate's picture in its workspace's tile reaches the Drive's row for it", async () => {
+test("a slate's picture in its workspace's tile reaches the Drive's row for it, and a live share of it names it", async () => {
   const world = await twoUserWorld();
   cleanups.push(world.close);
   const owner = identityOf(OWNER_ID, 'owner@example.test');
@@ -361,6 +361,8 @@ test("a slate's picture in its workspace's tile reaches the Drive's row for it",
   const shared = await jsonBody(present(await sharedRequest(world.env, owner, new Request('https://app.test/api/shared')), 'the library'), SharedLibrarySchema);
 
   expect(shared.slates.map((slate) => [slate.id, slate.picture])).toEqual([['issues', digest]]);
+  // So the share's tile can find that picture among the owner's slates.
+  expect(shared.mine.filter((row) => row.kind === 'live').map((row) => row.slate)).toEqual(['issues']);
 });
 
 test('a change whose card cannot reach the tile is made and says the list is behind; a revoke during the backoff still moves it', async () => {
