@@ -151,6 +151,8 @@ export interface Derived {
   readonly env: readonly string[];
   /** Whether the closure is the whole corpus. */
   readonly corpus: boolean;
+  /** The gitignored build outputs its graph runs from (`BUILT_OUTPUTS`), whose files the key hashes as built. */
+  readonly outputs: readonly string[];
   /** What the walker could not see and how it was handled, for the green path. */
   readonly notes: readonly string[];
 }
@@ -166,10 +168,10 @@ export type Closure = Derived | Uncomputable | { readonly kind: 'live'; readonly
 export const CORPUS_MODULE = 'scripts/sources.ts';
 
 /** A gitignored build output under the tree that a module graph runs from, and
- *  the tracked inputs every install rebuilds it from, so those inputs stand for
- *  its bytes as the lock and the patches stand for `node_modules`. A closure
- *  whose graph reaches `source` holds `inputs`, and `--audit-closure` counts an
- *  open under `output` as held only then. */
+ *  the tracked inputs every install rebuilds it from. A closure whose graph
+ *  reaches `source` holds `inputs` and names `output`, whose own files the key
+ *  hashes: only an install rebuilds it, so after a source edit without one the
+ *  gate runs the old build, and its green must not stand for the fresh one. */
 export interface BuiltOutput {
   readonly output: string;
   readonly source: string;
@@ -726,8 +728,10 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
     return { kind: 'uncomputable', why: `${run}: ${generated} is generated or untracked, so the tree cannot name its bytes` };
   }
 
-  for (const built of BUILT_OUTPUTS.filter((entry) => [...files].some((file) => file.startsWith(entry.source)))) {
-    for (const file of repo.files) if (built.inputs.some((input) => file === input || file.startsWith(input))) files.add(file);
+  const built = BUILT_OUTPUTS.filter((entry) => [...files].some((file) => file.startsWith(entry.source)));
+
+  for (const entry of built) {
+    for (const file of repo.files) if (entry.inputs.some((input) => file === input || file.startsWith(input))) files.add(file);
   }
 
   for (const config of configsOf(files, repo, universe)) files.add(config);
@@ -739,6 +743,7 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
     files: [...files].sort(),
     env: [...new Set([...walked.env, ...loaded.env, ...(inputs.env ?? [])])].sort(),
     corpus,
+    outputs: built.map((entry) => entry.output),
     notes: closureNotes(walked, loaded, inputs, corpus),
   };
 }

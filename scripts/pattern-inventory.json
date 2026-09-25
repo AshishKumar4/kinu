@@ -1189,6 +1189,13 @@
       "owner": "CJS_IMPORT",
       "sourceSha256": "35649bf934923ae7e10df35684af94ba865b4eefc387701406e8629df4dda392",
       "decision": "lexical"
+    },
+    {
+      "file": "scripts/ladder-audit.ts",
+      "kind": "regex-literal",
+      "owner": "openedPaths",
+      "sourceSha256": "83399019e07399a366423eae08c28803c6599ad60acb08b8d75ca6752a00fd45",
+      "decision": "lexical"
     }
   ]
 }
