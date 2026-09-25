@@ -214,7 +214,7 @@ function workspaceExecFailure(input: { doing: string; cause: unknown; command?: 
   return nimbusFailure({ doing: input.doing, cause: input.cause });
 }
 
-const NO_LISTENER_MARK = 'No process is listening';
+const NO_LISTENER_MARK = 'nothing is serving port';
 
 function workspaceNoListenerReason(port: number): string {
   return `workspace port ${port} has no server listening. Start the server with startProcess, then expose the port `
