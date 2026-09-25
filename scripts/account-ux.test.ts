@@ -306,10 +306,12 @@ describe('account panels', () => {
         const text = await usage.evaluate(() => document.body.textContent ?? '');
         expect(text).toContain('anthropic · work');
         expect(text).toContain('3 of 50 requests left, resets in');
-        expect(text).toContain('41% of the 5h window used');
+        // Limits read live from each provider, in limitWindowText's words, above the spend rows.
+        expect(text).toContain('5h  62% used · 38% left · resets');
+        expect(text).toContain('credit  $5.88 used · $4.12 of $10.00 left · resets monthly');
+        expect(text).toContain("Claude · work: couldn't be read (");
         expect(text).toContain('No account recorded');
         expect(text).toContain('could not be read: old-bot');
-        expect(text).toContain('$4.12 of $10.00 left, resets monthly');
         await shoot(usage, 'settings-usage-mobile-dark');
       } finally {
         await usage.close();

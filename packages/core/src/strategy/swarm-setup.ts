@@ -831,7 +831,7 @@ export function buildNodeDeps(input: {
   readonly logger: Logger;
   readonly signal?: AbortSignal;
   readonly clock?: Clock;
-  readonly reportModelCall?: ModelCallSink;
+  readonly reportModelCall: ModelCallSink;
   readonly publishHeadStream?: PublishHeadStream;
   readonly mission?: MissionScope;
   readonly provisionHome?: NodeWorkspaceProvisioner;
@@ -843,13 +843,12 @@ export function buildNodeDeps(input: {
 
   const nodeDeps: NodeAgentDeps = {
     hostNode: deps.hostNode, model: deps.model, journal: deps.journal, logger: deps.logger,
+    reportModelCall: deps.reportModelCall,
   };
 
   if (deps.signal !== undefined) nodeDeps.signal = deps.signal;
 
   if (deps.clock !== undefined) nodeDeps.clock = deps.clock;
-
-  if (deps.reportModelCall !== undefined) nodeDeps.reportModelCall = deps.reportModelCall;
 
   if (deps.publishHeadStream !== undefined) nodeDeps.publishHeadStream = deps.publishHeadStream;
 

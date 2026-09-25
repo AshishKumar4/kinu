@@ -4,7 +4,7 @@ import type {
   AuthResolution, ModelProvider, ProviderDeps, ProviderInfo, ModelInfo,
 } from './types';
 import { parseModelSpec } from './types';
-import { StaleModelList } from './util';
+import { settleModelList, StaleModelList } from './util';
 import { diagnostics, KinuError, renderThrownChain } from '../obs/index';
 import { accountCredentialKey, MAIN_ACCOUNT, storedAccounts } from '../credentials/accounts';
 
@@ -291,7 +291,7 @@ export function createProviderRegistry(): ProviderRegistry {
           const own = accountDeps(deps, p.id);
 
           if (!(await p.isAvailable(own))) continue;
-          const modelId = p.defaultModel ?? (await p.listModels(own))[0]?.id;
+          const modelId = p.defaultModel ?? (await settleModelList(p.listModels(own))).models[0]?.id;
 
           if (modelId) return `${p.id}/${modelId}`;
         } catch (error) {

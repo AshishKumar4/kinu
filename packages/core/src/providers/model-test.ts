@@ -1,10 +1,9 @@
-import { streamText, type LanguageModel } from 'ai';
+import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
 import { describeProviderError, providerFailureFacts, toProviderError } from './util';
 import { abortCause } from '../utils/abort';
 import { renderThrownChain } from '../obs/index';
-import { normalizeUsage } from '../usage';
-import { callAccountOf } from './quota';
+import { streamTextReported } from './model-invocation';
 import type { ModelCallSink } from '../events/model-call';
 
 export type ModelTestFailure = 'signed-out' | 'spent' | 'unknown-model' | 'unreachable' | 'refused';
@@ -42,33 +41,29 @@ export async function testModel(input: {
 
   const started = now();
   let firstTokenMs: number | null = null;
-  const failures: Array<{ readonly error: unknown }> = [];
+  const spend = { source: 'test', report: input.report ?? ((): void => {}) } as const;
+  // The stream then throws a generic "no output" in place of this.
+  const streamed: Array<{ readonly error: unknown }> = [];
 
-  const result = streamText({
-    model,
-    prompt: 'Reply with the word OK.',
-    maxRetries: 0,
-    ...(input.signal !== undefined && { abortSignal: input.signal }),
-    onError: (event) => { failures.push(event); },
-  });
+  try {
+    const stream = streamTextReported({
+      model,
+      prompt: 'Reply with the word OK.',
+      maxRetries: 0,
+      ...(input.signal !== undefined && { abortSignal: input.signal }),
+      onError: (event) => { streamed.push(event); },
+    }, { spend, spec: input.spec });
 
-  for await (const part of result.fullStream) {
-    if (firstTokenMs === null && (part.type === 'text-delta' || part.type === 'reasoning-delta')) firstTokenMs = now() - started;
+    for await (const chunk of stream) if (firstTokenMs === null && chunk.length > 0) firstTokenMs = now() - started;
+  } catch (cause) {
+    if (input.signal?.aborted) throw abortCause(input.signal);
+
+    return failed({ cause: streamed[0]?.error ?? cause });
   }
 
-  if (input.signal?.aborted) throw abortCause(input.signal);
-
-  const [failure] = failures;
-
-  if (failure !== undefined) return failed({ cause: failure.error });
+  if (streamed[0] !== undefined) return failed({ cause: streamed[0].error });
 
   const totalMs = now() - started;
-  const [usage, response] = await Promise.all([result.usage, result.response]);
-
-  input.report?.({
-    source: 'test', spec: input.spec, usage: normalizeUsage(usage), account: callAccountOf(response),
-    ...(response.modelId.length > 0 && { modelId: response.modelId }),
-  });
 
   return { ok: true, firstTokenMs: firstTokenMs ?? totalMs, totalMs };
 }

@@ -11,7 +11,7 @@ import {
   type JsonObject,
   type VectorRecord,
 } from '../src/index';
-import { present } from '@kinu.run/test-utils';
+import { present, unobservedSpend } from '@kinu.run/test-utils';
 
 describe('reciprocalRankFusion', () => {
   test('returns empty for empty inputs', () => {
@@ -366,7 +366,7 @@ describe('createWorkersAIEmbedder', () => {
       },
     };
 
-    const embedder = createWorkersAIEmbedder({ aiBinding: ai, dimensions: 4 });
+    const embedder = present(createWorkersAIEmbedder({ env: { AI: ai }, dimensions: 4, report: unobservedSpend }), 'an embedder over a bound AI');
     const vec = await embedder.embed('hello');
     expect(vec).toEqual([0.1, 0.2, 0.3, 0.4]);
     expect(calls[0].model).toBe('@cf/baai/bge-small-en-v1.5');
@@ -381,7 +381,7 @@ describe('createWorkersAIEmbedder', () => {
       },
     };
 
-    const embedder = createWorkersAIEmbedder({ aiBinding: ai, dimensions: 2 });
+    const embedder = present(createWorkersAIEmbedder({ env: { AI: ai }, dimensions: 2, report: unobservedSpend }), 'an embedder over a bound AI');
     const embedBatch = embedder.embedBatch?.bind(embedder);
 
     if (!embedBatch) throw new Error('expected batch embed support');
@@ -403,7 +403,7 @@ describe('createWorkersAIEmbedder', () => {
       },
     };
 
-    const embedder = createWorkersAIEmbedder({ aiBinding: ai, dimensions: 2 });
+    const embedder = present(createWorkersAIEmbedder({ env: { AI: ai }, dimensions: 2, report: unobservedSpend }), 'an embedder over a bound AI');
     const embedBatch = present(embedder.embedBatch?.bind(embedder), 'batch embed support');
     const out = await embedBatch(['a', 'b']);
     expect(out.length).toBe(2);
@@ -411,7 +411,7 @@ describe('createWorkersAIEmbedder', () => {
 
   test('throws when ai.run returns empty data', async () => {
     const ai = { async run() { return { data: [] }; } };
-    const embedder = createWorkersAIEmbedder({ aiBinding: ai, dimensions: 2 });
+    const embedder = present(createWorkersAIEmbedder({ env: { AI: ai }, dimensions: 2, report: unobservedSpend }), 'an embedder over a bound AI');
     await expect(embedder.embed('hello')).rejects.toThrow(/no vector/);
   });
 });

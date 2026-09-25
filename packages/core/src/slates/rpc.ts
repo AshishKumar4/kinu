@@ -20,7 +20,7 @@ export function isSlateMethodName(name: string): boolean {
 
 /** The refusal is a value so it crosses a Durable Object RPC boundary intact. */
 export type SlateAnswer<Value> =
-  | { readonly ok: true; readonly value: Value }
+  | { readonly ok: true; readonly value: Value; readonly listing?: 'pending' }
   | ({ readonly ok: false } & Refusal);
 
 export type SlateCallResult = SlateAnswer<JsonValue>;

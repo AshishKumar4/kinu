@@ -37,13 +37,14 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, fixture }: {
+export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onListingPending, fixture }: {
   workspace: string;
   slate: string;
   rpc: Rpc;
   onClose: () => void;
   /** The dialog owns the busy state so its backdrop stops dismissing mid-write. */
   onBusy: (busy: boolean) => void;
+  onListingPending?: () => void;
   fixture?: BlueprintFixture;
 }) {
   const [versions, setVersions] = useState<string[] | null>(fixture?.versions ?? null);
@@ -106,24 +107,29 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, fix
     setErr(null);
 
     try {
-      setPublished(await publishBlueprint({ workspace, slate, version, include: include === null ? undefined : [...include], emails: emailsOf(emails) }));
+      const made = await publishBlueprint({ workspace, slate, version, include: include === null ? undefined : [...include], emails: emailsOf(emails) });
+      setPublished(made);
+
+      if (made.listing === 'pending') onListingPending?.();
     } catch (cause) {
       setErr(renderThrownChain({ cause }));
     } finally {
       setBusy(false);
     }
-  }, [busy, version, emails, workspace, slate, include, setBusy]);
+  }, [busy, version, emails, workspace, slate, include, setBusy, onListingPending]);
 
   const unshare = useCallback(async (share: string) => {
     setErr(null);
 
     try {
-      await revokeShare({ workspace, share });
+      const revoked = await revokeShare({ workspace, share });
       setShares((previous) => previous.filter((row) => row.id !== share));
+
+      if (revoked.listing === 'pending') onListingPending?.();
     } catch (cause) {
       setErr(renderThrownChain({ cause }));
     }
-  }, [workspace]);
+  }, [workspace, onListingPending]);
 
   if (published !== null) {
     const link = `${location.origin}${blueprintPagePath(published.id)}`;
@@ -131,7 +137,9 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, fix
     return (
       <>
         <div className="space-y-3 text-xs">
-          <p className="p-notice-success rounded-md px-3 py-2" data-blueprint-published>Published. Anyone with the link can read it and fork a copy.</p>
+          <p className="p-notice-success rounded-md px-3 py-2" data-blueprint-published>
+            Published. Anyone with the link can read it and fork a copy.{published.listing === "pending" && " The list will catch up."}
+          </p>
           <div className="flex items-center gap-2">
             <a href={blueprintPagePath(published.id)} className="min-w-0 flex-1 break-all font-mono p-accent" target="_blank" rel="noopener noreferrer">{link}</a>
             <CopyButton value={link} what="the blueprint link" className="p-btn-quiet rounded p-1" />

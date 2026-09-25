@@ -37,7 +37,9 @@ export function getBlueprint(id: string): Promise<BlueprintView> {
   return api(BlueprintViewSchema, 'GET', `/api/shared/blueprint/${encodeURIComponent(id)}`);
 }
 
-const PublishedLink = v.object({ id: v.string(), share: v.string(), users: v.array(v.string()) });
+const Listing = v.optional(v.literal('pending'));
+
+const PublishedLink = v.object({ id: v.string(), share: v.string(), users: v.array(v.string()), listing: Listing });
 
 export type Published = v.InferOutput<typeof PublishedLink>;
 
@@ -71,13 +73,13 @@ export function shareLive(input: {
   workspace: string; slate: string; visibility: LiveShareVisibility; emails?: string[];
   approved: { slate: string; binding: string; member: string }[];
   fork?: boolean;
-}): Promise<LiveShareCreated> {
-  return api(LiveShareCreatedSchema, 'POST', '/api/shared/live', input);
+}): Promise<LiveShareCreated & { listing?: 'pending' }> {
+  return api(v.object({ ...LiveShareCreatedSchema.entries, listing: Listing }), 'POST', '/api/shared/live', input);
 }
 
 /** Ends a live share or a blueprint link. */
-export async function revokeShare(input: { workspace: string; share: string }): Promise<void> {
-  await api(v.object({}), 'POST', '/api/shared/revoke', input);
+export async function revokeShare(input: { workspace: string; share: string }): Promise<{ listing?: 'pending' }> {
+  return await api(v.object({ listing: Listing }), 'POST', '/api/shared/revoke', input);
 }
 
 /** Share origin for a public share; a ticket-bearing entry for one that names people. */

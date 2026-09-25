@@ -34,6 +34,7 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import { CHILD_ENV_NAMES } from '../packages/test-utils/src/ambient-env';
 import { deriveClosure } from './ladder-closure';
+import { ignoredFilesUnder } from './sources';
 import type { Closure, Derived, Inputs, Repo } from './ladder-closure';
 
 const ToolVersionsSchema = v.object({
@@ -213,6 +214,18 @@ export function keyFor(preimage: KeyPreimage): string {
     hash.update(`file\0${file}\0`);
     hash.update(repo.read(file));
     hash.update('\0');
+  }
+
+  for (const output of closure.outputs) {
+    const built = ignoredFilesUnder(repo.root, output);
+
+    if (built.length === 0) hash.update(`built\0${output}\0absent\0`);
+
+    for (const file of built) {
+      hash.update(`built\0${file}\0`);
+      hash.update(readFileSync(join(repo.root, file)));
+      hash.update('\0');
+    }
   }
 
   for (const name of gateEnvNames(closure)) hash.update(`env\0${name}\0${env(name) ?? '\u0001unset'}\0`);

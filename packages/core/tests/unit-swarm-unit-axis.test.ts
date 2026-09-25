@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { createTestRuntime } from '@kinu.run/test-utils';
+import { createTestRuntime, unobservedSpend } from '@kinu.run/test-utils';
 import { SwarmConfigSchema } from '../src/tools/swarm-input';
 import type { JsonValue } from '../src/utils/json';
 import {
@@ -299,6 +299,7 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
     if ('reason' in resolved) throw new Error(resolved.error);
 
     const result = await runSwarm({
+      reportModelCall: unobservedSpend,
       rt, hostNode: hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true }).hostNode,
       mode: 'build',
       model: scriptedTurnModel({ doGenerate: async () => ({
@@ -326,6 +327,7 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
     const { rt, testSql } = createTestRuntime();
 
     const result = await runSwarm({
+      reportModelCall: unobservedSpend,
       rt,
       // `unit:'answer'` is an agent node: each node acquires a real seat.
       hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,

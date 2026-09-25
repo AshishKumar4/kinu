@@ -612,26 +612,26 @@ const STOCK_OVERVIEWS = new Map(Object.entries({
   "checkout-fixes": {
     activity: "working", decisionsWaiting: 2, hasUpdates: true,
     latestRun: { status: "error", task: "Investigate intermittent checkout failures in the coupon migration" },
-    slates: [{ id: "coupon-board", title: "Coupon board", picture: null }],
+    slates: [{ id: "coupon-board", title: "Coupon board", picture: null, bindings: 0, visibility: null }], shares: [],
   },
   "perf-audit": {
     activity: "working", decisionsWaiting: 0, hasUpdates: false,
-    latestRun: { status: null, task: "Profile the landing bundle and split the vendor chunk" }, slates: [],
+    latestRun: { status: null, task: "Profile the landing bundle and split the vendor chunk" }, slates: [], shares: [],
   },
   "email-triage": {
     activity: "idle", decisionsWaiting: 0, hasUpdates: true,
-    latestRun: { status: "completed", task: "Sort this week's receipts into the ledger" }, slates: [],
+    latestRun: { status: "completed", task: "Sort this week's receipts into the ledger" }, slates: [], shares: [],
   },
   "design-sys": {
     activity: "unfinished", decisionsWaiting: 0, hasUpdates: false,
-    latestRun: { status: "error", task: "Design system v2" }, slates: [],
+    latestRun: { status: "error", task: "Design system v2" }, slates: [], shares: [],
   },
   "handwrought-walnut-4166c321": {
-    activity: "idle", decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [],
+    activity: "idle", decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [],
   },
   "audit-sweep": {
     activity: "unfinished", decisionsWaiting: 0, hasUpdates: false,
-    latestRun: { status: "completed", task: "Recount the quarter's shares against the register" }, slates: [],
+    latestRun: { status: "completed", task: "Recount the quarter's shares against the register" }, slates: [], shares: [],
   },
 } satisfies Record<string, WorkspaceOverview>));
 
@@ -1177,7 +1177,6 @@ const GalleryPushFrameSchema = v.object({
 });
 
 window.addEventListener("gallery:push-frame", (event: Event) => {
-  // Parsed at the boundary: nothing typechecks across a dispatch.
   const detail = event instanceof CustomEvent ? v.safeParse(GalleryPushFrameSchema, event.detail) : null;
 
   if (detail?.success !== true) return;
@@ -1663,6 +1662,19 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
 
   if (new URLSearchParams(location.search).get("terminal") === "denied" && method === "getWorkspaceSnapshot") {
     return new Promise<T>(() => {});
+  }
+
+  if (new URLSearchParams(location.search).get("snapshot") === "held" && method === "getWorkspaceSnapshot"
+      && document.documentElement.dataset.snapshotReleased !== "1") {
+    await new Promise<void>((resolve) => {
+      const released = new MutationObserver(() => {
+        if (document.documentElement.dataset.snapshotReleased !== "1") return;
+        released.disconnect();
+        resolve();
+      });
+
+      released.observe(document.documentElement, { attributes: true, attributeFilter: ["data-snapshot-released"] });
+    });
   }
 
   const roster = galleryRosterRpc(method, args);

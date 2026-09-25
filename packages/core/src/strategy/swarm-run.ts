@@ -70,7 +70,7 @@ export interface SwarmRunDeps {
   readonly signal?: AbortSignal;
   /** See HeadInferenceDeps.clock. */
   readonly clock?: Clock;
-  readonly reportModelCall?: ModelCallSink;
+  readonly reportModelCall: ModelCallSink;
   /** Transient output frames (heads/head-stream.ts). Absent = nothing watching. */
   readonly publishHeadStream?: PublishHeadStream;
   /** Durable journal-write announcements, the twin of {@link publishHeadStream}. Absent = silent journal. */

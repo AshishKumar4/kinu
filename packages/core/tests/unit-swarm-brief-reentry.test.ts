@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs';
@@ -49,6 +49,7 @@ describe('a node keeps its assigned question across re-entry', () => {
 
     // A real actor per node over the one workspace database.
     const result = await runSwarm({
+      reportModelCall: unobservedSpend,
       rt, model: model(), mode: 'build', logger: createRecordingLogger(),
       hostNode: hostedSeatsOver({ rt, db }).hostNode,
     }, resolved());

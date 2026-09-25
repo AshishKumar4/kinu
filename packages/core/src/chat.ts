@@ -239,8 +239,8 @@ interface CallOutcome {
   readonly failure: CallFailure | null;
 }
 
-/** A fallback takes a call that failed before streaming, for a provider or account failure (unavailable, slow, out
- *  of allowance, a model it cannot reach); a malformed or too-large request fails the turn. */
+/** A fallback takes a call that failed before streaming for a provider or account failure; a malformed or
+ *  too-large request fails the turn. */
 function handsOver(failure: CallFailure): boolean {
   if (failure.streamed) return false;
   const { status } = providerFailureFacts({ cause: failure.cause });
@@ -251,16 +251,30 @@ function handsOver(failure: CallFailure): boolean {
   return code === null || code === 'unavailable' || code === 'timeout' || code === 'budget';
 }
 
-/** A 401 refuses the credential, so entries holding it are passed over; a 403 hands on, often refusing only the model. */
+/** A failed lookup is logged and unknown: it skips nothing. */
+async function credentialOrUnknown(credentialOf: (spec: string) => Promise<string | null>, spec: string): Promise<string | null> {
+  const found = await credentialOf(spec).then(
+    (key) => ({ key }),
+    (...rejection: [unknown]) => ({ failed: toKinuError({ doing: 'look up a fallback\'s credential', cause: rejection[0], otherwise: 'io' }) }),
+  );
+
+  if ('key' in found) return found.key;
+  diagnostics.failure('llm_call.fallback_credential_unknown', found.failed, { spec });
+
+  return null;
+}
+
+/** A 401 refuses the credential, so entries holding it are passed over; a 403 may be model-scoped. */
 async function nextFallback(
   chain: ChatFallback[], failed: string | undefined, failure: CallFailure, credentialOf: ChatOptions['credentialOf'],
 ): Promise<ChatFallback | undefined> {
   if (!handsOver(failure)) return undefined;
   const { status } = providerFailureFacts({ cause: failure.cause });
-  const refused = status === 401 && failed !== undefined && credentialOf !== undefined ? await credentialOf(failed) : null;
+  const lookup = status === 401 && failed !== undefined ? credentialOf : undefined;
+  const refused = lookup !== undefined && failed !== undefined ? await credentialOrUnknown(lookup, failed) : null;
 
   for (let next = chain.shift(); next !== undefined; next = chain.shift()) {
-    if (refused === null || await credentialOf?.(next.spec) !== refused) return next;
+    if (refused === null || lookup === undefined || await credentialOrUnknown(lookup, next.spec) !== refused) return next;
   }
 
   return undefined;

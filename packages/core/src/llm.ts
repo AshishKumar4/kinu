@@ -2,15 +2,13 @@
 
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
-import { generateText, streamText } from 'ai';
 import type { LanguageModel } from 'ai';
 import { synthesizeToolFallback } from './prompts/evidence-window';
 import type { LLM } from './types/primitives';
-import { beginModelOperation, type ModelCallSpend } from './events/model-call';
-import { normalizeUsage } from './usage';
+import type { ModelCallSpend } from './events/model-call';
+import { generateReported, streamTextReported } from './providers/model-invocation';
 import { parseModelSpec, type ProviderWaitInfo } from './providers/types';
 import { withRateLimitRetry } from './providers/rate-limit-retry';
-import { callAccountOf } from './providers/quota';
 import {
   reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE, type InferenceStage,
 } from './strategy/effort';
@@ -20,74 +18,26 @@ export interface LLMProviderConfig {
   baseURL: string;
   headers: Record<string, string>;
   model: string;
-  /** Where this LLM's calls are reported, and as whose spend; one field so the sink cannot be wired without the
-   *  label. Absent: spend is attributed to nothing. */
-  spend?: ModelCallSpend;
 }
 
-export function createVercelAILLM(config: LLMProviderConfig): LLM {
+/** `spend` is where this LLM's calls are reported, and as whose; one argument so the sink cannot be wired without
+ *  the label. */
+export function createVercelAILLM(config: LLMProviderConfig, spend: ModelCallSpend): LLM {
   const model = createModelFromLLMConfig(config);
   // No output cap: a reasoning model spends its budget thinking first, so a cap truncates or starves the answer.
-  const spend = config.spend;
 
   return {
-    async *stream(opts) {
-      // Opened before the request so an abandoned generator or destroyed frame still leaves the start row.
-      const operation = beginModelOperation(spend, 'stream');
-      let result;
+    stream: (opts) => streamTextReported({
+      model,
+      system: opts.system,
+      messages: opts.messages.map(m => ({
+        role: m.role,
+        content: m.content,
+      })),
+    }, { spend }),
 
-      try {
-        result = streamText({
-          model,
-          system: opts.system,
-          messages: opts.messages.map(m => ({
-            role: m.role,
-            content: m.content,
-          })),
-        });
-
-        for await (const chunk of result.textStream) {
-          yield chunk;
-        }
-      } catch (err) {
-        operation.failed({ cause: err });
-        throw err;
-      }
-
-      // Usage is known only once the stream finishes; `totalUsage` because `usage` is the last step only.
-      const usage = normalizeUsage(await result.totalUsage);
-      const response = await result.response;
-      const modelId = response.modelId;
-      operation.completed({ usage, modelId });
-
-      if (spend) {
-        spend.report({ source: spend.source, usage, modelId, account: callAccountOf(response) });
-      }
-    },
-
-    async complete(prompt) {
-      const operation = beginModelOperation(spend, 'complete');
-      let result;
-
-      try {
-        result = await generateText({
-          model,
-          prompt,
-        });
-      } catch (err) {
-        operation.failed({ cause: err });
-        throw err;
-      }
-
-      // Reported even when empty, so a silent provider stays distinguishable from a free one. No `spec`: this
-      // factory has no catalog spec to price.
-      const usage = normalizeUsage(result.totalUsage);
-      const modelId = result.response.modelId;
-      operation.completed({ usage, modelId });
-      spend?.report({ source: spend.source, usage, modelId, account: callAccountOf(result.response) });
-
-      return result.text.trim();
-    },
+    // No `spec`: this factory has no catalog spec to price.
+    complete: async (prompt) => (await generateReported({ model, prompt }, { spend })).text.trim(),
   };
 }
 
@@ -100,49 +50,22 @@ export function createCompletionLLM(opts: {
   spec: string;
   stage: InferenceStage;
   /** Where this model's calls are reported, and as whose spend; only the caller knows the label. */
-  spend?: ModelCallSpend;
+  spend: ModelCallSpend;
 }): LLM {
   const providerOptions = reasoningEffortOptions(
     REASONING_EFFORT_FOR_STAGE[opts.stage],
     parseModelSpec(opts.spec).provider,
   );
 
-  const spend = opts.spend;
-
   return {
     stream() {
       throw new Error(`createCompletionLLM(${opts.spec}) has no streaming path`);
     },
-    async complete(prompt) {
-      // Opened before the request so a process killed mid-call leaves a start row.
-      const operation = beginModelOperation(spend, 'complete', { spec: opts.spec });
-      let result;
-
-      try {
-        result = await generateText({
-          model: opts.model,
-          prompt,
-          providerOptions,
-        });
-      } catch (err) {
-        operation.failed({ cause: err });
-        throw err;
-      }
-
-      // `spec` is what the catalog prices; `modelId` is what the provider says served it.
-      const usage = normalizeUsage(result.totalUsage);
-      const modelId = result.response.modelId;
-      operation.completed({ usage, modelId });
-      spend?.report({
-        source: spend.source,
-        usage,
-        spec: opts.spec,
-        modelId,
-        account: callAccountOf(result.response),
-      });
-
-      return result.text.trim();
-    },
+    // `spec` is what the catalog prices; the row keeps the `modelId` the provider says served it beside it.
+    complete: async (prompt) => (await generateReported(
+      { model: opts.model, prompt, providerOptions },
+      { spend: opts.spend, spec: opts.spec },
+    )).text.trim(),
   };
 }
 

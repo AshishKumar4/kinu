@@ -3,7 +3,7 @@
  * journal held at that instant, so the test asserts the row's durable sequence, not a callback count.
  */
 import { describe, expect, test } from 'bun:test';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
@@ -97,6 +97,7 @@ async function run(announce?: AnnounceHeadActivity) {
   const seen: Announcement[] = [];
 
   const deps: SwarmRunDeps = {
+    reportModelCall: unobservedSpend,
     rt,
     // A real seat per node over this runtime's database; the journal is read back through `rt.actor`.
     hostNode: hostedSeatsOver({ rt, db }).hostNode,

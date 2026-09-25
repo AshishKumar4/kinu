@@ -4,16 +4,11 @@ import { createDefaultWebSearchProvider, type WebSearchProvider } from './provid
 import { REAL_CLOCK } from '../types/clock';
 import type { AuthResolver } from '../providers/types';
 import type { ModelCallSink } from '../events/model-call';
+import { workersAiHtmlToMarkdown, type WorkersAiMarkdown } from '../providers/model-invocation';
 
 /** Structural so core compiles without the Worker's ambient `Env`. */
-interface WorkersAiToMarkdown {
-  toMarkdown(files: { name: string; blob: Blob }[]): Promise<
-    ({ format: 'markdown'; data: string } | { format: 'error' })[]
-  >;
-}
-
 interface WebProviderEnv {
-  readonly AI?: WorkersAiToMarkdown;
+  readonly AI?: WorkersAiMarkdown;
 }
 
 /**
@@ -23,10 +18,8 @@ interface WebProviderEnv {
 export function buildCfWebSearchProvider(
   env: WebProviderEnv,
   resolveAuth: () => AuthResolver | undefined,
-  reportModelCall?: ModelCallSink,
+  reportModelCall: ModelCallSink,
 ): WebSearchProvider {
-  const ai = env.AI;
-
   const options: Parameters<typeof createDefaultWebSearchProvider>[0] = {
     fetch: globalThis.fetch,
     clock: REAL_CLOCK,
@@ -37,18 +30,9 @@ export function buildCfWebSearchProvider(
     },
   };
 
-  if (ai) {
-    options.htmlToMarkdown = async (html: string, opts?: { url?: string }) => {
-      const name = (opts?.url ?? "page") + ".html";
-      const blob = new Blob([html], { type: "text/html" });
-      const out = await ai.toMarkdown([{ name, blob }]);
-      // The binding returns no cost, so the call is counted without one rather than omitted.
-      reportModelCall?.({ source: "platform", usage: {}, modelId: "toMarkdown" });
-      const converted = out[0];
+  const htmlToMarkdown = workersAiHtmlToMarkdown(env, reportModelCall);
 
-      return converted?.format === "markdown" ? converted.data : "";
-    };
-  }
+  if (htmlToMarkdown) options.htmlToMarkdown = htmlToMarkdown;
 
   return createDefaultWebSearchProvider(options);
 }

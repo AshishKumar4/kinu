@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-25",
   "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
-  "method": "each row alone under `setsid timeout --signal=TERM --kill-after=5s <deadline> /usr/bin/time -v bash -c <run>`; the row's whole process tree — its session plus every descendant by ppid, so a setsid'd dev server or browser counts — sampled every 0.05s for its first 3s and every 0.25s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, Δ(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN)",
+  "method": "each row alone under `setsid timeout --signal=TERM --kill-after=5s <deadline> /usr/bin/time -v bash -c <run>`; the row's whole process tree \u2014 its session plus every descendant by ppid, so a setsid'd dev server or browser counts \u2014 sampled every 0.05s for its first 3s and every 0.25s after \u2014 summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, \u0394(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN)",
   "rows": {
     "bun scripts/preflight.ts": {
       "wallSeconds": 0.22,
@@ -12,17 +12,6 @@
       "meanThreads": 0.94,
       "samples": 3,
       "loadAtStart": 3.57,
-      "exit": 0
-    },
-    "bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts": {
-      "wallSeconds": 0.22,
-      "cpuSeconds": 0.11,
-      "peakRssMb": 58.36,
-      "peakRunnable": 3,
-      "peakCpuThreads": 0,
-      "meanThreads": 0.5,
-      "samples": 3,
-      "loadAtStart": 3.4,
       "exit": 0
     },
     "bun scripts/pattern-inventory.ts": {
@@ -213,14 +202,14 @@
       "exit": 1
     },
     "bun run gate:dead-code": {
-      "wallSeconds": 38.45,
-      "cpuSeconds": 55.45,
-      "peakRssMb": 15950.48,
+      "wallSeconds": 12.17,
+      "cpuSeconds": 19.74,
+      "peakRssMb": 1297.81,
       "peakRunnable": 8,
-      "peakCpuThreads": 7.78,
-      "meanThreads": 1.44,
-      "samples": 168,
-      "loadAtStart": 5.69,
+      "peakCpuThreads": 3.28,
+      "meanThreads": 1.62,
+      "samples": 83,
+      "loadAtStart": 11.57,
       "exit": 0
     },
     "bun run gate:undeclared-imports": {
@@ -872,15 +861,48 @@
       "loadAtStart": 18.46,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts": {
-      "wallSeconds": 48.1,
-      "cpuSeconds": 86.92,
-      "peakRssMb": 15310.7,
-      "peakRunnable": 29,
-      "peakCpuThreads": 14.65,
-      "meanThreads": 1.81,
-      "samples": 192,
-      "loadAtStart": 2.12,
+    "bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts": {
+      "wallSeconds": 0.36,
+      "cpuSeconds": 0.17,
+      "peakRssMb": 50.86,
+      "peakRunnable": 1,
+      "peakCpuThreads": 0,
+      "meanThreads": 0.48,
+      "samples": 5,
+      "loadAtStart": 9.07,
+      "exit": 0
+    },
+    "bun scripts/census-plants.ts packages/": {
+      "wallSeconds": 9.64,
+      "cpuSeconds": 9.68,
+      "peakRssMb": 85.22,
+      "peakRunnable": 15,
+      "peakCpuThreads": 1.35,
+      "meanThreads": 1,
+      "samples": 80,
+      "loadAtStart": 2.79,
+      "exit": 0
+    },
+    "bun scripts/census-plants.ts scripts/": {
+      "wallSeconds": 5.05,
+      "cpuSeconds": 5.46,
+      "peakRssMb": 161.01,
+      "peakRunnable": 8,
+      "peakCpuThreads": 1.27,
+      "meanThreads": 1.08,
+      "samples": 61,
+      "loadAtStart": 3.74,
+      "exit": 0
+    },
+    "bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts": {
+      "wallSeconds": 41.68,
+      "cpuSeconds": 65.59,
+      "peakRssMb": 4247.96,
+      "peakRunnable": 9,
+      "peakCpuThreads": 10.32,
+      "meanThreads": 1.57,
+      "samples": 193,
+      "loadAtStart": 3.71,
       "exit": 0
     }
   }

@@ -182,6 +182,14 @@ export function enumerateRepository(repoRoot: string): Enumeration {
   return { files, tracked: [...tracked].sort(), trackedIgnored };
 }
 
+/** The gitignored files under `directory`: a build output a module graph runs
+ *  from, which the enumeration above leaves out by design. Sorted. */
+export function ignoredFilesUnder(repoRoot: string, directory: string): string[] {
+  return execFileSync('git', ['-C', repoRoot, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--', directory], {
+    env: gitEnv(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+  }).split('\0').filter((f) => f.length > 0).sort();
+}
+
 /** Every file in this repository a gate may hold to a standard, memoised over
  *  the repository this module sits in. */
 export function trackedFiles(): readonly string[] {

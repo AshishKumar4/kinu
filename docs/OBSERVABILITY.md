@@ -199,20 +199,26 @@ reusable function. Each goes through `reviewLlm`, which returns the fast model
 turn carries mission labels.
 
 This spend is metered. `LLM.complete` returns a bare string
-(`types/primitives.ts`), so `evolution/` sees no tokens. Backends capture usage
-first and report it through `ModelCallSink`.
+(`types/primitives.ts`), so `evolution/` sees no tokens. The backends invoke
+the model through `core/src/providers/model-invocation.ts`, which reports the
+call's usage through the `ModelCallSink` the call was handed.
 
 - `MODEL_ROUTE_POLICY` (`profiles/model-route.ts`) is the only `SpendSource`
   table. `agent`, `head`, `mcts`, `swarm` and `slate` use the turn's tier.
   `scaffold`, `judge` and `advisor` use `deep`; `compaction`, `reflection` and
   `fast` use `fast`; `platform` and `warming` resolve no profile.
   `resolveModelRoute` is the only read path.
-- The CLI resolves the immutable profile and calls `reportCall`
-  (`cli-backend/src/model-resolver.ts`) with the route's source. It writes
-  `model_call` through `LocalAgentSession.modelCallSink`.
+- The CLI resolves the immutable profile and builds the lane with
+  `createLocalProviderLLM` (`cli-backend/src/model-resolver.ts`) under the
+  route's source. It writes `model_call` through
+  `LocalAgentSession.modelCallSink`.
 - Cloud uses `createProfileLaneLLM` (`cf-backend/src/runtime.ts`; the
-  `judgeModel`, `fastLlm` and `advisorLlm` lanes), then `reportCall` and
-  `ActorAgent.reportModelCall` for that row.
+  `judgeModel`, `fastLlm` and `advisorLlm` lanes), which files the row through
+  `ActorAgent.reportModelCall`.
+- Every entry point in `model-invocation.ts` takes the spend it reports, so a
+  call site cannot drop the sink. `.oxlintrc.json` refuses the AI SDK's
+  invoking exports and the `env.AI` binding read outside that module. Its rule
+  messages name each exempt file and the reason it is exempt.
 
 `workspaceSpend()` (`read-models/workspace-spend.ts`) groups the rows. `fast`
 and `reflection` carry review spend; `advisor` carries its deep-tier call. The

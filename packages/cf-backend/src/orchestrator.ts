@@ -418,6 +418,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return {
       workspace: this.name, bucket,
       url: async (port, token) => (await nimbusPreviewUrl(this.env, this.name, port, token)).url ?? null,
+      slates: async () => {
+        const listing = await this.slates.list(ROOT_SLATE_CALLER);
+
+        return new Set([...listing.slates, ...listing.problems].map((slate) => slate.id));
+      },
       camera: () => browserCamera(browser),
     };
   }
@@ -4110,7 +4115,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       kv: this.env.AUTH_KV,
       budget: () => this.budget,
       ownerTitle: async () => this.safeDisplayName(),
-      forgetPicture: (slate) => this.pictures.forget(this.name, slate, this.env.SLATE_PICTURES),
+      forgetPicture: async (slate) => {
+        await this.pictures.forget(this.name, slate, this.env.SLATE_PICTURES);
+        this.armDurableWake();
+      },
+      sharesChanged: async () => {
+        this.overviewChanged(true);
+
+        return await this.overviewSettled() === null ? 'current' : 'pending';
+      },
     });
 
     return this._slates;
@@ -4180,7 +4193,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // Blueprints cross workspaces, so these four are DO-only: the app host verifies viewer, address and
   // forker ownership before calling, and no browser stub reaches them.
 
-  /** Re-reads the row now; refused when revoked. */
   async readBlueprint(share: string): Promise<SlateAnswer<BlueprintReading>> {
     return this.slates.readBlueprint(share);
   }
@@ -4486,6 +4498,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const header = this.eventRecorder.latestRunHeader();
     const pictures = this.pictures.digests();
+    const shares = await this.slates.shareCards(new Map(listing.slates.map((slate) => [slate.id, slate.title])));
 
     return buildWorkspaceOverview({
       // A settled turn's leftovers still closing are its work, not a durable leftover.
@@ -4496,7 +4509,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       activePlan,
       scaffoldAutoApply: this.config.getAutoPromoteScaffold(),
       latestRun: header === null ? null : { status: header.status, task: header.userMessage },
-      slates: listing.slates.map((slate) => ({ id: slate.id, title: slate.title, picture: pictures.get(slate.id) ?? null })),
+      slates: listing.slates.map((slate) => ({
+        id: slate.id, title: slate.title, picture: pictures.get(slate.id) ?? null, bindings: slate.bindings.length,
+      })),
+      shares,
     });
   }
 
@@ -4504,6 +4520,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private pushedOverview: string | null = null;
   private overviewDirty = false;
   private overviewPushing = false;
+  private readonly overviewSettlers: Array<(failure: KinuError | null) => void> = [];
   /** Changes meanwhile ride its push. */
   private overviewRetry: { readonly at: number; readonly attempts: number } | null = null;
 
@@ -4511,19 +4528,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.overviewChanged();
   }
 
-  protected override overviewChanged(): void {
+  protected override overviewChanged(force = false): void {
     this.overviewDirty = true;
 
     if (this.overviewPushing || this.getOwnerUserId() === null) return;
 
     const retry = this.overviewRetry;
 
-    if (retry !== null && Date.now() < retry.at) return;
+    if (!force && retry !== null && Date.now() < retry.at) return;
     this.overviewPushing = true;
 
     // In flight, it owes the wake a failure would arm.
     if (retry !== null) this.overviewRetry = { at: Date.now() + recoveryBackoffMs(retry.attempts + 1), attempts: retry.attempts };
     this.detachOwned(async () => {
+      let failed: KinuError | null = null;
+
       try {
         while (this.overviewDirty) {
           this.overviewDirty = false;
@@ -4550,14 +4569,24 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const attempts = (this.overviewRetry?.attempts ?? 0) + 1;
         // A refusal meets the next push.
         const retrying = failure.code === 'unavailable' || failure.code === 'timeout';
+        failed = failure;
         this.overviewRetry = retrying ? { at: Date.now() + recoveryBackoffMs(attempts), attempts } : null;
         diagnostics.failure('workspace.overview_push_failed', failure, { workspace: this.name, attempts, retrying });
 
         if (this.overviewRetry !== null) await this.scheduleTerminalRetry(this.overviewRetry.at);
       } finally {
         this.overviewPushing = false;
+
+        for (const settle of this.overviewSettlers.splice(0)) settle(failed);
       }
     });
+  }
+
+  /** Once its card moved, or the failure that left the list behind. */
+  private async overviewSettled(): Promise<KinuError | null> {
+    if (!this.overviewPushing) return null;
+
+    return await new Promise<KinuError | null>((resolve) => { this.overviewSettlers.push(resolve); });
   }
 
   @callable() async executeInExecutor(executorId: string, command: string, device?: string) {

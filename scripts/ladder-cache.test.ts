@@ -7,7 +7,7 @@
  * hits could not tell a cache from a `true`.
  */
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { childEnv, git, initRepo, scratchDir } from '@kinu.run/test-utils';
@@ -18,7 +18,7 @@ import {
 } from './ladder-cache';
 import type { Plan, Store, ToolVersions } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
-import type { Inputs, Repo } from './ladder-closure';
+import type { Derived, Inputs, Repo } from './ladder-closure';
 
 const DERIVED: Inputs = { kind: 'derived', reads: [], env: [] };
 
@@ -349,6 +349,25 @@ describe('ladder-cache — red in every direction it claims', () => {
     expect(runGate(fx, 'bun scripts/a.ts').plan.kind).toBe('miss');
     expect(runGate(fx, 'bun scripts/a.ts').plan.kind).toBe('hit');
   });
+
+  test('a built output\'s own files are in the key, so a green over a stale build never stands for the fresh one', () => {
+    const fx = fixture({
+      '.gitignore': 'node_modules/\nthird_party/mossaic/sdk/dist/\n',
+      'third_party/mossaic/sdk/src/index.ts': 'export const sdk = 1;',
+      'third_party/mossaic/upstream.json': '{}',
+      'scripts/mossaic-sdk.ts': 'export const build = 1;',
+      'scripts/a.ts': `import { sdk } from '../third_party/mossaic/sdk/src/index';\nexport const a = sdk;\n${GREEN}`,
+    });
+
+    const dist = join(fx.root, 'third_party/mossaic/sdk/dist');
+    mkdirSync(dist, { recursive: true });
+    writeFileSync(join(dist, 'index.js'), 'export const sdk = 0;');
+    expect(runGate(fx, 'bun scripts/a.ts').plan.kind).toBe('miss');
+    expect(runGate(fx, 'bun scripts/a.ts').plan.kind).toBe('hit');
+    // The build the next install makes from the same tracked source: only the output moved.
+    writeFileSync(join(dist, 'index.js'), 'export const sdk = 1;');
+    expect(runGate(fx, 'bun scripts/a.ts').plan.kind).toBe('miss');
+  });
 });
 
 describe('ladder-cache — the audit sees what the walker cannot', () => {
@@ -375,6 +394,35 @@ describe('ladder-cache — the audit sees what the walker cannot', () => {
     const audit = auditClosure(argv, fx.root, declared, gateEnvironment(declared));
     expect(audit.undeclared).toEqual([]);
     expect(audit.covered).toBeGreaterThan(0);
+  });
+
+  test('a tracked file opened through its directory, or through a node_modules link, is judged where it lives', () => {
+    const fx = fixture({
+      'packages/p/package.json': JSON.stringify({ name: '@fx/p' }),
+      'packages/p/tsconfig.json': '{}',
+      'packages/p/src/p.ts': GREEN,
+      'scripts/a.ts': `import { readFileSync } from 'node:fs';\nexport const p = readFileSync(process.argv[2] ?? '', 'utf8');\n${GREEN}`,
+    });
+
+    mkdirSync(join(fx.root, 'node_modules', '@fx'), { recursive: true });
+    symlinkSync('../../packages/p', join(fx.root, 'node_modules', '@fx', 'p'));
+    const repo = fx.repo();
+
+    const without = (run: string, withheld: readonly string[]): Derived => {
+      const closure = deriveClosure(run, { kind: 'derived', reads: [] }, repo);
+
+      if (closure.kind !== 'derived') throw new Error(closure.why);
+
+      return { ...closure, files: closure.files.filter((file) => !withheld.includes(file)) };
+    };
+
+    // Bun opens a package's own configs through a descriptor on its directory: `openat(12</…/packages/p>, "package.json")`.
+    const configs = ['packages/p/package.json', 'packages/p/tsconfig.json'];
+    const own = without('bun packages/p/src/p.ts', configs);
+    expect(auditClosure(['bun', 'packages/p/src/p.ts'], fx.root, own, gateEnvironment(own)).undeclared).toEqual(configs);
+    const linked = without('bun scripts/a.ts', ['packages/p/package.json']);
+    const audit = auditClosure(['bun', 'scripts/a.ts', 'node_modules/@fx/p/package.json'], fx.root, linked, gateEnvironment(linked));
+    expect(audit.undeclared).toEqual(['packages/p/package.json']);
   });
 });
 

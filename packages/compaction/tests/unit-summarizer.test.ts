@@ -3,6 +3,7 @@ import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModel } from 'ai';
 import type { ModelCallReport } from '@kinu.run/core';
 import type { LanguageModelV3GenerateResult } from '@ai-sdk/provider';
+import { unobservedSpend } from '@kinu.run/test-utils';
 import { createModelSummarizer } from '../src/index';
 
 
@@ -50,7 +51,7 @@ describe('createModelSummarizer', () => {
       const deferred = deferredModel();
       let settled = false;
 
-      const pending = createModelSummarizer(deferred.model)('summarize this')
+      const pending = createModelSummarizer(deferred.model, { source: 'compaction', report: unobservedSpend })('summarize this')
         .then((result) => {
           settled = true;
 

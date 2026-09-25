@@ -45,7 +45,7 @@ import {
   createCompactionStateStore, createModelSummarizer, COMPACTION_PRESETS,
   type CompactionStateStore, type Logger as CompactionLogger,
 } from "@kinu.run/compaction";
-import { generateText, convertToModelMessages } from "ai";
+import { convertToModelMessages } from "ai";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import {
   McpToolSurfaceCache,
@@ -103,7 +103,7 @@ import {
   // Spend governor is opt-in: no label means no cap.
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
   normalizeUsage, priceCall, type Usage,
-  explorePrompt, reflectionPrompt,
+  branchCompletion, explorePrompt, reflectionPrompt, generateReported, type GenerateRequest,
   WORKSPACE_RUN_ID, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent, type CacheWarmingLane,
   recordModelOperations, type ProviderWaitInfo,
   // Prices a model_call row only when the rate belongs to that call's own model.
@@ -146,7 +146,7 @@ import {
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
-  accountDeps, callAccountOf, parseModelSpec, catalogModelInfo, countRequestInputTokens,
+  accountDeps, parseModelSpec, catalogModelInfo, countRequestInputTokens,
   ModelCatalogSession, resolveEffectiveModelSpec, type ModelInfo,
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
   measureCompactionTrigger,
@@ -165,7 +165,7 @@ import {
   type OperationProfile,
   createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
-  beginModelOperation, toolSurfaceTokens, McpToolSurfaceSchema,
+  toolSurfaceTokens, McpToolSurfaceSchema,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs,
   toolsForInvocation, withTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
@@ -985,6 +985,7 @@ export abstract class ActorAgent extends Agent<Env> {
     onProviderWait: (info) => { this.noteProviderWait(info); },
     accountFor: (provider) => this.config.getProviderAccounts()[provider]
       ?? this.actorSession.profileInputs?.envelope.catalog.accounts?.[provider],
+    reportModelCall: (report) => { this.reportModelCall(report); },
   });
 
   // The bare prototype must read as sound.
@@ -2134,7 +2135,9 @@ export abstract class ActorAgent extends Agent<Env> {
       }, task, context),
       // `scaffold` is a fixed tier in MODEL_ROUTE_POLICY, not the turn's model.
       model: async () => (await this.modelForSource('scaffold')).model,
-      judge: createJsonJudge(() => this.getModelForReview()),
+      judge: createJsonJudge(
+        () => this.getModelForReview(), (report) => this.reportModelCall(report), this.modelOperations,
+      ),
       // Attribution sinks for the plane, including the reflection LM.
       reportModelCall: (report) => this.reportModelCall(report),
       operations: this.modelOperations,
@@ -2946,32 +2949,11 @@ export abstract class ActorAgent extends Agent<Env> {
         // Use the route's effort, resolved with the spec; not `REASONING_EFFORT_FOR_STAGE`.
         const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(spec, effort);
 
-        const request: Parameters<typeof generateText>[0] = {
-          model,
-          messages: [{ role: 'user' as const, content: user }],
-        };
-
-        if (system !== undefined) request.system = system;
-
-        if (providerOptions) request.providerOptions = providerOptions;
-
-        const operation = beginModelOperation(
-          { source: 'mcts', operations: this.modelOperations }, 'complete', { spec },
+        return branchCompletion(
+          providerOptions ? { model, providerOptions } : { model },
+          system === undefined ? { user } : { system, user },
+          { operations: this.modelOperations, spec },
         );
-
-        let answer;
-
-        try {
-          answer = await generateText(request);
-        } catch (cause) {
-          operation.failed({ cause });
-          throw cause;
-        }
-
-        const usage = normalizeUsage(answer.usage);
-        operation.completed({ usage, modelId: spec });
-
-        return { text: answer.text.trim(), usage };
       },
     };
   }
@@ -3175,7 +3157,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * One `ai` binding call: resolve the profile as this actor's turn would, run one `generateText`
+   * One `ai` binding call: resolve the profile as this actor's turn would, run one model call
    * under a `slate` spend row. `actor` is the hosted actor hopped to, or absent for this actor.
    */
   private async slateAiRun(
@@ -3210,26 +3192,16 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const spec = profile.tier.model;
     const model = this.ownedModelServices.resolveModel(spec);
+    const input: GenerateRequest = { model, prompt: route.prompt };
 
-    const operation = beginModelOperation(
-      { source: 'slate', operations: this.modelOperations }, 'complete', { spec },
-    );
+    if (route.system !== undefined) input.system = route.system;
 
-    let answer;
+    const answer = await generateReported(input, {
+      spend: { source: 'slate', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
+      spec,
+    });
 
-    try {
-      const input: Parameters<typeof generateText>[0] = { model, prompt: route.prompt };
-
-      if (route.system !== undefined) input.system = route.system;
-
-      answer = await generateText(input);
-    } catch (cause) {
-      operation.failed({ cause });
-      throw cause;
-    }
-
-    const usage = normalizeUsage(answer.usage);
-    operation.completed({ usage, modelId: spec });
+    const usage = normalizeUsage(answer.totalUsage);
 
     return v.parse(JsonValueSchema, { text: answer.text, model: spec, tier: profile.tier.id, usage });
   }
@@ -3712,44 +3684,16 @@ export abstract class ActorAgent extends Agent<Env> {
     const { model, spec, providerOptions } = await this.modelForSource('fast');
 
     return suggestWorkspaceTitle(async (system, prompt) => {
-      // Opened before the request so a call that never returns still leaves a start row.
-      const operation = beginModelOperation(
-        { source: 'fast', operations: this.modelOperations },
-        'complete',
-        { spec },
-      );
+      // No output cap: reasoning models spend budget thinking and a cap starves the JSON.
+      const request: GenerateRequest = { model, system, prompt };
 
-      let result;
+      if (providerOptions) request.providerOptions = providerOptions;
 
-      try {
-        const request: Parameters<typeof generateText>[0] = {
-          model,
-          system,
-          prompt,
-          // No output cap: reasoning models spend budget thinking and a cap starves the JSON.
-        };
-
-        if (providerOptions) request.providerOptions = providerOptions;
-        result = await generateText(request);
-      } catch (err) {
-        operation.failed({ cause: err });
-        throw err;
-      }
-
-      // `spec` is the priced model string; `modelId` is what the provider served; keep both.
-      // The operation completes before the parse: bill first, judge the answer after.
-      const modelId = result.response?.modelId;
-      const usage = normalizeUsage(result.usage);
-      operation.completed({ usage, modelId: modelId ?? spec });
-      const account = callAccountOf(result.response ?? {});
-
-      this.reportModelCall(
-        modelId
-          ? { source: 'fast', usage, spec, modelId, account }
-          : { source: 'fast', usage, spec, account },
-      );
-
-      return result.text;
+      // Billed before the caller parses the answer.
+      return (await generateReported(request, {
+        spend: { source: 'fast', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
+        spec,
+      })).text;
     }, mission);
   }
 

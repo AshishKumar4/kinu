@@ -38,6 +38,7 @@ import { resolve } from 'node:path';
 import { cpus } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
+import { plantedInputs, readCensusLock } from './census-plants';
 import { DEADLINE_EXIT_CODE, LEFTOVER_BLIND_SPOTS, runUnderDeadline } from './deadline';
 import {
   CACHE_BLIND_SPOTS, defaultStoreDirectory, gateEnvironment, gateEnvNames, planGate, recordGreen, storeAt, toolVersions,
@@ -45,7 +46,7 @@ import {
 import type { GateCacheRequest, Plan } from './ladder-cache';
 import { auditClosure } from './ladder-audit';
 import { deriveClosure, repoAt } from './ladder-closure';
-import type { Inputs } from './ladder-closure';
+import type { Inputs, Repo } from './ladder-closure';
 import {
   isBunDiscoverableSuite, isParseable, isPythonSuite, isRunnableSuite, isVitestEvalSuite, readMatching,
   trackedFiles,
@@ -57,13 +58,16 @@ import { COST_TABLE, type CostTable, costRssMb, costThreads, machineName, readCo
 
 /** DERIVED, because it was hardcoded as 21 while the config carried 22 — a stale count in the
  *  document that tells a reader what a rung catches. Read from the enabled rules rather than from the
- *  plugin's registry: a rule registered and not enabled catches nothing. */
-const ANTI_SLOP_RULE_COUNT = Object.keys(
-  v.parse(
-    v.object({ rules: v.record(v.string(), v.unknown()) }),
-    JSON.parse(readFileSync(new URL('../.oxlintrc.json', import.meta.url).pathname, 'utf8')),
-  ).rules,
-).filter((rule) => rule.startsWith('anti-slop/')).length;
+ *  plugin's registry: a rule registered and not enabled catches nothing. Read when the row's text is,
+ *  never at load: `--run` loads this module and reads no tracked file beyond its modules. */
+function antiSlopRuleCount(): number {
+  return Object.keys(
+    v.parse(
+      v.object({ rules: v.record(v.string(), v.unknown()) }),
+      JSON.parse(readFileSync(new URL('../.oxlintrc.json', import.meta.url).pathname, 'utf8')),
+    ).rules,
+  ).filter((rule) => rule.startsWith('anti-slop/')).length;
+}
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -182,7 +186,7 @@ export interface Gate {
  *  projections read rather than restated — a name added to `LIVE_MODEL_ENV`
  *  widens the cache key by itself. `KINU_EVAL_LIVE` is the preload's own
  *  consent switch. */
-const AMBIENT_BY_NAME: Inputs = {
+const AMBIENT_BY_NAME: Extract<Inputs, { kind: 'derived' }> = {
   kind: 'derived',
   env: [
     ...AMBIENT_CREDENTIAL_ENV, ...AMBIENT_DECORATION_ENV, ...Object.values(EVAL_IDENTITY_ENV),
@@ -195,6 +199,14 @@ const AMBIENT_BY_NAME: Inputs = {
  *  an input. Measured by `--audit-closure` 2026-09-23: React runtime identity
  *  opened 1,319 tracked files off its module graph. */
 const CLIENT_BUILD: Inputs = { ...AMBIENT_BY_NAME, corpus: true };
+
+/** A row vitest runs in a workers pool rooted at `base`: its config bundles
+ *  with esbuild and writes by path inside the base, and the worker the config
+ *  names is walked from it (`configNamedModules`, ladder-closure.ts). Measured
+ *  by `--audit-closure` 2026-09-24 on the complexity row. */
+function workersPool(base: string): Inputs {
+  return { ...AMBIENT_BY_NAME, reads: [`${base}/`] };
+}
 
 /** Gates that run before the deploy tier. The deploy tier is parsed from
  *  deploy.sh — see the header. Cheapest first inside each tier, so the first
@@ -219,11 +231,12 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'reads the machine — inode tables, temp roots, stray project markers — none of which a hash over the tree stands for.' },
   },
   {
-    run: 'bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts',
+    run: 'bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts',
     label: 'Pattern census and parser self-tests',
     tier: 'push',
     seconds: 0.2, // Measured 2026-09-06 on the 24-thread workstation.
-    catches: 'a pattern census that mistakes strings for regexes or a JSONC parser that changes data',
+    catches: 'a pattern census that mistakes strings for regexes, a JSONC parser that changes data, or a syntax tree '
+      + 'kept alive after its caller drops it',
     blind: 'semantic quality of a reviewed parser candidate',
     inputs: AMBIENT_BY_NAME,
   },
@@ -248,8 +261,10 @@ export const LADDER: readonly Gate[] = [
     // its exit status. Interleaved at load 64-170: 149/181 CPU-s before,
     // 90/96 after. The 21.4 s stands until a quiet re-measure.
     seconds: 21.4,
-    catches: `the ${String(ANTI_SLOP_RULE_COUNT)} anti-slop rules across every file, every line, and the `
-      + 'rule suites that prove each rule red-to-green under node.',
+    get catches() {
+      return `the ${String(antiSlopRuleCount())} anti-slop rules across every file, every line, and the `
+        + 'rule suites that prove each rule red-to-green under node.';
+    },
     blind: 'types and behaviour. A lint-clean call to the wrong function passes.',
     // `anti-slop/rules.test.ts` imports every rule suite it discovers through
     // `sources.ts`; the suites are tracked under this directory.
@@ -796,22 +811,48 @@ export const LADDER: readonly Gate[] = [
     // Measured 2026-09-23 on the 24-thread box at load 5: 3.88/4.05/5.14 s.
     tier: 'commit',
     seconds: 4.1,
-    catches: 'a NEW coupled test, by the five axes a test review judges on — an assertion '
-      + "over the implementation's TEXT, a constant restating a module's own, a matcher that "
-      + 'cannot fail on the defect its title names, a reach into a member production declares '
-      + 'non-public, and a mock of an internal module. Keyed by category, file, TEST TITLE and '
-      + 'finding shape rather than by line, so moving a test does not read as a new one and '
-      + 'renaming one does. It also refuses a STALE key, so a coupling that was repaired is '
-      + 'recorded as repaired rather than left in the lock as budget for the next one.',
+    catches: 'a coupled test, by the axes a test review judges on. BANNED, whatever the lock holds: '
+      + "an assertion over the implementation's TEXT, a test function or constant restating the "
+      + "product's own, a reach into a member production declares non-public, and a mock of an "
+      + 'internal module. RATCHETED, the lock only shrinking: a matcher that cannot fail on the '
+      + 'defect its title names, keyed by category, file, TEST TITLE and finding shape, each locked '
+      + 'key naming the plants that turn it red. It also refuses a STALE key, so a repaired '
+      + 'coupling is recorded as repaired rather than left in the lock as budget for the next one.',
     blind: 'everything in its own `BLIND_SPOTS` list, printed on the GREEN path: a mirror by '
-      + 'DERIVATION rather than by a shared named literal, a path or asserted string built by '
-      + 'concatenation, a table-driven suite counted as one test, a tautology through a stored '
-      + 'value, and a test asserting over an installed dependency\'s shipped text — resolution '
-      + 'runs against the enumeration and `node_modules` is not tracked. It also cannot tell a '
-      + 'SHAPE GATE from a coupled test: whether a source-text assertion guards a rule no '
-      + 'behavioural test can express is a judgement, so the reach is reported and the ruling '
-      + 'left to the reviewer.',
+      + 'DERIVATION rather than by a shared named literal, a restated function renamed past its '
+      + 'structure, a path or asserted string built by concatenation, a table-driven suite counted '
+      + 'as one test, a tautology through a stored value, a mock echo, and a test asserting over an '
+      + "installed dependency's shipped text — resolution runs against the enumeration and "
+      + '`node_modules` is not tracked. A `scripts/` suite a ladder row runs is a gate test and may '
+      + 'read the tree it governs.',
     inputs: AMBIENT_BY_NAME,
+  },
+  {
+    run: 'bun scripts/census-plants.ts packages/',
+    label: 'Census suspects proven (packages/)',
+    tier: 'push',
+    // Measured 2026-09-25 on the 24-thread box at load 2.8: 9.6 s (gate-cost.json).
+    seconds: 9.6,
+    catches: 'a locked tautology suspect that no longer catches the defect its lock entry plants, '
+      + 'a plant whose planted text is gone, and a suspect red before any plant.',
+    blind: 'every defect a title claims beyond the planted ones, and a relational check nobody '
+      + 'planted against because the lock only holds what the census flags.',
+    // Read when a closure is derived, never at load: `--run` loads this table, and its closure holds no census lock.
+    get inputs(): Inputs { return { kind: 'derived', ...plantedInputs(readCensusLock(), 'packages/') }; },
+  },
+  {
+    run: 'bun scripts/census-plants.ts scripts/',
+    label: 'Census suspects proven (scripts/)',
+    tier: 'push',
+    // Keyed to the corpus: bench.test.ts and infra.test.ts reach scripts/sources.ts.
+    // Measured 2026-09-25 on the 24-thread box at load 3.7: 5.0 s (gate-cost.json).
+    seconds: 5,
+    catches: 'a locked tautology suspect that no longer catches the defect its lock entry plants, '
+      + 'a plant whose planted text is gone, and a suspect red before any plant.',
+    blind: 'every defect a title claims beyond the planted ones, and a relational check nobody '
+      + 'planted against because the lock only holds what the census flags.',
+    // Read when a closure is derived, never at load: `--run` loads this table, and its closure holds no census lock.
+    get inputs(): Inputs { return { kind: 'derived', ...plantedInputs(readCensusLock(), 'scripts/') }; },
   },
   {
     run: 'bun run gate:complexity',
@@ -926,7 +967,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts',
+    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -1843,7 +1884,7 @@ export const LADDER: readonly Gate[] = [
       + 'ran for two months is still only a regex\'s problem. And '
       + '`abortAllDurableObjects` is a hard reset, NOT a hibernation wake — it drops the '
       + 'sockets with the isolate, so what survives a real eviction is still unmeasured.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: workersPool('packages/cf-backend'),
   },
   {
     run: 'bun run test:workerd:cf-long',
@@ -1863,7 +1904,7 @@ export const LADDER: readonly Gate[] = [
       + 'Object across a real wake, a retention sweep, a spend aggregate over 20,000 rows, '
       + 'an EIO on files, a step cap and a stream lifecycle — the long-running half.',
     blind: 'the same as the row above.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: workersPool('packages/cf-backend'),
   },
   {
     run: 'bun run test:workerd:devbox',
@@ -1874,7 +1915,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'the devbox bench worker\'s admission and selected-arm guards as workerd runs '
       + 'them (`packages/devbox/tests/workerd`), which no bun test can express.',
     blind: 'everything above the platform, as the cf-backend row states.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: workersPool('packages/devbox'),
   },
   {
     run: 'bun run test:workerd:cf-complexity',
@@ -1898,7 +1939,7 @@ export const LADDER: readonly Gate[] = [
       + 'rewritten in place; and a step that prunes, which the session subject\'s messages are '
       + 'too small to make. The suite prints the list with its figures after the file, which '
       + 'vitest\'s agent reporter shows only when the file fails.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: workersPool('packages/cf-backend'),
   },
   {
     run: 'bun run gate:policy-drift',
@@ -2597,6 +2638,38 @@ export function gatesFor(tier: Tier): Gate[] {
   return LADDER.filter((gate) => TIERS.indexOf(gate.tier) <= upto);
 }
 
+/** Every file changed since `ref`, committed or not, and every addition not yet tracked. */
+function changedSince(ref: string, repo: Repo): Set<string> {
+  const run = Bun.spawnSync(['git', 'diff', '--name-only', '-z', ref], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+
+  if (run.exitCode !== 0) throw new Error(`git diff ${ref} exited ${String(run.exitCode)}: ${run.stderr.toString()}`);
+  const additions = repo.files.filter((file) => !repo.tracked.has(file));
+
+  return new Set([...run.stdout.toString().split('\0').filter((file) => file !== ''), ...additions]);
+}
+
+/**
+ * The source rows a change since `ref` can turn red, in deploy order: each whose
+ * derived closure holds a changed file, and each whose closure cannot be
+ * derived, which nothing proves unaffected. A live row has no closure to judge,
+ * so it is named and left out.
+ */
+function affectedSince(ref: string, repo: Repo): Gate[] {
+  const changed = changedSince(ref, repo);
+  const affected: Gate[] = [];
+
+  for (const gate of deployOrder().filter((row) => (row.phase ?? 'source') === 'source')) {
+    const closure = deriveClosure(gate.run, gate.inputs, repo);
+
+    if (closure.kind === 'live') console.log(`not judged, live: ${gate.run}`);
+    else if (closure.kind === 'uncomputable' || closure.files.some((file) => changed.has(file))) affected.push(gate);
+  }
+
+  console.log(`affected since ${ref}: ${String(affected.length)} source row(s), by ${String(changed.size)} changed file(s)`);
+
+  return affected;
+}
+
 /**
  * Every file a test runner would execute, from the one enumeration.
  *
@@ -3065,15 +3138,12 @@ if (import.meta.main) {
     if (cause.code !== 'EPIPE') throw cause;
   });
 
-  if (process.argv.includes('--plan')) {
-    console.log(printPlan(deployPlan()));
-    process.exit(0);
-  }
-
   // `--run <argv…>`: run a package script's command under its own row's
   // deadline. `bun run` sets `npm_lifecycle_event` to the script's name, so
   // the script needs no argument to find its row; a script no row runs gets
-  // the shared default. The hand run and the ladder row are one figure.
+  // the shared default. The hand run and the ladder row are one figure. It is
+  // the first branch, so a wrapped command's closure is the wrapper's graph
+  // loaded and nothing another mode reads (`RUNNER_SCRIPT`, ladder-closure.ts).
   const runAt = process.argv.indexOf('--run');
 
   if (runAt !== -1) {
@@ -3086,6 +3156,11 @@ if (import.meta.main) {
 
     const outcome = await runUnderDeadline({ argv, ...scriptDeadline(process.env.npm_lifecycle_event) });
     process.exit(outcome.exitCode);
+  }
+
+  if (process.argv.includes('--plan')) {
+    console.log(printPlan(deployPlan()));
+    process.exit(0);
   }
 
   if (process.argv.includes('--matrix')) {
@@ -3180,6 +3255,7 @@ if (import.meta.main) {
 
     let holes = 0;
     let audited = 0;
+    let unproven = 0;
 
     for (const gate of gates) {
       const closure = deriveClosure(gate.run, gate.inputs, repo);
@@ -3192,22 +3268,26 @@ if (import.meta.main) {
       const audit = auditClosure(runnableArgv(gate.run, tracked), root, closure, gateEnvironment(closure));
       audited += 1;
 
-      if (audit.undeclared.length === 0) {
-        console.log(`ok    ${gate.run}  (${String(audit.covered)} closure files opened, ${String(audit.outside)} outside the tree)`);
-        continue;
+      // A run that failed stopped short of what a green one opens, so its trace proves nothing about one.
+      if (audit.exitCode !== 0) {
+        unproven += 1;
+        console.error(`RED   ${gate.run}  exited ${String(audit.exitCode)} under the trace: a partial run's opens prove nothing`);
       }
 
-      holes += 1;
-      console.error(`HOLE  ${gate.run}  opened ${String(audit.undeclared.length)} file(s) its closure does not hold:`);
-
-      for (const file of audit.undeclared) console.error(`        ${file}`);
+      if (audit.undeclared.length > 0) {
+        holes += 1;
+        console.error(`HOLE  ${gate.run}  opened ${String(audit.undeclared.length)} file(s) its closure does not hold:\n`
+          + audit.undeclared.map((file) => `        ${file}`).join('\n'));
+      } else if (audit.exitCode === 0) {
+        console.log(`ok    ${gate.run}  (${String(audit.covered)} closure files opened, ${String(audit.outside)} outside the tree)`);
+      }
     }
 
     console.log(
       `\naudit-closure ${named === -1 ? `--tier=${tier}` : '--gate'}: ${String(audited)} gate(s) audited, `
-      + `${String(holes)} with undeclared reads`,
+      + `${String(holes)} with undeclared reads, ${String(unproven)} red under the trace`,
     );
-    process.exit(holes === 0 ? 0 : 1);
+    process.exit(holes === 0 && unproven === 0 ? 0 : 1);
   }
 
   if (process.argv.includes('--check-budget')) {
@@ -3311,20 +3391,27 @@ if (import.meta.main) {
     process.exit(2);
   }
 
+  // `--affected=<ref>`: the source rows a change since `ref` can turn red, each
+  // run as `--gate` runs one, so a lane proves a change before it sends it.
+  const affectedFrom = process.argv.find((argument) => argument.startsWith('--affected='))?.slice('--affected='.length);
   const flag = process.argv.find((argument) => argument.startsWith('--tier='));
-  const asked = selectedGate === undefined ? flag?.slice('--tier='.length) : 'deploy';
+  const asked = selectedGate === undefined && affectedFrom === undefined ? flag?.slice('--tier='.length) : 'deploy';
   const tier = TIERS.find((candidate) => candidate === asked);
 
-  if (tier === undefined) {
+  if (tier === undefined || affectedFrom === '') {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --gate <declared-command> | --plan | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --gate <declared-command> | --affected=<ref> | --plan | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
     );
     process.exit(2);
   }
 
-  const gates = selectedGate === undefined
+  const repo = repoAt(root, (run, files) => claims(run, files));
+
+  const declared = selectedGate === undefined
     ? gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT))
     : [selectedGate];
+
+  const gates = affectedFrom === undefined ? declared : affectedSince(affectedFrom, repo);
 
   const measured = assertMeasured(`ladder --tier=${tier}`, [
     ['gates in this tier', gates.length],
@@ -3362,7 +3449,6 @@ if (import.meta.main) {
   // hashes, cache or `--no-cache`, so a recorded verdict and a fresh one are
   // taken in one environment.
   const caching = !process.argv.includes('--no-cache');
-  const repo = repoAt(root, (run, files) => claims(run, files));
   const tools = toolVersions(root);
   const store = storeAt(defaultStoreDirectory());
   const revision = Bun.spawnSync(['git', 'rev-parse', '--short', 'HEAD'], { cwd: root, stdout: 'pipe' }).stdout.toString().trim();

@@ -1,5 +1,5 @@
 {
-  "reason": "worker-bundle-reach.test.ts joins the Gate self-tests row beside the advisory gate's self-tests; the row stays 24 s",
+  "reason": "gate self-tests row now also runs scripts/egress-forwarder.test.ts (the forwarder admission's planted reds, job 88 P1); re-measured alone: 41.7 s, 4248 MiB",
   "tiers": {
     "commit": {
       "seconds": 91.47,
@@ -43,12 +43,12 @@
       }
     },
     "push": {
-      "seconds": 436.87,
+      "seconds": 451.47,
       "measuredAt": "2026-09-25",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,
-        "bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts": 0.2,
+        "bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts": 0.2,
         "bun scripts/pattern-inventory.ts": 2.5,
         "bun run lint": 21.4,
         "bun test --timeout=0 packages/agent-core/drift.test.ts scripts/mossaic-sdk.test.ts": 0.2,
@@ -75,12 +75,14 @@
         "bun run gate:core-layering": 1,
         "bun run gate:vendor-schema": 1,
         "bun scripts/test-census.ts --ratchet": 4.1,
+        "bun scripts/census-plants.ts packages/": 9.6,
+        "bun scripts/census-plants.ts scripts/": 5,
         "bun run gate:complexity": 2.5,
         "bun run gate:silent-drop": 1,
         "bun run gate:test-clocks": 1.5,
         "bun scripts/secret-scan.ts": 18,
         "bun scripts/schema-drift.ts": 0.23,
-        "bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts": 24,
+        "bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts": 24,
         "bun test --timeout=0 scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts": 0.1,
         "bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts": 1.3,
         "bun test --timeout=0 scripts/deploy.test.ts": 87,

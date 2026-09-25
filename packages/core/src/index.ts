@@ -493,6 +493,10 @@ export {
 
 export type { LLMProviderConfig, ChatModelConfig, LLMUsage } from './llm';
 
+export {
+  createWorkersAIEmbedder, generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
+} from './providers/model-invocation';
+
 // Every surface that counts tokens speaks this usage report.
 export {
   USAGE_FIELDS,
@@ -910,7 +914,6 @@ export {
 
 export { EVIDENCE_BUDGETS, evidenceWindow, renderToolResult } from './prompts/evidence-window';
 
-// Runtime builder
 export { buildRuntime } from './runtime-builder';
 
 export type { RuntimeComponents } from './runtime-builder';
@@ -945,7 +948,7 @@ export {
   type ExplorePrompt, type ExplorePromptInput, type ExploreToolHint,
 } from './mcts/explore-prompt';
 
-export { exploreRollout, reflectRollout, type BranchRoute } from './mcts/rollout';
+export { branchCompletion, exploreRollout, reflectRollout, type BranchRoute } from './mcts/rollout';
 
 export {
   canonicalLanguage, fencedBlocks, readProposalCode,
@@ -1250,7 +1253,6 @@ export {
 export {
   reciprocalRankFusion,
   createCloudflareVectorStore,
-  createWorkersAIEmbedder,
   createNoopVectorStore,
   VECTOR_BACKEND_COOLDOWN_MS,
   type VectorStore,
@@ -1339,6 +1341,7 @@ export {
   MODEL_OPERATION_OUTCOMES,
   beginModelOperation,
   buildModelCallEvent,
+  unpricedLedgerSink,
   type ModelCallReport,
   type ModelCallSpend,
   type ModelCallSink,
@@ -2068,7 +2071,9 @@ export type { PendingAction, PendingActionKind, PendingActionInputs, PersonAsks 
 
 export { buildWorkspaceOverview, rosterBucket, rosterHeadline, rosterMatches, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
-export type { RosterBucket, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewSlate, WorkspaceStatus } from './read-models/workspace-overview';
+export type {
+  RosterBucket, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewShare, WorkspaceOverviewSlate, WorkspaceStatus,
+} from './read-models/workspace-overview';
 
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,

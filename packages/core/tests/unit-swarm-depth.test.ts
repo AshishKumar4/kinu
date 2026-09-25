@@ -14,6 +14,8 @@ import { backpropagate } from '../src/mcts/backpropagation';
 import { selectFrontierNode, type FrontierPolicy } from '../src/mcts/frontier';
 import { diversityAngle } from '../src/mcts/diversity';
 import { runSwarm } from '../src/strategy/swarm-run';
+import { RunEventRecorder } from '../src/events/recorder';
+import { unpricedLedgerSink } from '../src/events/model-call-event';
 import { SOLUTION_FILE } from '../src/strategy/exec-ratio';
 import { readExplorationCanvas } from '../src/read-models/exploration-canvas';
 import { explorationForkTree } from '../src/read-models/fork-tree-rows';
@@ -33,7 +35,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { SearchNode } from '../src/types/mcts';
 import type { LLM, SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
-import { createTestActors, present } from '@kinu.run/test-utils';
+import { createTestActors, present, unobservedSpend } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { refuseHostNode } from './helpers-actor-host';
 
@@ -518,7 +520,7 @@ async function run(input: {
   const prompts: string[] = [];
 
   const result = await runSwarm(
-    { rt, hostNode: NO_NODE, model: answering(input.proposeWidth, input.answers ?? [OPTIMAL], prompts), mode: 'build', logger },
+    { reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: answering(input.proposeWidth, input.answers ?? [OPTIMAL], prompts), mode: 'build', logger },
     resolved({ depth: input.depth, branches: input.branches, over: input.config, floor: input.floor, key: input.key }),
   );
 
@@ -528,6 +530,24 @@ async function run(input: {
 
   return { logger, nodes, result, prompts };
 }
+
+describe('a thought node\'s call is swarm spend', () => {
+  test('every node the search expanded lands in the workspace ledger once, measured', async () => {
+    const { rt } = createTestRuntime();
+    const events = new RunEventRecorder(rt.storage.sql, rt.actor);
+    const prompts: string[] = [];
+
+    const result = await runSwarm(
+      { reportModelCall: unpricedLedgerSink(events), rt, hostNode: NO_NODE, model: answering(null, [OPTIMAL], prompts), mode: 'build' },
+      resolved({ depth: 1, branches: 3 }),
+    );
+
+    expect('reason' in result).toBe(false);
+    // One call per expanded node, and every call the model saw is one of them.
+    expect(prompts).toHaveLength(3);
+    expect(events.spendByProducer().get('swarm')).toMatchObject({ calls: 3, callsWithoutUsage: 0 });
+  });
+});
 
 describe('a swarm at depth 2 expands, and its tree is measured', () => {
   test('depth 2 is REACHED, every node is derived from its parent, and the cap holds', async () => {
@@ -1034,7 +1054,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     expect(swarmValidity(call)?.error).toContain('samples ≥ 20');
 
     const { rt } = createTestRuntime();
-    const refusal = await runSwarm({ rt, hostNode: NO_NODE, model: answering(null), mode: 'build' }, call);
+    const refusal = await runSwarm({ reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: answering(null), mode: 'build' }, call);
     expect('reason' in refusal).toBe(true);
 
     if (!('reason' in refusal)) return;
@@ -1060,7 +1080,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     expect(swarmValidity(call)).toBeNull();
 
     const { rt } = createTestRuntime();
-    const result = await runSwarm({ rt, hostNode: NO_NODE, model: answering(null), mode: 'build' }, call);
+    const result = await runSwarm({ reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: answering(null), mode: 'build' }, call);
     expect('reason' in result).toBe(false);
 
     if ('reason' in result) return;
@@ -1075,7 +1095,7 @@ describe('merge-back at the settle barrier', () => {
     const logger = createRecordingLogger();
 
     const result = await runSwarm(
-      { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger },
+      { reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger },
       resolved({ depth: 1, branches: 2 }),
     );
 
@@ -1108,7 +1128,7 @@ describe('merge-back at the settle barrier', () => {
     const padded = `${OPTIMAL}\n// ${'x'.repeat(MAX_TX_BLOB_BYTES + 1)}\n`;
 
     const result = await runSwarm(
-      { rt, hostNode: NO_NODE, model: answering(null, [padded]), mode: 'build', logger },
+      { reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: answering(null, [padded]), mode: 'build', logger },
       resolved({ depth: 1, branches: 1 }),
     );
 
@@ -1171,7 +1191,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     const logger = createRecordingLogger();
 
     const result = await runSwarm(
-      { rt, hostNode: NO_NODE, model: scripted([variant('same'), variant('same'), variant('odd')]), mode: 'build', logger },
+      { reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: scripted([variant('same'), variant('same'), variant('odd')]), mode: 'build', logger },
       resolved({ depth: 3, branches: 3, over: { expand: 'aggregate' } }),
     );
 
@@ -1216,7 +1236,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     const logger = createRecordingLogger();
 
     const result = await runSwarm(
-      { rt, hostNode: NO_NODE, model: scripted([variant('same'), variant('same'), variant('odd')]), mode: 'build', logger },
+      { reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: scripted([variant('same'), variant('same'), variant('odd')]), mode: 'build', logger },
       resolved({ depth: 3, branches: 3, over: { expand: 'aggregate' } }),
     );
 
@@ -1252,7 +1272,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
 
     const result = await runSwarm(
       // Byte-identical members have not conflicted, so no graded node is spawned.
-      { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger },
+      { reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger },
       resolved({ depth: 2, branches: 2, over: { expand: 'aggregate' } }),
     );
 
@@ -1279,6 +1299,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     const result = await runSwarm(
       // The reference scores 0 and is retired: a parent with a last good state.
       {
+        reportModelCall: unobservedSpend,
         rt,
         hostNode: NO_NODE,
         model: scripted([variant('same'), variant('same'), variant('odd'), REFERENCE]),
@@ -1311,7 +1332,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
 
     const result = await runSwarm(
       // An unmeasurable candidate gets no edge, leaving one consumable parent: not a fan-in.
-      { rt, hostNode: NO_NODE, model: scripted(['export function solve() { throw new Error("no"); }\n', OPTIMAL]), mode: 'build', logger },
+      { reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: scripted(['export function solve() { throw new Error("no"); }\n', OPTIMAL]), mode: 'build', logger },
       resolved({ depth: 2, branches: 2, over: { expand: 'aggregate' } }),
     );
 
@@ -1331,7 +1352,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     const padded = `${OPTIMAL}\n// ${'x'.repeat(MAX_TX_BLOB_BYTES + 1)}\n`;
 
     const result = await runSwarm(
-      { rt, hostNode: NO_NODE, model: answering(null, [padded]), mode: 'build', logger },
+      { reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: answering(null, [padded]), mode: 'build', logger },
       resolved({ depth: 2, branches: 2, over: { expand: 'aggregate' } }),
     );
 
@@ -1363,7 +1384,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     const { rt } = createTestRuntime();
 
     const refusal = await runSwarm(
-      { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger: createRecordingLogger() },
       resolved({ depth: 1, branches: 3, over: { expand: 'aggregate' } }),
     );
 
@@ -1661,7 +1682,7 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
     const { rt } = createTestRuntime();
 
     const result = await runSwarm(
-      { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger: createRecordingLogger() },
       call,
     );
 
@@ -1703,7 +1724,7 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
     const { rt } = createTestRuntime();
 
     const result = await runSwarm(
-      { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger: createRecordingLogger() },
       call,
     );
 
@@ -1737,7 +1758,7 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
     const { rt } = createTestRuntime();
 
     const result = await runSwarm(
-      { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger: createRecordingLogger() },
       call,
     );
 
@@ -1825,7 +1846,7 @@ describe("a judged run's winner is the highest median, not the lowest", () => {
     const { rt } = createTestRuntime();
 
     const result = await runSwarm(
-      { rt: { ...rt, judgeModel }, hostNode: NO_NODE, model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt: { ...rt, judgeModel }, hostNode: NO_NODE, model, mode: 'build', logger: createRecordingLogger() },
       call,
     );
 

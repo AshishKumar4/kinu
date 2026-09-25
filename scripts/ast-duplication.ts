@@ -64,7 +64,7 @@ import {
 import { readSources } from './sources';
 import {
   blockBodyOf, declaredName, functionOwner, identifierCalleeName, identifierText,
-  literalText, memberCalleeName, methodKind, parse, type SyntaxNode, walk,
+  literalText, memberCalleeName, methodKind, parse, type Parsed, type SyntaxNode, walk,
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -80,7 +80,7 @@ const LOCK = `${root}scripts/ast-duplication.lock.json`;
  * the old floor of 30 found is still found: the measured image of that floor
  * under the new unit, not a taste.
  */
-const MIN_NODES = 26;
+export const MIN_NODES = 26;
 
 export type DuplicateKind = 'cross-package' | 'cross-file' | 'same-file';
 
@@ -97,7 +97,8 @@ export interface DuplicateGroup {
   readonly members: readonly DuplicateMember[];
 }
 
-interface Unit extends DuplicateMember {
+/** One function body: where it lives and its identifier-normalised structure. */
+export interface Unit extends DuplicateMember {
   readonly size: number;
   readonly hash: string;
   readonly start: number;
@@ -176,8 +177,8 @@ function nameOf(node: SyntaxNode): string {
   return inner;
 }
 
-function unitsOf(file: string, text: string): Unit[] {
-  const parsed = parse(file, text);
+/** Every function body of one parsed file; a caller that already parsed the file passes its tree. */
+export function unitsOf(file: string, parsed: Parsed): Unit[] {
   const units: Unit[] = [];
   walk(parsed.root, (node) => {
     const body = blockBodyOf(node);
@@ -214,7 +215,7 @@ export function findDuplicateGroups(
   const byHash = new Map<string, Unit[]>();
 
   for (const [file, text] of sources) {
-    for (const unit of unitsOf(file, text)) {
+    for (const unit of unitsOf(file, parse(file, text))) {
       if (unit.size < minNodes) continue;
       const bucket = byHash.get(unit.hash);
 
@@ -331,7 +332,7 @@ export const BLIND_SPOTS: readonly string[] = [
 
 if (import.meta.main) {
   const sources = readSources();
-  const units = [...sources].reduce((n, [file, text]) => n + unitsOf(file, text).length, 0);
+  const units = [...sources].reduce((n, [file, text]) => n + unitsOf(file, parse(file, text)).length, 0);
 
   const measured = assertMeasured('ast-duplication', [
     ['source files', sources.size],

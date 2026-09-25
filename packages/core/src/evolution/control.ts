@@ -1,16 +1,15 @@
 /** The scaffold evolution control plane: backend-neutral drivers over the evolution primitives. A backend
  *  supplies only a {@link ScaffoldSurface}. */
 
-import { generateText, type LanguageModel, type ModelMessage } from 'ai';
+import type { LanguageModel, ModelMessage } from 'ai';
 import * as v from 'valibot';
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { LLM, SqlExecutor } from '../types/primitives';
 import type { AgentConfigStore } from '../config/store';
 import { clampGepaEvalBudget } from '../config/store';
-import { beginModelOperation, type ModelCallSink, type ModelOperationSink } from '../events/model-call';
-import { normalizeUsage } from '../usage';
-import { callAccountOf } from '../providers/quota';
+import type { ModelCallSink, ModelCallSpend, ModelOperationSink } from '../events/model-call';
+import { generateReported } from '../providers/model-invocation';
 import { effortFor } from '../strategy/effort';
 import { evidenceWindow } from '../prompts/evidence-window';
 import { EVIDENCE_BUDGETS } from '../types/evidence';
@@ -108,7 +107,7 @@ export interface ScaffoldControl {
      */
   readonly judge: JsonGenerator;
   /** Reports the reflection LM's calls as `reflection` spend; rollouts and judge report elsewhere. */
-  readonly reportModelCall?: ModelCallSink;
+  readonly reportModelCall: ModelCallSink;
   /** Operation lifecycle sink. Absent means in-flight work is unattributable. */
   readonly operations?: ModelOperationSink;
 }
@@ -439,29 +438,9 @@ export async function applyScaffoldDecision(
 
 /** Uses the `scaffold_mutation` effort for prompt sections too: the job is the same. */
 function reflectionLmFor(control: ScaffoldControl, model: LanguageModel): ReflectionLM {
-  return async (prompt) => {
-    // Opens before the request so a pass killed mid-rewrite is named.
-    const operation = beginModelOperation(
-      { source: 'reflection', operations: control.operations },
-      'complete',
-    );
+  const spend: ModelCallSpend = { source: 'reflection', report: control.reportModelCall, operations: control.operations };
 
-    let result;
-
-    try {
-      result = await generateText({ model, prompt, ...effortFor('scaffold_mutation') });
-    } catch (err) {
-      operation.failed({ cause: err });
-      throw err;
-    }
-
-    const usage = normalizeUsage(result.totalUsage);
-    const modelId = result.response.modelId;
-    operation.completed({ usage, modelId });
-    control.reportModelCall?.({ source: 'reflection', usage, modelId, account: callAccountOf(result.response) });
-
-    return result.text;
-  };
+  return async (prompt) => (await generateReported({ model, prompt, ...effortFor('scaffold_mutation') }, { spend })).text;
 }
 
 const GepaScoreSchema = v.object({
@@ -961,7 +940,7 @@ export async function advancePromptSectionLane(
  *  Supplies its own `judge` spend label. */
 export function createJsonJudge(
   model: () => LanguageModel | Promise<LanguageModel>,
-  reportModelCall?: ModelCallSink,
+  reportModelCall: ModelCallSink,
   operations?: ModelOperationSink,
 ): JsonGenerator {
   return async (opts) => generateJson({
@@ -969,9 +948,7 @@ export function createJsonJudge(
     schema: opts.schema,
     prompt: opts.prompt,
     providerOptions: effortFor('judge').providerOptions,
-    spend: reportModelCall || operations
-      ? { source: 'judge', report: reportModelCall ?? (() => {}), operations }
-      : undefined,
+    spend: { source: 'judge', report: reportModelCall, operations },
   });
 }
 

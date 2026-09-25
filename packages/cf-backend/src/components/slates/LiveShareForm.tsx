@@ -187,12 +187,13 @@ function SharedNow({ shares, onStop, disabled }: { shares: readonly LiveShareRec
   );
 }
 
-export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, fixture }: {
+export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListingPending, fixture }: {
   workspace: string;
   slate: string;
   rpc: Rpc;
   onClose: () => void;
   onBusy: (busy: boolean) => void;
+  onListingPending?: () => void;
   fixture?: LiveShareFixture;
 }) {
   const [graph, setGraph] = useState<SlateCapabilityGraph | null>(fixture?.graph ?? null);
@@ -203,7 +204,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, fixture 
   const [fork, setFork] = useState(true);
   const [busy, setBusyState] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [created, setCreated] = useState<LiveShareCreated | null>(null);
+  const [created, setCreated] = useState<LiveShareCreated & { listing?: "pending" } | null>(null);
   const setBusy = useCallback((next: boolean) => { setBusyState(next); onBusy(next); }, [onBusy]);
 
   useEffect(() => {
@@ -249,23 +250,27 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, fixture 
       const result = await shareLive({ workspace, slate, visibility, emails: visibility === "users" ? emailList : undefined, approved: approvals, fork });
       setCreated(result);
       setShares((previous) => [result.share, ...previous]);
+
+      if (result.listing === 'pending') onListingPending?.();
     } catch (cause) {
       setErr(renderThrownChain({ cause }));
     } finally {
       setBusy(false);
     }
-  }, [canShare, approved, workspace, slate, visibility, emailList, fork, setBusy]);
+  }, [canShare, approved, workspace, slate, visibility, emailList, fork, setBusy, onListingPending]);
 
   const revoke = useCallback(async (shareId: string) => {
     setErr(null);
 
     try {
-      await revokeShare({ workspace, share: shareId });
+      const revoked = await revokeShare({ workspace, share: shareId });
       setShares((previous) => previous.filter((row) => row.id !== shareId));
+
+      if (revoked.listing === 'pending') onListingPending?.();
     } catch (cause) {
       setErr(renderThrownChain({ cause }));
     }
-  }, [workspace]);
+  }, [workspace, onListingPending]);
 
   if (created !== null) {
     return (
@@ -273,6 +278,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, fixture 
         <div className="space-y-3 text-xs">
           <p className="p-notice-success rounded-md px-3 py-2" data-share-created>
             Shared. {created.share.visibility === "public" ? "Anyone with the link can open it." : `${emailList.join(", ")} can open it.`}
+            {created.listing === "pending" && " The list will catch up."}
           </p>
           {created.url === null ? (
             <p className="p-meta p-text-3">This deployment cannot make share links: it has no preview host or signing secret.</p>

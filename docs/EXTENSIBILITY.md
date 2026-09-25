@@ -249,16 +249,16 @@ user setting. `effortFor()` returns only the Workers AI shape, so call
 Workers AI.
 
 ```ts
-import { effortFor } from '@kinu.run/core';
+import { effortFor, generateReported } from '@kinu.run/core';
 
-// User-facing chat → medium (default)
+// User-facing chat → medium (default): the turn loop, core/src/chat.ts
 streamText({ model, prompt, ...effortFor('chat') });
 
-// MCTS rollouts → low (many cheap samples)
+// MCTS rollouts → low (many cheap samples): core/src/mcts/rollout.ts
 generateText({ model, prompt, ...effortFor('mcts_rollout') });
 
-// Scaffold mutation → high (rare; must be good)
-streamText({ model, prompt, ...effortFor('scaffold_mutation') });
+// Scaffold mutation → high (rare; must be good), reported as `reflection` spend
+generateReported({ model, prompt, ...effortFor('scaffold_mutation') }, { spend });
 ```
 
 `chat`, `judge`, `mcts_judge` and `head_merge` use medium. `reflection`,

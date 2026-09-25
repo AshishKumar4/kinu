@@ -8,6 +8,8 @@ import type { PendingAction, PendingActionKind } from './pending-actions';
 import type { PendingDeviceConsent } from '../safety/device-consent';
 import type { PlanReviewStatus } from '../types/plans';
 import { workspaceDisplayTitle } from './workspace-title';
+import { LiveShareVisibilitySchema, type LiveShareVisibility } from '../slates/live-share-visibility';
+import { SHARE_KINDS } from '../slates/sharing';
 
 const TASK_PREVIEW_MAX = 240;
 
@@ -16,11 +18,26 @@ const WorkspaceOverviewRunSchema = v.object({
   task: v.nullable(v.string()),
 });
 
-/** `picture` is the digest of the slate's latest capture, null until its first. */
+/** `picture`: the latest capture's digest. Defaults read older tiles. */
 const WorkspaceOverviewSlateSchema = v.object({
   id: v.string(),
   title: v.string(),
   picture: v.nullable(v.string()),
+  bindings: v.optional(v.number(), 0),
+  visibility: v.optional(v.nullable(LiveShareVisibilitySchema), null),
+});
+
+const WorkspaceOverviewShareSchema = v.object({
+  kind: v.picklist(SHARE_KINDS),
+  share: v.string(),
+  slate: v.string(),
+  title: v.string(),
+  description: v.string(),
+  createdAt: v.number(),
+  bindings: v.number(),
+  users: v.array(v.string()),
+  visibility: v.optional(LiveShareVisibilitySchema),
+  fork: v.optional(v.boolean()),
 });
 
 export const WorkspaceOverviewSchema = v.object({
@@ -29,11 +46,14 @@ export const WorkspaceOverviewSchema = v.object({
   hasUpdates: v.boolean(),
   latestRun: v.nullable(WorkspaceOverviewRunSchema),
   slates: v.array(WorkspaceOverviewSlateSchema),
+  shares: v.optional(v.array(WorkspaceOverviewShareSchema), []),
 });
 
 export type WorkspaceOverview = v.InferOutput<typeof WorkspaceOverviewSchema>;
 
 export type WorkspaceOverviewSlate = v.InferOutput<typeof WorkspaceOverviewSlateSchema>;
+
+export type WorkspaceOverviewShare = v.InferOutput<typeof WorkspaceOverviewShareSchema>;
 
 export interface WorkspaceOverviewInputs {
   readonly working: boolean;
@@ -44,7 +64,8 @@ export interface WorkspaceOverviewInputs {
   /** A trial the engine applies itself is an update; one it cannot apply waits on the owner. */
   readonly scaffoldAutoApply: boolean;
   readonly latestRun: { readonly status: string | null; readonly task: string | null } | null;
-  readonly slates: readonly WorkspaceOverviewSlate[];
+  readonly slates: readonly Omit<WorkspaceOverviewSlate, 'visibility'>[];
+  readonly shares: readonly WorkspaceOverviewShare[];
 }
 
 type QueueEffect = 'decision' | 'update' | 'ignore';
@@ -96,8 +117,18 @@ export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): Workspa
       ? null
       : { status: inputs.latestRun.status, task: task === null ? null : task.slice(0, TASK_PREVIEW_MAX) },
 
-    slates: [...inputs.slates],
+    slates: inputs.slates.map((slate) => ({ ...slate, visibility: widestReach(inputs.shares, slate.id) })),
+    shares: [...inputs.shares],
   };
+}
+
+/** The wider reach, never understating who can see a slate. */
+function widestReach(shares: readonly WorkspaceOverviewShare[], slate: string): LiveShareVisibility | null {
+  const reaches = shares.filter((share) => share.slate === slate).map((share) => share.visibility);
+
+  if (reaches.includes('public')) return 'public';
+
+  return reaches.includes('users') ? 'users' : null;
 }
 
 /** `unreported`: no tile yet, never idle. */

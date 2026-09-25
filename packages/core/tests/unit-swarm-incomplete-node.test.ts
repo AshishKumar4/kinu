@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
 import type { LanguageModelV3Prompt } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
@@ -191,6 +191,7 @@ async function run(input: {
   let seated = 0;
 
   const deps: SwarmRunDeps = {
+    reportModelCall: unobservedSpend,
     rt,
     hostNode: async (node) => {
       seated += 1;

@@ -14,7 +14,7 @@ import {
   type AgentProviderRegistry, type UserCredentialClient,
 } from './providers/agent-registry';
 import { resolveReviewingModelSelection } from './providers/judge-model';
-import type { UserCaller } from '@kinu.run/core';
+import type { ModelCallSink, UserCaller } from '@kinu.run/core';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { CodexEgressNamespace } from './egress/codex-egress-route';
 
@@ -23,14 +23,6 @@ type MarkdownConversion = NonNullable<Parameters<typeof buildCfWebSearchProvider
 /** The `env.AI` binding. HTML→markdown is optional: without it core keeps raw HTML, and a gateway-only binding stays usable. */
 export interface OwnedAiBinding extends WorkersAIBinding {
   toMarkdown?: MarkdownConversion;
-}
-
-interface ConvertingAiBinding extends OwnedAiBinding {
-  toMarkdown: MarkdownConversion;
-}
-
-function convertsHtml(ai: OwnedAiBinding | undefined): ai is ConvertingAiBinding {
-  return ai?.toMarkdown !== undefined;
 }
 
 export interface OwnedModelEnv<Id> extends ProviderEnv {
@@ -53,6 +45,8 @@ export interface OwnedModelServicesOptions<Id> {
   /** Invoked at wait time, so the callback may read live turn state. */
   readonly onProviderWait?: (info: ProviderWaitInfo) => void;
   readonly accountFor?: (providerId: string) => string | undefined;
+  /** Where the web provider's Workers AI conversions are counted, as `platform` spend. */
+  readonly reportModelCall: ModelCallSink;
 }
 
 export class OwnedModelServices<Id = DurableObjectId> {
@@ -188,10 +182,10 @@ export class OwnedModelServices<Id = DurableObjectId> {
   /** Key-less by default; a stored `tavily` credential upgrades search. */
   getWebSearchProvider(): WebSearchProvider {
     if (this.webSearchProviderCache) return this.webSearchProviderCache;
-    const ai = this.options.env.AI;
     this.webSearchProviderCache = buildCfWebSearchProvider(
-      convertsHtml(ai) ? { AI: ai } : {},
+      this.options.env,
       () => this.options.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined,
+      this.options.reportModelCall,
     );
 
     return this.webSearchProviderCache;

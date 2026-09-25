@@ -11,7 +11,7 @@ import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } 
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
-const QUIET: WorkspaceOverview = { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [] };
+const QUIET: WorkspaceOverview = { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] };
 
 const FrameSchema = v.object({
   type: v.literal('workspace'),

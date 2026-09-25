@@ -347,8 +347,9 @@ function TransferRow({ row, onDismiss }: { row: Transfer; onDismiss: () => void 
   );
 }
 
-function DriveNotices({ notice, onDismissNotice, libraryResource, onRetryLibrary, copyStatus, transfers, onDismissTransfer }: {
+function DriveNotices({ notice, onDismissNotice, listingPending, libraryResource, onRetryLibrary, copyStatus, transfers, onDismissTransfer }: {
   notice: string | null;
+  listingPending: boolean;
   onDismissNotice: () => void;
   libraryResource: AsyncResource<SharedLibrary>;
   onRetryLibrary: () => void;
@@ -365,6 +366,7 @@ function DriveNotices({ notice, onDismissNotice, libraryResource, onRetryLibrary
           <button type="button" onClick={onDismissNotice} className="ml-auto shrink-0 p-text-3 hover:p-text" aria-label="Dismiss"><XIcon size={12} /></button>
         </div>
       )}
+      {listingPending && <p role="status" data-drive-listing-pending className="mt-4 p-meta p-text-3">Saved. The list will catch up.</p>}
       {libraryResource.status === "error" && (
         <LoadFailure what="your slates and shares" message={libraryResource.message} onRetry={onRetryLibrary} className="mt-4" />
       )}
@@ -428,6 +430,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const library = useAsyncResource(loadLibrary, undefined, "library");
   const [dialog, setDialog] = useState<DriveDialogState | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [listingPending, setListingPending] = useState(false);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [query, setQuery] = useState("");
   const nextTransfer = useRef(0);
@@ -651,7 +654,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
         {tab === "mine" && !isRoot && <div className="mt-6"><Crumbs path={path} /></div>}
         {subtitle !== null && <p className={`p-meta p-text-3 ${isRoot ? "mt-4" : "mt-1"}`}>{subtitle}</p>}
 
-        <DriveNotices notice={notice} onDismissNotice={() => setNotice(null)} libraryResource={library.resource} onRetryLibrary={library.reload}
+        <DriveNotices notice={notice} onDismissNotice={() => setNotice(null)} listingPending={listingPending} libraryResource={library.resource} onRetryLibrary={library.reload}
           copyStatus={copier.status} transfers={transfers} onDismissTransfer={(id) => setTransfers((rows) => rows.filter((row) => row.id !== id))} />
 
         {tab === "mine" ? (
@@ -674,7 +677,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
       {builtin !== undefined && <BuiltinSkillDrawer name={builtin} onClose={() => show("skill", null)} />}
       {dialog !== null && (
         <DriveDialog dialog={dialog} folder={path} onClose={() => setDialog(null)} onListingChanged={listing.reload}
-          onSharesChanged={library.reload} onSkillAdded={() => void afterSkillAdded()} />
+          onSharesChanged={(behind) => { if (behind === "pending") setListingPending(true); library.reload(); }} onSkillAdded={() => void afterSkillAdded()} />
       )}
     </div>
   );

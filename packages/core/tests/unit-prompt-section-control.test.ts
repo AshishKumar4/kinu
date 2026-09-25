@@ -77,6 +77,7 @@ function scriptedControl(rt: AgentRuntime, judgeScore: (candidate: string) => nu
     reflectionPrompts,
     judgePrompts,
     control: {
+      reportModelCall: unobservedSpend,
       events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt,
       sql: rt.storage.sql,

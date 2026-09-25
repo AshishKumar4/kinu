@@ -9,6 +9,8 @@ import {
   HeadJournal,
   MctsSearchStore,
   RunEventRecorder,
+  unpricedLedgerSink,
+  type ModelCallSink,
   TriggerRegistry,
   type AlarmScheduler,
   openWorkspaceMainActor,
@@ -602,10 +604,13 @@ export function getLocalEnsemble(name: string): EnsembleReport {
 }
 
 /** Resolving costs credentials, so `runEnsemble` takes this as a callback rather than resolving up front. */
-function localJudge(resolver: LocalModelResolver, named: string): EnsembleJudge {
+function localJudge(resolver: LocalModelResolver, named: string, report: ModelCallSink): EnsembleJudge {
   const spec = resolver.normalizeSpecSync(named);
 
-  return { spec, llm: createCompletionLLM({ model: resolver.resolveModel(spec), spec, stage: 'judge' }) };
+  return {
+    spec,
+    llm: createCompletionLLM({ model: resolver.resolveModel(spec), spec, stage: 'judge', spend: { source: 'judge', report } }),
+  };
 }
 
 /** Holds the database open for the whole pass: verdicts are written as they land, so an interrupted run keeps paid calls. */
@@ -621,21 +626,23 @@ export async function runLocalOutcomeEnsemble(
     initTurnOutcomeTables((ddl) => { db.exec(ddl); });
     // Choosing judges reads the catalog; resolving one needs credentials. Deferred so a label-less workspace is told that, not "unauthenticated".
     const { resolver } = createConfiguredLocalModelResolver({ agentName: name });
+    const actor = openWorkspaceMainActor(sql);
+    const report = unpricedLedgerSink(new RunEventRecorder(sql, actor));
 
-    return await runEnsemble(sql, openWorkspaceMainActor(sql), {
+    return await runEnsemble(sql, actor, {
       specs: async () => (await selectEnsembleJudges({
         specs,
-        chatSpec: () => resolver.normalizeSpecSync(openWorkspaceMainActor(sql).config.getModel()),
+        chatSpec: () => resolver.normalizeSpecSync(actor.config.getModel()),
         candidates: () => resolver.judgeCandidates(),
       })).specs,
-      judge: (named) => localJudge(resolver, named),
+      judge: (named) => localJudge(resolver, named, report),
     });
   } finally {
     db.close();
   }
 }
 
-/** Nothing is written to the ledger: the corpus is not this agent's history. */
+/** The corpus is not this agent's history: no outcome row is written. */
 export async function runLocalCorpusEval(name: string, input: {
   turns: ReadonlyArray<CorpusTurn>;
   labels: ReadonlyArray<WeakLabel>;
@@ -643,28 +650,36 @@ export async function runLocalCorpusEval(name: string, input: {
 }): Promise<CorpusEvalReport> {
   ensureLocalAgent(name);
   const { resolver } = createConfiguredLocalModelResolver({ agentName: name });
+  const db = new Database(agentDbPath(name));
 
-  const chatSpec = resolver.normalizeSpecSync(
-    withLocalDb(name, (db) => openWorkspaceMainActor(makeSql(db)).config.getModel()),
-  );
+  try {
+    const sql = makeSql(db);
+    const actor = openWorkspaceMainActor(sql);
+    const report = unpricedLedgerSink(new RunEventRecorder(sql, actor));
+    const chatSpec = resolver.normalizeSpecSync(actor.config.getModel());
 
-  const selection = await selectEnsembleJudges({
-    specs: input.specs,
-    chatSpec: () => chatSpec,
-    candidates: () => resolver.judgeCandidates(),
-  });
+    const selection = await selectEnsembleJudges({
+      specs: input.specs,
+      chatSpec: () => chatSpec,
+      candidates: () => resolver.judgeCandidates(),
+    });
 
-  const judges = selection.specs.map((named) => localJudge(resolver, named));
+    const judges = selection.specs.map((named) => localJudge(resolver, named, report));
 
-  return runCorpusEval({
-    turns: input.turns,
-    labels: input.labels,
-    classifier: {
-      name: `${chatSpec} (turn-outcome classifier)`,
-      llm: createCompletionLLM({ model: resolver.resolveModel(chatSpec), spec: chatSpec, stage: 'chat' }),
-    },
-    judges,
-  });
+    return await runCorpusEval({
+      turns: input.turns,
+      labels: input.labels,
+      classifier: {
+        name: `${chatSpec} (turn-outcome classifier)`,
+        llm: createCompletionLLM({
+          model: resolver.resolveModel(chatSpec), spec: chatSpec, stage: 'chat', spend: { source: 'fast', report },
+        }),
+      },
+      judges,
+    });
+  } finally {
+    db.close();
+  }
 }
 
 export interface LocalGepaRunDetail {

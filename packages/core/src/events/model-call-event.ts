@@ -2,7 +2,8 @@
 
 import { priceCall } from '../mission-budget';
 import type { ModelPricing } from '../providers/types';
-import type { ModelCallReport } from './model-call';
+import { WORKSPACE_RUN_ID, type ModelCallReport, type ModelCallSink } from './model-call';
+import type { RunEventRecorder } from './recorder';
 import type { RunEventInput } from './types';
 
 /**
@@ -37,4 +38,9 @@ export function buildModelCallEvent(report: ModelCallReport, opts: {
   }
 
   return event;
+}
+
+/** An actor's ledger outside any run, unpriced: for a seam no session prices. */
+export function unpricedLedgerSink(events: Pick<RunEventRecorder, 'emit'>): ModelCallSink {
+  return (report) => { events.emit(WORKSPACE_RUN_ID, buildModelCallEvent(report, { effectiveSpec: null, pricing: null })); };
 }

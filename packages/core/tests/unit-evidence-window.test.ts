@@ -14,7 +14,7 @@ import type { GepaCandidate } from '../src/evolution/gepa/types';
 import { initReplayTables, runReplayEval } from '../src/evolution/replay';
 import { buildOutcomeClassifierPrompt, initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes';
 import { createTestRuntime, makeExecRaw, makeSql, storesFor } from './helpers';
-import { createTestActors } from '@kinu.run/test-utils';
+import { createTestActors, unobservedSpend } from '@kinu.run/test-utils';
 import { RunEventRecorder } from '../src/events/recorder';
 
 /** A seed candidate carrying `source`, the only field these prompts read. */
@@ -132,6 +132,7 @@ describe('the readers can see the end of a long turn', () => {
     const currentOutput = trajectory(200_000, `CURRENT-${ending}`);
 
     const control: ScaffoldControl = {
+      reportModelCall: unobservedSpend,
       events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt,
       sql: rt.storage.sql,

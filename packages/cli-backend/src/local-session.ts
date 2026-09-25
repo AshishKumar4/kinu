@@ -8,7 +8,7 @@ import { sameActorReference, testModel, type ModelTestResult } from '@kinu.run/c
 import type { ActorHandle } from '@kinu.run/core';
 import { resolve } from 'node:path';
 import {
-  generateText, stepCountIs,
+  stepCountIs,
   type LanguageModel, type ToolSet,
 } from 'ai';
 import type { Database } from 'bun:sqlite';
@@ -80,7 +80,7 @@ import { TierIdSchema,
   turnReasonForMetadata, type TurnReason,
   runChat, type CountableRequest,
   parseModelSpec, agentAffinityKey,
-  normalizeUsage,
+  generateReported, type GenerateRequest,
   measureCompactionTrigger,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   AdvisorRecoverySnapshotSchema,
@@ -135,7 +135,7 @@ import { TierIdSchema,
   decodeJsonValue, projectJsonValue, JsonValueSchema,
   agentSelfHost, createAgentSelfProvider,
   cancelBackgroundJob, jobResult, listBackgroundJobs,
-  getAlwaysActiveSkills, getProviderAccounts, workspaceSpend, type WorkspaceSpend, callAccountOf, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
+  getAlwaysActiveSkills, getProviderAccounts, workspaceSpend, type WorkspaceSpend, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
   getShellApprovalGrants, revokeShellApprovalGrants, gatedGrants, type ApprovalGrant,
   setAlwaysActiveSkills, setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   getEvolutionChangelog, markChangelogSeen, pickAlternateTake,
@@ -2660,26 +2660,16 @@ export class LocalAgentSession implements BackendHost {
     return {
       async *stream() { yield ""; },
       complete: async (prompt: string): Promise<string> => {
-        const request: Parameters<typeof generateText>[0] = { model, prompt };
+        const request: GenerateRequest = { model, prompt };
 
         if (system !== undefined) request.system = system;
 
         if (providerOptions) request.providerOptions = providerOptions;
-        const result = await generateText(request);
 
-        const report = {
-          source: resolution.source,
+        return (await generateReported(request, {
+          spend: { source: resolution.source, report: this.modelCallSink },
           spec: resolution.model,
-          usage: normalizeUsage(result.usage),
-          account: callAccountOf(result.response ?? {}),
-        };
-
-        const modelId = result.response?.modelId;
-        this.modelCallSink(modelId
-          ? { ...report, modelId }
-          : report);
-
-        return result.text.trim();
+        })).text.trim();
       },
     };
   }

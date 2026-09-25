@@ -86,6 +86,16 @@ function topLevelNames(tree: Tree): string[] {
   return names;
 }
 
+export interface BlueprintHeading {
+  readonly title: string;
+  readonly description: string;
+  readonly bindings: number;
+}
+
+function heading(record: SlateShareRecord, project: SlateProject): Omit<BlueprintHeading, 'bindings'> {
+  return { title: project.slate.title ?? project.name ?? record.slate, description: project.description ?? '' };
+}
+
 export interface BlueprintReading {
   readonly record: SlateShareRecord;
   /** The page without its address: the app host signs the id. */
@@ -151,16 +161,12 @@ export class WorkspaceBlueprints {
 
   /** Refuses when revoked (S6). */
   read(share: string): BlueprintReading {
-    const record = this.deps.shares.live(share);
-    const publication = this.deps.slates.publication(new SlatePublicationId(record.publication));
-    const tree = this.tree(publication.materialization);
-    const project = this.project(tree);
+    const { record, tree, project } = this.published(share);
 
     return {
       record,
       view: {
-        title: project.slate.title ?? project.name ?? record.slate,
-        description: project.description ?? '',
+        ...heading(record, project),
         bindings: describeBindings(project),
         credentialed: credentialedBindings(project),
         entries: this.entries(tree, tree),
@@ -168,6 +174,20 @@ export class WorkspaceBlueprints {
         createdAt: record.createdAt,
       },
     };
+  }
+
+  /** Without the entries and warnings, which read every file. */
+  heading(share: string): BlueprintHeading {
+    const { record, project } = this.published(share);
+
+    return { ...heading(record, project), bindings: describeBindings(project).length };
+  }
+
+  private published(share: string) {
+    const record = this.deps.shares.live(share);
+    const tree = this.tree(this.deps.slates.publication(new SlatePublicationId(record.publication)).materialization);
+
+    return { record, tree, project: this.project(tree) };
   }
 
   /** Re-reads the row, so a revoked blueprint refuses here too. */
