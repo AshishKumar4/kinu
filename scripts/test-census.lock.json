@@ -1,5 +1,5 @@
 {
-  "measured": "d776bfc88: 1172 test files, 1020 runnable suites, 12877 tests, 43 runners, 35 non-public product members",
+  "measured": "e67977c0f: 1190 test files, 1033 runnable suites, 12988 tests, 43 runners, 35 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-codemode-sandbox.test.ts :: (file scope) :: declared mirror",
@@ -98,10 +98,6 @@
       "count": 2
     },
     {
-      "key": "tautology_suspect :: packages/cf-backend/tests/unit-head-delta.test.ts :: step ids are per step, so the trace is stable while it grows :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
       "key": "tautology_suspect :: packages/cf-backend/tests/unit-user-mcp.test.ts :: a bigger window admits more of the same catalog :: expected side computed by the code under test",
       "count": 1
     },
@@ -134,10 +130,6 @@
       "count": 2
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-bench-longhorizon.test.ts :: encode/decode is lossless and order-stable :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
       "key": "tautology_suspect :: packages/core/tests/unit-bench-longhorizon.test.ts :: the same spec generates byte-identical files :: expected side computed by the code under test",
       "count": 1
     },
@@ -154,27 +146,7 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-bench-report.test.ts :: is stable for identical config :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-bench-report.test.ts :: runOrder is deterministic per seed and varies across tasks :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-bench-split.test.ts :: is deterministic and depends on the salt :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-bench-split.test.ts :: is order-independent but content-sensitive :: expected side computed by the code under test",
-      "count": 2
-    },
-    {
       "key": "tautology_suspect :: packages/core/tests/unit-calibration.test.ts :: is deterministic, and an empty ledger draws nothing :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-deferred-turn-review.test.ts :: a deferred review lands the SAME outcome row an inline review would :: expected side computed by the code under test",
       "count": 1
     },
     {
@@ -194,43 +166,7 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: repeated topics from the same sender still admit (distinct outbox ids) :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: same body within same 5-min bucket → same key :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-subordinate.test.ts :: a report is keyed by the sending sequence; an assignment down is not keyed :: expected side computed by the code under test",
-      "count": 2
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-exploration-records.test.ts :: identical is 0, disjoint is 1, and it is symmetric :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-profile-catalog.test.ts :: is insertion-order independent :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-profile-catalog.test.ts :: moves when content moves :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-profile-catalog.test.ts :: the builtin catalog validates, pins the platform default model, and digests stably :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-swarm-preset-resolution.test.ts :: all six resolve, and none of them resolves into a refusal :: weak-only test",
-      "count": 1
-    },
-    {
       "key": "tautology_suspect :: packages/core/tests/unit-tool-call-id.test.ts :: the same native id in two responses cannot produce the same key :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-tool-call-id.test.ts :: two calls in one response never collide :: expected side computed by the code under test",
       "count": 1
     },
     {
@@ -239,10 +175,6 @@
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-turn-outcomes.test.ts :: outcomeQuality ties to the explicit-feedback constants :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-volatile-context.test.ts :: is deterministic and byte-sensitive :: expected side computed by the code under test",
       "count": 1
     },
     {
@@ -258,10 +190,6 @@
       "count": 2
     },
     {
-      "key": "tautology_suspect :: scripts/bench.test.ts :: accepts a throwaway root elsewhere :: weak-only test",
-      "count": 1
-    },
-    {
       "key": "tautology_suspect :: scripts/bench.test.ts :: regenerating a task at a different size changes the manifest :: expected side computed by the code under test",
       "count": 1
     },
@@ -275,7 +203,7 @@
     },
     {
       "key": "tautology_suspect :: tests/live/evolution-proof.test.ts :: the plaintext encodes back to the ciphertext, and Atbash is its own inverse :: expected side computed by the code under test",
-      "count": 2
+      "count": 1
     }
   ]
 }

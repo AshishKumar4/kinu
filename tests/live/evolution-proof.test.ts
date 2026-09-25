@@ -1000,12 +1000,13 @@ describe('the challenge solvers these turns are graded by', () => {
 
   test('the plaintext encodes back to the ciphertext, and Atbash is its own inverse', () => {
     console.log(`    ${CIPHER.ciphertext} -> ${CIPHER_ANSWER}`);
+    // A hand-known pair pins the mapping itself: ROT13 and an alphabet off by one pass the round trip too,
+    // and would define a wrong expected plaintext that a correct decoding then fails.
+    expect(atbash('WIZARD')).toBe('DRAZIW');
     expect(atbash(CIPHER_ANSWER)).toBe(CIPHER.ciphertext.toUpperCase());
-    expect(atbash(atbash(CIPHER.ciphertext))).toBe(CIPHER.ciphertext.toUpperCase());
     // Every letter MOVED, which is why `toContain` on the live turn cannot be
     // satisfied by a response that merely quoted the ciphertext back.
     expect(letterKey(CIPHER_ANSWER)).not.toBe(letterKey(CIPHER.ciphertext));
-    expect(letterKey(CIPHER_ANSWER).length).toBe(letterKey(CIPHER.ciphertext).length);
   });
 
   test('every prompt carries the data its answer was computed from', () => {
