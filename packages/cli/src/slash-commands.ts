@@ -1,13 +1,13 @@
 /** Slash commands shared by the TUI and classic REPL; outcomes are presentation-neutral. */
 
-import { fmtUsd, MAIN_ACCOUNT, specWithoutAccount, usageTotal } from '@kinu.run/core';
+import { fmtUsd, limitLines, MAIN_ACCOUNT, specWithoutAccount, usageTotal } from '@kinu.run/core';
 import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECISIONS, offeredReasoningEfforts, formatPlanWithLineNumbers, planTitle, type PlanReview, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentRefinementView } from './agent-client';
 import type { InstructionSourceRow } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { loadActiveProfile, updateDefaultAccount } from './default-model';
 import { readAllAccountUsage } from './account-usage';
-import { plural, renderAccountSpendLines, renderCreditLines, renderSearchTreeLines } from './display';
+import { plural, renderAccountSpendLines, renderSearchTreeLines } from './display';
 
 export interface SlashCommandInfo {
   name: string;
@@ -43,7 +43,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/tools', description: 'List the tools this agent can use', run: toolsCommand },
   { name: '/model', description: 'Show or set this workspace\'s model', usage: '/model [spec]', run: modelCommand },
   { name: '/effort', description: 'Show or set this workspace\'s reasoning effort', usage: '/effort [level]', run: effortCommand },
-  { name: '/stats', description: 'Show usage, quota and API-equivalent cost per provider account', usage: '/stats', run: statsCommand },
+  { name: '/stats', description: 'Show each provider account\'s limits and what is left, then usage and API-equivalent cost', usage: '/stats [refresh]', run: statsCommand },
   { name: '/accounts', description: 'Show each provider\'s accounts; choose this workspace\'s or the default', usage: ACCOUNTS_USAGE, run: accountsCommand },
   { name: '/role', description: 'Show or choose this agent\'s role', usage: '/role [id]', run: roleCommand },
   { name: '/rename', description: 'Rename this agent. Kinu never renames over a name you chose', usage: '/rename <name>', requires: 'rename', run: renameCommand },
@@ -224,8 +224,8 @@ async function modelCommand({ client, arg }: SlashContext): Promise<SlashOutcome
   return { kind: 'model-set', spec: result.spec };
 }
 
-async function statsCommand({ client }: SlashContext): Promise<SlashOutcome> {
-  const [usage, spend] = await Promise.all([readAllAccountUsage(), client.workspaceSpend()]);
+async function statsCommand({ client, arg }: SlashContext): Promise<SlashOutcome> {
+  const [usage, spend] = await Promise.all([readAllAccountUsage({ refresh: arg === 'refresh' }), client.workspaceSpend()]);
   const tokens = usageTotal(spend.total.usage);
   const usd = spend.total.usd === undefined ? 'unpriced' : fmtUsd(spend.total.usd);
   const here = `This workspace: ${tokens === undefined ? 'unmeasured' : `${tokens.toLocaleString()} tokens`}, ${usd}, ${plural(spend.total.calls, 'call')}`;
@@ -234,8 +234,9 @@ async function statsCommand({ client }: SlashContext): Promise<SlashOutcome> {
   return {
     kind: 'text',
     text: [
+      ...limitLines(usage.limits ?? [], Date.now()),
       `Across your ${plural(usage.workspaces, 'workspace')}`, ...renderAccountSpendLines(usage.accounts, Date.now()),
-      ...renderCreditLines(usage.credits ?? []), ...unread, here,
+      ...unread, here,
     ].join('\n'),
   };
 }

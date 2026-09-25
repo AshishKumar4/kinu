@@ -23,7 +23,7 @@ export const ModelTestResultSchema: v.GenericSchema<ModelTestResult> = v.union([
   }),
 ]);
 
-/** One unretried call; output is uncapped by rule, so the prompt asks for a word. */
+/** Unretried; output uncapped by rule. */
 export async function testModel(input: {
   readonly spec: string;
   readonly resolve: (spec: string) => LanguageModel;

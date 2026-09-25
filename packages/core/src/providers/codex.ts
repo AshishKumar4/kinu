@@ -58,7 +58,7 @@ export function codexEgressAllowed(input: { readonly method: string; readonly ur
   if (url?.protocol !== 'https:' || url.hostname !== 'chatgpt.com' || url.port !== '') return false;
   const { pathname } = url;
 
-  if (input.method === 'GET') return pathname === '/backend-api/codex/models';
+  if (input.method === 'GET') return pathname === '/backend-api/codex/models' || pathname === '/backend-api/wham/usage';
 
   return input.method === 'POST' && pathname === '/backend-api/codex/responses';
 }

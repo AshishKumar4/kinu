@@ -88,9 +88,7 @@ describe('/stats reads every workspace this person holds', () => {
       }],
       workspaces: 2,
       unread: ['cloud-gone'],
-      credits: [{
-        provider: 'openrouter', account: 'team', at: 5_000, limit: 10, remaining: 4, reset: 'monthly', usedToday: 1, usedThisMonth: 6,
-      }],
+      limits: [{ provider: 'codex', account: 'work', at: 5_000, windows: [{ name: '5h', usedPercent: 40, resetsAt: 9_000 }] }],
     };
 
     const seen: string[] = [];
@@ -112,7 +110,7 @@ describe('/stats reads every workspace this person holds', () => {
       expect(usage.unread).toEqual(['cloud-gone']);
       expect(usage.accounts.map((row) => [row.provider, row.account, row.calls, row.usd])).toEqual([['anthropic', 'work', 4, 2]]);
       expect(usage.accounts[0]?.quota?.windows[0]?.remaining).toBe(3);
-      expect(usage.credits).toEqual(cloud.credits);
+      expect(usage.limits).toEqual(cloud.limits);
     } finally {
       await server.stop(true);
     }

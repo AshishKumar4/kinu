@@ -328,11 +328,23 @@ async function settingsSectionsFixture(path: string): Promise<Response | null> {
     return fixtureJson({
       accounts: ACTIVITY_ACCOUNTS,
       workspaces: 4,
-      unread: ["old-bot"],
-      credits: [{
-        provider: "openrouter", account: "main", at: NOW - 5e3,
-        limit: 10, remaining: 4.12, reset: "monthly", usedToday: 1.03, usedThisMonth: 5.88,
-      }],
+      unread: ["old-bot", "Claude · work limits (Claude answered HTTP 401 for the work account)"],
+      limits: [
+        { provider: "claude", account: "main", at: NOW - 5e3, windows: [
+          { name: "5h", usedPercent: 62, resetsAt: NOW + 2 * 36e5 + 3 * 6e4 },
+          { name: "weekly", usedPercent: 18, resetsAt: NOW + 3.5 * 864e5 },
+        ] },
+        { provider: "codex", account: "main", at: NOW - 5e3, windows: [
+          { name: "5h", usedPercent: 40, resetsAt: NOW + 36e5 },
+          { name: "weekly", usedPercent: 7, resetsAt: NOW + 6 * 864e5 },
+        ] },
+        { provider: "opencode-go", account: "main", at: NOW - 12 * 6e4, undocumented: true, windows: [
+          { name: "5h", usedPercent: 12, resetsAt: NOW + 3 * 36e5 },
+          { name: "weekly", usedPercent: 55, resetsAt: NOW + 3 * 864e5 },
+          { name: "monthly", usedPercent: 100, resetsAt: NOW + 8.4 * 864e5 },
+        ] },
+        { provider: "openrouter", account: "main", at: NOW - 5e3, windows: [{ name: "credit", used: 5.88, limit: 10, resets: "monthly" }] },
+      ],
     });
   }
 

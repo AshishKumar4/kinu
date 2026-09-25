@@ -319,7 +319,9 @@ cliRoutes.post('/api/cli/models/test', async (c) => {
 });
 
 cliRoutes.get('/api/cli/usage', async (c) =>
-  json({ body: await readUserAccountUsage(c.env, c.get('cli').userDO, await ownerCaller(c.env)) }));
+  json({ body: await readUserAccountUsage({
+    env: c.env, userDO: c.get('cli').userDO, owner: await ownerCaller(c.env), userId: c.get('cli').userId, refresh: c.req.query('refresh') === '1',
+  }) }));
 
 cliRoutes.post('/api/cli/workspaces', async (c) => {
   const cli = c.get('cli');

@@ -1930,8 +1930,8 @@ export type { RunListEntry, RunSummary } from './read-models/runs';
 export { workspaceSpend } from './read-models/workspace-spend';
 
 export {
-  AccountSpendSchema, AccountUsageSchema, mergeAccountSpend, readAccountCredits, readAccountUsage,
-  type AccountCreditSource, type AccountLedgerSource, type AccountUsage,
+  AccountSpendSchema, AccountUsageSchema, mergeAccountSpend, readAccountUsage,
+  type AccountLedgerSource, type AccountUsage,
 } from './read-models/account-usage';
 
 export type {

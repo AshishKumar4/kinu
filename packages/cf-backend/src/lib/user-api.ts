@@ -324,7 +324,7 @@ export const disconnectCodex  = () => api(OkSchema, 'DELETE', '/codex')
 
  return r; });
 
-export const getAccountUsage = () => api(AccountUsageSchema, 'GET', '/usage');
+export const getAccountUsage = (refresh = false) => api(AccountUsageSchema, 'GET', refresh ? '/usage?refresh=1' : '/usage');
 
 export const getProfileCatalog = (): Promise<ProfileCatalogEnvelope> =>
   api(ProfileCatalogEnvelopeSchema, 'GET', '/profile-catalog');

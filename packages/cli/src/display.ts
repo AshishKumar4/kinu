@@ -1,8 +1,8 @@
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall, TUI_MARKS } from '@kinu.run/core';
-import type { AccountCredit, AccountSpend, SearchNode, ReasoningEffort, JsonObject, JsonValue, ToolOutcome } from '@kinu.run/core';
-import { creditText, fmtUsd, quotaWindowText, timeAgo, usageTotal } from '@kinu.run/core';
+import type { AccountSpend, SearchNode, ReasoningEffort, JsonObject, JsonValue, ToolOutcome } from '@kinu.run/core';
+import { fmtUsd, quotaWindowText, timeAgo, usageTotal } from '@kinu.run/core';
 import { clipText } from '@kinu.run/core';
 import { guideFailure } from './provider-guidance';
 import cliPackage from '../package.json' with { type: 'json' };
@@ -300,12 +300,6 @@ export function renderAccountSpendLines(accounts: readonly AccountSpend[] | unde
 
     return [line, `      quota as of ${timeAgo(row.quota.at)}:`, ...row.quota.windows.map((window) => `        ${quotaWindowText(window, now)}`)];
   })];
-}
-
-export function renderCreditLines(credits: readonly AccountCredit[]): string[] {
-  if (credits.length === 0) return [];
-
-  return ['Credit left, read from the provider now', ...credits.map((credit) => `  ${`${credit.provider} · ${credit.account}`.padEnd(24)} ${creditText(credit)}`)];
 }
 
 export function printSearchTree(nodes: SearchNode[]): void {

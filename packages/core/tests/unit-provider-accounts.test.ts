@@ -6,8 +6,6 @@ import {
   ANTHROPIC_BASE_URL,
   asFetchFunction,
   catalogProviderOfKey,
-  creditText,
-  readOpenRouterCredit,
   createAnthropicProvider,
   createCodexProvider,
   createOpenAICompatProvider,
@@ -332,31 +330,3 @@ describe('what a call tells the ledger about its account', () => {
   });
 });
 
-describe('what an OpenRouter key has left', () => {
-  const keyInfo = (data: Readonly<Record<string, number | string | null>>, status = 200) => asFetchFunction(async () => Response.json({ data }, { status }));
-
-  test('a key with a credit limit says what is left of it and when it resets', async () => {
-    const credit = await readOpenRouterCredit({
-      account: 'work',
-      headers: { Authorization: 'Bearer sk-or-work' },
-      fetch: keyInfo({ label: 'work', limit: 10, limit_remaining: 4.12, limit_reset: 'monthly', usage: 30, usage_daily: 1.03, usage_monthly: 5.88 }),
-    });
-
-    expect(creditText(credit)).toBe('$4.12 of $10.00 left, resets monthly; $1.03 used today, $5.88 this month');
-  });
-
-  test('a key without a limit says so rather than a balance it does not have', async () => {
-    const credit = await readOpenRouterCredit({
-      account: 'main',
-      headers: { Authorization: 'Bearer sk-or-main' },
-      fetch: keyInfo({ label: 'main', limit: null, limit_remaining: null, usage: 3, usage_daily: 0, usage_monthly: 0.5 }),
-    });
-
-    expect(creditText(credit)).toBe('no credit limit on this key; $0 used today, $0.500 this month');
-  });
-
-  test('a refused key is an error naming its account, never zero credit', async () => {
-    await expect(readOpenRouterCredit({ account: 'team', headers: {}, fetch: keyInfo({}, 401) }))
-      .rejects.toThrow('OpenRouter answered HTTP 401 for the team key');
-  });
-});

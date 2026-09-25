@@ -357,8 +357,8 @@ export async function listCloudAgents(origin: string, token: string): Promise<Cl
 
 /** Admitted by the rule both backends share, so every field the hub sends (each model's reasoning levels
  *  included) reaches the TUI. */
-export async function getCloudAccountUsage(origin: string, token: string): Promise<AccountUsage> {
-  return cloudJson(AccountUsageSchema, origin, '/api/cli/usage', { token });
+export async function getCloudAccountUsage(origin: string, token: string, refresh = false): Promise<AccountUsage> {
+  return cloudJson(AccountUsageSchema, origin, refresh ? '/api/cli/usage?refresh=1' : '/api/cli/usage', { token });
 }
 
 export async function listCloudAvailableModels(origin: string, token: string): Promise<AgentModelMenu> {

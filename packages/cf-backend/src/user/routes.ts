@@ -395,7 +395,9 @@ userRoutes.post('/api/user/models/test', async (c) => {
   }) });
 });
 
-userRoutes.get('/api/user/usage', async (c) => json({ body: await readUserAccountUsage(c.env, c.get('stub'), c.get('owner')) }));
+userRoutes.get('/api/user/usage', async (c) => json({ body: await readUserAccountUsage({
+  env: c.env, userDO: c.get('stub'), owner: c.get('owner'), userId: c.get('identity').userId, refresh: c.req.query('refresh') === '1',
+}) }));
 
 userRoutes.get('/api/user/cloudflare/accounts', async (c) => json({ body: await c.get('stub').listCloudflareAccounts(c.get('owner')) }));
 
