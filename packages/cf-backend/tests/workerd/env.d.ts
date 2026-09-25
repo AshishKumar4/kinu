@@ -116,6 +116,7 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   openHire(workspace: string, prompt: string): Promise<void>;
   msgSent(): Promise<void>;
   reenter(workspace: string): Promise<void>;
+  stopChild(workspace: string): Promise<void>;
   observe(workspace: string): Promise<HireObservation>;
 }
 
