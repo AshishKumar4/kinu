@@ -36,7 +36,7 @@ Statements come in three kinds:
 
 The request snapshot holds 975 catalogued messages and 801 occurrences from the active OMP session; all 794 previously captured occurrences are still accounted for. The input audit has 2,740 ask rows: 2,584 historical rows, 125 previously added rows, and 31 rows from messages 971 to 975. These are coverage counts, not a completion percentage. Imported handoffs, repeated instructions, questions and superseded requests do not count as separate features.
 
-The source comparison starts from `9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a`. The independently checked production revision is `71479ace9`. Source-only and locally verified changes are labelled apart from deployed behavior. The full private message and evidence audit lives under the primary checkout's `docs/research/product-acceptance/`; this public document does not republish private transcripts or credentials.
+The source comparison starts from `d6a88d8e736e0ca4aa934cbabf5fa52327e5792b`. The independently checked production revision is `20f4362db`. Source-only and locally verified changes are labelled apart from deployed behavior. The full private message and evidence audit lives under the primary checkout's `docs/research/product-acceptance/`; this public document does not republish private transcripts or credentials.
 
 A criterion is complete only when its behavior and failure cases are exercised through the relevant surface. Compilation, a source symbol, a mock response, a retained proposal, or a method that returns `unsupported` is not proof.
 
@@ -697,12 +697,12 @@ An isolated **eval-service** account exists. Its resolver reads the eval environ
 
 The latest bounded check established:
 
-- the dedicated service session is valid for staging build `1372b50f8`;
+- the dedicated service session is valid for staging build `24d9037e0`;
 - the existing protected renewal flow works without personal `kinu auth`;
 - a scoped `ai.proxy` access token can be minted and used by a constrained inference client;
 - workspace access is denied to that scoped client;
 - one short GLM 5.3 inference request succeeded;
-- production build `71479ace9` rejects that staging bearer.
+- production build `20f4362db` rejects that staging bearer.
 
 The receipt is `service-auth-20260908/proof.json`, SHA-256 `c07f6309f602f75db0d3a9aae40ef060c0978be2152cacf48f45e4b591654295`, kept privately with the eval evidence. Secret values do not belong in this document.
 

@@ -22,7 +22,7 @@
  *     compares. Measured over the 57 revisions of
  *     `scripts/complexity.lock.json`: 18 entries were re-recorded HIGHER across
  *     14 functions between 2026-09-01 and 2026-09-14, `WorkspacePage` 64 to 72
- *     in one commit (fb62d4c3b) and `measureArm` 92 to 100 over two.
+ *     in one commit (9010595e0) and `measureArm` 92 to 100 over two.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';

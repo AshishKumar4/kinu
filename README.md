@@ -32,7 +32,7 @@
   <img alt="Animated walkthrough: the agent plans the checkout fix, submits the plan for review, the cursor approves it, and the support-queue slate builds and opens, using sample data." src="docs/assets/kinu-plan-demo.gif" width="1200" height="750">
 </p>
 
-<p align="center"><em>The planning walkthrough, recorded from the product at build <code>89bb99e85</code>: a real workspace driven through its own controls, with a stand-in model. Try it at <a href="https://kinu.run">kinu.run</a>.</em></p>
+<p align="center"><em>The planning walkthrough, recorded from the product at build <code>4a9079f34</code>: a real workspace driven through its own controls, with a stand-in model. Try it at <a href="https://kinu.run">kinu.run</a>.</em></p>
 
 ## What Kinu is
 

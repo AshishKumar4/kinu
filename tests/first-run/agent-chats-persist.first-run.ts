@@ -334,7 +334,7 @@ describe(SUITE, () => {
           // with the pane's actor id (use-chat-thread.ts). A page request
           // WITHOUT the actor id answers the workspace's own rows by
           // contract, so a row that omitted it read an empty workspace chat
-          // as a lost conversation — measured 2026-09-22 on 78f345bf1.
+          // as a lost conversation — measured 2026-09-22 on fd6e888fe.
           for (const [index, name] of names.entries()) {
             const path = `${room}/${hostedActorSocketPath(name)}`;
             const wanted = SAID[index] ?? '';

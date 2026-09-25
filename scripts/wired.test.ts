@@ -450,7 +450,7 @@ ${SUPPLY(`{ rt: 'x' }`)}`,
       // A name is not an identity. The table is keyed by DECLARING file and read
       // through the caller's own import, so a second file's `Writable` cannot
       // lend this one its meaning — breaking exactly that key is how the three
-      // collisions `8c313fcb1` repaired got in.
+      // collisions `43467f876` repaired got in.
       body: "  const opts: Writable<RunDeps> = { mission: 'm' };\n  opts.logger = 'l';\n"
         + "  runIt({ rt: 'r' });",
       extra: [[`${BASE}strategy/shape.ts`, "export type Writable<T> = { -readonly [K in keyof T]: T[K] };\n"]],

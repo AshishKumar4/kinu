@@ -2,7 +2,7 @@
 
 I accepted this protection in OWNER-MESSAGES m1099 on 2026-09-12: "move the trajectory family onto the deploy path before publish, so an agent that stops acting correctly blocks the upload rather than being discovered after it". It remains unmet.
 
-Before `4f4c0af36`, the pre-publish tier called production. The candidate had not been uploaded, so a failing old build could block the build carrying its repair. That commit moved trajectory after publication. The tier now measures the right build, and the protection I accepted is gone.
+Before `98be0b59b`, the pre-publish tier called production. The candidate had not been uploaded, so a failing old build could block the build carrying its repair. That commit moved trajectory after publication. The tier now measures the right build, and the protection I accepted is gone.
 
 ## Why version previews cannot close the gap
 
@@ -20,7 +20,7 @@ This is not a pin a caller can select. [Worker version affinity](https://develop
 
 ## The decision still needed
 
-A. Keep post-publish acceptance. All production traffic is exposed while the tier runs. A red leaves that build live. The latest two `release-*/deploy.log` files, `1a6cb6a72` and `ad85849b0`, stopped before upload; neither measured trajectory. The last completed deployed run in `/tmp/kinu-deploy11.log`, build `4f4c0af36`, took 1,487 seconds (24m47s), with five live cases failing. That is a historical measurement, not a promised duration.
+A. Keep post-publish acceptance. All production traffic is exposed while the tier runs. A red leaves that build live. The latest two `release-*/deploy.log` files, `b84eb4550` and `9a88c6f52`, stopped before upload; neither measured trajectory. The last completed deployed run in `/tmp/kinu-deploy11.log`, build `98be0b59b`, took 1,487 seconds (24m47s), with five live cases failing. That is a historical measurement, not a promised duration.
 
 B. Build gradual acceptance. Allocate a small percentage to the candidate. Prove the tier's eval workspaces received that version. Then promote on green or roll back on red. That percentage of traffic and object assignments is exposed during acceptance. This is not zero-exposure protection. Candidate-workspace selection and version assertions, rollback, and deploy-contract red/green tests do not exist yet. A mechanism that forces only eval objects onto the candidate is undocumented and unproven. Shared UserDO and Sandbox versions also need checking.
 

@@ -198,7 +198,7 @@ export const ROSTER: readonly string[] = ['Main'];
  * in `by AshishKumar4` clone URLs.
  *
  * A DELETED IDENTIFIER DOES NOT BELONG HERE, and two used to. `FacetIdentity`
- * (`76936034ba` line 21) and `NodeLoopHost` (`9078d528c8` line 3) were both
+ * (`fd80900702` line 21) and `NodeLoopHost` (`2a130df4bd` line 3) were both
  * declared by the tree their own commit shipped and deleted by a later cutover,
  * and each was added here to stop the gate reading a shipped type as a
  * colleague. That was the wrong remedy for the right defect: this list
@@ -765,7 +765,7 @@ function treeDeclares(repo: string, tree: string, name: string): boolean {
  *
  * WHY NOT THE WORKING TREE. A commit message is immutable and its citations are
  * claims about the code that commit was about. Judging them against the live
- * tree lets every later cutover rewrite history's verdict: `c64acf7554` cites
+ * tree lets every later cutover rewrite history's verdict: `190f0f1954` cites
  * `DeltaManifestV2['metadataOps'][number]`, a type
  * `packages/devbox/src/candidates/merkle-pack/delta.ts` declared at that commit,
  * and deleting that file turns the citation into a colleague being credited by
@@ -774,7 +774,7 @@ function treeDeclares(repo: string, tree: string, name: string): boolean {
  * repository's cutover rate.
  *
  * WHY THE PARENTS TOO, AND NOT ONLY THE RESULT. A change is a delta, and a
- * message may legitimately name what the change REMOVES: `f9c0b3847`'s body
+ * message may legitimately name what the change REMOVES: `5c6498516`'s body
  * discusses `FacetIdentity`, the type that same commit deletes, so its own tree
  * no longer holds it while the tree it started from does. Post-state alone is
  * the same error as the live tree, one commit narrower. Every parent is asked

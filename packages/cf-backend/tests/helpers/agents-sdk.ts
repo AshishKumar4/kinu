@@ -714,7 +714,7 @@ export interface RecordedMcpTransport {
   headers?: Record<string, string>;
   requestInit?: RequestInit;
   /** Off the current whitelist, but a plaintext-era row can carry it
-   *  (`7ba56550e^:src/user/mcp.ts:270-287`). */
+   *  (`a080f8d2a^:src/user/mcp.ts:270-287`). */
   eventSourceInit?: { fetch?: McpCredentialTransport['fetch'] };
   authProvider?: RecordedMcpAuthProvider;
   reconnectionOptions?: { maxRetries?: number };

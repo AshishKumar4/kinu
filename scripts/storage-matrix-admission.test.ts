@@ -94,7 +94,7 @@ function validRecord(): StorageRunRecord {
   return {
     schema: 'storage-matrix/run@1',
     provenance: {
-      runId: 'run-1', commit: '3a115f232',
+      runId: 'run-1', commit: 'a0bf02a4b',
       startedAt: '2026-08-25T10:00:00.000Z', finishedAt: '2026-08-25T10:01:00.000Z',
       seed: '17', image: 'docker.io/cloudflare/sandbox:0.12.8',
       versions: { '@cloudflare/sandbox': '0.12.8' }, containerFacts: 'Linux fixture 6.0',
@@ -488,7 +488,7 @@ describe('G0-G9 storage run admission', () => {
 /** A run identity with every G0 field present and distinct. */
 function fullIdentity(overrides: Partial<RunIdentity> = {}): RunIdentity {
   return {
-    commit: '3a115f232',
+    commit: 'a0bf02a4b',
     dirtyDigest: 'clean',
     workerVersion: '0f0a1e2c-9a1b-4c3d-8e5f-6a7b8c9d0e1f',
     startedAt: '2026-08-30T10:00:00.000Z',

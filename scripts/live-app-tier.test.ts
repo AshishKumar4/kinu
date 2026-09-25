@@ -292,7 +292,7 @@ interface GeometryVerdict {
  *  The harness mints a scratch directory per boot; before that the Cloudflare
  *  plugin persisted into the checkout's `packages/cf-backend/.wrangler/state`,
  *  one directory per checkout shared by every run on the box. That is how the
- *  deploy wave at 18fbea162 met a `user_workspaces` table written before
+ *  deploy wave at 419c31bdc met a `user_workspaces` table written before
  *  `delete_pending` existed and answered 500 to the first credential this
  *  suite wrote, while the same file was green from a fresh worktree. */
 interface StateVerdict {

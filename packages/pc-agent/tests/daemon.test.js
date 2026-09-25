@@ -97,7 +97,7 @@ function setup(opts = {}) {
 // A sub-millisecond red of the two fixture-first tests below identifies the
 // box's tmpdir. Each test's first syscall is mkdtempSync, and a refusal there
 // fails the test before any product code runs: two 0.1-0.3 ms rows appeared
-// once under a 711-file parallel run at 391b4d9f4 while the identical
+// once under a 711-file parallel run at dec792391 while the identical
 // syscalls one test later passed. persist is synchronous and atomic, its temp
 // file never survives a call, and files cannot pollute each other. Bun runs
 // each file in a fresh context with fresh builtins (bun 1.4.0). Check

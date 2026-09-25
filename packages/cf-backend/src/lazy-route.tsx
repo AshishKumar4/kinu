@@ -82,7 +82,7 @@ export async function loadRouteChunk<Module>(
 
 /**
  * One lazily-loaded route. The lazy slot is per call, not component state: a component that suspends on first
- * mount loses its hooks, so `useState(() => lazy(...))` never rendered (measured 2026-09-18 on build 2f4f3b27d).
+ * mount loses its hooks, so `useState(() => lazy(...))` never rendered (measured 2026-09-18 on build c324cae9d).
  * A rejection clears the slot so a retry re-imports; the build comparison runs once per route per document.
  */
 export function lazyRoute<Props extends object>(

@@ -1,5 +1,5 @@
 /**
- * The rpc lane re-raises the SDK's file-error shape. Defends `sandbox-mount-write` on build ac73ffc5e answering
+ * The rpc lane re-raises the SDK's file-error shape. Defends `sandbox-mount-write` on build a158238ba answering
  * `FileNotFoundError` untranslated: capnweb rebuilds unknown error names as plain `Error` (node_modules/capnweb/dist/index-workers.js:1698)
  * and the DO hop drops custom props, so the `FileNotFoundError: ` message prefix is the only classification left.
  */
@@ -76,7 +76,7 @@ describe('the rpc wire flattens SDK file errors to name plus message', () => {
   });
 });
 
-/** The live string, verbatim (kinu.run build ac73ffc5e). */
+/** The live string, verbatim (kinu.run build a158238ba). */
 const LIVE_MISS = 'FileNotFoundError: File not found: /workspace/first-run-mount.mjs';
 
 function liveWireError(): Error {

@@ -237,7 +237,7 @@ async function openWorkspacePage(target: FlowTarget, path: string): Promise<Page
 
 /** Put `text` into the chat column's live composer and read it back; the
  *  composer, to press Send on. One insertion, the way a paste lands: typed key
- *  by key at machine speed, the live composer dropped characters on 41494531d
+ *  by key at machine speed, the live composer dropped characters on b220f59f8
  *  ("flow-pobe.txt") and under the 2026-09-24 sweep's load ("say whatis"). */
 export async function typeIntoComposer(page: Page, text: string): Promise<ElementHandle<Element>> {
   const composer = await page.$('#chat textarea:not([disabled])');

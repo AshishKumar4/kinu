@@ -388,7 +388,7 @@ describe('the living background', () => {
     // for an unknown name, and moves no `matchMedia` answer. Touch emulation
     // gives `(hover: none)` before the first script, but under the launch's mouse
     // a settings-portal `color-scheme` answer landing after it turned it false
-    // for good (the deploy red at b4b2790c8). So this browser declares no mouse.
+    // for good (the deploy red at d054a5ff2). So this browser declares no mouse.
     await withGallery(async (gallery) => {
       const page = await gallery.newPage();
       await page.evaluateOnNewDocument(() => localStorage.setItem('theme', 'light'));

@@ -1710,7 +1710,7 @@ describe("worker release artifact", () => {
     expect(entries).toContain("release.json");
   });
 
-  // Measured 2026-09-21: release 0.2.0+bd1872f73 carried both, and the
+  // Measured 2026-09-21: release 0.2.0+7cb7078c8 carried both, and the
   // `.dev.vars` was this checkout's local-dev root key, published to anyone
   // who installs. A member is what the runtime loads; scaffolding is not.
   test("the artifact carries no local-dev secrets and no build index, and the manifest names only modules", () => {

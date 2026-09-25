@@ -109,7 +109,7 @@ bun run test:live:cloud                  # cloud target: a real workspace on the
 bun run deploy:preflight                 # does the deployment run this branch? (the cloud arm's gate)
 ```
 
-The two backends once ran different turn loops. The hosted actor ran `@cloudflare/think`, which capped a turn at ten model steps: four of four capped production runs across two workspaces reported `run_end: 'completed'` while the model still called tools, and no local suite could reach that loop. Think was removed from the hosted adapter on 2026-09-20 (`9220b6c05`). Both backends now drive core `ChatSession` (`packages/core/src/orchestrator/chat-session.ts`), and every eval turn checks for that cut (see Evals).
+The two backends once ran different turn loops. The hosted actor ran `@cloudflare/think`, which capped a turn at ten model steps: four of four capped production runs across two workspaces reported `run_end: 'completed'` while the model still called tools, and no local suite could reach that loop. Think was removed from the hosted adapter on 2026-09-20 (`491ab8289`). Both backends now drive core `ChatSession` (`packages/core/src/orchestrator/chat-session.ts`), and every eval turn checks for that cut (see Evals).
 
 The executors still differ. The local target has the CLI shell with a real `node`. The deployment has the Nimbus `node` shim, which rejects esbuild-wasm's `wasmModule` option, so `exec-ratio`, the only registered verifier kind, cannot run there.
 
@@ -419,7 +419,7 @@ bun scripts/coverage.ts --merge-only   # re-merge and re-render, no suites re-ru
 `bun run coverage` runs each package's bun suites as one group, adds the cf-backend and devbox workerd pools, writes `coverage/<group>/lcov.info` per group, merges to `coverage/lcov.info`, renders `coverage/html/index.html`, and prints a per-package table plus the 25 least-covered files. The suite list comes from `trackedTestFiles()` and `isBunDiscoverableSuite`, the same predicates `scripts/ladder.ts` credits a bun gate with. A new package is measured without anyone editing a list.
 `bash scripts/test.sh --coverage` is not this. It runs four directories in one `bun test` and prints a text table to stdout. Measured 2026-09-01: 8,655 tests over 600 files, 339 s, `All files 79.97 % funcs / 81.46 % lines`, and no file written anywhere. agent-utils, compaction, devbox, test-utils, pc-agent, the scripts gates, root `tests/` and the workerd layer are absent from that number. Its table also carries ~20 rows for mutation-suite scratch copies under `$TMPDIR`, which drag the average. `bun run coverage` drops every record whose path leaves the repository.
 
-One `bun run coverage` at `ffcdfab2d`, 12-core box under load ~98: 1,911.6 s wall for the suites. Re-merging the same per-group lcov files with `--merge-only` takes 2.3 s and reproduces the table below. The merged lcov holds 946 repository files.
+One `bun run coverage` at `7517f3c4b`, 12-core box under load ~98: 1,911.6 s wall for the suites. Re-merging the same per-group lcov files with `--merge-only` takes 2.3 s and reproduces the table below. The merged lcov holds 946 repository files.
 
 | Package | lines | funcs | branches | files |
 |---|---|---|---|---|

@@ -287,7 +287,7 @@ async function reportAfterAMinute(build: (loader: WorkerLoader) => RunProgram): 
   return run;
 }
 
-// 2026-09-24, the first-run tier on d2053b1a8: all five swarm nodes died together, "errored after 0 step(s) in
+// 2026-09-24, the first-run tier on 24ea8520b: all five swarm nodes died together, "errored after 0 step(s) in
 // 60157 ms: run agent <id> to a report: Execution timed out". codemode races each program against its `timeout`
 // (default 60 s), and a node agent's whole scaffold loop runs as one program through `rt.executor`.
 describe("a program awaiting a host call past a minute still gets its answer", () => {

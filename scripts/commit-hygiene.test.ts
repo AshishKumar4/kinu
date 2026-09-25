@@ -562,7 +562,7 @@ describe('a historical message is judged against the tree it shipped', () => {
   });
 
   test('a commit may name what it REMOVES: the deletion commit spans its parent', () => {
-    // `f9c0b3847`'s body quotes `FacetIdentity`, the type it deletes, so its own
+    // `5c6498516`'s body quotes `FacetIdentity`, the type it deletes, so its own
     // tree does not hold it. Post-state alone is the live-tree error one commit
     // narrower, and it is why the parents are asked too.
     const { repo, deletion } = cutoverRepo();

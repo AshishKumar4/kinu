@@ -63,7 +63,7 @@ The main agent orchestrates; Opus 5.5 lanes build. Main plans each change in a l
 
 ## Decision logs
 - A subsystem with a decision log (`docs/DEVBOX-DECISIONS.md`) is entered by reading it. The log holds decisions and the measurement that settled each, one entry per decision, dated, with the commit; not activity, not reports. A decision without a measurement is written as a hypothesis.
-- A change that reverses a logged decision names the entry it reverses and re-runs that entry's measurement under both shapes before it lands. A reversal that skips the control is how `bde0047cb` undid a working in-hook restore on a wrong premise and cost four days.
+- A change that reverses a logged decision names the entry it reverses and re-runs that entry's measurement under both shapes before it lands. A reversal that skips the control is how `6707ce6fd` undid a working in-hook restore on a wrong premise and cost four days.
 - A commit body is not where a decision lives; it is where the change is explained. The log entry is the durable record, and the body cites it.
 
 ## Packages

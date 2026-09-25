@@ -68,7 +68,7 @@ The flow never reads the repository. It reads `release.json`.
 
 ### What the artifact weighs, and what that costs the run
 
-Measured 2026-09-18 at `d5d744899` with `scripts/build-worker-release.ts`: the
+Measured 2026-09-18 at `ba33cf283` with `scripts/build-worker-release.ts`: the
 artifact is 27.35 MiB compressed and 107.99 MiB unpacked, 118 modules and 427
 assets, biggest single member 21.5 MiB
 (`client/_assets/opencode/1.16.2/chunks.json`).
@@ -248,7 +248,7 @@ Cloudflare door. No user repository and no Workers Builds.
    while a connect to it still succeeds.
 
    **Measured against a real release 2026-09-21**, for the first time: the
-   published `0.2.0+bd1872f73` installed and workerd exited on its first
+   published `0.2.0+7cb7078c8` installed and workerd exited on its first
    member. Three defects, each fixed with its red pin:
    - The renderer embedded the one `esbuild-*.wasm` member as an ES module
      (`wasm = embed` now, `unit-deploy-flow`).
@@ -278,7 +278,7 @@ Cloudflare door. No user repository and no Workers Builds.
 6. **Not done: the Cloudflare door has never deployed anything.** One real run
    was driven through the plan on 2026-09-18 with an account API token as the
    bearer (instance `kinu-probe-202609181030`, release
-   `0.4.0+probe-d5d744899`). It read the account, settled
+   `0.4.0+probe-ba33cf283`). It read the account, settled
    `kinu-probe-202609181030.ashishkmr472.workers.dev`, created the KV namespace
    and all four R2 buckets, and stopped at the Vectorize step: `code 10000
    status 403 Authentication error`, the same refusal on a plain

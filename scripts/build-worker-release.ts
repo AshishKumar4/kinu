@@ -94,7 +94,7 @@ const modules: string[] = [];
  *  config), `*.map` (uploaded separately), `.vite/manifest.json` (the build's
  *  own index), and `.dev.vars` (this checkout's local-dev secrets, which the
  *  plugin copies in for preview). Measured 2026-09-21: release
- *  0.2.0+bd1872f73 shipped `.dev.vars` and `.vite/manifest.json` to the public
+ *  0.2.0+7cb7078c8 shipped `.dev.vars` and `.vite/manifest.json` to the public
  *  bucket, and `kinu deploy local` exited on the first non-module member. The
  *  release carries the manifest instead of any of them. */
 function isWorkerModule(path: string): boolean {

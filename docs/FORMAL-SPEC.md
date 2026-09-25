@@ -74,7 +74,7 @@ is now proved:
 
 ## Minimality review
 
-Reviewed 2026-09-23 against `main` at b2c60d09f. A model stays when a
+Reviewed 2026-09-23 against `main` at 6c3b99cfb. A model stays when a
 requirement enrolls it and the shipped code has the thing it models.
 
 - Removed 2026-09-23: the ToolSystem model (`PR-EXEC-002`, `PR-EXEC-003`), an

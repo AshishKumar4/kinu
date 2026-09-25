@@ -32,7 +32,7 @@ import { buildGraph, builtinToolNames, findEntrypoints, findUnreached, isReacher
 const root = new URL('..', import.meta.url).pathname;
 
 /**
- * The smallest function body the clone search reads. Measured at ad61dea6c:
+ * The smallest function body the clone search reads. Measured at 1dd25b3ad:
  * from 8 to 11 nodes the groups are one-line delegation methods colliding by
  * structure (27 copies of `return this.x.y(a)` at 8), which the wrapper count
  * already names; from 12 up they include real copies such as `toLf`/`toLF`.
@@ -40,7 +40,7 @@ const root = new URL('..', import.meta.url).pathname;
 const CLONE_FLOOR = 12;
 
 /**
- * Fields a literal needs before its repeats count. Measured at ad61dea6c: at two
+ * Fields a literal needs before its repeats count. Measured at 1dd25b3ad: at two
  * fields 193 groups repeat, led by result arms carrying `error` (18 copies); at
  * three the repeats are records such as `{ stdout; stderr; exitCode }` (7 copies).
  */

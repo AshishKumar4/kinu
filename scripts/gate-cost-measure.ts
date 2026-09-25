@@ -27,7 +27,7 @@
  * id — but a child that calls `setsid` ITSELF leaves that session, and the two
  * heaviest children a browser row has both do: `live-app-harness.ts` spawns
  * `vite dev` detached so the teardown can signal workerd through the group
- * (d6b075bd8), and puppeteer spawns Chrome detached by default. Measured on
+ * (f0455917c), and puppeteer spawns Chrome detached by default. Measured on
  * this box under both shapes, 2026-09-17: the live-app row reads 203 MiB by
  * session and 5,013/5,115 MiB by pid tree (vite 2.6 GiB, workerd 1.1 GiB,
  * Chrome 1.0 GiB), and the UI self-tests row read 141.97 CPU seconds over a

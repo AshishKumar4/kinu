@@ -370,7 +370,7 @@ export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, 
   // change made since it was written, and genesis is locked with no column
   // reconcile — so a table it holds from before a column existed makes the
   // first route naming that column answer 500 (`no such column:
-  // delete_pending`, the deploy wave at 18fbea162, while the same file was
+  // delete_pending`, the deploy wave at 419c31bdc, while the same file was
   // green from a fresh worktree). A tier reads the product, never the box's
   // leftovers. Released with the rest of this run's scratch.
   const statePath = scratchDir('live-app-state');

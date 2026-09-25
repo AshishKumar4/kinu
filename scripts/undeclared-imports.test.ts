@@ -8,7 +8,7 @@
  * never reach `node_modules` at all — a gate whose first run is mostly noise
  * trains people to ignore it.
  *
- * The shape at the centre of this file is 8af794001: a package whose own
+ * The shape at the centre of this file is e5528c2e9: a package whose own
  * manifest declared nothing while thirty-two of its test files imported a
  * workspace package. It is reproduced here as a two-manifest tree, because the
  * one thing that must never happen is a rule that reads "the root declares it"
@@ -22,7 +22,7 @@ import {
   readPackages, workspaceGlobMatches,
 } from './undeclared-imports';
 
-/** The 8af794001 tree: a workspace root that pins the third-party world and
+/** The e5528c2e9 tree: a workspace root that pins the third-party world and
  *  claims `packages/*`, and one member declaring nothing at all. */
 const WORKSPACE = new Map([
   ['package.json', JSON.stringify({

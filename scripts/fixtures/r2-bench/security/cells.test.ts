@@ -43,7 +43,7 @@ function recordWithSecurity(security: ReturnType<typeof summarizeSecurity>): Sto
   return {
     schema: 'storage-matrix/run@1',
     provenance: {
-      runId: 'run-1', commit: '3a115f232',
+      runId: 'run-1', commit: 'a0bf02a4b',
       startedAt: '2026-08-25T10:00:00.000Z', finishedAt: '2026-08-25T10:01:00.000Z',
       seed: '17', image: 'docker.io/cloudflare/sandbox:0.12.8',
       versions: { '@cloudflare/sandbox': '0.12.8' }, containerFacts: 'Linux fixture 6.0',

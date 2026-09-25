@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="1456" viewBox="0 0 640 1456" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="slate-title slate-desc">
 <title id="slate-title">CURRENT: A slate from source to preview</title>
 <desc id="slate-desc">A slate is source under the canonical workspace file plane. Its strict package manifest introduces only declared, admitted bindings. Preview compiles and starts a caller-scoped resident; the browser opens a separate preview origin and talks to authored HTTP. The caller does not acquire a callee author’s authority. Source and committed versions are durable; resident processes and preview URLs are derived. Hosted Worker previews and sandbox Node applications retain distinct execution boundaries.</desc>
-<!-- Sources: docs/LIVE-UI.md; packages/core/src/slates/project.ts; packages/core/src/slates/bindings.ts; packages/cf-backend/src/slates/host.ts. Current-source baseline: 9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a. -->
+<!-- Sources: docs/LIVE-UI.md; packages/core/src/slates/project.ts; packages/core/src/slates/bindings.ts; packages/cf-backend/src/slates/host.ts. Current-source baseline: d6a88d8e736e0ca4aa934cbabf5fa52327e5792b. -->
 <style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
 <defs>
 <marker id="slate-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">

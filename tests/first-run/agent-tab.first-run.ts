@@ -159,7 +159,7 @@ describe(SUITE, () => {
             reached: upgraded,
             detail: upgraded
               ? `${tabSocket.path} upgraded to a socket`
-              : `${tabSocket.path} refused the upgrade — the cba44dcb9 shape: 404 with no 101, `
+              : `${tabSocket.path} refused the upgrade — the fddd4f9d6 shape: 404 with no 101, `
                 + 'after which every RPC on it can only time out',
           });
 

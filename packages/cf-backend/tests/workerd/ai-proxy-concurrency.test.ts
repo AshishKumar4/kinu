@@ -6,14 +6,14 @@
  * simultaneously waiting for response headers", and the runtime queues the seventh itself
  * (https://developers.cloudflare.com/workers/platform/limits/#simultaneous-open-connections, read 2026-09-23; catalog
  * `worker.simultaneous_connections`). The provider pacer spent that six as one budget for the whole isolate.
- * Measured on kinu.run at b2c60d09f, 2026-09-23T03:43:51Z: eight concurrent requests answered 6x200 and 2x HTTP 500
+ * Measured on kinu.run at 6c3b99cfb, 2026-09-23T03:43:51Z: eight concurrent requests answered 6x200 and 2x HTTP 500
  * `error code: 1101`, each 56-58 ms after it arrived, and Workers Logs names both "The Workers runtime canceled this
  * request because it detected that your Worker's code had hung": a request queued for the budget waits on a promise
  * only another request can resolve. A request the runtime cancels while it holds budget (a client that disconnects
  * mid-inference) never gives it back. The 03:27Z run drew 2x200 and 6x1101 from eight; the four units it lacked match
  * four requests their clients abandoned at 02:59Z, each after 182 s with no response.
  *
- * Red at b2c60d09f in this pool: 6x200 and 2 hung from eight; 5x200 and 1 hung from six after one cancel, while six
+ * Red at 6c3b99cfb in this pool: 6x200 and 2 hung from eight; 5x200 and 1 hung from six after one cancel, while six
  * with nothing canceled first all answered. `SurfaceAI` parks every `HELD_PROXY_MODEL` call on the Node-side hold, so
  * each request stays out on real I/O until the test releases them all. A request the runtime kills settles at once; a
  * parked one only after release.

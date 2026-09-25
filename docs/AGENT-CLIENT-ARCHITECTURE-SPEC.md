@@ -2,7 +2,7 @@
 
 > Source of truth: `packages/cli/src/agent-client.ts` and the two adapters
 > beside it. This page describes shipped behavior, checked against the code on
-> 2026-09-22 at `ad61dea6c`.
+> 2026-09-22 at `1dd25b3ad`.
 
 ## Backends and contract
 

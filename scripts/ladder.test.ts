@@ -366,7 +366,7 @@ describe('the ladder measures something', () => {
     // The glob and named-file forms are proved over a FIXTURE tree below
     // (`claims() resolves a glob against whatever tree it is given`), never by
     // naming the live repo's files: this held a thirteen-entry list of bench
-    // suites that a new suite had to be added to by hand (f6d08d72d), which is
+    // suites that a new suite had to be added to by hand (46f992845), which is
     // the defect the family rule exists to remove. The live tree's one property
     // worth asserting is that the glob resolves to SOMETHING, so an empty
     // expansion cannot read as a gate that ran nothing.

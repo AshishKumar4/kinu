@@ -3,7 +3,7 @@
  * only goes down.
  *
  * Owner decision, 2026-09-22, after `scripts/bloat-census.ts` measured comments
- * at 41% of the non-whitespace characters in product source at ad61dea6c. The
+ * at 41% of the non-whitespace characters in product source at 1dd25b3ad. The
  * unit is `commentCharacters`: non-whitespace characters inside oxc's comment
  * spans, delimiters included, so reflowing a comment does not move the number.
  *
@@ -163,7 +163,7 @@ if (import.meta.main) {
         invariant: 'a package holds no more comment characters than its locked budget',
         found: `${String(now)} comment characters, ${was === undefined ? 'and the lock holds no budget for it' : `locked at ${String(was)}`}`,
         silently: 'comments accrete a sentence at a time until they are 41% of the text, as measured at '
-          + 'ad61dea6c, and a reader stops reading any of them',
+          + '1dd25b3ad, and a reader stops reading any of them',
         fix: 'cut the new comment, or as many characters elsewhere in the package; `--lock` never raises a budget',
       }));
     }

@@ -257,7 +257,7 @@ describe('the public surface, driven inside the pool', () => {
 describe('two panes on one workspace object are two chat rooms', () => {
   /**
    * Pins: one workspace is one DO, so `broadcast` reached every socket and actors' transcripts rendered in each other's panes
-   * (measured on main 9c801574b). Asserts the recipient set in both directions, so a room that answers nothing cannot read as scoped.
+   * (measured on main e59e99cb6). Asserts the recipient set in both directions, so a room that answers nothing cannot read as scoped.
    */
   it('keeps the root chat and a hosted actor chat on separate sockets', async () => {
     await publicJson(`/api/user/credentials/openai-compat.default`, v.object({ ok: v.boolean() }), {

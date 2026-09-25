@@ -8,7 +8,7 @@ a user can choose between `native` (what Kinu writes) and a vendor profile
 (what Claude Code, Codex or pi write), and the agent then sees the translated
 prompts, events, context and tools. The idea and its first implementation are
 the owner's `oh-my-tau` (`packages/coding-agent/src/harness/` in that fork).
-This reading is against its tip `05833b9ee8` and Kinu `main` at `1cdae25d6`,
+This reading is against its tip `05833b9ee8` and Kinu `main` at `457a962dd`,
 both 2026-09-21.
 
 Nothing past step 0 is built. Step 0 is what the tree already holds, and what

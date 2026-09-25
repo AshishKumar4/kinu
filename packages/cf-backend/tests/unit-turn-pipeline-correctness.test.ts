@@ -140,7 +140,7 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('the second turn\'s request carries the message that started it, after the first', async () => {
-    // Measured on deployed 234ed5d7d (bench-artifacts/first-run-flash-1789196459812/every-tool): the
+    // Measured on deployed a90ddda79 (bench-artifacts/first-run-flash-1789196459812/every-tool): the
     // second turn's request held only the first turn's user message.
     const harness = orchestratorHarness();
     const agent = harness.agent;

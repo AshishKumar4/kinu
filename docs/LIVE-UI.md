@@ -251,7 +251,7 @@ This run predates the class-based slate API and durable preview URLs (both
 2026-09-14), so the `POST` route and the 410 recycle answer below describe the
 design of that date.
 
-Production `kinu.run` at commit `dbc2c5797` (Worker version
+Production `kinu.run` at commit `fcace5d32` (Worker version
 `3a269c61-df4b-47e7-b1a2-06ffb6215d0c`), driven through the stored CLI
 credential, `POST /api/cli/workspaces`, a connect-ticket `AgentClient` session
 held open for the run, `/api/cli/workspaces/:name/rpc`, and a clean headless

@@ -452,7 +452,7 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     // plaintext and nothing would reach it again.
     const first = harness();
     await seedServer(first, 'srv1');
-    // Shape of a stored plaintext row (`buildMcpHeaderTransportOpts`, `7ba56550e^:src/user/mcp.ts:270-287`).
+    // Shape of a stored plaintext row (`buildMcpHeaderTransportOpts`, `a080f8d2a^:src/user/mcp.ts:270-287`).
     seedSdkMcpServer('srv1', {
       type: 'auto',
       eventSourceInit: {},

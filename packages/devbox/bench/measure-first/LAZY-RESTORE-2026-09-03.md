@@ -8,7 +8,7 @@ reproduced by running that suite rather than trusted on their own.
 
 The candidate code measured here (`src/candidates/`, including
 `bounded-layers.ts`, `residency.ts`, `lazy-restore.ts` and `control.ts`) was
-deleted on 2026-09-09 in `337eaf6f9`. The figures below are the record; the
+deleted on 2026-09-09 in `46c320bc1`. The figures below are the record; the
 suite at HEAD no longer runs these arms.
 
 ## The measured facts this lane built on
@@ -26,7 +26,7 @@ suite at HEAD no longer runs these arms.
 ## Before, 2026-09-02
 
 Recorded in `tests/support/conformance-bug-list.ts` on the tree at
-`origin/main 6d19d50e7`, from the same cells measured below:
+`origin/main ee10827c0`, from the same cells measured below:
 
 | Arm | Cell | `RestoreWork.totalRemoteOps` | Bound |
 |---|---|---|---|

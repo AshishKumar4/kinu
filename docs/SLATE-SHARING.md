@@ -2,7 +2,7 @@
 
 How a slate is shared: as a live share that keeps running in the owner's
 workspace, or as a blueprint someone forks into their own. This began as a plan
-on 2026-09-13 against `c0fed7a4e`. It is all built now; §5 names the files.
+on 2026-09-13 against `b5f98858c`. It is all built now; §5 names the files.
 
 ## 1. Today
 

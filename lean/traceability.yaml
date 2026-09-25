@@ -1,6 +1,6 @@
 # Machine-checked by check-traceability.mjs. The Lean models are maintained
 # by hand; a theorem proves its statement only inside the named abstract model.
-# Safety/Execution/MCTS/Evolution/Exploration source audit: backend-parity 21d0f5ae7.
+# Safety/Execution/MCTS/Evolution/Exploration source audit: backend-parity 61e789ecf.
 edition: 1.0.0
 formalScope: abstract-model-only
 requirements:
@@ -1051,7 +1051,7 @@ requirements:
       - packages/devbox/src/lifecycle.ts#DEFAULT_DEVBOX_POLICY
     remainingEvidence:
       - P is the shipped checkpointIntervalMs of 300000 ms; J, the alarm lateness, and D, the longest tick, are parameters with no recorded measurement
-      - The gate is modelled as lane/devbox 1c68a65b3 ships it, clocked by tick commits alone (tickClock); this branch's shouldCheckpoint predates that commit, and the refinement against it follows once it is on main
+      - The gate is modelled as lane/devbox 42c7c64a7 ships it, clocked by tick commits alone (tickClock); this branch's shouldCheckpoint predates that commit, and the refinement against it follows once it is on main
       - A background sync that replaces the periodic tick instantiates Tick with its own period and upload bound
       - A tick is modelled from its start to its commit; interruption inside one storage operation is PR-DEVBOX-002's scope
   PR-DEVBOX-004:
