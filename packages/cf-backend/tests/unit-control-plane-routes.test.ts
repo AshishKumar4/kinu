@@ -286,11 +286,11 @@ function harness(options: World = {}): Harness {
     },
     async listWorkspaces() {
       if (options.rosterError) throw new Error(options.rosterError);
-      const entries = (rosters.get(userId) ?? []).map((row) => ({ ...row, overview: null }));
+      const entries = (rosters.get(userId) ?? []).map((row) => ({ ...row, overview: null, decisions: 0 }));
 
       return {
         entries, total: entries.length, nextCursor: null,
-        counts: { all: entries.length, needs: 0, working: 0, idle: entries.length, decisions: 0 },
+        counts: { all: entries.length, needs: 0, working: 0, idle: 0, unreported: entries.length, decisions: 0 },
       };
     },
     async removeWorkspace(_caller: UserCaller, workspace: string, owner: string) {

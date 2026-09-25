@@ -611,14 +611,18 @@ const galleryRoster: RosterEntry[] = [
   ...(EXTRA_WORKSPACE ? [{
     name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5, lastVisited: NOW - 36e5, archivedAt: null,
   }] : []),
-].map((entry) => ({ ...entry, overview: STOCK_OVERVIEWS.get(entry.name) ?? null }));
+].map((entry) => {
+  const overview = STOCK_OVERVIEWS.get(entry.name) ?? null;
+
+  return { ...entry, overview, decisions: overview?.decisionsWaiting ?? 0 };
+});
 
 function galleryRosterCounts(): RosterCounts {
-  const counts: RosterCounts = { all: galleryRoster.length, needs: 0, working: 0, idle: 0, decisions: 0 };
+  const counts: RosterCounts = { all: galleryRoster.length, needs: 0, working: 0, idle: 0, unreported: 0, decisions: 0 };
 
   for (const entry of galleryRoster) {
-    counts[rosterBucket(entry.overview?.activity ?? null, entry.overview?.decisionsWaiting ?? 0)] += 1;
-    counts.decisions += entry.overview?.decisionsWaiting ?? 0;
+    counts[rosterBucket(entry.overview?.activity ?? null, entry.decisions)] += 1;
+    counts.decisions += entry.decisions;
   }
 
   return counts;
@@ -630,7 +634,7 @@ function rosterAnswer(search: URLSearchParams): RosterPage {
   const q = search.get("q") ?? "";
 
   const entries = galleryRoster.filter((entry) => rosterMatches(entry, q)
-    && (bucket === null || rosterBucket(entry.overview?.activity ?? null, entry.overview?.decisionsWaiting ?? 0) === bucket));
+    && (bucket === null || rosterBucket(entry.overview?.activity ?? null, entry.decisions) === bucket));
 
   return { entries, total: entries.length, nextCursor: null, counts: galleryRosterCounts() };
 }
@@ -669,6 +673,7 @@ window.addEventListener("gallery:overview", (event: Event) => {
 
   if (entry === undefined) return;
   entry.overview = detail.output.overview;
+  entry.decisions = detail.output.overview?.decisionsWaiting ?? 0;
   const change: RosterFrame = { type: "workspace", name: entry.name, entry: { ...entry }, counts: galleryRosterCounts() };
 
   for (const socket of rosterSockets) socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(change) }));

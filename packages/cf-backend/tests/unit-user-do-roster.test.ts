@@ -93,17 +93,23 @@ describe('a page of the roster', () => {
 
     for (const [name, tile] of tiles) await harness.userDO.putWorkspaceOverview(await workspace(harness, name), name, tile);
 
-    // One that never pushed reads idle.
+    // One that never reported is unknown, never idle.
     await harness.userDO.registerWorkspace(owner, 'silent');
 
-    const needs = await harness.userDO.listWorkspaces(owner, { bucket: 'needs' });
-    expect(needs.entries.map((each) => each.name).sort()).toEqual(['budget', 'ledger']);
+    const needs = await harness.userDO.listWorkspaces(owner, { bucket: 'needs', limit: 1 });
+    const moreNeeds = await harness.userDO.listWorkspaces(owner, { bucket: 'needs', limit: 1, cursor: needs.nextCursor });
+    expect([...needs.entries, ...moreNeeds.entries].map((each) => each.name).sort()).toEqual(['budget', 'ledger']);
+    expect(moreNeeds.nextCursor).toBeNull();
     expect(needs.total).toBe(2);
-    expect(needs.counts).toEqual({ all: 5, needs: 2, working: 1, idle: 2, decisions: 3 });
+    expect(needs.counts).toEqual({ all: 5, needs: 2, working: 1, idle: 1, unreported: 1, decisions: 3 });
 
-    expect((await harness.userDO.listWorkspaces(owner, { bucket: 'idle' })).entries.map((each) => each.name).sort())
-      .toEqual(['garden', 'silent']);
-    expect((await harness.userDO.listWorkspaces(owner, { query: 'GAR' })).entries.map((each) => each.name)).toEqual(['garden']);
+    expect((await harness.userDO.listWorkspaces(owner, { bucket: 'idle' })).entries.map((each) => each.name)).toEqual(['garden']);
+    const silent = (await harness.userDO.listWorkspaces(owner)).entries.find((each) => each.name === 'silent');
+    expect(silent).toMatchObject({ overview: null, decisions: 0 });
+
+    const search = await harness.userDO.listWorkspaces(owner, { query: 'GAR' });
+    expect(search.entries.map((each) => each.name)).toEqual(['garden']);
+    expect(search.total).toBe(1);
 
     const first = await harness.userDO.listWorkspaces(owner, { limit: 2 });
     const rest = await harness.userDO.listWorkspaces(owner, { limit: 2, cursor: first.nextCursor });

@@ -2051,7 +2051,7 @@ export type { TurnAuthor } from './utils/ui-message';
 
 export type { PendingAction, PendingActionKind, PendingActionInputs, PersonAsks } from './read-models/pending-actions';
 
-export { buildWorkspaceOverview, overviewHeadline, rosterBucket, rosterMatches, WorkspaceOverviewSchema } from './read-models/workspace-overview';
+export { buildWorkspaceOverview, rosterBucket, rosterHeadline, rosterMatches, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
 export type { RosterBucket, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewSlate, WorkspaceStatus } from './read-models/workspace-overview';
 

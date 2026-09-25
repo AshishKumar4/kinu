@@ -11,10 +11,10 @@ import {
   type ReactNode,
 } from "react";
 
-import { rosterBucket, rosterMatches, type RosterBucket } from "@kinu.run/core";
+import { rosterBucket, rosterMatches } from "@kinu.run/core";
 import {
   listWorkspaces, RosterFrameSchema, ROSTER_SOCKET_ROUTE,
-  type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry,
+  type RosterCounts, type RosterEntry, type RosterFilterBucket, type RosterFrame, type RosterPage, type WorkspaceEntry,
 } from "@/lib/user-api";
 import { renderThrownChain, tolerate } from "@kinu.run/core/obs";
 
@@ -22,18 +22,17 @@ const ROSTER_PAGE = 50;
 
 export const RECENT_WORKSPACES = 5;
 
-const NO_COUNTS: RosterCounts = { all: 0, needs: 0, working: 0, idle: 0, decisions: 0 };
+const NO_COUNTS: RosterCounts = { all: 0, needs: 0, working: 0, idle: 0, unreported: 0, decisions: 0 };
 
 type FrameListener = (frame: RosterFrame) => void;
 
 export interface RosterFilter {
-  readonly bucket?: RosterBucket;
+  readonly bucket?: RosterFilterBucket;
   readonly q?: string;
 }
 
 export interface RosterPages {
   readonly entries: readonly RosterEntry[];
-  /** What the filter matches. */
   readonly total: number;
   readonly counts: RosterCounts;
   readonly hasMore: boolean;
@@ -62,7 +61,7 @@ const WorkspaceRenameSchema = v.object({
 });
 
 function matchesFilter(entry: RosterEntry, filter: RosterFilter): boolean {
-  const bucket = rosterBucket(entry.overview?.activity ?? null, entry.overview?.decisionsWaiting ?? 0);
+  const bucket = rosterBucket(entry.overview?.activity ?? null, entry.decisions);
 
   return (filter.bucket === undefined || bucket === filter.bucket) && rosterMatches(entry, filter.q ?? "");
 }
@@ -265,7 +264,7 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
   }, []);
 
   const upsert = useCallback((entry: WorkspaceEntry): void => {
-    const added: RosterEntry = { ...entry, overview: null };
+    const added: RosterEntry = { ...entry, overview: null, decisions: 0 };
 
     edit((entries) => entries.some((each) => each.name === entry.name)
       ? entries.map((each) => each.name === entry.name ? { ...each, ...entry } : each)
@@ -314,7 +313,6 @@ export function useWorkspaceRoster(): WorkspaceRosterValue {
   return roster;
 }
 
-/** Null for a null filter. */
 export function useFilteredRoster(filter: RosterFilter | null): RosterPages | null {
   const { subscribe, epoch } = useWorkspaceRoster();
   const { pages } = useRosterPages(filter, subscribe, epoch);

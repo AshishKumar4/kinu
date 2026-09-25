@@ -151,8 +151,8 @@ import {
   type McpPresetAvailability, type McpServerSummary, type McpToolListing, type McpTransport,
 } from './mcp';
 import {
-  acceptRosterSocket, isRosterSocket, rosterCounts, rosterEntry, rosterPage, rosterSockets, sendRosterFrame, ROSTER_SOCKET_PATH,
-  type RosterPage, type RosterQuery, type RosterRow,
+  acceptRosterSocket, isRosterSocket, rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame,
+  ROSTER_SOCKET_PATH, type RosterPage, type RosterQuery,
 } from './roster';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import {
@@ -871,23 +871,7 @@ export class UserDO extends Agent<Env> {
     await this.resumePendingDeletions();
     await this.reclaimStaleForkReservations();
 
-    return rosterPage(this.rosterRows(), query);
-  }
-
-  /** A workspace's decisions add the owner's pending release approvals, which live here. */
-  private rosterRows(): RosterRow[] {
-    return this.sqlx<RosterRow & SqlRow>(
-      `SELECT w.name, w.display_name AS displayName, w.created_at AS createdAt, w.last_visited AS lastVisited,
-              w.archived_at AS archivedAt, o.overview, o.activity,
-              COALESCE(o.decisions, 0) + COALESCE(a.pending, 0) AS decisions
-       FROM user_workspaces w
-       LEFT JOIN workspace_overviews o ON o.name = w.name
-       LEFT JOIN (SELECT c.agent_name, COUNT(*) AS pending FROM release_approvals p
-                  JOIN release_changes c ON c.id = p.change_id
-                  WHERE p.decision = 'pending' GROUP BY c.agent_name) a ON a.agent_name = w.name
-       WHERE w.archived_at IS NULL AND w.delete_pending = 0 AND w.create_pending = 0
-       ORDER BY w.last_visited DESC, w.name ASC`,
-    );
+    return rosterPage(this.ctx.storage.sql, query);
   }
 
   /** With no page open, nothing is read. */
@@ -895,9 +879,8 @@ export class UserDO extends Agent<Env> {
     const sockets = rosterSockets(this.ctx);
 
     if (sockets.length === 0) return;
-    const rows = this.rosterRows();
-    const row = rows.find((each) => each.name === name);
-    sendRosterFrame(sockets, { type: 'workspace', name, entry: row === undefined ? null : rosterEntry(row), counts: rosterCounts(rows) });
+    const sql = this.ctx.storage.sql;
+    sendRosterFrame(sockets, { type: 'workspace', name, entry: rosterRow(sql, name), counts: rosterCounts(sql) });
   }
 
   /** A repeat writes and sends nothing. */

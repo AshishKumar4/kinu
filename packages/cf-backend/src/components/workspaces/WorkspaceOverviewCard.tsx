@@ -1,6 +1,6 @@
 /** One workspace on the roster, drawn from the tile its entry carries: the card reads nothing of its own. */
 import { Link } from "react-router-dom";
-import { overviewHeadline, shortAge, workspaceDisplayTitle, type WorkspaceOverview, type WorkspaceStatus } from "@kinu.run/core";
+import { rosterHeadline, shortAge, workspaceDisplayTitle, type WorkspaceOverview, type WorkspaceStatus } from "@kinu.run/core";
 import type { RosterEntry } from "@/lib/user-api";
 import { coverBadge, coverLetter, coverWash, hueOf } from "@/components/ui/cover";
 
@@ -20,14 +20,13 @@ function workspaceStatusTone(status: WorkspaceStatus): StatusTone {
       return { dot: "p-dot-danger", text: "p-danger" };
     case "updated":
     case "idle":
+    case "unreported":
       return { dot: "p-dot-neutral", text: "p-text-3" };
   }
 }
 
-/** A workspace that has not pushed a tile yet has nothing to say, so it shows no chip. */
-function StatusChip({ overview }: { overview: WorkspaceOverview | null }) {
-  if (overview === null) return null;
-  const headline = overviewHeadline(overview);
+function StatusChip({ workspace }: { workspace: RosterEntry }) {
+  const headline = rosterHeadline(workspace.overview, workspace.decisions);
   const tone = workspaceStatusTone(headline.status);
 
   return (
@@ -65,7 +64,7 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
             <span className="block truncate p-row-text font-medium p-text">{title}</span>
             {mission !== null && <span className="block truncate p-meta p-text-3">{mission}</span>}
           </span>
-          <StatusChip overview={overview} />
+          <StatusChip workspace={workspace} />
           {age !== null && <span className="shrink-0 p-meta p-text-4 tabular-nums">{age}</span>}
         </Link>
       </div>
@@ -90,7 +89,7 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
       </span>
       <span className="flex min-h-0 flex-1 flex-col px-4 pb-3 pt-2.5">
         <span className="truncate p-row-text font-medium p-text">{title}</span>
-        <span className="mt-1"><StatusChip overview={overview} /></span>
+        <span className="mt-1"><StatusChip workspace={workspace} /></span>
         {mission !== null && <span className="mt-1.5 line-clamp-2 p-meta p-text-3">{mission}</span>}
         {age !== null && <span className="mt-auto self-end pt-2 p-meta p-text-4 tabular-nums">{age}</span>}
       </span>

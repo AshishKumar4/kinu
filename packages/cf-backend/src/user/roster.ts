@@ -1,6 +1,6 @@
-/** The owner's roster as its pages read it, and the socket each change arrives on; no workspace is asked. */
+/** The owner's roster, paged in SQL, and the socket its changes arrive on. */
 import * as v from 'valibot';
-import { rosterBucket, rosterMatches, WorkspaceOverviewSchema, WS_OPEN, type RosterBucket, type WorkspaceOverview } from '@kinu.run/core';
+import { rosterMatches, WorkspaceOverviewSchema, WS_OPEN, type RosterBucket, type SqlExec, type WorkspaceOverview } from '@kinu.run/core';
 import type { WorkspaceEntry } from './user-do';
 
 export const ROSTER_SOCKET_PATH = '/roster/live';
@@ -10,8 +10,9 @@ const ROSTER_SOCKET_TAG = 'roster';
 const WORKSPACE_LIST_LIMIT = 200;
 
 export interface RosterEntry extends WorkspaceEntry {
-  /** `decisionsWaiting` counts the owner's release approvals too. */
   overview: WorkspaceOverview | null;
+  /** With the owner's pending release approvals, which a tile cannot know. */
+  decisions: number;
 }
 
 export interface RosterCounts {
@@ -19,6 +20,7 @@ export interface RosterCounts {
   needs: number;
   working: number;
   idle: number;
+  unreported: number;
   decisions: number;
 }
 
@@ -33,14 +35,8 @@ export interface RosterPage {
 export interface RosterQuery {
   cursor?: string | null;
   limit?: number;
-  bucket?: RosterBucket;
+  bucket?: Exclude<RosterBucket, 'unreported'>;
   query?: string;
-}
-
-export interface RosterRow extends WorkspaceEntry {
-  overview: string | null;
-  activity: WorkspaceOverview['activity'] | null;
-  decisions: number;
 }
 
 export interface RosterFrame {
@@ -49,6 +45,38 @@ export interface RosterFrame {
   entry: RosterEntry | null;
   counts: RosterCounts;
 }
+
+const ACTIVE = 'w.archived_at IS NULL AND w.delete_pending = 0 AND w.create_pending = 0';
+
+const FROM = `FROM user_workspaces w
+  LEFT JOIN workspace_overviews o ON o.name = w.name
+  LEFT JOIN (SELECT c.agent_name AS name, COUNT(*) AS pending FROM release_approvals p
+             JOIN release_changes c ON c.id = p.change_id WHERE p.decision = 'pending' GROUP BY c.agent_name) a
+    ON a.name = w.name`;
+
+const DECISIONS = 'COALESCE(o.decisions, 0) + COALESCE(a.pending, 0)';
+
+const BUCKET = `CASE WHEN ${DECISIONS} > 0 THEN 'needs' WHEN o.activity IS NULL THEN 'unreported'
+  WHEN o.activity = 'working' THEN 'working' ELSE 'idle' END`;
+
+const ENTRY = `SELECT w.name, w.display_name AS displayName, w.created_at AS createdAt, w.last_visited AS lastVisited,
+  w.archived_at AS archivedAt, o.overview, COALESCE(o.decisions, 0) + COALESCE(a.pending, 0) AS decisions`;
+
+const RosterRowSchema = v.object({
+  name: v.string(),
+  displayName: v.string(),
+  createdAt: v.number(),
+  lastVisited: v.number(),
+  archivedAt: v.nullable(v.number()),
+  overview: v.nullable(v.string()),
+  decisions: v.number(),
+});
+
+type RosterRow = v.InferOutput<typeof RosterRowSchema>;
+
+const CountRowSchema = v.object({ bucket: v.picklist(['needs', 'working', 'idle', 'unreported']), n: v.number(), decisions: v.number() });
+
+const SearchRowSchema = v.object({ name: v.string(), displayName: v.string() });
 
 function encodeRosterCursor(entry: Pick<WorkspaceEntry, 'name' | 'lastVisited'>): string {
   return encodeURIComponent(JSON.stringify({ v: entry.lastVisited, n: entry.name }));
@@ -81,51 +109,106 @@ function clampRosterLimit(limit?: number): number {
   return Math.min(limit, WORKSPACE_LIST_LIMIT);
 }
 
-function rowBucket(row: RosterRow): RosterBucket {
-  return rosterBucket(row.activity, row.decisions);
-}
-
 /** A tile a later schema cannot read shows as none until the workspace pushes again. */
-export function rosterEntry(row: RosterRow): RosterEntry {
+function rosterEntry(row: RosterRow): RosterEntry {
   const stored = row.overview === null ? null : v.safeParse(WorkspaceOverviewSchema, JSON.parse(row.overview));
 
   return {
     name: row.name, displayName: row.displayName, createdAt: row.createdAt, lastVisited: row.lastVisited, archivedAt: row.archivedAt,
     overview: stored?.success === true ? { ...stored.output, decisionsWaiting: row.decisions } : null,
+    decisions: row.decisions,
   };
 }
 
-export function rosterCounts(rows: readonly RosterRow[]): RosterCounts {
-  const counts: RosterCounts = { all: rows.length, needs: 0, working: 0, idle: 0, decisions: 0 };
+/** A superset, since the title shown is `workspaceDisplayTitle`'s; `rosterMatches` decides. */
+function searchClause(query: string) {
+  const needle = query.trim().toLowerCase();
+  // LIKE folds ASCII case only.
+  const ascii = new TextEncoder().encode(needle).length === needle.length;
 
-  for (const row of rows) {
-    counts[rowBucket(row)] += 1;
+  if (needle === '' || 'untitled workspace'.includes(needle) || !ascii) return { sql: '', bindings: [] };
+  const pattern = `%${needle.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+
+  return { sql: " AND (w.display_name LIKE ? ESCAPE '\\' OR w.name LIKE ? ESCAPE '\\')", bindings: [pattern, pattern] };
+}
+
+export function rosterCounts(sql: SqlExec): RosterCounts {
+  const counts: RosterCounts = { all: 0, needs: 0, working: 0, idle: 0, unreported: 0, decisions: 0 };
+
+  for (const raw of sql.exec(`SELECT ${BUCKET} AS bucket, COUNT(*) AS n, SUM(${DECISIONS}) AS decisions ${FROM} WHERE ${ACTIVE} GROUP BY bucket`).toArray()) {
+    const row = v.parse(CountRowSchema, raw);
+    counts[row.bucket] = row.n;
+    counts.all += row.n;
     counts.decisions += row.decisions;
   }
 
   return counts;
 }
 
-export function rosterPage(rows: readonly RosterRow[], query: RosterQuery = {}): RosterPage {
+/** `idx_user_workspaces_roster` serves the order and the cursor. */
+function pageRows(sql: SqlExec, query: RosterQuery, cursor: { v: number; n: string } | null, limit: number): RosterRow[] {
+  const search = searchClause(query.query ?? '');
+  const bucket = query.bucket === undefined ? '' : ` AND ${BUCKET} = ?`;
+  const after = cursor === null ? '' : ' AND (w.last_visited < ? OR (w.last_visited = ? AND w.name > ?))';
+
+  return sql.exec(`${ENTRY} ${FROM} WHERE ${ACTIVE}${after}${bucket}${search.sql} ORDER BY w.last_visited DESC, w.name ASC LIMIT ?`,
+    ...(cursor === null ? [] : [cursor.v, cursor.v, cursor.n]), ...(query.bucket === undefined ? [] : [query.bucket]), ...search.bindings, limit)
+    .toArray().map((raw) => v.parse(RosterRowSchema, raw));
+}
+
+/** A chunk short of matches reads on past its last row. */
+export function rosterPage(sql: SqlExec, query: RosterQuery = {}): RosterPage {
   const limit = clampRosterLimit(query.limit);
-  const cursor = decodeRosterCursor(query.cursor);
+  const entries: RosterEntry[] = [];
+  let cursor = decodeRosterCursor(query.cursor);
+  let more = false;
 
-  const matching = rows.filter((row) => (query.bucket === undefined || rowBucket(row) === query.bucket)
-    && rosterMatches(row, query.query ?? ''));
+  for (;;) {
+    const rows = pageRows(sql, query, cursor, limit + 1);
 
-  const after = cursor === null ? 0 : matching.findIndex((row) => row.lastVisited < cursor.v
-    || (row.lastVisited === cursor.v && row.name > cursor.n));
+    for (const row of rows) {
+      if (!rosterMatches(row, query.query ?? '')) continue;
 
-  const start = after < 0 ? matching.length : after;
-  const page = matching.slice(start, start + limit);
-  const last = page.at(-1);
+      if (entries.length === limit) {
+        more = true;
+        break;
+      }
+
+      entries.push(rosterEntry(row));
+    }
+
+    const last = rows.at(-1);
+
+    if (more || rows.length <= limit || last === undefined) break;
+    cursor = { v: last.lastVisited, n: last.name };
+  }
+
+  const counts = rosterCounts(sql);
+  const lastEntry = entries.at(-1);
 
   return {
-    entries: page.map(rosterEntry),
-    total: matching.length,
-    nextCursor: start + limit < matching.length && last !== undefined ? encodeRosterCursor(last) : null,
-    counts: rosterCounts(rows),
+    entries, total: rosterTotal(sql, query, counts), nextCursor: more && lastEntry !== undefined ? encodeRosterCursor(lastEntry) : null, counts,
   };
+}
+
+function rosterTotal(sql: SqlExec, query: RosterQuery, counts: RosterCounts): number {
+  if ((query.query ?? '').trim() === '') return query.bucket === undefined ? counts.all : counts[query.bucket];
+  const search = searchClause(query.query ?? '');
+  const bucket = query.bucket === undefined ? '' : ` AND ${BUCKET} = ?`;
+  let total = 0;
+
+  for (const raw of sql.exec(`SELECT w.name, w.display_name AS displayName ${FROM} WHERE ${ACTIVE}${bucket}${search.sql}`,
+    ...(query.bucket === undefined ? [] : [query.bucket]), ...search.bindings).toArray()) {
+    if (rosterMatches(v.parse(SearchRowSchema, raw), query.query ?? '')) total += 1;
+  }
+
+  return total;
+}
+
+export function rosterRow(sql: SqlExec, name: string): RosterEntry | null {
+  const [raw] = sql.exec(`${ENTRY} ${FROM} WHERE ${ACTIVE} AND w.name = ?`, name).toArray();
+
+  return raw === undefined ? null : rosterEntry(v.parse(RosterRowSchema, raw));
 }
 
 const RosterAttachmentSchema = v.object({ roster: v.literal(true) });

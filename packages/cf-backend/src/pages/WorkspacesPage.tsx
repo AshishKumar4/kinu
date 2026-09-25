@@ -4,8 +4,9 @@ import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
 import { ListIcon, PlusIcon, SquaresFourIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
-import { APP_ROUTES, type RosterBucket } from "@kinu.run/core";
+import { APP_ROUTES } from "@kinu.run/core";
 import { useFilteredRoster, useWorkspaceRoster, type RosterFilter } from "@/hooks/use-workspace-roster";
+import type { RosterFilterBucket } from "@/lib/user-api";
 import { inputCls } from "@/components/ui/form";
 import { Segmented } from "@/components/ui/Segmented";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -28,7 +29,7 @@ const BUCKET_IDS = ["all", "needs", "working", "idle"] as const;
 
 const SEARCH_PAUSE_MS = 250;
 
-const BUCKETS: Record<"all" | RosterBucket, { label: string; empty: string }> = {
+const BUCKETS: Record<"all" | RosterFilterBucket, { label: string; empty: string }> = {
   all: { label: "All", empty: "No workspaces" },
   needs: { label: "Needs you", empty: "Nothing is waiting on you" },
   working: { label: "Working", empty: "No workspace is working right now" },
@@ -69,7 +70,7 @@ export default function WorkspacesPage() {
   const roster = useWorkspaceRoster();
   const [query, setQuery] = useState("");
   const [view, setViewState] = useState<View>(storedView);
-  const [filter, setFilter] = useState<"all" | RosterBucket>("all");
+  const [filter, setFilter] = useState<"all" | RosterFilterBucket>("all");
   const navigate = useNavigate();
   const q = usePaused(query.trim());
   const narrowed = filter !== "all" || q !== "";
@@ -103,7 +104,12 @@ export default function WorkspacesPage() {
           />
           <Segmented label="Workspace state" value={filter} onChange={setFilter} segments={SEGMENTS} />
           <div className="ml-auto flex items-center gap-3">
-            {total > 0 && <span className="p-meta p-text-4 tabular-nums">{matching} of {total}</span>}
+            {total > 0 && (
+              <span className="p-meta p-text-4 tabular-nums">
+                {matching} of {total}
+                {roster.counts.unreported > 0 && ` · ${String(roster.counts.unreported)} not yet reported`}
+              </span>
+            )}
             <div className="flex items-center gap-1">
               <Button variant="ghost" size="sm" aria-label="List view" aria-pressed={view === "list"}
                 icon={<ListIcon size={14} />} onClick={() => setView("list")} />

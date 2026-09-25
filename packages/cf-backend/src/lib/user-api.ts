@@ -45,10 +45,12 @@ export type RosterPage = v.InferOutput<typeof RosterPageSchema>;
 
 export type RosterFrame = v.InferOutput<typeof RosterFrameSchema>;
 
+export type RosterFilterBucket = Exclude<RosterBucket, 'unreported'>;
+
 export interface RosterQuery {
   readonly cursor?: string | null;
   readonly limit?: number;
-  readonly bucket?: RosterBucket;
+  readonly bucket?: RosterFilterBucket;
   readonly q?: string;
 }
 
@@ -104,10 +106,10 @@ const WorkspaceEntrySchema = v.object({
   archivedAt: v.nullable(v.number()),
 });
 
-const RosterEntrySchema = v.object({ ...WorkspaceEntrySchema.entries, overview: v.nullable(WorkspaceOverviewSchema) });
+const RosterEntrySchema = v.object({ ...WorkspaceEntrySchema.entries, overview: v.nullable(WorkspaceOverviewSchema), decisions: v.number() });
 
 const RosterCountsSchema = v.object({
-  all: v.number(), needs: v.number(), working: v.number(), idle: v.number(), decisions: v.number(),
+  all: v.number(), needs: v.number(), working: v.number(), idle: v.number(), unreported: v.number(), decisions: v.number(),
 });
 
 const RosterPageSchema = v.object({

@@ -167,6 +167,24 @@ describe('the home workspace cards', () => {
     });
   });
 
+  test('a workspace with no tile reads as not yet reported, never idle', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'dark');
+
+      try {
+        await setOverview(page, 'handwrought-walnut-4166c321', null);
+        await page.waitForFunction(
+          () => [...document.querySelectorAll('section[aria-label="Recent workspaces"] [data-overview-chip]')]
+            .some((chip) => chip.textContent?.trim() === 'Not yet reported'),
+        );
+
+        expect(cardNamed(await cards(page), 'Untitled workspace').chip).toBe('Not yet reported');
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test('a narrow viewport keeps the line whole — chip and task visible, nothing sideways', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'dark', { width: 390, height: 844 });

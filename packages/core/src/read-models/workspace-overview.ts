@@ -100,12 +100,13 @@ export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): Workspa
   };
 }
 
-/** The Workspaces page's filters. */
-export type RosterBucket = 'needs' | 'working' | 'idle';
+/** `unreported`: no tile yet, never idle. */
+export type RosterBucket = 'needs' | 'working' | 'idle' | 'unreported';
 
-/** A workspace that never pushed has a null activity and reads idle. */
 export function rosterBucket(activity: WorkspaceOverview['activity'] | null, decisions: number): RosterBucket {
   if (decisions > 0) return 'needs';
+
+  if (activity === null) return 'unreported';
 
   return activity === 'working' ? 'working' : 'idle';
 }
@@ -118,19 +119,30 @@ export function rosterMatches(entry: { readonly name: string; readonly displayNa
 }
 
 /** `needs` waits on the owner; `failed`/`unfinished` are ends and durable leftovers; `updated`/`idle` are quiet. */
-export type WorkspaceStatus = 'needs' | 'working' | 'failed' | 'unfinished' | 'updated' | 'idle';
+export type WorkspaceStatus = 'needs' | 'working' | 'failed' | 'unfinished' | 'updated' | 'idle' | 'unreported';
 
 export interface WorkspaceHeadline {
   readonly label: string;
   readonly status: WorkspaceStatus;
 }
 
+function needsYou(decisions: number): WorkspaceHeadline {
+  return { label: `Needs you · ${String(decisions)}`, status: 'needs' };
+}
+
+/** With no tile, only the owner's approvals are known. */
+export function rosterHeadline(overview: WorkspaceOverview | null, decisions: number): WorkspaceHeadline {
+  if (overview !== null) return overviewHeadline(overview);
+
+  return decisions > 0 ? needsYou(decisions) : { label: 'Not yet reported', status: 'unreported' };
+}
+
 /** First match wins. Working and durable leftovers outrank a failed run: a stale verdict beside live
  * work would say two things. */
-export function overviewHeadline(o: WorkspaceOverview): WorkspaceHeadline {
+function overviewHeadline(o: WorkspaceOverview): WorkspaceHeadline {
   const bucket = rosterBucket(o.activity, o.decisionsWaiting);
 
-  if (bucket === 'needs') return { label: `Needs you · ${o.decisionsWaiting}`, status: 'needs' };
+  if (bucket === 'needs') return needsYou(o.decisionsWaiting);
 
   if (bucket === 'working') return { label: 'Working', status: 'working' };
 

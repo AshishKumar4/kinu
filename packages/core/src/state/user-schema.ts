@@ -69,7 +69,7 @@ export function initUserTables(sql: SqlExec): void {
       fork_lease_expires_at INTEGER
     )
   `);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_workspaces_last_visited ON user_workspaces (last_visited DESC)`);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_workspaces_roster ON user_workspaces (last_visited DESC, name)`);
 
   initWorkspaceCapabilityTables(sql);
 
@@ -365,14 +365,14 @@ export function initUserTables(sql: SqlExec): void {
 
   initExperienceLibraryTables(sql);
 
-  // `activity` and `decisions` repeat the JSON's, so a filter parses none.
+  // `activity` and `decisions` repeat the JSON's, which goes last so a count never reads it.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS workspace_overviews (
       name       TEXT PRIMARY KEY,
-      overview   TEXT NOT NULL,
       activity   TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle')),
       decisions  INTEGER NOT NULL,
-      changed_at INTEGER NOT NULL
+      changed_at INTEGER NOT NULL,
+      overview   TEXT NOT NULL
     )
   `);
 
