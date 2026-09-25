@@ -150,7 +150,7 @@ export interface EpisodeEvidence {
 }
 
 /**
- * How long an evidence read may run from its start. A wedged Durable Object (2026-09-17, cba44dcb9) or a closed
+ * How long an evidence read may run from its start. A wedged Durable Object (2026-09-17, fddd4f9d6) or a closed
  * socket (2026-09-23) never answers; healthy reads take tens of milliseconds. Unanswered channels are recorded.
  */
 export const EVIDENCE_GRACE_MS = 60_000;

@@ -1596,7 +1596,7 @@ export function measureFields(
    * aliases this tree writes itself.
    *
    * Keyed by DECLARING FILE, never by bare name: all three collisions
-   * `8c313fcb1` repaired were a global table keyed on a name two files spell
+   * `43467f876` repaired were a global table keyed on a name two files spell
    * their own way, and `Writable` is exactly the kind of name a second file
    * redeclares differently.
    */

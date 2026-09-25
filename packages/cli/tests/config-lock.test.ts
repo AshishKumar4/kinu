@@ -1,3 +1,4 @@
+import { runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 
@@ -13,21 +14,15 @@ describe('cross-process config read-modify-write', () => {
   const CONFIG_TS = JSON.stringify(join(repoRoot, 'packages/cli/src/config.ts'));
 
   interface ProcessOutcome {
-    readonly code: number;
+    readonly code: number | null;
     readonly stdout: string;
     readonly stderr: string;
   }
 
-  function runIn(home: string, body: string): ProcessOutcome {
-    const proc = Bun.spawnSync({
-      cmd: [process.execPath, '-e', body],
-      cwd: repoRoot,
-      env: { ...process.env, KINU_HOME: home },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+  async function runIn(home: string, body: string): Promise<ProcessOutcome> {
+    const run = await runToExit([process.execPath, '-e', body], { cwd: repoRoot, env: { ...process.env, KINU_HOME: home } });
 
-    return { code: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+    return { code: run.exitCode, stdout: run.stdout, stderr: run.stderr };
   }
 
   function spawnIn(home: string, body: string): Bun.Subprocess<'ignore', 'pipe', 'pipe'> {
@@ -71,7 +66,7 @@ describe('cross-process config read-modify-write', () => {
     expect(a).toEqual({ code: 0, stderr: '' });
     expect(b).toEqual({ code: 0, stderr: '' });
 
-    const final = runIn(home, `
+    const final = await runIn(home, `
       const { loadConfigFile } = await import(${CONFIG_TS});
       console.log(JSON.stringify(loadConfigFile().aliases));
     `);
@@ -80,10 +75,10 @@ describe('cross-process config read-modify-write', () => {
     expect(JSON.parse(final.stdout)).toEqual({ count: '50' });
   });
 
-  test('a throwing mutator changes nothing and releases the lock', () => {
+  test('a throwing mutator changes nothing and releases the lock', async () => {
     const home = scratchDir('config-lock-crash');
 
-    const result = runIn(home, `
+    const result = await runIn(home, `
       const { lstatSync } = await import('node:fs');
       const { updateConfigFile, loadConfigFile, CONFIG_PATH } = await import(${CONFIG_TS});
       updateConfigFile(() => ({ origin: 'https://before.test' }));
@@ -108,7 +103,7 @@ describe('cross-process config read-modify-write', () => {
       lockReleased: true,
     });
 
-    const again = runIn(home, `
+    const again = await runIn(home, `
       const { updateConfigFile } = await import(${CONFIG_TS});
       updateConfigFile((config) => { config.updateCheck = false; });
       console.log('ok');
@@ -118,10 +113,10 @@ describe('cross-process config read-modify-write', () => {
     expect(again.stdout.trim()).toBe('ok');
   });
 
-  test('a lock left behind by a killed process is taken over', () => {
+  test('a lock left behind by a killed process is taken over', async () => {
     const home = scratchDir('config-lock-abandoned');
 
-    const result = runIn(home, `
+    const result = await runIn(home, `
       const { lstatSync, symlinkSync } = await import('node:fs');
       const { CONFIG_PATH, loadConfigFile, updateConfigFile } = await import(${CONFIG_TS});
       const lock = CONFIG_PATH + '.lock';
@@ -131,7 +126,9 @@ describe('cross-process config read-modify-write', () => {
       // nothing else — no clock is touched here, and no duration would change
       // either answer. This pid has exited and been reaped, so Linux says
       // plainly that there is no such process.
-      const dead = Bun.spawnSync({ cmd: ['/bin/true'] }).pid;
+      const exited = Bun.spawn({ cmd: ['/bin/true'] });
+      await exited.exited;
+      const dead = exited.pid;
       symlinkSync('v1 linux 00000000-0000-4000-8000-000000000004 ' + dead + ' 12345', lock);
       updateConfigFile((config) => { config.origin = 'https://after.test'; });
       console.log(JSON.stringify({

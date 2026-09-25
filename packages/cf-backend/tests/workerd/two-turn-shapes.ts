@@ -101,15 +101,6 @@ export type HttpCall = v.InferOutput<typeof HttpCallSchema>;
 
 export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin';
 
-/** One armed row of the SDK's schedule registry, as `armWakeRow` wrote it. `callback` names
- *  which Kinu wake chain armed it; `at` is whole seconds. */
-export const ArmedWakeSchema = v.object({
-  callback: v.string(),
-  at: v.number(),
-});
-
-export type ArmedWake = v.InferOutput<typeof ArmedWakeSchema>;
-
 /** A durable `pending_steers` row; `turn_id` is null when reserved before a turn opens. */
 export const PendingSteerSchema = v.object({
   actorId: v.string(),
@@ -166,6 +157,22 @@ export const AgentLogEventSchema = v.object({
 });
 
 export type AgentLogEvent = v.InferOutput<typeof AgentLogEventSchema>;
+
+/** What the arrival's call saw before its eviction: the schedule registry's callbacks, due or future,
+ *  before the arrival and once its detached arm landed, and the peer rows at the abort. */
+export const ReactorEvictionSchema = v.object({
+  armedBefore: v.array(v.string()),
+  armedAfter: v.array(v.string()),
+  evictedWith: v.array(AgentLogEventSchema),
+});
+
+export type ReactorEviction = v.InferOutput<typeof ReactorEvictionSchema>;
+
+/** The eviction, then the peer rows after the fresh activation's first `_kinuTimerTick` and the run causes. */
+export interface ReactorWake extends ReactorEviction {
+  readonly drained: AgentLogEvent[];
+  readonly causes: string[];
+}
 
 export const ExerciseResultSchema = v.object({
   register: RegisterSchema,

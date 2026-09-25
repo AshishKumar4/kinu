@@ -158,9 +158,9 @@ export const FIRST_RUN_DEFECTS = {
       + 'actor column, and Kinu read it with one. Every suite built the table from Kinu\'s own '
       + 'copy of the DDL, so the reads were never run over the shape the deployment has; nothing '
       + 'sent a turn through the product and then made the read the web app makes on open.',
-    provedRedAt: '3d6edb212',
+    provedRedAt: 'cc82601c4',
     redDirection: 'one real turn over the public socket, then `getWorkspaceSnapshot` as the web app '
-      + 'calls it: it must answer, count both messages, and name a model. RED at 3d6edb212 on the '
+      + 'calls it: it must answer, count both messages, and name a model. RED at cc82601c4 on the '
       + 'first of the three.',
   },
   'approve-clears': {
@@ -182,8 +182,8 @@ export const FIRST_RUN_DEFECTS = {
     missedBecause: 'every device test attaches ONE fake daemon, so "the first live socket" and '
       + '"the machine the user named" are the same machine in the fixture and different machines '
       + 'in the account.',
-    provedRedAt: 'd894de564',
-    redDirection: 'the parent of d894de564 resolves no name: an unnamed call lands on whichever '
+    provedRedAt: '343e157df',
+    redDirection: 'the parent of 343e157df resolves no name: an unnamed call lands on whichever '
       + 'machine map iteration yields, and a NAMED call is not routed at all.',
   },
   'enter-sends': {
@@ -193,8 +193,8 @@ export const FIRST_RUN_DEFECTS = {
     missedBecause: 'the in-process renderer negotiates no keyboard protocol and delivered CR '
       + 'only. A tty can deliver Enter as LF, and the LF spelling hit opentui\'s default table, '
       + 'which opens a line.',
-    provedRedAt: '4e1122d2d',
-    redDirection: 'the parent of 4e1122d2d binds `return` only, so the LF run submits nothing '
+    provedRedAt: 'daad4aeee',
+    redDirection: 'the parent of daad4aeee binds `return` only, so the LF run submits nothing '
       + 'and the deployed workspace records no user turn.',
   },
   'files-outside-tree': {
@@ -204,8 +204,8 @@ export const FIRST_RUN_DEFECTS = {
     missedBecause: 'the ranged read ran `node -e` through the box\'s exec, and `node -e` compiles '
       + 'its source with `new Function`, which workerd forbids and every Node-hosted test '
       + 'allows. The whole bun suite was green over it.',
-    provedRedAt: '675444233',
-    redDirection: 'the parent of 675444233 has no native ranged read on the box file plane, so '
+    provedRedAt: 'a85ce8793',
+    redDirection: 'the parent of a85ce8793 has no native ranged read on the box file plane, so '
       + 'the first read of a path outside the workspace tree answers EIO on the deployment.',
   },
   'slate': {
@@ -221,15 +221,15 @@ export const FIRST_RUN_DEFECTS = {
     id: 'command-refusal',
     found: 'A production slate binding and workspace executor reported a command that never ran as ordinary exit-one prose, losing the denied or waiting-for-approval class.',
     missedBecause: 'Tests checked NOT RUN prose and queue state rather than structural producer refusals; generic stdout interpretation also mistakes successful business data for errors.',
-    provedRedAt: '53ba25348',
-    redDirection: 'Non-model CLI REST and AgentClient calls require producer-owned refusal metadata and no execution for denied/parked commands. Executed exit-one failures and successful JSON-looking stdout are independent controls. Original 53ba25348 RED receipts remain retained unchanged.',
+    provedRedAt: '4d119fec2',
+    redDirection: 'Non-model CLI REST and AgentClient calls require producer-owned refusal metadata and no execution for denied/parked commands. Executed exit-one failures and successful JSON-looking stdout are independent controls. Original 4d119fec2 RED receipts remain retained unchanged.',
   },
   'public-share': {
     id: 'public-share',
     found: 'The owner asked for a live share a stranger can open without an account and call one read-only member of, with every mutating member refused unless approved by name.',
     missedBecause: 'No deployed route served a share origin: the share label parser, the grant cut and the viewer path existed in no build, so every unit and workerd proof ran against code production never had.',
-    provedRedAt: 'e060e360f',
-    redDirection: 'RED against the deployed e060e360f on 2026-09-15: the `share` slate op was refused as bad_input ("Expected (list | preview | … | shares) but received share"), so no URL existed to open and every later subgoal missed. Green requires the op to answer a URL a signed-out fetch serves, `probe()` to answer over a Cap\'n Web batch, and `mutate()` to be refused with the share\'s own "does not grant" reason.',
+    provedRedAt: '0415e0f93',
+    redDirection: 'RED against the deployed 0415e0f93 on 2026-09-15: the `share` slate op was refused as bad_input ("Expected (list | preview | … | shares) but received share"), so no URL existed to open and every later subgoal missed. Green requires the op to answer a URL a signed-out fetch serves, `probe()` to answer over a Cap\'n Web batch, and `mutate()` to be refused with the share\'s own "does not grant" reason.',
   },
   'share-capability-cut': {
     id: 'share-capability-cut',
@@ -258,14 +258,14 @@ export const FIRST_RUN_DEFECTS = {
     id: 'preview-address',
     found: 'Production admitted a workspace name whose length prevented every workspace preview URL.',
     missedBecause: 'Creation tests used short names; preview-only tests refused the long name after the unusable workspace already existed.',
-    provedRedAt: '53ba25348',
+    provedRedAt: '4d119fec2',
     redDirection: 'Non-model CLI creation must reject a fresh 32-character address with the 31-character limit, while a fresh 31-character address must serve actual preview HTTP.',
   },
   'workspace-title': {
     id: 'workspace-title',
     found: 'The owned workspace registry held its generated display title, but the loaded actor status returned the workspace ID.',
     missedBecause: 'Warm or locally initialized status fixtures did not read a generated title from the real owner registry on a cold actor.',
-    provedRedAt: 'b48b9bba4',
+    provedRedAt: '82ea0d9e3',
     redDirection: 'Read-only production mismatch retained by the title owner in workspace-title-production-before.json. This case selects an explicitly owned workspace with a distinct registry title, reads its loaded snapshot first, and compares without writes, eviction or model/spend claims.',
   },
   'every-tool': {
@@ -275,8 +275,8 @@ export const FIRST_RUN_DEFECTS = {
     missedBecause: 'every tool has unit coverage over inputs its author wrote, and no row ever '
       + 'asked the deployed agent to use each one and then read what it left behind, so a tool '
       + 'that fails only when the MODEL calls it on the deployment was invisible to every gate.',
-    provedRedAt: '234ed5d7d',
-    redDirection: 'RED against the deployed 234ed5d7d on 2026-09-12: the retained transcript '
+    provedRedAt: 'a90ddda79',
+    redDirection: 'RED against the deployed a90ddda79 on 2026-09-12: the retained transcript '
       + '(bench-artifacts/first-run-flash-1789196459812/every-tool) shows the model\'s request '
       + 'for the listing turn carrying ONE user message, the genesis signal, and none of the '
       + 'text the turn was started with, so every check but `no-agents-call` missed. '
@@ -300,7 +300,7 @@ export const FIRST_RUN_DEFECTS = {
       + 'old contract; the deployed SDK throws FileNotFoundError, which the file view passed '
       + 'through unclassified, so the write path\'s create-vs-overwrite probe read a create as an '
       + 'I/O failure. No test ever called listFiles with an empty path.',
-    provedRedAt: 'b4d2c6001',
+    provedRedAt: '96c3fa2b0',
     redDirection: 'retained run bench-artifacts/trajectory-product-1789381033344/'
       + 'public-failure-recovery/events.jsonl on 2026-09-14: event 9 is the refused create '
       + '(reason io, FileNotFoundError on a path the list at event 7 showed absent), event 12 is '
@@ -316,8 +316,8 @@ export const FIRST_RUN_DEFECTS = {
     missedBecause: 'every device test asserts the link at the moment it forms — connectDevice '
       + 'waits for the first connected and stops — so a hub that cannot answer `ping` drops the '
       + 'socket at +40 s in a window nothing ever measured.',
-    provedRedAt: 'c9a43fdb8',
-    redDirection: 'RED against the deployed c9a43fdb8 on 2026-09-15: a real daemon under this '
+    provedRedAt: '2fbe8695f',
+    redDirection: 'RED against the deployed 2fbe8695f on 2026-09-15: a real daemon under this '
       + 'repo\'s bun, a real `POST /api/cli/devices` registration, and the devices route\'s own '
       + 'stamps — `lastSeenAt` moves when the second accept lands and `connected` flickers '
       + 'through the redial gap. Green requires the link to hold the whole 50 s window, a '
@@ -329,18 +329,18 @@ export const FIRST_RUN_DEFECTS = {
     found: 'A `run` on the sandbox that outlived the 30s foreground window detached to a '
       + 'background job and replied with the handle — and the episode closed there. The job\'s '
       + 'settled result either never woke the agent or woke it where nothing downstream could '
-      + 'see it: public-failure-recovery on c9a43fdb8 recorded the detach and no reply carrying '
+      + 'see it: public-failure-recovery on 2fbe8695f recorded the detach and no reply carrying '
       + 'the test\'s outcome.',
     missedBecause: 'the detach half is asserted in isolation everywhere the threshold is '
       + 'tested, and the wake half never was: no row asked the deployed product what a detached '
       + 'run\'s settlement does to the transcript, so a wake that never lands reads the same as '
       + 'a command still running.',
-    provedRedAt: 'f1da0985f',
-    redDirection: 'RED live 2026-09-15 on deployed build f1da0985f: a sleep-45-then-echo row '
+    provedRedAt: '5e3acd011',
+    redDirection: 'RED live 2026-09-15 on deployed build 5e3acd011: a sleep-45-then-echo row '
       + 'against https://kinu.run held in-flight 20 min with no wake run closing and no marker '
       + 'reply — killed by the row\'s own 10 min budget at '
       + '/home/mrwhite0racle/kinu-logs/failure-recovery-live/background-settle-live.log. The '
-      + 'retained c9a43fdb8 episode (bench-artifacts/trajectory-product-1789455120159/'
+      + 'retained 2fbe8695f episode (bench-artifacts/trajectory-product-1789455120159/'
       + 'public-failure-recovery/events.jsonl) shows the same shape: the detached handle at '
       + 'event 20 and a ledger that closed over a still-running job.',
   },
@@ -348,17 +348,17 @@ export const FIRST_RUN_DEFECTS = {
     id: 'background-wake',
     found: 'A multi-step turn whose activation ended mid-turn — an isolate killed, an alarm-boundary '
       + 'reset — sat un-driven: the run row stayed open with nothing scheduled to notice it. The '
-      + 'turn-open wake added at 346bdced7 was released by the first tick that fired inside the turn, '
+      + 'turn-open wake added at 4fe96cf72 was released by the first tick that fired inside the turn, '
       + 'so an ordinary turn held a wake for about one second (REVIEW-chat-loop C2).',
     missedBecause: 'the wake-chain suite listed schedules right after a turn opened and never fired a '
       + 'tick with the turn parked; the workerd background-wake case holds the turn in-process and '
       + 'ends no activation; and the deployed product had no way to end one, so no row could ask it.',
-    provedRedAt: 'cba44dcb9',
-    redDirection: 'RED by reading on build cba44dcb9: `_kinuTerminalRetryTick` cancelled its armed row '
+    provedRedAt: 'fddd4f9d6',
+    redDirection: 'RED by reading on build fddd4f9d6: `_kinuTerminalRetryTick` cancelled its armed row '
       + 'whenever `nextOwedAt()` was null, and an open run row is untimed, so every mid-turn tick left '
       + 'the registry empty (packages/cf-backend/src/actor-agent.ts:1929-1932 at that build). '
       + 'Unit red: unit-alarm-wake-chain "a tick that fires inside a parked turn keeps a wake row" '
-      + 'found 0 rows before 154893baa. This row is the live proof; it needs the eval-only abort '
+      + 'found 0 rows before 14909875d. This row is the live proof; it needs the eval-only abort '
       + '(ARCHITECTURE-DECISIONS C3) to end an activation on the deployed build, so its first live '
       + 'run is on the build that carries both.',
   },
@@ -370,8 +370,8 @@ export const FIRST_RUN_DEFECTS = {
     missedBecause: 'every-tool deliberately EXCLUDES hire and asserts the agents tool was never '
       + 'called; the unit proofs drive that tool against fixtures the test author wrote. Nothing '
       + 'asked the deployed agent to hire and then read back the settle, the relay, and the retire.',
-    provedRedAt: 'cba44dcb9',
-    redDirection: 'RED by reading on build cba44dcb9, measured 2026-09-17: the workspace\'s '
+    provedRedAt: 'fddd4f9d6',
+    redDirection: 'RED by reading on build fddd4f9d6, measured 2026-09-17: the workspace\'s '
       + 'opening turn never closed inside the 20-minute case budget, no `hire` call ever '
       + 'settled, no model call was accounted, and the ledger reads hung on the unresponsive '
       + 'object until the row\'s own test bound ended it. The card ceiling never reached '
@@ -385,8 +385,8 @@ export const FIRST_RUN_DEFECTS = {
     missedBecause: 'the workerd proof drives hosted actors through the object and the routing '
       + 'pin proves the grammar over literals the test writes; nothing opens the actor\'s own '
       + 'socket path the way the browser does, so a client-built dead facet path stayed invisible.',
-    provedRedAt: 'cba44dcb9',
-    redDirection: 'RED by reading on build cba44dcb9, measured 2026-09-17, on a different link of '
+    provedRedAt: 'fddd4f9d6',
+    redDirection: 'RED by reading on build fddd4f9d6, measured 2026-09-17, on a different link of '
       + 'the chain than reported: the transport-admitted actor path `/actor/<name>` upgraded and '
       + 'BOTH mount reads answered — proving the socket grammar was never the server\'s defect and '
       + 'B1 lives entirely in the client\'s address — but the hosted actor was already inside a '
@@ -407,10 +407,10 @@ export const FIRST_RUN_DEFECTS = {
       + 'because this row read the roster over the socket, which answered in full, while the page '
       + 'threw that answer away: its reset effect bumped the roster read\'s generation after the '
       + 'sibling effect had sent it.',
-    provedRedAt: 'a39effc66',
+    provedRedAt: 'a13e33514',
     redDirection: 'the row drops EVERY socket between the sends and the reads, so the answers come '
       + 'from durable rows rather than a live activation, then loads the page. RED by reading on '
-      + 'build a39effc66, measured 2026-09-23: roster-survives and chats-reachable green, and with '
+      + 'build a13e33514, measured 2026-09-23: roster-survives and chats-reachable green, and with '
       + 'every read the page sent answered its strip and sidebar drew no agent at all.',
   },
   'agent-dismissed-chat': {
@@ -420,13 +420,13 @@ export const FIRST_RUN_DEFECTS = {
       + 'is not registered in this workspace.", while the dialog promises "Its conversation is '
       + 'kept, not deleted".',
     missedBecause: '`agent-chats-persist` proves EMPLOYED agents keep their chats and never '
-      + 'dismisses one, so it passes with the fix (e29da7f01) reverted. The pre-deploy half '
+      + 'dismisses one, so it passes with the fix (e21207492) reverted. The pre-deploy half '
       + 'arrived with the fix, in packages/cf-backend/tests/workerd/public-surface.test.ts; no '
       + 'deployed row read a dismissed agent\'s kept chat the way its pane reads it.',
-    provedRedAt: '5e53b4248',
-    redDirection: 'Run against 5e53b4248, the parent of e29da7f01, served by `vite dev` on '
+    provedRedAt: '2eba2c1e5',
+    redDirection: 'Run against 2eba2c1e5, the parent of e21207492, served by `vite dev` on '
       + 'loopback (the Worker the deploy ships, with local state): `kept-chat-reads` misses on '
-      + 'the refusal above. Green on e29da7f01 served the same way.',
+      + 'the refusal above. Green on e21207492 served the same way.',
   },
   'agent-confined': {
     id: 'agent-confined',
@@ -447,7 +447,7 @@ export const FIRST_RUN_DEFECTS = {
     missedBecause: 'the search provider (Tavily with a key, DuckDuckGo without) is unit-tested over '
       + 'fixture pages, so a provider the deployment cannot reach, or a layout it no longer parses, '
       + 'is invisible until a user asks the agent to look something up.',
-    provedRedAt: '41494531d',
+    provedRedAt: 'b220f59f8',
     redDirection: 'RED on the deployed build: DuckDuckGo answers the Worker 522 or rate-limits it, so every '
       + 'search fails; it stays red until the search provider serves Worker egress. Also planted on '
       + 'loopback `vite dev`: an endpoint that does not answer leaves `searched` and `results-returned` missed.',
@@ -503,7 +503,7 @@ export const FIRST_RUN_DEFECTS = {
     missedBecause: 'a nested hire runs in a subordinate the same workspace object hosts, one delegation '
       + 'level down, and its answer reaches the root only through the middle helper\'s settlement, '
       + 'none of which a one-level hire exercises.',
-    provedRedAt: '41494531d',
+    provedRedAt: 'b220f59f8',
     redDirection: 'RED on the deployed build: a task hire settles at its helper\'s first turn end, so a helper '
       + 'that hires its own and waits for the wake reports "has been hired" upward and the nested answer never '
       + 'climbs; it stays red until a task hire waits for its helper\'s own delegated work. Also planted on '
@@ -516,7 +516,7 @@ export const FIRST_RUN_DEFECTS = {
     missedBecause: 'the eval tier\'s swarm arm asserts a search row exists on the cloud target and reads '
       + 'neither the pane nor the nodes\' settlement, so a canvas that lost the node transcripts, '
       + 'or a node left running, passed it.',
-    provedRedAt: '41494531d',
+    provedRedAt: 'b220f59f8',
     redDirection: 'RED on the deployed build: every node errored at its 60 s budget while waiting out the '
       + 'provider\'s rate-limit backoff, which the budget counts; it stays red until a node\'s budget '
       + 'stops counting provider-mandated waits. Also planted on loopback `vite dev`: a canvas read that '

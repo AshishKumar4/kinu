@@ -1,10 +1,10 @@
 /**
- * Remote-RPC policy shared by client and server: each workspace method and the credential it needs. A CLI call
- * off the table does not compile. An unlisted method is unreachable over HTTP (`/api/cli/workspaces/:name/rpc`)
- * and session-only over WebSocket, where a scoped `pta_…` socket reaches only its scope's rows.
+ * Remote-RPC policy shared by client and server: each workspace method and the credential it needs. An unlisted
+ * method is unreachable over HTTP and session-only over WebSocket, where a `pta_…` socket reaches only its scope.
  */
 import * as v from 'valibot';
 import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from './access-tokens';
+import type { JsonValue } from '../utils/json';
 
 export type AgentRpcAccess = AccessTokenScope | 'interactive' | 'never';
 
@@ -37,7 +37,6 @@ export const AGENT_RPC_ACCESS = {
   getToolDescriptions: 'workspace.read',
   getWorkspaceSnapshot: 'workspace.read',
   getWorkspaceTabPresence: 'workspace.read',
-  listAgentTasks: 'workspace.read',
   listWorkspaceWork: 'workspace.read',
   listSlates: 'workspace.read',
   listBackgroundJobs: 'workspace.read',
@@ -101,6 +100,7 @@ export const AGENT_RPC_ACCESS = {
   forkAgent: 'interactive',
   revertConversation: 'interactive',
   getActivitySnapshot: 'interactive',
+  getActorSnapshot: 'interactive',
   getAlwaysActiveSkills: 'interactive',
   getExecutorDiff: 'interactive',
   getExecutorFiles: 'interactive',
@@ -166,7 +166,7 @@ export function isAgentRpcMethod(method: string): method is AgentRpcMethod {
   return Object.hasOwn(AGENT_RPC_ACCESS, method);
 }
 
-/** Null when the method is off-table (never dispatch it). */
+/** Null off the table: never dispatch it. */
 export function requiredRpcAccess(method: string): AgentRpcAccess | null {
   return isAgentRpcMethod(method)
     ? AGENT_RPC_ACCESS[method]
@@ -175,4 +175,33 @@ export function requiredRpcAccess(method: string): AgentRpcAccess | null {
 
 export function rpcAccessScope(access: AgentRpcAccess | null): AccessTokenScope | null {
   return v.is(v.picklist(ACCESS_TOKEN_SCOPES), access) ? access : null;
+}
+
+export interface HostedWindowActor {
+  readonly name: string;
+  readonly id: string;
+}
+
+type HostedWindowCheck = (args: readonly JsonValue[], actor: HostedWindowActor) => boolean;
+
+/** A hosted window's calls: on its own agent, or workspace-wide. */
+const HOSTED_WINDOW_RPC = {
+  getChatHistoryPage: (args, actor) => v.is(v.object({ actor: v.literal(actor.id) }), args[0]),
+  getActorSnapshot: (args, actor) => args[0] === actor.name,
+  setActorModel: (args, actor) => args[0] === actor.name,
+  setReasoningEffort: (args, actor) => args[1] === actor.name,
+  listBackgroundJobs: (args, actor) => args[1] === actor.name,
+  cancelCurrentWork: () => true,
+  send: () => true,
+  listPendingConsents: () => true,
+  resolveDeviceConsent: () => true,
+  getToolDescriptions: () => true,
+} as const satisfies Partial<Record<AgentRpcMethod, HostedWindowCheck>>;
+
+export function hostedWindowCalls(method: string): method is keyof typeof HOSTED_WINDOW_RPC {
+  return Object.hasOwn(HOSTED_WINDOW_RPC, method);
+}
+
+export function hostedWindowMay(method: string, args: readonly JsonValue[], actor: HostedWindowActor): boolean {
+  return hostedWindowCalls(method) && HOSTED_WINDOW_RPC[method](args, actor);
 }

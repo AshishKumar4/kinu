@@ -6,9 +6,9 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Server } from 'bun';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { scratchDir } from '@kinu.run/test-utils';
+import { scratchDir, runToExit } from '@kinu.run/test-utils';
 import { generateReleaseSigningKey, signRelease, type JsonObject } from '@kinu.run/core';
 
 const repoRoot = resolve(__dirname, '../../..');
@@ -27,7 +27,7 @@ const PLATFORM_ARTIFACT = `/downloads/kinu-cli-${process.platform}-${process.arc
 
 const RUNTIME_ARTIFACT = '/downloads/kinu-runtime-cpython.tar.gz';
 
-function tarball(files: Record<string, string>): Uint8Array {
+async function tarball(files: Record<string, string>): Promise<Uint8Array> {
   const work = scratchDir('self-update-archive');
   mkdirSync(join(work, 'kinu', 'node_modules'), { recursive: true });
 
@@ -36,9 +36,9 @@ function tarball(files: Record<string, string>): Uint8Array {
     writeFileSync(join(work, 'kinu', name), content);
   }
 
-  const archived = Bun.spawnSync({ cmd: ['tar', '-czf', join(work, 'a.tar.gz'), '-C', work, 'kinu'] });
+  const archived = await runToExit(['tar', '-czf', join(work, 'a.tar.gz'), '-C', work, 'kinu']);
 
-  if (archived.exitCode !== 0) throw new Error(`tar failed: ${new TextDecoder().decode(archived.stderr)}`);
+  if (archived.exitCode !== 0) throw new Error(`tar failed: ${archived.stderr}`);
 
   return new Uint8Array(readFileSync(join(work, 'a.tar.gz')));
 }
@@ -142,10 +142,14 @@ const currentCli = (home: string) => readFileSync(join(home, 'cli', 'current', '
 const cliEntries = (home: string) => readdirSync(join(home, 'cli')).sort();
 
 describe('refreshCliTree stages, verifies and swaps', () => {
-  const runtime = tarball({ 'node_modules/@nimbus-sh/runtime-cpython/manifest.json': '{}' });
+  let runtime: Uint8Array;
+
+  beforeAll(async () => {
+    runtime = await tarball({ 'node_modules/@nimbus-sh/runtime-cpython/manifest.json': '{}' });
+  });
 
   test('a good build lands with the rename pair: current is the new tree, prev the old one', async () => {
-    const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED), 'package.json': '{}' }), runtime });
+    const stub = startOrigin({ platform: await tarball({ 'cli.js': cliSource(SERVED), 'package.json': '{}' }), runtime });
     const home = installedHome('1.0.0+old');
     const before = currentCli(home);
 
@@ -161,7 +165,7 @@ describe('refreshCliTree stages, verifies and swaps', () => {
   test('a refresh for a build already installed adopts nothing and downloads nothing', async () => {
     // Two commands inside one probe window both spawn a refresh; the second must find the first's work under
     // the lock and stop, or it replaces prev with the fresh build.
-    const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED), 'package.json': '{}' }), runtime });
+    const stub = startOrigin({ platform: await tarball({ 'cli.js': cliSource(SERVED), 'package.json': '{}' }), runtime });
     const home = installedHome('1.0.0+old');
     const before = currentCli(home);
 
@@ -175,7 +179,7 @@ describe('refreshCliTree stages, verifies and swaps', () => {
   });
 
   test('two refreshes at once take one lock: current is never absent and the build lands once', async () => {
-    const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED), 'package.json': '{}' }), runtime });
+    const stub = startOrigin({ platform: await tarball({ 'cli.js': cliSource(SERVED), 'package.json': '{}' }), runtime });
     const home = installedHome('1.0.0+old');
     const before = currentCli(home);
 
@@ -191,7 +195,7 @@ describe('refreshCliTree stages, verifies and swaps', () => {
   test('an unsigned manifest, or one signed by another key, downloads nothing (C1)', async () => {
     // Without Kinu's signature over the checksums the refresh fetches no artifact.
     for (const signing of ['none', 'foreign'] as const) {
-      const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED), 'package.json': '{}' }), runtime, signing });
+      const stub = startOrigin({ platform: await tarball({ 'cli.js': cliSource(SERVED), 'package.json': '{}' }), runtime, signing });
       const home = installedHome('1.0.0+old');
       const before = currentCli(home);
 
@@ -203,7 +207,7 @@ describe('refreshCliTree stages, verifies and swaps', () => {
   });
 
   test('a corrupt tarball (checksum mismatch) leaves current byte-identical and nothing staged', async () => {
-    const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED) }), runtime, corrupt: true });
+    const stub = startOrigin({ platform: await tarball({ 'cli.js': cliSource(SERVED) }), runtime, corrupt: true });
     const home = installedHome('1.0.0+old');
     const before = currentCli(home);
 
@@ -213,7 +217,7 @@ describe('refreshCliTree stages, verifies and swaps', () => {
   });
 
   test('a staged build whose --version is not the served stamp is refused; current untouched', async () => {
-    const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource('9.9.9+other') }), runtime });
+    const stub = startOrigin({ platform: await tarball({ 'cli.js': cliSource('9.9.9+other') }), runtime });
     const home = installedHome('1.0.0+old');
     const before = currentCli(home);
 
@@ -223,7 +227,7 @@ describe('refreshCliTree stages, verifies and swaps', () => {
   });
 
   test('an archive without cli.js is refused before anything moves', async () => {
-    const stub = startOrigin({ platform: tarball({ 'README': 'no cli here' }), runtime });
+    const stub = startOrigin({ platform: await tarball({ 'README': 'no cli here' }), runtime });
     const home = installedHome('1.0.0+old');
     const before = currentCli(home);
 
@@ -233,7 +237,7 @@ describe('refreshCliTree stages, verifies and swaps', () => {
   });
 
   test('a tree staged earlier for the served stamp is adopted without a download', async () => {
-    const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED) }), runtime });
+    const stub = startOrigin({ platform: await tarball({ 'cli.js': cliSource(SERVED) }), runtime });
     const home = installedHome('1.0.0+old');
     const staged = join(home, 'cli', 'next-9.9.9-served');
     mkdirSync(staged, { recursive: true });
@@ -267,12 +271,16 @@ async function startupCheck(home: string, opts: { isTTY: boolean; origin: string
 }
 
 describe('the startup check starts a refresh only when every gate opens', () => {
-  const runtime = tarball({ 'node_modules/.keep': '' });
+  let runtime: Uint8Array;
 
-  const newerOrigin = () => startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED) }), runtime });
+  beforeAll(async () => {
+    runtime = await tarball({ 'node_modules/.keep': '' });
+  });
+
+  const newerOrigin = async () => startOrigin({ platform: await tarball({ 'cli.js': cliSource(SERVED) }), runtime });
 
   test('a newer served build on a TTY starts one refresh and prints the one line', async () => {
-    const stub = newerOrigin();
+    const stub = await newerOrigin();
     const home = installedHome('1.0.0+old', { origin: stub.origin, accessToken: 'ptc_test', updateCheckedAt: 0 });
 
     const { lines, outcome, spawned } = await startupCheck(home, { isTTY: true, origin: stub.origin });
@@ -283,7 +291,7 @@ describe('the startup check starts a refresh only when every gate opens', () => 
   });
 
   test('non-TTY: no probe, no refresh', async () => {
-    const stub = newerOrigin();
+    const stub = await newerOrigin();
     const home = installedHome('1.0.0+old', { origin: stub.origin, accessToken: 'ptc_test', updateCheckedAt: 0 });
 
     expect(await startupCheck(home, { isTTY: false, origin: stub.origin })).toEqual({ lines: [], outcome: null, spawned: 0 });
@@ -291,7 +299,7 @@ describe('the startup check starts a refresh only when every gate opens', () => 
   });
 
   test('updateCheck: false: no probe, no refresh', async () => {
-    const stub = newerOrigin();
+    const stub = await newerOrigin();
     const home = installedHome('1.0.0+old', { origin: stub.origin, accessToken: 'ptc_test', updateCheckedAt: 0, updateCheck: false });
 
     expect(await startupCheck(home, { isTTY: true, origin: stub.origin })).toEqual({ lines: [], outcome: null, spawned: 0 });
@@ -299,7 +307,7 @@ describe('the startup check starts a refresh only when every gate opens', () => 
   });
 
   test('inside the 24h throttle window: no probe, no refresh', async () => {
-    const stub = newerOrigin();
+    const stub = await newerOrigin();
     const home = installedHome('1.0.0+old', { origin: stub.origin, accessToken: 'ptc_test', updateCheckedAt: NOW - 60_000 });
 
     expect(await startupCheck(home, { isTTY: true, origin: stub.origin })).toEqual({ lines: [], outcome: null, spawned: 0 });

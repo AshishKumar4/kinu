@@ -24,7 +24,7 @@ afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observati
 
 /**
  * The settle a detached `shell` owes the agent, measured the way the missing
- * recovery surfaced: `public-failure-recovery` on build c9a43fdb8 backgrounded
+ * recovery surfaced: `public-failure-recovery` on build 2fbe8695f backgrounded
  * its test run at the 30s window and the episode's ledger closed with the
  * result still on the job row — the wake either never ran or ran where nobody
  * scoring could see it. This row asks for a sleep that must detach, then asks
@@ -39,7 +39,7 @@ describe(SUITE, () => {
   // the retry the runner guarantees before a wake is re-queued. If the budget
   // gives first, the harness retains the ledger as found and the verdict
   // reads it: a still-open wake is red, not unknown. (The runner's own
-  // timeout, wider, retained nothing: build cba44dcb9 timed out at 600 s with
+  // timeout, wider, retained nothing: build fddd4f9d6 timed out at 600 s with
   // an empty episode directory.)
   liveTest(`MEASURED: ${CASE}`, { timeout: 12 * 60_000 }, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');

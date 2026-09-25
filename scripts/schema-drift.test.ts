@@ -169,7 +169,7 @@ describe('schema-drift genesis comparison', () => {
   });
 
   test('RED: a changed CHECK on a shipped table is drift, though every column is still there', () => {
-    // 9ae83227f widened `name_origin`'s CHECK. Every column matched its genesis,
+    // 5f2881a86 widened `name_origin`'s CHECK. Every column matched its genesis,
     // so the column-only gate was green, and every account older than the
     // deploy refused the new value (2026-09-22).
     const key = lockKey('user_workspaces', 'packages/core/src/state/user-schema.ts');
@@ -283,7 +283,7 @@ describe('schema-drift over this tree', () => {
     // defect this file exists to make impossible. 115 is the count at the reset
     // genesis, after `crafted_tools` lost its two duplicate declarations and
     // kept one owner (`@kinu.run/agent-utils`), and after `agent_views` left
-    // with the views DSL (8d6444f4f). A table that leaves lowers this number
+    // with the views DSL (0dba3bd8c). A table that leaves lowers this number
     // in the same commit, with its reason here.
     expect(state.tables.length).toBeGreaterThanOrEqual(115);
     // The three event-log views and `search_node_scores`.

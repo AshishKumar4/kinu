@@ -434,7 +434,7 @@ export function referencesPackage(file: string, text: string, forms: ReferenceFo
 
 /** Each file's module edges, computed once per text. The census asks every file
  *  once PER DECLARED PACKAGE, and a parse per question made this gate the
- *  heaviest of the commit tier: measured 2026-09-22 at ad61dea6c under load ~80,
+ *  heaviest of the commit tier: measured 2026-09-22 at 1dd25b3ad under load ~80,
  *  the census alone passed 10 GiB resident and the gate more than 180 CPU-s,
  *  where both knip runs together took 27. The key is the file and its exact
  *  text, so an answer never outlives the bytes it was read from. */

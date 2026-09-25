@@ -25,7 +25,6 @@ import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestra
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import type {
   AgentLogEvent,
-  ArmedWake,
   CallRecord,
   DriveOnceInput,
   DriveOnceResult,
@@ -41,9 +40,10 @@ import type {
   PreparedConversation,
   QueueProbeMode,
   RawChatProbeResult,
+  ReactorEviction,
+  ReactorWake,
 } from './two-turn-shapes';
 import {
-  ArmedWakeSchema,
   DriveOnceInputSchema,
   DriveOnceResultSchema,
   ExerciseResultSchema,
@@ -54,6 +54,7 @@ import {
   ParityPreparedSchema,
   ParityRowsSchema,
   PreparedConversationSchema,
+  ReactorEvictionSchema,
   WakeDriveResultSchema,
   WakeRowsSchema,
   WAKE_MARKER,
@@ -61,7 +62,7 @@ import {
   type WakeHoldPlacement,
   type WakeRows,
 } from './two-turn-shapes';
-import { ownerCaller, type WorkMode } from '@kinu.run/core';
+import { ownerCaller, type PeerMessage, type WorkMode } from '@kinu.run/core';
 import type { ToolSet } from 'ai';
 
 // Re-exported under production names so the auxiliary worker binds the shipped
@@ -89,10 +90,11 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'runEventWake');
     Reflect.deleteProperty(this, 'parityRows');
     Reflect.deleteProperty(this, 'wakeRows');
-    Reflect.deleteProperty(this, 'armedWakeRows');
-    Reflect.deleteProperty(this, 'driveArmedWakes');
-    Reflect.deleteProperty(this, 'runStartCauses');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'armedWakeRows', 'driveArmedWakes', 'runStartCauses']);
+    Reflect.deleteProperty(this, 'receivePeerThenEvict');
+    Reflect.deleteProperty(this, 'timerTickFinished');
+    Reflect.deleteProperty(this, 'runCauses');
+    Reflect.deleteProperty(this, 'drainRunClosed');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed']);
   }
 
   /** Parks a turn-end extension over `/wake/wait`, holding the settle window open
@@ -293,52 +295,88 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     await fetch(`http://probe-control.invalid/log/until?marker=${encodeURIComponent(marker)}`);
   }
 
-  /** Future rows only, as `armWakeRow`'s collapse: while a tick runs, the SDK keeps its
-   *  overdue row listed until the callback returns. */
-  async armedWakeRows(): Promise<ArmedWake[]> {
-    const nowSec = Math.floor(Date.now() / 1000);
+  /**
+   * The shipped receiver, then this activation's eviction, as one critical section. The row an arrival
+   * arms comes due at the next whole second, when the platform delivers it; blocking concurrency keeps
+   * that alarm out until the abort, however late the section runs. A timer armed inside the section is
+   * not held back, so the section never starts one: the abort would drop scheduleDrain's debounce anyway,
+   * and a debounce that fired first would drain on the wrong evidence. The detached durable arm is joined
+   * and synced first, since an abort drops writes not yet durable. The rows ride the abort's reason.
+   */
+  async receivePeerThenEvict(msg: PeerMessage): Promise<void> {
+    await this.ctx.blockConcurrencyWhile(async () => {
+      this.host.setTimer = () => undefined;
+      const armedBefore = (await this.listSchedules()).map((row) => row.callback);
+      const admitted = await this.receivePeerMessage(msg);
 
-    return (await this.listSchedules())
-      .filter((row) => row.time > nowSec)
-      .map((row) => v.parse(ArmedWakeSchema, { callback: row.callback, at: row.time }))
-      .sort((left, right) => left.at - right.at || left.callback.localeCompare(right.callback));
+      if (!admitted.admitted) throw new Error(`reactor-wake probe peer input refused: ${admitted.reason}`);
+      await this.settleBackgroundTasks();
+      await this.ctx.storage.sync();
+      const armedAfter = (await this.listSchedules()).map((row) => row.callback);
+      const evictedWith = (await this.agentLogEvents()).filter((row) => row.variant === 'peer_agent');
+
+      this.ctx.abort(`${REACTOR_EVICTION}${JSON.stringify({ armedBefore, armedAfter, evictedWith })}`);
+    });
+  }
+
+  /** Settled by the first `_kinuTimerTick` this activation finishes, whoever delivered it. */
+  private readonly firstTimerTick = Promise.withResolvers<void>();
+
+  override async _kinuTimerTick(): Promise<void> {
+    try {
+      await super._kinuTimerTick();
+    } finally {
+      this.firstTimerTick.resolve();
+    }
+  }
+
+  async timerTickFinished(): Promise<void> {
+    await this.firstTimerTick.promise;
+  }
+
+  /** Each run's cause in start order, and whether it closed; a drain turn is `caused_by: 'event_drain'`. */
+  async runCauses(): Promise<Array<{ cause: string; closed: boolean }>> {
+    const sql = this.actorState.storage.sql;
+
+    const closed = new Set(sql.exec("SELECT run_id FROM run_events WHERE type = 'run_end'").toArray()
+      .map((row) => textColumn(row.run_id)));
+
+    return sql.exec("SELECT run_id, payload FROM run_events WHERE type = 'run_start' ORDER BY rowid").toArray()
+      .map((row) => ({
+        cause: v.parse(
+          v.fallback(v.looseObject({ caused_by: v.fallback(v.string(), '') }), { caused_by: '' }),
+          JSON.parse(textColumn(row.payload)),
+        ).caused_by,
+        closed: closed.has(textColumn(row.run_id)),
+      }));
   }
 
   /**
-   * Deliver armed wakes, one lap in wake order, invoking each row's callback: the frame,
-   * never a hand-picked pass (`hire-probe.ts:225-232`). In-request because the pool cannot
-   * deliver a real alarm while a request holds the input gate.
+   * Every run's cause once an `event_drain` run has closed, read from this workspace's own ledger (the model
+   * log and the diagnostics sink are shared by every workspace). Each read follows a fresh signal that the
+   * next recorded `run_end` settles, so a close between the read and the wait is still seen; the runner's
+   * deadline ends a close that never comes.
    */
-  async driveArmedWakes(): Promise<string[]> {
-    // The one place the registry's callback string becomes a call.
-    const frames = [
-      ['_kinuTimerTick', () => this._kinuTimerTick()],
-      ['_kinuTerminalRetryTick', () => this.terminalRetryPass()],
-    ] as const;
+  async drainRunClosed(): Promise<string[]> {
+    let recorded = Promise.withResolvers<void>();
 
-    const armed = await this.armedWakeRows();
-    const driven: string[] = [];
+    const stop = this.eventRecorder.observe((event) => {
+      if (event.type === 'run_end') recorded.resolve();
+    });
 
-    for (const row of armed) {
-      const frame = frames.find(([callback]) => callback === row.callback);
+    try {
+      for (;;) {
+        const next = Promise.withResolvers<void>();
 
-      if (frame === undefined) continue;
-      await frame[1]();
-      driven.push(row.callback);
+        recorded = next;
+        const runs = await this.runCauses();
+
+        if (runs.some((run) => run.cause === 'event_drain' && run.closed)) return runs.map((run) => run.cause);
+        await next.promise;
+      }
+    } finally {
+      stop();
     }
-
-    return driven;
-  }
-
-  /** A drain turn is `caused_by: 'event_drain'`, distinguishing it from a chat turn. */
-  async runStartCauses(): Promise<string[]> {
-    return this.actorState.storage.sql
-      .exec("SELECT payload FROM run_events WHERE type = 'run_start' ORDER BY rowid")
-      .toArray()
-      .map((row) => v.parse(
-        v.fallback(v.looseObject({ caused_by: v.fallback(v.string(), '') }), { caused_by: '' }),
-        JSON.parse(textColumn(row.payload)),
-      ).caused_by);
   }
 }
 
@@ -488,7 +526,7 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
   | 'createSubordinateAgent'>
   & Pick<ObservedOrchestrator, 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
-  | 'armedWakeRows' | 'driveArmedWakes' | 'runStartCauses'>;
+  | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
 const WAKE_RUN_SLEEP_MS = 40_000;
@@ -564,6 +602,25 @@ async function awaitQuiet(recording: RecordingLogger): Promise<void> {
       throw new Error('two-turn probe: log never went quiet; work is still detached at exit');
     }
   }
+}
+
+/** Prefixes the reason `receivePeerThenEvict` aborts with, ahead of the rows it saw. */
+const REACTOR_EVICTION = 'reactor-wake probe eviction: ';
+
+/** The rows an evicting call carried out in its abort's reason; the call answering at all is the failure. */
+async function evictionOf(call: Promise<void>): Promise<ReactorEviction> {
+  try {
+    await call;
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    const at = message.indexOf(REACTOR_EVICTION);
+
+    if (at === -1) throw cause;
+
+    return v.parse(ReactorEvictionSchema, JSON.parse(message.slice(at + REACTOR_EVICTION.length)));
+  }
+
+  throw new Error('reactor-wake probe: the arrival call answered, so the object was never evicted');
 }
 
 
@@ -1366,10 +1423,12 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await target.seedStaleDrainEvent(marker);
   }
 
+  /** Ends on the woken drain run's close, so its turn leaves nothing for the next test to count. */
   async runEventWakeFor(workspace: string, marker: string): Promise<void> {
     const target: QueueTarget = await this.queueTarget(workspace);
 
     await target.runEventWake(marker);
+    await target.drainRunClosed();
   }
 
   /** Claimed and left idle: no genesis turn, no due trigger, nothing owed. */
@@ -1380,43 +1439,34 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /**
-   * One external event via `receivePeerMessage` (the shipped cross-DO receiver, wired to
-   * `scheduleDrain`); armed rows are read in the same call, before the caller can evict.
+   * One external event into the idle workspace through the shipped receiver (`receivePeerMessage`,
+   * wired to `scheduleDrain`), the object evicted in the arrival's own call, then the platform's own
+   * delivery of what the eviction left armed: the fresh activation's first `_kinuTimerTick` is joined,
+   * not driven. Once that tick drained the event, the drain's model call and its run's close are joined
+   * too, so nothing the drain does lands in the next test's logs.
    */
-  async publishPeerEvent(workspace: string, owner: string, body: string): Promise<ArmedWake[]> {
+  async reactorWake(workspace: string, owner: string, body: string): Promise<ReactorWake> {
     const target: QueueTarget = await this.queueTarget(workspace);
 
-    const admitted = await target.receivePeerMessage({
+    const evicted = await evictionOf(target.receivePeerThenEvict({
       sender_event_id: `rwake-${body}`, sender_agent_name: 'rwake-peer', sender_user_id: owner,
       topic: 'reactor-wake', body, mode: 'build', reply_expected: false,
-    });
+    }));
 
-    if (!admitted.admitted) throw new Error(`reactor-wake probe peer input refused: ${admitted.reason}`);
+    // Bound before the eviction, or no Kinu timer armed: no tick of this arrival is left to join.
+    if (evicted.evictedWith.some((row) => row.turnId !== null) || !evicted.armedAfter.includes('_kinuTimerTick')) {
+      return { ...evicted, drained: [], causes: [] };
+    }
 
-    return await target.armedWakeRows();
-  }
+    const fresh: QueueTarget = await this.queueTarget(workspace);
+    await fresh.timerTickFinished();
+    const drained = (await fresh.agentLogEvents()).filter((row) => row.variant === 'peer_agent');
 
-  async armedWakesFor(workspace: string): Promise<ArmedWake[]> {
-    const target: QueueTarget = await this.queueTarget(workspace);
+    // A tick that left the event unbound is the finding; its drain's model call would never come.
+    if (drained.every((row) => row.turnId === null)) return { ...evicted, drained, causes: [] };
+    await fetch(`http://probe-control.invalid/log/until?marker=${encodeURIComponent(body)}`);
 
-    return await target.armedWakeRows();
-  }
-
-  async driveArmedWakesFor(workspace: string): Promise<string[]> {
-    const target: QueueTarget = await this.queueTarget(workspace);
-
-    return await target.driveArmedWakes();
-  }
-
-  async runStartCausesFor(workspace: string): Promise<string[]> {
-    const target: QueueTarget = await this.queueTarget(workspace);
-
-    return await target.runStartCauses();
-  }
-
-  /** Called only after the durable row proved the drain bound the event. */
-  async awaitWireMarker(marker: string): Promise<void> {
-    await fetch(`http://probe-control.invalid/log/until?marker=${encodeURIComponent(marker)}`);
+    return { ...evicted, drained, causes: await fresh.drainRunClosed() };
   }
 
   /** Returns the model-call count and terminal evidence so the test can say where the drive stopped. */
@@ -1538,9 +1588,9 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /**
    * The agent tab: a socket on the hired actor's own chat path (not a facet hop via the SDK
-   * `sub` option, which this transport refuses), then `getActorSnapshot` and `listAgentTasks`.
+   * `sub` option, which this transport refuses), then `getActorSnapshot` and its own `listBackgroundJobs`.
    */
-  async hostedActorTab(): Promise<{ name: string; snapshot: string; tasks: string; frames: number }> {
+  async hostedActorTab(): Promise<{ name: string; snapshot: string; jobs: string; frames: number }> {
     const { target, workspace } = await this.claimQueueWorkspace('twin');
     const created = v.parse(v.object({ name: v.string() }), await target.createSubordinateAgent());
     const path = `https://probe/agents/orchestrator-agent/${workspace}/${hostedActorSocketPath(created.name)}`;
@@ -1571,13 +1621,13 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     try {
       socket.send(JSON.stringify({ type: 'rpc', id: 'tab-snapshot', method: 'getActorSnapshot', args: [created.name] }));
-      socket.send(JSON.stringify({ type: 'rpc', id: 'tab-tasks', method: 'listAgentTasks', args: [] }));
+      socket.send(JSON.stringify({ type: 'rpc', id: 'tab-jobs', method: 'listBackgroundJobs', args: [50, created.name] }));
       await arrived.promise;
 
       return {
         name: created.name,
         snapshot: answers.get('tab-snapshot') ?? '',
-        tasks: answers.get('tab-tasks') ?? '',
+        jobs: answers.get('tab-jobs') ?? '',
         frames,
       };
     } finally {

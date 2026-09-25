@@ -3,7 +3,7 @@
  * container's working directory, and an empty path lists it.
  *
  * THE DEFECT. In the trajectory run public-failure-recovery (kinu.run at
- * b4d2c6001, run-6k2kglxfvqag1l0hwg8o8, 2026-09-14) the agent listed
+ * 96c3fa2b0, run-6k2kglxfvqag1l0hwg8o8, 2026-09-14) the agent listed
  * `/sandbox/workspace` — empty — then asked the file tool to write
  * `/sandbox/workspace/broken.mjs` and was refused `io`:
  * `FileNotFoundError: File not found: /workspace/broken.mjs`. A CREATE through

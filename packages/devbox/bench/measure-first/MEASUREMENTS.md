@@ -4,7 +4,7 @@
 - where: a deployed Cloudflare Sandbox container, image `docker.io/cloudflare/sandbox@sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f` (the digest `scripts/bench-devbox-strategies.ts` pins), built with the journal daemon's own libfuse recipe plus the lane 0 instruments
 - raw artifacts: `bench-artifacts/devbox-measure-first-m0902lane0.json` (filesystem, write path, fence) and `bench-artifacts/devbox-measure-first-m0902r2b.json` (R2 cells, imported filesystem rows merged). Every cell below is a median of 3 deployed runs unless stated otherwise; p95 is the median of the 3 runs' per-run p95.
 - probe: `packages/devbox/bench/measure-first/probe.ts` and its siblings. Nothing on the product paths changed.
-- repo commit at run time: `6d19d50e78e0097f86d2d77ad68617ccb5e4deaf`
+- repo commit at run time: `ee10827c0869cfa1dce1ac1ae0701e205737a365`
 
 ## (a) Platform identity and FUSE capabilities
 

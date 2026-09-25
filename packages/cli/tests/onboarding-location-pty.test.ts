@@ -14,10 +14,10 @@ const cliBin = resolve(import.meta.dir, '../bin/cli.ts');
 
 const DOWN = '\u001b[B';
 
-test('choosing where workspaces live keeps the answer and moves setup to the provider step', () => {
+test('choosing where workspaces live keeps the answer and moves setup to the provider step', async () => {
   const home = scratchDir('onboarding-location-home');
 
-  const run = runTuiInPty(cliBin, {
+  const run = await runTuiInPty(cliBin, {
     cwd: scratchDir('onboarding-location-project'),
     cols: 120,
     rows: 32,
@@ -36,10 +36,10 @@ test('choosing where workspaces live keeps the answer and moves setup to the pro
   expect(parseJsonObject(readFileSync(join(home, 'tui.json'), 'utf8')).onboardingLocation).toBe('local');
 });
 
-test('Esc on a setup question answers it, and kinu keeps running', () => {
+test('Esc on a setup question answers it, and kinu keeps running', async () => {
   const home = scratchDir('onboarding-escape-home');
 
-  const run = runTuiInPty(cliBin, {
+  const run = await runTuiInPty(cliBin, {
     cwd: scratchDir('onboarding-escape-project'),
     cols: 120,
     rows: 40,

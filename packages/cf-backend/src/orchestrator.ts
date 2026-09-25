@@ -106,7 +106,7 @@ import {
   AGENT_CONFIG_KEYS,
   listProposedTasks, updateProposedTaskStatus,
   hybridSearch, memorySnippetRehydrator, type HybridHit,
-  type BackgroundJob, type AgentTaskTree, TriggerRegistry, ReplyChannelStore,
+  type BackgroundJob, TriggerRegistry, ReplyChannelStore,
   type ReasoningEffort, type ShellApprovalMode, type ResolvedTurnProfile,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
@@ -379,7 +379,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       onFilesChanged: (paths) => {
         const ids = this.slates.filesChanged(paths);
 
-        if (ids.length !== 0) this.broadcast(JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
+        if (ids.length !== 0) this.broadcastToActor(null, JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
       },
       ensureSlate: (owner) => this.slates.ensureDurable(owner),
       slateInvocation: (port, socket) => this.slates.slateInvocation(port, socket),
@@ -1667,11 +1667,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.actorHost().bindStores(actor).stores.history.transcript(CHAT_SESSION_ID);
   }
 
-  protected override hostedChatWire(name: string): ChatWire | null {
+  private hostedReference(name: string): ActorReference | null {
     const row = this.subordinateRoster.get(name);
 
-    if (!row || row.status === 'dismissed' || !row.actorReference) return null;
-    const reference = row.actorReference;
+    return !row || row.status === 'dismissed' || !row.actorReference ? null : row.actorReference;
+  }
+
+  protected override hostedActorId(name: string): string | null {
+    return this.hostedReference(name)?.actorId ?? null;
+  }
+
+  protected override hostedChatWire(name: string): ChatWire | null {
+    const reference = this.hostedReference(name);
+
+    if (reference === null) return null;
     const bound = this.actorHost().bindStores(reference);
     const history = bound.stores.history;
     const rows = history.transcript(CHAT_SESSION_ID);
@@ -2412,8 +2421,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async listBackgroundJobs(limit = 20): Promise<BackgroundJob[]> {
-    return listBackgroundJobs(this.jobs, limit);
+  async listBackgroundJobs(limit = 20, actor?: string): Promise<BackgroundJob[]> {
+    return listBackgroundJobs(actor === undefined ? this.jobs : this.hostedChild(actor).child.stores.jobs, limit);
   }
 
   /** Wrapped at one boundary so the retry ratio is visible across all four sites.
@@ -2455,13 +2464,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async clearBackgroundJobs(): Promise<{ ok: boolean }> {
     return this.countJobOperation('clear', await clearBackgroundJobs(this.jobs));
-  }
-
-  /** Read-only: the agent maintains this list via the `tasks` tool; a second writer would
-   *  swap its plan silently. Changes go through chat. */
-  @callable()
-  async listAgentTasks(): Promise<AgentTaskTree[]> {
-    return this.taskList.list();
   }
 
   /** Roster includes retired actors: a dismissed subordinate's rows still show on the board. */
@@ -2583,7 +2585,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     // The needs-you queue is polled, not pushed; this frame tells clients to re-read it.
-    this.broadcast(JSON.stringify({ type: 'pending_actions_changed' }));
+    this.broadcastToActor(null, JSON.stringify({ type: 'pending_actions_changed' }));
   }
 
   /** Read by the needs-you queue; also callable alone so a surface can render just this. */
@@ -3817,7 +3819,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       throw new KinuError('denied', 'This workspace has no such plan actor.');
     }
 
-    this.broadcast(JSON.stringify({ type: 'workspace_plan_updated', reference: parsed }));
+    this.broadcastToActor(null, JSON.stringify({ type: 'workspace_plan_updated', reference: parsed }));
   }
 
   @callable()

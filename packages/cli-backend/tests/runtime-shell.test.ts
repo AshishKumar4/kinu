@@ -10,9 +10,18 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
+import { tolerate } from '@kinu.run/core/obs';
 import { createHostShell } from '../src/runtime';
 
 const FloodReportSchema = v.object({ grew: v.number(), exitCode: v.number(), stdout: v.string() });
+
+/** Each test that backgrounds `sleep 20` ends it: the sleep outlives the shell by design, as a backgrounded server
+ *  should, and a run ends what it starts. SIGKILL takes effect at once, so nothing is left running. */
+function endBackgrounded(stdout: string): void {
+  const pid = Number(/started (\d+)/u.exec(stdout)?.[1]);
+
+  if (Number.isInteger(pid) && pid > 0) tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
+}
 
 describe('createHostShell', () => {
   test('aborts long-running commands through AbortSignal', async () => {
@@ -34,9 +43,10 @@ describe('createHostShell', () => {
     // `sleep 20 &` inherits the stdout pipe; the call must return when `sh` exits, not when the pipe closes.
     const shell = createHostShell(process.cwd());
     const started = Date.now();
-    const result = await shell.exec('sleep 20 & echo started');
+    const result = await shell.exec('sleep 20 & echo started $!');
     const elapsed = Date.now() - started;
 
+    endBackgrounded(result.stdout);
     expect(result.stdout).toContain('started');
     expect(result.exitCode).toBe(0);
     // Generous against the correct ~50ms, still far under the broken ~20s.
@@ -48,15 +58,17 @@ describe('createHostShell', () => {
     const script = `
       import { createHostShell } from ${JSON.stringify(new URL('../src/runtime.js', import.meta.url).pathname)};
       const shell = createHostShell(process.cwd());
-      await shell.exec('sleep 20 & echo started');
+      const { stdout } = await shell.exec('sleep 20 & echo started $!');
+      process.stdout.write(stdout);
       // Nothing else keeps this process alive. If it lingers, the shell does.
     `;
 
     const started = Date.now();
-    const proc = Bun.spawn(['bun', '-e', script], { stdout: 'ignore', stderr: 'pipe' });
+    const proc = Bun.spawn(['bun', '-e', script], { stdout: 'pipe', stderr: 'pipe' });
     const exitCode = await proc.exited;
     const elapsed = Date.now() - started;
 
+    endBackgrounded(await new Response(proc.stdout).text());
     expect(await new Response(proc.stderr).text()).toBe('');
     expect(exitCode).toBe(0);
     expect(elapsed).toBeLessThan(10_000);

@@ -1307,7 +1307,7 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.click('[aria-label="New agent"]');
       await page.waitForSelector('[role="alert"]');
       const banner = await page.$eval('[role="alert"]', (node) => node.textContent ?? '');
-      // 9593645b0: one spelling, "Could not create an agent".
+      // 445fb6af3: one spelling, "Could not create an agent".
       expect(banner).toContain('Could not create an agent');
       expect(banner).toContain(CREATE_REFUSAL_CHAIN);
       // The + button is not stuck in `creating`.
@@ -1320,7 +1320,7 @@ describe('an additional agent, as an ordinary conversation', () => {
       // Retry lands: the banner clears and the new conversation opens.
       await page.click('[aria-label="New agent"]');
       await waitForNewAgentOpen(page);
-      // 9593645b0: the banner's spelling, if it wrongly returned.
+      // 445fb6af3: the banner's spelling, if it wrongly returned.
       expect(await page.evaluate(() => document.body.innerText)).not.toContain('Could not create an agent');
       await page.close();
     });
@@ -2136,7 +2136,7 @@ describe('a revoked device whose command may still run', () => {
       await dialogAccepted;
 
       const immediate = await page.$eval('[data-device-incident="dev-1"]', (row) => row.textContent ?? '');
-      // 33056d3d8: the warning reads "Kinu could not confirm that every
+      // 3d50a51a3: the warning reads "Kinu could not confirm that every
       // command stopped after revocation."
       expect(immediate).toContain('Kinu could not confirm that every command stopped after revocation.');
       expect(immediate).toContain('2 commands have no confirmed termination and may still run.');
@@ -2146,7 +2146,7 @@ describe('a revoked device whose command may still run', () => {
       await page.reload({ waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-device-incident="dev-1"]');
       const persisted = await page.$eval('[data-device-incident="dev-1"]', (row) => row.textContent ?? '');
-      // 33056d3d8: same rewrite as the immediate arm.
+      // 3d50a51a3: same rewrite as the immediate arm.
       expect(persisted).toContain('Kinu could not confirm that every command stopped after revocation.');
       expect(persisted).toContain('Commands may still run.');
 
@@ -2190,7 +2190,7 @@ describe('linking a machine happens on the surface that asked for it', () => {
       expect(new URL(page.url()).pathname).toBe('/gallery.html');
       // The disclosure is on screen BEFORE anything is installed.
       expect(await page.$eval('[role="dialog"]', (d) => d.textContent ?? ''))
-        // 98caa7776 cut the disclosure to three lines, ending on "The daemon
+        // a8459f7f3 cut the disclosure to three lines, ending on "The daemon
         // only dials out. Revoke it any time under Account settings → Devices."
         .toContain('The daemon only dials out. Revoke it any time under Account settings → Devices.');
 
@@ -2633,7 +2633,7 @@ test('file navigation does not pair a new breadcrumb with the old directory', as
       // so reaching a file on the device is TWO crossings and each one swaps a
       // trail and a listing together. Watching only the first and settling on a
       // file two levels down is a condition that cannot arrive: it hung this
-      // suite, and with it the row, from 0cdf5d9b3 until this line.
+      // suite, and with it the row, from 89f3b895d until this line.
       await cross('pc', 'pc', 'sandbox', "Ashish's MacBook");
       await cross("Ashish's MacBook", "Ashish's MacBook", "Ashish's MacBook", 'quarterly-report.txt');
 

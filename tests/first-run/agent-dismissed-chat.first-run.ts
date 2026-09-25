@@ -9,7 +9,7 @@
  *
  * WHY `agent-chats-persist` DID NOT GUARD THIS. That row proves two EMPLOYED
  * agents keep their chats across navigation and never dismisses one. Run
- * against 5e53b4248, the parent of the fix (e29da7f01), it passes; this row
+ * against 2eba2c1e5, the parent of the fix (e21207492), it passes; this row
  * fails there, on the page read.
  *
  * NO WALL CLOCK. Every wait is settled by the product or by the case's own

@@ -554,6 +554,8 @@ export function mockAgentsSdk(): void {
       readonly name: string = '';
     },
     callable: () => <Method>(method: Method): Method => method,
+    // No socket carries a harness call into a method, so a call has no connection, as a route's or a stub's has none.
+    getCurrentAgent: () => ({ agent: undefined, connection: undefined, request: undefined, email: undefined }),
     getAgentByName: async (namespace: DurableObjectNamespace, name: string) =>
       namespace.get(namespace.idFromName(name)),
     /** Undefined is the SDK's "not my path", which drops the request to the SPA fallback. */
@@ -712,7 +714,7 @@ export interface RecordedMcpTransport {
   headers?: Record<string, string>;
   requestInit?: RequestInit;
   /** Off the current whitelist, but a plaintext-era row can carry it
-   *  (`7ba56550e^:src/user/mcp.ts:270-287`). */
+   *  (`a080f8d2a^:src/user/mcp.ts:270-287`). */
   eventSourceInit?: { fetch?: McpCredentialTransport['fetch'] };
   authProvider?: RecordedMcpAuthProvider;
   reconnectionOptions?: { maxRetries?: number };

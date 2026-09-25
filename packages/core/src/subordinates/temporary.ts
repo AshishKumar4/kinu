@@ -1,7 +1,6 @@
 /**
- * Task-lifetime agents: a full child run inside the calling tool call, answered as the tool
- * result, then released. Same {@link SubordinateRuntime} and roster as a durable hire.
- * The in-memory waiter is only a fast path; without it the report stays a `subordinate_report` event.
+ * Task-lifetime agents: a full child run inside the calling tool call, answered as its result, then released, on a
+ * durable hire's runtime and roster. The in-memory waiter is a fast path; the report is a `subordinate_report` event.
  */
 
 import type { SubordinateReportStatus } from '../events/hub/types';
@@ -60,16 +59,28 @@ const TASK_ENDING_REPORT = {
     + 'produced; its transcript holds what it had done.',
 } as const satisfies Record<TaskTurnEnding, string | null>;
 
-/**
- * The one report a task child owes its caller, for every way a turn can end: always exactly
- * once, `completed` for an answer, `blocked` for any non-answer. Null for a durable child.
- */
-export function terminalTaskReport(input: {
+/** The report a child's settled turn owes its caller. */
+export interface OwedReport {
+  readonly status: SubordinateReportStatus;
+  readonly content: string;
+}
+
+/** How a turn ended, as a task child's caller hears it. */
+export function taskTurnEnding(completed: boolean, interrupted: boolean): TaskTurnEnding {
+  if (completed) return 'answered';
+
+  return interrupted ? 'interrupted' : 'errored';
+}
+
+/** A task child's one report per ending: `completed` for an answer, else `blocked`; null for a durable child. */
+export async function terminalTaskReport(input: {
   readonly lifetime: SubordinateLifetime;
   readonly ending: TaskTurnEnding;
   /** The child's own closing words, when it had any. */
   readonly assistantText: string;
-}): { readonly status: SubordinateReportStatus; readonly content: string } | null {
+  /** Each step's words, oldest first; read only for a task that did not answer. */
+  readonly narration: () => Promise<readonly string[]>;
+}): Promise<OwedReport | null> {
   if (input.lifetime !== TEMPORARY_LIFETIME) return null;
   const text = input.assistantText.trim();
 
@@ -80,11 +91,18 @@ export function terminalTaskReport(input: {
       : { status: 'blocked', content: TASK_ENDING_REPORT.silent };
   }
 
-  const reason = TASK_ENDING_REPORT[input.ending];
+  // A stopped or failed turn often found something on the way.
+  const said: string[] = [];
 
-  // The child's own words still ride along when it managed any: a failing turn
-  // often says something useful before it fails.
-  return { status: 'blocked', content: text.length > 0 ? `${text}\n\n${reason}` : reason };
+  for (const step of await input.narration()) {
+    const words = step.trim();
+
+    if (words.length > 0 && words !== said.at(-1)) said.push(words);
+  }
+
+  if (text.length > 0 && !said.includes(text)) said.push(text);
+
+  return { status: 'blocked', content: [...said, TASK_ENDING_REPORT[input.ending]].join('\n\n') };
 }
 
 /**
@@ -122,10 +140,7 @@ function renderTemporaryTaskBrief(input: {
   return parts.join('\n\n');
 }
 
-/**
- * Task-lifetime policy over the shared roster and child substrate. Adds only the in-memory
- * waiter; never stores the answer (the child's transcript and the report event hold it).
- */
+/** Task-lifetime policy over the shared roster: it adds only the in-memory waiter and never stores the answer. */
 export function createTemporaryAgentPort(deps: {
   roster: SubordinateRosterStore;
   runtime: SubordinateRuntime;

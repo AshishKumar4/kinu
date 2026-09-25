@@ -8,10 +8,13 @@ import { SessionPayloads } from '../src/session/payload';
 import { SessionContext } from '../src/session/context';
 import { SessionProposals } from '../src/session/proposals';
 import { SessionTranscript, readSessionTranscript } from '../src/session/transcript';
+import { rowText } from '../src/utils/ui-message';
 import { SessionHistory } from '../src/session/history';
 import { initSessionTranscriptTables } from '../src/session/transcript-schema';
 import { getChatHistoryPage } from '../src/read-models/status';
 import { answersForDrainTurns } from '../src/identity/conversation-store';
+import { inheritedContextFromTranscript } from '../src/orchestrator/heads-support';
+import type { JsonObject } from '../src/utils/json';
 import { KinuError } from '../src/obs/error';
 
 function setup() {
@@ -361,4 +364,84 @@ test('drain recovery returns the newest nonempty canonical answer across sibling
 
     expect(await answersForDrainTurns(transcript, ['drain', 'unanswered'])).toEqual(new Map([['drain', 'latest answer']]));
   } finally { s.testSql.close(); }
+});
+
+/** A chat transcript whose turn streamed `parts`, settled with its last streamed text, or with `answer` written apart. */
+async function settledAnswer(s: ReturnType<typeof setup>, parts: JsonObject[], answer: string | null) {
+  initSessionTranscriptTables(s.rt.storage.execRaw);
+  const transcript = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, atomic: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
+  const input = s.messages.insert(await s.messages.prepare({ role: 'user', content: 'list the folders' }, 'input'), 'input');
+  transcript.appendUser(await transcript.prepareUser({ id: 'ask', turnId: 'turn', message: input, metadata: { drainTurnId: 'drain' } }));
+  const output = s.messages.insert(await s.messages.prepareParts({ id: 'output', role: 'assistant', content: parts, envelope: {} }), 'output');
+  const streamed = parts.map((_, partNo) => ({ messageId: output.messageId, partNo }));
+  const lastText = parts.reduce((found, part, index) => (part.type === 'text' ? index : found), -1);
+
+  const finalText = answer === null ? streamed[lastText] ?? null
+    : { messageId: s.messages.insert(await s.messages.prepare({ role: 'assistant', content: answer }, 'display'), 'render').messageId, partNo: 0 };
+
+  transcript.appendAssistant(await transcript.prepareAssistant({ id: 'answer', parentId: 'ask', turnId: 'turn', runId: 'run', parts: streamed, finalText }));
+  const drawn = (await transcript.message('answer'))?.parts ?? [];
+
+  return { transcript, drawn: drawn.map(part => part.type === 'text' ? part.text : part.type) };
+}
+
+const listed = (id: string): JsonObject[] => [
+  { type: 'tool-call', toolCallId: id, toolName: 'file', input: {} },
+  { type: 'tool-result', toolCallId: id, toolName: 'file', output: { type: 'text', value: 'listed' } },
+];
+
+test('a multi-step answer draws every part it streamed, and every reader of the answer reads only its final text', async () => {
+  const s = setup();
+
+  try {
+    const { transcript, drawn } = await settledAnswer(s, [
+      { type: 'text', text: 'Step 1: listing.' }, ...listed('one'), { type: 'text', text: 'Step 2: listing.' }, ...listed('two'), { type: 'text', text: 'Done.' },
+    ], null);
+
+    expect(drawn).toEqual(['Step 1: listing.', 'tool-file', 'Step 2: listing.', 'tool-file', 'Done.']);
+    expect((await transcript.project('answer'))?.content).toBe('Done.');
+    expect((await getChatHistoryPage(transcript, {})).items.find(item => item.role === 'assistant')?.content).toBe('Done.');
+    expect((await transcript.newestFirst()).find(row => row.role === 'assistant')?.content).toBe('Done.');
+    expect(await answersForDrainTurns(transcript, ['drain'])).toEqual(new Map([['drain', 'Done.']]));
+    expect((await inheritedContextFromTranscript(transcript)).find(row => row.role === 'assistant')?.content).toBe('Done.');
+    expect(rowText({ role: 'assistant', parts: (await transcript.message('answer'))?.parts ?? [] })).toBe('Done.');
+  } finally { s.testSql.close(); }
+});
+
+test('a turn that ends on a tool (stopped mid-call, or at the step cap) keeps its row as it streamed', async () => {
+  const s = setup();
+
+  try {
+    const { transcript, drawn } = await settledAnswer(s, [
+      { type: 'text', text: 'Step 1: listing.' }, ...listed('one'), { type: 'text', text: 'Step 2: reading.' }, ...listed('two'),
+    ], null);
+
+    expect(drawn).toEqual(['Step 1: listing.', 'tool-file', 'Step 2: reading.', 'tool-file']);
+    expect((await transcript.project('answer'))?.content).toBe('Step 2: reading.');
+  } finally { s.testSql.close(); }
+});
+
+test('a recorded answer takes the place of the texts it is made of, and follows narration it is not made of', async () => {
+  const continued = setup();
+  const reported = setup();
+
+  try {
+    // A step cut at the output limit, then its continuation: the answer is the two joined, drawn once.
+    const joined = await settledAnswer(continued, [
+      { type: 'text', text: 'Step 1: listing.' }, ...listed('one'), { type: 'text', text: 'The folder holds ' }, { type: 'text', text: 'three files.' },
+    ], 'The folder holds three files.');
+
+    expect(joined.drawn).toEqual(['Step 1: listing.', 'tool-file', 'The folder holds three files.']);
+
+    // A head's report is not the model's text: the narration stays and the report follows it.
+    const report = await settledAnswer(reported, [
+      { type: 'text', text: 'Step 1: listing.' }, ...listed('one'), { type: 'text', text: 'Step 2: reading.' },
+    ], 'Head h1 stopped: out of steps.');
+
+    expect(report.drawn).toEqual(['Step 1: listing.', 'tool-file', 'Step 2: reading.', 'Head h1 stopped: out of steps.']);
+    expect((await report.transcript.project('answer'))?.content).toBe('Head h1 stopped: out of steps.');
+  } finally {
+    continued.testSql.close();
+    reported.testSql.close();
+  }
 });

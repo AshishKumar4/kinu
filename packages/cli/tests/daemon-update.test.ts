@@ -130,7 +130,7 @@ async function waitForExit(proc: Subprocess, timeoutMs = 15_000): Promise<number
 
 describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   test('HELLO names the build, the platform and the opt-out state; a current build gets no UPDATE', async () => {
-    const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
+    const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
 
@@ -143,7 +143,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   });
 
   test('a behind build is landed, selftested, started as a successor; the old daemon stays until replaced', async () => {
-    const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW) });
+    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
     const oldPid = await until(() => (existsSync(join(home, 'pc-agent.pid')) ? pidfile(home) : null), 'the pidfile', daemon.log);
@@ -173,7 +173,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
 
   test('THE TROJAN PROBE: a hub-chosen checksum with no Kinu signature downloads nothing', async () => {
     // SECURITY-devices C1: an unsigned frame naming a trojaned tarball is refused before any byte is fetched.
-    const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW), signing: 'none' });
+    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW), signing: 'none' });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
     const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
@@ -187,7 +187,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   });
 
   test('a release signed by a key that is not the pinned one is refused the same way', async () => {
-    const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW), signing: 'foreign' });
+    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW), signing: 'foreign' });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
     const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
@@ -199,7 +199,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   });
 
   test('a daemon on the production pin refuses the test key: the pin is the build\'s, not the environment\'s', async () => {
-    const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW) });
+    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home);
     const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
@@ -210,7 +210,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   });
 
   test('a corrupt archive (checksum mismatch) lands nothing; the old daemon keeps the machine', async () => {
-    const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW), corrupt: true });
+    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW), corrupt: true });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
 
@@ -228,7 +228,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
 
   test('a landed daemon that fails its selftest is rolled back to .prev; no successor starts', async () => {
     const broken = { ...DAEMON_FILES, 'pc-agent.js': 'process.exit(7);\n' };
-    const served = hub({ served: NEW, archive: daemonArchive(broken, NEW) });
+    const served = hub({ served: NEW, archive: await daemonArchive(broken, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
 
@@ -243,7 +243,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   });
 
   test('updateCheck: false — HELLO says so, and an UPDATE pushed anyway is refused', async () => {
-    const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW), pushAlways: true });
+    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW), pushAlways: true });
     const home = installedMachine(served.origin, OLD, { updateCheck: false });
     const daemon = startDaemon(home, await releaseSigningEnv());
 
@@ -256,7 +256,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
 
   test('HELLO names the build this process IS, not the stamp on disk now', async () => {
     // Re-reading the stamp at each HELLO would report the new build from old code after a failed successor.
-    const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
+    const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
     const first = await until(() => served.sockets[0], 'the HELLO', daemon.log);
@@ -270,7 +270,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   });
 
   test('a hostile frame — an off-origin url, or a checksum that is not one — lands nothing', async () => {
-    const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
+    const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
     const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
@@ -286,7 +286,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   });
 
   test('a daemon without a stamp sends no version and is left alone', async () => {
-    const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW) });
+    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, null);
     const daemon = startDaemon(home, await releaseSigningEnv());
 
@@ -333,7 +333,7 @@ function tunnelOver(socket: HubSocket, sandbox: FrameSandbox, log: () => string)
 // driven by a hub that speaks them, it must answer in them.
 describe('the daemon answers the hub in core\'s frames', () => {
   test('a rotated token is on disk when the daemon acknowledges it', async () => {
-    const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
+    const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
 
@@ -344,7 +344,7 @@ describe('the daemon answers the hub in core\'s frames', () => {
   });
 
   test('a sandboxed command\'s whole output reads back through core\'s file client at the /tmp path it printed', async () => {
-    const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
+    const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
     const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
@@ -388,7 +388,7 @@ const DYING_DAEMON = [
 
 describe('a successor that dies before connecting is the old daemon\'s to undo', () => {
   test('the old daemon re-takes the pidfile, rolls the files back, clears the marker and keeps serving', async () => {
-    const served = hub({ served: NEW, archive: daemonArchive({ ...NEW_FILES, 'pc-agent.js': DYING_DAEMON }, NEW) });
+    const served = hub({ served: NEW, archive: await daemonArchive({ ...NEW_FILES, 'pc-agent.js': DYING_DAEMON }, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
     const oldPid = await until(() => (existsSync(join(home, 'pc-agent.pid')) ? pidfile(home) : null), 'the pidfile', daemon.log);
@@ -422,7 +422,7 @@ describe('a successor that dies before connecting is the old daemon\'s to undo',
   });
 
   test('a live pidfile means nothing to recover, marker or not', async () => {
-    const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
+    const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
     await until(() => served.sockets[0], 'the HELLO', daemon.log);

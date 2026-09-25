@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="950" viewBox="0 0 640 950" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="workspace-current-title workspace-current-desc">
 <title id="workspace-current-title">CURRENT: Hosted workspace ownership</title>
 <desc id="workspace-current-desc">One workspace root Durable Object holds the main agent, hires and exploration actors over one workspace SQLite. Actor-scoped records and the canonical Nimbus files share that database. Shared storage is not shared authority.</desc>
-<!-- Sources: docs/ARCHITECTURE.md#the-actor-hierarchy; packages/core/src/state/actor-host.ts; packages/cf-backend/src/subordinate-hosting.ts; packages/cf-backend/src/exploration-hosting.ts. Current-source baseline: 7ec50001f. -->
+<!-- Sources: docs/ARCHITECTURE.md#the-actor-hierarchy; packages/core/src/state/actor-host.ts; packages/cf-backend/src/subordinate-hosting.ts; packages/cf-backend/src/exploration-hosting.ts. Current-source baseline: 95696234e. -->
 <style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
 <defs>
 <marker id="workspace-current-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">

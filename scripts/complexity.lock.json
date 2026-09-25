@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-24",
-  "files": 2675,
-  "functions": 65741,
+  "measuredAt": "2026-09-25",
+  "files": 2680,
+  "functions": 65974,
   "ceiling": 87,
   "line": 32,
   "inventory": [
@@ -176,10 +176,6 @@
     {
       "key": "scripts/fixtures/payload-transport/worker.ts#fetch",
       "complexity": 35
-    },
-    {
-      "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>useEffect#7>handler",
-      "complexity": 34
     },
     {
       "key": "packages/cli/src/commands/debug.ts#printHumanSummary",

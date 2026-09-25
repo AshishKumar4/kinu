@@ -299,10 +299,8 @@ export class ActorSession {
     };
   }
 
-  /** Open a durable assignment against this actor's working revision. The
-   * lease's turn id is the delivery identity, not the actor's name: a re-drive
-   * keeps the admitted task once, even when two assignments have equal text.
-   * Birth context is used only before the conversation's first turn. */
+  /** Open a durable assignment. The lease's turn id is the delivery identity, so a re-drive admits a task once,
+   *  even beside an equal text. Birth context applies only before the first turn. */
   async openDelegatedTurn(lease: ActorTurnLease, input: {
     readonly messages: readonly ModelMessage[];
     readonly birthContext: () => Promise<readonly ModelMessage[]>;
@@ -546,8 +544,8 @@ export class ActorSession {
           case 'error': {
             this.orchestrator.acc.hadError = true;
 
-            // An `error` event is a failure: the scaffold loop pushes it instead of throwing (`scaffold/executor.ts`),
-            // and a claim must not settle `completed` for a turn that produced nothing. First failure wins; an abort is not one.
+            // The scaffold loop pushes an `error` event rather than throwing, so an empty turn never settles `completed`.
+            // First failure wins; an abort is not one.
             if (failure === null
               && !active.abort.signal.aborted
               && event.message !== INTERRUPTED_TURN) {
@@ -588,37 +586,37 @@ export class ActorSession {
 
     const output = await this.canonical.outputForTurn(lease.turnId);
     const outputReferences = output.messages;
-    const finalTextReference = await this.matchTranscriptText(text, outputReferences);
+    const said = await this.saidText(outputReferences, text, answer);
 
     return {
-      text, answer, steps, failure, program, claim: active.claim,
+      text: said.text, answer, steps, failure, program, claim: active.claim,
       interrupted: active.abort.signal.aborted || failure?.message === INTERRUPTED_TURN,
       admittedMessages,
-      outputReferences, finalTextReference,
+      outputReferences, finalTextReference: said.reference,
       outputPartReferences: output.parts,
     };
   }
 
-  private async matchTranscriptText(text: string, output: readonly MessageReference[]): Promise<MessagePartReference | null> {
-    if (text === '') return null;
+  /** What the turn said: its answer, else the last text it streamed. */
+  private async saidText(output: readonly MessageReference[], text: string, answer: string | null): Promise<{ readonly text: string; readonly reference: MessagePartReference | null }> {
+    const streamed = await this.lastText(output);
+    const said = answer === null && streamed !== null ? streamed.text : text;
 
+    return { text: said, reference: said !== '' && streamed?.text === said ? streamed.reference : null };
+  }
+
+  private async lastText(output: readonly MessageReference[]): Promise<{ readonly reference: MessagePartReference; readonly text: string } | null> {
     for (let index = output.length - 1; index >= 0; index--) {
       const reference = output[index];
 
       if (reference === undefined) continue;
       const parts = await this.canonical.messages.materializeParts(reference);
-      let last: (typeof parts)[number] | undefined;
 
       for (let partIndex = parts.length - 1; partIndex >= 0; partIndex--) {
         const part = parts[partIndex];
 
-        if (part?.value.type === 'text') { last = part; break; }
+        if (part?.value.type === 'text') return { reference: { messageId: reference.messageId, partNo: part.partNo }, text: v.parse(v.string(), part.value.text) };
       }
-
-      if (last === undefined) continue;
-
-      if (last.value.text === text) return { messageId: reference.messageId, partNo: last.partNo };
-      break;
     }
 
     return null;
@@ -626,10 +624,10 @@ export class ActorSession {
 
   async recordTranscriptText(claim: ActorTurnClaim, purpose: 'answer' | 'report', text: string, output: readonly MessageReference[]): Promise<MessagePartReference | null> {
     if (text === '') return null;
-    const existing = await this.matchTranscriptText(text, output);
+    const streamed = await this.lastText(output);
     this.canonical.assertClaimEpoch(claim.turnId, claim.epoch);
 
-    if (existing !== null) return existing;
+    if (streamed?.text === text) return streamed.reference;
     const id = `${claim.turnId}:${claim.epoch}:display-${purpose}`;
     const prepared = await this.canonical.messages.prepare({ role: 'assistant', content: text }, id);
 

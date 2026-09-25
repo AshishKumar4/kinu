@@ -2,12 +2,13 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import type { Server, ServerWebSocket } from 'bun';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
-  JsonArraySchema, JsonObjectSchema, parseJsonObject, hostedActorSocketPath,
+  JsonArraySchema, JsonObjectSchema, parseJsonObject, hostedActorSocketPath, hostedWindowMay,
   ChatHistoryEntrySchema, restoredRows,
   type JsonObject, type JsonValue, type ReasoningEffort,
 } from '@kinu.run/core';
 import { CloudAgentClient } from '../src/cloud-agent-client';
 import { renderAccountSpendLines } from '../src/display';
+import { watchDeviceConsents } from '../src/consent-watch';
 import type { AgentClientEvent } from '../src/agent-client';
 import * as v from 'valibot';
 
@@ -45,11 +46,12 @@ const SPEND_BEFORE_ACCOUNTS = {
   missions: [],
 };
 
-function startMockAgentServer(options: {
+/** `serve` answers a socket frame as it lands, as the workspace object would; null leaves it to the test. */
+function startMockAgentServer(options: ({
   holdTicketAt: number;
   ticketGate: Promise<void>;
   onTicketReleased(): void;
-} | Record<never, never> = {}): MockAgentServer {
+} | Record<never, never>) & { serve?: (frame: JsonObject) => JsonObject | null } = {}): MockAgentServer {
   const frames: JsonObject[] = [];
   const ticketRequests: Array<{ name: string; auth: string | null }> = [];
   const connectUrls: URL[] = [];
@@ -151,8 +153,13 @@ function startMockAgentServer(options: {
     },
     websocket: {
       open(socket) { ws = socket; },
-      message(_socket, message) {
-        frames.push(parseJsonObject(String(message)));
+      message(socket, message) {
+        const frame = parseJsonObject(String(message));
+        const answer = options.serve?.(frame) ?? null;
+
+        frames.push(frame);
+
+        if (answer !== null) socket.send(JSON.stringify(answer));
       },
     },
   });
@@ -365,6 +372,109 @@ describe('CloudAgentClient protocol', () => {
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'Reviewed' }, true));
     await expect(turn).resolves.toMatchObject({ text: 'Reviewed' });
 
+    await child.close();
+    await parent.close();
+  });
+
+  test('an additional agent reads and sets its own status, model and effort, never the workspace\'s', async () => {
+    const mock = startMockAgentServer();
+    const parent = newClient(mock);
+    const child = parent.openAdditionalAgent('researcher-a1b2c3');
+    const answered = new Set<JsonValue | undefined>();
+
+    /** Answers the next socket rpc named `method` with `result`, and returns its arguments. */
+    const answer = async (method: string, result: JsonValue): Promise<JsonValue> => {
+      const frame = await waitFor(() => mock.frames.find((each) => each.type === 'rpc' && each.method === method && !answered.has(each.id)), `${method} rpc`);
+
+      answered.add(frame.id);
+      mock.reply({ type: 'rpc', id: frame.id, success: true, done: true, result });
+
+      return frame.args ?? null;
+    };
+
+    const snapshot = {
+      name: 'researcher-a1b2c3', actorId: 'actor-1', displayName: 'Researcher', role: 'task', mission: 'Review the release',
+      model: { model: 'openai/gpt-own', source: 'actor' }, reasoningEffort: 'high', activePlan: null, pendingSteers: [],
+    };
+
+    const status = child.status();
+
+    expect(await answer('getActorSnapshot', snapshot)).toEqual(['researcher-a1b2c3']);
+    await expect(status).resolves.toEqual({
+      name: 'Researcher', purpose: 'Review the release', model: 'openai/gpt-own', reasoningEffort: 'high', roleId: 'task',
+    });
+
+    const model = child.setModel('openai/gpt-next');
+
+    expect(await answer('setActorModel', { ok: true, spec: 'openai/gpt-next' })).toEqual(['researcher-a1b2c3', 'openai/gpt-next']);
+    await expect(model).resolves.toEqual({ spec: 'openai/gpt-next' });
+
+    const effort = child.setReasoningEffort('low');
+
+    expect(await answer('setReasoningEffort', { ok: true, effort: 'low' })).toEqual(['low', 'researcher-a1b2c3']);
+    await expect(effort).resolves.toEqual({ effort: 'low' });
+    await child.close();
+    await parent.close();
+  });
+
+  test('an additional agent\'s session sends only what its window may call, and answers its own device consent', async () => {
+    const window = { name: 'researcher-a1b2c3', id: 'actor-1' };
+    const tools = { builtIn: [{ name: 'file', description: 'Read and write files' }], crafted: [] };
+    const consent = { consentId: 'consent-1', deviceLabel: 'laptop', method: 'exec', command: 'npm test' };
+
+    const answers = new Map<string, JsonValue>([
+      ['listPendingConsents', [consent]], ['resolveDeviceConsent', { ok: true }], ['getToolDescriptions', { ...tools, executors: [] }], ['listBackgroundJobs', []],
+    ]);
+
+    const refused: string[] = [];
+
+    // The workspace object's side of the actor socket: its window gate, then its answer.
+    const mock = startMockAgentServer({
+      serve: (frame): JsonObject | null => {
+        if (frame.type !== 'rpc') return null;
+        const method = v.parse(v.string(), frame.method);
+        const id = frame.id ?? null;
+
+        if (hostedWindowMay(method, v.parse(JsonArraySchema, frame.args), window)) return { type: 'rpc', id, success: true, done: true, result: answers.get(method) ?? null };
+        refused.push(method);
+
+        return { type: 'rpc', id, success: false, error: `${method} from ${window.name}'s window may act only on ${window.name}.` };
+      },
+    });
+
+    const parent = newClient(mock);
+    const child = parent.openAdditionalAgent(window.name);
+    const turn = child.send('Review the release');
+    const request = await firstChatRequest(mock);
+    const notes: string[] = [];
+    const noted = Promise.withResolvers<void>();
+
+    // What the TUI runs while a turn is live: the workspace's device consents, polled, and this one denied.
+    const watcher = watchDeviceConsents(child.consents, {
+      present: async () => 'deny',
+      note: (kind, message) => { notes.push(`${kind}: ${message}`); noted.resolve(); },
+    });
+
+    await noted.promise;
+    watcher.stop();
+    await watcher.done;
+    // A mid-turn branch goes out as a steer; takes, checkpoints and plan reviews are the workspace agent's.
+    expect(child.branch('Try the other route')).toBe(false);
+    await expect(child.latestTakes()).resolves.toBeNull();
+    expect(child.checkpoints).toBeNull();
+    expect(child.plans).toBeNull();
+    await expect(child.describeTools()).resolves.toEqual(tools);
+    await expect(child.listJobs(5)).resolves.toEqual([]);
+    // Asking for the workspace agent's memory fails here, without a frame.
+    await expect(child.readMemory()).rejects.toThrow('getMemoryContent is not available in an additional agent\'s session.');
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'Reviewed' }, true));
+    await turn;
+
+    expect(notes).toEqual(['resolved: Denied.']);
+    expect(refused).toEqual([]);
+    expect(mock.frames.filter((frame) => frame.type === 'rpc').map((frame) => [frame.method, frame.args])).toEqual([
+      ['listPendingConsents', []], ['resolveDeviceConsent', ['consent-1', 'deny']], ['getToolDescriptions', []], ['listBackgroundJobs', [5, window.name]],
+    ]);
     await child.close();
     await parent.close();
   });

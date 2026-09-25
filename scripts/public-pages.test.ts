@@ -557,7 +557,7 @@ beforeAll(async () => {
 
       // Read, not awaited: `seek` resolves with the beat's DOM committed (LandingMovieHandle), and a wait
       // on a row the product stopped rendering never ended: `[data-tool-group]` went with the activity
-      // card on 2026-09-23 (9e9d2ab10) and this suite hung on it from then on.
+      // card on 2026-09-23 (7d471135f) and this suite hung on it from then on.
       const tools = await page.evaluate(() => ({
         rows: document.querySelectorAll('[data-landing-frame="plan"] [data-tool-state]').length,
         coupon: document.querySelector('[data-landing-frame="plan"]')?.textContent?.includes('apply-coupon') === true,

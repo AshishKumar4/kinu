@@ -11,7 +11,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as v from 'valibot';
-import { scratchDir } from '@kinu.run/test-utils';
+import { runToExit, scratchDir } from '@kinu.run/test-utils';
 
 import { runTuiInPty, type PtyStep } from './helpers/pty-screen';
 
@@ -121,23 +121,21 @@ function cliEnv({ home, endpoint, env }: Machine) {
   };
 }
 
-function mustRun(machine: Machine, args: readonly string[], stdin?: string): string {
-  const run = Bun.spawnSync([process.execPath, cliBin, ...args], {
+async function mustRun(machine: Machine, args: readonly string[], stdin?: string): Promise<string> {
+  const run = await runToExit([process.execPath, cliBin, ...args], {
     cwd: scratchDir('workspace-model-cwd'),
     env: { ...process.env, ...cliEnv(machine) },
-    stdin: stdin === undefined ? 'ignore' : Buffer.from(stdin),
-    stdout: 'pipe',
-    stderr: 'pipe',
+    stdin,
   });
 
-  expect(run.exitCode, `kinu ${args.join(' ')}\n${run.stdout.toString()}\n${run.stderr.toString()}`).toBe(0);
+  expect(run.exitCode, `kinu ${args.join(' ')}\n${run.stdout}\n${run.stderr}`).toBe(0);
 
-  return run.stdout.toString();
+  return run.stdout;
 }
 
 /** A TUI ends when its terminal closes; a command that finishes on its own is only waited for. */
-function inTerminal(machine: Machine, args: readonly string[], steps: readonly PtyStep[], close = true): void {
-  const run = runTuiInPty(cliBin, {
+async function inTerminal(machine: Machine, args: readonly string[], steps: readonly PtyStep[], close = true): Promise<void> {
+  const run = await runTuiInPty(cliBin, {
     args: [...args],
     cwd: scratchDir('workspace-model-tui'),
     cols: 120,
@@ -159,9 +157,9 @@ function requestedModels({ endpoint }: Machine, turns: boolean): string[] {
 }
 
 /** Runs one turn in the workspace and answers the model it ran on. */
-function nextTurnModel(machine: Machine, workspace: string): string | undefined {
+async function nextTurnModel(machine: Machine, workspace: string): Promise<string | undefined> {
   const before = requestedModels(machine, true).length;
-  mustRun(machine, ['run', workspace, 'hello']);
+  await mustRun(machine, ['run', workspace, 'hello']);
 
   return requestedModels(machine, true).slice(before).at(-1);
 }
@@ -178,15 +176,15 @@ describe('the default model', () => {
   test('an OpenAI-compatible endpoint with no model named serves the first model its /models lists', async () => {
     const machine = await connectedMachine();
 
-    mustRun(machine, ['create', 'first-light', '--mode', 'local']);
+    await mustRun(machine, ['create', 'first-light', '--mode', 'local']);
 
-    expect(nextTurnModel(machine, 'first-light')).toBe('alpha-model');
+    expect(await nextTurnModel(machine, 'first-light')).toBe('alpha-model');
   });
 
   test('the first provider connect names it, a second leaves it, and a new workspace runs it', async () => {
     const machine = { home: scratchDir('workspace-model-fresh-home'), endpoint: await startEndpoint(['alpha-model', 'beta-model']) };
 
-    inTerminal(machine, ['provider', 'connect', 'openai-compatible', '--local'], [
+    await inTerminal(machine, ['provider', 'connect', 'openai-compatible', '--local'], [
       { wait: 'Base URL', timeout: 30 },
       { send: `${machine.endpoint.baseURL}\r` },
       { wait: 'API key', timeout: 10 },
@@ -195,23 +193,23 @@ describe('the default model', () => {
       { send: '\r' },
       { wait: 'openai-compat/alpha-model', timeout: 15 },
     ], false);
-    inTerminal(machine, ['provider', 'connect', 'openai', '--local'], [
+    await inTerminal(machine, ['provider', 'connect', 'openai', '--local'], [
       { wait: 'OpenAI API key', timeout: 30 },
       { send: 'sk-fixture\r' },
       { wait: 'Default model', timeout: 10 },
       { send: '\r' },
       { wait: 'stays', timeout: 15 },
     ], false);
-    mustRun(machine, ['create', 'after-connects', '--mode', 'local']);
+    await mustRun(machine, ['create', 'after-connects', '--mode', 'local']);
 
-    expect(nextTurnModel(machine, 'after-connects')).toBe('alpha-model');
+    expect(await nextTurnModel(machine, 'after-connects')).toBe('alpha-model');
   });
 
   test('a /models probe that never answers waits visibly until Enter skips it, which aborts it and asks for the model', async () => {
     const machine = { home: scratchDir('workspace-model-blackhole-home'), endpoint: await startEndpoint(['alpha-model']) };
     const blackholed = machine.endpoint.baseURL.replace(/\/v1$/u, '/blackhole/v1');
 
-    inTerminal(machine, ['provider', 'connect', 'openai-compatible', '--local'], [
+    await inTerminal(machine, ['provider', 'connect', 'openai-compatible', '--local'], [
       { wait: 'Base URL', timeout: 30 },
       { send: `${blackholed}\r` },
       { wait: 'API key', timeout: 10 },
@@ -230,7 +228,7 @@ describe('the default model', () => {
   test('picked under Defaults on the home screen is the model a new workspace\'s first requests name', async () => {
     const machine = await connectedMachine();
 
-    inTerminal(machine, [], [
+    await inTerminal(machine, [], [
       { wait: 'What is this workspace for?', timeout: 45 },
       { send: 'Keep the fixture honest' },
       ...PICK_BETA,
@@ -254,10 +252,10 @@ describe('the default model', () => {
 describe('a model or effort chosen for a workspace', () => {
   test('in the TUI picker and by /effort holds after a restart, and no other workspace moves', async () => {
     const machine = await connectedMachine();
-    mustRun(machine, ['create', 'picked', '--mode', 'local']);
-    mustRun(machine, ['create', 'untouched', '--mode', 'local']);
+    await mustRun(machine, ['create', 'picked', '--mode', 'local']);
+    await mustRun(machine, ['create', 'untouched', '--mode', 'local']);
 
-    inTerminal(machine, ['chat', 'picked'], [
+    await inTerminal(machine, ['chat', 'picked'], [
       { wait: 'Send a message', timeout: 45 },
       ...PICK_BETA,
       { wait: 'Model: openai-compat/beta-model', timeout: 10 },
@@ -265,38 +263,38 @@ describe('a model or effort chosen for a workspace', () => {
       { wait: 'Reasoning effort: high', timeout: 10 },
     ]);
 
-    expect(nextTurnModel(machine, 'picked')).toBe('beta-model');
-    expect(nextTurnModel(machine, 'untouched')).toBe('alpha-model');
-    expect(mustRun(machine, ['effort', 'picked'])).toContain('high');
-    expect(mustRun(machine, ['effort', 'untouched'])).not.toContain('high');
+    expect(await nextTurnModel(machine, 'picked')).toBe('beta-model');
+    expect(await nextTurnModel(machine, 'untouched')).toBe('alpha-model');
+    expect(await mustRun(machine, ['effort', 'picked'])).toContain('high');
+    expect(await mustRun(machine, ['effort', 'untouched'])).not.toContain('high');
   });
 
   test('by /model holds after a restart', async () => {
     const machine = await connectedMachine();
-    mustRun(machine, ['create', 'slashed', '--mode', 'local']);
+    await mustRun(machine, ['create', 'slashed', '--mode', 'local']);
 
-    inTerminal(machine, ['chat', 'slashed'], [
+    await inTerminal(machine, ['chat', 'slashed'], [
       { wait: 'Send a message', timeout: 45 },
       { send: '/model openai-compat/beta-model\r' },
       { wait: 'Model: openai-compat/beta-model', timeout: 10 },
     ]);
 
-    expect(nextTurnModel(machine, 'slashed')).toBe('beta-model');
+    expect(await nextTurnModel(machine, 'slashed')).toBe('beta-model');
   });
 
   test('with kinu model and kinu effort is that workspace\'s alone', async () => {
     const machine = await connectedMachine();
-    mustRun(machine, ['create', 'retuned', '--mode', 'local']);
-    mustRun(machine, ['create', 'bystander', '--mode', 'local']);
+    await mustRun(machine, ['create', 'retuned', '--mode', 'local']);
+    await mustRun(machine, ['create', 'bystander', '--mode', 'local']);
 
-    mustRun(machine, ['model', 'retuned', 'openai-compat/beta-model']);
-    mustRun(machine, ['effort', 'retuned', 'high']);
+    await mustRun(machine, ['model', 'retuned', 'openai-compat/beta-model']);
+    await mustRun(machine, ['effort', 'retuned', 'high']);
 
-    expect(mustRun(machine, ['model', 'retuned'])).toContain('openai-compat/beta-model');
-    expect(nextTurnModel(machine, 'retuned')).toBe('beta-model');
-    expect(nextTurnModel(machine, 'bystander')).toBe('alpha-model');
-    expect(mustRun(machine, ['effort', 'retuned'])).toContain('high');
-    expect(mustRun(machine, ['effort', 'bystander'])).not.toContain('high');
+    expect(await mustRun(machine, ['model', 'retuned'])).toContain('openai-compat/beta-model');
+    expect(await nextTurnModel(machine, 'retuned')).toBe('beta-model');
+    expect(await nextTurnModel(machine, 'bystander')).toBe('alpha-model');
+    expect(await mustRun(machine, ['effort', 'retuned'])).toContain('high');
+    expect(await mustRun(machine, ['effort', 'bystander'])).not.toContain('high');
   });
 
   test('with kinu effort on a machine with no profile yet leaves kinu exec reaching the model the environment names', async () => {
@@ -308,10 +306,10 @@ describe('a model or effort chosen for a workspace', () => {
       env: { KINU_BASE_URL: endpoint.baseURL, KINU_AUTH: 'Bearer mock', KINU_MODEL: 'alpha-model' },
     };
 
-    mustRun(machine, ['create', 'maxed', '--mode', 'local']);
+    await mustRun(machine, ['create', 'maxed', '--mode', 'local']);
 
-    mustRun(machine, ['effort', 'maxed', 'max']);
-    mustRun(machine, ['exec', '-w', 'maxed', '--no-auto-evolve', 'hello']);
+    await mustRun(machine, ['effort', 'maxed', 'max']);
+    await mustRun(machine, ['exec', '-w', 'maxed', '--no-auto-evolve', 'hello']);
 
     expect(requestedModels(machine, true).length).toBeGreaterThan(0);
     expect(new Set(requestedModels(machine, false))).toEqual(new Set(['alpha-model']));
@@ -319,23 +317,23 @@ describe('a model or effort chosen for a workspace', () => {
 
   test('by the rpc model command holds after the session ends', async () => {
     const machine = await connectedMachine();
-    mustRun(machine, ['create', 'scripted', '--mode', 'local']);
+    await mustRun(machine, ['create', 'scripted', '--mode', 'local']);
 
-    const rpc = mustRun(machine, ['run', 'scripted', '--mode', 'rpc'],
+    const rpc = await mustRun(machine, ['run', 'scripted', '--mode', 'rpc'],
       `${JSON.stringify({ id: 1, type: 'model', spec: 'openai-compat/beta-model' })}\n${JSON.stringify({ type: 'exit' })}\n`);
 
     expect(rpc).toContain('openai-compat/beta-model');
-    expect(nextTurnModel(machine, 'scripted')).toBe('beta-model');
+    expect(await nextTurnModel(machine, 'scripted')).toBe('beta-model');
   });
 });
 
 describe('a reopened workspace', () => {
   test('shows in the TUI the conversation its next turn continues', async () => {
     const machine = await connectedMachine();
-    mustRun(machine, ['create', 'resumed', '--mode', 'local']);
-    mustRun(machine, ['run', 'resumed', 'remember the fixture']);
+    await mustRun(machine, ['create', 'resumed', '--mode', 'local']);
+    await mustRun(machine, ['run', 'resumed', 'remember the fixture']);
 
-    inTerminal(machine, ['chat', 'resumed'], [
+    await inTerminal(machine, ['chat', 'resumed'], [
       { wait: 'Send a message', timeout: 45 },
       { wait: 'remember the fixture', timeout: 10 },
       { wait: REPLY, timeout: 10 },
@@ -344,7 +342,7 @@ describe('a reopened workspace', () => {
 });
 
 /** The default tier's fallbacks, written through the profile store as the settings page's save writes a tier. */
-function setDefaultFallbacks(machine: Machine, fallbacks: readonly string[]): void {
+async function setDefaultFallbacks(machine: Machine, fallbacks: readonly string[]): Promise<void> {
   const script = `
     const { loadActiveProfile } = await import('./packages/cli/src/default-model.ts');
     const { writeLocalProfile } = await import('./packages/cli/src/profiles.ts');
@@ -352,11 +350,11 @@ function setDefaultFallbacks(machine: Machine, fallbacks: readonly string[]): vo
     writeLocalProfile({ ...catalog, tiers: { ...catalog.tiers, default: { ...catalog.tiers.default, fallbacks: ${JSON.stringify(fallbacks)} } } });
   `;
 
-  const run = Bun.spawnSync([process.execPath, '-e', script], {
-    cwd: repoRoot, env: { ...process.env, ...cliEnv(machine) }, stdout: 'pipe', stderr: 'pipe',
+  const run = await runToExit([process.execPath, '-e', script], {
+    cwd: repoRoot, env: { ...process.env, ...cliEnv(machine) },
   });
 
-  expect(run.exitCode, run.stderr.toString()).toBe(0);
+  expect(run.exitCode, run.stderr).toBe(0);
 }
 
 const TimelineRowSchema = v.looseObject({ kind: v.string(), payload: v.unknown() });
@@ -371,17 +369,17 @@ describe("a tier's fallback chain", () => {
     })}\n`, { mode: 0o600 });
 
     const machine = { home, endpoint };
-    mustRun(machine, ['create', 'chained', '--mode', 'local']);
-    setDefaultFallbacks(machine, ['openai-compat/beta-model']);
+    await mustRun(machine, ['create', 'chained', '--mode', 'local']);
+    await setDefaultFallbacks(machine, ['openai-compat/beta-model']);
 
-    const printed = mustRun(machine, ['run', 'chained', 'hello']);
+    const printed = await mustRun(machine, ['run', 'chained', 'hello']);
 
     expect(requestedModels(machine, true)).toEqual(['alpha-model', 'beta-model']);
     expect(printed).toContain(REPLY);
     expect(printed).toContain('openai-compat/beta-model took over from openai-compat/alpha-model');
     expect(printed).toContain('insufficient credits for alpha-model (HTTP 402)');
 
-    const timeline = v.parse(v.array(TimelineRowSchema), JSON.parse(mustRun(machine, ['timeline', 'chained', '--json'])));
+    const timeline = v.parse(v.array(TimelineRowSchema), JSON.parse(await mustRun(machine, ['timeline', 'chained', '--json'])));
     expect(timeline.find((row) => row.kind === 'run:model_fallback')?.payload)
       .toMatchObject({ from: 'openai-compat/alpha-model', to: 'openai-compat/beta-model' });
   });

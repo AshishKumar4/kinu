@@ -98,7 +98,7 @@ import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 import {
   DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema,
-  STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, CommandResultSchema,
+  STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
   type WorkspaceSpend,
 } from '../../packages/core/src/index';
@@ -772,26 +772,6 @@ const SubordinateRosterSchema = v.array(SubordinateRowSchema);
 /** One row of the roster, as the Agents surface lists it. */
 export type PublicSubordinate = v.InferOutput<typeof SubordinateRowSchema>;
 
-/** The agent's own task list as `listAgentTasks` serves it (orchestrator.ts:3103)
- *  — the read `WorkTab.tsx:124` is bound to. Narrowed to what a case grades and
- *  mirroring `AgentTaskTree` (core/src/tasks/store.ts:44) rather than importing
- *  it: the store module is another lane's, and every other read on this session
- *  declares the shape it consumes. */
-const TaskRowSchema = v.object({
-  id: v.string(),
-  title: v.string(),
-  status: v.picklist(['open', 'active', 'done', 'dropped']),
-  createdAt: v.number(),
-  updatedAt: v.number(),
-});
-
-const TaskTreeSchema = v.object({ ...TaskRowSchema.entries, subtasks: v.array(TaskRowSchema) });
-
-const TaskListSchema = v.array(TaskTreeSchema);
-
-/** One task with its subtasks, as the Work tab draws it. */
-export type PublicTask = v.InferOutput<typeof TaskTreeSchema>;
-
 /** What `readExecutorFile` answers, exactly as `ExecutorTextFile` declares it
  *  (core/src/read-models/files.ts): the preview's text, or the reason there is
  *  none. Both optional, because the read model answers one or the other. */
@@ -822,6 +802,7 @@ const HistorySchema = v.array(v.object({
 /** One durable message, as the web pane's seed carries it. */
 export interface PublicMessage {
   readonly role: string;
+  /** What it says: an answer's final text, never the narration its steps streamed before it. */
   readonly text: string;
   /** For a user row that landed mid-turn: the step index of the step it was
    *  spliced into — the product's own statement of where inside the absorbing
@@ -1352,25 +1333,6 @@ export class KinuPublicSession {
     return v.parse(SubordinateRosterSchema, rows);
   }
 
-  /**
-   * The agent's own task list — `listAgentTasks`, the read the Work tab polls
-   * (`components/surfaces/WorkTab.tsx:124`'s `loadTasks`).
-   *
-   * READ-ONLY on purpose at the product end (orchestrator.ts:3098-3105): the
-   * agent maintains this list from its `tasks` tool, so this is the surface's
-   * view of what the agent decided, never a place a harness may write. That is
-   * exactly what makes it a verifier: a reply claiming a task is closed is
-   * checked against the list the product would draw.
-   */
-  async tasks(): Promise<readonly PublicTask[]> {
-    const rows = await infraBoundary(
-      `listAgentTasks on ${this.input.origin}/${this.workspace}`,
-      () => this.rpc('listAgentTasks', []),
-    );
-
-    return v.parse(TaskListSchema, rows);
-  }
-
   /** Resolve when a response chunk of `requestId` satisfies `accept` — a
    *  wait on the socket's own output, for a row that must act while a turn
    *  is inside its work (its first tool result has streamed). */
@@ -1480,13 +1442,7 @@ export class KinuPublicSession {
     return rows.map((row) => {
       const spliceStep = v.safeParse(v.number(), row.metadata?.[STEER_STEP_METADATA_KEY]);
 
-      const message: PublicMessage = {
-        role: row.role,
-        text: (row.parts ?? [])
-          .filter((part) => part.type === 'text')
-          .map((part) => part.text ?? '')
-          .join(''),
-      };
+      const message: PublicMessage = { role: row.role, text: rowText({ role: row.role, parts: row.parts ?? [] }) };
 
       // SAFETY: `v.number()` above already proved the metadata value is a
       // number — the splice step is a field the row either carries or lacks.

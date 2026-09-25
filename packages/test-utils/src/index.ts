@@ -42,6 +42,8 @@ export * from './facts';
 
 export * from './git';
 
+export * from './spawn';
+
 export * from './eval-run';
 
 export * from './eval-outcome';

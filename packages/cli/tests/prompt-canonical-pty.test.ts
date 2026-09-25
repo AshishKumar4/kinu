@@ -3,9 +3,8 @@
  * on macOS, where kqueue cannot poll /dev/tty. The harness mirrors `curl | bash`: PTY controlling tty, stdin on a pipe.
  */
 import { scratchDir } from '../../test-utils/src/scratch';
-import { present } from '@kinu.run/test-utils';
+import { present, runToExit } from '@kinu.run/test-utils';
 import { writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 
 import { join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -127,21 +126,19 @@ const HarnessResultSchema: v.GenericSchema<HarnessResult> = v.object({
 });
 
 /** `expectPending` only decides when to stop waiting; the test asserts the observed flags itself. */
-function runInPty(
+async function runInPty(
   mode: string,
   driverSource: string,
   expectPending: Partial<{ icanon: boolean; echo: boolean; isig: boolean }>,
-): HarnessResult {
+): Promise<HarnessResult> {
   const harnessPath = join(fixtures, "harness.py");
   writeFileSync(harnessPath, HARNESS);
   const driverPath = join(fixtures, `driver-${Bun.hash(driverSource).toString(16)}.ts`);
   writeFileSync(driverPath, driverSource);
 
-  const run = spawnSync(present(python, 'a python3 on PATH'), [harnessPath, mode, JSON.stringify(expectPending), process.execPath, driverPath], {
-    encoding: "utf8",
-  });
+  const run = await runToExit([present(python, 'a python3 on PATH'), harnessPath, mode, JSON.stringify(expectPending), process.execPath, driverPath]);
 
-  expect(run.status).toBe(0);
+  expect(run.exitCode).toBe(0);
 
   return v.parse(HarnessResultSchema, JSON.parse(present(run.stdout.trim().split("\n").at(-1), 'the last line of stdout')));
 }
@@ -162,8 +159,8 @@ process.exit(0);
 `;
 
 describe.if(Boolean(python))("prompts under the installer PTY topology (stdin pipe, /dev/tty terminal)", () => {
-  test("pending confirm stays canonical: kernel echo, line editing, live Ctrl+C", () => {
-    const result = runInPty("y", CONFIRM_DRIVER, { icanon: true, echo: true, isig: true });
+  test("pending confirm stays canonical: kernel echo, line editing, live Ctrl+C", async () => {
+    const result = await runInPty("y", CONFIRM_DRIVER, { icanon: true, echo: true, isig: true });
     expect(result.pending).toEqual({ icanon: true, echo: true, isig: true });
     expect(result.output).toContain("y");
     expect(result.output).toContain("ANSWER=true");
@@ -172,8 +169,8 @@ describe.if(Boolean(python))("prompts under the installer PTY topology (stdin pi
     expect(result.post).toEqual({ icanon: true, echo: true, isig: true });
   });
 
-  test("Ctrl+C interrupts a pending confirm and leaves the terminal sane", () => {
-    const result = runInPty("ctrlc", CONFIRM_DRIVER, { isig: true });
+  test("Ctrl+C interrupts a pending confirm and leaves the terminal sane", async () => {
+    const result = await runInPty("ctrlc", CONFIRM_DRIVER, { isig: true });
     expect(result.pending.isig).toBe(true);
     expect(result.exited).toBe(true);
     expect(result.signaled).toBe(true);
@@ -181,8 +178,8 @@ describe.if(Boolean(python))("prompts under the installer PTY topology (stdin pi
     expect(result.post).toEqual({ icanon: true, echo: true, isig: true });
   });
 
-  test("askSecret hides input but keeps Ctrl+C live, and restores echo", () => {
-    const result = runInPty("s3cr3t", SECRET_DRIVER, { icanon: true, echo: false, isig: true });
+  test("askSecret hides input but keeps Ctrl+C live, and restores echo", async () => {
+    const result = await runInPty("s3cr3t", SECRET_DRIVER, { icanon: true, echo: false, isig: true });
     expect(result.pending).toEqual({ icanon: true, echo: false, isig: true });
     expect(result.output.split("SECRET=")[0]).not.toContain("s3cr3t");
     expect(result.output).toContain('SECRET="s3cr3t"');
@@ -190,8 +187,8 @@ describe.if(Boolean(python))("prompts under the installer PTY topology (stdin pi
     expect(result.post).toEqual({ icanon: true, echo: true, isig: true });
   });
 
-  test("Ctrl+C during askSecret kills the CLI and restores echo via the sh trap", () => {
-    const result = runInPty("ctrlc", SECRET_DRIVER, { echo: false });
+  test("Ctrl+C during askSecret kills the CLI and restores echo via the sh trap", async () => {
+    const result = await runInPty("ctrlc", SECRET_DRIVER, { echo: false });
     expect(result.pending.echo).toBe(false);
     expect(result.exited).toBe(true);
     expect(result.signaled).toBe(true);

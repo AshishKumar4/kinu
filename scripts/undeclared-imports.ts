@@ -8,7 +8,7 @@
  * invisible to it, because the census walks declarations and an undeclared edge
  * is not one: a package imports a name, `bunfig.toml`'s `linker = "hoisted"`
  * resolves it against the root `node_modules`, every suite passes, and no
- * manifest ever learns. Measured at 8af794001: `packages/cli-backend` imported
+ * manifest ever learns. Measured at e5528c2e9: `packages/cli-backend` imported
  * `@kinu.run/test-utils` from thirty-two test files — the
  * `workspace-resolution.test.ts` AGENTS.md mandates among them — behind a
  * manifest with no `devDependencies` at all. Nothing in the tree said so. The

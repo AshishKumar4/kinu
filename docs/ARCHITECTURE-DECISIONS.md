@@ -47,7 +47,7 @@ Reviewed 2026-09-13; pinned by `unit-cache-breakpoints.test.ts` and
 `contract-cache-markers.test.ts`.
 Unmeasured: no test pins a nonzero cache read; the telemetry exists
 (`cacheRead` per `step_finish`) and a hit-ratio gate does not. Open: O1.
-Later note: `contract-cache-hit.test.ts` (240edaf8c) pins a nonzero
+Later note: `contract-cache-hit.test.ts` (3534aabd5) pins a nonzero
 `cacheRead` per caching provider against a mocked provider cache; no
 live-provider read is pinned.
 
@@ -172,7 +172,7 @@ returns normally; returning or throwing its refusal propagates through the SDK
 error channel. Inner failures survive recovery in `ToolOutcome.failures`, and
 the census attributes them to their binding, not to `eval`. Malformed
 programs still throw, with the native-name correction. Decided 2026-09-13,
-commit `526f618d7`.
+commit `6c3dd1139`.
 Measured: `unit-sandbox-errors` rejected the host-disconnect regression before
 the fix; the scoped codemode suites and harness-wiring's durable-census case
 pass after it. O2 closed.
@@ -197,7 +197,7 @@ one facet manager, and the journal re-drives it on the wake after a reset or
 a hibernation. Decided 2026-09-15 with Nimbus worker 0.7 (`composeFacetManager`,
 `spawnWorker`). Reversed: the hosted workspace's rule that "an object that
 is never asked never boots anything" (a resident was re-driven only on the
-next request for its URL, `workspace-host.ts` at `92c769b6b`). The launch
+next request for its URL, `workspace-host.ts` at `9ad8e7a6e`). The launch
 journal recovers on the first pump of an incarnation. The hosted workspace
 runs that pump from `waitUntil` when it composes the manager, because its one
 alarm slot belongs to the SDK scheduler. The recipe carries digests, port and
@@ -216,7 +216,7 @@ The URL-on-request path stays and is pinned by workerd `slate-durability`.
 W1. Fabric's own `adoptGeneration` allocates the workspace's process
 generation, over a storage the host supplies; Kinu keeps no allocator.
 Decided 2026-09-15 with Nimbus fabric 0.5. Reversed: `nextWorkspaceGeneration`
-(`core/src/vfs/nimbus-workspace.ts` at `92c769b6b`), a SQL upsert that bumped
+(`core/src/vfs/nimbus-workspace.ts` at `9ad8e7a6e`), a SQL upsert that bumped
 `kinu_workspace_generation` once per `createWorkspace`. The row stays. On both
 backends the storage is `workspaceGenerationStorage(sql)`, one row in that
 same table, so the counter continues rather than restarts, and the pid floor
@@ -250,7 +250,7 @@ reload shows the answer. On cf the row keeps the streamed message's non-text
 parts in order and carries the answer as its one text part, placed last; a
 turn that ended on tool calls with no final text stores the streamed
 narration as that part.
-Decided 2026-09-16, commit 21dd9f226. Measured on build cba44dcb9: the
+Decided 2026-09-16, commit 7190e8492. Measured on build fddd4f9d6: the
 `public-failure-recovery` episode's "reply with only PASS or FAIL" row held
 three narration lines with FAIL run onto the end. A continuation joins the
 cut step's text to the answer only when the resumed step is the answer (no
@@ -271,7 +271,7 @@ Stop. A turn cut before it streamed anything (no token, no call) writes no
 assistant row; the operator's row stands alone on both backends, as it did
 before the Think switch. Decided 2026-09-16, pinned by
 `unit-chat-transport` and `turn-answer-row`. The parity re-record at
-a49c1edfa hid both changes.
+624852a1c hid both changes.
 
 C3. The deployed product carries one eval-only surface that ends a workspace
 object's activation: `POST /api/workspaces/<name>/eval/abort`. It answers only
@@ -300,14 +300,14 @@ swarm node may inherit the parent's conversation
 (`config.context:'inherit'`). Decided 2026-09-03. Being extended 2026-09-13:
 `hire` gains the same `context` field so a subordinate can be forked when the
 work depends on the conversation (`feat/hire-fork`). Later note: `feat/hire-fork`
-merged as 5e061cc60.
+merged as 8216dc82b.
 
 D2. The root actor delegates across roles in the fusion pattern from the
 owner's oh-my-pi fork: dedicated streams to a durable specialist hire,
 research to a researcher task hire, general work to a task hire. Coupled,
 dependent or single-context work stays with the root. Subordinates keep their
 role prompts. Decided 2026-09-13; lands with `feat/delegation-prompts`. Later
-note: merged as 59dc3d79d.
+note: merged as 550ee2dac.
 
 D3. An assignment is not an external event, so no reactor drains one. A
 `subordinate_task` row is the whole turn input of the subordinate it names, and
@@ -315,14 +315,14 @@ one runner owns it: core `drainAssignments`
 (`core/src/subordinates/assignments.ts`), driven by the cloud sweep
 (`drainAdmittedDelegations`) and by the local host's pass
 (`drainAssignedWork`). `wakesADrain` states the exclusion once, for the batch,
-the wake fold and the runner. Decided 2026-09-17, commit 53c341be7. Measured
+the wake fold and the runner. Decided 2026-09-17, commit 8946319e3. Measured
 the same day in the workerd pool (`tests/workerd/hire.test.ts`, "one brief
 produces exactly one child turn"). Before: one hire brief produced 242
 `subordinate_task` rows with bodies nesting 253 -> 850 characters. The
 reactor digested the row into "1 event arrived while you were idle …", the
 hosted turn admission re-published that digest as a new assignment, and the
 durable sweep ran the raw brief beside it. After: 1 row whose body is the
-brief. Re-measured 2026-09-17 on 4e7da0360, one hire alone: exactly 1 row, body
+brief. Re-measured 2026-09-17 on 99cfeee98, one hire alone: exactly 1 row, body
 253 characters. `consumed_at` is still set because the child retires itself
 inside the turn that answers, and its dead handle then refuses the runner's
 lease close.
@@ -360,7 +360,7 @@ id, no `run_start`, no `run_end`), so `getRunSummaries` answered
 D5. There is one inherited-context kind, `fork`. The `digest` kind rendered the
 parent's recent conversation as prose for a fresh hire. Its only reader was
 the reactor's rendering of the assignment row, which D3 removed: both turn
-runners read the messages and answered `[]` for a digest, so from e6e24f547 it
+runners read the messages and answered `[]` for a digest, so from 69ef79b17 it
 reached nobody. Deleted end to end 2026-09-17 (schema arm, both producers, the
 `renderSubordinateInheritedContext` renderer and the visibility prefix)
 rather than spliced into the turn, because the product's own pin refuses it:
@@ -394,7 +394,7 @@ so the probe never picks the chain.
 
 | shape | armed | after the wake's frame ran |
 | --- | --- | --- |
-| the fold alone (6f000def4) | `_kinuTimerTick` | row `turn_id NULL, consumed_at NULL`; `_kinuTimerTick` re-armed for the same row |
+| the fold alone (080bc85dd) | `_kinuTimerTick` | row `turn_id NULL, consumed_at NULL`; `_kinuTimerTick` re-armed for the same row |
 | with the drain phase | `_kinuTimerTick` | row `turn_id evt-…`, lease closed, `run_start caused_by event_drain`, event text on the model wire |
 
 The re-arm is the second half of the cost. `armWakeRow` clamps a due target to
@@ -416,15 +416,15 @@ mechanisms, one rule each; nothing to reconcile.
 L1. The deploy wave is scheduled by a thread budget, not a gate count. Each
 heavy gate declares the threads it occupies at peak (`GATE_WEIGHTS`, held
 equal to deploy.sh's table by `deploy.test.ts`), and a gate launches only while
-the running weight fits `nproc`. Decided 2026-09-15, commit 19f9c6666.
+the running weight fits `nproc`. Decided 2026-09-15, commit 72143c5d6.
 Reversed by L6 on 2026-09-17: the declaration is gone and the cost is
 measured, in two dimensions.
 Measured: under a six-gate width the eleven-suite UI row failed every deploy
 on a puppeteer wall beside two `--parallel=4` rows and passed alone in 361 s.
 Process-tree sampling read one Chrome suite at 4.3 threads peak and a
 `--parallel=4` row at 10.5. Under the budget the pre-publish tier ran 66/66
-green with the UI row inside it, twice (390 s on 19f9c6666, 602 s including
-the account gate on 1c82aee60).
+green with the UI row inside it, twice (390 s on 72143c5d6, 602 s including
+the account gate on 2ec26ac5a).
 
 L2. A green gate is skipped only on a content-hash proof of its input closure.
 The closure is derived from the module graph (`scripts/import-graph.ts`, the
@@ -432,8 +432,8 @@ walker `client-graph` already used) plus declared `reads` and `env`, the
 preload, configs on the path, `bun.lock` and `patches/`, and the toolchain.
 A graph that reads the environment whole, imports by a computed specifier,
 reaches an untracked file, or opens the tree by an undeclared path is never
-cached, and neither is a `live` row. Decided 2026-09-15, commits 99bbb74ca,
-c54800545, 8a151ec0d. Measured on the push tier at 8a151ec0d, 24-thread
+cached, and neither is a `live` row. Decided 2026-09-15, commits 268b8260a,
+618b89f80, 630ca0ba2. Measured on the push tier at 630ca0ba2, 24-thread
 workstation, load 0.6 at start:
 
 | run | hits | recorded | never cached | wall |
@@ -442,21 +442,21 @@ workstation, load 0.6 at start:
 | warm (same tree) | 32 | 0 | 15 | 301.3 s |
 
 The 15 never-cached rows held the tier's heaviest work, and each named one
-cause. Commits 2804d8e54 (computed imports declare what they load),
-97009f393 and d1aa2e0d6 (a child a test spawns gets the environment by
-name), and b73710162 (`check` split into lint, drift and typecheck; `test`
+cause. Commits a1b8c15a0 (computed imports declare what they load),
+6a63aa58d and ca63e68aa (a child a test spawns gets the environment by
+name), and 6ce823e4b (`check` split into lint, drift and typecheck; `test`
 into core and spine, each keyed by its own closure) closed nine of them.
-Re-measured at d1aa2e0d6 on 2026-09-15, load 5.1 at start:
+Re-measured at ca63e68aa on 2026-09-15, load 5.1 at start:
 
 | run | hits | recorded | never cached | wall |
 | --- | --- | --- | --- | --- |
 | cold (store emptied) | 0 | 42 | 8 | 434.8 s |
 | warm (same tree) | 42 | 0 | 8 | 194.9 s |
 
-Commit 8cd49f535 then let a row declare `corpus: true` after
+Commit 4c1b70204 then let a row declare `corpus: true` after
 `--audit-closure` showed `test:core` and `packages/devbox/` scanning the tree
 by path (a `reads` list there would be an allowlist over the corpus).
-Re-measured at 8cd49f535 on 2026-09-15, load 5.3 at start:
+Re-measured at 4c1b70204 on 2026-09-15, load 5.3 at start:
 
 | run | hits | recorded | never cached | wall |
 | --- | --- | --- | --- | --- |
@@ -474,19 +474,19 @@ which tests the strip itself; and the cf-backend suite through
 `gate:scanner-bundle` reading two files off its graph.
 
 L3. A deploy wave stops launching at its first red and lets running gates
-finish; `--all` audits the whole wave. Decided 2026-09-15, commit a924a3fb2,
+finish; `--all` audits the whole wave. Decided 2026-09-15, commit 5d5df1b59,
 proved at budget 1 in both directions.
 
 L4. The connectome's cost pins are ratios against an in-process calibration
 unit measured in the same cheapest-of-N loop, never absolute CPU time. Decided
-2026-09-15, commit e965315d0. Measured quiet: canvas 0.75 units, mesh 5.2.
+2026-09-15, commit f67757466. Measured quiet: canvas 0.75 units, mesh 5.2.
 Under twelve busy threads the absolute mesh frame doubled (0.61 to 1.13 ms,
 the wave's red) while the ratio read 3.9 to 5.2. Proved red at ten steps per
 frame. A wall-clock pin is a latency contract and stays wall-clock. The red
 proof's own wall (bun's 5 s default) went red under the deploy wave on
-368b8d694 at 5.96 s. Measured in three contention shapes, the ten-step ratio
+86618f8fa at 5.96 s. Measured in three contention shapes, the ten-step ratio
 reads 3.5 to 5.0 and 21.5 to 31 against floors of 1.5 and 12.5, so commit
-8a5b9eee5 runs a third of the batches (under a second quiet) with a stated
+c4892a4c1 runs a third of the batches (under a second quiet) with a stated
 20 s budget.
 
 L5. The runner consumes the ladder; nothing is written twice. deploy.sh
@@ -494,13 +494,13 @@ loads `bun scripts/ladder.ts --plan` (phase, label, threads, resident MiB,
 deadline and command per row; `weight` until L6) and schedules each phase as
 one wave. A row carries its own `label`, `phase`/`alone` and `deadline`; the UI
 row claims the `*-ux` family by glob; the resolver is proved over a fixture
-tree. Decided 2026-09-15, commits 5aac4b263, 45f6c3786, 7482c90c1, f6ec56c8f.
+tree. Decided 2026-09-15, commits 4c8c7c456, 648800f61, 3cd6796a9, 2c1fd31c2.
 Removed: deploy.sh's run lines, GATE_WEIGHT, GATE_DEADLINES, GATE_GROUP tables;
 ladder.ts's GATE_WEIGHTS, GATE_DEADLINES, SERIAL_GATES, EXCLUSION_GROUPS and
 the four deploy.sh parsers; deploy.test.ts's REQUIRED_GATES, POST_DEPLOY_GATES
 and BENCH_GATE_FILES lists; ladder.test.ts's bench list and rig-row spelling
-(the last edited by hand on f6d08d72d, the case that prompted this). Measured
-at f6ec56c8f with `--gates-only` at thread budget 12, with other lanes' hooks
+(the last edited by hand on 46f992845, the case that prompted this). Measured
+at 2c1fd31c2 with `--gates-only` at thread budget 12, with other lanes' hooks
 running on the box (load 9 to 21). Run 1: 68/68 source gates green and the
 hammer green in 815.9 s wall, with only the account gate red on a missing
 KINU_ACCESS_API_TOKEN in the measuring process. Run 2: 67/68 in 528.8 s with
@@ -607,7 +607,7 @@ questions, and memory a detached child holds is memory the box does not have.
 What L6 missed. A child that calls `setsid` leaves the row's session, and the
 two heaviest children a browser row has both do it: `live-app-harness.ts`
 spawns `vite dev` detached so the teardown can signal workerd through the
-group (d6b075bd8), and puppeteer spawns Chrome detached by default. Measured
+group (f0455917c), and puppeteer spawns Chrome detached by default. Measured
 under both shapes on the 24-thread workstation, 2026-09-17, the live-app row:
 203 MiB and 75.4 CPU seconds by session, 5,112 MiB and 114.8 CPU seconds by
 tree, against an independent pid-tree sampler that read 5,013 and 5,115 MiB
@@ -667,7 +667,7 @@ contributes nothing to `stat`.
 
 L9. The wave admits at most one row holding the browser lane at a time, beside
 the measured-cost caps. Decided 2026-09-18. This amends L6 (the measured-cost
-admission, owner bug B9, fixed @10ba05d74) and reverses nothing in it: both
+admission, owner bug B9, fixed @719363154) and reverses nothing in it: both
 caps still decide every other row, and no row declares a cost. The rows that
 hold the lane are derived, never listed: the closure of tracked modules that
 reach puppeteer (`browserModules` in `scripts/ladder.ts`), intersected with
@@ -682,7 +682,7 @@ scheduler with twelve overlapping pairs.
 
 What is measured and what is a hypothesis. Measured on the 24-thread
 workstation, 2026-09-18, quiet box (load 1.04 concurrent / 0.45 serial,
-41,197 MiB MemAvailable): the three rows that reddened the c80cb4141 wave, run
+41,197 MiB MemAvailable): the three rows that reddened the 42ebc1737 wave, run
 exactly as the wave launches them (`timeout --signal=TERM --kill-after=5s 480`
 per row):
 
@@ -757,7 +757,7 @@ environment and outlived its parent, anything off Linux, and
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn
 per provider that supports caching. Later note: `contract-cache-hit.test.ts`
-(240edaf8c) pins this against a mocked provider cache; a live-provider read
+(3534aabd5) pins this against a mocked provider cache; a live-provider read
 is still unpinned.
 
 O2. The tier wall at thread budget 12 against 24, on a quiet box, before any
@@ -787,10 +787,10 @@ main test worker so a file boots only the probe family it drives, which is a
 harness change across 36 files and stays open.
 
 O3. The plan-review surface does not mount in the gallery's `workspacepage`
-frame or in the live app: measured 2026-09-18 at c80cb4141, three deploy rows
+frame or in the live app: measured 2026-09-18 at 42ebc1737, three deploy rows
 red alone on it (L9). The named seam is the gallery's blanket `[]` answer for
 the record-shaped `getToolDescriptions` read, plus `LandingWorkspaceFrame`'s
-bounded 90-frame poll for the lazy plan chunk. Unfixed. Later note: f62b0c7c9
+bounded 90-frame poll for the lazy plan chunk. Unfixed. Later note: 8f5703781
 (2026-09-18) gives the gallery a record-shaped `getToolDescriptions` answer
 and makes the landing drive await the plan chunk instead of 90 frames; the
 three rows have not been re-measured in this log.

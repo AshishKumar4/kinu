@@ -131,7 +131,7 @@ export type Tier = (typeof TIERS)[number];
  * admitted at 1, 1 and 3 threads and 2,534, 2,458 and 6,446 MiB, so no cap
  * refuses the overlap at any value the box can carry. L9 in
  * docs/ARCHITECTURE-DECISIONS.md, which names the entry it amends (L6, the
- * measured-cost admission, B9 @10ba05d74).
+ * measured-cost admission, B9 @719363154).
  */
 export const SHARED_RESOURCES = ['browser'] as const;
 
@@ -651,7 +651,7 @@ export const LADDER: readonly Gate[] = [
     // reproduce on the reference box.
     seconds: 2,
     catches: 'a package that IMPORTS what its own manifest never declares, resolving only '
-      + 'through `bunfig.toml`\'s hoisted linker. Measured at 8af794001: `packages/cli-backend` '
+      + 'through `bunfig.toml`\'s hoisted linker. Measured at e5528c2e9: `packages/cli-backend` '
       + 'imported `@kinu.run/test-utils` from 32 test files — the `workspace-resolution.test.ts` '
       + 'AGENTS.md mandates among them — behind a manifest with NO `devDependencies` at all, and '
       + 'a human reading a lock diff is what found it. `gate:dead-code`\'s dependency census '
@@ -660,7 +660,7 @@ export const LADDER: readonly Gate[] = [
       + 'installs `--frozen-lockfile` so what ships is whatever the lock carries for reasons no '
       + 'manifest states, and an empty `devDependencies` reads to every tool as a package with '
       + 'no test dependencies. 54 such edges were locked on the tree that introduced this gate, '
-      + '`packages/devbox` -> `@kinu.run/test-utils` among them: the same defect as 8af794001, '
+      + '`packages/devbox` -> `@kinu.run/test-utils` among them: the same defect as e5528c2e9, '
       + 'live in a second package.',
     blind: 'a specifier no import FORM carries — `await import(name)` over a variable, a '
       + '`require()` in the CommonJS daemon, a CSS `@import`, a binary a manifest script spawns, '
@@ -935,7 +935,7 @@ export const LADDER: readonly Gate[] = [
     // `client-graph.test.ts`, `install-scripts-gate.test.ts` and
     // `tracing-gate.test.ts` join 2026-09-12: three gates that had shipped with
     // no red proof at all. Measured solo on the 24-thread box: 0.7/0.4/0.2s.
-    // `release-manifest.test.ts` joins 2026-09-18: it shipped with fcc3ec7ec
+    // `release-manifest.test.ts` joins 2026-09-18: it shipped with 166d34521
     // claimed by no tier at all — the same defect `capability-parity` was, and
     // the reason `bun test scripts/ladder.test.ts` was red on main that day.
     // Measured solo on the 24-thread box: 0.09s wall, 34ms in-suite, 14 tests.
@@ -1954,7 +1954,7 @@ export const LADDER: readonly Gate[] = [
     seconds: 0.6,
     catches: 'comment growth in a package. The owner capped comments after the census measured '
       + 'them at 41% of the non-whitespace characters in product source (4,906,181 at '
-      + 'ad61dea6c): each package holds one number, a package over it is red, a package the '
+      + '1dd25b3ad): each package holds one number, a package over it is red, a package the '
       + 'lock never held has a budget of zero, and `--lock` only lowers a number. A cut is '
       + 'green and printed as a stale row, so trimming comments never fails a commit.',
     blind: 'prose moved into a string literal, a doc or a commit body; comments in tests, '
@@ -2046,7 +2046,7 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run verify:lean',
     label: 'Lean proofs, consistency, and traceability',
     tier: 'deploy',
-    // 10 s WARM: 10.1 and 9.3 s at 5e22e792f (lane/formal-proofs) in a detached
+    // 10 s WARM: 10.1 and 9.3 s at 961dd0ab2 (lane/formal-proofs) in a detached
     // worktree on the 24-thread box, 2026-09-22, at load 20-21 with other lanes
     // running, after one cold run of 24.4 s. The growth from 2.2 s (2026-08-21,
     // warm, `lake build` a no-op) is the refinement fixtures regenerated and
@@ -2237,8 +2237,8 @@ export const LADDER: readonly Gate[] = [
       + 'only — a `tool_outcome` row that closed clean, a decided row GONE from the queue, the '
       + 'other machine\'s exec log EMPTY, a user turn durable in the deployment\'s own '
       + 'transcript, a file\'s exact bytes off the Files tab\'s own read. Three of the six red '
-      + 'directions are proved against the deployed builds that had the bug (675444233, '
-      + 'd894de564, 4e1122d2d).',
+      + 'directions are proved against the deployed builds that had the bug (a85ce8793, '
+      + '343e157df, daad4aeee).',
     blind: 'everything a first run does not reach, and the list is long on purpose: it drives '
       + 'six paths, not the product. It cannot see a defect on any surface no case names, a '
       + 'defect that needs a second user or a second account, or one that needs a machine that '
@@ -2258,7 +2258,7 @@ export const LADDER: readonly Gate[] = [
     deadline: {
       seconds: 900,
       why: 'six rows, four of them waiting on a real model turn over the public edge: 329s '
-        + 'against 41494531d on 2026-09-23, the slate turn alone 240s. About three times the '
+        + 'against b220f59f8 on 2026-09-23, the slate turn alone 240s. About three times the '
         + 'wall, so a slow model answers rather than being killed as a hang.',
     },
     alone: 'runs in the post-publish wave, after the upload and the smoke gate, beside the '
@@ -2266,7 +2266,7 @@ export const LADDER: readonly Gate[] = [
       + 'eval prefix and are torn down by the row that made them, and it attaches no machine, '
       + 'so it stands outside the device fleet the first-run tier counts.',
     tier: 'deploy',
-    // 329s against 41494531d on 2026-09-23 with the slate row (66s to 128s without
+    // 329s against b220f59f8 on 2026-09-23 with the slate row (66s to 128s without
     // it); the model turns are the spread.
     seconds: 329,
     catches: 'a flow a person runs in the page that breaks on the DEPLOYED build: the same rows '

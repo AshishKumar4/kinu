@@ -1,5 +1,6 @@
 // Workers AI is option 1 and the `--yes` answer: the account already serves it, and a BYO default would
 // override what the platform resolves to. Subprocess: config.ts binds KINU_HOME at import.
+import { runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { readFileSync, writeFileSync } from 'node:fs';
 
@@ -31,19 +32,16 @@ function home(config: JsonObject): string {
 }
 
 /** The default model, set the way the home screen's Defaults set it. */
-function withDefaultModel(kinuHome: string, model: string): string {
-  const proc = Bun.spawnSync({
-    cmd: [process.execPath, '-e', `
+async function withDefaultModel(kinuHome: string, model: string): Promise<string> {
+  const proc = await runToExit([process.execPath, '-e', `
       const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
       await updateDefaultTier({ model: ${JSON.stringify(model)} });
-    `],
+    `], {
     cwd: repoRoot,
     env: { ...process.env, KINU_HOME: kinuHome },
-    stdout: 'pipe',
-    stderr: 'pipe',
   });
 
-  expect(proc.exitCode, proc.stderr.toString()).toBe(0);
+  expect(proc.exitCode, proc.stderr).toBe(0);
 
   return kinuHome;
 }
@@ -57,14 +55,13 @@ function defaultModelOf(config: JsonObject): string | undefined {
 }
 
 /** `skipCloud` keeps every branch off the network; each case needs its own process. */
-function runSetup(opts: JsonObject, kinuHome: string) {
+async function runSetup(opts: JsonObject, kinuHome: string) {
   const runner = `
     const { setupCommand } = await import('./packages/cli/src/commands/setup.ts');
     await setupCommand({ ...${JSON.stringify(opts)}, skipCloud: true });
   `;
 
-  const proc = Bun.spawnSync({
-    cmd: [process.execPath, '-e', runner],
+  const proc = await runToExit([process.execPath, '-e', runner], {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -72,58 +69,56 @@ function runSetup(opts: JsonObject, kinuHome: string) {
       KINU_BASE_URL: '', KINU_AUTH: '', KINU_MODEL: '', KINU_TOKEN: '', KINU_ORIGIN: '',
       KINU_HOME: kinuHome, NO_COLOR: '1',
     },
-    stdout: 'pipe',
-    stderr: 'pipe',
   });
 
   return {
-    stdout: proc.stdout.toString(),
-    stderr: proc.stderr.toString(),
+    stdout: proc.stdout,
+    stderr: proc.stderr,
     exitCode: proc.exitCode,
     config: parseJsonObject(readFileSync(join(kinuHome, 'config.json'), 'utf8')),
   };
 }
 
 describe('kinu setup recommends the native Workers AI model', () => {
-  test('--yes takes the native path, which becomes the default where there is none', () => {
-    const out = runSetup({ yes: true }, signedInHome());
+  test('--yes takes the native path, which becomes the default where there is none', async () => {
+    const out = await runSetup({ yes: true }, signedInHome());
     expect(out.exitCode).toBe(0);
     expect(defaultModelOf(out.config)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
     expect(out.stdout).toContain(DEFAULT_WORKERS_AI_MODEL_SPEC);
     expect(out.config.providers).toMatchObject({ codex: { accessToken: 'codex-token' } });
   });
 
-  test('menu option 1 is the native path', () => {
-    const out = runSetup({ provider: '1' }, signedInHome());
+  test('menu option 1 is the native path', async () => {
+    const out = await runSetup({ provider: '1' }, signedInHome());
     expect(out.exitCode).toBe(0);
     expect(out.stdout).toContain(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
-  test('the other providers are still offered, one position further down', () => {
-    const skipped = runSetup({ provider: '8' }, withDefaultModel(signedInHome(), 'codex/gpt-5.5'));
+  test('the other providers are still offered, one position further down', async () => {
+    const skipped = await runSetup({ provider: '8' }, await withDefaultModel(signedInHome(), 'codex/gpt-5.5'));
     expect(skipped.exitCode).toBe(0);
     expect(skipped.stdout).toContain('Skipped choosing a model provider');
     expect(defaultModelOf(skipped.config)).toBe('codex/gpt-5.5');
 
-    const unknown = runSetup({ provider: 'nope' }, signedInHome());
+    const unknown = await runSetup({ provider: 'nope' }, signedInHome());
     expect(unknown.exitCode).not.toBe(0);
     expect(unknown.stderr)
       .toContain('Provider must be workers-ai, codex, openai, openrouter, anthropic, openai-compatible, opencode, or skip.');
   });
 
-  test('an explicit Workers AI model becomes the default where there is none, and leaves a chosen one', () => {
-    const fresh = runSetup({ provider: 'workers-ai', model: '@cf/meta/llama-4' }, signedInHome());
+  test('an explicit Workers AI model becomes the default where there is none, and leaves a chosen one', async () => {
+    const fresh = await runSetup({ provider: 'workers-ai', model: '@cf/meta/llama-4' }, signedInHome());
     expect(fresh.exitCode).toBe(0);
     expect(defaultModelOf(fresh.config)).toBe('workers-ai/@cf/meta/llama-4');
 
-    const chosen = runSetup({ provider: 'workers-ai', model: '@cf/meta/llama-4' }, withDefaultModel(signedInHome(), 'codex/gpt-5.5'));
+    const chosen = await runSetup({ provider: 'workers-ai', model: '@cf/meta/llama-4' }, await withDefaultModel(signedInHome(), 'codex/gpt-5.5'));
     expect(chosen.exitCode).toBe(0);
     expect(defaultModelOf(chosen.config)).toBe('codex/gpt-5.5');
     expect(chosen.stdout).toContain('pick it under Defaults');
   });
 
-  test('signed out, the native path asks for sign-in instead of writing a model it cannot serve', () => {
-    const out = runSetup({ yes: true }, home({}));
+  test('signed out, the native path asks for sign-in instead of writing a model it cannot serve', async () => {
+    const out = await runSetup({ yes: true }, home({}));
     expect(out.exitCode).toBe(0);
     expect(defaultModelOf(out.config)).toBeUndefined();
     expect(out.stdout).toContain('kinu auth');

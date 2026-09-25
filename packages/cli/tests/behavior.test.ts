@@ -12,11 +12,11 @@ import {
 } from "@kinu.run/core";
 import { tolerate } from "@kinu.run/core/obs";
 import * as v from "valibot";
-import { present } from '@kinu.run/test-utils';
+import { present, runToExit } from '@kinu.run/test-utils';
 
-/** Bytes to assertable text, stripped of terminal decoration. */
-function toText(bytes: Buffer): string {
-  return Bun.stripANSI(bytes.toString()).replaceAll('\r\n', '\n');
+/** Output to assertable text, stripped of terminal decoration. */
+function toText(output: string): string {
+  return Bun.stripANSI(output).replaceAll('\r\n', '\n');
 }
 
 const tempDirs: string[] = [];
@@ -93,40 +93,7 @@ function runCli(args: string[], opts: { home?: string; stdin?: string; env?: Rec
 
   if (opts.home) env.KINU_HOME = opts.home;
 
-  return Bun.spawnSync({
-    cmd: [process.execPath, cliBin, ...args],
-    cwd: newProjectDir(),
-    stdin: opts.stdin ? Buffer.from(opts.stdin) : undefined,
-    stdout: "pipe",
-    stderr: "pipe",
-    env,
-  });
-}
-
-async function runCliAsync(
-  args: string[],
-  opts: { home?: string; stdin?: string; env?: Record<string, string> } = {},
-) {
-  const env = { ...process.env, ...opts.env };
-
-  if (opts.home) env.KINU_HOME = opts.home;
-
-  const proc = Bun.spawn({
-    cmd: [process.execPath, cliBin, ...args],
-    cwd: newProjectDir(),
-    stdin: opts.stdin ? Buffer.from(opts.stdin) : undefined,
-    stdout: "pipe",
-    stderr: "pipe",
-    env,
-  });
-
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).arrayBuffer(),
-    new Response(proc.stderr).arrayBuffer(),
-    proc.exited,
-  ]);
-
-  return { stdout: Buffer.from(stdout), stderr: Buffer.from(stderr), exitCode };
+  return runToExit([process.execPath, cliBin, ...args], { cwd: newProjectDir(), env, stdin: opts.stdin });
 }
 
 function runCliInPty(args: string[], opts: { home: string; stdin?: string }) {
@@ -137,14 +104,7 @@ function runCliInPty(args: string[], opts: { home: string; stdin?: string }) {
     ...args.map(shellQuote),
   ].join(" ");
 
-  return Bun.spawnSync({
-    cmd: ["script", "-qefc", command, "/dev/null"],
-    cwd: newProjectDir(),
-    stdin: opts.stdin ? Buffer.from(opts.stdin) : undefined,
-    stdout: "pipe",
-    stderr: "pipe",
-    env: process.env,
-  });
+  return runToExit(["script", "-qefc", command, "/dev/null"], { cwd: newProjectDir(), stdin: opts.stdin });
 }
 
 function writeConfig(home: string, body: JsonObject) {
@@ -156,7 +116,7 @@ function shellQuote(value: string): string {
 }
 
 describe("CLI behavior", () => {
-  test("setup --account-only with an existing account does not enter the local model wizard", () => {
+  test("setup --account-only with an existing account does not enter the local model wizard", async () => {
     const home = scratchDir("cli-setup-account");
     tempDirs.push(home);
     writeConfig(home, {
@@ -165,7 +125,7 @@ describe("CLI behavior", () => {
       user: { id: "user_123", email: "ashish@example.com" },
     });
 
-    const proc = runCli(["setup", "--account-only"], { home });
+    const proc = await runCli(["setup", "--account-only"], { home });
     const stdout = toText(proc.stdout);
     const stderr = toText(proc.stderr);
 
@@ -176,7 +136,7 @@ describe("CLI behavior", () => {
     expect(stdout).not.toContain("OpenAI API key");
   });
 
-  test("interactive setup can be rerun and reaches provider choices", () => {
+  test("interactive setup can be rerun and reaches provider choices", async () => {
     const home = scratchDir("cli-setup-rerun");
     tempDirs.push(home);
     writeConfig(home, {
@@ -185,7 +145,7 @@ describe("CLI behavior", () => {
       user: { id: "user_123", email: "ashish@example.com" },
     });
 
-    const proc = runCliInPty(["setup"], { home, stdin: "8\n" });
+    const proc = await runCliInPty(["setup"], { home, stdin: "8\n" });
     const stdout = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
@@ -197,7 +157,7 @@ describe("CLI behavior", () => {
     expect(stdout).toContain("Skipped choosing a model provider");
   });
 
-  test("setup --local-model keeps local provider setup explicit", () => {
+  test("setup --local-model keeps local provider setup explicit", async () => {
     const home = scratchDir("cli-setup-local");
     tempDirs.push(home);
     writeConfig(home, {
@@ -206,7 +166,7 @@ describe("CLI behavior", () => {
       user: { id: "user_123", email: "ashish@example.com" },
     });
 
-    const proc = runCli(["setup", "--local-model", "--provider", "skip"], { home });
+    const proc = await runCli(["setup", "--local-model", "--provider", "skip"], { home });
     const stdout = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
@@ -214,7 +174,7 @@ describe("CLI behavior", () => {
     expect(stdout).toContain("Cloud workspaces are ready");
   });
 
-  test("provider list summarizes connected providers without leaking credentials", () => {
+  test("provider list summarizes connected providers without leaking credentials", async () => {
     const home = scratchDir("cli-providers");
     tempDirs.push(home);
     writeConfig(home, {
@@ -228,7 +188,7 @@ describe("CLI behavior", () => {
       },
     });
 
-    const proc = runCli(["provider", "list"], { home });
+    const proc = await runCli(["provider", "list"], { home });
     const stdout = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
@@ -240,8 +200,8 @@ describe("CLI behavior", () => {
     expect(stdout).not.toContain("codex-refresh-token");
   });
 
-  test("no-arg CLI keeps a non-interactive help fallback", () => {
-    const proc = runCli([]);
+  test("no-arg CLI keeps a non-interactive help fallback", async () => {
+    const proc = await runCli([]);
     const stdout = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
@@ -249,8 +209,8 @@ describe("CLI behavior", () => {
     expect(stdout).toContain("kinu <command>");
   });
 
-  test("subcommand help reaches the selected command instead of root help", () => {
-    const proc = runCli(["run", "--help"]);
+  test("subcommand help reaches the selected command instead of root help", async () => {
+    const proc = await runCli(["run", "--help"]);
     const out = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
@@ -259,8 +219,8 @@ describe("CLI behavior", () => {
     expect(out).not.toContain("Self-evolving AI agent with MCTS exploration");
   });
 
-  test("chat help offers transcript controls, never resume or fork selection", () => {
-    const proc = runCli(["chat", "--help"]);
+  test("chat help offers transcript controls, never resume or fork selection", async () => {
+    const proc = await runCli(["chat", "--help"]);
     const out = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
@@ -274,7 +234,7 @@ describe("CLI behavior", () => {
     expect(out).not.toContain("-r, --resume");
   });
 
-  test("no-name chat can select a configured cloud agent", () => {
+  test("no-name chat can select a configured cloud agent", async () => {
     const home = scratchDir("cli-chat");
     tempDirs.push(home);
     writeConfig(home, {
@@ -294,7 +254,7 @@ describe("CLI behavior", () => {
       aliases: { jarvis: "jarvis" },
     });
 
-    const proc = runCli(["chat"], { home, stdin: "/exit\n" });
+    const proc = await runCli(["chat"], { home, stdin: "/exit\n" });
     const stderr = toText(proc.stderr);
 
     expect(proc.exitCode).toBe(0);
@@ -303,16 +263,16 @@ describe("CLI behavior", () => {
 });
 
 describe("kinu exec (headless)", () => {
-  test("requires a task prompt and exits nonzero", () => {
+  test("requires a task prompt and exits nonzero", async () => {
     const home = scratchDir("cli-exec-usage");
     tempDirs.push(home);
 
-    const proc = runCli(["exec"], { home });
+    const proc = await runCli(["exec"], { home });
     expect(proc.exitCode).toBe(1);
     expect(toText(proc.stderr)).toContain("A task prompt is required");
   });
 
-  test("demands --workspace when several workspaces are configured", () => {
+  test("demands --workspace when several workspaces are configured", async () => {
     const home = scratchDir("cli-exec-agents");
     tempDirs.push(home);
     const stamp = new Date(0).toISOString();
@@ -323,7 +283,7 @@ describe("kinu exec (headless)", () => {
       },
     });
 
-    const proc = runCli(["exec", "do something"], { home });
+    const proc = await runCli(["exec", "do something"], { home });
     expect(proc.exitCode).toBe(1);
     const stderr = toText(proc.stderr);
     expect(stderr).toContain("Multiple workspaces configured");
@@ -343,10 +303,10 @@ describe("kinu exec (headless)", () => {
         KINU_MODEL: "mock-model",
       };
 
-      const created = await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke test agent"], { home, env });
+      const created = await runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke test agent"], { home, env });
       expect(created.exitCode).toBe(0);
 
-      const proc = await runCliAsync(["exec", "--workspace", "smokey", "--json", "Say hello"], { home, env });
+      const proc = await runCli(["exec", "--workspace", "smokey", "--json", "Say hello"], { home, env });
       expect(toText(proc.stderr)).toBe("");
       expect(proc.exitCode).toBe(0);
 
@@ -376,7 +336,7 @@ describe("kinu exec (headless)", () => {
       expect(ledger.every((e) => e.runId.length > 0)).toBe(true);
       expect(new Set(ledger.map((e) => e.runId)).size).toBe(1);
 
-      const second = await runCliAsync(["exec", "--workspace", "smokey", "--json", "Say hello again"], { home, env });
+      const second = await runCli(["exec", "--workspace", "smokey", "--json", "Say hello again"], { home, env });
       expect(second.exitCode).toBe(0);
 
       const secondHeader = v.parse(
@@ -413,9 +373,9 @@ describe("kinu exec (headless)", () => {
         KINU_MODEL: "mock-model",
       };
 
-      expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env: goodEnv })).exitCode).toBe(0);
+      expect((await runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env: goodEnv })).exitCode).toBe(0);
 
-      const proc = await runCliAsync(["exec", "--workspace", "smokey", "--json", "Say hello"], {
+      const proc = await runCli(["exec", "--workspace", "smokey", "--json", "Say hello"], {
         home,
         env: { ...goodEnv, KINU_BASE_URL: `http://127.0.0.1:${bad.port}` },
       });
@@ -441,9 +401,9 @@ describe("kinu exec (headless)", () => {
         KINU_MODEL: "mock-model",
       };
 
-      expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
+      expect((await runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
-      const proc = await runCliAsync(["exec", "--workspace", "smokey", "--json", "--no-auto-evolve", "Say hello"], { home, env });
+      const proc = await runCli(["exec", "--workspace", "smokey", "--json", "--no-auto-evolve", "Say hello"], { home, env });
       expect(toText(proc.stderr)).toBe("");
       expect(proc.exitCode).toBe(0);
       const events = toText(proc.stdout).trim().split("\n").map(parseJsonObject);
@@ -454,7 +414,7 @@ describe("kinu exec (headless)", () => {
     }
   });
 
-  test("--no-auto-evolve is rejected for cloud workspaces", () => {
+  test("--no-auto-evolve is rejected for cloud workspaces", async () => {
     const home = scratchDir("cli-exec-noevolve-cloud");
     tempDirs.push(home);
     const stamp = new Date(0).toISOString();
@@ -466,7 +426,7 @@ describe("kinu exec (headless)", () => {
       },
     });
 
-    const proc = runCli(["exec", "--workspace", "jarvis", "--json", "--no-auto-evolve", "Say hello"], { home });
+    const proc = await runCli(["exec", "--workspace", "jarvis", "--json", "--no-auto-evolve", "Say hello"], { home });
     expect(proc.exitCode).toBe(1);
     expect(toText(proc.stderr)).toContain("--no-auto-evolve applies to local workspaces");
   });
@@ -492,10 +452,10 @@ describe("kinu run — a tool refusal is rendered for the person, not the model"
         KINU_MODEL: "mock-model",
       };
 
-      const created = await runCliAsync(["create", "refusy", "--mode", "local", "--purpose", "refusal render"], { home, env });
+      const created = await runCli(["create", "refusy", "--mode", "local", "--purpose", "refusal render"], { home, env });
       expect(created.exitCode).toBe(0);
 
-      const proc = await runCliAsync(["run", "refusy", "try the nonexistent runtime"], { home, env });
+      const proc = await runCli(["run", "refusy", "try the nonexistent runtime"], { home, env });
       expect(proc.exitCode).toBe(1);
       const stdout = toText(proc.stdout);
       expect(stdout).toContain("✗");
@@ -531,9 +491,9 @@ describe("kinu exec --json — a mechanical steer is observable from outside", (
         KINU_MODEL: "mock-model",
       };
 
-      expect((await runCliAsync(["create", "nudgey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
+      expect((await runCli(["create", "nudgey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
-      const proc = await runCliAsync(["exec", "--workspace", "nudgey", "--json", "--no-auto-evolve", "Fix it"], { home, env });
+      const proc = await runCli(["exec", "--workspace", "nudgey", "--json", "--no-auto-evolve", "Fix it"], { home, env });
       const lines = toText(proc.stdout).trim().split("\n");
       const events = lines.map(parseJsonObject);
 
@@ -574,9 +534,9 @@ describe("kinu exec --json — the turn-end usage payload", () => {
         KINU_MODEL: "mock-model",
       };
 
-      expect((await runCliAsync(["create", "quiet", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
+      expect((await runCli(["create", "quiet", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
-      const proc = await runCliAsync(["exec", "--workspace", "quiet", "--json", "--no-auto-evolve", "Say hello"], { home, env });
+      const proc = await runCli(["exec", "--workspace", "quiet", "--json", "--no-auto-evolve", "Say hello"], { home, env });
       expect(proc.exitCode).toBe(0);
       const events = toText(proc.stdout).trim().split("\n").map(parseJsonObject);
 
@@ -779,7 +739,7 @@ describe("kinu create — an unusable model is named at creation", () => {
 
       // Ambient credentials (a BYO key, or KINU_BASE_URL/KINU_MODEL set by another test file) would
       // suppress the warning; the subprocess starts without them.
-      const proc = await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], {
+      const proc = await runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], {
         home,
         env: {
           OPENAI_API_KEY: "", ANTHROPIC_API_KEY: "", OPENROUTER_API_KEY: "",
@@ -802,7 +762,7 @@ describe("kinu create — an unusable model is named at creation", () => {
     const server = startMockLlm("ok");
 
     try {
-      const proc = await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], {
+      const proc = await runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], {
         home,
         env: {
           KINU_BASE_URL: `http://127.0.0.1:${server.port}`,
@@ -838,9 +798,9 @@ describe("kinu exec — provider failures are legible and actionable", () => {
         KINU_MODEL: "mock-model",
       };
 
-      expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
+      expect((await runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
-      const proc = await runCliAsync(["exec", "--workspace", "smokey", "Say hello"], {
+      const proc = await runCli(["exec", "--workspace", "smokey", "Say hello"], {
         home,
         env: { ...env, KINU_BASE_URL: `http://127.0.0.1:${bad.port}` },
       });
@@ -869,9 +829,9 @@ describe("kinu exec — provider failures are legible and actionable", () => {
         KINU_MODEL: "mock-model",
       };
 
-      expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
+      expect((await runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
-      const proc = await runCliAsync(["exec", "--workspace", "smokey", "--json", "Say hello"], {
+      const proc = await runCli(["exec", "--workspace", "smokey", "--json", "Say hello"], {
         home,
         env: { ...env, KINU_BASE_URL: `http://127.0.0.1:${bad.port}` },
       });

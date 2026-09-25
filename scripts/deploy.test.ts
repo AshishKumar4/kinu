@@ -1520,7 +1520,7 @@ describe("CLI distribution artifacts", () => {
     run(["model", "w1", "openai-compat/mock-model"]);
   }
 
-  function chatSurface(root: string, env: Record<string, string>): PtyRun {
+  function chatSurface(root: string, env: Record<string, string>): Promise<PtyRun> {
     return runTuiInPty(join(root, "cli.js"), {
       args: ["chat", "w1"],
       cwd: root,
@@ -1557,7 +1557,7 @@ describe("CLI distribution artifacts", () => {
 
       provisionWorkspace(root, env, `http://127.0.0.1:${String(server.modelPort)}/v1`);
 
-      const run = chatSurface(root, env);
+      const run = await chatSurface(root, env);
 
       expect(run.waits.every((w) => w.met), `PTY waits failed: ${JSON.stringify(run.waits)}`).toBe(true);
 
@@ -1615,7 +1615,7 @@ describe("CLI distribution artifacts", () => {
       try {
         provisionWorkspace(root, env, `http://127.0.0.1:${String(server.modelPort)}/v1`);
 
-        const run = chatSurface(root, env);
+        const run = await chatSurface(root, env);
 
         expect(run.screen).toContain("**two green lanes**");
         expect(run.screen).toContain("### Heading marker");
@@ -1710,7 +1710,7 @@ describe("worker release artifact", () => {
     expect(entries).toContain("release.json");
   });
 
-  // Measured 2026-09-21: release 0.2.0+bd1872f73 carried both, and the
+  // Measured 2026-09-21: release 0.2.0+7cb7078c8 carried both, and the
   // `.dev.vars` was this checkout's local-dev root key, published to anyone
   // who installs. A member is what the runtime loads; scaffolding is not.
   test("the artifact carries no local-dev secrets and no build index, and the manifest names only modules", () => {

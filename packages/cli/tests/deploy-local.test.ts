@@ -10,6 +10,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { LocalConfigSchema } from '@kinu.run/core/deploy';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
+import { runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 
 const repoRoot = resolve(__dirname, '../../..');
@@ -116,11 +117,9 @@ async function artifact(): Promise<Uint8Array> {
 
   const out = join(stage, 'release.tar.gz');
 
-  const tar = Bun.spawnSync({
-    cmd: ['tar', '--format=ustar', '-czf', out, '-C', stage, 'release.json', 'worker/index.js', 'client/index.html'],
-  });
+  const tar = await runToExit(['tar', '--format=ustar', '-czf', out, '-C', stage, 'release.json', 'worker/index.js', 'client/index.html']);
 
-  if (tar.exitCode !== 0) throw new Error(`tar refused: ${tar.stderr.toString()}`);
+  if (tar.exitCode !== 0) throw new Error(`tar refused: ${tar.stderr}`);
 
   return new Uint8Array(readFileSync(out));
 }
@@ -186,19 +185,11 @@ function boundPort(server: Server): number {
   return bound.output.port;
 }
 
-/** Spawned async: the channel is an HTTP server in this process, so `spawnSync` would deadlock. */
-async function runDeploy(home: string, args: readonly string[]) {
-  const proc = Bun.spawn({
-    cmd: [process.execPath, cliBin, 'deploy', 'local', ...args],
+function runDeploy(home: string, args: readonly string[]) {
+  return runToExit([process.execPath, cliBin, 'deploy', 'local', ...args], {
     cwd: scratchDir('local-project'),
-    stdout: 'pipe',
-    stderr: 'pipe',
     env: { ...process.env, KINU_HOME: home, PATH: `${binDir}:${process.env.PATH ?? ''}` },
   });
-
-  const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-
-  return { exitCode: await proc.exited, stdout, stderr };
 }
 
 function readPid(home: string): number | null {

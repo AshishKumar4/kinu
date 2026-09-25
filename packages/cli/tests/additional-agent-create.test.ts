@@ -1,3 +1,4 @@
+import { runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 
@@ -8,7 +9,7 @@ const HOME = scratchDir('additional-agent-home');
 const PROJECT = scratchDir('additional-agent-project');
 
 describe('local additional-agent creation', () => {
-  test('inherits the stored placeholder mission when the workspace has no custom mission', () => {
+  test('inherits the stored placeholder mission when the workspace has no custom mission', async () => {
     // config.ts binds KINU_HOME at module load; a subprocess makes the isolated home authoritative.
     const scenario = `
       import { Database } from 'bun:sqlite';
@@ -27,17 +28,15 @@ describe('local additional-agent creation', () => {
       db.close();
     `;
 
-    const result = Bun.spawnSync(['bun', '-e', scenario], {
+    const result = await runToExit(['bun', '-e', scenario], {
       cwd: join(import.meta.dir, '../../..'),
       env: {
         ...process.env, HOME, KINU_HOME: HOME,
         KINU_BASE_URL: 'http://localhost:1/v1', KINU_AUTH: 'Bearer fixture', KINU_MODEL: 'fixture-model',
       },
-      stdout: 'pipe',
-      stderr: 'pipe',
     });
 
-    expect(result.exitCode, result.stderr.toString()).toBe(0);
-    expect(result.stdout.toString().trim()).toBe('Help the user with the work they assign.');
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe('Help the user with the work they assign.');
   });
 });

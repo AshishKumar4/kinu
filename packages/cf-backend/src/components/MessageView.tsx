@@ -14,7 +14,7 @@ import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
 import {
   ADVISOR_SEVERITY_LABEL,
-  describeToolCall, summarizeToolCall,
+  describeToolCall, rowText, summarizeToolCall,
 } from "@kinu.run/core";
 import type { AdvisorSeverity, InlineSteer, JsonObject, JsonValue, PlacedSteer, ToolCallEffect } from "@kinu.run/core";
 import * as v from "valibot";
@@ -36,10 +36,6 @@ import {
 } from "@kinu.run/core";
 import { useToggledSet } from "@/hooks/use-toggled-set";
 import type { UnavailableDevice } from "@/hooks/use-kinu";
-
-function getMessageText(msg: UIMessage): string {
-  return msg.parts.filter(p => p.type === "text").map(p => p.text).join("");
-}
 
 const MessageCreatedAtSchema = v.looseObject({
   createdAt: v.optional(v.union([v.string(), v.number(), v.instance(Date)])),
@@ -672,13 +668,13 @@ export const MessageView = memo(function MessageView({
   if (programmatic) {
     return (
       <ProgrammaticTurnCard
-        turn={programmatic} text={getMessageText(message)} state={signalState ?? "shown"} />
+        turn={programmatic} text={rowText(message)} state={signalState ?? "shown"} />
     );
   }
 
   if (message.role === "system") {
     return <ProgrammaticTurnCard turn={{ kind: "system_event", event: "system" }}
-      text={getMessageText(message)} state={signalState ?? "shown"} />;
+      text={rowText(message)} state={signalState ?? "shown"} />;
   }
 
   if (isUser) {
@@ -692,7 +688,7 @@ export const MessageView = memo(function MessageView({
               {fileParts.map((p, i) => <FilePartView key={i} part={p} />)}
             </div>
           )}
-          {getMessageText(message)}
+          {rowText(message)}
           {canFork && (
             <button
               onClick={() => onFork(message.id)}

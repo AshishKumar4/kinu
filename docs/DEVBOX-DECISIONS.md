@@ -96,10 +96,10 @@ With the hold past 5 s, the hook's timers stalled locally, 4 of 4 (run
 D1. Admission is port-proven. The container-start path proves the control
 listener answers before calling the budgeted restore hook. D8 supersedes the
 input-block portion of this decision; the listener proof remains required.
-Decided 2026-09-09 (`6e96741cc`, "admit only through startAndWaitForPorts"),
-reversed 2026-09-09 (`bde0047cb`, on the mistaken premise that port 3000 was
+Decided 2026-09-09 (`8f9693f6e`, "admit only through startAndWaitForPorts"),
+reversed 2026-09-09 (`6707ce6fd`, on the mistaken premise that port 3000 was
 an app port), re-decided 2026-09-13 on P3. Status: on main since the
-`feat/devbox-gated-restore` merge `69cae24ac` (2026-09-13). The five resets
+`feat/devbox-gated-restore` merge `408df63f4` (2026-09-13). The five resets
 measured 2026-09-10 (DECISIVE-2026-09-05.md, "Six fresh starts") were
 measured under the reversed shape and do not bear on the port-proven one.
 
@@ -131,12 +131,12 @@ hypothesis and is replaced, with red fixtures in both directions.
 D4. Chunked delta publication stays. A checkpoint publishes changed 16 KiB
 blocks plus whole small files in one delta object, so a 64 KiB overwrite in a
 64 MiB file publishes under 196,608 bytes (`C3_BYTES_BOUND`). Decided
-2026-09-09 (`baf033132`, `006289643`) from COST-2026-09-09-chain-publication.md,
+2026-09-09 (`edecd1e38`, `7962b3624`) from COST-2026-09-09-chain-publication.md,
 which measured whole-delta publication re-uploading unchanged dirty data
 quadratically. D2 changes where the delta is consumed, not how it is written.
 
 D5. Snapshot-chain is refused full strategy admission on 2026-09-13.
-Settlement run `20260913154111`, clean `fed2b9d779`, ran from
+Settlement run `20260913154111`, clean `a292c7488c`, ran from
 15:41:12.703 to 16:02:22.337 UTC and completed the checkpoint ladder, but
 failed G3, G6 and G9. It ranks no strategy. Snapshot-chain remains the
 shipped implementation; no alternative is shown better under R3.
@@ -146,7 +146,7 @@ run's recorded verdicts, without combining observations from other runs:
 
 | Gate | Verdict | Deciding evidence |
 | --- | --- | --- |
-| G0 Provenance | Pass | Clean `fed2b9d779`; Worker `25825c2d-1a73-47da-9b15-68e1912c906e`; pinned image digest `3b11f7bf756af01664663f05fd1f3c1721dababc6a4fcf2bfa047d341d9b6a9e` |
+| G0 Provenance | Pass | Clean `a292c7488c`; Worker `25825c2d-1a73-47da-9b15-68e1912c906e`; pinned image digest `3b11f7bf756af01664663f05fd1f3c1721dababc6a4fcf2bfa047d341d9b6a9e` |
 | G1 Mount truth | Pass | Workspace mount, writable upper, named archives and durable bytes verified |
 | G2 Filesystem semantics | Pass | Both re-registered witnesses observed; no unexpected semantic failure |
 | G3 Publication safety | Refused | The read-only probe's top-level `exit` terminated the persistent SDK shell, so write refusal and the aggregate cut verdict were unobserved |
@@ -161,7 +161,7 @@ Both npm profiles completed their first repetition. Git repetition 1
 completed segments 0 to 2; after the idle-policy quiesce, segments 3 and 4 were
 refused. SQLite repetition 1 and all four second-repetition preparations
 were attempted before replacement startup settled and returned "ask again".
-This was the request-admission gap fixed by D13 (`c0181b5eb`), not a stale
+This was the request-admission gap fixed by D13 (`796b5bab2`), not a stale
 startup row discarded by D12. The original refusal remains recorded.
 
 The immutable-publication witness retained the first 81,932,288-byte delta
@@ -174,7 +174,7 @@ delta's own ID. The legacy-only `delta-layer-collapse` profile remains:
 `snapshot-chain.ts` still collapses a mounted non-chunked delta, and the
 full-upper conformance row proves that live property.
 
-The G3 command now runs in a subshell (`9ae255d17`). Its local POSIX-shell
+The G3 command now runs in a subshell (`bd287a516`). Its local POSIX-shell
 control was red for session termination and green for preserving both a
 failed write's status 1 and a writable control's status 0. Neither this fix
 nor D13 has a completed post-fix cloud matrix: three consecutive deployed
@@ -186,9 +186,9 @@ stopped. The unchanged 55-second observation ceiling ended measurement.
 
 | Run | Source | UTC interval on 2026-09-13 | Outcome |
 | --- | --- | --- | --- |
-| `20260913161007` | `c0181b5eb` | 16:10:09.351 to 16:11:45.088 | Eight admission incidents; no restore or workload |
-| `20260913161823` | `9ae255d17` | 16:18:25.294 to 16:19:40.525 | Eight admission incidents; no restore or workload |
-| `20260913162021` | `9ae255d17` | 16:20:22.861 to 16:21:40.113 | Nine admission incidents; no restore or workload |
+| `20260913161007` | `796b5bab2` | 16:10:09.351 to 16:11:45.088 | Eight admission incidents; no restore or workload |
+| `20260913161823` | `bd287a516` | 16:18:25.294 to 16:19:40.525 | Eight admission incidents; no restore or workload |
+| `20260913162021` | `bd287a516` | 16:20:22.861 to 16:21:40.113 | Nine admission incidents; no restore or workload |
 
 All three pass G0 and G8 and refuse the other eight gates for missing
 measurements. Their seven-entry teardown manifests are complete, cleanup
@@ -228,7 +228,7 @@ No comparison run to date was admitted end to end; see "Comparisons not
 admitted" in `kinu-logs/devbox-history-report.json`. The two earliest, whose
 reports are deleted:
 
-- `kinu-devbox-bench-20260903140046` on `1ffe8ea4f` plus driver fix
+- `kinu-devbox-bench-20260903140046` on `35fee582a` plus driver fix
   `2f3b3f81`, 2026-09-03T14:00:48Z to 15:28:41Z, seed 20260824, 2 reps. Refused
   at admission: G0 green, G1 to G9 red. Only snapshot-chain passed lifecycle
   (9/9). r2fs was refused at cold attach ("Failed to change directory to
@@ -256,7 +256,7 @@ reports are deleted:
   `INCIDENT_LEDGER_MAX_ROWS = 100` truncated the incidents to totals, so they
   could not be grouped.
 
-The removal of the alternatives' source on 2026-09-09 (`337eaf6f9`) followed
+The removal of the alternatives' source on 2026-09-09 (`46c320bc1`) followed
 an owner choice to measure C3 and chain publication first, not an owner
 finding that the alternatives were defeated. They are recoverable from the
 `archive/*` tags named in `docs/BRANCH-ARCHIVE.md`.
@@ -264,13 +264,13 @@ finding that the alternatives were defeated. They are recoverable from the
 D6. The test double models the platform. `FakeSandbox.stop()` and
 `destroy()` discard container-local state and keep Durable Object rows and
 remote objects; `resetIsolate()` keeps the disk. Decided 2026-09-13 from P1
-(`0a913d39c`). Before this the double kept the disk across a stop, so tests
+(`620709a75`). Before this the double kept the disk across a stop, so tests
 that passed under it proved reactivation, not restart.
 
 D7. Block-layer design gate. Status: storage half implemented on 2026-09-13.
 The conditional design is in [DEVBOX-BLOCK-LAYER.md](DEVBOX-BLOCK-LAYER.md).
-Manifest v2 is `f69af22cf`; the Rust/fuser lower is `7598a68a6`; the derived
-image is `ac6ae8f39`, digest-pinned for both product and bench. The exact
+Manifest v2 is `e185bb046`; the Rust/fuser lower is `0bdf297c5`; the derived
+image is `6a97e34ce`, digest-pinned for both product and bench. The exact
 stack is `block-lower:lower-delta/<generation>/.devbox-delta/tree:lower-base`.
 No implementation can bound arbitrary service-demanded work before readiness;
 the adopted read-only lower bounds storage attachment only.
@@ -308,7 +308,7 @@ The eager counterexamples `c3_attach_copies_the_whole_64mib_base` and
 implementation. They do not describe v2 storage attach. No product deployment,
 full-hook latency guarantee or callback-only publication bound is claimed.
 
-D8. SDK input blocks contain storage work only (`4bca22e3c`, 2026-09-13). Reversed by D26.
+D8. SDK input blocks contain storage work only (`25b4cf285`, 2026-09-13). Reversed by D26.
 This supersedes D1/D3's
 in-block restore placement and the input-block part of R1, as authorized by
 the lifecycle-defect assignment on 2026-09-13. Restore still runs once per
@@ -335,7 +335,7 @@ against the old installed SDK and passes the storage-only blocks. It follows
 named methods, virtual hooks and direct callback arguments; computed names
 and imported/indirect callbacks remain outside its static claim.
 
-D9. Opaque directories are directory records (`40f16afc6`, 2026-09-13).
+D9. Opaque directories are directory records (`e46c7760c`, 2026-09-13).
 The native probe observes overlay xattrs or `.wh..wh..opq`; an unreadable
 opacity decision refuses publication. The package writes the mask in
 `delta/tree`, below the chunked inodes and beside this checkpoint's whole
@@ -355,7 +355,7 @@ was red before the fix. The image and source are pinned in
 `block-lower/upstream.json`; evidence is under
 `bench-artifacts/block-attach/opaque-20260913/`.
 
-D10. Storage commands run from the runtime directory (`291359865`,
+D10. Storage commands run from the runtime directory (`a3f34dc22`,
 2026-09-13). In `b20260913132854`, first-base reseat ran with cwd
 `/workspace` and unmount failed EBUSY after 2,235 ms. The catch continued;
 the next checkpoint found no base files and compared 4,096 upper blocks
@@ -365,7 +365,7 @@ published 69,632 bytes. Failed reseats now refuse the checkpoint, even when
 the base archive is already durable. A Docker row proves the cwd holder,
 reseat, small next delta and exact cold restore.
 
-D11. The block mount type is the measured `fuse` (`4ded56c3b`, 2026-09-13).
+D11. The block mount type is the measured `fuse` (`e2e84f464`, 2026-09-13).
 Cloud trace `b20260913141100` showed that type with every source/generation
 comparison true; the old `fuse.devbox-block` assertion alone refused the
 valid composition and drove recovery. The pinned image reports `fuse` in
@@ -374,7 +374,7 @@ conformance corpus is red for a missing mount, wrong type or wrong token,
 and green for the measured mount.
 
 D12. A stale startup row cannot reopen a settled running generation
-(`9f877511e`, 2026-09-13). The SDK can buffer rows that a successful hook
+(`2c6f6db18`, 2026-09-13). The SDK can buffer rows that a successful hook
 has deleted. The dense trace below showed one such adoption waiting
 14,814 ms behind an active writer on the shared exec session. Scheduled
 startup now returns when that running generation already has admission;
@@ -382,7 +382,7 @@ unsettled generations still use the same coordinator. The active-caller
 regression is red before the guard and green after it.
 
 D13. A request in the running-before-hook window joins the generation's
-startup coordinator (2026-09-13). Run `20260913154111`, control `fed2b9d779`,
+startup coordinator (2026-09-13). Run `20260913154111`, control `a292c7488c`,
 quiesced after Git repetition 1 segment 2. The next requests saw
 `running:true` before `onStart` had registered its restore promise and
 received `pending` instead of joining startup. The remaining workload
@@ -402,12 +402,12 @@ Raw control evidence is under `bench-artifacts/devbox-admission/20260913154111/`
 
 D14. A due schedule row is never re-armed by a caller that is not
 dispatching it (2026-09-14, `fix/devbox-o1`). The "cold restore unstarted"
-red of `b20260914045438` is not a regression between `4ded56c3b` and
-`5d2707ba3`: the same 55-second `running:true, restoration:unstarted`
+red of `b20260914045438` is not a regression between `e2e84f464` and
+`c45d48cc5`: the same 55-second `running:true, restoration:unstarted`
 reading, with one incident undelivered and no heartbeat tick, appears on
-`40f16afc6` (both cells of `b20260913131044`) and on `4ded56c3b` (the dense
+`e46c7760c` (both cells of `b20260913131044`) and on `e2e84f464` (the dense
 baseline of `b20260913143908`). Its cause was measured on
-`b20260914070552` (`ba2258e91` plus the startup traces of `791a80a83`,
+`b20260914070552` (`7347577db` plus the startup traces of `a6494198a`,
 ten destroy/create cycles, `--lifecycle`, interrupted by the driver's own
 process ceiling after seven): cycles 2, 3, 5 and 6 each recorded exactly one
 admission refusal, `Container request aborted.: The container is not
@@ -432,7 +432,7 @@ times) and green after; the self-re-arming direction stays red. Evidence:
 `bench-artifacts/teardown/b20260914070552.json`, zero objects and zero
 multipart uploads, bucket absent.
 
-Measured live on 2026-09-14 on clean `3618e3e0b`, run `b20260914073654`,
+Measured live on 2026-09-14 on clean `e34e124c2`, run `b20260914073654`,
 `--lifecycle`, all ten destroy/create cycles: no cycle refused at the
 55-second ceiling with `restoration:unstarted`; every cold cycle attached,
 with `incidents.total` between 3 and 8 and `incidents.undelivered` at 0,
@@ -450,7 +450,7 @@ zero residue multipart uploads. Evidence: `observations.json` and
 
 D15. One object attempt per checkpoint, by publishing the staged archive
 with an HTTP PUT to the mount's own egress host (2026-09-14, `fix/devbox-o1`,
-`e2cd0eb51`). H1's design, landed and measured live. `storeObjectUrl(key)` in
+`0b31e69e3`). H1's design, landed and measured live. `storeObjectUrl(key)` in
 `#chainPorts` answers `http://r2.internal/<binding>/<key relative to the
 mount prefix>` and refuses a key outside the prefix; `publishCommand`
 writes the publisher script into `/var/tmp/devbox` and runs it under bun,
@@ -462,7 +462,7 @@ image's Bun 1.3.12 sends nothing for a `Bun.file` slice as a fetch body
 the `conv=fsync` check `dd` owed s3fs; the mount is still held because its
 registration routes `r2.internal` and its reads serve the layers.
 
-Measured live on clean `4a7dd1be6`, run `b20260914082622`, `--c3-only`:
+Measured live on clean `d691264bb`, run `b20260914082622`, `--c3-only`:
 `published.transport.puts: 1`, `putUploadBytes: 69632`, `correctness:
 passed`, cold restore 13,839 ms, versus three attempts and 12,350 ms on
 the s3fs control `b20260914074243`, and the three attempts of the earlier
@@ -477,7 +477,7 @@ of three attempts. s3fs's marker/placeholder/flush three-put shape is retired
 for writes and stays for reads.
 
 D16. The post-fix settlement run is refused at cold attach
-(2026-09-14). Run `20260914220919` on clean `e060e360f` reproduced D5's
+(2026-09-14). Run `20260914220919` on clean `0415e0f93` reproduced D5's
 shape on the current tree (one `snapshot-chain` arm, `--decisive`,
 `--fault-cuts`, seed 20260824, loop budget 8,000 ms, two repetitions)
 with D14's alarm fix and D15's one-attempt publish in place. The fixture
@@ -510,7 +510,7 @@ timing or a new admission failure is unmeasured. O1 stays open.
 
 
 D17. A fixture is not handed to a driver until its container application
-has a provisioned instance (2026-09-14, `6bcd11b35`). This answers D16's
+has a provisioned instance (2026-09-14, `c28e0d9a4`). This answers D16's
 open question: the 54,540 ms refusal was neither the D14 alarm shape nor a
 new admission failure. It was the platform's rollout of a freshly deployed
 container application, measured inside the cold attach's own 55 s observer
@@ -568,7 +568,7 @@ gate, ceiling, budget or workload changed. `scripts/deploy-substrate.test.ts`
 is red when the wait would return on `scheduling` or `starting`, green on
 `healthy` and on `active`, and red past the deadline.
 
-Settlement run `20260914234711`, clean `6bcd11b35`, D5's exact flags (one
+Settlement run `20260914234711`, clean `c28e0d9a4`, D5's exact flags (one
 `snapshot-chain` arm, `--decisive`, `--fault-cuts`, seed 20260824, loop
 budget 8,000 ms, two repetitions), Worker version
 `a78f7be4-654b-4302-842d-2d154929d799`, 23:47:12 to 00:50:42 UTC. The
@@ -580,7 +580,7 @@ false. The run's recorded verdicts:
 
 | Gate | Verdict | Deciding evidence |
 | --- | --- | --- |
-| G0 Provenance | Pass | Clean `6bcd11b35`; Worker `a78f7be4-654b-4302-842d-2d154929d799`; pinned image digest `3b11f7bf…` |
+| G0 Provenance | Pass | Clean `c28e0d9a4`; Worker `a78f7be4-654b-4302-842d-2d154929d799`; pinned image digest `3b11f7bf…` |
 | G1 Mount truth | Pass | Workspace mount, writable upper, named archives and durable bytes verified |
 | G2 Filesystem semantics | Refused | The expected red witness `chunked-absorption` did not fail: chunked manifest unobserved, marker merged=false, upper absent; an expected failure that vanished is instrument drift |
 | G3 Publication safety | Refused | The cut cell threw before judging: the baseline witness was not observed, bytes differ; no cut completion, observer, barrier-ack, sweep or rollback evidence |
@@ -619,7 +619,7 @@ closed.
 
 
 D18. Snapshot-chain is admitted as the full strategy (2026-09-15). Run
-`20260915065241`, clean `84a026c2f`, D5's exact flags (one `snapshot-chain`
+`20260915065241`, clean `421c75d69`, D5's exact flags (one `snapshot-chain`
 arm, `--decisive`, `--fault-cuts`, seed 20260824, loop budget 8,000 ms, two
 repetitions), Worker version `f793cbb1-c6e1-4dd0-9dbd-52f70bf6737a`, ran
 from 06:52:42 to 08:19:07 UTC and passed all ten gates;
@@ -628,7 +628,7 @@ decisions, each measured before it, carried the three gates D17 left red:
 
 | Gate | Verdict | Deciding evidence |
 | --- | --- | --- |
-| G0 Provenance | Pass | Clean `84a026c2f`; Worker `f793cbb1-c6e1-4dd0-9dbd-52f70bf6737a`; pinned image digest `3b11f7bf…`; application provisioned 37,794 ms after deploy |
+| G0 Provenance | Pass | Clean `421c75d69`; Worker `f793cbb1-c6e1-4dd0-9dbd-52f70bf6737a`; pinned image digest `3b11f7bf…`; application provisioned 37,794 ms after deploy |
 | G1 Mount truth | Pass | Workspace mount, writable upper, named archives and durable bytes verified |
 | G2 Filesystem semantics | Pass | `mutable-delta` and `chunked-absorption` both observed |
 | G3 Publication safety | Pass | Cut verdict `all-old`: the record is identical to its pre-cut self and the cut marker never landed; absent references 0; barrier-ack loss 0; rollback or phantom root false; the served delta layer refused writes |
@@ -642,7 +642,7 @@ decisions, each measured before it, carried the three gates D17 left red:
 The four decisions, in landing order, each with its measurement:
 
 (a) Every operation route asks again while the box is starting
-(`fc9d4f010`). Run `20260914234711` recorded eight decisive segments as
+(`ddb47d348`). Run `20260914234711` recorded eight decisive segments as
 `unobserved execution` on the box's own `A startup is armed, so ask again`,
 read after the fixture's 6,000 ms admission window against a box that had
 just been quiesced, while `pollForAttach` beside them re-drove the same
@@ -655,7 +655,7 @@ instead of passing as written. `scripts/bench-devbox-ask-again.test.ts` is
 red on a tree where either route returns its first refusal. No budget,
 ceiling or window changed.
 
-(b) A stop never lands under a caller (`bb0195201`). Run `20260914234711`
+(b) A stop never lands under a caller (`6966047d1`). Run `20260914234711`
 lost `sqlite/1/1` and `git/2/4` to `OperationInterruptedError` three
 seconds into each command, and quiesced under `git/1/1`'s successor. Two
 causes, both in the box. First, `quiesceStep` trusted a `quietSince` older
@@ -675,14 +675,14 @@ for every admitted operation, so file traffic counts as use.
 under an admitted exec) and green after, with its no-caller control
 stopping; `tests/terminal-activity.test.ts` pins the write stamp.
 
-(c) A witness cell's setup replies are read (`665ed6a09`). Run
+(c) A witness cell's setup replies are read (`88bfd3b45`). Run
 `20260914234711`'s `chunked-absorption` cell wrote its marker through an
 exec that was answered "ask again", never read the reply, and judged a
 marker nobody wrote: G2's "expected red witness vanished". With (a) the
 exec is answered; `ranInBox` ends the cell with the box's own reason if a
 setup command did not run to exit 0.
 
-(d) A delta batch's `set -e` stays inside its own subshell (`84a026c2f`).
+(d) A delta batch's `set -e` stays inside its own subshell (`421c75d69`).
 The SDK runs every command of a box in one persistent `bash --norc`
 session (`@cloudflare/sandbox` 0.12.8 container server `initialize()`), and
 `runOpsBatched`'s top-level `set -e` outlived its batch: from the wake's
@@ -692,7 +692,7 @@ meant to fail with EROFS, answered `SessionTerminatedError: Session
 'sandbox-default' shell exited (exit code: 1)` in run `20260915012040`,
 and D5's G3 recorded the same death on 2026-09-13 as "the read-only probe's
 top-level `exit` terminated the persistent SDK shell". The probe's
-subshell fix (`9ae255d17`) treated the symptom; the `set -e` was the
+subshell fix (`bd287a516`) treated the symptom; the `set -e` was the
 cause. Measured 2026-09-15 on the pinned image's own container server run
 locally: a `set -e` batch then a failing top-level command ends the
 session; the same batch inside `( … )` and the session survives. The batch
@@ -702,7 +702,7 @@ member of its session-death class, so the conformance and chain suites are
 red on the old batch text, and `tests/decisions.test.ts` measures both
 directions against a real bash fed the way the SDK feeds a session.
 
-The intermediate run `20260915012040` on clean `bb0195201` (with (a), (b)
+The intermediate run `20260915012040` on clean `6966047d1` (with (a), (b)
 and (c), before (d)) passed nine gates and refused only G3, with 40 of 40
 segments priced and both witnesses observed; its artifacts are committed
 beside this run's. D13 and D14 are unchanged. No gate, ceiling, budget,
@@ -721,7 +721,7 @@ handed, not on the wall clock (2026-09-15). `openStartBudget` measured
 `setTimeout`, so a test budget was a race against the machine.
 `tests/lifecycle-generation.test.ts`'s `TightBox` holds a 20 ms budget so
 one step can be exhausted without sleeping; under the deploy wave on main
-`bea156897` the whole restore outran that budget before the parked
+`423af6ffc` the whole restore outran that budget before the parked
 exposure was reached, and "an exposure that outruns its allowance is
 reported, not exposed and not replaced" received `[deadline → repair]
 restoration did not settle inside the 20ms hook budget` in place of `port
@@ -750,7 +750,7 @@ Measured 2026-09-15 on this branch. The failing test and the new control
 (every command 25 real ms, longer than the whole budget) pass 3 of 3 alone,
 and 3 of 3 with `bun test --parallel=4 packages/cf-backend` and a 24-way CPU
 burner running beside them, one-minute load average 13.80 on 24 cores. The
-control is red 3 of 3 on main `bea156897`, where the same scenario answers
+control is red 3 of 3 on main `423af6ffc`, where the same scenario answers
 `[abandoned → replace] Devbox.onStart exceeded its 20ms budget`; main's
 original test did not go red under load 13.80 in 3 runs, so the deploy
 wave's exact load was not reproduced here and the fix rests on the control,
@@ -761,7 +761,7 @@ raised and no test retries.
 
 
 D20. The hosted workspace runs Nimbus's published hosted runtime, not a
-hand-built host (2026-09-21, commits `5a3f3530f` and `5b7438e59` on
+hand-built host (2026-09-21, commits `c0d3c46a1` and `a18e018be` on
 `feat/nimbus-hosted-runtime-0921`). `createHostedWorkspace` composes
 `composeHostedRuntime` (`@nimbus-sh/worker` 0.8.0, core 0.10.0, fabric 0.6.0,
 sdk 0.7.0) over the bundle's own `NimbusWorkspace`, with Kinu's one
@@ -897,7 +897,7 @@ as one row thereafter; the update rows stay the truth and a missing
 projection is rebuilt from them. The same turn after twenty long answers
 measured 375 ms (1.03x the empty transcript; the priors 22.4 s). The gate
 above holds the ratio under 3x and is red on the old reader at 6.3x.
-(4) After (1)-(3) shipped as 5682c7907 the eval object `del-gw1zqv` still
+(4) After (1)-(3) shipped as 7c6d070c1 the eval object `del-gw1zqv` still
 reset ten times in ten minutes, each frame 30 s of CPU across activation,
 the re-run of the interrupted delegated turn, and its two model calls, with
 output tokens in the low thousands per call. What remained was one storage
@@ -968,7 +968,7 @@ failure rather than a copy. The suite asserts that refusal by its own words,
 so a host failure can never hide behind it.
 
 D24. A streamed answer accumulates in SQLite in one row per open part and
-is committed once (2026-09-21, commits bef2de9bf through bd383b907 on
+is committed once (2026-09-21, commits 28fa2a5e0 through 02dffa2fe on
 `lane/session-store`). The owner's decision, removing D23's defect at its
 root: `message_updates` (an append-only ledger folded to a cutoff on every
 read), `message_parts` and D23's `message_projections` cache are gone, with
@@ -987,7 +987,7 @@ their value; `replyTo` is data in the parts array. The schema genesis is
 re-locked (a reset deployment; there are no users).
 Measured 2026-09-21 in `/home/mrwhite0racle/Kinu-wt-session-store` with a
 throwaway bench (not committed) driving `SessionStream` over bun:sqlite,
-one streamed text answer, three runs each, median; the base 0104882bb read
+one streamed text answer, three runs each, median; the base c57832111 read
 through a `git archive` copy under the same modules. Stream time is the
 whole answer from `text-start` to the step's seal; rows are what the answer
 leaves. 2,000 deltas: base 12 ms, 39 `message_updates` rows plus 2
@@ -1003,9 +1003,9 @@ tree: a 500-delta turn 219 ms on an empty transcript and 299 ms after twenty
 2,000-delta answers (1.37x, bound 3x). Removed: 3 tables (`message_parts`,
 `message_updates`, `message_projections`; `stream_parts` added), 7
 `*_sequence` columns with their FKs, 4 fork staging columns, 908 source
-lines against 544 added across 22 files (`git diff --numstat 0104882bb
-bd383b907 -- 'packages/*/src/**'`).
-Review fixes (commit d8a16a673): a streamed answer joins the working
+lines against 544 added across 22 files (`git diff --numstat c57832111
+02dffa2fe -- 'packages/*/src/**'`).
+Review fixes (commit 3f13ab88a): a streamed answer joins the working
 context only when it seals, so a context revision names immutable content;
 every container seals before its step advances, so a step cancelled while
 reasoning keeps its buffered tail; a part whose text outgrows one row
@@ -1023,10 +1023,10 @@ holds one stream row per part while open and none once sealed" and
 reads its accumulated text and a sealed one its content" and "a message left
 open by a dead stream seals from what it accumulated at the next admission".
 
-D25. A wake proves a recycle only after the stop confirms (`6b217f201`,
+D25. A wake proves a recycle only after the stop confirms (`b6a6ace00`,
 2026-09-04). The 2026-09-04 rerun (`kinu-devbox-bench-20260904142724`) saw
 candidate arms wake empty with "candidate control has no published head".
-Probe `kinu-devbox-bench-20260904220340` (bounded-layers, tip `66aa6f501`)
+Probe `kinu-devbox-bench-20260904220340` (bounded-layers, tip `7ff3ef80b`)
 ran a real recycle: stop 8578 ms, wake 579 store calls in 45917 ms, boot
 `fd48f635` then `64b07fe4`, and the publish-time and wake-time control rows
 were identical. No write was lost. The cause stays an inference: stops that
@@ -1034,7 +1034,7 @@ never completed were measured as recycles. `requireConfirmedStop` in
 `scripts/bench-devbox-strategies.ts` refuses a wake after an unconfirmed stop.
 
 D26. Restore runs inside the SDK start block again (2026-09-23,
-`5d3197bfe` and `61aa55ef7`, `@cloudflare/sandbox` 0.12.9). This reverses D8's placement
+`2a2716881` and `423c294c9`, `@cloudflare/sandbox` 0.12.9). This reverses D8's placement
 (hook after the block) and restores R1: no event reaches the object until
 the restore settles. Two platform facts made the in-block hook deadlock, and
 the patched SDK isolates the hook from both.
@@ -1089,8 +1089,8 @@ Measured on the tree that ships, deployed 2026-09-23 with
 every 250 ms. Each arm is the same probe (`probeReentry`: start, leave one
 timer pending, start again at once, hook execs once, then holds 6 s, past
 the 5 s ping timers) built from those packages plus one patch set: outside
-is `b2c60d09f`'s pair and inside is upstream's containers package with
-`b2c60d09f`'s sandbox patch, both ported onto the 0.12.9 chunk; rotated is
+is `6c3b99cfb`'s pair and inside is upstream's containers package with
+`6c3b99cfb`'s sandbox patch, both ported onto the 0.12.9 chunk; rotated is
 this tree's pair. Pending timer: connection (an exec just before, so the 1 s
 poll is armed), alarm (two schedule rows, the loop waiting for the second),
 stray (a 1 s `setTimeout` nothing clears). Outside and inside ran as
@@ -1141,7 +1141,7 @@ better (D5's table). A new design reopens the search only with a comparison
 run under that contract; none is scheduled (O3).
 
 D28. The Durable Object batches the container calls it keeps (DBX-7,
-`b60c5d873`, 2026-09-23; asked in m712: "combine multiple exec api calls to single ones
+`527e15417`, 2026-09-23; asked in m712: "combine multiple exec api calls to single ones
 wherever possible, as the DO <> container I/O can be flaky"). Measured
 first with `scripts/bench-devbox-exec-census.ts` over the deployed `kinu`
 Worker, 6 h to 2026-09-23T03:44Z: 509 `sandbox.exec` events in 303 Durable
@@ -1232,7 +1232,7 @@ reseat inside the container failed EBUSY, D10's defect again (strategies run
 Device or resource busy"). The box now parks that shell in the runtime
 directory with a bare `cd` for a quiesce's flush, and returns it after.
 
-Deployed, run `w260923160453` (2026-09-23, `2080bdbde`, one box, P = 300 s,
+Deployed, run `w260923160453` (2026-09-23, `e1e2a6b41`, one box, P = 300 s,
 5 writes at random offsets into the period): write-to-commit windows 153.9,
 194.0, 137.6, 262.8 and 53.5 s; p50 153.9 s, max 262.8 s, each inside
 P plus the commit. The box's own wire (commands, replies and sync requests)
@@ -1270,7 +1270,7 @@ whose stop was refused), it replaces the changes since the old base. The
 store holds at most the fallback and the current generation; each commit
 sweeps the rest. Tests: the conformance suite deletes a file after a tick
 commits the first base, commits by quiesce or by tick, wakes, and expects
-the file gone. It was red on `2080bdbde` (the file came back) and is green
+the file gone. It was red on `e1e2a6b41` (the file came back) and is green
 here. Deployed re-proof: owed on this image.
 
 D32. The dd-style storage arm DBX-8 asks for is not built (2026-09-23): D27
@@ -1306,22 +1306,22 @@ admitted only when every G gate passes; a refused run ranks nothing.
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean
-`84a026c2f` passed all ten gates and `admission.admitted` is true. What
+`421c75d69` passed all ten gates and `admission.admitted` is true. What
 follows is the history that led there, kept as written.
 
 Full live acceptance was refused by D5's dated settlement. Witness
-registration is complete in `fed2b9d779` and both witnesses passed on
+registration is complete in `a292c7488c` and both witnesses passed on
 deployed Containers and R2. The two measured blockers are now closed: D14's
 alarm-starvation fix ran ten `--lifecycle` cycles with zero refusals
 (`b20260914073654`) and D15's egress publish is one object attempt live
 (`b20260914082622`, `puts: 1`, correctness passed). The post-fix
 settlement ran on 2026-09-14 (D16, run `20260914220919`, clean
-`e060e360f`): the cold attach was refused at its 54,540 ms ceiling with
+`0415e0f93`): the cold attach was refused at its 54,540 ms ceiling with
 `restoration:unstarted`, no cell ran, and G3, G6 and G9 all scored
 Refused for missing measurements. D17 measured that refusal as the fresh
 container application's rollout inside the observer ceiling and moved the
 wait into the deploy step; settlement `20260914234711` on clean
-`6bcd11b35` then attached cold in 3,618 ms, completed every cell and
+`c28e0d9a4` then attached cold in 3,618 ms, completed every cell and
 passed G6 with one C3 object attempt, but refused G2 (the
 `chunked-absorption` witness stopped failing), G3 (the cut cell's baseline
 witness bytes differed before judging) and G9 (24 of 40 segments priced:
@@ -1331,7 +1331,7 @@ four decisions closed those three gates and run `20260915065241` passed
 all ten. Earlier controls follow.
 
 The bounded cloud attempt on 2026-09-13 (`b20260913094839`, source
-`ad8a2346b`, image digest
+`7469fadfd`, image digest
 `d09be1f3e613173006430cff1b58e5e5d1269dc383fe0404a33f9e3ff8a2d0a0`) was
 refused before either changed-file restore. The 64 MiB C3 baseline
 publication took 656,741 ms and failed at s3fs fsync/close with EIO; the
@@ -1343,12 +1343,12 @@ Raw observations and the completed teardown manifest are committed under
 bucket and generated configuration were removed; the final residue scan
 found zero objects and zero multipart uploads. No workload was changed to
 make this refusal green. The stream-composition publication defect was later
-fixed in `08d58075b`; its controls are in
+fixed in `b3666d43b`; its controls are in
 `bench-artifacts/block-attach/20260913-publication/`.
 
-The bounded rerun `b20260913114625` on clean `116c7e632` attempted C3 and a
+The bounded rerun `b20260913114625` on clean `f6a0ee931` attempted C3 and a
 2 GiB dense changed file after D8 and the named-fallback/hash-batching fix
-`197daa94f`. Their base checkpoints committed in 13,259 ms (67,112,960 bytes)
+`16d1357ec`. Their base checkpoints committed in 13,259 ms (67,112,960 bytes)
 and 181,611 ms (2,147,487,744 bytes). Both edited checkpoints then refused
 `opaque-directory publication requires an explicit namespace record`, after
 1,882 and 61,558 ms. Neither changed-file attach ran. Both attach times,
@@ -1356,7 +1356,7 @@ payload-byte counters and index-page counters are unmeasured, not zero.
 The dense writer's size and three range hashes were recorded before its
 edited checkpoint. This refusal did not publish a legacy delta.
 
-`a551b73f3` fixed the empty delta-key delete that interrupted intermediate
+`b5089313d` fixed the empty delta-key delete that interrupted intermediate
 cleanup. Each cell now has its own container identity; startup observation
 ends at 55 seconds without changing a runtime budget. Worker, container
 application, both boxes, bucket and generated configuration were removed;
@@ -1367,7 +1367,7 @@ Raw observations, verdict and receipts are under
 directory support and the unmeasured changed-file restores at that revision.
 
 D9 removed the opaque publication refusal. In `b20260913131044` on clean
-`40f16afc6`, C3's base committed in 15,268 ms and its edited checkpoint
+`e46c7760c`, C3's base committed in 15,268 ms and its edited checkpoint
 committed as chunked in 23,610 ms. The edit still uploaded 67,559,424
 bytes, with two zero-byte PUTs and one multipart completion (13 parts).
 These were successful directory/placeholder operations, not retries, and
@@ -1386,7 +1386,7 @@ The observations, precise refusals and receipt are under
 `bench-artifacts/teardown/b20260913131044.json`. O1 stays open on startup
 admission and publication cost, not on opaque-record support at that revision.
 
-The storage figures are now observed. Clean `4ded56c3b`, run
+The storage figures are now observed. Clean `e2e84f464`, run
 `b20260913143908`, restored the C3 changed file in 5,218 ms (5,555 − 337),
 with payloadBytes=0, indexPages=0 and readRequests=0 before the full file
 verification passed. Its delta was 69,632 bytes. The independent dense run
@@ -1405,10 +1405,10 @@ their final residue counts were zero objects and zero multipart uploads.
 C3 still made three object attempts: two zero-byte directory/placeholder
 PUTs and the payload write. The payload-size gate passes; the one-attempt
 gate remains red. No attempt was hidden or reclassified to admit the run.
-`b20260914045438` on `5d2707ba3` repeated both: three attempts, and a cold
+`b20260914045438` on `c45d48cc5` repeated both: three attempts, and a cold
 restore that read `running:true, restoration:unstarted` for 55 s. D14 names
 the startup cause and its fix, now measured live (`b20260914073654`); D15
-names the publication design, landed in `e2cd0eb51` and measured live at
+names the publication design, landed in `0b31e69e3` and measured live at
 one attempt (`b20260914082622`). O1 therefore remains open as a full
 strategy-admission claim.
 

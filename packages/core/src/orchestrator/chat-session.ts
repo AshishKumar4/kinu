@@ -46,6 +46,7 @@ import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
 import type { MessageReference } from '../session/messages';
 import type { ContextSelection } from '../session/context';
 import { subordinateTurnContext } from '../subordinates/support';
+import { taskTurnEnding, type OwedReport, type TaskTurnEnding } from '../subordinates/temporary';
 import { TURN_END_METADATA_KEY } from '../read-models/background-event';
 import { TaskReminders, TASK_REMINDER_EVENT } from '../tasks/reminder';
 import type { TaskListStore } from '../tasks/store';
@@ -209,9 +210,9 @@ export interface OwedTerminalEffectsInput {
   /** Read off the settling turn itself; undefined for a person's message. */
   readonly event: string | undefined;
   readonly assistantText: string;
+  /** Decided before the commit; null when none is owed. */
+  readonly owedReport: OwedReport | null;
   readonly completed: boolean;
-  /** A task child's caller distinguishes interrupted from errored. */
-  readonly interrupted: boolean;
   readonly startedAt: number;
   readonly trialContext: readonly ModelMessage[];
   /** A cold replay has no live toolset to ask. */
@@ -230,6 +231,8 @@ export interface ChatSessionPorts {
   /** Runs after the opening row and run are durable; a throw ends the turn as an error with one `turn-end`. */
   prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn>;
   owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
+  /** The report this ending owes its caller; narration is read only if the report carries it. */
+  owedReport?(ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>): Promise<OwedReport | null>;
   /** Asked per call: the bodies close over stores built after this session. */
   terminal(): TerminalTransitions;
   holdTerminalClose(transition: TerminalTransition, close: () => Promise<void>): void;
@@ -460,11 +463,7 @@ export class ChatSession {
     return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user');
   }
 
-  /**
-   * Send the user's message and resolve where it landed: `'mid-turn'` at a step or `'turn'` once its
-   * turn finished, never guessed at admission. Rejects when it did not land (lease refused, or handed
-   * back by an interrupt). Use {@link admit} for admission only.
-   */
+  /** Send; resolves where it landed (`'mid-turn'` or `'turn'`), never guessed at admission, and rejects if it did not land. */
   async send(input: string | { text: string; files: ReadonlyArray<PromptFile> }, opts: SendOptions): Promise<SendLanding> {
     const landing = Promise.withResolvers<SendLanding>();
 
@@ -965,25 +964,29 @@ export class ChatSession {
       ...(end.reason === 'incomplete' && { metadata: { [TURN_END_METADATA_KEY]: end.reason } }),
     }) : null;
 
+    const owedReport = await this.ports.owedReport?.(
+      taskTurnEnding(runError === null, interrupted), fullText, () => this.transcript.narration(execution.outputPartReferences),
+    ) ?? null;
+
     // One commit — see {@link commitTurn}.
     const commit = this.commitTurn({
       item,
       event: eventName,
       startedAt,
       assistantText: fullText,
+      owedReport,
       // A turn cut before its first token has no answer row.
       assistantRow: streamed || !interrupted,
       preparedAssistant,
       runError,
-      interrupted,
       end,
       trialContext: execution.admittedMessages,
       reachableTools: Object.keys(prepared.execution.chat.tools ?? {}),
       overflowRetry,
     });
 
-    // Exactly once per turn, after the actor enters settling, outside every failure path. A turn whose
-    // answer never reached disk reports `completed: false` so its events are re-queued.
+    // Once per turn, after settling begins, outside every failure path; an answer that never reached disk
+    // reports `completed: false`, so its events re-queue.
     const durable = runError === null && 'committed' in commit;
     const settled = this.actorSession.orchestrator.inbox.settle({ completed: durable });
 
@@ -1067,11 +1070,11 @@ export class ChatSession {
     readonly event: string | undefined;
     readonly startedAt: number;
     readonly assistantText: string;
+    readonly owedReport: OwedReport | null;
     /** False only for a turn interrupted before it streamed anything. */
     readonly assistantRow: boolean;
     readonly preparedAssistant: PreparedConversationEntry | null;
     readonly runError: string | null;
-    readonly interrupted: boolean;
     /** Classified once by the caller — see `closeRun`. */
     readonly end: RunEndClassification;
     readonly trialContext: readonly ModelMessage[];
@@ -1129,8 +1132,8 @@ export class ChatSession {
         userText: item.text,
         event: input.event,
         assistantText: input.assistantText,
+        owedReport: input.owedReport,
         completed: runError === null,
-        interrupted: input.interrupted,
         taskReminder,
         startedAt: input.startedAt,
         trialContext: input.trialContext,

@@ -40,6 +40,8 @@ export interface ScriptedPace {
   readonly leadMs: number;
   /** A first silence of unknown length, ended by the row that holds it ({@link heldCall}). */
   readonly hold?: Promise<void>;
+  /** A silence after the lead, ended the same way: the text stops mid-way until the row lets it finish. */
+  readonly rest?: Promise<void>;
 }
 
 /** One answer: prose, or a tool call with its complete arguments. Unpaced, it is written in one piece. */
@@ -57,6 +59,8 @@ export interface ScriptedRequest {
    *  product sends in that role after the words (a `<dynamic_context>` block, the turn-local context), so
    *  the last entry is the latest ask. */
   readonly userTexts: readonly string[];
+  /** What the agent said, oldest first: every assistant-role message's text. */
+  readonly assistantTexts: readonly string[];
   /** The system messages' text: where a workspace's mission reaches its model. */
   readonly system: string;
   /** Tool names already called in this conversation, in order. */
@@ -123,6 +127,7 @@ export function readScriptedRequest(body: string): ScriptedRequest {
 
       return message.role === 'user' && !isRuntimeState(text) ? [text] : [];
     }),
+    assistantTexts: messages.flatMap((message) => message.role === 'assistant' && message.content ? [message.content] : []),
     system: messages.flatMap((message) => message.role === 'system' ? [message.content ?? ''] : []).join('\n'),
     called: messages.flatMap((message) => (message.tool_calls ?? []).flatMap(
       (call) => call.function?.name === undefined ? [] : [call.function.name],
@@ -177,7 +182,9 @@ function writePaced(response: ServerResponse, answer: ScriptedAnswer, pace: Scri
   (pace.hold ?? Promise.resolve()).then(() => {
     setTimeout(() => {
       response.write(frame({ content: pace.lead }));
-      setTimeout(() => { response.end(streamOf(answer, step)); }, pace.leadMs);
+      (pace.rest ?? Promise.resolve()).then(() => {
+        setTimeout(() => { response.end(streamOf(answer, step)); }, pace.leadMs);
+      }, () => { response.destroy(); });
     }, pace.firstTokenMs);
   }, () => { response.destroy(); });
 }
@@ -343,6 +350,13 @@ export const OBSERVED_TURN_ASK = 'Observer probe: take your steps, then wait.';
 
 export const SLEPT_TURN_ASK = 'Sleep probe: take your steps, then wait.';
 
+export const WATCHED_SLEPT_TURN_ASK = 'Watched sleep probe: take your steps, then wait mid-answer.';
+
+export const ANSWERED_TURN_ASK = 'Answer probe: take your steps, then wait.';
+
+/** The ask after an answered turn, whose request carries what that turn said. */
+export const TOLD_BACK_ASK = 'Answer probe: what did you just do?';
+
 /** The folders the reconnect turn lists before its held call, one step each; a new workspace has both. (Listing its
  *  `memory` folder fails, which would leave a row that never reads done.) */
 const RECONNECT_FOLDERS = ['', 'scaffold', ''];
@@ -353,10 +367,10 @@ export const RECONNECT_STEPS = RECONNECT_FOLDERS.length;
 /**
  * The reconnect turn: {@link RECONNECT_STEPS} steps that each say what they do and list a folder, then a call held on
  * `held` whose answer closes the turn, so the turn is still running whatever the row does meanwhile. Each lists a
- * different folder, since a third identical call makes the harness steer the turn (turn-steering.ts). Null for any
- * request that did not send `ask`.
+ * different folder, since a third identical call makes the harness steer the turn (turn-steering.ts). `midAnswer`
+ * holds the answer after its first word instead of before it. Null for any request that did not send `ask`.
  */
-export function reconnectTurn(request: ScriptedRequest, ask: string, held: HeldCall): ScriptedAnswer | null {
+export function reconnectTurn(request: ScriptedRequest, ask: string, held: HeldCall, midAnswer = false): ScriptedAnswer | null {
   if (!request.userTexts.some((text) => text.includes(ask))) return null;
 
   if (!request.available.includes('file')) return { text: FALLBACK_ANSWER };
@@ -372,7 +386,17 @@ export function reconnectTurn(request: ScriptedRequest, ask: string, held: HeldC
     };
   }
 
+  if (midAnswer) return { text: 'ne.', pace: { firstTokenMs: 0, lead: 'Do', leadMs: 0, rest: held.hold() } };
+
   return { text: 'Done.', pace: { firstTokenMs: 0, lead: '', leadMs: 0, hold: held.hold() } };
+}
+
+/** Answers {@link TOLD_BACK_ASK}, handing `heard` the request that carried it. */
+export function toldBackTurn(request: ScriptedRequest, heard: (request: ScriptedRequest) => void): ScriptedAnswer | null {
+  if (request.userTexts.at(-1)?.includes(TOLD_BACK_ASK) !== true) return null;
+  heard(request);
+
+  return { text: 'I listed the folders.' };
 }
 
 /* ── The plan walkthrough ──────────────────────────────────────────────── */

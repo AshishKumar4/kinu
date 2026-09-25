@@ -1,8 +1,8 @@
 # Block layer: design gate
 
-Written against base df1694e9c on 2026-09-13. The storage half is implemented
+Written against base 550e0e0d1 on 2026-09-13. The storage half is implemented
 (decision D7 in [DEVBOX-DECISIONS.md](DEVBOX-DECISIONS.md): manifest v2
-`f69af22cf`, the Rust/fuser lower `7598a68a6`, the derived image `ac6ae8f39`).
+`e185bb046`, the Rust/fuser lower `0bdf297c5`, the derived image `6a97e34ce`).
 
 I refuse the full-hook requirement: no candidate I evaluated meets it under the
 current constraints. The read-only design removes the whole-file copy from

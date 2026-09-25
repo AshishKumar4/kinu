@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { initTurnOutcomeTables, recordTurnOutcome, seededRandom } from '@kinu.run/core';
 import { makeSql } from '@kinu.run/cli-backend';
-import { scratchDir, createTestActorsOver } from '@kinu.run/test-utils';
+import { scratchDir, createTestActorsOver, runToExit } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 /** The CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
@@ -20,17 +20,14 @@ const repoRoot = resolve(__dirname, '../../..');
 
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 
-function runCli(home: string, args: string[]) {
-  const result = Bun.spawnSync({
-    cmd: [process.execPath, cliBin, ...args],
+async function runCli(home: string, args: string[]) {
+  const result = await runToExit([process.execPath, cliBin, ...args], {
     cwd: newProjectDir(),
-    stdout: 'pipe',
-    stderr: 'pipe',
     env: { ...process.env, KINU_HOME: home, NO_COLOR: '1' },
   });
 
   return {
-    stdout: `${result.stdout.toString()}${result.stderr.toString()}`.replace(
+    stdout: `${result.stdout}${result.stderr}`.replace(
       new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '',
     ),
     exitCode: result.exitCode,
@@ -111,11 +108,11 @@ function turnOutcome(flagged: boolean, roll: number): 'frustrated' | 'corrected'
 }
 
 describe('kinu label', () => {
-  test('export → fill → ingest → report, and the corrected rate finds the truth the raw one missed', () => {
+  test('export → fill → ingest → report, and the corrected rate finds the truth the raw one missed', async () => {
     const { home, truth } = seedWorkspace('demo');
     const file = join(home, 'calib.txt');
 
-    const exported = runCli(home, ['label', 'export', 'demo', '--out', file]);
+    const exported = await runCli(home, ['label', 'export', 'demo', '--out', file]);
     expect(exported.exitCode).toBe(0);
     expect(exported.stdout).toContain('drew 100 turns');
     expect(exported.stdout).toContain('minutes)');
@@ -126,12 +123,12 @@ describe('kinu label', () => {
     for (const verdict of ['accepted', 'corrected', 'frustrated']) expect(body).not.toContain(verdict);
 
     fillFile(file, truth);
-    const ingested = runCli(home, ['label', 'ingest', 'demo', file, '--labeler', 'owner']);
+    const ingested = await runCli(home, ['label', 'ingest', 'demo', file, '--labeler', 'owner']);
     expect(ingested.exitCode).toBe(0);
     expect(ingested.stdout).toContain('stored 100 verdicts as owner');
     expect(ingested.stdout).toMatch(/You disagreed with the classifier on \d+ of 100\./);
 
-    const report = runCli(home, ['label', 'report', 'demo', '--json']);
+    const report = await runCli(home, ['label', 'report', 'demo', '--json']);
 
     const { calibration: parsed, ensemble } = v.parse(v.object({
       calibration: v.object({
@@ -167,35 +164,35 @@ describe('kinu label', () => {
     expect(parsed.segments).toHaveLength(2);
   });
 
-  test('alignment prints the corrected block beside the raw rate', () => {
+  test('alignment prints the corrected block beside the raw rate', async () => {
     const { home, truth } = seedWorkspace('demo');
     const file = join(home, 'calib.txt');
 
-    const before = runCli(home, ['alignment', 'demo']);
+    const before = await runCli(home, ['alignment', 'demo']);
     expect(before.stdout).toContain('K_align');
     expect(before.stdout).toContain('uncalibrated — no hand-labeled turns yet');
     expect(before.stdout).toContain('600 classifier-graded turns are waiting to be checked');
 
-    runCli(home, ['label', 'export', 'demo', '--out', file]);
+    await runCli(home, ['label', 'export', 'demo', '--out', file]);
     fillFile(file, truth);
-    runCli(home, ['label', 'ingest', 'demo', file]);
+    await runCli(home, ['label', 'ingest', 'demo', file]);
 
-    const after = runCli(home, ['alignment', 'demo']);
+    const after = await runCli(home, ['alignment', 'demo']);
     expect(after.stdout).toContain('K_align');
     expect(after.stdout).toContain('Sensitivity:');
     expect(after.stdout).toContain('Corrected correction rate:');
     expect(after.stdout).not.toContain('uncalibrated');
   });
 
-  test('a second export never re-asks a turn already answered', () => {
+  test('a second export never re-asks a turn already answered', async () => {
     const { home, truth } = seedWorkspace('demo');
     const first = join(home, 'a.txt');
     const second = join(home, 'b.txt');
 
-    runCli(home, ['label', 'export', 'demo', '--out', first, '--size', '30']);
+    await runCli(home, ['label', 'export', 'demo', '--out', first, '--size', '30']);
     fillFile(first, truth);
-    runCli(home, ['label', 'ingest', 'demo', first]);
-    runCli(home, ['label', 'export', 'demo', '--out', second, '--size', '30']);
+    await runCli(home, ['label', 'ingest', 'demo', first]);
+    await runCli(home, ['label', 'export', 'demo', '--out', second, '--size', '30']);
 
     const ids = (path: string): string[] =>
       [...readFileSync(path, 'utf8').matchAll(/^###\s+\d+\/\d+\s+(\S+)$/gm)].map((m) => m[1]);
@@ -205,55 +202,55 @@ describe('kinu label', () => {
     expect(ids(second).some((id) => answered.has(id))).toBe(false);
   });
 
-  test('a file with a problem in it stores nothing', () => {
+  test('a file with a problem in it stores nothing', async () => {
     const { home } = seedWorkspace('demo');
     const file = join(home, 'broken.txt');
-    runCli(home, ['label', 'export', 'demo', '--out', file, '--size', '5']);
+    await runCli(home, ['label', 'export', 'demo', '--out', file, '--size', '5']);
     // Only lines that start with `verdict:` are verdicts; the header mentions it too.
     writeFileSync(file, readFileSync(file, 'utf8').replace(/^verdict:$/m, 'verdict: z'));
 
-    const ingested = runCli(home, ['label', 'ingest', 'demo', file]);
+    const ingested = await runCli(home, ['label', 'ingest', 'demo', file]);
     expect(ingested.exitCode).toBe(1);
     expect(ingested.stdout).toContain('Nothing was stored');
     expect(ingested.stdout).toContain('is not a verdict');
-    expect(runCli(home, ['label', 'report', 'demo']).stdout).toContain('uncalibrated');
+    expect((await runCli(home, ['label', 'report', 'demo'])).stdout).toContain('uncalibrated');
   });
 
-  test('an untouched file is not an error, it is just nothing yet', () => {
+  test('an untouched file is not an error, it is just nothing yet', async () => {
     const { home } = seedWorkspace('demo');
     const file = join(home, 'blank.txt');
-    runCli(home, ['label', 'export', 'demo', '--out', file, '--size', '5']);
+    await runCli(home, ['label', 'export', 'demo', '--out', file, '--size', '5']);
 
-    const ingested = runCli(home, ['label', 'ingest', 'demo', file]);
+    const ingested = await runCli(home, ['label', 'ingest', 'demo', file]);
     expect(ingested.exitCode).toBe(0);
     expect(ingested.stdout).toContain('no verdicts');
   });
 
-  test('the panel refuses before there is anything to score it against', () => {
+  test('the panel refuses before there is anything to score it against', async () => {
     const { home, truth } = seedWorkspace('demo');
     const file = join(home, 'calib.txt');
 
-    const early = runCli(home, ['label', 'ensemble', 'demo', '--models', 'anthropic/claude-fable-5,codex/gpt-5.6-sol']);
+    const early = await runCli(home, ['label', 'ensemble', 'demo', '--models', 'anthropic/claude-fable-5,codex/gpt-5.6-sol']);
     expect(early.exitCode).toBe(0);
     expect(early.stdout).toContain('did not run');
     expect(early.stdout).toContain('kinu label export');
     expect(early.stdout).toContain('kinu label ingest');
 
-    runCli(home, ['label', 'export', 'demo', '--out', file]);
+    await runCli(home, ['label', 'export', 'demo', '--out', file]);
     fillFile(file, truth);
-    runCli(home, ['label', 'ingest', 'demo', file]);
+    await runCli(home, ['label', 'ingest', 'demo', file]);
 
     // No same-vendor model substitutes for the missing panelist.
-    const alone = runCli(home, ['label', 'ensemble', 'demo', '--models', 'anthropic/claude-fable-5']);
+    const alone = await runCli(home, ['label', 'ensemble', 'demo', '--models', 'anthropic/claude-fable-5']);
     expect(alone.exitCode).toBe(0);
     expect(alone.stdout).toContain('two models from different vendors');
-    expect(runCli(home, ['label', 'report', 'demo']).stdout).toContain('Judge panel');
+    expect((await runCli(home, ['label', 'report', 'demo'])).stdout).toContain('Judge panel');
   });
 
-  test('unknown actions and missing arguments say what to type', () => {
+  test('unknown actions and missing arguments say what to type', async () => {
     const { home } = seedWorkspace('demo');
-    expect(runCli(home, ['label', 'summarise', 'demo']).stdout)
+    expect((await runCli(home, ['label', 'summarise', 'demo'])).stdout)
       .toContain('Use export, ingest, ensemble, report, mine, or score');
-    expect(runCli(home, ['label', 'ingest', 'demo']).stdout).toContain('kinu label ingest <agent> <file>');
+    expect((await runCli(home, ['label', 'ingest', 'demo'])).stdout).toContain('kinu label ingest <agent> <file>');
   });
 });

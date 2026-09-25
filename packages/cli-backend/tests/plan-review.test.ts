@@ -196,7 +196,7 @@ describe('LocalAgentSession — plan review', () => {
     // A subordinate reports to whoever hired it, so a plan has no owner to decide it
     // (the cloud backend wires `submitPlan` on the orchestrator alone).
     agent.setParentRelay({
-      owed: () => null,
+      owed: async () => null,
       sequenceId: (messageId) => messageId,
       send: async () => 'relayed',
     });

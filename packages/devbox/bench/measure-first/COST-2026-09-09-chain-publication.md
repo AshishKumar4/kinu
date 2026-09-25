@@ -6,7 +6,7 @@ records what snapshot-chain beat and how, but not what a publication
 costs as a box keeps working. This report puts that cost beside the win for
 whoever next decides whether to revisit the strategy.
 
-Measured against the shipped module at `7f27576ca`, `snapshot-chain.ts` blob
+Measured against the shipped module at `9c92b2d4c`, `snapshot-chain.ts` blob
 `179a0123f`, with the matched-chain harness on the same host and the same
 proxy counting boundary as the other chain cohorts. `putUploadBytes` is PUT
 request-body bytes: what went up.
@@ -93,7 +93,7 @@ it from, so this report states no per-turn number.
 
 ## Provenance
 
-- Revision `7f27576ca6dff3acb6d5515234fed2cf01b9adaa`, `snapshot-chain.ts`
+- Revision `9c92b2d4c35331e6e854517d15492e8eba625b19`, `snapshot-chain.ts`
   blob `179a0123f0093d8acb290fde48c1b56ff0907803`.
 - Cohorts `C3-7e4a7d9a-9ce15c72`, `C0-history-7e4a7d9a-9ce15c72`,
   `C0-growth-7e4a7d9a-9ce15c72`; rows and raws in
@@ -104,5 +104,5 @@ it from, so this report states no per-turn number.
   different and far smaller quantity (1,844-2,054 B) and is not that column.
 - Both transport hops are local, so wall-clock here supports no cloud claim.
 - The C3 and C0-history matrices ran three times (once at
-  `904c22cc4` and twice at `7f27576ca` under two harness digests) and agree
+  `322b4bf5b` and twice at `9c92b2d4c` under two harness digests) and agree
   byte-for-byte on every figure above.

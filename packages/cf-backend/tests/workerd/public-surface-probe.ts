@@ -61,6 +61,20 @@ export class SurfaceControl extends WorkerEntrypoint<SurfaceEnv> {
     await probeControl('/proxy/release', 'POST');
   }
 
+  /** Arms the Node-side hold: every `probe-queue` call parks until `releaseQueuedModel`. */
+  async holdQueuedModel(): Promise<void> {
+    await probeControl('/queue/hold', 'POST');
+  }
+
+  /** Answers once a model call carrying `marker` has been made: with the hold armed, that call is parked. */
+  async modelCalledWith(marker: string): Promise<void> {
+    await probeControl(`/log/until?marker=${encodeURIComponent(marker)}`, 'GET');
+  }
+
+  async releaseQueuedModel(): Promise<void> {
+    await probeControl('/queue/release', 'POST');
+  }
+
   /** A `kinu auth` bearer for a fresh user, minted by the production UserDO as an approved device flow mints it. */
   async mintCliBearer(): Promise<string> {
     const userId = crypto.randomUUID().replaceAll('-', '');

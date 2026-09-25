@@ -1,6 +1,6 @@
 /**
  * A fresh NimbusProcess instance that never saw `startProcess` must materialize the process before serving; measured on
- * production 2ee3f7c92 (~/kinu-logs/slate-cold/REPORT.md) as `404 x-slate-runner: unstarted`. Runs `slateRunnerSource` verbatim.
+ * production 253b86c01 (~/kinu-logs/slate-cold/REPORT.md) as `404 x-slate-runner: unstarted`. Runs `slateRunnerSource` verbatim.
  */
 import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';

@@ -23,8 +23,8 @@ import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 import type { SlateBinding } from '../../src/slates/bindings';
 import type {
-  AgentLogEvent, ArmedWake, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
-  PendingSteer, PendingSteerFile, PreparedConversation, QueueProbeMode,
+  AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
+  PendingSteer, PendingSteerFile, PreparedConversation, QueueProbeMode, ReactorWake,
   ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, WakeHoldPlacement,
 } from './two-turn-shapes';
 import type {
@@ -50,6 +50,9 @@ interface SurfaceControlRpc extends Rpc.WorkerEntrypointBranded {
   holdProxyModel(): Promise<void>;
   proxyModelParked(count: number): Promise<number>;
   releaseProxyModel(): Promise<void>;
+  holdQueuedModel(): Promise<void>;
+  modelCalledWith(marker: string): Promise<void>;
+  releaseQueuedModel(): Promise<void>;
   mintCliBearer(): Promise<string>;
 }
 
@@ -80,15 +83,11 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   seedStaleDrainEventFor(workspace: string, marker: string): Promise<void>;
   runEventWakeFor(workspace: string, marker: string): Promise<void>;
   claimReactorWakeWorkspace(): Promise<{ workspace: string; owner: string }>;
-  publishPeerEvent(workspace: string, owner: string, body: string): Promise<ArmedWake[]>;
-  armedWakesFor(workspace: string): Promise<ArmedWake[]>;
-  driveArmedWakesFor(workspace: string): Promise<string[]>;
-  runStartCausesFor(workspace: string): Promise<string[]>;
-  awaitWireMarker(marker: string): Promise<void>;
+  reactorWake(workspace: string, owner: string, body: string): Promise<ReactorWake>;
   firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; transcript: Array<{ id: string; role: string }>; sleepTimeSettled: number }>;
   twinSends(): Promise<{ http: HttpCall[]; transcript: Array<{ id: string; role: string }>; steers: PendingSteer[]; runEnds: Array<{ runId: string; reason: string }> }>;
   evalAbort(): Promise<{ receipt: string | null; alive: boolean }>;
-  hostedActorTab(): Promise<{ name: string; snapshot: string; tasks: string; frames: number }>;
+  hostedActorTab(): Promise<{ name: string; snapshot: string; jobs: string; frames: number }>;
   firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; inbox: { busy: boolean }; landed: string | null; transcript: Array<{ id: string; role: string }>; failures: Array<{ event: string; code: string; cause: string }> }>;
   parityPrepare(): Promise<ParityPrepared>;
   parityComplete(prepared: ParityPrepared): Promise<ParityCompleted>;

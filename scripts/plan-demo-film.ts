@@ -179,7 +179,7 @@ const STRIP_LABELS = `[...document.querySelectorAll('#inspector .p-tabstrip butt
  * Tool cards standing in the transcript — what a turn that ran tools leaves.
  *
  * `data-tool-state` is on every call's row, and the only tool marker the
- * transcript renders since the group header went (9e9d2ab10).
+ * transcript renders since the group header went (7d471135f).
  */
 const TOOL_CARDS = `document.querySelectorAll('#chat [data-tool-state]').length`;
 

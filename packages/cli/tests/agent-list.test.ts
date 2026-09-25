@@ -1,3 +1,4 @@
+import { runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { realpathSync, writeFileSync, mkdirSync } from 'node:fs';
 
@@ -73,7 +74,7 @@ describe('CLI cloud agent registry sync', () => {
     }]);
   });
 
-  test('uses the cloud agent list as the source of truth for cloud refs', () => {
+  test('uses the cloud agent list as the source of truth for cloud refs', async () => {
     const home = scratchDir('agent-list');
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, 'config.json'), JSON.stringify({
@@ -117,12 +118,9 @@ describe('CLI cloud agent registry sync', () => {
       console.log(JSON.stringify({ result, config }));
     `;
 
-    const proc = Bun.spawnSync({
-      cmd: [process.execPath, '-e', script],
+    const proc = await runToExit([process.execPath, '-e', script], {
       cwd: repoRoot,
       env: { ...process.env, KINU_HOME: home },
-      stdout: 'pipe',
-      stderr: 'pipe',
     });
 
     expect(proc.exitCode).toBe(0);
@@ -136,7 +134,7 @@ describe('CLI cloud agent registry sync', () => {
         agents: v.record(v.string(), v.object({ mode: v.string(), displayName: v.optional(v.string()) })),
         aliases: v.optional(v.record(v.string(), v.string())),
       }),
-    }), JSON.parse(proc.stdout.toString()));
+    }), JSON.parse(proc.stdout));
 
     expect(parsed.config.agents.stale).toBeUndefined();
     expect(parsed.config.agents['web-agent']).toMatchObject({ mode: 'cloud', displayName: 'Web Agent' });
@@ -146,7 +144,7 @@ describe('CLI cloud agent registry sync', () => {
     expect(parsed.result.collisions).toEqual([]);
   });
 
-  test('a cloud workspace whose name a placed local ref holds leaves the placement alone and reports the clash', () => {
+  test('a cloud workspace whose name a placed local ref holds leaves the placement alone and reports the clash', async () => {
     const home = scratchDir('agent-list');
     const project = realpathSync(scratchDir('project'));
     mkdirSync(join(home, 'shopbot'), { recursive: true });
@@ -185,12 +183,9 @@ describe('CLI cloud agent registry sync', () => {
       }));
     `;
 
-    const proc = Bun.spawnSync({
-      cmd: [process.execPath, '-e', script],
+    const proc = await runToExit([process.execPath, '-e', script], {
       cwd: repoRoot,
       env: { ...process.env, KINU_HOME: home },
-      stdout: 'pipe',
-      stderr: 'pipe',
     });
 
     expect(proc.exitCode).toBe(0);
@@ -214,7 +209,7 @@ describe('CLI cloud agent registry sync', () => {
         aliases: v.optional(v.record(v.string(), v.string())),
       }),
       placed: v.array(v.looseObject({ name: v.string(), workspaceId: v.string() })),
-    }), JSON.parse(proc.stdout.toString()));
+    }), JSON.parse(proc.stdout));
 
     expect(parsed.config.agents.shopbot).toMatchObject({
       mode: 'local',
@@ -272,7 +267,7 @@ describe('virtual workspace grouping', () => {
 });
 
 describe('the sidebar roster for one directory', () => {
-  test('lists this project, unplaced agents, and cloud refs — never another project, and never merged duplicates', () => {
+  test('lists this project, unplaced agents, and cloud refs — never another project, and never merged duplicates', async () => {
     const home = scratchDir('agent-list');
     const projectDir = realpathSync(scratchDir('agent-proj'));
     const otherDir = realpathSync(scratchDir('agent-other'));
@@ -310,15 +305,12 @@ describe('the sidebar roster for one directory', () => {
       console.log(JSON.stringify({ root, agents, grouped: groupAgentWorkspaces(agents, root) }));
     `;
 
-    const proc = Bun.spawnSync({
-      cmd: [process.execPath, '-e', script],
+    const proc = await runToExit([process.execPath, '-e', script], {
       cwd: repoRoot,
       env: { ...process.env, KINU_HOME: home },
-      stdout: 'pipe',
-      stderr: 'pipe',
     });
 
-    expect({ exitCode: proc.exitCode, stderr: proc.stderr.toString() }).toEqual({ exitCode: 0, stderr: '' });
+    expect({ exitCode: proc.exitCode, stderr: proc.stderr }).toEqual({ exitCode: 0, stderr: '' });
 
     const RowSchema = v.object({
       name: v.string(),
@@ -339,7 +331,7 @@ describe('the sidebar roster for one directory', () => {
         unplaced: v.array(RowSchema),
         remote: v.array(RowSchema),
       }),
-    }), JSON.parse(proc.stdout.toString()));
+    }), JSON.parse(proc.stdout));
 
     expect(parsed.agents.map((agent) => `${agent.mode}:${agent.name}`)).toEqual([
       // Placed agents by workspace then name, then unplaced workspaces, then the account's cloud workspaces.
@@ -361,7 +353,7 @@ describe('the sidebar roster for one directory', () => {
 });
 
 describe('the local roster is one function', () => {
-  test('transcripts with no agent lists the set list shows locally', () => {
+  test('transcripts with no agent lists the set list shows locally', async () => {
     const home = scratchDir('roster-home');
     const projectDir = realpathSync(scratchDir('roster-proj'));
 
@@ -396,12 +388,9 @@ describe('the local roster is one function', () => {
       process.stdout.write(JSON.stringify({ listed, transcripted: lines }) + '\\n');
     `;
 
-    const proc = Bun.spawnSync({
-      cmd: [process.execPath, '-e', script],
+    const proc = await runToExit([process.execPath, '-e', script], {
       cwd: repoRoot,
       env: { ...process.env, KINU_HOME: home, NO_COLOR: '1' },
-      stdout: 'pipe',
-      stderr: 'pipe',
     });
 
     expect(proc.exitCode).toBe(0);
@@ -409,7 +398,7 @@ describe('the local roster is one function', () => {
     const parsed = v.parse(v.object({
       listed: v.array(v.string()),
       transcripted: v.array(v.string()),
-    }), JSON.parse(proc.stdout.toString()));
+    }), JSON.parse(proc.stdout));
 
     const names = (lines: string[]) => ['alpha', 'beta', 'gamma'].filter((name) => lines.some((line) => line.includes(name)));
     expect(names(parsed.listed)).toEqual(['alpha', 'beta', 'gamma']);

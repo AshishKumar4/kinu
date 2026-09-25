@@ -76,7 +76,7 @@ export interface HistoryScanOutcome {
 }
 
 /**
- * The historical fixture corpus at f78a92e6e. Every line is one exact
+ * The historical fixture corpus at c817e00f0. Every line is one exact
  * `(blob OID, path, detector, count)` adjudication; none names a directory or a
  * test class. A new historical fixture must earn another exact row rather than
  * widening a suppression.

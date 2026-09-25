@@ -6,6 +6,7 @@
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { STEER_METADATA_KEY, STEER_STEP_METADATA_KEY } from '../orchestrator/inbox';
+import { rowText } from '../utils/ui-message';
 
 export type TranscriptPart = UIMessage['parts'][number];
 
@@ -79,7 +80,7 @@ export function extendTranscript(
 
     if (step !== null) {
       steerRowIds.add(message.id);
-      pending.push({ id: message.id, text: messageText(message), atStep: step, state: 'landed' });
+      pending.push({ id: message.id, text: rowText(message), atStep: step, state: 'landed' });
       continue;
     }
 
@@ -169,12 +170,6 @@ export function segmentBySteers(
   segments.push({ steer, parts: parts.slice(cursor) });
 
   return segments;
-}
-
-function messageText(message: UIMessage): string {
-  return message.parts
-    .flatMap((part) => part.type === 'text' ? [part.text] : [])
-    .join('');
 }
 
 function steerMessage(steer: InlineSteer): UIMessage {

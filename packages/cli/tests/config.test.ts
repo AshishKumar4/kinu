@@ -1,3 +1,4 @@
+import { runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 
@@ -15,9 +16,9 @@ import {
 import * as v from 'valibot';
 
 describe("CLI config safety", () => {
-  test("validates local agent names", () => {
+  test("validates local agent names", async () => {
     // agentDir joins the home directory, so a name that could escape it must fail here.
-    const out = runNameChecks();
+    const out = await runNameChecks();
     expect(out.slice(0, 2).map((r) => r.ok)).toEqual([true, true]);
     expect(out.slice(2, 5).map((r) => r.error)).toEqual([
       expect.stringContaining("Agent name must"),
@@ -26,9 +27,9 @@ describe("CLI config safety", () => {
     ]);
   });
 
-  test("validates aliases as executable names", () => {
+  test("validates aliases as executable names", async () => {
     // upsertAgentConfig refuses a bad or reserved alias before it reaches the config file.
-    const out = runNameChecks();
+    const out = await runNameChecks();
     expect(out.slice(5, 7).map((r) => r.ok)).toEqual([true, true]);
     expect(out.slice(7, 9).map((r) => r.error)).toEqual([
       expect.stringContaining("Alias must"),
@@ -37,44 +38,41 @@ describe("CLI config safety", () => {
     expect(out[9].error).toContain("reserved");
   });
 
-  test("honors KINU_HOME before falling back to the OS home", () => {
+  test("honors KINU_HOME before falling back to the OS home", async () => {
     const home = scratchDir("cli-home");
     const kinuHome = scratchDir("cli-config");
 
     const script = "import { AGENT_HOME } from './packages/cli/src/config.ts'; console.log(AGENT_HOME);";
 
-    const proc = Bun.spawnSync({
-      cmd: [process.execPath, "-e", script],
+    const proc = await runToExit([process.execPath, "-e", script], {
       cwd: resolve(__dirname, "../../.."),
       env: {
         ...process.env,
         HOME: home,
         KINU_HOME: kinuHome,
       },
-      stdout: "pipe",
-      stderr: "pipe",
     });
 
     expect(proc.exitCode).toBe(0);
-    expect(proc.stdout.toString().trim()).toBe(resolve(kinuHome));
+    expect(proc.stdout.trim()).toBe(resolve(kinuHome));
   });
 
-  test("requireAuthConfig enforces token expiry", () => {
-    const expired = runRequireAuth(new Date(Date.now() - 60_000).toISOString());
-    expect(expired.stdout.toString()).toContain("session has expired");
+  test("requireAuthConfig enforces token expiry", async () => {
+    const expired = await runRequireAuth(new Date(Date.now() - 60_000).toISOString());
+    expect(expired.stdout).toContain("session has expired");
 
-    const valid = runRequireAuth(new Date(Date.now() + 60_000).toISOString());
-    expect(valid.stdout.toString().trim()).toBe("ok");
+    const valid = await runRequireAuth(new Date(Date.now() + 60_000).toISOString());
+    expect(valid.stdout.trim()).toBe("ok");
   });
 
-  test("KINU_TOKEN env wins over the stored session, even an expired one", () => {
+  test("KINU_TOKEN env wins over the stored session, even an expired one", async () => {
     const ciToken = `pta_${"0".repeat(32)}_${"a".repeat(44)}`;
-    const result = runRequireAuth(new Date(Date.now() - 60_000).toISOString(), ciToken);
-    expect(result.stdout.toString().trim()).toBe(`ok ${ciToken}`);
+    const result = await runRequireAuth(new Date(Date.now() - 60_000).toISOString(), ciToken);
+    expect(result.stdout.trim()).toBe(`ok ${ciToken}`);
   });
 
-  test("one invalid field is reported, not replaced by defaults that would read as a first run", () => {
-    expect(runInvalidFieldLoad()).toContain('is not a valid Kinu config');
+  test("one invalid field is reported, not replaced by defaults that would read as a first run", async () => {
+    expect(await runInvalidFieldLoad()).toContain('is not a valid Kinu config');
   });
 
   test("a published workspace is readable once its WAL sidecars are gone", () => {
@@ -102,8 +100,8 @@ const CLOUD_ORIGIN = "https://kinu.example.com";
 const CLOUD_TOKEN = ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join("");
 
 describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
-  test("derives the worker AI proxy endpoint with the platform default model", () => {
-    const out = runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN });
+  test("derives the worker AI proxy endpoint with the platform default model", async () => {
+    const out = await runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN });
     expect(out).toEqual({
       name: "workers-ai",
       baseURL: `${CLOUD_ORIGIN}/api/user/ai/v1`,
@@ -112,19 +110,19 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
     });
   });
 
-  test("honors a configured workers-ai model; non-workers-ai specs keep the default endpoint model", () => {
-    const pinned = runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN }, { defaultModel: "workers-ai/@cf/meta/llama-4" });
+  test("honors a configured workers-ai model; non-workers-ai specs keep the default endpoint model", async () => {
+    const pinned = await runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN }, { defaultModel: "workers-ai/@cf/meta/llama-4" });
     expect(pinned).toMatchObject({ name: "workers-ai", model: "@cf/meta/llama-4" });
 
-    const partner = runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN }, { defaultModel: "workers-ai/minimax/m3" });
+    const partner = await runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN }, { defaultModel: "workers-ai/minimax/m3" });
     expect(partner).toMatchObject({ name: "workers-ai", model: "minimax/m3" });
 
-    const gateway = runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN }, { defaultModel: "my-gateway/openai/gpt-4.1" });
+    const gateway = await runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN }, { defaultModel: "my-gateway/openai/gpt-4.1" });
     expect(gateway).toMatchObject({ name: "workers-ai", model: DEFAULT_WORKERS_AI_MODEL_ID });
   });
 
-  test("signed-in Cloudflare AI remains the default when unrelated BYO keys exist", () => {
-    const out = runResolveLLM({
+  test("signed-in Cloudflare AI remains the default when unrelated BYO keys exist", async () => {
+    const out = await runResolveLLM({
       origin: CLOUD_ORIGIN,
       accessToken: CLOUD_TOKEN,
       providers: { openai: { apiKey: "sk-test" } },
@@ -134,8 +132,8 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
   });
 
   // Item 11.2: with every BYO credential and no chosen model, the native Workers AI model still wins.
-  test("no chosen model lands on the native default however many BYO credentials are stored", () => {
-    const out = runResolveLLM({
+  test("no chosen model lands on the native default however many BYO credentials are stored", async () => {
+    const out = await runResolveLLM({
       origin: CLOUD_ORIGIN,
       accessToken: CLOUD_TOKEN,
       providers: {
@@ -157,7 +155,7 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
 
   // A local Ollama accepts `@cf/deepseek-ai/…` and serves something else, so the local endpoint
   // must never answer for a spec the signed-in account owns.
-  test("a local openai-compatible endpoint cannot answer for a native spec", () => {
+  test("a local openai-compatible endpoint cannot answer for a native spec", async () => {
     const compat = { default: { baseURL: "http://localhost:11434/v1", apiKey: "local" } };
 
     for (const model of [
@@ -165,22 +163,22 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
       DEFAULT_WORKERS_AI_MODEL_ID,
       "my-gateway/openai/gpt-4.1",
     ]) {
-      const out = runResolveLLM({
+      const out = await runResolveLLM({
         origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN, providers: { openaiCompat: compat },
       }, { defaultModel: model });
 
       expect(out).toMatchObject({ name: "workers-ai", baseURL: `${CLOUD_ORIGIN}/api/user/ai/v1` });
     }
 
-    const local = runResolveLLM({
+    const local = await runResolveLLM({
       origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN, providers: { openaiCompat: compat },
     }, { defaultModel: "openai-compat/gpt-oss:20b" });
 
     expect(local).toMatchObject({ name: "openai-compat", baseURL: "http://localhost:11434/v1", model: "gpt-oss:20b" });
   });
 
-  test("a default tier on a BYO provider overrides the signed-in proxy", () => {
-    const out = runResolveLLM({
+  test("a default tier on a BYO provider overrides the signed-in proxy", async () => {
+    const out = await runResolveLLM({
       origin: CLOUD_ORIGIN,
       accessToken: CLOUD_TOKEN,
       providers: { openai: { apiKey: "sk-test" } },
@@ -189,8 +187,8 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
     expect(out).toMatchObject({ name: "openai", model: "gpt-5.5" });
   });
 
-  test("an explicit direct endpoint keeps precedence over the signed-in proxy", () => {
-    const out = runResolveLLM(
+  test("an explicit direct endpoint keeps precedence over the signed-in proxy", async () => {
+    const out = await runResolveLLM(
       { origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN },
       { env: { KINU_BASE_URL: "https://gateway.example/v1", KINU_AUTH: "Bearer direct" } },
     );
@@ -213,16 +211,16 @@ describe("resolveLLMConfig — registry-only providers", () => {
   ];
 
   for (const registry of registryOnly) {
-    test(registry.name, () => {
-      const out = runResolveLLM({}, { env: { KINU_MODEL: registry.spec } });
+    test(registry.name, async () => {
+      const out = await runResolveLLM({}, { env: { KINU_MODEL: registry.spec } });
       expect(out).toEqual({ name: registry.provider, baseURL: "", headers: {}, model: registry.model });
     });
   }
 
-  test("nothing configured — signed out or expired — resolves to null", () => {
-    expect(runResolveLLM({})).toBeNull();
+  test("nothing configured — signed out or expired — resolves to null", async () => {
+    expect(await runResolveLLM({})).toBeNull();
 
-    const expired = runResolveLLM({
+    const expired = await runResolveLLM({
       origin: CLOUD_ORIGIN,
       accessToken: CLOUD_TOKEN,
       tokenExpiresAt: new Date(Date.now() - 60_000).toISOString(),
@@ -231,7 +229,7 @@ describe("resolveLLMConfig — registry-only providers", () => {
     expect(expired).toBeNull();
   });
 
-  test("requireLLMConfig still names the fixes when an endpoint is mandatory", () => {
+  test("requireLLMConfig still names the fixes when an endpoint is mandatory", async () => {
     const kinuHome = scratchDir("cli-llm-req");
     writeFileSync(join(kinuHome, "config.json"), JSON.stringify({}), { mode: 0o600 });
 
@@ -249,26 +247,23 @@ describe("resolveLLMConfig — registry-only providers", () => {
       "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "CODEX_ACCESS_TOKEN",
     ]) delete env[name];
 
-    const proc = Bun.spawnSync({
-      cmd: [process.execPath, "-e", script],
+    const proc = await runToExit([process.execPath, "-e", script], {
       cwd: resolve(__dirname, "../../.."),
       env,
-      stdout: "pipe",
-      stderr: "pipe",
     });
 
     expect(proc.exitCode).toBe(0);
-    expect(parseJsonValue(proc.stdout.toString())).toMatchObject({
+    expect(parseJsonValue(proc.stdout)).toMatchObject({
       error: expect.stringContaining("claude"),
     });
   });
 });
 
 /** resolveLLMConfig in a clean subprocess (config.ts binds KINU_HOME at import); `defaultModel` is the default tier's. */
-function runResolveLLM(
+async function runResolveLLM(
   config: JsonObject,
   { env: extraEnv = {}, defaultModel }: { env?: Record<string, string>; defaultModel?: string } = {},
-): JsonValue {
+): Promise<JsonValue> {
   const kinuHome = scratchDir("cli-llm");
   writeFileSync(join(kinuHome, "config.json"), JSON.stringify(config), { mode: 0o600 });
 
@@ -288,17 +283,14 @@ function runResolveLLM(
     if (!(name in extraEnv)) delete env[name];
   }
 
-  const proc = Bun.spawnSync({
-    cmd: [process.execPath, "-e", script],
+  const proc = await runToExit([process.execPath, "-e", script], {
     cwd: resolve(__dirname, "../../.."),
     env,
-    stdout: "pipe",
-    stderr: "pipe",
   });
 
   expect(proc.exitCode).toBe(0);
 
-  return parseJsonValue(proc.stdout.toString());
+  return parseJsonValue(proc.stdout);
 }
 
 function runRequireAuth(tokenExpiresAt: string, envToken?: string) {
@@ -320,12 +312,9 @@ function runRequireAuth(tokenExpiresAt: string, envToken?: string) {
   if (envToken) env.KINU_TOKEN = envToken;
   else delete env.KINU_TOKEN;
 
-  return Bun.spawnSync({
-    cmd: [process.execPath, "-e", script],
+  return runToExit([process.execPath, "-e", script], {
     cwd: resolve(__dirname, "../../.."),
     env,
-    stdout: "pipe",
-    stderr: "pipe",
   });
 }
 
@@ -334,7 +323,7 @@ interface NameCheck {
   error: string | null;
 }
 
-function runNameChecks(): NameCheck[] {
+async function runNameChecks(): Promise<NameCheck[]> {
   const kinuHome = scratchDir("cli-names");
 
   const script = `
@@ -358,21 +347,18 @@ function runNameChecks(): NameCheck[] {
     console.log(JSON.stringify(results));
   `;
 
-  const proc = Bun.spawnSync({
-    cmd: [process.execPath, "-e", script],
+  const proc = await runToExit([process.execPath, "-e", script], {
     cwd: resolve(__dirname, "../../.."),
     env: { ...process.env, KINU_HOME: kinuHome },
-    stdout: "pipe",
-    stderr: "pipe",
   });
 
   expect(proc.exitCode).toBe(0);
 
-  return JSON.parse(proc.stdout.toString());
+  return JSON.parse(proc.stdout);
 }
 
 /** Loads a config.json whose one field has the wrong type; answers the rejection. */
-function runInvalidFieldLoad(): string {
+async function runInvalidFieldLoad(): Promise<string> {
   const kinuHome = scratchDir("cli-invalid-field");
   writeFileSync(join(kinuHome, "config.json"), JSON.stringify({ updateCheck: "sometimes" }), { mode: 0o600 });
 
@@ -381,17 +367,14 @@ function runInvalidFieldLoad(): string {
     try { loadConfigFile(); console.log('loaded'); } catch (error) { console.log(error instanceof Error ? error.message : String(error)); }
   `;
 
-  const proc = Bun.spawnSync({
-    cmd: [process.execPath, "-e", script],
+  const proc = await runToExit([process.execPath, "-e", script], {
     cwd: resolve(__dirname, "../../.."),
     env: { ...process.env, KINU_HOME: kinuHome },
-    stdout: "pipe",
-    stderr: "pipe",
   });
 
   expect(proc.exitCode).toBe(0);
 
-  return proc.stdout.toString();
+  return proc.stdout;
 }
 
 // The raw CLI token is the only copy (the server stores a hash), so a failed revoke must keep it.

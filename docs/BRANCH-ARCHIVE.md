@@ -8,7 +8,7 @@ Never delete a tag under `refs/tags/archive/` until the test reports zero novel 
 
 ## Tag inventory
 
-There were 205 lightweight tags under `refs/tags/archive/` on 2026-09-08, and 231 on 2026-09-22 (`git tag -l 'archive/*'` at `ad61dea6c`). The first forty are inventoried below. Nine predate the 2026-08-21 prune wave, which added thirty-one. Those measurements use `main` at `29f654bd` and `c143c4b6`, respectively.
+There were 205 lightweight tags under `refs/tags/archive/` on 2026-09-08, and 231 on 2026-09-22 (`git tag -l 'archive/*'` at `1dd25b3ad`). The first forty are inventoried below. Nine predate the 2026-08-21 prune wave, which added thirty-one. Those measurements use `main` at `29f654bd` and `c143c4b6`, respectively.
 
 Blobs `main` lacks are absent from its history. Sole-copy blobs have no other ref. Re-measure the sole-copy count after pruning.
 
@@ -97,7 +97,7 @@ Measured 2026-08-30, the repository has 143 `archive/*` tags. The three affected
 
 ### The pre-rewrite safety anchor
 
-`save-pre-reword` named one pre-rewrite savepoint branch. Before pruning that branch, `archive/save-pre-reword` pinned `b3b41f5c`. Against integration at `f7547b3bf`, it retains 51 commits and 2,849 blobs absent from integration. Eight blobs have no other ref. The tag is the last home for those eight blobs and must not be deleted.
+`save-pre-reword` named one pre-rewrite savepoint branch. Before pruning that branch, `archive/save-pre-reword` pinned `b3b41f5c`. Against integration at `88d6da473`, it retains 51 commits and 2,849 blobs absent from integration. Eight blobs have no other ref. The tag is the last home for those eight blobs and must not be deleted.
 
 Reflog expiry and object pruning remain pending until the final all-ref scan lands. That scan confirms no credential blob is reachable. It also reconciles the restart-era empty-object quarantine.
 
@@ -149,7 +149,7 @@ The full 102-row manifest with head SHAs is at `~/Proteus-backups/worktree-resid
 
 The lanes of the 2026-09-03 to 2026-09-05 quality program landed on `main` by cherry-pick. 143 worktrees were removed and 151 branches deleted. A branch counted as merged when every commit it carried was on `main` by cherry-pick trailer or by patch id. Those branches have no tag, because their content is on `main`. The 38 branches below carried commits `main` lacks. Each was tagged. The tag was verified at the tip before the branch went. Twelve worktrees held uncommitted residue of child lanes whose parents landed a later form of the work. Each diff is at `~/kinu-wip/<worktree>-2026-09-05.patch`, with its untracked files beside it.
 
-Counts use `main` at `443f1653c`, measured 2026-09-05. Sole copy counts the
+Counts use `main` at `cdb2b0ff4`, measured 2026-09-05. Sole copy counts the
 blobs no other ref reaches, the archive tags of this wave included.
 
 | Branch (deleted) | Tag | Commit | Commits | Blobs `main` lacks | Sole copy |
@@ -197,7 +197,7 @@ The manifest with every deleted branch sits at `~/kinu-wip/prune-manifest-2026-0
 
 ### Landing cleanup on 2026-09-08
 
-These tags retain the implementation commits whose changes shipped in `904c22cc4`. Both worktrees were clean before removal. Production deployment and browser receipts are retained in the machine-local release evidence archive. Novel and sole-copy blob counts were not measured.
+These tags retain the implementation commits whose changes shipped in `322b4bf5b`. Both worktrees were clean before removal. Production deployment and browser receipts are retained in the machine-local release evidence archive. Novel and sole-copy blob counts were not measured.
 
 | Removed branch | Retained tag | Commit |
 |---|---|---|
@@ -206,13 +206,13 @@ These tags retain the implementation commits whose changes shipped in `904c22cc4
 
 ### The 2026-09-12 reconciliation
 
-Fifteen branches were reconciled against the integration tip by content, not by patch id. None needed a tag. `main` at `d49410f01`. The doc's own blob test (below) ran on every candidate before its branch went.
+Fifteen branches were reconciled against the integration tip by content, not by patch id. None needed a tag. `main` at `5c0b2e0e5`. The doc's own blob test (below) ran on every candidate before its branch went.
 
-Landed by a different commit, so the tree already held the behavior: the fork-receiver authority (`fork.ts:386-390`), the vendor-schema gate (`c00f8ff73`), the pane-store docs, the PostCSS scroll test, the Work-tab click, both `fix/capability-required-shape` commits by patch id, `integrate/2026-09-12-v2`, and the whole of `eval/trajectory-and-agent-benchmarks` (its pi comparator is byte-identical on the tip, its reasoning-effort and session-affinity fixes are present in evolved form, and its audit report was deleted on the branch itself). Their remaining novel blobs were intermediate revisions of files whose landed versions are on `main`.
+Landed by a different commit, so the tree already held the behavior: the fork-receiver authority (`fork.ts:386-390`), the vendor-schema gate (`d0952b42b`), the pane-store docs, the PostCSS scroll test, the Work-tab click, both `fix/capability-required-shape` commits by patch id, `integrate/2026-09-12-v2`, and the whole of `eval/trajectory-and-agent-benchmarks` (its pi comparator is byte-identical on the tip, its reasoning-effort and session-affinity fixes are present in evolved form, and its audit report was deleted on the branch itself). Their remaining novel blobs were intermediate revisions of files whose landed versions are on `main`.
 
 Rejected by a later decision: the two-browser-rows frame loop, which the inspector rewrite deletes.
 
-Merged now: `e611638b4` (address-length schema) as `f594a4f1d`, and `f429f7b0c` (the 2026-09-09 whole-delta publication cost) as `9d081df3c`. That commit also re-sources the amplification figures the report had withdrawn as unsourced.
+Merged now: `e611638b4` (address-length schema) as `73e5c132f`, and `f429f7b0c` (the 2026-09-09 whole-delta publication cost) as `5b0ea6feb`. That commit also re-sources the amplification figures the report had withdrawn as unsourced.
 
 Kept: `feat/devbox-durability-next` at `f3a0fcf7f`, the home the decisive report names for the 2026-09-08 native lineage. Its six sibling branches held zero blobs that branch lacks. `bench/mmap-contract-cost` shared its tip.
 
@@ -220,7 +220,7 @@ Seven worktrees went. Three held residue, saved as `~/kinu-wip/<worktree>-2026-0
 
 ### The 2026-09-18 prune wave
 
-`main` at `9ad3b7a76`. Sixty-nine local branches went; fifty-four were `main` ancestors (zero commits ahead) and needed no tag. The fifteen that carried commits `main` lacks each got a tag first, and the blob test below ran on every one before its branch was deleted. Counts are novel blobs (absent from `main`'s history) and sole copies (no other ref, measured after the deletions). The script and its log sit at `~/kinu-wip/prune-2026-09-18.sh` and `~/kinu-wip/prune-2026-09-18/`.
+`main` at `654902ad1`. Sixty-nine local branches went; fifty-four were `main` ancestors (zero commits ahead) and needed no tag. The fifteen that carried commits `main` lacks each got a tag first, and the blob test below ran on every one before its branch was deleted. Counts are novel blobs (absent from `main`'s history) and sole copies (no other ref, measured after the deletions). The script and its log sit at `~/kinu-wip/prune-2026-09-18.sh` and `~/kinu-wip/prune-2026-09-18/`.
 
 | Removed branch | Retained tag | Commit | Novel | Sole |
 |---|---|---|---|---|
@@ -240,15 +240,15 @@ Seven worktrees went. Three held residue, saved as `~/kinu-wip/<worktree>-2026-0
 | `snapshot/chat-transport-step3` | `archive/chat-transport-step3` | `b8fa6df73` | 4 | 3 |
 | `snapshot/ladder-cache-wip-0447` | `archive/ladder-cache-wip-0447` | `aa1421be8` | 5 | 5 |
 
-The 2026-09-12 entry above kept `feat/devbox-durability-next` as the home of the 2026-09-08 native lineage. That home is now the tag `archive/devbox-durability-next`, at the same commit; the one citation of the branch name outside this file (`packages/devbox/bench/measure-first/DECISIVE-2026-09-05.md`) names the tag now. The branch itself was superseded on 2026-09-17 by content: `main` holds bounded zero-payload attach by another route (`f69af22cf`, `7598a68a6`, `a3c6712de`, `ac6ae8f39`; settlement `20260915065241` admitted under D18), 88% of the branch's additions are files `main` deleted in `337eaf6f9`, and its own three test reds came from wall-clock start budgets, the shape D19 replaced with the box's own clock. The assessment's evidence is at `~/kinu-logs/devbox-next-0917/`. Its snapshot tag is a superset (the branch tip is an ancestor), so the 430 novel blobs are held twice and the sole-copy count is 0 for both.
+The 2026-09-12 entry above kept `feat/devbox-durability-next` as the home of the 2026-09-08 native lineage. That home is now the tag `archive/devbox-durability-next`, at the same commit; the one citation of the branch name outside this file (`packages/devbox/bench/measure-first/DECISIVE-2026-09-05.md`) names the tag now. The branch itself was superseded on 2026-09-17 by content: `main` holds bounded zero-payload attach by another route (`e185bb046`, `0bdf297c5`, `d6ab41dac`, `6a97e34ce`; settlement `20260915065241` admitted under D18), 88% of the branch's additions are files `main` deleted in `46c320bc1`, and its own three test reds came from wall-clock start budgets, the shape D19 replaced with the box's own clock. The assessment's evidence is at `~/kinu-logs/devbox-next-0917/`. Its snapshot tag is a superset (the branch tip is an ancestor), so the 430 novel blobs are held twice and the sole-copy count is 0 for both.
 
-`feat/durable-slates` was superseded the same way: its two commits patched `@nimbus-sh/worker@0.4.0` and `@nimbus-sh/fabric@0.2.0`, and `main` adopted worker 0.7 and fabric 0.5 without local patches (`8d917e527`, `75c7750c4`) with a slate as a durable Nimbus application (`a9633d132`), proved across eviction by `packages/cf-backend/tests/workerd/slate-durability.test.ts`. Its worktree's uncommitted `slate_apps` table and host changes (498 insertions) are in the snapshot tag and in `~/kinu-wip/prune-2026-09-18/Kinu-wt-durable-slates-2026-09-18.patch`.
+`feat/durable-slates` was superseded the same way: its two commits patched `@nimbus-sh/worker@0.4.0` and `@nimbus-sh/fabric@0.2.0`, and `main` adopted worker 0.7 and fabric 0.5 without local patches (`162e0aefe`, `6baeb2243`) with a slate as a durable Nimbus application (`915ea0cb1`), proved across eviction by `packages/cf-backend/tests/workerd/slate-durability.test.ts`. Its worktree's uncommitted `slate_apps` table and host changes (498 insertions) are in the snapshot tag and in `~/kinu-wip/prune-2026-09-18/Kinu-wt-durable-slates-2026-09-18.patch`.
 
 Six worktrees went (`Kinu-wt-delivery-seam`, `Kinu-wt-devbox-c3`, `Kinu-wt-devbox-decisive`, `Kinu-wt-devbox-next`, `Kinu-wt-durable-slates`, `wt-chunked-pub-v2`). Every one held residue; each is saved as `~/kinu-wip/prune-2026-09-18/<worktree>-2026-09-18.patch`, untracked files beside it as a tarball, and the 2026-09-14 snapshot tags above hold the same residue as commits.
 
 Eleven stash entries were tagged `archive/stash-<n>-<slug>-20260918` on their stash commits (the untracked third parent included) and the stash list was cleared. The list as it was is at `~/kinu-wip/prune-2026-09-18/stash-list.txt`.
 
-Remote: `origin/fix/devbox-decision` is a `main` ancestor and is deleted on the next push of `main`, which carries the new tags. `origin/feat/devbox-durability-next` is not the archived tip: on 2026-09-22 it points at `9ec942bed` (2026-09-07), whose 15 commits `main` lacks include 10 with no patch-equivalent in `archive/devbox-durability-next`. Tag that tip before deleting the remote branch. `origin/takeover/stabilize` (2026-09-03, eleven commits `main` lacks) was not assessed and stays. As of 2026-09-22 origin holds one `archive/*` tag, so the local tags above are the only copies.
+Remote: `origin/fix/devbox-decision` is a `main` ancestor and is deleted on the next push of `main`, which carries the new tags. `origin/feat/devbox-durability-next` is not the archived tip: on 2026-09-22 it points at `4f93d0507` (2026-09-07), whose 15 commits `main` lacks include 10 with no patch-equivalent in `archive/devbox-durability-next`. Tag that tip before deleting the remote branch. `origin/takeover/stabilize` (2026-09-03, eleven commits `main` lacks) was not assessed and stays. As of 2026-09-22 origin holds one `archive/*` tag, so the local tags above are the only copies.
 
 ## Reproduce the test
 

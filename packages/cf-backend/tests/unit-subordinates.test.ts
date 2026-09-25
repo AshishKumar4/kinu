@@ -1,20 +1,25 @@
 // How this backend hosts core's subordinate module (policy: core/tests/unit-subordinates.test.ts), read
 // through the actor's own bootstrap reads, a hosted child's runtime, and the tools each actor is built with.
 import './helpers/ui-module-globals';
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
+import * as v from 'valibot';
 import {
-  BUILTIN_TOOLS, DEPS_GATED_TOOLS, observedActionEnum, REPORT_TOOL, TASK_TURN_ENDINGS, terminalTaskReport,
+  actorConnectionTag, BUILTIN_TOOLS, DEPS_GATED_TOOLS, hostedActorSocketPath,
+  observedActionEnum, ORCHESTRATOR_AGENT_SLUG, REPORT_TOOL, reviewCommand, TASK_TURN_ENDINGS, terminalTaskReport,
 } from '@kinu.run/core';
 import type { SubordinateRosterEntry } from '@kinu.run/core/protocol';
+import { present } from '@kinu.run/test-utils';
+import { ActorAgent } from '../src/actor-agent';
 import { SubordinateTabs } from '../src/components/SubordinateTabs';
 import { KeptTranscript } from '../src/components/KeptTranscript';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import {
-  chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask,
+  chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, workspaceFiles,
 } from './helpers/actor-harness';
+import { socketConnection } from './helpers/bindings';
 import { answeringGateway, offeredTools } from './helpers/platform-gateway';
 
 mockAgentsSdk();
@@ -31,7 +36,7 @@ describe('subordinate wiring', () => {
     expect(identity.lifetime).toBe('task');
 
     for (const ending of TASK_TURN_ENDINGS) {
-      const report = terminalTaskReport({ lifetime: identity.lifetime, ending, assistantText: ending === 'answered' ? 'The evidence is complete.' : '' });
+      const report = await terminalTaskReport({ lifetime: identity.lifetime, ending, assistantText: ending === 'answered' ? 'The evidence is complete.' : '', narration: async () => [] });
       expect(report?.status).toBe(ending === 'answered' ? 'completed' : 'blocked');
       expect(report?.content).toBeString();
     }
@@ -180,5 +185,56 @@ describe('a dismissed agent keeps its conversation reachable', () => {
     expect(markup.indexOf('asked before')).toBeLessThan(note);
     expect(note).toBeLessThan(markup.indexOf('asked after'));
     expect(markup.slice(note, markup.indexOf('</p>', note))).toContain('unavailable');
+  });
+});
+
+describe('an agent\'s window hears only what it may act on', () => {
+  /**
+   * One object serves the workspace's windows and each agent's. The workspace's own frames once reached an agent's
+   * window too, whose pane answered them with calls that window may not make, and showed "could not be refreshed".
+   */
+  test('the workspace\'s own frames reach only its windows, and a workspace-wide one reaches every window', async () => {
+    const { agent } = orchestratorHarness();
+    const heard = new Map<string, string[]>([['workspace', []], ['agent', []]]);
+    const windows = [socketConnection({ id: 'workspace', tags: [] })];
+    const rosterSent = Promise.withResolvers<void>();
+
+    // The platform's fan-out: every window but the ones named.
+    const fanout = spyOn(Object.getPrototypeOf(ActorAgent.prototype), 'broadcast').mockImplementation((message: string, without?: string[]) => {
+      const frame = v.safeParse(v.looseObject({ type: v.string() }), JSON.parse(message));
+      const type = frame.success ? frame.output.type : '';
+
+      for (const window of windows) if (!(without ?? []).includes(window.id)) heard.get(window.id)?.push(type);
+
+      if (type === 'subordinates_changed' && windows.length === 2) rosterSent.resolve();
+    });
+
+    Object.defineProperty(agent, 'getConnections', { configurable: true, value: () => windows });
+
+    try {
+      // An added agent inherits the workspace's purpose, so the workspace needs one first.
+      await agent.setSoul('# Purpose\n\nAudit the ledger.');
+      const { name } = await agent.createSubordinateAgent();
+      const tag = present(actorConnectionTag(`/agents/${ORCHESTRATOR_AGENT_SLUG}/ledger/${hostedActorSocketPath(name)}`), 'the window tag');
+
+      windows.push(socketConnection({ id: 'agent', tags: [tag] }));
+      await agent.renameSubordinateAgent(name, 'Ledger auditor');
+      await rosterSent.promise;
+      await agent.announceSubordinatePlan({ path: [name], id: 'plan-1', revision: 1 });
+      await agent.cancelCurrentWork();
+      agent.observeDeferrals().park({ command: 'git push --force origin main', executor: 'workspace', review: reviewCommand('git push --force origin main', 'workspace') });
+      await agent.listSlates();
+      await workspaceFiles(agent).mkdir('/home/main/slates/tally', { recursive: true });
+      await workspaceFiles(agent).writeFile('/home/main/slates/tally/server.ts', 'export default { fetch() { return new Response("ok"); } };');
+      await agent.announceDeviceAvailable({ id: 'device-1', label: 'studio' });
+    } finally {
+      fanout.mockRestore();
+    }
+
+    const own = ['subordinates_changed', 'workspace_plan_updated', 'work_cancelled', 'pending_actions_changed', 'slates_changed'];
+
+    expect(heard.get('workspace')).toEqual(expect.arrayContaining([...own, 'device_available']));
+    expect(heard.get('agent')?.filter((type) => own.includes(type))).toEqual([]);
+    expect(heard.get('agent')).toContain('device_available');
   });
 });

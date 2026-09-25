@@ -6,7 +6,7 @@ import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot, flushSync } from '@opentui/react';
 import { expect, test } from 'bun:test';
 import { parseJsonObject } from '@kinu.run/core';
-import { scratchDir } from '@kinu.run/test-utils';
+import { runToExit, scratchDir } from '@kinu.run/test-utils';
 
 import type { ProviderConnectionState } from '../src/commands/provider-connect';
 import { GuidedOnboarding, type OnboardingReadiness, type TuiOnboardingOperations } from '../src/tui/onboarding';
@@ -148,7 +148,7 @@ test('a check that never answers shows until Esc skips it, which aborts it and m
   }
 });
 
-test('a provider connected through the port stores the key the connected check reads', () => {
+test('a provider connected through the port stores the key the connected check reads', async () => {
   const home = scratchDir('onboarding-connect-home');
 
   const runner = `
@@ -161,8 +161,7 @@ test('a provider connected through the port stores the key the connected check r
     console.log(JSON.stringify({ before: before.connected, after: after.connected, kind: outcome.kind }));
   `;
 
-  const proc = Bun.spawnSync({
-    cmd: [process.execPath, '-e', runner],
+  const proc = await runToExit([process.execPath, '-e', runner], {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -172,12 +171,10 @@ test('a provider connected through the port stores the key the connected check r
       KINU_TOKEN: '',
       KINU_ORIGIN: '',
     },
-    stdout: 'pipe',
-    stderr: 'pipe',
   });
 
-  expect(proc.stderr.toString()).toBe('');
-  const result = parseJsonObject(proc.stdout.toString().trim().split('\n').at(-1) ?? '{}');
+  expect(proc.stderr).toBe('');
+  const result = parseJsonObject(proc.stdout.trim().split('\n').at(-1) ?? '{}');
   expect(result).toEqual({ before: false, after: true, kind: 'connected' });
   const config = parseJsonObject(readFileSync(join(home, 'config.json'), 'utf8'));
   expect(JSON.stringify(config)).toContain('sk-onboarding-key');

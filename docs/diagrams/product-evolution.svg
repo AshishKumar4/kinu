@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="1426" viewBox="0 0 640 1426" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="evolution-title evolution-desc">
 <title id="evolution-title">CURRENT: Evolution follows evidence</title>
 <desc id="evolution-desc">Current evolution has a step-level channel for crafted-tool fitness and execution-recovery findings, turn-level outcome review, and longer session-window and lifetime processes. A tool that returns is not proof of task correctness. Negative outcomes can produce lessons; corroboration gates curated memory. Proposed scaffold changes pass validation and evaluation rather than becoming policy automatically. Records distinguish promotion, rejection and rollback.</desc>
-<!-- Sources: docs/EVOLUTION.md; packages/core/src/evolution/engine.ts; packages/core/src/orchestrator/craft-cycle.ts; packages/core/src/evolution/recovery.ts. Current-source baseline: 9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a. -->
+<!-- Sources: docs/EVOLUTION.md; packages/core/src/evolution/engine.ts; packages/core/src/orchestrator/craft-cycle.ts; packages/core/src/evolution/recovery.ts. Current-source baseline: d6a88d8e736e0ca4aa934cbabf5fa52327e5792b. -->
 <style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
 <defs>
 <marker id="evolution-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">

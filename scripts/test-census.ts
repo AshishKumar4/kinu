@@ -40,7 +40,7 @@
  * sites here before that.
  *
  * THE DENOMINATOR, RECONCILED against a hand tally, because the first review of
- * this tool counted by hand and got a different number. At `d86cd6672` the
+ * this tool counted by hand and got a different number. At `0da431407` the
  * review tallied 62 test files under `scripts/`; this census reads 63 there,
  * and the one file between the two readings is `scripts/test-census.test.ts` —
  * this tool's own suite, which did not exist at that revision. Nothing else

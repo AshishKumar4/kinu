@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 
@@ -299,7 +300,7 @@ describe('CLI TUI layout', () => {
     }
   });
 
-  test('CLI version has package.json as its single source', () => {
+  test('CLI version has package.json as its single source', async () => {
     const packageJson = v.parse(
       v.object({ version: v.string() }),
       JSON.parse(readFileSync(resolve(repoRoot, 'packages/cli/package.json'), 'utf8')),
@@ -307,14 +308,11 @@ describe('CLI TUI layout', () => {
 
     expect(VERSION).toBe(packageJson.version);
 
-    const reported = Bun.spawnSync({
-      cmd: [process.execPath, resolve(repoRoot, 'packages/cli/bin/cli.ts'), '-v'],
+    const reported = await runToExit([process.execPath, resolve(repoRoot, 'packages/cli/bin/cli.ts'), '-v'], {
       cwd: repoRoot,
-      stdout: 'pipe',
-      stderr: 'pipe',
     });
 
-    expect({ exitCode: reported.exitCode, stdout: reported.stdout.toString().trim() })
+    expect({ exitCode: reported.exitCode, stdout: reported.stdout.trim() })
       .toEqual({ exitCode: 0, stdout: VERSION });
   });
 
@@ -859,8 +857,8 @@ describe('CLI TUI layout', () => {
   });
 
   // The arrow press afterwards proves keys arrived, so "the selection did not move" is meaningful.
-  test('digit keys never select a workspace on the home screen', () => {
-    const run = runHomeScreen({
+  test('digit keys never select a workspace on the home screen', async () => {
+    const run = await runHomeScreen({
       workspaces: WORKSPACE_NAMES,
       driver: `
         // The TITLES, because that is what the navigator renders. A row shows
@@ -922,10 +920,10 @@ describe('CLI TUI layout', () => {
   });
 
   // The mission seeds SOUL.md and names the workspace; it must not be replayed as the opening turn.
-  test('creating a workspace from a mission opens it without sending the mission', () => {
+  test('creating a workspace from a mission opens it without sending the mission', async () => {
     const mission = 'My personal assistant, Jarvis';
 
-    const run = runHomeScreen({
+    const run = await runHomeScreen({
       width: 80,
       driver: `
         await waitFor('the mission field to render', () => frame().includes('What is this workspace for?'));
@@ -961,8 +959,8 @@ describe('CLI TUI layout', () => {
 
   // Tab queues a focus commit and Escape finishes the screen in the same tick, forcing a commit after the
   // renderer is freed; nothing may reach the native library once it is.
-  test('nothing reaches the native library after the home screen frees its renderer', () => {
-    const run = runHomeScreen({
+  test('nothing reaches the native library after the home screen frees its renderer', async () => {
+    const run = await runHomeScreen({
       driver: `
         const lib = renderer.lib;
         const ptr = renderer.rendererPtr;
@@ -1001,7 +999,7 @@ describe('CLI TUI layout', () => {
     expect(observed.afterFree).toEqual([]);
   });
 
-  test('home model and effort selections persist as global defaults', () => {
+  test('home model and effort selections persist as global defaults', async () => {
     const kinuHome = scratchDir('home-tui');
 
     writeFileSync(resolve(kinuHome, 'config.json'), JSON.stringify({
@@ -1101,16 +1099,13 @@ describe('CLI TUI layout', () => {
       delete env[name];
     }
 
-    const proc = Bun.spawnSync({
-      cmd: [process.execPath, '-e', script],
+    const proc = await runToExit([process.execPath, '-e', script], {
       cwd: repoRoot,
       env,
-      stdout: 'pipe',
-      stderr: 'pipe',
     });
 
-    expect({ exitCode: proc.exitCode, stderr: proc.stderr.toString() }).toEqual({ exitCode: 0, stderr: '' });
-    const tier = v.parse(v.object({ reasoningEffort: v.string(), model: v.string() }), JSON.parse(proc.stdout.toString()));
+    expect({ exitCode: proc.exitCode, stderr: proc.stderr }).toEqual({ exitCode: 0, stderr: '' });
+    const tier = v.parse(v.object({ reasoningEffort: v.string(), model: v.string() }), JSON.parse(proc.stdout));
     expect(tier).toMatchObject({ reasoningEffort: 'high' });
     expect(tier.model).toStartWith('openai/');
     expect(tier.model).not.toBe('openai/gpt-5.5');
@@ -1244,8 +1239,8 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
   await waitFor('the home screen to start accepting keys', () => renderer.keyInput.listenerCount('keypress') > 1);
 `;
 
-  test('the home screen carries readiness once and reads its brief in one line', () => {
-    const full = runHomeScreen({
+  test('the home screen carries readiness once and reads its brief in one line', async () => {
+    const full = await runHomeScreen({
       driver: `
         await waitFor('the mode segments to render', () => frame().includes('Cloud'));
         const rows = frame().split('\\n');
@@ -1264,7 +1259,7 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
     expect(observed.readinessRow).toBe(false);
     expect(observed.briefOnOneLine).toBe(true);
 
-    const compact = runHomeScreen({
+    const compact = await runHomeScreen({
       height: 30,
       driver: `
         await waitFor('the readiness row to render', () => frame().includes('Cloud account'));
@@ -1275,10 +1270,10 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
     expect(JSON.parse(compact.stdout)).toEqual({ readinessRow: true });
   });
 
-  test('a cloud workspace whose name a local one holds is named on screen, not silently dropped', () => {
+  test('a cloud workspace whose name a local one holds is named on screen, not silently dropped', async () => {
     const project = realpathSync(scratchDir('home-project'));
 
-    const run = runHomeScreen({
+    const run = await runHomeScreen({
       workspaces: ['shopbot'],
       config: {
         origin: 'https://kinu.test',
@@ -1318,7 +1313,7 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
   });
 
 /** Subprocess so one KINU_HOME and one renderer swap belong to one test; the caller owns the returned home. */
-function runHomeScreen(options: {
+async function runHomeScreen(options: {
   driver: string;
   workspaces?: readonly string[];
   width?: number;
@@ -1349,22 +1344,16 @@ function runHomeScreen(options: {
 
   for (const name of INHERITED_CREDENTIALS) delete env[name];
 
-  const proc = Bun.spawnSync({
-    cmd: [
-      process.execPath,
-      '-e',
-      `${homeScreenPrelude(options.width, options.height, options.fetchStub)}${options.driver}`,
-    ],
-    cwd: repoRoot,
-    env,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
+  const proc = await runToExit([
+    process.execPath,
+    '-e',
+    `${homeScreenPrelude(options.width, options.height, options.fetchStub)}${options.driver}`,
+  ], { cwd: repoRoot, env });
 
   // Bun exits 0 for a rejected top-level await, so stderr is what fails the test.
-  expect({ exitCode: proc.exitCode, stderr: proc.stderr.toString() }).toEqual({ exitCode: 0, stderr: '' });
+  expect({ exitCode: proc.exitCode, stderr: proc.stderr }).toEqual({ exitCode: 0, stderr: '' });
 
-  return { home, stdout: proc.stdout.toString() };
+  return { home, stdout: proc.stdout };
 }
 
 const MODELS: AgentModelEntry[] = [

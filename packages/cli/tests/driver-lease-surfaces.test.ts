@@ -3,6 +3,7 @@
  * file and `EventLog.markConsumed` has no compare-and-set. The rival is a real `sleep` process
  * holding the lease, since the lease only asks whether the holder's pid exists.
  */
+import { runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 
 import { resolve } from 'node:path';
@@ -25,7 +26,7 @@ function printed(result: JsonObject, key: string): string {
   return String(value);
 }
 
-function scenario(body: string): JsonObject {
+async function scenario(body: string): Promise<JsonObject> {
   const home = freshDir('kinu-lease-home-');
   const project = freshDir('kinu-lease-project-');
 
@@ -89,11 +90,8 @@ function scenario(body: string): JsonObject {
     }
   `;
 
-  const proc = Bun.spawnSync({
-    cmd: [process.execPath, '-e', script],
+  const proc = await runToExit([process.execPath, '-e', script], {
     cwd: repoRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
     env: {
       ...process.env,
       KINU_HOME: home,
@@ -109,15 +107,15 @@ function scenario(body: string): JsonObject {
   });
 
   if (proc.exitCode !== 0) {
-    throw new Error(`lease scenario failed (${proc.exitCode}): ${proc.stderr.toString()}`);
+    throw new Error(`lease scenario failed (${proc.exitCode}): ${proc.stderr}`);
   }
 
-  return parseJsonObject(proc.stdout.toString().trim().split('\n').at(-1) ?? '{}');
+  return parseJsonObject(proc.stdout.trim().split('\n').at(-1) ?? '{}');
 }
 
 describe('the interactive client and the driver lease', () => {
-  test('opening a client takes the conversation from a live daemon', () => {
-    const result = scenario(`
+  test('opening a client takes the conversation from a live daemon', async () => {
+    const result = await scenario(`
       const daemonPid = rivalHolds('daemon');
       const client = await openLocalAgentClient('leasebot', { cwd: process.env.KINU_PROJECT });
       let opened = true;
@@ -141,8 +139,8 @@ describe('the interactive client and the driver lease', () => {
     expect(result.releasedOnClose).toBe(true);
   });
 
-  test('a second interactive client is refused, and says who has the conversation', () => {
-    const result = scenario(`
+  test('a second interactive client is refused, and says who has the conversation', async () => {
+    const result = await scenario(`
       const otherPid = rivalHolds('interactive');
       const client = await openLocalAgentClient('leasebot', { cwd: process.env.KINU_PROJECT });
       let opened = true;
@@ -164,8 +162,8 @@ describe('the interactive client and the driver lease', () => {
     expect(result.heldPid).toBe(result.otherPid);
   });
 
-  test('a foreground daemon tick reports a deferred pass instead of printing a tick', () => {
-    const result = scenario(`
+  test('a foreground daemon tick reports a deferred pass instead of printing a tick', async () => {
+    const result = await scenario(`
       const ownerPid = rivalHolds('interactive');
       const lines = [];
       const log = console.log;

@@ -1237,9 +1237,9 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   const refreshBackgroundJobs = useCallback(() => refreshCurrentLiveResource(
     "jobs",
-    () => rpc<BackgroundJob[]>("listBackgroundJobs", [50]),
+    () => rpc<BackgroundJob[]>("listBackgroundJobs", subordinate === undefined ? [50] : [50, subordinate]),
     setBackgroundJobs,
-  ), [refreshCurrentLiveResource, rpc]);
+  ), [refreshCurrentLiveResource, rpc, subordinate]);
 
   // One call feeds the queue and the sidebar dot's unseen count so they cannot disagree.
   const refreshPendingActions = useCallback(() => refreshCurrentLiveResource(
@@ -1312,19 +1312,17 @@ export function useKinu(target?: string | KinuActorAddress) {
     } finally {
       abandonTurnIfOwner(sendLatch.current, aborting);
 
-      if (!isSubordinate) {
-        try {
-          await refreshBackgroundJobs();
-        } catch (cause) {
-          diagnostics.failure('workspace.abort_refresh_failed', toKinuError({
-            doing: 'refreshing live workspace data',
-            cause,
-            otherwise: 'io',
-          }));
-        }
+      try {
+        await refreshBackgroundJobs();
+      } catch (cause) {
+        diagnostics.failure('workspace.abort_refresh_failed', toKinuError({
+          doing: 'refreshing live workspace data',
+          cause,
+          otherwise: 'io',
+        }));
       }
     }
-  }, [stop, rpc, refreshBackgroundJobs, isSubordinate]);
+  }, [stop, rpc, refreshBackgroundJobs]);
 
   // Attach to the outer `agent` EventTarget, not the private `_ws`, so the listener survives
   // partysocket reconnects without dropping events.
@@ -1439,20 +1437,20 @@ export function useKinu(target?: string | KinuActorAddress) {
             knownPlans.current.add(key);
             setActivePlan(plan);
           }
-        } else if (!isSubordinate && msg.type === 'workspace_plan_updated') {
+        } else if (msg.type === 'workspace_plan_updated') {
           const key = JSON.stringify(msg.reference);
 
           if (!knownWorkspacePlans.current.has(key)) {
             knownWorkspacePlans.current.add(key);
             setArrivedReference(msg.reference);
           }
-        } else if (!isSubordinate && msg.type === TURN_CLAIM_FRAME) {
+        } else if (msg.type === TURN_CLAIM_FRAME) {
           setTurnClaim(msg.claim);
-        } else if (!isSubordinate && msg.type === "subordinates_changed") {
+        } else if (msg.type === "subordinates_changed") {
           const roster = parseSubordinateRoster({ value: msg.subordinates });
 
           if (roster) await writeRoster(roster);
-        } else if (!isSubordinate && msg.type === "subordinate_event") {
+        } else if (msg.type === "subordinate_event") {
           const subordinateEvent = parseSubordinateActivityEvent({ value: msg });
 
           if (subordinateEvent) {

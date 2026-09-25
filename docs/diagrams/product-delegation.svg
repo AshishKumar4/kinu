@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="1396" viewBox="0 0 640 1396" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="delegation-title delegation-desc">
 <title id="delegation-title">CURRENT: Delegation and context forks</title>
 <desc id="delegation-desc">Current delegation distinguishes persistent hires, temporary assigned actors, existing-actor messages and tree searches. Searches choose answer agents or toolless thought calls. Context fork shares the parent conversation prefix with a child work seed; fresh supplies the task and parent conclusion. This does not create private copied workspace files. Verification, judgment and unranked results have different meanings. A workspace storage fork is a separate operation with a new ownership root.</desc>
-<!-- Sources: packages/core/src/strategy/swarm-expansion.ts:branchSeed; packages/core/src/strategy/node-agent.ts; packages/core/src/subordinates/temporary.ts; docs/EXPLORATION.md#the-six-axes. Current-source baseline: 9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a. -->
+<!-- Sources: packages/core/src/strategy/swarm-expansion.ts:branchSeed; packages/core/src/strategy/node-agent.ts; packages/core/src/subordinates/temporary.ts; docs/EXPLORATION.md#the-six-axes. Current-source baseline: d6a88d8e736e0ca4aa934cbabf5fa52327e5792b. -->
 <style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
 <defs>
 <marker id="delegation-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">

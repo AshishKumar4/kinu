@@ -328,7 +328,3 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
   ...Object.keys(AGENT_RPC_ACCESS),
   ...ORCHESTRATOR_METHODS,
 ];
-
-/** Hosted actors run through root-owned objects, not stubs; their chat is governed by
- * `ORCHESTRATOR_RPC_SURFACE`. */
-

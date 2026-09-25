@@ -243,7 +243,7 @@ describe(SUITE, () => {
         // underscores, never the spelling the call carried — and a note hit as
         // its `MEMORY.md` chunk carrying the written line. Requiring the fact
         // rendering alone made this subgoal unreachable for a turn that chose
-        // `save`: measured 2026-09-16 on build cba44dcb9, the turn saved the
+        // `save`: measured 2026-09-16 on build fddd4f9d6, the turn saved the
         // note and the search answered with it
         // (`[memory/MEMORY.md:1-4] … every-tool probe: ok`) and the row still
         // read "search naming the fact missing".

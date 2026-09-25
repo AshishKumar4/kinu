@@ -7,7 +7,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import * as v from 'valibot';
-import { scratchDir } from '@kinu.run/test-utils';
+import { scratchDir, runToExit } from '@kinu.run/test-utils';
 import { DEVICE_TOKEN_ROTATION, generateReleaseSigningKey, signRelease, type SignedRelease } from '@kinu.run/core';
 import DAEMON_SOURCE from '../../../pc-agent/src/index.js' with { type: 'text' };
 import SANDBOX_SOURCE from '../../../pc-agent/src/sandbox.js' with { type: 'text' };
@@ -29,16 +29,16 @@ export const ROTATED_TOKEN = `pdt_${'c'.repeat(32)}`;
 export const PLATFORM_ARTIFACT = `/downloads/kinu-cli-${process.platform}-${process.arch}.tar.gz`;
 
 /** Shape scripts/build-cli-dist.sh publishes: `kinu/pc-agent/<files>` plus the stamp. */
-export function daemonArchive(files: Record<string, string>, stamp: string): Uint8Array {
+export async function daemonArchive(files: Record<string, string>, stamp: string): Promise<Uint8Array> {
   const work = scratchDir('update-hub-archive');
   mkdirSync(join(work, 'kinu', 'pc-agent'), { recursive: true });
 
   for (const [name, content] of Object.entries(files)) writeFileSync(join(work, 'kinu', 'pc-agent', name), content);
   writeFileSync(join(work, 'kinu', 'pc-agent', 'pc-agent.version'), `${stamp}\n`);
   writeFileSync(join(work, 'kinu', 'cli.js'), 'console.log("not the daemon");\n');
-  const archived = Bun.spawnSync({ cmd: ['tar', '-czf', join(work, 'a.tar.gz'), '-C', work, 'kinu'] });
+  const archived = await runToExit(['tar', '-czf', join(work, 'a.tar.gz'), '-C', work, 'kinu']);
 
-  if (archived.exitCode !== 0) throw new Error(`tar failed: ${new TextDecoder().decode(archived.stderr)}`);
+  if (archived.exitCode !== 0) throw new Error(`tar failed: ${archived.stderr}`);
 
   return new Uint8Array(readFileSync(join(work, 'a.tar.gz')));
 }
