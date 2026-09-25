@@ -8,6 +8,7 @@ import {
   createChatModel, createOpenAICompatProvider, createProviderRegistry, runChat,
   type AuthResolution, type ChatEvent, type ChatFallback, type ProviderDeps,
 } from '../src/index';
+import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 
@@ -187,7 +188,7 @@ describe('a failed call hands the turn down its fallback chain', () => {
 async function accountTurn(
   answerFor: (key: string, seen: number) => Response,
   fallbacks: readonly string[],
-  opts: { readonly primary?: string; readonly defaultAccount?: string } = {},
+  opts: { readonly primary?: string; readonly defaultAccount?: string; readonly lookupFails?: boolean } = {},
 ) {
   const primary = opts.primary ?? 'openai-compat@work/m';
   const served: { key: string; handover: boolean }[] = [];
@@ -231,7 +232,8 @@ async function accountTurn(
   try {
     for await (const event of runChat({
       model: registry.resolve(primary, deps), modelContext: { id: 'm' }, modelSpec: primary, fallbacks: chain,
-      credentialOf: (spec) => registry.credentialFor(spec, deps),
+      // A store the backend cannot reach, as a UserDO RPC failing after the 401.
+      credentialOf: opts.lookupFails ? () => Promise.reject(new Error('credential store unreachable')) : (spec) => registry.credentialFor(spec, deps),
       system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {},
     })) events.push(event);
   } catch (error) {
@@ -314,6 +316,27 @@ describe('a refused credential (HTTP 401) passes over the chain entries that hol
 
     expect(threw).toBeNull();
     expect(served.map((entry) => entry.key)).toEqual(['Bearer key-work', 'Bearer key-work']);
+  });
+
+  test('a credential lookup that fails is unknown: the 401 hands over without skipping, is not replaced, and is logged', async () => {
+    const log = createRecordingLogger();
+    const restore = setDiagnosticsSink(log);
+
+    try {
+      const served = await accountTurn(
+        (_key, seen) => (seen === 1 ? refused(401) : answer('from backup')), ['openai-compat@work/other'], { lookupFails: true },
+      );
+
+      expect(served.threw).toBeNull();
+      expect(served.served.map((entry) => entry.key)).toEqual(['Bearer key-work', 'Bearer key-work']);
+
+      const exhausted = await accountTurn(() => refused(401), ['openai-compat@work/other'], { lookupFails: true });
+
+      expect(exhausted.threw?.message ?? '').toContain('HTTP 401');
+      expect(log.emitted.filter((line) => line.event === 'llm_call.fallback_credential_unknown').length).toBeGreaterThan(0);
+    } finally {
+      restore();
+    }
   });
 
   test('with only same-account backups a 401 fails the turn on the first refusal, asking none of them', async () => {
