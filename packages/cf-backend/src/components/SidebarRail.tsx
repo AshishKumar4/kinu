@@ -10,11 +10,13 @@ import { useAccount } from "@/hooks/use-account";
 import { lastValue } from "@/hooks/use-async-resource";
 import { KinuMark } from "./ui/KinuLogo";
 import Sidebar from "./Sidebar";
-import { navActive, PRIMARY_NAV } from "./nav";
+import { navActive, navRowCls, PRIMARY_NAV } from "./nav";
 
 const RAIL_KEY = "kinu:rail-open";
 
-const RAIL_ICON_CLS = "flex size-9 items-center justify-center rounded-lg p-text-3 transition-colors hover:bg-[var(--c-elevated)] hover:p-text";
+const RAIL_ICON_CLS = "flex size-9 items-center justify-center rounded-lg p-text-3 transition-colors";
+
+const RAIL_BUTTON_CLS = `${RAIL_ICON_CLS} hover:bg-[var(--c-elevated)] hover:p-text`;
 
 /** Lane width and entering column share 180ms; reduced motion gets the end state at once. */
 const LANE_ENTER_CLS = "motion-safe:animate-[fade-in_180ms_ease-out]";
@@ -51,20 +53,24 @@ export function SidebarRail() {
         </div>
       ) : (
         <div key="icons" className={`flex h-full w-14 flex-col items-center gap-1 py-3 ${LANE_ENTER_CLS}`}>
-          <button type="button" onClick={() => setOpen(true)} aria-label="Show sidebar" data-rail-expand className={RAIL_ICON_CLS}>
+          <button type="button" onClick={() => setOpen(true)} aria-label="Show sidebar" data-rail-expand className={RAIL_BUTTON_CLS}>
             <SidebarSimpleIcon size={18} />
           </button>
-          <Link to="/" aria-label="Kinu home" className={`${RAIL_ICON_CLS} mt-1`}><KinuMark size={20} /></Link>
-          <button type="button" onClick={() => navigate("/")} aria-label="New workspace" title="New workspace" className={RAIL_ICON_CLS}>
+          <Link to="/" aria-label="Kinu home" className={`${RAIL_BUTTON_CLS} mt-1`}><KinuMark size={20} /></Link>
+          <button type="button" onClick={() => navigate("/")} aria-label="New workspace" title="New workspace" className={RAIL_BUTTON_CLS}>
             <PlusIcon size={17} weight="bold" />
           </button>
           <nav aria-label="Primary" className="flex flex-col items-center gap-1 pt-1">
-            {PRIMARY_NAV.map((item) => (
-              <Link key={item.to} to={item.to} aria-label={item.label} title={item.label} aria-current={navActive(item, pathname) ? "page" : undefined}
-                className={`${RAIL_ICON_CLS} ${navActive(item, pathname) ? "bg-[var(--c-elevated)] p-accent" : ""}`}>
-                <item.Icon size={17} />
-              </Link>
-            ))}
+            {PRIMARY_NAV.map((item) => {
+              const open = navActive(item, pathname);
+
+              return (
+                <Link key={item.to} to={item.to} aria-label={item.label} title={item.label} aria-current={open ? "page" : undefined}
+                  className={`${RAIL_ICON_CLS} ${navRowCls(open)} ${open ? "p-accent" : "hover:p-text"}`}>
+                  <item.Icon size={17} />
+                </Link>
+              );
+            })}
           </nav>
           <Link to="/user/settings" aria-label="Account settings" title="Account settings" className="mt-auto flex size-[26px] items-center justify-center rounded-full bg-[#2A2018] text-[12px] font-semibold text-[var(--c-accent)]">
             {profile?.email?.[0]?.toUpperCase() ?? "?"}

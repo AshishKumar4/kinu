@@ -42,17 +42,23 @@ async function shoot(page: Page, name: string): Promise<string> {
 
 const dialogText = (page: Page) => page.$eval('[role="dialog"]', (element) => element.textContent ?? '');
 
-/** The rail's primary nav, as drawn: which rows carry the active token (the
- *  elevated background class every active row shares) and which one react-
- *  router marks current. Exactly one row may be lit, and it must be the page's. */
-async function activeNavRow(page: Page): Promise<string> {
-  const rows = await page.$$eval('nav[aria-label="Primary"] a', (anchors) => anchors.map((a) => ({
-    label: a.textContent?.trim() ?? '',
-    lit: a.className.includes('bg-[var(--c-elevated)]') && !a.className.includes('hover:bg-[var(--c-elevated)]'),
-    current: a.getAttribute('aria-current') === 'page',
-  })));
+/** The primary nav, painted, once each row's own colour transition has ended. */
+async function navPaint(page: Page): Promise<{ label: string; background: string; current: boolean }[]> {
+  return page.$$eval('nav[aria-label="Primary"] a', async (anchors) => {
+    await Promise.allSettled(anchors.flatMap((anchor) => anchor.getAnimations().map((animation) => animation.finished)));
 
-  const lit = rows.filter((row) => row.lit);
+    return anchors.map((anchor) => ({
+      label: anchor.textContent?.trim() ?? '',
+      background: getComputedStyle(anchor).backgroundColor,
+      current: anchor.getAttribute('aria-current') === 'page',
+    }));
+  });
+}
+
+/** With the pointer away, exactly one row is painted, and it is the one react-router marks current. */
+async function activeNavRow(page: Page): Promise<string> {
+  const rows = await navPaint(page);
+  const lit = rows.filter((row) => row.background !== 'rgba(0, 0, 0, 0)');
   const current = rows.filter((row) => row.current);
 
   if (lit.length !== 1 || current.length !== 1 || lit[0]?.label !== current[0]?.label) {
@@ -432,6 +438,14 @@ describe('account panels', () => {
               expect(rail).toContain('Checkout coupon bug');
               expect(rail).toContain('ashish@example.com');
               shots.push(await shoot(home, `sidebar-nav-${theme}`));
+
+              // The row under the pointer is painted too, but never as the open row: the two sit 2 px apart, and in
+              // one paint they read as one block, which is how hover and the open row came to merge.
+              await home.hover('nav[aria-label="Primary"] a[href="/workspaces"]');
+              const painted = new Map((await navPaint(home)).map((row) => [row.label, row.background]));
+
+              expect(painted.get('Workspaces')).not.toBe('rgba(0, 0, 0, 0)');
+              expect(painted.get('Workspaces')).not.toBe(painted.get('Home'));
             } finally {
               await home.close();
             }

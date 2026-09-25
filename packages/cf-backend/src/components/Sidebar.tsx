@@ -18,7 +18,7 @@ import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle } from "@k
 import { Modal } from "./ui/Modal";
 import * as v from "valibot";
 import { renderCauseChain, renderThrownChain } from "@kinu.run/core/obs";
-import { navActive, PRIMARY_NAV } from "./nav";
+import { navActive, navRowCls, PRIMARY_NAV } from "./nav";
 
 function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
   const { to, label, Icon } = item;
@@ -28,9 +28,7 @@ function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
     <Link
       to={to}
       aria-current={active ? "page" : undefined}
-      className={`flex items-center gap-2.5 rounded-lg py-[7px] pl-3 pr-3 p-t-control transition-colors ${
-        active ? 'bg-[var(--c-elevated)] p-text' : 'p-text-2 hover:bg-[var(--c-elevated)]'
-      }`}
+      className={`flex items-center gap-2.5 rounded-lg py-[7px] pl-3 pr-3 p-t-control transition-colors ${navRowCls(active)} ${active ? 'p-text' : 'p-text-2'}`}
     >
       <Icon size={15} className={active ? 'p-accent' : 'p-text-3'} />
       <span>{label}</span>
@@ -308,9 +306,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
                       <NavLink
                         to={`/workspace/${a.name}`}
                         className={({ isActive: linkActive }) =>
-                          `flex items-center gap-2 rounded-lg py-[7px] pl-3 pr-16 lg:pr-3 lg:group-hover:pr-16 lg:group-focus-within:pr-16 transition-colors ${
-                            linkActive ? 'bg-[var(--c-elevated)]' : 'hover:bg-[var(--c-elevated)]'
-                          }`
+                          `flex items-center gap-2 rounded-lg py-[7px] pl-3 pr-16 lg:pr-3 lg:group-hover:pr-16 lg:group-focus-within:pr-16 transition-colors ${navRowCls(linkActive)}`
                         }
                       >
                         <span className="size-1.5 shrink-0 rounded-full">{dot}</span>

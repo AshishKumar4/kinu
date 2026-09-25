@@ -26,3 +26,7 @@ export function navActive(item: { readonly to: string; readonly end: boolean; re
 
   return item.also !== undefined && under(item.also);
 }
+
+export function navRowCls(open: boolean): string {
+  return open ? "bg-[var(--c-accent-subtle)]" : "hover:bg-[var(--c-elevated)]";
+}

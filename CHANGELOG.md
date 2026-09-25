@@ -704,6 +704,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A hovered sidebar row or chat tab no longer looks like the open one.** The open row in the sidebar takes a
+  soft accent wash and a row under the pointer the plain raise, so the two never merge into one block; a closed
+  chat tab under the pointer brightens over a neutral bar, and the open tab keeps its accent bar.
 - **Hired agents make slates.** Slates lived in the main agent's home, so an agent you hired could not create one
   ("can't promote to /home/main/slates/widgets (EACCES)"). They now live at `/slates`, the workspace's own
   directory. Every chat in the workspace makes, edits, previews and removes slates there as the main chat does, and

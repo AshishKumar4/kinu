@@ -3069,7 +3069,10 @@ interface StripPaint {
 }
 
 function agentStripPaint(page: Page, strip: string): Promise<StripPaint> {
-  return page.$eval(`[data-tab-strip="${strip}"] nav[aria-label="Workspace agents"]`, (nav) => {
+  return page.$eval(`[data-tab-strip="${strip}"] nav[aria-label="Workspace agents"]`, async (nav) => {
+    // A tab under the pointer is read once its own colour transition has ended.
+    await Promise.allSettled([...nav.querySelectorAll('.p-tab')].flatMap((tab) => tab.getAnimations().map((animation) => animation.finished)));
+
     // The name sits in the deepest element that has text and no children of
     // its own; Main writes its name as a text node, so it reports itself.
     const labelled = (tab: Element): Element => {
@@ -3179,6 +3182,38 @@ describe('the open agent tab, as the browser paints it', () => {
       });
     });
   }
+
+  // The other half of the complaint: tabs lit alike merge. A closed tab under the pointer answers it, brighter over a
+  // neutral bar, and never in the open tab's accent. `agent-4f2c`'s codename renders through its own text role.
+  test('a closed tab under the pointer brightens over a neutral bar, never the open tab\'s', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      for (const theme of ['dark', 'light'] as const) {
+        const page = await newPage();
+        await page.setViewport({ width: 900, height: 1000 });
+        await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
+        await page.goto(`${origin}/gallery.html?frame=tabs`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-tab-strip="coupon-tester"] nav[aria-label="Workspace agents"]');
+        const rest = await agentStripPaint(page, 'coupon-tester');
+        const open = rest.tabs.find((one) => one.current === 'page');
+
+        for (const closed of ['migration-review', 'agent-4f2c']) {
+          await page.hover(`[data-tab-strip="coupon-tester"] [data-agent-tab="${closed}"] a`);
+          const paint = await agentStripPaint(page, 'coupon-tester');
+          const before = rest.tabs.find((one) => one.tab === closed);
+          const hovered = paint.tabs.find((one) => one.tab === closed);
+
+          expect(hovered?.color).not.toBe(before?.color);
+          expect(hovered?.labelColor).toBe(hovered?.color);
+          expect(hovered?.underlineWidth).toBeGreaterThanOrEqual(2);
+          expect(hovered?.underlineColor).not.toBe('rgba(0, 0, 0, 0)');
+          expect(hovered?.underlineColor).not.toBe(open?.underlineColor);
+          expect(paint.tabs.find((one) => one.current === 'page')?.underlineColor).toBe(open?.underlineColor);
+        }
+
+        await page.close();
+      }
+    });
+  });
 });
 
 /** One Work section, as the browser drew it. */

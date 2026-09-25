@@ -722,22 +722,21 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 /* ── Tabs ──────────────────────────────────────────────────────────
    A tab belongs to the panel underneath it, and says so with its bottom
-   edge. It is never a box: a four-sided tab is a chip that has floated
-   free of the thing it switches, which is what the agent tab strip had
-   become. One grammar for all three strips — work surfaces, output
-   sub-tabs, and the agent tabs above the chat. Pair with `-mb-px` on the
-   strip so the active bar lands on the strip's own rule. */
+   edge: accent when open, neutral on hover. It is never a box, which
+   floats free of what it switches. One grammar for all three strips —
+   work surfaces, output sub-tabs, and the agent tabs above the chat.
+   Pair with `-mb-px` on the strip so the bar lands on its rule. */
 .p-tab {
   border-bottom: 2px solid transparent;
   color: var(--c-text-3);
   transition: color var(--dur-base) ease-out, border-color var(--dur-base) ease-out;
 }
-.p-tab:hover { color: var(--c-text-2); }
+.p-tab:hover { color: var(--c-text-2); border-bottom-color: var(--c-border-strong); }
 .p-tab-active {
   color: var(--c-accent-fg);
   border-bottom-color: var(--c-accent);
 }
-.p-tab-active:hover { color: var(--c-accent-fg); }
+.p-tab-active:hover { color: var(--c-accent-fg); border-bottom-color: var(--c-accent); }
 
 /* Tab strip — scrolls when its column is narrower than the set of surfaces,
    rather than clipping a label. It carries the scroll-edge affordance above;
