@@ -9,7 +9,7 @@ import {
 import { readDefaultTier } from './profiles';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-export interface LocalModelResolverOptions {
+interface LocalModelResolverOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;
@@ -17,14 +17,14 @@ export interface LocalModelResolverOptions {
   agentName?: string;
 }
 
-export interface ConfiguredLocalModelResolver {
+interface ConfiguredLocalModelResolver {
   /** Default endpoint for bare ids, or null. */
   llmConfig: LLMProviderConfig | null;
   resolver: LocalModelResolver;
 }
 
 
-export interface UnusableModel {
+interface UnusableModel {
   spec: string;
   /** Absent when resolution failed before any provider could be named. */
   provider?: string;

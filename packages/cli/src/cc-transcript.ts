@@ -172,13 +172,13 @@ const USER_REJECTION = /^The user doesn't want (?:to proceed with this tool use|
 /** `automode-*` kinds are deployment routing, not a verdict on the turn. */
 const USER_DENIAL_KIND = 'user-rejected';
 
-export interface MineOptions {
+interface MineOptions {
   root: string;
   projects?: ReadonlyArray<string>;
 }
 
 /** Printed on every report so a silently dropped version cannot pass as a smaller corpus. */
-export interface MineSkips {
+interface MineSkips {
   unparsableLines: number;
   emptyFiles: number;
   nonInteractivePrompts: number;

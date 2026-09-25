@@ -2,7 +2,7 @@
 import type { TuiKeyDispatcher, TuiKeyEvent } from './actions';
 
 /** Null consumes the key and leaves the question open. */
-export type ConsentKeyDecision = 'once' | 'always' | 'deny';
+type ConsentKeyDecision = 'once' | 'always' | 'deny';
 
 export function consentKeyDecision(
   key: TuiKeyEvent,

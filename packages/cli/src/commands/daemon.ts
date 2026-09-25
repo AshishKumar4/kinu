@@ -232,7 +232,7 @@ async function waitUntilRelease(
     if (released(pid)) return true;
 
     if (Date.now() >= deadline) return false;
-    await sleep(50);
+    await Bun.sleep(50);
   }
 }
 
@@ -307,7 +307,7 @@ async function runDaemonLoop(): Promise<void> {
 
 function createDaemonHost(wakeAt?: (at: number) => void): LocalAgentHost {
   const options = {
-    roster: (): HostedAgentRef[] => listLocalRefsAllProjects(),
+    roster: listLocalRefsAllProjects,
     dbPath: agentDbPath,
     open: openDaemonAgent,
     // Both callers are the daemon. As `interactive` the resident daemon would hold every lease forever and no
@@ -384,8 +384,4 @@ function writePid(pid: number | undefined): void {
 
 function log(message: string): void {
   appendDaemonLog(LOG_PATH, `${new Date().toISOString()} ${message}\n`);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

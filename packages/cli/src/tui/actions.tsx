@@ -288,7 +288,7 @@ function keyEventAction(
     .sort((left, right) => SCOPE_PRIORITY[right.scope] - SCOPE_PRIORITY[left.scope])[0]?.actionId ?? null;
 }
 
-export interface KeyDispatcherResult {
+interface KeyDispatcherResult {
   readonly actionId: TuiActionId | null;
   readonly pending: boolean;
 }
@@ -336,7 +336,7 @@ export function createKeyDispatcher(registry: KeybindingRegistry): TuiKeyDispatc
   };
 }
 
-export interface OpenTuiKeyBinding {
+interface OpenTuiKeyBinding {
   name: string;
   ctrl?: boolean;
   shift?: boolean;

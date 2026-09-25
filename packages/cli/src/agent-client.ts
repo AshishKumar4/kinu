@@ -42,7 +42,7 @@ export function promptFiles(prompt: AgentPrompt): ReadonlyArray<PromptFile> {
   return text.success ? [] : v.parse(AgentPromptObjectSchema, prompt).files;
 }
 
-export interface AgentToolCallResult {
+interface AgentToolCallResult {
   name: string;
   args: JsonObject;
   result?: string;
@@ -99,7 +99,7 @@ export interface AgentClientStatus {
   tierId?: string;
 }
 
-export interface AgentToolDescription {
+interface AgentToolDescription {
   name: string;
   description: string;
 }
@@ -338,7 +338,7 @@ export interface AgentClient {
   inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult>;
 }
 
-export interface AgentUiMessage {
+interface AgentUiMessage {
   id: string;
   role: 'system' | 'user' | 'assistant';
   parts: AgentUiMessagePart[];
@@ -346,7 +346,7 @@ export interface AgentUiMessage {
   metadata?: { kinuMode: WorkMode };
 }
 
-export type AgentUiMessagePart =
+type AgentUiMessagePart =
   | { type: 'file'; mediaType: string; filename: string; url: string }
   | { type: 'text'; text: string };
 

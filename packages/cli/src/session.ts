@@ -23,9 +23,9 @@ export interface CliSessionOptions {
   conversationId?: string;
 }
 
-export type CliSessionMode = 'record' | 'none';
+type CliSessionMode = 'record' | 'none';
 
-export interface CliSessionHeader {
+interface CliSessionHeader {
   type: 'session';
   version: 1;
   id: string;
@@ -35,7 +35,7 @@ export interface CliSessionHeader {
   conversationId?: string;
 }
 
-export interface CliSessionEntry extends JsonObject {
+interface CliSessionEntry extends JsonObject {
   type: string;
   id: string;
   parentId: string | null;
@@ -52,7 +52,7 @@ export interface CliSession {
   append(type: string, data?: JsonObject): CliSessionEntry | null;
 }
 
-export interface CliSessionInfo {
+interface CliSessionInfo {
   id: string;
   path: string;
   agent: string;

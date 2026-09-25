@@ -3,7 +3,7 @@
 import { describeProviderError, providerFailureFacts } from '@kinu.run/core';
 import { MODEL_OPTION_FLAG } from './options';
 
-export interface GuidedFailure {
+interface GuidedFailure {
   /** Never empty. */
   message: string;
   hint?: string;
