@@ -1249,6 +1249,20 @@ describe('daemon process under Bun against a local hub', () => {
     }
   }
 
+  test('a daemon whose first reconciliation fails refuses to start in its own words', async () => {
+    if (process.platform !== 'linux' && process.platform !== 'darwin') return;
+    const root = scratchDir('daemon-unreconciled');
+    makeConfig(root, 'http://127.0.0.1:9');
+    const notADirectory = path.join(root, 'inflight-is-a-file');
+    fs.writeFileSync(notADirectory, '');
+    const { child, logPath } = spawnDaemon(root, { KINU_INFLIGHT_ROOT: notADirectory });
+
+    // Startup awaits the reconciliation only after claiming the machine and
+    // probing the sandbox; a rejection nobody handled by then ends Bun first.
+    expect(await child.exited).toBe(1);
+    expect(fs.readFileSync(logPath, 'utf8')).toContain(`Kinu PC agent: ENOTDIR: not a directory, scandir '${notADirectory}'`);
+  });
+
   test('HELLO on connect, rotation, exec, cancel, file op, and reconnect — all under Bun', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
     const root = scratchDir('daemon-e2e');

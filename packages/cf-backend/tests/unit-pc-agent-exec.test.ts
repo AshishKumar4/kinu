@@ -38,8 +38,9 @@ const DaemonFrameSchema = v.object({
 });
 
 /** A dropped socket calls into `inFlight` directly, so disconnect is exercised without a real WebSocket. */
-/** `terminated` stays unparsed until awaited: a pending promise has no shape to check. */
-const SweepSchema = v.array(v.object({ requestId: v.string(), terminated: v.unknown() }));
+const SweepSchema = v.array(v.object({ requestId: v.string(), terminated: v.promise() }));
+
+const RecoveredSchema = v.array(v.object({ requestId: v.string(), terminal: v.boolean() }));
 
 const ConfirmedCancellationSchema = v.object({ requestId: v.string(), cancelled: v.string() });
 
@@ -47,7 +48,7 @@ const PcAgentModuleSchema = v.object({
   handle: v.function(),
   inFlight: v.object({
     size: v.function(),
-    terminateUnanswered: v.function(),
+    terminateUnanswered: v.pipe(v.function(), v.returnsAsync(SweepSchema)),
   }),
   createInFlight: v.function(),
   INFLIGHT_ROOT: v.string(),
@@ -67,11 +68,11 @@ const PcAgentModuleSchema = v.object({
 });
 
 const SupervisorRegistrySchema2 = v.object({
-  terminateUnanswered: v.function(),
+  terminateUnanswered: v.pipe(v.function(), v.returnsAsync(SweepSchema)),
 });
 
 const SupervisorRegistrySchema = v.object({
-  reconcile: v.function(),
+  reconcile: v.pipe(v.function(), v.returnsAsync(RecoveredSchema)),
   cancel: v.function(),
   acknowledge: v.function(),
 });
@@ -443,7 +444,7 @@ describe('pc-agent command cancellation', () => {
     expect(alive(abandoned)).toBe(true);
     await supervisorState(rpcId(260));
 
-    const swept = v.parse(SweepSchema, detached.terminateUnanswered());
+    const swept = await detached.terminateUnanswered();
     const mine = swept.find((entry) => entry.requestId === rpcId(260));
     expect(mine).toBeDefined();
     expect(v.parse(ConfirmedCancellationSchema, await mine?.terminated))
@@ -461,7 +462,7 @@ describe('pc-agent command cancellation', () => {
 
     // Settles only once the kill is confirmed and rejects when unproven; polling `kill(pid, 0)` cannot tell
     // "not yet" from "never". Selected by request id: the sweep terminates every abandoned command at once.
-    const swept = v.parse(SweepSchema, pcAgent.inFlight.terminateUnanswered());
+    const swept = await pcAgent.inFlight.terminateUnanswered();
     const mine = swept.find((entry) => entry.requestId === rpcId(250));
     expect(mine).toBeDefined();
     expect(v.parse(ConfirmedCancellationSchema, await mine?.terminated))
@@ -501,7 +502,7 @@ describe('pc-agent durable supervisor', () => {
     await settled(() => (existsSync(join(requestDir, 'state')) ? true : undefined), 'supervisor state');
 
     const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(pcAgent.INFLIGHT_ROOT));
-    expect(restarted.reconcile()).toContainEqual({ requestId: id, terminal: false });
+    expect(await restarted.reconcile()).toContainEqual({ requestId: id, terminal: false });
     await expect(restarted.cancel(id)).resolves.toEqual({ requestId: id, cancelled: 'terminated' });
     await settled(() => ws.of(id)[0], 'reconciled exec result');
     await expect(restarted.acknowledge(id)).resolves.toEqual({ requestId: id, acknowledged: true });
@@ -516,7 +517,7 @@ describe('pc-agent durable supervisor', () => {
     expect(existsSync(join(requestDir, 'result'))).toBe(true);
 
     const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(pcAgent.INFLIGHT_ROOT));
-    expect(restarted.reconcile()).toContainEqual({ requestId: id, terminal: true });
+    expect(await restarted.reconcile()).toContainEqual({ requestId: id, terminal: true });
     await expect(restarted.acknowledge(id)).resolves.toEqual({ requestId: id, acknowledged: true });
     expect(existsSync(requestDir)).toBe(false);
   });
