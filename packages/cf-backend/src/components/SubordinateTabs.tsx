@@ -21,7 +21,7 @@ export function agentTitle(entry: Pick<SubordinateRosterEntry, "name" | "display
 
 interface SubordinateTabsProps {
   workspace: string;
-  /** Every retained agent, dismissed ones included, since their conversations stay reachable. */
+  /** Every retained agent, dismissed included: a dismissed one keeps its conversation, so its tab must stay reachable. */
   subordinates: readonly SubordinateRosterEntry[];
   activeName?: string;
   /** WorkspacePage owns the action and its failure banner: the sidebar can invoke it while this strip is unmounted. */
