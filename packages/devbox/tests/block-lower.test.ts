@@ -2,7 +2,7 @@
 // The probe image builds from the source pinned in block-lower/upstream.json.
 import { afterAll, expect, test } from 'bun:test';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -18,17 +18,22 @@ const image = `kinu-block-lower:${process.pid}`;
 
 let built = false;
 
-/** Runs one probe phase privileged with `/dev/fuse`, fixture writable, script read-only.
+/** A probe runs as root, so the fixture goes back to its owner once the phase ends, however it ended: a probe's own
+ *  EXIT trap does not run when it is killed. `-xdev` keeps the walk off the probe's read-only mounts under /fixture. */
+const HAND_BACK = '"$0" /probe.sh "$1"; status=$?; find /fixture -xdev -exec chown --no-dereference "$(stat -c %u:%g /fixture)" {} +; exit "$status"';
+
+/** Runs one probe phase privileged with `/dev/fuse`, fixture writable, script read-only, under {@link HAND_BACK}.
  *  The shell is per probe: the reseat probe needs bash. */
 function probeRunner(fixture: string, script: string, shell: string): (phase: string) => SpawnSyncReturns<string> {
   return (phase) => spawnSync('docker', ['run', '--rm', '--network=none', '--privileged', '--device', '/dev/fuse',
-    '-v', `${fixture}:/fixture`, '-v', `${script}:/probe.sh:ro`, '--entrypoint', shell, image, '/probe.sh', phase], { encoding: 'utf8' });
+    '-v', `${fixture}:/fixture`, '-v', `${script}:/probe.sh:ro`, '--entrypoint', '/bin/sh', image, '-c', HAND_BACK, shell, phase],
+  { encoding: 'utf8' });
 }
 
 afterAll(() => {
-  rmSync(root, { recursive: true, force: true });
-
   if (built) removeBlockImage(image);
+
+  rmSync(root, { recursive: true, force: true });
 });
 
 test('real squashfuse and overlay compose indexed bytes with zero payload read at attach', () => {
@@ -149,4 +154,17 @@ test('moving the checkpoint session out of the workspace reseats the base and pu
   expect(restored.status, restored.stdout + restored.stderr).toBe(0);
   expect(Number(readFileSync(`${fixture}/delta-bytes`, 'utf8'))).toBeLessThan(196608);
   expect(restored.stdout).toContain('reseat=outside-workspace delta=small restored=exact payload=0 index-pages=0');
+});
+
+test('a probe that dies mid-phase still hands its fixture back to its owner', () => {
+  // The reseat probe's restore phase exited 137 on 2026-09-25 and left root-owned output no later sweep could remove.
+  const fixture = `${root}/killed`;
+  mkdirSync(fixture, { recursive: true });
+  const script = join(fixture, 'killed-probe.sh');
+  writeFileSync(script, 'set -e\nmkdir -p /fixture/pkg && echo written > /fixture/pkg/file\nsleep 30 & kill -KILL $! && wait $!\n');
+
+  const killed = probeRunner(fixture, script, '/bin/bash')('prepare');
+
+  expect(killed.status, killed.stdout + killed.stderr).toBe(137);
+  expect(statSync(`${fixture}/pkg/file`).uid).toBe(statSync(fixture).uid);
 });

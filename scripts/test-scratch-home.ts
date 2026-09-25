@@ -126,4 +126,7 @@ releaseOnSignals();
 // A root is abandoned when the process that minted it no longer runs, which its
 // owner record says (process-owner.ts: boot, pid and start tick, so a reused pid
 // is not the owner).
-reapAbandonedRoots(runTemp, scratchRoot);
+for (const root of reapAbandonedRoots(runTemp, scratchRoot).unremovable) {
+  console.warn(`[test-preload] ${root} outlived its run and holds files this user may not remove (EACCES), so it `
+    + 'stays: a container wrote them as root and was killed first. Remove it as their owner.');
+}
