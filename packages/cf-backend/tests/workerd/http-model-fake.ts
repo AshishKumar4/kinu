@@ -1,5 +1,6 @@
 import * as v from 'valibot';
 import { WAKE_MARKER, WakeHoldPlacementSchema, type WakeHoldPlacement } from './two-turn-shapes';
+import { WORKERS_AI_FALLBACK_MODEL_CATALOG } from '../../../core/src/providers/workers-ai-catalog';
 /**
  * Node-side outbound handler for the two-turn HTTP-seam probe, and its test-only control surface.
  * The compat provider falls back to the global fetch, which the pool routes here; model routes key
@@ -36,9 +37,20 @@ function carriesMarker(call: CapturedHttpCall, marker: string): boolean {
 /** Catalog request count, read through `/log` to assert the catalog was served, not refused. */
 let catalogHits = 0;
 
+/** Workers AI's built-in list as models.dev would carry it, so the platform gateway's listing is complete. */
+const WORKERS_AI_MODELS = Object.fromEntries(WORKERS_AI_FALLBACK_MODEL_CATALOG.map((model) => [model.id.replace(/^@cf\//u, ''), {
+  id: model.id,
+  name: model.label,
+  tool_call: true,
+  reasoning: (model.reasoningEfforts?.length ?? 0) > 0,
+  reasoning_options: [{ type: 'effort', values: [...model.reasoningEfforts ?? []] }],
+  limit: { context: model.contextWindow },
+}]));
+
 /** The `https://models.dev/api.json` answer: 200 and well-formed so no provider takes the fallback
- *  path; its one provider is unnamed by the fixture credential. Shape: `ModelsDevCatalogSchema`. */
+ *  path; `groq` is unnamed by the fixture credential. Shape: `ModelsDevCatalogSchema`. */
 const MODELS_DEV_CATALOG = {
+  'cloudflare-workers-ai': { id: 'cloudflare-workers-ai', name: 'Workers AI', models: WORKERS_AI_MODELS },
   groq: {
     id: 'groq', name: 'Groq', doc: 'https://console.groq.com/docs/models',
     env: ['GROQ_API_KEY'], npm: '@ai-sdk/openai-compatible', api: 'https://api.groq.com/openai/v1',
