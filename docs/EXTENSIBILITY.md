@@ -331,8 +331,10 @@ truncates useful "when to use" guidance.
 - Rate-limit patience on every model fetch. `withRateLimitRetry`
   (`packages/core/src/providers/rate-limit-retry.ts`) wraps shared `createAuthedFetch`,
   Workers AI, AI Gateway, codex and opencode. On 429, 529 or overload-shaped
-  503 it honors `Retry-After`. Otherwise it waits a full-jitter draw under a
-  ceiling that doubles from 2 s to 60 s. No elapsed time or attempt count ends the loop.
+  503 it honors a `Retry-After` of 60 s or less; a longer one ends the call as a
+  spent allowance naming the reset time (`maxRetryDelayMs`, after oh-my-pi).
+  Otherwise it waits a full-jitter draw under a ceiling that doubles from 2 s to
+  60 s. No elapsed time or attempt count ends the loop.
   It stops on success, definitive failure or caller cancellation.
   Non-replayable bodies pass through untouched. Do not cap attempts and count
   on the SDK for the rest: `PROVIDER_SDK_RETRIES` is 2, and a cap under a

@@ -310,7 +310,7 @@ Prompt caching interacts with model choice. The reasoning-era Kimi line (k2.6, k
 
 ### Rate limits
 
-Every fetch goes through `withRateLimitRetry` (`packages/core/src/providers/rate-limit-retry.ts`). A 429 retries and the turn keeps running. Patient, not budgeted: neither elapsed time nor attempt count ends it. The request follows `Retry-After` until success, definitive failure, or caller cancel.
+Every fetch goes through `withRateLimitRetry` (`packages/core/src/providers/rate-limit-retry.ts`). A 429 retries and the turn keeps running. Neither elapsed time nor attempt count ends it. The request follows `Retry-After` until success, definitive failure, or caller cancel. One exception, after oh-my-pi's `maxRetryDelayMs`: a `Retry-After` above 60 s means the provider declared the account spent until then (OpenCode Go asked for 729883 s on kinu.run, 2026-09-24), so the call fails at once as `budget` with the reset time and the provider's message, and siblings that meet that cooldown fail the same way instead of parking.
 
 Classification is narrow. 429 and 529 always count. A 503 counts only when status text, `x-error-code` or body matches overload, capacity, too many requests, or rate limit. An unreadable 503 propagates rather than reading healthy. Without `Retry-After` the wait is a full-jitter draw doubling from 2 s to a 60 s cap (`DEFAULT_BASE_DELAY_MS`, `DEFAULT_MAX_DELAY_MS`). Non-replayable bodies pass through untouched. SDK transport retry is pinned at `PROVIDER_SDK_RETRIES = 2`, stated at the `streamText` call, so a vendor default cannot move it silently.
 

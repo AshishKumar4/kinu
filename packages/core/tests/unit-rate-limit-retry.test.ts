@@ -45,14 +45,14 @@ function retryHarness(
 describe('withRateLimitRetry', () => {
   test('honors Retry-After seconds', async () => {
     const harness = retryHarness([
-      new Response('limited', { status: 429, headers: { 'Retry-After': '3' } }),
+      new Response('limited', { status: 429, headers: { 'Retry-After': '30' } }),
       new Response('ok'),
     ]);
 
     const response = await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
 
     expect(await response.text()).toBe('ok');
-    expect(harness.waits).toEqual([3_000]);
+    expect(harness.waits).toEqual([30_000]);
   });
 
   test('honors Retry-After HTTP dates against the injected clock', async () => {
@@ -243,6 +243,69 @@ describe('withRateLimitRetry', () => {
 
       expect({ provider, status: response.status, calls: harness.calls() }).toEqual({ provider, status: 200, calls: 2 });
     }
+  });
+
+  // OpenCode Go's spent window, kinu.run 2026-09-24.
+  const SPENT_WINDOW_BODY = JSON.stringify({ error: { message: 'Monthly usage limit reached.', type: 'rate_limit_error' } });
+
+  test('a Retry-After past the longest wait ends the call as spent, naming the provider, reset time and message', async () => {
+    const harness = retryHarness(
+      [new Response(SPENT_WINDOW_BODY, { status: 429, headers: { 'Retry-After': '729883' } }), new Response('ok')],
+      { provider: 'opencode-go' },
+    );
+
+    const failure = await rejectionOf(() => harness.wrapped('https://opencode.ai/zen/go/v1/chat/completions', { body: '{}' }));
+    const described = describeProviderError({ cause: failure });
+
+    expect({ calls: harness.calls(), waits: harness.waits }).toEqual({ calls: 1, waits: [] });
+    expect(classifyErrorCode({ cause: failure })).toBe('budget');
+    expect(described).toContain('opencode-go');
+    expect(described).toContain(new Date(1_000_000 + 729_883_000).toISOString().slice(0, 16).replace('T', ' '));
+    expect(described).toContain('Monthly usage limit reached.');
+  });
+
+  test('an HTTP-date Retry-After days out ends the call; one at the longest wait is still waited', async () => {
+    const DAY_MS = 86_400_000;
+
+    const far = retryHarness([
+      new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': new Date(1_000_000 + 3 * DAY_MS).toUTCString() } }),
+      new Response('ok'),
+    ]);
+
+    const failure = await rejectionOf(() => far.wrapped('https://api.example.com/v1/chat', { body: '{}' }));
+
+    expect({ calls: far.calls(), waits: far.waits, code: classifyErrorCode({ cause: failure }) })
+      .toEqual({ calls: 1, waits: [], code: 'budget' });
+
+    const edge = retryHarness([
+      new Response('limited', { status: 529, headers: { 'Retry-After': new Date(1_060_000).toUTCString() } }),
+      new Response('ok'),
+    ]);
+
+    expect((await edge.wrapped('https://api.example.com/v1/chat', { body: '{}' })).status).toBe(200);
+    expect(edge.waits).toEqual([60_000]);
+  });
+
+  test('a sibling on the same lane ends at once on a declared wait past the longest wait, never parking', async () => {
+    let nowMs = 1_000_000;
+    const now = () => nowMs;
+    const parked: number[] = [];
+    const pacer = new ProviderPacer({ now, sleep: async (ms) => { parked.push(ms); nowMs += ms; } });
+    let sent = 0;
+
+    const wrapped = withRateLimitRetry(asFetchFunction(async () => {
+      sent++;
+
+      return sent === 1
+        ? new Response(SPENT_WINDOW_BODY, { status: 429, headers: { 'Retry-After': '729883' } })
+        : new Response('ok');
+    }), { now, pacer, provider: 'opencode-go', sleep: async (ms) => { parked.push(ms); }, warn: () => {} });
+
+    await rejectionOf(() => wrapped('https://opencode.ai/zen/go/v1/chat/completions', { body: '{}' }));
+    const sibling = await rejectionOf(() => wrapped('https://opencode.ai/zen/go/v1/chat/completions', { body: '{}' }));
+
+    expect({ sent, parked, code: classifyErrorCode({ cause: sibling }) }).toEqual({ sent: 1, parked: [], code: 'budget' });
+    expect(describeProviderError({ cause: sibling })).toContain('Monthly usage limit reached.');
   });
 
   test('the SDK neither retries a quota 429 nor loses its class on the way to the caller', async () => {

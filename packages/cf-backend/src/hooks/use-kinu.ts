@@ -913,11 +913,12 @@ export function useKinu(target?: string | KinuActorAddress) {
   const [chatError, setChatError] = useState<ChatTurnError | null>(null);
 
   /** Cleared on the next stream frame, socket close, or a timer keyed to the declared wait: the
-   *  clearing frame may never come if the request stays in the retry loop's sleep. */
+   *  clearing frame may never come if the request stays in the retry loop's sleep. `untilMs` is the
+   *  wait's end on this browser's clock, so the pill counts down. */
   const [providerWait, setProviderWait] = useState<{
     provider: string;
     modelId?: string;
-    waitMs: number;
+    untilMs: number;
     attempt: number;
   } | null>(null);
 
@@ -942,7 +943,10 @@ export function useKinu(target?: string | KinuActorAddress) {
   // The notice's `waitMs` plus a grace for the next frame; each wait in a chain updates it.
   const showProviderWait = useCallback((notice: { provider: string; modelId?: string; waitMs: number; attempt: number }) => {
     clearProviderWait();
-    setProviderWait(notice);
+    setProviderWait({
+      provider: notice.provider, attempt: notice.attempt, untilMs: Date.now() + notice.waitMs,
+      ...(notice.modelId !== undefined && { modelId: notice.modelId }),
+    });
     providerWaitTimer.current = setTimeout(() => setProviderWait(null), notice.waitMs + 5_000);
   }, [clearProviderWait]);
 

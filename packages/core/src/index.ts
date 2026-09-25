@@ -2160,7 +2160,7 @@ export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
 
 export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';
 
-export { fmtPct, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
+export { fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
 
 export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './utils/do-rpc';
 

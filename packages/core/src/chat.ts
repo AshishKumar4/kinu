@@ -251,7 +251,7 @@ function handsOver(failure: CallFailure): boolean {
   if (status !== undefined) return status === 401 || status === 402 || status === 408 || status === 429 || status >= 500;
   const code = classifyErrorCode({ cause: failure.error });
 
-  return code === null || code === 'unavailable' || code === 'timeout';
+  return code === null || code === 'unavailable' || code === 'timeout' || code === 'budget';
 }
 
 const DEAD_STREAM = 'Model stream ended without output: the provider stream terminated prematurely '

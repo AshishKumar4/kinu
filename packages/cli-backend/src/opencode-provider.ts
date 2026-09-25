@@ -322,7 +322,7 @@ function createOpenCodeModel(spec: OpenCodeModelSpec): LanguageModel {
   const upstreamModel = modelId.slice(slash + 1);
 
   const placeholder = 'https://opencode.invalid';
-  const modelFetch = withRateLimitRetry(fetchImpl);
+  const modelFetch = withRateLimitRetry(fetchImpl, { provider: providerId, modelId: upstreamModel });
 
   const customFetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
     const config = await resolveConfig();

@@ -2664,7 +2664,7 @@ function ForkLiveFrame({ pinned }: { pinned: number | null }) {
 }
 
 /* The real component: there is exactly one identity row. */
-function GalleryWorkspaceBar({ providerWait }: { providerWait?: { provider: string; waitMs: number } | null }) {
+function GalleryWorkspaceBar({ providerWait }: { providerWait?: { provider: string; untilMs: number } | null }) {
   return (
     <WorkspaceBar
       title="Checkout coupon bug"
@@ -2775,7 +2775,7 @@ function Shell(
     /** Empty is the liveness case: with no running job or streaming turn the fork list drops to its idle cadence. */
     backgroundJobs?: BackgroundJob[];
     /** Empty by default: only the provider-wait frame pins it. */
-    providerWait?: { provider: string; waitMs: number } | null;
+    providerWait?: { provider: string; untilMs: number } | null;
     /** Empty by default: a neighbour stuck in failure makes the photographed surface look broken. */
     notices?: readonly ComposerNotice[];
   },
@@ -3003,7 +3003,7 @@ function ChatEmptyFrame() {
 
 /* A turn waiting on the provider: the wait is named on the task indicator rather than guessed from silence. */
 function ProviderWaitFrame() {
-  return <Shell providerWait={{ provider: "anthropic", waitMs: 45_000 }} />;
+  return <Shell providerWait={{ provider: "anthropic", untilMs: Date.now() + 45_000 }} />;
 }
 
 /* A workspace with history before its transcript arrives: must read "not yet", distinct from ChatEmptyFrame's "nothing here". */
