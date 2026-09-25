@@ -142,7 +142,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
 
     const boot = {
       key: crypto.randomUUID(), owner, root, app, cred,
-      globalOutbound: codemodeEgress(),
+      globalOutbound: codemodeEgress(null),
       project: parseSlateProject(project),
     };
 

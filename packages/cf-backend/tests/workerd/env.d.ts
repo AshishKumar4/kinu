@@ -319,6 +319,7 @@ declare global {
         SlateBinding: typeof SlateBinding;
         CodemodeEgress: typeof CodemodeEgress;
         SlateChainProbe: typeof SlateChainProbe;
+        default: ExportedHandler<Cloudflare.Env>;
       };
     }
   }

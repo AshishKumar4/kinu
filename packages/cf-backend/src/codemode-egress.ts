@@ -7,15 +7,31 @@
  */
 
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
-import { refusedHostname } from '@kinu.run/core';
+import { parseWorkspacePreviewLabel, previewHostSuffix, refusedHostname, type PreviewSuffixEnv } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, KinuError } from '@kinu.run/core/obs';
 
 /** Loopback throws reach the caller as opaque `internal error`, so failures
  *  travel as responses (codemode-node-shim.ts `createFetch` rethrows). */
 export const EGRESS_FAILURE_HEADER = 'x-kinu-egress-failure';
 
-async function forwardCodemodeEgress(request: Request): Promise<Response> {
+export interface CodemodeEgressProps {
+  readonly workspace: string | null;
+}
+
+function ownPreviewHost(url: URL, env: PreviewSuffixEnv, workspace: string): boolean {
+  const suffix = previewHostSuffix(env);
+
+  if (suffix === null || !url.hostname.endsWith(`.${suffix}`)) return false;
+
+  return parseWorkspacePreviewLabel(url.hostname.slice(0, -suffix.length - 1))?.workspace === workspace;
+}
+
+async function forwardCodemodeEgress(request: Request, env: PreviewSuffixEnv, workspace: string | null): Promise<Response> {
   const url = new URL(request.url);
+  const self = exports.default;
+
+  if (self !== undefined && workspace !== null && ownPreviewHost(url, env, workspace)) return await self.fetch(request);
+
   const refusal = refusedHostname(url.hostname);
 
   if (refusal !== null) {
@@ -43,13 +59,13 @@ async function forwardCodemodeEgress(request: Request): Promise<Response> {
   }
 }
 
-export class CodemodeEgress extends WorkerEntrypoint {
+export class CodemodeEgress extends WorkerEntrypoint<PreviewSuffixEnv, CodemodeEgressProps> {
   override async fetch(request: Request): Promise<Response> {
-    return await forwardCodemodeEgress(request);
+    return await forwardCodemodeEgress(request, this.env, this.ctx.props.workspace);
   }
 }
 
 /** Null outside workerd (test harnesses). */
-export function codemodeEgress(): Fetcher | null {
-  return exports.CodemodeEgress ?? null;
+export function codemodeEgress(workspace: string | null): Fetcher | null {
+  return exports.CodemodeEgress?.({ props: { workspace } }) ?? null;
 }

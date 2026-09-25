@@ -640,7 +640,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ),
       codemodeTool: (runtime, webSearch) => {
         const factory = createCodemodeToolFactory({
-          loader: this.env.LOADER, egress: codemodeEgress(), rt: runtime,
+          loader: this.env.LOADER, egress: codemodeEgress(this.workspaceName()), rt: runtime,
           sql: this.boundSql, workspace: this.workspaceName(), webSearch,
         });
 
@@ -701,7 +701,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress(), rt: turn.runtime,
+      loader: this.env.LOADER, egress: codemodeEgress(this.workspaceName()), rt: turn.runtime,
       sql: this.boundSql, workspace: this.workspaceName(), webSearch,
       // A thunk, so it reads the `report` deps declared below rather than a construction-time copy.
       extraProviders: () => [createReportCodemodeProvider(() => report)],
