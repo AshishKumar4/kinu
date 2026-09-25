@@ -13,8 +13,8 @@ function spell(model: string): string {
   return createConfiguredLocalModelResolver().resolver.normalizeSpecSync(model);
 }
 
-function startLocalProfile(tier: TierAssignment, mode: 'replace' | 'seed'): ProfileCatalogEnvelope {
-  return writeLocalProfile({ roles: BUILTIN_PROFILE_CATALOG.roles, tiers: { default: tier } }, mode);
+async function startLocalProfile(tier: TierAssignment, mode: 'replace' | 'seed'): Promise<ProfileCatalogEnvelope> {
+  return await writeLocalProfile({ roles: BUILTIN_PROFILE_CATALOG.roles, tiers: { default: tier } }, mode);
 }
 
 /** Read for writes: CAS needs the server's version, so the cache answers only if the fetch failed. */
@@ -30,7 +30,7 @@ export async function loadActiveProfile(): Promise<ProfileCatalogEnvelope> {
 
   if (!model) throw new Error('No model is set up: run kinu setup, or kinu provider connect <provider>.');
 
-  return startLocalProfile({ model: spell(model) }, 'seed');
+  return await startLocalProfile({ model: spell(model) }, 'seed');
 }
 
 /** Seeds a machine with none; an account's is from its cache. */
@@ -39,9 +39,9 @@ export async function ensureDefaultTier(): Promise<TierAssignment | null> {
 }
 
 /** Sets it only where none is set. */
-export function adoptDefaultModel(model: string): TierAssignment | null {
+export async function adoptDefaultModel(model: string): Promise<TierAssignment | null> {
   if (resolveProfileAuthority().kind === 'local' && loadLocalProfileAuthority() === null) {
-    startLocalProfile({ model: spell(model) }, 'seed');
+    await startLocalProfile({ model: spell(model) }, 'seed');
   }
 
   return readDefaultTier();
@@ -54,7 +54,7 @@ export async function updateDefaultTier(
   const edit = patch.model === undefined ? patch : { ...patch, model: spell(patch.model) };
 
   if (edit.model !== undefined && resolveProfileAuthority().kind === 'local' && loadLocalProfileAuthority() === null) {
-    return startLocalProfile({ ...edit, model: edit.model }, 'replace');
+    return await startLocalProfile({ ...edit, model: edit.model }, 'replace');
   }
 
   const current = await loadActiveProfile();

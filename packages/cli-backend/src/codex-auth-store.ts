@@ -12,7 +12,7 @@ import {
 import * as v from 'valibot';
 import { readFileSync } from 'node:fs';
 import { tolerate } from '@kinu.run/core/obs';
-import { withConfigLock, withConfigLockAsync } from './config-lock';
+import { withConfigLock } from './config-lock';
 import { writeSecretFile } from './secret-file';
 
 const storedCodexCredentialSchema = v.object({
@@ -35,7 +35,7 @@ type KinuConfigFile = v.InferOutput<typeof kinuConfigSchema>;
 export interface LocalCodexAuthStore {
   hasCredential(): boolean;
   getAuth(opts?: { forceRefresh?: boolean }): Promise<AuthResolution | null>;
-  save(credential: OAuthCredential): void;
+  save(credential: OAuthCredential): Promise<void>;
 }
 
 export function createFileCodexAuthStore(configPath: string, opts: { fetch?: typeof fetch } = {}): LocalCodexAuthStore {
@@ -58,8 +58,8 @@ export function createFileCodexAuthStore(configPath: string, opts: { fetch?: typ
       return { headers: codexCredentialToHeaders(refreshed) };
     },
 
-    save(credential: OAuthCredential): void {
-      withConfigLock(configPath, () => {
+    async save(credential: OAuthCredential): Promise<void> {
+      await withConfigLock(configPath, () => {
         const config = readConfig(configPath);
         writeConfig(configPath, {
           ...config,
@@ -80,7 +80,7 @@ async function refreshUnderLock(
   original: OAuthCredential,
   fetchFn?: typeof fetch,
 ): Promise<OAuthCredential> {
-  return withConfigLockAsync(configPath, async () => {
+  return withConfigLock(configPath, async () => {
     const latest = readCredential(configPath);
 
     if (latest?.accessToken && latest.accessToken !== original.accessToken && !needsRefresh(latest)) {

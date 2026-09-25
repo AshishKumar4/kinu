@@ -154,7 +154,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
     console.log(DIM(`  Sign out of ${tool} itself: ${command}`));
     warnDefaultModelFor(provider);
     // Kinu holds nothing here, but a resident session must re-probe that tool's login.
-    bumpProviderRevision();
+    await bumpProviderRevision();
 
     return;
   }
@@ -164,7 +164,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
   if (!credential) throw new Error(`No local credential for ${provider}.`);
 
   let removed = false;
-  updateConfigFile((config) => {
+  await updateConfigFile((config) => {
     if (config.providers) removed = credential.clear(config.providers);
   });
 
@@ -187,7 +187,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
 
   warnDefaultModelFor(provider);
   // Published even when no row was found, so a resident session stops offering a revoked provider.
-  bumpProviderRevision();
+  await bumpProviderRevision();
 
   const live = credential.envVars.filter((name) => process.env[name]);
 
@@ -216,7 +216,7 @@ async function disconnectAccountProvider(name: string): Promise<void> {
   await deleteCloudCredential(cloud.origin, cloud.token, credKey);
   console.log(`${OK('✓')} Removed the ${ACCENT(name)} credential from your Kinu account.`);
   warnDefaultModelPrefixes([`${name}/`]);
-  bumpProviderRevision();
+  await bumpProviderRevision();
 }
 
 function warnDefaultModelFor(provider: ProviderName): void {

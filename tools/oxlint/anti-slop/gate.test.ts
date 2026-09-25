@@ -28,6 +28,7 @@ const expectedRules = [
   "anti-slop/no-reflect-get",
   "anti-slop/no-runtime-typeof",
   "anti-slop/no-sentinel-catch",
+  "anti-slop/no-sync-spawn",
   "anti-slop/no-shape-in-symbol-names",
   "anti-slop/no-unaccounted-catch",
   "anti-slop/no-unknown-parameters",

@@ -186,14 +186,14 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
       create: (cloudInput) => createCloudAgent(auth.origin, auth.token, cloudInput),
     });
 
-    upsertAgentConfig({
+    await upsertAgentConfig({
       name: agent.name,
       mode: 'cloud',
       displayName: agent.displayName,
       cloudName: agent.name,
       alias: input.alias === '' ? undefined : input.alias,
     });
-    const aliasPath = input.alias ? writeAliasShim(agent.name, input.alias) : undefined;
+    const aliasPath = input.alias ? await writeAliasShim(agent.name, input.alias) : undefined;
 
     return { name: agent.name, displayName: agent.displayName, mode: 'cloud', purpose, cloudName: agent.name, aliasPath };
   }
@@ -272,7 +272,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   // The checkpointed (empty) sidecars belong to a name that no longer exists.
   discardPartialWorkspace(partial);
 
-  upsertAgentConfig({
+  await upsertAgentConfig({
     name,
     mode: 'local',
     localName: name,
@@ -282,7 +282,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     // The db's durable id, so creation and adoption record the same identity.
     identityId: readWorkspaceIdentityId(dbPath) ?? undefined,
   });
-  const aliasPath = input.alias ? writeAliasShim(name, input.alias) : undefined;
+  const aliasPath = input.alias ? await writeAliasShim(name, input.alias) : undefined;
   ensureLocalDaemonRunning();
 
   return {

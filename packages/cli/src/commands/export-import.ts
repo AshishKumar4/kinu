@@ -144,7 +144,7 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
     return;
   }
 
-  const placed = adoptUnplacedLocalAgent(name);
+  const placed = await adoptUnplacedLocalAgent(name);
   console.log(`  ${DIM('workspace:')} ${placed.workspaceId} ${DIM('in')} ${placed.cwd}\n`);
 }
 
@@ -171,7 +171,7 @@ async function* localArchivePages(name: string, output: string): AsyncGenerator<
   const ref = resolveAgentRef(name);
 
   if (ref?.cwd && !existsSync(ref.cwd)) throw new Error(`Cannot export workspace files: ${ref.cwd} is missing.`);
-  const local = resolveLocalAgent(name, { adopt: false });
+  const local = await resolveLocalAgent(name, { adopt: false });
   const outputPath = resolve(output);
 
   const files = local.placement === 'unplaced' ? null : archiveFileTree({

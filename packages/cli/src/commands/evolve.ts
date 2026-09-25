@@ -26,7 +26,7 @@ export async function evolveCommand(name: string, opts: {
     return;
   }
 
-  const local = requireLocalAgent(name);
+  const local = await requireLocalAgent(name);
   const workspace = local.name;
   const dbPath = local.dbPath;
 

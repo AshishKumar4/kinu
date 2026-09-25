@@ -48,14 +48,14 @@ function createDeviceCheckpoints(options?: DeviceCheckpointOptions) {
   }), daemon.createCheckpoints(options));
 
   return {
-    ensure: (hint: DeviceCheckpointHint, fallbackDir?: string) =>
-      v.parse(v.nullable(v.string()), raw.ensure(hint, fallbackDir)),
-    list: (agent: string, limit?: number) =>
-      v.parse(v.array(checkpointEntrySchema), raw.list(agent, limit)),
-    plan: (agent: string, dir: string, id: string) =>
-      v.parse(checkpointPlanSchema, raw.plan(agent, dir, id)),
-    restore: (agent: string, dir: string, id: string) =>
-      v.parse(checkpointRestoreSchema, raw.restore(agent, dir, id)),
+    ensure: async (hint: DeviceCheckpointHint, fallbackDir?: string) =>
+      v.parse(v.nullable(v.string()), await raw.ensure(hint, fallbackDir)),
+    list: async (agent: string, limit?: number) =>
+      v.parse(v.array(checkpointEntrySchema), await raw.list(agent, limit)),
+    plan: async (agent: string, dir: string, id: string) =>
+      v.parse(checkpointPlanSchema, await raw.plan(agent, dir, id)),
+    restore: async (agent: string, dir: string, id: string) =>
+      v.parse(checkpointRestoreSchema, await raw.restore(agent, dir, id)),
   };
 }
 
@@ -81,7 +81,7 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
     const id = present(await host.ensureCheckpoint(work), 'the host engine snapshot id');
     expect(id).toBeTruthy();
 
-    const listed = device.list(AGENT);
+    const listed = await device.list(AGENT);
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({
       id, dir: work, turnId: 'turn-ts', sessionId: 'sess-1', reason: 'pre-mutation',
@@ -89,15 +89,15 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
 
     writeFileSync(join(work, 'a.txt'), 'damage');
     writeFileSync(join(work, 'junk.txt'), 'extra');
-    const plan = device.plan(AGENT, work, id);
+    const plan = await device.plan(AGENT, work, id);
     expect(plan.files.map((f) => `${f.kind}:${f.path}`).sort())
       .toEqual(['delete:junk.txt', 'modify:a.txt']);
 
-    const result = device.restore(AGENT, work, id);
+    const result = await device.restore(AGENT, work, id);
     expect(readFileSync(join(work, 'a.txt'), 'utf8')).toBe('host wrote this');
     expect(existsSync(join(work, 'junk.txt'))).toBe(false);
     // Both pre-restore safety snapshots are null-turn, so /undo grouping matches.
-    const preRestore = device.list(AGENT).find((e) => e.id === result.preRestoreId);
+    const preRestore = (await device.list(AGENT)).find((e) => e.id === result.preRestoreId);
     expect(preRestore).toMatchObject({ turnId: null, sessionId: null, reason: 'pre-restore' });
   });
 
@@ -105,7 +105,7 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
     const { work, host, device } = setup();
 
     writeFileSync(join(work, 'b.txt'), 'daemon wrote this');
-    const id = present(device.ensure({ agent: AGENT, dir: work, turnId: 'turn-js', sessionId: 'sess-2' }), 'the daemon engine snapshot id');
+    const id = present(await device.ensure({ agent: AGENT, dir: work, turnId: 'turn-js', sessionId: 'sess-2' }), 'the daemon engine snapshot id');
     expect(id).toBeTruthy();
 
     const listed = await host.list();
@@ -131,7 +131,7 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
     writeFileSync(join(workB, 'x'), '1');
     host.beginTurn({ turnId: 't', sessionId: 's' });
     await host.ensureCheckpoint(work);
-    device.ensure({ agent: AGENT, dir: workB, turnId: 't', sessionId: 's' });
+    await device.ensure({ agent: AGENT, dir: workB, turnId: 't', sessionId: 's' });
 
     const stores = (await import('node:fs')).readdirSync(join(root, 'shadow', AGENT));
     expect(stores).toHaveLength(2);
@@ -160,17 +160,17 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
 
       host.beginTurn({ turnId: 't', sessionId: 's' });
       const hostId = present(await host.ensureCheckpoint(work, 'file write'), 'the host engine snapshot id');
-      const deviceId = present(device.ensure({ agent: AGENT, dir: workB, turnId: 't', sessionId: 's' }, undefined), 'the daemon engine snapshot id');
+      const deviceId = present(await device.ensure({ agent: AGENT, dir: workB, turnId: 't', sessionId: 's' }, undefined), 'the daemon engine snapshot id');
       expect(hostId).toBeTruthy();
       expect(deviceId).toBeTruthy();
 
-      const byId = new Map(device.list(AGENT).map((e) => [e.id, e.reason]));
+      const byId = new Map((await device.list(AGENT)).map((e) => [e.id, e.reason]));
       expect(byId.get(hostId)).toBe('file write [skipped 1 unreadable: systemd-private-1]');
       expect(byId.get(deviceId)).toBe('pre-mutation [skipped 1 unreadable: systemd-private-1]');
 
       writeFileSync(join(work, 'mine.txt'), 'damaged');
       expect((await host.plan(work, hostId)).files).toEqual([{ path: 'mine.txt', kind: 'modify' }]);
-      expect(device.plan(AGENT, workB, deviceId).files).toEqual([]);
+      expect((await device.plan(AGENT, workB, deviceId)).files).toEqual([]);
     } finally {
       for (const dir of foreign) chmodSync(dir, 0o700);
 

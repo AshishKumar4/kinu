@@ -309,7 +309,7 @@ async function connectClaude(port: ProviderConnectPort): Promise<ProviderConnect
 
   if (binary && loggedIn) {
     // Nothing is written, but a resident session learns of the connection only through this bump.
-    bumpProviderRevision();
+    await bumpProviderRevision();
 
     return { kind: 'connected', summary: CLAUDE_READY, detail: 'Cloud workspaces cannot use this subscription. Connect an Anthropic API key for them.' };
   }
@@ -325,7 +325,7 @@ async function connectCodex(port: ProviderConnectPort, requestedModel: string | 
   const answered = requestedModel ?? await port.ask({ label: 'Default Codex model', fallback: current });
   const model = answered.startsWith('codex/') ? answered.slice('codex/'.length) : answered;
   const credential = await runCodexDeviceFlow(port);
-  updateConfigFile((next) => withProvider(next, {
+  await updateConfigFile((next) => withProvider(next, {
     codex: {
       accessToken: credential.accessToken,
       refreshToken: credential.refreshToken,
@@ -334,7 +334,7 @@ async function connectCodex(port: ProviderConnectPort, requestedModel: string | 
     },
   }));
 
-  return { kind: 'connected', summary: 'Connected ChatGPT Codex subscription', detail: defaultModelDetail(`codex/${model}`) };
+  return { kind: 'connected', summary: 'Connected ChatGPT Codex subscription', detail: await defaultModelDetail(`codex/${model}`) };
 }
 
 async function runCodexDeviceFlow(port: ProviderConnectPort) {
@@ -402,7 +402,7 @@ async function connectApiKeyProvider(port: ProviderConnectPort, provider: ApiKey
     summary: where === 'account'
       ? `Connected ${provider.label} to your Kinu account. No key stored on this machine.`
       : `Saved ${provider.label} credentials to this machine.`,
-    detail: defaultModelDetail(spec),
+    detail: await defaultModelDetail(spec),
   };
 }
 
@@ -436,7 +436,7 @@ async function connectOpenAiCompatible(port: ProviderConnectPort, requestedModel
     summary: where === 'account'
       ? 'Connected the OpenAI-compatible endpoint to your Kinu account. No key stored on this machine.'
       : 'Saved the OpenAI-compatible endpoint credentials to this machine.',
-    detail: defaultModelDetail(spec),
+    detail: await defaultModelDetail(spec),
   };
 }
 
@@ -490,12 +490,12 @@ async function connectOpenCode(port: ProviderConnectPort, requestedModel: string
     model = first.id;
   }
 
-  updateConfigFile((config) => withProvider(config, {}));
+  await updateConfigFile((config) => withProvider(config, {}));
 
   return {
     kind: 'connected',
     summary: 'Connected OpenCode',
-    detail: `${defaultModelDetail(`opencode/${model}`)} Kinu reads models and auth from your local opencode install at request time.`,
+    detail: `${await defaultModelDetail(`opencode/${model}`)} Kinu reads models and auth from your local opencode install at request time.`,
   };
 }
 
@@ -531,7 +531,7 @@ async function storeProviderSecret(opts: {
   }
 
   opts.clearLocally();
-  bumpProviderRevision();
+  await bumpProviderRevision();
 
   return 'account';
 }
@@ -588,8 +588,8 @@ function withProvider(config: KinuConfig, providers: NonNullable<KinuConfig['pro
   };
 }
 
-function defaultModelDetail(spec: string): string {
-  const current = adoptDefaultModel(spec)?.model;
+async function defaultModelDetail(spec: string): Promise<string> {
+  const current = (await adoptDefaultModel(spec))?.model;
 
   if (current === spec) return `Default model: ${spec}`;
 

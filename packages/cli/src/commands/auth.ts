@@ -34,14 +34,14 @@ export async function authenticateCli(
   if (status.status === 'expired') throw new Error(status.message ?? 'The sign-in code expired. Run kinu auth again.');
 
   if (!status.token || !status.user) throw new Error('Sign-in was approved, but the server sent no token. Run kinu auth again.');
-  updateConfigFile((config) => {
+  await updateConfigFile((config) => {
     config.origin = status.origin ?? origin;
     config.accessToken = status.token;
     config.tokenExpiresAt = status.expiresAt;
     config.user = status.user;
   });
   // Signing in makes account credentials reachable through the proxy, so cached provider listings are stale.
-  bumpProviderRevision();
+  await bumpProviderRevision();
   callbacks.completed?.(status.user.email);
 }
 
@@ -85,7 +85,7 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
       // so it stays pending for the next logout or `kinu sessions revoke --all`.
       const reason = renderThrownChain({ cause: error });
       console.error(`${WARN('!')} Could not revoke the session at ${origin} (${reason}); it may still be valid.`);
-      updateConfigFile((current) => {
+      await updateConfigFile((current) => {
         current.pendingRevocation = {
           token: config.accessToken ?? '',
           origin,
@@ -96,7 +96,7 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
     }
 
     if (!revoked) {
-      bumpProviderRevision();
+      await bumpProviderRevision();
       console.log(`${WARN('!')} Not signed out: the session is still valid, and this computer keeps its token so a later logout can revoke it.`);
       console.log(DIM(`Run \`kinu logout\` again once ${origin} is reachable, or revoke it with \`kinu sessions revoke\` from any computer.`));
 
@@ -104,14 +104,14 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
     }
   }
 
-  updateConfigFile((current) => {
+  await updateConfigFile((current) => {
     delete current.accessToken;
     delete current.tokenExpiresAt;
     delete current.user;
     delete current.pendingRevocation;
   });
   // The inverse of sign-in: every account-held provider just became unreachable.
-  bumpProviderRevision();
+  await bumpProviderRevision();
   console.log(`${OK('✓')} Signed out`);
 }
 

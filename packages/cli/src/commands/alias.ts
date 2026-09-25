@@ -13,7 +13,7 @@ export async function aliasCommand(agentName: string, aliasName: string | undefi
 }
 
 export async function unaliasCommand(aliasName: string): Promise<void> {
-  deleteAliasShim(aliasName);
+  await deleteAliasShim(aliasName);
   console.log(`${OK('✓')} Removed alias ${ACCENT(aliasName)}`);
 }
 
