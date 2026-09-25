@@ -53,3 +53,34 @@ export function constantString(node: acorn.AnyNode): string | null {
 
   return null;
 }
+
+/** A codemode program as the sandbox receives it: an LLM often fences it in markdown, which the
+ *  sandbox strips before it runs the program, so a fenced program is read inside its fences. */
+export function parseCodemodeProgram(program: string): acorn.Program | null {
+  const lines = program.trim().split('\n');
+  const fenced = lines.length >= 2 && lines[0]?.startsWith('```') === true && lines.at(-1)?.trim() === '```';
+
+  return parseEvolvedCode(fenced ? lines.slice(1, -1).join('\n') : program);
+}
+
+/** Every `namespace.method(…)` the program calls, as `namespace.method`; a mention without a call,
+ *  a string or a comment naming one, and a call on a deeper object (`a.tools.x()`) are not calls. */
+export function namespacedCalls(program: acorn.Program, namespaces: readonly string[]): Set<string> {
+  const calls = new Set<string>();
+
+  for (const node of nodesOf(program)) {
+    if (node.type !== 'CallExpression' || node.callee.type !== 'MemberExpression') continue;
+    const { object, property, computed } = node.callee;
+
+    if (object.type !== 'Identifier' || !namespaces.includes(object.name)) continue;
+
+    if (!computed && property.type === 'Identifier') calls.add(`${object.name}.${property.name}`);
+    else if (computed && property.type !== 'PrivateIdentifier') {
+      const method = constantString(property);
+
+      if (method !== null) calls.add(`${object.name}.${method}`);
+    }
+  }
+
+  return calls;
+}

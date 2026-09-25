@@ -253,13 +253,6 @@
       "decision": "framing"
     },
     {
-      "file": "packages/core/src/craft/in-episode.ts",
-      "kind": "hand-parser",
-      "owner": "stripNonCode",
-      "sourceSha256": "64e41131795761abb07ac1a49bf0fbc3f3d5172d57755fb5166a60f7b59252e9",
-      "decision": "sourceGate"
-    },
-    {
       "file": "packages/core/src/craft/source.ts",
       "kind": "hand-parser",
       "owner": "stripExports",

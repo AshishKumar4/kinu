@@ -512,6 +512,11 @@ describe('a capability reached through codemode counts as used', () => {
     });
   }
 
+  test('a call spelled by a computed key or inside a markdown fence is a use', () => {
+    expect(buildAdvisorPrompt(swarmed('await agents["swarm"]({})'), ['agents'])).toContain('did not use: (none recorded)');
+    expect(buildAdvisorPrompt(swarmed('```js\nawait agents.swarm({})\n```'), ['agents'])).toContain('did not use: (none recorded)');
+  });
+
   test('a shared namespace reports both its capabilities reached, never neither', () => {
     // `shell` and `file` both reach `workspace`; over-reporting reach is harmless here.
     const prompt = buildAdvisorPrompt(swarmed('await workspace.exec("ls")'), ['shell', 'file']);
