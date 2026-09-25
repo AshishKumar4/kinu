@@ -49,6 +49,7 @@ import * as v from 'valibot';
 const resolverRest = {
   judgeCandidates: async () => [],
   getAuth: async () => null,
+  credentialFor: async () => null,
   countInputTokens: async () => ({
     kind: 'unsupported' as const,
     provider: 'fake',

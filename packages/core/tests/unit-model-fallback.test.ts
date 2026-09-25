@@ -171,17 +171,25 @@ describe('a failed call hands the turn down its fallback chain', () => {
     });
   }
 
-  test('a model its provider no longer serves (HTTP 404) hands the turn to the next model on the same account', async () => {
-    const { events, threw, served } = await turn((model) => (model === 'primary' ? refused(404) : answer('from backup')), ['backup']);
+  for (const status of [403, 404]) {
+    test(`a model the account cannot reach (HTTP ${String(status)}) hands the turn to the next model`, async () => {
+      const { events, threw, served } = await turn((model) => (model === 'primary' ? refused(status) : answer('from backup')), ['backup']);
 
-    expect(served.map((entry) => entry.model)).toEqual(['primary', 'backup']);
-    expect(events.find((event) => event.type === 'model-fallback')).toMatchObject({ from: 'openrouter/primary', to: 'openrouter/backup' });
-    expect(threw).toBeNull();
-  });
+      expect(served.map((entry) => entry.model)).toEqual(['primary', 'backup']);
+      expect(events.find((event) => event.type === 'model-fallback')).toMatchObject({ from: 'openrouter/primary', to: 'openrouter/backup' });
+      expect(threw).toBeNull();
+    });
+  }
 });
 
 /** Two accounts of one OpenAI-compatible provider on one endpoint; `answerFor` decides by the key each request carries. */
-async function accountTurn(answerFor: (key: string, seen: number) => Response, fallbacks: readonly string[]) {
+/** A turn on `primary` (default `openai-compat@work/m`) whose chain is `fallbacks`; `defaultAccount` is the profile's pick for a bare spec. */
+async function accountTurn(
+  answerFor: (key: string, seen: number) => Response,
+  fallbacks: readonly string[],
+  opts: { readonly primary?: string; readonly defaultAccount?: string } = {},
+) {
+  const primary = opts.primary ?? 'openai-compat@work/m';
   const served: { key: string; handover: boolean }[] = [];
 
   const server = Bun.serve({
@@ -206,6 +214,7 @@ async function accountTurn(answerFor: (key: string, seen: number) => Response, f
     async getAuth(key) { return stored.get(key) ?? null; },
     async hasCredential(key) { return stored.has(key); },
     async listCredentialKeys() { return [...stored.keys()]; },
+    accountFor: () => opts.defaultAccount,
   };
 
   const registry = createProviderRegistry();
@@ -221,7 +230,8 @@ async function accountTurn(answerFor: (key: string, seen: number) => Response, f
 
   try {
     for await (const event of runChat({
-      model: registry.resolve('openai-compat@work/m', deps), modelContext: { id: 'm' }, modelSpec: 'openai-compat@work/m', fallbacks: chain,
+      model: registry.resolve(primary, deps), modelContext: { id: 'm' }, modelSpec: primary, fallbacks: chain,
+      credentialOf: (spec) => registry.credentialFor(spec, deps),
       system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {},
     })) events.push(event);
   } catch (error) {
@@ -270,26 +280,47 @@ describe('an account that hits its limit hands the turn to the next account of i
   });
 });
 
-describe('a refusal of the whole account passes over the chain entries on that account', () => {
-  for (const status of [401, 403]) {
-    test(`HTTP ${String(status)} hands the turn past a backup on the same account to one on another`, async () => {
-      const { events, served, threw } = await accountTurn(
-        (key) => (key === 'Bearer key-work' ? refused(status) : answer('from home')),
-        ['openai-compat@work/other', 'openai-compat@home/m'],
+describe('a refused credential (HTTP 401) passes over the chain entries that hold it', () => {
+  test('a 401 hands the turn past a backup on the same account to one on another', async () => {
+    const { events, served, threw } = await accountTurn(
+      (key) => (key === 'Bearer key-work' ? refused(401) : answer('from home')),
+      ['openai-compat@work/other', 'openai-compat@home/m'],
+    );
+
+    expect(threw).toBeNull();
+    expect(served.map((entry) => entry.key)).toEqual(['Bearer key-work', 'Bearer key-home']);
+    expect(events.filter((event) => event.type === 'model-fallback'))
+      .toMatchObject([{ from: 'openai-compat@work/m', to: 'openai-compat@home/m' }]);
+  });
+
+  test('accounts compare as they resolve: a bare spec whose default is work holds the same credential as an @work entry', async () => {
+    for (const [primary, backup] of [['openai-compat/m', 'openai-compat@work/other'], ['openai-compat@work/m', 'openai-compat/other']]) {
+      const { served, threw } = await accountTurn(
+        (key) => (key === 'Bearer key-work' ? refused(401) : answer('from home')),
+        [backup, 'openai-compat@home/m'],
+        { primary, defaultAccount: 'work' },
       );
 
       expect(threw).toBeNull();
       expect(served.map((entry) => entry.key)).toEqual(['Bearer key-work', 'Bearer key-home']);
-      expect(events.filter((event) => event.type === 'model-fallback'))
-        .toMatchObject([{ from: 'openai-compat@work/m', to: 'openai-compat@home/m' }]);
-    });
-  }
+    }
+  });
 
-  test('with only same-account backups the turn fails on the first refusal, asking none of them', async () => {
-    const { events, served, threw } = await accountTurn(() => refused(403), ['openai-compat@work/other']);
+  test('a 403, which may refuse only the model, still tries the same account\'s next model', async () => {
+    const { served, threw } = await accountTurn(
+      (key, seen) => (key === 'Bearer key-work' && seen === 1 ? refused(403) : answer('from backup')),
+      ['openai-compat@work/other'],
+    );
+
+    expect(threw).toBeNull();
+    expect(served.map((entry) => entry.key)).toEqual(['Bearer key-work', 'Bearer key-work']);
+  });
+
+  test('with only same-account backups a 401 fails the turn on the first refusal, asking none of them', async () => {
+    const { events, served, threw } = await accountTurn(() => refused(401), ['openai-compat@work/other']);
 
     expect(served.map((entry) => entry.key)).toEqual(['Bearer key-work']);
     expect(events.some((event) => event.type === 'model-fallback')).toBe(false);
-    expect(threw?.message ?? '').toContain('HTTP 403');
+    expect(threw?.message ?? '').toContain('HTTP 401');
   });
 });

@@ -1769,6 +1769,7 @@ export class LocalAgentSession implements BackendHost {
 
       const normalize = (spec: string) => this.profiles().normalizeSpec(spec);
       liveTurn.modelSpec = normalize(profile.tier.model);
+      liveTurn.credentialOf = (spec) => resolver.credentialFor(spec);
       liveTurn.fallbacks = profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
         spec: normalize(spec),
         bind: () => {

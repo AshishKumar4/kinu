@@ -109,6 +109,12 @@ export class OwnedModelServices<Id = DurableObjectId> {
     return model;
   }
 
+  credentialFor(spec: string): Promise<string | null> {
+    const agent = this.providerRegistry();
+
+    return agent.registry.credentialFor(agent.normalizeSpecSync(spec), agent.deps);
+  }
+
   resolveModelWithEffort(spec: string | null | undefined, effort: ReasoningEffort | null) {
     const registry = this.providerRegistry();
     const normalized = registry.normalizeSpecSync(spec);

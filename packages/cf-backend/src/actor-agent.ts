@@ -4092,6 +4092,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const providers = this.providerRegistry();
     liveTurn.modelSpec = providers.normalizeSpecSync(assembled.profile.tier.model);
+    liveTurn.credentialOf = (spec) => this.ownedModelServices.credentialFor(spec);
     liveTurn.fallbacks = assembled.profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
       spec: providers.normalizeSpecSync(spec),
       bind: () => this.ownedModelServices.resolveModelWithEffort(spec, reasoningEffort),

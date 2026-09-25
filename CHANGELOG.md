@@ -722,8 +722,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - **A fallback takes over from a model your account cannot reach.** A tier's fallback chain gave up when its first
   model answered 403 or 404 (a model the account has no access to, or one the provider no longer serves), though the
   next model could have answered. It now hands the turn on, as it does for a rate limit or an outage; a malformed or
-  too-large request still fails the turn, since the next model would refuse it too. A 401 or 403 refuses the whole
-  account, so the turn passes over the chain's other models on that account to one on another.
+  too-large request still fails the turn, since the next model would refuse it too. A 401 refuses the credential
+  itself, so the turn passes over the chain's other models that sign in with it to one that does not.
 
 - **Reasoning effort is always a level the model takes.** A stored effort the model does not declare (xhigh on GLM
   5.3, which takes low, medium and high) was sent as it was. It is now sent as the nearest level the model declares

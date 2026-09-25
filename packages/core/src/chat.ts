@@ -52,8 +52,8 @@ export type ChatEvent =
   | { type: 'reasoning-delta'; delta: string }
   /** The provider's call id, pairing this event with its 'tool-result'; name alone cannot pair concurrent calls. */
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: JsonObject }
-  /** `result` is the rendered output or error text; `output` is the returned value projected to JSON, for the
-   *  ledger. `durationMs` is absent for a call the SDK never dispatched here. */
+  /** `result`: the rendered output or error; `output`: the value as JSON, for the ledger. `durationMs` is absent for
+   *  a call the SDK never dispatched here. */
   | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string; output?: JsonValue; error?: string; durationMs?: number } & ToolOutcome)
   /** `usage` is what the provider reported for this step; absent is not zero. `responseMessages` is the SDK's
    *  cumulative array by reference, so a long turn does not re-serialize its transcript per step. */
@@ -121,6 +121,8 @@ export interface ChatOptions {
   modelContext?: PromptModelContext;
   /** The turn model's spec, normalized as its fallbacks' are. */
   modelSpec?: string;
+  /** A spec's stored credential; a 401 skips entries holding the refused one. */
+  credentialOf?: (spec: string) => Promise<string | null>;
   /** Provider-reported prompt tokens of the previous turn's final request, the measured compaction trigger. */
   providerReportedTokens?: number;
   /** 'force' when the caller consumed an armed force-compaction flag after an overflow. */
@@ -131,10 +133,7 @@ export interface ChatOptions {
   extensions?: ExtensionHost;
   /** Prompt-cache identity: provider id + stable conversation key. See prompting/cache-breakpoints.ts. */
   cache?: { providerId?: string; modelId?: string; sessionKey: string; retention?: CacheRetention };
-  /**
-   * A second reader of each call's stream, as the SDK's UIMessage chunks; the SDK tees the stream so neither starves.
-   * Called once per provider call; see {@link ObservedCall}.
-   */
+  /** A second reader of each call's stream as UIMessage chunks (the SDK tees it), once per call; {@link ObservedCall}. */
   observeStream?: ObserveStream;
   providerOptions?: NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
   /** The subset of `tools` the model may call; the rest stay wired for execution. Absent, all are offered. */
@@ -143,15 +142,13 @@ export interface ChatOptions {
   budget?: MissionGovernor;
   /** An extra stop reason; there is no step cap to combine with (see UNBOUNDED_STEPS). */
   stopWhen?: StopCondition<ToolSet>;
-  /**
-   * Each finished step, raw and awaited: the sink may be an RPC to another DO, and the next request must wait for it.
-   * A throw rejects the turn, as from `prepareStep`.
-   */
+  /** Each finished step, raw and awaited, since the sink may be another DO the next request waits for; a throw rejects
+   *  the turn. */
   onStep?: (step: StepResult<ToolSet>) => Promise<void> | void;
   /** Raw SDK output for a host UI bridge; not part of the serializable ChatEvent projection. */
   onToolOutput?: (output: ChatToolOutput) => Promise<void> | void;
-  /** Where each model call opens and closes its `model_operation` rows, so a call in flight at process death is
-   *  visible to `RunEventRecorder.unterminatedModelOperations`. */
+  /** Where each call opens and closes its `model_operation` rows, so one in flight at process death shows in
+   *  `RunEventRecorder.unterminatedModelOperations`. */
   operations?: ModelOperationSink;
 }
 
@@ -203,8 +200,8 @@ interface AnswerStep {
   readonly toolCalls?: ReadonlyArray<unknown>;
 }
 
-/** The final step's text, or null to keep what streamed; earlier steps' prose is narration. A `length`-cut step
- *  without tool calls joins its continuation; an interrupted turn has none. */
+/** The final step's text, or null to keep what streamed (earlier prose is narration); a toolless `length`-cut step
+ *  joins its continuation. */
 function answerFromSteps(
   steps: readonly AnswerStep[],
   interrupted: boolean,
@@ -254,21 +251,16 @@ function handsOver(failure: CallFailure): boolean {
   return code === null || code === 'unavailable' || code === 'timeout';
 }
 
-/** `anthropic@work`, or `anthropic` for the default account. */
-function specAccount(spec: string): string {
-  const slash = spec.indexOf('/');
-
-  return slash < 1 ? spec : spec.slice(0, slash);
-}
-
-/** A 401 or 403 refuses the whole account, so its other entries are passed over. */
-function nextFallback(chain: ChatFallback[], failed: string, failure: CallFailure): ChatFallback | undefined {
+/** A 401 refuses the credential, so entries holding it are passed over; a 403 hands on, often refusing only the model. */
+async function nextFallback(
+  chain: ChatFallback[], failed: string | undefined, failure: CallFailure, credentialOf: ChatOptions['credentialOf'],
+): Promise<ChatFallback | undefined> {
   if (!handsOver(failure)) return undefined;
   const { status } = providerFailureFacts({ cause: failure.cause });
-  const refused = status === 401 || status === 403 ? specAccount(failed) : null;
+  const refused = status === 401 && failed !== undefined && credentialOf !== undefined ? await credentialOf(failed) : null;
 
   for (let next = chain.shift(); next !== undefined; next = chain.shift()) {
-    if (specAccount(next.spec) !== refused) return next;
+    if (refused === null || await credentialOf?.(next.spec) !== refused) return next;
   }
 
   return undefined;
@@ -297,8 +289,8 @@ class ProviderCall {
   private responseSoFar: readonly ModelMessage[] = [];
   readonly finishedSteps: StepResult<ToolSet>[] = [];
   private readonly pendingStepEvents: PendingStepEvent[] = [];
-  /** When the in-flight step's request left, stamped in `prepareStep`: a cache warm counts its TTL from the request's
-   *  start (docs/research/harness/anthropic-sources.md §2). */
+  /** When the step's request left (`prepareStep`): a cache warm counts its TTL from there
+   *  (docs/research/harness/anthropic-sources.md §2). */
   private stepSentAt = Date.now();
   /** A finished step whose record or hook failed; the SDK drops a step-callback throw (ai 6.0.214 `notify`). */
   stepFailure: { readonly doing: string; readonly cause: unknown } | null = null;
@@ -453,10 +445,8 @@ class ProviderCall {
     return null;
   }
 
-  /**
-   * The messages this call generated. A cut or failed call adds the unfinished step with every dispatched call
-   * paired, or every later request from this history would be refused.
-   */
+  /** The messages this call generated; a cut or failed call's unfinished step keeps every dispatched call paired, or
+   *  every later request from this history is refused. */
   produced(): ModelMessage[] {
     const finished = [...this.responseSoFar];
 
@@ -531,10 +521,8 @@ function turnText(streamed: string, steps: readonly StepResult<ToolSet>[], answe
   return allText;
 }
 
-/**
- * One chat turn; callers append its response messages (tool calls and results included) to history. A cut turn
- * yields `done`, then throws {@link INTERRUPTED_TURN}; a dead provider stream throws without `done`.
- */
+/** One chat turn; callers append its response messages to history. A cut turn yields `done`, then throws
+ *  {@link INTERRUPTED_TURN}; a dead provider stream throws without `done`. */
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const extensions = opts.extensions;
 
@@ -794,7 +782,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     const outcome = yield* callModel(request, stepOffset);
 
     if (outcome.failure === null) return outcome;
-    const next = nextFallback(chain, current.spec, outcome.failure);
+    const next = await nextFallback(chain, servingFallback ?? opts.modelSpec, outcome.failure, opts.credentialOf);
 
     if (next === undefined) throw outcome.failure.error;
     yield { type: 'model-fallback', from: current.spec, to: next.spec, reason: describeProviderError({ cause: outcome.failure.cause }) };
