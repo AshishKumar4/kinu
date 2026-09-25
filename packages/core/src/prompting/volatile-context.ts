@@ -197,8 +197,9 @@ const APPENDED = '(appended)';
 
 export const DYNAMIC_CONTEXT_HEADER =
   'Kinu runtime state, not conversation or user text. A full block replaces prior state; a delta changes only what it names.\n'
-  + `A delta section replaces its section. Under "${CHANGED_ROWS}", each row replaces or adds the row with its id, and `
-  + `"${REMOVED_ROW} <id>" drops one.\n"${APPENDED}" continues its section. Execution deltas update named runtimes. Cleared means empty.`;
+  + `A delta section replaces its section. Under "${CHANGED_ROWS}", a row replaces the row with its id or is added at the end,\n`
+  + `and "${REMOVED_ROW} <id>" drops one; a task's, job's or delegate's id is its first word, any other row's its whole text.\n`
+  + `"${APPENDED}" adds lines to its section's end. Execution deltas update named runtimes. Cleared means empty.`;
 
 const DYNAMIC_DELTA_HEADER = 'Kinu runtime state update, not conversation or user text.';
 
@@ -365,11 +366,9 @@ function clip(text: string, max = ENTRY_CHARS): string {
   return oneLine.length > max ? `${oneLine.slice(0, max - 1).trimEnd()}…` : oneLine;
 }
 
-/** `id` names a row in a delta's removal; `delta`: the row as a delta prints it. */
 interface SectionRow {
   readonly id: string;
   readonly line: string;
-  readonly delta?: string;
 }
 
 interface RenderedSection {
@@ -378,28 +377,31 @@ interface RenderedSection {
   readonly log?: string;
 }
 
-const ELIDED_ROW = '\u0000more';
+/** A row's id as the header states it: in a `keyed` list the first word, else the whole row. */
+function rowOf(line: string, keyed: boolean): SectionRow {
+  const text = line.replace(/^\s*- /u, '');
+
+  return { id: keyed ? text.split(' ', 1)[0] ?? text : text, line };
+}
 
 /** Elision is counted from the roster's true total, never the returned page. Null when empty. */
 function rosterSection<T>(
   title: string,
   roster: ActiveRoster<T>,
-  cap: number,
-  row: (item: T) => SectionRow,
+  listing: { readonly cap: number; readonly keyed: boolean },
+  line: (item: T) => string,
 ): RenderedSection | null {
   if (roster.total === 0) return null;
-  const rows = roster.items.slice(0, cap).map(row);
-  const elided = roster.total - rows.length;
+  const lines = roster.items.slice(0, listing.cap).map(line);
+  const elided = roster.total - lines.length;
 
-  if (elided > 0) rows.push({ id: ELIDED_ROW, line: `- …and ${elided} more, not shown` });
+  if (elided > 0) lines.push(`- …and ${elided} more, not shown`);
 
-  return { text: [title, ...rows.map((r) => r.line)].join('\n'), rows };
+  return { text: [title, ...lines].join('\n'), rows: lines.map((row) => rowOf(row, listing.keyed)) };
 }
 
 function textSection(title: string, body: string): RenderedSection {
-  const rows = body.split('\n').map((line) => ({ id: line, line }));
-
-  return { text: `${title}\n${body}`, rows };
+  return { text: `${title}\n${body}`, rows: body.split('\n').map((line) => rowOf(line, false)) };
 }
 
 /** An absent plane renders nothing, never "(none)". */
@@ -449,12 +451,8 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
 
   add('recoveries', rosterSection(
     DYNAMIC_SECTION_TITLES.recoveries,
-    { items: ctx.recoveries ?? [], total: (ctx.recoveries ?? []).length }, MAX_RECOVERIES,
-    (finding) => {
-      const id = clip(finding, RECOVERY_ENTRY_CHARS);
-
-      return { id, line: `- ${id}` };
-    },
+    { items: ctx.recoveries ?? [], total: (ctx.recoveries ?? []).length }, { cap: MAX_RECOVERIES, keyed: false },
+    (finding) => `- ${clip(finding, RECOVERY_ENTRY_CHARS)}`,
   ));
 
   const executors = (ctx.executors ?? []).filter(executorIsSelectable);
@@ -487,43 +485,32 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
 
   add('tasks', rosterSection(
     DYNAMIC_SECTION_TITLES.tasks,
-    ctx.tasks ?? EMPTY_ROSTER, MAX_TASK_ROWS,
-    (task) => {
-      const row = `${task.id} [${task.status}] ${clip(task.title)}`;
-
-      // Out of the list, a subtask names its task.
-      return task.parentId
-        ? { id: task.id, line: `  - ${row}`, delta: `- ${row} (subtask of ${task.parentId})` }
-        : { id: task.id, line: `- ${row}` };
-    },
+    ctx.tasks ?? EMPTY_ROSTER, { cap: MAX_TASK_ROWS, keyed: true },
+    (task) => `${task.parentId ? '  ' : ''}- ${task.id} [${task.status}] ${clip(task.title)}`,
   ));
 
   add('jobs', rosterSection(
     DYNAMIC_SECTION_TITLES.jobs,
-    ctx.jobs ?? EMPTY_ROSTER, MAX_JOBS,
-    (job) => ({ id: job.id, line: `- ${job.id} (${job.kind})${job.label ? `: ${clip(job.label)}` : ''}` }),
+    ctx.jobs ?? EMPTY_ROSTER, { cap: MAX_JOBS, keyed: true },
+    (job) => `- ${job.id} (${job.kind})${job.label ? `: ${clip(job.label)}` : ''}`,
   ));
 
   add('delegates', rosterSection(
     DYNAMIC_SECTION_TITLES.delegates,
-    ctx.delegates ?? EMPTY_ROSTER, MAX_DELEGATES,
-    (d) => ({ id: d.name, line: `- ${d.name} (${d.kind}), ${clip(d.phase, 40)}${d.task ? `: ${clip(d.task)}` : ''}` }),
+    ctx.delegates ?? EMPTY_ROSTER, { cap: MAX_DELEGATES, keyed: true },
+    (d) => `- ${d.name} (${d.kind}), ${clip(d.phase, 40)}${d.task ? `: ${clip(d.task)}` : ''}`,
   ));
 
   add('approvals', rosterSection(
     DYNAMIC_SECTION_TITLES.approvals,
-    ctx.approvals ?? EMPTY_ROSTER, MAX_APPROVALS,
-    (a) => {
-      const id = `${clip(a.kind, 40)}: ${clip(a.detail)}`;
-
-      return { id, line: `- ${id}` };
-    },
+    ctx.approvals ?? EMPTY_ROSTER, { cap: MAX_APPROVALS, keyed: false },
+    (a) => `- ${clip(a.kind, 40)}: ${clip(a.detail)}`,
   ));
 
   add('missingCapabilities', rosterSection(
     DYNAMIC_SECTION_TITLES.missingCapabilities,
-    { items: ctx.missingCapabilities ?? [], total: (ctx.missingCapabilities ?? []).length }, MAX_MISSING_CAPABILITIES,
-    (m) => ({ id: clip(m.source, 60), line: `- ${clip(m.source, 60)}: ${clip(m.reason)}` }),
+    { items: ctx.missingCapabilities ?? [], total: (ctx.missingCapabilities ?? []).length }, { cap: MAX_MISSING_CAPABILITIES, keyed: false },
+    (m) => `- ${clip(m.source, 60)}: ${clip(m.reason)}`,
   ));
 
   return sections;
@@ -590,31 +577,27 @@ interface ToldSections {
   readonly executors: readonly PromptExecutorInfo[];
 }
 
-/** Null when an id repeats. */
+/** Null unless a reader folds it back to `after`: ids unique, kept rows first in their old order. */
 function rowDelta(title: string, before: readonly SectionRow[], after: readonly SectionRow[]): string | null {
-  const previous = new Map(before.map((row) => [row.id, row.delta ?? row.line]));
+  const previous = new Map(before.map((row) => [row.id, row.line]));
   const current = new Set(after.map((row) => row.id));
 
   if (previous.size !== before.length || current.size !== after.length) return null;
+  const kept = before.filter((row) => current.has(row.id));
 
-  const lines = after.filter((row) => previous.get(row.id) !== (row.delta ?? row.line)).map((row) => row.delta ?? row.line);
+  if (kept.some((row, index) => after[index]?.id !== row.id)) return null;
+  const lines = after.filter((row) => previous.get(row.id) !== row.line).map((row) => row.line);
 
   for (const id of previous.keys()) {
-    if (!current.has(id)) lines.push(id === ELIDED_ROW ? '- …every row is shown now' : `- ${REMOVED_ROW} ${id}`);
+    if (!current.has(id)) lines.push(`- ${REMOVED_ROW} ${id}`);
   }
 
   return [`${title} ${CHANGED_ROWS}`, ...lines].join('\n');
 }
 
-/** What `after` appends to `before`, if it keeps at least half of it: a window over an append-only file. */
+/** The lines `after` adds past `before`; null otherwise, as when a window slides. */
 function appendedText(before: string, after: string): string | null {
-  for (let cut = 0; cut <= before.length / 2; cut++) {
-    const kept = before.slice(cut);
-
-    if (after.startsWith(kept)) return after.length > kept.length ? after.slice(kept.length).trim() || null : null;
-  }
-
-  return null;
+  return after.startsWith(`${before}\n`) ? after.slice(before.length + 1) : null;
 }
 
 function sectionDelta(key: keyof DynamicContext, before: RenderedSection, after: RenderedSection): string {
@@ -739,8 +722,8 @@ export interface DynamicBlockBirth {
   readonly replaces: boolean;
 }
 
-/** Deltas since the newest full block, in full blocks' chars, past which the next change is stated whole. The
- *  longest chain measured: 20 row deltas, 6.2 full blocks' worth, read back right 10/10 on glm-5.3. */
+/** Deltas since the newest full block, in its chars, past which a change is stated whole: the longest chain
+ *  measured, as glm-5.3 read the task list back 10/10 at every share up to 20 row deltas (6.5 full blocks). */
 const KEYFRAME_SHARE = 6;
 
 const BLOCK_TAG = new RegExp(`^${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="([^"]*)" kind="(full|delta)"(?: state="([^"]*)")?>`, 'u');

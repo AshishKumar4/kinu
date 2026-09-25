@@ -23,11 +23,12 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - **The agent's live state changes by row.** A change to one task, job, delegate, approval, fact or recovery
   re-sent that whole list in the step's state update, so on a 40-step turn with task churn each update (901 bytes)
   outweighed the full state it changed (729). An update now names only the rows that changed (`- t12 [active] …`,
-  `- removed: t12`), and the memory tail only what was appended; a change no smaller than the full state is stated
-  whole. Once the updates since the last full statement outweigh six of them (the longest chain measured: 20
-  updates, which glm-5.3 read back right 10 times in 10), the next change restates the whole state after them;
-  nothing before it is rewritten, so the prompt cache keeps it. On that turn the final request carries 14.0 KB of
-  state instead of 35.9 KB, and the turn re-sends 308 KB of it instead of 834 KB.
+  `- removed: t12`, a new row at the end), and the memory tail only the lines appended; a list whose rows moved or
+  gained one before its end, a memory window that slid, and any change no smaller than the full state are stated
+  whole, so the updates always add up to the state. Once the updates since the last full statement outweigh six of
+  them (the longest chain measured: 20 updates, which glm-5.3 read back right 10 times in 10), the next change
+  restates the whole state after them; nothing before it is rewritten, so the prompt cache keeps it. On that turn
+  the final request carries 14.1 KB of state instead of 35.9 KB, and the turn re-sends 311 KB of it instead of 834 KB.
 - The Worker's `/api` routes are served by one Hono app whose route order is the old dispatch order, gate for gate. An error no route catches is now answered as JSON with its class's status and a message naming only that class (the cause goes to the log), never cached, instead of the platform's error page; the run-event routes read the workspace whose ownership was just proven, even when the request spells its name with escapes.
 - **The Diffs tab is now Changes.** It lists the changed files as a tree with their counts; a file opens to a diff
   that keeps three lines around each change, folds the rest, marks the changed words and keeps the code's colours.

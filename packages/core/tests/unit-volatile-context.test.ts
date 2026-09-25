@@ -943,41 +943,160 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
       return messageText(present(ledger.weave(history, after).at(-1), 'the newest block'));
     };
 
-    test('a task list states only the rows that changed: added, changed and removed', () => {
-      const delta = deltaAfter(
-        { tasks: roster([task(1), task(2), task(3), task(4), task(5)]) },
-        { tasks: roster([task(1), task(2, 'active'), task(3), task(5), task(6), task(7, 'open', 't6')]) },
-      );
+    const idOf = (title: string, line: string) => {
+      const row = line.replace(/^\s*- /u, '');
 
-      expect(blockKind(delta)).toBe('delta');
-      expect(delta).toContain('(you keep this with the `tasks` tool) (changed rows)');
-      expect(delta).toContain('- t2 [active] step 2');
-      expect(delta).toContain('- removed: t4');
-      expect(delta).toContain('- t6 [open] step 6');
-      // Out of the list's context, a new subtask names the task it sits under.
-      expect(delta).toContain('- t7 [open] step 7 (subtask of t6)');
+      return /^## (Your task list|Background work|Delegates)/u.test(title) ? row.split(' ')[0] : row;
+    };
 
-      for (const unchanged of ['t1', 't3', 't5']) expect(delta).not.toContain(`- ${unchanged} [`);
+    /** A "(changed rows)" section's lines applied to its section's rows. */
+    const applyRows = (title: string, rows: readonly string[], lines: readonly string[]): string[] => {
+      const next = [...rows];
+
+      for (const line of lines) {
+        const removed = /^- removed: (.*)$/u.exec(line)?.[1];
+        const at = next.findIndex((row) => idOf(title, row) === (removed ?? idOf(title, line)));
+
+        if (removed !== undefined && at < 0) throw new Error(`a delta removes a row the state lacks: ${line}`);
+
+        if (removed !== undefined) next.splice(at, 1);
+        else if (at < 0) next.push(line);
+        else next[at] = line;
+      }
+
+      return next;
+    };
+
+    /** A reader of the grammar the header states: each section's rows as the blocks, in order, leave them. */
+    const fold = (blocks: readonly string[]): Record<string, string[]> => {
+      const sections = new Map<string, string[]>();
+
+      for (const block of blocks) {
+        if (block.includes('kind="full"')) sections.clear();
+        const body = block.slice(block.indexOf('>\n') + 2, block.lastIndexOf('\n</dynamic_context>'));
+
+        for (const section of body.split('\n\n').slice(1)) {
+          const [heading = '', ...lines] = section.split('\n');
+          const [, title = heading, mode] = /^(.*) \((changed rows|appended)\)$/u.exec(heading) ?? [];
+          const rows = sections.get(title) ?? [];
+
+          if (lines[0] === 'Cleared: no current entries.') sections.delete(title);
+          else if (mode === 'appended') sections.set(title, [...rows, ...lines]);
+          else sections.set(title, mode === undefined ? lines : applyRows(title, rows, lines));
+        }
+      }
+
+      return Object.fromEntries([...sections].sort(([a], [b]) => a.localeCompare(b)));
+    };
+
+    const tasks = (...rows: ReturnType<typeof task>[]): DynamicContext => ({ tasks: roster(rows) });
+    const blocksOf = (request: readonly ModelMessage[]) => request.map(messageText).filter(isDynamicBlock);
+    const foldedFull = (context: DynamicContext) => fold([renderDynamicContextBlock(context) ?? '']);
+
+    /** Every state in turn, a step each, deltas among the blocks: the last request's blocks fold to the last state. */
+    const expectFolded = (states: readonly DynamicContext[]) => {
+      const ledger = new DynamicContextLedger();
+      const history: ModelMessage[] = [{ role: 'user', content: 'plan the work' }];
+      let request: ModelMessage[] = [];
+
+      for (const step of states) {
+        request = ledger.weave(history, step);
+        history.push({ role: 'assistant', content: `step ${String(history.length)}` });
+      }
+
+      expect(blocksOf(request).some((block) => blockKind(block) === 'delta')).toBe(true);
+      expect(fold(blocksOf(request))).toEqual(foldedFull(present(states.at(-1), 'the last state')));
+    };
+
+    test('a reorder folds to the new order', () => {
+      expectFolded([tasks(task(1), task(2), task(3)), tasks(task(3), task(1), task(2))]);
     });
 
-    test('a row the cap hid comes back as added, and the elision line says every row is shown', () => {
-      const sixteen = Array.from({ length: 16 }, (_, i) => task(i + 1));
-      const delta = deltaAfter({ tasks: roster(sixteen) }, { tasks: roster(sixteen.slice(1)) });
-
-      expect(delta).toContain('- removed: t1');
-      expect(delta).toContain('- t16 [open] step 16');
-      expect(delta).toContain('- …every row is shown now');
-      expect(delta).not.toContain('- t2 [');
+    test('a row added between kept rows, a subtask under its task included, folds into its place', () => {
+      expectFolded([
+        tasks(task(1), task(3)),
+        tasks(task(1), task(2), task(3)),
+        tasks(task(1), task(4, 'open', 't1'), task(2), task(3)),
+      ]);
     });
 
-    test('a memory tail that grew is continued, even as its window slides past the oldest notes', () => {
-      const notes = Array.from({ length: 8 }, (_, i) => `### Note ${String(i)}\nLesson ${String(i)}: keep the build green.`);
-      const before = notes.join('\n');
-      const after = `${notes.slice(2).join('\n')}\n### Note 8\nLesson 8: retry the upload once.`;
-      const delta = deltaAfter({ memoryTail: before }, { memoryTail: after });
+    test('a removed row, a changed one and rows added at the end fold in place', () => {
+      expectFolded([
+        tasks(task(1), task(2), task(3)),
+        tasks(task(1, 'active'), task(3)),
+        tasks(task(1, 'active'), task(3), task(5), task(6, 'open', 't5')),
+      ]);
+    });
 
-      expect(delta).toContain('## Memory (newest MEMORY.md lessons and reflections) (appended)\n### Note 8\nLesson 8: retry the upload once.');
-      expect(delta).not.toContain('Lesson 7');
+    test('an elided list folds as rows come into view and its count changes and goes', () => {
+      const all = Array.from({ length: 17 }, (_, i) => task(i + 1));
+
+      expectFolded([tasks(...all.slice(0, 16)), tasks(...all), tasks(...all.slice(1)), tasks(...all.slice(1, 15))]);
+    });
+
+    test('a memory tail folds through an append and through its window sliding off the oldest notes', () => {
+      const notes = Array.from({ length: 10 }, (_, i) => `### Note ${String(i)}\nLesson ${String(i)}: keep the build green.`);
+
+      expectFolded([
+        { memoryTail: notes.slice(0, 7).join('\n') },
+        { memoryTail: notes.slice(0, 8).join('\n') },
+        { memoryTail: notes.slice(2, 9).join('\n') },
+      ]);
+    });
+
+    test('facts, approvals, recoveries and missing capabilities fold by their whole rows; jobs and delegates by their first word', () => {
+      const consent = { id: 'c-1', kind: 'device consent', detail: 'git push' };
+
+      expectFolded([
+        {
+          factsBlock: '- a = 1\n- b = 2\n- c = 3', approvals: roster([consent]), recoveries: ['`uv pip install` ran clean'],
+          missingCapabilities: [{ source: 'mcp: github', reason: 'not connected' }],
+          jobs: roster([{ id: 'job-1', kind: 'shell', label: 'build' }]),
+          delegates: roster([{ kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey' }]),
+        },
+        {
+          factsBlock: '- a = 1\n- b = 9\n- c = 3', approvals: roster([consent, { id: 'c-2', kind: 'shell', detail: 'rm -rf build' }]),
+          missingCapabilities: [{ source: 'mcp: github', reason: 'token expired' }],
+          jobs: roster([{ id: 'job-1', kind: 'shell', label: 'build and test' }, { id: 'job-2', kind: 'think_heads', label: null }]),
+          delegates: roster([{ kind: 'subordinate', name: 'ana', phase: 'done', task: 'survey' }]),
+        },
+      ]);
+    });
+
+    test('the first delta after a keyframe folds from the keyframe', () => {
+      const ledger = new DynamicContextLedger();
+      const history: ModelMessage[] = [{ role: 'user', content: 'work through the list' }];
+      const window = (step: number) => tasks(...Array.from({ length: 10 }, (_, i) => task(step + i)));
+      let blocks: string[] = [];
+      let step = 0;
+
+      const next = () => {
+        blocks = blocksOf(ledger.weave(history, window(step)));
+        history.push({ role: 'assistant', content: `finished step ${String(step)}` });
+        step += 1;
+      };
+
+      while (step < 200 && blocks.filter((block) => blockKind(block) === 'full').length < 2) next();
+      next();
+
+      expect(blocks.map(blockKind).slice(-2)).toEqual(['full', 'delta']);
+      expect(fold(blocks)).toEqual(foldedFull(window(step - 1)));
+    });
+
+    test('the first change after a restart folds from the blocks the store kept', () => {
+      const first = new DynamicContextLedger(true);
+      const history: ModelMessage[] = [{ role: 'user', content: 'plan the work' }];
+      first.adopt([]);
+      first.weave(history, tasks(task(1), task(2)));
+      history.push({ role: 'assistant', content: 'working' });
+      first.weave(history, tasks(task(1, 'active'), task(2)));
+
+      const restarted = new DynamicContextLedger(true);
+      restarted.adopt(first.takeBirths().map((birth) => ({ text: birth.text, before: birth.before, after: null })));
+      history.push({ role: 'assistant', content: 'still working' });
+      const last = tasks(task(1, 'done'), task(3));
+
+      expect(fold(blocksOf(restarted.weave(history, last)))).toEqual(foldedFull(last));
     });
 
     test('state that shrank below its delta is restated as one full block', () => {

@@ -92,10 +92,10 @@ export const LOCKED_BASELINE: Baseline = {
   'volatile-context/frozen-blocks-hold-their-position': '6d1bd321d278900d',
   'volatile-context/ledger-appends-once-per-change': '1a8be5669810ecb8',
   'volatile-context/ledger-resets-on-history-rewrite': '517967a1c92a2374',
-  'volatile-context/list-changes-by-row': '081b84254d00821a',
-  'volatile-context/live-rosters-are-bounded': '793261b513c0f1a6',
+  'volatile-context/list-changes-by-row': '04a4948cfc7e12ae',
+  'volatile-context/live-rosters-are-bounded': '76e4a2e6e3c04b18',
   'volatile-context/request-ends-the-turn': '7690ba63669d5adf',
-  'volatile-context/system-state-block': 'edbbca9b3c8cf8af',
+  'volatile-context/system-state-block': '51cce99983742140',
   'volatile-context/turn-local-empty-is-null': '5b9bc4ba528108e4',
   'volatile-context/turn-local-tail': '418c87882c7f75e2',
 };

@@ -491,14 +491,19 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'volatile-context/list-changes-by-row',
-        asserts: 'a changed task list rides a delta that names only its added, changed and removed rows',
+        asserts: 'a changed task list rides a delta that names only its changed, removed and end-added rows',
         observe: (s) => {
           const ledger = new s.DynamicContextLedger();
-          const task = (id: string, status: string) => ({ id, title: `step ${id}`, status, parentId: null });
-          ledger.weave(shortHistory(), { tasks: { items: [task('t1', 'open'), task('t2', 'open'), task('t3', 'open')], total: 3 } });
+
+          const tasks = (ids: readonly string[], active: string) => ({
+            items: ids.map((id) => ({ id, title: `step ${id}`, status: id === active ? 'active' : 'open', parentId: null })),
+            total: ids.length,
+          });
+
+          ledger.weave(shortHistory(), { tasks: tasks(['t1', 't2', 't3', 't4', 't5', 't6'], '') });
 
           const later = ledger.weave([...shortHistory(), { role: 'assistant', content: 'ok' }], {
-            tasks: { items: [task('t1', 'active'), task('t3', 'open'), task('t4', 'open')], total: 3 },
+            tasks: tasks(['t1', 't3', 't4', 't5', 't6', 't7'], 't1'),
           });
 
           return v.parse(v.string(), later.at(-1)?.content);
