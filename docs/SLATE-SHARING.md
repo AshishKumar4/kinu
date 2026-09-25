@@ -137,7 +137,7 @@ gatekeeper.
 binding resolves as the owner's workspace root.
 
 **Viewer**: whoever sends a request to a live share. Anonymous on a public
-share; a signed-in Kinu user on a users share.
+share; on a users share, a signed-in Kinu user it names, or its owner.
 
 **Live share**: the owner's slate, running in the owner's workspace, reachable
 by viewers under the owner's bindings and only the members the owner granted.
@@ -265,17 +265,18 @@ approved in the share dialog; an approval naming anything else is refused.
 
 **The host, viewer versus owner.** `SlateHost.routeShare` admits through
 `admitViewerRequest`: it re-reads the share row (S6, fail closed), checks the
-viewer against visibility (a named user by `userId`, a public viewer by source
-hash), spends the per-viewer request bound on the ingress counter
-(`packages/core/src/http/ingress-budget.ts`), shows the consent page if needed,
-and opens the audit row. The share runs in its own private process under
-`shareCaller(share.id)`: the owner's root with the share id attached, so it
-never shares the owner's preview process. The forwarded request carries
+viewer against visibility (on a users share its owner or a named user, by
+`userId`, the rule the fork route uses too; a public viewer by source hash),
+spends the per-viewer request bound on the ingress counter
+(`packages/core/src/http/ingress-budget.ts`), shows the consent page if
+needed, and opens the audit row. The share runs in its own private process
+under `shareCaller(share.id)`: the owner's root with the share id attached, so
+it never shares the owner's preview process. The forwarded request carries
 `x-slate-call` for the audit row (S7). On each binding call, `bindingCall`
 re-reads the row, refuses as `budget` once the share's daily spend label
-(`shareSpendLabel`) is exhausted, checks the grant (`grantAdmits`), records the
-call on the audit row, and debits the label. A blueprint or fork runs in the
-forker's workspace as its own root (S8).
+(`shareSpendLabel`) is exhausted, checks the grant (`grantAdmits`), records
+the call on the audit row, and debits the label. A blueprint or fork runs in
+the forker's workspace as its own root (S8).
 
 **Consent.** A share whose slate declares any credentialed binding (the set
 `credentialedBindings(project)` computes in `packages/core/src/slates/project.ts`,

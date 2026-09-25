@@ -726,6 +726,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   the reason until it is dismissed. A folder with an upload in flight no longer says it is empty.
 - **A sheet's tile shows its cells, and code its line numbers.** In the Drive, a CSV or TSV file's tile draws its
   first rows as a small sheet with a header, and a code file's tile its first lines numbered, as the design has them.
+- **You can open your own people-only share.** Open on a live share you gave to named people answered "Not
+  found", because the share let in only the people it names. It now lets in its owner too, as forking it
+  already did; nobody else gets in.
 - **Hired agents make slates.** Slates lived in the main agent's home, so an agent you hired could not create one
   ("can't promote to /home/main/slates/widgets (EACCES)"). They now live at `/slates`, the workspace's own
   directory. Every chat in the workspace makes, edits, previews and removes slates there as the main chat does, and
