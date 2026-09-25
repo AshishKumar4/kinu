@@ -2,7 +2,7 @@ import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { fakeMossaic, git, gitEnv, initRepo, scratchDir } from '@kinu.run/test-utils';
-import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createWorkspace } from '../src/workspace-birth';
@@ -21,6 +21,7 @@ import { createTestRuntime } from './helpers';
 import { commandResult, type CommandResult } from '../src/execution/exec-result';
 import { agentCred, provisionAgentHome, subordinateAgentName } from '../src/vfs/agent-home';
 import { withMountTable } from '../src/vfs/mounts';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { sharedDriveMount } from '../src/vfs/shared-drive';
 
@@ -287,6 +288,28 @@ describe('workspace diff lifecycle', () => {
     expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual([
       `added ${home}/draft.md`, 'added /slates/board/index.html', 'added notes.md',
     ]);
+  });
+
+  test('a symbolic link is never followed: not into hidden files, a hire\'s home or back into its own folder', async () => {
+    const { rt, workspace } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    const identity = { uid: 2001, gid: 2001 };
+    const home = provisionAgentHome((await workspace.privileged()).root, subordinateAgentName('builder'), identity);
+    const session = await workspace.session();
+    const builder = session.vfs.as(agentCred(identity));
+    const user = session.vfs.as(CRED_SESSION_USER);
+    await resetWorkspaceBaseline(rt);
+
+    await rt.storage.vfs.mkdir('.config', { recursive: true });
+    await rt.storage.vfs.writeFile('.config/secret.txt', 'TOKEN=1\n');
+    builder.mkdir(`${home}/node_modules/pkg`, { recursive: true });
+    builder.writeFile(`${home}/node_modules/pkg/index.js`, 'installed\n');
+    user.symlink(`${WORKSPACE_ROOT}/.config`, `${WORKSPACE_ROOT}/cfg`);
+    user.symlink(`${home}/node_modules`, `${WORKSPACE_ROOT}/deps`);
+    user.symlink(WORKSPACE_ROOT, `${WORKSPACE_ROOT}/loop`);
+    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+
+    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['added notes.md']);
   });
 
   test('hidden files a baseline recorded before they were left out are not listed as removed', async () => {

@@ -4,7 +4,7 @@
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { RawSqlExec, VFS, VfsEntryStat } from '../types/primitives';
+import type { RawSqlExec, VFS, VfsEntryStat, VfsLinkStat } from '../types/primitives';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { diffLines, fileDiff, parseGitDiff, type FileDiff, type FileStatus, type Omitted } from '../vfs/diff';
 import { nanoid } from '../utils/nanoid';
@@ -126,7 +126,7 @@ async function walkWorkspaceFiles(
       if (UNREVIEWED_PATHS.has(full) || (routed.mountOf?.(full) ?? null) !== null) continue;
       const st = await statOf(rt, full);
 
-      if (st === undefined || st === null) continue;
+      if (st === undefined || st === null || ('isSymlink' in st && st.isSymlink)) continue;
 
       if (st.isDir) {
         children.push(full);
@@ -156,10 +156,15 @@ async function namesIn(rt: WorkspaceBaselineRuntime, dir: string, listed: boolea
   }
 }
 
-/** Null when the entry is gone since its directory was listed. */
-async function statOf(rt: WorkspaceBaselineRuntime, path: string): Promise<VfsEntryStat | null | undefined> {
+/**
+ * The entry itself, a symbolic link not followed: a link's target is files seen twice, or hidden ones, or its own
+ * folder again. Null when the entry is gone since its directory was listed.
+ */
+async function statOf(rt: WorkspaceBaselineRuntime, path: string): Promise<VfsLinkStat | VfsEntryStat | null | undefined> {
+  const { vfs } = rt.storage;
+
   try {
-    return await tolerateAsync(() => rt.storage.vfs.stat(path), 'eacces');
+    return await tolerateAsync(() => (vfs.lstat === undefined ? vfs.stat(path) : vfs.lstat(path)), 'eacces');
   } catch (error) {
     throw new Error(`Workspace snapshot could not stat ${JSON.stringify(path)}`, { cause: error });
   }

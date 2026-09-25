@@ -714,7 +714,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   file a hired agent wrote in its own home never appeared. It now lists every agent's home (`/home/*`) and the
   slates, and nothing else: `/usr`, `/tmp`, mounted drives (`/pc`, `/shared`, `/sandbox`, `/context`) and the
   platform's own state stay out. So do hidden files and folders, any name starting with `.` (`.env`, `.bashrc`,
-  `.config/`, `.git/`), and installed dependencies (`node_modules`, `venv`, `__pycache__`).
+  `.config/`, `.git/`), and installed dependencies (`node_modules`, `venv`, `__pycache__`). A symbolic link is
+  not followed: its target's files are listed where they live, or not at all.
 
 - **Long conversations no longer slow down turn by turn.** Each turn re-read the conversation's whole membership
   list several times, so a turn's database reads grew with the conversation (14,432 rows at 300 turns). A turn now

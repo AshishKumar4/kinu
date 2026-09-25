@@ -37,6 +37,10 @@ export interface VfsEntryStat {
   revision?: VfsRevision;
 }
 
+export interface VfsLinkStat extends VfsEntryStat {
+  readonly isSymlink: boolean;
+}
+
 /** Relative paths resolve at the workspace root, the same directory the workspace shell starts in. */
 export interface VFS {
   /** Native compare-and-write. When undefined, callers must not emulate it with read/compare/write. */
@@ -51,6 +55,8 @@ export interface VFS {
   writeFile(path: string, data: string | Uint8Array): Promise<void>;
   readdir(path: string): Promise<string[]>;
   stat(path: string): Promise<VfsEntryStat | null>;
+  /** The entry itself, a symbolic link not followed; absent on a plane that cannot tell a link from its target. */
+  lstat?(path: string): Promise<VfsLinkStat | null>;
   unlink(path: string): Promise<void>;
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
   exists(path: string): Promise<boolean>;

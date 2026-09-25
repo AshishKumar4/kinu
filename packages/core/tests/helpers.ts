@@ -107,6 +107,7 @@ function afterSeed(vfs: WorkspaceVFS, seed: () => Promise<void>): VFS & Pick<Vfs
     writeFile: chain((p: string, d: string | Uint8Array) => vfs.writeFile(p, d)),
     readdir: chain((p: string) => vfs.readdir(p)),
     stat: chain((p: string) => vfs.stat(p)),
+    lstat: chain((p: string) => vfs.lstat(p)),
     unlink: chain((p: string) => vfs.unlink(p)),
     mkdir: chain((p: string, o?: { recursive?: boolean }) => vfs.mkdir(p, o)),
     exists: chain((p: string) => vfs.exists(p)),
