@@ -512,6 +512,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [listingPending, setListingPending] = useState(false);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
+  const [listedAt, setListedAt] = useState(listing.resource);
   const [query, setQuery] = useState("");
   const nextTransfer = useRef(0);
 
@@ -712,13 +713,15 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     );
   };
 
-  // Kept until listed, so the Files never blink.
-  const listed = new Set(contents.files.map((entry) => entry.name));
-  const shown = transfers.filter((row) => row.status === "landed" && row.folder === path && listed.has(row.name));
+  // Landed: leaves with the next listing.
+  const published = listing.resource.status === "loading" ? listedAt : listing.resource;
 
-  if (shown.length > 0) setTransfers((rows) => rows.filter((row) => !shown.includes(row)));
+  if (published !== listedAt) {
+    setListedAt(published);
+    setTransfers((rows) => rows.some((row) => row.status === "landed") ? rows.filter((row) => row.status !== "landed") : rows);
+  }
 
-  const uploads = transfers.filter((row) => row.folder === path && !shown.includes(row));
+  const uploads = transfers.filter((row) => row.folder === path);
 
   const uploadTile = (row: Transfer): ReactNode => (
     <Tile key={`upload:${String(row.id)}`} title={row.name} icon={fileIcon(row.name)} picture={<TransferPicture status={row.status} />}

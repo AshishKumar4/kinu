@@ -723,7 +723,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   empty folder in the Drive shows a folder, not the Drive's own icon.
 - **An upload is a tile in its folder.** A file on its way into the Drive shows as a tile among the folder's files,
   with its size and a moving bar, and Cancel upload in its menu stops it; one the Drive refuses stays as a tile with
-  the reason until it is dismissed. A folder with an upload in flight no longer says it is empty.
+  the reason until it is dismissed. Each tile leaves when its own upload lands, a folder or a .zip too. A folder
+  with an upload in flight no longer says it is empty.
 - **A sheet's tile shows its cells, and code its line numbers.** In the Drive, a CSV or TSV file's tile draws its
   first rows as a small sheet with a header, and a code file's tile its first lines numbered, as the design has them.
 - **You can open your own people-only share.** Open on a live share you gave to named people answered "Not
