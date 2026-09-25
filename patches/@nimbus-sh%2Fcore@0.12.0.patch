@@ -19,7 +19,7 @@ index ab583395295c780d5b86dfba29fca3fb4593f322..0d71413ba779217bb1a7828374b4dc24
                  fileEntries.push({
                      name: arg,
 diff --git a/dist/vfs/sqlite-vfs.js b/dist/vfs/sqlite-vfs.js
-index 363e3db45eb7fad69b4b24b53a016aecac84b80f..62b0822591dc73d19062422d6fcff217a4eff4fd 100644
+index 363e3db45eb7fad69b4b24b53a016aecac84b80f..4c9a3a9145025a0a1e406d634ff9921f0538a7da 100644
 --- a/dist/vfs/sqlite-vfs.js
 +++ b/dist/vfs/sqlite-vfs.js
 @@ -1416,6 +1416,21 @@ export class SqliteVFS {
@@ -91,7 +91,71 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..62b0822591dc73d19062422d6fcff217
          if (options?.recursive) {
              const parts = normalized.split('/').filter(Boolean);
              let current = '';
-@@ -1781,7 +1816,8 @@ export class SqliteVFS {
+@@ -1695,14 +1730,28 @@ export class SqliteVFS {
+             this._mkdirSingle(normalized, options?.mode, cred);
+         }
+     }
++    /**
++     * Kinu patch, Nimbus ask N23: a setgid directory is shared. An entry made in it takes the
++     * directory's group, the group gets the owner's bits, and a directory made in it is shared too.
++     */
++    sharedEntry(parentPath, kind, mode, gid, parentOf = (path) => this.inodes.get(path)) {
++        const parent = parentOf(parentPath);
++        if (parent === undefined || !isSharedDirectory(parent))
++            return { mode, gid };
++        const sharedGid = parent.gid ?? gid;
++        if (kind === 'symlink')
++            return { mode, gid: sharedGid };
++        const shared = (mode & ~0o070) | ((mode & 0o700) >> 3);
++        return { mode: kind === 'directory' ? shared | 0o2000 : shared, gid: sharedGid };
++    }
+     _mkdirSingle(path, requestedMode, cred) {
+         const pp = this.parentPath(path);
+         const now = this.now();
+-        const mode = (requestedMode ?? 0o777) & ~cred.umask & 0o7777;
++        const { mode, gid } = this.sharedEntry(pp, 'directory', (requestedMode ?? 0o777) & ~cred.umask & 0o7777, cred.gid);
+         let ino = 0;
+         this.transactionSync(() => {
+             ino = this.inodes.get(path)?.ino ?? this.nextIno();
+-            this.sql.exec("INSERT OR REPLACE INTO inodes (path, parent_path, kind, size, atime, mtime, mode, uid, gid, chunk_count, content_id, ino) VALUES (?, ?, 1, 0, ?, ?, ?, ?, ?, 0, NULL, ?)", path, pp, now, now, mode, cred.uid, cred.gid, ino);
++            this.sql.exec("INSERT OR REPLACE INTO inodes (path, parent_path, kind, size, atime, mtime, mode, uid, gid, chunk_count, content_id, ino) VALUES (?, ?, 1, 0, ?, ?, ?, ?, ?, 0, NULL, ?)", path, pp, now, now, mode, cred.uid, gid, ino);
+         });
+         const inode = {
+             path,
+@@ -1714,7 +1763,7 @@ export class SqliteVFS {
+             mtime: now,
+             mode,
+             uid: cred.uid,
+-            gid: cred.gid,
++            gid,
+             chunkCount: 0,
+             contentId: null,
+             ino,
+@@ -1755,6 +1804,9 @@ export class SqliteVFS {
+         // POSIX: rewriting an existing file never changes its mode; the mode
+         // is chosen only at creation (open(2) O_CREAT).
+         const prior = this.inodes.get(effectivePath);
++        const created = prior?.kind === 'file'
++            ? { mode: prior.mode, gid: prior.gid }
++            : this.sharedEntry(pp, 'file', (options?.mode ?? 0o666) & ~cred.umask & 0o7777, cred.gid);
+         const inode = {
+             path: effectivePath,
+             parentPath: pp,
+@@ -1763,11 +1815,9 @@ export class SqliteVFS {
+             size: data.length,
+             atime: now,
+             mtime: now,
+-            mode: prior?.kind === 'file'
+-                ? prior.mode
+-                : (options?.mode ?? 0o666) & ~cred.umask & 0o7777,
++            mode: created.mode,
+             uid: prior?.uid ?? cred.uid,
+-            gid: prior?.gid ?? cred.gid,
++            gid: created.gid,
+             chunkCount,
+         };
+         try {
+@@ -1781,7 +1831,8 @@ export class SqliteVFS {
      }
      symlink(target, path, cred) {
          this.assertMutationsAllowed([path]);
@@ -101,7 +165,7 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..62b0822591dc73d19062422d6fcff217
          const prior = this.checkAccess(normalized, 0, cred, { followLeaf: false, allowMissingLeaf: true });
          if (prior.inode)
              throw vfsError('EEXIST', normalized);
-@@ -2656,7 +2692,10 @@ export class SqliteVFS {
+@@ -2656,7 +2707,10 @@ export class SqliteVFS {
          const inode = resolved.inode;
          if (inode && inode.kind !== 'directory')
              throw vfsError('ENOTDIR', path);
@@ -113,7 +177,7 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..62b0822591dc73d19062422d6fcff217
          if (!kids) {
              // W2.5b diagnostic: empty children-set for a directory we expected
              // to be populated.
-@@ -2714,18 +2753,19 @@ export class SqliteVFS {
+@@ -2714,18 +2768,19 @@ export class SqliteVFS {
          const np = this.storageKey(path, cred);
          const resolved = this.checkAccess(np, 0, cred, { followLeaf: false });
          this.checkParentAccess(resolved.path, cred);
@@ -136,25 +200,90 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..62b0822591dc73d19062422d6fcff217
      }
      /**
       * Remove a path and everything beneath it, in bounded transactions.
-@@ -3038,14 +3078,15 @@ export class SqliteVFS {
+@@ -2888,8 +2943,16 @@ export class SqliteVFS {
+             builder.addDeletedPath(newPath, destInode);
+             builder.addGcContent(this.contentIdForInode(destInode));
+         }
++        // Kinu patch, Nimbus ask N23: a tree moved into a shared directory from outside it is shared as if made there.
++        const sourceParent = this.inodes.get(this.parentPath(oldPath));
++        const destinationParent = this.inodes.get(this.parentPath(newPath));
++        const joins = destinationParent !== undefined && isSharedDirectory(destinationParent)
++            && !(sourceParent !== undefined && isSharedDirectory(sourceParent) && sourceParent.gid === destinationParent.gid);
+         const renamed = moving.map((entry) => {
+             const path = newPath + entry.path.substring(oldPath.length);
++            const kept = joins
++                ? this.sharedEntry(this.parentPath(newPath), inodeKind(entry), entry.mode, entry.gid)
++                : { mode: entry.mode, gid: entry.gid };
+             const stored = {
+                 path,
+                 parentPath: this.parentPath(path),
+@@ -2898,9 +2961,9 @@ export class SqliteVFS {
+                 size: entry.size,
+                 atime: entry.atime,
+                 mtime: entry.mtime,
+-                mode: entry.mode,
++                mode: kept.mode,
+                 uid: entry.uid,
+-                gid: entry.gid,
++                gid: kept.gid,
+                 chunkCount: entry.chunkCount,
+                 // Materialize the old legacy key before the logical path changes, so
+                 // the published inode names the content explicitly rather than
+@@ -2956,6 +3019,8 @@ export class SqliteVFS {
+                 ...entry,
+                 path: stored.path,
+                 parentPath: stored.parentPath,
++                mode: stored.mode,
++                gid: stored.gid,
+                 contentId: stored.contentId,
+             };
+             this.inodes.set(moved.path, moved);
+@@ -3037,26 +3102,34 @@ export class SqliteVFS {
+         this.writeFile(dest, this.readFile(src, cred), undefined, cred);
      }
      // ── Batch write (npm install fast path) ───────────────────────────────
-     normalizeBatchInode(entry, cred) {
+-    normalizeBatchInode(entry, cred) {
 -        const path = this.storageKey(entry.path, cred);
++    normalizeBatchInode(entry, cred, pending) {
 +        // Kinu patch, Nimbus ask N22: written where a link resolves, not under its name.
 +        const path = this.createdPath(entry.path, cred);
          const prior = this.inodes.get(path);
          const newUid = cred.uid === 0 ? (entry.uid ?? 1000) : cred.uid;
          const newGid = cred.uid === 0 ? (entry.gid ?? 1000) : cred.gid;
++        const kind = inodeKind(entry);
++        const parentPath = this.parentPath(path);
++        const created = prior
++            ? { mode: prior.mode, gid: prior.gid }
++            : this.sharedEntry(parentPath, kind, kind === 'symlink' ? inodeTypeBits('symlink') | 0o777 : entry.mode & ~cred.umask & 0o7777, newGid,
++                (parent) => pending?.get(parent) ?? this.inodes.get(parent));
          return {
              ...entry,
              path,
 -            parentPath: this.storageKey(entry.parentPath, cred),
-+            parentPath: this.parentPath(path),
-             mode: prior
-                 ? prior.mode
-                 : inodeKind(entry) === 'symlink'
-@@ -3080,7 +3121,7 @@ export class SqliteVFS {
+-            mode: prior
+-                ? prior.mode
+-                : inodeKind(entry) === 'symlink'
+-                    ? inodeTypeBits('symlink') | 0o777
+-                    : entry.mode & ~cred.umask & 0o7777,
++            parentPath,
++            mode: created.mode,
+             uid: prior?.uid ?? newUid,
+-            gid: prior?.gid ?? newGid,
++            gid: created.gid,
+         };
+     }
+     authorizeBatch(payload, cred) {
+-        const inodes = payload.inodes.map((entry) => this.normalizeBatchInode(entry, cred));
++        const normalizing = new Map();
++        const inodes = payload.inodes.map((entry) => {
++            const normalized = this.normalizeBatchInode(entry, cred, normalizing);
++            normalizing.set(normalized.path, normalized);
++            return normalized;
++        });
+         const pending = new Map(inodes.map((entry) => [entry.path, entry]));
+         const checkedParents = new Set();
+         const checkParent = (path) => {
+@@ -3080,7 +3153,7 @@ export class SqliteVFS {
              }
          };
          for (const path of payload.deletePaths ?? []) {
@@ -163,7 +292,7 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..62b0822591dc73d19062422d6fcff217
              const existing = this.checkAccess(normalized, 0, cred, {
                  followLeaf: false,
                  allowMissingLeaf: true,
-@@ -3095,15 +3136,17 @@ export class SqliteVFS {
+@@ -3095,15 +3168,17 @@ export class SqliteVFS {
              else
                  checkParent(entry.path);
          }
@@ -186,7 +315,7 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..62b0822591dc73d19062422d6fcff217
          };
      }
      /**
-@@ -3470,7 +3513,7 @@ export class SqliteVFS {
+@@ -3470,7 +3545,7 @@ export class SqliteVFS {
                          // Close the group before the file that would overflow it, so a
                          // file either fits whole or begins a group of its own. The
                          // estimate only picks the boundary — the flush asserts the bound.
@@ -195,7 +324,7 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..62b0822591dc73d19062422d6fcff217
                          const overflows = group.wouldExceedFile(record.inode.size, record.inode.chunkCount, prior !== undefined && !prior.isDir);
                          if (overflows !== null)
                              flushGroup();
-@@ -4377,7 +4420,8 @@ export class SqliteVFS {
+@@ -4377,7 +4452,8 @@ export class SqliteVFS {
          const toCreate = [];
          const seen = new Set();
          for (const path of paths) {
@@ -205,6 +334,17 @@ index 363e3db45eb7fad69b4b24b53a016aecac84b80f..62b0822591dc73d19062422d6fcff217
              let current = '';
              for (const part of parts) {
                  current = current ? current + '/' + part : part;
+@@ -4567,6 +4643,10 @@ export class SqliteVFS {
+         };
+     }
+ }
++/** Kinu patch, Nimbus ask N23: a setgid directory, whose entries its group shares. */
++function isSharedDirectory(inode) {
++    return inodeKind(inode) === 'directory' && (inode.mode & 0o2000) !== 0;
++}
+ function inodeKind(inode) {
+     const kind = inode.kind ?? (inode.isDir ? 'directory' : 'file');
+     if (kind !== 'file' && kind !== 'directory' && kind !== 'symlink') {
 diff --git a/src/shell/unix-commands.ts b/src/shell/unix-commands.ts
 index 15de09dcb7e88641427a9b5053457ce961c08f18..83776ce2b07ef80e6ea3efe39c1561e1f5fde3d5 100644
 --- a/src/shell/unix-commands.ts
@@ -226,7 +366,7 @@ index 15de09dcb7e88641427a9b5053457ce961c08f18..83776ce2b07ef80e6ea3efe39c1561e1
          fileEntries.push({
            name: arg,
 diff --git a/src/vfs/sqlite-vfs.ts b/src/vfs/sqlite-vfs.ts
-index 336f9918ac93fd50b60331d544474a0ed9998fcd..ef40a5b66793bf8b6b7022fa14ea4783e0910e08 100644
+index 336f9918ac93fd50b60331d544474a0ed9998fcd..9c371d53188ce983791135e51a2e378f4838c9db 100644
 --- a/src/vfs/sqlite-vfs.ts
 +++ b/src/vfs/sqlite-vfs.ts
 @@ -1836,6 +1836,21 @@ export class SqliteVFS {
@@ -296,7 +436,75 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ef40a5b66793bf8b6b7022fa14ea4783
  
      if (options?.recursive) {
        const parts = normalized.split('/').filter(Boolean);
-@@ -2211,7 +2245,8 @@ export class SqliteVFS {
+@@ -2120,16 +2154,32 @@ export class SqliteVFS {
+     }
+   }
+ 
++  /**
++   * Kinu patch, Nimbus ask N23: a setgid directory is shared. An entry made in it takes the
++   * directory's group, the group gets the owner's bits, and a directory made in it is shared too.
++   */
++  private sharedEntry(
++    parentPath: string, kind: INode['kind'], mode: number, gid: number,
++    parentOf: (path: string) => { readonly kind?: INode['kind']; readonly isDir?: boolean; readonly mode: number; readonly gid?: number } | undefined = (path) => this.inodes.get(path),
++  ): { mode: number; gid: number } {
++    const parent = parentOf(parentPath);
++    if (parent === undefined || !isSharedDirectory(parent)) return { mode, gid };
++    const sharedGid = parent.gid ?? gid;
++    if (kind === 'symlink') return { mode, gid: sharedGid };
++    const shared = (mode & ~0o070) | ((mode & 0o700) >> 3);
++    return { mode: kind === 'directory' ? shared | 0o2000 : shared, gid: sharedGid };
++  }
++
+   private _mkdirSingle(path: string, requestedMode: number | undefined, cred: VfsCred): void {
+     const pp = this.parentPath(path);
+     const now = this.now();
+-    const mode = (requestedMode ?? 0o777) & ~cred.umask & 0o7777;
++    const { mode, gid } = this.sharedEntry(pp, 'directory', (requestedMode ?? 0o777) & ~cred.umask & 0o7777, cred.gid);
+     let ino = 0;
+     this.transactionSync(() => {
+       ino = this.inodes.get(path)?.ino ?? this.nextIno();
+       this.sql.exec(
+         "INSERT OR REPLACE INTO inodes (path, parent_path, kind, size, atime, mtime, mode, uid, gid, chunk_count, content_id, ino) VALUES (?, ?, 1, 0, ?, ?, ?, ?, ?, 0, NULL, ?)",
+-        path, pp, now, now, mode, cred.uid, cred.gid, ino,
++        path, pp, now, now, mode, cred.uid, gid, ino,
+       );
+     });
+     const inode: INode = {
+@@ -2142,7 +2192,7 @@ export class SqliteVFS {
+       mtime: now,
+       mode,
+       uid: cred.uid,
+-      gid: cred.gid,
++      gid,
+       chunkCount: 0,
+       contentId: null,
+       ino,
+@@ -2186,6 +2236,9 @@ export class SqliteVFS {
+     // POSIX: rewriting an existing file never changes its mode; the mode
+     // is chosen only at creation (open(2) O_CREAT).
+     const prior = this.inodes.get(effectivePath);
++    const created = prior?.kind === 'file'
++      ? { mode: prior.mode, gid: prior.gid }
++      : this.sharedEntry(pp, 'file', (options?.mode ?? 0o666) & ~cred.umask & 0o7777, cred.gid);
+     const inode: BatchInodeEntry = {
+       path: effectivePath,
+       parentPath: pp,
+@@ -2194,11 +2247,9 @@ export class SqliteVFS {
+       size: data.length,
+       atime: now,
+       mtime: now,
+-      mode: prior?.kind === 'file'
+-        ? prior.mode
+-        : (options?.mode ?? 0o666) & ~cred.umask & 0o7777,
++      mode: created.mode,
+       uid: prior?.uid ?? cred.uid,
+-      gid: prior?.gid ?? cred.gid,
++      gid: created.gid,
+       chunkCount,
+     };
+     try {
+@@ -2211,7 +2262,8 @@ export class SqliteVFS {
  
    private symlink(target: string, path: string, cred: VfsCred): void {
      this.assertMutationsAllowed([path]);
@@ -306,7 +514,7 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ef40a5b66793bf8b6b7022fa14ea4783
      const prior = this.checkAccess(normalized, 0, cred, { followLeaf: false, allowMissingLeaf: true });
      if (prior.inode) throw vfsError('EEXIST', normalized);
      this.checkParentAccess(normalized, cred);
-@@ -3381,7 +3416,10 @@ export class SqliteVFS {
+@@ -3381,7 +3433,10 @@ export class SqliteVFS {
      const resolved = np ? this.checkAccess(np, 0o4, cred) : { path: '', inode: undefined };
      const inode = resolved.inode;
      if (inode && inode.kind !== 'directory') throw vfsError('ENOTDIR', path);
@@ -318,7 +526,7 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ef40a5b66793bf8b6b7022fa14ea4783
      if (!kids) {
        // W2.5b diagnostic: empty children-set for a directory we expected
        // to be populated.
-@@ -3445,16 +3483,17 @@ export class SqliteVFS {
+@@ -3445,16 +3500,17 @@ export class SqliteVFS {
      const np = this.storageKey(path, cred);
      const resolved = this.checkAccess(np, 0, cred, { followLeaf: false });
      this.checkParentAccess(resolved.path, cred);
@@ -339,25 +547,93 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ef40a5b66793bf8b6b7022fa14ea4783
    }
  
    /**
-@@ -3754,14 +3793,15 @@ export class SqliteVFS {
+@@ -3617,8 +3673,16 @@ export class SqliteVFS {
+       builder.addDeletedPath(newPath, destInode);
+       builder.addGcContent(this.contentIdForInode(destInode));
+     }
++    // Kinu patch, Nimbus ask N23: a tree moved into a shared directory from outside it is shared as if made there.
++    const sourceParent = this.inodes.get(this.parentPath(oldPath));
++    const destinationParent = this.inodes.get(this.parentPath(newPath));
++    const joins = destinationParent !== undefined && isSharedDirectory(destinationParent)
++      && !(sourceParent !== undefined && isSharedDirectory(sourceParent) && sourceParent.gid === destinationParent.gid);
+     const renamed = moving.map((entry) => {
+       const path = newPath + entry.path.substring(oldPath.length);
++      const kept = joins
++        ? this.sharedEntry(this.parentPath(newPath), inodeKind(entry), entry.mode, entry.gid)
++        : { mode: entry.mode, gid: entry.gid };
+       const stored: StoredInodeEntry = {
+         path,
+         parentPath: this.parentPath(path),
+@@ -3627,9 +3691,9 @@ export class SqliteVFS {
+         size: entry.size,
+         atime: entry.atime,
+         mtime: entry.mtime,
+-        mode: entry.mode,
++        mode: kept.mode,
+         uid: entry.uid,
+-        gid: entry.gid,
++        gid: kept.gid,
+         chunkCount: entry.chunkCount,
+         // Materialize the old legacy key before the logical path changes, so
+         // the published inode names the content explicitly rather than
+@@ -3678,6 +3742,8 @@ export class SqliteVFS {
+         ...entry,
+         path: stored.path,
+         parentPath: stored.parentPath,
++        mode: stored.mode,
++        gid: stored.gid,
+         contentId: stored.contentId,
+       };
+       this.inodes.set(moved.path, moved);
+@@ -3753,27 +3819,37 @@ export class SqliteVFS {
+ 
    // ── Batch write (npm install fast path) ───────────────────────────────
  
-   private normalizeBatchInode(entry: BatchInodeEntry, cred: VfsCred): NormalizedBatchInodeEntry {
+-  private normalizeBatchInode(entry: BatchInodeEntry, cred: VfsCred): NormalizedBatchInodeEntry {
 -    const path = this.storageKey(entry.path, cred);
++  private normalizeBatchInode(
++    entry: BatchInodeEntry, cred: VfsCred, pending?: ReadonlyMap<string, NormalizedBatchInodeEntry>,
++  ): NormalizedBatchInodeEntry {
 +    // Kinu patch, Nimbus ask N22: written where a link resolves, not under its name.
 +    const path = this.createdPath(entry.path, cred);
      const prior = this.inodes.get(path);
      const newUid = cred.uid === 0 ? (entry.uid ?? 1000) : cred.uid;
      const newGid = cred.uid === 0 ? (entry.gid ?? 1000) : cred.gid;
++    const kind = inodeKind(entry);
++    const parentPath = this.parentPath(path);
++    const created = prior
++      ? { mode: prior.mode, gid: prior.gid }
++      : this.sharedEntry(parentPath, kind, kind === 'symlink' ? inodeTypeBits('symlink') | 0o777 : entry.mode & ~cred.umask & 0o7777, newGid,
++        (parent) => pending?.get(parent) ?? this.inodes.get(parent));
      return {
        ...entry,
        path,
 -      parentPath: this.storageKey(entry.parentPath, cred),
-+      parentPath: this.parentPath(path),
-       mode: prior
-         ? prior.mode
-         : inodeKind(entry) === 'symlink'
-@@ -3795,7 +3835,7 @@ export class SqliteVFS {
+-      mode: prior
+-        ? prior.mode
+-        : inodeKind(entry) === 'symlink'
+-          ? inodeTypeBits('symlink') | 0o777
+-          : entry.mode & ~cred.umask & 0o7777,
++      parentPath,
++      mode: created.mode,
+       uid: prior?.uid ?? newUid,
+-      gid: prior?.gid ?? newGid,
++      gid: created.gid,
+     };
+   }
+ 
+   private authorizeBatch(payload: BatchWritePayload, cred: VfsCred): BatchWritePayload {
+-    const inodes = payload.inodes.map((entry) => this.normalizeBatchInode(entry, cred));
++    const normalizing = new Map<string, NormalizedBatchInodeEntry>();
++    const inodes = payload.inodes.map((entry) => {
++      const normalized = this.normalizeBatchInode(entry, cred, normalizing);
++      normalizing.set(normalized.path, normalized);
++      return normalized;
++    });
+     const pending = new Map(inodes.map((entry) => [entry.path, entry]));
+     const checkedParents = new Set<string>();
+     const checkParent = (path: string): void => {
+@@ -3795,7 +3871,7 @@ export class SqliteVFS {
      };
  
      for (const path of payload.deletePaths ?? []) {
@@ -366,7 +642,7 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ef40a5b66793bf8b6b7022fa14ea4783
        const existing = this.checkAccess(normalized, 0, cred, {
          followLeaf: false,
          allowMissingLeaf: true,
-@@ -3807,14 +3847,16 @@ export class SqliteVFS {
+@@ -3807,14 +3883,16 @@ export class SqliteVFS {
        if (prior) this.checkAccess(entry.path, 0o2, cred, { followLeaf: false });
        else checkParent(entry.path);
      }
@@ -387,7 +663,7 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ef40a5b66793bf8b6b7022fa14ea4783
      };
    }
  
-@@ -4235,7 +4277,7 @@ export class SqliteVFS {
+@@ -4235,7 +4313,7 @@ export class SqliteVFS {
              // Close the group before the file that would overflow it, so a
              // file either fits whole or begins a group of its own. The
              // estimate only picks the boundary — the flush asserts the bound.
@@ -396,7 +672,7 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ef40a5b66793bf8b6b7022fa14ea4783
              const overflows = group.wouldExceedFile(
                record.inode.size,
                record.inode.chunkCount,
-@@ -5276,7 +5318,8 @@ export class SqliteVFS {
+@@ -5276,7 +5354,8 @@ export class SqliteVFS {
      const seen = new Set<string>();
  
      for (const path of paths) {
@@ -406,3 +682,15 @@ index 336f9918ac93fd50b60331d544474a0ed9998fcd..ef40a5b66793bf8b6b7022fa14ea4783
        let current = '';
        for (const part of parts) {
          current = current ? current + '/' + part : part;
+@@ -5478,6 +5557,11 @@ export class SqliteVFS {
+   }
+ }
+ 
++/** Kinu patch, Nimbus ask N23: a setgid directory, whose entries its group shares. */
++function isSharedDirectory(inode: Pick<BatchInodeEntry, 'kind' | 'isDir'> & { readonly mode: number }): boolean {
++  return inodeKind(inode) === 'directory' && (inode.mode & 0o2000) !== 0;
++}
++
+ function inodeKind(inode: Pick<BatchInodeEntry, 'kind' | 'isDir'>): VfsInodeKind {
+   const kind = inode.kind ?? (inode.isDir ? 'directory' : 'file');
+   if (kind !== 'file' && kind !== 'directory' && kind !== 'symlink') {

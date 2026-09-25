@@ -72,7 +72,7 @@ description: Build a slate — a small live app with a server class and a React 
 
 A slate is a small application that lives in this workspace: a server class with its own storage, a React client in a sandboxed iframe, and an RPC link between them. Users rarely ask for "a slate". They ask for a game, a tracker, a dashboard, a picker, a form, a live view over workspace data. Each of those is a slate.
 
-A slate is a directory \`/home/main/slates/<id>/\` with a \`package.json\`:
+A slate is a directory \`/slates/<id>/\`. \`/slates\` is the workspace's, not one agent's: a hired agent makes, edits and previews slates there too; in a CLI workspace it is the project's own \`slates/\` folder. Each slate has a \`package.json\`:
 
 \`\`\`json
 { "main": "server.ts", "browser": "client.tsx",

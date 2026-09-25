@@ -1178,15 +1178,16 @@ export { currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, requi
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
 export {
-  canonicalWorkspacePath, workspacePath, LEGACY_WORKSPACE_ROOT, WORKSPACE_ROOT,
+  canonicalWorkspacePath, workspacePath, LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
 
 export {
   agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity,
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
+  settleWorkspaceSlates,
   subordinateAgentName, headAgentName,
   MAIN_AGENT, AGENT_HOME_MODE, AGENT_TMP_MODE, SESSION_UID, AGENT_UID_FLOOR,
-  type AgentIdentity, type HomeRootVfs, type RootMoveVfs, type TmpConfiner,
+  type AgentIdentity, type HomeRootVfs, type RootMoveVfs, type SlatesMoveVfs, type TmpConfiner,
 } from './vfs/agent-home';
 
 export type {

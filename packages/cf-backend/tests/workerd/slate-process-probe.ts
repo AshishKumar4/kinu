@@ -124,7 +124,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     browser, project = { main: 'server.ts' }, app = { port: 8789 },
   }: SlateStart = {}): Promise<void> {
     await this.stop();
-    const root = '/home/main/slates/notes';
+    const root = '/slates/notes';
     const files = this.vfs.as(CRED_KERNEL);
     files.mkdir(root, { recursive: true });
     files.writeFile(`${root}/${v.parse(v.string(), project.main ?? 'server.ts')}`, source);
@@ -221,7 +221,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
 
   paths() {
     return {
-      kinuInSlateRoot: this.vfs.as(CRED_SESSION_USER).exists('/home/main/slates/notes/.kinu'),
+      kinuInSlateRoot: this.vfs.as(CRED_SESSION_USER).exists('/slates/notes/.kinu'),
       entries: this.vfs.as(CRED_SESSION_USER).readdir('/usr/lib/kinu/slate/entries/notes').map((entry) => entry.name),
     };
   }

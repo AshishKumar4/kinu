@@ -37,7 +37,7 @@ const SLATE = 'cutshare';
 
 const CONTROL_SLATE = 'cutagent';
 
-const MARK = `/home/main/slates/${SLATE}/mark`;
+const MARK = `/slates/${SLATE}/mark`;
 
 describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
@@ -48,25 +48,25 @@ describe(SUITE, () => {
       async run({ session, plan }) {
         const goals: EvalSubgoal[] = [];
 
-        const setup = v.parse(Exec, await session.execute('workspace', `mkdir -p /home/main/slates/${SLATE} /home/main/slates/${CONTROL_SLATE}
-cat > /home/main/slates/${SLATE}/package.json <<'END'
+        const setup = v.parse(Exec, await session.execute('workspace', `mkdir -p /slates/${SLATE} /slates/${CONTROL_SLATE}
+cat > /slates/${SLATE}/package.json <<'END'
 {"main":"server.ts","slate":{"title":"Capability cut probe","bindings":{"FILES":{"kind":"namespace","namespace":"workspace","members":["exists","writeFile"]}}}}
 END
-cat > /home/main/slates/${SLATE}/server.ts <<'END'
+cat > /slates/${SLATE}/server.ts <<'END'
 import { SlateObject } from "kinu:slate";
 export class Slate extends SlateObject {
-  async probe() { return { exists: await this.env.FILES.exists("/home/main/slates") }; }
-  async mutate() { return await this.env.FILES.writeFile("/home/main/slates/${SLATE}/mark", "x"); }
+  async probe() { return { exists: await this.env.FILES.exists("/slates") }; }
+  async mutate() { return await this.env.FILES.writeFile("/slates/${SLATE}/mark", "x"); }
   async fetch() { return new Response("cut-share-probe-ok"); }
 }
 END
-cat > /home/main/slates/${CONTROL_SLATE}/package.json <<'END'
+cat > /slates/${CONTROL_SLATE}/package.json <<'END'
 {"main":"server.ts","slate":{"title":"Agent control probe","bindings":{"FILES":{"kind":"namespace","namespace":"workspace","members":["exists"]},"CONTROL":{"kind":"namespace","namespace":"agents"}}}}
 END
-cat > /home/main/slates/${CONTROL_SLATE}/server.ts <<'END'
+cat > /slates/${CONTROL_SLATE}/server.ts <<'END'
 import { SlateObject } from "kinu:slate";
 export class Slate extends SlateObject {
-  async probe() { return { exists: await this.env.FILES.exists("/home/main/slates") }; }
+  async probe() { return { exists: await this.env.FILES.exists("/slates") }; }
   async ctrl() { return await this.env.CONTROL.msg("x"); }
   async fetch() { return new Response("cut-agent-probe-ok"); }
 }

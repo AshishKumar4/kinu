@@ -17,7 +17,7 @@
  */
 import { createServer as createHttpServer, type ServerResponse } from 'node:http';
 import * as v from 'valibot';
-import { DYNAMIC_CONTEXT_OPEN_TAG, WORKSPACE_INSTRUCTIONS_TAG, parseJsonValue, workspacePath } from '@kinu.run/core';
+import { DYNAMIC_CONTEXT_OPEN_TAG, SLATES_ROOT, WORKSPACE_INSTRUCTIONS_TAG, parseJsonValue, workspacePath } from '@kinu.run/core';
 
 import { apiJson } from './live-app-harness';
 
@@ -459,7 +459,7 @@ const SLATE_SERVER = [
   '}',
 ].join('\n');
 
-const SLATE_ROOT = workspacePath(`slates/${SLATE_ID}`);
+const SLATE_ROOT = `${SLATES_ROOT}/${SLATE_ID}`;
 
 /** The implement turn's writes, in the order the script plays them. */
 const SLATE_WRITES: readonly ScriptedAnswer[] = [

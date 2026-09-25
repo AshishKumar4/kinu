@@ -48,7 +48,7 @@ You can use it for:
   `research` swarm looks at one question from several angles at once, and you
   can hire a `researcher` for the long reads.
 - Live apps. Ask for a dashboard and the agent writes a slate: a small Worker
-  under `/home/user/slates/<id>/` that opens in its own tab on a preview URL.
+  under `/slates/<id>/` that opens in its own tab on a preview URL.
   A slate reads live data through bindings you declare, such as workspace
   files, a workspace read model, or an MCP connection narrowed to named tools.
 - Engineering. A real shell, git, package installs, a Linux container for heavy

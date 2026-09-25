@@ -105,9 +105,9 @@ describe(SUITE, () => {
         const goals: EvalSubgoal[] = [];
 
         // ── The slate: resident code, called by the owner, no model. ──────────
-        // Written over the files route, relative to the workspace root, so the row runs on any root.
-        await session.writeFile(`slates/${SLATE}/package.json`, '{"main":"server.ts","slate":{"title":"Isolation probe"}}\n');
-        await session.writeFile(`slates/${SLATE}/server.ts`, `import { SlateObject } from "kinu:slate";
+        // Written over the files route where every workspace keeps its slates, whatever its root.
+        await session.writeFile(`/slates/${SLATE}/package.json`, '{"main":"server.ts","slate":{"title":"Isolation probe"}}\n');
+        await session.writeFile(`/slates/${SLATE}/server.ts`, `import { SlateObject } from "kinu:slate";
 export class Slate extends SlateObject {
   async probe() {
     try {

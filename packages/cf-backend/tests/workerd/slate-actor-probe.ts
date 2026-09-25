@@ -26,8 +26,8 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
   async craftedSlate(): Promise<string> {
     const vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
     const files = vfs.as(CRED_SESSION_USER);
-    files.mkdir('/home/main/slates/crafted', { recursive: true });
-    files.writeFile('/home/main/slates/crafted/package.json', JSON.stringify({
+    files.mkdir('/slates/crafted', { recursive: true });
+    files.writeFile('/slates/crafted/package.json', JSON.stringify({
       main: 'server.ts', slate: { bindings: { CALCULATE: { kind: 'tool', name: 'calculate' } } },
     }));
     const sql = bindAgentSql(this);
