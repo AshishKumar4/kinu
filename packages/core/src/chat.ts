@@ -574,10 +574,15 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     abortSignal: opts.signal,
   };
 
-  // Pre-submission admission; turn-context.ts owns the policy. The tools riding every request are measured too.
+  const primary = {
+    spec: opts.modelSpec ?? opts.modelContext?.id ?? 'the turn model',
+    provider: opts.modelContext?.provider ?? opts.cache?.providerId,
+  };
+
+  // Pre-submission admission; turn-context.ts owns the policy. The tools are counted as the first call sends them.
   assembly.admission = {
     count: opts.countInputTokens,
-    tools,
+    tools: withToolSchemaDialect(tools, toolSchemaDialect(dialectSpec(primary))),
     instructions: opts.dynamicContext?.instructions,
     limits: window,
   };
@@ -622,8 +627,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const rollTail = hasCacheMarkers(cache.strategy);
 
   let current = {
-    spec: opts.modelSpec ?? opts.modelContext?.id ?? 'the turn model',
-    provider: opts.modelContext?.provider ?? opts.cache?.providerId,
+    ...primary,
     model: opts.model,
     providerOptions: mergeProviderOptions(cache.providerOptions, opts.providerOptions),
   };

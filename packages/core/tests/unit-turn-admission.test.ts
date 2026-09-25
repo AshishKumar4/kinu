@@ -442,6 +442,7 @@ describe('provider count support', () => {
     const tools = { look: tool({ description: 'look something up', inputSchema: z.object({ q: z.string() }) }) };
 
     let vendorBody: unknown;
+    let countBody: unknown;
 
     const vendorDeps: ProviderDeps = {
       ...NO_DEPS,
@@ -452,21 +453,6 @@ describe('provider count support', () => {
       }),
     };
 
-    const model = createAnthropicProvider().createModel('claude-opus-4-7', vendorDeps);
-    let refused: unknown;
-
-    try {
-      for await (const _event of runChat({ model, system, history, tools })) { /* the request is the observation */ }
-    } catch (caught) {
-      refused = caught;
-    }
-
-    expect(refused).toBeInstanceOf(Error);
-    // Proves the vendor converted: a turn failing for another reason would capture nothing.
-    expect(vendorBody).toBeDefined();
-
-    let countBody: unknown;
-
     const countDeps: ProviderDeps = {
       ...NO_DEPS,
       fetch: asFetchFunction(async (_input, init) => {
@@ -476,11 +462,23 @@ describe('provider count support', () => {
       }),
     };
 
-    const counted = await countRequestInputTokens(
-      createAnthropicProvider(), 'claude-opus-4-7', countDeps, { system, messages: history, tools },
-    );
+    const provider = createAnthropicProvider();
+    const model = provider.createModel('claude-opus-4-7', vendorDeps);
+    let refused: unknown;
 
-    expect(counted.kind).toBe('counted');
+    // One turn: its admission counts the request, then its call sends it; both go through runChat.
+    try {
+      for await (const _event of runChat({
+        model, system, history, tools,
+        countInputTokens: (request) => countRequestInputTokens(provider, 'claude-opus-4-7', countDeps, request),
+      })) { /* the request is the observation */ }
+    } catch (caught) {
+      refused = caught;
+    }
+
+    expect(refused).toBeInstanceOf(Error);
+    // Proves both converted: a turn failing for another reason would capture nothing.
+    expect(vendorBody).toBeDefined();
     expect(countBody).toBeDefined();
 
     const vendor = v.parse(WireBodySchema, vendorBody);
