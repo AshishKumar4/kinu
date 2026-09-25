@@ -17,7 +17,7 @@ import {
 } from '../src/orchestrator/heads-support';
 import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../src/prompts/evidence-window';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../src/utils/evidence-window';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { getRunEvents } from '../src/read-models/runs';
 

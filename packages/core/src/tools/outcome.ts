@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import * as v from 'valibot';
 import { KinuError, renderThrownChain, classifyErrorCode } from '../obs/index';
-import { FileRefusalError } from './file-edit';
+import { FileRefusalError } from '../types/file-edits';
 import { BindingFailureSchema, ToolFailureValueSchema, type BindingFailure, type ToolOutcome } from '../types/tool-outcome';
 import type { JsonValue } from '../utils/json';
 

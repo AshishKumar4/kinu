@@ -7,7 +7,7 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { AuthError, authenticateRequest, crossSiteRejection } from '../auth/session';
 import { authApiRoutes } from '../auth/routes';
 import { verifyControlPlaneAccess } from '../control-plane/access-gate';
-import { adminDenialMessage, adminDenialStatus, reportAdminDenial } from '../control-plane/admin-caller';
+import { adminDenialAnswer, reportAdminDenial } from '../control-plane/admin-caller';
 import { observeIdentity } from '../control-plane/index-feed';
 import { controlRoutes } from '../control-plane/routes';
 import { cliRoutes } from '../cli/routes';
@@ -48,7 +48,9 @@ app.use('/api/control/*', async (c, next) => {
   if (!access.ok) {
     reportAdminDenial(access.denial, new URL(c.req.url).pathname, c.req.method);
 
-    return err(adminDenialStatus(access.denial), adminDenialMessage(access.denial));
+    const answer = adminDenialAnswer(access.denial);
+
+    return err(answer.status, answer.message);
   }
 
   c.set('access', access.access);

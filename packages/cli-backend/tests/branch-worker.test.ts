@@ -11,7 +11,7 @@ import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import { createBranchSpawner } from '../src/branch-process';
 import { openWorkspaceCLI } from '../src/open';
-import { createWorkspace } from '@kinu.run/core/identity';
+import { createWorkspace } from '@kinu.run/core/workspace-birth';
 
 const dir = scratchDir('branch-test');
 

@@ -8,7 +8,7 @@
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import * as v from 'valibot';
 import {
   type PendingScaffold, type ShadowConfig, type ShadowTrialVerdict, type ScaffoldDecisionEvents,

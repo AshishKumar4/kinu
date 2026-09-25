@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import { CHARS_PER_TOKEN } from './llm';
 import { JsonObjectSchema } from './utils/json';
 import { diagnostics, renderThrownChain } from './obs/index';
-import { DYNAMIC_CONTEXT_OPEN_TAG, splitPromptSections } from './prompting/sections';
+import { DYNAMIC_CONTEXT_OPEN_TAG, splitPromptSections } from './utils/prompt-sections';
 
 /** Coarse on purpose: the four things an operator can act on. */
 export type ContextPlane = 'system' | 'tools' | 'messages' | 'ephemeral';

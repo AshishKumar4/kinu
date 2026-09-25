@@ -124,11 +124,7 @@ export class WorkspaceSlates {
   }
 
   publication(publicationId: SlatePublicationId): SlatePublication {
-    const publication = this.deps.store.getPublication(publicationId);
-
-    if (publication === undefined || !publication.workspaceId.equals(this.deps.workspaceId)) throw new KinuError('missing', 'Slate publication not found');
-
-    return publication;
+    return this.owned(this.deps.store.getPublication(publicationId), 'Slate publication not found');
   }
 
   /** Credential-free: when a subset was published, the skeleton names the materialization, not the version source. */
@@ -163,11 +159,13 @@ export class WorkspaceSlates {
   }
 
   version(versionId: SlateVersionId): SlateVersion {
-    const version = this.deps.store.getVersion(versionId);
+    return this.owned(this.deps.store.getVersion(versionId), 'Slate version not found');
+  }
 
-    if (version === undefined || !version.workspaceId.equals(this.deps.workspaceId)) throw new KinuError('missing', 'Slate version not found');
+  private owned<T extends { readonly workspaceId: WorkspaceId }>(found: T | undefined, missing: string): T {
+    if (found === undefined || !found.workspaceId.equals(this.deps.workspaceId)) throw new KinuError('missing', missing);
 
-    return version;
+    return found;
   }
 
   private runtime(authoredId?: SlateId, restoring = false): SlateRuntime {

@@ -160,7 +160,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const target = await this.workspaceTarget(input.workspace);
 
     await this.claimWorkspace(target, input.workspace, input.owner);
-    const root = `/home/main/slates/${input.id}`;
+    const root = `/slates/${input.id}`;
 
     await this.writeSlateFile(target, `${root}/package.json`, JSON.stringify({
       main: 'server.ts',
@@ -206,7 +206,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const target = await this.workspaceTarget(input.workspace);
 
     await this.claimWorkspace(target, input.workspace, input.owner);
-    const root = '/home/main/slates/whiteboard';
+    const root = '/slates/whiteboard';
 
     await this.writeSlateFile(target, `${root}/package.json`, JSON.stringify({ main: 'server.ts', slate: { title: 'Whiteboard' } }));
     await this.writeSlateFile(target, `${root}/server.ts`, [

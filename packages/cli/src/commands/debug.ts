@@ -29,7 +29,7 @@ import {
   getLocalReleaseBoard, getLocalToolSurface,
 } from '../local-inspection';
 
-export interface DebugOpts {
+interface DebugOpts {
   json?: boolean;
   out?: string;
   runs?: string;

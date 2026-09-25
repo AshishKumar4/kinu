@@ -5,7 +5,7 @@ import { scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils
 import { createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
 import { runChat, UNBOUNDED_STEPS, type ChatEvent } from '../src/index';
 import { createFileTool } from '../src/tools/file-tool';
-import { TurnFileLedger } from '../src/tools/file-ledger';
+import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 import { createTasksCodemodeProvider } from '../src/tools/tasks-codemode';
 import { createReportCodemodeProvider } from '../src/delegation/report-codemode';

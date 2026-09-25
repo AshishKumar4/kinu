@@ -2,7 +2,7 @@
 import { z } from 'zod';
 import type { CodemodeProvider } from '../tools/sandbox-contract';
 import type { ReportToolDeps } from '../tools/builtins';
-import { dispatchReport, ReportHandoffFields, ReportToolInputSchema } from './report-tool';
+import { dispatchReport, ReportHandoffFields, ReportToolInputSchema } from '../tools/report-tool';
 import { refusedInput } from '../obs/index';
 import {
   SUBORDINATE_REPORT_HANDOFF_FIELDS, SUBORDINATE_REPORT_STATUSES,

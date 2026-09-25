@@ -3,10 +3,10 @@
 export {
   createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql, inspectionFiles,
   createHostShell,
-  type CLIRuntime, type CLIRuntimeConfig, type LocalDb,
+  type CLIRuntime,
 } from './runtime';
 
-export { createHostCheckpoints, type HostCheckpointsOpts } from './checkpoints';
+export { createHostCheckpoints } from './checkpoints';
 
 export { kinuHome } from './home';
 
@@ -14,68 +14,35 @@ export {
   writeSecretFile, enforceOwnerOnly, ensureSecretDir,
 } from './secret-file';
 
-export { openWorkspaceCLI, type WorkspaceInfo, type CLIOpenConfig } from './open';
+export { openWorkspaceCLI, type WorkspaceInfo } from './open';
 
 export { withConfigLock } from './config-lock';
 
-export { createSandboxedExecutor } from './executor';
-
 export { hostToolchainCapabilities } from './host-toolchain';
 
-export { createSqlFiber, detectOrphanedFibers } from '@kinu.run/core';
-
-export { createBranchSpawner } from './branch-process';
-
-export { createNodeCraftedExecute } from './craft-executor';
-
-export { discoverAgentsMd } from './agents-md';
-
-export { createNodeCodemodeToolFactory, type NodeExecuteToolFactoryDeps } from './codemode-tool-factory';
-
-export {
-  createLocalProfileAuthority, resolverModelPlane, staticModelPlane, STATIC_MODEL_SPEC,
-  type LocalProfileAuthority, type LocalProfileModelPlane,
-  type ProfileAuthorityRefinement, type ProfileEnvelopeSource,
-} from './profile-authority';
+export { type ProfileEnvelopeSource } from './profile-authority';
 
 export {
   LocalAgentSession, LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
-  type LocalAgentSessionOpts, type SessionEvent, type LocalSessionDb,
+  type LocalAgentSessionOpts, type SessionEvent,
   type ShellApprovalHandler,
 } from './local-session';
 
-export {
-  LocalAgentHost,
-  type AgentEventListener,
-  type LocalAgentHostOptions,
-  type LocalHostedAgent,
-  type LocalTickResult,
-  DriverLeaseHold,
-  type DriverKind,
-  type DriverLeaseDeps,
-  type DriverLeaseHolder,
-  type DriverLeaseRefusal,
-  type LeaseProcess,
-} from './agent-host';
+export { LocalAgentHost, type LocalAgentHostOptions, type LocalHostedAgent, DriverLeaseHold } from './agent-host';
 
 export { OS_LEASE_PROCESS } from './agent-host/lease-process';
 
 export {
   createLocalModelResolver, cloudProxyBaseURL, CLOUD_PROXY_PROVIDER_IDS,
   defaultSpecForEndpoint, stripProvider,
-  type LocalModelResolver, type LocalModelResolverConfig, type LocalCloudSession,
-  type LocalProviderCredentials, type LocalOpenAICompatCredential,
+  type LocalModelResolver, type LocalCloudSession,
+  type LocalProviderCredentials,
 } from './model-resolver';
 
 export { createFileOAuthStore, type LocalOAuthStore } from './oauth-store';
 
 export {
   createOpenCodeProvider, checkOpenCodeAvailability,
-  OPENCODE_PROVIDER_ID,
-  type OpenCodeProviderOptions, type OpenCodeAvailability,
-  type OpenCodeModelInfo, type OpenCodeSpawn, type SpawnedOpenCode,
 } from './opencode-provider';
 
-export { createCLIHeadRuntime } from './head-runtime';
-
-export { connectMcpServers, type McpServerConfig, type McpConnection } from './mcp';
+export { type McpServerConfig } from './mcp';

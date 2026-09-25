@@ -7,7 +7,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 
 import { join } from 'node:path';
-import { createWorkspace } from '../../core/src/identity/index';
+import { createWorkspace } from '../../core/src/workspace-birth';
 import { initWorkspaceSchema, type LLMProviderConfig } from '../../core/src/index';
 import { openWorkspaceCLI, makeWorkspaceSchemaSql } from '../../cli-backend/src/index';
 import { assertExecutableRuntime, createTestRuntime } from '../src/runtime';

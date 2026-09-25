@@ -20,7 +20,7 @@ import {
   type ExecOutcome, type LifecycleOp, type LifecycleSeam, type OperationCeiling,
   type SettleOutcome, type StartupOutcome, type StrategyVerdict,
 } from './devbox-e2e';
-import { COLD_ATTACH_CEILING_MS, type Strategy } from './bench-devbox-strategies';
+import { COLD_ATTACH_CEILING_MS, type Strategy } from './bench-devbox-fixture';
 
 /** Every ceiling at one small value, so a test that proves a ceiling FIRES
  *  costs milliseconds and a test that proves one does not fire has room. */

@@ -1,9 +1,9 @@
+import { stripVTControlCharacters } from 'node:util';
 import chalk from 'chalk';
 import type { Command } from 'commander';
-import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall, TUI_MARKS } from '@kinu.run/core';
+import { BUILTIN_TOOLS, clipText, describeToolCall, fmtUsd, quotaWindowText, summarizeToolCall, timeAgo, TUI_MARKS, usageTotal } from '@kinu.run/core';
 import type { AccountSpend, SearchNode, ReasoningEffort, JsonObject, JsonValue, ToolOutcome } from '@kinu.run/core';
-import { fmtUsd, quotaWindowText, timeAgo, usageTotal } from '@kinu.run/core';
-import { clipText } from '@kinu.run/core';
+import type { AgentSearchNode } from './agent-client';
 import { guideFailure } from './provider-guidance';
 import cliPackage from '../package.json' with { type: 'json' };
 
@@ -40,29 +40,21 @@ const MUTED: Paint = chalk.hex(INK.dim);
 
 export { BRAND, VERSION, DIM, ACCENT, OK, WARN, ERR, MUTED };
 
-const BOX = { tl: '┌', tr: '┐', bl: '└', br: '┘', h: '─', v: '│' } as const;
+const BOX = { tl: '┌', bl: '└', v: '│' } as const;
 
 function termWidth(): number {
   return Math.min(process.stdout.columns ?? 80, 80);
 }
 
-function boxTop(width: number): string {
-  return DIM(`${BOX.tl}${'─'.repeat(width - 2)}`);
-}
-
-function boxBot(width: number): string {
-  return DIM(`${BOX.bl}${'─'.repeat(width - 2)}`);
+function boxEdge(corner: string, width: number): string {
+  return DIM(`${corner}${'─'.repeat(width - 2)}`);
 }
 
 function boxRow(label: string, value: string, width: number): string {
   const raw = `${label}${value}`;
-  const padding = Math.max(0, width - 4 - stripAnsi(raw).length);
+  const padding = Math.max(0, width - 4 - stripVTControlCharacters(raw).length);
 
   return `${DIM(BOX.v)} ${label}${value}${' '.repeat(padding)}`;
-}
-
-function stripAnsi(s: string): string {
-  return s.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
 }
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -160,16 +152,16 @@ export function printCreatedCard(name: string, purpose: string, model: string, d
   const L = (label: string) => DIM(label.padEnd(10));
   console.log('');
   console.log(`${BRAND} ${DIM('· workspace created')}`);
-  console.log(boxTop(w));
+  console.log(boxEdge(BOX.tl, w));
   console.log(boxRow(L('Name:'), ACCENT(name), w));
   console.log(boxRow(L('Mission:'), clipText(purpose, w - 18), w));
   console.log(boxRow(L('Model:'), MUTED(model), w));
   console.log(boxRow(L('Database:'), MUTED(dbPath), w));
-  console.log(boxBot(w));
+  console.log(boxEdge(BOX.bl, w));
   console.log(`\n${DIM('Start chatting:')} ${ACCENT(`kinu chat ${name}`)}\n`);
 }
 
-export interface AgentStatusInfo {
+interface AgentStatusInfo {
   name: string;
   purpose: string;
   createdAt: number;
@@ -188,7 +180,7 @@ export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: 
   const w = termWidth();
   console.log('');
   console.log(`${BRAND} ${DIM('· workspace status')}`);
-  console.log(boxTop(w));
+  console.log(boxEdge(BOX.tl, w));
 
   const L = (label: string) => DIM(label.padEnd(14));
 
@@ -213,7 +205,7 @@ export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: 
 
   console.log(boxRow(L('Tools:'), `${BUILTIN_TOOLS.length} built-in + ${info.craftedToolCount} crafted`, w));
   console.log(boxRow(L('Memory:'), formatBytes(info.memorySize), w));
-  console.log(boxBot(w));
+  console.log(boxEdge(BOX.bl, w));
   console.log('');
 }
 
@@ -257,23 +249,15 @@ export function printAgentList(agents: Array<{
   console.log('');
 }
 
-export interface SearchTreeNode {
-  depth: number;
-  status: string;
-  action: string | null;
-  value: number;
-  visits: number;
-}
-
 /** Open reads as pending. */
-const SEARCH_STATUS_ICON: Record<SearchTreeNode['status'], string> = {
+const SEARCH_STATUS_ICON: Record<AgentSearchNode['status'], string> = {
   terminal: OK('●'),
   pruned: ERR('○'),
   failed: ERR('✗'),
   open: WARN('◌'),
 };
 
-export function renderSearchTreeLines(nodes: readonly SearchTreeNode[]): string[] {
+export function renderSearchTreeLines(nodes: readonly AgentSearchNode[]): string[] {
   return nodes.map((node) => {
     const indent = '  '.repeat(node.depth + 1);
 
@@ -406,7 +390,7 @@ export function setCommandExample(command: Command, example: string): void {
   command.addHelpText('after', `\nExample:\n  $ ${example}`);
 }
 
-export interface HelpEntry {
+interface HelpEntry {
   command: Command;
   term: string;
   description: string;

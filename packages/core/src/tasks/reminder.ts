@@ -1,8 +1,8 @@
 // Stop-time reminder for open tasks, queued as a terminal effect so the ledger enforces the once. Ports OMP's
 // `TodoTracker.checkCompletion`, minus its user-force skip; plan mode never reminds (the plan is the product).
 
-import type { ActiveRoster } from '../prompting/volatile-context';
-import type { AgentTaskTree } from './store';
+import type { ActiveRoster } from '../types/dynamic-context';
+import type { AgentTaskTree } from '../tools/task-store';
 import type { WorkMode } from '../types/turn';
 
 /** Admit pre-flight drops a signal once the ledger no longer owes its reminder row. */

@@ -354,21 +354,41 @@ export function overview(sql: ControlPlaneSql, now = Date.now()): ControlOvervie
   };
 }
 
-export function listUsers(sql: ControlPlaneSql, request: PageRequest = {}): Page<ControlUserRow> {
+function seekNewest<SqlRow, Row>(sql: ControlPlaneSql, request: PageRequest, query: {
+  readonly schema: v.GenericSchema<SqlRow>;
+  readonly columns: string;
+  readonly from: string;
+  readonly at: string;
+  readonly id: string;
+  readonly project: (row: SqlRow) => Row;
+  readonly key: (row: Row) => readonly [number, string];
+}): Page<Row> {
   const limit = clampPage(request.limit);
-  const from = readAnchor(request.cursor, 2);
+  const after = readAnchor(request.cursor, 2);
 
-  const found = select(sql, UserSqlRowSchema,
-    `SELECT u.user_id, u.email, u.display_name, u.first_seen_at, u.last_seen_at,
-            (SELECT COUNT(*) FROM cp_workspaces w
-              WHERE w.user_id = u.user_id AND w.removed_at IS NULL) AS workspaces
-       FROM cp_users u
-      ${from ? `WHERE (u.last_seen_at < ?) OR (u.last_seen_at = ? AND u.user_id > ?)` : ''}
-      ORDER BY u.last_seen_at DESC, u.user_id ASC
+  const found = select(sql, query.schema,
+    `SELECT ${query.columns}
+       FROM ${query.from}
+      ${after ? `WHERE (${query.at} < ?) OR (${query.at} = ? AND ${query.id} > ?)` : ''}
+      ORDER BY ${query.at} DESC, ${query.id} ASC
       LIMIT ?`,
-    ...(from ? [from[0], from[0], from[1]] : []), limit + 1);
+    ...(after ? [after[0], after[0], after[1]] : []), limit + 1);
 
-  return seekPage(found.map(projectUser), limit, (row) => anchor(row.lastSeenAt, row.userId));
+  return seekPage(found.map(query.project), limit, (row) => anchor(...query.key(row)));
+}
+
+export function listUsers(sql: ControlPlaneSql, request: PageRequest = {}): Page<ControlUserRow> {
+  return seekNewest(sql, request, {
+    schema: UserSqlRowSchema,
+    columns: `u.user_id, u.email, u.display_name, u.first_seen_at, u.last_seen_at,
+            (SELECT COUNT(*) FROM cp_workspaces w
+              WHERE w.user_id = u.user_id AND w.removed_at IS NULL) AS workspaces`,
+    from: 'cp_users u',
+    at: 'u.last_seen_at',
+    id: 'u.user_id',
+    project: projectUser,
+    key: (row) => [row.lastSeenAt, row.userId],
+  });
 }
 
 export function getUser(sql: ControlPlaneSql, userId: string): ControlUserRow | null {
@@ -422,18 +442,15 @@ export function listWorkspaces(
 }
 
 export function listAudit(sql: ControlPlaneSql, request: PageRequest = {}): Page<ControlAuditRow> {
-  const limit = clampPage(request.limit);
-  const from = readAnchor(request.cursor, 2);
-
-  const found = select(sql, AuditSqlRowSchema,
-    `SELECT id, at, actor_email, actor_user, operation, target_kind, target, outcome, detail
-       FROM cp_audit
-      ${from ? `WHERE (at < ?) OR (at = ? AND id > ?)` : ''}
-      ORDER BY at DESC, id ASC
-      LIMIT ?`,
-    ...(from ? [from[0], from[0], from[1]] : []), limit + 1);
-
-  return seekPage(found.map(projectAudit), limit, (row) => anchor(row.at, row.id));
+  return seekNewest(sql, request, {
+    schema: AuditSqlRowSchema,
+    columns: 'id, at, actor_email, actor_user, operation, target_kind, target, outcome, detail',
+    from: 'cp_audit',
+    at: 'at',
+    id: 'id',
+    project: projectAudit,
+    key: (row) => [row.at, row.id],
+  });
 }
 
 export interface AuditDraft {
@@ -581,19 +598,16 @@ export function recordFeedback(sql: ControlPlaneSql, row: FeedbackRecord): Feedb
 }
 
 export function listFeedback(sql: ControlPlaneSql, request: PageRequest = {}): Page<ControlFeedbackRow> {
-  const limit = clampPage(request.limit);
-  const from = readAnchor(request.cursor, 2);
-
-  const found = select(sql, FeedbackSqlRowSchema,
-    `SELECT id, created_at, user_id, email, note, route, workspace,
-            object_key, content_type, bytes, user_agent
-       FROM cp_feedback
-      ${from ? `WHERE (created_at < ?) OR (created_at = ? AND id > ?)` : ''}
-      ORDER BY created_at DESC, id ASC
-      LIMIT ?`,
-    ...(from ? [from[0], from[0], from[1]] : []), limit + 1);
-
-  return seekPage(found.map(projectFeedback), limit, (row) => anchor(row.createdAt, row.id));
+  return seekNewest(sql, request, {
+    schema: FeedbackSqlRowSchema,
+    columns: `id, created_at, user_id, email, note, route, workspace,
+            object_key, content_type, bytes, user_agent`,
+    from: 'cp_feedback',
+    at: 'created_at',
+    id: 'id',
+    project: projectFeedback,
+    key: (row) => [row.createdAt, row.id],
+  });
 }
 
 function projectFeedback(row: FeedbackSqlRow): ControlFeedbackRow {

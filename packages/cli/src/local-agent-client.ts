@@ -71,7 +71,7 @@ import type {
   PlanReviewSurface,
 } from './agent-client';
 
-export interface LocalAgentClientOptions {
+interface LocalAgentClientOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;
@@ -158,7 +158,7 @@ export async function autoTitleLocalWorkspace(
   });
 }
 
-export interface LocalAgentClientDeps {
+interface LocalAgentClientDeps {
   agentName: string;
   /** The session installs itself as this runtime's model-call ledger; `AgentRuntime` would hide that channel. */
   rt: CLIRuntime;

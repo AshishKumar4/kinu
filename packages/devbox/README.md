@@ -269,9 +269,12 @@ package failure.
 
 Three of four schedule rows re-arm themselves. A broken chain does not restart
 itself. Devbox arms all three initial rows because `devboxHeartbeat` cannot
-supply its own first link. Its idempotence guard counts only strictly-future
-rows: the SDK retains a fired row until its callback returns, so counting the
-active row would suppress its successor.
+supply its own first link; every container start runs the start hook, which
+arms them. A heartbeat that finds the container stopped writes one last tick
+and arms nothing, so nothing wakes a stopped box until something starts it
+(D34). The arming guard counts only strictly-future rows: the SDK retains a
+fired row until its callback returns, so counting the active row would
+suppress its successor.
 
 Devbox never enables `setKeepAlive(true)`. The SDK alarm loop's activity branch
 returns without an alarm. With keepAlive on, `onActivityExpired` logs, then an

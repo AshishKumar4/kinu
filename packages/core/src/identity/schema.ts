@@ -1,9 +1,5 @@
-/** Every workspace table, in one place. Idempotent: every statement uses IF NOT EXISTS. */
+/** Identity and actor DDL; `state/workspace-schema.ts` composes every table. */
 
-import { initSearchTables } from '../mcts/schemas';
-import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
-import { initScaffoldTables } from '../scaffold/schemas';
-import { initCodemodeStateTable } from './program-state';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 
 export const WORKSPACE_IDENTITY_DDL =
@@ -19,7 +15,7 @@ export const WORKSPACE_IDENTITY_DDL =
 
 /** Durable state owned by every full-loop actor, including facet actors. */
 const ACTOR_DDL = [
-  // mcts/schemas.ts and scaffold/schemas.ts own their DDL (run below): one owner per table.
+  // mcts/schemas.ts and scaffold/schemas.ts own their DDL (initActorTables runs it): one owner per table.
 
   // Actor-scoped: fiber names ('advisor-lane', 'reactor', …) repeat across actors.
   `CREATE TABLE IF NOT EXISTS fibers (
@@ -121,14 +117,8 @@ const FORK_STAGED_FILES_DDL = `CREATE TABLE IF NOT EXISTS fork_staged_files (
     path TEXT PRIMARY KEY
   )`;
 
-/** Actor-local state, without a workspace ownership root or fork lineage. */
-export function initActorTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
+export function initActorDdl(execRaw: RawSqlExec): void {
   for (const ddl of ACTOR_DDL) execRaw(ddl);
-  initSearchTables(execRaw);
-  initScaffoldTables(execRaw);
-  // Workspace-wide by design: role eligibility filters the tool surface, not storage (PRODUCT-SPEC.md:371).
-  initCraftedToolsTables(sql);
-  initCodemodeStateTable(execRaw);
 }
 
 export function initWorkspaceOwnershipTables(execRaw: RawSqlExec): void {
@@ -136,11 +126,6 @@ export function initWorkspaceOwnershipTables(execRaw: RawSqlExec): void {
   execRaw(FORK_LINEAGE_DDL);
   execRaw(FORK_TRANSFER_DDL);
   execRaw(FORK_STAGED_FILES_DDL);
-}
-
-export function initAllTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
-  initWorkspaceOwnershipTables(execRaw);
-  initActorTables(execRaw, sql);
 }
 
 /** The canonical `fibers` DDL, for runtimes built without the whole workspace schema. */

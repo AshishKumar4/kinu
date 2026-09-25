@@ -50,6 +50,7 @@ export {
   createRecordingLogger,
   diagnostics,
   setDiagnosticsSink,
+  settleLogged,
   RESERVED_LOG_FIELDS,
   type LogEventName,
   type LogFields,

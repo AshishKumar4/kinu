@@ -23,7 +23,7 @@ const ENTRY_POINTS: ReadonlyArray<readonly [label: string, specifier: string]> =
   ['heads/types', 'heads/types.ts'],
   ['the core barrel', 'index.ts'],
   ['tools/builtins — the confined-surface factory', 'tools/builtins.ts'],
-  ['tools/actor-tools — the actor surface that adds `agents`', 'tools/actor-tools.ts'],
+  ['delegation/actor-tools — the actor surface that adds `agents`', 'delegation/actor-tools.ts'],
   ['delegation/agents-tool — the delegation tool', 'delegation/agents-tool.ts'],
   ['strategy/swarm-run — the search that runs the nodes', 'strategy/swarm-run.ts'],
   ['strategy/node-agent — the reader itself, first', 'strategy/node-agent.ts'],

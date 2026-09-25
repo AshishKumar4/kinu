@@ -17,7 +17,7 @@ const CASE = 'slate';
 
 const ID = 'hello';
 
-const ASK = 'Use the file tool to create a slate at /home/main/slates/hello/. '
+const ASK = 'Use the file tool to create a slate at /slates/hello/. '
   + 'Write package.json with main "server.ts" and slate {"title":"Hello","port":8787,"bindings":{}}. '
   + 'Write server.ts so the slate answers GET /ping with JSON '
   + '{"message":"pong","method":request.method,"path":new URL(request.url).pathname} '

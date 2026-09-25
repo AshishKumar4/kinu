@@ -274,7 +274,7 @@ export function agentDbPath(name: string): string {
   return join(agentDir(name), 'agent.db');
 }
 
-export interface LocalAgentRef {
+interface LocalAgentRef {
   name: string;
   cwd: string;
   workspaceId: string;
@@ -282,7 +282,7 @@ export interface LocalAgentRef {
 }
 
 /** `adopted`: this resolve bound an unplaced `~/.kinu/<name>` workspace to the caller's project. */
-export type LocalPlacement = 'recorded' | 'adopted' | 'unplaced';
+type LocalPlacement = 'recorded' | 'adopted' | 'unplaced';
 
 export interface ResolvedLocalAgent extends LocalAgentRef {
   placement: LocalPlacement;
@@ -395,7 +395,7 @@ export function readWorkspaceDisplayName(dbPath: string): string | null {
   }
 }
 
-export interface AdoptUnplacedAgentOptions {
+interface AdoptUnplacedAgentOptions {
   cwd?: string;
   workspaceId?: string;
 }
@@ -805,12 +805,7 @@ export function resolveLLMConfig(opts?: {
 }
 
 /** For seams that must hand core an endpoint object (workspace creation, evolution); the failure names every fix. */
-export function requireLLMConfig(opts?: {
-  model?: string;
-  baseUrl?: string;
-  auth?: string;
-  defaultModel?: string;
-}): LLMProviderConfig {
+export function requireLLMConfig(opts?: Parameters<typeof resolveLLMConfig>[0]): LLMProviderConfig {
   const config = resolveLLMConfig(opts);
 
   if (config) return config;

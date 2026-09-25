@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { LLM } from '../types/primitives';
 import type { TurnOutcome } from '../evolution/outcomes';
-import { extractJsonArray, jsonArrayOnlyInstruction } from '../prompts/structured';
+import { extractJsonArray, jsonArrayOnlyInstruction } from '../providers/structured';
 import { parseJsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 

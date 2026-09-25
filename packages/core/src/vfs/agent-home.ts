@@ -1,9 +1,7 @@
 /**
- * Per-agent layout in the one global view per workspace: separation is
- * uid/gid/mode on shared inodes, never a per-agent filesystem or mount table
- * (shell and file-RPC planes must resolve every path identically).
- * Homes are 0o755 so the grader and merge-back can read them; tmp is 0o700.
- * Both planes act as the agent's credential, or its own tool writes get `EACCES`.
+ * Per-agent layout in the one global view per workspace: uid/gid/mode on shared inodes, never a per-agent filesystem
+ * or mount table, since shell and file-RPC planes resolve every path alike. Homes are 0o755 for the grader and
+ * merge-back; tmp is 0o700. Both planes act as the agent's credential, or its own tool writes get `EACCES`.
  */
 
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -11,7 +9,7 @@ import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import * as v from 'valibot';
-import { LEGACY_WORKSPACE_ROOT, WORKSPACE_ROOT } from './workspace-path';
+import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from './workspace-path';
 
 /** Its home is {@link WORKSPACE_ROOT}. */
 export const MAIN_AGENT = 'main';
@@ -27,6 +25,16 @@ export const SESSION_UID = 1000;
 
 /** Allocated agent uids start here — clear of uid 0 and {@link SESSION_UID}. */
 export const AGENT_UID_FLOOR = 2000;
+
+const WORKSPACE_GID = SESSION_UID;
+
+const SHARED_DIRECTORY_MODE = 0o2775;
+
+function sharedMode(mode: number, directory: boolean): number {
+  const shared = (mode & 0o7707) | ((mode & 0o700) >> 3);
+
+  return directory ? shared | 0o2000 : shared;
+}
 
 /**
  * The first character excludes `-` so no home reads as a CLI flag; derived
@@ -94,7 +102,9 @@ export interface AgentIdentity {
 
 /** {@link AgentIdentity} as the substrate's per-call credential. */
 export function agentCred(identity: AgentIdentity): VfsCred {
-  return { uid: identity.uid, gid: identity.gid, groups: [identity.gid], umask: 0o022 };
+  const groups = identity.gid === WORKSPACE_GID ? [identity.gid] : [identity.gid, WORKSPACE_GID];
+
+  return { uid: identity.uid, gid: identity.gid, groups, umask: 0o022 };
 }
 
 const IDENTITY_TABLE = 'kinu_agent_identity';
@@ -140,7 +150,7 @@ function allocatedAgentIdentity(sql: SqlDatabase, agentName: string): AgentIdent
   return row ? { uid: Number(row.uid), gid: Number(row.gid) } : null;
 }
 
-/** Root-credentialled surface a home's lifecycle needs; satisfied by `SqliteVFS.as(CRED_KERNEL)`. */
+/** A home's lifecycle, as `SqliteVFS.as(CRED_KERNEL)`. */
 export interface HomeRootVfs {
   mkdir(path: string, options?: { recursive?: boolean; mode?: number }): void;
   chown(path: string, uid: number | null, gid: number | null): void;
@@ -216,6 +226,55 @@ export function settleWorkspaceRoot(kernel: RootMoveVfs): void {
   }
 }
 
+export type SlatesMoveVfs = RootMoveVfs & Pick<CredentialedVfs, 'mkdir' | 'lstat'>;
+
+/** Kernel-owned, group-shared, setgid; the old root's slates move in once. */
+export function settleWorkspaceSlates(kernel: SlatesMoveVfs): void {
+  if (kernel.isSymlink(SLATES_ROOT)) {
+    kernel.unlink(SLATES_ROOT);
+  } else if (kernel.exists(SLATES_ROOT) && !kernel.isDirectory(SLATES_ROOT)) {
+    // Moved aside, not deleted.
+    kernel.rename(SLATES_ROOT, freePath(kernel, `${WORKSPACE_ROOT}/slates-file`));
+  }
+
+  if (!kernel.exists(SLATES_ROOT)) kernel.mkdir(SLATES_ROOT);
+  const root = kernel.stat(SLATES_ROOT);
+
+  if (root.uid !== 0 || root.gid !== WORKSPACE_GID || (root.mode & 0o7777) !== SHARED_DIRECTORY_MODE) {
+    kernel.chown(SLATES_ROOT, 0, WORKSPACE_GID);
+    kernel.chmod(SLATES_ROOT, SHARED_DIRECTORY_MODE);
+
+    for (const { name } of kernel.readdir(SLATES_ROOT)) share(kernel, `${SLATES_ROOT}/${name}`);
+  }
+
+  const legacy = `${WORKSPACE_ROOT}/slates`;
+
+  if (kernel.isSymlink(legacy)) {
+    kernel.unlink(legacy);
+  } else if (kernel.isDirectory(legacy)) {
+    moveMissing(kernel, legacy, SLATES_ROOT);
+    kernel.removeRecursive(legacy);
+  }
+}
+
+function freePath(kernel: SlatesMoveVfs, base: string): string {
+  for (let suffix = 1; ; suffix += 1) {
+    const path = suffix === 1 ? base : `${base}-${String(suffix)}`;
+
+    if (!kernel.exists(path)) return path;
+  }
+}
+
+function share(kernel: SlatesMoveVfs, path: string): void {
+  const stat = kernel.lstat(path);
+
+  if (stat.type === 'symlink') return;
+  kernel.chown(path, null, WORKSPACE_GID);
+  kernel.chmod(path, sharedMode(stat.mode & 0o7777, stat.type === 'directory'));
+
+  if (stat.type === 'directory') for (const { name } of kernel.readdir(path)) share(kernel, `${path}/${name}`);
+}
+
 function moveMissing(kernel: RootMoveVfs, from: string, to: string): void {
   for (const { name } of kernel.readdir(from)) {
     const source = `${from}/${name}`;
@@ -261,7 +320,7 @@ export function releaseAgentHome(
 
 /**
  * Re-register `/tmp` rewrites after the in-memory registry is recreated;
- * an existing tmp dir marks a live agent. Returns the count restored.
+ * an existing tmp dir marks a live agent.
  */
 export function restoreAgentTmpConfinements(
   sql: SqlDatabase,

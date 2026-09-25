@@ -56,7 +56,7 @@ import {
   makeSql as makeTagged, makeSqlExec, makeExecRaw, createTestActor, createTestWorkspace,
 } from './helpers';
 import type { z } from 'zod';
-import { dispatchReport, ReportToolInputSchema, type ReportToolResult } from '../src/delegation/report-tool';
+import { dispatchReport, ReportToolInputSchema, type ReportToolResult } from '../src/tools/report-tool';
 
 const NOW = 1_700_000_000_000;
 

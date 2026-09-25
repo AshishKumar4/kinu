@@ -17,7 +17,7 @@ import { headProducedFindings } from './head-summary';
 import { USAGE_FIELDS, type Usage } from '../usage';
 import { HEAD_USAGE_COLUMNS, type StoredHeadUsage } from './schema';
 import { mapPage, seekPage, StaleCursorError, type Page, type PageRequest } from '../session/page';
-import type { ActiveRoster } from '../prompting/volatile-context';
+import type { ActiveRoster } from '../types/dynamic-context';
 
 
 export interface StepTotals {

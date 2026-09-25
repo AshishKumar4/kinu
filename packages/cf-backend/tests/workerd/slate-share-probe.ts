@@ -13,12 +13,14 @@ import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
 import { workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import { adoptGeneration, generation } from '@nimbus-sh/fabric/generation.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
-import { probeFacetManager } from './facet-manager';
+import { probeDurableApps, probeFacetManager } from './facet-manager';
 import {
-  bindActorHandle, initWorkspaceSchema, MissionGovernor, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel,
+  agentCred, bindActorHandle, initWorkspaceSchema, MissionGovernor, provisionAgentHome, settleWorkspaceSlates, SHARE_SPEND_CAP_USD_PER_DAY,
+  shareSpendLabel, subordinateAgentName,
   type JsonValue, type ShareViewerClaim, type SlateCallResult, type SqlExec, type SqlExecutor, type SqlValue,
 } from '@kinu.run/core';
-import { initSlateLiveShareTables } from '@kinu.run/core/slates';
+import { SlateId } from '@agent-core/core/slates';
+import { initSlateLiveShareTables, slateDirectory } from '@kinu.run/core/slates';
 import { SlateHost } from '../../src/slates/host';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../../src/slates/bindings';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
@@ -78,6 +80,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     });
     initSlateLiveShareTables((ddl: string) => ctx.storage.sql.exec(ddl));
     seedBaseFilesystem(this.vfs, ['home', 'etc']);
+    // As the Kinu boot leaves every workspace: slates are the workspace's, not its main agent's.
+    settleWorkspaceSlates(this.vfs.as(CRED_KERNEL));
     // Pids are generation-scoped per boot so a re-spawned process never gets a pid with a live append writer.
     this.gen = workspaceGenerationStorage(ctx.storage.sql);
     const facets = probeFacetManager({ ctx, env, processes: this.processes, portRegistry: this.ports, vfs: this.vfs });
@@ -98,9 +102,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
         return null;
       },
       apps: {
-        ensure: async () => { throw new Error('a share probe reserves no durable app'); },
-        remove: async () => ({ removed: false, port: null }),
-        url: async () => { throw new Error('a share probe publishes no preview URL'); },
+        ...probeDurableApps(facets),
+        url: async (port) => ({ url: `https://${String(port)}.preview.test/` }),
       },
       catalog: async () => ({ ...CATALOG, slates: await this.host.projects(ROOT_SLATE_CALLER) }),
       shareUrl: async (handle) => `https://${handle}.share.test/`,
@@ -125,12 +128,9 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   async start(): Promise<void> {
     await adoptGeneration(this.gen);
     this.processes.setPidBase(generation(this.gen) * PID_GEN_STRIDE);
-    const root = '/home/main/slates/board';
+    const root = '/slates/board';
     const files = this.vfs.as(CRED_KERNEL);
     files.mkdir(root, { recursive: true });
-
-    // The user's slates are the user's, as a workspace's home is: an imported blueprint lands beside them.
-    for (const dir of ['/home/main', '/home/main/slates']) files.chown(dir, CRED_SESSION_USER.uid, CRED_SESSION_USER.gid);
     files.writeFile(`${root}/package.json`, JSON.stringify({
       name: SLATE_ID, main: 'server.ts',
       slate: {
@@ -150,7 +150,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       '  async fetch() { return new Response("share-ok"); }',
       '}',
     ].join('\n'));
-    const digest = '/home/main/slates/digest';
+    const digest = '/slates/digest';
     files.mkdir(digest, { recursive: true });
     files.writeFile(`${digest}/package.json`, JSON.stringify({
       name: 'digest', main: 'server.ts', slate: { title: 'Digest', runtime: 'worker', bindings: {} },
@@ -162,6 +162,38 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       '}',
     ].join('\n'));
     files.writeFile('/x', 'fixture-bytes');
+  }
+
+  /**
+   * A hired agent's slate, made with its own credential where slates live: its manifest in place, its server built
+   * in its home and moved in, as a hire promotes a draft. The main agent changes both, then the hire previews it.
+   */
+  async previewAsHire(): Promise<SlateCallResult> {
+    await adoptGeneration(this.gen);
+    this.processes.setPidBase(generation(this.gen) * PID_GEN_STRIDE);
+    const identity = { uid: 2001, gid: 2001 };
+    const home = provisionAgentHome(this.vfs.as(CRED_KERNEL), subordinateAgentName('builder'), identity);
+    const hire: SlateCaller = { path: [{ name: 'builder' }], cred: agentCred(identity), workMode: 'build' };
+    const dir = slateDirectory(new SlateId('widgets'));
+    const files = this.vfs.as(hire.cred);
+    const main = this.vfs.as(CRED_SESSION_USER);
+    const manifest = (title: string) => JSON.stringify({ name: 'widgets', main: 'server.ts', slate: { title, runtime: 'worker', bindings: {} } });
+
+    const server = (count: number) => [
+      'import { SlateObject } from "kinu:slate";',
+      'export class Slate extends SlateObject {',
+      `  async count() { return ${String(count)}; }`,
+      '}',
+    ].join('\n');
+
+    files.mkdir(dir, { recursive: true });
+    files.writeFile(`${dir}/package.json`, manifest('Widgets'));
+    files.writeFile(`${home}/server.ts`, server(3));
+    files.rename(`${home}/server.ts`, `${dir}/server.ts`);
+    main.writeFile(`${dir}/package.json`, manifest('Widgets, reviewed'));
+    main.writeFile(`${dir}/server.ts`, server(4));
+
+    return await this.host.operation(hire, { op: 'preview', id: 'widgets' });
   }
 
   /** `approved` names members granted beyond the graph's read members. */

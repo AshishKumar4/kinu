@@ -9,6 +9,7 @@
     "./analytics": "./src/obs/analytics/index.ts",
     "./deploy": "./src/deploy/index.ts",
     "./identity": "./src/identity/index.ts",
+    "./workspace-birth": "./src/workspace-birth.ts",
     "./obs": "./src/obs/index.ts",
     "./protocol": "./src/protocol.ts",
     "./slates": "./src/slates/index.ts",

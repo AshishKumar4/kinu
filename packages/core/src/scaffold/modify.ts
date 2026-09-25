@@ -8,11 +8,8 @@
 import type { AgentRuntime } from '../types/agent-runtime';
 import { DEFAULT_CONFIG } from '../config';
 import { nowMs, today } from '../utils/date';
-import {
-  SCAFFOLD_FORBIDDEN_PATTERNS as FORBIDDEN_PATTERNS,
-  SCAFFOLD_REQUIRED_SIGNATURE as REQUIRED_SIGNATURE,
-} from './safety-patterns';
-import { checkMisevolution, recordMisevolutionVeto } from './misevolution';
+import { scaffoldRefusal } from './safety-patterns';
+import { checkMisevolution, recordMisevolutionVeto } from '../safety/misevolution';
 import { parsePathologyTag } from '../evolution/pathology';
 import { getCurrentScaffoldVersion, readScaffoldVersion } from './shadow';
 import type { ModifyResult } from '../types/scaffold';
@@ -38,15 +35,9 @@ export async function modifyScaffold(
     return { ok: false, stage: 1, error: `Rationale must be ≥${minRationaleLength} chars` };
   }
 
-  for (const pattern of FORBIDDEN_PATTERNS) {
-    if (pattern.test(code)) {
-      return { ok: false, stage: 1, error: `Forbidden pattern: ${pattern.source}` };
-    }
-  }
+  const refused = scaffoldRefusal(code);
 
-  if (!REQUIRED_SIGNATURE.test(code)) {
-    return { ok: false, stage: 1, error: 'Must export async function* run(rt, task)' };
-  }
+  if (refused !== null) return { ok: false, stage: 1, error: refused };
 
   // Misevolution veto; re-checked at promotion against the on-disk pending file.
   const misevolution = checkMisevolution(code);

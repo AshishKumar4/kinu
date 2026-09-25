@@ -210,10 +210,7 @@ if (import.meta.main) {
       proof: 'bun test scripts/jsonc.test.ts scripts/release-config.test.ts scripts/analytics-datasets.test.ts' },
     { file: 'scripts/setup-worktree.sh', owner: 'SCOPES and package name', classification: 'REPLACED',
       replacement: 'JSON.parse reads the top-level manifest name instead of sed field extraction',
-      proof: 'The nested-name smoke fixture returned @wrong before the change and @right after it.' },
-    { file: 'scripts/bench-devbox-strategies.ts', owner: 'parseOptions', classification: 'REPLACED',
-      replacement: 'node:util.parseArgs tokenizes declared options; benchmark domain validation remains local',
-      proof: 'bun test scripts/bench-restore-probe.test.ts --test-name-pattern "refuses at parse time and names G3|an armed decisive parse succeeds"' }];
+      proof: 'The nested-name smoke fixture returned @wrong before the change and @right after it.' }];
 
   if (process.argv.includes('--write') && pending.length === 0) writeFileSync(new URL('./pattern-inventory.json', import.meta.url), `${JSON.stringify({
     candidates: result.candidates.map(({ file, kind, owner, source, decision }) => ({

@@ -357,7 +357,7 @@ export function layerIntegrityFailure(input: {
 
 /** `chain` is the production lazy-mount path; `extract` is local development.
  *  Persisted: a box always attaches the way it was checkpointed. */
-export type ChainMode = 'chain' | 'extract';
+type ChainMode = 'chain' | 'extract';
 
 /** Mirrors the SDK's `CheckChangesResult.status`. `resync` means the retained
  *  change state was lost, so the directory counts as changed. */
@@ -689,12 +689,12 @@ function chainShell(exec: ContainerExec, root: string) {
     readMounts: async (): Promise<string> => await must('reading the mount table', 'cat /proc/mounts'),
     /** The checkpoint gate's reads, one container call ({@link tickProbeCommand}). */
     probeTick: async (): Promise<{ readonly mounts: string; readonly fingerprint: string }> => {
-      const probed = await must('reading the mount table and the upper fingerprint', tickProbeCommand(upperDir));
-      const split = probed.indexOf('\0');
+      const probed = await must('reading the upper fingerprint and the mount table', tickProbeCommand(upperDir));
+      const newline = probed.indexOf('\n');
 
-      return split === -1
-        ? { mounts: probed, fingerprint: '' }
-        : { mounts: probed.slice(0, split), fingerprint: probed.slice(split + 1).trim() };
+      return newline === -1
+        ? { mounts: '', fingerprint: probed.trim() }
+        : { mounts: probed.slice(newline + 1), fingerprint: probed.slice(0, newline).trim() };
     },
     /** A mount line without a usable upper is a box whose writes have nowhere to land. */
     pathExists: async (path: string): Promise<boolean> =>
@@ -2148,10 +2148,9 @@ export function upperFingerprintCommand(sourceDir: string): string {
   return `bash -o pipefail -c ${shellPath(walk)}`;
 }
 
-
-/** The checkpoint gate's reads in one exec: `/proc/mounts`, a NUL, then the fingerprint only when
- *  its walk succeeds, so a failed walk reads as an empty mark, never a hash of a partial walk. */
+/** The checkpoint gate's reads in one exec, a line each (P6): the upper's fingerprint, empty when
+ *  its walk fails so it never names a partial walk, then `/proc/mounts`. */
 function tickProbeCommand(sourceDir: string): string {
-  return '# devbox-tick-probe-v1\n'
-    + `cat /proc/mounts && printf '\\0' && { mark=$(${upperFingerprintCommand(sourceDir)}) && printf %s "$mark"; true; }`;
+  return '# devbox-tick-probe-v2\n'
+    + `mark=$(${upperFingerprintCommand(sourceDir)}) || mark=; printf '%s\\n' "$mark"; cat /proc/mounts`;
 }

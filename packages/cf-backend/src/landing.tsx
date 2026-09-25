@@ -19,15 +19,11 @@ window.fetch = Object.assign(
     const method = (init?.method ?? (parsedRequest.success ? parsedRequest.output.method : 'GET')).toUpperCase();
 
     if (method === 'GET' && path === '/api/user/profile') {
-      return Promise.resolve(
-        new Response(JSON.stringify(LANDING_PROFILE), { headers: { 'content-type': 'application/json' } }),
-      );
+      return Promise.resolve(Response.json(LANDING_PROFILE));
     }
 
     if (method === 'GET' && path === '/api/user/workspaces') {
-      return Promise.resolve(
-        new Response(JSON.stringify(LANDING_ROSTER), { headers: { 'content-type': 'application/json' } }),
-      );
+      return Promise.resolve(Response.json(LANDING_ROSTER));
     }
 
     return realFetch(input, init);

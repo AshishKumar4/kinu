@@ -8,7 +8,6 @@ import type { ToolCallRecord } from '../evolution/types';
 import type { HeadFileChange, HeadFileChangeSet, HeadId, SerializedMessage } from '../types/heads';
 import type { EvaluationGrounding } from '../types/evaluation';
 import type { Usage } from '../usage';
-import type { ToolSet } from 'ai';
 import type { BuiltinToolName } from '../tools/registry';
 import type { LoopOrigin } from '../scaffold/loop-origin';
 import type { MessageReference, MessagePartReference } from '../session/messages';
@@ -230,17 +229,4 @@ import type { WorkMode } from '../types/turn';
 
 /** `memory` and `skills` are withheld because they would address head-private stores. */
 export const HEAD_BUILTIN_TOOLS = ['eval', 'shell', 'file', 'web'] as const satisfies readonly BuiltinToolName[];
-
-/** One filter over a named set, so a builtin added upstream never silently appears on a confined surface. */
-export function keepBuiltins(builtin: ToolSet, names: readonly string[]): ToolSet {
-  const kept: ToolSet = {};
-
-  for (const name of names) {
-    const entry = builtin[name];
-
-    if (entry) kept[name] = entry;
-  }
-
-  return kept;
-}
 

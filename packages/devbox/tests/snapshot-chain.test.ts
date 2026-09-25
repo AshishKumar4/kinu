@@ -96,7 +96,7 @@ import {
   type CheckpointKind,
   type CheckpointOutcome,
 } from '../src/storage';
-import { sessionShellRefusal } from './support/session-shell';
+import { sessionShellOutput, sessionShellRefusal } from './support/session-shell';
 
 const CHAIN_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 
@@ -263,7 +263,7 @@ function shellLabel(world: ShellWorld): ShellOutcome {
 
   if (command === 'cat /proc/mounts') return { call: 'readMounts', stdout: mounts };
 
-  if (command.startsWith('# devbox-tick-probe-v1\n')) return { call: 'probeTick', stdout: `${mounts}\0${upperMark}` };
+  if (command.startsWith('# devbox-tick-probe-v2\n')) return { call: 'probeTick', stdout: `${upperMark}\n${mounts}` };
 
   const delta = DELTA_SHELL_REPLIES.get(command.split('\n')[0]);
 
@@ -2501,35 +2501,44 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       && call.includes('change watermark could not be advanced'))).toBe(true);
   });
 
-  test('an unchanged attached tick reads its gate in one container call, which bash runs', async () => {
-    const record = harness({ state: chainState({ upperMark: '7:4096:1700000000' }), mounts: MOUNTED });
-    const sent: string[] = [];
-    const inner = record.ports.exec;
-    record.ports.exec = async (command) => {
-      sent.push(command);
+  // The gate's one call runs on two shells: the image's sync runs it on its own and reads the bytes
+  // bash wrote, and a box that drives its own ticks runs it through the container server, which
+  // re-reads them by lines and drops NUL bytes (P6). Both must read the same mark.
+  for (const [shell, output] of [
+    ['on the sync\'s own shell', (raw: string): string => raw],
+    ['through the container server', sessionShellOutput],
+  ] as const) {
+    test(`an attached tick reads its gate in one container call ${shell}, which bash runs`, async () => {
+      const scratch = devboxScratchDir('devbox-probe');
+      const upper = join(scratch, 'upper');
+      mkdirSync(upper);
+      writeFileSync(join(upper, 'notes.md'), 'written since the attach');
+      const table = join(scratch, 'mounts');
+      writeFileSync(table, `${MOUNTED}\n`);
 
-      return await inner(command);
-    };
+      const tick = async (walked: string) => {
+        const record = harness({ state: chainState({ upperMark: fingerprintOf(upper) }), mounts: MOUNTED });
+        const probes: string[] = [];
+        const inner = record.ports.exec;
+        record.ports.exec = async (command) => {
+          if (!command.startsWith('# devbox-tick-probe-')) return await inner(command);
+          probes.push(command);
+          // The command as sent, run by bash over a scratch upper and mount table.
+          const ran = Bun.spawnSync(['bash', '-c', command.replaceAll(UPPER, walked).replaceAll('/proc/mounts', table)]);
 
-    const outcome = await checkpointOf(record, 'tick');
+          return { stdout: output(ran.stdout.toString()), stderr: output(ran.stderr.toString()), exitCode: ran.exitCode };
+        };
 
-    expect(outcome.reason).toBe('work directory is unchanged');
-    expect(record.calls.filter((call) => ['probeTick', 'readMounts', 'upperFingerprint'].includes(call)))
-      .toEqual(['probeTick']);
-    const probe = sent.find((command) => command.startsWith('# devbox-tick-probe-v1\n')) ?? '';
+        const outcome = await checkpointOf(record, 'tick');
 
-    // The command as sent, run on a scratch upper: the mount table, a NUL, then the mark only
-    // when the walk succeeds.
-    const run = (dir: string) => {
-      const out = Bun.spawnSync(['bash', '-c', probe.replaceAll('/var/tmp/devbox/upper', dir)]).stdout.toString();
+        return { reason: outcome.reason, probes: probes.length, reads: record.calls.filter((call) => ['readMounts', 'upperFingerprint'].includes(call)) };
+      };
 
-      return { mounts: out.slice(0, out.indexOf('\0')), mark: out.slice(out.indexOf('\0') + 1).trim() };
-    };
-
-    const scratch = devboxScratchDir('devbox-probe');
-    expect(run(scratch).mark).toBe(fingerprintOf(scratch));
-    expect(run(join(scratch, 'absent'))).toEqual({ mounts: expect.stringContaining(' /proc proc '), mark: '' });
-  });
+      expect(await tick(upper)).toEqual({ reason: 'work directory is unchanged', probes: 1, reads: [] });
+      // A walk that fails reads as no mark, which never matches, so the tick does not skip.
+      expect((await tick(join(scratch, 'absent'))).reason).not.toBe('work directory is unchanged');
+    });
+  }
 
   test('a failed publication leaves the previous record intact and records the reason', async () => {
     const record = harness({ state: chainState(), mounts: MOUNTED, failPublish: true });

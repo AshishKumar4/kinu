@@ -137,7 +137,7 @@ import {
   answersForDrainTurns,
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
-  checkpointAvailability, fileCheckpointListing, deviceFileCheckpoints,
+  checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore, deviceFileCheckpoints,
   CommandResultSchema,
   type CheckpointAvailability, type FileCheckpointListing, type FileCheckpointReads,
   type FileRestorePlan, type FileRestoreResult,
@@ -3457,8 +3457,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return getAlwaysActiveSkills(this.config);
   }
 
-  // Checkpoints live on the user's machine, reached via the user hub. Restore is owner-invoked,
-  // so it bypasses the per-agent consent gate.
+  // Checkpoints live on the user's machine; restore crosses its consent gate.
 
   private get deviceCheckpoints(): FileCheckpointReads {
     return this._deviceCheckpoints ??= deviceFileCheckpoints({
@@ -3479,12 +3478,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async planFileRestore(dir: string, id: string): Promise<FileRestorePlan> {
-    return this.deviceCheckpoints.plan(dir, id);
+    return fileRestorePlan(this.deviceCheckpoints, dir, id);
   }
 
   @callable()
   async restoreFileCheckpoint(dir: string, id: string): Promise<FileRestoreResult> {
-    return this.deviceCheckpoints.restore(dir, id);
+    return fileCheckpointRestore(this.deviceCheckpoints, dir, id);
   }
 
   /**
@@ -4464,10 +4463,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** The root's tabs read the claim when they load, and hear every change to it here. */
+  /** The root's tabs hear the claim when they connect ({@link ActorAgent}'s connect), and every change to it here. */
   protected override turnClaimChanged(): void {
-    this.broadcastToActor(null, JSON.stringify({ type: TURN_CLAIM_FRAME, claim: this.turnClaimState() }));
+    this.broadcastToActor(null, this.turnClaimFrame());
     this.overviewChanged();
+  }
+
+  protected override turnClaimFrame(): string {
+    return JSON.stringify({ type: TURN_CLAIM_FRAME, claim: this.turnClaimState() });
   }
 
   /**

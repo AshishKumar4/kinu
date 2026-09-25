@@ -11,7 +11,7 @@ import {
   DEVBOX_SYNC_HANDLER, DEVBOX_SYNC_HOST, containerChainPorts, decodeSyncConfig, parseCheckpointKind, syncCaller,
   syncWorker, type SyncAnswer,
 } from '../../src/sync';
-import { sessionShellRefusal } from './session-shell';
+import { sessionShellOutput, sessionShellRefusal } from './session-shell';
 
 /** Models `@cloudflare/sandbox` errors: `code` is a getter on an unexported `SandboxError` class,
  *  not an own property; a plain-field stand-in would pass checks the shipped SDK fails. */
@@ -342,6 +342,8 @@ export class FakeSandbox {
   destroys = 0;
   bootId: string | undefined;
   containerStarts = 0;
+  /** Each run of the start hook the SDK's start block makes (D26): one per wake of a box. */
+  startHooks = 0;
   readonly startWaitOptions: unknown[] = [];
   readonly files = new Map<string, string>();
   /** Recorded by the box's own `fuse-overlayfs` command and reported via `cat /proc/mounts`,
@@ -393,6 +395,8 @@ export class FakeSandbox {
     return { stdout: '', stderr: `Failed to change directory to '${cwd}'`, exitCode: 1 };
   }
 
+  /** The SDK's `exec`: the command runs in a session shell and its output comes back through the
+   *  container server's line reader (`sessionShellOutput`), unlike a program's own shell. */
   async #execInSession(
     session: string,
     command: string,
@@ -417,7 +421,9 @@ export class FakeSandbox {
     this.sessionCwds.set(session, options?.cwd ?? resting);
 
     try {
-      return await this.#execIn(command, options);
+      const { stdout, stderr, exitCode } = await this.#execIn(command, options);
+
+      return { stdout: sessionShellOutput(stdout), stderr: sessionShellOutput(stderr), exitCode };
     } finally {
       this.sessionCwds.set(session, resting);
     }
@@ -733,18 +739,19 @@ export class FakeSandbox {
     return { stdout: '', stderr: '', exitCode: 0 };
   }
 
-  /** The box's own programs and probes, answered from this container's state; null for any other. */
+  /** The box's own programs and probes, answered from this container's state with the bytes bash
+   *  writes; the session path hands them back as the container server does. Null for any other. */
   async #execBoxProgram(command: string): Promise<{ stdout: string; stderr: string; exitCode: number } | null> {
     if (command === 'cat /tmp/devbox-boot-id 2>/dev/null || true') return { stdout: this.bootId ?? '', stderr: '', exitCode: 0 };
 
-    if (command.startsWith("cat /tmp/devbox-boot-id 2>/dev/null; printf '\\0';")) {
-      return { stdout: `${this.bootId ?? ''}\0${this.syncRunning ? 'alive' : ''}`, stderr: '', exitCode: 0 };
+    if (command.startsWith('# devbox-beat-v1\n')) {
+      return { stdout: `${this.bootId ?? ''}\n${this.syncRunning ? 'alive' : ''}`, stderr: '', exitCode: 0 };
     }
 
     if (command === 'cat /proc/mounts') return { stdout: this.#procMounts(), stderr: '', exitCode: 0 };
 
-    if (command.startsWith('# devbox-tick-probe-v1\n')) {
-      return { stdout: `${this.#procMounts()}\0${this.#upperMark()}`, stderr: '', exitCode: 0 };
+    if (command.startsWith('# devbox-tick-probe-v2\n')) {
+      return { stdout: `${this.#upperMark()}\n${this.#procMounts()}`, stderr: '', exitCode: 0 };
     }
 
     if (command.startsWith('# devbox-sync-flush-v1\n')) return await this.#flushSync(command);
@@ -1093,6 +1100,7 @@ export class FakeSandbox {
 
     // The patched SDK runs the hook inside its start block, which holds the input gate until the
     // hook settles (D26); the hook's own container calls answer on a connection opened inside it.
+    this.startHooks += 1;
     const hook = this.onStart();
     this.initGate = Promise.allSettled([hook]).then(() => undefined);
 
@@ -1192,11 +1200,56 @@ export class FakeSandbox {
     );
   }
 
+  /** Also moves the object's alarm a second out, as the SDK's `scheduleNextAlarm` does for every row. */
   schedule(delaySeconds: number, callback: string): Promise<void> {
     this.schedules.push(callback);
     this.scheduleRows.push({ callback, time: Date.now() / 1000 + delaySeconds });
+    this.alarmAt = Date.now() + 1000;
 
     return Promise.resolve();
+  }
+
+  /** The object's one platform alarm, in ms, as the SDK leaves it after a pass; `null` once the
+   *  SDK deleted it, and then the platform never wakes the object on its own again. */
+  alarmAt: number | null = null;
+
+  /** What a scheduled callback threw: the SDK logs it and deletes the row all the same. */
+  readonly alarmCallbackErrors: unknown[] = [];
+
+  /** One pass of `Container.alarm` (containers 0.3.7, `container.js:1541-1629`): each due row's
+   *  callback runs, then its row goes; a row naming no member stays. A stopped container then keeps
+   *  an alarm only for a row still owed, and a running one always keeps one, at most 3 min out. */
+  async alarm(): Promise<void> {
+    for (const row of this.scheduleRows.slice()) {
+      if (row.time > Date.now() / 1000) continue;
+      const callback = this.#member(row.callback);
+
+      if (callback === undefined) continue;
+
+      try {
+        await callback();
+      } catch (error) {
+        this.alarmCallbackErrors.push(error);
+      }
+
+      const at = this.scheduleRows.indexOf(row);
+
+      if (at !== -1) this.scheduleRows.splice(at, 1);
+    }
+
+    const owed = this.scheduleRows.length === 0 ? null : Math.min(...this.scheduleRows.map((row) => row.time * 1000));
+    this.alarmAt = this.running.running ? Math.min(owed ?? Number.POSITIVE_INFINITY, Date.now() + 180_000) : owed;
+  }
+
+  /** The SDK calls a row's callback by name (`this[row.callback]`), a member of any class above. */
+  #member(name: string): (() => Promise<void>) | undefined {
+    for (let owner: object | null = Object.getPrototypeOf(this); owner !== null; owner = Object.getPrototypeOf(owner)) {
+      const method = v.safeParse(v.function(), Object.getOwnPropertyDescriptor(owner, name)?.value);
+
+      if (method.success) return async () => { await method.output.call(this); };
+    }
+
+    return undefined;
   }
 }
 
@@ -1341,4 +1394,18 @@ export async function deliver<T>(container: FakeSandbox, work: () => Promise<T>)
   await container.initGate;
 
   return await work();
+}
+
+/** The platform's side of the alarm: it fires the object's one alarm once due, until the SDK deletes
+ *  it or `passes` passes ran. `advance` moves the test's clock to the alarm; returns the passes run. */
+export async function wakeWhileArmed(container: FakeSandbox, advance: (to: number) => void, passes: number): Promise<number> {
+  let ran = 0;
+
+  while (ran < passes && container.alarmAt !== null) {
+    advance(container.alarmAt);
+    await container.alarm();
+    ran += 1;
+  }
+
+  return ran;
 }

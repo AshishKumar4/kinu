@@ -299,7 +299,7 @@ describe('OpenAI-compat provider', () => {
           object: 'list',
           data: [
             { id: 'model-a', name: 'Model A', context_window: 131072 },
-            { id: 'model-b' },
+            { id: 'model-b', context_window: 0.5 },
             { name: 'missing-id' },
           ],
         });

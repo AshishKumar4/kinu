@@ -1,13 +1,12 @@
 /** `tasks.*` in codemode: projects the native `tasks` dispatcher over the same TaskListStore. */
 import { codemodeText, type CodemodeProvider } from './sandbox-contract';
 import type { z } from 'zod';
-import { TASK_STATUSES, type TaskListStore } from '../tasks/store';
+import { TASK_STATUSES, type TaskListStore } from './task-store';
 import type { AgentConfigStore } from '../config/store';
 import { TOOL_REACH } from './registry';
-import type { ProfileCatalogEnvelope } from '../types/profile';
 import { decodeJsonValue } from '../utils/json';
 import {
-  createTasksDispatcher, TaskParentSchema, TaskRoleSchema, TaskStatusSchema, TaskTitlesSchema,
+  createTasksDispatcher, TaskParentSchema, TaskRoleSchema, TaskStatusSchema, TaskTitlesSchema, type RoleSwitch,
 } from './tasks-tool';
 import { refusedInput } from '../obs/index';
 import { branchableToolCall } from './outcome';
@@ -34,9 +33,9 @@ const TYPES = `export declare const tasks: {
 export function createTasksCodemodeProvider(
   taskList: TaskListStore,
   config: AgentConfigStore,
-  roleAuthority?: () => ProfileCatalogEnvelope | null,
+  roleSwitch?: RoleSwitch,
 ): CodemodeProvider {
-  const run = createTasksDispatcher(taskList, config, roleAuthority);
+  const run = createTasksDispatcher(taskList, config, roleSwitch);
 
   return {
     name: TOOL_REACH.tasks.codemode,

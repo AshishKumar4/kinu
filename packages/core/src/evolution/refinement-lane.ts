@@ -31,8 +31,8 @@ import { clampGepaEvalBudget } from '../config/store';
 import { getPendingPromptSection, listPromptSectionVersions } from '../prompting/section-store';
 import { PROMPT_SECTIONS } from '../prompting/section-templates';
 import { routeSkill, settleSkillApproval } from './refinement-skill';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { renderIssues } from '../utils/json';
 import { renderThrownChain, tolerate, type ErrorCode } from '../obs/index';
 import type { TemporaryRunRequest } from '../subordinates/temporary';
@@ -285,7 +285,7 @@ const OFF_SCHEMA_ANSWER: ErrorCode = 'bad_input';
 
 /** Instruction files the refiner may read itself, offered only when present:
  *  the port refuses an absent path by name. `memory/MEMORY.md` is where
- *  genesis (`identity/create.ts`) writes it; `AGENTS.md` is owner-written. */
+ *  genesis (`workspace-birth.ts`) writes it; `AGENTS.md` is owner-written. */
 const REFINER_CONTEXT_CANDIDATES: readonly string[] = ['memory/MEMORY.md', 'AGENTS.md'];
 
 async function presentContextRefs(deps: RefinementDeps): Promise<string[]> {

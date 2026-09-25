@@ -6,7 +6,6 @@ import type { LanguageModel, ToolSet } from 'ai';
 import {
   type HeadRuntime, type HeadGrounding, type SpawnedHead, type HeadInput, type HeadReport,
   type WebSearchProvider, type CodemodeProvider,
-  type HeadSplitRequest, type HeadSplitResult,
   type HeadMergeModelBinder, type ResolvedTurnProfile,
   type PublishHeadStream,
   type MissionGovernor, type ModelCallSink, type ModelOperationSink,
@@ -144,7 +143,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
       history: seat.actor.stores.history,
       codemodeTool: hostedCodemodeTool(seat.actor, deps.codemodeExtras()),
       webSearch: deps.webSearch,
-      split: (request) => runLocalSplit(request, input, deps),
+      split: (request) => runHeadSplit(new HeadController(createCLIHeadRuntime(deps), deps.journal(), REAL_CLOCK), input, request),
     });
 
     const mission = localMissionScope(deps.governor(), input.missionLabels ?? []);
@@ -171,12 +170,4 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
   } finally {
     await seat.release();
   }
-}
-
-async function runLocalSplit(
-  request: HeadSplitRequest,
-  input: HeadInput,
-  deps: CLIHeadRuntimeDeps,
-): Promise<HeadSplitResult> {
-  return await runHeadSplit(new HeadController(createCLIHeadRuntime(deps), deps.journal(), REAL_CLOCK), input, request);
 }

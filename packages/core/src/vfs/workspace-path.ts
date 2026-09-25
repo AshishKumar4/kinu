@@ -3,6 +3,9 @@ export const WORKSPACE_ROOT = '/home/main';
 
 export const LEGACY_WORKSPACE_ROOT = '/home/user';
 
+/** Every agent's. */
+export const SLATES_ROOT = '/slates';
+
 /** Platform state, not anyone's work: Nimbus runtimes, bindings and images; Kinu agent state. */
 const SYSTEM_MANAGED_DIRECTORIES: ReadonlySet<string> = new Set(['.nimbus', '.kinu']);
 

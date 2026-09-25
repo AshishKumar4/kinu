@@ -165,7 +165,11 @@ export function classifyRecoveredFiber(
   try {
     if (ctx.name.startsWith(BACKGROUND_FIBER_PREFIX)) return redriveBackgroundJobLane(transports, ctx);
 
-    if (ctx.name === EVOLUTION_LANE_FIBER) return redriveEvolutionLane(transports, ctx);
+    // Not `settleEvolution()`: its promises died with the last isolate. `runDueSessionEvolution()`
+    // drains the durable queues and is idempotent.
+    if (ctx.name === EVOLUTION_LANE_FIBER) {
+      return redriveLane(transports, ctx, { name: EVOLUTION_LANE_FIBER, redrive: 'session-evolution' }, () => transports.runDueSessionEvolution());
+    }
 
     if (ctx.name === ADVISOR_LANE_FIBER) return redriveAdvisorLane(transports, ctx);
 
@@ -173,7 +177,11 @@ export function classifyRecoveredFiber(
 
     if (ctx.name === MCP_WARM_LANE_FIBER) return recoverMcpWarmLane();
 
-    if (ctx.name === TERMINAL_LANE_FIBER) return armTerminalLaneRecovery(transports, ctx);
+    // Replay nothing in the init gate (it awaits SMTP, peers, models); arm the ledger's own
+    // retry wake, whose alarm replays under the claim join.
+    if (ctx.name === TERMINAL_LANE_FIBER) {
+      return redriveLane(transports, ctx, { name: TERMINAL_LANE_FIBER, redrive: 'terminal-wake' }, () => transports.armOwedTerminalRecovery());
+    }
 
     if (ctx.name === FORK_NOTICE_LANE_FIBER) return redriveForkNoticeLane(transports, ctx);
 
@@ -192,17 +200,16 @@ export function classifyRecoveredFiber(
   }
 }
 
-/** Terminal effects lane: replay nothing in the init gate (it awaits SMTP, peers, models);
- *  arm the ledger's own retry wake, whose alarm replays under the claim join. */
-function armTerminalLaneRecovery(
+/** Hands the lane's `body` to a carrier under its own fiber name. */
+function redriveLane(
   transports: FiberLaneTransports,
   ctx: FiberRecoveryContext,
+  lane: { readonly name: string; readonly redrive: string },
+  body: () => Promise<void>,
 ): FiberRecoveryResult {
-  transports.redrive(
-    TERMINAL_LANE_FIBER, fiberSnapshot(ctx), () => transports.armOwedTerminalRecovery(),
-  );
+  transports.redrive(lane.name, fiberSnapshot(ctx), body);
 
-  return { status: 'completed', snapshot: { lane: TERMINAL_LANE_FIBER, redrive: 'terminal-wake' } };
+  return { status: 'completed', snapshot: { lane: lane.name, redrive: lane.redrive } };
 }
 
 /**
@@ -227,21 +234,6 @@ function redriveBackgroundJobLane(
   });
 
   return { status: 'completed', snapshot: { lane: ctx.name, redrive: 'background-job' } };
-}
-
-/**
- * Not `settleEvolution()`: its promises died with the last isolate. `runDueSessionEvolution()`
- * drains the durable queues and is idempotent (windows claimed once, trials dropped after scoring).
- */
-function redriveEvolutionLane(
-  transports: FiberLaneTransports,
-  ctx: FiberRecoveryContext,
-): FiberRecoveryResult {
-  transports.redrive(
-    EVOLUTION_LANE_FIBER, fiberSnapshot(ctx), () => transports.runDueSessionEvolution(),
-  );
-
-  return { status: 'completed', snapshot: { lane: EVOLUTION_LANE_FIBER, redrive: 'session-evolution' } };
 }
 
 /**

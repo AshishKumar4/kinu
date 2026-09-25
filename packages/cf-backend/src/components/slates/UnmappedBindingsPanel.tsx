@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import { ArrowSquareOutIcon, PlugsConnectedIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
-import { APP_ROUTES, PLANE, describeBindings, parseSlateProject, workspacePath, type Rpc, type SlateBindingDeclaration } from "@kinu.run/core";
+import { APP_ROUTES, PLANE, SLATES_ROOT, describeBindings, parseSlateProject, type Rpc, type SlateBindingDeclaration } from "@kinu.run/core";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { BINDING_KIND_LABEL } from "@/pages/BlueprintPage";
@@ -45,7 +45,7 @@ export function UnmappedBindingsPanel({ slate, title, rpc, onOpen, fixture }: {
 
   const load = useCallback(async (): Promise<SlateBindingDeclaration[]> => {
     if (fixture !== undefined) return fixture;
-    const file = v.parse(FileTextSchema, await rpc("readExecutorFile", [PLANE, workspacePath(`slates/${slate}/package.json`)]));
+    const file = v.parse(FileTextSchema, await rpc("readExecutorFile", [PLANE, `${SLATES_ROOT}/${slate}/package.json`]));
 
     if (file.content === undefined) throw new Error(file.error ?? "package.json could not be read");
 

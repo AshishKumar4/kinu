@@ -21,7 +21,7 @@ import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import type { ScaffoldArchiveEntry } from '../src/scaffold/archive';
 import { RunEventRecorder } from '../src/events/recorder';
 import type { ToolCallRecord } from '../src/evolution/types';
-import { jsonObjectOnlyInstruction } from '../src/prompts/structured';
+import { jsonObjectOnlyInstruction } from '../src/providers/structured';
 import { present } from '@kinu.run/test-utils';
 
 /** The production schema: the eval split reads the message and run-event ledgers too. */

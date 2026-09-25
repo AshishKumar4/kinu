@@ -18,7 +18,6 @@ export const SCRATCH_PREFIXES = [
   'devbox-digest-',
   // The devbox bench-decision suite's control fixtures.
   'devbox-control-',
-  'fuse-probe-',
   'bench-external-',
   'cc-corpus-',
   'deploy-isolation-',

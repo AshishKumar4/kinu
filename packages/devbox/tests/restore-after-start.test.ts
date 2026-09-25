@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import type { RestoreClockPhase } from '../src/devbox';
+import type { RestoreClockPhase } from '../src/restoration';
 import type { StoredValue } from '../src/storage';
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
 import {

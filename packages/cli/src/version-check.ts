@@ -19,7 +19,7 @@ const ServedVersionSchema = v.object({
   builtAt: v.optional(v.string()),
 });
 
-export interface ServedVersion {
+interface ServedVersion {
   version: string;
   sha?: string;
   builtAt?: string;
@@ -65,7 +65,7 @@ export async function fetchServedVersion(
   }
 }
 
-export interface NoticeContext {
+interface NoticeContext {
   config: Pick<KinuConfig, 'origin' | 'updateCheck' | 'updateCheckedAt'>;
   isTTY: boolean;
   now: number;

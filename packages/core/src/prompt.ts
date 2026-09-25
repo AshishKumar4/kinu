@@ -21,7 +21,7 @@ import { DEFAULT_SOUL_MD } from './identity/soul';
 import { renderAgentsMdSection, type AgentsMdSources } from './prompting/agents-md';
 import {
   WORKSPACE_INSTRUCTIONS_DELIMITER, WORKSPACE_INSTRUCTIONS_TAG, sealDelimiters,
-} from './prompting/sections';
+} from './utils/prompt-sections';
 import {
   AGENT_NAMES_LINE,
   BACKGROUND_WORK_SECTION,

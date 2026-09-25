@@ -7,7 +7,7 @@ import { makeSql } from './helpers';
 import {
   CRAFT_INVOCATION_QUALITY, CRAFT_NEUTRAL_PRIOR,
   craftCreatesTool, craftFailureBlame, craftFailureMarker, craftInvocationError, craftInvocationSites,
-  createCraftLedger, stripNonCode,
+  createCraftLedger,
 } from '../src/craft/in-episode';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { feedbackToQuality } from '../src/evolution/outcomes';
@@ -46,8 +46,7 @@ describe('craftInvocationSites — what the runtime saw called', () => {
       .toEqual(['summarizeAll']);
   });
 
-  test('a stored name that cannot be dot-called is skipped, never interpolated', () => {
-    // Regex metacharacters in a stored name must not become pattern syntax.
+  test('a stored name that is not the called name matches nothing', () => {
     expect(craftInvocationSites('tools.a.b(1)', ['a.b'])).toEqual([]);
     expect(craftInvocationSites('tools.x(1)', ['.*'])).toEqual([]);
   });
@@ -60,10 +59,13 @@ describe('craftInvocationSites — what the runtime saw called', () => {
     expect(craftInvocationSites('`${ f({a: tools.summarize(1)}) }`', ['summarize'])).toEqual(['summarize']);
   });
 
-  test('stripNonCode replaces spans rather than joining what surrounded them', () => {
-    expect(stripNonCode('a"x"b')).toBe('a b');
-    expect(stripNonCode('a/*x*/b')).toBe('a b');
-    expect(stripNonCode('"\\""')).toBe(' ');
+  test('a call is read off the syntax tree, whatever its spelling', () => {
+    expect(craftInvocationSites('await tools["summarize"](1)', ['summarize'])).toEqual(['summarize']);
+    expect(craftInvocationSites('await tools.summarize?.(1)', ['summarize'])).toEqual(['summarize']);
+    // A regex literal holding a quote is not the start of a string that swallows the call after it.
+    expect(craftInvocationSites('const q = /"/; await tools.summarize(1)', ['summarize'])).toEqual(['summarize']);
+    // The sandbox strips a markdown fence before it runs the program.
+    expect(craftInvocationSites('```js\nawait tools.summarize(1)\n```', ['summarize'])).toEqual(['summarize']);
   });
 });
 

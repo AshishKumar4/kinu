@@ -10,10 +10,10 @@ import type { AgentConfigStore } from '../config/store';
 import { clampGepaEvalBudget } from '../config/store';
 import type { ModelCallSink, ModelCallSpend, ModelOperationSink } from '../events/model-call';
 import { generateReported } from '../providers/model-invocation';
-import { effortFor } from '../strategy/effort';
-import { evidenceWindow } from '../prompts/evidence-window';
+import { effortFor } from '../providers/effort';
+import { evidenceWindow } from '../utils/evidence-window';
 import { EVIDENCE_BUDGETS } from '../types/evidence';
-import { extractJsonObject, generateJson, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { extractJsonObject, generateJson, jsonObjectOnlyInstruction } from '../providers/structured';
 import {
   runScaffold, scaffoldEventText,
   type ScaffoldRunOptions, type ScaffoldRunResult,

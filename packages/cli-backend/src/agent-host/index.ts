@@ -1,9 +1,7 @@
 export {
   LocalAgentHost,
-  type AgentEventListener,
   type LocalAgentHostOptions,
   type LocalHostedAgent,
-  type LocalTickResult,
 } from './host';
 
 export {

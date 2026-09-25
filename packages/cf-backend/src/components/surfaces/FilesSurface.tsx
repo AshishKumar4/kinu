@@ -1,7 +1,7 @@
 /** Raw bytes ride the files HTTP route: the RPC transport is the chat WebSocket, whose 1 MiB frame ceiling is below ordinary file sizes. */
 import {
   useCallback, useEffect, useMemo, useRef, useState,
-  type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
@@ -20,6 +20,7 @@ import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useToggledSet } from "@/hooks/use-toggled-set";
+import { useFileDrop } from "@/hooks/use-file-drop";
 import { FileViewer } from "./FileViewer";
 import {
   PLANE, entryRevision, nextTreeCache, putFileBytes, type CachedDir, type FileText,
@@ -69,7 +70,6 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const [renaming, setRenaming] = useState<{ path: string; draft: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [uploads, setUploads] = useState<UploadState[]>([]);
-  const [dragOver, setDragOver] = useState(false);
   const [treeCache, setTreeCache] = useState<ReadonlyMap<string, CachedDir>>(new Map());
   const { set: expanded, toggle: toggleExpanded } = useToggledSet(() => new Set(["/"]));
   const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -190,23 +190,13 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     await reloadListing();
   }), [preview, reloadListing, rpc, run]);
 
-  const onListDragOver = useCallback((e: ReactDragEvent) => {
-    if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragOver(true); }
-  }, []);
-
-  const onListDragLeave = useCallback((e: ReactDragEvent) => {
-    if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
-    setDragOver(false);
-  }, []);
-
-  const onListDrop = useCallback((e: ReactDragEvent) => {
-    if (!e.dataTransfer.files.length) return;
-    e.preventDefault();
-    setDragOver(false);
-    const dropped = [...e.dataTransfer.files];
+  const uploadDropped = useCallback((files: FileList) => {
+    const dropped = [...files];
 
     return run(() => uploadFiles(dropped));
   }, [run, uploadFiles]);
+
+  const { dragOver, handlers: listDrop } = useFileDrop(uploadDropped);
 
   const atRoot = path === "/";
   const segments = path.split("/").filter(Boolean);
@@ -376,7 +366,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
           tabIndex={0}
           onKeyDown={onKeyDown}
           className={`flex-1 overflow-y-auto py-1 text-xs outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--c-accent)] ${dragOver ? "outline-dashed outline-2 -outline-offset-2 outline-[var(--c-accent)]" : ""}`}
-          onDragOver={onListDragOver} onDragLeave={onListDragLeave} onDrop={onListDrop}
+          {...listDrop}
         >
           {err && <div className="p-danger px-3 py-1.5 break-words">{err}</div>}
           {uploads.map((u) => (

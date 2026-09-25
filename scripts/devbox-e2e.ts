@@ -30,8 +30,8 @@
  * measurement. Arms run concurrently, each in its own container, and a duration
  * recorded here is a driver-side wall clock that includes this process's poll
  * cadence — fine for "did this settle at all", useless for "which arm is
- * faster", which is `bench-devbox-strategies.ts`'s question and is answered
- * with the fixture's own in-container timings. It proves one lifecycle per arm
+ * faster", which was the removed strategy comparison's question (D27 in
+ * docs/DEVBOX-DECISIONS.md). It proves one lifecycle per arm
  * per run, at two tree sizes, on one account, so it is a smoke test of
  * durability rather than a durability proof; a strategy that fails one run in
  * ten passes here nine times.
@@ -53,7 +53,7 @@ import {
   retryTransient, startupOperation, stopOperation, teardownLiveArms, writeFileInBox,
   writeArmArtifact,
   type ArmFixture, type Fixture, type Strategy,
-} from './bench-devbox-strategies';
+} from './bench-devbox-fixture';
 import {
   WRANGLER_FAILED, delay, describeThrown, publishTeardown, runTeardownOnce, runWrangler,
 } from './fixtures/r2-bench/deploy-substrate';
@@ -1051,7 +1051,7 @@ export function render(verdicts: readonly StrategyVerdict[], options: Options): 
   // is invisible exactly when the tree is green.
   lines.push('What a green run here does NOT prove:');
   lines.push('  - nothing about SPEED. Durations are driver-side wall clocks with five arms in');
-  lines.push('    flight; ranking is bench-devbox-strategies.ts\'s question, on the fixture\'s own timings.');
+  lines.push('    flight; ranking strategies is not this driver\'s question.');
   lines.push('  - nothing about a defect that needs a bigger tree than this suite writes');
   lines.push(`    (${String(options.midScaleMib)} MiB), or more than one recycle per size.`);
   lines.push('  - nothing about concurrency INSIDE one box: one writer, one lifecycle, no contention.');

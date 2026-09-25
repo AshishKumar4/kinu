@@ -13,7 +13,7 @@ import type { LanguageModel, Tool, ToolSet } from 'ai';
 import {
   HeadCapture, buildHeadToolSet, runHeadInference,
   collectDynamicContext, explorationActorKey, headStatusUnsettled, resolveModelRoute,
-  storedHeadReportStatus, subordinateDelegatesOf,
+  registeredParent, storedHeadReportStatus, subordinateDelegatesOf,
   type ActorHost, type ActorReference, type BranchExploration, type BranchHandle,
   type BranchReflection, type CraftedTool, type HeadId, type HeadInferenceDeps,
   type HeadInput, type HeadReport, type HeadSplitRequest, type HeadSplitResult,
@@ -92,18 +92,6 @@ export interface ExplorationHostSeams {
   split(actor: HostedActor, runtime: CFRuntime, input: HeadInput): (request: HeadSplitRequest) => Promise<HeadSplitResult>;
 }
 
-/** The parent reference the directory recorded; the row is the only authority on it. */
-function explorationParent(seams: ExplorationHostSeams, reference: ActorReference): ActorReference {
-  const parentId = reference.parentActorId;
-
-  if (parentId === null) throw new KinuError('denied', 'An exploration actor always has a parent.');
-  const parent = seams.host.describe(parentId);
-
-  if (parent === null) throw new KinuError('missing', 'The exploration actor has no registered parent.');
-
-  return { actorId: parent.actorId, workspaceId: parent.workspaceId, parentActorId: parent.parentActorId };
-}
-
 /** Retire an exploration actor. `observed` travels when a live claim was seen, so the host settles it. */
 async function retireExploration(
   seams: ExplorationHostSeams, reference: ActorReference, name: string,
@@ -114,7 +102,10 @@ async function retireExploration(
 
   if (claim !== null) request.observed = { turnId: claim.turnId, epoch: claim.epoch };
   const retirement = actorRetirementFor(request);
-  await seams.host.retire(explorationParent(seams, reference), retirement);
+  await seams.host.retire(registeredParent(seams.host, reference, {
+    orphan: 'An exploration actor always has a parent.',
+    unregistered: 'The exploration actor has no registered parent.',
+  }), retirement);
 }
 
 /** The caller's pinned spec wins (heterogeneous heads); else the route's, resolved through the

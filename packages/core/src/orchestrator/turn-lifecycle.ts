@@ -1,7 +1,7 @@
 /** Turn settle spine both backends share: run-event bracket, graded snapshot, compaction trigger, overflow recovery, credit. */
 
 import type { TurnContextBudget } from '../context-budget';
-import type { TurnFileLedger } from '../tools/file-ledger';
+import type { TurnFileLedger } from '../vfs/file-ledger';
 import type {
   CompletionGateRecord, CraftCycleRecord, ExecutionRecoveryRecord,
   OpenTurnIdentity, RunEventInput, TurnSteeringRecord,

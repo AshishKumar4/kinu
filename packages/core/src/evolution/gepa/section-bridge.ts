@@ -10,7 +10,7 @@
 import type { SqlExecutor } from '../../types/primitives';
 import type { ActorHandle } from '../../identity/actor-handle';
 import { renderThrownChain } from '../../obs/error';
-import { checkMisevolution } from '../../scaffold/misevolution';
+import { checkMisevolutionForSurface } from '../../safety/misevolution';
 import { PROMPT_SECTIONS } from '../../prompting/section-templates';
 import { templateContract, type PromptSection } from '../../prompting/template';
 import {
@@ -110,7 +110,7 @@ export async function runSectionGepa<I = unknown, E = unknown>(
             + `flags: ${wanted.flags.join(', ') || '(none)'}}`;
         }
 
-        const misevolution = checkMisevolution(source);
+        const misevolution = checkMisevolutionForSurface({ prose: source }, 'scaffold');
 
         return misevolution.ok
           ? null

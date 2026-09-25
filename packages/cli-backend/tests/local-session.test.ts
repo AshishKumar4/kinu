@@ -1250,7 +1250,7 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
     const runner = new BackgroundJobRunner({
       store,
       fiber: async (_name, fn) => fn({ stash: () => {}, snapshot: null }),
-      inbox: new Inbox(session),
+      inbox: new Inbox(session.host),
       scheduleDrain: () => {},
     });
 
@@ -2029,7 +2029,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
   test('broadcast fans out as a SessionEvent', async () => {
     const { session, events } = setup();
-    session.broadcast({ type: 'job_update', jobId: 'x' });
+    session.host.broadcast({ type: 'job_update', jobId: 'x' });
     await session.flushEvents();
     const b = events.find((event) => event.type === 'broadcast');
 

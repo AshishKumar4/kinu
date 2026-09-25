@@ -91,6 +91,22 @@ export interface ActorHost {
   resumable(limit?: number): readonly ResumableActorTurn[];
 }
 
+/** The parent reference the directory row records; the row is the only authority on it. */
+export function registeredParent(
+  host: Pick<ActorHost, 'describe'>,
+  child: Pick<WorkspaceActor, 'parentActorId'>,
+  refusal: { readonly orphan: string; readonly unregistered: string },
+): ActorReference {
+  const parentId = child.parentActorId;
+
+  if (parentId === null) throw new KinuError('denied', refusal.orphan);
+  const parent = host.describe(parentId);
+
+  if (parent === null) throw new KinuError('missing', refusal.unregistered);
+
+  return { actorId: parent.actorId, workspaceId: parent.workspaceId, parentActorId: parent.parentActorId };
+}
+
 // Per binding, not per actor id: an id-keyed fence would be revived by the next acquisition.
 interface ReleaseFence {
   released: boolean;

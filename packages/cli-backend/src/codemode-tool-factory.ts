@@ -23,7 +23,7 @@ import { tool } from 'ai';
 import { normalizeCode } from '@cloudflare/codemode/normalize';
 import * as v from 'valibot';
 
-export interface NodeExecuteToolFactoryDeps {
+interface NodeExecuteToolFactoryDeps {
   extraProviders?: CodemodeProvider[];
 }
 
@@ -38,22 +38,18 @@ const BuiltinsSchema = v.object({ loaded: v.looseObject({}) });
 
 type KinuNode = v.InferOutput<typeof KinuNodeSchema> & { readonly builtins: v.InferOutput<typeof BuiltinsSchema>['loaded'] };
 
-/** A data URL: the module exists only as the source the hosted sandbox loads. */
-async function importKinuNode(): Promise<KinuNode> {
-  const node = v.parse(KinuNodeSchema, await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`));
-
-  return { ...node, builtins: v.parse(BuiltinsSchema, await node.loadBuiltins()).loaded };
-}
-
 let kinuNode: Promise<KinuNode> | undefined;
 
+/** A data URL: the module exists only as the source the hosted sandbox loads. */
 function loadKinuNode(): Promise<KinuNode> {
-  kinuNode ??= importKinuNode();
+  kinuNode ??= (async () => {
+    const node = v.parse(KinuNodeSchema, await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`));
+
+    return { ...node, builtins: v.parse(BuiltinsSchema, await node.loadBuiltins()).loaded };
+  })();
 
   return kinuNode;
 }
-
-const abortOptionsSchema = v.object({ abortSignal: v.optional(v.instance(AbortSignal)) });
 
 type CodemodeExecute = CodemodeProvider['tools'][string]['execute'];
 
@@ -93,7 +89,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
         const sandboxConsole = { log: capture, info: capture, warn: capture, error: capture, debug: capture, trace: capture, dir: capture };
 
         try {
-          const signal = readAbortSignal({ options });
+          const signal = options.abortSignal;
           const context = signal ? { signal } : undefined;
           const toolBindings: Record<string, CodemodeExecute | CraftedExecute> = {};
 
@@ -193,10 +189,4 @@ function formatLogArg(input: { value: unknown }): string {
   catch (error) {
     return `unserializable tool input: ${renderThrownChain({ cause: error })}`;
   }
-}
-
-function readAbortSignal(input: { options: unknown }): AbortSignal | undefined {
-  const parsed = v.safeParse(abortOptionsSchema, input.options);
-
-  return parsed.success ? parsed.output.abortSignal : undefined;
 }

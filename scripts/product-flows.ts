@@ -20,7 +20,7 @@
  */
 import type { Browser, ElementHandle, Page } from 'puppeteer';
 import * as v from 'valibot';
-import { workspacePath } from '@kinu.run/core';
+import { SLATES_ROOT } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -979,7 +979,7 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
     const ledger = await frameLedger(page);
 
-    await sendAndSettle(page, `Use the file tool to create a slate at /home/user/slates/${FLOW_SLATE.id}/. `
+    await sendAndSettle(page, `Use the file tool to create a slate at ${SLATES_ROOT}/${FLOW_SLATE.id}/. `
       + `Write package.json with main "server.ts" and slate {"title":"${FLOW_SLATE.title}","port":8788,"bindings":{}}. `
       + `Write server.ts so the slate answers GET / with an HTML page whose body is <h1>${FLOW_SLATE.page}</h1>. `
       + 'Start its preview. Reply with the preview URL.');
@@ -1207,7 +1207,7 @@ async function writeWorkspaceFile(target: FlowTarget, workspace: string, path: s
 
 async function workspaceWithSlate(target: FlowTarget, subject: string): Promise<string> {
   const workspace = await createFlowWorkspace(target, subject);
-  const root = workspacePath(`slates/${DRIVE_SLATE.id}`);
+  const root = `${SLATES_ROOT}/${DRIVE_SLATE.id}`;
 
   await writeWorkspaceFile(target, workspace, `${root}/package.json`, JSON.stringify({
     name: DRIVE_SLATE.id, main: 'server.ts', slate: { title: DRIVE_SLATE.title, bindings: {} },

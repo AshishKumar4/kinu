@@ -1,14 +1,10 @@
 import type { SelectOption, SelectRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { formatContextWindow, CHANGE_KIND_GLYPH, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry } from '@kinu.run/core';
-import { takeEvidence } from '@kinu.run/core';
+import { CHANGE_KIND_GLYPH, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS, clipText, filterModels, formatContextWindow, formatModelSpec, modelTestText, parseModelSpec, specWithoutAccount, takeEvidence, type AgentModelEntry, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ModelTestResult, type ProviderFailure, type ShellApprovalRequest } from '@kinu.run/core';
 import { filterCommands, type SlashCommandInfo } from '../slash-commands';
-import { filterModels, formatModelSpec, parseModelSpec, specWithoutAccount, type AgentModelEntry } from '@kinu.run/core';
-import type { ProviderFailure, ShellApprovalRequest } from '@kinu.run/core';
 import type { AgentChangelogView, ForkPoint } from '../agent-client';
 import type { DeviceConnectPromptState } from './use-device-connect';
-import { clipText, modelTestText, type ModelTestResult } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { createKeyDispatcher, useKeybindingRegistry, type TuiActionId } from './actions';
 import {
@@ -18,9 +14,18 @@ import {
   type TuiThemeDefinition,
 } from './theme';
 
-export interface OverlayGeometry {
+interface OverlayGeometry {
   width: number;
   height: number;
+}
+
+/** A `select` handler that ignores an index the list no longer holds. */
+function selectAt<T>(items: readonly T[], onSelect: (item: T) => void): (index: number) => void {
+  return (index) => {
+    const item = items[index];
+
+    if (item !== undefined) onSelect(item);
+  };
 }
 
 interface CommandHintProps {
@@ -190,11 +195,7 @@ export function CommandPaletteOverlay({ commands, terminal, onSelect }: CommandP
           showDescription={false}
           showScrollIndicator={true}
           wrapSelection={true}
-          onSelect={(index) => {
-            const command = filtered[index];
-
-            if (command) onSelect(command);
-          }}
+          onSelect={selectAt(filtered, onSelect)}
           style={{
             width: '100%',
             flexGrow: 1,
@@ -288,11 +289,7 @@ export function SettingsOverlay({ settings, terminal, onSelect }: SettingsOverla
           showDescription={false}
           showScrollIndicator={true}
           wrapSelection={true}
-          onSelect={(index) => {
-            const setting = filtered[index];
-
-            if (setting) onSelect(setting);
-          }}
+          onSelect={selectAt(filtered, onSelect)}
           style={{
             width: '100%',
             flexGrow: 1,
@@ -521,11 +518,7 @@ function ModelListOverlay({ models, failures, currentSpec, terminal, loading, er
           showDescription={false}
           showScrollIndicator={true}
           wrapSelection={true}
-          onSelect={(index) => {
-            const selected = filteredModels[index];
-
-            if (selected) onSelect(selected);
-          }}
+          onSelect={selectAt(filteredModels, onSelect)}
           style={{
             flexGrow: 1,
             height: compact ? 1 : Math.max(3, paletteHeight - 6),
@@ -595,11 +588,7 @@ export function WalkbackOverlay({ candidates, terminal, onSelect }: WalkbackOver
         showDescription={false}
         showScrollIndicator={true}
         wrapSelection={true}
-          onSelect={(index) => {
-            const selected = candidates[index];
-
-            if (selected) onSelect(selected);
-        }}
+          onSelect={selectAt(candidates, onSelect)}
         style={{
           flexGrow: 1,
           height: compact ? Math.max(1, paletteHeight - 4) : Math.max(3, paletteHeight - 5),
@@ -663,11 +652,7 @@ export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayP
           showDescription={true}
           showScrollIndicator={true}
           wrapSelection={true}
-          onSelect={(index) => {
-            const selected = view.entries[index];
-
-            if (selected) onSelect(selected);
-          }}
+          onSelect={selectAt(view.entries, onSelect)}
           style={{
             flexGrow: 1,
             height: compact ? Math.max(1, paletteHeight - 4) : Math.max(3, paletteHeight - 5),
@@ -736,11 +721,7 @@ export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
         showDescription={true}
         showScrollIndicator={true}
         wrapSelection={true}
-        onSelect={(index) => {
-          const selected = set.candidates[index];
-
-          if (selected) onSelect(selected);
-        }}
+        onSelect={selectAt(set.candidates, onSelect)}
         style={{
           flexGrow: 1,
           height: compact ? Math.max(1, paletteHeight - 4) : Math.max(3, paletteHeight - 6),
@@ -787,11 +768,7 @@ export function PromptHistoryOverlay({ entries, terminal, onSelect }: {
       {filtered.length === 0 ? <PaletteLine text="No matching prompts" width={innerWidth} color={colors.text.muted} /> : (
         <select id="prompt-history-results" ref={selectRef} focused={false} showDescription={false} showScrollIndicator={true}
           options={filtered.map((text) => ({ name: clipText(text.replace(/\s+/g, ' '), innerWidth), description: '', value: text }))}
-          onSelect={(index) => {
-            const text = filtered[index];
-
-            if (text !== undefined) onSelect(text);
-          }}
+          onSelect={selectAt(filtered, onSelect)}
           style={{ height: Math.max(1, paletteHeight - 6), backgroundColor: colors.background.overlay,
             textColor: colors.text.primary, selectedBackgroundColor: colors.background.selection,
             selectedTextColor: colors.text.strong }} />

@@ -327,7 +327,9 @@ that VFS. In an `eval` program, `process.cwd()` is the workspace root, and the
 
 ### Slates
 
-A slate is an authored project under `/home/main/slates/<id>/`. For the default
+A slate is an authored project under `/slates/<id>/`. `/slates` is the
+workspace's, not one agent's: every agent, hired ones too, makes, edits and
+previews slates there, and only the workspace root makes one live. For the default
 `worker` runtime, `package.json` `main` names the module that exports
 `class Slate extends SlateObject` from `kinu:slate`; every public method is
 callable from the client. A `node` runtime instead names a server `slate.port`
@@ -356,7 +358,7 @@ and is the UI's fork-chat.
 | `memory.*` | `save`, `search`, `conversations`, and (when a FactsStore is wired) `remember`/`recall`/`forget` | `createMemoryDispatcher` (`tools/memory-tool.ts`) |
 | `tasks.*` | `add`, `update`, `list`, `mode` | `createTasksDispatcher` over the same `TaskListStore` instance (`tools/tasks-tool.ts`) |
 | `report.*` | `send(status, content, handoff?)` | the native `report` tool's `ReportToolDeps.report` |
-| `release.*` | `board`/`bindSource`/`create`/`update`/`transition`/`requestApproval`, plus `apply`/`runChecks`/`preview`/`deploy`/`rollback` (engine backends) or `recordCheck`/`recordDeployment` (ledger-only backends) | `runReleaseAction` (`tools/release-tool.ts`); release has no native tool, so this is its only reach |
+| `release.*` | `board`/`bindSource`/`create`/`update`/`transition`/`requestApproval`, plus `apply`/`runChecks`/`preview`/`deploy`/`rollback` (engine backends) or `recordCheck`/`recordDeployment` (ledger-only backends) | `runReleaseAction` (`release/tool.ts`); release has no native tool, so this is its only reach |
 
 These project onto their native dispatchers. `memory.*` and `tasks.*` are always
 present. `report.*` is subordinate-only.
@@ -455,7 +457,7 @@ into exact edits and clipped reads.
 
 `shell` is the Nimbus POSIX shell over the same files as `file` and
 `workspace.*`. It has pipelines, redirects, variables, loops, and the "~95
-coreutils" the executor advertises (`packages/core/src/execution/inline.ts`);
+coreutils" the executor advertises (`packages/core/src/tools/inline-executor.ts`);
 that number is the executor's claim, not a count. Live executor status defines
 what hosted execution can do. Local execution uses the workspace process.
 

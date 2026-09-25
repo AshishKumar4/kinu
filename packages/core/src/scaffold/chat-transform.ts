@@ -14,7 +14,7 @@ import type { ActorTurnProgram } from '../orchestrator/actor-program';
 import { currentWorkMode } from '../execution/work-mode';
 import { JsonObjectSchema, JsonValueSchema } from '../utils/json';
 import { ToolOutcomeSchema } from '../tools/outcome';
-import { renderToolResult } from '../prompts/evidence-window';
+import { renderToolResult } from '../utils/evidence-window';
 import { FAILURE_WITHOUT_ERROR } from '../events/types';
 import { UsageSchema } from '../usage';
 import {

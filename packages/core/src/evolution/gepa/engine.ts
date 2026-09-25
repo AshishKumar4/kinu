@@ -242,16 +242,6 @@ function checkConstraints(source: string, c?: GepaConstraints): string | null {
     return `source exceeds ${c.maxSizeBytes} bytes (${source.length})`;
   }
 
-  if (c.requiredPattern && !c.requiredPattern.test(source)) {
-    return `source does not match required pattern ${c.requiredPattern.source}`;
-  }
-
-  if (c.forbiddenPatterns) {
-    for (const p of c.forbiddenPatterns) {
-      if (p.test(source)) return `source matches forbidden pattern ${p.source}`;
-    }
-  }
-
   if (c.customCheck) {
     const err = c.customCheck(source);
 

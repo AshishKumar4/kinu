@@ -2,8 +2,8 @@
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import { nameOriginOf, type NameOrigin } from '../identity/naming';
 import { isAccountName, isProviderScope } from '../credentials/accounts';
-import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort';
-import { DEFAULT_ROLE_ID, isTierId, isValidRoleId, type RoleId, type TierId } from '../profiles/catalog';
+import { isReasoningEffort, type ReasoningEffort } from '../providers/reasoning-effort';
+import { DEFAULT_ROLE_ID, isTierId, isValidRoleId, type RoleId, type TierId } from '../types/profile';
 import {
   DEFAULT_CACHE_RETENTION, isCacheRetention, type CacheRetention,
 } from '../providers/types';
@@ -12,7 +12,7 @@ import {
 } from '../safety/approval-gate';
 import {
   DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity, type AdvisorSeverity,
-} from '../advisor/review';
+} from '../types/advisor';
 
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 
@@ -220,6 +220,18 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     void sql`DELETE FROM actor_config WHERE actor_id = ${actorId} AND key = ${key}`;
   };
 
+  const setValid = (key: string, value: string, valid: boolean, what: string): void => {
+    if (!valid) throw new Error(`Invalid ${what}: ${value}`);
+    set(key, value);
+  };
+
+  const unitIntervalOr = (key: string, fallback: number): number => {
+    const stored = get(key);
+    const n = stored ? Number(stored) : fallback;
+
+    return Number.isFinite(n) && n >= 0 && n <= 1 ? n : fallback;
+  };
+
   /** The read writes nothing, so an unread row stays distinguishable from a stored `task`. */
   const readRoleSelection = (): RoleId => {
     const stored = get(AGENT_CONFIG_KEYS.roleSelection);
@@ -296,14 +308,8 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return isReasoningEffort(effort) ? effort : null;
     },
     setReasoningEffort(effort) {
-      if (effort === null) {
-        remove(AGENT_CONFIG_KEYS.reasoningEffort);
-
-        return;
-      }
-
-      if (!isReasoningEffort(effort)) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
-      set(AGENT_CONFIG_KEYS.reasoningEffort, effort);
+      if (effort === null) remove(AGENT_CONFIG_KEYS.reasoningEffort);
+      else setValid(AGENT_CONFIG_KEYS.reasoningEffort, effort, isReasoningEffort(effort), 'reasoning effort');
     },
     getCacheRetention() {
       const value = get(AGENT_CONFIG_KEYS.cacheRetention);
@@ -311,8 +317,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return isCacheRetention(value) ? value : DEFAULT_CACHE_RETENTION;
     },
     setCacheRetention(retention) {
-      if (!isCacheRetention(retention)) throw new Error(`Invalid cache retention: ${String(retention)}`);
-      set(AGENT_CONFIG_KEYS.cacheRetention, retention);
+      setValid(AGENT_CONFIG_KEYS.cacheRetention, retention, isCacheRetention(retention), 'cache retention');
     },
     getDisplayName() { return get(AGENT_CONFIG_KEYS.displayName); },
     setDisplayName(name) { set(AGENT_CONFIG_KEYS.displayName, name); },
@@ -342,24 +347,15 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return stored !== null && isTierId(stored) ? stored : null;
     },
     setAssignedTier(tier) {
-      if (tier === null) {
-        remove(AGENT_CONFIG_KEYS.assignedTier);
-
-        return;
-      }
-
-      if (!isTierId(tier)) throw new Error(`Invalid assigned tier: ${String(tier)}`);
-      set(AGENT_CONFIG_KEYS.assignedTier, tier);
+      if (tier === null) remove(AGENT_CONFIG_KEYS.assignedTier);
+      else setValid(AGENT_CONFIG_KEYS.assignedTier, tier, isTierId(tier), 'assigned tier');
     },
     getRoleChangePolicy(): 'allow' | 'approval' | 'locked' {
       return parseRoleChangePolicy(get(AGENT_CONFIG_KEYS.roleChangePolicy));
     },
     setRoleChangePolicy(policy) {
-      if (policy !== 'allow' && policy !== 'approval' && policy !== 'locked') {
-        throw new Error(`Invalid role change policy: ${String(policy)}`);
-      }
-
-      set(AGENT_CONFIG_KEYS.roleChangePolicy, policy);
+      const valid = policy === 'allow' || policy === 'approval' || policy === 'locked';
+      setValid(AGENT_CONFIG_KEYS.roleChangePolicy, policy, valid, 'role change policy');
     },
     getShellApprovalMode(): ShellApprovalMode {
       const v = get(AGENT_CONFIG_KEYS.shellApprovalMode);
@@ -367,11 +363,8 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return v === 'allow_all' || v === 'deny_all' ? v : 'strict';
     },
     setShellApprovalMode(mode) {
-      if (mode !== 'strict' && mode !== 'allow_all' && mode !== 'deny_all') {
-        throw new Error(`Invalid shell approval mode: ${String(mode)}`);
-      }
-
-      set(AGENT_CONFIG_KEYS.shellApprovalMode, mode);
+      const valid = mode === 'strict' || mode === 'allow_all' || mode === 'deny_all';
+      setValid(AGENT_CONFIG_KEYS.shellApprovalMode, mode, valid, 'shell approval mode');
     },
     getShellApprovalGrants: storedGrants,
     grantShellApproval(grants) { writeGrants([...storedGrants(), ...grants]); },
@@ -392,19 +385,9 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     setAutoPromoteScaffold(enabled) {
       set(AGENT_CONFIG_KEYS.autoPromoteScaffold, enabled ? 'true' : 'false');
     },
-    getShadowSampleRate() {
-      const v = get(AGENT_CONFIG_KEYS.shadowSampleRate);
-      const n = v ? Number(v) : 0.25;
-
-      return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.25;
-    },
+    getShadowSampleRate() { return unitIntervalOr(AGENT_CONFIG_KEYS.shadowSampleRate, 0.25); },
     setShadowSampleRate(rate) { set(AGENT_CONFIG_KEYS.shadowSampleRate, String(unitInterval('shadow_sample_rate', rate))); },
-    getScaffoldExploreShare() {
-      const v = get(AGENT_CONFIG_KEYS.scaffoldExploreShare);
-      const n = v ? Number(v) : 0.2;
-
-      return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.2;
-    },
+    getScaffoldExploreShare() { return unitIntervalOr(AGENT_CONFIG_KEYS.scaffoldExploreShare, 0.2); },
     setScaffoldExploreShare(share) { set(AGENT_CONFIG_KEYS.scaffoldExploreShare, String(unitInterval('scaffold_explore_share', share))); },
     getAdvisorEnabled() { return get(AGENT_CONFIG_KEYS.advisorEnabled) === 'true'; },
     setAdvisorEnabled(enabled) { set(AGENT_CONFIG_KEYS.advisorEnabled, String(enabled)); },
@@ -414,8 +397,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return isAdvisorSeverity(stored) ? stored : DEFAULT_ADVISOR_MIN_SEVERITY;
     },
     setAdvisorMinSeverity(severity) {
-      if (!isAdvisorSeverity(severity)) throw new Error(`Invalid advisor severity: ${String(severity)}`);
-      set(AGENT_CONFIG_KEYS.advisorMinSeverity, severity);
+      setValid(AGENT_CONFIG_KEYS.advisorMinSeverity, severity, isAdvisorSeverity(severity), 'advisor severity');
     },
     getAlwaysActiveSkills() {
       const v = get(AGENT_CONFIG_KEYS.alwaysActiveSkills);

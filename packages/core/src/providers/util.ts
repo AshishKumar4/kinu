@@ -5,7 +5,7 @@ import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './t
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
 import { withCallAccount } from './quota';
-import { evidenceWindow } from '../prompts/evidence-window';
+import { evidenceWindow } from '../utils/evidence-window';
 import * as v from 'valibot';
 import { nonEmptyString } from '../utils/json';
 import {
@@ -148,7 +148,7 @@ export async function catalogModelInfo(
 }
 
 export function positiveInteger(input: { value: unknown }): number | undefined {
-  const parsed = v.safeParse(v.pipe(v.number(), v.finite(), v.gtValue(0)), input.value);
+  const parsed = v.safeParse(v.pipe(v.number(), v.finite(), v.minValue(1)), input.value);
 
   return parsed.success ? Math.floor(parsed.output) : undefined;
 }

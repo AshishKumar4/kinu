@@ -11,8 +11,8 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { AgentStores } from '../src/state/agent-stores';
 import type {
   DynamicContext, DynamicApproval, DynamicDelegate, MissingCapability,
-  ActiveRoster,
 } from '../src/prompting/volatile-context';
+import type { ActiveRoster } from '../src/types/dynamic-context';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { profileCatalogDigest, resolveTurnProfile } from '../src/profiles';
 import { withCraftedToolDeclarations } from '../src/tools/sandbox-contract';

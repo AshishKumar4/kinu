@@ -18,7 +18,7 @@
   "containers": [
     {
       "class_name": "ExampleBox",
-      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:c2c03bdf3b46d22633ffdeab545953d7c0caa0fb562d36e70ebdd4618898c718",
+      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:d04e2beefa5eaf5486c2c8903eb444ce1499bc7d4e439967b5d48c2c39b14174",
       "max_instances": 1,
       "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
     }

@@ -254,7 +254,7 @@ export const CATALOGUE: readonly Mutation[] = [
   },
   {
     id: 'effort-judge-rung',
-    file: 'packages/core/src/strategy/effort.ts',
+    file: 'packages/core/src/providers/effort.ts',
     find: "  judge: 'medium',",
     replace: "  judge: 'low',",
     decision: 'a judge call gets the medium reasoning rung',
@@ -263,7 +263,7 @@ export const CATALOGUE: readonly Mutation[] = [
   },
   {
     id: 'provider-options-override-wins',
-    file: 'packages/core/src/strategy/effort.ts',
+    file: 'packages/core/src/providers/effort.ts',
     find: '    merged[provider] = { ...base[provider], ...options };',
     replace: '    merged[provider] = { ...options, ...base[provider] };',
     decision: 'inside one provider namespace the override wins over the base',

@@ -2,7 +2,7 @@ import { ContentRef } from '@agent-core/core';
 import type { SlateId } from '@agent-core/core/slates';
 import * as v from 'valibot';
 import type { SqlExec } from '../types/primitives';
-import { workspacePath } from '../vfs/workspace-path';
+import { SLATES_ROOT } from '../vfs/workspace-path';
 import { SlateDirectoryName } from './rpc';
 import type { WorkspaceSlateContentStore } from './content';
 import { KinuError } from '../obs/error';
@@ -29,7 +29,7 @@ export function slateDirectory(id: SlateId): string {
 
   if (!name.success) throw new KinuError('bad_input', 'Slate id must be one directory name', { cause: new v.ValiError(name.issues) });
 
-  return workspacePath('slates/' + name.output);
+  return `${SLATES_ROOT}/${name.output}`;
 }
 
 export function forgetSlateFiles(sql: SqlExec, id: SlateId): void {

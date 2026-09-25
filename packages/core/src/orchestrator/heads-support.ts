@@ -8,7 +8,7 @@ import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { SerializedMessage } from '../heads/types';
 import type { SessionTranscriptReader } from '../session/transcript';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 
 const INHERITED_CONTEXT_CAP = 50;
 

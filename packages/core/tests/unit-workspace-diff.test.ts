@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import { git, gitEnv, initRepo, scratchDir } from '@kinu.run/test-utils';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createWorkspace } from '../src/identity/create';
+import { createWorkspace } from '../src/workspace-birth';
 import {
   getExecutorDiff,
   getWorkspaceDiff,

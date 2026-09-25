@@ -6,7 +6,7 @@
 
 import * as v from 'valibot';
 import type { LLM } from '../types/primitives';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import type { JsonObject } from '../utils/json';
 import { diagnostics, renderThrownChain } from '../obs/index';
 

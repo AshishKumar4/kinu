@@ -2,7 +2,7 @@
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import { nowMs } from '../utils/date';
-import { checkMisevolution, recordMisevolutionVeto } from '../scaffold/misevolution';
+import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/misevolution';
 import { DEFAULT_CONFIG } from '../config';
 
 interface CraftCandidate {
@@ -52,7 +52,7 @@ export async function upsertCraftedTool(
   rt: AgentRuntime,
   candidate: CraftCandidate,
 ): Promise<{ accepted: boolean; vetoReason?: string }> {
-  const misevolution = checkMisevolution(candidate.code);
+  const misevolution = checkMisevolutionForSurface({ code: candidate.code }, 'craft');
 
   if (!misevolution.ok) {
     recordMisevolutionVeto(rt.storage.sql, rt.actor, {

@@ -15,7 +15,7 @@ function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, 
 }
 
 async function authorIssuesSlate(files: AgentRuntime['storage']['vfs'], extra: Record<string, string> = {}) {
-  const root = '/home/main/slates/issues';
+  const root = '/slates/issues';
   await files.mkdir(root + '/src', { recursive: true });
   await files.mkdir(root + '/scratch', { recursive: true });
   await files.writeFile(root + '/package.json', JSON.stringify({
@@ -96,7 +96,7 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
       ['GITHUB', 'mcp', true], ['FILES', 'namespace', true], ['NOTES', 'memory', true], ['PEER', 'app', false],
     ]);
     const forkerFiles = workspaceFiles(forker.agent);
-    const landed = '/home/main/slates/' + fork.slate;
+    const landed = '/slates/' + fork.slate;
     expect(await forkerFiles.readFile(landed + '/src/server.ts', { encoding: 'utf8' })).toContain('"issues"');
     expect(await forkerFiles.stat(landed + '/scratch')).toBeNull();
     const admittedTree = JSON.stringify(await forkerFiles.readFile(landed + '/package.json', { encoding: 'utf8' })) + await forkerFiles.readFile(landed + '/src/server.ts', { encoding: 'utf8' });
@@ -133,7 +133,7 @@ test('the export warns about secret-shaped text and stays silent on a clean tree
   expect(flagged.warnings).toEqual([{ path: 'src/config.ts', line: 1, pattern: 'aws-access-key', message: 'AWS access key id' }]);
   expect(JSON.stringify(flagged)).not.toContain(pasted);
 
-  await files.writeFile('/home/main/slates/issues/src/config.ts', 'export const AWS = process.env.AWS_KEY;\n');
+  await files.writeFile('/slates/issues/src/config.ts', 'export const AWS = process.env.AWS_KEY;\n');
   const clean = answered(await owner.agent.slate({ op: 'commit', id: 'issues' }), v.object({ id: v.string() }));
   expect(answered(await owner.agent.slate({ op: 'inspect', id: 'issues', version: clean.id }), BlueprintInspectionSchema).warnings).toEqual([]);
   // Published bytes are scanned: the warning follows the version, not the working tree.

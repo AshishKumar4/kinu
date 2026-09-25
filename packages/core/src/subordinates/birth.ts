@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import { TierIdSchema, isValidRoleId } from '../profiles/catalog';
+import { TierIdSchema, isValidRoleId } from '../types/profile';
 import { isWorkMode, type WorkMode } from '../types/turn';
 import { KinuError, toKinuError } from '../obs/error';
 import { diagnostics } from '../obs/index';

@@ -658,13 +658,6 @@ describe('runGepa — constraint checks', () => {
     expect((await runWith({ maxSizeBytes: 10 }, 'x'.repeat(11))).accepted).toBe(false);
   });
 
-  test('forbiddenPatterns reject the candidate and name the pattern', async () => {
-    const { accepted, reasons } = await runWith({ forbiddenPatterns: [/eval\(/] }, 'eval(danger)');
-    expect(accepted).toBe(false);
-    expect(reasons[0]).toContain('forbidden pattern');
-    expect((await runWith({ forbiddenPatterns: [/eval\(/] }, 'safe source')).accepted).toBe(true);
-  });
-
   test('customCheck rejects with its own message', async () => {
     const { accepted, reasons } = await runWith(
       { customCheck: (s) => (s.includes('TODO') ? 'contains a TODO' : null) },

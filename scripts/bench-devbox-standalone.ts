@@ -24,12 +24,12 @@ import * as v from 'valibot';
 import {
   BENCH_ACCOUNT_ID, cleanupObservationProbes, orphanTeardownExecutor, r2CleanupKeyRefusal, r2ResiduePlane,
   sourceRevision,
-} from './bench-devbox-strategies';
+} from './bench-devbox-fixture';
 import {
   WRANGLER_FAILED, awaitApplicationRollout, containerAppIds, delay, describeThrown, publishTeardown,
   runTeardownOnce, runWrangler,
 } from './fixtures/r2-bench/deploy-substrate';
-import { R2_OP_VOCABULARY } from './fixtures/storage-matrix/admission';
+import { R2_OPERATION_NAMES as R2_OP_VOCABULARY } from '../packages/devbox/bench/r2-operations';
 import {
   checkCleanup, createManifest, recoverAbandonedRuns, replayTeardown, writeManifest, type CleanupReport,
 } from './fixtures/storage-matrix/cleanup';

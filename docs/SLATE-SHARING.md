@@ -127,7 +127,7 @@ origin to identify a Kinu user. I left out forking the conversation.
 
 ## 3. The model
 
-**Slate**: an authored tree under `/home/main/slates/<id>` whose
+**Slate**: an authored tree under `/slates/<id>` whose
 `package.json` declares bindings. Avoid: app, gadget.
 
 **Binding**: one declared name a slate calls through. Avoid: connection,
@@ -290,7 +290,7 @@ their shared `ShareParts`) on the slate tab and a slate's Drive tile,
 `UnmappedBindingsPanel`.
 
 **CLI.** The CLI backend hosts no slates: `workspace.slates` exists only when a
-backend supplies a host (`packages/core/src/execution/inline.ts`). There is no
+backend supplies a host (`packages/core/src/tools/inline-executor.ts`). There is no
 local sharing; the CLI shares through a cloud workspace.
 
 **Security proofs**, each a test:

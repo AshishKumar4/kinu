@@ -7,7 +7,7 @@ import { fetchServedVersion } from '../version-check';
 import { CLI_CURRENT, refreshCliTree } from '../self-update';
 import { updateConfigFile } from '../config';
 
-export interface UpdateOptions {
+interface UpdateOptions {
   origin?: string;
   force?: boolean;
   background?: boolean;

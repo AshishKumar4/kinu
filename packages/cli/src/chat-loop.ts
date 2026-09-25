@@ -14,6 +14,7 @@ import {
   connectDevice,
   defaultDeviceName,
   describeConnectOutcome,
+  waitingDots,
   deviceStatusLine,
   dismissDeviceConnectPrompt,
   killSessionDaemon,
@@ -449,22 +450,9 @@ async function promptDeviceConnect(rl: readline.Interface, opts: { allowDismiss:
 async function runDeviceConnect(session: boolean): Promise<void> {
   try {
     const auth = requireAuthConfig();
-    let waiting = false;
-
-    const result = await connectDevice(auth, {
-      session,
-      label: defaultDeviceName(),
-      onWaiting: () => {
-        if (!waiting) {
-          process.stdout.write(DIM('  Waiting for the daemon to connect'));
-          waiting = true;
-        }
-
-        process.stdout.write(DIM('.'));
-      },
-    });
-
-    if (waiting) process.stdout.write('\n');
+    const dots = waitingDots('  ');
+    const result = await connectDevice(auth, { session, label: defaultDeviceName(), onWaiting: dots.onWaiting });
+    dots.end();
     const outcome = describeConnectOutcome(result, session);
     console.log(`  ${outcome.ok ? OK('✓') : ERR('✗')} ${outcome.message}`);
   } catch (err) {

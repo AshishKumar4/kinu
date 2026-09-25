@@ -1,23 +1,21 @@
 import * as v from 'valibot';
 import type { VFS, VfsEntryStat, VfsRevision } from '../types/primitives';
-import type { ContextEventRecorder } from '../types/context-plane';
-import type { ActorClaimStore, StoredActorClaim } from '../orchestrator/actor-claims';
+import type { ActorClaimReader, ContextEventRecorder, ContextTurnClaim, StagedContextDeferral } from '../types/context-plane';
 import type { SessionHistory } from '../session/history';
 import type { SessionMessages } from '../session/messages';
 import type { PendingContextProposal } from '../session/proposals';
-import type { StagedContextDeferral } from '../types/context-plane';
 import type { ContextEntry, ContextSelection } from '../session/context';
 import type { PreparedMessage } from '../session/messages';
 import type { ContextChange } from '../session/proposals';
 import { JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { KinuError } from '../obs/error';
-import { FileRefusalError } from '../tools/file-edit';
+import { FileRefusalError } from '../types/file-edits';
 import { makeVfsError } from './errno';
 import type { VfsMount, VfsNativeReads } from './mounts';
 import { toolPairingGaps } from '../session/tool-pairing';
 
-export interface ActorContextStores { readonly claims: ActorClaimStore; readonly events: ContextEventRecorder | null }
+export interface ActorContextStores { readonly claims: ActorClaimReader; readonly events: ContextEventRecorder | null }
 
 export interface ChildContextResolver { list(): readonly string[]; resolve(storageKey: string): ActorContextStores | null }
 
@@ -64,7 +62,7 @@ interface WorkingView {
   readonly header: ContextFileHeader; readonly modified: number;
 }
 
-interface Document { readonly owner: ActorClaimStore; readonly writable: boolean; readonly version: string; readonly modified: number; readonly chunks: () => AsyncGenerator<string> }
+interface Document { readonly owner: ActorClaimReader; readonly writable: boolean; readonly version: string; readonly modified: number; readonly chunks: () => AsyncGenerator<string> }
 
 type PairingView = v.InferOutput<typeof PairingView>;
 
@@ -93,7 +91,7 @@ function stagedEntries(history: SessionHistory, selection: ContextSelection | nu
 
 interface WorkingVersionFacts {
   readonly actorId: string; readonly selection: ContextSelection | null; readonly pending: PendingContextProposal | undefined;
-  readonly blocked: StagedContextDeferral | undefined; readonly claim: StoredActorClaim | null;
+  readonly blocked: StagedContextDeferral | undefined; readonly claim: ContextTurnClaim | null;
 }
 
 /** Revision token: everything a later write must find unchanged, in the order contextRevision reads it. */

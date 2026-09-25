@@ -1324,7 +1324,7 @@ function chainExec(
 
     const ok = shellOk;
 
-    if (command.startsWith('# devbox-tick-probe-v1\n')) return ok(`${disk.procMounts()}\0${upperWalkDigest(disk)}`);
+    if (command.startsWith('# devbox-tick-probe-v2\n')) return ok(`${upperWalkDigest(disk)}\n${disk.procMounts()}`);
     const delta = deltaCommand(command, disk);
 
     if (delta !== undefined) return delta;

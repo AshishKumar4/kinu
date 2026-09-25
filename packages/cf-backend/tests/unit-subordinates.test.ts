@@ -225,8 +225,8 @@ describe('an agent\'s window hears only what it may act on', () => {
       await agent.setShellApprovalMode('strict');
       await agent.executeInExecutor('workspace', 'git push --force origin main');
       await agent.listSlates();
-      await workspaceFiles(agent).mkdir('/home/main/slates/tally', { recursive: true });
-      await workspaceFiles(agent).writeFile('/home/main/slates/tally/server.ts', 'export default { fetch() { return new Response("ok"); } };');
+      await workspaceFiles(agent).mkdir('/slates/tally', { recursive: true });
+      await workspaceFiles(agent).writeFile('/slates/tally/server.ts', 'export default { fetch() { return new Response("ok"); } };');
       await agent.announceDeviceAvailable({ id: 'device-1', label: 'studio' });
     } finally {
       fanout.mockRestore();

@@ -5,7 +5,7 @@ import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { applyFileEdits, formatFileSlice, type FileEditFailure } from '../src/tools/file-edit';
 import { scanFileWindow } from '../src/tools/file-scan';
-import { TurnFileLedger } from '../src/tools/file-ledger';
+import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
 import { withCheckedInput } from '../src/tools/tool-schema';
 import { SPILL_DIRS, TurnContextBudget } from '../src/context-budget';

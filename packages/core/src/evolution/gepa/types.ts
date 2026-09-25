@@ -48,8 +48,6 @@ export interface GepaCandidate {
 
 export interface GepaConstraints {
   maxSizeBytes?: number;
-  requiredPattern?: RegExp;
-  forbiddenPatterns?: RegExp[];
   /** Null accepts; a string is the rejection reason. */
   customCheck?: (source: string) => string | null;
 }

@@ -1,3 +1,5 @@
+import { KinuError } from '../obs/error';
+
 /** Durable counter keys in the `file_edit` run event. */
 export type FileEditFailure =
   | 'empty_anchor'
@@ -15,6 +17,12 @@ export type FileEditFailure =
 export const FILE_REFUSAL_REASONS = [
   'empty_anchor', 'not_found', 'ambiguous', 'overlap', 'no_change', 'unread', 'stale',
 ] as const satisfies readonly (FileEditFailure | 'unread' | 'stale')[];
+
+export class FileRefusalError extends KinuError {
+  constructor(readonly verdict: (typeof FILE_REFUSAL_REASONS)[number], message: string) {
+    super('bad_input', message);
+  }
+}
 
 export type FileEditOutcomeReason =
   | FileEditFailure

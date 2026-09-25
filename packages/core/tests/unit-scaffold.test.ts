@@ -22,7 +22,9 @@ describe('Scaffold modification (4-gate)', () => {
   });
 
   const refusedSources = [
-    { name: 'rejects code with import statement', code: 'import fs from "fs";\nasync function* run(rt, task) {}', says: 'Forbidden pattern' },
+    { name: 'rejects code with import statement', code: 'import fs from "fs";\nasync function* run(rt, task) {}', says: 'Forbidden construct: import' },
+    { name: 'rejects require held in a variable', code: 'const load = require;\nasync function* run(rt, task) {}', says: 'Forbidden construct: require' },
+    { name: 'rejects a run that is not an async generator', code: 'async function run(rt, task) {}', says: 'async function* run(rt, task)' },
     { name: 'rejects code with require()', code: 'const x = require("fs");\nasync function* run(rt, task) {}', says: null },
     { name: 'rejects code with eval()', code: 'eval("malicious"); async function* run(rt, task) {}', says: null },
     { name: 'rejects code with globalThis', code: 'globalThis.fetch("evil"); async function* run(rt, task) {}', says: null },
@@ -46,6 +48,19 @@ describe('Scaffold modification (4-gate)', () => {
       if (c.says !== null) expect(result.error).toContain(c.says);
     });
   }
+
+  test('a comment naming a forbidden construct is not code', async () => {
+    const { rt } = createTestRuntime();
+    initScaffoldTables(rt.storage.execRaw);
+
+    const result = await modifyScaffold(
+      rt,
+      'This is a long enough rationale to pass the 50 char minimum check.',
+      '// No import, no eval: this loop only delegates.\nasync function* run(rt, task) { await host.defaultInference(); }',
+    );
+
+    expect(result.error ?? '').not.toContain('Forbidden');
+  });
 
   test('accepts valid scaffold code', async () => {
     const { rt } = createTestRuntime();

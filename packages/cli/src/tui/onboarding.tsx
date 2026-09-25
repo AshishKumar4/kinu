@@ -42,7 +42,7 @@ export interface OnboardingRoleChoice {
   readonly description: string;
 }
 
-export interface OnboardingWorkspaceInput {
+interface OnboardingWorkspaceInput {
   readonly mission: string;
   readonly roleId: string;
 }
@@ -150,15 +150,17 @@ export function GuidedOnboarding(props: {
     if (deriveOnboardingState(next).ready) props.onReady();
   }, [props.onReady, props.operations]);
 
-  useEffect(() => {
+  const attempt = useCallback((work: () => Promise<void>) => {
     startTransition(async () => {
       try {
-        await refresh();
+        await work();
       } catch (cause) {
         setError(renderThrownChain({ cause }));
       }
     });
-  }, [refresh, startTransition]);
+  }, [startTransition]);
+
+  useEffect(() => attempt(refresh), [attempt, refresh]);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -169,15 +171,8 @@ export function GuidedOnboarding(props: {
   }, [props.operations]);
 
   useEffect(() => {
-    if (activeStep !== 'connection') return;
-    startTransition(async () => {
-      try {
-        await loadProviders();
-      } catch (cause) {
-        setError(renderThrownChain({ cause }));
-      }
-    });
-  }, [activeStep, loadProviders, startTransition]);
+    if (activeStep === 'connection') attempt(loadProviders);
+  }, [activeStep, attempt, loadProviders]);
 
   /** The secret never reaches a renderable. */
   const port = useMemo<ProviderConnectPort>(() => ({

@@ -153,6 +153,10 @@ class MountRoutedBridge implements RuntimeFsBridge {
     return at === null ? durable() : mounted(at);
   }
 
+  private durableOnly<T>(path: RuntimeFsPath, what: string, durable: () => T): T {
+    return this.onPath(path, durable, (at) => { throw unsupported(at.path, what); });
+  }
+
   private onDescriptor<T>(handleId: number, durable: () => T, mounted: (descriptor: MountDescriptor) => T): T {
     const descriptor = this.descriptors.get(handleId);
 
@@ -469,7 +473,7 @@ class MountRoutedBridge implements RuntimeFsBridge {
   }
 
   symlink(target: string, path: RuntimeFsPath): ReturnType<RuntimeFsBridge['symlink']> {
-    return this.onPath(path, () => this.inner.symlink(target, path), (at) => { throw unsupported(at.path, 'symlinks'); });
+    return this.durableOnly(path, 'symlinks', () => this.inner.symlink(target, path));
   }
 
   fsync(handleId?: number): ReturnType<RuntimeFsBridge['fsync']> {
@@ -493,11 +497,11 @@ class MountRoutedBridge implements RuntimeFsBridge {
   }
 
   subscribe(path: string, listener: Parameters<NonNullable<RuntimeFsBridge['subscribe']>>[1]): () => void {
-    return this.onPath(path, () => {
+    return this.durableOnly(path, 'change feed', () => {
       if (!this.inner.subscribe) throw unsupported(path, 'change feed');
 
       return this.inner.subscribe(path, listener);
-    }, (at) => { throw unsupported(at.path, 'change feed'); });
+    });
   }
 
   realpath(path: RuntimeFsPath): ReturnType<RuntimeFsBridge['realpath']> {
@@ -594,7 +598,7 @@ class MountRoutedBridge implements RuntimeFsBridge {
   }
 
   appendOnce(...args: Parameters<RuntimeFsBridge['appendOnce']>): ReturnType<RuntimeFsBridge['appendOnce']> {
-    return this.onPath(args[0], () => this.inner.appendOnce(...args), (at) => { throw unsupported(at.path, 'append journal'); });
+    return this.durableOnly(args[0], 'append journal', () => this.inner.appendOnce(...args));
   }
 
   acknowledgeAppend(...args: Parameters<RuntimeFsBridge['acknowledgeAppend']>): ReturnType<RuntimeFsBridge['acknowledgeAppend']> {
@@ -612,7 +616,7 @@ class MountRoutedBridge implements RuntimeFsBridge {
   acquireExclusiveMutation(
     ...args: Parameters<RuntimeFsBridge['acquireExclusiveMutation']>
   ): ReturnType<RuntimeFsBridge['acquireExclusiveMutation']> {
-    return this.onPath(args[0], () => this.inner.acquireExclusiveMutation(...args), (at) => { throw unsupported(at.path, 'mutation lease'); });
+    return this.durableOnly(args[0], 'mutation lease', () => this.inner.acquireExclusiveMutation(...args));
   }
 
   releaseExclusiveMutation(

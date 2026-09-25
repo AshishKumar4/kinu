@@ -10,7 +10,7 @@ import { err, json, safeJson } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import { MONITOR_SINGLETON, type MonitorDO } from '../monitor/monitor-do';
 import {
-  actorDigest, adminCaller, adminDenialMessage, adminDenialStatus, authorizeAdmin,
+  actorDigest, adminCaller, adminDenialAnswer, authorizeAdmin,
   reportAdminDenial, type AdminGateEnv, type AuthorizedAdmin, type ControlCaller,
 } from './admin-caller';
 import { rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
@@ -98,7 +98,9 @@ controlRoutes.use('/api/control/*', async (c, next) => {
   if (!authorization.ok) {
     reportAdminDenial(authorization.denial, new URL(c.req.url).pathname, c.req.method);
 
-    return err(adminDenialStatus(authorization.denial), adminDenialMessage(authorization.denial));
+    const answer = adminDenialAnswer(authorization.denial);
+
+    return err(answer.status, answer.message);
   }
 
   const admin = authorization.admin;
@@ -219,7 +221,7 @@ async function handleAction<Id>(
   if (!admin.fresh) {
     return await refuse({ env, admin, caller }, described, {
       status: 403,
-      message: adminDenialMessage('stale_auth'),
+      message: adminDenialAnswer('stale_auth').message,
       detail: 'refused: the sign-in was not fresh',
       reason: 'stale_auth',
     });

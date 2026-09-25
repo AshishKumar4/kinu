@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LLMProviderConfig } from '@kinu.run/core';
-import { createWorkspace } from '@kinu.run/core/identity';
+import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { openWorkspaceCLI } from '../src/open';
 
 const DUMMY_LLM: LLMProviderConfig = {
