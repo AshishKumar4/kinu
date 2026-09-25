@@ -1613,6 +1613,8 @@ export {
   type SecretPattern,
   type SecretFinding,
   type SecretSighting,
+  performBoundWrite,
+  type ApprovalContent,
 } from './safety/index';
 
 export {

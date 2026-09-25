@@ -697,12 +697,12 @@ export interface FileAccess {
   readonly path: string;
   readonly hostPath: string;
   readonly reaches: 'own' | 'outside-directory' | 'user-mount';
+  /** Over a file already there; on a user mount only this and a delete ask. */
+  readonly replaces?: boolean;
 }
 
-const FILE_CHANGE_HITS: Readonly<Record<FileAccess['reaches'], ApprovalRuleHit | null>> = {
-  own: null,
-  'outside-directory': { decision: 'gate', rule: 'write-outside-directory', explanation: 'Changes a file outside the workspace directory.' },
-  'user-mount': { decision: 'gate', rule: 'write-user-files', explanation: 'Changes a file on the user\'s device or Drive.' },
+const WRITE_OUTSIDE: ApprovalRuleHit = {
+  decision: 'gate', rule: 'write-outside-directory', explanation: 'Changes a file outside the workspace directory.',
 };
 
 function reviewFileAccess(access: FileAccess): ApprovalResult {
@@ -712,22 +712,25 @@ function reviewFileAccess(access: FileAccess): ApprovalResult {
     hits.push({ decision: 'warn', rule: SECRET_READ.name, explanation: SECRET_READ.why });
   }
 
-  const change = access.op === 'read' ? null : FILE_CHANGE_HITS[access.reaches];
+  if (access.op !== 'read' && access.reaches === 'outside-directory') hits.push(WRITE_OUTSIDE);
 
-  if (change !== null) hits.push(change);
+  if (access.reaches === 'user-mount' && (access.op === 'delete' || (access.op === 'write' && access.replaces === true))) hits.push(OVERWRITE);
 
   return { decision: dominant(hits), hits };
 }
 
-/** Asked, never parked: a parked approval answers a later request with the same text, which cannot bind a write's
- *  bytes. */
-export async function approveFileAccess(access: FileAccess, executor: string, policy: ShellApprovalPolicy): Promise<void> {
+/** Without `parkedAs` an unanswered ask is refused: a parked approval answers any later request with the same text. */
+export async function approveFileAccess(
+  access: FileAccess, executor: string, policy: ShellApprovalPolicy, parkedAs?: () => Promise<string>,
+): Promise<void> {
   const review = reviewFileAccess(access);
 
   if (review.decision === 'allow') return;
-  const decision = await decideApproval({ command: `file ${access.op} ${access.hostPath}`, executor }, review, policy, { park: false });
+  const decision = await decideApproval({ command: `file ${access.op} ${access.hostPath}`, executor }, review, policy, parkedAs ?? null);
 
   if (!decision.run) throw decision.error;
+
+  if (decision.spent !== undefined) policy.deferrals?.settle(decision.spent, 'spent');
 }
 
 /** `runCode` in another language: its text cannot show what it does to the user's files, so it asks there. */
@@ -876,12 +879,13 @@ export function gateExec<R>(
   };
 }
 
-/** The mode/grant/channel/deferral ladder; a `run: true` from a replayed park carries a spend the caller settles. */
+/** The mode/grant/channel/deferral ladder; a `run: true` from a replayed park carries a spend the caller settles.
+ *  `parkedAs` null never parks. */
 async function decideApproval(
   subject: { readonly command: string; readonly executor: string },
   rawReview: ApprovalResult,
   policy: ShellApprovalPolicy,
-  options: { readonly park: boolean } = { park: true },
+  parkedAs: (() => Promise<string>) | null = async () => subject.command,
 ): Promise<
   | { readonly run: true; readonly spent?: ApprovalSpend }
   | { readonly run: false; readonly error: KinuError }
@@ -912,9 +916,8 @@ async function decideApproval(
 
       if (outcome === null) {
         // Under 'strict', an unanswered ask parks if a queue is wired, only after the channel declines.
-        const parked = mode === 'strict' && options.park
-          ? policy.deferrals?.park({ command: cmd, executor, review })
-          : undefined;
+        const deferrals = mode === 'strict' ? policy.deferrals : undefined;
+        const parked = deferrals === undefined || parkedAs === null ? undefined : deferrals.park({ command: await parkedAs(), executor, review });
 
         if (parked && !parked.run) return refuse(parked.reason, parked.message);
 

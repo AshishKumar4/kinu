@@ -18,7 +18,7 @@ import {
   type ActorHost, type ActorHostDeps, type ActorRetirement, type BoundActor,
   type ActorHandle, type ActorReference, type AgentOrchestratorDeps, type AgentRuntime,
   type BackendHost, type BroadcastEvent, type ContextEventRecorder,
-  type DeferredApprovalChannel, type EnqueueTurnResult,
+  type ApprovalContent, type DeferredApprovalChannel, type EnqueueTurnResult,
   type LoopOrigin, type ModelCallReport,
   type ModelOperationSink, type ModelPricing, type NimbusSandboxHandle, type NodeHomeHost,
   type NodeWorkspace,
@@ -80,6 +80,7 @@ export interface WorkspaceHostSeams {
   slate(actor: ActorHandle, operation: SlateOperation): Promise<SlateCallResult>;
   /** The owner's needs-you queue: one per workspace. */
   deferrals(): DeferredApprovalChannel | undefined;
+  approvalContent(): ApprovalContent | undefined;
   refinementLane(bound: BoundActor & { readonly runtime: AgentRuntime }): () => Promise<void>;
   /** The loop origin a creation site named for this actor, or null for the kind's default. */
   chosenLoopOrigin(record: WorkspaceActor): LoopOrigin | null;
@@ -201,6 +202,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         reportModelCall: (report) => { seams.reportModelCall(report); },
         slate: (operation) => seams.slate(bound.handle, operation),
         deferrals: () => seams.deferrals(),
+        approvalContent: seams.approvalContent(),
         // The chat's authority: a self-resolved profile could differ from the turn's and make a search unreproducible.
         resolveProfile: async () => (await seams.resolveProfile({
           actor: bound.handle, availableTools: [], workMode: 'build',

@@ -2,14 +2,15 @@
 // never reported as a success, and an approval is never reported as an effect.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { toolExecute } from '@kinu.run/test-utils';
+import { createMemoryVfs, fakeMossaic, present, toolExecute } from '@kinu.run/test-utils';
 import {
   DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools,
-  formatApprovalGrant, createShellSession,
-  type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome,
-  type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT,
+  formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs,
+  type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome, type ApprovalContent,
+  type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, type VFS, WORKSPACE_ROOT,
 } from '../src/index';
+import type { BoundFileWrite } from '../src/safety/bound-write';
 import { buildPendingActions } from '../src/read-models/pending-actions';
 import { gateProviderExec } from '../src/execution/approval';
 import { commandResult, formatExecResult, type CommandResult } from '../src/execution/exec-result';
@@ -62,6 +63,7 @@ function setup(opts: {
   const audited: Array<{ approvalId: string; command: string; executor: string }> = [];
 
   const queue = new DeferredApprovalQueue({
+    performWrite: null,
     store,
     inbox: { send: async (signal) => {
       delivered.push(signal);
@@ -115,6 +117,7 @@ describe('a gated action nobody is there to approve', () => {
     const restore = setDiagnosticsSink(log);
 
     const queue = new DeferredApprovalQueue({
+      performWrite: null,
       store: new DeferredApprovalStore(sql, actor),
       inbox: { send: async () => 'queued' }, remember: () => {},
       audit: () => { throw new Error('audit unavailable'); },
@@ -542,6 +545,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
     store.create({ id: 'defer-7', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
 
     const queue = new DeferredApprovalQueue({
+      performWrite: null,
       store,
       inbox: { send: () => Promise.reject(new Error('no host')) },
       remember: () => { throw new Error('not an always answer'); },
@@ -560,6 +564,7 @@ describe('"always" grants the rules the owner was shown', () => {
     const granted: string[] = [];
 
     const queue = new DeferredApprovalQueue({
+      performWrite: null,
       store: new DeferredApprovalStore(sql, actor),
       inbox: { send: async () => 'queued' },
       remember: (grants) => { for (const g of grants) granted.push(formatApprovalGrant(g)); },
@@ -639,6 +644,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     const audited: Array<{ approvalId: string; command: string; executor: string }> = [];
 
     const queue = new DeferredApprovalQueue({
+      performWrite: null,
       store,
       inbox: { send: async () => 'queued' },
       remember: () => { throw new Error('not an always answer'); },
@@ -848,4 +854,60 @@ test('an executed exit-one command remains a command failure even if stdout look
   expect(commandResult(result)).toMatchObject({ reason: 'io', execution: { exitCode: 1 } });
   expect(rendered).toContain(stdout);
   expect(rendered).toContain('process failure');
+});
+
+/** The owner's Drive at /shared, over the agent's own files, with a queue nobody has answered yet. */
+function driveWithQueue(performWrite: (plane: VFS, content: ApprovalContent, write: BoundFileWrite) => Promise<'written' | 'changed'>) {
+  const { sql, actor } = approvalsDb();
+  const store = new DeferredApprovalStore(sql, actor);
+  const drive = mossaicVfs(fakeMossaic().tenant('owner'));
+  const plane = withMountTable(createMemoryVfs().vfs, [sharedDriveMount(() => drive, () => 'no Drive')]);
+  const held = new Map<string, Uint8Array>();
+  const woken: string[] = [];
+
+  const content: ApprovalContent = {
+    retain: async (bytes) => { held.set(new Bun.CryptoHasher('sha256').update(bytes).digest('hex'), bytes); },
+    read: async (sha256) => present(held.get(sha256), 'the parked bytes'),
+  };
+
+  const queue = new DeferredApprovalQueue({
+    store, remember: () => {}, newId: () => `defer-${String(store.listQueued().length + 1)}`,
+    inbox: { send: async (signal) => {
+      woken.push(signal.text);
+
+      return 'queued';
+    } },
+    performWrite: (write) => performWrite(plane, content, write),
+  });
+
+  const policy: ShellApprovalPolicy = { mode: () => 'strict', deferrals: queue.channel };
+  const files = withApprovalGatedFiles(plane, 'workspace', { userRoots: () => plane.userRoots(), locate: null, content }, policy);
+
+  return { drive, files, queue, store, woken };
+}
+
+test('a new file on the Drive is free; an overwrite parks, and a write that fails on approval waits for the same bytes', async () => {
+  let outage = true;
+
+  const { drive, files, queue, store, woken } = driveWithQueue(async (plane, content, write) => {
+    if (outage) throw new KinuError('unavailable', 'the Drive is not answering');
+
+    return await performBoundWrite(plane, content, write);
+  });
+
+  await files.writeFile('/shared/new.md', 'created\n');
+  await drive.writeFile('/notes.md', 'the owner\u2019s\n');
+  await expect(files.writeFile('/shared/notes.md', 'rewritten\n')).rejects.toMatchObject({ code: 'unavailable' });
+  expect(queue.list().map((row) => row.command)).toEqual([expect.stringMatching(/^file write \/shared\/notes\.md sha256:[0-9a-f]{64} over sha256:[0-9a-f]{64}$/u)]);
+
+  await queue.decide(['defer-1'], 'approved');
+  expect(await drive.readFile('/notes.md', { encoding: 'utf8' })).toBe('the owner\u2019s\n');
+  expect(store.get('defer-1')?.status).toBe('approved');
+  expect(woken.at(-1)).toContain('APPROVED, still not run — re-issue once');
+
+  outage = false;
+  await files.writeFile('/shared/notes.md', 'rewritten\n');
+  expect(await drive.readFile('/notes.md', { encoding: 'utf8' })).toBe('rewritten\n');
+  expect(await drive.readFile('/new.md', { encoding: 'utf8' })).toBe('created\n');
+  expect(store.get('defer-1')).toBeNull();
 });

@@ -147,6 +147,7 @@ export async function hostedWorkspace(
     logActivity: () => undefined,
     slate: () => Promise.resolve({ ok: false, reason: 'unavailable', error: 'no slate host in this fixture' }),
     deferrals: () => undefined,
+    approvalContent: () => undefined,
     refinementLane: () => () => Promise.resolve(),
     chosenLoopOrigin: (record) => chosen.get(record.actorId) ?? null,
     chosenWriteObserver: () => null,

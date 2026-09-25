@@ -5,6 +5,7 @@ import {
   approveFileAccess, commandFilesOwner, gateExec, onUserRoots, reviewProgram, reviewShellCommand, sessionAt,
   STRICT_NO_CHANNEL_POLICY, type ApprovalResult, type FileAccess, type GatedExecutor, type ShellApprovalPolicy, type ShellCwd,
 } from '../safety/approval-gate';
+import { parkWriteAs, type ApprovalContent } from '../safety/bound-write';
 import * as v from 'valibot';
 import { answeredRefusal, CommandResultSchema } from './exec-result';
 import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
@@ -73,19 +74,28 @@ export function withApprovalGatedShell(
 
 export interface FileReach {
   readonly userRoots: () => readonly string[];
-  /** Absent: nothing is outside. */
-  readonly locate?: (path: string) => { readonly hostPath: string; readonly outside: boolean };
+  /** Null: nothing is outside. */
+  readonly locate: ((path: string) => { readonly hostPath: string; readonly outside: boolean }) | null;
+  /** Null: an unanswered overwrite is refused. */
+  readonly content: ApprovalContent | null;
 }
 
-/** A change past the agent's own files is asked, never parked; a secret-looking read follows `cat`'s rule. */
+type Approve = (op: FileAccess['op'], path: string, bytes?: string | Uint8Array) => Promise<void>;
+
+/** A change past the agent's own files is asked; a secret-looking read follows `cat`'s rule. */
 export function withApprovalGatedFiles(vfs: VFS, executor: string, reach: FileReach, policy: ShellApprovalPolicy): VFS {
-  const approve = async (op: FileAccess['op'], path: string): Promise<void> => {
+  const approve: Approve = async (op, path, bytes) => {
     const onUser = onUserRoots(path, reach.userRoots());
     const at = onUser ? undefined : reach.locate?.(path);
+    const hostPath = at?.hostPath ?? path;
+    const replaces = onUser && op === 'write' && await vfs.exists(path);
+    const content = replaces ? reach.content : null;
     let reaches: FileAccess['reaches'] = at?.outside === true ? 'outside-directory' : 'own';
 
     if (onUser) reaches = 'user-mount';
-    await approveFileAccess({ op, path, hostPath: at?.hostPath ?? path, reaches }, executor, policy);
+    const parkedAs = content === null || bytes === undefined ? undefined : parkWriteAs(hostPath, bytes, () => vfs.readFile(path), content);
+
+    await approveFileAccess({ op, path, hostPath, reaches, replaces }, executor, policy, parkedAs);
   };
 
   const gated: VFS & Partial<VfsNativeMutations & VfsNativeReads> = {
@@ -95,7 +105,7 @@ export function withApprovalGatedFiles(vfs: VFS, executor: string, reach: FileRe
       return vfs.readFile(path, opts);
     },
     async writeFile(path, data) {
-      await approve('write', path);
+      await approve('write', path, data);
 
       return vfs.writeFile(path, data);
     },
@@ -123,7 +133,7 @@ export function withApprovalGatedFiles(vfs: VFS, executor: string, reach: FileRe
 function forwardNative(
   vfs: VFS & Partial<VfsNativeMutations & VfsNativeReads>,
   gated: VFS & Partial<VfsNativeMutations & VfsNativeReads>,
-  approve: (op: FileAccess['op'], path: string) => Promise<void>,
+  approve: Approve,
 ): void {
   const conditional = vfs.writeFileIfRevision?.bind(vfs);
   const atRevision = vfs.readFileAtRevision;
@@ -134,7 +144,7 @@ function forwardNative(
 
   if (conditional) {
     gated.writeFileIfRevision = async (path, data, expected) => {
-      await approve('write', path);
+      await approve('write', path, data);
 
       return conditional(path, data, expected);
     };

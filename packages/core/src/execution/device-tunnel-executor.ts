@@ -7,7 +7,7 @@ import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
 import type { VFS, VfsEntryStat } from '../types/primitives';
 import type { VfsNativeReads } from '../vfs/mounts';
-import { makeVfsError } from '../vfs/errno';
+import { makeVfsError, vfsErrorFromText } from '../vfs/errno';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { commandResult, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
@@ -25,6 +25,8 @@ import {
   nextDeviceRequestId,
 } from './device-tunnel';
 import { readDeviceOwnershipContext, readExecSignal } from './signal';
+import { approveFileAccess, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
+import { parkWriteAs, type ApprovalContent } from '../safety/bound-write';
 import { RESERVED_REFERENCE_ROOTS } from '../vfs/mounts';
 import {
   isJsonObject,
@@ -189,10 +191,16 @@ type CallView =
   | { readonly kind: 'view'; readonly view: DeviceVFS }
   | { readonly kind: 'refusal'; readonly refusal: Refusal };
 
+export interface DeviceWriteApproval {
+  readonly policy: ShellApprovalPolicy;
+  readonly content?: ApprovalContent;
+}
+
 export function createDeviceTunnelExecutor(
   transport: DeviceTransport,
   /** Path-scope for the file view; omit only where the transport is already scoped. */
   consent: DeviceFileConsent = ALWAYS_CONSENTED,
+  approval: DeviceWriteApproval = { policy: STRICT_NO_CHANNEL_POLICY },
 ): ExecutorProvider {
   const rpc: DeviceTransport['rpc'] = (method, params, opts) => transport.rpc(method, params, opts);
 
@@ -354,10 +362,13 @@ export function createDeviceTunnelExecutor(
         }
 
         try {
-          const target = filesForCall(transport, consent, readDeviceSelection({ context: args[2] }));
+          const target = resolveForCall(transport, readDeviceSelection({ context: args[2] }));
 
           if (target.kind === 'refusal') return target.refusal;
-          const view = target.view;
+          const view = deviceFiles(transport, consent, target.deviceId);
+          const refused = await approveOverwrite(approval, transport, target.deviceId, { view, path, content });
+
+          if (refused !== null) return refused;
           await view.writeFile(path, content);
 
           return `Written ${content.length} bytes to ${path}`;
@@ -486,10 +497,34 @@ declare namespace device {
   return provider;
 }
 
-/**
- * Resolves the machine a call is for. Named and held → id; named but not held → `unavailable`; unnamed with several
- * live → `bad_input`; otherwise the sole live id or none (hub resolves). The snapshot never gates the call itself.
- */
+/** Asks as a write onto `/pc` does, and parks under that path. */
+async function approveOverwrite(
+  approval: DeviceWriteApproval, transport: DeviceTransport, deviceId: string | undefined,
+  write: { readonly view: DeviceVFS; readonly path: string; readonly content: string },
+): Promise<Refusal | null> {
+  const { view, path, content } = write;
+
+  if (!await view.exists(path)) return null;
+  const fleet = transport.status().devices;
+  const device = deviceId === undefined ? undefined : fleet?.find((entry) => entry.id === deviceId);
+  const mounted = device === undefined || !path.startsWith('/') ? null : `/pc/${deviceMountSegment(device, fleet)}${path}`;
+  const store = mounted === null ? undefined : approval.content;
+
+  try {
+    await approveFileAccess(
+      { op: 'write', path: mounted ?? path, hostPath: mounted ?? path, reaches: 'user-mount', replaces: true }, 'device', approval.policy,
+      store === undefined || mounted === null ? undefined : parkWriteAs(mounted, content, () => view.readFile(path), store),
+    );
+  } catch (error) {
+    if (error instanceof KinuError) return refusalOf(error);
+    throw error;
+  }
+
+  return null;
+}
+
+/** Named and held → its id; named, not held → `unavailable`; unnamed among several live → `bad_input`; else the sole
+ *  live id or none. The snapshot never gates the call itself. */
 function resolveForCall(
   transport: DeviceTransport,
   named: string | undefined,
@@ -552,14 +587,20 @@ const AGENT_TMP_PATHS = ['/tmp', '/var/tmp'] as const;
 
 export type DeviceVFS = VFS & Pick<ExecutorProvider, 'homeDir'> & Pick<VfsNativeReads, 'readRange'>;
 
-/**
- * The machine's filesystem in its own absolute paths. The daemon resolves root and path before the sink; this client
- * guard only rejects lexical escapes. `homeDir` comes from HELLO, never an `exec` (which needs the full tier).
- */
+/** The machine's files in its own absolute paths: the daemon resolves root and path, this guard only rejects lexical
+ *  escapes, and `homeDir` is HELLO's, never an `exec`'s. */
 export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConsent, deviceId?: string): DeviceVFS {
   // No id (one-machine account or undescribed fleet): send no key and let the hub resolve.
   const target: DeviceExecOptions | undefined = deviceId === undefined ? undefined : { deviceId };
   const trimmed = (path: string): string => (path.length > 1 ? path.replace(/\/+$/, '') : path);
+
+  const call = async (method: string, params: JsonValue[], path: string): ReturnType<DeviceTransport['rpc']> => {
+    try {
+      return await transport.rpc(method, params, target);
+    } catch (cause) {
+      throw (cause instanceof Error ? vfsErrorFromText(cause.message, path) : null) ?? cause;
+    }
+  };
 
   const effectiveRoot = async (): Promise<string> => {
     const explicit = await consent.consentedRoot(deviceId);
@@ -626,7 +667,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
 
     for (;;) {
       const asked = length === null ? DEVICE_READ_CHUNK_BYTES : Math.min(DEVICE_READ_CHUNK_BYTES, length - total);
-      const raw = await transport.rpc('readRange', [path, offset + total, asked, { root }], target);
+      const raw = await call('readRange', [path, offset + total, asked, { root }], path);
 
       if (raw === undefined || !isJsonObject(raw) || raw.encoding !== 'base64') {
         throw makeVfsError('EIO', 'device returned an unreadable file range', path);
@@ -672,12 +713,12 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
       let result: JsonValue | undefined;
 
       if (v.is(v.string(), data)) {
-        result = await transport.rpc('writeFile', [path, data, { root }], target);
+        result = await call('writeFile', [path, data, { root }], path);
       } else {
         const text = asLosslessText(data);
         result = text !== null
-          ? await transport.rpc('writeFile', [path, text, { root }], target)
-          : await transport.rpc('writeFile', [path, bytesToBase64(data), { encoding: 'base64', root }], target);
+          ? await call('writeFile', [path, text, { root }], path)
+          : await call('writeFile', [path, bytesToBase64(data), { encoding: 'base64', root }], path);
       }
 
       const ok = result === 'ok'
@@ -691,8 +732,8 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
       const entries: JsonValue[] = [];
 
       for (let offset: number | null = 0; offset !== null;) {
-        const page: v.InferOutput<typeof DeviceListPageSchema> = v.parse(DeviceListPageSchema, await transport.rpc(
-          'listFiles', [path, { root, offset, limit: DEVICE_LIST_PAGE_ENTRIES }], target,
+        const page: v.InferOutput<typeof DeviceListPageSchema> = v.parse(DeviceListPageSchema, await call(
+          'listFiles', [path, { root, offset, limit: DEVICE_LIST_PAGE_ENTRIES }], path,
         ));
 
         if (Array.isArray(page)) {
@@ -718,23 +759,23 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     async stat(path) {
       const root = await guard(path, 'stat');
 
-      return v.parse(DeviceStatSchema, await transport.rpc('statPath', [path, { root }], target));
+      return v.parse(DeviceStatSchema, await call('statPath', [path, { root }], path));
     },
 
     async unlink(path) {
       const root = await guard(path, 'unlink');
-      await transport.rpc('unlinkPath', [path, { root }], target);
+      await call('unlinkPath', [path, { root }], path);
     },
 
     async mkdir(path, opts) {
       const root = await guard(path, 'mkdir');
-      await transport.rpc('mkdirPath', [path, { root, recursive: opts?.recursive ?? false }], target);
+      await call('mkdirPath', [path, { root, recursive: opts?.recursive ?? false }], path);
     },
 
     async exists(path) {
       const root = await guard(path, 'stat');
 
-      return v.parse(v.boolean(), await transport.rpc('exists', [path, { root }], target));
+      return v.parse(v.boolean(), await call('exists', [path, { root }], path));
     },
   };
 }

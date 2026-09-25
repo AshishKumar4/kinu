@@ -12,6 +12,7 @@ import { getExecutorFiles } from '../src/read-models/files';
 import { withMountTable, standardMounts } from '../src/vfs/mounts';
 import { setDiagnosticsSink } from '../src/obs/log';
 import { DefaultExecutionRouter } from '../src/execution/router';
+import type { ApprovalGrant } from '../src/safety/approval-gate';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { toolExecute } from '@kinu.run/test-utils';
 import { createTestRuntime, storesFor } from './helpers';
@@ -132,7 +133,11 @@ describe('the device fleet at the executor surface', () => {
 
   test('every file tool rides the named machine, not the first live one', async () => {
     const t = fleetTransport([STUDIO, RIG]);
-    const provider = createDeviceTunnelExecutor(t);
+
+    // The owner lets the agent replace files there: the write's approval asks nothing, but its probe still rides.
+    const provider = createDeviceTunnelExecutor(t, undefined, {
+      policy: { mode: () => 'strict', granted: (grant: ApprovalGrant) => grant.rule === 'overwrite-user-files' },
+    });
 
     expect(await provider.tools.readFile.execute('/etc/hosts', { device: 'mrwhite@rig' })).toBe('bytes of dev-rig');
     expect(await provider.tools.readdir.execute('/home', { device: 'mrwhite@rig' })).toEqual(['entry-of-dev-rig']);
@@ -140,7 +145,7 @@ describe('the device fleet at the executor surface', () => {
     expect(await provider.tools.writeFile.execute('/tmp/x', 'y', { device: 'ashish@studio' })).toBe('Written 1 bytes to /tmp/x');
 
     expect(t.sent.map((frame) => [frame.method, frame.deviceId])).toEqual([
-      ['readRange', 'dev-rig'], ['listFiles', 'dev-rig'], ['exists', 'dev-studio'], ['writeFile', 'dev-studio'],
+      ['readRange', 'dev-rig'], ['listFiles', 'dev-rig'], ['exists', 'dev-studio'], ['exists', 'dev-studio'], ['writeFile', 'dev-studio'],
     ]);
   });
 

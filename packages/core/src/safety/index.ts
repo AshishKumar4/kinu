@@ -27,6 +27,8 @@ export {
   type DeferredApprovalChannel,
 } from './approval-gate';
 
+export { performBoundWrite, type ApprovalContent } from './bound-write';
+
 export {
   EGRESS_PLACEHOLDER_PREFIX,
   EGRESS_PLACEHOLDER_BYTES,

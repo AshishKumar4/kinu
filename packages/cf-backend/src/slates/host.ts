@@ -1,5 +1,5 @@
 import { exports } from 'cloudflare:workers';
-import { WorkspaceId } from '@agent-core/core';
+import { ContentRef, Digest, WorkspaceId } from '@agent-core/core';
 import { SlateId, SlateVersionId } from '@agent-core/core/slates';
 import * as v from 'valibot';
 import { CRED_KERNEL, CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -20,7 +20,7 @@ import {
   type SlateBindingCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim,
   type MissionGovernor,
 } from '@kinu.run/core';
-import { canonicalWorkspacePath, workspacePath, WORKSPACE_ROOT } from '@kinu.run/core';
+import { canonicalWorkspacePath, workspacePath, WORKSPACE_ROOT, type ApprovalContent } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import { ERROR_CODES, KinuError, classifyErrorCode, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
@@ -118,6 +118,22 @@ export class SlateHost {
     this.state = new SqliteSlateStateStore(deps.ctx.storage.sql);
     initSlateLiveShareTables((ddl) => { deps.ctx.storage.sql.exec(ddl); });
     this.live = new SlateLiveShareStore(deps.ctx.storage.sql);
+  }
+
+  /** Slate content, also a parked write's bytes. */
+  readonly parkedWrites: ApprovalContent = {
+    retain: async (bytes) => {
+      const session = await this.deps.session();
+      const content = this.contentOf(session);
+      session.vfs.withTransaction(() => content.retain(bytes));
+    },
+    read: async (sha256) => this.contentOf(await this.deps.session()).read(ContentRef.fromDigest(new Digest(sha256))),
+  };
+
+  private contentOf(session: Awaited<ReturnType<SlateHostDeps['session']>>): WorkspaceSlateContentStore {
+    this.content ??= session.vfs.withTransaction(() => new WorkspaceSlateContentStore(session.vfs.as(CRED_KERNEL)));
+
+    return this.content;
   }
 
   private async project(cred: VfsCred, id: string): Promise<SlateProject> {
@@ -410,14 +426,14 @@ export class SlateHost {
 
   private async sources(cred: VfsCred): Promise<WorkspaceSlates> {
     const session = await this.deps.session();
-    this.content ??= session.vfs.withTransaction(() => new WorkspaceSlateContentStore(session.vfs.as(CRED_KERNEL)));
+    const content = this.contentOf(session);
     const key = slateCredentialKey(cred);
     let runtime = this.sourceRuntimes.get(key);
 
     if (runtime === undefined) {
       runtime = new WorkspaceSlates({
         workspaceId: new WorkspaceId(this.deps.workspace), store: this.store,
-        files: new SlateFiles(session.vfs.as(cred), this.content, this.deps.ctx.storage.sql, (body) => session.vfs.withTransaction(body)),
+        files: new SlateFiles(session.vfs.as(cred), content, this.deps.ctx.storage.sql, (body) => session.vfs.withTransaction(body)),
         mutations: { mutate: async (request, mutation) => {
           if (request.workspaceId.value !== this.deps.workspace) throw new KinuError('denied', 'Slate mutation belongs to another workspace');
 

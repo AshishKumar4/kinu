@@ -209,7 +209,7 @@ import { OwnedModelServices } from "./owned-model-services";
 import {
   promptCachePlan, markLastToolForAnthropicCache,
 } from "@kinu.run/core";
-import type { CodemodeProvider, DeferredApprovalChannel, SlateBindingRoute, SlateCallResult, SlateOperation, SlateReadModel } from "@kinu.run/core";
+import type { ApprovalContent, CodemodeProvider, DeferredApprovalChannel, SlateBindingRoute, SlateCallResult, SlateOperation, SlateReadModel } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
 import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
@@ -2980,6 +2980,7 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!this._rt) {
       const hooks: CFRuntimeHooks = {
         deferrals: () => this.deferralChannel(),
+        approvalContent: this.approvalContent(),
         slate: (operation) => this.slate(operation),
         reportModelCall: (report) => this.reportModelCall(report),
         resolveProfile: () => this.routingProfile(),
@@ -3039,6 +3040,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * queue re-enters `rt`).
    */
   protected deferralChannel(): DeferredApprovalChannel | undefined { return undefined; }
+  protected approvalContent(): ApprovalContent | undefined { return undefined; }
 
   /**
    * The actor a slate acts for; never client-reachable. Hosted actors' callers are minted by the

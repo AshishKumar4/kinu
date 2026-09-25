@@ -697,12 +697,14 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
-- **The agent's file tools ask before changing your files.** Its `file` tool and its programs' `workspace.*` calls
-  wrote, renamed and deleted files on your connected machine (`/pc`) and your Drive (`/shared`) without asking,
-  while the shell asked before the same change. They now wait for you there, and in a CLI workspace before changing
-  a file outside its directory, which they can now reach by its absolute path. Reads stay unasked, except a file that
-  looks like a secret (`.env`, `.npmrc`, credentials), which follows the rule `cat` does. With nobody there to
-  answer, the change is refused, never queued.
+- **The agent's file tools ask before replacing your files.** Its `file` tool and its programs' `workspace.*` and
+  `device.writeFile` calls overwrote files on your connected machine (`/pc`) and your Drive (`/shared`) without
+  asking, while the shell asked before the same change. A new file there is still the agent's to create; replacing
+  one now waits for you, as does any change outside a CLI workspace's directory, which the tools can now reach by its
+  absolute path. With nobody there to answer, the hosted workspace queues the replacement with its exact bytes:
+  approving writes those bytes unless the file changed since the ask, and "always" lets the next ones through. Reads
+  stay unasked, except a file that looks like a secret (`.env`, `.npmrc`, credentials), which follows the rule `cat`
+  does. A new file the file tool writes on a connected machine no longer fails on the machine's "no such file".
 
 - **A workspace's card shows the owner's words, never Kinu's own.** A new workspace's card showed the prompt Kinu
   starts its first turn with as the owner's latest task, and a background event after the owner's message did the

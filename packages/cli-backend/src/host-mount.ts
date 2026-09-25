@@ -113,11 +113,11 @@ function cwdPlaneLocator(cwd: string): (path: string) => { readonly hostPath: st
 export function directoryFileReach(cwd: string | null, table: MountedVfs | null): FileReach {
   const userRoots = () => table?.userRoots() ?? [];
 
-  if (cwd === null) return { userRoots };
+  if (cwd === null) return { userRoots, locate: null, content: null };
   const locate = cwdPlaneLocator(cwd);
 
-  // A mounted path is its mount's, never the directory's.
-  return { userRoots, locate: (path) => ((table?.mountOf(path) ?? null) === null ? locate(path) : { hostPath: path, outside: false }) };
+  // A mounted path is its mount's, never the directory's. The CLI asks: nothing parks a write here.
+  return { userRoots, locate: (path) => ((table?.mountOf(path) ?? null) === null ? locate(path) : { hostPath: path, outside: false }), content: null };
 }
 
 /** The working directory as the workspace file plane ({@link cwdPlaneLocator}); agent state stays in `agentStateVfs`. */

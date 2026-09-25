@@ -63,7 +63,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
 
       deps.workspace.mountTable(mounted, node.cred);
       vfs = mounted;
-      toolFiles = withApprovalGatedFiles(mounted, 'workspace', { userRoots: () => mounted.userRoots() }, deps.approvalPolicy);
+      toolFiles = withApprovalGatedFiles(mounted, 'workspace', { userRoots: () => mounted.userRoots(), locate: null, content: null }, deps.approvalPolicy);
       ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs: toolFiles, files: mounted, shell, filesOwner: 'agent' }));
 
       for (const info of origin.executionRouter?.listExecutors() ?? []) {

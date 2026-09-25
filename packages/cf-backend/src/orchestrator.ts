@@ -216,9 +216,9 @@ import {
   DeviceConsentRegistry, DeviceConsentStore,
   type DeviceConsentAnswer, type DeviceConsentDecision,
   type DeviceConsentRequest, type PendingDeviceConsent,
-  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
+  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, performBoundWrite,
   type DeferredApproval, type DeferredApprovalAnswer, type DeferredApprovalChannel,
-  type DeferredApprovalNotice, type ApprovalGrant,
+  type DeferredApprovalNotice, type ApprovalGrant, type ApprovalContent,
   TURN_AUTHOR_METADATA_KEY,
   WorkspacePlanReferenceSchema,
 } from "@kinu.run/core";
@@ -555,6 +555,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation,
       ),
       deferrals: () => this.deferralChannel(),
+      approvalContent: () => this.approvalContent(),
       refinementLane: () => async () => { await refinementPass(this.refinementDeps); },
       chosenLoopOrigin: (record: WorkspaceActor) => this._chosenLoopOrigins.get(record.actorId) ?? null,
       chosenWriteObserver: (record: WorkspaceActor) => this._actorWriteObservers.get(record.actorId) ?? null,
@@ -2593,7 +2594,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.consents.list();
   }
 
-  // Deferred approval: nothing is ever reported as having run (core safety/deferred-approval.ts).
+  // Deferred approval (core safety/deferred-approval.ts): only a parked write runs on approval.
   protected _deferrals: DeferredApprovalQueue | null = null;
   protected get deferrals(): DeferredApprovalQueue {
     this._deferrals ??= new DeferredApprovalQueue({
@@ -2611,6 +2612,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         });
       },
       announce: (notice) => this.announceDeferral(notice),
+      performWrite: (write) => performBoundWrite(this.rt.storage.vfs, this.approvalContent(), write),
     });
 
     return this._deferrals;
@@ -2618,6 +2620,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   protected override deferralChannel(): DeferredApprovalChannel {
     return this.deferrals.channel;
+  }
+
+  // Read per call: the slate host is built after the runtime.
+  protected override approvalContent(): ApprovalContent {
+    return { retain: (bytes) => this.slates.parkedWrites.retain(bytes), read: (sha256) => this.slates.parkedWrites.read(sha256) };
   }
 
   private announceDeferral(notice: DeferredApprovalNotice): void {

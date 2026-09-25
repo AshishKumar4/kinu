@@ -1,6 +1,7 @@
 /**
  * Deferred approval: a gated action parks on the owner and the agent is told so. A queued action returns through
- * `denyResult`, so nothing unrun looks like a success; 'approved' is permission, not an effect. SQL, to survive eviction.
+ * `denyResult`, so nothing unrun looks like a success; 'approved' is permission, not an effect, except a parked
+ * write's. SQL, to survive eviction.
  */
 
 import type { DynamicApproval } from '../types/dynamic-context';
@@ -14,6 +15,7 @@ import {
   type ApprovalGrant, type ApprovalSpend, type ApprovalSpendOutcome,
   type DeferredApprovalChannel, type ShellApprovalRequest,
 } from './approval-gate';
+import { boundWriteOf, type BoundFileWrite } from './bound-write';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, toKinuError } from '../obs/index';
 
@@ -28,15 +30,13 @@ export type DeferredApprovalStatus =
   | 'approved'
   /** The owner said no. Stands for {@link DENIAL_STANDING_MS}, then is swept. */
   | 'denied'
-  /** Out with a running command; answers nobody. The gate deletes the row or restores 'approved'; a row
-   *  left here is a process that died mid-command, its grant lost (the safe direction). */
+  /** Out with a running command, answering nobody; left here, its process died mid-command and the grant is lost. */
   | 'spent';
 
 /** What the owner can pick. `always` is `approved` plus a standing grant for the tripped rules on that executor. */
 export type DeferredApprovalAnswer = Extract<DeferredApprovalStatus, 'approved' | 'denied'> | 'always';
 
-/** How long a denial answers before the queue asks again, so old refusals neither govern today nor
- *  accumulate; standing policy lives in actor_config. */
+/** How long a denial answers before the queue asks again; standing policy lives in actor_config. */
 export const DENIAL_STANDING_MS = 24 * 60 * 60 * 1000;
 
 /** One action parked on the owner. */
@@ -54,8 +54,7 @@ export interface DeferredApproval {
   readonly decidedAt: number | null;
 }
 
-/** What the gate learns about a command. `shell` is the only verdict that proceeds, and reaching it
- *  has already spent the grant; it names the spend so the gate can close it. */
+/** What the gate learns about a command; `run` has already spent the grant and names the spend. */
 export type DeferredApprovalVerdict =
   | { readonly outcome: 'run'; readonly action: DeferredApproval; readonly spend: ApprovalSpend }
   | { readonly outcome: 'denied'; readonly action: DeferredApproval }
@@ -112,8 +111,7 @@ export class DeferredApprovalStore {
     this.actorId = actor.actorId;
   }
 
-  /** This command's live row on this executor ('queued', 'approved' or a standing 'denied', never 'spent'); a
-   *  decision outranks an ask, and the newest decision wins. */
+  /** This command's live row on this executor, never 'spent'; a decision outranks an ask, the newest wins. */
   standing(command: string, executor: string, now: number): DeferredApproval | null {
     this.actor.assertCurrent();
 
@@ -150,8 +148,7 @@ export class DeferredApprovalStore {
     return { ...action, status: 'queued', decidedAt: null };
   }
 
-  /** Record the owner's answer; reports the row only if this call changed it. Read and write have no
-   *  await between them, which is atomic on single-threaded SQLite. */
+  /** The owner's answer; the row only if this call changed it. No await between read and write: atomic here. */
   decide(id: string, answer: DeferredApprovalAnswer, now: number): DeferredApproval | null {
     this.actor.assertCurrent();
 
@@ -164,8 +161,8 @@ export class DeferredApprovalStore {
     return this.get(id);
   }
 
-  /** Hand an approved grant to a command about to run, out of `standing()` first so a crash loses an approval
-   *  rather than granting twice; null if another call won. */
+  /** Hands an approved grant to a command about to run, out of `standing()` first: a crash loses it, never doubles
+   *  it; null if another call won. */
   spend(id: string): { readonly action: DeferredApproval; readonly spend: ApprovalSpend } | null {
     this.actor.assertCurrent();
 
@@ -184,8 +181,7 @@ export class DeferredApprovalStore {
     };
   }
 
-  /** Consume the grant or give it back, guarded on the spend counter so a stale settle cannot reach a later
-   *  attempt; reports whether the row moved. */
+  /** Consumes the grant or gives it back, guarded on the spend counter; whether the row moved. */
   settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): boolean {
     this.actor.assertCurrent();
 
@@ -232,8 +228,7 @@ function clip(text: string): string {
   return text.length <= COMMAND_ECHO_MAX_CHARS ? text : `${text.slice(0, COMMAND_ECHO_MAX_CHARS)}…`;
 }
 
-/** A parked action's one-line result: nothing ran, which rule, which machine, the id. Returned through
- *  `denyResult`; the doctrine lives in the system prompt. */
+/** A parked action's one-line result, returned through `denyResult`: nothing ran, which rule and machine, the id. */
 function queuedActionMessage(action: DeferredApproval): string {
   return `NOT RUN — queued for owner approval (${action.id}): ${ruleNames(action)} on ${action.executor}. `
     + 'A decision will wake you.';
@@ -258,22 +253,21 @@ function ruleNames(action: DeferredApproval): string {
   return names.length > 0 ? names.join(', ') : 'needs approval';
 }
 
+type WriteOutcome = 'written' | 'changed';
+
 /** The message on the turn a decision wakes: one for the whole batch. */
-function decisionWakeMessage(decided: readonly DeferredApproval[]): string {
+function decisionWakeMessage(decided: readonly DeferredApproval[], written: ReadonlyMap<string, WriteOutcome>): string {
   const lines: string[] = [];
-  const approved = decided.filter((a) => a.status === 'approved');
-  const denied = decided.filter((a) => a.status === 'denied');
 
+  const section = (title: string, actions: readonly DeferredApproval[]): void => {
+    if (actions.length > 0) lines.push(title, ...actions.map((a) => `  ${a.id} — ${clip(a.command)}`));
+  };
+
+  section('WRITTEN on approval — nothing to re-issue:', decided.filter((a) => written.get(a.id) === 'written'));
+  section('APPROVED, not written: the file changed since the ask — read it again:', decided.filter((a) => written.get(a.id) === 'changed'));
   // Repeat "still not run": the exact mistake an agent makes on waking.
-  if (approved.length > 0) {
-    lines.push('APPROVED, still not run — re-issue once:',
-      ...approved.map((a) => `  ${a.id} — ${clip(a.command)}`));
-  }
-
-  if (denied.length > 0) {
-    lines.push('DENIED — do not re-issue:',
-      ...denied.map((a) => `  ${a.id} — ${clip(a.command)}`));
-  }
+  section('APPROVED, still not run — re-issue once:', decided.filter((a) => a.status === 'approved' && !written.has(a.id)));
+  section('DENIED — do not re-issue:', decided.filter((a) => a.status === 'denied'));
 
   return lines.join('\n');
 }
@@ -284,13 +278,15 @@ export interface DeferredApprovalQueueDeps {
   readonly inbox: AgentInbox;
   /** Record a standing grant from an 'always' answer; the host owns storage (actor_config). */
   remember(grants: readonly ApprovalGrant[]): void;
-  /** Durable audit sink for `approval_consumed`. Optional only for tests; production must wire it. */
+  /** Durable `approval_consumed` sink; optional only for tests. */
   audit?(record: ApprovalConsumedRecord): void;
   /** Mint a request id; injected for host id vocabulary and deterministic tests. */
   newId?: () => string;
   now?: () => number;
   /** Told when actions park and batches are decided. Never throws into the gate. */
   announce?(event: DeferredApprovalNotice): void;
+  /** Runs an approved parked write; failing, its row stays approved for a re-issue. Null: nothing parks a write. */
+  readonly performWrite: ((write: BoundFileWrite) => Promise<WriteOutcome>) | null;
 }
 
 /** What the host is told as actions come and go. */
@@ -328,8 +324,8 @@ export class DeferredApprovalQueue {
     };
   }
 
-  /** Park an action, or answer with the owner's standing decision. Re-asking returns the same row
-   *  so the turn's repeat detector (orchestrator/turn-steering.ts) sees a loop. */
+  /** Parks an action or answers with the owner's standing decision; a re-ask returns the same row, so the turn's
+   *  repeat detector sees a loop. */
   park(req: ShellApprovalRequest): DeferredApprovalVerdict {
     const now = this.now();
     // Delete expired denials on the write path; nothing else sweeps them.
@@ -361,8 +357,7 @@ export class DeferredApprovalQueue {
     return { outcome: 'queued', action };
   }
 
-  /** Close a spend {@link park} made: 'spent' consumes the grant and audits it, 'did-not-run' restores the row.
-   *  Reports whether this call closed it. */
+  /** Closes a spend: 'spent' consumes and audits the grant, 'did-not-run' restores the row; whether this call closed it. */
   settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): boolean {
     const action = this.deps.store.get(spent.approvalId);
 
@@ -383,8 +378,7 @@ export class DeferredApprovalQueue {
     return true;
   }
 
-  /** The owner decided, for one or many actions. `always` also remembers the tripped rules on that
-   *  executor. Rows are written before the one wake signal. */
+  /** The owner decided on one or many actions; `always` also grants the tripped rules on that executor. */
   async decide(ids: readonly string[], answer: DeferredApprovalAnswer): Promise<DeferredApproval[]> {
     const now = this.now();
     this.deps.store.sweepDenials(now);
@@ -405,14 +399,45 @@ export class DeferredApprovalQueue {
         .filter((hit) => hit.decision === 'gate').map((hit) => ({ rule: hit.rule, executor: a.executor }))));
     }
 
+    const written = await this.performWrites(decided);
     this.notify({ kind: 'decided', actions: decided });
     await this.deps.inbox.send({
       kind: DEFERRED_APPROVAL_SIGNAL,
-      text: decisionWakeMessage(decided),
+      text: decisionWakeMessage(decided, written),
       metadata: { decision: answer, count: decided.length, ids: decided.map((a) => a.id) },
     });
 
     return decided;
+  }
+
+  /** Spent before writing, so a re-issue meanwhile cannot write twice. */
+  private async performWrites(decided: readonly DeferredApproval[]): Promise<ReadonlyMap<string, WriteOutcome>> {
+    const written = new Map<string, WriteOutcome>();
+    const { performWrite, store } = this.deps;
+
+    if (performWrite === null) return written;
+
+    for (const action of decided) {
+      const write = action.status === 'approved' ? boundWriteOf(action.command) : null;
+      const spent = write === null ? null : store.spend(action.id);
+
+      if (write === null || spent === null) continue;
+      let outcome: WriteOutcome;
+
+      try {
+        outcome = await performWrite(write);
+      } catch (cause) {
+        store.settle(spent.spend, 'did-not-run');
+        diagnostics.failure('approval.write_failed', toKinuError({ doing: `writing ${write.path} on approval`, cause, otherwise: 'io' }));
+        continue;
+      }
+
+      if (outcome === 'written') this.settle(spent.spend, 'spent');
+      else store.settle(spent.spend, 'spent');
+      written.set(action.id, outcome);
+    }
+
+    return written;
   }
 
   /** Everything still parked, oldest first. */

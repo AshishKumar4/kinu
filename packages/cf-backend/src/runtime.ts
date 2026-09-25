@@ -10,6 +10,7 @@ import type {
   FiberCtx, ExecutionRouter,
   TurnAccumulator,
   DeferredApprovalChannel,
+  ApprovalContent,
   WriteObserver,
   ModelCallSink, SpendSource, ResolvedTurnProfile,
   SlateCallResult, SlateOperation,
@@ -204,9 +205,11 @@ export function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
 }
 
 export interface CFRuntimeHooks {
-  /** A thunk read at exec time: resolving during construction would re-enter the caller's lazy runtime
-     *  getter. Undefined (head, subordinate) means no queue, so 'strict' refuses. */
+  /** Read at exec time, as resolving during construction re-enters the runtime getter. Undefined (head,
+     *  subordinate): no queue, so 'strict' refuses. */
   deferrals?: () => DeferredApprovalChannel | undefined;
+  /** A parked write's bytes; absent, an unanswered overwrite is refused. */
+  approvalContent?: ApprovalContent;
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
   workspaceObserver?: WriteObserver;
   /** Where non-turn model seams (judge, fast tier, reflection, embedder) report cost; turn spend arrives
@@ -370,7 +373,11 @@ export function createCFRuntime(
   const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
   // The shell this actor runs as serves its file tool's mount points.
   workspaceBox.mountTable?.(agentFileVfs, hooks.workspaceExecution?.cred);
-  const toolFiles = withApprovalGatedFiles(agentFileVfs, 'workspace', { userRoots: () => agentFileVfs.userRoots() }, approvalPolicy);
+
+  const toolFiles = withApprovalGatedFiles(agentFileVfs, 'workspace', {
+    userRoots: () => agentFileVfs.userRoots(), locate: null, content: hooks.approvalContent ?? null,
+  }, approvalPolicy);
+
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
     shellSession,
@@ -513,7 +520,7 @@ export function createCFRuntime(
         });
       }
     },
-  }));
+  }, { policy: approvalPolicy, content: hooks.approvalContent }));
 
   const runtime: CFRuntime = {
     actor: actor.actor,
