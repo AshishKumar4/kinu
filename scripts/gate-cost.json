@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-09-24",
+  "measuredAt": "2026-09-25",
   "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
   "method": "each row alone under `setsid timeout --signal=TERM --kill-after=5s <deadline> /usr/bin/time -v bash -c <run>`; the row's whole process tree — its session plus every descendant by ppid, so a setsid'd dev server or browser counts — sampled every 0.05s for its first 3s and every 0.25s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, Δ(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN)",
   "rows": {
@@ -872,15 +872,15 @@
       "loadAtStart": 18.46,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts": {
-      "wallSeconds": 44.21,
-      "cpuSeconds": 111.82,
-      "peakRssMb": 12256.21,
-      "peakRunnable": 8,
-      "peakCpuThreads": 8.39,
-      "meanThreads": 2.53,
-      "samples": 190,
-      "loadAtStart": 8.08,
+    "bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts": {
+      "wallSeconds": 48.1,
+      "cpuSeconds": 86.92,
+      "peakRssMb": 15310.7,
+      "peakRunnable": 29,
+      "peakCpuThreads": 14.65,
+      "meanThreads": 1.81,
+      "samples": 192,
+      "loadAtStart": 2.12,
       "exit": 0
     }
   }
