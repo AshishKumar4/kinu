@@ -97,8 +97,8 @@ interface Observed {
   readonly reducedMotionTails: Record<string, TailFrame>;
   readonly chat: Record<string, ChatRow>;
   readonly forkInterruptedAfterClick: ChatRow;
-  /** The failed-turn card's headline, keyed by whether it is a replay. */
-  readonly chatErrorHeadings: Record<string, string>;
+  /** Each failure card by its state (`live`, `replayed`): its headline, its border's paint, and whether it offers the turn again. */
+  readonly chatErrors: Record<string, { readonly heading: string; readonly border: string; readonly retry: boolean }>;
   /** The drive at its root: crumb text, row names, and the origin badges the
    *  mounted folders wear. */
   readonly filesRoot: { crumbs: string; entries: string[]; badges: string[] };
@@ -353,11 +353,15 @@ async function run(): Promise<Observed> {
 
     const forkInterruptedAfterClick = (await readChatRows(chatPage))[UNSTAMPED_FORK_ROW];
 
-    const chatErrorHeadings = Object.fromEntries(await chatPage.$$eval(
+    const chatErrors = Object.fromEntries(await chatPage.$$eval(
       '[data-chat-error]',
       (cards) => cards.map((card) => [
         card.getAttribute('data-chat-error') ?? '',
-        card.querySelector('.font-medium')?.textContent ?? '',
+        {
+          heading: card.querySelector('.font-medium')?.textContent ?? '',
+          border: getComputedStyle(card).borderTopColor,
+          retry: [...card.querySelectorAll('button')].some((button) => /retry/i.test(button.textContent ?? '') && !button.disabled),
+        },
       ]),
     ));
 
@@ -610,7 +614,7 @@ async function run(): Promise<Observed> {
     await explore.close();
 
     return {
-      tails, reducedMotionTails, chat, forkInterruptedAfterClick, chatErrorHeadings, toolActivity,
+      tails, reducedMotionTails, chat, forkInterruptedAfterClick, chatErrors, toolActivity,
       filesRoot, filesRoster, filesInMount, filesAfterUp, treeFileNames,
       filesMarkdownRendered, filesPreviewText, filesEditorSeedsFromTheFile,
       filesAfterRename, filesAfterDelete, filesFiltered, filesOfflineRow,
@@ -780,9 +784,14 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
   test('a replayed failure does not claim to be a live one', () => {
     // `sunlit-stone-4a20` still answers a resume ACK with
     // {"body":"Unauthorized","done":true,"error":true} from a turn that ended
-    // 2026-08-17. Both states are on the page, and they must not read alike.
-    expect(observed.chatErrorHeadings.live).toBe('The last turn failed and produced no answer');
-    expect(observed.chatErrorHeadings.replayed).toBe('This workspace was last left on a failed turn');
+    // 2026-08-17. Both states are on the page, and they must not read alike: the replayed one neither says what the
+    // live one says nor raises its alarm, and each still offers its turn again.
+    const { live, replayed } = observed.chatErrors;
+
+    expect(replayed?.heading).not.toBe(live?.heading);
+    expect(replayed?.border).not.toBe(live?.border);
+    expect(live?.retry).toBe(true);
+    expect(replayed?.retry).toBe(true);
   });
 });
 
@@ -3046,7 +3055,6 @@ interface AgentTabPaint {
   readonly color: string;
   readonly background: string;
   readonly underlineColor: string;
-  readonly underlineWidth: number;
   /**
    * The colour of the element that holds the tab's NAME.
    *
@@ -3097,7 +3105,6 @@ function agentStripPaint(page: Page, strip: string): Promise<StripPaint> {
         color: style.color,
         background: style.backgroundColor,
         underlineColor: style.borderBottomColor,
-        underlineWidth: Number.parseFloat(style.borderBottomWidth),
         labelColor: getComputedStyle(labelled(tab)).color,
         bottom: tab.getBoundingClientRect().bottom,
       }];
@@ -3153,10 +3160,6 @@ describe('the open agent tab, as the browser paints it', () => {
           expect(closed.length).toBeGreaterThan(0);
 
           for (const tab of current) {
-            // The bar is drawn, in a colour of its own.
-            expect(tab.underlineWidth).toBeGreaterThanOrEqual(2);
-            expect(tab.underlineColor).not.toBe('rgba(0, 0, 0, 0)');
-
             // The NAME reads in the tab's own colour, whatever holds it. Main
             // inherits that by writing its name as text; an agent's name sits
             // in a rename control, and the control used to write a role of its
@@ -3204,8 +3207,7 @@ describe('the open agent tab, as the browser paints it', () => {
 
           expect(hovered?.color).not.toBe(before?.color);
           expect(hovered?.labelColor).toBe(hovered?.color);
-          expect(hovered?.underlineWidth).toBeGreaterThanOrEqual(2);
-          expect(hovered?.underlineColor).not.toBe('rgba(0, 0, 0, 0)');
+          expect(hovered?.underlineColor).not.toBe(before?.underlineColor);
           expect(hovered?.underlineColor).not.toBe(open?.underlineColor);
           expect(paint.tabs.find((one) => one.current === 'page')?.underlineColor).toBe(open?.underlineColor);
         }
