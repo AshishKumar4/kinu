@@ -25,7 +25,7 @@ import {
   type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
   DefaultExecutionRouter, createInlineExecutor,
   withMountTable, standardMounts, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
-  withApprovalGatedShell, holdsGrant,
+  withApprovalGatedShell, createShellSession, shellCwd, holdsGrant,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount, skillsMount,
   resolveRoutingProfile, createRoutedModelLane,
@@ -383,7 +383,6 @@ export function createCLIRuntime(
   // A directory-bound shell runs on the user's machine and may mutate the tree, so it
   // snapshots first; the in-SQLite shell is the agent's own and serves the mount table.
   const filesOwner: FilesOwner = cwd === null ? 'agent' : 'user';
-  const userRoots = () => agentVfs.userRoots();
 
   const facetShell = cwd === null ? null : (facet: string | undefined): Shell => withApprovalGatedShell(
     withCheckpointedShell(
@@ -392,13 +391,18 @@ export function createCLIRuntime(
       cwd,
     ),
     // The host shell serves no mount table: `/pc` there is the machine's own path.
-    { filesOwner, userRoots: () => [], home: cwd, keepsCwd: false },
+    { filesOwner },
     approvalPolicy,
   );
 
   const shell: Shell = facetShell
     ? facetShell(config.facet)
-    : withApprovalGatedShell(workspace.shell, { filesOwner, userRoots, home: WORKSPACE_ROOT, keepsCwd: true }, approvalPolicy);
+    : withApprovalGatedShell(workspace.shell, {
+      filesOwner,
+      shellSession: createShellSession({
+        home: WORKSPACE_ROOT, userRoots: () => agentVfs.userRoots(), keepsCwd: true, stored: () => shellCwd(workspace.shell),
+      }),
+    }, approvalPolicy);
 
   const executionRouter = new DefaultExecutionRouter(approvalPolicy);
 
@@ -453,7 +457,6 @@ export function createCLIRuntime(
     craftStore,
     shell,
     filesOwner,
-    userRoots,
     sql,
     ledger: () => turnFileLedgerProvider?.(),
     // A directory-bound shell declares what this machine's PATH proves.
@@ -655,7 +658,6 @@ async function buildCLIHeadRuntime(
     vfs, memory: parent.memory, craftStore: parent.craftStore, shell, sql,
     // The same machine the parent's shell runs on.
     filesOwner: parent.cwd ? 'user' : 'agent',
-    userRoots: () => agentVfs.userRoots(),
     toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
   };
 

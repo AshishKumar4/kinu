@@ -16,7 +16,7 @@ import type {
   ActorClaimStore, ChildContextResolver, ContextEventRecorder,
 } from "@kinu.run/core";
 import {
-  nimbusSessionFiles, nimbusSessionShell,
+  nimbusSessionFiles, nimbusSessionShell, shellCwd, createShellSession,
   observeWrites,
   type WorkspaceVFS,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
@@ -319,14 +319,18 @@ export function createCFRuntime(
       ownGrants: () => memoryConfig.getShellApprovalGrants(),
     });
 
-  // The workspace is the agent's own, but its shell serves the mount table below, the user's device and Drive included.
-  const shell = withApprovalGatedShell(nimbusSessionShell(executionBox), {
-    filesOwner: 'agent',
-    userRoots: () => agentFileVfs.userRoots(),
+  // The agent's own workspace, whose shell also serves the user's device and Drive; codemode runs in it too.
+  const sessionShell = nimbusSessionShell(executionBox);
+
+  const shellSession = createShellSession({
     home: hooks.workspaceExecution?.home ?? WORKSPACE_ROOT,
+    userRoots: () => agentFileVfs.userRoots(),
     // A hosted node's box pins every call's cwd to its home (withHostedNodeExecution).
     keepsCwd: hooks.workspaceExecution === undefined,
-  }, approvalPolicy);
+    stored: () => shellCwd(sessionShell),
+  });
+
+  const shell = withApprovalGatedShell(sessionShell, { filesOwner: 'agent', shellSession }, approvalPolicy);
 
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
   // State services keep `baseWorkspaceVfs` and never index foreign bytes. The context mount is last:
@@ -368,12 +372,12 @@ export function createCFRuntime(
   workspaceBox.mountTable?.(agentFileVfs, hooks.workspaceExecution?.cred);
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
+    shellSession,
     // Declared exactly when NIMBUS_RUNTIME_CACHE is bound: without it there is nothing to install.
     runtimeCatalog: env.NIMBUS_RUNTIME_CACHE !== undefined,
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
       vfs: agentFileVfs, memory, craftStore, shell,
-      userRoots: () => agentFileVfs.userRoots(),
       sql,
       ledger: () => access.acc?.().files,
       budget: () => access.acc?.().context,

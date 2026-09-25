@@ -6,7 +6,7 @@
 import type { VFS } from '../types/primitives';
 import type { JsonValue } from '../utils/json';
 import type { DeviceSandboxStatus } from './device-status';
-import type { FilesOwner } from '../safety/approval-gate';
+import type { FilesOwner, ShellSession } from '../safety/approval-gate';
 
 /**
  * "No work deadline" for a mechanism that insists on a timer: the largest `setTimeout` delay; larger values
@@ -106,8 +106,8 @@ export interface ExecutorProvider {
   /** Whose files its commands reach (safety/approval-gate.ts). */
   readonly filesOwner: FilesOwner;
 
-  /** The user's mount roots its commands see. */
-  readonly userRoots?: () => readonly string[];
+  /** Its tools' durable shell, when it serves the user's mounts. */
+  readonly shellSession?: ShellSession;
 
   /** Capabilities that can be neither claimed nor ruled out (e.g. GPU on a tunnelled machine). Disjoint from `capabilities`. */
   readonly unmeasuredCapabilities?: ReadonlySet<ExecutorCapability>;

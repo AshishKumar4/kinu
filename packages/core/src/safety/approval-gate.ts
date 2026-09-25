@@ -11,23 +11,40 @@ export type ApprovalDecision = 'allow' | 'warn' | 'gate' | 'deny';
 /** Where a rule's harm lands: 'local' (the executing machine only) or 'reaches_out' (leaves the executor). */
 export type ApprovalHarm = 'local' | 'reaches_out';
 
-/** Whose files an executor reaches, as it declares: 'agent' (its own disposable state; local-harm rules are not
- *  gated) or 'user' (anything else). Never read from a name, so a rename cannot inherit an exemption. */
+/** 'agent': its own disposable state, where local harm is not gated; 'user': anything else. Declared, never read
+ *  from a name. */
 export type FilesOwner = 'agent' | 'user';
 
 export interface GatedExecutor {
   readonly name: string;
   readonly filesOwner: FilesOwner;
-  /** The user's mount roots its commands see. */
-  readonly userRoots?: () => readonly string[];
-  /** Its shell session, as {@link nextShellCwd} tracks it. */
-  readonly session?: () => ShellCwd;
+  readonly shellSession?: ShellSession;
 }
 
 export interface ShellCwd {
   readonly home: string;
   readonly cwd: string;
   readonly mayBeUsers: boolean;
+}
+
+export interface ShellSession {
+  readonly home: string;
+  readonly userRoots: () => readonly string[];
+  /** Behind earlier calls, so a review sees their `cd`s. */
+  serial<R>(call: () => Promise<R>): Promise<R>;
+  /** Where a call without its own `cwd` starts. */
+  at(): Promise<ShellCwd>;
+  /** A foreground call without a `cwd` exited. */
+  ran(command: string, exitCode: number): void;
+}
+
+export interface ShellSessionOptions {
+  readonly home: string;
+  readonly userRoots: () => readonly string[];
+  /** False when the box starts every call at home. */
+  readonly keepsCwd: boolean;
+  /** Its cwd as an earlier process left it; null: unreadable. */
+  readonly stored?: () => Promise<string | null>;
 }
 
 export interface ApprovalRuleHit {
@@ -352,7 +369,7 @@ interface CommandScan {
 }
 
 /** One quote-aware pass: programs in command position (after env assignments and prefix words) and the unquoted
- *  text. Over-collection is safe; under-collection is not. */
+ *  text. Over-collecting is safe. */
 function scanCommand(command: string): CommandScan {
   const invoked = new Set<string>();
   let unquoted = '';
@@ -506,8 +523,8 @@ function cdTarget(step: ShellStep, cwd: string, home: string): string | null | u
 }
 
 /** Known when every step ran (`&&`, exit 0) or it ends on the `cd`; else a `cd` that may enter the user's files
- *  marks the session. `cd "$DIR"` moves nothing: an obfuscated path is not caught. */
-export function nextShellCwd(at: ShellCwd, command: string, exitCode: number, userRoots: readonly string[]): ShellCwd {
+ *  marks the session. `cd "$DIR"` moves nothing. */
+function nextShellCwd(at: ShellCwd, command: string, exitCode: number, userRoots: readonly string[]): ShellCwd {
   const steps = shellSteps(command);
   let cwd = at.cwd;
   let known = true;
@@ -551,10 +568,37 @@ export function sessionAt(home: string, cwd: string | undefined): ShellCwd {
   return at === null ? { cwd: home, home, mayBeUsers: true } : { cwd: at, home, mayBeUsers: false };
 }
 
-/** The executor's own, or the user's when the command names one of their roots, reaches under one from its
- *  session's directory, or that session may already be there. */
-export function commandFilesOwner(executor: GatedExecutor, command: string, session = executor.session?.()): FilesOwner {
-  const roots = executor.userRoots?.() ?? [];
+export function createShellSession({ home, userRoots, keepsCwd, stored }: ShellSessionOptions): ShellSession {
+  const atHome: ShellCwd = { home, cwd: home, mayBeUsers: false };
+  let known: ShellCwd | null = keepsCwd && stored !== undefined ? null : atHome;
+  let tail: Promise<unknown> = Promise.resolve();
+
+  return {
+    home,
+    userRoots,
+    serial<R>(call: () => Promise<R>): Promise<R> {
+      const next = tail.then(call, call);
+      tail = next;
+
+      return next;
+    },
+    async at() {
+      if (known !== null) return known;
+      const cwd = stored === undefined ? home : await stored();
+      known = cwd === null ? { ...atHome, mayBeUsers: true } : sessionAt(home, cwd);
+
+      return known;
+    },
+    ran(command, exitCode) {
+      // Unread: the next review reads it.
+      if (keepsCwd && known !== null) known = nextShellCwd(known, command, exitCode, userRoots());
+    },
+  };
+}
+
+/** The user's when the command names or reaches under one of their roots, or its session may be there. */
+export function commandFilesOwner(executor: GatedExecutor, command: string, session: ShellCwd | undefined): FilesOwner {
+  const roots = executor.shellSession?.userRoots() ?? [];
 
   if (executor.filesOwner === 'user' || roots.length === 0) return executor.filesOwner;
 
@@ -612,7 +656,7 @@ function redirectTargets(step: ShellStep): ShellWord[] {
 }
 
 function overwritesUserFiles(executor: GatedExecutor, command: string, session: ShellCwd | undefined): boolean {
-  const roots = executor.userRoots?.() ?? [];
+  const roots = executor.shellSession?.userRoots() ?? [];
   const home = session?.home ?? '/';
   let cwd = session?.cwd ?? '/';
 
@@ -631,7 +675,7 @@ const OVERWRITE: ApprovalRuleHit = {
 };
 
 /** The rule table for whose files a command reaches, and any overwrite onto the user's mounts. */
-export function reviewShellCommand(executor: GatedExecutor, command: string, session = executor.session?.()): ApprovalResult {
+export function reviewShellCommand(executor: GatedExecutor, command: string, session: ShellCwd | undefined): ApprovalResult {
   const review = reviewCommand(command, commandFilesOwner(executor, command, session));
 
   if (!overwritesUserFiles(executor, command, session)) return review;
@@ -722,8 +766,8 @@ export type ApprovalSpendOutcome =
   | 'did-not-run'
   | 'spent';
 
-/** Parks an unanswered 'gate' on the owner (safety/deferred-approval.ts, not imported). `run: true`: the grant
- *  is spent; `settle` refunds unrun attempts. */
+/** Parks an unanswered 'gate' on the owner (safety/deferred-approval.ts). `run: true`: the grant is spent;
+ *  `settle` refunds unrun attempts. */
 export interface DeferredApprovalChannel {
   park(req: ShellApprovalRequest):
     | { readonly run: true; readonly spent: ApprovalSpend }
@@ -768,7 +812,10 @@ export function gateExec<R>(
     const [command, ...rest] = args;
     const cmd = String(command);
 
-    const review = tuning.review === undefined ? reviewShellCommand(executor, cmd) : await tuning.review(cmd, rest);
+    const review = tuning.review === undefined
+      ? reviewShellCommand(executor, cmd, await executor.shellSession?.at())
+      : await tuning.review(cmd, rest);
+
     const decision = await decideApproval({ command: cmd, executor: executor.name }, review, policy);
 
     if (!decision.run) return denyResult(decision.error);

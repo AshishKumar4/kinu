@@ -1,4 +1,4 @@
-import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, createInlineExecutor, observeWrites, skillsMount, withApprovalGatedShell, withMountTable, standardMounts, sharedDriveMount, SHARED_DRIVE_UNBOUND } from '@kinu.run/core';
+import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, createInlineExecutor, createShellSession, shellCwd, observeWrites, skillsMount, withApprovalGatedShell, withMountTable, standardMounts, sharedDriveMount, SHARED_DRIVE_UNBOUND } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { ActorHandle, AgentRuntime, NodeWorkspace, ShellApprovalPolicy, VFS, WriteObserver } from '@kinu.run/core';
 import type { WorkspaceBundle } from '@kinu.run/core/workspace';
@@ -43,9 +43,13 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
     if (node.isolation === 'private-home') {
       const plane = await deps.workspace.asAgent({ cred: node.cred, home: node.home, tmp: node.tmp });
       requireLocalActorWorkspace(origin.actor, actor);
+
       // A private home is a plane of the in-SQLite workspace, never the user's directory.
-      const reach = { filesOwner: 'agent', userRoots: () => mounted.userRoots(), home: node.home, keepsCwd: true } as const;
-      shell = withApprovalGatedShell(plane.shell, reach, deps.approvalPolicy);
+      const shellSession = createShellSession({
+        home: node.home, userRoots: () => mounted.userRoots(), keepsCwd: true, stored: () => shellCwd(plane.shell),
+      });
+
+      shell = withApprovalGatedShell(plane.shell, { filesOwner: 'agent', shellSession }, deps.approvalPolicy);
       const ownRouter = new DefaultExecutionRouter(deps.approvalPolicy);
       const files = observer ? observeWrites(plane.vfs, observer) : plane.vfs;
 
@@ -58,7 +62,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
 
       deps.workspace.mountTable(mounted, node.cred);
       vfs = mounted;
-      ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs, shell, filesOwner: 'agent', userRoots: reach.userRoots }));
+      ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs, shell, filesOwner: 'agent' }));
 
       for (const info of origin.executionRouter?.listExecutors() ?? []) {
         if (info.name === 'workspace') continue;

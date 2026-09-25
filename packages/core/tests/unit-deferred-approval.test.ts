@@ -6,7 +6,7 @@ import { toolExecute } from '@kinu.run/test-utils';
 import {
   DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools,
-  formatApprovalGrant,
+  formatApprovalGrant, createShellSession,
   type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome,
   type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT,
 } from '../src/index';
@@ -34,7 +34,7 @@ function approvalsDb() {
 }
 
 /** A workspace shell over the agent's own files, with no mount of the user's. */
-const AGENTS_OWN = { filesOwner: 'agent', userRoots: () => [], home: WORKSPACE_ROOT, keepsCwd: true } as const;
+const AGENTS_OWN = { filesOwner: 'agent' } as const;
 
 /** Gated on every executor, workspace included: a force-push harms a remote beyond this machine. */
 const GATED = 'git push --force origin main';
@@ -580,7 +580,7 @@ describe('"always" grants the rules the owner was shown', () => {
       kind: 'workspace',
       capabilities: new Set(['shell']),
       filesOwner: 'agent',
-      userRoots: () => ['/pc', '/shared'],
+      shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => ['/pc', '/shared'], keepsCwd: true }),
       homeDir: async () => WORKSPACE_ROOT,
       isAvailable: () => true,
       connect: async () => {},

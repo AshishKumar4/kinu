@@ -2,11 +2,11 @@
  *  tools on `ExecutionRouter.register()`. */
 
 import {
-  commandFilesOwner, gateExec, nextShellCwd, reviewProgram, reviewShellCommand, sessionAt, STRICT_NO_CHANNEL_POLICY,
-  type ApprovalResult, type FilesOwner, type ShellApprovalPolicy, type ShellCwd,
+  commandFilesOwner, gateExec, reviewProgram, reviewShellCommand, sessionAt, STRICT_NO_CHANNEL_POLICY,
+  type ApprovalResult, type GatedExecutor, type ShellApprovalPolicy, type ShellCwd,
 } from '../safety/approval-gate';
 import * as v from 'valibot';
-import { answeredRefusal } from './exec-result';
+import { answeredRefusal, CommandResultSchema } from './exec-result';
 import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
 import type { Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
 import { requireBuild } from './work-mode';
@@ -27,13 +27,14 @@ function parseShellExecOptions(input: { value: unknown }): string | ShellExecOpt
 }
 
 /** What a workspace shell's commands reach. */
-export interface ShellReach {
-  readonly filesOwner: FilesOwner;
-  readonly userRoots: () => readonly string[];
-  /** Where a session starts and `cd` returns. */
-  readonly home: string;
-  /** Whether `cd` carries to the next command (a hosted node's box pins each call's cwd). */
-  readonly keepsCwd: boolean;
+export type ShellReach = Pick<GatedExecutor, 'filesOwner' | 'shellSession'>;
+
+/** A shell's cwd, read ungated; a durable one outlives its process. Null: unreadable. */
+export async function shellCwd(shell: Shell): Promise<string | null> {
+  const result = await shell.exec('pwd');
+  const cwd = result.stdout.trim();
+
+  return result.refusal === undefined && result.exitCode === 0 && cwd.startsWith('/') ? cwd : null;
 }
 
 /** A refusal is shaped as a command that did not run: exit 1, message on stderr, classification in `refusal`,
@@ -43,27 +44,29 @@ export function withApprovalGatedShell(
   reach: ShellReach,
   policy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY,
 ): Shell {
-  let session: ShellCwd = { cwd: reach.home, home: reach.home, mayBeUsers: false };
+  const session = reach.shellSession;
 
   // 'workspace' only: gateProviderExec skips the workspace `exec` because it is gated here.
   const execute = gateExec<ShellExecResult>(
     (command, ...rest) => shell.exec(command, parseShellExecOptions({ value: rest[0] })),
     (error) => ({ stdout: '', stderr: error.message, exitCode: 1, refusal: refusalOf(error) }),
-    { name: 'workspace', filesOwner: reach.filesOwner, userRoots: reach.userRoots, session: () => session },
+    { name: 'workspace', ...reach },
     { policy, refusalCode: (result) => result.refusal?.reason ?? null },
   );
+
+  const run = async (command: string, stdinOrOptions?: string | ShellExecOptions): Promise<ShellExecResult> => {
+    const result = await execute(command, stdinOrOptions);
+
+    if (result.refusal === undefined) session?.ran(command, result.exitCode);
+
+    return result;
+  };
 
   return {
     exec: (command, stdinOrOptions) => {
       requireBuild('Workspace shell execution');
 
-      return execute(command, stdinOrOptions).then((result) => {
-        if (reach.keepsCwd && result.refusal === undefined) {
-          session = nextShellCwd(session, command, result.exitCode, reach.userRoots());
-        }
-
-        return result;
-      });
+      return session === undefined ? run(command, stdinOrOptions) : session.serial(() => run(command, stdinOrOptions));
     },
   };
 }
@@ -73,16 +76,31 @@ const SHELL_COMMAND_MEMBERS = ['exec', 'startProcess', 'runCode'] as const;
 
 const CallOptionsSchema = v.object({ cwd: v.optional(v.string()), language: v.optional(v.string()) });
 
+function parseCallOptions(input: { value: unknown }): v.InferOutput<typeof CallOptionsSchema> {
+  const parsed = v.safeParse(CallOptionsSchema, input.value);
+
+  return parsed.success ? parsed.output : {};
+}
+
 /** `runCode` is a shell command only in the shell language. */
 async function reviewCall(provider: ExecutorProvider, member: string, command: string, rest: readonly unknown[]): Promise<ApprovalResult> {
-  const parsed = v.safeParse(CallOptionsSchema, rest[0]);
-  const options = parsed.success ? parsed.output : {};
-  const mounted = provider.filesOwner === 'agent' && provider.userRoots !== undefined;
-  const session = mounted ? sessionAt(await provider.homeDir(), options.cwd) : undefined;
+  const options = parseCallOptions({ value: rest[0] });
+  const session = provider.shellSession;
+  let at: ShellCwd | undefined;
+
+  if (session !== undefined) at = options.cwd === undefined ? await session.at() : sessionAt(session.home, options.cwd);
 
   return member === 'runCode' && options.language !== 'shell'
-    ? reviewProgram(command, commandFilesOwner(provider, command, session))
-    : reviewShellCommand(provider, command, session);
+    ? reviewProgram(command, commandFilesOwner(provider, command, at))
+    : reviewShellCommand(provider, command, at);
+}
+
+function ranExitCode(result: ExecutorToolResult): number | null {
+  const parsed = v.safeParse(CommandResultSchema, result);
+
+  if (!parsed.success) return null;
+
+  return v.is(v.string(), parsed.output) ? 0 : parsed.output.execution?.exitCode ?? null;
 }
 
 /** Already-wrapped executes, so a provider shared across routers is gated once (idempotent). */
@@ -111,10 +129,23 @@ export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprov
       },
     );
 
+    const session = provider.shellSession;
+
+    // Nimbus keeps a shell program's `cd`s (withShellState).
+    const run = async (...args: unknown[]): Promise<ExecutorToolResult> => {
+      const result = await gated(...args);
+      const options = parseCallOptions({ value: args[1] });
+      const exitCode = name === 'runCode' && options.language === 'shell' && options.cwd === undefined ? ranExitCode(result) : null;
+
+      if (exitCode !== null) session?.ran(String(args[0]), exitCode);
+
+      return result;
+    };
+
     const execute: ExecutorTool['execute'] = (...args) => {
       requireBuild(provider.name + '.' + name);
 
-      return gated(...args);
+      return session === undefined ? run(...args) : session.serial(() => run(...args));
     };
 
     GATED_EXECUTES.add(execute);

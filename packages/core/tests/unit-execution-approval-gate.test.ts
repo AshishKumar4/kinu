@@ -4,11 +4,12 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { gateProviderExec, withApprovalGatedShell } from '../src/execution/approval';
 import { createSandboxExecutor } from '../src/execution/sandbox';
 import type { ExecutorProvider } from '../src/execution/types';
-import type { FilesOwner, ShellApprovalPolicy, ShellApprovalRequest } from '../src/safety/approval-gate';
+import { createShellSession, type FilesOwner, type ShellApprovalPolicy, type ShellApprovalRequest } from '../src/safety/approval-gate';
 import type { VFS } from '../src/types/primitives';
 import { withMountTable } from '../src/vfs/mounts';
 import { skillsMount } from '../src/skills/view';
@@ -243,16 +244,16 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
 function askingRouter() {
   const asked: ShellApprovalRequest[] = [];
 
-  const router = new DefaultExecutionRouter({
+  const policy: ShellApprovalPolicy = {
     mode: () => 'strict',
     requestApproval: async (req) => {
       asked.push(req);
 
       return 'deny';
     },
-  });
+  };
 
-  return { router, asked };
+  return { router: new DefaultExecutionRouter(policy), asked, policy };
 }
 
 /** `gateProviderExec` hands the provider to `gateExec`; these differ only in whose files the provider declares. */
@@ -391,7 +392,9 @@ function workspaceOverDevice() {
   workspace.mountTable(mounted);
   const asked: string[] = [];
 
-  const shell = withApprovalGatedShell(workspace.shell, { filesOwner: 'agent', userRoots: () => mounted.userRoots(), home: WORKSPACE_ROOT, keepsCwd: true }, {
+  const shellSession = createShellSession({ home: WORKSPACE_ROOT, userRoots: () => mounted.userRoots(), keepsCwd: true });
+
+  const shell = withApprovalGatedShell(workspace.shell, { filesOwner: 'agent', shellSession }, {
     mode: () => 'strict',
     requestApproval: async (request) => {
       asked.push(request.command);
@@ -450,7 +453,7 @@ function mountedWorkspaceProvider() {
     kind: 'workspace',
     capabilities: new Set(['shell']),
     filesOwner: 'agent',
-    userRoots: () => ['/pc', '/shared'],
+    shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => ['/pc', '/shared'], keepsCwd: true }),
     homeDir: async () => WORKSPACE_ROOT,
     isAvailable: () => true,
     connect: async () => {},
@@ -478,7 +481,10 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
       { name: 'pc', files: () => device, absentReason: () => 'no device', filesOwner: 'user' },
     ]);
 
-    router.register({ ...mountedWorkspaceProvider().provider, userRoots: () => mounted.userRoots() });
+    router.register({
+      ...mountedWorkspaceProvider().provider,
+      shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => mounted.userRoots(), keepsCwd: true }),
+    });
     const run = present(router.getProvider('workspace'), 'the workspace executor').tools.runCode;
     const write = "open('/pc/laptop/notes.txt', 'w').write('x')";
 
@@ -545,7 +551,7 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
 
         return { stdout: '', stderr: '', exitCode: 0 };
       },
-    }, { filesOwner: 'agent', userRoots: () => ['/pc'], home: '/home/agents/n1', keepsCwd: false }, {
+    }, { filesOwner: 'agent', shellSession: createShellSession({ home: '/home/agents/n1', userRoots: () => ['/pc'], keepsCwd: false }) }, {
       mode: () => 'strict',
       requestApproval: async (request) => {
         asked.push(request.command);
@@ -558,5 +564,110 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
 
     expect(asked).toEqual(['rm -rf ../../../pc/x']);
     expect(ran).toEqual(['cd /pc/proj && ls', 'rm -rf build', 'cd sub && ls']);
+  });
+});
+
+describe('one durable shell, reached through the shell tool and through codemode', () => {
+  const DENIED = { error: expect.stringContaining('Denied by the owner') };
+
+  const CwdOption = v.object({ cwd: v.string() });
+
+  /**
+   * A Nimbus named shell as cf drives it: the gated shell and the executor's processes and programs all start where
+   * the last foreground `cd` left it, and `leftAt` is where an earlier process left it.
+   */
+  function durableShell(leftAt = WORKSPACE_ROOT) {
+    const { router, asked, policy } = askingRouter();
+    const ran: string[] = [];
+    let cwd = leftAt;
+
+    const run = (command: string, at: string, keepsCd: boolean) => {
+      if (!command.startsWith('cd ')) ran.push(`${at}$ ${command}`);
+      else if (keepsCd) cwd = command === 'cd ~' ? WORKSPACE_ROOT : command.slice('cd '.length);
+    };
+
+    const shellSession = createShellSession({
+      home: WORKSPACE_ROOT, userRoots: () => ['/pc', '/shared'], keepsCwd: true, stored: async () => cwd,
+    });
+
+    const shell = withApprovalGatedShell({
+      exec: async (command) => {
+        run(command, cwd, true);
+
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+    }, { filesOwner: 'agent', shellSession }, policy);
+
+    router.register({
+      ...mountedWorkspaceProvider().provider,
+      shellSession,
+      tools: {
+        startProcess: {
+          description: 'Start a background process',
+          execute: async (...args: unknown[]) => {
+            const options = v.safeParse(CwdOption, args[1]);
+            run(String(args[0]), options.success ? options.output.cwd : cwd, false);
+
+            return 'started';
+          },
+        },
+        runCode: {
+          description: 'Run a program',
+          execute: async (...args: unknown[]) => {
+            const options = v.safeParse(CwdOption, args[1]);
+            run(String(args[0]), options.success ? options.output.cwd : cwd, !options.success);
+
+            return 'ok';
+          },
+        },
+      },
+    });
+
+    return { shell, tools: present(router.getProvider('workspace'), 'the workspace executor').tools, asked, ran };
+  }
+
+  test('a `cd` into the user\'s machine through the shell carries to a process or a shell program started next', async () => {
+    const { shell, tools, asked, ran } = durableShell();
+
+    await shell.exec('cd /pc/laptop/proj');
+    expect(await tools.startProcess?.execute('rm -rf build')).toMatchObject(DENIED);
+    expect(await tools.runCode?.execute('rm -rf build', { language: 'shell' })).toMatchObject(DENIED);
+
+    await shell.exec('cd ~');
+    expect(await tools.startProcess?.execute('rm -rf build')).toBe('started');
+
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf build', 'rm -rf build']);
+    expect(ran).toEqual([`${WORKSPACE_ROOT}$ rm -rf build`]);
+  });
+
+  test('a `cd` into the user\'s machine through a shell program carries to the shell\'s next command', async () => {
+    const { shell, tools, asked, ran } = durableShell();
+
+    await tools.runCode?.execute('cd /pc/laptop/proj', { language: 'shell' });
+    expect((await shell.exec('rm -rf build')).exitCode).not.toBe(0);
+
+    await tools.runCode?.execute('cd ~', { language: 'shell' });
+    expect((await shell.exec('rm -rf build')).exitCode).toBe(0);
+
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf build']);
+    expect(ran).toEqual([`${WORKSPACE_ROOT}$ rm -rf build`]);
+  });
+
+  test('a shell an earlier process left on the user\'s machine is judged from there', async () => {
+    const { shell, asked, ran } = durableShell('/pc/laptop/proj');
+
+    expect((await shell.exec('rm -rf build')).exitCode).not.toBe(0);
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf build']);
+    expect(ran).toEqual([]);
+  });
+
+  test('calls issued together are judged in turn, each from where the one before left the shell', async () => {
+    const { shell, tools, asked, ran } = durableShell();
+
+    const [, started] = await Promise.all([shell.exec('cd /pc/laptop/proj'), tools.startProcess?.execute('rm -rf build')]);
+
+    expect(started).toMatchObject(DENIED);
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf build']);
+    expect(ran).toEqual([]);
   });
 });

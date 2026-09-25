@@ -687,10 +687,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - **A delete that reaches your machine or your Drive from the hosted workspace waits for you.** The hosted
   workspace is the agent's own, but its shell also reaches your connected machine at `/pc` and your Drive at
   `/shared`, and `rm -rf /pc/proj` ran there without asking. A command that names `/pc` or `/shared`, or runs
-  after a `cd` into one or with its working directory there, now waits for you as the same command on your
-  machine does, from the shell, a background process or a shell program; a program in another language that
-  names those files asks once. A path computed as it runs (a variable, a glob) is not caught; on `/pc` the
-  machine's own consent still applies.
+  after a `cd` into one (made by the shell, a background process or a shell program, which share one working
+  directory) or with its working directory there, now waits for you as the same command on your machine does; a
+  program in another language that writes there asks once, and reading a skill asks nobody. A path computed as
+  it runs (a variable, a glob) is not caught; on `/pc` the machine's own consent still applies.
 
 - **The CLI asks before a destructive command in your directory.** In a workspace placed in a directory, `sudo`,
   `rm -rf`, `git reset --hard`, `chmod u+s` and the other commands whose harm stays on the machine ran without

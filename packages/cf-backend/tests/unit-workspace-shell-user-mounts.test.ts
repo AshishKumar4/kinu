@@ -19,3 +19,18 @@ test('on the hosted workspace shell, deleting under /pc or /shared waits for the
   const own = await shell.exec('mkdir -p scratch/x && rm -rf scratch');
   expect({ refusal: own.refusal, exitCode: own.exitCode }).toEqual({ refusal: undefined, exitCode: 0 });
 });
+
+test('a `cd` into /pc through the shell tool carries to the process or shell program codemode starts next', async () => {
+  const workspace = orchestratorHarness();
+  const main = await hostedMainActor(workspace);
+  const shell = present(main.actor.runtime.shell, 'the main actor\u2019s shell');
+  const tools = present(main.actor.runtime.executionRouter?.getProvider('workspace'), 'the workspace executor').tools;
+  const asked = { error: expect.stringContaining('rm-recursive') };
+
+  await shell.exec('cd /pc/proj');
+  expect(await tools.startProcess?.execute('rm -rf build')).toMatchObject(asked);
+  expect(await tools.runCode?.execute('rm -rf build', { language: 'shell' })).toMatchObject(asked);
+
+  expect((await shell.exec('cd ~')).exitCode).toBe(0);
+  expect(await tools.runCode?.execute('mkdir -p scratch && rm -rf scratch', { language: 'shell' })).toBe('(no output)');
+});
