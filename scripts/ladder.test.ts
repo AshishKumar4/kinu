@@ -32,6 +32,7 @@ import {
   isVitestEvalSuite, readMatching,
 } from './sources';
 import { SKIP_RATCHET_TARGETS } from './skip-ratchet';
+import { declaredName, parse, walk } from './syntax';
 import { QUIET_LOAD, readCosts } from './gate-cost';
 
 const root = resolve(import.meta.dir, '..');
@@ -211,6 +212,38 @@ describe('the ladder measures something', () => {
    *  closure by construction: text in the file that claims it. */
   const BROWSER_LAUNCHER = /puppeteer\.launch|from ['"]puppeteer['"]|['"]playwright['"]|--headless|chrome-headless-shell|CHROME_PATH|google-chrome/u;
 
+  /** Browser Rendering's client. Its `puppeteer.launch(binding)` drives a
+   *  browser on Cloudflare through a Worker binding, so in a file that names
+   *  this module and not puppeteer's own, that call launches nothing on this
+   *  box — unless a suite's Miniflare binds Browser Rendering, which starts a
+   *  local Chrome for it and which the guard below refuses. */
+  const RENDERING_CLIENT = /['"]@cloudflare\/puppeteer['"]/u;
+
+  const LOCAL_PUPPETEER = /['"]puppeteer['"]/u;
+
+  function namesLauncher(text: string): boolean {
+    const renderingOnly = RENDERING_CLIENT.test(text) && !LOCAL_PUPPETEER.test(text);
+
+    return BROWSER_LAUNCHER.test(renderingOnly ? text.replaceAll('puppeteer.launch', '') : text);
+  }
+
+  /** Where Miniflare runs a Worker for a deploy row. */
+  const VITEST_CONFIG = /(?:^|\/)vitest[^/]*\.config\.[cm]?[jt]s$/u;
+
+  /** The configs whose Miniflare binds Browser Rendering: an object property
+   *  named `browserRendering`, the option Miniflare starts a local Chrome for. */
+  function bindingRendering(configs: ReadonlyMap<string, string>): string[] {
+    return [...configs].filter(([file, text]) => {
+      let binds = false;
+
+      walk(parse(file, text).root, (node) => {
+        if (node.type === 'Property' && declaredName(node) === 'browserRendering') binds = true;
+      });
+
+      return binds;
+    }).map(([file]) => file);
+  }
+
   /** This file, as the corpus names it. The census names the tokens it looks
    *  for, so it matches ITSELF — measured on this test's first run, which
    *  reported `scripts/ladder.test.ts` as an undeclared browser launcher off
@@ -234,10 +267,38 @@ describe('the ladder measures something', () => {
     }
 
     const unseen = [...corpus]
-      .filter(([file, text]) => file !== censusFile && BROWSER_LAUNCHER.test(text) && !reaching.has(file))
+      .filter(([file, text]) => file !== censusFile && namesLauncher(text) && !reaching.has(file))
       .map(([file]) => file);
 
     expect(unseen, 'files that launch a browser by name and reach puppeteer through no import edge').toEqual([]);
+  });
+
+  test('no vitest config binds Browser Rendering, so its client launches nothing on this box', () => {
+    const configs = readMatching((file) => VITEST_CONFIG.test(file));
+
+    expect([...configs.keys()]).toContain('packages/cf-backend/vitest.config.ts');
+    expect(bindingRendering(configs)).toEqual([]);
+  });
+
+  // THE RED DIRECTIONS of the exemption, over fixtures: it spares a file whose
+  // only puppeteer is the Browser Rendering client, and nothing else, and the
+  // binding that would make that client start a local Chrome is refused.
+  test('a local launcher still names a browser, and a config that binds Browser Rendering is refused', () => {
+    const launch = 'await puppeteer.launch(options);\n';
+
+    expect(namesLauncher(`const puppeteer = require('puppeteer');\n${launch}`)).toBeTrue();
+    expect(namesLauncher(`import puppeteer from '@cloudflare/puppeteer';\n${launch}`)).toBeFalse();
+    expect(namesLauncher(`import puppeteer from '@cloudflare/puppeteer';\nconst local = require('puppeteer');\n${launch}`))
+      .toBeTrue();
+
+    const workers = (miniflare: string): string => `export default { test: { poolOptions: { workers: { miniflare: ${miniflare} } } } };\n`;
+
+    const configs = new Map([
+      ['packages/bound/vitest.config.ts', workers("{ browserRendering: { binding: 'BROWSER' } }")],
+      ['packages/unbound/vitest.config.ts', workers("{ bindings: { BROWSER_NAME: 'chrome' } }")],
+    ]);
+
+    expect(bindingRendering(configs)).toEqual(['packages/bound/vitest.config.ts']);
   });
 
   test('every deploy row that claims a browser module holds the browser lane', () => {
