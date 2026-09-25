@@ -106,10 +106,8 @@ describe('the caller can assign the first level node by node', () => {
 
 describe('every named preset resolves to a tuple validity accepts', () => {
   test('all six resolve, and none of them resolves into a refusal', () => {
-    // *Presets* requires a named preset to be unrefusable.
-    for (const preset of NAMED_SWARM_PRESETS) {
-      expect(() => legal(callFor(preset))).not.toThrow();
-    }
+    // *Presets* requires a named preset to be unrefusable; `legal` throws a refusal's own text.
+    expect(NAMED_SWARM_PRESETS.map((preset) => legal(callFor(preset)).preset)).toEqual([...NAMED_SWARM_PRESETS]);
   });
 
   test('the three coverage presets are archive runs at the converted Rainbow filter', () => {

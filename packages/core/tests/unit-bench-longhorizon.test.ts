@@ -215,7 +215,7 @@ describe('the spec round-trips into the check argv', () => {
       parts: 1, markers: 5, filler: 60, entries: 120, seed: 11, mode: 'digest',
     };
 
-    expect(encodeLongHorizonSpec(reordered)).toBe(encodeLongHorizonSpec(digest));
+    expect(encodeLongHorizonSpec(reordered)).toBe('["digest",11,120,60,5,1]');
   });
 
   test('a malformed spec is an error, not a silently different corpus', () => {
