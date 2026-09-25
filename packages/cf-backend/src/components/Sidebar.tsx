@@ -30,7 +30,7 @@ function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
       aria-current={active ? "page" : undefined}
       className={`flex items-center gap-2.5 rounded-lg py-[7px] pl-3 pr-3 p-t-control transition-colors ${navRowCls(active)}`}
     >
-      <Icon size={15} className={active ? undefined : 'p-text-3'} />
+      <Icon size={15} className={active ? 'p-accent-mark' : 'p-text-3'} />
       <span>{label}</span>
     </Link>
   );

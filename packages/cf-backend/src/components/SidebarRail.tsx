@@ -67,7 +67,7 @@ export function SidebarRail() {
               return (
                 <Link key={item.to} to={item.to} aria-label={item.label} title={item.label} aria-current={open ? "page" : undefined}
                   className={`${RAIL_ICON_CLS} ${navRowCls(open, "p-text-3")}`}>
-                  <item.Icon size={17} />
+                  <item.Icon size={17} className={open ? "p-accent-mark" : undefined} />
                 </Link>
               );
             })}

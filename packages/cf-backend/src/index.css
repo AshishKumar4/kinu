@@ -232,6 +232,7 @@ html, body, #root {
   --c-accent-fg: #E3D2AE;  /* mock --silk — the bright end: links, brand ink, inline code */
   --c-accent-on: #1A1408;  /* mock --goldInk, 8.4:1 on gold */
   --c-accent-subtle: rgba(224, 164, 88, 0.12);
+  --c-accent-mark:   var(--c-accent);  /* an icon that marks "here": the gold itself, where the ground is dark */
 
   /* Status hues. good/bad are the mock's own; warning and info have no
      mock literal and keep the family's tan and slate. */
@@ -397,6 +398,7 @@ html, body, #root {
   --c-accent-fg: #7A5514;  /* mock --silk — links, brand ink, inline code, 5.2:1 on bg */
   --c-accent-on: #1F1503;  /* mock --goldInk, 7.4:1 on the fill */
   --c-accent-subtle: rgba(216, 154, 68, 0.16);
+  --c-accent-mark:   var(--c-accent-fg);  /* the gold is under 2:1 on the light wash; the ink is 4.9:1 */
 
   --c-success:  #316530;   /* mock --good #356B35 lifted for AA on wells (4.9:1 worst) */
   --c-warning:  #7E5205;
@@ -481,6 +483,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 @utility p-text-3 { color: var(--c-text-3); }
 @utility p-text-4 { color: var(--c-text-4); }
 @utility p-accent { color: var(--c-accent-fg); }
+@utility p-accent-mark { color: var(--c-accent-mark); }
 @utility p-accent-subtle { background: var(--c-accent-subtle); }
 
 @utility p-success { color: var(--c-success); }

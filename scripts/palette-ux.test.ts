@@ -32,9 +32,13 @@ const STATUSES = ['success', 'warning', 'danger', 'info'] as const;
 
 const AA = 4.5;
 
+/** WCAG's floor for a graphic that carries meaning: the open sidebar row's icon on its wash. */
+const NON_TEXT = 3;
+
 const ASKED = [
   ...SURFACES, ...TEXT_ROLES, ...FILLS.flatMap(([ink, fill]) => [ink, fill]),
   ...STATUSES.flatMap((status) => [`--c-${status}`, `--c-${status}-tint`]),
+  '--c-accent-mark', '--c-accent-subtle',
 ];
 
 /** What one theme computes: the mode it landed on, and each asked token as a probe's `color` resolves it. */
@@ -242,6 +246,10 @@ describe.each([...MODES])('the app palette on the %s theme', (mode) => {
     })).filter((row) => row.ratio < AA);
 
     expect(failures).toEqual([]);
+  });
+
+  test('the open sidebar row\'s icon stands out on its wash', () => {
+    expect(contrast(colour('--c-accent-mark'), over(colour('--c-accent-subtle'), colour('--c-sidebar')))).toBeGreaterThanOrEqual(NON_TEXT);
   });
 });
 
