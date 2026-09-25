@@ -48,6 +48,17 @@ export function processStartTicks(pid: number): number | undefined {
   return stat === undefined ? undefined : Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
 }
 
+/** Whether a process of `group` still runs; a zombie has ended and only waits for its parent to collect it. */
+export function groupRuns(group: number): boolean {
+  return readdirSync('/proc').some((pid) => {
+    const stat = /^\d+$/u.test(pid) ? procFile(pid, 'stat') : undefined;
+    // After the parenthesised command name, which may hold spaces: state, ppid, process group.
+    const [state, , member] = stat?.slice(stat.lastIndexOf(')') + 2).split(' ') ?? [];
+
+    return state !== undefined && state !== 'Z' && Number(member) === group;
+  });
+}
+
 /** Who minted a scratch root, so a later run judges it by whether that process still runs. */
 export const OWNER_RECORD = 'owner.json';
 

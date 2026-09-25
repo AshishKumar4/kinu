@@ -43,7 +43,7 @@ import {
   ChatHistoryEntrySchema, hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG, parseJsonValue, type JsonValue,
 } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
-import type { Browser, Page } from 'puppeteer';
+import type { Page } from 'puppeteer';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
@@ -51,6 +51,7 @@ import {
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
 import { webHeaders, type PublicSessionPlan } from '../../evals/src/session';
 import { openBrowser, signedInPage } from './browser';
+import type { TestChrome } from '../../scripts/test-chrome';
 
 const SUITE = 'First-run · agent-chats-persist';
 
@@ -207,7 +208,7 @@ describe(SUITE, () => {
         const open = (path: string): PublicSocket => openPublicSocket(plan.origin, plan.identity, path, budget);
         const live: PublicSocket[] = [];
 
-        let browser: Browser | null = null;
+        let browser: TestChrome | null = null;
 
         try {
           // ── Two agents, created the way "+" creates one. ────────────────
@@ -375,7 +376,7 @@ describe(SUITE, () => {
           // ── The page, loaded from nothing, draws both agents with no new
           //    event: a tab in the strip and a link in the sidebar. ─────────
           browser = await openBrowser();
-          const drawn = await drawnRoster(await signedInPage(browser, plan.identity), plan, session.workspace, budget);
+          const drawn = await drawnRoster(await signedInPage(browser.browser, plan.identity), plan, session.workspace, budget);
           const undrawn = names.filter((name) => !drawn.tabs.includes(name) || !drawn.links.includes(name));
 
           subgoals.push({

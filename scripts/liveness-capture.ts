@@ -26,9 +26,9 @@
  * recovery instead of failing on the dropped sockets.
  */
 
-import { existsSync } from "node:fs";
 import * as v from "valibot";
-import puppeteer, { type Browser, type Page } from "puppeteer";
+import type { Page } from "puppeteer";
+import { launchTestChrome, type TestChrome } from "./test-chrome";
 
 const ORIGIN = (process.env.KINU_LIVENESS_ORIGIN ?? "http://localhost:5174").replace(/\/+$/, "");
 
@@ -43,8 +43,6 @@ const MAX_WAIT_MS = Number(process.env.KINU_LIVENESS_MAX_WAIT_MS ?? 420_000);
 const EXPECT_RESTART = process.env.KINU_LIVENESS_EXPECT_RESTART === "1";
 
 const POLL_MS = 400;
-
-const CHROME_CANDIDATES = ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium"];
 
 interface CaptureEvent {
   t: number;
@@ -297,17 +295,9 @@ const DOM_SAMPLER = `
 })();
 `;
 
-async function launchBrowser(): Promise<{ browser: Browser; page: Page }> {
-  const executablePath = CHROME_CANDIDATES.find((p) => existsSync(p));
-
-  const launchOptions: Parameters<typeof puppeteer.launch>[0] = {
-    headless: true,
-    args: ["--no-sandbox", "--disable-dev-shm-usage"],
-  };
-
-  if (executablePath !== undefined) launchOptions.executablePath = executablePath;
-  const browser = await puppeteer.launch(launchOptions);
-  const page = await browser.newPage();
+async function launchBrowser(): Promise<{ browser: TestChrome; page: Page }> {
+  const browser = await launchTestChrome();
+  const page = await browser.browser.newPage();
   await page.setViewport({ width: 1600, height: 1000 });
   await page.evaluateOnNewDocument(PAGE_INSTRUMENT);
 

@@ -8,15 +8,15 @@
  * does however it dies. Measured: 5 s after `kill -9` of the launcher, all 9 processes of a port-driven Chrome were
  * running and none of a pipe-driven one.
  *
- * Its profile is in RAM ({@link BROWSER_PROFILE_PARENT}) and goes when the browser closes; one a killed launcher
- * left behind is removed by `scripts/preflight.ts --reclaim`, which judges it by the owner recorded here.
+ * Its profile is in RAM ({@link BROWSER_PROFILE_PARENT}) and goes when the browser has ended; one a killed launcher
+ * left behind is removed by the next launch, or by `scripts/preflight.ts --reclaim`, judged by the owner recorded here.
  */
 
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import puppeteer, { type Browser, type LaunchOptions } from 'puppeteer';
 import { BROWSER_PROFILE_PARENT, holdForRelease, releaseScratch, scratchDir } from '../packages/test-utils/src/scratch';
-import { recordOwner } from './process-owner';
+import { groupRuns, reapAbandonedRoots, recordOwner } from './process-owner';
 import { signalGroup } from './process-group';
 
 // A caller that is a script rather than a `bun test` row has no preload `afterAll`: a browser it left open, and the
@@ -43,17 +43,42 @@ function chromePath(): string | undefined {
   return ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium'].find((candidate) => existsSync(candidate));
 }
 
+/** Sleeps this thread, which a process being ended has no event loop left to await with. */
+const PAUSE = new Int32Array(new SharedArrayBuffer(4));
+
+/**
+ * SIGKILL has no handler, so the group ends as soon as the kernel runs it: every member was a zombie right after
+ * the signal in 6 of 6 abandons measured on 2026-09-25. The bound is for a member stuck in the kernel (state D).
+ */
+const GROUP_END_POLLS = 500;
+
+/**
+ * Ends the browser's group, then removes its profile once no member runs, so no dying process writes into a removed
+ * profile. A group still running after {@link GROUP_END_POLLS} polls keeps its profile for the next launch to reap.
+ */
+function endAndRemove(group: number | undefined, root: string): void {
+  signalGroup(group, 'SIGKILL');
+
+  for (let poll = 0; group !== undefined && groupRuns(group); poll++) {
+    if (poll === GROUP_END_POLLS) return;
+    Atomics.wait(PAUSE, 0, 0, 10);
+  }
+
+  rmSync(root, { recursive: true, force: true });
+}
+
 export async function launchTestChrome(options: TestChromeOptions = {}): Promise<TestChrome> {
   const root = scratchDir('chrome', BROWSER_PROFILE_PARENT);
 
   recordOwner(root);
+  // A launcher killed outright left its profile in RAM; its recorded owner says it is gone.
+  reapAbandonedRoots(BROWSER_PROFILE_PARENT, root);
   let group: number | undefined;
 
   const abandon = (): void => {
     options.onAbandon?.();
     signalGroup(group, 'SIGTERM');
-    signalGroup(group, 'SIGKILL');
-    rmSync(root, { recursive: true, force: true });
+    endAndRemove(group, root);
   };
 
   // Under `bun test` this is the one teardown a killed row runs: the preload's signal listener releases and then ends
@@ -94,8 +119,7 @@ export async function launchTestChrome(options: TestChromeOptions = {}): Promise
       // whatever of the group that close left, a wedged renderer or a zygote holding a pipe.
       signalGroup(group, 'SIGTERM');
       await browser.close();
-      signalGroup(group, 'SIGKILL');
-      rmSync(root, { recursive: true, force: true });
+      endAndRemove(group, root);
     },
   };
 }

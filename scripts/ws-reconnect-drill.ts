@@ -42,7 +42,8 @@ import { join } from "node:path";
 import * as v from "valibot";
 import { parseJsonValue, type JsonValue } from "@kinu.run/core";
 import { renderCauseChain, tolerate } from "@kinu.run/core/obs";
-import puppeteer, { type Browser, type HTTPRequest, type Page } from "puppeteer";
+import type { HTTPRequest, Page } from "puppeteer";
+import { launchTestChrome } from "./test-chrome";
 
 /* ── configuration ─────────────────────────────────────────────────────────── */
 
@@ -692,10 +693,8 @@ async function main(): Promise<void> {
   let server = await startDevServer("first boot");
   await ensureWorkspace();
 
-  const browser: Browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-dev-shm-usage"],
-  });
+  const chrome = await launchTestChrome();
+  const { browser } = chrome;
 
   try {
     const page = await browser.newPage();
@@ -819,7 +818,7 @@ async function main(): Promise<void> {
     log("DRILL GREEN — session survived the supersede without a reload");
   } finally {
     try {
-      await browser.close();
+      await chrome.close();
     } catch (cause) {
       log(`cleanup: browser close failed: ${String(cause)}`);
     }
