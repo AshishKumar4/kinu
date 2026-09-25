@@ -155,6 +155,15 @@ describe('change view', () => {
     ]);
   });
 
+  test('a git view\'s repository folders are marked, and none is joined with the folder it holds', () => {
+    const files = ['org/api/src/app.ts', 'org/api/vendor/lib/src/lib.ts', 'web/index.html']
+      .map((path) => fileDiff(path, 'changed', diffLines('a', 'b')));
+
+    expect(changeTree(files, ['org/api', 'org/api/vendor/lib', 'web']).flatMap((row) => (row.kind === 'folder' ? [`${row.path}${row.repository ? ' (repository)' : ''}`] : []))).toEqual([
+      'org/api (repository)', 'org/api/src', 'org/api/vendor/lib (repository)', 'org/api/vendor/lib/src', 'web (repository)',
+    ]);
+  });
+
   test('a poll keeps the object of each file whose content did not change, so nothing worked out from it is redone', () => {
     const before = [changedFile(['a'], ['b'], 'src/a.ts'), changedFile(['c'], ['d'], 'src/c.ts')];
 

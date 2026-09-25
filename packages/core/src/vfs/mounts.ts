@@ -432,7 +432,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 		return op(files, routed.native);
 	};
 
-	return {
+	const table: MountedVfs = {
 		mountOf: (path) => mountNamed(path)?.name ?? null,
 		mountPoints,
 		userRoots: () => userRoots,
@@ -602,6 +602,36 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 			});
 		},
 	};
+
+	const baseLstat = base.lstat?.bind(base);
+
+	// Only a base that tells a link from its target gives the table an lstat.
+	if (baseLstat !== undefined) {
+		table.lstat = async (path) => {
+			const routed = routeOf(path);
+
+			if (!('mount' in routed)) return baseLstat(path);
+			const files = routed.mount.files();
+
+			if (!files) return null;
+
+			if (routed.native === '/') return { ...MOUNT_POINT_STAT, isSymlink: false };
+
+			if (files.lstat) return files.lstat(routed.native);
+			const stat = await files.stat(routed.native);
+
+			return stat && { ...stat, isSymlink: false };
+		};
+
+		// A mount with no readlink reports no link, so none is asked of it.
+		table.readlink = (path) => delegate(path, async (files, native) => {
+			if (!files.readlink) throw makeVfsError('ENOTSUP', 'this plane serves no readlink', path);
+
+			return files.readlink(native);
+		});
+	}
+
+	return table;
 }
 
 const MOUNT_POINT_STAT: VfsEntryStat = { size: 0, mtimeMs: 0, isDir: true };

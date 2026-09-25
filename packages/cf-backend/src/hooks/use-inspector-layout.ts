@@ -41,7 +41,7 @@ export type InspectorPanelProps = Pick<
   "id" | "minSize" | "defaultSize" | "collapsible" | "collapsedSize" | "panelRef" | "className"
 >;
 
-/** `disableDoubleClick` keeps the library's dblclick-to-default out so `resetToDefault` is the one reset. */
+/** `disableDoubleClick`: `resetToDefault` is the one reset, not the library's dblclick. */
 export interface InspectorSeparatorProps {
   readonly elementRef: (element: HTMLDivElement | null) => void;
   readonly disableDoubleClick: boolean;

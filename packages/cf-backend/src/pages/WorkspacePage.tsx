@@ -547,8 +547,8 @@ export default function WorkspacePage() {
   const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null);
   const workbench = useRef<WorkbenchHandle | null>(null);
 
-  // Every surface opened from the chat, a note or a landing is brought into view: a collapsed inspector, or a phone
-  // showing the chat, would otherwise change what nobody can see.
+  // A surface opened from the chat, a note or a landing is brought into view; a collapsed inspector or a phone
+  // showing the chat would hide it.
   const show = useCallback((next: SurfaceKind): void => {
     setSurface(next);
     workbench.current?.reveal();
@@ -1036,7 +1036,7 @@ export default function WorkspacePage() {
             )}
         </ChatSlates>}
         inspector={(
-          // `planOwner` must be the actor's registered name as the work read reports it; the root's is the workspace name.
+          // `planOwner` is the actor's registered name, as the work read reports it; the root's is the workspace's.
           <WorkSurface
             surface={surface}
             previewFocus={state.previewFocus}

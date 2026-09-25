@@ -40,7 +40,7 @@ function readThemeTokens() {
 const browserOrigin = (): string =>
   'window' in globalThis && window.location !== undefined ? window.location.origin : '';
 
-/** Around the chat: a preview folds behind a later one of the same slate, and while the panel shows its slate. */
+/** In the chat, a preview folds behind a later one of its slate, and while the panel shows it. */
 export function ChatSlates({ shownInPanel, children }: { shownInPanel: string | null; children: ReactNode }) {
   const inline = useContext(SlateInlineContext);
   const [previews] = useState(() => new SlatePreviews());

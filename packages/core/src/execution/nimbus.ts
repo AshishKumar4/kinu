@@ -2,7 +2,7 @@
 
 import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
-import type { Shell, VFS } from '../types/primitives';
+import type { Shell, VFS, VfsLinkStat } from '../types/primitives';
 import type { MountedVfs, VfsNativeReads } from '../vfs/mounts';
 import { atVfsPath, makeVfsError } from '../vfs/errno';
 import { workspacePath } from '../vfs/workspace-path';
@@ -129,6 +129,8 @@ export interface NimbusSandboxFiles {
     /** Native stat (SDK ≥0.2.0). `mtime` is in milliseconds; null when absent. No revision field. */
     stat?(path: string): Promise<{ type: string; size: number; mtime: number } | null>;
     lstat?(path: string): Promise<{ type: string; size: number; mtime: number; mode?: number } | null>;
+    /** A link's target text; null when the path is absent. */
+    readlink?(path: string): Promise<string | null>;
     rename?(from: string, to: string): Promise<void>;
     chmod?(path: string, mode: number): Promise<void>;
     exists(path: string): Promise<boolean>;
@@ -662,6 +664,8 @@ function asCred(cred: VfsCred | undefined): { cred: VfsCred } | Record<string, n
 }
 
 export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VFS & {
+  lstat(path: string): Promise<VfsLinkStat | null>;
+  readlink(path: string): Promise<string>;
   removeRecursive(path: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
 } & Pick<VfsNativeReads, 'readRange'> {
@@ -708,6 +712,42 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
       const absolute = workspacePath(path);
 
       return (await atVfsPath(absolute, 'scandir', () => files.list(absolute))).map((e) => e.name);
+    },
+    async lstat(path) {
+      const absolute = workspacePath(path);
+
+      if (files.lstat) {
+        const st = await files.lstat(absolute);
+
+        return st && { size: st.size, mtimeMs: st.mtime, isDir: st.type === 'directory', isSymlink: st.type === 'symlink' };
+      }
+
+      // `stat` without -L describes a link itself.
+      const r = await box.exec(`stat -c '%s %Y %F' ${shellQuote(absolute)}`, asCred(cred));
+
+      if (!r.success || r.exitCode !== 0) return null;
+      const [size, seconds, ...kind] = r.stdout.trim().split(/\s+/);
+      const type = kind.join(' ');
+
+      return { size: Number(size), mtimeMs: Number(seconds) * 1_000, isDir: type === 'directory', isSymlink: type === 'symbolic link' };
+    },
+    async readlink(path) {
+      const absolute = workspacePath(path);
+
+      if (files.readlink) {
+        const target = await atVfsPath(absolute, 'readlink', () => files.readlink?.(absolute) ?? null);
+
+        if (target === null) throw makeVfsError('ENOENT', `no such file or directory, readlink '${absolute}'`, absolute);
+
+        return target;
+      }
+
+      // Like the `stat` fallback, a failed readlink reads as an absent link; its stderr says why.
+      const r = await box.exec(`readlink -- ${shellQuote(absolute)}`, asCred(cred));
+
+      if (!r.success || r.exitCode !== 0) throw makeVfsError('ENOENT', `readlink '${absolute}': ${r.stderr.trim()}`, absolute);
+
+      return r.stdout.replace(/\n$/, '');
     },
     async stat(path) {
       if (files.stat) {

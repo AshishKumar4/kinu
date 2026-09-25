@@ -39,7 +39,7 @@ const DESIGN_VIEWS: readonly DesignView[] = [
   { id: "file-last", group: "Narrow pane", label: "The last file", query: "&file=packages/checkout/README.md" },
   { id: "reviewed", group: "Narrow pane", label: "Just marked reviewed", query: "&reviewed=1" },
   { id: "device", group: "Other machines", label: "A laptop's uncommitted changes", query: "&source=laptop" },
-  { id: "device-file", group: "Other machines", label: "A git diff, with gaps", query: "&source=laptop&file=src/app/checkout/page.tsx" },
+  { id: "device-file", group: "Other machines", label: "A git diff, with gaps", query: "&source=laptop&file=shop/src/app/checkout/page.tsx" },
   { id: "source-menu", group: "Other machines", label: "Choosing whose changes", query: "&menu=source" },
   { id: "offline", group: "Other machines", label: "A laptop gone offline", query: "&source=laptop&offline=1" },
   { id: "edge", group: "Large and odd files", label: "Large, binary and long files", query: "&set=edge" },

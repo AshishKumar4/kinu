@@ -2,9 +2,9 @@ import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { fakeMossaic, git, gitEnv, initRepo, scratchDir } from '@kinu.run/test-utils';
-import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { createWorkspace } from '../src/workspace-birth';
 import {
   getExecutorDiff,
@@ -21,6 +21,7 @@ import { createTestRuntime } from './helpers';
 import { commandResult, type CommandResult } from '../src/execution/exec-result';
 import { agentCred, provisionAgentHome, subordinateAgentName } from '../src/vfs/agent-home';
 import { withMountTable } from '../src/vfs/mounts';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { sharedDriveMount } from '../src/vfs/shared-drive';
 
@@ -33,6 +34,33 @@ afterEach(() => { setSystemTime(); });
 
 /** One millisecond for a write, a capture and a same-size rewrite, as one request's frozen clock gives them. */
 const ONE_MILLISECOND = Date.parse('2026-09-24T00:00:00.000Z');
+
+/** A sandbox executor whose shell is `/bin/sh` in `cwd` (dash here, as the CLI runs it), in the clean git environment:
+ *  under a git hook the inherited GIT_DIR points at the developer's checkout. */
+function shellIn(cwd: string): ExecutionRouter {
+  const provider: ExecutorProvider = {
+    name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']), filesOwner: 'agent',
+    homeDir: async () => '/workspace',
+    isAvailable: () => true, connect: async () => {}, disconnect: async () => {},
+    tools: {
+      exec: {
+        description: 'test shell',
+        execute: async (...args) => {
+          const [command] = v.parse(v.tuple([v.string()]), args);
+          const result = Bun.spawnSync(['/bin/sh', '-lc', command], { cwd, env: gitEnv(), stdout: 'pipe', stderr: 'pipe' });
+
+          return commandResult({ stdout: result.stdout.toString(), stderr: result.stderr.toString(), exitCode: result.exitCode });
+        },
+      },
+    },
+  };
+
+  return {
+    register: () => {}, unregister: () => {},
+    getProvider: (name) => name === 'sandbox' ? provider : undefined,
+    getProviders: () => [], listExecutors: () => [],
+  };
+}
 
 describe('workspace diff lifecycle', () => {
   test('workspace birth captures seed files before any agent work', async () => {
@@ -264,6 +292,79 @@ describe('workspace diff lifecycle', () => {
     expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual([
       `added ${home}/draft.md`, 'added /slates/board/app.tsx', 'added notes.md',
     ]);
+  });
+
+  test('hidden files and folders are never reviewed: not in the working directory, a hire\'s home or a slate', async () => {
+    const { rt, workspace } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    const identity = { uid: 2001, gid: 2001 };
+    const home = provisionAgentHome((await workspace.privileged()).root, subordinateAgentName('builder'), identity);
+    const builder = (await workspace.session()).vfs.as(agentCred(identity));
+    await resetWorkspaceBaseline(rt);
+
+    await rt.storage.vfs.writeFile('.env', 'TOKEN=1\n');
+    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+    builder.writeFile(`${home}/.bashrc`, 'alias ll=ls\n');
+    builder.mkdir(`${home}/.config/tool`, { recursive: true });
+    builder.writeFile(`${home}/.config/tool/settings.json`, '{}');
+    builder.writeFile(`${home}/draft.md`, 'draft\n');
+    builder.mkdir('/slates/board/.build', { recursive: true });
+    builder.writeFile('/slates/board/.build/out.js', 'built');
+    builder.writeFile('/slates/board/index.html', '<p>board</p>\n');
+
+    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual([
+      `added ${home}/draft.md`, 'added /slates/board/index.html', 'added notes.md',
+    ]);
+  });
+
+  test('a symbolic link is listed as itself, its target as its text, and never followed', async () => {
+    const { rt, workspace } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    const identity = { uid: 2001, gid: 2001 };
+    const home = provisionAgentHome((await workspace.privileged()).root, subordinateAgentName('builder'), identity);
+    const session = await workspace.session();
+    const builder = session.vfs.as(agentCred(identity));
+    const user = session.vfs.as(CRED_SESSION_USER);
+    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+    await resetWorkspaceBaseline(rt);
+
+    await rt.storage.vfs.mkdir('.config', { recursive: true });
+    await rt.storage.vfs.writeFile('.config/secret.txt', 'TOKEN=1\n');
+    builder.mkdir(`${home}/node_modules/pkg`, { recursive: true });
+    builder.writeFile(`${home}/node_modules/pkg/index.js`, 'installed\n');
+    user.symlink(`${WORKSPACE_ROOT}/.config`, `${WORKSPACE_ROOT}/cfg`);
+    user.symlink(`${home}/node_modules`, `${WORKSPACE_ROOT}/deps`);
+    user.symlink(WORKSPACE_ROOT, `${WORKSPACE_ROOT}/loop`);
+    user.symlink('notes.md', `${WORKSPACE_ROOT}/alias.md`);
+
+    const listed = (await getWorkspaceDiff(rt)).files;
+    expect(listed.map((file) => `${file.status} ${file.path}: ${file.lines.map((line) => line.text).join('|')}`)).toEqual([
+      'added alias.md: notes.md',
+      `added cfg: ${WORKSPACE_ROOT}/.config`,
+      `added deps: ${home}/node_modules`,
+      `added loop: ${WORKSPACE_ROOT}`,
+    ]);
+
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.unlink('alias.md');
+    await rt.storage.vfs.writeFile('alias.md', 'notes.md');
+    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['changed alias.md']);
+  });
+
+  test('hidden files a baseline recorded before they were left out are not listed as removed', async () => {
+    const { rt, db } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await rt.storage.vfs.mkdir('.config', { recursive: true });
+    await rt.storage.vfs.writeFile('.config/settings.json', '{}');
+    await rt.storage.vfs.writeFile('.env', 'TOKEN=1\n');
+    await resetWorkspaceBaseline(rt);
+
+    for (const path of ['.env', '.config/settings.json']) {
+      db.prepare(`INSERT OR IGNORE INTO vfs_baseline_manifest (actor_id, generation, path, size, mtime_ms, hash, active)
+        SELECT actor_id, generation, ?, 2, 0, NULL, 1 FROM vfs_baseline_manifest WHERE path = '' AND active = 1`).run(path);
+    }
+
+    expect((await getWorkspaceDiff(rt)).files).toEqual([]);
   });
 
   test('a baseline taken while slates lived in the home finds them at /slates, so their move is no change', async () => {
@@ -500,7 +601,7 @@ describe('workspace diff lifecycle', () => {
   });
 
   test('a failed git subcommand is an Output error, never an empty successful diff', async () => {
-    const responses: CommandResult[] = ['/repo', '3f2a1c0b9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b', { reason: 'io', error: 'Error (exit 128)\nfatal: index corrupt' }];
+    const responses: CommandResult[] = [{ reason: 'io', error: 'Error (exit 128)\nfatal: index corrupt' }];
 
     const provider: ExecutorProvider = {
       name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']), filesOwner: 'agent',
@@ -538,48 +639,137 @@ describe('workspace diff lifecycle', () => {
     writeFileSync(join(repo, 'tracked.txt'), 'after\n');
     writeFileSync(join(repo, 'untracked file.txt'), 'new\n');
 
-    // Needs the clean git environment: under a git hook the inherited GIT_DIR points at the developer's checkout.
-    const exec = async (command: string): Promise<CommandResult> => {
-      const result = Bun.spawnSync(['bash', '-lc', command], {
-        cwd: repo, env: gitEnv(), stdout: 'pipe', stderr: 'pipe',
-      });
-
-      return commandResult({ stdout: result.stdout.toString(), stderr: result.stderr.toString(), exitCode: result.exitCode });
-    };
-
-    const provider: ExecutorProvider = {
-      name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']), filesOwner: 'agent',
-      homeDir: async () => '/workspace',
-      isAvailable: () => true, connect: async () => {}, disconnect: async () => {},
-      tools: {
-        exec: {
-          description: 'test shell',
-          execute: async (...args) => {
-            const [command] = v.parse(v.tuple([v.string()]), args);
-
-            return exec(command);
-          },
-        },
-      },
-    };
-
-    const router: ExecutionRouter = {
-      register: () => {}, unregister: () => {},
-      getProvider: (name) => name === 'sandbox' ? provider : undefined,
-      getProviders: () => [], listExecutors: () => [],
-    };
-
     const { rt } = createTestRuntime();
-    rt.executionRouter = router;
+    rt.executionRouter = shellIn(repo);
     const before = readFileSync(join(repo, '.git/index'));
 
     const first = await getExecutorDiff(rt, 'sandbox');
     const second = await getExecutorDiff(rt, 'sandbox');
     const after = readFileSync(join(repo, '.git/index'));
+    const folder = basename(repo);
 
-    expect(first.files.map((file) => file.path)).toEqual(['tracked.txt', 'untracked file.txt']);
-    expect(first.baseline).toBe(git(repo, 'rev-parse', 'HEAD').trim());
+    expect(first.files.map((file) => file.path)).toEqual([`${folder}/tracked.txt`, `${folder}/untracked file.txt`]);
+    expect(first.repositories).toEqual([folder]);
+    expect(first.baseline).toBe(`${folder}@${git(repo, 'rev-parse', 'HEAD').trim()}`);
     expect(second.files).toEqual(first.files);
     expect(after.equals(before)).toBe(true);
+  });
+
+  test('the git view lists every repository within reach of the working directory, each under its folder', async () => {
+    const cwd = scratchDir('git-view');
+
+    const repository = (at: string, files: Readonly<Record<string, string>>, commit = true): string => {
+      const root = join(cwd, at);
+      mkdirSync(root, { recursive: true });
+      initRepo(root);
+
+      for (const [path, text] of Object.entries(files)) {
+        mkdirSync(dirname(join(root, path)), { recursive: true });
+        writeFileSync(join(root, path), text);
+      }
+
+      if (commit) {
+        git(root, 'add', '-A');
+        git(root, 'commit', '-qm', 'seed');
+      }
+
+      return root;
+    };
+
+    const api = repository('api', { 'app.ts': 'one\n', '.gitignore': 'dist/\n' });
+    const lib = repository('api/vendor/lib', { 'lib.ts': 'one\n' });
+    repository('web', { 'index.html': '<p>web</p>\n' }, false);
+    const deep = repository('a/b/c/deep', { 'far.ts': 'one\n' });
+    const hidden = repository('.config/tool', { 'settings.json': '{}\n' });
+    const installed = repository('node_modules/pkg', { 'index.js': 'one\n' });
+    writeFileSync(join(api, 'app.ts'), 'two\n');
+    writeFileSync(join(api, 'new.ts'), 'new\n');
+    mkdirSync(join(api, 'dist'));
+    writeFileSync(join(api, 'dist/bundle.js'), 'built\n');
+    writeFileSync(join(lib, 'lib.ts'), 'two\n');
+
+    for (const outside of [deep, hidden, installed]) writeFileSync(join(outside, 'changed.txt'), 'not listed\n');
+    mkdirSync(join(cwd, 'notes'));
+    writeFileSync(join(cwd, 'notes/todo.md'), 'no repository\n');
+
+    const { rt } = createTestRuntime();
+    rt.executionRouter = shellIn(cwd);
+    const view = await getExecutorDiff(rt, 'sandbox');
+
+    expect(view.error).toBeUndefined();
+    expect(view.repositories).toEqual(['api', 'api/vendor/lib', 'web']);
+    expect(view.files.map((file) => `${file.status} ${file.path}`)).toEqual([
+      'changed api/app.ts', 'added api/new.ts', 'changed api/vendor/lib/lib.ts', 'added web/index.html',
+    ]);
+
+    rt.executionRouter = shellIn(join(cwd, 'notes'));
+    expect(await getExecutorDiff(rt, 'sandbox')).toEqual({ files: [], mode: 'git', notGitRepo: true });
+  });
+
+  test('a working directory inside a repository shows that repository, and the ones below it', async () => {
+    const mono = join(scratchDir('git-enclosing'), 'mono');
+    mkdirSync(join(mono, 'sub/inner'), { recursive: true });
+    initRepo(mono);
+    writeFileSync(join(mono, 'root.txt'), 'one\n');
+    writeFileSync(join(mono, 'sub/f.txt'), 'one\n');
+    git(mono, 'add', '-A');
+    git(mono, 'commit', '-qm', 'seed');
+    initRepo(join(mono, 'sub/inner'));
+    writeFileSync(join(mono, 'root.txt'), 'two\n');
+    writeFileSync(join(mono, 'sub/f.txt'), 'two\n');
+    writeFileSync(join(mono, 'sub/inner/in.txt'), 'new\n');
+
+    const { rt } = createTestRuntime();
+    rt.executionRouter = shellIn(join(mono, 'sub'));
+    const view = await getExecutorDiff(rt, 'sandbox');
+
+    expect(view.error).toBeUndefined();
+    expect(view.repositories).toEqual(['mono', 'mono/sub/inner']);
+    expect(view.files.map((file) => `${file.status} ${file.path}`)).toEqual([
+      'changed mono/root.txt', 'changed mono/sub/f.txt', 'added mono/sub/inner/in.txt',
+    ]);
+  });
+
+  test('a file name with quotes, spaces, a newline or non-ASCII letters is shown as it is on disk', async () => {
+    const cwd = scratchDir('git-names');
+    const odd = ['a b.txt', 'naïve.txt', 'qu"o\'te.txt', 'back\\slash.txt', 'tab\there.txt', 'line\nbreak.txt'];
+    const repo = join(cwd, 'r');
+    mkdirSync(repo, { recursive: true });
+    initRepo(repo);
+
+    for (const name of odd) writeFileSync(join(repo, name), 'one\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'seed');
+
+    for (const name of odd) {
+      writeFileSync(join(repo, name), 'two\n');
+      writeFileSync(join(repo, `new ${name}`), 'new\n');
+    }
+
+    const { rt } = createTestRuntime();
+    rt.executionRouter = shellIn(cwd);
+    const view = await getExecutorDiff(rt, 'sandbox');
+
+    expect(view.error).toBeUndefined();
+    expect(view.files.map((file) => `${file.status} ${file.path} +${String(file.added)}`).sort()).toEqual([
+      ...odd.map((name) => `changed r/${name} +1`),
+      ...odd.map((name) => `added r/new ${name} +1`),
+    ].sort());
+  });
+
+  test('a folder name with a newline is one folder, never two phantom repositories', async () => {
+    const cwd = scratchDir('git-newline');
+    const repo = join(cwd, 'nl\nname', 'r2');
+    mkdirSync(repo, { recursive: true });
+    initRepo(repo);
+    writeFileSync(join(repo, 'x.txt'), 'new\n');
+
+    const { rt } = createTestRuntime();
+    rt.executionRouter = shellIn(cwd);
+    const view = await getExecutorDiff(rt, 'sandbox');
+
+    expect(view.error).toBeUndefined();
+    expect(view.repositories).toEqual(['nl\nname/r2']);
+    expect(view.files.map((file) => `${file.status} ${file.path}`)).toEqual(['added nl\nname/r2/x.txt']);
   });
 });

@@ -9,9 +9,12 @@ import { ChangesPanel } from "./changes/ChangesPanel";
 import { NotesProvider, type NotesStore } from "./changes/notes-provider";
 
 function changeSetOf(source: string, result: ExecutorDiffResult): ChangeSet {
-  const error = result.error ?? (result.notGitRepo === true ? "Its folder is not a git repository, so there is nothing to compare." : undefined);
+  const error = result.error ?? (result.notGitRepo === true ? "Its folder holds no git repository, so there is nothing to compare." : undefined);
 
-  return { source, label: executorLabel(source), mode: result.mode, files: result.files, trackedSince: result.trackedSince, baseline: result.baseline, error };
+  return {
+    source, label: executorLabel(source), mode: result.mode, files: result.files, trackedSince: result.trackedSince, baseline: result.baseline,
+    repositories: result.repositories, error,
+  };
 }
 
 async function answered(call: () => Promise<ChangeNotesResult>): Promise<ChangeNotesResult> {

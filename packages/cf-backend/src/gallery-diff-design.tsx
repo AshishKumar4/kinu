@@ -393,7 +393,26 @@ const DEVICE_PATCH = [
   "+}",
 ].join("\n");
 
-const DEVICE_CHANGES: ChangeSet = { source: "laptop", label: "laptop", mode: "git", baseline: "HEAD 3f2a1c0", files: parseGitDiff(DEVICE_PATCH) };
+const BLOG_PATCH = [
+  "diff --git a/posts/launch.md b/posts/launch.md",
+  "index 7c1d2e3..9f8a7b6 100644",
+  "--- a/posts/launch.md",
+  "+++ b/posts/launch.md",
+  "@@ -1,3 +1,3 @@",
+  " # Launch week",
+  "-Checkout ships on Monday.",
+  "+Checkout and coupons ship on Monday.",
+  " ",
+].join("\n");
+
+/** Two repositories in the laptop's working folder, each a folder of the list. */
+const DEVICE_CHANGES: ChangeSet = {
+  source: "laptop", label: "laptop", mode: "git", baseline: "blog@9f8a7b6 shop@3f2a1c0", repositories: ["blog", "shop"],
+  files: [
+    ...parseGitDiff(BLOG_PATCH).map((file) => ({ ...file, path: `blog/${file.path}` })),
+    ...parseGitDiff(DEVICE_PATCH).map((file) => ({ ...file, path: `shop/${file.path}` })),
+  ],
+};
 
 const DEVICE_OFFLINE: ChangeSet = {
   source: "laptop", label: "laptop", mode: "git", files: [], error: "laptop is offline. Its changes come back when it reconnects.",
