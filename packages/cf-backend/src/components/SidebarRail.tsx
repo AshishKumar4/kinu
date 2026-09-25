@@ -10,13 +10,13 @@ import { useAccount } from "@/hooks/use-account";
 import { lastValue } from "@/hooks/use-async-resource";
 import { KinuMark } from "./ui/KinuLogo";
 import Sidebar from "./Sidebar";
-import { navActive, navRowCls, PRIMARY_NAV } from "./nav";
+import { navActive, NAV_HOVER, navRowCls, PRIMARY_NAV } from "./nav";
 
 const RAIL_KEY = "kinu:rail-open";
 
-const RAIL_ICON_CLS = "flex size-9 items-center justify-center rounded-lg p-text-3 transition-colors";
+const RAIL_ICON_CLS = "flex size-9 items-center justify-center rounded-lg transition-colors";
 
-const RAIL_BUTTON_CLS = `${RAIL_ICON_CLS} hover:bg-[var(--c-elevated)] hover:p-text`;
+const RAIL_BUTTON_CLS = `${RAIL_ICON_CLS} p-text-3 ${NAV_HOVER}`;
 
 /** Lane width and entering column share 180ms; reduced motion gets the end state at once. */
 const LANE_ENTER_CLS = "motion-safe:animate-[fade-in_180ms_ease-out]";
@@ -66,7 +66,7 @@ export function SidebarRail() {
 
               return (
                 <Link key={item.to} to={item.to} aria-label={item.label} title={item.label} aria-current={open ? "page" : undefined}
-                  className={`${RAIL_ICON_CLS} ${navRowCls(open)} ${open ? "p-accent" : "hover:p-text"}`}>
+                  className={`${RAIL_ICON_CLS} ${navRowCls(open, "p-text-3")}`}>
                   <item.Icon size={17} />
                 </Link>
               );

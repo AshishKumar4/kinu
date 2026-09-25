@@ -28,9 +28,9 @@ function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
     <Link
       to={to}
       aria-current={active ? "page" : undefined}
-      className={`flex items-center gap-2.5 rounded-lg py-[7px] pl-3 pr-3 p-t-control transition-colors ${navRowCls(active)} ${active ? 'p-text' : 'p-text-2'}`}
+      className={`flex items-center gap-2.5 rounded-lg py-[7px] pl-3 pr-3 p-t-control transition-colors ${navRowCls(active)}`}
     >
-      <Icon size={15} className={active ? 'p-accent' : 'p-text-3'} />
+      <Icon size={15} className={active ? undefined : 'p-text-3'} />
       <span>{label}</span>
     </Link>
   );
@@ -255,7 +255,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
           </Button>
         </div>
       )}
-      <nav aria-label="Primary" className="px-2 pt-1 space-y-0.5">
+      <nav aria-label="Primary" className="px-2 pt-1 space-y-1">
         {PRIMARY_NAV.map((item) => <PrimaryNavRow key={item.to} {...item} />)}
       </nav>
       <div className="flex-1 overflow-y-auto pt-2 pb-3">
@@ -271,7 +271,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
             className="w-full text-left px-5 py-2 text-xs p-warning rounded-md p-card-hover transition-colors"
           >Could not load workspaces. Retry</button>
         )}
-        <ul className="space-y-0.5">
+        <ul className="space-y-1">
           {workspaces.map((a) => {
             const age = shortAge(a.lastVisited);
             const live = activity[a.name];
@@ -305,12 +305,13 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
                     <>
                       <NavLink
                         to={`/workspace/${a.name}`}
+                        end
                         className={({ isActive: linkActive }) =>
                           `flex items-center gap-2 rounded-lg py-[7px] pl-3 pr-16 lg:pr-3 lg:group-hover:pr-16 lg:group-focus-within:pr-16 transition-colors ${navRowCls(linkActive)}`
                         }
                       >
                         <span className="size-1.5 shrink-0 rounded-full">{dot}</span>
-                        <span className={`min-w-0 flex-1 truncate p-row-text ${isActive ? 'font-semibold p-text' : 'font-semibold p-text-2'} ${isPlaceholderWorkspaceTitle(a.displayName, a.name) ? 'italic p-text-3' : ''}`}>{shown}</span>
+                        <span className={`min-w-0 flex-1 truncate p-row-text font-semibold ${isPlaceholderWorkspaceTitle(a.displayName, a.name) ? `italic ${isActive ? '' : 'p-text-3'}` : ''}`}>{shown}</span>
                         {age && <span className="w-[30px] shrink-0 text-right p-meta tabular-nums p-text-4 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
                       </NavLink>
                       <Link
@@ -336,16 +337,16 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
                 </div>
 
                 {isActive && activeAgents && activeAgents.length > 0 && (
-                  <div className="ml-[21px] mt-0.5 border-l p-border pl-2.5">
+                  <div className="ml-[21px] mt-1 space-y-1 border-l p-border pl-2.5">
                     {activeAgents.map((sub) => (
                       <NavLink
                         key={sub.name}
                         to={`/workspace/${a.name}/agents/${sub.name}`}
-                        className="flex items-center gap-2 rounded-lg px-2.5 py-[5px] transition-colors hover:bg-[var(--c-elevated)]"
+                        className={({ isActive: agentOpen }) => `flex items-center gap-2 rounded-lg px-2.5 py-[5px] transition-colors ${navRowCls(agentOpen)}`}
                         title={agentTitle(sub)}
                       >
                         <span className={`size-1.5 shrink-0 rounded-full ${subordinateDot(sub.status)}`} />
-                        <span className="min-w-0 flex-1 truncate p-row-text p-text-2">{agentTitle(sub)}</span>
+                        <span className="min-w-0 flex-1 truncate p-row-text">{agentTitle(sub)}</span>
                       </NavLink>
                     ))}
                     <button
@@ -357,7 +358,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
                   </div>
                 )}
                 {isActive && activeAgents && activeAgents.length === 0 && (
-                  <div className="ml-[21px] mt-0.5 border-l p-border pl-2.5">
+                  <div className="ml-[21px] mt-1 border-l p-border pl-2.5">
                     <button
                       onClick={() => window.dispatchEvent(new CustomEvent("kinu:new-agent"))}
                       className="w-full rounded-lg px-2.5 py-[5px] text-left p-t-control p-text-4 transition-colors hover:p-accent"

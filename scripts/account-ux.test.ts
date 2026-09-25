@@ -43,15 +43,19 @@ async function shoot(page: Page, name: string): Promise<string> {
 const dialogText = (page: Page) => page.$eval('[role="dialog"]', (element) => element.textContent ?? '');
 
 /** The primary nav, painted, once each row's own colour transition has ended. */
-async function navPaint(page: Page): Promise<{ label: string; background: string; current: boolean }[]> {
+async function navPaint(page: Page): Promise<{ label: string; background: string; ink: string; top: number; bottom: number; current: boolean }[]> {
   return page.$$eval('nav[aria-label="Primary"] a', async (anchors) => {
     await Promise.allSettled(anchors.flatMap((anchor) => anchor.getAnimations().map((animation) => animation.finished)));
 
-    return anchors.map((anchor) => ({
-      label: anchor.textContent?.trim() ?? '',
-      background: getComputedStyle(anchor).backgroundColor,
-      current: anchor.getAttribute('aria-current') === 'page',
-    }));
+    return anchors.map((anchor) => {
+      const style = getComputedStyle(anchor);
+      const box = anchor.getBoundingClientRect();
+
+      return {
+        label: anchor.textContent?.trim() ?? '', background: style.backgroundColor, ink: style.color,
+        top: box.top, bottom: box.bottom, current: anchor.getAttribute('aria-current') === 'page',
+      };
+    });
   });
 }
 
@@ -439,13 +443,17 @@ describe('account panels', () => {
               expect(rail).toContain('ashish@example.com');
               shots.push(await shoot(home, `sidebar-nav-${theme}`));
 
-              // The row under the pointer is painted too, but never as the open row: the two sit 2 px apart, and in
-              // one paint they read as one block, which is how hover and the open row came to merge.
+              // The row under the pointer is painted too, but never as the open row: not its ground, not its ink,
+              // and never touching it. Lit alike and 2 px apart, the two once read as one block.
               await home.hover('nav[aria-label="Primary"] a[href="/workspaces"]');
-              const painted = new Map((await navPaint(home)).map((row) => [row.label, row.background]));
+              const rows = await navPaint(home);
+              const open = rows.find((row) => row.label === 'Home');
+              const hovered = rows.find((row) => row.label === 'Workspaces');
 
-              expect(painted.get('Workspaces')).not.toBe('rgba(0, 0, 0, 0)');
-              expect(painted.get('Workspaces')).not.toBe(painted.get('Home'));
+              expect(hovered?.background).not.toBe('rgba(0, 0, 0, 0)');
+              expect(hovered?.background).not.toBe(open?.background);
+              expect(hovered?.ink).not.toBe(open?.ink);
+              expect((hovered?.top ?? 0) - (open?.bottom ?? 0)).toBeGreaterThanOrEqual(4);
             } finally {
               await home.close();
             }
