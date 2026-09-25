@@ -288,8 +288,9 @@ function Stepper({ files, current, onShow }: { files: readonly FileDiff[]; curre
   );
 }
 
-function Expanded({ files, file, split, tree, notesShown, onNotes, onOpenInFiles }: {
+function Expanded({ files, repositories, file, split, tree, notesShown, onNotes, onOpenInFiles }: {
   files: readonly FileDiff[];
+  repositories: readonly string[] | undefined;
   file: string | null;
   split: boolean;
   tree: boolean;
@@ -360,7 +361,7 @@ function Expanded({ files, file, split, tree, notesShown, onNotes, onOpenInFiles
             <Stepper files={files} current={current} onShow={show} />
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <FileTree files={files} current={current} onOpen={show} />
+            <FileTree files={files} repositories={repositories} current={current} onOpen={show} />
           </div>
         </nav>
       )}
@@ -417,7 +418,7 @@ function NarrowBody({ set, files, at, path, reviewable, onGo, onReviewed, onOpen
         {set.error === undefined ? (
           <>
             {path !== null && <p className="px-4 pt-3 p-meta p-text-3" data-changes-gone>{vfsBasename(path)} has no changes now.</p>}
-            <FileTree files={files} current={null} onOpen={onGo} />
+            <FileTree files={files} repositories={set.repositories} current={null} onOpen={onGo} />
           </>
         ) : <p className="px-4 py-3.5 p-row-text p-text-2" data-changes-error>{set.error}</p>}
       </div>
@@ -538,7 +539,7 @@ export function ChangesPanel({ sets, source, onSource, now, file: initialFile = 
           <FileHeader files={files} at={at} onGo={go} />
         )}
         {expanded ? (
-          <Expanded files={files} file={path} split={room.split && layout === "split"} tree={room.tree}
+          <Expanded files={files} repositories={set.repositories} file={path} split={room.split && layout === "split"} tree={room.tree}
             notesShown={notesShown} onNotes={setNotesOpen} onOpenInFiles={onOpenInFiles} />
         ) : (
           <NarrowBody key={open?.path ?? "list"} set={set} files={files} at={at} path={path} reviewable={set.mode === "vfs-baseline" && !noted}

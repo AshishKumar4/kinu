@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
-import { CaretDownIcon, CheckIcon, FolderSimpleIcon } from "@phosphor-icons/react";
+import { CaretDownIcon, CheckIcon, FolderSimpleIcon, GitBranchIcon } from "@phosphor-icons/react";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { changeBody, changeTotals, changeTree, type ChangeSet, type FileDiff } from "@kinu.run/core";
 import { ChangeMark, count, Counts, fullTime, sinceLabel } from "./diff";
@@ -16,17 +16,25 @@ function Tag({ file }: { file: FileDiff }) {
 
 const INDENT = 14;
 
-export function FileTree({ files, current, onOpen }: { files: readonly FileDiff[]; current: string | null; onOpen: (path: string) => void }) {
+export function FileTree({ files, repositories, current, onOpen }: {
+  files: readonly FileDiff[];
+  repositories: readonly string[] | undefined;
+  current: string | null;
+  onOpen: (path: string) => void;
+}) {
   return (
     <ul role="list" className="py-1.5" data-file-tree>
-      {changeTree(files).map((row) => {
+      {changeTree(files, repositories).map((row) => {
         const inset = { paddingLeft: `${String(14 + row.depth * INDENT)}px` };
 
         if (row.kind === "folder") {
           return (
-            <li key={`d:${row.path}`} style={inset} className="flex h-7 items-center gap-1.5 pr-3.5 text-[12.5px] p-text-3" data-folder-row>
-              <FolderSimpleIcon size={13} weight="fill" className="shrink-0 p-text-4 opacity-70" />
-              <span className="min-w-0 truncate">{row.name}</span>
+            <li key={`d:${row.path}`} style={inset} className="flex h-7 items-center gap-1.5 pr-3.5 text-[12.5px] p-text-3" data-folder-row
+              data-repository-row={row.repository ? row.path : undefined} title={row.repository ? `Git repository ${row.path}` : undefined}>
+              {row.repository
+                ? <GitBranchIcon size={13} weight="bold" className="shrink-0 p-text-3" />
+                : <FolderSimpleIcon size={13} weight="fill" className="shrink-0 p-text-4 opacity-70" />}
+              <span className={`min-w-0 truncate ${row.repository ? "font-medium p-text-2" : ""}`}>{row.name}</span>
             </li>
           );
         }

@@ -13,6 +13,8 @@ export interface ChangeSet {
   readonly files: readonly FileDiff[];
   readonly trackedSince?: number;
   readonly baseline?: string;
+  /** A git view's repositories, as the folders their files are listed under. */
+  readonly repositories?: readonly string[];
   readonly error?: string;
 }
 
@@ -41,7 +43,7 @@ export interface ChangePair {
 }
 
 export type ChangeTreeRow =
-  | { readonly kind: 'folder'; readonly name: string; readonly path: string; readonly depth: number }
+  | { readonly kind: 'folder'; readonly name: string; readonly path: string; readonly depth: number; readonly repository: boolean }
   | { readonly kind: 'file'; readonly file: FileDiff; readonly depth: number };
 
 const CONTEXT = 3;
@@ -344,23 +346,24 @@ function folderIn(parent: Folder, name: string): Folder {
   return made;
 }
 
-/** `within`: the folder's path, '' at the root. */
-function rowsOf(folder: Folder, depth: number, within: string): ChangeTreeRow[] {
+/** `within`: the folder's path, '' at the root. A repository's folder is never joined with the folder it holds. */
+function rowsOf(folder: Folder, depth: number, within: string, repositories: ReadonlySet<string>): ChangeTreeRow[] {
   const rows: ChangeTreeRow[] = [];
+  const at = (label: string): string => (within === '' ? label : `${within}/${label}`);
 
   for (const [name, child] of [...folder.folders].sort(([a], [b]) => a.localeCompare(b))) {
     let label = name;
     let inner = child;
 
-    while (inner.files.length === 0 && inner.folders.size === 1) {
+    while (!repositories.has(at(label)) && inner.files.length === 0 && inner.folders.size === 1) {
       const [[next, only]] = [...inner.folders];
       label = `${label}/${next}`;
       inner = only;
     }
 
-    const path = within === '' ? label : `${within}/${label}`;
+    const path = at(label);
 
-    rows.push({ kind: 'folder', name: label, path, depth }, ...rowsOf(inner, depth + 1, path));
+    rows.push({ kind: 'folder', name: label, path, depth, repository: repositories.has(path) }, ...rowsOf(inner, depth + 1, path, repositories));
   }
 
   const files = [...folder.files].sort((a, b) => vfsBasename(a.path).localeCompare(vfsBasename(b.path)));
@@ -369,7 +372,7 @@ function rowsOf(folder: Folder, depth: number, within: string): ChangeTreeRow[] 
 }
 
 /** Folders before files at each level; a folder holding only one folder is one row ("packages/checkout"). */
-export function changeTree(files: readonly FileDiff[]): ChangeTreeRow[] {
+export function changeTree(files: readonly FileDiff[], repositories: readonly string[] = []): ChangeTreeRow[] {
   const root: Folder = { folders: new Map(), files: [] };
 
   for (const file of files) {
@@ -377,7 +380,7 @@ export function changeTree(files: readonly FileDiff[]): ChangeTreeRow[] {
     parts.reduce(folderIn, root).files.push(file);
   }
 
-  return rowsOf(root, 0, '');
+  return rowsOf(root, 0, '', new Set(repositories));
 }
 
 function sameFile(a: FileDiff, b: FileDiff): boolean {

@@ -3,8 +3,8 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { fakeMossaic, git, gitEnv, initRepo, scratchDir } from '@kinu.run/test-utils';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { createWorkspace } from '../src/workspace-birth';
 import {
   getExecutorDiff,
@@ -33,6 +33,33 @@ afterEach(() => { setSystemTime(); });
 
 /** One millisecond for a write, a capture and a same-size rewrite, as one request's frozen clock gives them. */
 const ONE_MILLISECOND = Date.parse('2026-09-24T00:00:00.000Z');
+
+/** A sandbox executor whose shell is real bash in `cwd`, in the clean git environment: under a git hook the
+ *  inherited GIT_DIR points at the developer's checkout. */
+function shellIn(cwd: string): ExecutionRouter {
+  const provider: ExecutorProvider = {
+    name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']), filesOwner: 'agent',
+    homeDir: async () => '/workspace',
+    isAvailable: () => true, connect: async () => {}, disconnect: async () => {},
+    tools: {
+      exec: {
+        description: 'test shell',
+        execute: async (...args) => {
+          const [command] = v.parse(v.tuple([v.string()]), args);
+          const result = Bun.spawnSync(['bash', '-lc', command], { cwd, env: gitEnv(), stdout: 'pipe', stderr: 'pipe' });
+
+          return commandResult({ stdout: result.stdout.toString(), stderr: result.stderr.toString(), exitCode: result.exitCode });
+        },
+      },
+    },
+  };
+
+  return {
+    register: () => {}, unregister: () => {},
+    getProvider: (name) => name === 'sandbox' ? provider : undefined,
+    getProviders: () => [], listExecutors: () => [],
+  };
+}
 
 describe('workspace diff lifecycle', () => {
   test('workspace birth captures seed files before any agent work', async () => {
@@ -517,7 +544,7 @@ describe('workspace diff lifecycle', () => {
   });
 
   test('a failed git subcommand is an Output error, never an empty successful diff', async () => {
-    const responses: CommandResult[] = ['/repo', '3f2a1c0b9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b', { reason: 'io', error: 'Error (exit 128)\nfatal: index corrupt' }];
+    const responses: CommandResult[] = [{ reason: 'io', error: 'Error (exit 128)\nfatal: index corrupt' }];
 
     const provider: ExecutorProvider = {
       name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']), filesOwner: 'agent',
@@ -555,48 +582,70 @@ describe('workspace diff lifecycle', () => {
     writeFileSync(join(repo, 'tracked.txt'), 'after\n');
     writeFileSync(join(repo, 'untracked file.txt'), 'new\n');
 
-    // Needs the clean git environment: under a git hook the inherited GIT_DIR points at the developer's checkout.
-    const exec = async (command: string): Promise<CommandResult> => {
-      const result = Bun.spawnSync(['bash', '-lc', command], {
-        cwd: repo, env: gitEnv(), stdout: 'pipe', stderr: 'pipe',
-      });
-
-      return commandResult({ stdout: result.stdout.toString(), stderr: result.stderr.toString(), exitCode: result.exitCode });
-    };
-
-    const provider: ExecutorProvider = {
-      name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']), filesOwner: 'agent',
-      homeDir: async () => '/workspace',
-      isAvailable: () => true, connect: async () => {}, disconnect: async () => {},
-      tools: {
-        exec: {
-          description: 'test shell',
-          execute: async (...args) => {
-            const [command] = v.parse(v.tuple([v.string()]), args);
-
-            return exec(command);
-          },
-        },
-      },
-    };
-
-    const router: ExecutionRouter = {
-      register: () => {}, unregister: () => {},
-      getProvider: (name) => name === 'sandbox' ? provider : undefined,
-      getProviders: () => [], listExecutors: () => [],
-    };
-
     const { rt } = createTestRuntime();
-    rt.executionRouter = router;
+    rt.executionRouter = shellIn(repo);
     const before = readFileSync(join(repo, '.git/index'));
 
     const first = await getExecutorDiff(rt, 'sandbox');
     const second = await getExecutorDiff(rt, 'sandbox');
     const after = readFileSync(join(repo, '.git/index'));
+    const folder = basename(repo);
 
-    expect(first.files.map((file) => file.path)).toEqual(['tracked.txt', 'untracked file.txt']);
-    expect(first.baseline).toBe(git(repo, 'rev-parse', 'HEAD').trim());
+    expect(first.files.map((file) => file.path)).toEqual([`${folder}/tracked.txt`, `${folder}/untracked file.txt`]);
+    expect(first.repositories).toEqual([folder]);
+    expect(first.baseline).toBe(`${folder}@${git(repo, 'rev-parse', 'HEAD').trim()}`);
     expect(second.files).toEqual(first.files);
     expect(after.equals(before)).toBe(true);
+  });
+
+  test('the git view lists every repository within reach of the working directory, each under its folder', async () => {
+    const cwd = scratchDir('git-view');
+
+    const repository = (at: string, files: Readonly<Record<string, string>>, commit = true): string => {
+      const root = join(cwd, at);
+      mkdirSync(root, { recursive: true });
+      initRepo(root);
+
+      for (const [path, text] of Object.entries(files)) {
+        mkdirSync(dirname(join(root, path)), { recursive: true });
+        writeFileSync(join(root, path), text);
+      }
+
+      if (commit) {
+        git(root, 'add', '-A');
+        git(root, 'commit', '-qm', 'seed');
+      }
+
+      return root;
+    };
+
+    const api = repository('api', { 'app.ts': 'one\n', '.gitignore': 'dist/\n' });
+    const lib = repository('api/vendor/lib', { 'lib.ts': 'one\n' });
+    repository('web', { 'index.html': '<p>web</p>\n' }, false);
+    const deep = repository('a/b/c/deep', { 'far.ts': 'one\n' });
+    const hidden = repository('.config/tool', { 'settings.json': '{}\n' });
+    const installed = repository('node_modules/pkg', { 'index.js': 'one\n' });
+    writeFileSync(join(api, 'app.ts'), 'two\n');
+    writeFileSync(join(api, 'new.ts'), 'new\n');
+    mkdirSync(join(api, 'dist'));
+    writeFileSync(join(api, 'dist/bundle.js'), 'built\n');
+    writeFileSync(join(lib, 'lib.ts'), 'two\n');
+
+    for (const outside of [deep, hidden, installed]) writeFileSync(join(outside, 'changed.txt'), 'not listed\n');
+    mkdirSync(join(cwd, 'notes'));
+    writeFileSync(join(cwd, 'notes/todo.md'), 'no repository\n');
+
+    const { rt } = createTestRuntime();
+    rt.executionRouter = shellIn(cwd);
+    const view = await getExecutorDiff(rt, 'sandbox');
+
+    expect(view.error).toBeUndefined();
+    expect(view.repositories).toEqual(['api', 'api/vendor/lib', 'web']);
+    expect(view.files.map((file) => `${file.status} ${file.path}`)).toEqual([
+      'changed api/app.ts', 'added api/new.ts', 'changed api/vendor/lib/lib.ts', 'added web/index.html',
+    ]);
+
+    rt.executionRouter = shellIn(join(cwd, 'notes'));
+    expect(await getExecutorDiff(rt, 'sandbox')).toEqual({ files: [], mode: 'git', notGitRepo: true });
   });
 });

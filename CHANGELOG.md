@@ -716,6 +716,11 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   platform's own state stay out. So do hidden files and folders, any name starting with `.` (`.env`, `.bashrc`,
   `.config/`, `.git/`), and installed dependencies (`node_modules`, `venv`, `__pycache__`).
 
+- **Changes for a PC or the sandbox shows every repository in its folder.** It showed only the git repository that
+  held the working folder, so a folder of projects read "not a git repository". Now every repository up to three
+  folders below it is listed, nested ones included, each as a folder of the list with its uncommitted changes,
+  untracked files included and `.gitignore` honoured. Hidden folders and `node_modules` are not searched.
+
 - **Long conversations no longer slow down turn by turn.** Each turn re-read the conversation's whole membership
   list several times, so a turn's database reads grew with the conversation (14,432 rows at 300 turns). A turn now
   reads only what it adds.

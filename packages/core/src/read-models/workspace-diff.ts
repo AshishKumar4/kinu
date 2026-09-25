@@ -41,7 +41,11 @@ const PLANE_ROOT = '/';
 /** Under the plane root the change-set reviews every agent's home and the slates, and nothing else (owner, 2026-09-25). */
 const REVIEWED_UNDER_ROOT = ['home', SLATES_ROOT.slice(1)];
 
-const NOT_GIT_REPO = '__KINU_NOT_GIT_REPO__';
+/** How far below an executor's working directory the git view looks for repositories, as VS Code bounds its scan. */
+const REPOSITORY_SCAN_DEPTH = 3;
+
+/** Opens each line of the git view's framing: the directory's name, each repository's section, then the end. */
+const MARK = '\u0001';
 
 const HeadCommitSchema = v.pipe(v.string(), v.hexadecimal(), v.minLength(40), v.maxLength(64));
 
@@ -86,6 +90,8 @@ export interface ExecutorDiffResult {
   mode: 'git' | 'vfs-baseline';
   trackedSince?: number;
   baseline?: string;
+  /** The git view's repositories, as the folders their files are listed under. */
+  repositories?: string[];
   notGitRepo?: boolean;
   error?: string;
 }
@@ -395,8 +401,82 @@ export function restoreWorkspaceBaseline(rt: WorkspaceBaselineRuntime): { ok: tr
   return { ok: true, capturedAt: marker.mtime_ms };
 }
 
-/** Tracked, staged and untracked changes without writing the index: `git diff --no-index` avoids
- * `.git/index.lock` contention that `git add -N` would cause. */
+/**
+ * One exec that finds every repository within {@link REPOSITORY_SCAN_DEPTH} of the working directory, skipping hidden
+ * folders and node_modules, and prints each one's changes since HEAD: tracked, staged and untracked, .gitignore
+ * honoured. `git diff --no-index` reads untracked files without writing the index. A nested repository is listed by
+ * its parent as an untracked folder (`dir/`), which is skipped: it is its own section.
+ */
+function gitViewScript(): string {
+  const untracked = 'case "$2" in ""|*/) exit 0;; esac; git -C "$1" --no-pager diff --no-index --no-ext-diff --no-renames -- /dev/null "$2" || test "$?" -eq 1';
+
+  return [
+    `printf '\\001%s\\n' "$(basename "$(pwd -P)")"`,
+    `find . -maxdepth ${String(REPOSITORY_SCAN_DEPTH + 1)} \\( -name node_modules -o \\( -name '.?*' ! -name .git \\) \\) -prune -o -name .git -print -prune 2>/dev/null | LC_ALL=C sort | while IFS= read -r dotgit; do`,
+    '  repo=${dotgit%/.git}',
+    '  head=$(git -C "$repo" rev-parse --verify --quiet HEAD 2>/dev/null) || head=',
+    `  printf '\\001%s\\001%s\\n' "$repo" "$head"`,
+    '  if [ -n "$head" ]; then git -C "$repo" --no-pager diff --no-ext-diff --no-renames HEAD -- || exit $?; scope=--others; else scope=\'--cached --others\'; fi',
+    `  git -C "$repo" ls-files $scope --exclude-standard -z | xargs -0 -n 1 sh -c '${untracked}' sh "$repo" || exit $?`,
+    'done || exit $?',
+    `printf '\\001\\n'`,
+  ].join('\n');
+}
+
+interface GitView {
+  readonly files: FileDiff[];
+  readonly repositories: string[];
+  readonly heads: string[];
+}
+
+/**
+ * The script's output read back: each repository's files under its folder, the working directory's own name when it
+ * is itself a repository, so every repository is a folder of the list. What follows the end mark is stderr.
+ */
+function gitView(output: string): GitView {
+  const lines = output.split('\n');
+  const name = lines[0]?.startsWith(MARK) === true ? lines[0].slice(MARK.length) : '';
+  const sections: { repo: string; head: string; lines: string[] }[] = [];
+
+  for (const line of lines.slice(1)) {
+    if (line === MARK) break;
+
+    if (!line.startsWith(MARK)) {
+      sections.at(-1)?.lines.push(line);
+      continue;
+    }
+
+    const [repo = '.', head = ''] = line.slice(MARK.length).split(MARK);
+    sections.push({ repo, head, lines: [] });
+  }
+
+  const rooted = sections.some((section) => section.repo === '.');
+
+  const folderOf = (repo: string): string => {
+    const relative = repo === '.' ? '' : repo.replace(/^\.\//, '');
+
+    if (!rooted) return relative;
+
+    return relative === '' ? name : `${name}/${relative}`;
+  };
+
+  const view: GitView = { files: [], repositories: [], heads: [] };
+
+  for (const section of sections) {
+    if (section.head !== '' && !v.safeParse(HeadCommitSchema, section.head).success) {
+      throw new KinuError('io', `Unexpected git HEAD in ${section.repo}: ${section.head}`);
+    }
+
+    const folder = folderOf(section.repo);
+    view.repositories.push(folder);
+    view.heads.push(`${folder}@${section.head}`);
+
+    for (const file of parseGitDiff(section.lines.join('\n'))) view.files.push({ ...file, path: folder === '' ? file.path : `${folder}/${file.path}` });
+  }
+
+  return view;
+}
+
 async function getGitDiff(rt: AgentRuntime, executorId: string): Promise<ExecutorDiffResult> {
   const provider = rt.executionRouter?.getProvider(executorId);
 
@@ -405,46 +485,15 @@ async function getGitDiff(rt: AgentRuntime, executorId: string): Promise<Executo
 
   if (!execTool) return { files: [], mode: 'git', error: `Executor "${executorId}" has no exec tool` };
 
-  const execute = async (command: string): Promise<string> => {
-    const result = v.parse(CommandResultSchema, await execTool.execute(command));
+  try {
+    const result = v.parse(CommandResultSchema, await execTool.execute(gitViewScript()));
 
     if (!v.is(v.string(), result)) throw new KinuError(result.reason, result.error);
+    const view = gitView(result);
 
-    return result;
-  };
+    if (view.repositories.length === 0) return { files: [], mode: 'git', notGitRepo: true };
 
-  try {
-    // Keep the two git streams separate: a single pipeline would mix NUL-delimited paths into the diff.
-    const root = (await execute(`git rev-parse --show-toplevel 2>/dev/null || printf '${NOT_GIT_REPO}'`)).trim();
-
-    if (root === NOT_GIT_REPO) return { files: [], mode: 'git', notGitRepo: true };
-
-    const quotedRoot = `'${root.replace(/'/g, `'\\''`)}'`;
-    const head = (await execute(`git -C ${quotedRoot} rev-parse --verify --quiet HEAD || printf no`)).trim();
-    const hasHead = head !== 'no';
-
-    if (hasHead && !v.safeParse(HeadCommitSchema, head).success) {
-      return { files: [], mode: 'git', error: `Unexpected git HEAD probe output: ${head}` };
-    }
-
-    const tracked = hasHead
-      ? await execute(`git -C ${quotedRoot} --no-pager diff --no-ext-diff --no-renames HEAD --`)
-      : '';
-
-    const pathScope = hasHead ? '--others' : '--cached --others';
-    const untracked = await execute(`git -C ${quotedRoot} ls-files ${pathScope} --exclude-standard -z`);
-
-    const untrackedDiff = untracked === '(no output)'
-      ? ''
-      : await execute(`git -C ${quotedRoot} ls-files ${pathScope} --exclude-standard -z | ` +
-        `xargs -0 -n 1 sh -c '[ -z "$2" ] || git -C "$1" --no-pager diff --no-index --no-ext-diff --no-renames -- /dev/null "$2" || test "$?" -eq 1' sh ${quotedRoot}`);
-
-    const unified = [tracked === '(no output)' ? '' : tracked, untrackedDiff === '(no output)' ? '' : untrackedDiff]
-      .filter(Boolean).join('\n');
-
-    const files = parseGitDiff(unified);
-
-    return hasHead ? { files, mode: 'git', baseline: head } : { files, mode: 'git' };
+    return { files: view.files, mode: 'git', baseline: view.heads.join(' '), repositories: view.repositories };
   } catch (err) {
     return { files: [], mode: 'git', error: renderThrownChain({ cause: err }) };
   }
