@@ -2,8 +2,8 @@ import { AnnotationPanel } from "@plannotator/ui/components/AnnotationPanel";
 import { inNoteOrder, type ReviewAnnotation } from "@kinu.run/core";
 import { panelNote, placeLabel, useNotes } from "./notes";
 
-export default function NotesPanel({ open, onClose, onReveal }: {
-  open: boolean;
+export default function NotesPanel({ width, onClose, onReveal }: {
+  width: string;
   onClose: () => void;
   onReveal: (note: ReviewAnnotation) => void;
 }) {
@@ -20,8 +20,8 @@ export default function NotesPanel({ open, onClose, onReveal }: {
   };
 
   return (
-    <AnnotationPanel isOpen={open} annotations={inNoteOrder(notes.notes).map(panelNote)} selectedId={notes.selected}
-      width="19rem" onClose={onClose}
+    <AnnotationPanel isOpen annotations={inNoteOrder(notes.notes).map(panelNote)} selectedId={notes.selected}
+      width={width} onClose={onClose}
       onSelect={(id) => {
         const note = byId.get(id);
 

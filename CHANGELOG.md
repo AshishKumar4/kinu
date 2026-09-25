@@ -57,8 +57,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - The Worker's `/api` routes are served by one Hono app whose route order is the old dispatch order, gate for gate. An error no route catches is now answered as JSON with its class's status and a message naming only that class (the cause goes to the log), never cached, instead of the platform's error page; the run-event routes read the workspace whose ownership was just proven, even when the request spells its name with escapes.
 - **The Diffs tab is now Changes.** It lists the changed files as a tree with their counts; a file opens to a diff
   that keeps three lines around each change, folds the rest, marks the changed words and keeps the code's colours.
-  Expand shows every file split beside the tree (one column on a phone). A binary file or one over 2 MB says so
-  instead of "File exceeds 1000 lines", and a new binary file is listed. Mark reviewed can be undone for 10 seconds.
+  A pane wide enough shows every file at once beside the tree, in two columns where they fit; a narrower pane lists
+  the files and opens one at a time. A binary file or one over 2 MB says so instead of "File exceeds 1000 lines",
+  and a new binary file is listed. Mark reviewed can be undone for 10 seconds.
 - **Notes to the agent on its changes.** In the Changes tab, select words or press a line number (Shift-press
   another to extend), then Comment or Remove, with plan review's toolbar, popover, marks and list; a file and the
   whole set take a note too. Unsent notes are kept in the workspace, so a reload or another device finds them, and

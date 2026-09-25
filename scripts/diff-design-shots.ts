@@ -1,8 +1,9 @@
 /**
  * Photograph every state of the Changes-tab design at desktop and phone widths in both themes, into
  * ~/kinu-logs/diff-design/. The states are the ones the frame's review bar lists, read from the page, so the shots
- * cannot drift from what the owner can click. A panel shot is as tall as its content; the expanded sheet is a desktop
- * view, photographed at the window's own size, as it is seen.
+ * cannot drift from what the owner can click. A narrow pane's shot is as tall as its content; a wide pane scrolls
+ * inside its stack, so it is photographed at the window's own size, as it is seen. The widest panes need a 1920-pixel
+ * window, the `wide` one, to leave the chat its share.
  *
  *   bun scripts/diff-design-shots.ts                         # through the gallery harness (a frozen build)
  *   bun scripts/diff-design-shots.ts --dev http://127.0.0.1:5272 --only changes,file --vp desktop --theme dark
@@ -16,6 +17,7 @@ const OUT = join(import.meta.dir, '..', '..', 'kinu-logs', 'diff-design');
 
 const VIEWPORTS = [
   { name: 'desktop', width: 1280, height: 860 },
+  { name: 'wide', width: 1920, height: 1080 },
   { name: 'mobile', width: 390, height: 844 },
 ] as const;
 
@@ -24,7 +26,7 @@ const THEMES = ['dark', 'light'] as const;
 interface DesignView {
   readonly id: string;
   readonly query: string;
-  /** "desktop" or "mobile" when only one width shows the state, else "both". */
+  /** "desktop", "wide" or "mobile" when only one window shows the state; "both" for the desktop and the phone. */
   readonly width: string;
 }
 
@@ -60,7 +62,7 @@ async function designViews(page: Page, origin: string): Promise<DesignView[]> {
   return views;
 }
 
-/** The deepest overflow on the page: the panel scrolls inside its column, the sheet inside its stack. */
+/** The deepest overflow on the page: the panel scrolls inside its column, a wide pane inside its stack. */
 async function overflow(page: Page): Promise<number> {
   return page.evaluate(() => {
     let most = 0;
@@ -89,8 +91,8 @@ async function shootOne(page: Page, origin: string, shot: Shot): Promise<string>
   await page.goto(`${origin}/gallery.html?frame=diff-design${view.query}&theme=${theme}&review=0`, { waitUntil: 'networkidle0' });
   await page.waitForSelector('main');
   await settled(page);
-  // The sheet covers the window, so it is photographed as seen; the panel grows to its content.
-  const extra = view.query.includes('sheet=1') ? 0 : await overflow(page);
+  // A wide pane is photographed as seen; a narrow one grows to its content.
+  const extra = view.query.includes('inspector=') ? 0 : await overflow(page);
 
   if (extra > 0) {
     await page.setViewport({ ...size, height: size.height + extra });
@@ -116,7 +118,7 @@ async function shoot(newPage: () => Promise<Page>, origin: string): Promise<stri
   const views = await designViews(listing, origin).finally(() => listing.close());
 
   const shots: Shot[] = views.filter((view) => kept('only', view.id)).flatMap((view) => VIEWPORTS
-    .filter((viewport) => kept('vp', viewport.name) && (view.width === 'both' || view.width === viewport.name))
+    .filter((viewport) => kept('vp', viewport.name) && (view.width === viewport.name || (view.width === 'both' && viewport.name !== 'wide')))
     .flatMap((viewport) => THEMES.filter((theme) => kept('theme', theme)).map((theme) => ({ view, viewport, theme }))));
 
   const written: string[] = [];
