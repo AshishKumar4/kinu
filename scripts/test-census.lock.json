@@ -1,5 +1,5 @@
 {
-  "measured": "5844ee98e3: 1202 test files, 1043 runnable suites, 13173 tests, 43 runners, 1437 non-public product members, 8550 product function bodies",
+  "measured": "d4f75a04c6: 1208 test files, 1047 runnable suites, 13154 tests, 43 runners, 1443 non-public product members, 8612 product function bodies",
   "entries": [
     {
       "key": "tautology_suspect :: packages/cf-backend/tests/unit-copy-label.test.ts :: only a resolved write reads as copied :: expected side computed by the code under test",
@@ -430,36 +430,6 @@
             [
               "    renderRuntimeContext(opts),\n  ].filter(Boolean).join",
               "    renderRuntimeContext(opts),\n    String(performance.now()),\n  ].filter(Boolean).join"
-            ]
-          ]
-        }
-      ]
-    },
-    {
-      "key": "tautology_suspect :: scripts/bench-r2-workspace.test.ts :: the plan is a pure function of the run id :: expected side computed by the code under test",
-      "count": 2,
-      "plants": [
-        {
-          "defect": "a clock read in the bench plan",
-          "file": "scripts/fixtures/r2-bench/layouts.ts",
-          "edits": [
-            [
-              "root: `${NATIVE_ROOT}/bench-${runId}`,",
-              "root: `${NATIVE_ROOT}/bench-${runId}-${performance.now()}`,"
-            ]
-          ]
-        },
-        {
-          "defect": "the plan ignoring its run id",
-          "file": "scripts/fixtures/r2-bench/layouts.ts",
-          "edits": [
-            [
-              "  const prefix = mountPrefixFor(runId);\n",
-              "  const prefix = mountPrefixFor('run');\n"
-            ],
-            [
-              "root: `${NATIVE_ROOT}/bench-${runId}`,",
-              "root: `${NATIVE_ROOT}/bench`,"
             ]
           ]
         }
