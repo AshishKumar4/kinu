@@ -46,7 +46,7 @@ interface Slide { readonly live: readonly UIMessage[]; readonly slid: readonly U
 function slideWindow(prev: Slide, next: readonly UIMessage[]): Slide {
   const first = next[0]?.id;
 
-  if (first === undefined) return { live: next, slid: NO_MESSAGES, gaps: prev.gaps };
+  if (first === undefined) return { live: next, slid: NO_MESSAGES, gaps: prev.live.length > 0 ? prev.gaps + 1 : prev.gaps };
   const at = prev.live.findIndex((message) => message.id === first);
 
   if (at > 0) return { live: next, slid: [...prev.slid, ...prev.live.slice(0, at)], gaps: prev.gaps };
