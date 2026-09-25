@@ -25,16 +25,17 @@
  * definition that created it, so every later definition is one no reader gets.
  * A view is locked as its whole normalized definition, and any change is drift.
  *
- * WHAT IT MEASURES and WHAT IT GOVERNS are the same set, and that is checked
- * rather than claimed: every `CREATE TABLE IF NOT EXISTS` and `CREATE VIEW IF
- * NOT EXISTS` in the product corpus `scripts/sources.ts` enumerates. A DDL this
- * cannot parse FAILS the gate. The previous regex required the closing paren on
- * its own line and read the table name as `\w+`, so it measured 114 of 126
- * statements while reporting on all of them: four real tables whose column list
- * arrives through a `${DDL}` template constant were invisible (`turn_outcomes`,
- * `lessons`, `imported_experience`, `experience_library`), and three prose
- * sentences about this very mechanism were counted as tables named `is`, `will`
- * and `quietly`.
+ * WHAT IT MEASURES and WHAT IT GOVERNS are the same set: every persistent
+ * `CREATE TABLE` and `CREATE VIEW` a string expression in the product corpus
+ * (`scripts/sources.ts`) spells, the consts it names followed, parsed as SQLite
+ * by `sql-parser-cst` (`scripts/sql-text.ts`). A string that opens as one and
+ * does not parse FAILS the gate. Two regex readers came before. The first
+ * measured 114 of 126 statements, missed four tables built from a `${DDL}`
+ * constant and counted three prose sentences as tables `is`, `will` and
+ * `quietly`. The second, until 2026-09-25, missed lower case, quoted names, a
+ * comment between keywords, a name held in a const (`kinu_agent_identity`,
+ * `kinu_workspace_generation`, `agent_data_tables`), and cut a body at a `--`
+ * inside a string.
  *
  * `--lock` writes an entry for a table that has none and REFUSES to change one
  * that has: a genesis is a fact about deployed storage, and a gate whose
@@ -54,20 +55,16 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
+import type { CreateTableStmt, CreateViewStmt, Node as SqlNode } from 'sql-parser-cst';
 import { isProductSource, readMatching } from './sources';
+import {
+  commentRanges, constInitializer, entityName, type Expand, holesAsNames, leadingKeywords, sqlProgram, sqlStrings, UNWRAPPED, writtenText,
+} from './sql-text';
+import { literalString, type SyntaxNode } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
 
 const GENESIS_LOCK = `${root}scripts/schema-genesis.lock.json`;
-
-/** The name and the opening of a table body: `(` for an inline column list,
- *  `${IDENT}` for the four DDLs whose body is a template constant. A prose
- *  mention of this statement has neither, which is what keeps `… IF NOT EXISTS
- *  is a no-op …` out of the table census. */
-const DDL_RE = /CREATE TABLE IF NOT EXISTS\s+([a-z_][a-z0-9_]*)\s*(?:\(|\$\{\s*([A-Za-z_$][\w$]*)\s*\})/g;
-
-/** A view's name, up to the `AS` its definition follows. */
-const VIEW_RE = /CREATE VIEW IF NOT EXISTS\s+([a-z_][a-z0-9_]*)\s+AS\s/g;
 
 /** A body part opening a table CONSTRAINT rather than naming a column. */
 const CONSTRAINT_KEYWORD = {
@@ -138,299 +135,196 @@ export function lockKey(table: string, file: string): string {
   return `${table}@${file}`;
 }
 
-/** The text between `openIndex`'s paren and its match, so a nested `CHECK (…)`
- *  or `DEFAULT (unixepoch() * 1000)` cannot end the body early. */
-function balancedBody(source: string, openIndex: number): string {
-  let depth = 0;
+/** A column block a template GENERATES: `Object.entries(OBJ)` or
+ *  `Object.keys(OBJ)` at the root of a call chain (`.map(…).join(…)`), reached
+ *  directly or through any number of consts. Its columns are OBJ's own keys;
+ *  undefined for any other interpolation. */
+function generatedKeys(expression: SyntaxNode): string[] | undefined {
+  const seen = new Set<SyntaxNode>();
+  let node: SyntaxNode | undefined = expression;
 
-  for (let i = openIndex; i < source.length; i += 1) {
-    const ch = source[i];
+  while (node !== undefined && !seen.has(node)) {
+    seen.add(node);
+    const { raw } = node;
 
-    if (ch === '(') depth += 1;
-    else if (ch === ')') {
-      depth -= 1;
-
-      if (depth === 0) return source.slice(openIndex + 1, i);
-    }
-  }
-
-  throw new Error('schema-drift: a CREATE TABLE body has no closing paren');
-}
-
-/** The template constant a `CREATE TABLE IF NOT EXISTS t ${DDL}` interpolates.
- *  Resolved textually and fail-closed: an unresolvable body is a parse failure,
- *  never a table quietly left out of the census. */
-function interpolatedBody(source: string, file: string, table: string, name: string): string {
-  const declaration = new RegExp(`(?:const|let|var)\\s+${name}\\s*(?::[^=]+)?=\\s*\`\\s*\\(`).exec(source);
-
-  if (declaration === null) {
-    throw new Error(
-      `schema-drift: ${file} builds ${table} from \${${name}}, which is not a local template beginning with '('`,
-    );
-  }
-
-  return balancedBody(source, source.indexOf('(', declaration.index));
-}
-
-/** The keys of an object literal declared in this file, in declaration order.
- *  A column block generated from an object IS that object's key set, so reading
- *  it is the only way to see those columns at all. */
-function objectLiteralKeys(source: string, file: string, table: string, name: string): string[] {
-  const declaration = new RegExp(`(?:const|let|var)\\s+${name}\\s*(?::[^=]+)?=\\s*\\{`).exec(source);
-
-  if (declaration === null) {
-    throw new Error(`schema-drift: ${file}: ${table} builds columns from ${name}, which is not a local object`);
-  }
-
-  const open = source.indexOf('{', declaration.index);
-  let depth = 0;
-  let end = source.length;
-
-  for (let i = open; i < source.length; i += 1) {
-    if (source[i] === '{') depth += 1;
-    else if (source[i] === '}') {
-      depth -= 1;
-
-      if (depth === 0) { end = i; break; }
-    }
-  }
-
-  // Keys at the object's own nesting level, so a one-line object reads the same
-  // as a formatted one and a nested value's keys are never counted as columns.
-  const keys: string[] = [];
-  let level = 0;
-
-  for (const part of source.slice(open + 1, end).split(',')) {
-    if (level === 0) {
-      const key = /^\s*([a-z_][a-z0-9_]*)\s*:/.exec(part)?.[1];
-
-      if (key !== undefined) keys.push(key);
-    }
-
-    for (const ch of part) {
-      if (ch === '{' || ch === '(' || ch === '[') level += 1;
-
-      if (ch === '}' || ch === ')' || ch === ']') level -= 1;
-    }
-  }
-
-  if (keys.length === 0) {
-    throw new Error(`schema-drift: ${file}: ${table} builds columns from ${name}, which has no keys`);
-  }
-
-  return keys;
-}
-
-/** The declaration statement of `name`, so an indirection through a constant
- *  can be followed one step: `const IDENTITY_COLUMN_DDL = Object.entries(…)`. */
-function declarationStatement(source: string, name: string): string | null {
-  const declaration = new RegExp(`(?:const|let|var)\\s+${name}\\s*(?::[^=]+)?=`).exec(source);
-
-  if (declaration === null) return null;
-  let depth = 0;
-  let quote = '';
-
-  for (let i = declaration.index; i < source.length; i += 1) {
-    const ch = source[i] ?? '';
-
-    if (quote !== '') {
-      if (ch === quote && source[i - 1] !== '\\') quote = '';
+    if (raw.type === 'Identifier') {
+      node = constInitializer(node, raw.name);
       continue;
     }
 
-    if (ch === '\'' || ch === '"' || ch === '`') { quote = ch; continue; }
+    if (raw.type !== 'CallExpression' || raw.callee.type !== 'MemberExpression') return undefined;
+    const { callee } = raw;
+    const method = callee.property.type === 'Identifier' ? callee.property.name : undefined;
 
-    if (ch === '(' || ch === '{' || ch === '[') depth += 1;
+    if (callee.object.type === 'Identifier' && callee.object.name === 'Object' && (method === 'entries' || method === 'keys')) {
+      const argument = node.children.find((child) => child.raw === raw.arguments[0]);
 
-    if (ch === ')' || ch === '}' || ch === ']') depth -= 1;
-
-    if (ch === ';' && depth === 0) return source.slice(declaration.index, i);
-  }
-
-  return source.slice(declaration.index);
-}
-
-/** A column block a template builds rather than spells: either
- *  `${Object.entries(OBJ).map(…)}` inline, or `${CONST}` where CONST is that
- *  expression. Fail-closed — an interpolation neither shape covers is a parse
- *  failure, never a table quietly left out of the census. */
-function generatedColumns(source: string, file: string, table: string, part: string): string[] {
-  const inline = /\$\{\s*Object\.(?:entries|keys)\(\s*([A-Za-z_$][\w$]*)\s*\)/.exec(part)?.[1];
-
-  if (inline !== undefined) return objectLiteralKeys(source, file, table, inline);
-
-  const constant = /^\$\{\s*([A-Za-z_$][\w$]*)\s*\}$/.exec(part)?.[1];
-  const statement = constant === undefined ? null : declarationStatement(source, constant);
-
-  const indirect = statement === null
-    ? undefined
-    : /Object\.(?:entries|keys)\(\s*([A-Za-z_$][\w$]*)\s*\)/.exec(statement)?.[1];
-
-  if (indirect !== undefined) return objectLiteralKeys(source, file, table, indirect);
-
-  throw new Error(
-    `schema-drift: ${file}: ${table} has a body part this cannot read: ${part.slice(0, 60)}`,
-  );
-}
-
-/** The index of the `}` that closes the `${` at `start`. Nested interpolations
- *  inside a template argument balance out, so plain brace counting is enough. */
-function closingBrace(body: string, start: number): number {
-  let depth = 0;
-
-  for (let i = start; i < body.length; i += 1) {
-    if (body[i] === '{') depth += 1;
-    else if (body[i] === '}') {
-      depth -= 1;
-
-      if (depth === 0) return i;
+      return argument === undefined ? undefined : objectKeys(argument);
     }
+
+    node = node.children.find((child) => child.raw === callee)?.children.find((child) => child.raw === callee.object);
   }
 
-  throw new Error('schema-drift: an interpolated DDL body has no closing brace');
+  return undefined;
+}
+
+/** The own keys of the object literal `node` is, or names through consts;
+ *  undefined for a spread, a computed key or anything but an object, which
+ *  leaves the interpolation a parameter and the DDL unparseable. */
+function objectKeys(node: SyntaxNode): string[] | undefined {
+  const { raw } = node;
+  const [inner] = node.children;
+
+  if (raw.type === 'Identifier') {
+    const init = constInitializer(node, raw.name);
+
+    return init === undefined ? undefined : objectKeys(init);
+  }
+
+  if (Object.hasOwn(UNWRAPPED, raw.type)) return inner === undefined ? undefined : objectKeys(inner);
+
+  if (raw.type !== 'ObjectExpression') return undefined;
+
+  const keys = raw.properties.map((property) => {
+    if (property.type !== 'Property' || property.computed) return undefined;
+
+    return property.key.type === 'Identifier' ? property.key.name : literalString(property.key);
+  });
+
+  return keys.length === 0 || keys.includes(undefined) ? undefined : keys.filter((key) => key !== undefined);
+}
+
+/** A generated block spliced as `key TEXT` columns, with the separators its
+ *  neighbours in the template do not already supply. */
+const columnBlock: Expand = (expression, { before, after }) => {
+  const keys = generatedKeys(expression);
+
+  if (keys === undefined) return undefined;
+  const last = before.trimEnd().at(-1);
+  const next = after.trimStart()[0];
+  const lead = last === undefined || last === ',' || last === '(' ? '' : ', ';
+  const trail = next === undefined || next === ',' || next === ')' ? '' : ', ';
+
+  return `${lead}${keys.map((key) => `${key} TEXT`).join(', ')}${trail}`;
+};
+
+/** Whether text SQLite's grammar refused was meant as a table or view this censuses. */
+function spellsDdl(text: string): boolean {
+  const [first, second] = leadingKeywords(text, 2);
+
+  return first === 'CREATE' && (second === 'TABLE' || second === 'VIEW');
+}
+
+/** A persistent table: not TEMP (gone with the connection), not VIRTUAL (a
+ *  module's arguments, not columns), not in the `temp` schema. */
+function persists(statement: CreateTableStmt | CreateViewStmt): boolean {
+  const kinds = statement.type === 'create_table_stmt' ? [statement.kind] : statement.kinds;
+  const schema = statement.name.type === 'member_expr' ? entityName(statement.name.object) : undefined;
+
+  return kinds.every((kind) => kind === undefined) && schema !== 'temp';
+}
+
+function rangeOf(file: string, line: number, node: SqlNode): [number, number] {
+  if (node.range === undefined) throw new Error(`schema-drift: ${file}:${String(line)}: the SQL parser gave no range`);
+
+  return node.range;
+}
+
+export interface Declared {
+  readonly tables: readonly TableDdl[];
+  readonly views: readonly TableDdl[];
+  /** CREATE TABLE statements whose name is a runtime value: a table the product makes on request, not one it ships. */
+  readonly runtimeNamed: number;
 }
 
 /**
- * The body with every TOP-LEVEL interpolation replaced by the columns it
- * generates, so the comma split below reads generated and spelled columns
- * alike. Only top level: an interpolation INSIDE a column definition —
- * `CHECK (outcome IN (${TURN_OUTCOMES.map(…)}))` — is part of that column, not a
- * column list, and resolving it would fail on a DDL that is perfectly readable.
+ * Every table and view one file declares, each read as the statement SQLite
+ * would run: every string expression the file spells, with its constants
+ * followed, parsed as SQLite. Fail-closed: a string that begins as a CREATE
+ * TABLE or VIEW and does not parse fails the gate, and so does a view whose
+ * definition interpolates a value.
  */
-function expandColumnBlocks(body: string, source: string, file: string, table: string): string {
-  let out = '';
-  let depth = 0;
-  let i = 0;
+export function ddlIn(file: string, source: string): Declared {
+  const tables = new Map<string, string[]>();
+  const views = new Map<string, string[]>();
+  let runtimeNamed = 0;
 
-  while (i < body.length) {
-    const ch = body[i] ?? '';
+  const union = (into: Map<string, string[]>, name: string, parts: readonly string[]) => {
+    const known = into.get(name) ?? [];
 
-    if (ch === '$' && body[i + 1] === '{') {
-      const end = closingBrace(body, i + 1);
-      const part = body.slice(i, end + 1);
-      // A generated block already carries its own separators; the extra comma
-      // only guarantees one, and an empty part is skipped below.
-      out += depth === 0
-        ? `${generatedColumns(source, file, table, part).map((column) => `${column} TEXT`).join(',')},`
-        : part;
-      i = end + 1;
+    for (const part of parts) if (!known.includes(part)) known.push(part);
+    into.set(name, known);
+  };
+
+  for (const sql of sqlStrings(file, source, columnBlock)) {
+    // Only a string that spells CREATE can hold a CREATE statement.
+    if (!sql.text.toUpperCase().includes('CREATE')) continue;
+    const asParameters = sqlProgram(sql.text);
+    const program = asParameters ?? sqlProgram(holesAsNames(sql));
+
+    if (program === undefined) {
+      if (spellsDdl(sql.text)) {
+        throw new Error(`schema-drift: ${file}:${String(sql.line)} spells a CREATE this cannot parse as SQLite: `
+          + `${sql.text.trim().slice(0, 80)}`);
+      }
+
       continue;
     }
 
-    if (ch === '(') depth += 1;
+    const comments = commentRanges(program);
+    const written = (node: SqlNode) => normalizedPart(writtenText(sql, rangeOf(file, sql.line, node), comments));
 
-    if (ch === ')') depth -= 1;
-    out += ch;
-    i += 1;
-  }
+    for (const statement of program.statements) {
+      if ((statement.type !== 'create_table_stmt' && statement.type !== 'create_view_stmt') || !persists(statement)) continue;
+      const name = entityName(statement.name);
 
-  return out;
-}
+      const holed = (node: SqlNode) => {
+        const [from, to] = rangeOf(file, sql.line, node);
 
-function parseParts(body: string, source: string, file: string, table: string): string[] {
-  // Line comments first: their prose carries commas, and a comma is the part
-  // separator below.
-  const text = expandColumnBlocks(body.replace(/--[^\n]*/g, ''), source, file, table);
-  const parts: string[] = [];
-  let depth = 0;
-  let current = '';
+        return sql.holes.some(({ at }) => at >= from && at < to);
+      };
 
-  for (const ch of text) {
-    if (ch === '(') depth += 1;
+      if (name === undefined) throw new Error(`schema-drift: ${file}:${String(sql.line)}: a CREATE names no table`);
 
-    if (ch === ')') depth -= 1;
+      if (holed(statement.name)) {
+        runtimeNamed += 1;
+        continue;
+      }
 
-    if (ch === ',' && depth === 0) {
-      parts.push(current);
-      current = '';
-      continue;
+      if (asParameters === undefined && holed(statement)) {
+        throw new Error(`schema-drift: ${file}:${String(sql.line)}: ${name} has a body part this cannot read`);
+      }
+
+      if (statement.type === 'create_view_stmt') {
+        const definition = statement.clauses.find((clause) => clause.type === 'as_clause');
+
+        if (definition === undefined || holed(definition.expr)) {
+          throw new Error(`schema-drift: ${file}: view ${name} has a definition this cannot read`);
+        }
+
+        union(views, name, [written(definition.expr)]);
+        continue;
+      }
+
+      const items = statement.columns?.expr.items;
+
+      if (items === undefined) throw new Error(`schema-drift: ${file}: ${name} has no column list this can read`);
+      const parts = items.map(written);
+
+      if (columnsOf(parts).length === 0) throw new Error(`schema-drift: ${file}: ${name} parsed no columns`);
+      union(tables, name, parts);
     }
-
-    current += ch;
   }
 
-  parts.push(current);
+  const listed = (declared: Map<string, string[]>) => [...declared].map(([table, parts]) => ({ table, file, parts }));
 
-  const normalized: string[] = [];
-
-  for (const part of parts) {
-    const trimmed = part.trim();
-
-    if (trimmed === '') continue;
-
-    if (!/^[A-Za-z_]/u.test(trimmed)) {
-      throw new Error(
-        `schema-drift: ${file}: ${table} has a body part this cannot read: ${trimmed.slice(0, 60)}`,
-      );
-    }
-
-    normalized.push(normalizedPart(trimmed));
-  }
-
-  if (columnsOf(normalized).length === 0) throw new Error(`schema-drift: ${file}: ${table} parsed no columns`);
-
-  return normalized;
-}
-
-export function parseTables(file: string, source: string): TableDdl[] {
-  const byTable = new Map<string, string[]>();
-
-  for (const match of source.matchAll(DDL_RE)) {
-    const table = match[1];
-
-    if (table === undefined) continue;
-    const constant = match[2];
-
-    const body = constant === undefined
-      ? balancedBody(source, source.indexOf('(', match.index + match[0].length - 1))
-      : interpolatedBody(source, file, table, constant);
-
-    const parts = byTable.get(table) ?? [];
-
-    for (const part of parseParts(body, source, file, table)) {
-      if (!parts.includes(part)) parts.push(part);
-    }
-
-    byTable.set(table, parts);
-  }
-
-  return [...byTable].map(([table, parts]) => ({ table, file, parts }));
+  return { tables: listed(tables), views: listed(views), runtimeNamed };
 }
 
 export function tablesIn(sources: ReadonlyMap<string, string>): TableDdl[] {
-  return [...sources].flatMap(([file, source]) => parseTables(file, source));
+  return [...sources].flatMap(([file, source]) => ddlIn(file, source).tables);
 }
 
-/**
- * Every view one file declares, its definition read from `AS` to the end of the
- * template literal the statement opens. Fail-closed: a definition this cannot
- * read as text — outside a template, or interpolated — is a parse failure,
- * never a view quietly left out of the census.
- */
-export function parseViews(file: string, source: string): TableDdl[] {
-  const byView = new Map<string, string[]>();
-
-  for (const match of source.matchAll(VIEW_RE)) {
-    const view = match[1];
-
-    if (view === undefined) continue;
-    const start = match.index + match[0].length;
-    const end = source.slice(0, match.index).trimEnd().endsWith('`') ? source.indexOf('`', start) : -1;
-    const definition = end === -1 ? '' : source.slice(start, end).replace(/--[^\n]*/g, '').trim();
-
-    if (definition === '' || definition.includes('${')) {
-      throw new Error(`schema-drift: ${file}: view ${view} has a definition this cannot read`);
-    }
-
-    const parts = byView.get(view) ?? [];
-    const part = normalizedPart(definition);
-
-    if (!parts.includes(part)) parts.push(part);
-    byView.set(view, parts);
-  }
-
-  return [...byView].map(([table, parts]) => ({ table, file, parts }));
-}
 
 const GenesisLockSchema = v.record(v.string(), v.array(v.string()));
 
@@ -604,8 +498,9 @@ export interface Survey {
   /** Files ENUMERATED. Every product source, so the corpus is the same set the
    *  other gates hold. */
   readonly files: number;
-  /** Files PARSED: those carrying a statement this gate reads. */
-  readonly parsed: number;
+  /** Files that declare at least one table or view. */
+  readonly declaring: number;
+  readonly runtimeNamed: number;
   readonly tables: readonly TableDdl[];
   readonly views: readonly TableDdl[];
   readonly lock: GenesisLock;
@@ -613,12 +508,6 @@ export interface Survey {
   /** Locked tables and views no longer in the corpus. Retained on purpose — see header. */
   readonly retired: readonly string[];
 }
-
-/** The two statements the gate reads. A product file without either declares
- *  no table or view, so parsing it is work with no possible verdict. The
- *  ENUMERATION stays whole — this narrows only what is handed to the parser, and
- *  both counts are printed, so the corpus cannot shrink behind the number. */
-const READABLE_TOKEN = /CREATE (?:TABLE|VIEW) IF NOT EXISTS/;
 
 export function survey(lock: GenesisLock = readGenesisLock()): Survey {
   // Working tree, not HEAD: the gate must fail on the change being made, not on
@@ -629,14 +518,15 @@ export function survey(lock: GenesisLock = readGenesisLock()): Survey {
   // sitting directly in a `src/` was invisible. `actor-agent.ts` among them: the
   // largest DDL surface in the repo, in a gate reporting drift-free over it.
   const sources = readMatching(isProductSource);
-  const readable = new Map([...sources].filter(([, source]) => READABLE_TOKEN.test(source)));
-  const tables = tablesIn(readable);
-  const views = [...readable].flatMap(([file, source]) => parseViews(file, source));
+  const declared = [...sources].map(([file, source]) => ddlIn(file, source));
+  const tables = declared.flatMap((file) => file.tables);
+  const views = declared.flatMap((file) => file.views);
   const present = new Set([...tables, ...views].map(({ table, file }) => lockKey(table, file)));
 
   return {
     files: sources.size,
-    parsed: readable.size,
+    declaring: declared.filter((file) => file.tables.length + file.views.length > 0).length,
+    runtimeNamed: declared.reduce((sum, file) => sum + file.runtimeNamed, 0),
     tables,
     views,
     lock,
@@ -649,12 +539,17 @@ export function survey(lock: GenesisLock = readGenesisLock()): Survey {
  *  visible only in red output is invisible exactly when the tree is green. */
 export function blindSpots(state: Survey): string[] {
   return [
-    'reads DDL text, never a database: nothing here runs a statement or opens storage',
+    'reads DDL as SQLite\'s grammar, never a database: nothing here runs a statement or opens storage',
     'column ORDER is not compared, and a formatting-only edit to a definition reads as a change',
     'a column block a template GENERATES is compared by column name only; its types come from '
       + 'an object this reads the keys of',
-    'an interpolation inside a definition (a CHECK list built from a constant) is compared as its '
-      + 'source text, so a change to the value it names is invisible',
+    'an interpolation inside a definition (a CHECK list built from a function call) is compared as its '
+      + 'source text, so a change to the value it names is invisible; a const string it names is followed',
+    `${String(state.runtimeNamed)} CREATE TABLE statement(s) take their name at runtime (tables made on request) `
+      + 'and are not censused',
+    'a CREATE past the first statement of a string that does not parse as SQLite, a TEMP table and a '
+      + 'VIRTUAL table are not censused; SQL built outside a string expression (a runtime join of '
+      + 'parameters, a string from another module) is read as a parameter or not at all',
     `${String(state.retired.length)} locked table(s) and view(s) are no longer in the corpus and stay locked, `
       + 'never re-locked: storage created under that DDL may still exist',
     'a table created outside the product corpus — a test fixture, a statement typed into a shell — '
@@ -681,7 +576,7 @@ if (import.meta.main) {
   // only on the checking path, for the same reason.
   const corpus: readonly (readonly [string, number])[] = [
     ['product files enumerated', state.files],
-    ['of them parsed', state.parsed],
+    ['of them declaring a table or view', state.declaring],
     ['tables', state.tables.length],
     ['views', state.views.length],
   ];

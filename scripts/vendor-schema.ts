@@ -26,13 +26,16 @@
  * Statements come from the syntax tree, not from the text: a backtick-fenced
  * `DELETE FROM …` in a doc comment is prose, not a read.
  */
-import { Database } from 'bun:sqlite';
+import { Database, SQLiteError } from 'bun:sqlite';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import * as v from 'valibot';
 import { assertMeasured } from './gate-ratchet';
 import { columnsOf, tablesIn } from './schema-drift';
 import { isParseable, isTestFile, readMatching } from './sources';
-import { parse, walk } from './syntax';
+import {
+  entityName, holesAsNames, leadingKeywords, type Names, namesIn, sqlProgram, type SqlStatement, sqlStrings,
+} from './sql-text';
 
 const VENDORS = ['agents', '@cloudflare/containers'] as const;
 
@@ -58,66 +61,105 @@ function* jsFiles(dir: string): Generator<string> {
   }
 }
 
-function balanced(source: string, open: number): string {
-  let depth = 0;
+/** The tables and views one string leaves in an empty database, each with the
+ *  statement SQLite stored for it; undefined when SQLite refuses the string. The
+ *  string is RUN rather than parsed because a virtual table's module arguments
+ *  (`fts5(… UNINDEXED, tokenize=…)`) belong to no grammar but the module's. */
+function createdBy(text: string): { readonly name: string; readonly ddl: string }[] | undefined {
+  const db = new Database(':memory:');
 
-  for (let i = open; i < source.length; i += 1) {
-    if (source[i] === '(') depth += 1;
-    else if (source[i] === ')' && (depth -= 1) === 0) return source.slice(open, i + 1);
+  try {
+    db.run(text);
+
+    return v.parse(v.array(v.object({ name: v.string(), ddl: v.string() })), db.query(
+      `SELECT l.name AS name, m.sql AS ddl FROM pragma_table_list AS l JOIN sqlite_master AS m ON m.name = l.name
+        WHERE l.schema = 'main' AND l.type IN ('table', 'virtual') AND substr(l.name, 1, 7) <> 'sqlite_'`,
+    ).all());
+  } catch (error) {
+    // SQLite refusing the string is the answer: it is not DDL this database can run.
+    if (error instanceof SQLiteError) return undefined;
+    throw error;
+  } finally {
+    db.close();
   }
-
-  throw new Error('vendor-schema: an unterminated CREATE TABLE body');
 }
 
-/** Every table the installed vendors create, keyed by name. A name two vendors
- *  both create with different bodies is a finding, not a silent pick. */
-export function vendorTables(nodeModules = 'node_modules'): Map<string, VendorTable> {
+export interface Vendors {
+  readonly tables: Map<string, VendorTable>;
+  /** Vendor strings that begin as a CREATE TABLE and that SQLite refused: a hole it could not fold, or a broken DDL. */
+  readonly refused: number;
+}
+
+/** Every table the installed vendors create, keyed by name: each string
+ *  expression in the vendor's dist that spells CREATE, its constants folded off
+ *  the syntax tree, run in its own empty database. A name two vendors both
+ *  create with different bodies is a finding, not a silent pick. */
+export function vendorTables(nodeModules = 'node_modules'): Vendors {
   const tables = new Map<string, VendorTable>();
-  const head = /CREATE\s+(?:VIRTUAL\s+)?TABLE\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)\s*(?:USING\s+\w+\s*)?\(/gi;
+  let refused = 0;
 
-  for (const vendor of VENDORS) {
-    for (const file of jsFiles(join(nodeModules, vendor, 'dist'))) {
-      const source = readFileSync(file, 'utf8');
+  const strings = VENDORS.flatMap((vendor) => [...jsFiles(join(nodeModules, vendor, 'dist'))]
+    .flatMap((file) => sqlStrings(file, readFileSync(file, 'utf8')).map(({ text }) => ({ vendor, text }))));
 
-      for (const match of source.matchAll(head)) {
-        const table = match[1]?.toLowerCase();
+  // Only a string that spells CREATE can create a table.
+  for (const { vendor, text } of strings.filter((string) => string.text.toUpperCase().includes('CREATE'))) {
+    const created = createdBy(text);
 
-        if (table === undefined) continue;
-        const body = balanced(source, match.index + match[0].length - 1).replace(/\\n/g, ' ');
-        const ddl = `${match[0].slice(0, -1)}${body}`;
-        const known = tables.get(table);
+    if (created === undefined) {
+      const [first, ...rest] = leadingKeywords(text, 3);
 
-        if (known !== undefined && known.ddl.replace(/\s+/g, ' ') !== ddl.replace(/\s+/g, ' ')) {
-          throw new Error(`vendor-schema: ${table} is created by both ${known.vendor} and ${vendor} with different bodies`);
-        }
+      if (first === 'CREATE' && rest.includes('TABLE')) refused += 1;
+      continue;
+    }
 
-        tables.set(table, { table, vendor, ddl });
+    for (const { name, ddl } of created) {
+      const table = name.toLowerCase();
+      const known = tables.get(table);
+
+      if (known !== undefined && known.ddl !== ddl) {
+        throw new Error(`vendor-schema: ${table} is created by both ${known.vendor} and ${vendor} with different bodies`);
       }
+
+      tables.set(table, { table, vendor, ddl });
     }
   }
 
-  return tables;
+  return { tables, refused };
 }
 
-/** Every SQL template literal in one product file, off its syntax tree: the
- *  statement with each `${…}` bound as a parameter, and the line it starts on.
- *  A nested template inside an interpolation is its own literal and is read
- *  on its own; the outer statement sees it as one parameter. */
-export function statementsOf(file: string, source: string): readonly { line: number; sql: string }[] {
-  const out: { line: number; sql: string }[] = [];
-  const parsed = parse(file, source);
+/** The words a string must open with to be read as SQL at all; the parser decides the rest. */
+const STATEMENT_HEADS = {
+  SELECT: true, WITH: true, VALUES: true, INSERT: true, REPLACE: true, UPDATE: true, DELETE: true,
+  CREATE: true, DROP: true, ALTER: true, PRAGMA: true, EXPLAIN: true,
+} satisfies Record<string, true>;
 
-  walk(parsed.root, (node) => {
-    const { raw } = node;
+export interface Statement {
+  readonly line: number;
+  /** The statement's own text, each hole a parameter, or a name where a parameter cannot stand. */
+  readonly sql: string;
+  readonly program: SqlStatement;
+  readonly names: Names;
+}
 
-    if (raw.type !== 'TemplateLiteral') return;
-    const sql = raw.quasis.map((quasi) => quasi.value.cooked ?? quasi.value.raw).join('?');
+/** Every SQL statement one file's string expressions spell, off its syntax
+ *  tree: a backtick-fenced `DELETE FROM …` in a doc comment is prose, not a
+ *  read. A hole is a bound parameter, or a name (`FROM ${table}`) where SQLite
+ *  admits no parameter; a string SQLite reads neither way is not SQL. */
+export function statementsOf(file: string, source: string): readonly Statement[] {
+  return sqlStrings(file, source).flatMap((string) => {
+    const [head] = leadingKeywords(string.text, 1);
 
-    if (!/^\s*(?:SELECT|WITH|INSERT|UPDATE|DELETE|CREATE|DROP)\b/i.test(sql)) return;
-    out.push({ line: parsed.lineAt(node.start), sql });
+    if (head === undefined || !Object.hasOwn(STATEMENT_HEADS, head)) return [];
+    const asParameters = sqlProgram(string.text);
+    const text = asParameters === undefined ? holesAsNames(string) : string.text;
+    const program = asParameters ?? sqlProgram(text);
+
+    return (program?.statements ?? []).flatMap((statement) => {
+      if (statement.type === 'empty' || statement.range === undefined) return [];
+
+      return [{ line: string.line, sql: text.slice(...statement.range), program: statement, names: namesIn(statement) }];
+    });
   });
-
-  return out;
 }
 
 /** Kinu's own tables as untyped column lists, so a statement that joins one to
@@ -156,18 +198,17 @@ export function findViolations(vendor: Map<string, VendorTable>, sources: Map<st
   let statements = 0;
 
   for (const [file, source] of sources) {
-    for (const { line, sql } of statementsOf(file, source)) {
-      const named = [...sql.matchAll(/\b(?:FROM|JOIN|INTO|UPDATE|TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s+([a-z_][a-z0-9_]*)/gi)]
-        .map((m) => m[1]?.toLowerCase() ?? '')
-        .filter((name) => vendor.has(name));
+    for (const { line, sql, program, names } of statementsOf(file, source)) {
+      const named = [...names.tables].filter((name) => vendor.has(name));
 
       if (named.length === 0) continue;
       statements += 1;
 
       for (const name of named) tablesRead.add(name);
+      const created = program.type === 'create_table_stmt' ? entityName(program.name) : undefined;
 
-      if (/^\s*CREATE\s+TABLE/i.test(sql)) {
-        findings.push({ file, line, table: named[0] ?? '', detail: 'Kinu declares a DDL for a table the vendor creates: two owners of one shape' });
+      if (created !== undefined && vendor.has(created)) {
+        findings.push({ file, line, table: created, detail: 'Kinu declares a DDL for a table the vendor creates: two owners of one shape' });
         continue;
       }
 
@@ -185,7 +226,7 @@ export function findViolations(vendor: Map<string, VendorTable>, sources: Map<st
 }
 
 if (import.meta.main) {
-  const vendor = vendorTables();
+  const { tables: vendor, refused } = vendorTables();
   const sources = readMatching((file) => isParseable(file) && file.startsWith('packages/') && !isTestFile(file));
   const { findings, statements, tablesRead } = findViolations(vendor, sources);
 
@@ -209,7 +250,10 @@ if (import.meta.main) {
   }
 
   console.log(`vendor-schema: ok — ${measured}`);
-  console.log('  blind: statements built at runtime from strings, and a vendor DDL whose text this cannot parse');
+  console.log('  blind: SQL built at runtime beyond a string expression and the consts it names; a hole is read as a '
+    + 'parameter, or as a name where SQLite admits no parameter');
+  console.log(`  blind: ${String(refused)} vendor string(s) begin as a CREATE TABLE and SQLite refused them (an unfolded hole or a `
+    + 'broken DDL), so any table they create is not built; a column a vendor adds by ALTER TABLE is not built either');
   console.log('  blind: a column that exists with a different TYPE or DEFAULT; prepare checks names, not semantics');
   console.log(`  blind: a vendor outside ${VENDORS.join(', ')}`);
 }

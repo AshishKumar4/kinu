@@ -86,6 +86,13 @@
     "settled_at INTEGER",
     "PRIMARY KEY(actor_id,turn_id)"
   ],
+  "agent_data_tables@packages/core/src/tools/db-codemode.ts": [
+    "name TEXT PRIMARY KEY",
+    "scope TEXT NOT NULL CHECK(scope IN ('actor','workspace'))",
+    "columns TEXT NOT NULL",
+    "created_by TEXT NOT NULL",
+    "created_at INTEGER NOT NULL"
+  ],
   "agent_facts@packages/core/src/memory/facts.ts": [
     "actor_id TEXT NOT NULL",
     "key TEXT NOT NULL",
@@ -752,6 +759,15 @@
     "digest TEXT NOT NULL",
     "decision TEXT NOT NULL CHECK (decision IN ('approved', 'grandfathered', 'revoked'))",
     "PRIMARY KEY (actor_id, scope, path)"
+  ],
+  "kinu_agent_identity@packages/core/src/vfs/agent-home.ts": [
+    "agent_name TEXT PRIMARY KEY",
+    "uid INTEGER NOT NULL UNIQUE",
+    "gid INTEGER NOT NULL"
+  ],
+  "kinu_workspace_generation@packages/core/src/vfs/nimbus-workspace.ts": [
+    "id INTEGER PRIMARY KEY",
+    "value INTEGER NOT NULL"
   ],
   "lessons@packages/core/src/evolution/outcomes.ts": [
     "actor_id TEXT NOT NULL",

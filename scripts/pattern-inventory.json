@@ -260,13 +260,6 @@
       "decision": "traversal"
     },
     {
-      "file": "packages/core/src/tools/report-tool.ts",
-      "kind": "hand-parser",
-      "owner": "parseHandoff",
-      "sourceSha256": "b130de84adc4e447bc1da97d90e65d2639c5cde032394a304825a3a6e4f04500",
-      "decision": "traversal"
-    },
-    {
       "file": "packages/core/src/events/ingress/email.ts",
       "kind": "regex-literal",
       "owner": "angled",
@@ -412,6 +405,13 @@
       "owner": "parseSkillFile",
       "sourceSha256": "ff56a1a2ae37b6386d4ab996a2e4c30e3cdcec9e05a2970aee2032c4e1f0c246",
       "decision": "lexical"
+    },
+    {
+      "file": "packages/core/src/tools/report-tool.ts",
+      "kind": "hand-parser",
+      "owner": "parseHandoff",
+      "sourceSha256": "b130de84adc4e447bc1da97d90e65d2639c5cde032394a304825a3a6e4f04500",
+      "decision": "traversal"
     },
     {
       "file": "packages/core/src/tui/context-status.ts",
@@ -1021,27 +1021,6 @@
       "owner": "html",
       "sourceSha256": "7eb623284311613b1d5f5d089b629a265cfd2d210d9b1ee62fa659c6f51f7aa0",
       "decision": "lexical"
-    },
-    {
-      "file": "scripts/schema-drift.ts",
-      "kind": "hand-parser",
-      "owner": "parseParts",
-      "sourceSha256": "96846a953000b622e42de67d1198d956112223e43c4ab90b9149771d5cea1b13",
-      "decision": "schema"
-    },
-    {
-      "file": "scripts/schema-drift.ts",
-      "kind": "hand-parser",
-      "owner": "parseTables",
-      "sourceSha256": "f44cef3dd50ce15d0987fa7c1ddd6e353db57444efafa7ba32418475dbefba1a",
-      "decision": "schema"
-    },
-    {
-      "file": "scripts/schema-drift.ts",
-      "kind": "hand-parser",
-      "owner": "parseViews",
-      "sourceSha256": "e509f7961875dcad058318b159e048df93c97a2b7abb5e7adeec368994c5d021",
-      "decision": "schema"
     },
     {
       "file": "scripts/silent-drop.ts",
