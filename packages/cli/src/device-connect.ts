@@ -20,7 +20,7 @@ import PC_AGENT_DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 't
 import PC_AGENT_SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
 import PC_AGENT_PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
 import PC_AGENT_UPDATE_SOURCE from '../../pc-agent/src/update.js' with { type: 'text' };
-import { VERSION } from './display';
+import { DIM, VERSION } from './display';
 
 const PID_PATH = join(AGENT_HOME, 'pc-agent.pid');
 
@@ -211,6 +211,29 @@ export function describeConnectOutcome(result: ConnectDeviceResult, session: boo
           : 'Connected. This computer stays connected after you leave the CLI.',
       };
   }
+}
+
+export interface WaitingDots {
+  readonly onWaiting: () => void;
+  readonly end: () => void;
+}
+
+export function waitingDots(indent: string): WaitingDots {
+  let waiting = false;
+
+  return {
+    onWaiting: () => {
+      if (!waiting) {
+        process.stdout.write(DIM(`${indent}Waiting for the daemon to connect`));
+        waiting = true;
+      }
+
+      process.stdout.write(DIM('.'));
+    },
+    end: () => {
+      if (waiting) process.stdout.write('\n');
+    },
+  };
 }
 
 /** The fix sentence comes from `@kinu.run/core`; the daemon's reason code is not printed. */

@@ -122,33 +122,27 @@ export const ProfileCatalogEnvelopeSchema = v.strictObject({
   catalog: ProfileCatalogSchema,
 });
 
-export function formatProfileValidationIssues(issues: readonly v.BaseIssue<unknown>[]): string {
-  return issues.slice(0, 3).map((issue) => {
+/** Throws, naming up to three offending paths, on any shape violation of `what`. */
+export function parseProfileValue<T>(schema: v.GenericSchema<unknown, T>, what: string, input: { value: unknown }): T {
+  const parsed = v.safeParse(schema, input.value);
+
+  if (parsed.success) return parsed.output;
+
+  const issues = parsed.issues.slice(0, 3).map((issue) => {
     const path = issue.path?.map((item) => String(item.key)).join('.') ?? '(root)';
 
     return `${path}: ${issue.message}`;
   }).join('; ');
+
+  throw new Error(`invalid ${what}: ${issues}`);
 }
 
-/** Throws, naming the offending paths, on any shape violation. */
 export function validateProfileCatalog(input: { value: unknown }): ProfileCatalog {
-  const parsed = v.safeParse(ProfileCatalogSchema, input.value);
-
-  if (!parsed.success) {
-    throw new Error(`invalid profile catalog: ${formatProfileValidationIssues(parsed.issues)}`);
-  }
-
-  return parsed.output;
+  return parseProfileValue(ProfileCatalogSchema, 'profile catalog', input);
 }
 
 export function validateProfileCatalogEnvelope(input: { value: unknown }): ProfileCatalogEnvelope {
-  const parsed = v.safeParse(ProfileCatalogEnvelopeSchema, input.value);
-
-  if (!parsed.success) {
-    throw new Error(`invalid profile catalog envelope: ${formatProfileValidationIssues(parsed.issues)}`);
-  }
-
-  return parsed.output;
+  return parseProfileValue(ProfileCatalogEnvelopeSchema, 'profile catalog envelope', input);
 }
 
 /** Canonical JSON the digest covers (catalog only, never version or authority); exposed for WebCrypto hashing. */

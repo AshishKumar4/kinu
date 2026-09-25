@@ -13,7 +13,7 @@ import {
   subordinateForkContext, type SubordinateInheritedContext,
   inheritedAsModelMessage,
   classifyRunEnd, closeTurnRun, openTurnRun,
-  terminalTaskReport, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, CHAT_SESSION_ID,
+  registeredParent, terminalTaskReport, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, CHAT_SESSION_ID,
   type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor,
   type DelegationBudget,
   type DynamicContext, type HeadInferenceDeps, type HeadInput, type HostedActor, type ResolvedTurnProfile,
@@ -126,18 +126,6 @@ function hostedLifetime(record: WorkspaceActor): SubordinateLifetime {
   return record.lifetime;
 }
 
-/** The hiring parent from the directory row; past depth 1 it is not the workspace. */
-function hiringParent(seams: SubordinateHostSeams, record: WorkspaceActor): ActorReference {
-  const parentId = record.parentActorId;
-
-  if (parentId === null) throw new KinuError('denied', 'The workspace main actor was not hired by anyone.');
-  const parent = seams.host.describe(parentId);
-
-  if (parent === null) throw new KinuError('missing', 'The hiring actor is no longer registered.');
-
-  return { actorId: parent.actorId, workspaceId: parent.workspaceId, parentActorId: parent.parentActorId };
-}
-
 /** Admit work and report the delivery branch; only this actor knows whether a turn is live. */
 export async function admitHostedTask(
   seams: SubordinateHostSeams,
@@ -211,7 +199,12 @@ export async function relayHostedReport(
     readonly handoff?: SubordinateReportHandoff;
   },
 ): Promise<SubordinateEventResult> {
-  const parent = hiringParent(seams, child.record);
+  // Past depth 1 the hiring parent is not the workspace.
+  const parent = registeredParent(seams.host, child.record, {
+    orphan: 'The workspace main actor was not hired by anyone.',
+    unregistered: 'The hiring actor is no longer registered.',
+  });
+
   const name = child.record.name;
 
   return await seams.host.run(parent, async (hirer) => receiveSubordinateEvent({

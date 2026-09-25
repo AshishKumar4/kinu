@@ -7,7 +7,7 @@ import { NAMED_SWARM_PRESETS } from '../strategy/swarm-presets';
 import { REASONING_EFFORTS, type ReasoningEffort } from '../providers/effort';
 import type { WorkMode } from '../types/turn';
 import { TierIdSchema,
-  ProfileAuthoritySchema, formatProfileValidationIssues,
+  ProfileAuthoritySchema, parseProfileValue,
   type RoleId, type TierId,
 } from './catalog';
 import { type TierFallback, type TierSource, type ResolvedTurnProfile } from './resolve';
@@ -93,15 +93,7 @@ const SwarmProfileSnapshotSchema: v.GenericSchema<unknown, SwarmProfileSnapshot>
 
 /** A stored snapshot that no longer parses is refused, never resumed half-read. */
 export function validateSwarmProfileSnapshot(input: { value: unknown }): SwarmProfileSnapshot {
-  const parsed = v.safeParse(SwarmProfileSnapshotSchema, input.value);
-
-  if (!parsed.success) {
-    throw new Error(
-      `invalid durable swarm profile snapshot: ${formatProfileValidationIssues(parsed.issues)}`,
-    );
-  }
-
-  return parsed.output;
+  return parseProfileValue(SwarmProfileSnapshotSchema, 'durable swarm profile snapshot', input);
 }
 
 export type { ResolvedTurnProfile, RoleId, TierId, TierSource, WorkMode };

@@ -83,20 +83,20 @@ function defineSchema<const S extends AnalyticsSchema>(
 }
 
 /** 1-based, as AE's columns are. */
+function slotColumn(schema: AnalyticsSchema, kind: 'blob' | 'double', name: string): string {
+  const at = (kind === 'blob' ? schema.blobs : schema.doubles).map((slot) => slot.name).indexOf(name);
+
+  if (at < 0) throw new RangeError(`${schema.dataset}: no ${kind} slot named "${name}"`);
+
+  return `${kind}${at + 1}`;
+}
+
 export function blobColumn<S extends AnalyticsSchema>(schema: S, name: BlobName<S>): string {
-  const at = schema.blobs.findIndex((slot) => slot.name === name);
-
-  if (at < 0) throw new RangeError(`${schema.dataset}: no blob slot named "${String(name)}"`);
-
-  return `blob${at + 1}`;
+  return slotColumn(schema, 'blob', String(name));
 }
 
 export function doubleColumn<S extends AnalyticsSchema>(schema: S, name: DoubleName<S>): string {
-  const at = schema.doubles.findIndex((slot) => slot.name === name);
-
-  if (at < 0) throw new RangeError(`${schema.dataset}: no double slot named "${String(name)}"`);
-
-  return `double${at + 1}`;
+  return slotColumn(schema, 'double', String(name));
 }
 
 export function indexColumn(_schema: AnalyticsSchema): string {

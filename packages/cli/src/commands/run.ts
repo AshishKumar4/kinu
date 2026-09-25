@@ -12,7 +12,7 @@ import { ensureLocalDaemonRunning } from './daemon';
 import { resolvePromptAttachments } from '../attachments';
 import { watchHeadlessConsents, watchTerminalConsents, type ConsentWatcher } from '../consent-watch';
 import { DIM, ERR, formatFailure, printFailure, printToolCall, printToolResult } from '../display';
-import { normalizeWebhookAuthMode, numberField, stringField } from '../options';
+import { normalizeWebhookAuthMode, numberField, oneOfFlag, stringField } from '../options';
 import { guideFailure } from '../provider-guidance';
 import {
   executeLocalExecutor,
@@ -45,7 +45,7 @@ export async function runCommand(name: string, promptParts: string[], opts: Agen
   classic?: boolean;
   mode?: string;
 }): Promise<void> {
-  const outputMode = normalizeOutputMode(opts.mode);
+  const outputMode = oneOfFlag(opts.mode, '--mode', ['text', 'json', 'rpc']);
   const target = resolveAgentTarget(name);
 
   if (outputMode === 'rpc') {
@@ -691,11 +691,4 @@ async function buildPrompt(parts: string[]): Promise<string> {
   if (stdin.trim()) chunks.push(`<stdin>\n${stdin.trim()}\n</stdin>`);
 
   return chunks.join(' ').trim();
-}
-
-function normalizeOutputMode(raw: string | undefined): 'text' | 'json' | 'rpc' {
-  const mode = (raw ?? 'text').toLowerCase();
-
-  if (mode === 'text' || mode === 'json' || mode === 'rpc') return mode;
-  throw new Error('--mode must be text, json, or rpc');
 }

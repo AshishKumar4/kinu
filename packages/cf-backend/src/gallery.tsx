@@ -21,7 +21,7 @@ import {
 } from "@phosphor-icons/react";
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
-import { mcpPresetById } from "@kinu.run/core";
+import { mcpPresetById, seededRandom } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT } from "@kinu.run/core";
 import type { ReasoningEffort } from "@kinu.run/core";
 import {
@@ -920,20 +920,8 @@ const MCTS_ACTIONS = [
   "Cache the resolved kind per coupon id",
 ];
 
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-
-  return () => {
-    a = (a + 0x6D2B79F5) >>> 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
-  const rnd = mulberry32(0x5EA4C4);
+  const rnd = seededRandom(0x5EA4C4);
   const rows: MctsRow[] = [];
 
   const push = (row: MctsRow): MctsRow => { rows.push(row);
@@ -6015,9 +6003,13 @@ async function mctsExplorerFrame(run: string): Promise<MountedFrame> {
   const { default: MCTSExplorer } = await import("@/pages/MCTSExplorer");
   serveGalleryRpc(focusRun(run));
 
+  return routedPage(`/mcts/checkout-fixes?run=${run}`, "/mcts/:agentId", <MCTSExplorer />);
+}
+
+function routedPage(entry: string, path: string, page: React.ReactNode, height = "h-screen"): MountedFrame {
   return {
-    entries: [`/mcts/checkout-fixes?run=${run}`],
-    node: <Routes><Route path="/mcts/:agentId" element={<div className="h-screen p-bg p-text"><MCTSExplorer /></div>} /></Routes>,
+    entries: [entry],
+    node: <Routes><Route path={path} element={<div className={`${height} p-bg p-text`}>{page}</div>} /></Routes>,
   };
 }
 
@@ -6025,31 +6017,14 @@ async function mctsExplorerFrame(run: string): Promise<MountedFrame> {
 async function settingsFrame(): Promise<MountedFrame> {
   const { default: SettingsPage } = await import("@/pages/SettingsPage");
 
-  return {
-    entries: ["/workspace/checkout-fixes/settings"],
-    node: (
-      <Routes>
-        <Route
-          path="/workspace/:agentId/settings"
-          element={<div className="min-h-screen p-bg p-text"><SettingsPage /></div>}
-        />
-      </Routes>
-    ),
-  };
+  return routedPage("/workspace/checkout-fixes/settings", "/workspace/:agentId/settings", <SettingsPage />, "min-h-screen");
 }
 
 /** Routed: tab, account and workspace selection live in the URL. */
 async function controlFrame(): Promise<MountedFrame> {
   const { default: ControlPage } = await import("@/pages/ControlPage");
 
-  return {
-    entries: ["/control"],
-    node: (
-      <Routes>
-        <Route path="/control" element={<div className="h-screen p-bg p-text"><ControlPage /></div>} />
-      </Routes>
-    ),
-  };
+  return routedPage("/control", "/control", <ControlPage />);
 }
 
 /** In the real chrome: the sidebar's route logic decides what renders at "/". */

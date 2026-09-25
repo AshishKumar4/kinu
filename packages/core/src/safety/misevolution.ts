@@ -216,7 +216,7 @@ const KEYED_ACCESSORS: ReadonlySet<string> = new Set([
   'Reflect.get', 'Reflect.getOwnPropertyDescriptor', 'Object.getOwnPropertyDescriptor',
 ]);
 
-/** `.constructor` kept in place: a property of it read, or it compared. */
+/** `.constructor` read from or compared. */
 function constructorStaysPut({ parent, field }: PlacedNode): boolean {
   if (parent?.type === 'MemberExpression') return field === 'object';
 
