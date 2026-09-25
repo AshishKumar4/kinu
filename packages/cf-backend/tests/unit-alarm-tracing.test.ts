@@ -23,8 +23,8 @@ const PHASES = [
   'alarm.email_reconcile',
   'alarm.cache_warm',
   'alarm.sleep_time',
-  'alarm.slate_pictures',
   'alarm.timer_rearm',
+  'alarm.slate_pictures',
 ] as const;
 
 describe('alarm tick tracing', () => {
@@ -108,8 +108,8 @@ describe('alarm tick tracing', () => {
         '  alarm.email_reconcile  [isolate_gen=1 invocation=1]',
         '  alarm.cache_warm  [isolate_gen=1 invocation=1 cache_warmed=false]',
         '  alarm.sleep_time  [isolate_gen=1 invocation=1 sleep_time_ran=false]',
-        '  alarm.slate_pictures  [isolate_gen=1 invocation=1]',
         '  alarm.timer_rearm  [isolate_gen=1 invocation=1 rearmed=false]',
+        '  alarm.slate_pictures  [isolate_gen=1 invocation=1]',
       ].join('\n'),
     );
   });

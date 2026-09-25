@@ -155,4 +155,64 @@ describe('a shot', () => {
     expect(shot).toMatchObject({ open: true, otherPort: false, pastItsLife: false });
     expect(store.captures(PORT, shot?.handle ?? '', T0 + 30_000)).toBe(false);
   });
+
+  test('is three a wake at most, oldest due first; the rest stay due for the next', async () => {
+    const store = pictures();
+    const bucket = memoryBucket();
+
+    for (const [index, slate] of ['a', 'b', 'c', 'd'].entries()) store.rendered(slate, PORT + index, T0 + index);
+    await store.captureDue(capture(shooting(A, B, new Uint8Array([7]), new Uint8Array([8])), bucket), T0 + 40_000);
+
+    expect([...store.digests().keys()].sort()).toEqual(['a', 'b', 'c']);
+    expect(store.nextDueAt()).toBe(T0 + 30_003);
+  });
+
+  test('of a slate removed while it ran keeps nothing', async () => {
+    const store = pictures();
+    const bucket = memoryBucket();
+
+    const removing: Camera = {
+      async shoot() {
+        await store.forget('ledger', 'board', bucket);
+
+        return A;
+      },
+      async close() {},
+    };
+
+    store.rendered('board', PORT, T0);
+
+    expect(await store.captureDue(capture(removing, bucket), T0 + 30_000)).toBe(false);
+    expect([...bucket.objects.keys()]).toEqual([]);
+  });
+});
+
+describe("a removed slate's pictures", () => {
+  async function pictured(bucket: MemoryBucket): Promise<SlatePictures> {
+    const store = pictures();
+    store.rendered('board', PORT, T0);
+    await store.captureDue(capture(shooting(A), bucket), T0 + 30_000);
+
+    return store;
+  }
+
+  test('go, and then its row', async () => {
+    const bucket = memoryBucket();
+    const store = await pictured(bucket);
+
+    await store.forget('ledger', 'board', bucket);
+
+    expect([...bucket.objects.keys()]).toEqual([]);
+    expect(store.digests().size).toBe(0);
+  });
+
+  test('R2 refusing keeps the row that names them, and the removal still goes on', async () => {
+    const bucket = memoryBucket();
+    const store = await pictured(bucket);
+    const refusing: MemoryBucket = { ...bucket, delete: async () => { throw new Error('R2 is unavailable'); } };
+
+    await store.forget('ledger', 'board', refusing);
+
+    expect(store.digests().get('board')).toBe(sha256Hex(A));
+  });
 });

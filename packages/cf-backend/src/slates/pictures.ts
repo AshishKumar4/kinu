@@ -14,6 +14,8 @@ const LOCAL_DEV_ZONE = '.localhost';
 
 const ATTEMPTS = 3;
 
+const SHOTS_PER_TICK = 3;
+
 const CAPTURE_HANDLE_LIFE_MS = 120_000;
 
 export function initSlatePictureTable(execRaw: RawSqlExec): void {
@@ -55,8 +57,12 @@ export class SlatePictures {
   }
 
   private due(now: number): DuePicture[] {
-    return this.db.exec(`SELECT slate, port, digest, attempts FROM slate_pictures WHERE due_at <= ?`, now).toArray()
+    return this.db.exec(`SELECT slate, port, digest, attempts FROM slate_pictures WHERE due_at <= ? ORDER BY due_at`, now).toArray()
       .map((row) => v.parse(DueRowSchema, row));
+  }
+
+  private removed(slate: string): boolean {
+    return this.db.exec(`SELECT 1 AS x FROM slate_pictures WHERE slate = ?`, slate).toArray().length === 0;
   }
 
   captures(port: number, handle: string, now: number): boolean {
@@ -97,8 +103,15 @@ export class SlatePictures {
     }));
   }
 
-  forget(slate: string): void {
-    this.db.exec(`DELETE FROM slate_pictures WHERE slate = ?`, slate);
+  async forget(workspace: string, slate: string, bucket: PictureBucket | undefined): Promise<void> {
+    try {
+      if (bucket !== undefined) await deletePictures(bucket, picturePrefix(workspace, slate));
+      this.db.exec(`DELETE FROM slate_pictures WHERE slate = ?`, slate);
+    } catch (cause) {
+      diagnostics.failure('slate.picture_delete_failed', toKinuError({
+        doing: `deleting the pictures of removed slate ${slate}`, cause, otherwise: 'unavailable',
+      }), { workspace, slate });
+    }
   }
 
   async captureDue(capture: PictureCapture, now: number): Promise<boolean> {
@@ -117,7 +130,7 @@ export class SlatePictures {
     let changed = false;
 
     try {
-      for (const picture of due) {
+      for (const picture of due.slice(0, SHOTS_PER_TICK)) {
         try {
           changed = await this.shoot(camera, capture, picture) || changed;
         } catch (cause) {
@@ -147,7 +160,14 @@ export class SlatePictures {
       const changed = digest !== picture.digest;
 
       if (changed) {
-        await capture.bucket.put(pictureKey(capture.workspace, picture.slate, digest), shot, { httpMetadata: { contentType: 'image/webp' } });
+        const key = pictureKey(capture.workspace, picture.slate, digest);
+        await capture.bucket.put(key, shot, { httpMetadata: { contentType: 'image/webp' } });
+
+        if (this.removed(picture.slate)) {
+          await capture.bucket.delete(key);
+
+          return false;
+        }
 
         if (picture.digest !== null) await capture.bucket.delete(pictureKey(capture.workspace, picture.slate, picture.digest));
       }

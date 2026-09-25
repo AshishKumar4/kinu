@@ -34,7 +34,7 @@ import type { ChatWire } from './chat-transport';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
-import { browserCamera, deletePictures, initSlatePictureTable, picturePrefix, SlatePictures, type PictureCapture } from "./slates/pictures";
+import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
 import {
@@ -420,12 +420,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       url: async (port, token) => (await nimbusPreviewUrl(this.env, this.name, port, token)).url ?? null,
       camera: () => browserCamera(browser),
     };
-  }
-
-  private async forgetPicture(slate: string): Promise<void> {
-    this.pictures.forget(slate);
-
-    if (this.env.SLATE_PICTURES !== undefined) await deletePictures(this.env.SLATE_PICTURES, picturePrefix(this.name, slate));
   }
 
   protected workspaceBox(shellId: string): NimbusSandboxHandle {
@@ -3040,24 +3034,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         }
       });
 
-      await tick.span('alarm.slate_pictures', async (span) => {
-        const capture = this.pictureCapture();
-
-        if (capture === null) return;
-
-        try {
-          const changed = await this.pictures.captureDue(capture, now);
-          span.setAttribute('kinu.pictures_changed', changed);
-
-          if (changed) this.overviewChanged();
-        } catch (err) {
-          const failure = toKinuError({ doing: 'photographing the slates due a picture', cause: err, otherwise: 'unavailable' });
-
-          span.fail(failure);
-          diagnostics.failure('slate.pictures_failed', failure);
-        }
-      });
-
       // Soonest-wins arm, so it never clobbers a sooner wake armed during dispatch. Awaited: this link
       // keeps the timer chain alive.
       await tick.span('alarm.timer_rearm', async (span) => {
@@ -3078,6 +3054,24 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           // Rethrown: this failure loses the next wake. An uncaught alarm throw makes the runtime redeliver
           // it (tests/workerd/do-alarm.test.ts), and the redelivered tick re-arms from durable state.
           throw failure;
+        }
+      });
+
+      await tick.span('alarm.slate_pictures', async (span) => {
+        const capture = this.pictureCapture();
+
+        if (capture === null) return;
+
+        try {
+          const changed = await this.pictures.captureDue(capture, now);
+          span.setAttribute('kinu.pictures_changed', changed);
+
+          if (changed) this.overviewChanged();
+        } catch (err) {
+          const failure = toKinuError({ doing: 'photographing the slates due a picture', cause: err, otherwise: 'unavailable' });
+
+          span.fail(failure);
+          diagnostics.failure('slate.pictures_failed', failure);
         }
       });
     });
@@ -4107,7 +4101,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       kv: this.env.AUTH_KV,
       budget: () => this.budget,
       ownerTitle: async () => this.safeDisplayName(),
-      forgetPicture: (slate) => this.forgetPicture(slate),
+      forgetPicture: (slate) => this.pictures.forget(this.name, slate, this.env.SLATE_PICTURES),
     });
 
     return this._slates;
