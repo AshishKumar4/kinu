@@ -57,7 +57,7 @@ describe('a heartbeat landing inside a restoration leaves that restoration alone
 
     await box.devboxHeartbeat();
 
-    expect(container.sequence.slice(before)).toEqual(['exec:cat']);
+    expect(container.sequence.slice(before)).toEqual(['exec:devbox-beat-v1']);
     expect((await box.devboxState()).lastTick?.ping).toBe('ok');
   });
 
