@@ -47,7 +47,7 @@ export interface HeadToolDeps {
 
 const SplitSubheadsInputSchema = z.object({
   rationale: z.string(),
-  heads: z.array(z.object({ task: z.string(), rationale: z.string() })).min(2).max(4),
+  heads: z.array(z.object({ task: z.string(), rationale: z.string() })).meta({ minItems: 2, maxItems: 4 }),
   merge_strategy: oneOf(MERGE_STRATEGIES).optional(),
 });
 

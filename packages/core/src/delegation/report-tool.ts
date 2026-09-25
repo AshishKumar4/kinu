@@ -23,7 +23,7 @@ function handoffField(purpose: string) {
 export const ReportBodySchema = z.object({
   status: oneOf(SUBORDINATE_REPORT_STATUSES)
     .describe('completed: the assignment is done. blocked: you need input. progress: a mid-task update.'),
-  content: z.string().max(20000).trim().min(1).describe('The result, or what blocks you.'),
+  content: z.string().trim().min(1).meta({ maxLength: 20000 }).describe('The result, or what blocks you.'),
 });
 
 export const ReportHandoffFields = {

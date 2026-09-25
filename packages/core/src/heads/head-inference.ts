@@ -77,7 +77,7 @@ const RecordEvidenceInputSchema = z.object({
   kind: oneOf(EVIDENCE_KINDS),
   body: z.string(),
   ref: z.string().optional(),
-  confidence: z.number().min(0).max(1).optional(),
+  confidence: z.number().meta({ minimum: 0, maximum: 1 }).optional(),
 });
 
 const RecordDecisionInputSchema = z.object({

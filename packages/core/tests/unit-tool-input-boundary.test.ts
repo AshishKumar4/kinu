@@ -8,6 +8,8 @@ import { createFileTool } from '../src/tools/file-tool';
 import { TurnFileLedger } from '../src/tools/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 import { createTasksCodemodeProvider } from '../src/tools/tasks-codemode';
+import { createReportCodemodeProvider } from '../src/delegation/report-codemode';
+import type { ReportToolDeps } from '../src/tools/builtins';
 import { initAllTables, initTaskListTable, TaskListStore } from '../src/index';
 import type { VFS } from '../src/types/primitives';
 import type { JsonObject } from '../src/utils/json';
@@ -118,5 +120,24 @@ describe('a program calling a namespace with a value the tool\'s schema refuses'
     expect(JSON.stringify(outcome)).toContain('status');
     expect(JSON.stringify(outcome)).not.toContain('\\"code\\"');
     expect(tasks.list().map((listed) => listed.status)).toEqual(['open']);
+  });
+});
+
+describe('a bound the schema only advertises', () => {
+  test('does not refuse a call that ran before: a report longer than the advertised 20,000 characters is delivered', async () => {
+    const delivered: string[] = [];
+
+    const report: ReportToolDeps['report'] = async ({ content }) => {
+      delivered.push(content);
+
+      return { ok: true };
+    };
+
+    const provider = createReportCodemodeProvider(() => ({ report }));
+
+    const outcome = await provider.tools.send?.execute('completed', 'x'.repeat(20_001));
+
+    expect(outcome).toEqual({ ok: true });
+    expect(delivered.map((content) => content.length)).toEqual([20_001]);
   });
 });

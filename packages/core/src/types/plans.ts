@@ -2,7 +2,7 @@
 import { z } from 'zod';
 
 /** One edit to a submitted plan: the `submit_plan` tool's input item, and what the review store applies. */
-export const PlanEditSchema = z.strictObject({
+export const PlanEditSchema = z.object({
   start: z.number().int().min(1).describe('First affected line, one-indexed.'),
   end: z.number().int().min(1).nullable().optional()
     .describe('Last affected line, inclusive. Omit to replace through end of plan.'),

@@ -189,7 +189,7 @@ const WebToolInputSchema = z.object({
   url: z.string().describe('For fetch: an absolute http(s) URL.').optional(),
 });
 
-const PlanEditsInputSchema = z.strictObject({ edits: z.array(PlanEditSchema).min(1).max(100) });
+const PlanEditsInputSchema = z.object({ edits: z.array(PlanEditSchema).min(1).meta({ maxItems: 100 }) });
 
 /** Device nicknames are not in the enum, so it stays advisory: any string passes, and an unknown one is a device. */
 function shellInputSchema(runtimes: readonly string[]) {

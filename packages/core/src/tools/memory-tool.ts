@@ -32,7 +32,7 @@ export interface MemoryToolDeps {
 }
 
 /** A remembered fact's confidence; `memory.remember` in eval takes it positionally. */
-export const ConfidenceSchema = z.number().min(0).max(1).describe('For remember; default 1.').optional();
+export const ConfidenceSchema = z.number().meta({ minimum: 0, maximum: 1 }).describe('For remember; default 1.').optional();
 
 /** Input of the native tool and of `memory.*` in eval. */
 export const MemoryToolInputSchema = z.object({
