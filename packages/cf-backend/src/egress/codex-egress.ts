@@ -6,6 +6,10 @@ const TARGET_HEADER = 'x-kinu-target';
 
 const HOP_HEADERS = ['host', 'content-length', 'connection', 'transfer-encoding'];
 
+const refuseOutbound = (): never => {
+  throw new KinuError('denied', 'the Codex egress container keeps its own outbound policy');
+};
+
 export class CodexEgress extends Container<Env> {
   defaultPort = 8080;
 
@@ -14,6 +18,34 @@ export class CodexEgress extends Container<Env> {
   enableInternet = true;
 
   readonly #calls = new EgressCalls();
+
+  override async start(): Promise<void> {
+    await super.start();
+  }
+
+  override async startAndWaitForPorts(_ports?: Parameters<Container['startAndWaitForPorts']>[0], cancellation?: { readonly abort?: AbortSignal }): Promise<void> {
+    await super.startAndWaitForPorts(this.defaultPort, cancellation?.abort === undefined ? undefined : { abort: cancellation.abort });
+  }
+
+  override async setOutboundHandler(): Promise<void> { refuseOutbound(); }
+
+  override async setOutboundByHost(): Promise<void> { refuseOutbound(); }
+
+  override async removeOutboundByHost(): Promise<void> { refuseOutbound(); }
+
+  override async setOutboundByHosts(): Promise<void> { refuseOutbound(); }
+
+  override async setAllowedHosts(): Promise<void> { refuseOutbound(); }
+
+  override async setDeniedHosts(): Promise<void> { refuseOutbound(); }
+
+  override async allowHost(): Promise<void> { refuseOutbound(); }
+
+  override async denyHost(): Promise<void> { refuseOutbound(); }
+
+  override async removeAllowedHost(): Promise<void> { refuseOutbound(); }
+
+  override async removeDeniedHost(): Promise<void> { refuseOutbound(); }
 
   async forward(ownerUserId: string, callId: string, request: Request): Promise<Response> {
     if (!this.env.CodexEgress.idFromName(ownerUserId).equals(this.ctx.id)) {

