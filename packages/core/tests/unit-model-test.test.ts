@@ -73,4 +73,21 @@ describe('testModel', () => {
     expect(result.ok ? 0 : result.until ?? 0).toBeGreaterThan(Date.now() + 8 * 86_400_000);
     expect(modelTestText(result, { provider: 'opencode-go', from: 'here' })).toMatch(/^OpenCode Go allowance is spent until \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\.$/u);
   });
+
+  test('a thinking model is timed from its first reasoning delta, even before any answer text', async () => {
+    // One clock reading per event: the start, the first token, the end. A reply of thought alone tells the two
+    // readings apart: timed on text only, the first token would read as the end.
+    const readings = [0, 100, 900];
+    const clock = (): number => readings.shift() ?? 900;
+
+    const thought = (): Response => new Response([
+      `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: 'thinking' } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 9, completion_tokens: 1, total_tokens: 10 } })}\n\n`,
+      'data: [DONE]\n\n',
+    ].join(''), { headers: SSE });
+
+    const result = await testModel({ spec: 'probe/m', resolve: modelAnswering(thought, { count: 0 }), now: clock });
+
+    expect(result).toEqual({ ok: true, firstTokenMs: 100, totalMs: 900 });
+  });
 });
