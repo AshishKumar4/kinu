@@ -1,18 +1,17 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  ddlIn,
   driftViolations,
   genesisForNewTable,
   lockKey,
   lockUpdate,
-  parseTables,
-  parseViews,
   survey,
-  tablesIn,
   type GenesisLock,
   type TableDdl,
   viewDriftViolations,
 } from './schema-drift';
 import { readSources } from './sources';
+import type { Names } from './sql-text';
 import { statementsOf } from './vendor-schema';
 
 const USER_DEVICES_GENESIS = [
@@ -38,7 +37,7 @@ describe('schema-drift DDL census', () => {
   // required the closing paren on a line of its own and read the table name as
   // `\w+` — reported on 114 of the 126 statements it claimed.
   test('reads a one-line DDL, nested parens and comment prose carrying commas', () => {
-    const parsed = parseTables('fixture.ts', `
+    const parsed = ddlIn('fixture.ts', `
       execRaw('CREATE TABLE IF NOT EXISTS flat (id TEXT PRIMARY KEY, n INTEGER)');
       sql.exec(\`
         CREATE TABLE IF NOT EXISTS nested (
@@ -48,7 +47,7 @@ describe('schema-drift DDL census', () => {
           PRIMARY KEY (id, made)
         )
       \`);
-    `);
+    `).tables;
 
     expect(parsed).toEqual([
       { table: 'flat', file: 'fixture.ts', parts: ['id TEXT PRIMARY KEY', 'n INTEGER'] },
@@ -62,14 +61,14 @@ describe('schema-drift DDL census', () => {
   test('a prose mention of the statement is not a table', () => {
     // `CREATE TABLE IF NOT EXISTS is a no-op …` was censused as a table named
     // `is`; two more sentences produced `will` and `quietly`.
-    expect(parseTables('fixture.ts', `
+    expect(ddlIn('fixture.ts', `
       // CREATE TABLE IF NOT EXISTS is a no-op on a table that already exists.
       /** CREATE TABLE IF NOT EXISTS will not add a column to an older workspace. */
-    `)).toEqual([]);
+    `)).toEqual({ tables: [], views: [], runtimeNamed: 0 });
   });
 
   test('reads a body built from a template constant and from a generated column block', () => {
-    const parsed = parseTables('fixture.ts', `
+    const parsed = ddlIn('fixture.ts', `
       const USAGE = { token_input: 'INTEGER', neurons: 'REAL' } as const;
       const BLOCK = Object.entries(USAGE).map(([c, t]) => \`  \${c} \${t}\`).join(',\\n');
       const JOURNAL_DDL = \`(
@@ -82,7 +81,7 @@ describe('schema-drift DDL census', () => {
       \${Object.entries(USAGE).map(([c, t]) => \`  \${c} \${t},\`).join('\\n')}
         tail TEXT
       )\`);
-    `);
+    `).tables;
 
     expect(parsed).toEqual([
       { table: 'journal', file: 'fixture.ts', parts: ['id TEXT PRIMARY KEY', 'token_input TEXT', 'neurons TEXT'] },
@@ -90,46 +89,83 @@ describe('schema-drift DDL census', () => {
     ]);
   });
 
-  test('fails closed on an interpolation it cannot resolve', () => {
-    expect(() => parseTables('fixture.ts', `
+  test('fails closed on an interpolation it cannot resolve; a table named at runtime is counted apart', () => {
+    expect(() => ddlIn('fixture.ts', `
       execRaw(\`CREATE TABLE IF NOT EXISTS mystery (
         id TEXT PRIMARY KEY,
       \${buildColumns()}
       )\`);
     `)).toThrow(/mystery has a body part this cannot read/u);
+
+    expect(ddlIn('fixture.ts', `
+      execRaw(\`CREATE TABLE IF NOT EXISTS \${quoted(spec.name)} (\${columns.join(', ')})\`);
+    `)).toEqual({ tables: [], views: [], runtimeNamed: 1 });
   });
 
   test('a table declared twice in one file carries the union of both statements', () => {
-    expect(parseTables('fixture.ts', `
+    expect(ddlIn('fixture.ts', `
       execRaw('CREATE TABLE IF NOT EXISTS both (id TEXT PRIMARY KEY, first INTEGER)');
       execRaw('CREATE TABLE IF NOT EXISTS both (id TEXT PRIMARY KEY, second INTEGER)');
-    `)).toEqual([{ table: 'both', file: 'fixture.ts', parts: ['id TEXT PRIMARY KEY', 'first INTEGER', 'second INTEGER'] }]);
+    `).tables).toEqual([{ table: 'both', file: 'fixture.ts', parts: ['id TEXT PRIMARY KEY', 'first INTEGER', 'second INTEGER'] }]);
   });
 
   test('a view is its whole definition, read to the end of the template it opens', () => {
-    expect(parseViews('fixture.ts', `
+    expect(ddlIn('fixture.ts', `
       execRaw(\`CREATE VIEW IF NOT EXISTS scores AS
         SELECT *, CASE WHEN parent_id IS NULL THEN value
           -- The root keeps its mean.
           ELSE 0 END AS own
         FROM nodes\`);
-    `)).toEqual([{
+    `).views).toEqual([{
       table: 'scores', file: 'fixture.ts',
       parts: ['SELECT *, CASE WHEN parent_id IS NULL THEN value ELSE 0 END AS own FROM nodes'],
     }]);
   });
 
-  test('fails closed on a view definition it cannot read as text', () => {
-    expect(() => parseViews('fixture.ts', `
+  test('fails closed on a view definition that interpolates a value', () => {
+    expect(() => ddlIn('fixture.ts', `
       execRaw(\`CREATE VIEW IF NOT EXISTS built AS SELECT \${columns} FROM nodes\`);
     `)).toThrow(/view built has a definition this cannot read/u);
 
-    // Outside a template the next backtick opens some other statement, so reading
-    // up to it would lock that statement's text as this view's definition.
-    expect(() => parseViews('fixture.ts', `
+    // A definition ends where its statement does, never at the next statement's text.
+    expect(ddlIn('fixture.ts', `
       execRaw('CREATE VIEW IF NOT EXISTS quoted AS SELECT 1');
       execRaw(\`CREATE INDEX IF NOT EXISTS idx_later ON later(id)\`);
-    `)).toThrow(/view quoted has a definition this cannot read/u);
+    `).views).toEqual([{ table: 'quoted', file: 'fixture.ts', parts: ['SELECT 1'] }]);
+  });
+
+  test('RED: every spelling SQLite accepts is a table, and a DDL body is read as SQL', () => {
+    // Each of these was invisible to the regex census, or read short of its body.
+    const parsed = ddlIn('fixture.ts', `
+      execRaw('create table if not exists lower_case (id text primary key)');
+      execRaw('CREATE TABLE IF NOT EXISTS main."quoted" (id TEXT PRIMARY KEY)');
+      execRaw('CREATE /* one owner */ TABLE IF NOT EXISTS commented (id TEXT PRIMARY KEY)');
+      execRaw('CREATE TABLE plain (id TEXT PRIMARY KEY)');
+      execRaw("CREATE TABLE IF NOT EXISTS dashes (sep TEXT DEFAULT '--', n INTEGER)");
+      const COLUMNS = \`(id TEXT PRIMARY KEY, n INTEGER)\`;
+      const BODY = COLUMNS;
+      execRaw(\`CREATE TABLE IF NOT EXISTS two_steps \${BODY}\`);
+    `).tables;
+
+    expect(parsed).toEqual([
+      { table: 'lower_case', file: 'fixture.ts', parts: ['id text primary key'] },
+      { table: 'quoted', file: 'fixture.ts', parts: ['id TEXT PRIMARY KEY'] },
+      { table: 'commented', file: 'fixture.ts', parts: ['id TEXT PRIMARY KEY'] },
+      { table: 'plain', file: 'fixture.ts', parts: ['id TEXT PRIMARY KEY'] },
+      { table: 'dashes', file: 'fixture.ts', parts: ['sep TEXT DEFAULT \'--\'', 'n INTEGER'] },
+      { table: 'two_steps', file: 'fixture.ts', parts: ['id TEXT PRIMARY KEY', 'n INTEGER'] },
+    ]);
+  });
+
+  test('RED: a view spelled in lower case or behind a comment is a view', () => {
+    expect(ddlIn('fixture.ts', `
+      execRaw(\`create view if not exists lower_view as select 1 as one\`);
+      execRaw(\`CREATE -- one owner
+        VIEW IF NOT EXISTS commented_view AS SELECT 2 AS two\`);
+    `).views).toEqual([
+      { table: 'lower_view', file: 'fixture.ts', parts: ['select 1 as one'] },
+      { table: 'commented_view', file: 'fixture.ts', parts: ['SELECT 2 AS two'] },
+    ]);
   });
 });
 
@@ -262,11 +298,13 @@ describe('schema-drift genesis lock', () => {
 describe('schema-drift over this tree', () => {
   test('the product SQL corpus never names the retired actor table or indexes', () => {
     const sources = readSources();
-    const retired = /\b(?:FROM|JOIN|INTO|UPDATE|REFERENCES|TABLE(?:\s+IF\s+(?:NOT\s+)?EXISTS)?|ON)\s+["`[]?messages\b|\b(?:conversation_rev_messages_\w+|idx_msg_\w+)\b/i;
+
+    const retired = ({ tables, indexes }: Names) => tables.has('messages')
+      || [...indexes].some((index) => index.startsWith('conversation_rev_messages_') || index.startsWith('idx_msg_'));
 
     const violations = [...sources].flatMap(([file, source]) =>
       statementsOf(file, source)
-        .filter(({ sql }) => retired.test(sql))
+        .filter(({ names }) => retired(names))
         .map(({ line }) => `${file}:${line}`));
 
     expect(sources.size).toBeGreaterThan(0);
@@ -317,17 +355,5 @@ describe('schema-drift over this tree', () => {
       expect(violations.map(({ key }) => key)).toEqual([lockKey(view.table, view.file)]);
       expect(violations[0]?.detail).toContain('CREATE VIEW IF NOT EXISTS never replaces a view');
     }
-  });
-
-  test('the census reads every CREATE TABLE IF NOT EXISTS the corpus holds', () => {
-    // MEASURES == GOVERNS, checked rather than claimed: every statement in the
-    // corpus that names a table appears in the census.
-    const state = survey();
-    const censused = new Set(state.tables.map(({ table, file }) => lockKey(table, file)));
-    const declared = tablesIn(new Map(state.tables.map(({ file }) => [file, ''])));
-
-    expect(declared).toEqual([]);
-
-    for (const { table, file } of state.tables) expect(censused.has(lockKey(table, file))).toBe(true);
   });
 });

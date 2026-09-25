@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { readSources } from "../../../scripts/sources.ts";
+import { isFunctionLike, parse, superClassName, walk } from "../../../scripts/syntax.ts";
 import { lintJson, type LintDiagnostic } from "./shared/oxlint-json.ts";
 
 const repoRoot = process.cwd();
@@ -201,12 +202,36 @@ for (const { rule } of cases) {
  * zero on either must fail loudly rather than report a clean lint.
  */
 const corpus = { files: 0, selects: 0, functions: 0, modelCalls: 0, agentClasses: 0, tuiModules: 0, variantClasses: 0 };
+/** Functions, and classes whose `extends` names an agent base, read from the parsed source. */
+function shapes(file: string, text: string): { functions: number; agentClasses: number } {
+  const counted = { functions: 0, agentClasses: 0 };
+
+  walk(parse(file, text).root, (node) => {
+    if (isFunctionLike(node) && node.type !== "MethodDefinition") counted.functions += 1;
+    const base = superClassName(node);
+
+    if (base === "Agent" || base === "ActorAgent") counted.agentClasses += 1;
+  });
+
+  return counted;
+}
+
+// A text match missed the wrapped `extends` and counted the prose `function` and the `=>` inside a string.
+assert.deepEqual(shapes("fixture.ts", [
+  "// a function in prose, and '=>' in a string",
+  "export class Worker",
+  "  extends ActorAgent<Env> {}",
+  "const label = 'a => b';",
+  "",
+].join("\n")), { functions: 0, agentClasses: 1 });
+
 for (const [file, text] of readSources()) {
   corpus.files += 1;
   corpus.selects += text.match(/\bSELECT\b/gu)?.length ?? 0;
-  corpus.functions += text.match(/\bfunction\b|=>/gu)?.length ?? 0;
+  const found = shapes(file, text);
+  corpus.functions += found.functions;
   corpus.modelCalls += text.match(/\b(generateText|streamText|generateObject|streamObject)\(/gu)?.length ?? 0;
-  corpus.agentClasses += text.match(/\bclass \w+ extends (?:Agent<|ActorAgent\b)/gu)?.length ?? 0;
+  corpus.agentClasses += found.agentClasses;
   corpus.tuiModules += file.startsWith("packages/cli/src/tui/") ? 1 : 0;
   corpus.variantClasses += text.match(/[a-z-]+:p-[a-z]/gu)?.length ?? 0;
 }

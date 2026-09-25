@@ -70,8 +70,33 @@ import {
 import { readSources } from './sources';
 import {
   blockBodyOf, declaredName, identifierCalleeName, identifierText, isAsync, memberCalleeName,
-  parse, walk, type SyntaxNode,
+  parse, walk, type Parsed, type SyntaxNode,
 } from './syntax';
+
+/** Whether a function says it handles an error: it narrows with `instanceof Error`,
+ *  or a parameter arrives unnarrowed, typed `unknown` or by one of the function's
+ *  own type parameters — how all 26 of the real adapters were written. */
+function handlesAnError(fn: SyntaxNode): boolean {
+  const { raw } = fn;
+
+  if (raw.type !== 'FunctionDeclaration' && raw.type !== 'FunctionExpression' && raw.type !== 'ArrowFunctionExpression') return false;
+  const typeParameters = new Set(raw.typeParameters?.params.map((parameter) => parameter.name.name) ?? []);
+
+  const unnarrowed = raw.params.some((parameter) => {
+    const annotation = 'typeAnnotation' in parameter ? parameter.typeAnnotation?.typeAnnotation : undefined;
+
+    return annotation?.type === 'TSUnknownKeyword' || (annotation?.type === 'TSTypeReference'
+      && annotation.typeName.type === 'Identifier' && typeParameters.has(annotation.typeName.name));
+  });
+
+  let narrows = false;
+  walk(fn, (node) => {
+    if (node.raw.type === 'BinaryExpression' && node.raw.operator === 'instanceof'
+      && node.raw.right.type === 'Identifier' && node.raw.right.name === 'Error') narrows = true;
+  });
+
+  return unnarrowed || narrows;
+}
 
 const REPO = new URL('..', import.meta.url).pathname;
 
@@ -529,8 +554,7 @@ function localCalleeName(call: SyntaxNode): string | undefined {
  * Every class in one file. Pure over `(file, text)` so the self-test drives each
  * branch from a fixture rather than from whatever the tree happens to hold.
  */
-export function auditFile(file: string, text: string): readonly Drop[] {
-  const { root, lineAt } = parse(file, text);
+export function auditFile(file: string, text: string, { root, lineAt }: Parsed = parse(file, text)): readonly Drop[] {
   const defined = asyncDefinitions(root);
   const found: Drop[] = [];
 
@@ -618,14 +642,8 @@ export function auditFile(file: string, text: string): readonly Drop[] {
     // valibot `Issue`, a chat event and a timeline row as much as to an `Error`,
     // and 11 of the first 15 findings here were `(issue) => issue.message` over
     // `safeParse().issues` — reading a typed field of a non-error, which is not a
-    // dropped chain and cannot be one. So the function has to say so itself:
-    // either it narrows with `instanceof Error`, or its parameter arrives
-    // unnarrowed (`unknown`, or a bare type parameter), which is exactly how all
-    // 26 of the real ones were written.
-    const source = text.slice(fn.start, fn.end);
-    const handlesAnError = /instanceof Error|:\s*unknown|<\w+>\s*\(/u.test(source);
-
-    if (!handlesAnError) return;
+    // dropped chain and cannot be one. So the function has to say so itself.
+    if (!handlesAnError(fn)) return;
 
     for (const name of bound) {
       let flattens = false;
@@ -748,12 +766,25 @@ export function auditFile(file: string, text: string): readonly Drop[] {
 /** The whole corpus. `readSources()` and no glob of its own: the population this
  *  governs must be the population `no-swallow` measures, or the two numbers
  *  describe different repositories. */
-export function auditCorpus(sources: ReadonlyMap<string, string>): readonly Drop[] {
+/** The corpus's drops, and how many handlers it has for them to hide in. */
+export interface CorpusAudit {
+  readonly drops: readonly Drop[];
+  readonly handlers: number;
+}
+
+export function auditCorpus(sources: ReadonlyMap<string, string>): CorpusAudit {
   const drops: Drop[] = [];
+  let handlers = 0;
 
-  for (const [file, text] of sources) drops.push(...auditFile(file, text));
+  for (const [file, text] of sources) {
+    const parsed = parse(file, text);
+    walk(parsed.root, (node) => {
+      if (node.type === 'CatchClause' || memberCalleeName(node) === 'catch') handlers += 1;
+    });
+    drops.push(...auditFile(file, text, parsed));
+  }
 
-  return drops;
+  return { drops, handlers };
 }
 
 /** One ratchet key per site, symbol-anchored so an edit above it does not churn
@@ -808,14 +839,13 @@ function detailOf(drops: readonly Drop[]): ReadonlyMap<string, string> {
 
 async function main(): Promise<number> {
   const sources = readSources();
-  const drops = auditCorpus(sources);
+  const { drops, handlers } = auditCorpus(sources);
 
   // Upstream of every write and every verdict: a census over an empty corpus
   // reports a clean tree and locks nothing.
   const measured = assertMeasured('silent-drop', [
     ['product sources', sources.size],
-    ['catch occurrences', [...sources.values()]
-      .reduce((total, text) => total + (text.match(/\bcatch\b/gu)?.length ?? 0), 0)],
+    ['catch clauses and .catch calls', handlers],
     ['classes searched', DROP_CLASSES.length],
   ]);
 

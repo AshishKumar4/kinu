@@ -239,6 +239,19 @@ export function reasons(issues: readonly v.BaseIssue<unknown>[]): readonly strin
 `)).toEqual([]);
   });
 
+  test('an error parameter is read from the signature, not from the text around it', () => {
+    // A constrained type parameter is still a bare one, and an `instanceof Error`
+    // inside a comment narrows nothing.
+    expect(classesIn(`export function errorText<Thrown extends Error>(thrown: Thrown): string {
+  return thrown.message;
+}
+`)).toEqual(['projecting_helper']);
+    expect(classesIn(`export function describe(row: { message: string }): string {
+  return row.message; // a row, unlike \`x instanceof Error\`, is data
+}
+`)).toEqual([]);
+  });
+
   test('a one-statement sentinel handler is left to no-sentinel-catch', () => {
     // Not this gate's, and claiming it would make the two counts overlap so
     // neither could be read.
@@ -278,19 +291,22 @@ export function readCredential(read: () => string): string | null {
     expect(auditFile('a.ts', flattens).map((drop) => drop.kind).sort()).toEqual(['handler_absorbs', 'message_only']);
   });
 
+  test('the handler denominator counts handlers, not the word', () => {
+    expect(auditCorpus(new Map([['a.ts', '// catch me if you can\nexport const label = "catch";\n']])).handlers).toBe(0);
+    expect(auditCorpus(new Map([['a.ts', 'declare const p: Promise<void>;\ntry { f(); } catch { g(); }\nvoid p.catch(h);\n']])).handlers).toBe(2);
+  });
+
   test('the live corpus is the one no-swallow measures, and it is not empty', () => {
     const sources = readSources();
-
-    const catches = [...sources.values()]
-      .reduce((total, text) => total + (text.match(/\bcatch\b/gu)?.length ?? 0), 0);
+    const { drops, handlers } = auditCorpus(sources);
 
     expect(sources.size).toBeGreaterThan(0);
-    expect(catches).toBeGreaterThan(0);
+    expect(handlers).toBeGreaterThan(0);
 
     // A census over the real tree, so a scan that silently stopped parsing is a
     // failure here rather than a clean report. The floor is the population the
     // lock records, which shrinks as drops are fixed; the lock asserts which sites.
-    const counts = census(auditCorpus(sources));
+    const counts = census(drops);
     const total = DROP_CLASSES.reduce((sum, name) => sum + (counts.get(name) ?? 0), 0);
     expect(total).toBeGreaterThanOrEqual(readLock(join(import.meta.dir, 'silent-drop.lock.json')).length);
   });

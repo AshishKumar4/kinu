@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname } from "node:path";
 
 import antiSlopPlugin from "./index.ts";
 import { isParseable, isRunnableSuite, readRepositoryFile, trackedFiles } from "../../../scripts/sources.ts";
+import { declaredName, importBindings, literalString, parse, walk, type SyntaxNode } from "../../../scripts/syntax.ts";
 
 const expectedRules = [
   "anti-slop/no-ambient-git-in-tests",
@@ -51,7 +53,6 @@ const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const pluginPackage = JSON.parse(
   readFileSync("tools/oxlint/anti-slop/package.json", "utf8"),
 );
-const ci = readFileSync(".github/workflows/ci.yml", "utf8");
 
 assert.deepEqual(
   Object.keys(config.rules).filter((name) => name.startsWith("anti-slop/")).sort(),
@@ -95,37 +96,34 @@ function parseRuleRegistry(source: string): {
   readonly importModuleBySymbol: ReadonlyMap<string, string>;
   readonly entries: readonly RegistryEntry[];
 } {
+  const tree = parse("index.ts", source).root;
   const importModuleBySymbol = new Map<string, string>();
-  for (const match of source.matchAll(
-    /^import \{ (\w+) \} from "\.\/rules\/([a-z0-9-]+)\.ts";$/gmu,
-  )) {
-    const symbol = match[1]!;
-    assert.ok(
-      !importModuleBySymbol.has(symbol),
-      `index.ts imports ${JSON.stringify(symbol)} from more than one rule module`,
-    );
-    importModuleBySymbol.set(symbol, match[2]!);
+  for (const statement of tree.children) {
+    if (statement.raw.type !== "ImportDeclaration") continue;
+    const specifier = statement.raw.source.value;
+    if (dirname(specifier) !== "./rules" || !specifier.endsWith(".ts")) continue;
+    for (const { local } of importBindings(statement)) {
+      assert.ok(
+        !importModuleBySymbol.has(local),
+        `index.ts imports ${JSON.stringify(local)} from more than one rule module`,
+      );
+      importModuleBySymbol.set(local, basename(specifier, ".ts"));
+    }
   }
 
-  const entries: RegistryEntry[] = [];
-  let inRules = false;
-  let closedRules = false;
-  for (const line of source.split("\n")) {
-    if (line === "\trules: {") {
-      assert.equal(inRules, false, "index.ts declares more than one rules registry");
-      inRules = true;
-      continue;
-    }
-    if (!inRules) continue;
-    if (line === "\t},") {
-      closedRules = true;
-      break;
-    }
-    const match = line.match(/^\t\t"([a-z0-9-]+)": (\w+),$/u);
-    if (match !== null) entries.push([match[1]!, match[2]!]);
-  }
-  assert.ok(inRules, "index.ts declares no rules registry");
-  assert.ok(closedRules, "index.ts does not close its rules registry");
+  const registries: SyntaxNode[] = [];
+  walk(tree, (node) => {
+    if (node.raw.type === "Property" && declaredName(node) === "rules") registries.push(node);
+  });
+  assert.equal(registries.length, 1, "index.ts must declare exactly one rules registry");
+  const [registryNode] = registries;
+  const registry = registryNode?.raw;
+  assert.ok(registry?.type === "Property" && registry.value.type === "ObjectExpression", "index.ts's rules registry is not an object literal");
+  const entries = registry.value.properties.map((property): RegistryEntry => {
+    if (property.type !== "Property") return ["...", "<spread>"];
+    const key = property.key.type === "Identifier" ? property.key.name : literalString(property.key);
+    return [key ?? "<computed>", property.value.type === "Identifier" ? property.value.name : "<not an identifier>"];
+  });
   return { importModuleBySymbol, entries };
 }
 
@@ -143,6 +141,22 @@ function registryValueMappingFindings(
       : [`${key}: ${symbol} is imported from ./rules/${module}.ts, not ./rules/${key}.ts`];
   });
 }
+
+// A registry spelled the ways the parser must read and a line match did not: single quotes, a
+// multi-name import, keys on one line, an unquoted key, and an import inside a block comment.
+const plantedRegistry = parseRuleRegistry(`import { xRule } from './rules/x.ts';
+import { yRule, yHelper } from "./rules/y.ts";
+/*
+import { zRule } from "./rules/z.ts";
+*/
+export default eslintCompatPlugin({ meta: { name: "anti-slop" }, rules: { x: xRule, "y": yRule } });
+`);
+assert.deepEqual(
+  [...plantedRegistry.importModuleBySymbol],
+  [["xRule", "x"], ["yRule", "y"], ["yHelper", "y"]],
+  "every rule-module import binding is read, and a commented-out import is not",
+);
+assert.deepEqual(plantedRegistry.entries, [["x", "xRule"], ["y", "yRule"]], "every registry property is read");
 
 const indexRegistry = parseRuleRegistry(
   readRepositoryFile(process.cwd(), `${pluginDirectory}/index.ts`),
@@ -395,17 +409,38 @@ assert.match(packageJson.scripts.lint, /^bun run test:anti-slop$/u);
 assert.match(packageJson.scripts.check, /^bun run lint && /u);
 assert.doesNotMatch(packageJson.scripts.lint, /--quiet|--allow|--fix|baseline/u);
 
-// The strict gate must provably run in CI. ci.yml does not enumerate commands — it delegates to
-// the ladder — so read the property through the ladder instead of grepping ci.yml for a literal.
-// Both halves are needed: CI runs the ci tier, and the ci tier claims `bun run lint`
-// (the lint half of `bun run check`, its own ladder row since 2026-09-15 so its
-// closure is keyed apart from the typecheck's).
-const ladder = readFileSync("scripts/ladder.ts", "utf8");
-assert.match(ci, /run: bun scripts\/ladder\.ts --tier=ci/u, "CI must run the ladder's ci tier");
-assert.match(
-  ladder,
-  /run: 'bun run lint',\s*\n\s*label: [^\n]*\n\s*tier: '(?:commit|push|ci)',/u,
-  "the ladder must claim `bun run lint` at or before the ci tier",
+// The strict gate must provably run in CI. ci.yml runs the ladder's ci tier, which
+// `scripts/ladder.test.ts` proves over the parsed workflow; here, the ci tier claims `bun run lint`
+// (the lint half of `bun run check`, its own ladder row since 2026-09-15 so its closure is keyed
+// apart from the typecheck's). `LADDER` is data in a module raw Node cannot load, so its rows are
+// read off the syntax tree: each object literal's `run` and `tier`.
+function ladderTiers(source: string): ReadonlyMap<string, string> {
+  const tiers = new Map<string, string>();
+  walk(parse("scripts/ladder.ts", source).root, (node) => {
+    if (node.raw.type !== "VariableDeclarator" || declaredName(node) !== "LADDER") return;
+    walk(node, (row) => {
+      if (row.raw.type !== "ObjectExpression") return;
+      const fields = new Map(row.raw.properties.flatMap((property) =>
+        property.type === "Property" && !property.computed && property.key.type === "Identifier"
+          ? [[property.key.name, literalString(property.value)] as const]
+          : []));
+      const run = fields.get("run");
+      const tier = fields.get("tier");
+      if (run !== undefined && tier !== undefined) tiers.set(run, tier);
+    });
+  });
+  return tiers;
+}
+assert.deepEqual(
+  [...ladderTiers(`export const LADDER = [\n  { tier: 'deploy', label: 'Lint', run: 'bun run lint' },\n];\n/*\n  run: 'bun run lint',\n  label: 'Lint',\n  tier: 'ci',\n*/\n`)],
+  [["bun run lint", "deploy"]],
+  "a ladder row is read whatever its field order, and a row inside a comment is not a row",
+);
+const ladderRows = ladderTiers(readFileSync("scripts/ladder.ts", "utf8"));
+assert.ok(ladderRows.size > 50, `read ${ladderRows.size} LADDER rows; the table has far more, so the reader is not matching`);
+assert.ok(
+  ["commit", "push", "ci"].includes(ladderRows.get("bun run lint") ?? "absent"),
+  `the ladder must claim \`bun run lint\` at or before the ci tier; it is at ${ladderRows.get("bun run lint") ?? "no tier"}`,
 );
 
 function isForbiddenLintDirective(line: string): boolean {
@@ -457,5 +492,5 @@ assert.deepEqual(
 );
 
 process.stdout.write(
-  `anti-slop: registry-value mapping equality (${indexRegistry.entries.length}/${expectedRules.length})\n`,
+  `anti-slop: registry-value mapping equality (${indexRegistry.entries.length}/${expectedRules.length}); ${ladderRows.size} LADDER rows read; blind: a registry value that is not an identifier maps to no module, and a LADDER run or tier that is not a string literal is not read\n`,
 );

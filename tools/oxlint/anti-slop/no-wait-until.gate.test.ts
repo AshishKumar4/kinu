@@ -14,6 +14,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { readSources } from "../../../scripts/sources.ts";
+import { declaredName, parse, walk } from "../../../scripts/syntax.ts";
+
+/** Names of the classes a source declares with an `extends` clause, read from the parsed source. */
+function subclassNames(text: string, file = "source.ts"): string[] {
+  const names: string[] = [];
+
+  walk(parse(file, text).root, (node) => {
+    const { raw } = node;
+    const name = declaredName(node);
+
+    if (raw.type === "ClassDeclaration" && raw.superClass !== null && name !== undefined) names.push(name);
+  });
+
+  return names;
+}
+
+// A text match read `extends` in a type parameter as a base class, and missed a wrapped clause.
+assert.deepEqual(
+  subclassNames("export class Plain<T extends object> {}\nexport class Bound\n  extends DurableObject {}\n"),
+  ["Bound"],
+);
 
 const repoRoot = process.cwd();
 
@@ -177,9 +198,8 @@ function durableObjectCorpus(): {
   // Filtering the shared list keeps the scope while making it impossible for this
   // set to be wider than the enumeration or to disagree with `.gitignore`.
   const WORKER = "packages/cf-backend/src/";
-  const sources = [...readSources()]
-    .filter(([file]) => file.startsWith(WORKER))
-    .map(([, text]) => text);
+  const files = [...readSources()].filter(([file]) => file.startsWith(WORKER));
+  const sources = files.map(([, text]) => text);
   assert.ok(
     sources.length > 0,
     `no source found under ${WORKER}; a facet scan over an empty corpus finds no facets and passes`,
@@ -211,9 +231,8 @@ function durableObjectCorpus(): {
     ),
   ];
 
-  const declaredHere = [...new Set([...bound, ...facets])].filter((name) =>
-    sources.some((text) => new RegExp(`\\bclass\\s+${name}\\b[^{]*\\bextends\\b`, "u").test(text)),
-  );
+  const subclasses = new Set(files.flatMap(([file, text]) => subclassNames(text, file)));
+  const declaredHere = [...new Set([...bound, ...facets])].filter((name) => subclasses.has(name));
   const stateHandleUses = sources.reduce(
     (total, text) => total + (text.match(/\bthis\.(?:ctx|state)\s*\./gu)?.length ?? 0),
     0,

@@ -3,6 +3,29 @@
 // no provider — CI can gate on all of it.
 import { scratchDir } from '../packages/test-utils/src/scratch';
 import { present } from '../packages/test-utils/src/present';
+import { declaredName, literalString, parse, walk } from './syntax';
+
+/** The string literals of `EvolutionEvent.type`, read from the parsed interface. */
+function eventTypes(file: string, source: string): string[] {
+  const found: string[] = [];
+
+  walk(parse(file, source).root, (node) => {
+    if (node.type !== 'TSInterfaceDeclaration' || declaredName(node) !== 'EvolutionEvent') return;
+
+    const member = present(node.children.find((body) => body.type === 'TSInterfaceBody')?.children
+      .find((child) => child.raw.type === 'TSPropertySignature' && child.raw.key.type === 'Identifier' && child.raw.key.name === 'type'),
+    "core's EvolutionEvent type member");
+
+    walk(member, (inner) => {
+      const value = literalString(inner.raw);
+
+      if (value !== undefined) found.push(value);
+    });
+  });
+
+  return found;
+}
+
 import { describe, test, expect } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, lstatSync, readdirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -1276,14 +1299,22 @@ describe('the evolution-event vocabulary does not drift across languages', () =>
   // comes to report that the mechanism under test did not fire when it did.
   const readSource = (rel: string) => readFileSync(join(REPO_ROOT, rel), 'utf8');
 
-  test('every EvolutionEvent type is classified as evolution by the Python reader', () => {
-    const union = present(
-      /export interface EvolutionEvent \{\s*type:\s*([^;]+);/
-        .exec(readSource('packages/core/src/evolution/types.ts')),
-      "core's EvolutionEvent type union",
-    );
+  test('the union is read from the interface member, wherever it sits and however it wraps', () => {
+    const source = [
+      '/** Fired by the engine. */',
+      'export interface EvolutionEvent {',
+      '  message: string;',
+      "  type:",
+      "    | 'reflection'",
+      "    | 'consolidation';",
+      '}',
+    ].join('\n');
 
-    const fromCore = [...union[1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+    expect(eventTypes('types.ts', source)).toEqual(['reflection', 'consolidation']);
+  });
+
+  test('every EvolutionEvent type is classified as evolution by the Python reader', () => {
+    const fromCore = eventTypes('packages/core/src/evolution/types.ts', readSource('packages/core/src/evolution/types.ts'));
 
     expect(fromCore.length).toBeGreaterThan(5);
 

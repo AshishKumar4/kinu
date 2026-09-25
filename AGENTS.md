@@ -105,5 +105,5 @@ Over-engineering that cost CPU, storage or latency and delivered nothing is name
 - No elapsed deadlines on LLM, turn, delegation, swarm, or compaction work; work ends on completion, definitive failure, or cancellation.
 
 ## Code Style
-- TypeScript strict, ES2022, ESNext modules, bundler resolution, `verbatimModuleSyntax`. Relative imports carry no extension (`tools/oxlint/anti-slop/**` and `scripts/sources.ts` run under raw Node and keep `.ts`; `import-extension.gate.test.ts` pins that closure). Extensions only for real `.json`/`.mjs`/`.cjs`/`.js` files.
+- TypeScript strict, ES2022, ESNext modules, bundler resolution, `verbatimModuleSyntax`. Relative imports carry no extension (`tools/oxlint/anti-slop/**`, `scripts/sources.ts` and `scripts/syntax.ts` run under raw Node and keep `.ts`; `import-extension.gate.test.ts` pins that closure). Extensions only for real `.json`/`.mjs`/`.cjs`/`.js` files.
 - Vercel AI SDK v6 `tool()` + `jsonSchema()`; `ToolSet` from `ai`. Executor tools use positional args.

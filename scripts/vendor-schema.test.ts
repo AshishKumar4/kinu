@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import * as v from 'valibot';
+import { scratchDir } from '@kinu.run/test-utils';
 import { findViolations, vendorTables, type VendorTable } from './vendor-schema';
 
 const vendor = (): Map<string, VendorTable> => new Map([
@@ -13,6 +16,52 @@ const corpus = (files: Record<string, string>): Map<string, string> =>
 const ColumnSchema = v.object({ name: v.string() });
 
 describe('vendor-schema', () => {
+  test('RED: a read naming a vendor table in any spelling SQLite accepts is prepared', () => {
+    const { findings, statements } = findViolations(vendor(), corpus({
+      'a.ts': [
+        'const quoted = sql`SELECT actor_id FROM "v_rows"`;',
+        'const bracketed = sql`SELECT actor_id FROM [v_rows]`;',
+        'const qualified = sql`SELECT actor_id FROM main.v_rows`;',
+        'const commented = sql`-- the pane\\nSELECT actor_id FROM v_rows`;',
+        "execRaw('SELECT actor_id FROM v_rows WHERE 1');",
+        'const owned = `CREATE TABLE IF NOT EXISTS "v_rows" (id TEXT)`;',
+      ].join('\n'),
+    }));
+
+    expect(statements).toBe(6);
+    expect(findings.map((f) => [f.line, f.detail.includes('two owners') ? 'owners' : f.detail])).toEqual([
+      [1, 'no such column: actor_id'],
+      [2, 'no such column: actor_id'],
+      [3, 'no such column: actor_id'],
+      [4, 'no such column: actor_id'],
+      [5, 'no such column: actor_id'],
+      [6, 'owners'],
+    ]);
+  });
+
+  test('RED: a vendor CREATE TABLE is read whatever its spelling, and its body as SQL', () => {
+    const modules = scratchDir('vendor-schema');
+    const dist = join(modules, 'agents', 'dist');
+    mkdirSync(dist, { recursive: true });
+    mkdirSync(join(modules, '@cloudflare', 'containers', 'dist'), { recursive: true });
+    writeFileSync(join(dist, 'index.js'), [
+      'const TABLE = "cf_plain";',
+      'export function init(sql) {',
+      '  sql.exec(`create table ${TABLE} (id TEXT PRIMARY KEY, closer TEXT DEFAULT \')\', created_at INTEGER)`);',
+      '}',
+    ].join('\n'));
+    const { tables, refused } = vendorTables(modules);
+
+    expect([...tables.keys()]).toEqual(['cf_plain']);
+    expect(refused).toBe(0);
+    const db = new Database(':memory:');
+    db.run(tables.get('cf_plain')?.ddl ?? '');
+    const columns = v.parse(v.array(ColumnSchema), db.query('PRAGMA table_info(cf_plain)').all()).map((c) => c.name);
+    db.close();
+
+    expect(columns).toEqual(['id', 'closer', 'created_at']);
+  });
+
   const clean = [
     {
       name: 'a read naming only columns the vendor DDL has is not a finding',
@@ -89,7 +138,7 @@ describe('vendor-schema', () => {
   });
 
   test('the installed vendors declare the pane store and the fiber runs, and the pane carries no actor column', () => {
-    const tables = vendorTables();
+    const { tables } = vendorTables();
 
     expect(tables.has('assistant_messages')).toBe(true);
     expect(tables.has('cf_agents_runs')).toBe(true);

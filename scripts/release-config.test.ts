@@ -60,7 +60,9 @@ import { isPreviewHostRequest, previewHostSuffix } from '../packages/core/src/pr
 import { SANDBOX_TRANSPORT } from '../packages/core/src/preview/sandbox-id';
 import { parseJsonc } from './jsonc';
 import { CONTAINER_IMAGES, imageReference, readSource, sourceHash, type ContainerImage } from './container-images';
+import { allCommands, invocation, parseShell, type ShellScript } from './shell-words';
 import { readRepositoryFile, trackedFiles } from './sources';
+import { type ContextPath, contextPaths } from './workflow-expressions';
 // The config module itself, not its text: the failure being guarded is a hook
 // that exists and decides the wrong thing, which no source-text assertion sees.
 import viteConfigFor from '../packages/cf-backend/vite.config';
@@ -252,17 +254,31 @@ describe("the deployed Worker's stack traces are readable", () => {
 
 /** Only what these assertions read. `v.unknown()` where the shape is a union
  *  GitHub allows three spellings of: the questions below are answered from the
- *  job's text or from one key, never from a shape this file has to model. */
-// `looseObject`, not `object`: the secret search below reads the job's own JSON,
-// and a schema that stripped every key it does not name would strip the `env`
-// block the credential arrives in.
+ *  expressions a job holds or from one key, never from a shape this file has to model. */
+/** A YAML value, reduced at the parse to every string it holds at any depth:
+ *  the only text a `${{ … }}` expression can sit in. */
+const StringsSchema: v.GenericSchema<unknown, readonly string[]> = v.union([
+  v.pipe(v.string(), v.transform((one) => [one])),
+  v.pipe(v.array(v.lazy(() => StringsSchema)), v.transform((all) => all.flat())),
+  v.pipe(v.record(v.string(), v.lazy(() => StringsSchema)), v.transform((table) => Object.values(table).flat())),
+  v.pipe(v.unknown(), v.transform(() => [])),
+]);
+
+const EnvSchema = v.optional(v.record(v.string(), StringsSchema));
+
 const StepSchema = v.looseObject({
   uses: v.optional(v.string()),
   run: v.optional(v.string()),
+  env: EnvSchema,
 });
 
+// `looseObject`, not `object`: the secret search below reads every value in the
+// job, and a schema that stripped the keys it does not name would strip the
+// `with` block a credential can arrive in.
 const JobSchema = v.looseObject({
   environment: v.optional(v.unknown()),
+  env: EnvSchema,
+  secrets: v.optional(v.unknown()),
   steps: v.optional(v.array(StepSchema)),
 });
 
@@ -277,13 +293,19 @@ const TriggersSchema = v.union([
 const WorkflowSchema = v.object({
   permissions: v.optional(v.unknown()),
   on: TriggersSchema,
+  env: EnvSchema,
   jobs: v.record(v.string(), JobSchema),
 });
 
+type ParsedWorkflow = v.InferOutput<typeof WorkflowSchema>;
+
+type Job = v.InferOutput<typeof JobSchema>;
+
+type Env = v.InferOutput<typeof EnvSchema>;
+
 interface Workflow {
   readonly file: string;
-  readonly parsed: v.InferOutput<typeof WorkflowSchema>;
-  readonly text: string;
+  readonly parsed: ParsedWorkflow;
 }
 
 /** Every workflow, from the one repository enumerator. A workflow added tomorrow
@@ -291,29 +313,85 @@ interface Workflow {
 function workflows(): readonly Workflow[] {
   return trackedFiles()
     .filter((file) => dirname(file) === WORKFLOWS)
-    .map((file) => {
-      const text = readRepositoryFile(REPO_ROOT, file);
-
-      return { file, text, parsed: v.parse(WorkflowSchema, Bun.YAML.parse(text)) };
-    });
+    .map((file) => ({ file, parsed: v.parse(WorkflowSchema, Bun.YAML.parse(readRepositoryFile(REPO_ROOT, file))) }));
 }
 
 const WORKFLOW_FILES = workflows();
 
-/** Every step in every job, flattened, with where it came from. */
-function steps(): readonly { file: string; job: string; step: v.InferOutput<typeof StepSchema> }[] {
+/** Every step in every job, flattened, with where it came from and the `env`
+ *  maps it sees, innermost first. */
+function steps(): readonly { file: string; job: string; step: v.InferOutput<typeof StepSchema>; envs: readonly Env[] }[] {
   return WORKFLOW_FILES.flatMap(({ file, parsed }) =>
     Object.entries(parsed.jobs).flatMap(([job, definition]) =>
-      (definition.steps ?? []).map((step) => ({ file, job, step }))));
+      (definition.steps ?? []).map((step) => ({ file, job, step, envs: [step.env, definition.env, parsed.env] }))));
 }
 
-/** Jobs whose steps name a secret. Read off the job's own text rather than
- *  modelled: a secret reaches a step through `env`, `with`, a `run` body or an
- *  input default, and a schema that covered four places would miss the fifth. */
-function secretBearingJobs(): readonly { label: string; job: v.InferOutput<typeof JobSchema>; triggers: readonly string[] }[] {
+const readsSecrets = (strings: readonly string[]): boolean =>
+  strings.flatMap(contextPaths).some(([context]) => context === 'secrets');
+
+/** A job holds a secret when an expression anywhere in it reads the `secrets`
+ *  context (`secrets.X`, `secrets['X']`, `toJSON(secrets)`), when it hands
+ *  secrets to a called workflow (`secrets: inherit`), or when the workflow-level
+ *  `env` every job inherits reads one. */
+function holdsSecret(workflow: ParsedWorkflow, job: Job): boolean {
+  return job.secrets !== undefined || readsSecrets(v.parse(StringsSchema, job))
+    || readsSecrets(Object.values(workflow.env ?? {}).flat());
+}
+
+/** Does a `run:` body splice event data into its text? Event data is
+ *  `github.event…`, `github.head_ref`, the whole `github` context, any `inputs`
+ *  value, or an `env` value (step, job, then workflow) that itself holds one:
+ *  `${{ env.X }}` substitutes X's value into the script exactly as the original would. */
+function splicesEventData(run: string, envs: readonly Env[]): boolean {
+  const lookup = (name: string): readonly string[] => envs
+    .map((env) => Object.entries(env ?? {}).find(([key]) => key.toLowerCase() === name)?.[1])
+    .find((value) => value !== undefined) ?? [];
+
+  const tainted = ([context, property]: ContextPath, seen: ReadonlySet<string>): boolean => {
+    if (context === 'inputs') return true;
+
+    if (context === 'github') {
+      return property === undefined || property === '*' || property === 'event' || property === 'head_ref';
+    }
+
+    if (context !== 'env') return false;
+
+    const names = property === undefined || property === '*'
+      ? envs.flatMap((env) => Object.keys(env ?? {}).map((key) => key.toLowerCase()))
+      : [property];
+
+    return names.some((name) => !seen.has(name)
+      && lookup(name).flatMap(contextPaths).some((inner) => tainted(inner, new Set([...seen, name]))));
+  };
+
+  return contextPaths(run).some((path) => tainted(path, new Set()));
+}
+
+const DOWNLOADERS = new Set(['curl', 'wget']);
+
+const SHELLS = new Set(['sh', 'bash', 'dash', 'zsh', 'ksh', 'eval', 'source', '.']);
+
+const programIn = (programs: ReadonlySet<string>, command: Parameters<typeof invocation>[0]): boolean =>
+  programs.has(invocation(command)?.program ?? '');
+
+/** Does a shell body run a download as a script: `curl … | sh`, or a shell whose
+ *  argument or input is a download (`bash -c "$(curl …)"`, `bash <(curl …)`)? */
+function runsDownload(script: ShellScript): boolean {
+  return script.some((pipeline) => {
+    const download = pipeline.findIndex((command) => programIn(DOWNLOADERS, command));
+
+    return (download !== -1 && pipeline.slice(download + 1).some((command) => programIn(SHELLS, command)))
+      || pipeline.some((command) => (programIn(SHELLS, command)
+        && allCommands(command.substitutions).some((inner) => programIn(DOWNLOADERS, inner)))
+        || runsDownload(command.substitutions));
+  });
+}
+
+/** Jobs holding a secret, with the triggers that can start them. */
+function secretBearingJobs(): readonly { label: string; job: Job; triggers: readonly string[] }[] {
   return WORKFLOW_FILES.flatMap(({ file, parsed }) =>
     Object.entries(parsed.jobs)
-      .filter(([, job]) => JSON.stringify(job).includes('secrets.'))
+      .filter(([, job]) => holdsSecret(parsed, job))
       .map(([name, job]) => ({
         label: `${file}#${name}`,
         job,
@@ -323,6 +401,63 @@ function secretBearingJobs(): readonly { label: string; job: v.InferOutput<typeo
 
 const SECRET_JOBS = secretBearingJobs();
 
+const WORKFLOW_FIXTURE = (text: string): ParsedWorkflow => v.parse(WorkflowSchema, Bun.YAML.parse(text));
+
+describe('the workflow readers see what GitHub and the shell run', () => {
+  test('a secret is held however the expression spells it, and prose naming secrets holds none', () => {
+    const held = (text: string): string[] => {
+      const workflow = WORKFLOW_FIXTURE(text);
+
+      return Object.entries(workflow.jobs).filter(([, job]) => holdsSecret(workflow, job)).map(([name]) => name);
+    };
+
+    expect(held([
+      'on: push',
+      'env:',
+      '  TOKEN: ${{ secrets.DEPLOY_TOKEN }}',
+      'jobs:',
+      '  build: { steps: [{ run: make }] }',
+    ].join('\n'))).toEqual(['build']);
+
+    expect(held([
+      'on: push',
+      'jobs:',
+      "  bracket: { steps: [{ run: make, env: { T: \"${{ secrets['DEPLOY_TOKEN'] }}\" } }] }",
+      '  called: { uses: ./.github/workflows/x.yml, secrets: inherit }',
+      "  prose: { steps: [{ run: 'echo rotate the secrets. then retry' }] }",
+    ].join('\n'))).toEqual(['bracket', 'called']);
+  });
+
+  test('event data is found in every spelling that reaches the script text', () => {
+    const title = v.parse(EnvSchema, { TITLE: '${{ github.event.issue.title }}', SAFE: '${{ github.repository }}' });
+
+    for (const run of [
+      "echo \"${{ github['event'].issue.title }}\"",
+      'echo "${{ GitHub.Event.issue.title }}"',
+      'echo "${{ inputs.model }}"',
+      'echo \'${{ toJSON(github) }}\'',
+      'echo "${{ env.TITLE }}"',
+    ]) expect(splicesEventData(run, [title]), run).toBe(true);
+
+    for (const run of ['echo "$TITLE"', 'echo "${{ env.SAFE }}"', 'echo "${{ github.event_name }}"', 'echo github.event']) {
+      expect(splicesEventData(run, [title]), run).toBe(false);
+    }
+  });
+
+  test('a download run as a script is found through quoting, continuations and wrappers', () => {
+    for (const run of [
+      'curl -fsSL https://example.test/install.sh | sh',
+      'bash -c "$(curl -fsSL https://example.test/install.sh)"',
+      'curl -fsSL https://example.test/install.sh \\\n  | sudo bash',
+      'wget -qO- https://example.test/install.sh | /bin/sh -s -- --yes',
+      'source <(curl -fsSL https://example.test/env.sh)',
+    ]) expect(runsDownload(parseShell(run)), run).toBe(true);
+
+    for (const run of ['echo "never curl | sh"', 'sha=$(curl -fsS https://example.test/health | jq -r .sha)']) {
+      expect(runsDownload(parseShell(run)), run).toBe(false);
+    }
+  });
+});
 
 describe('the workflows that publish and measure this product', () => {
   test('every workflow is read, and the credential-bearing jobs are named', () => {
@@ -372,20 +507,19 @@ describe('the workflows that publish and measure this product', () => {
   });
 
   test('no run body interpolates event data into a command', () => {
-    // A `${{ github.event… }}` expression inside a `run:` body is substituted
-    // before the shell sees it, so the VALUE becomes syntax. The eval workflow
-    // spliced a dispatch input into its command line exactly this way. Inputs
-    // travel through `env` and are read as `"$VAR"`.
-    const INTERPOLATED = /\$\{\{\s*github\.event/u;
-    // Positive control, as a literal: a matcher that stops matching is
-    // indistinguishable from a clean tree.
-    expect(INTERPOLATED.test('bun x.ts --model "${{ github.event.inputs.model }}"')).toBe(true);
+    // A `${{ … }}` expression inside a `run:` body is substituted before the
+    // shell sees it, so the VALUE becomes syntax. The eval workflow spliced a
+    // dispatch input into its command line exactly this way. Inputs travel
+    // through `env` and are read as `"$VAR"`.
+    let bodies = 0;
 
-    for (const { file, job, step } of steps()) {
+    for (const { file, job, step, envs } of steps()) {
       if (step.run === undefined) continue;
-      expect(step.run, `${file}#${job} lets event data decide what runs`)
-        .not.toMatch(INTERPOLATED);
+      bodies += 1;
+      expect(splicesEventData(step.run, envs), `${file}#${job} lets event data decide what runs`).toBe(false);
     }
+
+    expect(bodies, 'no workflow runs a shell body').toBeGreaterThan(0);
   });
 
   test('no workflow pipes a remote script into a shell', () => {
@@ -394,8 +528,7 @@ describe('the workflows that publish and measure this product', () => {
     for (const { file, job, step } of steps()) {
       if (step.run === undefined) continue;
       bodies += 1;
-      expect(step.run, `${file}#${job} pipes a download into a shell`)
-        .not.toMatch(/(?:curl|wget)[^\n]*\|\s*(?:ba)?sh\b/u);
+      expect(runsDownload(parseShell(step.run)), `${file}#${job} pipes a download into a shell`).toBe(false);
     }
 
     expect(bodies, 'no workflow runs a shell body').toBeGreaterThan(0);

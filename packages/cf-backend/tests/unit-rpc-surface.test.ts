@@ -22,6 +22,31 @@ import type { UserDO } from '../src/user/user-do';
 import type { FilesRouteAgent } from '../src/files-routes';
 import type { TerminalWorkspace } from '../src/terminal-route';
 import { orchestratorHarness, rpcReachableFrom, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { declaredName, memberCalleeName, parse, walk } from '../../../scripts/syntax';
+
+/** Methods called on a binding named `…stub` or `…Stub` inside `getAgentByName`, read from the parsed module;
+ *  undefined when the module declares no such function. */
+function stubCallsIn(file: string, source: string): string[] | undefined {
+  let calls: string[] | undefined;
+
+  walk(parse(file, source).root, (node) => {
+    if (node.type !== 'FunctionDeclaration' || declaredName(node) !== 'getAgentByName') return;
+    const found: string[] = [];
+
+    walk(node, (inner) => {
+      const method = memberCalleeName(inner);
+      const { raw } = inner;
+
+      if (method === undefined || raw.type !== 'CallExpression' || raw.callee.type !== 'MemberExpression') return;
+      const { object } = raw.callee;
+
+      if (object.type === 'Identifier' && object.name.toLowerCase().endsWith('stub')) found.push(method);
+    });
+    calls = found;
+  });
+
+  return calls;
+}
 
 type UserDOInstance = ReturnType<typeof createTestUserDO>['userDO'];
 
@@ -309,15 +334,26 @@ describe('the SDK half of the surface is derived from the installed agents packa
     for (const name of [...UNIVERSAL_BRIDGES, ...MCP_AGENT_ONLY]) expect(all).toContain(name);
   });
 
+  test('a stub call is read from the parsed function, however it is laid out', () => {
+    const source = [
+      'async function getAgentByName(namespace, name) {',
+      '  const stub = namespace.get(namespace.idFromName(name));',
+      '  if (name) {',
+      '}',
+      '  await stub',
+      '    .setName(name);',
+      '  await stub?.warm();',
+      '  return stub;',
+      '}',
+    ].join('\n');
+
+    expect(stubCallsIn('routing.js', source)).toEqual(['setName', 'warm']);
+  });
+
   test('every sealed surface carries the one name getAgentByName calls on the stub', () => {
-    const routing = readFileSync(join(AGENTS_DIST, 'agent-routing.js'), 'utf8');
-    const body = routing.match(/async function getAgentByName\([\s\S]*?\n}/)?.[0];
+    const calledOnStub = stubCallsIn('agent-routing.js', readFileSync(join(AGENTS_DIST, 'agent-routing.js'), 'utf8'));
 
-    if (!body) throw new Error('getAgentByName is not declared in agents/dist/agent-routing.js');
-
-    const calledOnStub = [...body.matchAll(/\b\w*[sS]tub\.(\w+)\(/g)]
-      .map((match) => match[1])
-      .filter((name): name is string => name !== undefined);
+    if (calledOnStub === undefined) throw new Error('getAgentByName is not declared in agents/dist/agent-routing.js');
 
     expect(calledOnStub.length).toBeGreaterThan(0);
 
