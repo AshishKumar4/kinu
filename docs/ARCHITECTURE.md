@@ -450,7 +450,7 @@ MCTS branch rewards are execution-grounded on both backends. One scorer
 (`packages/core/src/mcts/evaluation.ts`) lets the execution outcome dominate the
 judge for hosted branches and CLI child-process branches alike. Checks run
 before a scaffold mutation takes effect: the misevolution gate
-(`scaffold/misevolution.ts`) rejects harmful edits by fixed criteria, the
+(`safety/misevolution.ts`) rejects harmful edits by fixed criteria, the
 shadow veto (`scaffold/shadow.ts`, `maxRegressions: 1`, `minDecisiveTrials: 5`,
 Monte-Carlo-derived) rejects regressions, and the DGM-style archive
 (`scaffold/archive.ts`) keeps prior variants as stepping stones, ranked for

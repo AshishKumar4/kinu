@@ -378,7 +378,7 @@ rollout configuration, self-modification entry points, and consent settings.
 It does not reject network calls. The same codemode Worker exposes raw network
 globals before the tool is saved, so blocking only the persisted copy would add
 no containment. The remaining checks limit the longer blast radius that
-persistence creates. `SURFACE_CRITERIA` in `core/src/scaffold/misevolution.ts`
+persistence creates. `SURFACE_CRITERIA` in `core/src/safety/misevolution.ts`
 owns this split, and `core/src/execution/inline.ts` applies it.
 
 Plan mode keeps ordinary tools but removes Release structurally:

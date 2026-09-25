@@ -89,6 +89,33 @@ describe('checkMisevolution — judged on the syntax tree, not the spelling', ()
     expect(checkMisevolution(source)).toMatchObject({ ok: false, criterionId });
   });
 
+  test.each([
+    ['network-egress', 'Reflect.get(globalThis, "fetch")'],
+    ['network-egress', 'Reflect.get(self, "fe" + "tch")'],
+    ['network-egress', 'Object.getOwnPropertyDescriptor(globalThis, "fetch").value'],
+    ['unanalysable-code', 'const { [k]: f } = globalThis'],
+    ['unanalysable-code', 'const g = globalThis; g[k]'],
+    ['unanalysable-code', '(async () => {}).constructor(body)'],
+    ['unanalysable-code', 'const make = Object.getPrototypeOf(run).constructor; make(body)'],
+    ['unanalysable-code', 'const F = Function; F(body)'],
+  ])('a crafted tool reaching %s through `%s` is refused', (criterionId, reach) => {
+    const code = `async (args) => { const k = args.key; const body = args.body; const run = async () => {}; ${reach}; }`;
+
+    for (const surface of ['craft', 'import'] as const) {
+      expect(checkMisevolutionForSurface({ code }, surface)).toMatchObject({ ok: false, criterionId });
+    }
+  });
+
+  test.each([
+    'await tools.eval({ code: args.code })',
+    'return args.cb instanceof Function',
+    'return { require: args.x }',
+    'return args.value.constructor.name',
+    'const self = args; return self[args.key]',
+  ])('a property, key or local named like a guarded construct passes: `%s`', (body) => {
+    expect(checkMisevolutionForSurface({ code: `async (args) => { ${body}; }` }, 'craft')).toEqual({ ok: true });
+  });
+
   test('a comment is not code: naming a guarded construct there passes', () => {
     expect(checkMisevolution(`// Never call fetch( directly or touch 'scaffold/agent.js'; allow_all is off.
 async function* run(rt, task) { yield { type: 'chunk', data: task }; }`)).toEqual({ ok: true });

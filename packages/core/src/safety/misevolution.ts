@@ -5,7 +5,8 @@
 
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { constantString, nodesOf, parseEvolvedCode } from './evolved-code';
+import type * as acorn from 'acorn';
+import { constantString, isNameOnly, nodesOf, parseEvolvedCode, placedNodesOf, type PlacedNode } from './evolved-code';
 
 export type MisevolutionSurface = 'scaffold' | 'craft' | 'craft_tool' | 'import';
 
@@ -25,6 +26,7 @@ export interface EvolvedArtifact {
 interface ArtifactFacts {
   readonly names: ReadonlySet<string>;
   readonly words: ReadonlySet<string>;
+  readonly strings: ReadonlySet<string>;
   readonly paths: readonly string[];
   readonly hidden: readonly string[];
 }
@@ -38,8 +40,6 @@ interface MisevolutionCriterion {
 const EGRESS_NAMES: ReadonlySet<string> = new Set(['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'sendBeacon']);
 
 const GLOBAL_OBJECTS: ReadonlySet<string> = new Set(['globalThis', 'self', 'window', 'global']);
-
-const CODE_FROM_STRING: ReadonlySet<string> = new Set(['eval', 'Function', 'require']);
 
 const mentions = (protectedNames: readonly string[]) => (facts: ArtifactFacts): boolean =>
   protectedNames.some((name) => facts.names.has(name) || facts.words.has(name));
@@ -59,7 +59,7 @@ function namesScaffoldFile(path: string): boolean {
 const CRITERIA: readonly MisevolutionCriterion[] = [
   {
     id: 'network-egress',
-    trips: (facts) => [...EGRESS_NAMES].some((name) => facts.names.has(name)),
+    trips: (facts) => [...EGRESS_NAMES].some((name) => facts.names.has(name) || facts.strings.has(name)),
     reason: 'direct network egress — evolved code must reach the outside world only through the audited tool surface (host.callTool / sandbox tools)',
   },
   {
@@ -86,7 +86,7 @@ const CRITERIA: readonly MisevolutionCriterion[] = [
   {
     id: 'unanalysable-code',
     trips: (facts) => facts.hidden.length > 0,
-    reason: 'the code hides what it names from this checklist (it does not parse, runs a string as code, imports at runtime, or reads the global object by a computed key) — write it with names the checklist can read',
+    reason: 'the code hides what it names from this checklist (it does not parse, runs a string as code, imports at runtime, takes a constructor out of an object, or hands on the global object) — write it with names the checklist can read',
   },
 ];
 
@@ -131,7 +131,53 @@ function addText(text: string, into: { words: Set<string>; paths: string[] }): v
   into.paths.push(...tokensOf(text, isPathChar));
 }
 
-function codeFacts(source: string, into: { names: Set<string>; words: Set<string>; paths: string[]; hidden: string[] }): void {
+function patternNames(pattern: acorn.AnyNode | null | undefined): string[] {
+  if (pattern === null || pattern === undefined) return [];
+
+  if (pattern.type === 'Identifier') return [pattern.name];
+
+  if (pattern.type === 'AssignmentPattern') return patternNames(pattern.left);
+
+  if (pattern.type === 'RestElement') return patternNames(pattern.argument);
+
+  if (pattern.type === 'ArrayPattern') return pattern.elements.flatMap((element) => patternNames(element));
+
+  if (pattern.type === 'ObjectPattern') {
+    return pattern.properties.flatMap((property) => patternNames(property.type === 'RestElement' ? property : property.value));
+  }
+
+  return [];
+}
+
+function declaredNames(program: acorn.Program): Set<string> {
+  const declared = new Set<string>();
+
+  const bind = (names: readonly string[]): void => { for (const name of names) declared.add(name); };
+
+  for (const node of nodesOf(program)) {
+    if (node.type === 'VariableDeclarator') bind(patternNames(node.id));
+    else if (node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression' || node.type === 'ArrowFunctionExpression') {
+      bind([...patternNames('id' in node ? node.id : null), ...node.params.flatMap((param) => patternNames(param))]);
+    } else if (node.type === 'ClassDeclaration' || node.type === 'ClassExpression') bind(patternNames(node.id));
+    else if (node.type === 'CatchClause') bind(patternNames(node.param));
+  }
+
+  return declared;
+}
+
+/** `.constructor` kept in place: a property of it read, or it compared. */
+function constructorStaysPut({ parent, field }: PlacedNode): boolean {
+  if (parent?.type === 'MemberExpression') return field === 'object';
+
+  return parent?.type === 'BinaryExpression' && ['===', '!==', '==', '!='].includes(parent.operator);
+}
+
+function readsGlobalByName({ parent, field }: PlacedNode): boolean {
+  return parent?.type === 'MemberExpression' && field === 'object'
+    && (!parent.computed || (parent.property.type !== 'PrivateIdentifier' && constantString(parent.property) !== null));
+}
+
+function codeFacts(source: string, into: MutableFacts): void {
   const program = parseEvolvedCode(source);
 
   if (program === null) {
@@ -140,38 +186,54 @@ function codeFacts(source: string, into: { names: Set<string>; words: Set<string
     return;
   }
 
-  const strings: string[] = [];
+  const declared = declaredNames(program);
 
-  for (const node of nodesOf(program)) {
+  for (const placed of placedNodesOf(program)) {
+    const { node, parent } = placed;
+
     if (node.type === 'Identifier') {
       into.names.add(node.name);
+      const reads = !isNameOnly(placed);
 
-      if (CODE_FROM_STRING.has(node.name)) into.hidden.push(`references ${node.name}`);
+      if (reads && (node.name === 'eval' || node.name === 'require')) into.hidden.push(`references ${node.name}`);
+
+      if (reads && node.name === 'Function' && !(parent?.type === 'BinaryExpression' && parent.operator === 'instanceof')) {
+        into.hidden.push('references Function');
+      }
+
+      if (reads && GLOBAL_OBJECTS.has(node.name) && !declared.has(node.name) && !readsGlobalByName(placed)) {
+        into.hidden.push(`hands ${node.name} on or reads it by a computed key`);
+      }
     } else if (node.type === 'ImportExpression' || node.type === 'ImportDeclaration') {
       into.hidden.push('imports a module');
     } else if (node.type === 'WithStatement') {
       into.hidden.push('uses a with statement');
-    } else if (node.type === 'MemberExpression' && node.computed && node.property.type !== 'PrivateIdentifier') {
-      const key = constantString(node.property);
+    } else if (node.type === 'MemberExpression') {
+      let key: string | null = null;
 
-      if (key !== null) into.names.add(key);
-      else if (node.object.type === 'Identifier' && GLOBAL_OBJECTS.has(node.object.name)) {
-        into.hidden.push(`reads ${node.object.name} by a computed key`);
-      }
+      if (!node.computed && node.property.type === 'Identifier') key = node.property.name;
+      else if (node.computed && node.property.type !== 'PrivateIdentifier') key = constantString(node.property);
+
+      if (node.computed && key !== null) into.names.add(key);
+
+      if (key === 'constructor' && !constructorStaysPut(placed)) into.hidden.push('takes a constructor out of an object');
     }
 
     const text = constantString(node);
 
-    if (text !== null) strings.push(text);
+    if (text !== null) {
+      into.strings.add(text);
+      addText(text, into);
+    }
   }
-
-  for (const text of strings) addText(text, into);
 }
+
+interface MutableFacts { names: Set<string>; words: Set<string>; strings: Set<string>; paths: string[]; hidden: string[] }
 
 function artifactFacts(artifact: EvolvedArtifact): ArtifactFacts {
   const paths: string[] = [];
   const hidden: string[] = [];
-  const facts = { names: new Set<string>(), words: new Set<string>(), paths, hidden };
+  const facts: MutableFacts = { names: new Set<string>(), words: new Set<string>(), strings: new Set<string>(), paths, hidden };
 
   if (artifact.code !== undefined) codeFacts(artifact.code, facts);
 

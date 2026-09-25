@@ -1,11 +1,11 @@
 diff --git a/packages/core/src/safety/misevolution.ts b/packages/core/src/safety/misevolution.ts
 --- a/packages/core/src/safety/misevolution.ts
 +++ b/packages/core/src/safety/misevolution.ts
-@@ -140,6 +140,7 @@
-     return;
+@@ -187,6 +187,7 @@
    }
  
+   const declared = declaredNames(program);
 +  addText(source, into);
-   const strings: string[] = [];
  
-   for (const node of nodesOf(program)) {
+   for (const placed of placedNodesOf(program)) {
+     const { node, parent } = placed;

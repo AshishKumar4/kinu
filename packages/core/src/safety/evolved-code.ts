@@ -8,7 +8,6 @@ const SCRIPT: acorn.Options = {
 
 const MODULE: acorn.Options = { ecmaVersion: 'latest', sourceType: 'module', allowAwaitOutsideFunction: true };
 
-/** The program, or null when the source parses in neither form. */
 export function parseEvolvedCode(source: string): acorn.Program | null {
   for (const options of [SCRIPT, MODULE]) {
     try {
@@ -24,14 +23,38 @@ export function parseEvolvedCode(source: string): acorn.Program | null {
 /** A child of an acorn node that is itself a node: every acorn node carries a type and its span. */
 const AcornNodeSchema = v.custom<acorn.AnyNode>((input) => v.is(v.looseObject({ type: v.string(), start: v.number(), end: v.number() }), input));
 
-export function* nodesOf(root: acorn.AnyNode): Generator<acorn.AnyNode> {
-  yield root;
+export interface PlacedNode {
+  readonly node: acorn.AnyNode;
+  readonly parent: acorn.AnyNode | null;
+  readonly field: string;
+}
 
-  for (const value of Object.values(root)) {
+export function* placedNodesOf(root: acorn.AnyNode, parent: acorn.AnyNode | null = null, field = ''): Generator<PlacedNode> {
+  yield { node: root, parent, field };
+
+  for (const [key, value] of Object.entries(root)) {
     for (const child of Array.isArray(value) ? value : [value]) {
-      if (v.is(AcornNodeSchema, child)) yield* nodesOf(child);
+      if (v.is(AcornNodeSchema, child)) yield* placedNodesOf(child, root, key);
     }
   }
+}
+
+export function* nodesOf(root: acorn.AnyNode): Generator<acorn.AnyNode> {
+  for (const { node } of placedNodesOf(root)) yield node;
+}
+
+/** `x.eval`, `{ require: 1 }`: a name, not a read of a binding. */
+export function isNameOnly({ parent, field }: PlacedNode): boolean {
+  if (parent === null) return false;
+
+  if (parent.type === 'MemberExpression') return field === 'property' && !parent.computed;
+
+  if (parent.type === 'Property' || parent.type === 'MethodDefinition' || parent.type === 'PropertyDefinition') {
+    return field === 'key' && !parent.computed;
+  }
+
+  return parent.type === 'LabeledStatement' || parent.type === 'BreakStatement' || parent.type === 'ContinueStatement'
+    || parent.type === 'MetaProperty';
 }
 
 /** The string an expression evaluates to when every part of it is a literal, else null. */
@@ -63,8 +86,7 @@ export function parseCodemodeProgram(program: string): acorn.Program | null {
   return parseEvolvedCode(fenced ? lines.slice(1, -1).join('\n') : program);
 }
 
-/** Every `namespace.method(…)` the program calls, as `namespace.method`; a mention without a call,
- *  a string or a comment naming one, and a call on a deeper object (`a.tools.x()`) are not calls. */
+/** Every `namespace.method(…)` the program calls, as `namespace.method`; `a.tools.x()` is not one. */
 export function namespacedCalls(program: acorn.Program, namespaces: readonly string[]): Set<string> {
   const calls = new Set<string>();
 
