@@ -1687,7 +1687,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The host does the whole physical retirement in one call: runtime objects, `actor_id` rows in
       // the retirement transaction, and on destroy the home and `.kinu/agents/<key>/` subtree.
       await this.actorHost().retire(caller, {
-        reference: input.reference, name: input.name, destroy: true,
+        reference: input.reference, name: input.name, destroy: true, interrupt: true,
       });
 
       return entry.state === 'deleted' ? entry : directory.apply(caller, path, { action: 'release', name: input.name, reference: input.reference });

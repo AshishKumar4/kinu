@@ -226,7 +226,7 @@ export function createTemporaryAgentPort(deps: {
 
         if (!actor) throw new KinuError('missing', 'The temporary actor has no confirmed identity.');
         deps.roster.dismiss(name, deps.now());
-        await deps.runtime.dismiss(name, true, actor);
+        await deps.runtime.dismiss(name, { keepHistory: true, interrupt: false }, actor);
       };
 
       const creationId = crypto.randomUUID();

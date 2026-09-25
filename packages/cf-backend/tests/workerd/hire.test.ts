@@ -104,6 +104,29 @@ describe('hire', () => {
     expect(childTurns[0]?.runs).toBe(1);
   });
 
+  it('the owner\'s Dismiss with history kept ends a parked delegated turn instead of waiting on it', async () => {
+    const workspace = 'hire-dismiss';
+
+    await probe(workspace).setup(workspace, 'hire-root-durable', 'park');
+    // Held, not awaited: the root's turn waits on the child's answers, which the dismissal ends.
+    const hiring = probe(workspace).openHire(workspace, 'Hire one durable auditor; the owner will dismiss it.');
+
+    await probe(workspace).childSpoke();
+    // Hangs while the retirement waits on the parked turn: nothing below releases it.
+    const dismissed = await probe(workspace).dismissChild(workspace);
+
+    await abortAllDurableObjects();
+    await Promise.allSettled([hiring]);
+    await probe(workspace).reenter(workspace);
+
+    const observed: HireObservation = await probe(workspace).observe(workspace);
+    const childTurns = observed.turns.filter((row) => row.actorId !== observed.rootActorId);
+
+    expect(observed.roster.find((row) => row.name === dismissed)?.status).toBe('dismissed');
+    expect(observed.toolResults.join(' ')).not.toContain(CHILD_ANSWER);
+    expect(childTurns[0]?.runs).toBe(1);
+  });
+
   it('an eviction between the child\'s answer and the caller\'s wait still settles the caller', async () => {
     const workspace = 'hire-evict';
 
