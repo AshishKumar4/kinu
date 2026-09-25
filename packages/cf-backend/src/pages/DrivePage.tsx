@@ -8,8 +8,10 @@ import {
 } from "@phosphor-icons/react";
 import * as v from "valibot";
 import {
-  APP_ROUTES, DRIVE_SKILLS_DIR, blueprintPagePath, entryRevision, formatBytes, parseSkillFile, shortAge, workspaceDisplayTitle,
-  type DriveEntry, type DriveListing, type LiveShareVisibility, type OwnedSlate, type SharedLibrary, type SharedRow,
+  APP_ROUTES, BUILTIN_SKILL_FILES, DRIVE_SKILLS_DIR, blueprintPagePath, compareSkillNames, entryRevision, formatBytes, parseSkillFile, shortAge,
+  skillViewPath, workspaceDisplayTitle,
+  type DriveEntry, type DriveListing, type FileText, type LiveShareVisibility, type OwnedSlate, type SharedLibrary, type SharedRow,
+  type SkillFileRefusal,
 } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import {
@@ -88,18 +90,6 @@ function Section({ label, titled = true, children }: { label: string; titled?: b
   );
 }
 
-function EmptyState({ title, body }: { title: string; body: ReactNode }) {
-  return (
-    <div data-drive-empty className="flex flex-col items-center px-6 py-16 text-center sm:py-24">
-      <span className="flex size-14 items-center justify-center rounded-2xl p-text-3 bg-[color-mix(in_srgb,var(--c-text)_7%,transparent)]">
-        <HardDrivesIcon size={26} />
-      </span>
-      <h2 className="mt-5 p-heading text-[19px] p-text">{title}</h2>
-      <p className="mt-2 max-w-[26rem] p-row-text p-text-3">{body}</p>
-    </div>
-  );
-}
-
 const TEXT = /\.(?:md|markdown|txt|csv|tsv|json|ya?ml|toml|ts|tsx|js|jsx|py|sh|css|html?)$/iu;
 
 const PROSE = /\.(?:md|markdown|txt)$/iu;
@@ -112,6 +102,21 @@ function coverLines(text: string, skill: boolean): [string | null, string[]] {
   const steps = parsed.skill.body.split("\n").filter((line) => line.trim() !== "");
 
   return [parsed.skill.name, [parsed.skill.description, "", ...steps].slice(0, 12)];
+}
+
+function TextPage({ text, name }: { text: string | null; name: string }) {
+  const [heading, lines] = text === null ? [null, []] : coverLines(text, name === "SKILL.md");
+
+  if (lines.length === 0) return <FileCover name={name} />;
+
+  return (
+    <span className="absolute inset-0 overflow-hidden p-recessed px-[14%] pt-[5%]">
+      <span className={`block h-full overflow-hidden rounded-t-md border border-b-0 p-border p-surface px-3 pt-2.5 text-[8.5px] leading-[1.45] p-text-3 ${PROSE.test(name) ? "" : "font-mono"}`}>
+        {heading !== null && <span className="mb-1 block truncate text-[11px] font-semibold p-text">{heading}</span>}
+        {lines.map((line, index) => <span key={index} className="block truncate">{line === "" ? "\u00a0" : line}</span>)}
+      </span>
+    </span>
+  );
 }
 
 /** The first lines of a text file, read once the tile is in view. */
@@ -141,20 +146,7 @@ function TextCover({ path, name }: { path: string; name: string }) {
     return () => { live = false; observer.disconnect(); };
   }, [path]);
 
-  const [heading, lines] = text === null ? [null, []] : coverLines(text, name === "SKILL.md");
-
-  return (
-    <span ref={holder} className="absolute inset-0">
-      {lines.length === 0 ? <FileCover name={name} /> : (
-        <span className="absolute inset-0 overflow-hidden p-recessed px-[14%] pt-[5%]">
-          <span className={`block h-full overflow-hidden rounded-t-md border border-b-0 p-border p-surface px-3 pt-2.5 text-[8.5px] leading-[1.45] p-text-3 ${PROSE.test(name) ? "" : "font-mono"}`}>
-            {heading !== null && <span className="mb-1 block truncate text-[11px] font-semibold p-text">{heading}</span>}
-            {lines.map((line, index) => <span key={index} className="block truncate">{line === "" ? "\u00a0" : line}</span>)}
-          </span>
-        </span>
-      )}
-    </span>
-  );
+  return <span ref={holder} className="absolute inset-0"><TextPage text={text} name={name} /></span>;
 }
 
 interface Transfer {
@@ -170,6 +162,26 @@ function VisibilityGlyph({ visibility }: { visibility: LiveShareVisibility | und
   return visibility === "public"
     ? <GlobeIcon size={13} className="shrink-0 p-text-4" aria-label="Anyone with the link" />
     : <UsersIcon size={13} className="shrink-0 p-text-4" aria-label="Shared with people" />;
+}
+
+function whyUnused(refusal: SkillFileRefusal): string {
+  if (refusal.reason === "builtin") return "A built-in skill has this name, so agents use the built-in";
+
+  if (refusal.reason === "shadowed") return `Agents read ${refusal.by.slice(1)} instead`;
+
+  return `Not a skill name: it ${refusal.problem}`;
+}
+
+function NotUsed({ refusal }: { refusal: SkillFileRefusal }) {
+  return <span className="truncate p-warning" title={whyUnused(refusal)}>Not used</span>;
+}
+
+function SkillMeta({ entry, from }: { entry: DriveEntry; from: string | null }) {
+  if (entry.unused !== undefined) return <NotUsed refusal={entry.unused} />;
+
+  if (from !== null) return <span className="truncate">{`From ${from.slice(1)}`}</span>;
+
+  return <span className="truncate">{entry.mtimeMs > 0 ? `Updated ${shortAge(entry.mtimeMs)}` : ""}</span>;
 }
 
 function whoCanOpen(row: SharedRow): string {
@@ -189,43 +201,50 @@ interface MineContents {
   readonly blueprints: readonly SharedRow[];
   readonly folders: readonly DriveEntry[];
   readonly files: readonly DriveEntry[];
+  readonly builtins: readonly string[];
 }
 
-/** The Skills folder leads the folders, and is left out until it holds a skill. */
-function mineContents(path: string, entries: readonly DriveEntry[], library: SharedLibrary | null, skillsListed: boolean): MineContents {
+const SKILLS_FOLDER = DRIVE_SKILLS_DIR.slice(1);
+
+function mineContents(path: string, entries: readonly DriveEntry[], library: SharedLibrary | null): MineContents {
   const isRoot = path === "/";
-  const isSkills = (entry: DriveEntry): boolean => isRoot && entry.name === DRIVE_SKILLS_DIR.slice(1);
-  const shown = entries.filter((entry) => skillsListed || !isSkills(entry));
+  const isSkills = (entry: DriveEntry): boolean => isRoot && entry.name === SKILLS_FOLDER;
 
   return {
     slates: isRoot && library !== null ? library.slates : [],
     blueprints: isRoot && library !== null ? library.mine.filter((row) => row.kind === "blueprint") : [],
-    folders: shown.filter((entry) => entry.kind !== "file").sort((a, b) => Number(isSkills(b)) - Number(isSkills(a))),
-    files: shown.filter((entry) => entry.kind === "file"),
+    folders: entries.filter((entry) => entry.kind !== "file").sort((a, b) => Number(isSkills(b)) - Number(isSkills(a))),
+    files: entries.filter((entry) => entry.kind === "file"),
+    builtins: path === DRIVE_SKILLS_DIR ? Object.keys(BUILTIN_SKILL_FILES) : [],
   };
 }
 
 function isEmptyMine(contents: MineContents): boolean {
-  return contents.slates.length + contents.blueprints.length + contents.folders.length + contents.files.length === 0;
+  return contents.slates.length + contents.blueprints.length + contents.folders.length + contents.files.length + contents.builtins.length === 0;
+}
+
+function ownsNothing(contents: MineContents): boolean {
+  return contents.slates.length + contents.blueprints.length + contents.files.length === 0
+    && contents.folders.every((entry) => entry.name === SKILLS_FOLDER);
 }
 
 /** Shared with nothing in it goes back to My stuff; a first visit to an empty My stuff goes to what is shared. */
-function landing(tab: DriveTab, firstVisit: boolean, mineEmpty: boolean, library: SharedLibrary | null): ReactNode {
+function landing(tab: DriveTab, firstVisit: boolean, nothingOwned: boolean, library: SharedLibrary | null): ReactNode {
   const sharesAnything = library !== null && !isEmptyLibrary(library);
 
   if (tab === "shared" && library !== null && !sharesAnything) return <Navigate to={APP_ROUTES.drive} replace state={{ chosen: true }} />;
 
-  if (tab === "mine" && firstVisit && mineEmpty && sharesAnything) return <Navigate to={APP_ROUTES.shared} replace />;
+  if (tab === "mine" && firstVisit && nothingOwned && sharesAnything) return <Navigate to={APP_ROUTES.shared} replace />;
 
   return null;
 }
 
-function subtitleOf(tab: DriveTab, path: string, mineEmpty: boolean): ReactNode {
+function subtitleOf(tab: DriveTab, path: string): ReactNode {
   if (tab !== "mine") return null;
 
   if (path === DRIVE_SKILLS_DIR) return "Every workspace you own uses these skills.";
 
-  if (path !== "/" || mineEmpty) return null;
+  if (path !== "/") return null;
 
   return <>Files and folders here are in every workspace you own, at <span className="font-mono p-text-2">/shared</span>.</>;
 }
@@ -265,12 +284,10 @@ function SharedBody({ shared, query, tile }: { shared: SharedLibrary | null; que
   );
 }
 
-function MineBody({ resource, onRetry, empty, isRoot, sharesAnything, children }: {
+function MineBody({ resource, onRetry, empty, children }: {
   resource: AsyncResource<DriveListing>;
   onRetry: () => void;
   empty: boolean;
-  isRoot: boolean;
-  sharesAnything: boolean;
   children: ReactNode;
 }) {
   if (resource.status === "loading") return <div className="flex justify-center py-16"><Loader size="base" /></div>;
@@ -281,11 +298,14 @@ function MineBody({ resource, onRetry, empty, isRoot, sharesAnything, children }
 
   if (!empty) return children;
 
-  if (!isRoot) return <EmptyState title="This folder is empty" body="Drop files here, or use New." />;
-
   return (
-    <EmptyState title={sharesAnything ? "Nothing here yet" : "Your Drive is empty"}
-      body={<>Drop files here, or use New. Every workspace you own sees them at <span className="font-mono p-text-2">/shared</span>, and the slates your workspaces build show up here too.</>} />
+    <div data-drive-empty className="flex flex-col items-center px-6 py-16 text-center sm:py-24">
+      <span className="flex size-14 items-center justify-center rounded-2xl p-text-3 bg-[color-mix(in_srgb,var(--c-text)_7%,transparent)]">
+        <HardDrivesIcon size={26} />
+      </span>
+      <h2 className="mt-5 p-heading text-[19px] p-text">This folder is empty</h2>
+      <p className="mt-2 max-w-[26rem] p-row-text p-text-3">Drop files here, or use New.</p>
+    </div>
   );
 }
 
@@ -358,15 +378,39 @@ function DriveNotices({ notice, onDismissNotice, libraryResource, onRetryLibrary
   );
 }
 
-function FileDrawer({ path, entry, onSaved, onClose }: { path: string; entry: DriveEntry; onSaved: () => void; onClose: () => void }) {
+function Drawer({ onClose, children }: { onClose: () => void; children: ReactNode }) {
   return (
     <>
       <div aria-hidden="true" className="p-scrim fixed inset-0 z-40" onClick={onClose} />
-      <div className="fixed inset-y-0 right-0 z-50 w-full sm:w-[min(640px,92vw)]" data-drive-viewer>
-        <FileViewer path={path} read={readDriveText} revision={entryRevision(entry)} rawHref={inlineUrl(path)} downloadHref={downloadUrl(path)}
-          onSaved={onSaved} onClose={onClose} />
-      </div>
+      <div className="fixed inset-y-0 right-0 z-50 w-full sm:w-[min(640px,92vw)]" data-drive-viewer>{children}</div>
     </>
+  );
+}
+
+function FileDrawer({ path, entry, onClose }: { path: string; entry: DriveEntry; onClose: () => void }) {
+  return (
+    <Drawer onClose={onClose}>
+      <FileViewer path={path} read={readDriveText} revision={entryRevision(entry)} rawHref={inlineUrl(path)} downloadHref={downloadUrl(path)} onClose={onClose} />
+    </Drawer>
+  );
+}
+
+/** Each built-in's SKILL.md at its `/skills` path, read only. */
+const BUILTIN_SKILL_TEXT: ReadonlyMap<string, string> = new Map(
+  Object.entries(BUILTIN_SKILL_FILES).map(([name, text]) => [skillViewPath(name), text]),
+);
+
+function readBuiltinSkill(path: string): Promise<FileText> {
+  return Promise.resolve({ content: BUILTIN_SKILL_TEXT.get(path), readOnlyReason: "Built in: every workspace has this skill, and it can't be changed." });
+}
+
+function BuiltinSkillDrawer({ name, onClose }: { name: string; onClose: () => void }) {
+  const bytes = `data:text/markdown;charset=utf-8,${encodeURIComponent(BUILTIN_SKILL_FILES[name])}`;
+
+  return (
+    <Drawer onClose={onClose}>
+      <FileViewer path={skillViewPath(name)} read={readBuiltinSkill} revision="built-in" rawHref={bytes} downloadHref={bytes} onClose={onClose} />
+    </Drawer>
   );
 }
 
@@ -383,8 +427,6 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const listing = useAsyncResource(loadListing, undefined, path);
   const loadLibrary = useCallback(() => getSharedLibrary(), []);
   const library = useAsyncResource(loadLibrary, undefined, "library");
-  const loadSkills = useCallback((): Promise<DriveListing | null> => (isRoot ? listDrive(DRIVE_SKILLS_DIR) : Promise.resolve(null)), [isRoot]);
-  const skills = useAsyncResource(loadSkills, undefined, isRoot ? "root" : "folder");
   const [dialog, setDialog] = useState<DriveDialogState | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
@@ -437,26 +479,24 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
 
   const afterSkillAdded = async (): Promise<void> => {
     listing.reload();
-    skills.reload();
 
     if (path !== DRIVE_SKILLS_DIR) await navigate(folderHref(DRIVE_SKILLS_DIR));
   };
 
-  const showFile = (name: string | null): void => {
+  const show = (key: "file" | "skill", name: string | null): void => {
     const next = new URLSearchParams(search);
 
-    if (name === null) next.delete("file");
-    else next.set("file", name);
+    if (name === null) next.delete(key);
+    else next.set(key, name);
     setSearch(next);
   };
 
   const shared = lastValue(library.resource);
   const sharesAnything = shared !== null && !isEmptyLibrary(shared);
-  const contents = mineContents(path, lastValue(listing.resource)?.entries ?? [], shared, (lastValue(skills.resource)?.entries.length ?? 0) > 0);
-  const settled = [listing.resource, library.resource, skills.resource].every((resource) => resource.status !== "loading");
-  const mineEmpty = settled && isEmptyMine(contents);
+  const contents = mineContents(path, lastValue(listing.resource)?.entries ?? [], shared);
+  const settled = [listing.resource, library.resource].every((resource) => resource.status !== "loading");
   const inSkills = path === DRIVE_SKILLS_DIR;
-  const redirect = landing(tab, isRoot && !v.safeParse(ChosenState, location.state).success, mineEmpty, shared);
+  const redirect = landing(tab, isRoot && !v.safeParse(ChosenState, location.state).success, settled && ownsNothing(contents), shared);
 
   if (redirect !== null) return redirect;
 
@@ -485,7 +525,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   };
 
   const fileMenu = (entry: DriveEntry): MenuItem[] => [
-    { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => showFile(entry.name) },
+    { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => show("file", entry.name) },
     { label: "Download", icon: <DownloadSimpleIcon size={15} />, marker: "data-drive-download", onSelect: () => window.location.assign(downloadUrl(childPath(path, entry.name))) },
     { label: "Rename", icon: <PencilSimpleIcon size={15} />, marker: "data-drive-rename", onSelect: () => setDialog({ kind: "rename", entry }) },
     { label: "Delete", icon: <TrashIcon size={15} />, marker: "data-drive-delete", danger: true, apart: true, onSelect: () => setDialog({ kind: "delete", entry }) },
@@ -541,14 +581,10 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     if (entry.kind === "symlink") icon = entry.skill ? SKILLS_ICON : LINK_ICON;
 
     if (inSkills && entry.skill) {
-      let meta = opens === full ? "" : `From ${opens.slice(1)}`;
-
-      if (opens === full && entry.mtimeMs > 0) meta = `Updated ${shortAge(entry.mtimeMs)}`;
-
       return (
         <Tile key={entry.name} title={entry.name} icon={<BookOpenIcon size={16} />} href={`${folderHref(opens)}?file=SKILL.md`}
           picture={<TextCover path={`${opens}/SKILL.md`} name="SKILL.md" />}
-          meta={<span className="truncate">{meta}</span>} menu={folderMenu(entry)} attributes={attributes} />
+          meta={<SkillMeta entry={entry} from={opens === full ? null : opens} />} menu={folderMenu(entry)} attributes={attributes} />
       );
     }
 
@@ -558,22 +594,35 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     );
   };
 
+  const builtinTile = (name: string): ReactNode => (
+    <Tile key={`builtin:${name}`} title={name} icon={<BookOpenIcon size={16} />} onOpen={() => show("skill", name)}
+      picture={<TextPage text={BUILTIN_SKILL_FILES[name]} name="SKILL.md" />}
+      meta={<span className="truncate">Built in</span>} menu={[]} attributes={{ "data-drive-builtin": name }} />
+  );
+
+  /** The /skills view's order: by name, a built-in first. */
+  const skillTiles = (): ReactNode[] => [
+    ...contents.builtins.map((name) => ({ name, tile: builtinTile(name) })),
+    ...contents.folders.map((entry) => ({ name: entry.name, tile: folderTile(entry) })),
+  ].sort((a, b) => compareSkillNames(a.name, b.name)).map((each) => each.tile);
+
   const fileTile = (entry: DriveEntry): ReactNode => {
     const full = childPath(path, entry.name);
     const age = entry.mtimeMs > 0 ? shortAge(entry.mtimeMs) : null;
 
     return (
-      <Tile key={entry.name} title={entry.name} icon={fileIcon(entry.name)} onOpen={() => showFile(entry.name)}
+      <Tile key={entry.name} title={entry.name} icon={fileIcon(entry.name)} onOpen={() => show("file", entry.name)}
         picture={TEXT.test(entry.name) && entry.size > 0 ? <TextCover path={full} name={entry.name} />
           : <FileCover name={entry.name} image={IMAGE.test(entry.name) ? inlineUrl(full) : undefined} />}
-        meta={<span className="truncate">{[formatBytes(entry.size), age].filter(Boolean).join(" · ")}</span>}
+        meta={entry.unused === undefined ? <span className="truncate">{[formatBytes(entry.size), age].filter(Boolean).join(" · ")}</span> : <NotUsed refusal={entry.unused} />}
         menu={fileMenu(entry)}
         attributes={{ "data-drive-entry": entry.name, "data-drive-kind": entry.kind, "data-drive-skill": "false" }} />
     );
   };
 
   const opened = contents.files.find((entry) => entry.name === search.get("file"));
-  const subtitle = subtitleOf(tab, path, mineEmpty);
+  const builtin = contents.builtins.find((name) => name === search.get("skill"));
+  const subtitle = subtitleOf(tab, path);
 
   return (
     <div className="h-full overflow-y-auto">
@@ -608,11 +657,11 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
 
         {tab === "mine" ? (
           <DropZone label={isRoot ? "My stuff" : path.slice(path.lastIndexOf("/") + 1)} onFiles={uploadFiles}>
-            <MineBody resource={listing.resource} onRetry={listing.reload} empty={mineEmpty} isRoot={isRoot} sharesAnything={sharesAnything}>
+            <MineBody resource={listing.resource} onRetry={listing.reload} empty={isEmptyMine(contents)}>
               <SectionList groups={[
                 { label: "Slates", tiles: contents.slates.map(slateTile) },
                 { label: "Blueprints", tiles: contents.blueprints.map((row) => shareTile(row, true)) },
-                { label: inSkills ? "Skills" : "Folders", tiles: contents.folders.map(folderTile) },
+                { label: inSkills ? "Skills" : "Folders", tiles: inSkills ? skillTiles() : contents.folders.map(folderTile) },
                 { label: "Files", tiles: contents.files.map(fileTile) },
               ]} />
             </MineBody>
@@ -622,7 +671,8 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
         )}
       </div>
 
-      {opened !== undefined && <FileDrawer path={childPath(path, opened.name)} entry={opened} onSaved={listing.reload} onClose={() => showFile(null)} />}
+      {opened !== undefined && <FileDrawer path={childPath(path, opened.name)} entry={opened} onClose={() => show("file", null)} />}
+      {builtin !== undefined && <BuiltinSkillDrawer name={builtin} onClose={() => show("skill", null)} />}
       {dialog !== null && (
         <DriveDialog dialog={dialog} folder={path} onClose={() => setDialog(null)} onListingChanged={listing.reload}
           onSharesChanged={library.reload} onSkillAdded={() => void afterSkillAdded()} />

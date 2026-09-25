@@ -1298,6 +1298,8 @@ export {
   type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
 
+export { MarkdownFrontmatterError, parseMarkdownFrontmatter } from './utils/markdown-frontmatter';
+
 export { compareCodeUnits } from './utils/text';
 
 // Sleep-time compute
@@ -1806,7 +1808,7 @@ export type {
   SkillHeader, ParsedSkill, DiscoveredSkill, ActiveSkill, SkillBodyRef,
   SkillsIndex, SkillSource, ActiveSkillSet, ActivationReason,
   SkillParseResult,
-  SkillsVfs, DiscoverOpts, SkillsDiscovery, UnreadSkillFile,
+  SkillsVfs, DiscoverOpts, SkillsDiscovery, UnreadSkillFile, SkillFileRefusal,
   LoadActiveSkillsOpts, ActivatedSkill,
 } from './skills/index';
 

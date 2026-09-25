@@ -282,16 +282,17 @@ describe('MCP presets', () => {
             );
 
             // The row grammar, at this width: the endpoint is gone from every
-            // row — a preset's, a server's and a skill's alike — and each row
-            // carries one trailing control, which is the preset rows' add or
-            // menu button and nobody else's.
+            // row, a preset's and a server's alike, and each row carries one
+            // trailing control, which is the preset rows' add or menu button
+            // and nobody else's.
             const drawn = await drawnRows(plugins);
 
             expect(drawn.filter((row) => row.preset).map((row) => row.name))
               .toEqual(['GitHub', 'Cloudflare', 'Gmail']);
-            // The failed server is on the page, so its line — a failure, where
-            // the endpoint used to be — is under the same rule.
-            expect(drawn.map((row) => row.name)).toContain('notion');
+            // Services only, skills being in the Drive: the presets, then the
+            // account's own servers. The failed one is among them, so its line
+            // (a failure, where the endpoint used to be) is under the same rule.
+            expect(drawn.map((row) => row.name)).toEqual(['GitHub', 'Cloudflare', 'Gmail', 'linear', 'notion']);
 
             for (const row of drawn) {
               expect(row.text).not.toContain('http');
