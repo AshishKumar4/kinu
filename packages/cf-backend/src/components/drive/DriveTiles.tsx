@@ -89,6 +89,8 @@ function Opener({ href, onOpen, className, label, children }: {
 }) {
   if (href !== undefined) return <Link to={href} aria-label={label} className={className}>{children}</Link>;
 
+  if (onOpen === undefined) return <div className={className}>{children}</div>;
+
   return <button type="button" aria-label={label} onClick={onOpen} className={`w-full text-left ${className}`}>{children}</button>;
 }
 

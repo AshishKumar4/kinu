@@ -124,6 +124,10 @@ describe('slate sharing surfaces', () => {
             expect(limits).toContain(String(SHARE_VIEWER_REQUESTS_PER_MINUTE));
             expect(limits).toContain(`$${String(SHARE_SPEND_CAP_USD_PER_DAY)}`);
             shots.push(await shoot(live, `share-dialog-live-${viewport}-${theme}`, LIVE_SHOTS));
+            // Folded, the reach names what the slate reaches (a server by its title), not the slate's own keys.
+            const reach = await live.$eval('[data-share-reach]', (element) => element.textContent ?? '');
+            expect(reach).toContain('GitHub');
+            expect(reach).not.toContain('GITHUB');
             await live.click('[data-share-reach]');
             await live.waitForSelector('[data-grant-summary]');
             const text = await live.$eval('[role="dialog"]', (element) => element.textContent ?? '');

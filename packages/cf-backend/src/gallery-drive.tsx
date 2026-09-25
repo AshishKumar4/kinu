@@ -16,16 +16,34 @@ const DrivePage = lazy(() => import("@/pages/DrivePage"));
 
 const SKILL = (name: string, description: string): string => `---\nname: ${name}\ndescription: ${description}\n---\n# ${name}\n\nSteps.\n`;
 
+const PEOPLE = ["Lovelace, Ada", "Hopper, Grace", "Turing, Alan", "Johnson, Katherine", "Dijkstra, Edsger", "Liskov, Barbara"];
+
+const CUSTOMERS = ["id,name,plan,seats", ...Array.from({ length: 180 }, (_, index) =>
+  `${String(index + 1)},"${PEOPLE[index % PEOPLE.length] ?? ""}",${["Team", "Pro", "Free"][index % 3] ?? ""},${String(2 + (index * 7) % 38)}`)].join("\n");
+
+const RUNBOOK = [
+  "# Runbook", "", "When checkout errors climb, start here.", "", "## First five minutes", "",
+  "1. Check the error budget on the dashboard.", "2. Roll back the last deploy if it is under an hour old.", "3. Page the on-call owner.", "",
+  "## Useful", "", "- `wrangler tail --env production`", "- The [status page](https://status.example.com)", "",
+].join("\n");
+
+const DEPLOY_SCRIPT = [
+  "#!/bin/sh", "# Ship the current branch to production.", "set -eu", "",
+  "branch=$(git rev-parse --abbrev-ref HEAD)", "echo \"Shipping $branch\"", "",
+  "bun install --frozen-lockfile", "bun run build", "bun run test", "",
+  "wrangler deploy --env production", "echo \"Shipped $branch\"", "",
+].join("\n");
+
 async function seededDrive(): Promise<MossaicVfs> {
   const drive = mossaicVfs(fakeMossaic().tenant("gallery-owner"));
   const write = (path: string, text: string) => drive.writeFile(path, text);
 
   await write("/README.md", "# Drive\n\nShared across every workspace.\n");
-  await write("/data/customers.csv", "id,name\n1,Ada\n2,Grace\n".repeat(400));
+  await write("/data/customers.csv", CUSTOMERS);
   await write("/data/notes.txt", "call back on Tuesday");
   await write("/projects/ops/deploy/SKILL.md", SKILL("deploy", "Ship the current branch to production"));
-  await write("/projects/ops/deploy/scripts/run.sh", "#!/bin/sh\necho ship\n");
-  await write("/projects/ops/runbook.md", "# Runbook\n");
+  await write("/projects/ops/deploy/scripts/run.sh", DEPLOY_SCRIPT);
+  await write("/projects/ops/runbook.md", RUNBOOK);
   await write("/notes/todo.md", "- write the skill\n");
   await write("/skills/review/SKILL.md", SKILL("review", "Review a pull request the way this team does"));
   await write("/skills/slates/SKILL.md", SKILL("slates", "The team's own notes on building slates"));
@@ -138,15 +156,21 @@ const NOW = Date.now();
 
 const DESCRIPTION = "Reads the open issues of a repository, groups them by area, and writes a triage note every morning.";
 
+/** A capture's digest; the gallery serves no pictures, so a browser test answers these. */
+const SLATE_PICTURES = {
+  "issue-triage": "3f1c7a0d9e5b28c4a6f0e1d2b3c4a5968778695a4b3c2d1e0f9e8d7c6b5a4938",
+  lighthouse: "a9b8c7d6e5f4031928374655647382910abcdef0123456789abcdef012345678",
+} as const;
+
 const LIBRARY: SharedLibrary = {
   slates: [
-    { id: "issue-triage", title: "Issue triage", workspace: "checkout-fixes", bindings: 4, visibility: "public" },
-    { id: "lighthouse", title: "Landing perf report", workspace: "perf-audit", bindings: 1 },
+    { id: "issue-triage", title: "Issue triage", workspace: "checkout-fixes", bindings: 4, visibility: "public", picture: SLATE_PICTURES["issue-triage"] },
+    { id: "lighthouse", title: "Landing perf report", workspace: "perf-audit", bindings: 1, picture: SLATE_PICTURES.lighthouse },
     { id: "standup", title: "Standup notes", workspace: "email-triage", bindings: 0 },
   ],
   mine: [
     { id: "checkout-fixes~k7Qm2pV9xRt3aB4c~mfrq6zk3p2xw7ha", kind: "blueprint", share: "k7Qm2pV9xRt3aB4c", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 3 * 864e5, bindings: 4, workspace: "checkout-fixes", users: ["pat@example.com"] },
-    { id: "live-board-1", kind: "live", share: "live-board-1", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 864e5, bindings: 4, visibility: "public", workspace: "checkout-fixes", users: [], fork: true },
+    { id: "live-board-1", kind: "live", share: "live-board-1", slate: "issue-triage", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 864e5, bindings: 4, visibility: "users", workspace: "checkout-fixes", users: ["sam@example.com", "lee@example.com"], fork: true },
   ],
   received: [
     { id: "live-mail-9", kind: "live", share: "live-mail-9", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 2 * 3600e3, bindings: 2, visibility: "users", workspace: "sam-mail", owner: "sam@example.com", fork: true },

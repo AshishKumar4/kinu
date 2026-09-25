@@ -124,7 +124,7 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
     return { read: members.filter((member) => member.effect === "read").length, mutating: members.filter((member) => member.effect === "mutate").length };
   }, [graph]);
 
-  const names = graph.bindings.filter((binding) => binding.slate === graph.slate).map((binding) => binding.name).join(", ");
+  const names = [...new Set(graph.bindings.filter((binding) => binding.slate === graph.slate).map((binding) => capabilityLabel(binding.capability)))].join(", ");
   let changes = "reading only";
 
   if (approved.size > 0) changes = `${String(approved.size)} ${approved.size === 1 ? "change" : "changes"} allowed`;
@@ -134,7 +134,10 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
       <button type="button" aria-expanded={open} data-share-reach onClick={() => setOpen((shown) => !shown)}
         className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-elevated)]">
         <span className="w-14 shrink-0 p-row-text font-medium p-text">Reach</span>
-        <span className="min-w-0 flex-1 truncate p-meta p-text-3">{names} · {changes}</span>
+        <span className="flex min-w-0 flex-1 p-meta p-text-3">
+          <span className="truncate">{names}</span>
+          <span className="shrink-0 whitespace-pre"> · {changes}</span>
+        </span>
         {open ? <CaretDownIcon size={13} className="shrink-0 p-text-4" /> : <CaretRightIcon size={13} className="shrink-0 p-text-4" />}
       </button>
       {open && (

@@ -25,13 +25,16 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
-import { withGallery, type Gallery } from './gallery-harness';
+import { contrast, rgba, withGallery, type Gallery } from './gallery-harness';
 
 const SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'drive-ux');
 
 mkdirSync(SHOTS, { recursive: true });
 
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 844 } } as const;
+
+/** A one-pixel PNG: what a slate's picture route answers here, since the gallery serves none. */
+const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 
 async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light', viewport: keyof typeof VIEWPORTS): Promise<Page> {
   const page = await gallery.newPage();
@@ -115,6 +118,11 @@ async function tabTo(page: Page, label: string): Promise<{ disabled: string | nu
   return null;
 }
 
+/** Resolves once a frame has been drawn after everything before it. */
+async function drawn(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); }));
+}
+
 async function pressNew(page: Page, item: string): Promise<void> {
   await page.click('[data-drive-new]');
   await page.waitForSelector(`[${item}]`);
@@ -175,18 +183,220 @@ describe('the Drive', () => {
     });
   });
 
+  /** Opens `frame` with Issue triage's picture answering, every other picture missing, and reads what each tile under
+   *  `selector` drew once every picture has answered and a frame has drawn the answer. */
+  async function drawnPictures(gallery: Gallery, frame: string, selector: string, key: string): Promise<[string | null, string][]> {
+    const page = await gallery.newPage();
+
+    try {
+      await page.setRequestInterception(true);
+      page.on('request', async (request) => {
+        const { pathname } = new URL(request.url());
+
+        if (!pathname.startsWith('/api/user/pictures/')) await request.continue();
+        else if (pathname.startsWith('/api/user/pictures/checkout-fixes/issue-triage/')) await request.respond({ status: 200, contentType: 'image/png', body: PIXEL });
+        else await request.respond({ status: 404, body: 'No such picture.' });
+      });
+      await page.setViewport(VIEWPORTS.desktop);
+      await page.goto(`${gallery.origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector(selector);
+      await page.waitForFunction((tiles: string) => [...document.querySelectorAll(`${tiles} img`)].every((img) => img instanceof HTMLImageElement && img.complete), {}, selector);
+      await drawn(page);
+
+      return await page.$$eval(selector, (tiles, attribute) => tiles.map((tile): [string | null, string] => {
+        const img = tile.querySelector('img');
+        let shows = 'cover';
+
+        if (img !== null) shows = img.naturalWidth > 0 ? 'picture' : 'broken';
+
+        return [tile.getAttribute(attribute), shows];
+      }), key);
+    } finally {
+      await page.close();
+    }
+  }
+
+  test('a slate tile shows its picture, and its cover while it has none or when the picture fails', async () => {
+    await withGallery(async (gallery) => {
+      // Issue triage's picture answers; Landing perf report's is missing; Standup notes has none yet.
+      expect(await drawnPictures(gallery, 'drive', '[data-drive-slate]', 'data-drive-slate'))
+        .toEqual([['issue-triage', 'picture'], ['lighthouse', 'cover'], ['standup', 'cover']]);
+    });
+  });
+
+  test('a live share of yours shows its slate\'s picture; a blueprint and a share you received keep their covers', async () => {
+    await withGallery(async (gallery) => {
+      const tiles = await drawnPictures(gallery, 'shared', '[data-drive-share]', 'data-drive-share');
+
+      // Only a live share of yours has a slate of yours to show; the others, two blueprints and a live share someone
+      // gave you, keep their covers.
+      expect(tiles.filter(([, how]) => how === 'picture').map(([id]) => id)).toEqual(['live-board-1']);
+      expect(tiles.length).toBe(4);
+    });
+  });
+
+  test("an upload's bar stands out on its tile, on both themes", async () => {
+    await withGallery(async (gallery) => {
+      for (const theme of ['dark', 'light'] as const) {
+        const page = await freshPage(gallery, 'drive&path=/projects/ops', theme, 'desktop');
+
+        try {
+          // Held in flight: the page's own fetch never answers the upload.
+          await page.evaluate(() => {
+            const real = window.fetch;
+
+            window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => (init?.method === 'PUT' ? new Promise<Response>(() => {}) : real(input, init)), { preconnect: real.preconnect });
+          });
+          const input = await page.$('input[data-drive-files-input]');
+
+          if (input === null) throw new Error('no files input');
+          await input.uploadFile(join(import.meta.dir, 'drive-ux.test.ts'));
+          await page.waitForSelector('[data-drive-transfer="uploading"]');
+
+          const [sweep, ground] = await page.$eval('[data-drive-transfer="uploading"] [role="progressbar"]', (bar) => [
+            getComputedStyle(bar, '::after').backgroundColor,
+            getComputedStyle(bar.parentElement ?? bar).backgroundColor,
+          ]);
+
+          // WCAG's floor for a graphic that carries meaning.
+          expect(contrast(rgba(sweep), rgba(ground))).toBeGreaterThanOrEqual(3);
+        } finally {
+          await page.close();
+        }
+      }
+    });
+  });
+
+  test('an upload is a tile in its folder until its file is listed; Cancel stops it, and a refusal stays with its reason', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'drive', 'dark', 'desktop');
+
+      try {
+        // An empty folder to upload into.
+        await pressNew(page, 'data-drive-new-folder');
+        await page.waitForSelector('[role="dialog"] input');
+        await page.type('[role="dialog"] input', 'archive');
+        await page.click('[data-drive-dialog-commit]');
+        await waitForEntry(page, 'archive');
+        await page.click('[data-drive-entry="archive"] a');
+        await page.waitForSelector('[data-drive-empty]');
+
+        // The gallery's network is the page's own fetch: an upload is held until aborted, or refused when asked.
+        await page.evaluate(() => {
+          const real = window.fetch;
+
+          window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
+            if (init?.method !== 'PUT') return real(input, init);
+
+            if (document.documentElement.dataset.put === 'refuse') {
+              return Promise.resolve(new Response(JSON.stringify({ error: 'File too large for the Drive' }), { status: 413, headers: { 'content-type': 'application/json' } }));
+            }
+
+            return new Promise<Response>((_, reject) => { init.signal?.addEventListener('abort', () => reject(init.signal?.reason)); });
+          }, { preconnect: real.preconnect });
+        });
+
+        const input = await page.$('input[data-drive-files-input]');
+        const file = join(import.meta.dir, 'drive-ux.test.ts');
+
+        if (input === null) throw new Error('no files input');
+
+        // In flight, the folder is no longer empty: the file is a tile in Files.
+        await input.uploadFile(file);
+        await drawn(page);
+        expect(await page.$('[data-drive-empty]')).toBeNull();
+        expect(await sections(page)).toEqual([{ title: 'Files', tiles: ['drive-ux.test.ts'] }]);
+
+        // Cancelled, the tile goes and the folder is empty again.
+        await menuOf(page, '[data-drive-transfer="uploading"]');
+        await page.click('[data-drive-transfer="uploading"] [data-drive-cancel-upload]');
+        await drawn(page);
+        expect(await page.$('[data-drive-transfer]')).toBeNull();
+        expect(await page.$('[data-drive-empty]')).not.toBeNull();
+
+        // Refused, the tile stays with the Drive's reason until it is dismissed.
+        await page.evaluate(() => { document.documentElement.dataset.put = 'refuse'; });
+        await input.uploadFile(file);
+        await drawn(page);
+        expect(await page.$eval('[data-drive-transfer]', (tile) => [tile.getAttribute('data-drive-transfer'), tile.textContent?.includes('File too large for the Drive')]))
+          .toEqual(['failed', true]);
+        await menuOf(page, '[data-drive-transfer="failed"]');
+        await page.click('[data-drive-transfer="failed"] [data-drive-dismiss-upload]');
+        await drawn(page);
+        expect(await page.$('[data-drive-transfer]')).toBeNull();
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('a sheet\'s tile draws its first rows as cells, a code file\'s its lines numbered, and Markdown\'s its page', async () => {
+    await withGallery(async (gallery) => {
+      // A cover is drawn once its file is read, when the tile holds the file's first words however it draws them.
+      const read = async (query: string, entry: string, words: string): Promise<Page> => {
+        const page = await freshPage(gallery, query, 'dark', 'desktop');
+
+        await page.waitForFunction((tile: string, first: string) => document.querySelector(`[data-drive-entry="${tile}"]`)?.textContent?.includes(first) === true, {}, entry, words);
+        await drawn(page);
+
+        return page;
+      };
+
+      const sheet = await read('drive&path=/data', 'customers.csv', 'plan');
+
+      try {
+        expect(await sheet.$$eval('[data-drive-entry="customers.csv"] [data-drive-sheet-row]', (rows) => rows.slice(0, 2).map((row) => [...row.children].map((cell) => cell.textContent))))
+          .toEqual([['id', 'name', 'plan', 'seats'], ['1', 'Lovelace, Ada', 'Team', '2']]);
+      } finally {
+        await sheet.close();
+      }
+
+      const code = await read('drive&path=/projects/ops/deploy/scripts', 'run.sh', '#!/bin/sh');
+
+      try {
+        const lines = await code.$$eval('[data-drive-entry="run.sh"] [data-drive-code-line]', (rows) => rows.map((row) => [row.children[0]?.textContent, row.children[1]?.textContent]));
+
+        expect(lines.slice(0, 3)).toEqual([['1', '#!/bin/sh'], ['2', '# Ship the current branch to production.'], ['3', 'set -eu']]);
+        expect(lines.map(([number]) => number)).toEqual(lines.map((_, index) => String(index + 1)));
+      } finally {
+        await code.close();
+      }
+
+      const prose = await read('drive&path=/projects/ops', 'runbook.md', 'Runbook');
+
+      try {
+        const drawnPage = await prose.$eval('[data-drive-entry="runbook.md"]', (tile) => ({
+          heading: tile.querySelector('[data-drive-page-heading]')?.textContent ?? null,
+          lines: [...tile.querySelectorAll('[data-drive-page-line]')].map((line) => line.textContent?.trim() ?? ''),
+        }));
+
+        // The first heading titles the page, a list keeps its bullets, and no line shows Markdown's own marks.
+        expect(drawnPage.heading).toBe('Runbook');
+        expect(drawnPage.lines.some((line) => line.startsWith('• '))).toBe(true);
+        expect(drawnPage.lines.filter((line) => /^#|^[-*+] |`|\*\*|\]\(/u.test(line))).toEqual([]);
+      } finally {
+        await prose.close();
+      }
+    });
+  });
+
   test('marks a skill folder from its menu, shows the built-in skills beside it, and refuses a pasted file with no front matter', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'drive&path=/projects/ops', 'light', 'desktop');
 
       try {
         const deploy = '[data-drive-entry="deploy"]';
+        const markOf = (tile: string): Promise<string> => page.$eval(`${tile} svg`, (svg) => svg.outerHTML);
+        const skillMark = await markOf(deploy);
         expect((await menuOf(page, deploy)).find((item) => item.label === 'Mark as skill')).toEqual({ label: 'Mark as skill', refused: null });
         await page.click(`${deploy} [data-drive-mark]`);
 
         // Marking links it under /skills; the folder stays where it was.
         await page.click('[data-drive-crumb]');
         await waitForEntry(page, 'skills');
+        // The Skills folder holds skills without being one, and wears their mark; a plain folder does not.
+        expect(await markOf('[data-drive-entry="skills"]')).toBe(skillMark);
+        expect(await markOf('[data-drive-entry="projects"]')).not.toBe(skillMark);
         await page.click('[data-drive-entry="skills"] a');
         await waitForEntry(page, 'deploy');
         expect(await entries(page)).toEqual([
@@ -216,6 +426,11 @@ describe('the Drive', () => {
           ['standup.md', expect.stringMatching(/^\d+ B · /u), null],
         ]);
         // The reserved folder is not renamed or deleted, and its skills say who uses them.
+        // A built-in skill's tile reads as its page: its steps show none of Markdown's own marks.
+        const builtinLines = await page.$$eval('[data-drive-builtin] [data-drive-page-line]', (lines) => lines.map((line) => line.textContent ?? ''));
+
+        expect(builtinLines.length).toBeGreaterThan(0);
+        expect(builtinLines.filter((line) => /^#|`|\*\*/u.test(line))).toEqual([]);
         expect(await page.evaluate(() => document.body.innerText)).toContain('Every workspace you own uses these skills.');
         await shoot(page, 'drive-skills-light');
 
@@ -260,6 +475,29 @@ describe('the Drive', () => {
         await page.click('[data-drive-add-skill-commit]');
         await waitForEntry(page, 'triage');
         expect(await crumbs(page)).toEqual(['My stuff', 'Skills']);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('a Markdown file opens as a document: its headings stand above its text, and its lists keep their markers', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'drive&path=/projects/ops%3Ffile%3Drunbook.md', 'dark', 'desktop');
+
+      try {
+        await page.waitForSelector('[data-drive-viewer] [data-files-preview-body] li');
+
+        const read = await page.$eval('[data-drive-viewer] [data-files-preview-body]', (body) => {
+          const size = (selector: string): number => Number.parseFloat(getComputedStyle(body.querySelector(selector) ?? body).fontSize);
+
+          return {
+            headings: [size('h1'), size('h2')].every((heading) => heading > size('p')),
+            markers: [...body.querySelectorAll('ol, ul')].map((list) => getComputedStyle(list).listStyleType),
+          };
+        });
+
+        expect(read).toEqual({ headings: true, markers: ['decimal', 'disc'] });
       } finally {
         await page.close();
       }
@@ -318,7 +556,10 @@ describe('the Drive', () => {
         expect((await menuOf(shared, '[data-drive-share="live-board-1"]')).map((item) => item.label)).toEqual(['Open', 'Fork…', 'Stop sharing']);
         await shared.click('[data-drive-share="live-board-1"] [data-drive-stop-sharing]');
         await shared.waitForSelector('[role="dialog"]');
-        expect(await shared.$eval('[role="dialog"]', (element) => element.textContent ?? '')).toContain('Everyone with the link loses access right away');
+        // The confirmation names everyone the share was given to, the two people who lose it.
+        const confirm = await shared.$eval('[role="dialog"]', (element) => element.textContent ?? '');
+
+        expect(['sam@example.com', 'lee@example.com'].filter((person) => !confirm.includes(person))).toEqual([]);
         await shoot(shared, 'drive-shared-light');
       } finally {
         await shared.close();

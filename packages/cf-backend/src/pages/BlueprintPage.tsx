@@ -2,7 +2,7 @@
  * `/shared/blueprint/:id`: read-only, no workspace chrome; the viewer may have no account.
  * A secret-shaped scan hit is reported by location, never content.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import { FileIcon, FolderIcon, GitBranchIcon, LinkIcon, WarningIcon, type Icon } from "@phosphor-icons/react";
@@ -35,15 +35,13 @@ function bindingsByKind(bindings: readonly SlateBindingDeclaration[]): Array<{ k
     .filter((group) => group.bindings.length > 0);
 }
 
-export function SecretWarning({ warnings }: { warnings: BlueprintView["warnings"] }) {
+export function SecretWarning({ warnings, children }: { warnings: BlueprintView["warnings"]; children: ReactNode }) {
   if (warnings.length === 0) return null;
 
   return (
     <div className="p-notice-warning rounded-md px-3 py-2.5 text-xs" role="alert">
       <p className="flex items-center gap-1.5 font-medium"><WarningIcon size={14} /> Possible secrets in the source</p>
-      <p className="mt-1 opacity-90">
-        A blueprint never carries your connected credentials, but it can carry text someone pasted into the source. These lines look like secrets. Check them before you use this blueprint.
-      </p>
+      <p className="mt-1 opacity-90">{children}</p>
       <ul className="mt-1.5 space-y-0.5 font-mono">
         {warnings.map((warning) => (
           <li key={`${warning.path}:${warning.line}:${warning.pattern}`}>{warning.path}:{warning.line}: {warning.message}</li>
@@ -81,7 +79,9 @@ function BlueprintBody({ view }: { view: BlueprintView }) {
           </div>
         ))}
       </section>
-      <SecretWarning warnings={view.warnings} />
+      <SecretWarning warnings={view.warnings}>
+        A blueprint never carries your connected credentials, but it can carry text someone pasted into the source. These lines look like secrets. Check them before you use this blueprint.
+      </SecretWarning>
       <section className="space-y-2" aria-label="Files">
         <h2 className="p-eyebrow">Files</h2>
         <ul className="p-card px-4 py-3 font-mono text-xs">

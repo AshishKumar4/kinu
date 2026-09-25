@@ -73,16 +73,16 @@ export async function deleteEntry(path: string): Promise<void> {
   await api(Ok, 'DELETE', `?path=${encodeURIComponent(path)}`);
 }
 
-export async function uploadFile(path: string, file: Blob): Promise<void> {
-  await api(Ok, 'PUT', `/files?path=${encodeURIComponent(path)}`, { body: file });
+export async function uploadFile(path: string, file: Blob, signal?: AbortSignal): Promise<void> {
+  await api(Ok, 'PUT', `/files?path=${encodeURIComponent(path)}`, { body: file, signal });
 }
 
-export async function uploadZip(folder: string, archive: Blob): Promise<void> {
-  await api(Ok, 'PUT', `/files?folder=${encodeURIComponent(folder)}&unpack=zip`, { body: archive });
+export async function uploadZip(folder: string, archive: Blob, signal?: AbortSignal): Promise<void> {
+  await api(Ok, 'PUT', `/files?folder=${encodeURIComponent(folder)}&unpack=zip`, { body: archive, signal });
 }
 
-export async function uploadFolder(folder: string, files: readonly PickedFile[]): Promise<void> {
-  await uploadZip(folder, await zipped(files));
+export async function uploadFolder(folder: string, files: readonly PickedFile[], signal?: AbortSignal): Promise<void> {
+  await uploadZip(folder, await zipped(files), signal);
 }
 
 export function markAsSkill(path: string): Promise<MarkedSkill> {

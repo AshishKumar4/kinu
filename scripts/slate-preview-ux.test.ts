@@ -631,3 +631,123 @@ test('a mouse wheel over the inspector strip scrolls it sideways, so a tab past 
     } finally { await page.close(); }
   });
 });
+
+/** The chat's inline previews in document order: each slate's id, and whether its card is unfolded. */
+function inlinePreviews(page: Page): Promise<[string, boolean][]> {
+  return page.$$eval('[data-slate-inline]', (cards) => cards.map((card): [string, boolean] => [
+    card.getAttribute('data-slate-inline') ?? '',
+    card.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded') === 'true',
+  ]));
+}
+
+/** The chat with the board shown twice and the notes once between, each preview's page served. */
+async function openSlateThread(page: Page, origin: string, viewport: { width: number; height: number }): Promise<void> {
+  await serveSlate(page);
+  await page.setViewport(viewport);
+  await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=slates&slates=2`, { waitUntil: 'networkidle0' });
+  await page.waitForFunction(() => document.querySelectorAll('[data-slate-inline]').length === 3);
+  await drawn(page);
+}
+
+async function openFromChat(page: Page, slate: string): Promise<void> {
+  const cards = await page.$$(`[data-slate-inline="${slate}"]`);
+  const open = await cards.at(-1)?.$(`button[aria-label="Open ${slate} in the work surface"]`);
+
+  if (open === null || open === undefined) throw new Error(`the last ${slate} preview offers no way to open it`);
+  await open.click();
+  await drawn(page);
+}
+
+describe('inline slate previews in the chat', () => {
+  test('opening a slate from the chat brings a hidden inspector up on it; its previews fold behind the later one and while it is shown', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await openSlateThread(page, origin, { width: 1280, height: 860 });
+
+        // The later board keeps its preview; the earlier one folds under it.
+        expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', true]]);
+
+        // With the inspector hidden, the preview's open control brings it up on the board.
+        if (await page.$('[data-inspector-collapse]') !== null) await page.click('[data-inspector-collapse]');
+        await page.waitForSelector('[data-inspector-expand]');
+        await openFromChat(page, 'board');
+        expect(await page.$('[data-inspector-collapse]')).not.toBeNull();
+        expect(await page.$('.p-tabstrip button[aria-label="Board"][aria-current="true"]')).not.toBeNull();
+
+        // Shown beside the chat, the board's preview folds; moved off it, the preview comes back.
+        expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', false]]);
+        await page.click('.p-tabstrip button[aria-label="Work"]');
+        await drawn(page);
+        expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', true]]);
+
+        // The top bar folds and unfolds a preview by hand.
+        await page.click('[data-slate-inline="board"] button[aria-expanded]');
+        await drawn(page);
+        expect(await inlinePreviews(page)).toEqual([['board', true], ['notes', true], ['board', true]]);
+        await page.click('[data-slate-inline="notes"] button[aria-expanded]');
+        await drawn(page);
+        expect(await inlinePreviews(page)).toEqual([['board', true], ['notes', false], ['board', true]]);
+      } finally { await page.close(); }
+    });
+  });
+
+  test('a preview the reader opened by hand stays open while its slate is shown beside the chat, until that ends', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      const toggleLater = async (): Promise<void> => {
+        const bars = await page.$$('[data-slate-inline="board"] button[aria-expanded]');
+
+        await bars.at(-1)?.click();
+        await drawn(page);
+      };
+
+      try {
+        await openSlateThread(page, origin, { width: 1280, height: 860 });
+
+        // The reader folds the later board and opens it again: a choice of their own.
+        await toggleLater();
+        await toggleLater();
+        expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', true]]);
+
+        // Shown beside the chat, a preview folds by itself, but not one the reader opened.
+        await openFromChat(page, 'board');
+        expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', true]]);
+
+        // Moved off it, that reason ends and takes the reader's choice with it: shown again, the preview folds.
+        await page.click('.p-tabstrip button[aria-label="Work"]');
+        await drawn(page);
+        await openFromChat(page, 'board');
+        expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', false]]);
+      } finally { await page.close(); }
+    });
+  });
+
+  test('on a phone, opening a slate from the chat shows the Workspace pane on it, and the chat keeps its previews', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      // The pane switch's two buttons carry no hook of their own; their names are what a reader reads.
+      const pressed = (name: string): Promise<string | null> => page.$$eval('button[aria-pressed]', (buttons, wanted) =>
+        buttons.find((button) => button.textContent?.trim().startsWith(wanted))?.getAttribute('aria-pressed') ?? null, name);
+
+      try {
+        await openSlateThread(page, origin, { width: 390, height: 844 });
+        expect(await pressed('Chat')).toBe('true');
+        await openFromChat(page, 'board');
+        expect(await pressed('Workspace')).toBe('true');
+        expect(await page.$('.p-tabstrip button[aria-label="Board"][aria-current="true"]')).not.toBeNull();
+
+        // The two panes never share the screen, so back in the chat the board's preview is still unfolded.
+        await page.$$eval('button[aria-pressed]', (buttons) => {
+          buttons.find((button) => button.textContent?.trim().startsWith('Chat'))?.click();
+        });
+        await page.waitForFunction(() => document.querySelectorAll('[data-slate-inline]').length === 3);
+        await drawn(page);
+        expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', true]]);
+      } finally { await page.close(); }
+    });
+  });
+});

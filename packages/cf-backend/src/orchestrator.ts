@@ -3999,6 +3999,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       kv: this.env.AUTH_KV,
       budget: () => this.budget,
       ownerTitle: async () => this.safeDisplayName(),
+      ownerUserId: () => this.getOwnerUserId(),
       forgetPicture: async (slate) => {
         await this.pictures.forget(this.name, slate, this.env.SLATE_PICTURES);
         this.armDurableWake();
@@ -4044,17 +4045,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Share row re-read through the S6 gate (revoked answers 'missing'); a `users` share forks only for
-   * named accounts and the owner, `public` for anyone signed in. Skeleton is the running slate's tree.
+   * Share row re-read through the S6 gate (revoked answers 'missing'); a `users` share forks for whom it admits,
+   * `public` for anyone signed in. Skeleton is the running slate's tree.
    */
   async liveShareBundle(share: string, userId: string): Promise<SlateAnswer<BlueprintBundle>> {
     const record = await this.slates.readLiveShareRecord(share);
 
     if (!record.ok) return { ok: false, reason: record.reason, error: record.error };
     const { record: row } = record.value;
-    const ownerUserId = this.getOwnerUserId();
 
-    if (row.visibility === 'users' && userId !== ownerUserId && !this.slates.liveShareAdmitsUser(row.id, userId)) {
+    if (row.visibility === 'users' && !this.slates.liveShareAdmitsUser(row.id, userId)) {
       return { ok: false, reason: 'missing', error: 'No such share' };
     }
 

@@ -117,6 +117,46 @@ export function diagnosticsSettled(lines: RecordedDiagnostics, count: number): P
   return lines.settled(count);
 }
 
+export interface Rgba { readonly r: number; readonly g: number; readonly b: number; readonly a: number }
+
+/** A computed `color`: Chromium serialises sRGB colours as `rgb(…)` or `rgba(…)`. */
+export function rgba(computed: string): Rgba {
+  const channels = /^rgba?\(([^)]+)\)$/u.exec(computed)?.[1]?.split(',').map((part) => Number(part.trim()));
+
+  if (channels === undefined || channels.length < 3 || channels.some(Number.isNaN)) {
+    throw new Error(`not an sRGB computed colour: ${computed}`);
+  }
+
+  const [r = 0, g = 0, b = 0, a = 1] = channels;
+
+  return { r, g, b, a };
+}
+
+export const over = (ink: Rgba, paper: Rgba): Rgba => ({
+  r: ink.r * ink.a + paper.r * (1 - ink.a),
+  g: ink.g * ink.a + paper.g * (1 - ink.a),
+  b: ink.b * ink.a + paper.b * (1 - ink.a),
+  a: 1,
+});
+
+function luminance({ r, g, b }: Rgba): number {
+  const channel = (value: number): number => {
+    const unit = value / 255;
+
+    return unit <= 0.039_28 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
+  };
+
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+
+/** WCAG's contrast ratio of `ink` laid over `paper`. */
+export function contrast(ink: Rgba, paper: Rgba): number {
+  const light = luminance(over(ink, paper));
+  const dark = luminance(paper);
+
+  return Number(((Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05)).toFixed(2));
+}
+
 /**
  * Runs inside the page, so it closes over nothing: `page.evaluate(unruledClasses, scope, family, markers)`.
  * Each class the elements matching `scope` carry, with `family` in its name, that no rule in the page's
