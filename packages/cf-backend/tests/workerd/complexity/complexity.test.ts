@@ -42,12 +42,11 @@ const SUBJECTS: readonly Subject[] = [{
   sizes: [50, 300],
   run: async (probe, size) => await probe.sessionTurn(size),
   rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
-  tables: { context_memberships: { rowsRead: 'O(n)' } },
   requestBytes: 'O(n)',
   why: 'a turn writes what it adds (its input, one call and result, its answer, its claim and its two '
-    + 'requests) in a fixed number of statements, whatever came before it. The one read that grows is the '
-    + 'prompt: each request reads the live memberships of the context it sends, so those rows and the '
-    + 'request bytes grow with the history, and nothing grows faster',
+    + 'requests) in a fixed number of statements, whatever came before it, and reads none of the memberships '
+    + 'before it: a context keeps the head it last read or wrote. Only the request bytes grow with the '
+    + 'history, since each request carries it',
 }, {
   name: 'workspace Diffs, one read',
   unit: 'files in the workspace',

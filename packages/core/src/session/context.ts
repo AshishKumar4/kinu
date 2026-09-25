@@ -9,6 +9,22 @@ export interface ContextEntry extends MessageReference { readonly entryId: strin
 
 interface MemberRow { entry_id: string; position: number; message_id: string }
 
+/** The rows a revision opened, in one comparable form. */
+function openedKey(opened: readonly ContextEntry[]): string {
+  return opened.map(entry => `${entry.entryId}@${String(entry.position)}=${entry.messageId}`).sort().join('\n');
+}
+
+function entryOf(row: MemberRow): ContextEntry {
+  return { entryId: row.entry_id, position: row.position, messageId: row.message_id };
+}
+
+/**
+ * A head this instance read or wrote. It serves while its revision is still the head, opened the same rows and holds
+ * as many entries: positions are dense, so those fix the membership. A revision written again after a rolled-back
+ * transaction opens rows with other messages, or a different count, whatever its stamp.
+ */
+interface KeptHead { readonly revision: number; readonly opened: string; readonly entries: readonly ContextEntry[] }
+
 /** `recordUnchanged`: an authored edit is a statement even when it moves nothing. */
 interface RevisionOrigin {
   readonly author: string; readonly cause: string; readonly turnId: string | null; readonly proposalId: string | null;
@@ -29,6 +45,9 @@ export interface ContextCommitRequest {
 
 /** Interval membership is both the current selection and its historical record. */
 export class SessionContext {
+  /** Each context's head as last read or written here: a committed revision's membership never changes. */
+  private readonly heads = new Map<string, KeptHead>();
+
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle, private readonly atomic: <T>(operation: () => T) => T,
     private readonly messages: Pick<SessionMessageReader, 'originOf'>) {}
 
@@ -65,17 +84,48 @@ export class SessionContext {
     });
   }
 
-  entries(selection: ContextSelection): ContextEntry[] {
+  entries(selection: ContextSelection): readonly ContextEntry[] {
     this.actor.assertCurrent();
-    const exists = this.sql<{ revision: number }>`SELECT revision FROM context_revisions WHERE actor_id=${this.actor.actorId} AND context_id=${selection.contextId} AND revision=${selection.revision}`[0];
+    const actorId = this.actor.actorId;
+    const { contextId, revision } = selection;
+    const head = this.head(contextId) === revision;
 
-    if (exists === undefined) throw new KinuError('missing', 'context revision does not exist');
+    if (!head && this.sql`SELECT 1 AS found FROM context_revisions WHERE actor_id=${actorId} AND context_id=${contextId} AND revision=${revision}`.length === 0) {
+      throw new KinuError('missing', 'context revision does not exist');
+    }
 
-    const rows = this.head(selection.contextId) === selection.revision
-      ? this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships WHERE actor_id=${this.actor.actorId} AND context_id=${selection.contextId} AND to_revision IS NULL ORDER BY position`
-      : this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships WHERE actor_id=${this.actor.actorId} AND context_id=${selection.contextId} AND from_revision<=${selection.revision} AND (to_revision IS NULL OR to_revision>${selection.revision}) ORDER BY position`;
+    const kept = this.heads.get(contextId);
 
-    return rows.map(row => ({ entryId: row.entry_id, position: row.position, messageId: row.message_id }));
+    if (head && kept?.revision === revision && this.holds(selection, kept)) return kept.entries;
+
+    if (!head) {
+      return Object.freeze(this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships WHERE actor_id=${actorId} AND context_id=${contextId}
+        AND from_revision<=${revision} AND (to_revision IS NULL OR to_revision>${revision}) ORDER BY position`.map(entryOf));
+    }
+
+    const rows = this.sql<MemberRow & { from_revision: number }>`SELECT entry_id,position,message_id,from_revision FROM context_memberships
+      WHERE actor_id=${actorId} AND context_id=${contextId} AND to_revision IS NULL ORDER BY position`;
+
+    const entries = Object.freeze(rows.map(entryOf));
+
+    this.heads.set(contextId, { revision, opened: openedKey(rows.filter(row => row.from_revision === revision).map(entryOf)), entries });
+
+    return entries;
+  }
+
+  /** A head revision `kept` still names: the rows it opened, then its live count, both read by index. */
+  private holds(selection: ContextSelection, kept: KeptHead): boolean {
+    const actorId = this.actor.actorId;
+
+    const opened = this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships
+      WHERE actor_id=${actorId} AND context_id=${selection.contextId} AND from_revision=${selection.revision}`;
+
+    if (openedKey(opened.map(entryOf)) !== kept.opened) return false;
+
+    const last = this.sql<{ last: number | null }>`SELECT MAX(position) AS last FROM context_memberships
+      WHERE actor_id=${actorId} AND context_id=${selection.contextId} AND to_revision IS NULL`[0]?.last ?? null;
+
+    return (last === null ? 0 : last + 1) === kept.entries.length;
   }
 
   conversationOf(members: readonly ContextEntry[]): ContextEntry[] {
@@ -173,6 +223,8 @@ export class SessionContext {
       void this.sql`INSERT INTO context_memberships(actor_id,context_id,entry_id,from_revision,position,message_id)
         VALUES(${actorId},${expected.contextId},${entry.entryId},${revision},${entry.position},${entry.messageId})`;
     }
+
+    this.heads.set(expected.contextId, { revision, opened: openedKey(next.filter(entry => !retained.has(entry.entryId))), entries: Object.freeze(next) });
 
     return { contextId: expected.contextId, revision };
   }

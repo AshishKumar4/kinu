@@ -1,11 +1,11 @@
-import { expect, test } from 'bun:test';
+import { expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime, present } from '@kinu.run/test-utils';
 import { initSessionContextTables } from '../src/session/schema';
 import { SessionMessages } from '../src/session/messages';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
 import { SessionPayloads } from '../src/session/payload';
-import { SessionContext } from '../src/session/context';
+import { SessionContext, type ContextEntry, type ContextSelection } from '../src/session/context';
 import { SessionProposals } from '../src/session/proposals';
 import { SessionTranscript, readSessionTranscript } from '../src/session/transcript';
 import { rowText } from '../src/utils/ui-message';
@@ -146,6 +146,54 @@ test('reverting a context selects an isolated branch that survives reader recons
     expect(() => reopened.select(branch, compacted, () => { throw new Error('turn is active'); })).toThrow('turn is active');
     expect(reopened.selected()).toEqual(branch);
   } finally { s.testSql.close(); }
+});
+
+test('a context reads what is stored: another reader\'s revision, and one written again by the same turn after a rollback', async () => {
+  const s = setup();
+  // One millisecond for every write, as one request's frozen clock gives them.
+  setSystemTime(Date.parse('2026-09-25T00:00:00.000Z'));
+
+  try {
+    const assertOwner = () => s.rt.actor.assertCurrent();
+    const other = new SessionContext(s.rt.storage.sql, s.rt.actor, write => s.rt.storage.transactionSync(write), s.messages);
+
+    const said = async (text: string) => {
+      const prepared = await s.messages.prepare({ role: 'user', content: text }, text);
+
+      return (entries: readonly ContextEntry[]) => [...entries, { ...s.messages.insert(prepared, 'input'), entryId: text, position: entries.length }];
+    };
+
+    const read = async (selection: ContextSelection) => Promise.all(s.context.entries(selection).map(async entry => (await s.messages.materialize(entry)).content));
+    const first = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', assertEpoch: assertOwner, mutate: await said('one') });
+    const second = other.commit(first, { cause: 'input', turnId: 'turn', assertEpoch: assertOwner, mutate: await said('two') });
+
+    expect(await read(second)).toEqual(['one', 'two']);
+    const three = await said('three');
+
+    const rolledBack = (write: () => ContextSelection): void => {
+      expect(() => s.rt.storage.transactionSync(() => {
+        write();
+        throw new Error('rolled back after its revision');
+      })).toThrow('rolled back after its revision');
+    };
+
+    rolledBack(() => s.context.commit(second, { cause: 'input', turnId: 'third', assertEpoch: assertOwner, mutate: three }));
+    const third = other.commit(second, { cause: 'input', turnId: 'third', assertEpoch: assertOwner, mutate: await said('four') });
+
+    expect(third.revision).toBe(second.revision + 1);
+    expect(await read(third)).toEqual(['one', 'two', 'four']);
+
+    // Both writes open the same row; the retry also drops the last entry.
+    const five = s.messages.insert(await s.messages.prepare({ role: 'user', content: 'five' }, 'five'), 'input');
+    const replaced = (entries: readonly ContextEntry[]) => entries.map((entry, position) => (position === 0 ? { ...five, entryId: 'five', position } : entry));
+    rolledBack(() => s.context.commit(third, { cause: 'edit', turnId: 'fourth', assertEpoch: assertOwner, mutate: replaced }));
+    const fourth = other.commit(third, { cause: 'edit', turnId: 'fourth', assertEpoch: assertOwner, mutate: (entries) => replaced(entries).slice(0, 2) });
+
+    expect(await read(fourth)).toEqual(['five', 'two']);
+  } finally {
+    setSystemTime();
+    s.testSql.close();
+  }
 });
 
 test('VFS-backed image payloads fail explicitly after file corruption', async () => {
