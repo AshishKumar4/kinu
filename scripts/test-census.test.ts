@@ -51,6 +51,9 @@ const MODULE = 'packages/probe/src/budget.ts';
 const MODULE_TEXT = `
 export const PROMPT_BUDGET = 4096;
 export const MARKER = 'kinu-prompt-marker';
+export const REFRESH_LEAD_MS = 300_000;
+const TOKEN_URL = 'https://auth.example.com/v1/oauth/token';
+export const refresh = (fetcher: (url: string) => void): void => { fetcher(TOKEN_URL); };
 export const clampToBudget = (text: string): string => text.slice(0, PROMPT_BUDGET);
 export function pendingIds(ids: readonly string[], done: ReadonlySet<string>): string[] {
   const pending: string[] = [];
@@ -376,6 +379,30 @@ describe('mirror', () => {
     `)).toEqual(['mirrored constant']);
   });
 
+  test('RED: a constant expression folded to the value an exported constant names', () => {
+    expect(found('mirror', `
+      import { REFRESH_LEAD_MS } from '../src/budget';
+      const LEAD_MS = 5 * 60 * 1000;
+      test('a token is refreshed ahead of expiry', () => {
+        expect(LEAD_MS).toBeGreaterThan(0);
+      });
+    `)).toEqual(['mirrored constant']);
+  });
+
+  test('GREEN: an external contract the module keeps to itself, stated by the test and asserted', () => {
+    // The endpoint is the provider's fact; the test states it from outside and asserts the URL the
+    // code fetched, which is the behaviour test. Importing it would make the check agree by construction.
+    expect(found('mirror', `
+      import { refresh } from '../src/budget';
+      const TOKEN_ENDPOINT = 'https://auth.example.com/v1/oauth/token';
+      test('a refresh posts to the provider token endpoint', () => {
+        const fetched: string[] = [];
+        refresh((url) => { fetched.push(url); });
+        expect(fetched).toEqual([TOKEN_ENDPOINT]);
+      });
+    `)).toEqual([]);
+  });
+
   test('RED: a test function restating a product function with its names changed', () => {
     expect(found('mirror', `
       function stillOpen(items: readonly string[], finished: ReadonlySet<string>): string[] {
@@ -577,6 +604,44 @@ describe('internal_mock versus external_seam_mock', () => {
 
     expect(measured.findings.internal_mock).toEqual([]);
     expect(measured.externalSeam).toHaveLength(2);
+  });
+
+  test('RED: a spy on our object, traced through a factory, a later assignment and a parameter', () => {
+    const measured = measureFile(PROBE, `
+      import { spyOn, beforeEach } from 'bun:test';
+      import { Orchestrator, pendingIds } from '../src/budget';
+      const { store } = pendingIds([], new Set());
+      let agent: Orchestrator;
+      beforeEach(() => { agent = new Orchestrator(); });
+      function watch(target: Orchestrator) { return spyOn(target, 'publicRead'); }
+      test('spied', () => {
+        spyOn(store.rows, 'get');
+        spyOn(agent, 'publicRead');
+        expect(watch(agent)).toBeDefined();
+      });
+    `, inputs);
+
+    expect(measured.findings.internal_mock.map((f) => f.detail))
+      .toEqual(["spyOn(target, 'publicRead')", "spyOn(store.rows, 'get')", "spyOn(agent, 'publicRead')"]);
+  });
+
+  test('SILENT: a spy on a stand-in the test builds itself', () => {
+    const measured = measureFile(PROBE, `
+      import { spyOn, beforeEach } from 'bun:test';
+      class Recorder { write(): void {} }
+      const sink = { write: (line: string) => line };
+      let later: { write(): void };
+      beforeEach(() => { later = { write() {} }; });
+      test('recorded', () => {
+        spyOn(sink, 'write');
+        spyOn(new Recorder(), 'write');
+        spyOn(later, 'write');
+        expect(1).toBe(1);
+      });
+    `, inputs);
+
+    expect(measured.findings.internal_mock).toEqual([]);
+    expect(measured.externalSeam).toEqual([]);
   });
 });
 

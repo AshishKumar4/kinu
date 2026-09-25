@@ -886,6 +886,25 @@ function isScope(node: SyntaxNode): boolean {
   return isFunctionLike(node) || node.raw.type === 'ArrowFunctionExpression' || node.parent === undefined;
 }
 
+/** Every name a binding pattern introduces: `x`, `{ rt, db: store }`, `[first, ...rest]`, `x = 1`. */
+function patternNames(pattern: Node | null | undefined): string[] {
+  if (pattern === null || pattern === undefined) return [];
+
+  if (pattern.type === 'Identifier') return [pattern.name];
+
+  if (pattern.type === 'AssignmentPattern') return patternNames(pattern.left);
+
+  if (pattern.type === 'RestElement') return patternNames(pattern.argument);
+
+  if (pattern.type === 'ArrayPattern') return pattern.elements.flatMap((element) => patternNames(element));
+
+  if (pattern.type === 'ObjectPattern') {
+    return pattern.properties.flatMap((property) => patternNames(property.type === 'RestElement' ? property : property.value));
+  }
+
+  return [];
+}
+
 function bindingsOf(parsed: ParsedFile): Bindings {
   const byScope = new Map<SyntaxNode, Map<string, SyntaxNode>>();
 
@@ -907,21 +926,21 @@ function bindingsOf(parsed: ParsedFile): Bindings {
     const r = node.raw;
 
     if (r.type === 'VariableDeclarator' || r.type === 'ImportDeclaration') {
-      const names = r.type === 'ImportDeclaration' ? importBindings(node).map((bound) => bound.local) : [declaredName(node)];
+      const names = r.type === 'ImportDeclaration' ? importBindings(node).map((bound) => bound.local) : patternNames(r.id);
 
-      for (const name of names) if (name !== undefined) declare(enclosing(node), name, node);
+      for (const name of names) declare(enclosing(node), name, node);
 
       return;
+    }
+
+    if ((r.type === 'FunctionDeclaration' || r.type === 'ClassDeclaration') && r.id !== null) {
+      declare(enclosing(node), r.id.name, node);
     }
 
     if (!isFunctionLike(node) && r.type !== 'ArrowFunctionExpression') return;
     const params = 'params' in r ? r.params : [];
 
-    for (const param of params) {
-      const target = param.type === 'AssignmentPattern' ? param.left : param;
-
-      if (target.type === 'Identifier') declare(node, target.name, node);
-    }
+    for (const param of params) for (const name of patternNames(param)) declare(node, name, node);
   });
 
   return {
@@ -1199,30 +1218,82 @@ const NumberLiteral = v.object({ value: v.number() });
 
 const StringLiteral = v.object({ value: v.string() });
 
-/** `const NAME = <literal>` declarations at any depth — the shape a mirrored
- *  budget, cap or threshold takes on both sides. Only distinctive values are
- *  returned, because a shared `2` is noise and 1,176 rows of it drowned the 53
- *  real mirrors on this tree. */
-function namedValues(parsed: ParsedFile): NamedValue[] {
+/** A numeric constant expression's value: `5 * 60 * 1000` is `300_000`. Anything that is not
+ *  literal arithmetic is `undefined`. */
+function foldedNumber(node: Node): number | undefined {
+  if (node.type === 'Literal') {
+    const literal = v.safeParse(NumberLiteral, node);
+
+    return literal.success ? literal.output.value : undefined;
+  }
+
+  if (node.type === 'ParenthesizedExpression') return foldedNumber(node.expression);
+
+  if (node.type === 'UnaryExpression' && node.operator === '-') {
+    const inner = foldedNumber(node.argument);
+
+    return inner === undefined ? undefined : -inner;
+  }
+
+  if (node.type !== 'BinaryExpression' || node.left.type === 'PrivateIdentifier') return undefined;
+  const left = foldedNumber(node.left);
+  const right = foldedNumber(node.right);
+
+  if (left === undefined || right === undefined) return undefined;
+
+  if (node.operator === '+') return left + right;
+
+  if (node.operator === '-') return left - right;
+
+  if (node.operator === '*') return left * right;
+
+  if (node.operator === '/') return left / right;
+
+  return node.operator === '**' ? left ** right : undefined;
+}
+
+/** Names a module exports: `export const X`, and `export { X }` over a local binding. */
+function exportedNames(parsed: ParsedFile): Set<string> {
+  const names = new Set<string>();
+  walk(parsed.tree, (node) => {
+    const r = node.raw;
+
+    if (r.type !== 'ExportNamedDeclaration') return;
+
+    if (r.declaration?.type === 'VariableDeclaration') {
+      for (const declarator of r.declaration.declarations) for (const name of patternNames(declarator.id)) names.add(name);
+    }
+
+    if (r.source !== null) return;
+
+    for (const specifier of r.specifiers) if (specifier.local.type === 'Identifier') names.add(specifier.local.name);
+  });
+
+  return names;
+}
+
+/** `const NAME = <literal>` declarations at any depth, a numeric constant expression folded — the
+ *  shape a mirrored budget, cap or threshold takes on both sides. Only distinctive values are
+ *  returned, because a shared `2` is noise and 1,176 rows of it drowned the 53 real mirrors on
+ *  this tree. `only` narrows a module to the names a test could import instead. */
+function namedValues(parsed: ParsedFile, only?: ReadonlySet<string>): NamedValue[] {
   const found: NamedValue[] = [];
   walk(parsed.tree, (node) => {
     if (node.raw.type !== 'VariableDeclarator') return;
     const name = declaredName(node);
     const init = node.raw.init;
 
-    if (name === undefined || init === null || init === undefined) return;
-
-    if (init.type !== 'Literal') return;
+    if (name === undefined || init === null || init === undefined || (only !== undefined && !only.has(name))) return;
     const line = parsed.lineAt(node.start);
-    const asNumber = v.safeParse(NumberLiteral, init);
+    const folded = foldedNumber(init);
 
-    if (asNumber.success) {
-      if (distinctiveNumber(asNumber.output.value)) {
-        found.push({ name, line, kind: 'number', value: asNumber.output.value });
-      }
+    if (folded !== undefined) {
+      if (distinctiveNumber(folded)) found.push({ name, line, kind: 'number', value: folded });
 
       return;
     }
+
+    if (init.type !== 'Literal') return;
 
     const asString = v.safeParse(StringLiteral, init);
 
@@ -1328,7 +1399,10 @@ function mirrors(
 
     const byValue = new Map<string, string[]>();
 
-    for (const entry of namedValues(parsedModule)) {
+    // Only an exported constant: the test could import it instead. A value the module keeps to
+    // itself (an endpoint, a header) is a contract the test states from outside, and asserting
+    // what the code did against it is the behaviour test.
+    for (const entry of namedValues(parsedModule, exportedNames(parsedModule))) {
       const key = `${entry.kind}:${String(entry.value)}`;
       const names = byValue.get(key) ?? [];
       names.push(entry.name);
@@ -1655,13 +1729,90 @@ const MOCK_REGISTRARS: ReadonlySet<string> = new Set([
   'module', 'mockModule', 'registerSynchronousMock', 'doMock', 'unstable_mockModule',
 ]);
 
-/** Globals a spy at is a platform seam rather than an internal one. */
-const PLATFORM_OBJECTS: ReadonlySet<string> = new Set([
-  'console', 'Date', 'Math', 'globalThis', 'global', 'process', 'performance', 'crypto', 'fetch',
-  'Response', 'Request', 'WebSocket',
-]);
-
 interface MockSplit { readonly internal: Finding[]; readonly external: Finding[] }
+
+/** Where a spied object comes from: the platform (a global or a bare package), the test itself (a
+ *  literal, a class or function it declares), or our code (anything else, a parameter included). */
+type Origin = 'platform' | 'test' | 'ours';
+
+const CONSTRUCTED = new Set(['ObjectExpression', 'ArrayExpression', 'ArrowFunctionExpression', 'FunctionExpression',
+  'ClassExpression', 'Literal', 'TemplateLiteral', 'ThisExpression']);
+
+/**
+ * The origin of an expression, followed through the file's bindings: a member or a call answers
+ * for its object or callee, a variable for what it was initialised or first assigned with, an
+ * import for its specifier. `const { rt } = createTestRuntime(); spyOn(rt.craftStore, 'get')` is
+ * ours because `createTestRuntime` is imported from our code.
+ */
+interface OriginScope {
+  readonly bindings: Bindings;
+  /** The first value assigned to each binding declared without one. */
+  readonly assigned: ReadonlyMap<SyntaxNode, SyntaxNode>;
+  /** Whether an import specifier names our code. */
+  readonly ours: (specifier: string) => boolean;
+}
+
+function originOf(node: SyntaxNode, scope: OriginScope, seen: Set<SyntaxNode> = new Set()): Origin {
+  const r = node.raw;
+
+  const child = (inner: Node | null | undefined): Origin => {
+    const at = inner === null || inner === undefined ? undefined : nodeAt(node, inner.start, inner.end);
+
+    return at === undefined ? 'ours' : originOf(at, scope, seen);
+  };
+
+  if (CONSTRUCTED.has(r.type)) return 'test';
+
+  if (r.type === 'MemberExpression') return child(r.object);
+
+  if (r.type === 'CallExpression' || r.type === 'NewExpression') return child(r.callee);
+
+  if (r.type === 'TSAsExpression' || r.type === 'TSNonNullExpression' || r.type === 'TSSatisfiesExpression'
+    || r.type === 'ParenthesizedExpression' || r.type === 'ChainExpression' || r.type === 'TSTypeAssertion') {
+    return child(r.expression);
+  }
+
+  if (r.type === 'AwaitExpression') return child(r.argument);
+
+  if (r.type !== 'Identifier') return 'ours';
+  const bound = scope.bindings.resolve(node);
+
+  if (bound === undefined) return 'platform';
+
+  if (seen.has(bound)) return 'ours';
+  seen.add(bound);
+  const b = bound.raw;
+
+  if (b.type === 'ImportDeclaration') return scope.ours(String(b.source.value)) ? 'ours' : 'platform';
+
+  if ((b.type === 'FunctionDeclaration' || b.type === 'ClassDeclaration') && b.id?.name === r.name) return 'test';
+
+  if (b.type === 'VariableDeclarator') {
+    const init = b.init ?? undefined;
+    const from = init === undefined ? scope.assigned.get(bound) : nodeAt(bound, init.start, init.end);
+
+    return from === undefined ? 'ours' : originOf(from, scope, seen);
+  }
+
+  return 'ours';
+}
+
+/** The first value assigned to each `let` declared without one, keyed by its declarator. */
+function firstAssignments(parsed: ParsedFile, bindings: Bindings): Map<SyntaxNode, SyntaxNode> {
+  const assigned = new Map<SyntaxNode, SyntaxNode>();
+  walk(parsed.tree, (node) => {
+    const r = node.raw;
+
+    if (r.type !== 'AssignmentExpression' || r.left.type !== 'Identifier') return;
+    const target = nodeAt(node, r.left.start, r.left.end);
+    const value = nodeAt(node, r.right.start, r.right.end);
+    const bound = target === undefined ? undefined : bindings.resolve(target);
+
+    if (bound !== undefined && value !== undefined && !assigned.has(bound)) assigned.set(bound, value);
+  });
+
+  return assigned;
+}
 
 /**
  * Where a test replaces something, and whether that something is a REAL
@@ -1681,10 +1832,12 @@ function mocks(
   parsed: ParsedFile,
   spans: readonly TestSpan[],
   scope: string,
-  localBindings: ReadonlySet<string>,
 ): MockSplit {
   const internal: Finding[] = [];
   const external: Finding[] = [];
+  const bindings = bindingsOf(parsed);
+  const isOurs = (id: string): boolean => id.startsWith('.') || id.startsWith(`${scope}/`) || id.startsWith('@/');
+  const origins: OriginScope = { bindings, assigned: firstAssignments(parsed, bindings), ours: isOurs };
   walk(parsed.tree, (node) => {
     const called = calleeName(node);
 
@@ -1694,7 +1847,7 @@ function mocks(
 
     if (MOCK_REGISTRARS.has(called)) {
       for (const id of stringArguments(node)) {
-        const ours = id.startsWith('.') || id.startsWith(`${scope}/`) || id.startsWith('@/');
+        const ours = isOurs(id);
         (ours ? internal : external).push({
           file: parsed.file, line, test,
           what: ours ? 'internal module mock' : 'external seam mock',
@@ -1708,12 +1861,13 @@ function mocks(
     if (called !== 'spyOn') return;
     const [target, method] = argumentNodes(node);
     const targetText = target === undefined ? '?' : chainText(target.raw);
-    const base = targetText.split('.')[0] ?? '';
     const methodName = method === undefined ? '?' : literalText(method) ?? '?';
-    const ours = localBindings.has(base) && !PLATFORM_OBJECTS.has(base);
-    (ours ? internal : external).push({
+    const origin = target === undefined ? 'ours' : originOf(target, origins);
+
+    if (origin === 'test') return;
+    (origin === 'ours' ? internal : external).push({
       file: parsed.file, line, test,
-      what: ours ? 'spy on an internal object' : 'spy at a platform seam',
+      what: origin === 'ours' ? 'spy on an internal object' : 'spy at a platform seam',
       detail: `spyOn(${targetText}, '${methodName}')`,
     });
   });
@@ -2370,7 +2524,7 @@ export function measureFile(file: string, text: string, inputs: CensusInputs): M
   const { local, specifiers, localNames } = resolveImports(parsed, inputs.tracked, inputs.scope);
   const spans = testSpans(parsed);
   const facts = localFacts(parsed, inputs.tracked);
-  const { internal, external } = mocks(parsed, spans, inputs.scope, localNames);
+  const { internal, external } = mocks(parsed, spans, inputs.scope);
 
   const findings: Findings = {
     source_text: inputs.gateTests.has(file) ? [] : sourceText(parsed, spans, facts, inputs.tracked),
@@ -2581,6 +2735,9 @@ export const BLIND_SPOTS: readonly string[] = [
   'a mirrored function is matched by structure with names in first-use order, so a copy that '
   + 'reorders statements, changes a literal, or renames a local that shares a property\'s name '
   + `(\`salt\` beside \`opts.salt\`) reads as other code; a copy under ${String(MIN_NODES)} nodes is not compared`,
+  'a spy whose target is a call on a platform global, `spyOn(Object.getPrototypeOf(X.prototype), m)`, '
+  + 'reads as a platform seam whatever X is; and a constant a module keeps unexported is not a mirror '
+  + 'when a test restates it, since the test cannot import it and states it as an outside contract',
   'a MOCK ECHO: a test asserting the value a stand-in was scripted to return, passed through '
   + 'unchanged, is not detected; an external seam mock is allowed, and what flows out of it is not traced',
   'tautology through a stored value: `expect(actual).toEqual(expected)` where `expected` was '
