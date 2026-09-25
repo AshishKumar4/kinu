@@ -161,13 +161,25 @@ describe('a failed call hands the turn down its fallback chain', () => {
     expect(threw).not.toBeNull();
   });
 
-  test('a request refused as malformed fails the turn instead of trying the next model, which would refuse it too', async () => {
-    const { events, threw, served } = await turn((model) => (model === 'primary' ? refused(400) : answer('from backup')), ['backup']);
+  for (const status of [400, 413, 422]) {
+    test(`a request refused as malformed (HTTP ${String(status)}) fails the turn instead of trying the next model, which would refuse it too`, async () => {
+      const { events, threw, served } = await turn((model) => (model === 'primary' ? refused(status) : answer('from backup')), ['backup']);
 
-    expect(served.map((entry) => entry.model)).toEqual(['primary']);
-    expect(events.some((event) => event.type === 'model-fallback')).toBe(false);
-    expect(threw?.message ?? '').toContain('HTTP 400');
-  });
+      expect(served.map((entry) => entry.model)).toEqual(['primary']);
+      expect(events.some((event) => event.type === 'model-fallback')).toBe(false);
+      expect(threw?.message ?? '').toContain(`HTTP ${String(status)}`);
+    });
+  }
+
+  for (const status of [403, 404]) {
+    test(`a model the account cannot reach (HTTP ${String(status)}) hands the turn to the next model`, async () => {
+      const { events, threw, served } = await turn((model) => (model === 'primary' ? refused(status) : answer('from backup')), ['backup']);
+
+      expect(served.map((entry) => entry.model)).toEqual(['primary', 'backup']);
+      expect(events.find((event) => event.type === 'model-fallback')).toMatchObject({ from: 'openrouter/primary', to: 'openrouter/backup' });
+      expect(threw).toBeNull();
+    });
+  }
 });
 
 /** Two accounts of one OpenAI-compatible provider on one endpoint; `answerFor` decides by the key each request carries. */

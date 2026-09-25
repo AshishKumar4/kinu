@@ -243,12 +243,12 @@ interface CallOutcome {
 }
 
 /** A fallback takes a failed call only before its step streamed, and only for a provider or account failure
- *  (unavailable, slow, out of allowance, 401, 402); a malformed or too-large request fails the turn. */
+ *  (unavailable, slow, out of allowance, a model it cannot reach); a malformed or too-large request fails the turn. */
 function handsOver(failure: CallFailure): boolean {
   if (failure.streamed) return false;
   const { status } = providerFailureFacts({ cause: failure.cause });
 
-  if (status !== undefined) return status === 401 || status === 402 || status === 408 || status === 429 || status >= 500;
+  if (status !== undefined) return [401, 402, 403, 404, 408, 429].includes(status) || status >= 500;
   const code = classifyErrorCode({ cause: failure.error });
 
   return code === null || code === 'unavailable' || code === 'timeout';

@@ -676,6 +676,11 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   answers an empty list) proves nothing, so its models still serve. A model pinned to a workspace or an agent is
   still refused, so you can see and fix the pin.
 
+- **A fallback takes over from a model your account cannot reach.** A tier's fallback chain gave up when its first
+  model answered 403 or 404 (a model the account has no access to, or one the provider no longer serves), though the
+  next model could have answered. It now hands the turn on, as it does for a rate limit or an outage; a malformed or
+  too-large request still fails the turn, since the next model would refuse it too.
+
 - **Reasoning effort is always a level the model takes.** A stored effort the model does not declare (xhigh on GLM
   5.3, which takes low, medium and high) was sent as it was. It is now sent as the nearest level the model declares
   below it, or the lowest the model takes when none is below, and a model that takes no level (Claude Haiku 4.5) is
