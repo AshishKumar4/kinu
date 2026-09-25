@@ -3639,7 +3639,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async sendChangeNotes(set: NotedChanges): Promise<ChangeNotesResult> {
-    return sendChangeNotes(this.rt, { value: set }, (message) => this.chatLoop.admit(message.text, { id: message.id, metadata: message.metadata }));
+    return sendChangeNotes(this.rt, { value: set }, (message, consume) => this.chatLoop.admit(message.text, { id: message.id, metadata: message.metadata, consume }));
   }
 
   /** Recent branching-head runs, grouped by root_id with heads, step traces and merged synthesis. */

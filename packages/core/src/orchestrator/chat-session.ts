@@ -277,9 +277,10 @@ export interface SendOptions {
   readonly mode?: WorkMode;
 }
 
-/** Drawn as a card from `metadata`, in a turn of its own. */
+/** Its own turn; `consume` runs in the reserving transaction. */
 export interface CardSend extends SendOptions {
   readonly metadata: JsonObject;
+  readonly consume: () => void;
 }
 
 export type SendLandingWaiter = Pick<ReturnType<typeof Promise.withResolvers<SendLanding>>, 'resolve' | 'reject'>;
@@ -493,7 +494,7 @@ export class ChatSession {
     landing: SendLandingWaiter | null = null,
   ): Promise<void> {
     this.refuseUnusableId(opts.id);
-    const card = 'metadata' in opts ? opts.metadata : undefined;
+    const card = 'metadata' in opts ? opts : undefined;
     const { text, files } = normalizePromptInput(input);
 
     // The operator spoke: the reminder count starts over.
@@ -521,7 +522,7 @@ export class ChatSession {
     const mode = opts.mode ?? 'build';
 
     const metadata: JsonObject = {
-      ...card,
+      ...card?.metadata,
       ...(opts.tier !== undefined && { profile_tier: opts.tier }),
       kinuMode: mode,
     };
@@ -532,7 +533,8 @@ export class ChatSession {
 
     if (landing !== null) this.landings.set(turnId, landing);
     this.transaction(() => {
-      this.pendingSends.reserve({ id: pendingSendId, turnId: null, mode, text, files, ...(card !== undefined && { metadata: card }) });
+      card?.consume();
+      this.pendingSends.reserve({ id: pendingSendId, turnId: null, mode, text, files, ...(card !== undefined && { metadata: card.metadata }) });
     });
     this.queue.push({
       text, files, metadata, kind: 'user',

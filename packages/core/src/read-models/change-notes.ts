@@ -5,6 +5,7 @@ import type { DiffAnchor, ReviewAnnotation } from '../types/plans';
 import { admitReviewAnnotations, DiffAnchorSchema } from '../plans/review';
 import type { JsonObject } from '../utils/json';
 import { comparePaths } from './change-view';
+import { KinuError } from '../obs/index';
 
 const CHANGE_NOTES_EVENT = 'change_notes';
 
@@ -26,34 +27,20 @@ export type ChangeNotesResult =
   | { readonly ok: true; readonly notes: readonly ReviewAnnotation[] }
   | { readonly ok: false; readonly error: string };
 
-export function readChangeNotes(rt: NotesRuntime, source: string): ReviewAnnotation[] {
+function keptNotes(rt: NotesRuntime, source: string): { readonly json: string; readonly notes: ReviewAnnotation[] } | null {
   const row = rt.storage.sql<{ notes_json: string }>`SELECT notes_json FROM change_notes
     WHERE actor_id = ${rt.actor.actorId} AND source = ${source} LIMIT 1`[0];
 
-  if (row === undefined) return [];
+  if (row === undefined) return null;
   const admission = admitReviewAnnotations({ value: JSON.parse(row.notes_json) });
 
   if (!admission.ok) throw new Error(`the notes kept on ${source} no longer admit: ${admission.error}`);
 
-  return admission.annotations;
+  return { json: row.notes_json, notes: admission.annotations };
 }
 
-function takeChangeNotes(rt: NotesRuntime, source: string): ReviewAnnotation[] {
-  const notes = readChangeNotes(rt, source);
-
-  void rt.storage.sql`DELETE FROM change_notes WHERE actor_id = ${rt.actor.actorId} AND source = ${source}`;
-
-  return notes;
-}
-
-function putBack(rt: NotesRuntime, source: string, taken: readonly ReviewAnnotation[]): void {
-  const ids = new Set(taken.map((note) => note.id));
-  const since = readChangeNotes(rt, source).filter((note) => !ids.has(note.id));
-  const global = taken.some((note) => note.type === 'GLOBAL_COMMENT');
-  const kept = [...taken, ...since.filter((note) => !global || note.type !== 'GLOBAL_COMMENT')];
-
-  void rt.storage.sql`INSERT OR REPLACE INTO change_notes (actor_id, source, notes_json, updated_at)
-    VALUES (${rt.actor.actorId}, ${source}, ${JSON.stringify(kept)}, ${Date.now()})`;
+export function readChangeNotes(rt: NotesRuntime, source: string): ReviewAnnotation[] {
+  return keptNotes(rt, source)?.notes ?? [];
 }
 
 function refusal(notes: readonly ReviewAnnotation[]): string | null {
@@ -216,23 +203,23 @@ function changeNotesMessage(set: NotedChanges, notes: readonly ReviewAnnotation[
 }
 
 export async function sendChangeNotes(
-  rt: NotesRuntime, set: { value: unknown }, admit: (message: ChangeNotesMessage) => Promise<void>,
+  rt: NotesRuntime, set: { value: unknown }, admit: (message: ChangeNotesMessage, consume: () => void) => Promise<void>,
 ): Promise<ChangeNotesResult> {
   rt.actor.assertCurrent();
   const parsed = v.safeParse(NotedChangesSchema, set.value);
 
   if (!parsed.success) return { ok: false, error: `the change-set: ${parsed.issues[0].message}` };
   const { source } = parsed.output;
-  const notes = takeChangeNotes(rt, source);
+  const kept = keptNotes(rt, source);
 
-  if (notes.length === 0) return { ok: false, error: 'there are no notes to send' };
+  if (kept === null || kept.notes.length === 0) return { ok: false, error: 'there are no notes to send' };
 
-  try {
-    await admit(changeNotesMessage(parsed.output, notes));
-  } catch (cause) {
-    putBack(rt, source, notes);
-    throw cause;
-  }
+  await admit(changeNotesMessage(parsed.output, kept.notes), () => {
+    const taken = rt.storage.sql<{ source: string }>`DELETE FROM change_notes
+      WHERE actor_id = ${rt.actor.actorId} AND source = ${source} AND notes_json = ${kept.json} RETURNING source`;
+
+    if (taken.length === 0) throw new KinuError('unavailable', 'the notes changed while they were being sent; send them again');
+  });
 
   return { ok: true, notes: [] };
 }

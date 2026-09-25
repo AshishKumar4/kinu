@@ -297,6 +297,42 @@ describe('notes sent from the Changes tab', () => {
     expect(owed(next)).toEqual({ sends: 0, metadata: 0 });
   });
 
+  test('a reservation that fails leaves the notes where they were: they move with it or not at all', async () => {
+    const harness = orchestratorHarness();
+    const { agent } = harness;
+    await agent.activateActor();
+    await agent.saveChangeNotes('workspace', [CLAMP]);
+    // A storage fault in the reservation's last write, after the send's own row is in: the card has nowhere to go.
+    harness.db.run('DROP TABLE pending_steer_metadata');
+
+    await expect(agent.sendChangeNotes(CHANGES)).rejects.toThrow('pending_steer_metadata');
+    expect((await agent.getChangeNotes('workspace')).map((each) => each.id)).toEqual(['clamp']);
+    expect(harness.db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM pending_steers').get()?.n).toBe(0);
+  });
+
+  test('a card queued behind a turn stays its own message when that turn\'s leftover sends rerun', async () => {
+    const harness = orchestratorHarness();
+    const { agent } = harness;
+    await agent.activateActor();
+    await agent.saveChangeNotes('workspace', [CLAMP]);
+    const turns = chatSessionTurns(agent);
+    await turns.prepare({ messages: [{ role: 'user', content: 'the long job' }] });
+
+    // A typed message the running turn never reads, then the notes: both wait on that turn.
+    await agent.harnessChatLoop.admit('check staging', { id: 'typed-1' });
+    expect(await agent.sendChangeNotes(CHANGES)).toEqual({ ok: true, notes: [] });
+    await turns.settle({ messageId: 'answer-long', text: 'Done.' });
+    await agent.harnessChatLoop.pumpPromise;
+
+    const users = (await storedChat(harness)).filter((message) => message.role === 'user');
+    const texts = users.map((message) => message.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join(''));
+    const cards = users.map((message) => changeNotesCard({ metadata: message.metadata })?.notes.map((each) => each.id) ?? null);
+
+    expect(texts.slice(1).map((text) => (text.startsWith('# Notes on the changes') ? 'notes' : text))).toEqual(['check staging', 'notes']);
+    expect(cards.slice(1)).toEqual([null, ['clamp']]);
+    expect(owed(harness)).toEqual({ sends: 0, metadata: 0 });
+  });
+
   test('a queued send the loop refuses takes its card row with it', async () => {
     const harness = orchestratorHarness();
     const { agent } = harness;

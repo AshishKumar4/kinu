@@ -42,7 +42,9 @@ async function sent(notes: readonly ReviewAnnotation[]): Promise<ChangeNotesMess
   saveChangeNotes(rt, WORKSPACE.source, { value: notes });
   const messages: ChangeNotesMessage[] = [];
 
-  const result = await sendChangeNotes(rt, { value: WORKSPACE }, (message) => {
+  // As the chat's admission does: `consume` runs in the transaction that reserves the message.
+  const result = await sendChangeNotes(rt, { value: WORKSPACE }, (message, consume) => {
+    consume();
     messages.push(message);
 
     return Promise.resolve();
@@ -122,7 +124,7 @@ describe('notes on a change-set', () => {
     expect((await sent(NOTES)).id).not.toBe(message.id);
   });
 
-  test('a send takes the notes at once: one saved before admission answers is kept for the next send', async () => {
+  test('the notes move in admission\'s transaction: one saved before admission answers is kept for the next send', async () => {
     const { rt } = createTestRuntime();
     initChangeNotesTable(rt.storage.execRaw);
     const [first, later] = [NOTES[3], NOTES[2]];
@@ -132,13 +134,14 @@ describe('notes on a change-set', () => {
     const answer = Promise.withResolvers<void>();
     const sentIds: string[][] = [];
 
-    const admit = (message: ChangeNotesMessage, answered: Promise<void>): Promise<void> => {
+    const admit = (message: ChangeNotesMessage, consume: () => void, answered: Promise<void>): Promise<void> => {
+      consume();
       sentIds.push(changeNotesCard({ metadata: message.metadata })?.notes.map((each) => each.id) ?? []);
 
       return answered;
     };
 
-    const sending = sendChangeNotes(rt, { value: WORKSPACE }, (message) => admit(message, answer.promise));
+    const sending = sendChangeNotes(rt, { value: WORKSPACE }, (message, consume) => admit(message, consume, answer.promise));
 
     // The operator writes another note before admission has answered.
     expect(saveChangeNotes(rt, WORKSPACE.source, { value: [later] }).ok).toBe(true);
@@ -147,26 +150,32 @@ describe('notes on a change-set', () => {
     expect(await sending).toEqual({ ok: true, notes: [] });
     expect(readChangeNotes(rt, WORKSPACE.source)).toEqual([later]);
     // The next send carries the later note alone: each note is sent once.
-    expect(await sendChangeNotes(rt, { value: WORKSPACE }, (message) => admit(message, Promise.resolve()))).toMatchObject({ ok: true });
+    expect(await sendChangeNotes(rt, { value: WORKSPACE }, (message, consume) => admit(message, consume, Promise.resolve()))).toMatchObject({ ok: true });
     expect(sentIds).toEqual([[first.id], [later.id]]);
   });
 
-  test('a refused admission puts the notes back, ahead of any saved meanwhile', async () => {
+  test('a refused admission moves nothing, and consuming notes that changed refuses', async () => {
     const { rt } = createTestRuntime();
     initChangeNotesTable(rt.storage.execRaw);
-    const [clamp, deletion, all] = [NOTES[3], NOTES[1], NOTES[0]];
+    const [clamp, deletion] = [NOTES[3], NOTES[1]];
 
-    if (clamp === undefined || deletion === undefined || all === undefined) throw new Error('the fixture lost its notes');
-    saveChangeNotes(rt, WORKSPACE.source, { value: [clamp, all] });
-    const answer = Promise.withResolvers<void>();
-    const sending = sendChangeNotes(rt, { value: WORKSPACE }, () => answer.promise);
+    if (clamp === undefined || deletion === undefined) throw new Error('the fixture lost its notes');
+    saveChangeNotes(rt, WORKSPACE.source, { value: [clamp] });
 
-    // The page still shows the notes it sent, so it saves them with a new one, and another note on everything.
-    saveChangeNotes(rt, WORKSPACE.source, { value: [clamp, deletion, { ...all, id: 'all-again' }] });
-    answer.reject(new Error('the workspace is closing'));
+    await expect(sendChangeNotes(rt, { value: WORKSPACE }, () => Promise.reject(new Error('the workspace is closing'))))
+      .rejects.toThrow('the workspace is closing');
+    expect(readChangeNotes(rt, WORKSPACE.source).map((each) => each.id)).toEqual(['clamp']);
 
-    await expect(sending).rejects.toThrow('the workspace is closing');
-    expect(readChangeNotes(rt, WORKSPACE.source).map((each) => each.id)).toEqual(['clamp', 'all', 'test']);
+    // Notes saved between the read and the consume are not the ones the message carries: nothing is deleted.
+    const changed = sendChangeNotes(rt, { value: WORKSPACE }, (_message, consume) => {
+      saveChangeNotes(rt, WORKSPACE.source, { value: [clamp, deletion] });
+      consume();
+
+      return Promise.resolve();
+    });
+
+    await expect(changed).rejects.toThrow('the notes changed while they were being sent');
+    expect(readChangeNotes(rt, WORKSPACE.source).map((each) => each.id)).toEqual(['clamp', 'test']);
   });
 
   test('notes written on different baselines name each file\'s own', async () => {
