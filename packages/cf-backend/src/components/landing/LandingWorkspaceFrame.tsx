@@ -480,7 +480,6 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
           onRename={async (name) => name}
           connectionStatus="connected"
           working={kind === 'checkout'}
-          model={LANDING_MODEL}
           altitude={altitude}
           onAltitude={setAltitude}
         />
