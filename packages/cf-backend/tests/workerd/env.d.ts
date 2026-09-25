@@ -24,7 +24,7 @@ import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 import type { SlateBinding } from '../../src/slates/bindings';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
-  PendingSteer, PendingSteerFile, PreparedConversation, QueueProbeMode, ReactorWake,
+  PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
   ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, WakeHoldPlacement,
 } from './two-turn-shapes';
 import type {
@@ -73,7 +73,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   httpCalls(): Promise<HttpCall[]>;
   httpReset(): Promise<void>;
   driveOnce(input: DriveOnceInput): Promise<DriveOnceResult>;
-  queuedConversation(mode: QueueProbeMode): Promise<HttpCall[]>;
+  queuedConversation(mode: QueueProbeMode): Promise<QueuedConversation>;
   prepareQueuedConversation(mode: QueueProbeMode): Promise<PreparedConversation>;
   replayQueuedConversation(prepared: PreparedConversation): Promise<{ steers: PendingSteer[]; steerFiles: PendingSteerFile[] }>;
   completeQueuedConversation(prepared: PreparedConversation): Promise<{ http: HttpCall[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[]; transcript: Array<{ id: string; role: string }>; runEnds: Array<{ runId: string; reason: string }> }>;
