@@ -6,7 +6,7 @@ import { toolExecute } from '@kinu.run/test-utils';
 import {
   DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools,
-  formatApprovalGrant,
+  formatApprovalGrant, reviewCommand,
   type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome,
   type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT,
 } from '../src/index';
@@ -69,7 +69,7 @@ function setup(opts: {
       return 'queued';
     } },
     remember: (grants) => { for (const g of grants) granted.push(formatApprovalGrant(g)); },
-    filesOwner: () => filesOwner,
+    review: (_executor, command) => reviewCommand(command, filesOwner),
     newId: () => `defer-${++seq}`,
     now: () => 1_000 + seq + elapsed,
     audit: (record) => { audited.push(record); },
@@ -117,7 +117,7 @@ describe('a gated action nobody is there to approve', () => {
 
     const queue = new DeferredApprovalQueue({
       store: new DeferredApprovalStore(sql, actor),
-      inbox: { send: async () => 'queued' }, remember: () => {}, filesOwner: () => 'agent',
+      inbox: { send: async () => 'queued' }, remember: () => {}, review: (_executor, command) => reviewCommand(command, 'agent'),
       audit: () => { throw new Error('audit unavailable'); },
     });
 
@@ -546,7 +546,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
       store,
       inbox: { send: () => Promise.reject(new Error('no host')) },
       remember: () => { throw new Error('not an always answer'); },
-      filesOwner: () => 'agent',
+      review: (_executor, command) => reviewCommand(command, 'agent'),
     });
 
     await expect(queue.decide(['defer-7'], 'approved')).rejects.toThrow('no host');
@@ -570,7 +570,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
       store,
       inbox: { send: async () => 'queued' },
       remember: () => { throw new Error('not an always answer'); },
-      filesOwner: () => 'user',
+      review: (_executor, command) => reviewCommand(command, 'user'),
       newId: () => `defer-${++seq}`,
       now: () => 1_000 + seq,
       audit: (record) => { audited.push(record); },

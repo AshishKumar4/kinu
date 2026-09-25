@@ -209,6 +209,29 @@ describe('reviewCommand — the decision is a function of (rule, whose files)', 
     }
   });
 
+  test('a command that destroys uncommitted work or deletes in bulk is the user\'s decision on their files, however it is spelled', () => {
+    const destructive = [
+      'git -C /pc/proj reset --hard',
+      'git --work-tree=/pc/proj checkout -- .',
+      'git checkout HEAD~1 -- src/app.ts',
+      'git checkout .',
+      'git restore .',
+      'git restore --staged --worktree src/app.ts',
+      'git clean -fd',
+      'find /pc/proj -name "*.log" -delete',
+      'rsync -a --delete src/ /pc/proj/',
+    ];
+
+    for (const cmd of destructive) {
+      expect(reviewCommand(cmd, THEIRS).decision).toBe('gate');
+      expect(reviewCommand(cmd, OURS).decision).toBe('allow');
+    }
+
+    for (const cmd of ['git checkout -b feature', 'git restore --staged src/app.ts', 'git clean -n', 'find . -name "*.log"', 'rsync -a src/ dst/']) {
+      expect(reviewCommand(cmd, THEIRS).decision).toBe('allow');
+    }
+  });
+
   test('harm that reaches past the executor is gated wherever it was typed', () => {
     for (const cmd of ['git push --force origin main', 'npm publish']) {
       for (const owner of [OURS, THEIRS]) {

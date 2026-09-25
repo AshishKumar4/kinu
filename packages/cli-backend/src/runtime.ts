@@ -391,7 +391,8 @@ export function createCLIRuntime(
       checkpoints,
       cwd,
     ),
-    { filesOwner, userRoots, home: cwd, keepsCwd: false },
+    // The host shell serves no mount table: `/pc` there is the machine's own path.
+    { filesOwner, userRoots: () => [], home: cwd, keepsCwd: false },
     approvalPolicy,
   );
 

@@ -5,7 +5,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { DefaultExecutionRouter } from '../src/execution/router';
-import { declaredFilesOwner, gateProviderExec, withApprovalGatedShell } from '../src/execution/approval';
+import { declaredReview, gateProviderExec, withApprovalGatedShell } from '../src/execution/approval';
 import { createSandboxExecutor } from '../src/execution/sandbox';
 import type { ExecutorProvider } from '../src/execution/types';
 import type { FilesOwner, ShellApprovalPolicy, ShellApprovalRequest } from '../src/safety/approval-gate';
@@ -274,8 +274,8 @@ describe('the executor reaches the gate', () => {
     const { router } = askingRouter();
     router.register(createSandboxExecutor());
 
-    expect(declaredFilesOwner(router, 'sandbox', 'rm -rf build')).toBe('agent');
-    expect(declaredFilesOwner(router, 'device', 'rm -rf build')).toBe('user');
+    expect(declaredReview(router, 'sandbox', 'rm -rf build').decision).toBe('allow');
+    expect(declaredReview(router, 'device', 'rm -rf build').decision).toBe('gate');
   });
 
   test("an executor holding the user's files is asked, whatever it is named", async () => {
@@ -501,6 +501,21 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
 
     expect(asked.map((request) => request.command)).toEqual(['rm -rf /pc/laptop/proj', python]);
     expect(ran).toEqual(['code rm -rf build', "code print('hi')"]);
+  });
+
+  test('a move, copy or redirect onto the user\'s device or Drive asks, while the same write in the agent\'s home runs', async () => {
+    const { router, asked } = askingRouter();
+    const { provider, ran } = mountedWorkspaceProvider();
+    router.register(provider);
+    const start = present(router.getProvider('workspace'), 'the workspace executor').tools.startProcess;
+    const onto = ['mv notes.md /shared/notes.md', 'cp -r build /pc/laptop/proj', 'echo done > /shared/status.txt', 'cp -t /pc/laptop a.txt b.txt'];
+
+    for (const command of onto) expect(await start.execute(command)).toMatchObject(DENIED);
+
+    for (const command of ['mv notes.md done.md', 'echo done >> /shared/log.txt', 'cp /shared/notes.md .']) expect(await start.execute(command)).toBe('ok');
+
+    expect(asked.map((request) => request.command)).toEqual(onto);
+    expect(ran).toEqual(['start mv notes.md done.md', 'start echo done >> /shared/log.txt', 'start cp /shared/notes.md .']);
   });
 
   test('a hosted node\'s shell, whose box starts every call at its home, reads each command from there', async () => {

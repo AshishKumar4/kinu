@@ -2,7 +2,7 @@
  *  tools on `ExecutionRouter.register()`. */
 
 import {
-  commandFilesOwner, gateExec, nextShellCwd, reviewCommand, reviewProgram, sessionAt, STRICT_NO_CHANNEL_POLICY,
+  commandFilesOwner, gateExec, nextShellCwd, reviewCommand, reviewProgram, reviewShellCommand, sessionAt, STRICT_NO_CHANNEL_POLICY,
   type ApprovalResult, type FilesOwner, type ShellApprovalPolicy, type ShellCwd,
 } from '../safety/approval-gate';
 import * as v from 'valibot';
@@ -68,11 +68,11 @@ export function withApprovalGatedShell(
   };
 }
 
-/** Whose files the named executor's command reaches; an unregistered name is the user's. */
-export function declaredFilesOwner(router: ExecutionRouter | undefined, executor: string, command: string): FilesOwner {
+/** An unregistered executor's command is reviewed as the user's. */
+export function declaredReview(router: ExecutionRouter | undefined, executor: string, command: string): ApprovalResult {
   const provider = router?.getProvider(executor);
 
-  return provider === undefined ? 'user' : commandFilesOwner(provider, command);
+  return provider === undefined ? reviewCommand(command, 'user') : reviewShellCommand(provider, command);
 }
 
 /** Tools taking a shell command or a program first; VFS-shaped tools are out of scope. */
@@ -85,9 +85,11 @@ async function reviewCall(provider: ExecutorProvider, member: string, command: s
   const parsed = v.safeParse(CallOptionsSchema, rest[0]);
   const options = parsed.success ? parsed.output : {};
   const mounted = provider.filesOwner === 'agent' && provider.userRoots !== undefined;
-  const owner = commandFilesOwner(provider, command, mounted ? sessionAt(await provider.homeDir(), options.cwd) : undefined);
+  const session = mounted ? sessionAt(await provider.homeDir(), options.cwd) : undefined;
 
-  return member === 'runCode' && options.language !== 'shell' ? reviewProgram(command, owner) : reviewCommand(command, owner);
+  return member === 'runCode' && options.language !== 'shell'
+    ? reviewProgram(command, commandFilesOwner(provider, command, session))
+    : reviewShellCommand(provider, command, session);
 }
 
 /** Already-wrapped executes, so a provider shared across routers is gated once (idempotent). */

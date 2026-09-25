@@ -213,7 +213,7 @@ import {
   DeviceConsentRegistry, DeviceConsentStore,
   type DeviceConsentAnswer, type DeviceConsentDecision,
   type DeviceConsentRequest, type PendingDeviceConsent,
-  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, declaredFilesOwner,
+  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, declaredReview,
   type DeferredApproval, type DeferredApprovalAnswer, type DeferredApprovalChannel,
   type DeferredApprovalNotice, type ApprovalGrant,
   TURN_AUTHOR_METADATA_KEY,
@@ -2558,7 +2558,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       inbox: { send: (signal) => this.orch.inbox.send(signal) },
       // Same actor_config as the approval mode, read live by the gate on the next command.
       remember: (grants) => { this.config.grantShellApproval(grants); },
-      filesOwner: (executor, command) => declaredFilesOwner(this.rt.executionRouter, executor, command),
+      review: (executor, command) => declaredReview(this.rt.executionRouter, executor, command),
       // A spent grant's row is deleted, so this event is the only durable record of consumption.
       // Outside any turn it falls back to the workspace run.
       audit: (record) => {

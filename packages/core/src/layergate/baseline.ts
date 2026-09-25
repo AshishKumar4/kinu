@@ -61,7 +61,7 @@ export const LOCKED_BASELINE: Baseline = {
   'mid-turn-injection/one-delivery-time': 'e458628b8dd4c2fa',
   'mid-turn-injection/replay-into-history': '742d070ddb78048b',
   'safety-gate/a-standing-grant-stops-the-asking': '6c41847301038d2e',
-  'safety-gate/decision-table': 'd23a5cdb4aa88b43',
+  'safety-gate/decision-table': '00884fac28349a7e',
   'safety-gate/deny-never-executes': 'cb0b10867ae885e1',
   'safety-gate/digest-ignores-key-order': 'ad812e29ee68b135',
   'safety-gate/files-owner-decides-local-harm': '525fa6629432e9a9',

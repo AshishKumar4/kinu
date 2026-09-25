@@ -204,6 +204,11 @@ const COMMANDS = Object.freeze([
   'grep -rn "rm -rf" scripts/',
   // …unless an interpreter is the one being handed the program.
   'bash -c "rm -rf /home/main/work"',
+  'git -C /pc/proj reset --hard',
+  'git checkout -- .',
+  'git clean -fd',
+  'find /pc/proj -delete',
+  'rsync -a --delete src/ /pc/proj/',
 ]);
 
 /** Safety-gate probes run every command against both; the pair must disagree where it should. */

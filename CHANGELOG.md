@@ -679,6 +679,11 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **More commands that destroy your work wait for you.** `git -C <dir> reset --hard` and other git commands
+  spelled with global options, `git checkout -- .`, `git restore .`, `git clean -f`, `find … -delete` and
+  `rsync --delete` ran on your files without asking, as did `mv`, `cp` or `>` onto a file under `/pc` or
+  `/shared`. They now wait for you there as `rm -rf` does; on the agent's own files they still run.
+
 - **A delete that reaches your machine or your Drive from the hosted workspace waits for you.** The hosted
   workspace is the agent's own, but its shell also reaches your connected machine at `/pc` and your Drive at
   `/shared`, and `rm -rf /pc/proj` ran there without asking. A command that names `/pc` or `/shared`, or runs

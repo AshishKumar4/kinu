@@ -93,6 +93,9 @@ interface Rule {
   binaries?: readonly string[];
 }
 
+/** `git` and its global options (`-C`, `-c`, `--work-tree=`) before a subcommand. */
+const GIT = String.raw`\bgit(?:\s+(?:-[Cc]\s+\S+|--[\w-]+(?:[=\s]\S+)?))*\s+`;
+
 /** Every ecosystem's publish command. `binaries` gates whether the rule fires, so extend both together. */
 const PACKAGE_PUBLISH = new RegExp(
   [
@@ -193,12 +196,44 @@ const RULES: Rule[] = [
     binaries: ['rm'],
   },
   {
-    pattern: /\bgit\s+reset\s+--hard/,
+    pattern: new RegExp(`${GIT}reset\\s+--hard`),
     decision: 'gate',
     name: 'git-reset-hard',
     why: 'Discards local changes irreversibly.',
     harm: 'local',
     binaries: ['git'],
+  },
+  {
+    pattern: new RegExp(`${GIT}checkout(?:\\s+\\S+)*\\s+(?:--|\\.)(?:\\s|$)|${GIT}restore\\b(?:(?![^;|&\\n]*--staged)|[^;|&\\n]*--worktree)`),
+    decision: 'gate',
+    name: 'git-discard-changes',
+    why: 'Discards uncommitted changes to tracked files.',
+    harm: 'local',
+    binaries: ['git'],
+  },
+  {
+    pattern: new RegExp(`${GIT}clean\\b[^;|&\\n]*\\s(?:-[a-zA-Z]*f|--force)`),
+    decision: 'gate',
+    name: 'git-clean',
+    why: 'Deletes untracked files.',
+    harm: 'local',
+    binaries: ['git'],
+  },
+  {
+    pattern: /\bfind\b[^;|&\n]*\s-delete\b/,
+    decision: 'gate',
+    name: 'find-delete',
+    why: 'Deletes every file the search matches.',
+    harm: 'local',
+    binaries: ['find'],
+  },
+  {
+    pattern: /\brsync\b[^;|&\n]*\s--del(?:ete[\w-]*)?\b/,
+    decision: 'gate',
+    name: 'rsync-delete',
+    why: 'Deletes destination files the source lacks.',
+    harm: 'local',
+    binaries: ['rsync'],
   },
   {
     pattern: /\bdocker\s+(rm\s+-f|system\s+prune)/,
@@ -209,7 +244,7 @@ const RULES: Rule[] = [
     binaries: ['docker'],
   },
   {
-    pattern: /\bgit\s+push\b[^;|&]*?(?:\s--force\b|\s-f\b)/,
+    pattern: new RegExp(`${GIT}push\\b[^;|&]*?(?:\\s--force\\b|\\s-f\\b)`),
     decision: 'gate',
     name: 'git-force-push',
     why: 'Force-push rewrites history on a remote nobody here owns.',
@@ -537,6 +572,71 @@ export function commandFilesOwner(executor: GatedExecutor, command: string, sess
   return 'agent';
 }
 
+/** A `mv` or `cp` destination: `-t`'s, else the last argument. */
+function copyTarget(step: ShellStep): ShellWord | undefined {
+  const [verb, ...args] = step.words;
+
+  if (verb !== 'mv' && verb !== 'cp') return undefined;
+  const flag = args.indexOf('-t');
+
+  if (flag !== -1) return args[flag + 1];
+  const long = args.find((arg) => arg?.startsWith('--target-directory=') === true);
+
+  return long === undefined ? args.at(-1) : long?.slice('--target-directory='.length) ?? null;
+}
+
+function truncatingRedirect(word: string): number {
+  for (let i = 0; i < word.length; i++) {
+    if (word.charAt(i) === '>' && word.charAt(i - 1) !== '>' && word.charAt(i + 1) !== '>') return i;
+  }
+
+  return -1;
+}
+
+/** Files a `>` truncates; `>>` appends. */
+function redirectTargets(step: ShellStep): ShellWord[] {
+  const targets: ShellWord[] = [];
+
+  for (const [index, word] of step.words.entries()) {
+    const at = word === null ? -1 : truncatingRedirect(word);
+
+    if (word === null || at === -1) continue;
+    const rest = word.slice(at + 1);
+    targets.push(rest === '' ? step.words[index + 1] ?? null : rest);
+  }
+
+  return targets;
+}
+
+function overwritesUserFiles(executor: GatedExecutor, command: string, session: ShellCwd | undefined): boolean {
+  const roots = executor.userRoots?.() ?? [];
+  const home = session?.home ?? '/';
+  let cwd = session?.cwd ?? '/';
+
+  for (const step of roots.length === 0 ? [] : shellSteps(command)) {
+    const written = [...redirectTargets(step), copyTarget(step)].map((target) => (target === undefined ? null : shellPath(target, cwd, home)));
+
+    if (written.some((path) => path !== null && underRoots(path, roots))) return true;
+    cwd = cdTarget(step, cwd, home) ?? cwd;
+  }
+
+  return false;
+}
+
+const OVERWRITE: ApprovalRuleHit = {
+  decision: 'gate', rule: 'overwrite-user-files', explanation: 'Moves, copies or writes onto the user\'s device or Drive, replacing what is there.',
+};
+
+/** The rule table for whose files a command reaches, and any overwrite onto the user's mounts. */
+export function reviewShellCommand(executor: GatedExecutor, command: string, session = executor.session?.()): ApprovalResult {
+  const review = reviewCommand(command, commandFilesOwner(executor, command, session));
+
+  if (!overwritesUserFiles(executor, command, session)) return review;
+  const hits = [...review.hits, OVERWRITE];
+
+  return { decision: dominant(hits), hits };
+}
+
 /** `runCode` in another language: its text cannot show what it does to the user's files, so it asks there. */
 export function reviewProgram(code: string, filesOwner: FilesOwner): ApprovalResult {
   const review = reviewCommand(code, filesOwner);
@@ -665,7 +765,7 @@ export function gateExec<R>(
     const [command, ...rest] = args;
     const cmd = String(command);
 
-    const review = tuning.review === undefined ? reviewCommand(cmd, commandFilesOwner(executor, cmd)) : await tuning.review(cmd, rest);
+    const review = tuning.review === undefined ? reviewShellCommand(executor, cmd) : await tuning.review(cmd, rest);
     const decision = await decideApproval({ command: cmd, executor: executor.name }, review, policy);
 
     if (!decision.run) return denyResult(decision.error);
