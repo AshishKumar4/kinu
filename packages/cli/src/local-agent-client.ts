@@ -453,14 +453,15 @@ export class LocalAgentClient implements AgentClient {
 
   async status(): Promise<AgentClientStatus> {
     const info = await this.deps.refreshInfo();
+    const tier = await this.session.nextTurnTier();
 
     return {
       name: info.name,
       purpose: info.purpose,
-      model: this.session.getEffectiveModelSpec(),
-      reasoningEffort: this.session.getReasoningEffort().effort,
+      model: tier.model,
+      reasoningEffort: tier.reasoningEffort,
       roleId: this.session.getActiveRoleId(),
-      tierId: this.session.getEffectiveTierId(),
+      tierId: tier.id,
       scaffoldVersion: info.scaffoldVersion,
       searchNodeCount: info.searchNodeCount,
       craftedToolCount: info.craftedToolCount,

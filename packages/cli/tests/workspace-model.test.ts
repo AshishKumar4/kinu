@@ -167,8 +167,10 @@ async function nextTurnModel(machine: Machine, workspace: string): Promise<strin
 const PICK_BETA: readonly PtyStep[] = [
   { send: '\u000C' },
   { wait: 'Select model', timeout: 15 },
+  // The list has loaded, then the filter has applied once the other row is gone.
+  { wait: 'alpha-model ·', timeout: 15 },
   { send: 'beta' },
-  { wait: 'beta-model', timeout: 5 },
+  { gone: 'alpha-model ·', timeout: 5 },
   { send: '\r' },
 ];
 

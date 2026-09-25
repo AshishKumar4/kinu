@@ -67,6 +67,21 @@ describe('CLI TUI layout', () => {
       renderer.destroy();
     }
   });
+  test('status bar names a model served through a gateway on a wide terminal', async () => {
+    // A gateway's provider path took the whole budget, so the header showed no model at all.
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 160, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+
+    try {
+      root.render(<StatusBar name="jarvis" mode="local" model="my-gateway/anthropic/claude-opus-5-5" reasoningEffort="max" connected={true} />);
+      await renderSettled(renderOnce);
+      expect(captureCharFrame()).toContain('Claude Opus 5 5');
+    } finally {
+      flushSync(() => { root.unmount(); });
+      renderer.destroy();
+    }
+  });
+
   test('status bar drops the model control whole on narrow terminals and retains connection state', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 52, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);

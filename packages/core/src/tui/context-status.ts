@@ -10,8 +10,8 @@ export function modelDisplayName(spec: string | null | undefined): string {
 
   if (!raw) return 'default';
   const listed = specWithoutAccount(raw);
-  const modelId = stripKnownProvider(listed);
-  const leaf = modelId.startsWith('@cf/') ? modelId.split('/').at(-1) ?? modelId : modelId;
+  // The model is the last path segment: a provider, a gateway or a vendor folder only prefixes it.
+  const leaf = listed.split('/').at(-1) ?? listed;
 
   const name = leaf
     .replace(/^gpt-/, 'GPT-')
@@ -32,16 +32,6 @@ export function formatContextUsage(modelSpec: string | null | undefined, usedTok
   const window = reportedContextWindow ?? contextWindowForModel(modelSpec ?? '').window;
 
   return `ctx ~${formatTokenCount(usedTokens)}/${formatTokenCount(window)}`;
-}
-
-function stripKnownProvider(spec: string): string {
-  const known = ['workers-ai/', 'codex/', 'openai/', 'anthropic/', 'openrouter/', 'openai-compat/', 'ai-gateway/'];
-
-  for (const prefix of known) {
-    if (spec.startsWith(prefix)) return spec.slice(prefix.length);
-  }
-
-  return spec;
 }
 
 function formatTokenCount(tokens: number): string {

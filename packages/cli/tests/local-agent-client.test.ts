@@ -7,13 +7,17 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
-import { NO_COUNT_ENDPOINT, openWorkspaceMainActor, type LLMProviderConfig } from '@kinu.run/core';
+import {
+  NO_COUNT_ENDPOINT, openWorkspaceMainActor, profileCatalogDigest, type LLMProviderConfig, type ProfileCatalog, type ProfileCatalogEnvelope,
+} from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime, makeSql, type LocalModelResolver , makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 import { LocalAgentClient } from '../src/local-agent-client';
 import type { CliSessionOptions } from '../src/session';
 import type { AgentClientEvent } from '../src/agent-client';
+
+type CliProfileSource = () => Promise<ProfileCatalogEnvelope | null>;
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'openai-compat', baseURL: 'http://localhost:0', headers: { Authorization: 'x' }, model: 'fake-model',
@@ -77,7 +81,9 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
     resolveModel: () => model,
     credentialFor: async () => null,
     listProviders: async () => [{ id: 'fake', label: 'Fake', available: true }],
-    listModels: async () => ({ models: [{ id: 'fake-model', label: 'Fake Model', provider: 'fake' }], failures: [] }),
+    listModels: async () => ({
+      models: ['fake-model', 'big-model', 'pinned-model'].map((id) => ({ id, label: id, provider: 'fake' })), failures: [],
+    }),
     modelInfo: async () => null,
     judgeCandidates: async () => [],
     getAuth: async () => null,
@@ -90,7 +96,7 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
   };
 }
 
-function setup(model: LanguageModel) {
+function setup(model: LanguageModel, profileAuthority: CliProfileSource = async () => null) {
   const home = scratchDir('client');
   const dbPath = join(home, 'agent.db');
   // `createCLIRuntime` requires the actor database to be `dbPath` on disk (`requireLocalDatabasePath`),
@@ -114,7 +120,7 @@ function setup(model: LanguageModel) {
     refreshInfo: async () => info,
     model,
     modelResolver: fakeResolver(model),
-    profileAuthority: async () => null,
+    profileAuthority,
     mcpServers: {},
     noAutoEvolve: true,
     transcript: { transcriptDir: join(home, 'sessions') },
@@ -481,6 +487,24 @@ describe('LocalAgentClient', () => {
       }
     });
   }
+
+  test('before any turn, status names the model and effort the next turn runs at, and a pin wins over the tier', async () => {
+    // It named the resolver's bare default and 'medium', so a workspace whose default tier is a big model at max
+    // looked like it would run a small one, and the owner re-picked both in every workspace.
+    const catalog: ProfileCatalog = { roles: {}, tiers: { default: { model: 'fake/big-model', reasoningEffort: 'max' } } };
+
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'account', accountId: 'acct' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
+    };
+
+    const { client } = setup(fakeModel('ok'), async () => envelope);
+    await client.connect();
+
+    expect(await client.status()).toMatchObject({ model: 'fake/big-model', reasoningEffort: 'max', tierId: 'default' });
+    await client.setModel('fake/pinned-model');
+    expect(await client.status()).toMatchObject({ model: 'fake/pinned-model', reasoningEffort: 'max' });
+    await client.close();
+  });
 
   test('status and tools reflect the live session', async () => {
     const { client } = setup(fakeModel('ok'));
