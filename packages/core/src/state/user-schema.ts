@@ -378,8 +378,9 @@ export function initUserTables(sql: SqlExec): void {
 
   sql.exec(`
     CREATE TABLE IF NOT EXISTS workspace_overview_nudges (
-      name      TEXT PRIMARY KEY,
-      nudged_at INTEGER NOT NULL
+      name     TEXT PRIMARY KEY,
+      attempts INTEGER NOT NULL,
+      next_at  INTEGER NOT NULL
     )
   `);
 

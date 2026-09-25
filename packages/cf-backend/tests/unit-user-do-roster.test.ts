@@ -4,7 +4,7 @@
  * open page is told each change once, over its socket, and nothing for a push that changed nothing.
  */
 import * as v from 'valibot';
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, setSystemTime, test } from 'bun:test';
 import type { UserCaller, WorkspaceOverview } from '@kinu.run/core';
 import { nextTurn, until } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
@@ -117,6 +117,70 @@ describe('workspaces from before tiles existed', () => {
 
     await harness.userDO.listWorkspaces(owner);
     expect([...harness.overviewNudges].sort()).toEqual([...names].sort());
+    harness.close();
+  });
+
+  test('a failed ask is asked again once its backoff has passed, never before', async () => {
+    let refuse = true;
+    let answered = false;
+    const callers = new Map<string, UserCaller>();
+
+    const harness: TestUserDO = createTestUserDO({
+      durableObjectId: USER_ID,
+      overviewNudge: async (name) => {
+        if (refuse) throw new Error('the workspace is unavailable');
+        const caller = callers.get(name);
+
+        if (caller === undefined) throw new Error(`no capability for ${name}`);
+        await harness.userDO.putWorkspaceOverview(caller, name, QUIET);
+        answered = true;
+      },
+    });
+
+    const owner = await testOwner();
+    callers.set('ledger', await workspace(harness, 'ledger'));
+
+    try {
+      await harness.userDO.listWorkspaces(owner);
+      await until(() => harness.overviewNudges.length === 1, 'the first ask');
+
+      for (let lap = 0; lap < 10; lap++) await nextTurn();
+      await harness.userDO.listWorkspaces(owner);
+
+      for (let lap = 0; lap < 10; lap++) await nextTurn();
+      expect(harness.overviewNudges).toHaveLength(1);
+
+      refuse = false;
+      setSystemTime(new Date(Date.now() + 10 * 60_000));
+      await harness.userDO.listWorkspaces(owner);
+      await until(() => answered, 'the second ask is answered');
+      expect(harness.overviewNudges).toEqual(['ledger', 'ledger']);
+      expect((await harness.userDO.listWorkspaces(owner)).counts.unreported).toBe(0);
+    } finally {
+      setSystemTime();
+      harness.close();
+    }
+  });
+
+  test('a workspace deleted while the asks ahead of it are held is never woken', async () => {
+    const answer = Promise.withResolvers<void>();
+    const harness: TestUserDO = createTestUserDO({ durableObjectId: USER_ID, overviewNudge: async () => { await answer.promise; } });
+    const owner = await testOwner();
+    const names = ['ledger', 'notes', 'budget', 'garden', 'plans'];
+
+    for (const name of names) await workspace(harness, name);
+
+    await harness.userDO.listWorkspaces(owner);
+    await until(() => harness.overviewNudges.length === 4, 'four asks in flight');
+    const waiting = names.find((name) => !harness.overviewNudges.includes(name));
+
+    if (waiting === undefined) throw new Error('every workspace was asked at once');
+    await harness.userDO.removeWorkspace(owner, waiting, USER_ID);
+    answer.resolve();
+
+    for (let lap = 0; lap < 20; lap++) await nextTurn();
+    expect(harness.overviewNudges).toHaveLength(4);
+    expect(harness.overviewNudges).not.toContain(waiting);
     harness.close();
   });
 });

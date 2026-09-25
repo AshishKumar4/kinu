@@ -123,7 +123,7 @@ import { tenantDrive } from '../drive/tenant';
 import { deriveUserId } from '../auth/store';
 import { isModelInferenceCredentialKey } from '@kinu.run/core';
 import { randomToken, sha256Hex } from '@kinu.run/core';
-import { resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview } from '@kinu.run/core';
+import { recoveryBackoffMs, resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview } from '@kinu.run/core';
 import { displayNameProblem } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { recordReleaseTransition } from '@kinu.run/core/analytics';
@@ -876,15 +876,15 @@ export class UserDO extends Agent<Env> {
     return rosterPage(this.ctx.storage.sql, query);
   }
 
-  /** So two reads never ask one workspace twice. */
+  /** So two reads never ask one twice. */
   private readonly nudging = new Set<string>();
 
-  /** Held, not awaited: the read never waits. A lane never rejects. */
+  /** Never awaited, so a read never waits; a lane never rejects. */
   private nudges: Promise<unknown> = Promise.resolve();
 
-  /** Once ever per workspace with no tile: marked as asked, so a failed ask is not repeated; a reset leaves the rest. */
+  /** Each ask marks its retry first, so a failed or cut-short one is asked again. */
   private nudgeUnreported(): void {
-    const queue = unreportedWorkspaces(this.ctx.storage.sql).filter((name) => !this.nudging.has(name));
+    const queue = unreportedWorkspaces(this.ctx.storage.sql, Date.now()).filter((name) => !this.nudging.has(name));
 
     if (queue.length === 0) return;
 
@@ -893,7 +893,14 @@ export class UserDO extends Agent<Env> {
     const lane = async (): Promise<void> => {
       for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
         try {
-          this.sqlx(`INSERT OR IGNORE INTO workspace_overview_nudges (name, nudged_at) VALUES (?, ?)`, name, Date.now());
+          // Deleted since the queue was read: never woken.
+          if (!this.workspaceRegistered(name)) continue;
+          const [marker] = this.sqlx<{ attempts: number }>(`SELECT attempts FROM workspace_overview_nudges WHERE name = ?`, name);
+          const attempts = (marker?.attempts ?? 0) + 1;
+
+          this.sqlx(`INSERT INTO workspace_overview_nudges (name, attempts, next_at) VALUES (?, ?, ?)
+            ON CONFLICT (name) DO UPDATE SET attempts = excluded.attempts, next_at = excluded.next_at`,
+          name, attempts, Date.now() + recoveryBackoffMs(attempts));
           await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name)).requestOverviewPush();
         } catch (cause) {
           diagnostics.failure('roster.overview_nudge_failed', toKinuError({

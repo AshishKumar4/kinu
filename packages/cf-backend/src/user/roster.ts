@@ -207,10 +207,11 @@ function rosterTotal(sql: SqlExec, query: RosterQuery, counts: RosterCounts): nu
   return total;
 }
 
-export function unreportedWorkspaces(sql: SqlExec): string[] {
+export function unreportedWorkspaces(sql: SqlExec, now: number): string[] {
   return sql.exec(`SELECT w.name FROM user_workspaces w
     LEFT JOIN workspace_overviews o ON o.name = w.name LEFT JOIN workspace_overview_nudges n ON n.name = w.name
-    WHERE ${ACTIVE} AND o.name IS NULL AND n.name IS NULL`).toArray().map((row) => v.parse(NameRowSchema, row).name);
+    WHERE ${ACTIVE} AND o.name IS NULL AND (n.name IS NULL OR n.next_at <= ?)`, now)
+    .toArray().map((row) => v.parse(NameRowSchema, row).name);
 }
 
 export function rosterRow(sql: SqlExec, name: string): RosterEntry | null {

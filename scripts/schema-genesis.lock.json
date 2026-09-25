@@ -1663,7 +1663,8 @@
   ],
   "workspace_overview_nudges@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
-    "nudged_at INTEGER NOT NULL"
+    "attempts INTEGER NOT NULL",
+    "next_at INTEGER NOT NULL"
   ],
   "workspace_overviews@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
