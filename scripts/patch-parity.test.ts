@@ -234,6 +234,42 @@ describe('patch-parity — the verdict names the remedy', () => {
   });
 });
 
+describe('patch-parity — the patch is read as git applies it', () => {
+  const hunk = '@@ -1 +1 @@\n-old\n+new\n';
+
+  test('a section without a diff --git header is a file git applies, so it is read, not skipped', () => {
+    // It carries no `index` line, so its pre-image cannot be verified: the
+    // gate refuses naming it rather than leaving the file uncompared.
+    expect(() => parsePatch(
+      `diff --git a/x.js b/x.js\nindex 3367afd..3e75765 100644\n--- a/x.js\n+++ b/x.js\n${hunk}`
+      + `--- a/y.js\n+++ b/y.js\n${hunk}`,
+    )).toThrow('--- a/y.js carries no `index');
+  });
+
+  test('an empty file created, and a quoted path, are files rather than refusals', () => {
+    expect(parsePatch('diff --git a/dist/empty.d.ts b/dist/empty.d.ts\nnew file mode 100644\nindex 0000000..e69de29\n'))
+      .toEqual([{ from: undefined, to: 'dist/empty.d.ts', preBlob: '0000000' }]);
+
+    const quoted = '"a/sp\\303\\251c \\"x\\".js"';
+
+    const files = parsePatch(
+      `diff --git ${quoted} "b/sp\\303\\251c \\"x\\".js"\nindex 3367afd..3e75765 100644\n`
+      + `--- ${quoted}\n+++ "b/sp\\303\\251c \\"x\\".js"\n${hunk}`,
+    );
+
+    expect(files).toEqual([{ from: 'spéc "x".js', to: 'spéc "x".js', preBlob: '3367afd' }]);
+  });
+
+  test('a hunk ends by its line counts, so body lines shaped like headers stay body', () => {
+    const files = parsePatch(
+      'diff --git a/x.js b/x.js\nindex 3367afd..3e75765 100644\n--- a/x.js\n+++ b/x.js\n'
+      + '@@ -1,2 +1,2 @@\n--- a/fake.js\n+++ b/fake.js\n keep\n',
+    );
+
+    expect(files.map((file) => file.to)).toEqual(['x.js']);
+  });
+});
+
 describe('patch-parity — the blind spots are stated', () => {
   test('the green path names what the gate does not cover', () => {
     expect(BLIND_SPOTS.length).toBeGreaterThan(0);

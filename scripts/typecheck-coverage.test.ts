@@ -49,6 +49,17 @@ describe('checkedProjects', () => {
   test('leaves an empty check project list visible to the non-vacuity assertion', () => {
     expect(checkedProjects(JSON.stringify({ scripts: { check: 'echo hi' } }))).toEqual([]);
   });
+
+  test('reads each script as the shell runs it, not as a -p anywhere in the text', () => {
+    const projects = checkedProjects(JSON.stringify({
+      scripts: {
+        check: 'mkdir -p dist && bunx tsc --noEmit --project "packages/my pkg" \\\n  && bun run --silent lint',
+        lint: 'tsc --noEmit -p tools/lint',
+      },
+    }));
+
+    expect(projects).toEqual(['packages/my pkg', 'tools/lint']);
+  });
 });
 
 describe('programFiles', () => {

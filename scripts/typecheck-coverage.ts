@@ -12,6 +12,7 @@ import { join, relative, resolve, sep } from 'node:path';
 import { API } from 'typescript/unstable/async';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
+import { allCommands, invocation, parseShell } from './shell-words';
 import { isRunnableSuite, trackedFiles } from './sources';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -83,10 +84,29 @@ export function scriptTypeScriptFiles(files: readonly string[] = trackedFiles())
   return files.filter((file) => file.startsWith('scripts/') && file.endsWith('.ts')).sort();
 }
 
+/** Bun subcommands that shadow a same-named package.json script in `bun <name>`. */
+const BUN_SUBCOMMANDS = new Set([
+  'add', 'build', 'create', 'exec', 'init', 'install', 'link', 'pm', 'publish', 'remove', 'run', 'test', 'update', 'upgrade', 'x',
+]);
+
+/** The project a `tsc` argument list compiles: `-p`/`--project`, else the tsconfig of the working directory. */
+function tscProject(args: readonly string[]): string {
+  if (args.some((arg) => arg === '-b' || arg === '--build')) {
+    throw new Error('typecheck-coverage: `tsc --build` compiles references too; this gate reads `tsc -p` programs only');
+  }
+
+  const at = args.findIndex((arg) => arg === '-p' || arg === '--project');
+  const inline = args.find((arg) => arg.startsWith('--project='));
+
+  return inline?.slice('--project='.length) ?? (at === -1 ? '.' : args[at + 1] ?? '.');
+}
+
 /**
  * The tsconfig projects `bun run check` passes to tsc, following `bun run`
  * references transitively. The list is derived from the command that actually
- * runs rather than duplicated here.
+ * runs rather than duplicated here: each script body is read as shell
+ * (`shell-words.ts`), so a quoted path, a `bunx tsc`, a continued line or a
+ * `-p` handed to another program reads as the shell would run it.
  */
 export function checkedProjects(
   packageJson = readFileSync(resolve(root, 'package.json'), 'utf8'),
@@ -106,12 +126,25 @@ export function checkedProjects(
 
     if (body === undefined) return;
 
-    for (const match of body.matchAll(/-p\s+(\S+)/g)) {
-      if (match[1] !== undefined) projects.add(match[1]);
-    }
+    for (const command of allCommands(parseShell(body))) {
+      const run = invocation(command);
 
-    for (const match of body.matchAll(/bun run\s+([\w:.-]+)/g)) {
-      if (match[1] !== undefined) walk(match[1]);
+      if (run?.program === 'tsc') projects.add(tscProject(run.args));
+
+      if (run?.program !== 'bun') continue;
+      const [sub, ...rest] = run.args;
+
+      if (sub === 'run') {
+        if (rest.some((arg) => arg === '--filter' || arg === '-F' || arg === '--cwd')) {
+          throw new Error(`typecheck-coverage: \`${body}\` runs another package's scripts; this gate reads the root's`);
+        }
+
+        const script = rest.find((arg) => !arg.startsWith('-'));
+
+        if (script !== undefined) walk(script);
+      } else if (sub !== undefined && Object.hasOwn(scripts, sub) && !BUN_SUBCOMMANDS.has(sub)) {
+        walk(sub);
+      }
     }
   };
 
@@ -161,6 +194,9 @@ export const BLIND_SPOTS: readonly string[] = [
   'WHETHER THE TESTS IN A COVERED DIRECTORY ASSERT ANYTHING — NOT MEASURED. '
   + 'This gate proves each runnable suite reaches the compiler. A suite that '
   + 'compiles and asserts nothing passes here.',
+  'SCRIPTS ARE READ AS THE SHELL SUBSET IN scripts/shell-words.ts. A `tsc` or `bun run` reached '
+  + 'through `sh -c`, `eval`, a variable or a shell function is not followed, and a `-p` whose value '
+  + 'is an expansion is read as its source text.',
 ];
 
 export interface TestCoverage {
