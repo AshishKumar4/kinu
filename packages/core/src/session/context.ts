@@ -9,6 +9,17 @@ export interface ContextEntry extends MessageReference { readonly entryId: strin
 
 interface MemberRow { entry_id: string; position: number; message_id: string }
 
+/** A kept head serves while its revision's row reads the same; a rewrite after a rollback differs unless it repeats every field in the same millisecond. */
+interface RevisionStamp {
+  readonly recorded_at: number; readonly author: string; readonly cause: string; readonly turn_id: string | null; readonly proposal_id: string | null;
+}
+
+function sameStamp(a: RevisionStamp, b: RevisionStamp): boolean {
+  return a.recorded_at === b.recorded_at && a.author === b.author && a.cause === b.cause && a.turn_id === b.turn_id && a.proposal_id === b.proposal_id;
+}
+
+interface KeptHead { readonly revision: number; readonly stamp: RevisionStamp; readonly entries: readonly ContextEntry[] }
+
 /** `recordUnchanged`: an authored edit is a statement even when it moves nothing. */
 interface RevisionOrigin {
   readonly author: string; readonly cause: string; readonly turnId: string | null; readonly proposalId: string | null;
@@ -29,6 +40,9 @@ export interface ContextCommitRequest {
 
 /** Interval membership is both the current selection and its historical record. */
 export class SessionContext {
+  /** Each context's head as last read or written here: a committed revision's membership never changes. */
+  private readonly heads = new Map<string, KeptHead>();
+
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle, private readonly atomic: <T>(operation: () => T) => T,
     private readonly messages: Pick<SessionMessageReader, 'originOf'>) {}
 
@@ -65,17 +79,25 @@ export class SessionContext {
     });
   }
 
-  entries(selection: ContextSelection): ContextEntry[] {
+  entries(selection: ContextSelection): readonly ContextEntry[] {
     this.actor.assertCurrent();
-    const exists = this.sql<{ revision: number }>`SELECT revision FROM context_revisions WHERE actor_id=${this.actor.actorId} AND context_id=${selection.contextId} AND revision=${selection.revision}`[0];
+    const stamp = this.sql<RevisionStamp>`SELECT recorded_at,author,cause,turn_id,proposal_id FROM context_revisions WHERE actor_id=${this.actor.actorId} AND context_id=${selection.contextId} AND revision=${selection.revision}`[0];
 
-    if (exists === undefined) throw new KinuError('missing', 'context revision does not exist');
+    if (stamp === undefined) throw new KinuError('missing', 'context revision does not exist');
+    const kept = this.heads.get(selection.contextId);
 
-    const rows = this.head(selection.contextId) === selection.revision
+    if (kept?.revision === selection.revision && sameStamp(kept.stamp, stamp)) return kept.entries;
+    const head = this.head(selection.contextId) === selection.revision;
+
+    const rows = head
       ? this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships WHERE actor_id=${this.actor.actorId} AND context_id=${selection.contextId} AND to_revision IS NULL ORDER BY position`
       : this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships WHERE actor_id=${this.actor.actorId} AND context_id=${selection.contextId} AND from_revision<=${selection.revision} AND (to_revision IS NULL OR to_revision>${selection.revision}) ORDER BY position`;
 
-    return rows.map(row => ({ entryId: row.entry_id, position: row.position, messageId: row.message_id }));
+    const entries = Object.freeze(rows.map(row => ({ entryId: row.entry_id, position: row.position, messageId: row.message_id })));
+
+    if (head) this.heads.set(selection.contextId, { revision: selection.revision, stamp, entries });
+
+    return entries;
   }
 
   conversationOf(members: readonly ContextEntry[]): ContextEntry[] {
@@ -160,8 +182,9 @@ export class SessionContext {
     if (!origin.recordUnchanged && retained.size === current.length && current.length === next.length) return expected;
     const revision = expected.revision + 1;
     const actorId = this.actor.actorId;
+    const stamp: RevisionStamp = { recorded_at: Date.now(), author: origin.author, cause: origin.cause, turn_id: origin.turnId, proposal_id: origin.proposalId };
     void this.sql`INSERT INTO context_revisions(actor_id,context_id,revision,author,cause,turn_id,proposal_id,recorded_at)
-      VALUES(${actorId},${expected.contextId},${revision},${origin.author},${origin.cause},${origin.turnId},${origin.proposalId},${Date.now()})`;
+      VALUES(${actorId},${expected.contextId},${revision},${stamp.author},${stamp.cause},${stamp.turn_id},${stamp.proposal_id},${stamp.recorded_at})`;
 
     // Release all changed live positions before inserting replacements: swaps cannot collide.
     for (const entry of current) if (!retained.has(entry.entryId)) {
@@ -173,6 +196,8 @@ export class SessionContext {
       void this.sql`INSERT INTO context_memberships(actor_id,context_id,entry_id,from_revision,position,message_id)
         VALUES(${actorId},${expected.contextId},${entry.entryId},${revision},${entry.position},${entry.messageId})`;
     }
+
+    this.heads.set(expected.contextId, { revision, stamp, entries: Object.freeze(next) });
 
     return { contextId: expected.contextId, revision };
   }

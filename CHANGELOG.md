@@ -715,6 +715,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   slates, and nothing else: `/usr`, `/tmp`, mounted drives (`/pc`, `/shared`, `/sandbox`, `/context`) and the
   platform's own state stay out.
 
+- **Long conversations no longer slow down turn by turn.** Each turn re-read the conversation's whole membership
+  list several times, so a turn's database reads grew with the conversation (14,432 rows at 300 turns). A turn now
+  reads only what it adds.
+
 - **A workspace's card shows the owner's words, never Kinu's own.** A new workspace's card showed the prompt Kinu
   starts its first turn with as the owner's latest task, and a background event after the owner's message did the
   same. Home and the Workspaces page now show the owner's last message, or nothing until there is one.
