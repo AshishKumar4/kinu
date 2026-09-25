@@ -297,6 +297,8 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         broadcast: (event) => { seams.broadcast(handle.actorId, event); },
         enqueueTurn: (input) => seams.enqueueTurn(bound, input),
         turnInFlight: () => seams.turnInFlight(bound),
+        // Its queue is its event log, which never ends.
+        closed: () => false,
         setTimer: (fn, ms) => { seams.setTimer(fn, ms); },
         reconcileDurableWake: () => { seams.reconcileDurableWake(); },
       };

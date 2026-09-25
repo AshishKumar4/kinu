@@ -89,6 +89,8 @@ function setup(opts: {
   onDrain?: (steers: readonly UserSteer[], atStep: number) => void | Promise<void>;
   turnId?: string | null;
   enqueue?: 'queued' | 'skipped' | 'throw';
+  /** Ended as the CLI's `ChatSession` ends: a programmatic turn is answered 'skipped', a user rerun is still queued. */
+  closed?: boolean;
 } = {}) {
   const queued: ProgrammaticTurn[] = [];
   const broadcasts: Broadcast[] = [];
@@ -105,11 +107,12 @@ function setup(opts: {
 
       if (opts.enqueue === 'throw') throw new Error('queue unavailable');
 
-      if (opts.enqueue === 'skipped') return { status: 'skipped' };
+      if (opts.enqueue === 'skipped' || (opts.closed === true && turn.origin !== 'user')) return { status: 'skipped' };
 
       return { status: 'queued' };
     },
     turnInFlight: () => opts.turnInFlight === true,
+    closed: () => opts.closed === true,
     setTimer: () => {},
   };
 
@@ -569,6 +572,25 @@ describe('Inbox — the user kind beside the event kind', () => {
     const cards = broadcasts.filter((broadcast) => broadcast.type === 'signal_card');
     const offered = cards.find((card) => card.state === 'pending' && card.text === offer.text);
     expect(cards.filter((card) => card.id === offered?.id).at(-1)?.state).toBe('undelivered');
+  });
+
+  test('a closed host opens no rerun, so a wake left over beside users takes its own compensation', async () => {
+    // The CLI's end() closes the chat, then aborts the turn it cut, which settles still in flight.
+    const host = { turnInFlight: true, closed: false };
+    const { inbox, queued } = setup(host);
+    const compensated: string[] = [];
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'unsent when the session ended'));
+    await inbox.send(event('job 7 finished', { kind: 'background_job', compensate: (reason) => { compensated.push(reason); } }));
+
+    host.closed = true;
+    inbox.settle({ completed: false });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(compensated).toEqual(['preempted']);
+    // The words still reach the host, whose ledger keeps them for the next start.
+    expect(queued.filter((turn) => turn.origin === 'user').map((turn) => turn.text)).toEqual(['unsent when the session ended']);
   });
 
   test('a rerun the host never opens strands the events that waited for it to turns of their own', async () => {

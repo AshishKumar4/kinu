@@ -2159,6 +2159,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // Synchronous read plus same-tick buffer push means the observed turn's prepareStep drains
         // the signal; a turn that settles first re-delivers it from settle().
         turnInFlight: () => this.chatLoop.turnInFlight(),
+        closed: () => this.chatLoop.closed,
         // keepAliveWhile holds the DO through the debounce window and drain; if it dies anyway,
         // events stay durable in the EventLog and a later drain picks them up.
         setTimer: (fn, ms) => {

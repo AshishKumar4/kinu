@@ -511,29 +511,25 @@ export class Inbox implements AgentInbox {
   }
 
   /** Users as one user-origin turn, its first step carrying the events that do not yield to them; with no users,
-   *  each event is its own turn. */
+   *  or on a closed host, each event is its own turn. */
   private redeliver(users: readonly DeliveredUserSignal[], events: readonly DeliveredSignal[]): void {
     const [first, ...rest] = users;
-
-    if (first === undefined) {
-      for (const signal of events) {
-        void this.queue(signal).catch(reportRedeliveryFailure(signal.kind));
-      }
-
-      return;
-    }
+    const ride = first !== undefined && this.host.closed?.() !== true;
 
     for (const signal of events) {
-      if (signal.yieldsToUserMessage === true) {
+      if (!ride) {
+        void this.queue(signal).catch(reportRedeliveryFailure(signal.kind));
+      } else if (signal.yieldsToUserMessage === true) {
         this.moveCard(signal.cardId, 'undelivered');
-        continue;
+      } else {
+        this.pending.push(signal);
+        this.openCard(signal, stepBody(signal));
       }
-
-      this.pending.push(signal);
-      this.openCard(signal, stepBody(signal));
     }
 
-    void this.queueUsers([first, ...rest], { idempotent: true }).catch(reportRedeliveryFailure(USER_MESSAGE_SIGNAL_KIND));
+    if (first !== undefined) {
+      void this.queueUsers([first, ...rest], { idempotent: true }).catch(reportRedeliveryFailure(USER_MESSAGE_SIGNAL_KIND));
+    }
   }
 
   /** Compensation runs outside the enqueue's catch so a failing compensation surfaces instead of re-entering.

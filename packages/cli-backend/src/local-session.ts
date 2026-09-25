@@ -240,16 +240,10 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
       host: {
         broadcast: (event) => { input.session().broadcast(event); },
         enqueueTurn: (turn) => input.session().enqueueTurn(turn),
-        // Answers false rather than throwing when the seat is gone: `settled`/`busy` can call it after
-        // host teardown. The cf seam (`seams.turnInFlight`) does the same.
-        turnInFlight: () => {
-          try {
-            return input.session().turnInFlight();
-          } catch (cause) {
-            if (cause instanceof KinuError && cause.code === 'missing') return false;
-            throw cause;
-          }
-        },
+        // A seat that is gone runs nothing and has ended: `settled`/`busy` can read it after host teardown.
+        // The cf seam (`seams.turnInFlight`) answers the same.
+        turnInFlight: () => seatRead(input, (session) => session.turnInFlight(), false),
+        closed: () => seatRead(input, (session) => session.closed(), true),
         setTimer: (fn, ms) => { input.session().setTimer(fn, ms); },
         reconcileDurableWake: null,
       },
@@ -350,6 +344,16 @@ export interface LocalAgentSessionOpts {
 const TurnTierMetadataSchema = v.object({
   profile_tier: v.optional(TierIdSchema),
 });
+
+/** `read` of the seat, or `gone` once host teardown removed it. */
+function seatRead<T>(input: LocalOrchestrationInput, read: (session: LocalAgentSession) => T, gone: T): T {
+  try {
+    return read(input.session());
+  } catch (cause) {
+    if (cause instanceof KinuError && cause.code === 'missing') return gone;
+    throw cause;
+  }
+}
 
 function tierFromMetadata(metadata: ProgrammaticTurn['metadata']): TierId | undefined {
   if (metadata === undefined) return undefined;
@@ -1075,6 +1079,10 @@ export class LocalAgentSession implements BackendHost {
 
   turnInFlight(): boolean {
     return this.chat.turnInFlight();
+  }
+
+  closed(): boolean {
+    return this.chat.closed;
   }
 
   /** Send the user's message. `mode` is the composer's; a Plan message runs a Plan turn. */
