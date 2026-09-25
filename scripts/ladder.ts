@@ -196,6 +196,10 @@ const AMBIENT_BY_NAME: Extract<Inputs, { kind: 'derived' }> = {
   ],
 };
 
+/** `egress-interception.ts` loads each forwarder class it admits by path (`loadForwarderSurface`), and the classes
+ *  it scans live under cf-backend (`declaredForwarderClasses`). */
+const FORWARDER_CLASSES = ['packages/cf-backend/'];
+
 /** A row that builds the client with vite: vite reads the client graph by
  *  path and Tailwind scans the tree for class names, so every tracked file is
  *  an input. Measured by `--audit-closure` 2026-09-23: React runtime identity
@@ -313,7 +317,7 @@ export const LADDER: readonly Gate[] = [
       + 'at 25s and, past 31s, RESET the object. That invariant held at the method and '
       + 'was defeated at the object.',
     blind: 'I/O added on any other DO lifecycle path.',
-    inputs: { kind: 'derived' },
+    inputs: { kind: 'derived', imports: FORWARDER_CLASSES },
   },
   {
     run: 'bun run gate:duplication',
@@ -363,7 +367,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'whether interception actually engages at runtime, and DNS, which '
       + 'leaves regardless and which the gate reports as a known residual '
       + 'rather than closing.',
-    inputs: { kind: 'derived' },
+    inputs: { kind: 'derived', imports: FORWARDER_CLASSES },
   },
   {
     run: 'bun scripts/publication-egress.ts',
@@ -1054,7 +1058,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'whether the gates are wired into any tier at all — that is ladder.test.ts. For infra, '
       + 'everything that needs an account: no test here proves a `wrangler r2 bucket create` '
       + 'creates a bucket.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: { ...AMBIENT_BY_NAME, imports: FORWARDER_CLASSES },
   },
   {
     run: 'bun test --timeout=0 scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts',
