@@ -20,6 +20,7 @@ import type { ChatWireTransport } from '../../src/chat-transport';
 import { isWorkMode, workModeForTurnMetadata, ChatSession, ExtensionHost, type KinuExtension } from '@kinu.run/core';
 import {
   ActorClaimStore, admitSubordinateTask, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog,
+  SubordinateRosterStore,
   MAIN_AGENT, openWorkspaceMainActor,
   SessionHistory, TerminalTransitions, type VFS, WorkspaceActorDirectory,
 } from '@kinu.run/core';
@@ -621,6 +622,11 @@ export async function catalogTurn(agent: HarnessOrchestratorAgent, text: string)
 /** The main actor's event log over the object's stored rows: `publish` is the one writer ingress admits events through. */
 export function eventsOver(db: Database): EventLog {
   return new EventLog(makeSqlExec(db), workspaceMainActor(db));
+}
+
+/** The main actor's roster of the agents it hired, over the object's stored rows. */
+export function rosterOver(db: Database): SubordinateRosterStore {
+  return new SubordinateRosterStore(makeSqlExec(db), workspaceMainActor(db));
 }
 
 const ReportPayloadSchema = v.looseObject({ content: v.string() });
@@ -1285,6 +1291,9 @@ export interface HarnessActorWorld {
   freshScaffold?: boolean;
   /** The platform AI binding the gateway provider calls; a recording stub by default. */
   aiGateway?: StubbedAiBinding;
+  /** The deployed build's version id at `env.CF_VERSION_METADATA`: a claim on the built-in program names it, and
+   *  recovery holds a claim with no build as unverifiable. Unset, the object runs on no named build. */
+  versionId?: string;
   /** The `send_email` binding at `env.EMAIL`; unset, the workspace has no mail route. */
   email?: SendEmail;
   /** The container binding at `env.Sandbox`: the runtime registers the sandbox executor over the Sandbox SDK,
@@ -1328,6 +1337,7 @@ export function makeEnv(
     LOADER: inProcessWorkerLoader(),
     // The platform gateway is the harness's model provider, over a recording AI binding.
     ...platformGatewayEnv(world?.aiGateway),
+    ...(world?.versionId !== undefined && { CF_VERSION_METADATA: { id: world.versionId, tag: '', timestamp: '' } }),
     ...(world?.email !== undefined && { EMAIL: world.email }),
     ...(world?.container === true && { Sandbox: { idFromName: (name: string) => name, get: () => ({}) } }),
     UserDO: {

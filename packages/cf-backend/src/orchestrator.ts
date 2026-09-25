@@ -16,7 +16,7 @@ import {
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
   mintSubordinateName, withHeadCaptureRecording,
-  type ActorHost, type ActorToolsetDeps, type AgentsSwarmDeps, type AgentsToolDeps,
+  type ActorHost, type ActorToolsetDeps, type AgentsSwarmDeps, type AgentsToolDeps, type ResumableActorTurn,
   type AssignedTurnFraming, type BuiltinToolName,
   type BoundActor, type DynamicContext, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
@@ -46,7 +46,7 @@ import {
   type ExplorationHostSeams,
 } from "./exploration-hosting";
 import {
-  admitHostedTask, hostedDelegationBudget, hostedSubordinateRuntime, relayHostedReport,
+  admitHostedTask, hostedDelegationBudget, hostedSubordinateRuntime, relayHostedReport, retireStalledTask,
   reportSettlesRun, runHostedTask,
   type HostedTaskProfile, type HostedTaskTurn, type SubordinateHostSeams,
 } from "./subordinate-hosting";
@@ -1182,6 +1182,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       } catch (cause) {
         diagnostics.failure('subordinate.assignment_repend_failed', toKinuError({
           doing: 'returning an interrupted delegated turn to the admitted queue', cause, otherwise: 'io',
+        }), { workspace: this.name, actor: turn.record.name });
+      }
+    }
+  }
+
+  private async retireStalledAssignments(stalled: readonly ResumableActorTurn[]): Promise<void> {
+    for (const turn of stalled) {
+      if (turn.record.kind !== 'subordinate') continue;
+
+      try {
+        const child = await this.actorHost().acquire(actorReferenceOf(turn.record));
+        await retireStalledTask(this.subordinateSeams(), child, {
+          turnId: turn.claim.turnId, runs: turn.claim.epoch, workMode: turn.claim.workMode,
+        });
+      } catch (cause) {
+        diagnostics.failure('subordinate.stalled_retire_failed', toKinuError({
+          doing: 'retiring a delegated turn whose runs stalled', cause, otherwise: 'io',
         }), { workspace: this.name, actor: turn.record.name });
       }
     }
@@ -2760,6 +2777,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // The alarm owns recovery authority. Core retains verified claims as owed,
     // settles unverified ones indeterminate, and leaves live actors untouched.
     let owedClaims: readonly string[] = [];
+    let stalled: readonly ResumableActorTurn[] = [];
 
     try {
       const host = this.actorHost();
@@ -2787,6 +2805,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       });
 
       owedClaims = recovered.verified;
+      stalled = recovered.stalled;
     } catch (cause) {
       diagnostics.failure('actor.turn_recovery_failed', toKinuError({
         doing: 'rebuilding the hosted turns an eviction interrupted', cause, otherwise: 'io',
@@ -2794,6 +2813,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     this.rependRecoveredAssignments(owedClaims);
+    await this.retireStalledAssignments(stalled);
     // Retained claims still fence new work; verification alone is not execution.
     this.startDelegationDrain();
 

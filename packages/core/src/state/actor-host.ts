@@ -464,9 +464,27 @@ async function consumedEvidence(stores: AgentStores, claim: StoredActorClaim): P
   }
 }
 
+/** The furthest model step one run of a turn reached, by the run's epoch: -1 for a run that called no model. */
+function furthestStep(requests: readonly { readonly epoch: number; readonly step: number | null }[], epoch: number): number {
+  return requests.reduce((far, request) => (request.epoch === epoch && request.step !== null ? Math.max(far, request.step) : far), -1);
+}
+
+/**
+ * Whether an interrupted run got no further than the run before it. Each run of a turn starts again from its input, so a
+ * run that died no further than the last one did repeats the reset that ended both (a memory or wall limit its
+ * activation hit), and running it again repeats it again.
+ */
+function stalledRun(stores: Pick<AgentStores, 'history'>, claim: StoredActorClaim): boolean {
+  if (claim.epoch < 2) return false;
+  const requests = stores.history.requests.forTurn(claim.turnId);
+
+  return furthestStep(requests, claim.epoch) <= furthestStep(requests, claim.epoch - 1);
+}
+
 /**
  * Call only with recovery authority. Verified claims stay owed: bytes alone do not prove the turn finished. A claim whose
- * record fails to read settles `error` once; an actor that cannot be opened stays owed.
+ * record fails to read settles `error` once; an actor that cannot be opened stays owed. A run that got no further than
+ * the run before it settles `error` as stalled, and its caller tells whoever is owed the turn why it ended.
  */
 export async function recoverActorTurns(
   host: Pick<ActorHost, 'resumable'> & {
@@ -481,12 +499,14 @@ export async function recoverActorTurns(
   readonly failed: readonly string[];
   readonly unreadable: readonly string[];
   readonly active: readonly string[];
+  readonly stalled: readonly ResumableActorTurn[];
 }> {
   const verified: string[] = [];
   const refused: string[] = [];
   const failed: string[] = [];
   const unreadable: string[] = [];
   const active: string[] = [];
+  const stalled: ResumableActorTurn[] = [];
 
   for (const turn of host.resumable(limit)) {
     try {
@@ -523,6 +543,13 @@ export async function recoverActorTurns(
         continue;
       }
 
+      if (verdict.kind === 'verified' && stalledRun(actor.stores, turn.claim)) {
+        actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'error');
+        stalled.push(turn);
+        diagnostics.event('actor.turn_stalled', { actor: turn.record.name, turn: turn.claim.turnId, runs: turn.claim.epoch });
+        continue;
+      }
+
       if (verdict.kind === 'verified') {
         verified.push(turn.claim.turnId);
         continue;
@@ -540,5 +567,5 @@ export async function recoverActorTurns(
     }
   }
 
-  return { verified, refused, failed, unreadable, active };
+  return { verified, refused, failed, unreadable, active, stalled };
 }
