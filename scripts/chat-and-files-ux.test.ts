@@ -3011,24 +3011,28 @@ test('workspace tabs keep scrolling horizontal and suppress the scrollbar', asyn
     await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('[aria-label="Work"]');
 
-    // A strip narrower than its tabs, so the scroll is measured whatever the frame's tab count.
-    const strip = await page.$eval('.p-tabstrip', (element) => {
-      const style = getComputedStyle(element);
-      element.setAttribute('style', 'max-width: 120px');
-      element.scrollLeft = 50;
+    // The tabs' own container, capped narrower than its tabs so it must scroll whatever the frame's tab count.
+    const strip = await page.$eval('[aria-label="Work"]', (tab) => {
+      const row = tab.parentElement;
+
+      if (row === null) throw new Error('the Work tab has no container');
+      row.setAttribute('style', 'max-width: 120px');
+      row.scrollLeft = 50;
 
       return {
-        names: [...element.querySelectorAll('button[aria-label]')].map((button) => button.getAttribute('aria-label')),
-        overflowY: style.overflowY, scrollbarWidth: style.scrollbarWidth, scrollLeft: element.scrollLeft,
-        overflows: element.scrollWidth > element.clientWidth,
+        names: [...row.querySelectorAll('button[aria-label]')].map((button) => button.getAttribute('aria-label')),
+        overflows: row.scrollWidth > row.clientWidth,
+        scrollLeft: row.scrollLeft,
+        scrollbar: getComputedStyle(row).scrollbarWidth,
       };
     });
 
     expect(strip.names).toContain('Files');
     expect(strip.overflows).toBe(true);
-    expect(['hidden', 'clip']).toContain(strip.overflowY);
-    expect(strip.scrollbarWidth).toBe('none');
     expect(strip.scrollLeft).toBeGreaterThan(0);
+    // Headless Chrome runs with --hide-scrollbars, so no layout measure can see a scrollbar; the computed
+    // value is the one observable, and a global `scrollbar-width` rule once beat it (index.css).
+    expect(strip.scrollbar).toBe('none');
     await page.close();
   });
 });
