@@ -104,7 +104,6 @@ export class StaleModelList extends KinuError {
   }
 }
 
-/** A list read live, or the stand-in a `StaleModelList` carries; any other failure propagates. */
 export async function settleModelList(
   list: Promise<ModelInfo[]> | ModelInfo[],
 ): Promise<{ readonly models: readonly ModelInfo[]; readonly stale: StaleModelList | null }> {

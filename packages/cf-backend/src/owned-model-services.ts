@@ -16,6 +16,7 @@ import {
 import { resolveReviewingModelSelection } from './providers/judge-model';
 import type { UserCaller } from '@kinu.run/core';
 import type { ObjectNamespace } from '@kinu.run/core';
+import type { CodexEgressNamespace } from './egress/codex-egress-route';
 
 type MarkdownConversion = NonNullable<Parameters<typeof buildCfWebSearchProvider>[0]['AI']>['toMarkdown'];
 
@@ -34,6 +35,7 @@ function convertsHtml(ai: OwnedAiBinding | undefined): ai is ConvertingAiBinding
 
 export interface OwnedModelEnv<Id> extends ProviderEnv {
   AI?: OwnedAiBinding;
+  CodexEgress?: CodexEgressNamespace;
   UserDO: ObjectNamespace<Id, UserCredentialClient>;
 }
 
@@ -87,6 +89,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
 
     this.providerRegistryCache = createAgentProviderRegistry({
       env: this.options.env,
+      ownerUserId: userId,
       userDO: userDOStub ? { stub: userDOStub, caller: this.options.getUserCaller } : null,
       appTitle: this.options.appTitle,
       sessionAffinity: this.affinityKey,

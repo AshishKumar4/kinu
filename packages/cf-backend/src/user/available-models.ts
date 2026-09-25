@@ -9,6 +9,7 @@ import type { ObjectNamespace } from '@kinu.run/core';
 import type { ProviderEnv } from '@kinu.run/core';
 import { retryTransientDO } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
+import type { CodexEgressNamespace } from '../egress/codex-egress-route';
 
 export interface ModelMenuEntry {
   /** `<provider>/<modelId>`, used as the actor_config.model value. */
@@ -29,6 +30,7 @@ export interface ModelMenuResponse {
 }
 
 export interface AvailableModelsEnv<Id> extends ProviderEnv {
+  CodexEgress?: CodexEgressNamespace;
   UserDO: ObjectNamespace<Id, UserCredentialClient>;
 }
 
@@ -39,6 +41,7 @@ export async function listAvailableModels<Id>(
 
   const { registry, deps } = createAgentProviderRegistry({
     env,
+    ownerUserId: userId,
     userDO: { stub, caller },
     fetch,
   });
@@ -111,7 +114,7 @@ export async function listProviderCatalog<Id>(
   env: AvailableModelsEnv<Id>, userId: string, caller: UserCaller,
 ): Promise<ProviderCatalogEntry[]> {
   const stub = env.UserDO.get(env.UserDO.idFromName(userId));
-  const { registry } = createAgentProviderRegistry({ env, userDO: { stub, caller }, fetch });
+  const { registry } = createAgentProviderRegistry({ env, ownerUserId: userId, userDO: { stub, caller }, fetch });
 
   const [providers, creds] = await Promise.all([
     listModelsDevProviders({ fetch }),

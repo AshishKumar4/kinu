@@ -577,6 +577,7 @@ function actorProviderRegistry(
 ): AgentProviderRegistry {
   return createAgentProviderRegistry({
     env,
+    ownerUserId: actor.ownerUserId(),
     userDO: userCredentialSourceFor(env, actor),
     appTitle: title,
     sessionAffinity: agentAffinityKey(agent.name),

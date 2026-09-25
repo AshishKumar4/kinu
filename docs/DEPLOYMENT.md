@@ -316,6 +316,10 @@ Classification is narrow. 429 and 529 always count. A 503 counts only when statu
 
 `ProviderPacer` (`packages/core/src/providers/pacing.ts`) holds requests to a host behind its declared cooldown. `declareWait` joins siblings into one cooldown instead of each starting into a refusing limit. The pacer counts no requests. Workers limits connections waiting for headers to six per invocation and queues the seventh itself. An isolate-wide count made one request wait on another request's release, and workerd cancels such a request as hung: HTTP 500 `error code: 1101` on kinu.run, 2026-09-23.
 
+### Codex egress
+
+chatgpt.com refuses Workers egress: measured 2026-09-24 with throwaway probes and no credential, a Worker's fetch (egress 2a06:98c0:3600::103) got an HTTP 403 block page before sign-in, and a container's own egress (2a09:bac1::/2a09:bac5::) reached sign-in (HTTP 401 JSON), 4 of 4. So every chatgpt.com call from kinu.run (the Codex model list, turns, and plan usage) goes through `CodexEgress` (`packages/cf-backend/src/egress/codex-egress.ts`): one container per user, named by the user id, never pooled, sleeping after 5 idle minutes. The route carries only `GET /backend-api/codex/models`, `POST /backend-api/codex/responses` and `GET /backend-api/wham/usage` (`codexEgressAllowed` in core), and only for the user the object is named for; the forwarder (`packages/cf-backend/containers/codex-egress/server.mjs`) keeps to chatgpt.com and logs no header or body. The container runs with `enableInternet` and no allowed-host list or outbound handler: `@cloudflare/containers` sends either through its `ContainerProxy` Worker entrypoint, which is Workers egress again. First call to a sleeping container: 1.6-4.3 s (5 cold users, 2026-09-24); warm calls 75-100 ms. The image is pinned by digest in `wrangler.jsonc` and `scripts/release-config.test.ts`; rebuild it with `bunx wrangler containers build -p -t kinu-codex-egress:<content hash> packages/cf-backend/containers/codex-egress` and move both pins. The CLI calls chatgpt.com directly.
+
 ## Environment variables
 
 | Variable | Where | Description |

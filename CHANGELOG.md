@@ -20,6 +20,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- **Codex works on kinu.run.** chatgpt.com refuses Cloudflare Workers' network, so each user's Codex calls now go through their own small container, which chatgpt.com accepts. The first Codex call after a quiet spell takes about 2 to 4 seconds longer while the container wakes. A refused network now fails a Codex call once instead of three times.
 - **A model list that cannot load says so.** When a provider's live model list fails (Codex's `/models`, models.dev), the model picker still offers the built-in list and names why the live one is missing, instead of showing a stale list as current. The Codex built-in list now carries GPT-6 Sol, Luna and Astra and GPT-5.6 Sol, Terra and Luna. On kinu.run, chatgpt.com refuses the server's network with a block page before sign-in; a Codex turn there now fails as "Codex is unreachable from here", not as a sign-in problem.
 - **A provider that asks for more than a minute's wait ends the call.** A spent plan window answers 429 with a `Retry-After` of hours or days (OpenCode Go asked for 8.4 days); the turn used to sleep it out. Now any wait over 60 s fails the call at once with the provider's name, the reset time and its own message, and a fallback model, when the tier has one, takes over. Waits of a minute or less are still waited, and the top bar counts them down ("waiting on claude · 42s").
 - **The agent's live state changes by row.** A change to one task, job, delegate, approval, fact or recovery

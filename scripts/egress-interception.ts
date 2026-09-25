@@ -179,6 +179,24 @@ export function sandboxLineage(sources: ReadonlyMap<string, string>): ReadonlySe
   return lineage;
 }
 
+/** Bound containers that run only their own image's program, never agent code: direct `Container` subclasses, since
+ *  agent execution comes through the Sandbox SDK. No vault placeholder enters them, so they are outside this gate's
+ *  set; each is named on every run. */
+export function declaredForwarderClasses(sources: ReadonlyMap<string, string>): string[] {
+  const names = new Set<string>();
+
+  for (const [file, text] of sources) {
+    if (!file.startsWith('packages/cf-backend/') || !text.includes('Container')) continue;
+    walk(parse(file, text).root, (node) => {
+      const name = superClassName(node) === 'Container' ? declaredName(node) : undefined;
+
+      if (name !== undefined) names.add(name);
+    });
+  }
+
+  return [...names].sort();
+}
+
 export function declaredSandboxClasses(sources: ReadonlyMap<string, string>): string[] {
   const lineage = sandboxLineage(sources);
   const names = new Set<string>();
@@ -387,7 +405,9 @@ export function catchAllIsBound(sources: ReadonlyMap<string, string>): boolean {
 
 if (import.meta.main) {
   const sources = readSources();
-  const fromWrangler = wranglerContainerClasses(parseJsonc(readFileSync(`${root}${WRANGLER}`, 'utf8'), WranglerContainers, WRANGLER));
+  const bound = wranglerContainerClasses(parseJsonc(readFileSync(`${root}${WRANGLER}`, 'utf8'), WranglerContainers, WRANGLER));
+  const forwarders = declaredForwarderClasses(sources).filter((name) => bound.includes(name));
+  const fromWrangler = bound.filter((name) => !forwarders.includes(name));
   const fromSource = declaredSandboxClasses(sources);
   const classes = [...new Set([...fromWrangler, ...fromSource])].sort();
   const { inspected, violations } = auditInterception(sources, classes);
@@ -470,6 +490,8 @@ if (import.meta.main) {
   }
 
   console.log(`egress-interception: ok — ${measured}`);
+  console.log(`egress-interception: OUTSIDE THE SET — ${forwarders.join(', ') || 'none'}: bound containers that extend `
+    + 'Container directly and run their own image\'s program, so no agent code and no vault placeholder is inside');
   console.log(`egress-interception: read the SDK default from ${CONTAINERS} ${containers.version} `
     + `at ${relative(root, containers.module)}, the copy ${CONTAINERS_HOST} resolves for itself and `
     + 'the only copy the artifact binds');

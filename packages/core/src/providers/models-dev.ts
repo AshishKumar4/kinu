@@ -149,7 +149,10 @@ export async function listModelsDevProviderModels(
 
   const models = data[providerId]?.models;
 
-  if (!models) throw stale({ reason: `models.dev lists no ${providerId} models` });
+  if (!models) {
+    if (opts.fallback === undefined) return [];
+    throw stale({ reason: `models.dev lists no ${providerId} models` });
+  }
 
   const out: ModelInfo[] = [];
 
@@ -159,7 +162,10 @@ export async function listModelsDevProviderModels(
     if (info) out.push(info);
   }
 
-  if (out.length === 0) throw stale({ reason: `models.dev lists no usable ${providerId} models` });
+  if (out.length === 0) {
+    if (opts.fallback === undefined) return [];
+    throw stale({ reason: `models.dev lists no usable ${providerId} models` });
+  }
 
   return orderModels(out, opts.preferredIds);
 }

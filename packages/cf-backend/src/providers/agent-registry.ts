@@ -1,5 +1,5 @@
 // Per-agent provider registry: Cloudflare providers, core providers, then the models.dev catalog (static ids win).
-// Registration order is the model picker's listing order. Auth goes through the UserDO stub; no credential material here.
+// Registration order is the model picker's listing order. Auth goes through the UserDO stub.
 import {
   createProviderRegistry, createCodexProvider, createOpenAIProvider,
   createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider, createClaudeProvider,
@@ -15,6 +15,7 @@ import { AI_GATEWAY_PROVIDER_ID, createAIGatewayProvider, resolvePlatformGateway
 import type { CredentialSummary } from '../user/user-do';
 import type { UserCaller } from '@kinu.run/core';
 import { retryTransientDO } from '@kinu.run/core';
+import { codexEgressFetch, type CodexEgressNamespace } from '../egress/codex-egress-route';
 
 /**
  * Credential DO stub paired with the capability this context presents (owner, or workspace token resolved per call),
@@ -44,7 +45,8 @@ function isDirectAiBinding(binding: NonNullable<ProviderEnv['AI']>): binding is 
 }
 
 export interface AgentProviderDeps {
-  env: ProviderEnv;
+  env: ProviderEnv & { readonly CodexEgress?: CodexEgressNamespace };
+  ownerUserId?: string | null;
   /** Null for env-bound-only contexts (e.g. runtime.ts inline-branch fallback): getAuth is null, hasCredential false. */
   userDO?: UserCredentialSource | null;
   fetch?: typeof fetch;
@@ -99,7 +101,12 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   registry.register(createWorkersAIProvider({ sessionAffinity: opts.sessionAffinity }, developmentBinding));
   registry.register(createMyGatewayProvider());
   registry.register(createAIGatewayProvider());
-  registry.register(createCodexProvider());
+
+  const codexEgress = opts.env.CodexEgress !== undefined && opts.ownerUserId
+    ? codexEgressFetch(opts.env.CodexEgress, opts.ownerUserId)
+    : undefined;
+
+  registry.register(createCodexProvider(codexEgress === undefined ? {} : { egress: codexEgress }));
   registry.register(createClaudeProvider());
   registry.register(createOpenAIProvider());
   registry.register(createAnthropicProvider());

@@ -16,6 +16,7 @@ import type { LanguageModel } from 'ai';
 import type { CredentialHeaders } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 import { platformGatewayEnv } from './helpers/platform-gateway';
+import { WORKERS_AI_FALLBACK_MODEL_CATALOG } from '@kinu.run/core';
 import type { ProviderEnv } from '@kinu.run/core';
 
 /** `LanguageModel` is `string | LanguageModelV3`; resolvers hand back the object half. */
@@ -232,6 +233,27 @@ function catalogDown() {
   return mock;
 }
 
+/** models.dev answering with the Workers AI list only: a complete listing for an account with no catalog credential.
+ *  The catalog memo is keyed by the fetch it came through, so it does not outlive this mock. */
+function catalogUp() {
+  const models = Object.fromEntries(WORKERS_AI_FALLBACK_MODEL_CATALOG.map((model) => [model.id.replace(/^@cf\//, ''), {
+    id: model.id,
+    name: model.label,
+    tool_call: true,
+    reasoning: (model.reasoningEfforts?.length ?? 0) > 0,
+    reasoning_options: [{ type: 'effort', values: [...model.reasoningEfforts ?? []] }],
+    limit: { context: model.contextWindow },
+  }]));
+
+  const mock = createMockFetch([
+    { match: 'models.dev/api.json', respond: { status: 200, body: { 'cloudflare-workers-ai': { models } } } },
+  ]);
+
+  globalThis.fetch = mock.fetch;
+
+  return mock;
+}
+
 describe('OwnedModelServices — the provider snapshot', () => {
   // Assert the reported cache outcome (what core writes into `profile_resolution`), not object
   // identity.
@@ -240,8 +262,7 @@ describe('OwnedModelServices — the provider snapshot', () => {
 
     const { snapshot } = await degradedServices().profileProviderSnapshot();
 
-    expect(snapshot.unavailableProviders?.map((p) => p.provider)).toEqual(['catalog']);
-    expect(snapshot.unavailableProviders?.[0]).toEqual({
+    expect(snapshot.unavailableProviders).toContainEqual({
       provider: 'catalog',
       label: 'models.dev catalog',
       reason: 'models.dev returned HTTP 503',
@@ -250,11 +271,12 @@ describe('OwnedModelServices — the provider snapshot', () => {
 
   test('revision moves when only the failure set moves', async () => {
     catalogDown();
-
     const degraded = (await degradedServices().profileProviderSnapshot()).snapshot;
+
+    catalogUp();
     const clean = (await snapshotServices(null).profileProviderSnapshot()).snapshot;
 
-    expect(degraded.availableModels).toEqual(clean.availableModels);
+    expect([...degraded.availableModels].sort()).toEqual([...clean.availableModels].sort());
     expect(clean.unavailableProviders).toEqual([]);
     // Different revisions: nothing keyed on revision may serve a partial picture as complete.
     expect(degraded.revision).not.toBe(clean.revision);
@@ -278,7 +300,7 @@ describe('OwnedModelServices — the provider snapshot', () => {
   });
 
   test('a complete listing is memoized, and only a change expires it', async () => {
-    catalogDown();
+    catalogUp();
     const services = snapshotServices(null);
 
     const first = await services.profileProviderSnapshot();
@@ -299,7 +321,7 @@ describe('OwnedModelServices — the provider snapshot', () => {
     const first = await services.profileProviderSnapshot();
     const second = await services.profileProviderSnapshot();
 
-    expect(first.snapshot.unavailableProviders).toHaveLength(1);
+    expect(first.snapshot.unavailableProviders?.map((p) => p.provider)).toContain('catalog');
     // Caching this would hold the unverified-admission window open and freeze `revision` degraded.
     expect(first.cache).toBe('miss');
     expect(second.cache).toBe('miss');
@@ -357,7 +379,7 @@ describe('OwnedModelServices — the provider snapshot', () => {
   test('a credential change the fan-out never delivered is caught at the next use', async () => {
     // The notification can fail silently: the only signal here is the account's own revision,
     // compared before the cache is read.
-    catalogDown();
+    catalogUp();
     let revision = 7;
     const services = snapshotServices(null, {}, async () => revision);
 
@@ -372,7 +394,7 @@ describe('OwnedModelServices — the provider snapshot', () => {
   });
 
   test('an authority that cannot answer leaves the cache alone rather than failing the turn', async () => {
-    catalogDown();
+    catalogUp();
     let refuse = false;
 
     const services = snapshotServices(null, {}, async () => {
@@ -449,7 +471,7 @@ describe('a degraded listing versus a confirmed-missing model', () => {
   test('one provider listing 503 does not classify its pinned tier as confirmed missing', async () => {
     catalogDown();
     const degraded = (await degradedServices().profileProviderSnapshot()).snapshot;
-    expect(degraded.unavailableProviders).toHaveLength(1);
+    expect(degraded.unavailableProviders?.map((p) => p.provider)).toContain('catalog');
 
     const profile = resolveWith(degraded);
 
@@ -460,7 +482,7 @@ describe('a degraded listing versus a confirmed-missing model', () => {
   });
 
   test('a provider that answers without the model moves its tier to the account default', async () => {
-    catalogDown();
+    catalogUp();
     const clean = (await snapshotServices(null).profileProviderSnapshot()).snapshot;
     expect(clean.unavailableProviders).toEqual([]);
 

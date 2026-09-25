@@ -1,6 +1,6 @@
 // Codex via ChatGPT subscription (chatgpt.com/backend-api/codex/responses).
 import { createOpenAI } from '@ai-sdk/openai';
-import { wrapLanguageModel, type LanguageModel } from 'ai';
+import { APICallError, wrapLanguageModel, type LanguageModel } from 'ai';
 import type { AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
 import { MODEL_INPUT_MODALITIES } from './types';
 import { withRateLimitRetry } from './rate-limit-retry';
@@ -21,7 +21,7 @@ export const CODEX_CRED_KEY = 'codex.oauth';
 export const CODEX_DEFAULT_MODEL = 'gpt-5.5';
 
 /** Evolution's mechanical-call tier. */
-const CODEX_FAST_MODEL = 'gpt-5.4-mini';
+const CODEX_FAST_MODEL = 'gpt-6-luna';
 
 /** The remedy for a ChatGPT login refused after the forced-refresh retry: web settings or CLI device-code. */
 const CODEX_DEAD_LOGIN =
@@ -37,12 +37,12 @@ const FALLBACK_MODELS: ModelInfo[] = [
   { id: 'gpt-6-sol', label: 'GPT-6 Sol (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 272_000, reasoningEfforts: CODEX_MAX_EFFORTS },
   { id: 'gpt-6-luna', label: 'GPT-6 Luna (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 272_000, reasoningEfforts: CODEX_MAX_EFFORTS },
   { id: 'gpt-6-astra', label: 'GPT-6 Astra (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 272_000, reasoningEfforts: CODEX_MAX_EFFORTS },
-  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 872_000, reasoningEfforts: CODEX_MAX_EFFORTS },
-  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 872_000, reasoningEfforts: CODEX_MAX_EFFORTS },
-  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 872_000, reasoningEfforts: CODEX_MAX_EFFORTS },
+  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 1_000_000, reasoningEfforts: CODEX_MAX_EFFORTS },
+  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 1_000_000, reasoningEfforts: CODEX_MAX_EFFORTS },
+  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 1_000_000, reasoningEfforts: CODEX_MAX_EFFORTS },
 ];
 
-/** A refused network gets a 403 HTML page before sign-in (Workers egress, probe 2026-09-24); a login refusal is JSON. */
+/** A refused network gets a 403 HTML page before sign-in (docs/DEPLOYMENT.md); a login refusal is JSON. */
 function networkRefused(res: Response): boolean {
   return res.status === 403 && (res.headers.get('content-type') ?? '').includes('text/html');
 }
@@ -51,8 +51,22 @@ const NETWORK_REFUSED = 'chatgpt.com refused this server\'s network (HTTP 403 bl
 
 const CODEX_MODELS_TTL_MS = 5 * 60_000;
 
+/** All an egress route may carry for Codex. */
+export function codexEgressAllowed(input: { readonly method: string; readonly url: string }): boolean {
+  const url = URL.parse(input.url);
+
+  if (url?.protocol !== 'https:' || url.hostname !== 'chatgpt.com' || url.port !== '') return false;
+  const { pathname } = url;
+
+  if (input.method === 'GET') return pathname === '/backend-api/codex/models' || pathname === '/backend-api/wham/usage';
+
+  return input.method === 'POST' && pathname === '/backend-api/codex/responses';
+}
+
 export interface CodexProviderOptions {
   baseURL?: string;
+  /** Transport for chatgpt.com when this runtime's egress is refused there (Workers). */
+  egress?: typeof fetch;
 }
 
 export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvider {
@@ -97,7 +111,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
       let res: Response;
 
       try {
-        res = await (deps.fetch ?? fetch)(`${baseURL.replace(/\/+$/, '')}/models?client_version=1.0.0`, { headers: auth.headers });
+        res = await (opts.egress ?? deps.fetch ?? fetch)(`${baseURL.replace(/\/+$/, '')}/models?client_version=1.0.0`, { headers: auth.headers });
       } catch (cause) {
         throw stale({ reason: 'chatgpt.com could not be reached', cause });
       }
@@ -115,7 +129,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
     },
 
     createModel(modelId, deps): LanguageModel {
-      const retrying = (lane: string): typeof fetch => withRateLimitRetry(deps.fetch ?? fetch, {
+      const retrying = (lane: string): typeof fetch => withRateLimitRetry(opts.egress ?? deps.fetch ?? fetch, {
         provider: 'codex',
         modelId,
         lane,
@@ -187,17 +201,19 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
           }
         }
 
-        if (networkRefused(res)) {
-          diagnostics.failure('provider.codex_network_refused', new KinuError('unavailable', NETWORK_REFUSED), { model: modelId });
+if (networkRefused(res)) {
+          const refused = new KinuError('unavailable', NETWORK_REFUSED);
 
-          return new Response(
-            JSON.stringify({ error: {
-              message: `Codex is unreachable from here: ${NETWORK_REFUSED}. Run Codex from the Kinu CLI on your machine, or pick another model.`,
-              type: 'network_refused',
-              code: 'codex_unavailable',
-            } }),
-            { status: 503, headers: { 'Content-Type': 'application/json' } },
-          );
+          diagnostics.failure('provider.codex_network_refused', refused, { model: modelId });
+
+          throw new APICallError({
+            message: `Codex is unreachable from here: ${NETWORK_REFUSED}. Pick another model, or run Codex from the Kinu CLI.`,
+            url: input instanceof Request ? input.url : input.toString(),
+            requestBodyValues: undefined,
+            statusCode: 503,
+            isRetryable: false,
+            cause: refused,
+          });
         }
 
         if (res.status === 401) {

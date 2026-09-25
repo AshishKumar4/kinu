@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
 import {
   CODEX_CRED_KEY,
+  PROVIDER_SDK_RETRIES,
   OPENAI_CRED_KEY,
   catalogModelInfo,
+  codexEgressAllowed,
   createCodexProvider,
   createOpenAIProvider,
   createProviderRegistry,
@@ -178,7 +180,6 @@ describe('provider model catalogs', () => {
     }]);
   });
 
-  // chatgpt.com's answer to Workers egress (probe Worker, 2026-09-24).
   const blockPage = (): Response => new Response(
     '<html><body><p>Unable to load site</p><p>If you are using a VPN, try turning it off.</p></body></html>',
     { status: 403, headers: { 'content-type': 'text/html; charset=UTF-8', server: 'cloudflare' } },
@@ -216,19 +217,47 @@ describe('provider model catalogs', () => {
     expect(info?.contextWindow).toBe(272_000);
   });
 
-  test('a Codex call refused by the block page fails as an unreachable network, not a login problem', async () => {
+  test('a Codex call refused by the block page fails once, as an unreachable network, not a login problem', async () => {
+    let requests = 0;
+
     const model = createCodexProvider({ baseURL: 'https://chatgpt.test/backend-api/codex' })
-      .createModel('gpt-5.5', codexDeps(fetchStub(async () => blockPage())));
+      .createModel('gpt-5.5', codexDeps(fetchStub(async () => {
+        requests++;
+
+        return blockPage();
+      })));
 
     let classified = toProviderError({ doing: 'calling the model', cause: new Error('a blocked call succeeded') });
 
     try {
-      await generateText({ model, prompt: 'hi', maxRetries: 0 });
+      await generateText({ model, prompt: 'hi', maxRetries: PROVIDER_SDK_RETRIES });
     } catch (error) {
       classified = toProviderError({ doing: 'calling the model', cause: error });
     }
 
-    expect(classified.code).toBe('unavailable');
+    expect({ requests, code: classified.code }).toEqual({ requests: 1, code: 'unavailable' });
     expect(classified.message + String(classified.cause)).toMatch(/refused this server's network/);
+  });
+
+  test('the Codex egress route carries the Codex API and plan usage, nothing else', () => {
+    const carried = [
+      ['GET', 'https://chatgpt.com/backend-api/codex/models?client_version=1.0.0'],
+      ['POST', 'https://chatgpt.com/backend-api/codex/responses'],
+      ['GET', 'https://chatgpt.com/backend-api/wham/usage'],
+      ['GET', 'https://chatgpt.com/backend-api/conversation'],
+      ['POST', 'https://chatgpt.com/backend-api/codex/models'],
+      ['DELETE', 'https://chatgpt.com/backend-api/codex/responses'],
+      ['POST', 'http://chatgpt.com/backend-api/codex/responses'],
+      ['POST', 'https://chatgpt.com:8443/backend-api/codex/responses'],
+      ['POST', 'https://chatgpt.com.example.com/backend-api/codex/responses'],
+      ['POST', 'https://example.com/backend-api/codex/responses'],
+      ['POST', 'https://chatgpt.com/backend-api/codex/responses/../../conversation'],
+    ].map(([method, url]) => [method, url, codexEgressAllowed({ method: method ?? '', url: url ?? '' })]);
+
+    expect(carried.filter(([, , allowed]) => allowed).map(([method, url]) => `${String(method)} ${String(url)}`)).toEqual([
+      'GET https://chatgpt.com/backend-api/codex/models?client_version=1.0.0',
+      'POST https://chatgpt.com/backend-api/codex/responses',
+      'GET https://chatgpt.com/backend-api/wham/usage',
+    ]);
   });
 });

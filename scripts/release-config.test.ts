@@ -100,6 +100,12 @@ const SANDBOX_IMAGE = {
 
 const PINNED_IMAGE = `${SANDBOX_IMAGE.repository}@${SANDBOX_IMAGE.digest}`;
 
+/** Codex's egress forwarder, built from `packages/cf-backend/containers/codex-egress`. */
+const CODEX_EGRESS_IMAGE = 'registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-codex-egress@sha256:cd159d53d8e3e713c6ae024264867a2a36b94a66db5e998567849990da45ab48';
+
+/** Each container class and the one image the release record declares for it. */
+const PINNED_IMAGES = new Map([['KinuSandbox', PINNED_IMAGE], ['CodexEgress', CODEX_EGRESS_IMAGE]]);
+
 /** A vite plugin that decides something per environment — the one shape this
  *  file calls. `PluginOption` also admits arrays, promises and `false`, so the
  *  list is narrowed by PARSING each entry rather than by asking what it looks
@@ -152,13 +158,14 @@ const CONFIG = parseJsonc(readFileSync(join(REPO_ROOT, WRANGLER), 'utf8'), Wrang
 
 describe('the sandbox container image is pinned', () => {
   test('the Worker runs the pinned digest and names no tag', () => {
-    const images = (CONFIG.containers ?? []).map((container) => container.image);
+    const containers = CONFIG.containers ?? [];
 
-    expect(images.length, 'the Worker declares no container').toBeGreaterThan(0);
+    expect(containers.map((container) => container.class_name).sort(), 'the Worker declares other containers than the record')
+      .toEqual([...PINNED_IMAGES.keys()].sort());
 
-    for (const image of images) {
+    for (const { class_name: className, image } of containers) {
       expect(isImmutableImageReference(image), 'the Worker runs a re-pointable image').toBe(true);
-      expect(image, 'the Worker runs an image the release record does not declare').toBe(PINNED_IMAGE);
+      expect(image, 'the Worker runs an image the release record does not declare').toBe(PINNED_IMAGES.get(className) ?? `no pin for ${className}`);
     }
   });
 
