@@ -67,6 +67,7 @@ interface FakeClientOptions {
   localControls?: LocalSessionControls;
   plans?: PlanReviewSurface | null;
   listModels?: () => Promise<AgentModelMenu>;
+  testModel?: AgentClient['testModel'];
   send?: AgentClient['send'];
   setModel?: AgentClient['setModel'];
   connect?: AgentClient['connect'];
@@ -163,6 +164,7 @@ export function fakeClient(options: FakeClientOptions) {
       }],
       failures: [],
     })),
+    testModel: options.testModel ?? (async () => ({ ok: true, firstTokenMs: 0, totalMs: 0 })),
     inspectSubordinate: options.inspectSubordinate ?? (async (request) => missingSubordinateHistory(request.path)),
   };
 

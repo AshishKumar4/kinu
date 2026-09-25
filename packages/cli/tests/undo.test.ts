@@ -44,6 +44,7 @@ function slashClient(checkpoints: FileCheckpointSurface | null): AgentClient {
     getProviderAccounts: async () => ({}), setProviderAccount: async () => ({}),
     workspaceSpend: async () => { throw new Error('no spend'); },
     listModels: async () => ({ models: [], failures: [] }),
+    testModel: async () => ({ ok: true, firstTokenMs: 0, totalMs: 0 }),
     inspectSubordinate: async (request) => missingSubordinateHistory(request.path),
     getEvolutionConfig: async () => { throw new Error('not used'); },
     setEvolutionConfig: async () => { throw new Error('not used'); },

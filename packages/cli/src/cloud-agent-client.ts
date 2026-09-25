@@ -15,6 +15,7 @@ import {
   REFINEMENT_TRIGGERS,
   type RefinementDecisionInput, type RefinementDecisionResult, type RefinementRequestView,
   type StagedSkillResult,
+  type ModelTestResult,
 } from '@kinu.run/core';
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import {
@@ -29,6 +30,7 @@ import {
   CloudToolDescriptionsSchema,
   createCloudAgentConnectTicket,
   listCloudAvailableModels,
+  testCloudModel,
 } from './cloud-api';
 import {
   createCliSession,
@@ -824,6 +826,10 @@ export class CloudAgentClient implements AgentClient {
     }
 
     return menu;
+  }
+
+  async testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
+    return testCloudModel(this.origin, this.token, spec, signal);
   }
 
   private emit(event: AgentClientEvent): void {

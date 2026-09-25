@@ -4,7 +4,7 @@
  */
 
 import { realpathSync } from 'node:fs';
-import { sameActorReference } from '@kinu.run/core';
+import { sameActorReference, testModel, type ModelTestResult } from '@kinu.run/core';
 import type { ActorHandle } from '@kinu.run/core';
 import { resolve } from 'node:path';
 import {
@@ -919,6 +919,12 @@ export class LocalAgentSession implements BackendHost {
 
   listAvailableModels() {
     return this.modelResolver?.listModels() ?? Promise.resolve({ models: [], failures: [] });
+  }
+
+  async testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
+    if (this.modelResolver === null) throw new KinuError('missing', 'this session has no model resolver to test through');
+
+    return testModel({ model: this.modelResolver.resolveModel(spec), signal });
   }
 
   /** `caller` has no default: the model passes `'self'`, and core refuses a self cancel of an

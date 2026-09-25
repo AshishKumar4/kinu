@@ -1,14 +1,14 @@
-/** Shared model picker for every surface; groups follow server order (connected-provider preference). */
+/** The one model picker for every surface; groups follow server order (connected-provider preference). */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Combobox, Select } from "@cloudflare/kumo";
 import { ArrowsClockwiseIcon, BrainIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import {
-  formatContextWindow, formatModelSpec, isReasoningEffort, offeredReasoningEfforts, parseModelSpec, specWithoutAccount,
+  formatContextWindow, formatModelSpec, isReasoningEffort, modelTestText, offeredReasoningEfforts, parseModelSpec, specWithoutAccount,
   type ReasoningEffort,
 } from "@kinu.run/core";
 import {
-  cloudflareReconnectPath, listAvailableModels,
-  type ModelMenu, type ModelMenuEntry, type ProviderFailure,
+  cloudflareReconnectPath, listAvailableModels, testModel,
+  type ModelMenu, type ModelMenuEntry, type ModelTestResult, type ProviderFailure,
 } from "../lib/user-api";
 import { badgeCapabilities, groupModelMenu, modelMatchesQuery } from "./model-picker-options";
 import { BrandMark, providerBrand } from "./ui/BrandMark";
@@ -30,9 +30,6 @@ function modelMenuEntry(input: PickerValue): ModelMenuEntry | null {
 
   return parsed.success ? parsed.output : null;
 }
-
-/** Must match the selector in index.css that hides Kumo's forced clear button. */
-const CLEAR_LABEL_UNUSED = "Clear selection (unused)";
 
 /** Empty clears the workspace override; the tier's effort applies. */
 const DEFAULT_EFFORT = "";
@@ -120,11 +117,12 @@ export interface ModelPickerProps {
   /** Read-only: shows the value but opens no menu. */
   disabled?: boolean;
   effort?: { value: ReasoningEffort | null; onChange: (effort: ReasoningEffort | null) => void };
+  test?: (spec: string, signal: AbortSignal) => Promise<ModelTestResult>;
   className?: string;
 }
 
 export function ModelPicker({
-  models, failures, accounts, value, onChange, effort,
+  models, failures, accounts, value, onChange, effort, test,
   size = "base", placeholder = "Select a model…", label = "Model", clearable = false, className, disabled = false,
 }: ModelPickerProps) {
   const listed = value === '' ? '' : specWithoutAccount(value);
@@ -136,6 +134,7 @@ export function ModelPicker({
 
   const selected = useMemo(() => models.find((m) => m.spec === listed) ?? null, [models, listed]);
   const account = value === '' ? '' : parseModelSpec(value).account ?? '';
+  const unavailable = useMemo(() => new Map((failures ?? []).map((f) => [f.provider, f.reason])), [failures]);
 
   const combobox = (
     <Combobox
@@ -145,40 +144,49 @@ export function ModelPicker({
         const entry = next === null ? null : modelMenuEntry(next);
 
         if (entry) onChange(entry.provider === selected?.provider ? specOnAccount(entry.spec, account) : entry.spec);
-        else if (clearable) onChange("");
       }}
       itemToStringLabel={(item: PickerValue) => modelMenuEntry(item)?.label ?? ''}
       itemToStringValue={(item: PickerValue) => modelMenuEntry(item)?.spec ?? ''}
+      autoHighlight
       filter={(item: PickerValue, query: string) => {
         const model = modelMenuEntry(item);
 
         return model ? modelMatchesQuery(model, query) : false;
       }}
+      disabled={disabled}
       size={size}
     >
-      <Combobox.TriggerInput disabled={disabled}
-        placeholder={placeholder}
-        aria-label={label}
-        // Kumo always renders the clear button; `p-combobox-no-clear` hides it by this
-        // exact label, kept in step by unit-combobox-clear-affordance.test.ts.
-        clearLabel={clearable ? "Use default model" : CLEAR_LABEL_UNUSED}
-        className={clearable ? className : `p-combobox-no-clear ${className ?? ""}`}
-      />
-      <Combobox.Content className="min-w-72">
+      <Combobox.TriggerValue className={`min-w-0 max-w-full ${className ?? ""}`}>
+        <span className="flex min-w-0 items-center gap-1.5 pr-5" data-model-picker={label}>
+          <span className="sr-only">{label}: </span>
+          {selected !== null && <ProviderIcon provider={selected.provider} />}
+          <span className={`min-w-0 truncate ${selected === null ? "p-text-3" : ""}`}>{selected?.label ?? (value === '' ? placeholder : listed)}</span>
+        </span>
+      </Combobox.TriggerValue>
+      <Combobox.Content className="w-[min(28rem,calc(100vw-1rem))]">
+        <Combobox.Input placeholder="Search models" aria-label={`Search ${label.toLowerCase()}`} />
         <Combobox.Empty>No models match</Combobox.Empty>
-        <Combobox.List>
+        <Combobox.List className="max-h-[min(24rem,60vh)]">
           {(group: { value: string; items: ModelMenuEntry[] }) => (
             <Combobox.Group key={group.value} items={group.items}>
               <Combobox.GroupLabel>
                 <ProviderLabel provider={group.value} />
               </Combobox.GroupLabel>
               <Combobox.Collection>
-                {(model: ModelMenuEntry) => <ModelPickerItem key={model.spec} model={model} />}
+                {(model: ModelMenuEntry) => (
+                  <ModelPickerItem key={model.spec} model={model} unavailable={unavailable.get(model.provider)} test={test} />
+                )}
               </Combobox.Collection>
             </Combobox.Group>
           )}
         </Combobox.List>
         <ProviderFailureNotice failures={failures} />
+        {clearable && value !== '' && (
+          <button type="button" className="mx-1.5 mt-1 rounded px-2 py-1.5 text-left p-t-control p-text-2 hover:bg-[var(--c-elevated)]"
+            onClick={() => onChange("")}>
+            Use default model
+          </button>
+        )}
       </Combobox.Content>
     </Combobox>
   );
@@ -212,12 +220,14 @@ export function ConnectedModelPicker({
 }: Omit<ModelPickerProps, "models"> & {
   renderEmpty?: () => React.ReactNode;
 }) {
-  const [menu, setMenu] = useState<ModelMenu | null | "error">(null);
+  const [menu, setMenu] = useState<ModelMenu | null | { error: string }>(null);
 
   const fetchModels = useCallback(() => {
     const loadFailed = (...rejection: [unknown]): void => {
-      diagnostics.event("model_picker.load_failed", { error: renderThrownChain({ cause: rejection[0] }) });
-      setMenu("error");
+      const error = renderThrownChain({ cause: rejection[0] });
+
+      diagnostics.event("model_picker.load_failed", { error });
+      setMenu({ error });
     };
 
     setMenu(null);
@@ -236,16 +246,16 @@ export function ConnectedModelPicker({
     );
   }
 
-  if (menu === "error") {
+  if ("error" in menu) {
     return (
       <button
         type="button"
         onClick={fetchModels}
-        className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-1 p-t-control p-text-3 hover:p-text-2"
-        title="Could not load the model list. Click to retry."
+        className="inline-flex min-w-0 items-center gap-1 rounded-md border p-border px-2 py-1 p-t-control p-text-3 hover:p-text-2"
+        title={`The model list could not load: ${menu.error}. Click to retry.`}
       >
-        <ArrowsClockwiseIcon size={11} />
-        models unavailable
+        <ArrowsClockwiseIcon size={11} className="shrink-0" />
+        <span className="truncate">model list could not load: {menu.error}</span>
       </button>
     );
   }
@@ -293,6 +303,7 @@ export function ConnectedModelPicker({
       placeholder={placeholder}
       disabled={disabled}
       effort={effort}
+      test={testModel}
     />
   );
 }
@@ -318,29 +329,92 @@ function failureTitle(failures: ProviderFailure[]): string {
   return failures.map((f) => `${f.label ?? f.provider}: ${f.reason}`).join("\n");
 }
 
-function ProviderLabel({ provider }: { provider: string }) {
+function ProviderIcon({ provider }: { provider: string }) {
   const brand = providerBrand(provider);
 
+  return brand === undefined
+    ? <span aria-hidden="true" className="inline-block size-[13px] shrink-0 rounded-sm border p-border" />
+    : <BrandMark brand={brand} size={13} bare />;
+}
+
+function ProviderLabel({ provider }: { provider: string }) {
   return (
     <span className="flex items-center gap-1.5">
-      {brand !== undefined && <BrandMark brand={brand} size={13} bare />}
+      <ProviderIcon provider={provider} />
       {provider}
     </span>
   );
 }
 
-function ModelPickerItem({ model }: { model: ModelMenuEntry }) {
+type TestState = { running: AbortController } | { result: ModelTestResult } | { error: string } | null;
+
+/** The pointer and click stop at the button, so testing never picks the model. */
+function useModelTest(spec: string, test: ModelPickerProps["test"]) {
+  const [state, setState] = useState<TestState>(null);
+
+  if (test === undefined) return { button: null, status: null };
+  const running = state !== null && "running" in state;
+
+  const run = () => {
+    if (running) {
+      state.running.abort();
+      setState(null);
+
+      return;
+    }
+
+    const controller = new AbortController();
+    setState({ running: controller });
+    test(spec, controller.signal).then(
+      (result) => { if (!controller.signal.aborted) setState({ result }); },
+      (...rejection: [unknown]) => { if (!controller.signal.aborted) setState({ error: renderThrownChain({ cause: rejection[0] }) }); },
+    );
+  };
+
+  let shown: { readonly ok: boolean; readonly text: string } | null = null;
+
+  if (state !== null && "result" in state) shown = { ok: state.result.ok, text: modelTestText(state.result) };
+  else if (state !== null && "error" in state) shown = { ok: false, text: `Test could not run: ${state.error}` };
+
+  const button = (
+    <button type="button"
+      className="shrink-0 rounded border p-border px-1.5 py-0.5 p-t-status p-text-2 hover:p-text"
+      aria-label={running ? `Cancel the test of ${spec}` : `Test ${spec}`}
+      onPointerDown={(event) => { event.stopPropagation(); }}
+      onMouseDown={(event) => { event.stopPropagation(); }}
+      onClick={(event) => { event.stopPropagation(); event.preventDefault(); run(); }}>
+      {running ? "Testing… Cancel" : "Test"}
+    </button>
+  );
+
+  const status = shown === null ? null
+    : <span role="status" className={`block p-t-status ${shown.ok ? "p-success" : "p-warning"}`}>{shown.text}</span>;
+
+  return { button, status };
+}
+
+function ModelPickerItem({ model, unavailable, test }: {
+  model: ModelMenuEntry;
+  unavailable: string | undefined;
+  test: ModelPickerProps["test"];
+}) {
   const context = formatContextWindow(model.contextWindow);
+  const { button, status } = useModelTest(model.spec, test);
 
   return (
     <Combobox.Item value={model}>
-      <span className="flex w-full min-w-0 items-center gap-2">
-        <span className="min-w-0 truncate">{model.label}</span>
-        <span className="ml-auto flex shrink-0 items-center gap-1">
-          {badgeCapabilities(model).map((cap) => <Badge key={cap} variant="secondary">{cap}</Badge>)}
-          {context && <Badge variant="neutral">{context}</Badge>}
+      <span className="flex w-full min-w-0 items-center gap-2" title={unavailable}>
+        <span className={`min-w-0 flex-1 truncate ${unavailable === undefined ? "" : "p-text-3"}`}>{model.label}</span>
+        <span className="flex shrink-0 items-center gap-1">
+          {unavailable !== undefined && (
+            <span className="inline-flex items-center gap-0.5 p-t-status p-warning"><WarningCircleIcon size={11} />unavailable</span>
+          )}
+          <span className="hidden gap-1 sm:flex">{badgeCapabilities(model).map((cap) => <Badge key={cap} variant="secondary">{cap}</Badge>)}</span>
+          {context && <Badge variant="secondary">{context}</Badge>}
+          {button}
         </span>
       </span>
+      {status}
     </Combobox.Item>
   );
 }

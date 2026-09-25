@@ -23,7 +23,7 @@ export const CODEX_DEFAULT_MODEL = 'gpt-5.5';
 /** Evolution's mechanical-call tier. */
 const CODEX_FAST_MODEL = 'gpt-6-luna';
 
-/** The remedy for a ChatGPT login refused after the forced-refresh retry: web settings or CLI device-code. */
+/** A dead ChatGPT login's remedy. */
 const CODEX_DEAD_LOGIN =
   'Your ChatGPT login is no longer valid. Reconnect ChatGPT in User settings, or run `kinu setup` on this machine.';
 

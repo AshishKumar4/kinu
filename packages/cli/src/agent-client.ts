@@ -14,6 +14,7 @@ import type {
   DeferredApproval, DeferredApprovalAnswer,
   PlanReview, PlanReviewAnnotation, PlanReviewDecision, PlanReviewResult, WorkMode,
   SubordinateInspectionRequest, SubordinateInspectionResult, ChatHistoryEntry, WorkspaceSpend,
+  ModelTestResult,
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
@@ -333,6 +334,7 @@ export interface AgentClient {
   getEvolutionConfig(): Promise<EvolutionConfigView>;
   setEvolutionConfig(view: Partial<EvolutionConfigView>): Promise<EvolutionConfigView>;
   listModels(): Promise<AgentModelMenu>;
+  testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult>;
   inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult>;
 }
 

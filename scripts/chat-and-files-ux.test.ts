@@ -1374,9 +1374,10 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.click('[aria-label="New agent"]');
       await waitForNewAgentOpen(page);
       await page.waitForFunction(() => {
-        const input = document.querySelector('[data-agent-pane] input[aria-label="Model"]');
+        const picker = document.querySelector('[data-agent-pane] [data-model-picker="Model"]');
+        const trigger = picker?.closest('button');
 
-        return input instanceof HTMLInputElement && input.value === 'Claude Opus 4' && !input.disabled;
+        return picker?.textContent?.includes('Claude Opus 4') === true && trigger instanceof HTMLButtonElement && !trigger.disabled;
       });
 
       const body = await page.evaluate(() => document.body.innerText);
@@ -3447,8 +3448,8 @@ describe('the Work tab reads the workspace, not the actor', () => {
  * tier row drew its border in the text colour.
  */
 /** Opens the themed choice named `label`, reads its options, and closes it; a closed popup stays mounted, hidden. */
-async function choiceOptions(page: Page, label: string): Promise<string[]> {
-  await page.click(`[aria-label="${label}"]`);
+async function choiceOptions(page: Page, label: string, selector = `[aria-label="${label}"]`): Promise<string[]> {
+  await page.click(selector);
   await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((node) => node.checkVisibility()));
 
   const options = await page.$$eval('[role="option"]', (nodes) => nodes
@@ -3506,10 +3507,11 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
 
       // Point it at a model that documents five levels: the choice offers
       // exactly those, in the model's order, through the combobox every tier row carries.
-      const reviewPicker = await page.$('[data-tier="review"] input');
-      expect(reviewPicker).not.toBeNull();
-      await reviewPicker?.click();
-      await reviewPicker?.type('Opus');
+      // The picker opens on an empty search, so a new choice starts by typing, never by deleting.
+      await page.click('[data-tier="review"] [data-model-picker="review model"]');
+      await page.waitForSelector('input[aria-label="Search review model"]');
+      expect(await page.$eval('input[aria-label="Search review model"]', (input) => (input instanceof HTMLInputElement ? input.value : null))).toBe('');
+      await page.keyboard.type('Opus');
       await page.waitForSelector('[role="option"]');
       await page.click('[role="option"]');
       await page.waitForFunction(() => {
@@ -3548,7 +3550,9 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
       const chain = () => page.$eval('[aria-label="deep fallbacks"]', (group) => [...group.querySelectorAll('[data-spec]')]
         .map((chip) => chip.getAttribute('data-spec') ?? ''));
 
-      const offered = async (label: string) => (await choiceOptions(page, 'deep add fallback')).some((option) => option.includes(label));
+      // The model picker's trigger is named from inside it; `data-model-picker` is where that name sits.
+      const offered = async (label: string) => (await choiceOptions(page, 'deep add fallback', '[data-model-picker="deep add fallback"]'))
+        .some((option) => option.includes(label));
 
       const settled = (specs: readonly string[]) => page.waitForFunction((wanted) => {
         const chips = [...document.querySelectorAll('[aria-label="deep fallbacks"] [data-spec]')].map((chip) => chip.getAttribute('data-spec'));
@@ -3557,7 +3561,7 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
       }, {}, specs);
 
       const pick = async (label: string) => {
-        await page.click('[aria-label="deep add fallback"]');
+        await page.click('[data-model-picker="deep add fallback"]');
         await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((node) => node.checkVisibility()));
 
         for (const option of await page.$$('[role="option"]')) {

@@ -102,7 +102,7 @@ import type {
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
   AccountSpend, PendingAction, ProducerSpend, RunSummary, SearchTreeRow, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
-import type { McpServerSummary, ModelMenuEntry, UserDevice, WorkspaceEntry } from "@/lib/user-api";
+import type { McpServerSummary, ModelMenuEntry, ModelTestResult, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import { McpServerSummarySchema } from "@/lib/user-api";
 import * as v from "valibot";
 import { galleryServerPush, seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
@@ -3060,6 +3060,58 @@ function ComposerFrame() {
           <div className="p-eyebrow px-4">With a status row</div>
           <Composer {...shared} value="" liveness={IDLE_TURN} modelPicker={picker()} notices={MCTS_NOTICE} />
         </div>
+        <ModelPickerStates />
+      </div>
+    </div>
+  );
+}
+
+const PICKER_MODELS: ModelMenuEntry[] = [
+  { spec: "codex/gpt-5.5", label: "GPT-5.5 (Codex)", provider: "codex", contextWindow: 272_000, capabilities: ["reasoning", "vision"] },
+  { spec: "codex/gpt-6-sol", label: "GPT-6 Sol (Codex)", provider: "codex", contextWindow: 272_000, capabilities: ["reasoning", "vision"] },
+  { spec: "claude/claude-opus-4-8", label: "Claude Opus 4.8", provider: "claude", contextWindow: 1_000_000, capabilities: ["reasoning", "vision"] },
+  { spec: "claude/claude-sonnet-4-8", label: "Claude Sonnet 4.8", provider: "claude", contextWindow: 1_000_000, capabilities: ["reasoning"] },
+  { spec: "workers-ai/@cf/zai-org/glm-5.3", label: "GLM 5.3", provider: "workers-ai", contextWindow: 1_048_576, capabilities: ["reasoning"] },
+  { spec: "openrouter/qwen/qwen3.6-max", label: "Qwen 3.6 Max", provider: "openrouter", contextWindow: 262_144 },
+  { spec: "opencode-go/glm-5", label: "GLM-5 (OpenCode Go)", provider: "opencode-go", contextWindow: 200_000 },
+];
+
+const PICKER_FAILURES = [{ provider: "codex", label: "ChatGPT Codex (subscription)", reason: "Codex models could not be read: chatgpt.com refused this server's network (HTTP 403 block page, before sign-in); showing the built-in list" }];
+
+const PICKER_TEST_RESULTS = new Map<string, ModelTestResult>([
+  ["opencode-go", { ok: false, failure: "spent", message: "opencode-go is rate-limited until 2026-10-03 14:56 UTC (in 8d 10h): Monthly usage limit reached. (HTTP 429)" }],
+  ["codex", { ok: false, failure: "unreachable", message: "Codex is unreachable from here (HTTP 503, codex_unavailable)" }],
+]);
+
+function galleryModelTest(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
+  const { promise, resolve, reject } = Promise.withResolvers<ModelTestResult>();
+  const result = PICKER_TEST_RESULTS.get(spec.split("/")[0] ?? "") ?? { ok: true, firstTokenMs: 640, totalMs: 910 };
+  const timer = setTimeout(() => resolve(result), 700);
+
+  signal.addEventListener("abort", () => { clearTimeout(timer); reject(signal.reason); });
+
+  return promise;
+}
+
+function ModelPickerStates() {
+  const [model, setModel] = useState("codex/gpt-5.5");
+  const [tier, setTier] = useState("");
+  const models = PICKER_MODELS;
+  const failures = PICKER_FAILURES;
+  const test = galleryModelTest;
+
+  return (
+    <div className="space-y-6 px-4" data-model-picker-states>
+      <div className="space-y-1">
+        <div className="p-eyebrow">Model picker, a failed Codex list</div>
+        <div className="flex items-center gap-1">
+          <ModelPicker models={models} failures={failures} value={model} onChange={setModel} size="xs" test={test} label="Picker" />
+        </div>
+      </div>
+      <div className="space-y-1">
+        <div className="p-eyebrow">Settings tier, inheriting the default</div>
+        <ModelPicker models={models} failures={failures} value={tier} onChange={setTier} clearable size="sm"
+          label="deep model" placeholder="Use default (GPT-5.5 (Codex))" test={test} />
       </div>
     </div>
   );

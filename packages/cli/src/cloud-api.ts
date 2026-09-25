@@ -22,6 +22,8 @@ import {
   AccountUsageSchema,
   type AccountUsage,
   type AgentRpcMethod,
+  ModelTestResultSchema,
+  type ModelTestResult,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -363,6 +365,10 @@ export async function listCloudAvailableModels(origin: string, token: string): P
   return normalizeModelMenu({ payload: await cloudJson(v.unknown(), origin, '/api/cli/models', { token }) });
 }
 
+export async function testCloudModel(origin: string, token: string, spec: string, signal: AbortSignal): Promise<ModelTestResult> {
+  return cloudJson(ModelTestResultSchema, origin, '/api/cli/models/test', { method: 'POST', token, body: { spec }, signal });
+}
+
 /** Always an envelope: an uncustomized account gets version 0 over the builtin catalog. */
 export async function getCloudProfile(origin: string, token: string): Promise<ProfileCatalogEnvelope> {
   const { status, body } = await cloudRequest(origin, '/api/cli/profile', { token });
@@ -517,6 +523,7 @@ interface CloudRequestOpts {
   method?: string;
   body?: JsonValue;
   token?: string;
+  signal?: AbortSignal;
 }
 
 /** Keeps the server's body on failure statuses so callers can act on structured errors (a conflict is data). */
@@ -531,6 +538,7 @@ async function cloudRequest(origin: string, path: string, opts: CloudRequestOpts
     method: opts.method ?? 'GET',
     headers,
     body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+    ...(opts.signal !== undefined && { signal: opts.signal }),
   });
 
   const contentType = res.headers.get('content-type') ?? '';

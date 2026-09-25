@@ -1,8 +1,8 @@
 /** Model menu and connectable-provider catalog for HTTP clients. The provider registry is the
  *  source of truth for models; models.dev for which providers a BYO key can connect. */
 import {
-  catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL, openAICompatNameOf,
-  type ModelsDevProviderInfo, type ProviderFailure, type ReasoningEffort,
+  catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL, openAICompatNameOf, testModel,
+  type ModelTestResult, type ModelsDevProviderInfo, type ProviderFailure, type ReasoningEffort,
 } from '@kinu.run/core';
 import { createAgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
 import type { ObjectNamespace } from '@kinu.run/core';
@@ -126,4 +126,18 @@ export async function listProviderCatalog<Id>(
     new Set(registry.list().map((p) => p.id)),
     new Set(creds.map((c) => c.key)),
   );
+}
+
+export async function testAvailableModel<Id>(input: {
+  readonly env: AvailableModelsEnv<Id>;
+  readonly userId: string;
+  readonly caller: UserCaller;
+  readonly spec: string;
+  readonly signal: AbortSignal;
+}): Promise<ModelTestResult> {
+  const { env, userId, caller } = input;
+  const stub = env.UserDO.get(env.UserDO.idFromName(userId));
+  const registry = createAgentProviderRegistry({ env, ownerUserId: userId, userDO: { stub, caller }, fetch });
+
+  return testModel({ model: registry.resolveModel(input.spec), signal: input.signal });
 }

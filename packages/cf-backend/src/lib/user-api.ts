@@ -7,6 +7,8 @@ import {
   type DeviceTier,
   type DeviceUpdateState,
   type JsonValue,
+  ModelTestResultSchema,
+  type ModelTestResult,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
@@ -349,6 +351,21 @@ export function listAvailableModels(): Promise<ModelMenu> {
 }
 
 function invalidateModelsCache(): void { _modelsCache = null; }
+
+export type { ModelTestResult };
+
+export async function testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
+  const res = await fetch('/api/user/models/test', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ spec }),
+    signal,
+  });
+
+  if (!res.ok) throw new Error(`POST /api/user/models/test → ${res.status} ${await errorDetail(res)}`);
+
+  return v.parse(ModelTestResultSchema, await res.json());
+}
 
 export interface ProviderCatalogEntry {
   id: string;

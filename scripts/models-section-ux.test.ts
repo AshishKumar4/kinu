@@ -63,7 +63,7 @@ async function rowGeometry(page: Page): Promise<RowGeometry> {
     const composer = document.querySelector('[data-composer-root]');
 
     if (!composer) throw new Error('the composer frame rendered no composer');
-    const model = composer.querySelector('input[aria-label="Model"]');
+    const model = composer.querySelector('[data-model-picker="Model"]')?.closest('button');
     const thinking = composer.querySelector('[aria-label="Thinking level"]');
 
     if (!model || !thinking) throw new Error('the composer is missing the model or the thinking control');
@@ -152,8 +152,12 @@ describe('the models section keeps every control reachable by name', () => {
 
       // Every built-in tier row carries its two controls, named for the tier:
       // the model combobox and the reasoning-effort select.
+      // The model trigger is a button whose spoken name starts with the tier's label.
+      const pickerNamed = async (name: string): Promise<boolean> =>
+        page.$$eval('button', (buttons, wanted) => buttons.some((button) => button.textContent?.startsWith(`${wanted}: `) === true), name);
+
       for (const tier of ['fast', 'default', 'deep']) {
-        expect(await named(`${tier} model`)).toBe(true);
+        expect(await pickerNamed(`${tier} model`)).toBe(true);
         expect(await named(`${tier} reasoning effort`)).toBe(true);
       }
 

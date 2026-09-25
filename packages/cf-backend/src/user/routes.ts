@@ -5,7 +5,7 @@ import { PROFILE_CATALOG_CONFIG_KEY } from '@kinu.run/core';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
-import { listAvailableModels, listProviderCatalog } from './available-models';
+import { listAvailableModels, listProviderCatalog, testAvailableModel } from './available-models';
 import { readUserAccountUsage } from './account-usage';
 import {
   handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged, type CreateWorkspaceEnv,
@@ -384,6 +384,16 @@ userRoutes.get('/api/user/providers/catalog', async (c) => json({
 userRoutes.get('/api/user/models', async (c) => json({
   body: await listAvailableModels(c.env, c.get('identity').userId, c.get('owner')),
 }));
+
+userRoutes.post('/api/user/models/test', async (c) => {
+  const body = await safeJson(c.req.raw, v.object({ spec: v.pipe(v.string(), v.minLength(3)) }));
+
+  if (!body) return err(400, 'spec (string) required');
+
+  return json({ body: await testAvailableModel({
+    env: c.env, userId: c.get('identity').userId, caller: c.get('owner'), spec: body.spec, signal: c.req.raw.signal,
+  }) });
+});
 
 userRoutes.get('/api/user/usage', async (c) => json({ body: await readUserAccountUsage(c.env, c.get('stub'), c.get('owner')) }));
 
