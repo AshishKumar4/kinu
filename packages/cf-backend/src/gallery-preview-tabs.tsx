@@ -128,7 +128,6 @@ export function PreviewTabsGallery() {
       return reply({ ok: true, plan: next, queued: true });
     }
     else if (method === 'savePlanReviewAnnotations') return reply({ ok: true, plan });
-    else if (method === 'listAgentTasks') return reply([]);
     else if (method === 'getEvolutionChangelog') return reply({ entries: [], unseenCount: 0, seenAt: 0 });
     else if (method === 'markChangelogSeen') return reply({ seenAt: 0 });
 

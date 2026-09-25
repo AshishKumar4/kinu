@@ -27,7 +27,7 @@ import { describe, expect, test } from 'bun:test';
 import type { Server, ServerWebSocket } from 'bun';
 import * as v from 'valibot';
 
-import { renderSoulMarkdown, type RunEvent, type JsonValue } from '../../packages/core/src/index';
+import { isAgentRpcMethod, renderSoulMarkdown, type RunEvent, type JsonValue } from '../../packages/core/src/index';
 import { DeploymentAnswer, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import {
   PUBLIC_IDENTITY_ENV, decodeFrame, encodeChatRequest, encodeRpcRequest,
@@ -613,22 +613,23 @@ test('an explicitly missing file is an oracle miss; a failed answer is the build
 });
 
 /** One RPC method → the reply this fixture answers it with. */
-const FixtureRpcMethodSchema = v.picklist(['listSubordinates', 'listAgentTasks']);
+const FixtureRpcMethodSchema = v.picklist(['listSubordinates']);
 
 interface FixtureRpcAnswers {
   listSubordinates: JsonValue;
-  listAgentTasks: JsonValue;
 }
 
 describe('the verifier reads speak the RPCs the web app is bound to', () => {
+  // The fixture answers what it is told to, so a read of a method the product dropped would still pass here.
+  test('every method the fixture answers is one the product serves', () => {
+    expect(FixtureRpcMethodSchema.options.filter((method) => !isAgentRpcMethod(method))).toEqual([]);
+  });
+
   const answers: FixtureRpcAnswers = {
     listSubordinates: [
       { name: 'alpha', status: 'dismissed', lifetime: 'task', createdBy: 'orchestrator',
         currentTask: null, createdAt: 1, dismissedAt: 2, actorReference: null, birth: null,
         deleteRequested: false, taskEventId: null },
-    ],
-    listAgentTasks: [
-      { id: 't1', parentId: null, title: 'write the doc', status: 'done', createdAt: 3, updatedAt: 4, subtasks: [] },
     ],
   };
 
@@ -672,21 +673,6 @@ describe('the verifier reads speak the RPCs the web app is bound to', () => {
         .toEqual([{ name: 'alpha', status: 'dismissed', lifetime: 'task' }]);
 
       expect(asked).toEqual([{ method: 'listSubordinates', args: [] }]);
-    } finally { await session.teardown(); await server.stop(true); }
-  });
-
-  test('tasks() is listAgentTasks, with the status a reply is checked against', async () => {
-    const { server, session } = open();
-    asked.length = 0;
-
-    try {
-      await session.connect();
-
-      expect(await session.tasks()).toEqual([
-        { id: 't1', title: 'write the doc', status: 'done', createdAt: 3, updatedAt: 4, subtasks: [] },
-      ]);
-
-      expect(asked).toEqual([{ method: 'listAgentTasks', args: [] }]);
     } finally { await session.teardown(); await server.stop(true); }
   });
 });

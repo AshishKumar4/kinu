@@ -772,26 +772,6 @@ const SubordinateRosterSchema = v.array(SubordinateRowSchema);
 /** One row of the roster, as the Agents surface lists it. */
 export type PublicSubordinate = v.InferOutput<typeof SubordinateRowSchema>;
 
-/** The agent's own task list as `listAgentTasks` serves it (orchestrator.ts:3103)
- *  — the read `WorkTab.tsx:124` is bound to. Narrowed to what a case grades and
- *  mirroring `AgentTaskTree` (core/src/tasks/store.ts:44) rather than importing
- *  it: the store module is another lane's, and every other read on this session
- *  declares the shape it consumes. */
-const TaskRowSchema = v.object({
-  id: v.string(),
-  title: v.string(),
-  status: v.picklist(['open', 'active', 'done', 'dropped']),
-  createdAt: v.number(),
-  updatedAt: v.number(),
-});
-
-const TaskTreeSchema = v.object({ ...TaskRowSchema.entries, subtasks: v.array(TaskRowSchema) });
-
-const TaskListSchema = v.array(TaskTreeSchema);
-
-/** One task with its subtasks, as the Work tab draws it. */
-export type PublicTask = v.InferOutput<typeof TaskTreeSchema>;
-
 /** What `readExecutorFile` answers, exactly as `ExecutorTextFile` declares it
  *  (core/src/read-models/files.ts): the preview's text, or the reason there is
  *  none. Both optional, because the read model answers one or the other. */
@@ -1351,25 +1331,6 @@ export class KinuPublicSession {
     );
 
     return v.parse(SubordinateRosterSchema, rows);
-  }
-
-  /**
-   * The agent's own task list — `listAgentTasks`, the read the Work tab polls
-   * (`components/surfaces/WorkTab.tsx:124`'s `loadTasks`).
-   *
-   * READ-ONLY on purpose at the product end (orchestrator.ts:3098-3105): the
-   * agent maintains this list from its `tasks` tool, so this is the surface's
-   * view of what the agent decided, never a place a harness may write. That is
-   * exactly what makes it a verifier: a reply claiming a task is closed is
-   * checked against the list the product would draw.
-   */
-  async tasks(): Promise<readonly PublicTask[]> {
-    const rows = await infraBoundary(
-      `listAgentTasks on ${this.input.origin}/${this.workspace}`,
-      () => this.rpc('listAgentTasks', []),
-    );
-
-    return v.parse(TaskListSchema, rows);
   }
 
   /** Resolve when a response chunk of `requestId` satisfies `accept` — a

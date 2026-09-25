@@ -6,7 +6,8 @@
  * makes through `useKinu`'s `createSubordinate` — then open that actor's OWN
  * chat path and ask over it the two RPCs the tab makes on mount:
  * `getActorSnapshot` (the read `loadSubordinateData` depends on) and
- * `listAgentTasks` (the read the tab's task surface depends on). Then send one
+ * `getChatHistoryPage` naming the actor's id (the read `useChatThread` draws the
+ * tab's conversation from). Then send one
  * message to that subagent and read its answer. Every check reads what the
  * product answered — the RPC payload, the chat reply — never a model's account
  * of anything.
@@ -86,13 +87,14 @@ const CreatedSchema = v.object({ name: v.string() });
 
 const SnapshotSchema = v.object({
   name: v.string(),
+  actorId: v.string(),
   displayName: v.optional(v.string()),
   role: v.optional(v.string()),
   mission: v.optional(v.string()),
   pendingSteers: v.optional(v.array(v.unknown())),
 });
 
-const TasksSchema = v.array(v.unknown());
+const HistoryPageSchema = v.object({ status: v.string(), items: v.array(v.unknown()) });
 
 describe(SUITE, () => {
   // THE ROW MUST TERMINATE: the tier runs with testTimeout 0, so a read the
@@ -179,16 +181,22 @@ describe(SUITE, () => {
             }),
           });
 
-          const tasksAnswer = await ask(tabSocket, 'listAgentTasks', []);
-          const tasks = tasksAnswer.ok ? v.safeParse(TasksSchema, tasksAnswer.value) : null;
+          // The tab pages its conversation by the id the snapshot names; without one there is nothing to page.
+          const actorId = snapshot !== null && snapshot.success ? snapshot.output.actorId : null;
+
+          const historyAnswer = actorId === null
+            ? { ok: false as const, failure: 'the snapshot named no actor id to page by' }
+            : await ask(tabSocket, 'getChatHistoryPage', [{ actor: actorId, limit: 40 }]);
+
+          const history = historyAnswer.ok ? v.safeParse(HistoryPageSchema, historyAnswer.value) : null;
 
           subgoals.push({
-            what: 'tasks-answer',
-            reached: tasks !== null && tasks.success,
+            what: 'history-answers',
+            reached: history !== null && history.success,
             detail: rpcDetail({
-              rpc: 'listAgentTasks', answer: tasksAnswer, refusal: 'never answered',
-              said: tasks !== null && tasks.success
-                ? `listAgentTasks answered a list of ${String(tasks.output.length)}`
+              rpc: 'getChatHistoryPage', answer: historyAnswer, refusal: 'never answered',
+              said: history !== null && history.success
+                ? `getChatHistoryPage answered ${String(history.output.items.length)} rows (${history.output.status})`
                 : null,
             }),
           });
