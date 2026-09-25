@@ -172,6 +172,7 @@ export interface SubordinateSnapshot {
   model: { model: string; source: TierSource };
   reasoningEffort: ReasoningEffort;
   activePlan: unknown;
+  messageCount: number;
   /** No live broadcast repeats the queue for a tab that was gone when the steer was taken. */
   pendingSteers: InlineSteer[];
 }
@@ -1026,6 +1027,10 @@ export function useKinu(target?: string | KinuActorAddress) {
     connectionError,
   } = useAgentChat({
     agent,
+    // The socket's connect frame seeds the transcript. The SDK's default HTTP seed suspended this
+    // page on /get-messages before the socket even opened, so a 300-turn workspace fetched its
+    // transcript twice, one after the other. `transcriptSeeded` holds the pane on its skeleton until the frame.
+    getInitialMessages: null,
     // Matches the SDK default (cloudflare/agents#2058), pinned so an upstream change cannot move it.
     throttle: 50,
   });
@@ -1690,7 +1695,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       reasoningEffort: actorSnapshot.reasoningEffort,
       searchNodeCount: 0,
       craftedToolCount: 0,
-      messageCount: messages.length,
+      messageCount: actorSnapshot.messageCount,
       forkLineage: null,
     });
     const loadedPlan = parseActivePlanReview({ value: actorSnapshot.activePlan });

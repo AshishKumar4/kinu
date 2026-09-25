@@ -1,3 +1,4 @@
+import type { UIMessage } from "ai";
 import { startTransition, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
@@ -233,6 +234,14 @@ function SubordinateEventCard({ event, workspace }: { event: SubordinateActivity
       </Link>
     </div>
   );
+}
+
+/** The pane holds the newest rows and whatever pages were read, so the rows it never loaded are
+ *  the store's count less the loaded ones; a fork copies every one of them. */
+function messagesUpTo(shown: readonly UIMessage[], id: string, stored: number | undefined): number {
+  const unloaded = Math.max(0, (stored ?? shown.length) - shown.length);
+
+  return unloaded + shown.findIndex((message) => message.id === id) + 1;
 }
 
 function ForkModal({
@@ -691,11 +700,11 @@ export default function WorkspacePage() {
     () => new Map(state.signalCards.map((card) => [card.id, card.state])),
     [state.signalCards]);
 
-  const messageCardIds = useMemo(() => new Set(state.messages.flatMap((msg) => {
+  const messageCardIds = useMemo(() => new Set(transcript.flatMap((msg) => {
     const id = messageSignalId({ metadata: msg.metadata });
 
     return id ? [id] : [];
-  })), [state.messages]);
+  })), [transcript]);
 
   const looseCards = useMemo(() => state.signalCards.flatMap((card) => {
     if (messageCardIds.has(card.id)) return [];
@@ -1072,7 +1081,7 @@ export default function WorkspacePage() {
       {forkFor && (
         <ForkModal
           sourceName={shownTitle}
-          messagesUpToHere={state.messages.findIndex(m => m.id === forkFor) + 1}
+          messagesUpToHere={messagesUpTo(transcript, forkFor, state.agentStatus?.messageCount)}
           onCancel={() => setForkFor(null)}
           onSubmit={async (name) => {
             try {

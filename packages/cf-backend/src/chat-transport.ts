@@ -29,7 +29,8 @@ export interface ChatWire {
   broadcast(message: string, exclude?: string[]): void;
   /** The handshake asks by id before it replays to a replacement. */
   getConnection(id: string): ChatSocket | undefined;
-  history(): Promise<UIMessage[]>;
+  /** The newest `limit` entries, or all of them; frames ask for {@link TRANSCRIPT_WINDOW}. */
+  history(limit?: number): Promise<UIMessage[]>;
   /** A durable row or an accepted send's reservation: the hook resends its whole list per request. */
   admitted(id: string): boolean;
   /** Rejects when the loop refuses the message: nothing was written and no turn ran. */
@@ -119,6 +120,13 @@ class OpenParts {
   }
 }
 
+/**
+ * Messages a transcript frame carries: the newest ones, never the whole conversation. The pane pages
+ * older rows from storage and keeps what slides out of the window (`use-chat-thread`). Measured
+ * 2026-09-25 at 300 turns: the whole transcript was 271 KB per connect and per turn boundary.
+ */
+export const TRANSCRIPT_WINDOW = 60;
+
 function transcriptFrame(history: readonly UIMessage[]): string {
   return JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: history });
 }
@@ -191,7 +199,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   /** A socket opening mid-turn also reads the current transcript: seed and connect are separate fetches. */
   async onConnect(connection: Connection): Promise<void> {
     const resume = this.resume;
-    const history = await this.wire.history();
+    const history = await this.wire.history(TRANSCRIPT_WINDOW);
 
     if (resume !== null && resume.resumable.hasActiveStream()) resume.handshake.notifyStreamResuming(connection);
     sendIfOpen(connection, transcriptFrame(history));
@@ -270,7 +278,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       return;
     }
 
-    const storedMessages = await this.wire.history();
+    // The client resends only what its window holds, so the window is what it is reconciled against.
+    const storedMessages = await this.wire.history(TRANSCRIPT_WINDOW);
 
     const fresh = reconcileMessages(parsed.output.messages, storedMessages, sanitizeMessage)
       .filter((message) => message.role === 'user' && !this.wire.admitted(message.id));
@@ -329,7 +338,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), cadence: partialFlushCadence(), taken: false, broken: false, failure: null };
 
-    if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history()));
+    if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history(TRANSCRIPT_WINDOW)));
   }
 
   /** The answer row is durable before this. */
@@ -340,7 +349,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.live = null;
 
     if (!live.taken && !live.broken && live.accumulator.parts.length > 0) this.answers.set(live.accumulator.messageId, live.accumulator.toMessage());
-    const history = await this.wire.history();
+    const history = await this.wire.history(TRANSCRIPT_WINDOW);
 
     this.resume?.resumable.complete(live.streamId);
     this.pendingResume.clear();
@@ -383,7 +392,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
       // The walk-back moved the durable head; every tab needs the stored transcript.
       case 'history-reverted':
-        this.wire.broadcast(transcriptFrame(await this.wire.history()));
+        this.wire.broadcast(transcriptFrame(await this.wire.history(TRANSCRIPT_WINDOW)));
 
         return;
 
