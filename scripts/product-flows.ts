@@ -999,7 +999,8 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
       const frame = await (await page.$(frameSelector))?.contentFrame();
 
       if (frame !== null && frame !== undefined) {
-        await waitOn(page, "the slate's preview to load", frame.waitForFunction('document.readyState === "complete"', { polling: 100 }));
+        // The frame first holds its initial about:blank, which is already complete and empty.
+        await waitOn(page, "the slate's preview to load", frame.waitForFunction('location.href !== "about:blank" && document.readyState === "complete"', { polling: 100 }));
         frameText = v.parse(v.string(), await frame.evaluate('(document.body?.textContent ?? "").trim()'));
       }
     }
