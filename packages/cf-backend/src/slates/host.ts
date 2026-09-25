@@ -48,7 +48,7 @@ export interface SlateHostDeps extends ResidentSlateDeps {
   budget?(): MissionGovernor;
   ownerTitle?(): Promise<string>;
   forgetPicture?(slate: string): Promise<void>;
-  sharesChanged?(): Promise<void>;
+  sharesChanged?(): Promise<'current' | 'pending'>;
 }
 
 interface ViewerAdmission {
@@ -392,14 +392,8 @@ export class SlateHost {
     return this.changedShares(await this.blueprintAnswer('sharing slate ' + share, () => this.live.addUsers(share, users)));
   }
 
-  private async changedShares<Answer extends { readonly ok: boolean }>(answer: Answer): Promise<Answer | { ok: false } & Refusal> {
-    try {
-      if (answer.ok) await this.deps.sharesChanged?.();
-    } catch (cause) {
-      return { ok: false, ...refusalOf(toKinuError({ doing: "moving the share's card on the workspace's tile", cause, otherwise: 'unavailable' })) };
-    }
-
-    return answer;
+  private async changedShares<Answer extends { readonly ok: boolean }>(answer: Answer): Promise<Answer> {
+    return answer.ok && await this.deps.sharesChanged?.() === 'pending' ? { ...answer, listing: 'pending' } : answer;
   }
 
   /** A live share goes by its slate's title. */

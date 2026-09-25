@@ -4112,7 +4112,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       sharesChanged: async () => {
         this.overviewChanged(true);
-        await this.overviewSettled();
+
+        return await this.overviewSettled() === null ? 'current' : 'pending';
       },
     });
 
@@ -4572,12 +4573,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** A share's route answers once its card moved, or with why not. */
-  private async overviewSettled(): Promise<void> {
-    if (!this.overviewPushing) return;
-    const failure = await new Promise<KinuError | null>((resolve) => { this.overviewSettlers.push(resolve); });
+  /** Once its card moved, or the failure that left the list behind. */
+  private async overviewSettled(): Promise<KinuError | null> {
+    if (!this.overviewPushing) return null;
 
-    if (failure !== null) throw failure;
+    return await new Promise<KinuError | null>((resolve) => { this.overviewSettlers.push(resolve); });
   }
 
   @callable() async executeInExecutor(executorId: string, command: string, device?: string) {

@@ -344,24 +344,45 @@ test("the owner's Drive lists its slates and shares from the tiles its workspace
   expect(after.slates[0]?.visibility).toBeUndefined();
 });
 
-test('a share whose card cannot reach the tile answers the failure, and a revoke during the backoff that leaves still moves it', async () => {
+test('a change whose card cannot reach the tile is made and says the list is behind; a revoke during the backoff still moves it', async () => {
   const world = await twoUserWorld();
   cleanups.push(world.close);
   const owner = identityOf(OWNER_ID, 'owner@example.test');
   const userDO = world.ownerUser.userDO;
   const push = userDO.putWorkspaceOverview.bind(userDO);
-  const share = (visibility: 'users' | 'public') => sharedRequest(world.env, owner, post('/api/shared/live', { workspace: 'issues-owner', slate: 'issues', visibility }));
+  const failing = async () => { throw new KinuError('unavailable', 'the roster is unavailable'); };
+
+  const Made = v.object({ share: v.object({ id: v.string() }), listing: v.optional(v.literal('pending')) });
+
+  const share = async (visibility: 'users' | 'public') => jsonBody(present(await sharedRequest(world.env, owner,
+    post('/api/shared/live', { workspace: 'issues-owner', slate: 'issues', visibility })), 'the share answer'), Made);
+
+  const revoke = async (id: string) => present(await sharedRequest(world.env, owner, post('/api/shared/revoke', { workspace: 'issues-owner', share: id })), 'the revoke answer');
   const listed = async () => (await jsonBody(present(await sharedRequest(world.env, owner, new Request('https://app.test/api/shared')), 'the library'), SharedLibrarySchema)).mine;
 
-  const first = await jsonBody(present(await share('public'), 'the first share'), v.object({ share: v.object({ id: v.string() }) }));
+  const lives = async () => answered(await world.owner.agent.slate({ op: 'liveShares' }), v.array(LiveShareRecordSchema));
 
-  expect((await listed()).map((row) => row.id)).toEqual([first.share.id]);
+  const first = await share('public');
 
-  // The second share's push fails: its route says so, and the failure leaves a backoff pending.
-  Object.assign(userDO, { putWorkspaceOverview: async () => { throw new KinuError('unavailable', 'the roster is unavailable'); } });
-  expect((await share('users'))?.status).not.toBe(201);
+  expect(first.listing).toBeUndefined();
+
+  // Its push fails: the share is made and answered, so a retry would mint a second.
+  Object.assign(userDO, { putWorkspaceOverview: failing });
+  const second = await share('users');
   Object.assign(userDO, { putWorkspaceOverview: push });
 
-  expect((await sharedRequest(world.env, owner, post('/api/shared/revoke', { workspace: 'issues-owner', share: first.share.id })))?.status).toBe(200);
-  expect((await listed()).map((row) => [row.kind, row.visibility])).toEqual([['live', 'users']]);
+  expect(second.listing).toBe('pending');
+  expect(new Set((await lives()).filter((row) => row.revokedAt === null).map((row) => row.id))).toEqual(new Set([first.share.id, second.share.id]));
+
+  // During the backoff that failure left, a revoke still moves the tile, and the next fold lists the second share.
+  const revoked = await revoke(first.share.id);
+
+  expect(await jsonBody(revoked, v.object({ listing: v.optional(v.literal('pending')) }))).toEqual({});
+  expect((await listed()).map((row) => row.id)).toEqual([second.share.id]);
+
+  Object.assign(userDO, { putWorkspaceOverview: failing });
+  const behind = await revoke(second.share.id);
+
+  expect(behind.status).toBe(200);
+  expect(await jsonBody(behind, v.object({ listing: v.optional(v.literal('pending')) }))).toEqual({ listing: 'pending' });
 });

@@ -167,6 +167,10 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
   return { slates, mine, received };
 }
 
+function listed(answer: { readonly listing?: 'pending' }): { listing?: 'pending' } {
+  return answer.listing === undefined ? {} : { listing: answer.listing };
+}
+
 function slateRefusalStatus(reason: ErrorCode): number {
   if (reason === 'bad_input') return 400;
 
@@ -212,7 +216,7 @@ async function publish(request: Request, env: Env, identity: AuthIdentity, owner
     }
   }
 
-  return json({ body: { id, share: share.id, users, published: published.value } }, { status: 201 });
+  return json({ body: { id, share: share.id, users, published: published.value, ...listed(published) } }, { status: 201 });
 }
 
 async function fork(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
@@ -296,7 +300,7 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity, own
     }
   }
 
-  return json({ body: { share, url } }, { status: 201 });
+  return json({ body: { share, url, ...listed(created) } }, { status: 201 });
 }
 
 /** A live share and a blueprint link revoke alike: the owner's object knows which it holds. */
@@ -311,7 +315,7 @@ async function revoke(request: Request, env: Env, identity: AuthIdentity): Promi
 
   if (!revoked.ok) return err(revoked.reason === 'missing' ? 404 : 409, revoked.error);
 
-  return json({ body: revoked.value });
+  return json({ body: { ...v.parse(v.record(v.string(), v.unknown()), revoked.value), ...listed(revoked) } });
 }
 
 async function openLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
