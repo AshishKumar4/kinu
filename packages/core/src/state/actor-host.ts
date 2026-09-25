@@ -54,6 +54,8 @@ export interface ActorRetirement {
   readonly observed?: { readonly turnId: string; readonly epoch: number };
   /** `false`: the name goes, the conversation stays readable. */
   readonly destroy: boolean;
+  /** End an in-flight turn rather than wait for it; implied by `destroy`. */
+  readonly interrupt: boolean;
 }
 
 export interface ActorHostDeps {
@@ -330,9 +332,10 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       const slot = slotFor(retirement.reference);
 
       if (slot && !slot.fence.released) {
-        if (retirement.destroy) slot.actor.session.interrupt();
-        else if (slot.actor.session.inFlight) {
-          // A temporary agent files its report from inside its turn, so dismissal must wait.
+        if (retirement.destroy || retirement.interrupt) slot.actor.session.interrupt();
+
+        if (!retirement.destroy && slot.actor.session.inFlight) {
+          // A temporary agent files its report from inside its turn, so its release waits; an interrupted turn ends soon.
           // A failed turn has still settled; the re-check below bounds the wait.
           try { await slot.queue; }
           catch (cause) {

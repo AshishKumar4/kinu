@@ -243,7 +243,7 @@ interface HireRunOptions {
 }
 
 /** A `Pick` intersection: the full stub type instantiates too deeply to compile. */
-type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp'>
+type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp' | 'dismissSubordinate'>
   & Pick<HireOrchestrator,
     'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'stopHosted'>;
 
@@ -321,6 +321,16 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
 
     if (child === undefined) throw new Error('no hired child to stop');
     await target.stopHosted(child.name);
+  }
+
+  /** The owner's Dismiss with its history kept, as the roster menu calls it. */
+  async dismissChild(workspace: string): Promise<string> {
+    const target = await this.target(workspace);
+    const [child] = await target.rosterRows();
+
+    if (child === undefined) throw new Error('no hired child to dismiss');
+
+    return (await target.dismissSubordinate(child.name, true)).name;
   }
 
   async wakeReturned(workspace: string): Promise<void> {

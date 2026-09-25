@@ -442,11 +442,11 @@ export function hostedSubordinateRuntime(
       });
     },
     /** Wipe removes rows, home and state subtree; archive keeps them. `observed` lets the host settle a live claim. */
-    dismiss: async (name, keepHistory, reference) => {
+    dismiss: async (name, { keepHistory, interrupt }, reference) => {
       const live = seams.host.hosted(reference);
       const claim = live === null ? null : live.session.turnClaim;
       // `observed` only when a claim was seen: the host's refusal depends on absent vs present.
-      const request: ActorRetirementRequest = { reference, name, keepHistory };
+      const request: ActorRetirementRequest = { reference, name, keepHistory, interrupt };
 
       if (claim !== null) request.observed = { turnId: claim.turnId, epoch: claim.epoch };
       await seams.host.retire(parent().reference, actorRetirementFor(request));

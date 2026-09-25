@@ -436,7 +436,8 @@ export interface SubordinateRuntime {
   message(name: string, content: string, mode: WorkMode): Promise<SubordinateHandoff>;
   /** Called with `user` for an owner rename, which makes `planWorkspaceTitle`'s refusal durable. */
   rename(name: string, displayName: string, nameOrigin: NameOrigin): Promise<void>;
-  dismiss(name: string, keepHistory: boolean, reference: ActorReference): Promise<void>;
+  /** `interrupt` ends an in-flight turn; without it the retirement waits for the turn to settle. */
+  dismiss(name: string, dismissal: { readonly keepHistory: boolean; readonly interrupt: boolean }, reference: ActorReference): Promise<void>;
 }
 
 export interface SubordinatesChangedEvent {
@@ -728,10 +729,10 @@ export function createTeamToolDeps(deps: {
       else deps.roster.requestDeletion(input.name, reference, deps.now());
 
       if (keepHistory) {
-        try { await deps.runtime.dismiss(input.name, true, reference); }
+        try { await deps.runtime.dismiss(input.name, { keepHistory: true, interrupt: true }, reference); }
         catch (cause) { rollback({ cause }, () => deps.roster.restore(before), 'retained subordinate dismissal'); }
       } else {
-        await deps.runtime.dismiss(input.name, false, reference);
+        await deps.runtime.dismiss(input.name, { keepHistory: false, interrupt: true }, reference);
         deps.roster.removeActor(input.name, reference);
       }
 

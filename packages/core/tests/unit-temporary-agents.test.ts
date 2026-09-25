@@ -166,7 +166,7 @@ function makeScene(options: {
       return { lastActivity: null, recentSteps: [] };
     },
     async message() { return HANDOFF; },
-    async dismiss(name, keepHistory) {
+    async dismiss(name, { keepHistory }) {
       calls.push(`dismiss:${name}:${keepHistory}`);
 
       if (options.failRelease) throw new Error('the release failed');
