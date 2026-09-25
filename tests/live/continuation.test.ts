@@ -45,6 +45,12 @@ if (!IN_PROCESS) {
 
 const TARGET = IN_PROCESS ? liveModelTarget('Continuation') : null;
 
+// GATE-6 is the continuation guarantee: a live run that cannot reach a model fails here rather than going green.
+if (IN_PROCESS && TARGET === null && process.env['KINU_EVAL_LIVE'] === '1') {
+  throw new Error('Continuation: KINU_EVAL_LIVE=1 found no live model. Set KINU_ORIGIN + KINU_TOKEN, or '
+    + 'AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH (KINU_BASE_URL + KINU_AUTH).');
+}
+
 const liveTest = test.skipIf(!TARGET);
 
 const LLM: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;

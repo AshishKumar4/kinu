@@ -110,7 +110,7 @@ describe('createFileOAuthStore', () => {
   });
 
   // An unparseable config must not read as `{}`, or `save()` deletes every other provider's key.
-  test('an unparseable config is a failure, not an empty one', () => {
+  test('an unparseable config is a failure, not an empty one', async () => {
     const dir = scratchDir('oauth-store');
     const configPath = join(dir, 'config.json');
 
@@ -123,7 +123,7 @@ describe('createFileOAuthStore', () => {
 
     const store = createFileOAuthStore(configPath);
     expect(() => store.has(CODEX_CRED_KEY)).toThrow();
-    expect(() => store.save(CODEX_CRED_KEY, { kind: 'oauth', accessToken: 'a', refreshToken: 'r' })).toThrow();
+    await expect(store.save(CODEX_CRED_KEY, { kind: 'oauth', accessToken: 'a', refreshToken: 'r' })).rejects.toThrow();
     expect(readFileSync(configPath, 'utf-8')).toBe(intact.slice(0, -12));
   });
 
@@ -170,11 +170,11 @@ describe('createFileOAuthStore', () => {
     expect(saved.providers.codex.accounts.work?.refreshToken).toBe('refresh-work-2');
   });
 
-  test('a config that has never been written reads as empty', () => {
+  test('a config that has never been written reads as empty', async () => {
     const dir = scratchDir('oauth-store');
     const store = createFileOAuthStore(join(dir, 'nested', 'config.json'));
     expect(store.has(CODEX_CRED_KEY)).toBe(false);
-    store.save(CODEX_CRED_KEY, { kind: 'oauth', accessToken: 'a', refreshToken: 'r' });
+    await store.save(CODEX_CRED_KEY, { kind: 'oauth', accessToken: 'a', refreshToken: 'r' });
     expect(store.has(CODEX_CRED_KEY)).toBe(true);
   });
 

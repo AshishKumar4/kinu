@@ -51,6 +51,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
@@ -58,7 +59,7 @@ import * as v from 'valibot';
 import { isPreviewHostRequest, previewHostSuffix } from '../packages/core/src/preview/preview-origin';
 import { SANDBOX_TRANSPORT } from '../packages/core/src/preview/sandbox-id';
 import { parseJsonc } from './jsonc';
-import { CONTAINER_IMAGES, imageReference, readSource, sourceHash } from './container-images';
+import { CONTAINER_IMAGES, imageReference, readSource, sourceHash, type ContainerImage } from './container-images';
 import { readRepositoryFile, trackedFiles } from './sources';
 // The config module itself, not its text: the failure being guarded is a hook
 // that exists and decides the wrong thing, which no source-text assertion sees.
@@ -78,13 +79,36 @@ const SETUP_LEAN = '.github/actions/setup-lean/action.yml';
 
 const LEAN_VERIFY = '.github/workflows/lean-verify.yml';
 
-/** The `@cloudflare/sandbox` release whose container the SDK expects; the sandbox image is built on its upstream base,
- *  and its digest is declared with every other image in `container-images.ts`. */
-const SANDBOX_VERSION = '0.12.9';
+const BLOCK_LOWER = 'packages/devbox/block-lower';
 
-const SANDBOX_IMAGE = CONTAINER_IMAGES.KinuSandbox;
+/** The container hosts: every Worker config that runs the block-lower image. */
+const CONTAINER_HOSTS = [WRANGLER, 'packages/devbox/bench/wrangler.jsonc', 'packages/devbox/example/wrangler.jsonc'];
 
-const PINNED_IMAGE = imageReference(SANDBOX_IMAGE);
+/**
+ * The sandbox container image every environment runs, declared ONCE: the block-lower artifact record.
+ *
+ * `packages/devbox/block-lower/Dockerfile` compiles `devbox-block-lower` and `devbox-squashfuse` into the
+ * upstream `@cloudflare/sandbox` base, and the result is pushed to this account's registry; the push writes
+ * `upstream.json` with the pushed manifest's digest, the sandbox release whose container the SDK expects,
+ * and the hash of every source the image was built from. Each wrangler.jsonc repeats the reference because a
+ * JSONC file cannot import a constant; this record is what they are held to.
+ */
+const BlockLowerArtifactSchema = v.object({
+  image: v.string(),
+  digest: v.string(),
+  sandboxVersion: v.string(),
+  files: v.record(v.string(), v.string()),
+});
+
+const ARTIFACT = v.parse(BlockLowerArtifactSchema, JSON.parse(readRepositoryFile(REPO_ROOT, `${BLOCK_LOWER}/upstream.json`)));
+
+const SANDBOX_IMAGE = {
+  repository: ARTIFACT.image.slice(0, ARTIFACT.image.lastIndexOf('@')),
+  version: ARTIFACT.sandboxVersion,
+  digest: ARTIFACT.digest,
+} as const;
+
+const PINNED_IMAGE = ARTIFACT.image;
 
 /** Each container class and the one image the release record declares for it. */
 const PINNED_IMAGES = new Map(Object.entries(CONTAINER_IMAGES).map(([className, image]) => [className, imageReference(image)]));
@@ -120,6 +144,11 @@ function isImmutableImageReference(reference: string): boolean {
   return !name.slice(name.lastIndexOf('/') + 1).includes(':');
 }
 
+/** A container host's config, narrowed to the images it runs. */
+const ContainerHostSchema = v.object({
+  containers: v.array(v.object({ class_name: v.string(), image: v.string() })),
+});
+
 /** Only the keys this file reads. A narrow schema rather than the manifest's
  *  full one: a shape that admitted more would start answering other questions,
  *  and a key present but wrongly shaped fails the parse instead of reading as
@@ -153,7 +182,9 @@ describe('the sandbox container image is pinned', () => {
   });
 
   test('each image\'s source is the source its digest was built from', () => {
-    for (const [className, image] of Object.entries(CONTAINER_IMAGES)) {
+    // The sandbox's sources are held by its own artifact record (A8).
+    for (const [className, image] of Object.entries<ContainerImage>(CONTAINER_IMAGES)) {
+      if (image.sourceHash === undefined) continue;
       const files = readSource(REPO_ROOT, image.source);
 
       expect({ className, files: files.size > 0 }).toEqual({ className, files: true });
@@ -162,7 +193,7 @@ describe('the sandbox container image is pinned', () => {
     }
   });
 
-    test('the pin names the @cloudflare/sandbox version that ships', () => {
+  test('the pin names the @cloudflare/sandbox version that ships', () => {
     const manifest = v.parse(
       v.object({ dependencies: v.record(v.string(), v.string()) }),
       JSON.parse(readFileSync(join(REPO_ROOT, PACKAGE), 'utf8')),
@@ -171,7 +202,7 @@ describe('the sandbox container image is pinned', () => {
     // Exact, not a range: the container reports one SANDBOX_VERSION and the SDK
     // compares it to the installed one, so `^0.12.8` would let an install decide
     // which container is correct.
-    expect(manifest.dependencies['@cloudflare/sandbox']).toBe(SANDBOX_VERSION);
+    expect(manifest.dependencies['@cloudflare/sandbox']).toBe(SANDBOX_IMAGE.version);
   });
 
   test('a re-pointable reference is refused, in both directions', () => {
@@ -499,5 +530,38 @@ describe('sign-in has no single chokepoint', () => {
 describe('the sandbox has one transport', () => {
   test('the deployed default is the transport every client names', () => {
     expect(CONFIG.vars.SANDBOX_TRANSPORT).toBe(SANDBOX_TRANSPORT);
+  });
+});
+
+/**
+ * A8 THE BLOCK-LOWER IMAGE IS BUILT FROM THIS TREE. The pushed image is the only thing any host runs, so a
+ * source edited without a rebuild and a new record ships a container that is not the code reviewed here, and
+ * a host left on an older digest runs a filesystem the others do not.
+ */
+describe('the block-lower image is built from this tree', () => {
+  test('the record hashes exactly the sources the image builds from, and each hash holds', () => {
+    const sources = trackedFiles()
+      .filter((file) => file.startsWith(`${BLOCK_LOWER}/`))
+      .map((file) => file.slice(BLOCK_LOWER.length + 1))
+      .filter((file) => ['Cargo.toml', 'Cargo.lock', 'Dockerfile'].includes(file) || /^src\/[^/]+\.rs$/u.test(file));
+
+    expect(Object.keys(ARTIFACT.files).sort()).toEqual(sources.sort());
+
+    for (const [file, recorded] of Object.entries(ARTIFACT.files)) {
+      const built = createHash('sha256').update(readFileSync(join(REPO_ROOT, BLOCK_LOWER, file))).digest('hex');
+      expect(built, `${file} changed since the image was built`).toBe(recorded);
+    }
+  });
+
+  test('every container host runs the recorded image, by digest', () => {
+    expect(ARTIFACT.image.endsWith(`@${ARTIFACT.digest}`)).toBe(true);
+
+    for (const host of CONTAINER_HOSTS) {
+      const config = parseJsonc(readRepositoryFile(REPO_ROOT, host), ContainerHostSchema, host);
+      // The Codex forwarder beside it is held by the pin test above.
+      const sandboxes = config.containers.filter((container) => container.class_name !== 'CodexEgress');
+
+      expect(sandboxes.map((container) => container.image), host).toEqual(sandboxes.map(() => PINNED_IMAGE));
+    }
   });
 });

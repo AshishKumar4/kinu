@@ -127,6 +127,9 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
 
       return { ok: true };
     },
+    async requestOverviewPush() {
+      calls.push('fold');
+    },
     async setModel(spec: string) {
       calls.push(`model:set:${spec}`);
 
@@ -310,6 +313,29 @@ describe('CLI control routes', () => {
     expect(calls).toContain('work:cancel');
     expect(calls).toContain('memory:search:repo:3');
     expect(calls).toContain('executors:exec:workspace:pwd');
+  });
+
+  test('a write folds the workspace\'s tile, as a socket write does, and a read does not', async () => {
+    const { env, calls } = setupEnv();
+
+    await rpcResult(env, 'listPendingConsents');
+    await rpcResult(env, 'getAgentStatus');
+    expect(calls).not.toContain('fold');
+
+    await rpcResult(env, 'resolveDeviceConsent', ['cons-1', 'once']);
+    expect(calls.slice(-2)).toEqual(['consents:resolve:cons-1:once', 'fold']);
+  });
+
+  test('a fold that fails leaves the write answered', async () => {
+    const workspace = workspaceObject({
+      async claimOwner() { return { owner: USER_ID, capabilityHash: 'sha-existing' }; },
+      async setModel(spec: string) { return { ok: true, spec }; },
+      async requestOverviewPush() { throw new Error('workspace unavailable'); },
+    });
+
+    const env = testEnv(tokenHolderUserDO(), { idFromName: (n) => n, get: () => workspace });
+
+    expect(await rpcResult(env, 'setModel', ['openai/gpt-5.1'])).toEqual({ ok: true, spec: 'openai/gpt-5.1' });
   });
 
   test('off-table and never methods are rejected WITHOUT dispatching', async () => {

@@ -12,7 +12,7 @@ import type {
 import type {
   Schedule, Memory, VFS, VfsNativeReads, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql,
 } from '@kinu.run/core';
-import type { DeferredApprovalChannel, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
+import type { DeferredApprovalChannel, FilesOwner, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, rmSync, chmodSync, writeSync } from 'node:fs';
 import { constants as osConstants } from 'node:os';
@@ -20,12 +20,12 @@ import { join, resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, headAgentName, subordinateAgentName, MAIN_AGENT, facetHomeProvisioner, agentAffinityKey,
   observeWrites, type WriteObserver,
-  WORKSPACE_IDENTITY_DDL,
+  WORKSPACE_IDENTITY_DDL, WORKSPACE_ROOT,
   createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
   DefaultExecutionRouter, createInlineExecutor,
   withMountTable, standardMounts, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
-  withApprovalGatedShell, holdsGrant,
+  withApprovalGatedShell, createShellSession, shellCwd, holdsGrant,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount, skillsMount,
   resolveRoutingProfile, createRoutedModelLane,
@@ -380,20 +380,29 @@ export function createCLIRuntime(
     get deferrals() { return approvalDeferrals ?? undefined; },
   };
 
-  // A directory-bound shell may mutate the tree, so it snapshots first; the
-  // in-SQLite shell touches no host file.
+  // A directory-bound shell runs on the user's machine and may mutate the tree, so it
+  // snapshots first; the in-SQLite shell is the agent's own and serves the mount table.
+  const filesOwner: FilesOwner = cwd === null ? 'agent' : 'user';
+
   const facetShell = cwd === null ? null : (facet: string | undefined): Shell => withApprovalGatedShell(
     withCheckpointedShell(
       createHostShell(cwd, facet === undefined ? process.env : facetShellEnv(cwd, facet)),
       checkpoints,
       cwd,
     ),
+    // The host shell serves no mount table: `/pc` there is the machine's own path.
+    { filesOwner },
     approvalPolicy,
   );
 
   const shell: Shell = facetShell
     ? facetShell(config.facet)
-    : withApprovalGatedShell(workspace.shell, approvalPolicy);
+    : withApprovalGatedShell(workspace.shell, {
+      filesOwner,
+      shellSession: createShellSession({
+        home: WORKSPACE_ROOT, userRoots: () => agentVfs.userRoots(), keepsCwd: true, stored: () => shellCwd(workspace.shell),
+      }),
+    }, approvalPolicy);
 
   const executionRouter = new DefaultExecutionRouter(approvalPolicy);
 
@@ -447,6 +456,7 @@ export function createCLIRuntime(
     memory,
     craftStore,
     shell,
+    filesOwner,
     sql,
     ledger: () => turnFileLedgerProvider?.(),
     // A directory-bound shell declares what this machine's PATH proves.
@@ -646,6 +656,8 @@ async function buildCLIHeadRuntime(
 
   const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
     vfs, memory: parent.memory, craftStore: parent.craftStore, shell, sql,
+    // The same machine the parent's shell runs on.
+    filesOwner: parent.cwd ? 'user' : 'agent',
     toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
   };
 

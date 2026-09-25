@@ -1093,6 +1093,8 @@ body > .annotation-toolbar {
     background: color-mix(in oklab, var(--annotation-comment) 22%, transparent);
     border-bottom: 2px solid var(--annotation-comment);
   }
+  /* A diff note quotes code: its lines as written. */
+  [data-kinu-annotations] blockquote { white-space: pre-wrap; font-family: var(--font-mono); }
   :is([data-kinu-plan-review], [data-kinu-annotations]) .annotation-highlight.focused {
     background: color-mix(in oklab, var(--focus-highlight) 32%, transparent) !important;
     border-bottom: 2px solid var(--focus-highlight);

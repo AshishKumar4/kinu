@@ -322,7 +322,8 @@ describe('a completed step is durable at the moment it completes', () => {
     expect(events.filter((ev) => ev.type === 'step-finish' || ev.type === 'done')).toEqual([]);
   });
 
-  test('a step hook that throws ends the turn under its own name and class; the step it saw stays recorded', async () => {
+  /** One tool step, then a hook that throws `thrown`: the failure the turn ends with, and what was recorded. */
+  const hookThrows = async (thrown: Error) => {
     const provider = scriptedProvider([
       () => toolStep('call_a', 'git status'),
       () => textStep('never reached'),
@@ -335,7 +336,7 @@ describe('a completed step is durable at the moment it completes', () => {
       for await (const _ of runChat({
         model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }], tools, stopWhen: stepCountIs(20),
         persistStep: async (messages) => { persisted.push(messages.length); },
-        onStep: async () => { throw new KinuError('budget', 'the mission is spent'); },
+        onStep: async () => { throw thrown; },
       }));
     } catch (error) {
       if (!(error instanceof KinuError)) throw error;
@@ -344,11 +345,27 @@ describe('a completed step is durable at the moment it completes', () => {
       await provider.stop();
     }
 
+    return { failed, persisted, requests: provider.requests() };
+  };
+
+  test('a step hook that throws ends the turn under its own name and class; the step it saw stays recorded', async () => {
+    const { failed, persisted, requests } = await hookThrows(new KinuError('budget', 'the mission is spent'));
+
     expect({ code: failed.code, message: failed.message }).toEqual({ code: 'budget', message: 'run the step hook' });
     expect(renderThrownChain({ cause: failed })).toContain('the mission is spent');
     // The hook saw a step that was already recorded.
     expect(persisted).toHaveLength(1);
-    expect(provider.requests()).toBe(1);
+    expect(requests).toBe(1);
+  });
+
+  test("a step hook's unclassified throw ends the turn as io under the hook's name, its cause kept, after its step", async () => {
+    // obs/error.ts: io is the unclassified failure's answer.
+    const { failed, persisted, requests } = await hookThrows(new Error('the hook tripped over a null'));
+
+    expect({ code: failed.code, message: failed.message }).toEqual({ code: 'io', message: 'run the step hook' });
+    expect(renderThrownChain({ cause: failed })).toContain('the hook tripped over a null');
+    expect(persisted).toHaveLength(1);
+    expect(requests).toBe(1);
   });
 });
 

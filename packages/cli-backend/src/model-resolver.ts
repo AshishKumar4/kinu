@@ -126,6 +126,7 @@ function proxyFetchFor(cloud: LocalCloudSession, base: typeof fetch | undefined)
 export interface LocalModelResolver {
   normalizeSpecSync(specOrNull?: string | null): string;
   resolveModel(specOrNull?: string | null): LanguageModel;
+  credentialFor(specOrNull?: string | null): Promise<string | null>;
   listProviders(): Promise<ProviderInfo[]>;
   /** One broken credential never empties the menu. */
   listModels(): Promise<ModelMenu>;
@@ -421,6 +422,9 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     normalizeSpecSync,
     resolveModel(specOrNull) {
       return registry.resolve(normalizeSpecSync(specOrNull), own);
+    },
+    credentialFor(specOrNull) {
+      return registry.credentialFor(normalizeSpecSync(specOrNull), own);
     },
     listProviders() {
       return registry.listProviders(own);

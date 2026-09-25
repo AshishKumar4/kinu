@@ -299,6 +299,27 @@ describe('OwnedModelServices — the provider snapshot', () => {
     expect(profile.tier).toMatchObject({ model: glm, reasoningEffort: 'high' });
   });
 
+  test('a tier model moves only when its own provider lists models and leaves it out; a provider listing nothing proves nothing', async () => {
+    // A complete listing: a failed catalog read is recorded, and rule B then moves nothing.
+    catalogUp();
+    const { snapshot } = await snapshotServices(null).profileProviderSnapshot();
+    const glm = snapshot.availableModels.find((spec) => spec.endsWith(`/${DEFAULT_WORKERS_AI_MODEL_ID}`));
+
+    if (glm === undefined) throw new Error('the platform gateway lists no GLM 5.3');
+
+    // The platform gateway lists its Workers AI models; no OpenAI-compatible endpoint is connected, so it lists nothing.
+    const tiers = { default: { model: glm }, fast: { model: `${glm.slice(0, glm.indexOf('/'))}/@cf/retired/model` }, deep: { model: 'openai-compatible/house-model' } };
+    const catalog = { ...BUILTIN_PROFILE_CATALOG, tiers };
+
+    const profile = resolveTurnProfile({
+      envelope: { authority: { kind: 'account', accountId: 'acct-1' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
+      provider: snapshot, roleId: 'task', workMode: 'build', availableTools: [], activeSkills: [],
+    });
+
+    expect(profile.tiers.fast.model).toBe(glm);
+    expect(profile.tiers.deep.model).toBe('openai-compatible/house-model');
+  });
+
   test('a complete listing is memoized, and only a change expires it', async () => {
     catalogUp();
     const services = snapshotServices(null);
@@ -435,13 +456,13 @@ describe('a degraded listing versus a confirmed-missing model', () => {
    *  `catalog`. */
   const PINNED = 'groq/llama-3.3-70b-versatile';
 
-  function envelopeWithDeepPin(defaultModel: string): ProfileCatalogEnvelope {
+  function envelopeWithDeepPin(defaultModel: string, deep: string = PINNED): ProfileCatalogEnvelope {
     const catalog = {
       ...BUILTIN_PROFILE_CATALOG,
       tiers: {
         ...BUILTIN_PROFILE_CATALOG.tiers,
         default: { model: defaultModel },
-        deep: { model: PINNED },
+        deep: { model: deep },
       },
     };
 
@@ -453,13 +474,13 @@ describe('a degraded listing versus a confirmed-missing model', () => {
     };
   }
 
-  function resolveWith(provider: ProviderCatalogSnapshot) {
+  function resolveWith(provider: ProviderCatalogSnapshot, deep: string = PINNED) {
     const defaultModel = provider.availableModels[0];
 
     if (!defaultModel) throw new Error('fixture needs at least one available model');
 
     return resolveTurnProfile({
-      envelope: envelopeWithDeepPin(defaultModel),
+      envelope: envelopeWithDeepPin(defaultModel, deep),
       provider,
       roleId: 'task',
       workMode: 'build',
@@ -481,13 +502,31 @@ describe('a degraded listing versus a confirmed-missing model', () => {
     expect(profile.providerRevision).toBe(degraded.revision);
   });
 
+  // Job 57 P2: with models.dev unreachable, Anthropic's built-in list came back as if live, and rule B moved a
+  // sonnet-4-5 tier to glm-5.3. The listing is now a named failure, so the tier stays.
+  test('an unreachable catalog keeps an Anthropic tier on its model and names Anthropic unavailable', async () => {
+    globalThis.fetch = asFetchFunction(async () => {
+      throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) });
+    });
+
+    const services = snapshotServices('owner-1', { 'anthropic.bearer': { 'x-api-key': 'sk-ant' } });
+    const degraded = (await services.profileProviderSnapshot()).snapshot;
+
+    expect(degraded.unavailableProviders?.map((p) => p.provider)).toContain('anthropic');
+
+    const profile = resolveWith(degraded, 'anthropic/claude-sonnet-4-5');
+
+    expect(profile.tiers.deep.model).toBe('anthropic/claude-sonnet-4-5');
+  });
+
   test('a provider that answers without the model moves its tier to the account default', async () => {
     catalogUp();
     const clean = (await snapshotServices(null).profileProviderSnapshot()).snapshot;
     expect(clean.unavailableProviders).toEqual([]);
 
-    // An empty failure set asserts the listing was complete, so absence is proof the pinned model cannot serve.
-    const profile = resolveWith(clean);
+    // An empty failure set asserts the listing was complete, and Groq answering with another model is proof the
+    // pinned one cannot serve.
+    const profile = resolveWith({ ...clean, availableModels: [...clean.availableModels, 'groq/llama-3.1-8b-instant'] });
     expect(profile.tiers.deep.model).toBe(profile.tiers.default.model);
   });
 });

@@ -123,7 +123,7 @@ async function seedUntitledWorkspace(project: string): Promise<string> {
     db.close();
   }
 
-  upsertAgentConfig({ name: SLUG, mode: 'local', localName: SLUG, cwd: project, workspaceId: 'proj' });
+  await upsertAgentConfig({ name: SLUG, mode: 'local', localName: SLUG, cwd: project, workspaceId: 'proj' });
 
   return dbPath;
 }

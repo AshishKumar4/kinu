@@ -105,7 +105,7 @@ export interface FloorBreach {
 
 /**
  * Every surface through which a search's output reaches another run; the seal is stated over
- * this set. `contract-publication-seal.test.ts` pins it against the settle path's writer census.
+ * this set, and `scripts/publication-egress.ts` classifies the settle path's writes against it.
  */
 export const PUBLICATION_SURFACES = [
   'records', 'experience_library', 'craft', 'memory', 'task_history',

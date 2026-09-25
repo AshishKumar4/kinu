@@ -9,19 +9,18 @@
  * measured pressure, removes any. Stored in the working context, they are re-woven while the provider's cache holds
  * them and collapse into one block once it does not. Nothing clock-derived may render.
  *
- * Turn-local state (skill activation reasons, device notice, provenance) is one user message right before the
- * turn's input, this turn only, never fingerprinted, so the request stays the last user-role content: news after
- * it reads as the turn itself.
+ * The unapproved workspace files ride the same ledger as their own message, apart from the block, which asserts
+ * runtime provenance: sent where first needed, again only when they change, collapsed with the blocks.
  */
 
 import type { ModelMessage } from 'ai';
 import { fnv1a64 } from '../utils/fnv1a';
 import { isDeepStrictEqual } from 'node:util';
 import {
-  DYNAMIC_CONTEXT_DELIMITER, DYNAMIC_CONTEXT_OPEN_TAG, sealDelimiters,
+  DYNAMIC_CONTEXT_DELIMITER, DYNAMIC_CONTEXT_OPEN_TAG, WORKSPACE_INSTRUCTIONS_TAG, sealDelimiters,
 } from './sections';
 import { executorIsSelectable, type PromptExecutorInfo } from './surface';
-import { type TurnProvenance, type WorkMode } from '../types/turn';
+import { type TurnReason, type WorkMode } from '../types/turn';
 import { EXECUTOR_CAPABILITIES } from '../execution/types';
 import {
   connectedDevices, describeGpuNodes, effectiveDeviceMode, sandboxCause,
@@ -31,6 +30,7 @@ import { deviceMountSegment } from '../execution/device-tunnel-executor';
 import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import type { ActiveSkillSet } from '../skills/types';
 import { describeActivationReason } from '../skills/render';
+import { compareSkillNames } from '../skills/discover';
 import type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
 import { renderCraftedToolsDeclaration, type CraftedDeclaration } from '../tools/sandbox-contract';
 
@@ -67,7 +67,11 @@ export interface ActiveRoster<T> {
 
 /** Callers order lists; the renderer caps them. */
 export interface DynamicContext {
+  /** Absent where a caller has no turn to name. */
+  turn?: TurnReason;
   mode?: { readonly workMode: WorkMode; readonly planSubmission: boolean };
+  /** Active skills and why each is on; their bodies render in the stable prefix. */
+  skills?: readonly { readonly name: string; readonly reason: string }[];
   /** Empty renders a "none yet" line: the model checks `workspace.listTools()` before building. */
   craftedTools?: readonly CraftedDeclaration[];
   factsBlock?: string;
@@ -117,7 +121,9 @@ function flattenTaskList(
 }
 
 export interface DynamicContextSources {
+  readonly turn?: TurnReason;
   readonly mode?: DynamicContext['mode'];
+  readonly activeSkills?: ActiveSkillSet;
   readonly craftedTools?: readonly CraftedDeclaration[];
   readonly factsBlock: string | undefined;
   /** Read once per turn (the plane's only await); callers close over it. */
@@ -145,6 +151,7 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   const headDelegates = searchDelegates(sources.liveHeadRuns.items);
 
   const context: DynamicContext = {
+    turn: sources.turn,
     mode: sources.mode,
     craftedTools: sources.craftedTools,
     // Re-listed per step: availability flips mid-turn.
@@ -166,6 +173,13 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
 
   if (sources.devices !== undefined && sources.devices.length > 0) context.devices = sources.devices;
 
+  if (sources.activeSkills !== undefined && sources.activeSkills.active.length > 0) {
+    const reasons = new Map(sources.activeSkills.reasons.map((r) => [r.name, r.reason]));
+
+    context.skills = sources.activeSkills.active.map((skill) => skill.name).sort(compareSkillNames)
+      .map((name) => ({ name, reason: describeActivationReason(reasons.get(name)) }));
+  }
+
   if (sources.approvals && sources.approvals.total > 0) context.approvals = sources.approvals;
 
   if (sources.factsBlock) context.factsBlock = sources.factsBlock;
@@ -181,14 +195,6 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   return context;
 }
 
-export interface TurnLocalContext {
-  deviceNotice?: string | null;
-  /** Bodies render in the stable prefix; the per-turn activation reasons render here. */
-  activeSkills?: ActiveSkillSet;
-  /** An overlay out of the system prompt, as it flips when a background job lands; `chat` renders nothing. */
-  provenance?: TurnProvenance;
-}
-
 const CHANGED_ROWS = '(changed rows)';
 
 const REMOVED_ROW = 'removed:';
@@ -197,20 +203,20 @@ const APPENDED = '(appended)';
 
 export const DYNAMIC_CONTEXT_HEADER =
   'Kinu runtime state, not conversation or user text. A full block replaces prior state; a delta changes only what it names.\n'
-  + `A delta section replaces its section. Under "${CHANGED_ROWS}", each row replaces or adds the row with its id, and `
-  + `"${REMOVED_ROW} <id>" drops one.\n"${APPENDED}" continues its section. Execution deltas update named runtimes. Cleared means empty.`;
+  + `A delta section replaces its section. Under "${CHANGED_ROWS}", a row replaces the row with its id or is added at the end,\n`
+  + `and "${REMOVED_ROW} <id>" drops one; a task's, job's or delegate's id is its first word, any other row's its whole text.\n`
+  + `"${APPENDED}" adds lines to its section's end. Execution deltas update named runtimes. Cleared means empty.`;
 
 const DYNAMIC_DELTA_HEADER = 'Kinu runtime state update, not conversation or user text.';
 
-export const TURN_CONTEXT_HEADER =
-  '[Turn context: live state maintained by the Kinu runtime, not written by the user.]';
+function renderTurnReason(turn: TurnReason): string {
+  if (turn.provenance === 'chat') return 'Chat: this turn answers the conversation\'s newest message.';
 
-/** Turn-local, not in OPERATING_GUIDANCE: a conditional bullet in the prefix rewrote
- * the whole cached prefix on every wake/chat transition. */
-const BACKGROUND_RESUME_NOTICE =
-  '## Why this turn is running\n'
-  + 'A background job finished; the user did not type anything. Fetch the referenced job result '
-  + 'first, synthesize it, then continue or close the original work.';
+  if (turn.provenance === 'signal') return `Signal: the harness delivered this turn's message (${turn.event}).`;
+
+  return `Background resume: a background job finished${turn.job === null ? '' : ` (${turn.job})`} and nobody typed `
+    + 'anything. Fetch its result first, synthesize it, then continue or close the work you backgrounded.';
+}
 
 /** Volatile, so rendered in the dynamic-context block, never the cacheable prefix. */
 export function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
@@ -365,11 +371,9 @@ function clip(text: string, max = ENTRY_CHARS): string {
   return oneLine.length > max ? `${oneLine.slice(0, max - 1).trimEnd()}…` : oneLine;
 }
 
-/** `id` names a row in a delta's removal; `delta`: the row as a delta prints it. */
 interface SectionRow {
   readonly id: string;
   readonly line: string;
-  readonly delta?: string;
 }
 
 interface RenderedSection {
@@ -378,35 +382,40 @@ interface RenderedSection {
   readonly log?: string;
 }
 
-const ELIDED_ROW = '\u0000more';
+/** A row's id as the header states it: in a `keyed` list the first word, else the whole row. */
+function rowOf(line: string, keyed: boolean): SectionRow {
+  const text = line.replace(/^\s*- /u, '');
+
+  return { id: keyed ? text.split(' ', 1)[0] ?? text : text, line };
+}
 
 /** Elision is counted from the roster's true total, never the returned page. Null when empty. */
 function rosterSection<T>(
   title: string,
   roster: ActiveRoster<T>,
-  cap: number,
-  row: (item: T) => SectionRow,
+  listing: { readonly cap: number; readonly keyed: boolean },
+  line: (item: T) => string,
 ): RenderedSection | null {
   if (roster.total === 0) return null;
-  const rows = roster.items.slice(0, cap).map(row);
-  const elided = roster.total - rows.length;
+  const lines = roster.items.slice(0, listing.cap).map(line);
+  const elided = roster.total - lines.length;
 
-  if (elided > 0) rows.push({ id: ELIDED_ROW, line: `- …and ${elided} more, not shown` });
+  if (elided > 0) lines.push(`- …and ${elided} more, not shown`);
 
-  return { text: [title, ...rows.map((r) => r.line)].join('\n'), rows };
+  return { text: [title, ...lines].join('\n'), rows: lines.map((row) => rowOf(row, listing.keyed)) };
 }
 
 function textSection(title: string, body: string): RenderedSection {
-  const rows = body.split('\n').map((line) => ({ id: line, line }));
-
-  return { text: `${title}\n${body}`, rows };
+  return { text: `${title}\n${body}`, rows: body.split('\n').map((line) => rowOf(line, false)) };
 }
 
 /** An absent plane renders nothing, never "(none)". */
 const EMPTY_ROSTER: ActiveRoster<never> = { items: [], total: 0 };
 
 const DYNAMIC_SECTION_TITLES = {
+  turn: '## Why this turn runs',
   mode: '## Work mode',
+  skills: '## Active skills (why each is on)',
   craftedTools: '## Crafted tools available through eval',
   factsBlock: '## World model (facts you remembered)',
   memoryTail: '## Memory (newest MEMORY.md lessons and reflections)',
@@ -431,7 +440,15 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
     if (section !== null) sections.set(key, section);
   };
 
+  if (ctx.turn) add('turn', { text: `${DYNAMIC_SECTION_TITLES.turn}\n${renderTurnReason(ctx.turn)}` });
+
   if (ctx.mode) add('mode', { text: renderWorkMode(ctx.mode) });
+
+  add('skills', rosterSection(
+    DYNAMIC_SECTION_TITLES.skills, { items: ctx.skills ?? [], total: (ctx.skills ?? []).length },
+    { cap: Infinity, keyed: false },
+    (skill) => `- ${skill.name}: ${skill.reason}`,
+  ));
 
   if (ctx.craftedTools !== undefined) {
     add('craftedTools', { text: `${DYNAMIC_SECTION_TITLES.craftedTools}\n${ctx.craftedTools.length > 0
@@ -449,12 +466,8 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
 
   add('recoveries', rosterSection(
     DYNAMIC_SECTION_TITLES.recoveries,
-    { items: ctx.recoveries ?? [], total: (ctx.recoveries ?? []).length }, MAX_RECOVERIES,
-    (finding) => {
-      const id = clip(finding, RECOVERY_ENTRY_CHARS);
-
-      return { id, line: `- ${id}` };
-    },
+    { items: ctx.recoveries ?? [], total: (ctx.recoveries ?? []).length }, { cap: MAX_RECOVERIES, keyed: false },
+    (finding) => `- ${clip(finding, RECOVERY_ENTRY_CHARS)}`,
   ));
 
   const executors = (ctx.executors ?? []).filter(executorIsSelectable);
@@ -481,49 +494,39 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
     add('devices', { text: [
       DYNAMIC_SECTION_TITLES.devices,
       doctrine,
+      'A machine\'s first use in this workspace asks the user for consent: that prompt is expected, not an error.',
       ...fleet.map((device) => renderDeviceLine(device, fleet)),
     ].join('\n') });
   }
 
   add('tasks', rosterSection(
     DYNAMIC_SECTION_TITLES.tasks,
-    ctx.tasks ?? EMPTY_ROSTER, MAX_TASK_ROWS,
-    (task) => {
-      const row = `${task.id} [${task.status}] ${clip(task.title)}`;
-
-      // Out of the list, a subtask names its task.
-      return task.parentId
-        ? { id: task.id, line: `  - ${row}`, delta: `- ${row} (subtask of ${task.parentId})` }
-        : { id: task.id, line: `- ${row}` };
-    },
+    ctx.tasks ?? EMPTY_ROSTER, { cap: MAX_TASK_ROWS, keyed: true },
+    (task) => `${task.parentId ? '  ' : ''}- ${task.id} [${task.status}] ${clip(task.title)}`,
   ));
 
   add('jobs', rosterSection(
     DYNAMIC_SECTION_TITLES.jobs,
-    ctx.jobs ?? EMPTY_ROSTER, MAX_JOBS,
-    (job) => ({ id: job.id, line: `- ${job.id} (${job.kind})${job.label ? `: ${clip(job.label)}` : ''}` }),
+    ctx.jobs ?? EMPTY_ROSTER, { cap: MAX_JOBS, keyed: true },
+    (job) => `- ${job.id} (${job.kind})${job.label ? `: ${clip(job.label)}` : ''}`,
   ));
 
   add('delegates', rosterSection(
     DYNAMIC_SECTION_TITLES.delegates,
-    ctx.delegates ?? EMPTY_ROSTER, MAX_DELEGATES,
-    (d) => ({ id: d.name, line: `- ${d.name} (${d.kind}), ${clip(d.phase, 40)}${d.task ? `: ${clip(d.task)}` : ''}` }),
+    ctx.delegates ?? EMPTY_ROSTER, { cap: MAX_DELEGATES, keyed: true },
+    (d) => `- ${d.name} (${d.kind}), ${clip(d.phase, 40)}${d.task ? `: ${clip(d.task)}` : ''}`,
   ));
 
   add('approvals', rosterSection(
     DYNAMIC_SECTION_TITLES.approvals,
-    ctx.approvals ?? EMPTY_ROSTER, MAX_APPROVALS,
-    (a) => {
-      const id = `${clip(a.kind, 40)}: ${clip(a.detail)}`;
-
-      return { id, line: `- ${id}` };
-    },
+    ctx.approvals ?? EMPTY_ROSTER, { cap: MAX_APPROVALS, keyed: false },
+    (a) => `- ${clip(a.kind, 40)}: ${clip(a.detail)}`,
   ));
 
   add('missingCapabilities', rosterSection(
     DYNAMIC_SECTION_TITLES.missingCapabilities,
-    { items: ctx.missingCapabilities ?? [], total: (ctx.missingCapabilities ?? []).length }, MAX_MISSING_CAPABILITIES,
-    (m) => ({ id: clip(m.source, 60), line: `- ${clip(m.source, 60)}: ${clip(m.reason)}` }),
+    { items: ctx.missingCapabilities ?? [], total: (ctx.missingCapabilities ?? []).length }, { cap: MAX_MISSING_CAPABILITIES, keyed: false },
+    (m) => `- ${clip(m.source, 60)}: ${clip(m.reason)}`,
   ));
 
   return sections;
@@ -590,31 +593,27 @@ interface ToldSections {
   readonly executors: readonly PromptExecutorInfo[];
 }
 
-/** Null when an id repeats. */
+/** Null unless a reader folds it back to `after`: ids unique, kept rows first in their old order. */
 function rowDelta(title: string, before: readonly SectionRow[], after: readonly SectionRow[]): string | null {
-  const previous = new Map(before.map((row) => [row.id, row.delta ?? row.line]));
+  const previous = new Map(before.map((row) => [row.id, row.line]));
   const current = new Set(after.map((row) => row.id));
 
   if (previous.size !== before.length || current.size !== after.length) return null;
+  const kept = before.filter((row) => current.has(row.id));
 
-  const lines = after.filter((row) => previous.get(row.id) !== (row.delta ?? row.line)).map((row) => row.delta ?? row.line);
+  if (kept.some((row, index) => after[index]?.id !== row.id)) return null;
+  const lines = after.filter((row) => previous.get(row.id) !== row.line).map((row) => row.line);
 
   for (const id of previous.keys()) {
-    if (!current.has(id)) lines.push(id === ELIDED_ROW ? '- …every row is shown now' : `- ${REMOVED_ROW} ${id}`);
+    if (!current.has(id)) lines.push(`- ${REMOVED_ROW} ${id}`);
   }
 
   return [`${title} ${CHANGED_ROWS}`, ...lines].join('\n');
 }
 
-/** What `after` appends to `before`, if it keeps at least half of it: a window over an append-only file. */
+/** The lines `after` adds past `before`; null otherwise, as when a window slides. */
 function appendedText(before: string, after: string): string | null {
-  for (let cut = 0; cut <= before.length / 2; cut++) {
-    const kept = before.slice(cut);
-
-    if (after.startsWith(kept)) return after.length > kept.length ? after.slice(kept.length).trim() || null : null;
-  }
-
-  return null;
+  return after.startsWith(`${before}\n`) ? after.slice(before.length + 1) : null;
 }
 
 function sectionDelta(key: keyof DynamicContext, before: RenderedSection, after: RenderedSection): string {
@@ -655,61 +654,23 @@ function renderWorkMode(mode: NonNullable<DynamicContext['mode']>): string {
   return `${DYNAMIC_SECTION_TITLES.mode}\nMode: ${mode.workMode}; submit_plan: ${mode.planSubmission ? 'available' : 'unavailable'}.`;
 }
 
-export function renderTurnLocalContext(ctx: TurnLocalContext): string | null {
-  const sections: string[] = [];
-
-  // First: it frames why the turn exists.
-  if (ctx.provenance === 'background_resume') sections.push(BACKGROUND_RESUME_NOTICE);
-
-  const reasons = ctx.activeSkills?.reasons ?? [];
-
-  if (reasons.length > 0) {
-    sections.push([
-      '## Skills activated this turn',
-      ...reasons.map((r) => `- ${r.name} (${describeActivationReason(r.reason)})`),
-    ].join('\n'));
-  }
-
-  const notice = ctx.deviceNotice?.trim();
-
-  if (notice) sections.push(notice);
-
-  if (sections.length === 0) return null;
-
-  return [TURN_CONTEXT_HEADER, ...sections].join('\n\n');
-}
-
-/** This turn's only, never persisted: placed past the transformContext seam, right before the turn's input. */
-export function turnLocalContextMessage(ctx: TurnLocalContext): ModelMessage | null {
-  const text = renderTurnLocalContext(ctx);
-
-  return text ? { role: 'user', content: text } : null;
-}
-
 /** The turn's input: its last message when a person or a parent wrote it, else the end. Only the last, as an
  *  earlier user message can be a parent's conversation a hire inherited, whose prefix stays intact. */
 export function turnInputStart(messages: ReadonlyArray<ModelMessage>): number {
   return messages.at(-1)?.role === 'user' ? messages.length - 1 : messages.length;
 }
 
-/** Turn-local messages and the un-woven index of the input they ride before. */
-export interface TurnLocalPlacement {
+/** The un-woven index of the turn's input; blocks born at its first step ride before it. */
+export interface TurnInput {
   readonly at: number;
-  readonly messages: readonly ModelMessage[];
-  readonly firstStep?: boolean | undefined;
-}
-
-export function placeTurnLocal(messages: ReadonlyArray<ModelMessage>, placement: TurnLocalPlacement): ModelMessage[] {
-  const at = Math.min(placement.at, messages.length);
-
-  return [...messages.slice(0, at), ...placement.messages, ...messages.slice(at)];
+  readonly firstStep: boolean;
 }
 
 interface LedgerBlock {
   /** Un-woven position at birth, kept forever; a slot since taken by a tool result renders after it. */
   readonly index: number;
   readonly text: string;
-  readonly kind: 'full' | 'delta';
+  readonly kind: 'full' | 'delta' | 'instructions';
   /** Chars/4 cost, priced once at birth for the step pruner and `dropSuperseded`. */
   readonly tokens: number;
   readonly message: ModelMessage;
@@ -739,8 +700,8 @@ export interface DynamicBlockBirth {
   readonly replaces: boolean;
 }
 
-/** Deltas since the newest full block, in full blocks' chars, past which the next change is stated whole. The
- *  longest chain measured: 20 row deltas, 6.2 full blocks' worth, read back right 10/10 on glm-5.3. */
+/** Deltas since the newest full block, in its chars, past which a change is stated whole: the longest chain
+ *  measured, as glm-5.3 read the task list back 10/10 at every share up to 20 row deltas (6.5 full blocks). */
 const KEYFRAME_SHARE = 6;
 
 const BLOCK_TAG = new RegExp(`^${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="([^"]*)" kind="(full|delta)"(?: state="([^"]*)")?>`, 'u');
@@ -754,12 +715,21 @@ function blockTag(text: string): { readonly kind: 'full' | 'delta'; readonly sta
   return kind === 'full' ? { kind, state: fingerprint } : { kind: 'delta', state };
 }
 
-/** `history` excludes the blocks and turn-local messages, so positions are durable history's. `reset()` when the
- *  durable stream is rewritten (compaction) or the provider's cache expired. */
+/** The copy that goes out once no unapproved file is left, so the earlier ones read as withdrawn. */
+const INSTRUCTIONS_WITHDRAWN = `<${WORKSPACE_INSTRUCTIONS_TAG}>\nNo unapproved workspace files remain: the copies above no longer apply.\n</${WORKSPACE_INSTRUCTIONS_TAG}>`;
+
+function blockKind(text: string): LedgerBlock['kind'] {
+  return text.startsWith(`<${WORKSPACE_INSTRUCTIONS_TAG}>`) ? 'instructions' : blockTag(text)?.kind ?? 'full';
+}
+
+/** `history` excludes the blocks and the instruction copies, so positions are durable history's. `reset()` when
+ *  the durable stream is rewritten (compaction) or the provider's cache expired. */
 export class DynamicContextLedger {
   private blocks: LedgerBlock[] = [];
   /** The state the model holds (a delta's `state`); sections once rendered here. */
   private told: { readonly state: string; readonly sections: ToldSections | null } | null = null;
+  /** The unapproved instructions the newest copy carries. */
+  private toldInstructions: string | null = null;
   private stored: readonly StoredDynamicBlock[] | null = null;
   private loaded: boolean;
   private unresolved: { readonly block: LedgerBlock; readonly replaces: boolean }[] = [];
@@ -802,29 +772,29 @@ export class DynamicContextLedger {
     return births;
   }
 
-  /** One full block at the newest position replaces the rest, breaking the prefix cache: only for a caller over the
-   *  ladder's trigger. Returns tokens freed (chars/4). */
+  /** One full block and the instructions copy at the newest position replace the rest, breaking the prefix cache:
+   *  only for a caller over the ladder's trigger. Returns tokens freed (chars/4). */
   dropSuperseded(): number {
-    if (this.blocks.length <= 1) return 0;
     const newest = this.blocks.at(-1);
     const sections = this.told?.sections ?? null;
 
     if (newest === undefined || sections === null) return 0;
-    const before = this.overheadTokens;
     const body = fullBody(sections.sections);
-    this.blocks = body === null ? [] : [this.born(newest.index, dynamicBlock(body, { kind: 'full' }), true)];
+    const survivors = [this.toldInstructions, body === null ? null : dynamicBlock(body, { kind: 'full' })].filter((text) => text !== null);
+
+    if (this.blocks.length <= survivors.length) return 0;
+    const before = this.overheadTokens;
+    this.blocks = [];
+
+    for (const text of survivors) this.blocks.push(this.born(newest.index, text, this.blocks.length === 0));
 
     return before - this.overheadTokens;
   }
 
-  /** `turnLocal` rides right before the turn's input, after any block born there. */
-  weave(history: ReadonlyArray<ModelMessage>, state: DynamicContext, turnLocal?: TurnLocalPlacement): ModelMessage[] {
-    if (this.stored !== null) {
-      this.blocks = this.place(this.stored, history);
-      const newest = this.blocks.at(-1);
-      this.told = newest === undefined ? null : { state: blockTag(newest.text)?.state ?? '', sections: null };
-      this.stored = null;
-    }
+  /** `instructions`: the turn's unapproved instruction files as one message, null for none, undefined when the caller
+   *  keeps none. A copy is born where it is first needed and again only when it changes. */
+  weave(history: ReadonlyArray<ModelMessage>, state: DynamicContext, input?: TurnInput, instructions?: string | null): ModelMessage[] {
+    if (this.stored !== null) this.restore(this.stored, history);
 
     let previousIndex = -1;
 
@@ -842,10 +812,17 @@ export class DynamicContextLedger {
     const rendered: ToldSections = { sections: renderDynamicSections(current), executors: current.executors ?? [] };
     const body = fullBody(rendered.sections);
     const established = fnv1a64(body ?? '');
+    const birth = input?.firstStep === true ? Math.min(input.at, history.length) : turnInputStart(history);
+
+    // Before the state block born with it, which keeps the turn's reasons nearest its input.
+    if (instructions !== undefined && instructions !== this.toldInstructions) {
+      const copy = instructions ?? INSTRUCTIONS_WITHDRAWN;
+      this.blocks.push(this.born(birth, copy, this.blocks.length === 0));
+      this.toldInstructions = instructions;
+    }
 
     if (established !== (this.told?.state ?? fnv1a64(''))) {
       const text = this.statement(rendered, body, established);
-      const birth = turnLocal?.firstStep === true ? Math.min(turnLocal.at, history.length) : turnInputStart(history);
 
       if (text !== null) this.blocks.push(this.born(birth, text, this.blocks.length === 0));
     }
@@ -856,21 +833,15 @@ export class DynamicContextLedger {
     this.unresolved = [];
 
     const woven: ModelMessage[] = [];
-    const placeAt = turnLocal === undefined ? -1 : Math.min(turnLocal.at, history.length);
     let cursor = 0;
-    let lead = 0;
 
     for (const block of this.blocks) {
       const at = insertionPoint(history, Math.max(block.index, cursor));
       woven.push(...history.slice(cursor, at), block.message);
       cursor = at;
-
-      if (at <= placeAt) lead += 1;
     }
 
     woven.push(...history.slice(cursor));
-
-    if (turnLocal !== undefined) woven.splice(placeAt + lead, 0, ...turnLocal.messages);
 
     return woven;
   }
@@ -878,15 +849,26 @@ export class DynamicContextLedger {
   reset(): void {
     this.blocks = [];
     this.told = null;
+    this.toldInstructions = null;
     this.stored = null;
     this.unresolved = [];
     this.births = [];
     this.loaded = true;
   }
 
+  private restore(stored: readonly StoredDynamicBlock[], history: ReadonlyArray<ModelMessage>): void {
+    this.blocks = this.place(stored, history);
+    const state = this.blocks.filter((block) => block.kind !== 'instructions').at(-1);
+    const copy = this.blocks.filter((block) => block.kind === 'instructions').at(-1);
+    this.told = state === undefined ? null : { state: blockTag(state.text)?.state ?? '', sections: null };
+    this.toldInstructions = copy === undefined || copy.text === INSTRUCTIONS_WITHDRAWN ? null : copy.text;
+    this.stored = null;
+  }
+
   private statement(rendered: ToldSections, body: string | null, established: string): string | null {
     const full = body === null ? null : dynamicBlock(body, { kind: 'full' });
-    const known = this.blocks.length === 0 ? null : this.told?.sections ?? null;
+    const states = this.blocks.filter((block) => block.kind !== 'instructions');
+    const known = states.length === 0 ? null : this.told?.sections ?? null;
     const changes = known === null ? null : dynamicBody(deltaSections(known, rendered), DYNAMIC_DELTA_HEADER);
 
     if (changes === null) return full;
@@ -895,8 +877,8 @@ export class DynamicContextLedger {
     if (full === null) return delta;
 
     // Appended: a warm cache keeps every byte before it.
-    const since = this.blocks.map((block) => block.kind).lastIndexOf('full');
-    const pending = this.blocks.slice(since + 1).reduce((chars, block) => chars + block.text.length, 0);
+    const since = states.map((block) => block.kind).lastIndexOf('full');
+    const pending = states.slice(since + 1).reduce((chars, block) => chars + block.text.length, 0);
 
     return full.length <= delta.length || pending + delta.length > KEYFRAME_SHARE * full.length ? full : delta;
   }
@@ -926,7 +908,7 @@ export class DynamicContextLedger {
 
   private block(index: number, text: string): LedgerBlock {
     return Object.freeze({
-      index, text, kind: blockTag(text)?.kind ?? 'full', tokens: Math.round(text.length / 4),
+      index, text, kind: blockKind(text), tokens: Math.round(text.length / 4),
       message: Object.freeze({ role: 'user', content: text }),
     });
   }

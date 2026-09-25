@@ -12,6 +12,7 @@ import {
 import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, actorReadHandle, readSessionTranscript,
+  resetGuardedExec, StoragePredatesResetError, ERROR_STATUS,
   type SubordinateInspectionAuthority, type SessionTranscriptReader,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
@@ -35,7 +36,7 @@ import {
   type CliSocketBearer,
   type RpcFrame,
 } from "./cli/rpc-gate";
-import { hostedWindowMay, requiredRpcAccess } from "@kinu.run/core";
+import { hostedWindowMay, requiredRpcAccess, rpcMovesOverview } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
@@ -70,9 +71,9 @@ import {
   type PromptIdentity,
   activePromptSectionOverrides,
   currentDateForPrompt,
-  turnProvenanceForMetadata,
+  turnReasonForMetadata,
   workModeForTurnMetadata,
-  turnLocalContextMessage, unverifiedInstructionsMessage,
+  renderUnverifiedInstructions,
   observeSystemPromptHash, steerSkillsBlock,
   type DynamicContext, type DynamicApproval, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
@@ -89,7 +90,7 @@ import {
   type AgentsSwarmDeps,
   BUILTIN_TOOLS,
   type BuiltinToolName,
-  type TurnProvenance,
+  type TurnReason,
   type PromptModelContext,
   type WorkMode, isWorkMode,
   nanoid,
@@ -108,7 +109,6 @@ import {
   // Prices a model_call row only when the rate belongs to that call's own model.
   buildModelCallEvent,
   type FactsStore,
-  observeDevicePresence,
   createAgentStores, type AgentConfigStore, collectDynamicContext, subordinateDelegatesOf,
   nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT,
   CHAT_SESSION_ID, type SessionTranscript,
@@ -129,7 +129,7 @@ import {
   inheritedContextFromTranscript,
   type ReleaseToolDeps,
   PlanReviewActions, type PlanDecisionOutcome,
-  type PlanEdit, type PlanReview, type PlanReviewAnnotation,
+  type PlanEdit, type PlanReview, type ReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
   isVfsError,
   type ParentRpcResult, type ParentExecResult,
@@ -151,7 +151,7 @@ import {
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
   measureCompactionTrigger,
   // AGENTS.md discovery, and the trust authority deciding whether discovered bytes earn system placement.
-  collectWorkspaceAgentsMd, type AgentsMdSources,
+  collectWorkspaceAgentsMd,
   InstructionApprovalStore, trustOfInstructionApprovals,
   type InstructionApproval, type InstructionTrustResolver,
   InstructionApprovalDesk, type AdmittedInstructionDecision,
@@ -169,7 +169,7 @@ import {
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs,
   toolsForInvocation, withTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
-  type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing, type CountableRequest, type InputTokenCount, type DeviceStatus,
+  type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing, type CountableRequest, type InputTokenCount,
   type AgentInbox,
   type NimbusSandboxHandle, childContextResolver,
 } from "@kinu.run/core";
@@ -242,7 +242,6 @@ const UNRESOLVED_MODEL: ModelDimensions = { provider: '', model: '' };
 interface TurnReads {
   readonly profileInputs: ProfileAuthorityInputs;
   readonly mcpTools: ToolSet;
-  readonly deviceStatus: DeviceStatus;
   readonly identity: PromptIdentity;
 }
 
@@ -269,7 +268,8 @@ interface AssembledTurn {
   readonly activeToolSurface: ToolSet;
   /** The durable history with the CLI's cwd context laid over it. */
   readonly rawMessages: readonly ModelMessage[];
-  readonly turnLocal: ModelMessage[];
+  /** The unapproved instruction files as one message, null for none. */
+  readonly instructions: string | null;
   readonly measured: ReturnType<typeof measureCompactionTrigger>;
   /** Window for admission, compaction and pruning; records whether figures are the
    * catalog's or the static table's stand-in. */
@@ -485,12 +485,13 @@ function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider) {
 export abstract class ActorAgent extends Agent<Env> {
   // Actor profile: these members are the whole difference between actor kinds.
 
-  /** Owner userId, or null while unclaimed. */
   protected abstract getOwnerUserId(): string | null;
   protected abstract actorHandle(): ActorHandle;
   abstract actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult>;
 
   private actorRuntimeRefusal(): Refusal | null {
+    if (this.storageRefusal !== undefined) return refusalOf(this.storageRefusal);
+
     try {
       this.actorHandle();
 
@@ -502,6 +503,8 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   override async alarm(): Promise<void> {
+    // Returned, not thrown: the platform retries a thrown alarm.
+    if (this.storageRefusal !== undefined) return;
     const refusal = this.actorRuntimeRefusal();
 
     if (refusal) throw new KinuError(refusal.reason, refusal.error);
@@ -548,6 +551,8 @@ export abstract class ActorAgent extends Agent<Env> {
     void this.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${token})
              ON CONFLICT(id) DO UPDATE SET token = excluded.token`;
     this.invalidateModelCaches();
+    // The first tile, so a workspace nobody opens still shows.
+    this.overviewChanged();
 
     // Hosted actors read the single capability row through their runtime, so a reissue applies on
     // their next call; no per-actor copies exist, so `missed` is always zero (callers report it).
@@ -579,9 +584,19 @@ export abstract class ActorAgent extends Agent<Env> {
     // backend shares the table names with a nullable `turn_id`; one writer keeps creation order
     // from picking the shape.
     initPendingSendTables((ddl: string) => this.ctx.storage.sql.exec(ddl));
+
     // Per-actor admission ledger (one workspace-wide pointer cannot distinguish concurrent actors).
     // Initialized here because onStart recovery can read it before a root's ensureSchema runs.
-    initActorClaimTables((ddl: string) => this.ctx.storage.sql.exec(ddl));
+    try {
+      initActorClaimTables(resetGuardedExec((ddl: string) => this.ctx.storage.sql.exec(ddl), this.ctx.storage.sql));
+    } catch (cause) {
+      if (!(cause instanceof StoragePredatesResetError)) throw cause;
+      this.storageRefusal = cause;
+      diagnostics.failure('workspace.storage_predates_reset', cause, { table: cause.table });
+
+      return;
+    }
+
     // Same reason: the onStart recovery sweep can read it before a root's `ensureSchema`.
     initTerminalEffectTable((ddl: string) => this.ctx.storage.sql.exec(ddl));
   }
@@ -679,7 +694,7 @@ export abstract class ActorAgent extends Agent<Env> {
   async savePlanReviewAnnotations(
     id: string,
     revision: number,
-    annotations: PlanReviewAnnotation[],
+    annotations: ReviewAnnotation[],
   ): Promise<PlanReviewResult> {
     return this.planActions.saveAnnotations(id, revision, { value: annotations });
   }
@@ -972,6 +987,9 @@ export abstract class ActorAgent extends Agent<Env> {
       ?? this.actorSession.profileInputs?.envelope.catalog.accounts?.[provider],
   });
 
+  // The bare prototype must read as sound.
+  protected storageRefusal?: StoragePredatesResetError;
+
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     // Must precede any read or write of it; see initCapabilitySchema.
@@ -1047,7 +1065,9 @@ export abstract class ActorAgent extends Agent<Env> {
         if (await room.onMessage(connection, message)) return;
       }
 
-      return await dispatchMessage(connection, message);
+      await dispatchMessage(connection, message);
+
+      if (rpc !== null && rpcMovesOverview(rpc.method)) this.overviewChanged();
     };
 
     const baseOnConnect = this.onConnect.bind(this);
@@ -1055,9 +1075,21 @@ export abstract class ActorAgent extends Agent<Env> {
 
     this.onConnect = async (connection, ctx) => {
       if (await this.refuseRevokedSocketAuthority(connection, '')) return;
+
+      // Before anything reads the store.
+      if (this.storageRefusal !== undefined) {
+        connection.send(JSON.stringify({
+          type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: 'storage-refused', reason: this.storageRefusal.code,
+          body: this.storageRefusal.message, done: true, error: true,
+        }));
+
+        return;
+      }
+
       this.connectionOpened();
 
       await baseOnConnect(connection, ctx);
+
       const terminal = await this.terminalFor(connection);
 
       if (terminal) await terminal.attachTerminal(connection);
@@ -1065,6 +1097,7 @@ export abstract class ActorAgent extends Agent<Env> {
     };
 
     this.onClose = async (connection, code, reason, wasClean) => {
+      if (this.storageRefusal !== undefined) return await baseOnClose(connection, code, reason, wasClean);
       const terminal = await this.terminalFor(connection);
 
       if (terminal) terminal.terminalClose(connection);
@@ -1081,6 +1114,10 @@ export abstract class ActorAgent extends Agent<Env> {
 
     this.onRequest = async (request) => {
       const url = new URL(request.url);
+
+      if (this.storageRefusal !== undefined) {
+        return Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] });
+      }
 
       if (url.pathname === '/get-messages' || url.pathname.endsWith('/get-messages')) {
         // The seed is fetched on the same path the pane's socket opens, so each pane gets its own
@@ -1329,6 +1366,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
       if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);
     }
+
+    // A turn a deploy cut short reads right by the next tick of the wake it armed.
+    this.overviewChanged();
   }
 
   /**
@@ -1389,6 +1429,11 @@ export abstract class ActorAgent extends Agent<Env> {
   protected _terminalReported: Promise<void> = Promise.resolve();
   private _terminalReportedOwner: AsyncTaskOwner | null = null;
 
+  /** A settled turn's detached leftovers are still closing in this isolate. */
+  protected get terminalClosing(): boolean {
+    return this._terminalReportedOwner !== null;
+  }
+
   /**
    * Keep this isolate alive for a terminal close via a durable fiber, since a bare promise is not a
    * wake; the fiber's run row hands leftovers to {@link classifyRecoveredFiber}. Order: hold, join, dispose.
@@ -1414,6 +1459,8 @@ export abstract class ActorAgent extends Agent<Env> {
           this._terminalReportedOwner = null;
           this._terminalReported = Promise.resolve();
         }
+
+        this.overviewChanged();
       }
     })();
 
@@ -1723,6 +1770,7 @@ export abstract class ActorAgent extends Agent<Env> {
           // Arm the turn's own wake at its open, so a kill mid-turn leaves both the run row and the wake
           // that re-drives what it owed.
           armTurnWake: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
+          quiet: () => { this.overviewChanged(); },
           steerSkills: (text) => steerSkillsBlock({
             vfs: this.rt.storage.vfs,
             config: this.config,
@@ -1825,6 +1873,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Fires after each committed change to the root actor's turn claims. */
   protected abstract turnClaimChanged(): void;
+
+  protected abstract overviewChanged(): void;
 
   protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
 
@@ -2161,6 +2211,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // Synchronous read plus same-tick buffer push means the observed turn's prepareStep drains
         // the signal; a turn that settles first re-delivers it from settle().
         turnInFlight: () => this.chatLoop.turnInFlight(),
+        closed: () => this.chatLoop.closed,
         // keepAliveWhile holds the DO through the debounce window and drain; if it dies anyway,
         // events stay durable in the EventLog and a later drain picks them up.
         setTimer: (fn, ms) => {
@@ -2717,7 +2768,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private operationProfile(): OperationProfile | null {
     return currentOperationProfile(this.actorHandle()) ?? (this._inFlight ? this._turnOperation : null);
   }
-  /** Built in beforeTurn; read by the per-step dynamic context and turn-local context. */
+  /** Built in beforeTurn; read by the per-step dynamic context. */
   private _turnActiveSkills: ActiveSkillSet | null = null;
   /** Instruction trust (KINU-N028): one store over actor SQL, scoped to this workspace so a forked
    *  or copied root starts unapproved. */
@@ -3967,35 +4018,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.hostedModels.get(actor.actorId);
   }
 
-  /**
-   * Unapproved instruction files ride a sealed user message (agent-writable, not system plane).
-   * Never persisted; placed before the turn's input after the transformContext seam.
-   */
-  private turnLocalMessages(
-    deviceNotice: string | null,
-    agentsMd: AgentsMdSources,
-    activeSkills: ActiveSkillSet | undefined,
-  ): ModelMessage[] {
-    // Provenance rides here, not in the system prompt: it flips mid-session and would rewrite the
-    // cacheable prefix (core prompting/volatile-context.ts).
-    const turnLocalOptions: Parameters<typeof turnLocalContextMessage>[0] = {
-      deviceNotice,
-      provenance: this.turnProvenance(),
-    };
-
-    if (this._turnActiveSkills) turnLocalOptions.activeSkills = this._turnActiveSkills;
-    const turnLocal = turnLocalContextMessage(turnLocalOptions);
-
-    const unverified = unverifiedInstructionsMessage(
-      activeSkills ? { agentsMd, activeSkills } : { agentsMd },
-    );
-
-    return [
-      ...(unverified ? [unverified] : []),
-      ...(turnLocal ? [turnLocal] : []),
-    ];
-  }
-
   /** Source for `turnWorkMode`, `turnProvenance`, and `turnUserMetadata`. */
   private _turnItem: ChatTurnInput | null = null;
 
@@ -4046,7 +4068,6 @@ export abstract class ActorAgent extends Agent<Env> {
       attachments: {
         accepts: this.modelCatalog.acceptedMedia(), vfs: this.rt.storage.vfs, budget: this.acc.context,
       },
-      turnLocal: assembled.turnLocal.length > 0 ? assembled.turnLocal : undefined,
       tools: assembled.tools,
       activeTools: assembled.activeTools,
       // No step cap: the loop is bounded by the budget governor and the caller's cancel
@@ -4070,9 +4091,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (assembled.reasoningOptions) liveTurn.providerOptions = assembled.reasoningOptions;
 
-    liveTurn.fallbacks = assembled.profile.tier.fallbacks.map((spec) => ({
-      spec,
-      bind: () => this.ownedModelServices.resolveModelWithEffort(spec, assembled.profile.tier.reasoningEffort),
+    const providers = this.providerRegistry();
+    liveTurn.modelSpec = providers.normalizeSpecSync(assembled.profile.tier.model);
+    liveTurn.credentialOf = (spec) => this.ownedModelServices.credentialFor(spec);
+    liveTurn.fallbacks = assembled.profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
+      spec: providers.normalizeSpecSync(spec),
+      bind: () => this.ownedModelServices.resolveModelWithEffort(spec, reasoningEffort),
     }));
 
     const runtime = this.rt;
@@ -4084,6 +4108,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // All registered extensions; the turn adds the orchestrator's inbox extension itself.
         extensions: this.extensions.list(),
         dynamic: (profile, turnTools) => this.dynamicContextSnapshot(profile, turnTools, assembled.memoryTail),
+        instructions: assembled.instructions,
         scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       },
       sessionKey: this.name,
@@ -4120,7 +4145,7 @@ export abstract class ActorAgent extends Agent<Env> {
     if (this._cachedSoulText === null) await this.refreshSoulText();
 
     // Independent UserDO hops, run in parallel; each keeps its own failure arm.
-    const [profileInputs, mcpTools, deviceStatus, identity] = await Promise.all([
+    const [profileInputs, mcpTools, , identity] = await Promise.all([
       this.profileInputs(),
       // The remote catalog is admitted against the context budget left after the builtins.
       // A failed read answers no tools and the turn runs on builtins.
@@ -4131,7 +4156,7 @@ export abstract class ActorAgent extends Agent<Env> {
       this.promptIdentity(),
     ]);
 
-    return { profileInputs, mcpTools, deviceStatus, identity };
+    return { profileInputs, mcpTools, identity };
   }
 
   /** Runs after the turn is open (`orch.beginTurn`, the run row) and before the first model call. */
@@ -4153,7 +4178,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   private async assembleTurn(input: TurnAssemblyInput): Promise<AssembledTurn> {
-    const { profileInputs, mcpTools, deviceStatus, identity } = input.reads;
+    const { profileInputs, mcpTools, identity } = input.reads;
     const activeRoleId = this.activeRoleLabel();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
     this._workspaceInstructionApprovals = null;
@@ -4247,20 +4272,6 @@ export abstract class ActorAgent extends Agent<Env> {
         .filter(([name]) => toolAllowed(name)),
     );
 
-    // The persisted watermark is only a diff anchor for the change notice; the hub is the source
-    // of truth.
-    let deviceNotice: string | null = null;
-
-    try {
-      deviceNotice = observeDevicePresence(this.config, deviceStatus).notice;
-    } catch (err) {
-      diagnostics.failure('device.status_refresh_failed', toKinuError({
-        doing: 'recording the device hub presence for this turn',
-        cause: err,
-        otherwise: 'unavailable',
-      }));
-    }
-
     // AGENTS.md is turn-scoped state, so it rides the beforeTurn system override, not the cached
     // base prompt.
     const agentsMd = await collectWorkspaceAgentsMd(
@@ -4271,7 +4282,7 @@ export abstract class ActorAgent extends Agent<Env> {
     );
 
     // The cache prefix changes only on real agent events (soul, model, skills, tools, AGENTS.md);
-    // system and turn-local state ride the dynamic ledger and turn-local messages instead.
+    // live state rides the dynamic ledger instead.
     const execs = this.rt.executionRouter?.listExecutors() ?? [];
     const model = this.promptModelContext();
 
@@ -4307,7 +4318,7 @@ export abstract class ActorAgent extends Agent<Env> {
     this._turnDurableLength = rawMessages.length;
     // Must be awaited before submission: synchronous catalog reads return static stand-in values
     // while the lookup is in flight (#20).
-    const [window] = await Promise.all([this.modelCatalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks)]);
+    const [window] = await Promise.all([this.modelCatalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model))]);
     this._turnContextWindow = window.contextWindow;
     const measured = measureCompactionTrigger(this.compactionState, this.name, rawMessages.length);
 
@@ -4316,7 +4327,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // The reflection loop assumes the model sees its latest MEMORY.md lessons in-turn; read once
     // here since it is the one dynamic-context input needing an await.
     const memoryTail = await readMemoryTail(this.rt.memory);
-    const turnLocal = this.turnLocalMessages(deviceNotice, agentsMd, activeSetForPrompt);
+    const instructions = renderUnverifiedInstructions(activeSetForPrompt ? { agentsMd, activeSkills: activeSetForPrompt } : { agentsMd });
 
     const submittedTools = { ...modeTools, ...effectiveTools };
     const providers = this.providerRegistry();
@@ -4357,7 +4368,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return {
       profile, profileInputs, system: systemOverride, model: languageModel, tools, activeTools: effectiveActiveTools, activeToolSurface,
-      rawMessages, turnLocal, measured, window, memoryTail, countInputTokens,
+      rawMessages, instructions, measured, window, memoryTail, countInputTokens,
       cacheOptions, reasoningOptions, promptModel: model,
     };
   }
@@ -4383,6 +4394,8 @@ export abstract class ActorAgent extends Agent<Env> {
       stores: this.stores,
       profile,
       tools,
+      turn: this.turnReason(),
+      ...(this._turnActiveSkills !== null && { activeSkills: this._turnActiveSkills }),
       memoryTail,
       missingCapabilities: [
         ...this._mcpUnavailable,
@@ -4442,8 +4455,8 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Read from the event alone, never from the work mode stamped beside it. */
-  protected turnProvenance(): TurnProvenance {
-    return turnProvenanceForMetadata(this.turnDrivingMetadata());
+  protected turnReason(): TurnReason {
+    return turnReasonForMetadata(this.turnDrivingMetadata());
   }
 
   private turnDrivingMetadata(): JsonObject | undefined {

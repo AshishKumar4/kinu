@@ -1,9 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
-import {
-  BookOpenIcon, PlugsConnectedIcon, PuzzlePieceIcon,
-} from "@phosphor-icons/react";
-import { APP_ROUTES, BUILTIN_SKILL_HEADERS } from "@kinu.run/core";
+import { PlugsConnectedIcon, PuzzlePieceIcon } from "@phosphor-icons/react";
+import { APP_ROUTES } from "@kinu.run/core";
 import {
   listMcpServers, listMcpPresets,
   type McpServerSummary,
@@ -111,7 +109,7 @@ export default function PluginsPage() {
           <PuzzlePieceIcon size={22} className="mt-1 shrink-0 p-text-3" />
           <div>
             <h1 className="p-display text-2xl">Plugins</h1>
-            <p className="p-meta p-text-3">Services and skills your agents can use in every workspace.</p>
+            <p className="p-meta p-text-3">Services your agents can use in every workspace.</p>
           </div>
         </header>
 
@@ -135,25 +133,11 @@ export default function PluginsPage() {
 
               return (
                 <PluginRow key={server.id} name={server.name} description={serverLine(server)}
-                  state={status.label} tile={<PluginTile icon={PlugsConnectedIcon} kind="server" />}
+                  state={status.label} tile={<PluginTile icon={PlugsConnectedIcon} />}
                   trailing={<PluginStatePill status={status} />} />
               );
             }))}
         />
-
-        <section aria-label="Skills" className="space-y-2">
-          <div className="flex items-center justify-between gap-3 px-1">
-            <h2 className="p-eyebrow">Skills</h2>
-          </div>
-          <div className="grid gap-x-6 gap-y-0.5 sm:grid-cols-2">
-            {BUILTIN_SKILL_HEADERS.map((skill) => (
-              <PluginRow key={skill.name} name={skill.name} description={skill.description}
-                tile={<PluginTile icon={BookOpenIcon} kind="skill" />}
-                trailing={<PluginStatePill status={{ label: 'built in', tone: 'neutral' }} />} />
-            ))}
-          </div>
-        </section>
-
       </div>
       {managing && <AccountPanelModal panel="mcp" returnTo={APP_ROUTES.plugins} onClose={() => setManaging(false)} />}
     </div>

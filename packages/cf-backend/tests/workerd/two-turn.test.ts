@@ -13,6 +13,7 @@ import {
   HistorySchema,
   HttpCallSchema,
   PreparedConversationSchema,
+  QueuedConversationSchema,
   SnapshotSchema,
   type DiagnosticFailure,
   type HttpCall,
@@ -39,27 +40,29 @@ describe('two real turns over the HTTP model seam', () => {
   it('an ordinary signal arriving at the final model step is not lost at settlement', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('signal-queue-driver'));
 
-    const calls = v.parse(HttpSchema, await root.queuedConversation('signal'))
-      .filter((call) => call.model === 'probe-queue');
+    const conversation = v.parse(QueuedConversationSchema, await root.queuedConversation('signal'));
+    const calls = conversation.http.filter((call) => call.model === 'probe-queue');
 
-    expect(calls).toHaveLength(3);
+    // Its MCP caller got its answer at admission beside the held turn, as a mid-turn splice's caller does.
+    expect(conversation.task?.status).toBe('queued');
+
+    // The signal waited with the sends genesis could not land, so it rides their rerun's first step.
+    expect(calls).toHaveLength(2);
     const genesis = calls[0]?.users.find((message) => !message.startsWith('<'));
-    // Splice side and echo flush are timing-dependent; the contract is only that both inputs
-    // reached the model after the genesis exchange, on this one turn.
-    const signalTurn = calls[2]?.conversation.filter((message) => message.role !== 'system' && !message.content.startsWith('<'));
+    const rerun = calls[1]?.conversation.filter((message) => message.role !== 'system' && !message.content.startsWith('<'));
 
-    expect(signalTurn?.[0]).toEqual({ role: 'user', content: genesis });
-    expect(signalTurn?.[1]).toEqual({ role: 'assistant', content: `echo:${genesis}` });
-
-    const rest = signalTurn?.slice(2).map((m) => m.content) ?? [];
-    expect(rest).toContain('QUEUE-PROGRAMMATIC');
-    expect(rest).toContain('QUEUE-A\n\nQUEUE-B');
+    expect(rerun).toEqual([
+      { role: 'user', content: genesis },
+      { role: 'assistant', content: `echo:${genesis}` },
+      { role: 'user', content: 'QUEUE-A\n\nQUEUE-B' },
+      { role: 'user', content: 'QUEUE-PROGRAMMATIC' },
+    ]);
   });
 
   it('a genesis offer still yields inside its slot to an already admitted owner message', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('yield-queue-driver'));
 
-    const calls = v.parse(HttpSchema, await root.queuedConversation('yield'))
+    const calls = v.parse(QueuedConversationSchema, await root.queuedConversation('yield')).http
       .filter((call) => call.model === 'probe-queue');
 
     expect(calls).toHaveLength(1);
@@ -69,7 +72,7 @@ describe('two real turns over the HTTP model seam', () => {
   it('admits two websocket asks after held genesis through the installed Think queue', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('queue-driver'));
 
-    const calls = v.parse(HttpSchema, await root.queuedConversation('chat'))
+    const calls = v.parse(QueuedConversationSchema, await root.queuedConversation('chat')).http
       .filter((call) => call.model === 'probe-queue');
 
     expect(calls).toHaveLength(2);
@@ -91,7 +94,7 @@ describe('two real turns over the HTTP model seam', () => {
   it('a peer event that arrives mid-genesis rides the rerun of the sends genesis could not land', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('peer-queue-driver'));
 
-    const calls = v.parse(HttpSchema, await root.queuedConversation('peer'))
+    const calls = v.parse(QueuedConversationSchema, await root.queuedConversation('peer')).http
       .filter((call) => call.model === 'probe-queue');
 
     // A message arriving behind a queued user turn rides that turn's first step, so the drain's
@@ -155,7 +158,7 @@ describe('two real turns over the HTTP model seam', () => {
   it('splices a mid-turn attachment into the next model call as a file part', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('attach-queue-driver'));
 
-    const calls = v.parse(HttpSchema, await root.queuedConversation('attach')).filter((call) => call.model === 'probe-queue');
+    const calls = v.parse(QueuedConversationSchema, await root.queuedConversation('attach')).http.filter((call) => call.model === 'probe-queue');
 
     const spliced = calls.find(carriesAttachment);
 

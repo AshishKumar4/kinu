@@ -341,7 +341,7 @@ describe('device-connect prompt policy', () => {
 
     const out = await runScript(home, `
       import { dismissDeviceConnectPrompt, shouldOfferDeviceConnect } from './packages/cli/src/device-connect.ts';
-      dismissDeviceConnectPrompt();
+      await dismissDeviceConnectPrompt();
       console.log(JSON.stringify(await shouldOfferDeviceConnect()));
     `);
 

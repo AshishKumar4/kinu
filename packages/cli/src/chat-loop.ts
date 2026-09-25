@@ -436,7 +436,7 @@ async function promptDeviceConnect(rl: readline.Interface, opts: { allowDismiss:
     }
 
     if (opts.allowDismiss && answer === 'd') {
-      dismissDeviceConnectPrompt();
+      await dismissDeviceConnectPrompt();
       console.log(DIM(`  Kinu won't ask again. Connect later with /connect or kinu connect.`));
 
       return;

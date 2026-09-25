@@ -212,8 +212,8 @@ describe('two kinu processes refreshing one Codex credential', () => {
 
       const victim = Bun.spawn({
         cmd: [process.execPath, '-e', `
-          const { withConfigLockAsync } = await import(${JSON.stringify(join(import.meta.dir, '../src/config-lock.ts'))});
-          await withConfigLockAsync(${JSON.stringify(configPath)}, async () => {
+          const { withConfigLock } = await import(${JSON.stringify(join(import.meta.dir, '../src/config-lock.ts'))});
+          await withConfigLock(${JSON.stringify(configPath)}, async () => {
             await fetch(${JSON.stringify(base)} + '/holding');
             await new Promise(() => {});
           });
@@ -233,7 +233,7 @@ describe('two kinu processes refreshing one Codex credential', () => {
       await victim.exited;
 
       // The recorded process is gone, so the next writer takes over on its first attempt.
-      expect(withConfigLock(configPath, () => 'taken')).toBe('taken');
+      expect(await withConfigLock(configPath, () => 'taken')).toBe('taken');
       expect(lstatSync(`${configPath}.lock`, { throwIfNoEntry: false })).toBeUndefined();
     } finally {
       await server.stop(true);

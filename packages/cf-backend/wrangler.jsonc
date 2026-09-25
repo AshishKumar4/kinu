@@ -389,6 +389,8 @@
   // user's own chat calls deliberately do NOT ride this binding: they carry that
   // user's Cloudflare OAuth credential so the usage bills to their account.
   "ai": { "binding": "AI" },
+  // Browser Rendering: the headless browser that photographs a slate after it renders.
+  "browser": { "binding": "BROWSER" },
   // Analytics Engine — the fleet-level aggregate plane. Three datasets rather
   // than one because sampling is keyed on `index1`: a single dataset would let
   // a noisy turn stream sample away the admin audit markers, and three unrelated
@@ -449,7 +451,12 @@
     // artifact's `.sha256` are small and stay assets. The Worker streams the
     // object at /downloads/kinu-worker-<version>.tar.gz (deploy/artifact-route.ts).
     //   wrangler r2 bucket create kinu-releases
-    { "binding": "RELEASES_BUCKET", "bucket_name": "kinu-releases" }
+    { "binding": "RELEASES_BUCKET", "bucket_name": "kinu-releases" },
+    // Slate pictures, one WebP per slate at slate-pictures/<workspace>/<slate>/<sha256>.webp
+    // (slates/pictures.ts). Here, not in the workspace's object, so a Drive of 30 tiles wakes
+    // no workspace and a shared slate's picture never wakes its owner's.
+    //   wrangler r2 bucket create kinu-slate-pictures
+    { "binding": "SLATE_PICTURES", "bucket_name": "kinu-slate-pictures" }
   ],
   // Browser sessions, one-time OAuth state, and CLI browser-approval state.
   // All of it expires on its own clock, and all of it is read at the edge on

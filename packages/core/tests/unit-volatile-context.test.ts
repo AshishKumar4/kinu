@@ -12,8 +12,6 @@ import {
   runChat,
   DynamicContextLedger,
   renderDynamicContextBlock,
-  renderTurnLocalContext,
-  turnLocalContextMessage,
   executorAvailabilityLabel,
   fnv1a64,
   agentDynamicContext,
@@ -21,7 +19,6 @@ import {
   renderActiveSkillsSection,
   DYNAMIC_CONTEXT_HEADER,
   composePrepareStep,
-  TURN_CONTEXT_HEADER,
   type DynamicContext,
   type PromptExecutorInfo,
 } from '../src/index';
@@ -222,13 +219,12 @@ describe('byte-stable system prefix', () => {
     const chatPrefix = buildSystemPromptSync(rt, session);
     const wakePrefix = buildSystemPromptSync(rt, session);
     expect(wakePrefix).toBe(chatPrefix);
-    expect(chatPrefix).not.toContain('the referenced job result first');
+    expect(chatPrefix).not.toContain('Fetch its result first');
     expect(chatPrefix).not.toContain('Background-resume');
 
-    const wakeTail = present(turnLocalContextMessage({ provenance: 'background_resume' }), 'background-wake tail');
-    expect(wakeTail).toMatchObject({ role: 'user' });
-    expect(messageText(wakeTail)).toContain('the referenced job result first');
-    expect(turnLocalContextMessage({ provenance: 'chat' })).toBeNull();
+    // Why the turn runs rides the dynamic block instead.
+    expect(renderDynamicContextBlock({ turn: { provenance: 'background_resume', job: null } })).toContain('Fetch its result first');
+    expect(renderDynamicContextBlock({ turn: { provenance: 'chat' } })).not.toContain('Fetch its result first');
   });
 });
 
@@ -739,43 +735,26 @@ describe('observeSystemPromptHash', () => {
   });
 });
 
-describe('renderTurnLocalContext', () => {
-  test('renders activation reasons and the device notice under the turn header', () => {
-    const text = present(renderTurnLocalContext({
-      activeSkills: { active: [skill('alpha')], reasons: [{ name: 'alpha', reason: { kind: 'explicit', matched_token: 'deploy' } }] },
-      deviceNotice: '## Context update\nYour user\'s PC just connected.',
-    }), 'turn-local context');
+describe('active skills and why each is on', () => {
+  const blockOf = (activeSkills: ActiveSkillSet) => renderDynamicContextBlock(agentDynamicContext({
+    factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], executors: [], runningJobs: roster([]),
+    openTasks: roster([]), liveHeadRuns: roster([]), missingCapabilities: [], activeSkills,
+  }));
 
-    expect(text).toStartWith(TURN_CONTEXT_HEADER);
-    expect(text).toContain('alpha (explicit /deploy)');
-    expect(text).toContain('PC just connected');
+  test('every active skill is listed with its activation reason, in name order', () => {
+    const text = present(blockOf({
+      active: [skill('gamma'), skill('alpha'), skill('beta')],
+      reasons: [
+        { name: 'alpha', reason: { kind: 'explicit', matched_token: 'deploy' } },
+        { name: 'gamma', reason: { kind: 'always_active', via: 'config' } },
+      ],
+    }), 'the block');
+
+    expect(text).toContain('## Active skills (why each is on)\n- alpha: explicit /deploy\n- beta: active\n- gamma: pinned via config');
   });
 
-  test('every activation reason kind renders in its own form', () => {
-    const text = present(renderTurnLocalContext({
-      activeSkills: {
-        active: [skill('alpha'), skill('gamma')],
-        reasons: [
-          { name: 'alpha', reason: { kind: 'explicit', matched_token: 'deploy' } },
-          { name: 'gamma', reason: { kind: 'always_active', via: 'config' } },
-        ],
-      },
-    }), 'turn-local context');
-
-    expect(text).toContain('- alpha (explicit /deploy)');
-    expect(text).toContain('- gamma (pinned via config)');
-  });
-
-  test('empty turn-local context renders nothing (and no message)', () => {
-    expect(renderTurnLocalContext({})).toBeNull();
-    expect(renderTurnLocalContext({ deviceNotice: null })).toBeNull();
-    expect(turnLocalContextMessage({})).toBeNull();
-  });
-
-  test('turnLocalContextMessage wraps the render as one user message', () => {
-    const msg = present(turnLocalContextMessage({ deviceNotice: 'PC connected.' }), 'turn-local message');
-    expect(msg).toMatchObject({ role: 'user' });
-    expect(messageText(msg)).toStartWith(TURN_CONTEXT_HEADER);
+  test('no active skill renders no section', () => {
+    expect(blockOf({ active: [], reasons: [] })).toBeNull();
   });
 });
 
@@ -943,41 +922,160 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
       return messageText(present(ledger.weave(history, after).at(-1), 'the newest block'));
     };
 
-    test('a task list states only the rows that changed: added, changed and removed', () => {
-      const delta = deltaAfter(
-        { tasks: roster([task(1), task(2), task(3), task(4), task(5)]) },
-        { tasks: roster([task(1), task(2, 'active'), task(3), task(5), task(6), task(7, 'open', 't6')]) },
-      );
+    const idOf = (title: string, line: string) => {
+      const row = line.replace(/^\s*- /u, '');
 
-      expect(blockKind(delta)).toBe('delta');
-      expect(delta).toContain('(you keep this with the `tasks` tool) (changed rows)');
-      expect(delta).toContain('- t2 [active] step 2');
-      expect(delta).toContain('- removed: t4');
-      expect(delta).toContain('- t6 [open] step 6');
-      // Out of the list's context, a new subtask names the task it sits under.
-      expect(delta).toContain('- t7 [open] step 7 (subtask of t6)');
+      return /^## (Your task list|Background work|Delegates)/u.test(title) ? row.split(' ')[0] : row;
+    };
 
-      for (const unchanged of ['t1', 't3', 't5']) expect(delta).not.toContain(`- ${unchanged} [`);
+    /** A "(changed rows)" section's lines applied to its section's rows. */
+    const applyRows = (title: string, rows: readonly string[], lines: readonly string[]): string[] => {
+      const next = [...rows];
+
+      for (const line of lines) {
+        const removed = /^- removed: (.*)$/u.exec(line)?.[1];
+        const at = next.findIndex((row) => idOf(title, row) === (removed ?? idOf(title, line)));
+
+        if (removed !== undefined && at < 0) throw new Error(`a delta removes a row the state lacks: ${line}`);
+
+        if (removed !== undefined) next.splice(at, 1);
+        else if (at < 0) next.push(line);
+        else next[at] = line;
+      }
+
+      return next;
+    };
+
+    /** A reader of the grammar the header states: each section's rows as the blocks, in order, leave them. */
+    const fold = (blocks: readonly string[]): Record<string, string[]> => {
+      const sections = new Map<string, string[]>();
+
+      for (const block of blocks) {
+        if (block.includes('kind="full"')) sections.clear();
+        const body = block.slice(block.indexOf('>\n') + 2, block.lastIndexOf('\n</dynamic_context>'));
+
+        for (const section of body.split('\n\n').slice(1)) {
+          const [heading = '', ...lines] = section.split('\n');
+          const [, title = heading, mode] = /^(.*) \((changed rows|appended)\)$/u.exec(heading) ?? [];
+          const rows = sections.get(title) ?? [];
+
+          if (lines[0] === 'Cleared: no current entries.') sections.delete(title);
+          else if (mode === 'appended') sections.set(title, [...rows, ...lines]);
+          else sections.set(title, mode === undefined ? lines : applyRows(title, rows, lines));
+        }
+      }
+
+      return Object.fromEntries([...sections].sort(([a], [b]) => a.localeCompare(b)));
+    };
+
+    const tasks = (...rows: ReturnType<typeof task>[]): DynamicContext => ({ tasks: roster(rows) });
+    const blocksOf = (request: readonly ModelMessage[]) => request.map(messageText).filter(isDynamicBlock);
+    const foldedFull = (context: DynamicContext) => fold([renderDynamicContextBlock(context) ?? '']);
+
+    /** Every state in turn, a step each, deltas among the blocks: the last request's blocks fold to the last state. */
+    const expectFolded = (states: readonly DynamicContext[]) => {
+      const ledger = new DynamicContextLedger();
+      const history: ModelMessage[] = [{ role: 'user', content: 'plan the work' }];
+      let request: ModelMessage[] = [];
+
+      for (const step of states) {
+        request = ledger.weave(history, step);
+        history.push({ role: 'assistant', content: `step ${String(history.length)}` });
+      }
+
+      expect(blocksOf(request).some((block) => blockKind(block) === 'delta')).toBe(true);
+      expect(fold(blocksOf(request))).toEqual(foldedFull(present(states.at(-1), 'the last state')));
+    };
+
+    test('a reorder folds to the new order', () => {
+      expectFolded([tasks(task(1), task(2), task(3)), tasks(task(3), task(1), task(2))]);
     });
 
-    test('a row the cap hid comes back as added, and the elision line says every row is shown', () => {
-      const sixteen = Array.from({ length: 16 }, (_, i) => task(i + 1));
-      const delta = deltaAfter({ tasks: roster(sixteen) }, { tasks: roster(sixteen.slice(1)) });
-
-      expect(delta).toContain('- removed: t1');
-      expect(delta).toContain('- t16 [open] step 16');
-      expect(delta).toContain('- …every row is shown now');
-      expect(delta).not.toContain('- t2 [');
+    test('a row added between kept rows, a subtask under its task included, folds into its place', () => {
+      expectFolded([
+        tasks(task(1), task(3)),
+        tasks(task(1), task(2), task(3)),
+        tasks(task(1), task(4, 'open', 't1'), task(2), task(3)),
+      ]);
     });
 
-    test('a memory tail that grew is continued, even as its window slides past the oldest notes', () => {
-      const notes = Array.from({ length: 8 }, (_, i) => `### Note ${String(i)}\nLesson ${String(i)}: keep the build green.`);
-      const before = notes.join('\n');
-      const after = `${notes.slice(2).join('\n')}\n### Note 8\nLesson 8: retry the upload once.`;
-      const delta = deltaAfter({ memoryTail: before }, { memoryTail: after });
+    test('a removed row, a changed one and rows added at the end fold in place', () => {
+      expectFolded([
+        tasks(task(1), task(2), task(3)),
+        tasks(task(1, 'active'), task(3)),
+        tasks(task(1, 'active'), task(3), task(5), task(6, 'open', 't5')),
+      ]);
+    });
 
-      expect(delta).toContain('## Memory (newest MEMORY.md lessons and reflections) (appended)\n### Note 8\nLesson 8: retry the upload once.');
-      expect(delta).not.toContain('Lesson 7');
+    test('an elided list folds as rows come into view and its count changes and goes', () => {
+      const all = Array.from({ length: 17 }, (_, i) => task(i + 1));
+
+      expectFolded([tasks(...all.slice(0, 16)), tasks(...all), tasks(...all.slice(1)), tasks(...all.slice(1, 15))]);
+    });
+
+    test('a memory tail folds through an append and through its window sliding off the oldest notes', () => {
+      const notes = Array.from({ length: 10 }, (_, i) => `### Note ${String(i)}\nLesson ${String(i)}: keep the build green.`);
+
+      expectFolded([
+        { memoryTail: notes.slice(0, 7).join('\n') },
+        { memoryTail: notes.slice(0, 8).join('\n') },
+        { memoryTail: notes.slice(2, 9).join('\n') },
+      ]);
+    });
+
+    test('facts, approvals, recoveries and missing capabilities fold by their whole rows; jobs and delegates by their first word', () => {
+      const consent = { id: 'c-1', kind: 'device consent', detail: 'git push' };
+
+      expectFolded([
+        {
+          factsBlock: '- a = 1\n- b = 2\n- c = 3', approvals: roster([consent]), recoveries: ['`uv pip install` ran clean'],
+          missingCapabilities: [{ source: 'mcp: github', reason: 'not connected' }],
+          jobs: roster([{ id: 'job-1', kind: 'shell', label: 'build' }]),
+          delegates: roster([{ kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey' }]),
+        },
+        {
+          factsBlock: '- a = 1\n- b = 9\n- c = 3', approvals: roster([consent, { id: 'c-2', kind: 'shell', detail: 'rm -rf build' }]),
+          missingCapabilities: [{ source: 'mcp: github', reason: 'token expired' }],
+          jobs: roster([{ id: 'job-1', kind: 'shell', label: 'build and test' }, { id: 'job-2', kind: 'think_heads', label: null }]),
+          delegates: roster([{ kind: 'subordinate', name: 'ana', phase: 'done', task: 'survey' }]),
+        },
+      ]);
+    });
+
+    test('the first delta after a keyframe folds from the keyframe', () => {
+      const ledger = new DynamicContextLedger();
+      const history: ModelMessage[] = [{ role: 'user', content: 'work through the list' }];
+      const window = (step: number) => tasks(...Array.from({ length: 10 }, (_, i) => task(step + i)));
+      let blocks: string[] = [];
+      let step = 0;
+
+      const next = () => {
+        blocks = blocksOf(ledger.weave(history, window(step)));
+        history.push({ role: 'assistant', content: `finished step ${String(step)}` });
+        step += 1;
+      };
+
+      while (step < 200 && blocks.filter((block) => blockKind(block) === 'full').length < 2) next();
+      next();
+
+      expect(blocks.map(blockKind).slice(-2)).toEqual(['full', 'delta']);
+      expect(fold(blocks)).toEqual(foldedFull(window(step - 1)));
+    });
+
+    test('the first change after a restart folds from the blocks the store kept', () => {
+      const first = new DynamicContextLedger(true);
+      const history: ModelMessage[] = [{ role: 'user', content: 'plan the work' }];
+      first.adopt([]);
+      first.weave(history, tasks(task(1), task(2)));
+      history.push({ role: 'assistant', content: 'working' });
+      first.weave(history, tasks(task(1, 'active'), task(2)));
+
+      const restarted = new DynamicContextLedger(true);
+      restarted.adopt(first.takeBirths().map((birth) => ({ text: birth.text, before: birth.before, after: null })));
+      history.push({ role: 'assistant', content: 'still working' });
+      const last = tasks(task(1, 'done'), task(3));
+
+      expect(fold(blocksOf(restarted.weave(history, last)))).toEqual(foldedFull(last));
     });
 
     test('state that shrank below its delta is restated as one full block', () => {
@@ -1020,6 +1118,73 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
 
       expect(current.slice(0, previous.length)).toEqual(previous);
       expect(current).toHaveLength(previous.length + 2);
+    });
+  });
+
+  describe('the unapproved instructions', () => {
+    const copy = (body: string) => `<workspace_instructions>\n${body}\n</workspace_instructions>`;
+    const copies = (messages: ModelMessage[]) => messages.map(messageText).filter((text) => text.startsWith('<workspace_instructions>'));
+
+    /** One request per turn: the person's message, then the weave at the turn's first step. */
+    const turns = (ledger: DynamicContextLedger, history: ModelMessage[], instructions: readonly (string | null)[]) => instructions.map((current, i) => {
+      history.push({ role: 'user', content: `turn ${String(i)}` });
+      const woven = ledger.weave(history, state, { at: history.length - 1, firstStep: true }, current);
+      history.push({ role: 'assistant', content: `answer ${String(i)}` });
+
+      return woven;
+    });
+
+    test('go out right before the input of the turn that first needs them, and again only when they change', () => {
+      const requests = turns(new DynamicContextLedger(), [], [null, copy('Use tabs.'), copy('Use tabs.'), copy('Use spaces.')]);
+
+      expect(requests.map(copies)).toEqual([[], [copy('Use tabs.')], [copy('Use tabs.')], [copy('Use tabs.'), copy('Use spaces.')]]);
+      expect(present(requests[1], 'turn 1').slice(-2).map(messageText)).toEqual([copy('Use tabs.'), 'turn 1']);
+
+      // Each request opens with the whole one before it.
+      for (const [i, request] of requests.entries()) expect(request.slice(0, requests[i - 1]?.length ?? 0)).toEqual(requests[i - 1] ?? []);
+    });
+
+    test('once none is left, one short copy withdraws the earlier ones', () => {
+      const [, withdrawn = [], later = []] = turns(new DynamicContextLedger(), [], [copy('Use tabs.'), null, null]).map(copies);
+
+      expect(withdrawn).toHaveLength(2);
+      expect(withdrawn[1]).toContain('no longer apply');
+      expect(later).toEqual(withdrawn);
+    });
+
+    test('a cold start collapses them with the blocks: one fresh copy and one full block, before the input', () => {
+      const ledger = new DynamicContextLedger();
+      turns(ledger, [], [copy('Use tabs.'), copy('Use spaces.')]);
+      ledger.reset();
+
+      const out = ledger.weave([{ role: 'user', content: 'after the cache expired' }], state, { at: 0, firstStep: true }, copy('Use spaces.'));
+
+      expect(out.map(messageText)).toEqual([copy('Use spaces.'), renderDynamicContextBlock(state) ?? '', 'after the cache expired']);
+    });
+
+    test('a stored copy restarts with the ledger, so the same instructions do not go out again', () => {
+      const ledger = new DynamicContextLedger(true);
+      const history: ModelMessage[] = [{ role: 'user', content: 'turn 0' }];
+      ledger.adopt([]);
+      const first = ledger.weave(history, state, { at: 0, firstStep: true }, copy('Use tabs.'));
+      const births = ledger.takeBirths();
+
+      expect(births.map((birth) => birth.replaces)).toEqual([true, false]);
+      const restarted = new DynamicContextLedger(true);
+      restarted.adopt(births.map((birth) => ({ text: birth.text, before: birth.before, after: null })));
+      history.push({ role: 'assistant', content: 'answer 0' }, { role: 'user', content: 'turn 1' });
+
+      expect(restarted.weave(history, state, { at: 2, firstStep: true }, copy('Use tabs.')).slice(0, first.length)).toEqual(first);
+      expect(restarted.takeBirths()).toEqual([]);
+    });
+
+    test('dropSuperseded keeps the newest copy beside the one full block', () => {
+      const ledger = new DynamicContextLedger();
+      const history: ModelMessage[] = [];
+      turns(ledger, history, [copy('Use tabs.'), copy('Use spaces.')]);
+
+      expect(ledger.dropSuperseded()).toBeGreaterThan(0);
+      expect(copies(ledger.weave(history, state, undefined, copy('Use spaces.')))).toEqual([copy('Use spaces.')]);
     });
   });
 
@@ -1415,23 +1580,21 @@ function promptTexts(prompt: PromptMessage[]): string[] {
     .map((m) => textFromContent({ value: m.content }));
 }
 
-describe('the ledger + turn-local split through real runChat turns', () => {
-  test('stable state across turns keeps ONE frozen block; turn-local context re-renders per turn, before its input', async () => {
+describe('the ledger and its instruction copies through real runChat turns', () => {
+  test('stable state and instructions go out once, before the first input; changed instructions again, before the new one', async () => {
     const { model, prompts } = promptCapturingModel();
     const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [];
-    const state = { factsBlock: '- k = v' };
+    const copy = (body: string) => `<workspace_instructions>\n${body}\n</workspace_instructions>`;
 
-    const turn = async (userText: string, deviceNotice?: string) => {
+    const turn = async (userText: string, instructions: string) => {
       history.push({ role: 'user', content: userText });
-      const tail = turnLocalContextMessage({ deviceNotice });
 
       for await (const ev of runChat({
         model,
         system: 'sys',
         history,
-        dynamicContext: { ledger, snapshot: () => state },
-        turnLocal: tail ? [tail] : undefined,
+        dynamicContext: { ledger, snapshot: () => ({ factsBlock: '- k = v' }), instructions },
         tools: {},
         stopWhen: stepCountIs(1),
       })) {
@@ -1439,23 +1602,19 @@ describe('the ledger + turn-local split through real runChat turns', () => {
       }
     };
 
-    await turn('turn-1', 'PC connected.');
-    await turn('turn-2');
-    await turn('turn-3', 'PC disconnected.');
+    await turn('turn-1', copy('Use tabs.'));
+    await turn('turn-2', copy('Use tabs.'));
+    await turn('turn-3', copy('Use spaces.'));
 
-    const [p1, p2, p3] = prompts.map(promptTexts);
-    // The block, then the turn-local context, then the person's words: the request is the last user message.
-    expect(isDynamicBlock(p1[0])).toBe(true);
-    expect(p1[1]).toStartWith(TURN_CONTEXT_HEADER);
-    expect(p1[1]).toContain('PC connected.');
-    expect(p1[2]).toBe('turn-1');
-    expect(ledger.size).toBe(1);
-    expect(p2[0]).toBe(p1[0]);
-    expect(p3[0]).toBe(p1[0]);
-    expect(p2.some((t) => t.startsWith(TURN_CONTEXT_HEADER))).toBe(false);
-    expect(p3.at(-2)).toStartWith(TURN_CONTEXT_HEADER);
-    expect(p3.at(-2)).toContain('PC disconnected.');
-    expect(p3.at(-1)).toBe('turn-3');
+    const [p1 = [], p2 = [], p3 = []] = prompts.map(promptTexts);
+    // The instructions, then the block, then the person's words: the request is the last user message.
+    expect(p1).toEqual([copy('Use tabs.'), present(p1[1], 'the block'), 'turn-1']);
+    expect(isDynamicBlock(present(p1[1], 'the block'))).toBe(true);
+    // Each request opens with the whole previous one.
+    expect(p2.slice(0, p1.length)).toEqual(p1);
+    expect(p3.slice(0, p2.length)).toEqual(p2);
+    expect(p3.slice(-2)).toEqual([copy('Use spaces.'), 'turn-3']);
+    expect(history.some((m) => messageText(m).startsWith('<workspace_instructions>'))).toBe(false);
   });
 
   test('a state change mid-conversation adds a second block before the new turn\'s input', async () => {
@@ -1653,7 +1812,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
 describe('fnv1a64', () => {
   test('is deterministic and byte-sensitive', () => {
     expect(fnv1a64('abc')).toBe('e71fa2190541574b');
-    expect(fnv1a64('abc')).not.toBe(fnv1a64('abd'));
+    expect(fnv1a64('abd')).toBe('e71fa71905415fca');
     expect(fnv1a64('')).toHaveLength(16);
   });
 

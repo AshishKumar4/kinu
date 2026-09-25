@@ -14,7 +14,7 @@ import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { DYNAMIC_CONTEXT_OPEN_TAG, TURN_CONTEXT_HEADER } from '@kinu.run/core';
+import { DYNAMIC_CONTEXT_OPEN_TAG, WORKSPACE_INSTRUCTIONS_TAG } from '@kinu.run/core';
 
 import { scratchDir } from '../packages/test-utils/src/scratch';
 
@@ -241,14 +241,14 @@ describe('the recorded agent follows the walkthrough', () => {
 });
 
 describe('a script reads what was asked, not the live state sent after it', () => {
-  test('an ask the dynamic context and the turn context follow is still the ask', () => {
+  test('an ask the dynamic context and the unapproved instructions follow is still the ask', () => {
     // integration/0924: every request ended in the product's `<dynamic_context>` block, so the kept-tab script,
     // taking the last user message for the ask, answered the save with prose and the row waited out its tier.
     const asked = request({
       messages: [
         { role: 'user', content: KEPT_TAB_NOTE },
         { role: 'user', content: `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="1" kind="delta">\n## Work mode\nMode: build\n</dynamic_context>` },
-        { role: 'user', content: `${TURN_CONTEXT_HEADER}\n\n## Skills activated this turn\n- review (named in the ask)` },
+        { role: 'user', content: `<${WORKSPACE_INSTRUCTIONS_TAG}>\nFiles read from the workspace.\n</${WORKSPACE_INSTRUCTIONS_TAG}>` },
       ],
       available: ['file', 'memory'],
     });

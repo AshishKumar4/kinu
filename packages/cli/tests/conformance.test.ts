@@ -42,9 +42,9 @@ if (resolve(AGENT_HOME) === resolve(join(homedir(), '.kinu'))
 
 const AGENT_NAME = `conformance-${Date.now()}`;
 
-afterAll(() => {
+afterAll(async () => {
   // `kinu create` also writes an `agents` entry, and no product path removes a local one.
-  updateConfigFile((config) => {
+  await updateConfigFile((config) => {
     if (config.agents) delete config.agents[AGENT_NAME];
   });
 });
@@ -86,6 +86,7 @@ function staticResolver(model: LanguageModel): LocalModelResolver {
         return trimmed === undefined || trimmed === '' ? 'conformance/conformance-model' : trimmed;
       },
     resolveModel: () => model,
+    credentialFor: async () => null,
     listProviders: async () => [],
     listModels: async () => ({ models: [], failures: [] }),
     modelInfo: async () => null,

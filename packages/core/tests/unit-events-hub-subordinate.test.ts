@@ -88,11 +88,11 @@ describe('subordinate event derivation', () => {
     expect(dedupeKeyFor({
       ...reportEvent,
       payload: { ...reportPayload, content: 'a later retry re-worded it' },
-    })).toBe(dedupeKeyFor(reportEvent));
+    })).toBe('subordinate_report:settle:msg-77');
     expect(dedupeKeyFor({
       ...reportEvent,
       payload: { ...reportPayload, sequence_id: 'settle:msg-78' },
-    })).not.toBe(dedupeKeyFor(reportEvent));
+    })).toBe('subordinate_report:settle:msg-78');
   });
 });
 

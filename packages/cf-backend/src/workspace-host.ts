@@ -87,6 +87,10 @@ export interface HostedWorkspaceDeps<Id> {
   /** Keeps a slate from replaying retained bindings as an unnamed root lineage. `socket`: the invocation
      *  must outlive the routed 101 response. */
   slateInvocation?(port: number, socket: boolean): { readonly value: string; release: () => void } | null;
+  pictures?: {
+    captures(port: number, handle: string): boolean;
+    rendered(slate: string, port: number): void;
+  };
 }
 
 interface HostComposition {
@@ -140,6 +144,13 @@ export interface HostedWorkspace {
 /** Pins a URL to one exposure; the full 24-hex capability would not fit the DNS label. */
 export const PREVIEW_CAPABILITY_HANDLE_LENGTH = 10;
 
+function isRender(request: Request, response: Response): boolean {
+  const destination = request.headers.get('sec-fetch-dest');
+
+  return request.method === 'GET' && (destination === 'document' || destination === 'iframe')
+    && response.status === 200 && (response.headers.get('content-type') ?? '').startsWith('text/html');
+}
+
 /** Never a 403: a wrong handle must not confirm that the port is listening. */
 function previewNotFound(): Response {
   return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
@@ -161,7 +172,10 @@ interface PreviewGateRefusal {
 
 type PreviewGates =
   | { readonly routed: false; readonly refused: PreviewGateRefusal }
-  | { readonly routed: true; readonly capability: string; readonly refused: PreviewGateRefusal | null };
+  | {
+    readonly routed: true; readonly capability: string; readonly refused: PreviewGateRefusal | null;
+    readonly slate: string | null; readonly capture: boolean;
+  };
 
 function routeCheck(gates: PreviewGates): PreviewRouteCheck {
   return gates.refused === null
@@ -294,8 +308,11 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     }
 
     const { owner } = exposure;
+    const slate = owner !== null && exposure.kind === 'explicit' ? owner : null;
+    const matches = capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) === handle;
+    const capture = !matches && slate !== null && deps.pictures?.captures(port, handle) === true;
 
-    if (capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) {
+    if (!matches && !capture) {
       return { routed: false, refused: { gate: 'handle-mismatch', owner, detail: `the URL names another exposure of port ${port}` } };
     }
 
@@ -310,16 +327,19 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     const listener = portRegistry.get(port);
 
     if (listener === undefined) {
-      return { routed: true, capability, refused: { gate: 'no-listener', owner, detail: `nothing is listening on port ${port}` } };
+      return { routed: true, capability, slate, capture, refused: { gate: 'no-listener', owner, detail: `nothing is listening on port ${port}` } };
     }
 
     if (listener.capability !== capability) {
       const state = (await bundle.session()).processes.get(listener.pid)?.state ?? 'absent';
 
-      return { routed: true, capability, refused: { gate: 'capability-mismatch', owner, detail: `pid=${String(listener.pid)} state=${state}` } };
+      return {
+        routed: true, capability, slate, capture,
+        refused: { gate: 'capability-mismatch', owner, detail: `pid=${String(listener.pid)} state=${state}` },
+      };
     }
 
-    return { routed: true, capability, refused: null };
+    return { routed: true, capability, slate, capture, refused: null };
   };
 
   const files = workspaceBoxFiles(async () => (await bundle.session()).vfs);
@@ -373,13 +393,6 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
 
         return { port: reserved.port, capability: reserved.capability };
       },
-      async reserved(owner) {
-        const held = await readPortReservationByOwner(deps.ctx, owner);
-
-        return held === null || held.reservation.capability === null
-          ? null
-          : { port: held.port, capability: held.reservation.capability };
-      },
       async remove(owner) {
         const removed = await (await runtime()).removeApp({ owner });
 
@@ -418,6 +431,8 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
 
         // A 101 only opens the socket: the process's close listener releases the invocation.
         if (response.status !== 101) invocation?.release();
+
+        if (gates.slate !== null && !gates.capture && isRender(request, response)) deps.pictures?.rendered(gates.slate, port);
 
         return response;
       } catch (cause) {

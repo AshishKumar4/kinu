@@ -335,6 +335,16 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     vfs_baseline_manifest: EVERYWHERE,
     vfs_baseline_blob: EVERYWHERE,
     vfs_baseline_generation: EVERYWHERE,
+    change_notes: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
+      cli: { absent: 'a local workspace has no Changes tab, so nothing writes notes on a change-set' },
+    },
+    slate_pictures: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
+      cli: { absent: 'a local slate has no tile to draw and no Browser Rendering to shoot one' },
+    },
     // Container lifecycle announcement dedupe, keyed to the workspace's container.
     sandbox_lifecycle_incidents: {
       'cf-orchestrator': WIRED,
@@ -387,6 +397,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     pending_steers: EVERYWHERE,
     // File parts of a pending send, one row per part.
     pending_steer_files: EVERYWHERE,
+    pending_steer_metadata: EVERYWHERE,
     // Created by `initWorkspaceSchema` (CLI) and the `ActorAgent` constructor (cf),
     // ahead of the `onStart` recovery sweep.
     actor_turn_claims: EVERYWHERE,

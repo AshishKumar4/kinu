@@ -414,7 +414,7 @@ describe('turn-pipeline correctness wiring', () => {
   test('an auxiliary call binds the route it resolved — the model AND that route\'s own effort', async () => {
     // Driven twice under routes that differ on both axes, so a constant effort that matches the
     // first route still fails.
-    const asked: Array<{ spec: string | null | undefined; effort: ReasoningEffort }> = [];
+    const asked: Array<{ spec: string | null | undefined; effort: ReasoningEffort | null }> = [];
     let profile = mergePolicyProfile();
 
     const runtime = createHeadRuntime({
@@ -766,9 +766,9 @@ describe('turn-pipeline correctness wiring', () => {
     const system = config?.system ?? '';
     // Role is a prefix fact: it changes only on a deliberate agent event.
     expect(system).toContain('## Role: Task (task)');
-    // Provenance flips mid-session, so it rides `turnLocalTail`, never system placement.
-    expect(system).not.toContain('the referenced job result first');
-    expect(system).not.toContain('Background-resume');
+    // Provenance flips mid-session, so it rides the dynamic context, never system placement.
+    expect(system).not.toContain('Fetch its result first');
+    expect(system).not.toContain('## Why this turn runs');
   });
 
   test('the turn prompt advertises the temporary rung the child substrate always wires', async () => {

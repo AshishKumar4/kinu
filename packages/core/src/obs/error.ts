@@ -83,7 +83,6 @@ export type Refusal = {
   readonly execution?: { readonly exitCode: number };
 };
 
-/** Project a classified failure onto the wire. */
 export function refusalOf(error: KinuError): Refusal {
   const refusal = { reason: error.code, error: renderCauseChain(error) };
 
@@ -134,11 +133,24 @@ export function renderThrownChain(input: { cause: unknown }): string {
   return input.cause instanceof Error ? renderCauseChain(input.cause) : String(input.cause);
 }
 
-/** DOMException names; the name, not `code`, is the stable discriminator. */
+/** The name, not `code`, is the stable discriminator. */
 const CODE_BY_ERROR_NAME = new Map<string, ErrorCode>([
   ['AbortError', 'cancelled'],
   ['TimeoutError', 'timeout'],
+  ['CapabilityDeniedError', 'denied'],
 ]);
+
+/** Refused by another object, a shape was our bad input. */
+const CODE_BY_REMOTE_NAME = new Map<string, ErrorCode>([...CODE_BY_ERROR_NAME, ['ValiError', 'bad_input']]);
+
+/** A DO's RPC rethrows a custom error as a `remote` Error named in its message. */
+// As trustworthy as the thrower: a slate facet or codemode guest can forge the name. A label, never an authorization.
+function codeByName(caught: Error): ErrorCode | undefined {
+  const remote = 'remote' in caught && caught.remote === true && caught.name === 'Error';
+  const named = remote ? /^([A-Z][A-Za-z]*Error): /u.exec(caught.message)?.[1] : undefined;
+
+  return named === undefined ? CODE_BY_ERROR_NAME.get(caught.name) : CODE_BY_REMOTE_NAME.get(named);
+}
 
 const CODE_BY_ERRNO = new Map<string, ErrorCode>([
   ['ETIMEDOUT', 'timeout'],
@@ -182,7 +194,7 @@ export function classifyErrorCode(input: { cause: unknown }): ErrorCode | null {
     if (!(caught instanceof Error) || seen.has(caught)) break;
     seen.add(caught);
 
-    const byName = CODE_BY_ERROR_NAME.get(caught.name);
+    const byName = codeByName(caught);
 
     if (byName !== undefined) return byName;
 

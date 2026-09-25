@@ -401,7 +401,7 @@ export interface AdoptUnplacedAgentOptions {
 }
 
 /** Binds one named workspace, keyed on its own identity, so nothing sweeps every unplaced directory. Placed refs return unchanged. */
-export function adoptUnplacedLocalAgent(name: string, opts: AdoptUnplacedAgentOptions = {}): LocalAgentRef {
+export async function adoptUnplacedLocalAgent(name: string, opts: AdoptUnplacedAgentOptions = {}): Promise<LocalAgentRef> {
   const dbPath = agentDbPath(name);
 
   if (!existsSync(dbPath)) {
@@ -419,7 +419,7 @@ export function adoptUnplacedLocalAgent(name: string, opts: AdoptUnplacedAgentOp
   if (already) return already;
   const cwd = canonicalProjectRoot(opts.cwd);
   const workspaceId = opts.workspaceId ?? defaultVirtualWorkspaceId(cwd);
-  upsertAgentConfig({
+  await upsertAgentConfig({
     ...existing,
     name,
     mode: 'local',
@@ -450,7 +450,7 @@ export interface ResolveLocalAgentOptions {
 }
 
 /** The one local resolution, so the placement a peer group depends on cannot drift between call sites. */
-export function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions = {}): ResolvedLocalAgent {
+export async function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions = {}): Promise<ResolvedLocalAgent> {
   const ref = resolveAgentRef(input);
 
   if (ref && ref.mode !== 'local') {
@@ -476,7 +476,7 @@ export function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions 
     return { name, cwd, workspaceId, dbPath, placement: 'unplaced' };
   }
 
-  return { ...adoptUnplacedLocalAgent(name, { cwd, workspaceId }), placement: 'adopted' };
+  return { ...(await adoptUnplacedLocalAgent(name, { cwd, workspaceId })), placement: 'adopted' };
 }
 
 /** A changed identity means the name was reused; continuing would attach history to a different workspace. */
@@ -509,7 +509,7 @@ function writeConfigFileUnlocked(config: KinuConfig): void {
 }
 
 /** The one config writer; always read-modify-write under the lock, since a blind overwrite drops other processes' writes. */
-export function updateConfigFile(mutator: (config: KinuConfig) => KinuConfig | void): KinuConfig {
+export function updateConfigFile(mutator: (config: KinuConfig) => KinuConfig | void): Promise<KinuConfig> {
   return withConfigLock(CONFIG_PATH, () => {
     const config = loadConfigFile();
     const next = mutator(config) ?? config;
@@ -525,9 +525,9 @@ export function readProviderRevision(): number {
 }
 
 /** The only signal a resident daemon or chat session gets that its cached provider listing is stale. */
-export function bumpProviderRevision(): number {
+export async function bumpProviderRevision(): Promise<number> {
   let next = 0;
-  updateConfigFile((config) => {
+  await updateConfigFile((config) => {
     next = (config.providerRevision ?? 0) + 1;
     config.providerRevision = next;
   });
@@ -599,7 +599,7 @@ export function listConfiguredAgentRefs(): KinuAgentConfig[] {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function upsertAgentConfig(agent: Omit<KinuAgentConfig, 'createdAt' | 'updatedAt'> & Partial<Pick<KinuAgentConfig, 'createdAt' | 'updatedAt'>>): KinuAgentConfig {
+export async function upsertAgentConfig(agent: Omit<KinuAgentConfig, 'createdAt' | 'updatedAt'> & Partial<Pick<KinuAgentConfig, 'createdAt' | 'updatedAt'>>): Promise<KinuAgentConfig> {
   validateAgentName(agent.name);
 
   if (agent.alias) validateAliasName(agent.alias);
@@ -611,7 +611,7 @@ export function upsertAgentConfig(agent: Omit<KinuAgentConfig, 'createdAt' | 'up
   if (agent.workspaceId) validateWorkspaceId(agent.workspaceId);
   const now = new Date().toISOString();
   let saved!: KinuAgentConfig;
-  updateConfigFile((config) => {
+  await updateConfigFile((config) => {
     const existing = config.agents?.[agent.name];
     saved = {
       ...existing,
@@ -625,9 +625,9 @@ export function upsertAgentConfig(agent: Omit<KinuAgentConfig, 'createdAt' | 'up
   return saved;
 }
 
-export function removeCloudAgentConfig(cloudName: string): boolean {
+export async function removeCloudAgentConfig(cloudName: string): Promise<boolean> {
   let removed = false;
-  updateConfigFile((config) => {
+  await updateConfigFile((config) => {
     const agents = config.agents ?? {};
     const removedNames = new Set<string>();
 
@@ -650,10 +650,10 @@ export function removeCloudAgentConfig(cloudName: string): boolean {
   return removed;
 }
 
-function setAliasConfig(agentName: string, alias: string): void {
+async function setAliasConfig(agentName: string, alias: string): Promise<void> {
   validateAgentName(agentName);
   validateAliasName(alias);
-  updateConfigFile((config) => {
+  await updateConfigFile((config) => {
     config.aliases = { ...config.aliases, [alias]: agentName };
     const existing = config.agents?.[agentName];
 
@@ -666,8 +666,8 @@ function setAliasConfig(agentName: string, alias: string): void {
   });
 }
 
-function removeAliasConfig(alias: string): void {
-  updateConfigFile((config) => {
+async function removeAliasConfig(alias: string): Promise<void> {
+  await updateConfigFile((config) => {
     const agentName = config.aliases?.[alias];
 
     if (config.aliases) delete config.aliases[alias];
@@ -684,7 +684,7 @@ function aliasPath(alias: string): string {
   return join(BIN_DIR, alias);
 }
 
-export function writeAliasShim(agentName: string, alias: string): string {
+export async function writeAliasShim(agentName: string, alias: string): Promise<string> {
   validateAgentName(agentName);
   validateAliasName(alias);
   ensureBinDir();
@@ -698,15 +698,15 @@ exec "$bin_dir/kinu" run ${shellQuote(agentName)} "$@"
 
   writeFileSync(path, script, { mode: 0o755 });
   chmodSync(path, 0o755);
-  setAliasConfig(agentName, alias);
+  await setAliasConfig(agentName, alias);
 
   return path;
 }
 
-export function deleteAliasShim(alias: string): void {
+export async function deleteAliasShim(alias: string): Promise<void> {
   validateAliasName(alias);
   tolerate(() => unlinkSync(aliasPath(alias)), 'enoent');
-  removeAliasConfig(alias);
+  await removeAliasConfig(alias);
 }
 
 export function pathHint(): string | null {

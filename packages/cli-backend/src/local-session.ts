@@ -9,7 +9,7 @@ import type { ActorHandle } from '@kinu.run/core';
 import { resolve } from 'node:path';
 import {
   generateText, stepCountIs,
-  type LanguageModel, type ModelMessage, type ToolSet,
+  type LanguageModel, type ToolSet,
 } from 'ai';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -77,7 +77,7 @@ import { TierIdSchema,
   buildActorTools, buildMcpToolSet, buildSystemPromptSync, currentDateForPrompt,
   type ActorToolsetDeps,
   activePromptSectionOverrides,
-  turnProvenanceForMetadata,
+  turnReasonForMetadata, type TurnReason,
   runChat, type CountableRequest,
   parseModelSpec, agentAffinityKey,
   normalizeUsage,
@@ -92,7 +92,7 @@ import { TierIdSchema,
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
   createReportCodemodeProvider, REPORT_TOOL, type ReportToolDeps,
   MissionGovernor,
-  DynamicContextLedger, turnLocalContextMessage, unverifiedInstructionsMessage,
+  DynamicContextLedger, renderUnverifiedInstructions,
   observeSystemPromptHash,
   type DynamicContext,
   createReleaseStore, initReleaseTables, releaseSqlFromExec,
@@ -148,7 +148,7 @@ import { TierIdSchema,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
   PlanReviewActions, SUBMIT_PLAN_TOOL, workModeUnderReview,
-  type PlanDecisionOutcome, type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
+  type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
   ChatSession, CHAT_SESSION_ID, CHECKPOINTS_UNCONFIGURED, checkpointAvailability, fileCheckpointListing,
   type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
@@ -240,16 +240,10 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
       host: {
         broadcast: (event) => { input.session().broadcast(event); },
         enqueueTurn: (turn) => input.session().enqueueTurn(turn),
-        // Answers false rather than throwing when the seat is gone: `settled`/`busy` can call it after
-        // host teardown. The cf seam (`seams.turnInFlight`) does the same.
-        turnInFlight: () => {
-          try {
-            return input.session().turnInFlight();
-          } catch (cause) {
-            if (cause instanceof KinuError && cause.code === 'missing') return false;
-            throw cause;
-          }
-        },
+        // A seat that is gone runs nothing and has ended: `settled`/`busy` can read it after host teardown.
+        // The cf seam (`seams.turnInFlight`) answers the same.
+        turnInFlight: () => seatRead(input, (session) => session.turnInFlight(), false),
+        closed: () => seatRead(input, (session) => session.closed(), true),
         setTimer: (fn, ms) => { input.session().setTimer(fn, ms); },
         reconcileDurableWake: null,
       },
@@ -350,6 +344,16 @@ export interface LocalAgentSessionOpts {
 const TurnTierMetadataSchema = v.object({
   profile_tier: v.optional(TierIdSchema),
 });
+
+/** `read` of the seat, or `gone` once host teardown removed it. */
+function seatRead<T>(input: LocalOrchestrationInput, read: (session: LocalAgentSession) => T, gone: T): T {
+  try {
+    return read(input.session());
+  } catch (cause) {
+    if (cause instanceof KinuError && cause.code === 'missing') return gone;
+    throw cause;
+  }
+}
 
 function tierFromMetadata(metadata: ProgrammaticTurn['metadata']): TierId | undefined {
   if (metadata === undefined) return undefined;
@@ -1016,7 +1020,7 @@ export class LocalAgentSession implements BackendHost {
   async savePlanReviewAnnotations(
     id: string,
     revision: number,
-    annotations: PlanReviewAnnotation[],
+    annotations: ReviewAnnotation[],
   ): Promise<PlanReviewResult> {
     return this.planActions.saveAnnotations(id, revision, { value: annotations });
   }
@@ -1100,6 +1104,10 @@ export class LocalAgentSession implements BackendHost {
 
   turnInFlight(): boolean {
     return this.chat.turnInFlight();
+  }
+
+  closed(): boolean {
+    return this.chat.closed;
   }
 
   /** Send the user's message. `mode` is the composer's; a Plan message runs a Plan turn. */
@@ -1713,26 +1721,10 @@ export class LocalAgentSession implements BackendHost {
     const systemPrompt = buildSystemPromptSync(this.rt, systemPromptOptions);
     this.recordSystemPromptHash(systemPrompt);
 
-    // Live state rides the dynamic-context ledger, re-read every step; turn-local state rides right before the
-    // turn's input. Neither enters durable history, so the prefix stays cacheable.
-
-    // Provenance flips when a background job lands; in the system prompt it would rewrite the cached
-    // prefix (prompting/volatile-context.ts).
-    const turnLocal: Parameters<typeof turnLocalContextMessage>[0] = {
-      provenance: turnProvenanceForMetadata(item.metadata),
-    };
-
-    if (activeSkills) turnLocal.activeSkills = activeSkills;
-    const turnLocalMsg = turnLocalContextMessage(turnLocal);
-
-    // Unapproved instruction bytes ride as sealed reference material, before the turn-local message so
-    // activation reasons stay nearest the request.
-    const unverifiedMsg = unverifiedInstructionsMessage(
-      activeSkills ? { agentsMd, activeSkills } : { agentsMd },
-    );
-
-    const turnLocalMsgs = [unverifiedMsg, turnLocalMsg]
-      .filter((msg): msg is ModelMessage => msg !== null);
+    // Why the turn runs and the unapproved instruction files ride the dynamic-context ledger, out of the cached
+    // prefix: provenance flips when a background job lands.
+    const turn = turnReasonForMetadata(item.metadata);
+    const instructions = renderUnverifiedInstructions(activeSkills ? { agentsMd, activeSkills } : { agentsMd });
 
     const cache = this.cacheIdentity();
 
@@ -1747,7 +1739,7 @@ export class LocalAgentSession implements BackendHost {
     const measured = measureCompactionTrigger(this.compactionState, cache.sessionKey, historyLength);
     // Awaited once per turn: the sync catalog reads answer from a static stand-in while the lookup is
     // in flight, which measured a 1M-window model against 128k (#20). The fallbacks' rates price their steps.
-    const [window] = await Promise.all([this.modelCatalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks)]);
+    const [window] = await Promise.all([this.modelCatalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model))]);
     const contextWindow = window.contextWindow;
 
     const liveTurn: ActorExecutionInput['chat'] = {
@@ -1764,7 +1756,6 @@ export class LocalAgentSession implements BackendHost {
       attachments: {
         accepts: this.modelCatalog.acceptedMedia(), vfs: this.rt.storage.vfs, budget: this.actorSession.orchestrator.acc.context,
       },
-      turnLocal: turnLocalMsgs.length > 0 ? turnLocalMsgs : undefined,
       tools: turnTools,
       transformTrigger: measured.trigger,
       cache,
@@ -1784,16 +1775,15 @@ export class LocalAgentSession implements BackendHost {
       liveTurn.countInputTokens = (request: CountableRequest) =>
         resolver.countInputTokens(this.effectiveModelSpec(), request);
 
-      liveTurn.fallbacks = profile.tier.fallbacks.map((spec) => ({
-        spec,
+      const normalize = (spec: string) => this.profiles().normalizeSpec(spec);
+      liveTurn.modelSpec = normalize(profile.tier.model);
+      liveTurn.credentialOf = (spec) => resolver.credentialFor(spec);
+      liveTurn.fallbacks = profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
+        spec: normalize(spec),
         bind: () => {
-          const { provider } = parseModelSpec(this.profiles().normalizeSpec(spec));
+          const { provider } = parseModelSpec(normalize(spec));
 
-          return {
-            model: resolver.resolveModel(spec),
-            provider,
-            providerOptions: reasoningEffortOptions(profile.tier.reasoningEffort, provider),
-          };
+          return { model: resolver.resolveModel(spec), provider, providerOptions: reasoningEffortOptions(reasoningEffort, provider) };
         },
       }));
     }
@@ -1803,7 +1793,8 @@ export class LocalAgentSession implements BackendHost {
         loopVersion: await this.rt.identity.scaffold.version(),
         chat: liveTurn,
         extensions: [this.compactionExtension],
-        dynamic: (requestProfile, tools) => this.dynamicContextSnapshot(memoryTail, requestProfile, tools),
+        dynamic: (requestProfile, tools) => this.dynamicContextSnapshot(memoryTail, requestProfile, tools, { turn, activeSkills }),
+        instructions,
         scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
       },
       sessionKey: cache.sessionKey,
@@ -2418,12 +2409,17 @@ export class LocalAgentSession implements BackendHost {
 
   /** Live state for one model step (DO dynamicContextSnapshot peer). Nothing clock-derived: a
    *  wall-clock field would re-fingerprint the block every request. */
-  private dynamicContextSnapshot(memoryTail: string | undefined, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext {
+  private dynamicContextSnapshot(
+    memoryTail: string | undefined, profile: ResolvedTurnProfile, tools: ToolSet,
+    turnOf: { readonly turn: TurnReason; readonly activeSkills: ActiveSkillSet | undefined },
+  ): DynamicContext {
     return collectDynamicContext({
       rt: this.rt,
       stores: this.stores,
       profile,
       tools,
+      turn: turnOf.turn,
+      ...(turnOf.activeSkills !== undefined && { activeSkills: turnOf.activeSkills }),
       memoryTail,
       missingCapabilities: this.mcpUnavailable,
       subordinateDelegates: () => subordinateDelegatesOf(this.teamDeps?.snapshot() ?? []),

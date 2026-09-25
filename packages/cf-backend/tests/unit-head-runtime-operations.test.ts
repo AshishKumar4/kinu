@@ -71,7 +71,7 @@ const neverHost: ExplorationHostSeams = {
 function runtimeWith(text: string) {
   const operations: ModelOperationEvent[] = [];
   const reports: ModelCallReport[] = [];
-  const resolved: Array<{ spec: string | null | undefined; effort: ReasoningEffort }> = [];
+  const resolved: Array<{ spec: string | null | undefined; effort: ReasoningEffort | null }> = [];
   const calls: LanguageModelV3CallOptions[] = [];
 
   const runtime = createHeadRuntime({

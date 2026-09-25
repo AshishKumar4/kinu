@@ -7,7 +7,6 @@ import { createTestActors, createTestRuntime, present } from '@kinu.run/test-uti
 import {
   buildSystemPromptSync,
   renderUnverifiedInstructions,
-  unverifiedInstructionsMessage,
   filterToolSetBySkills,
   InstructionApprovalStore,
   initInstructionApprovalsTable,
@@ -105,14 +104,6 @@ describe('AGENTS.md the agent could have written', () => {
     expect(block).toContain('NOT approved');
     expect(block).toContain('reference material');
     expect(block).toContain(AGENTS_PATH);
-  });
-
-  test('the block rides a USER message, not the system prompt', () => {
-    const message = unverifiedInstructionsMessage({
-      agentsMd: agentsMd(POISON, 'unverified'),
-    });
-
-    expect(message).toMatchObject({ role: 'user' });
   });
 
   test('approved bytes keep system placement and their original force', () => {

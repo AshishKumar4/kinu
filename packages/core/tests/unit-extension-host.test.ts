@@ -6,6 +6,7 @@ import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
+  DynamicContextLedger,
   ExtensionHost,
   runChat,
   composePrepareStep,
@@ -186,7 +187,7 @@ function userTexts(prompt: PromptMessage[]): string[] {
 }
 
 describe('transformContext through runChat', () => {
-  test('rewrites the durable history; turn-local context joins after it, never seen by the transform', async () => {
+  test('rewrites the durable history; runtime context joins after it, never seen by the transform', async () => {
     const { model, prompt } = promptCapturingModel();
     let transformSaw: string[] = [];
 
@@ -207,16 +208,20 @@ describe('transformContext through runChat', () => {
         { role: 'assistant', content: 'old-2' },
         { role: 'user', content: 'old-3' },
       ],
-      turnLocal: [{ role: 'user', content: 'volatile-tail' }],
+      dynamicContext: {
+        ledger: new DynamicContextLedger(),
+        snapshot: () => ({ factsBlock: 'a: 1' }),
+        instructions: '<workspace_instructions>\nvolatile-tail\n</workspace_instructions>',
+      },
       tools: {},
       stopWhen: stepCountIs(1),
       extensions: new ExtensionHost().register(compactor),
     })) { /* drain */ }
 
-    // The transform saw ONLY the durable history — not the turn-local message.
+    // The transform saw ONLY the durable history, never the runtime context.
     expect(transformSaw).toEqual(['old-1', 'old-2', 'old-3']);
-    // The model saw the rewritten history, the turn-local message before the turn's input it now holds.
-    expect(userTexts(prompt())).toEqual(['volatile-tail', 'summary-of-history']);
+    // The model saw the rewritten history, the runtime context before the turn's input it now holds.
+    expect(userTexts(prompt()).map((text) => text.slice(0, 16))).toEqual(['<workspace_instr', '<dynamic_context', 'summary-of-histo']);
   });
 
   test('providerReportedTokens threads into the transform context, and step-finish reports the priced prompt', async () => {

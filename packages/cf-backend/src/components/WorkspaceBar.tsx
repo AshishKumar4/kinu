@@ -30,7 +30,6 @@ const ALTITUDE_TABS = [
 
 export interface WorkspaceBarProps {
   title: string;
-  /** "" on an untitled workspace so saving cannot persist the "Untitled workspace" label. */
   editValue?: string;
   onRename: (displayName: string) => Promise<string>;
   connectionStatus: ConnectionStatus;
@@ -38,20 +37,9 @@ export interface WorkspaceBarProps {
   /** `untilMs` is the wait's end on this browser's clock. */
   providerWait?: { provider: string; untilMs: number } | null;
   waitingOnYou?: boolean;
-  model?: string;
   forkParent?: { workspace: string; forkedAt: number };
   altitude: Altitude;
   onAltitude: (altitude: Altitude) => void;
-}
-
-function modelChipLabel(spec: string): string {
-  const withoutCompatPrefix = spec.replace(/^openai-compat:[^/]+\//, "");
-
-  const idPart = withoutCompatPrefix.includes("/")
-    ? withoutCompatPrefix.slice(withoutCompatPrefix.indexOf("/") + 1)
-    : withoutCompatPrefix;
-
-  return idPart.startsWith("@cf/") ? idPart.slice(4) : idPart;
 }
 
 const CONNECTION_TONE: Record<ConnectionStatus, { dot: string; word: string }> = {
@@ -110,7 +98,7 @@ function TaskIndicator({ working, providerWait, waitingOnYou }: { working: boole
 }
 
 export function WorkspaceBar({
-  title, editValue, onRename, connectionStatus, working, providerWait = null, waitingOnYou = false, model, forkParent,
+  title, editValue, onRename, connectionStatus, working, providerWait = null, waitingOnYou = false, forkParent,
   altitude, onAltitude,
 }: WorkspaceBarProps) {
   const { mode } = useTheme();
@@ -122,14 +110,6 @@ export function WorkspaceBar({
         <InlineRenameTitle title={title} editValue={editValue} onRename={onRename} subject="workspace" />
         <ConnectionIndicator status={connectionStatus} />
         <TaskIndicator working={working} providerWait={providerWait} waitingOnYou={waitingOnYou} />
-        {model && (
-          <span
-            className="hidden max-w-48 truncate rounded-full border p-border p-fill px-3 py-1 font-mono text-[11px] p-text-4 sm:inline"
-            title={`Next turn runs ${model}`}
-          >
-            {modelChipLabel(model)}
-          </span>
-        )}
         {forkParent && (
           <Link
             to={`/workspace/${forkParent.workspace}`}
@@ -231,7 +211,7 @@ export function InlineRenameTitle({ title, editValue, onRename, subject, textCla
           className="rounded-sm p-1 p-text-3 hover:p-text"
           aria-label="Cancel rename"
         ><PencilSimpleIcon size={13} style={{ transform: "scaleX(-1)" }} /></button>
-        {error && <span className="text-[10px] p-danger">{error}</span>}
+        {error && <span data-failure className="text-[10px] p-danger">{error}</span>}
       </form>
     );
   }

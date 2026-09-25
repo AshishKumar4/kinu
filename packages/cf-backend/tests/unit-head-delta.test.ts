@@ -149,6 +149,7 @@ describe('the journalled step, as the chat draws it', () => {
   });
 
   test('step ids are per step, so the trace is stable while it grows', () => {
-    expect(stepAsMessage(step(), 0, 'h1').id).not.toBe(stepAsMessage(step(), 1, 'h1').id);
+    expect(stepAsMessage(step(), 0, 'h1').id).toBe('h1-s0');
+    expect(stepAsMessage(step(), 1, 'h1').id).toBe('h1-s1');
   });
 });

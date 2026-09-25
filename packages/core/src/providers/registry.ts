@@ -41,11 +41,25 @@ export interface ProviderRegistry {
   /** Never rejects because of one provider. */
   listAllModels(deps: ProviderDeps): Promise<ModelMenu>;
   resolve(spec: string, deps: ProviderDeps): LanguageModel;
+  /** The stored credential `spec` authenticates with, found without authenticating; null when none would serve. */
+  credentialFor(spec: string, deps: ProviderDeps): Promise<string | null>;
   defaultSpec(deps: ProviderDeps): Promise<string | null>;
 }
 
 /** Id for a failure of the dynamic source itself. */
 const CATALOG_SOURCE_ID = 'catalog';
+
+/** As {@link accountDeps} picks, without authenticating; null where it finds none or refuses. */
+async function chosenCredentialKey(deps: ProviderDeps, providerId: string, key: string, named?: string): Promise<string | null> {
+  const chosen = named ?? deps.accountFor?.(providerId);
+
+  if (chosen !== undefined) return accountCredentialKey(key, chosen);
+
+  if (await deps.hasCredential(key)) return key;
+  const [only, ...others] = storedAccounts(key, await deps.listCredentialKeys?.() ?? []);
+
+  return only === undefined || only === MAIN_ACCOUNT || others.length > 0 ? null : accountCredentialKey(key, only);
+}
 
 /** `named`, else `accountFor`'s, else `main`, else the only one; several unchosen: refused. */
 export function accountDeps(deps: ProviderDeps, providerId: string, named?: string): ProviderDeps {
@@ -261,6 +275,13 @@ export function createProviderRegistry(): ProviderRegistry {
       }
 
       return provider.createModel(parsed.modelId, accountDeps(deps, parsed.provider, parsed.account));
+    },
+
+    async credentialFor(spec, deps) {
+      const parsed = parseModelSpec(spec);
+      const key = providerFor(parsed.provider)?.credentialKey;
+
+      return key === undefined ? null : chosenCredentialKey(deps, parsed.provider, key, parsed.account);
     },
 
     async defaultSpec(deps) {

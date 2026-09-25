@@ -11,13 +11,15 @@ const os = require('node:os');
 
 const crypto = require('node:crypto');
 
-const { spawn, spawnSync, execFileSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 
 const sandbox = require('./sandbox.js');
 
 const pty = require('./pty.js');
 
 const update = require('./update.js');
+
+const { runToExit } = update;
 
 /** The names this daemon requires beside itself — the three requires above
  *  — for the updater to land a newer set of. */
@@ -196,20 +198,6 @@ function rpc(ws, id, result, error) {
   ws.send(JSON.stringify(error ? { id, error } : { id, result }));
 }
 
-function runCommand(cmd, args) {
-  try {
-    return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  } catch (err) {
-    // Probing for an optional tool accepts two outcomes: the binary is not
-    // installed (ENOENT), or it ran and exited non-zero (a numeric status).
-    // Anything else — EACCES, ETIMEDOUT, EMFILE — is this daemon's own
-    // breakage and must surface instead of reading as "no such tool".
-    if (!err || (err.code !== 'ENOENT' && !Number.isInteger(err.status))) throw err;
-
-    return null;
-  }
-}
-
 // ── Shadow-git checkpoints ─────────────────────────────────────────────
 //
 // Zero-dep mirror of the store format in core/src/checkpoints/format.ts
@@ -341,37 +329,34 @@ function createCheckpoints(opts = {}) {
 
   const storeEnv = (gitDir, workdir) => ({ ...isolatedEnv(), GIT_DIR: gitDir, GIT_WORK_TREE: workdir });
 
+  const runGit = (args, cwd, env) => runToExit(gitBin, args, {
+    cwd, env, encoding: 'utf8', timeout: 30_000, maxBuffer: 32 * 1024 * 1024,
+  });
+
   /** Run git; returns stdout. Throws on non-zero exit or missing binary. */
-  const git = (args, cwd, env) => {
+  const git = async (args, cwd, env) => {
     // A missing cwd would fail spawn with the same ENOENT a missing binary
     // produces — never let a vanished workdir flip the degraded-mode probe.
     if (!fs.existsSync(cwd)) throw new Error(`working directory not found: ${cwd}`);
+    const { error, stdout, stderr } = await runGit(args, cwd, env);
 
-    try {
-      const out = execFileSync(gitBin, args, {
-        cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: 30_000, maxBuffer: 32 * 1024 * 1024,
-      });
-
-      gitAvailable = true;
-
-      return out;
-    } catch (err) {
-      if (err && err.code === 'ENOENT') {
-        gitAvailable = false;
-        throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT, { cause: err });
-      }
-
-      gitAvailable = true;
-      throw new Error((err.stderr ? String(err.stderr).trim() : '') || err.message, { cause: err });
+    if (error !== null && error.code === 'ENOENT') {
+      gitAvailable = false;
+      throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT, { cause: error });
     }
+
+    gitAvailable = true;
+
+    if (error !== null) throw new Error(String(stderr).trim() || error.message, { cause: error });
+
+    return stdout;
   };
 
-  const probe = () => {
+  const probe = async () => {
     if (gitAvailable !== null) return gitAvailable;
 
     try {
-      git(['--version'], os.homedir(), isolatedEnv());
+      await git(['--version'], os.homedir(), isolatedEnv());
     } catch (err) {
       // git() records availability from the spawn outcome, so a git that ran
       // and failed is still a git that exists. Only a failure that never
@@ -393,10 +378,10 @@ function createCheckpoints(opts = {}) {
   const storeDirFor = (agent, dir) => path.join(base, sanitizeAgent(agent), dirHash(dir));
   const workdirOrBase = (workdir) => (fs.existsSync(workdir) ? workdir : base);
 
-  const initStore = (gitDir, workdir) => {
+  const initStore = async (gitDir, workdir) => {
     if (fs.existsSync(path.join(gitDir, 'HEAD'))) return;
     fs.mkdirSync(gitDir, { recursive: true });
-    git(['init', '--bare', '--quiet', gitDir], path.dirname(gitDir), isolatedEnv());
+    await git(['init', '--bare', '--quiet', gitDir], path.dirname(gitDir), isolatedEnv());
     fs.mkdirSync(path.join(gitDir, 'info'), { recursive: true });
     fs.writeFileSync(path.join(gitDir, 'info', 'exclude'), CHECKPOINT_EXCLUDES.join('\n') + '\n');
     fs.writeFileSync(path.join(gitDir, WORKDIR_MARKER), path.resolve(workdir) + '\n');
@@ -436,11 +421,11 @@ function createCheckpoints(opts = {}) {
     }
   };
 
-  const storeRefs = (gitDir, workdir) => {
+  const storeRefs = async (gitDir, workdir) => {
     let out;
 
     try {
-      out = git(['for-each-ref', '--sort=-refname', '--format=%(refname)|%(objectname)|%(subject)', REF_PREFIX],
+      out = await git(['for-each-ref', '--sort=-refname', '--format=%(refname)|%(objectname)|%(subject)', REF_PREFIX],
         workdirOrBase(workdir), storeEnv(gitDir, workdir));
     } catch (err) {
       if (err.message === CHECKPOINTS_UNAVAILABLE_NO_GIT) throw err;
@@ -462,75 +447,74 @@ function createCheckpoints(opts = {}) {
   };
 
   /** `git add -A`, keeping what it could not read instead of failing over it.
-   *  spawnSync rather than the `git` helper above because stderr is the answer
-   *  here, and it arrives on a clean exit too (an unreadable DIRECTORY is only
-   *  a warning). */
-  const stageAll = (workdir, env) => {
+   *  Not the `git` helper above, because stderr is the answer here, and it
+   *  arrives on a clean exit too (an unreadable DIRECTORY is only a warning). */
+  const stageAll = async (workdir, env) => {
     if (!fs.existsSync(workdir)) throw new Error(`working directory not found: ${workdir}`);
+    const { error, stderr } = await runGit(['add', '-A', '--ignore-errors'], workdir, env);
 
-    const run = spawnSync(gitBin, ['add', '-A', '--ignore-errors'], {
-      cwd: workdir, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 30_000, maxBuffer: 32 * 1024 * 1024,
-    });
-
-    if (run.error && run.error.code === 'ENOENT') {
+    if (error !== null && error.code === 'ENOENT') {
       gitAvailable = false;
-      throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT, { cause: run.error });
+      throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT, { cause: error });
     }
 
     gitAvailable = true;
 
-    if (run.error) throw new Error(`checkpoint staging failed: ${run.error.message}`, { cause: run.error });
-    const stderr = String(run.stderr ?? '');
-    const diagnosis = diagnoseStaging(stderr);
+    // A code that is not an exit status (a timeout's kill, an overfull buffer)
+    // means git never finished, whatever it printed.
+    if (error !== null && !Number.isInteger(error.code)) {
+      throw new Error(`checkpoint staging failed: ${error.message}`, { cause: error });
+    }
+
+    const diagnosis = diagnoseStaging(String(stderr));
 
     // Non-zero explained entirely by paths it may not read is not a failure;
     // anything else is, and a truncated tree must not be called a checkpoint.
-    if (diagnosis.unexplained.length > 0 || (run.status !== 0 && diagnosis.unreadable.length === 0)) {
-      throw new Error(`checkpoint staging failed: ${stderr.trim()}`);
+    if (diagnosis.unexplained.length > 0 || (error !== null && diagnosis.unreadable.length === 0)) {
+      throw new Error(`checkpoint staging failed: ${String(stderr).trim()}`);
     }
 
     return diagnosis.unreadable;
   };
 
-  const stageCurrent = (gitDir, workdir) => {
+  const stageCurrent = async (gitDir, workdir) => {
     const env = storeEnv(gitDir, workdir);
-    const unreadable = stageAll(workdir, env);
+    const unreadable = await stageAll(workdir, env);
 
-    return { tree: git(['write-tree'], workdir, env).trim(), unreadable };
+    return { tree: (await git(['write-tree'], workdir, env)).trim(), unreadable };
   };
 
-  const snapshot = (agent, dir, turn, reason) => {
+  const snapshot = async (agent, dir, turn, reason) => {
     if (snapshotSkipped(dir)) return null;
     const abs = path.resolve(dir);
     const gitDir = storeDirFor(agent, abs);
-    initStore(gitDir, abs);
+    await initStore(gitDir, abs);
     const env = storeEnv(gitDir, abs);
-    const staged = stageCurrent(gitDir, abs);
+    const staged = await stageCurrent(gitDir, abs);
     const tree = staged.tree;
 
-    const refs = storeRefs(gitDir, abs);
+    const refs = await storeRefs(gitDir, abs);
     const latest = refs[0];
 
-    if (latest && git(['rev-parse', `${latest.id}^{tree}`], abs, env).trim() === tree) return latest.id;
+    if (latest && (await git(['rev-parse', `${latest.id}^{tree}`], abs, env)).trim() === tree) return latest.id;
 
     const subject = subjectFor(turn, reasonWithSkips(reason, staged.unreadable));
-    const sha = git(['commit-tree', tree, '-m', subject], abs, env).trim();
+    const sha = (await git(['commit-tree', tree, '-m', subject], abs, env)).trim();
     const refName = `${REF_PREFIX}/${String(Date.now()).padStart(13, '0')}-${(refSeq++).toString(36).padStart(3, '0')}`;
-    git(['update-ref', refName, sha], abs, env);
+    await git(['update-ref', refName, sha], abs, env);
 
     if (refs.length + 1 > keep) {
-      for (const stale of storeRefs(gitDir, abs).slice(keep)) {
-        git(['update-ref', '-d', stale.ref], abs, env);
+      for (const stale of (await storeRefs(gitDir, abs)).slice(keep)) {
+        await git(['update-ref', '-d', stale.ref], abs, env);
       }
 
-      git(['prune', '--expire=now'], abs, env);
+      await git(['prune', '--expire=now'], abs, env);
     }
 
     return sha;
   };
 
-  const requireCheckpoint = (agent, dir, id) => {
+  const requireCheckpoint = async (agent, dir, id) => {
     if (!SHA_RE.test(String(id))) throw new Error(`invalid checkpoint id: ${id}`);
     const abs = path.resolve(dir);
     const gitDir = storeDirFor(agent, abs);
@@ -538,7 +522,7 @@ function createCheckpoints(opts = {}) {
     if (!fs.existsSync(path.join(gitDir, 'HEAD'))) throw new Error(`no checkpoints exist for ${abs}`);
     const env = storeEnv(gitDir, abs);
 
-    try { git(['rev-parse', '--verify', `${id}^{commit}`], workdirOrBase(abs), env); }
+    try { await git(['rev-parse', '--verify', `${id}^{commit}`], workdirOrBase(abs), env); }
     catch (err) {
       if (err.message === CHECKPOINTS_UNAVAILABLE_NO_GIT) throw err;
       throw new Error(`checkpoint not found: ${id}`, { cause: err });
@@ -548,11 +532,11 @@ function createCheckpoints(opts = {}) {
   };
 
   /** diff current staged state → checkpoint tree, in restore direction. */
-  const diffToCheckpoint = (gitDir, abs, id) => {
+  const diffToCheckpoint = async (gitDir, abs, id) => {
     const env = storeEnv(gitDir, abs);
     // An unreadable path is in neither tree, so no change names it.
-    const current = stageCurrent(gitDir, abs);
-    const out = git(['diff-tree', '-r', '--name-status', current.tree, `${id}^{tree}`], abs, env);
+    const current = await stageCurrent(gitDir, abs);
+    const out = await git(['diff-tree', '-r', '--name-status', current.tree, `${id}^{tree}`], abs, env);
     const files = [];
 
     for (const line of out.split('\n')) {
@@ -570,33 +554,129 @@ function createCheckpoints(opts = {}) {
     return files;
   };
 
+  const listEntries = async (agent, limit, turnId) => {
+    if (!(await probe())) return [];
+    const agentBase = path.join(base, sanitizeAgent(agent));
+    let stores;
+
+    try { stores = fs.readdirSync(agentBase); }
+    catch (err) {
+      // No store directory means this agent has taken no checkpoints; any
+      // other readdir failure is a real fault and must not read as "none".
+      if (!err || err.code !== 'ENOENT') throw err;
+
+      return [];
+    }
+
+    const entries = [];
+
+    for (const name of stores) {
+      const gitDir = path.join(agentBase, name);
+      const marker = path.join(gitDir, WORKDIR_MARKER);
+
+      if (!fs.existsSync(path.join(gitDir, 'HEAD')) || !fs.existsSync(marker)) continue;
+      const workdir = fs.readFileSync(marker, 'utf8').trim();
+
+      for (const ref of await storeRefs(gitDir, workdir)) {
+        const meta = parseSubject(ref.subject);
+
+        if (turnId !== undefined && turnId !== null && meta.turnId !== turnId) continue;
+        entries.push({ id: ref.id, dir: workdir, at: refTimestampMs(ref.ref), ...meta });
+      }
+    }
+
+    entries.sort((a, b) => b.at - a.at);
+
+    return entries.slice(0, Math.max(1, limit ?? 50));
+  };
+
+  const restoreTo = async (agent, dir, id) => {
+    if (!(await probe())) throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT);
+    const { gitDir, abs, env } = await requireCheckpoint(agent, dir, id);
+
+    if (!fs.existsSync(abs)) throw new Error(`working directory no longer exists: ${abs}`);
+    const files = await diffToCheckpoint(gitDir, abs, id);
+
+    // Safety snapshot first, so the restore itself is undoable.
+    const preRestoreId = await snapshot(agent, abs, null, 'pre-restore');
+
+    // Remove files created since the checkpoint, then materialize the
+    // checkpoint tree (content + recreated deletions) from the store index.
+    for (const change of files) {
+      if (change.kind !== 'delete') continue;
+      const target = path.resolve(abs, change.path);
+
+      if (!target.startsWith(abs)) continue;
+
+      try { fs.unlinkSync(target); }
+      catch (err) { if (!err || err.code !== 'ENOENT') throw err; }
+    }
+
+    await git(['read-tree', id], abs, env);
+    await git(['checkout-index', '-a', '-f'], abs, env);
+
+    return { dir: abs, id, files, preRestoreId };
+  };
+
+  /** Pre-mutation snapshot driven by the frame's checkpoint hint. Never
+   *  throws — a snapshot failure must not block the operation it precedes. */
+  const snapshotFor = async (hint, fallbackDir) => {
+    try {
+      if (!hint || !(await probe())) return null;
+      const dir = hintedDir(hint) ?? fallbackDir;
+
+      if (!dir) return null;
+      const abs = path.resolve(dir);
+      const dedupeKey = `${sanitizeAgent(hint.agent)}|${abs}`;
+      const turnId = hint.turnId ?? '';
+      const turnKey = turnId === '' ? 'no-turn' : turnId;
+
+      if (turnDone.get(dedupeKey) === turnKey) return null;
+      turnDone.set(dedupeKey, turnKey);
+
+      return await snapshot(hint.agent, abs, { turnId: hint.turnId, sessionId: hint.sessionId }, 'pre-mutation');
+    } catch (err) {
+      log('checkpoint snapshot failed (non-blocking):', err.message);
+
+      return null;
+    }
+  };
+
+  /** Settles once every operation queued before it has settled. */
+  let queue = Promise.resolve();
+
+  /** One operation at a time, in arrival order. Git keeps one index per store,
+   *  and a restore rewrites the tree a snapshot reads, so two operations must
+   *  never overlap; a synchronous daemon had this order for free. */
+  const inOrder = (operation) => {
+    const run = queue.then(operation);
+    queue = Promise.allSettled([run]);
+
+    return run;
+  };
+
   return {
     status() {
-      return probe() ? { available: true } : { available: false, reason: CHECKPOINTS_UNAVAILABLE_NO_GIT };
+      return inOrder(async () => ((await probe())
+        ? { available: true }
+        : { available: false, reason: CHECKPOINTS_UNAVAILABLE_NO_GIT }));
     },
 
-    /** Pre-mutation snapshot driven by the frame's checkpoint hint. Never
-     *  throws — a snapshot failure must not block the operation it precedes. */
+    /** The pre-mutation snapshot the hint asks for, in store order: its id,
+     *  or null when none was taken. */
     ensure(hint, fallbackDir) {
-      try {
-        if (!hint || !probe()) return null;
-        const dir = hintedDir(hint) ?? fallbackDir;
+      return inOrder(() => snapshotFor(hint, fallbackDir));
+    },
 
-        if (!dir) return null;
-        const abs = path.resolve(dir);
-        const dedupeKey = `${sanitizeAgent(hint.agent)}|${abs}`;
-        const turnId = hint.turnId ?? '';
-        const turnKey = turnId === '' ? 'no-turn' : turnId;
+    /** `apply`, a frame's mutation, in store order and after the pre-mutation
+     *  snapshot its hint asks for: the snapshot never holds the mutation it
+     *  precedes, and no store operation runs while it lands. */
+    mutate(hint, fallbackDir, apply) {
+      return inOrder(async () => {
+        await snapshotFor(hint, fallbackDir);
 
-        if (turnDone.get(dedupeKey) === turnKey) return null;
-        turnDone.set(dedupeKey, turnKey);
-
-        return snapshot(hint.agent, abs, { turnId: hint.turnId, sessionId: hint.sessionId }, 'pre-mutation');
-      } catch (err) {
-        log('checkpoint snapshot failed (non-blocking):', err.message);
-
-        return null;
-      }
+        return apply();
+      });
     },
 
     // `turnId` filters HERE, before the limit truncates, because retention is
@@ -604,74 +684,20 @@ function createCheckpoints(opts = {}) {
     // reads a window and filters by turn itself loses turns whose checkpoint
     // still exists. See FileCheckpoints.list in @kinu.run/core.
     list(agent, limit, turnId) {
-      if (!probe()) return [];
-      const agentBase = path.join(base, sanitizeAgent(agent));
-      let stores;
-
-      try { stores = fs.readdirSync(agentBase); }
-      catch (err) {
-        // No store directory means this agent has taken no checkpoints; any
-        // other readdir failure is a real fault and must not read as "none".
-        if (!err || err.code !== 'ENOENT') throw err;
-
-        return [];
-      }
-
-      const entries = [];
-
-      for (const name of stores) {
-        const gitDir = path.join(agentBase, name);
-        const marker = path.join(gitDir, WORKDIR_MARKER);
-
-        if (!fs.existsSync(path.join(gitDir, 'HEAD')) || !fs.existsSync(marker)) continue;
-        const workdir = fs.readFileSync(marker, 'utf8').trim();
-
-        for (const ref of storeRefs(gitDir, workdir)) {
-          const meta = parseSubject(ref.subject);
-
-          if (turnId !== undefined && turnId !== null && meta.turnId !== turnId) continue;
-          entries.push({ id: ref.id, dir: workdir, at: refTimestampMs(ref.ref), ...meta });
-        }
-      }
-
-      entries.sort((a, b) => b.at - a.at);
-
-      return entries.slice(0, Math.max(1, limit ?? 50));
+      return inOrder(() => listEntries(agent, limit, turnId));
     },
 
     plan(agent, dir, id) {
-      if (!probe()) throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT);
-      const { gitDir, abs } = requireCheckpoint(agent, dir, id);
+      return inOrder(async () => {
+        if (!(await probe())) throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT);
+        const { gitDir, abs } = await requireCheckpoint(agent, dir, id);
 
-      return { dir: abs, id, files: diffToCheckpoint(gitDir, abs, id) };
+        return { dir: abs, id, files: await diffToCheckpoint(gitDir, abs, id) };
+      });
     },
 
     restore(agent, dir, id) {
-      if (!probe()) throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT);
-      const { gitDir, abs, env } = requireCheckpoint(agent, dir, id);
-
-      if (!fs.existsSync(abs)) throw new Error(`working directory no longer exists: ${abs}`);
-      const files = diffToCheckpoint(gitDir, abs, id);
-
-      // Safety snapshot first, so the restore itself is undoable.
-      const preRestoreId = snapshot(agent, abs, null, 'pre-restore');
-
-      // Remove files created since the checkpoint, then materialize the
-      // checkpoint tree (content + recreated deletions) from the store index.
-      for (const change of files) {
-        if (change.kind !== 'delete') continue;
-        const target = path.resolve(abs, change.path);
-
-        if (!target.startsWith(abs)) continue;
-
-        try { fs.unlinkSync(target); }
-        catch (err) { if (!err || err.code !== 'ENOENT') throw err; }
-      }
-
-      git(['read-tree', id], abs, env);
-      git(['checkout-index', '-a', '-f'], abs, env);
-
-      return { dir: abs, id, files, preRestoreId };
+      return inOrder(() => restoreTo(agent, dir, id));
     },
 
     /** The project directory holding `p`, climbing only through directories
@@ -695,70 +721,6 @@ function createCheckpoints(opts = {}) {
       return candidate;
     },
   };
-}
-
-// ── Listening-port discovery ───────────────────────────────────────────
-
-function listListeningPorts() {
-  const rows = [];
-  const seen = new Set();
-
-  const add = (port, host, command, pid) => {
-    const n = Number(port);
-
-    if (!Number.isInteger(n) || n <= 0 || n > 65535) return;
-    const bind = host ?? '';
-    const program = command ?? '';
-    const key = `${bind}:${n}:${pid ?? ''}:${program}`;
-
-    if (seen.has(key)) return;
-    seen.add(key);
-    rows.push({ port: n, host: bind === '' ? '0.0.0.0' : bind, protocol: 'tcp', command: program === '' ? null : program, pid: pid ? Number(pid) : null });
-  };
-
-  const lsof = runCommand('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN']);
-
-  if (lsof) {
-    for (const line of lsof.split('\n').slice(1)) {
-      const parts = line.trim().split(/\s+/);
-      const name = parts.slice(8).join(' ');
-      const m = name.match(/(.+):(\d+)\s+\(LISTEN\)$/);
-
-      if (m) add(m[2], m[1].replace(/^\[|\]$/g, ''), parts[0], parts[1]);
-    }
-
-    if (rows.length) return rows;
-  }
-
-  const ss = runCommand('ss', ['-ltnp']);
-
-  if (ss) {
-    for (const line of ss.split('\n').slice(1)) {
-      const parts = line.trim().split(/\s+/);
-      const local = parts[3] ?? '';
-      const m = local.match(/^(.*):(\d+)$/);
-      const proc = line.match(/users:\(\("([^"]+)",pid=(\d+)/);
-
-      if (m) add(m[2], m[1].replace(/^\[|\]$/g, ''), proc?.[1], proc?.[2]);
-    }
-
-    if (rows.length) return rows;
-  }
-
-  const netstat = runCommand('netstat', ['-anv']);
-
-  if (netstat) {
-    for (const line of netstat.split('\n')) {
-      if (!/\bLISTEN\b/i.test(line) || !/^tcp/i.test(line.trim())) continue;
-      const parts = line.trim().split(/\s+/);
-      const local = parts[3] ?? parts[1] ?? '';
-      const m = local.match(/^(.*)\.(\d+)$/) ?? local.match(/^(.*):(\d+)$/);
-
-      if (m) add(m[2], m[1].replace(/^\[|\]$/g, ''), null, null);
-    }
-  }
-
-  return rows;
 }
 
 // ── PATH lookup (the toolchain probe's device half) ────────────────────
@@ -914,7 +876,16 @@ function requestDirectory(root, requestId) {
   return dir;
 }
 
-function processStartIdentity(pid) {
+/** `ps` on darwin, run to its exit: its stdout, or its error thrown. */
+async function psOutput(args) {
+  const { error, stdout } = await runToExit('ps', args, { encoding: 'utf8' });
+
+  if (error !== null) throw error;
+
+  return stdout;
+}
+
+async function processStartIdentity(pid) {
   if (process.platform === 'linux') {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
     const tail = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
@@ -926,7 +897,7 @@ function processStartIdentity(pid) {
   }
 
   if (process.platform === 'darwin') {
-    const start = execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).trim();
+    const start = (await psOutput(['-p', String(pid), '-o', 'lstart='])).trim();
 
     if (!start) throw new Error(`cannot read start identity for supervisor ${pid}`);
 
@@ -964,11 +935,12 @@ function readSupervisorState(dir) {
 }
 
 /** Whether `pid` still runs as the process that started at `start`; false once it is gone. */
-function startedAs(pid, start) {
+async function startedAs(pid, start) {
   try {
-    return processStartIdentity(pid) === start;
+    return (await processStartIdentity(pid)) === start;
   } catch (err) {
-    if (err && (err.code === 'ENOENT' || (process.platform === 'darwin' && err.status === 1))) {
+    // Linux: no /proc entry. Darwin: `ps -p` found no such process and exited 1.
+    if (err && (err.code === 'ENOENT' || (process.platform === 'darwin' && err.code === 1))) {
       return false;
     }
 
@@ -976,11 +948,11 @@ function startedAs(pid, start) {
   }
 }
 
-function supervisorStartMatches(entry) {
-  return startedAs(entry.pid, entry.start) && startedAs(entry.group, entry.groupStart);
+async function supervisorStartMatches(entry) {
+  return (await startedAs(entry.pid, entry.start)) && (await startedAs(entry.group, entry.groupStart));
 }
 
-function processGroupHasLiveProcess(group) {
+async function processGroupHasLiveProcess(group) {
   if (process.platform === 'linux') {
     for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
       if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
@@ -999,7 +971,7 @@ function processGroupHasLiveProcess(group) {
     return false;
   }
 
-  const rows = execFileSync('ps', ['-ax', '-o', 'pid=,pgid=,stat='], { encoding: 'utf8' }).trim().split('\n');
+  const rows = (await psOutput(['-ax', '-o', 'pid=,pgid=,stat='])).trim().split('\n');
 
   return rows.some((row) => {
     const [pid, pgid, stat] = row.trim().split(/\s+/, 3);
@@ -1070,7 +1042,7 @@ const COMMAND_SHELL = 'bash';
 const SUPERVISOR_SCRIPT = `
 'use strict';
 const fs = require('node:fs');
-const { execFileSync, spawn } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 
 const [commandFile, stateFile, resultFile, stdoutFile, stderrFile, ackFile, maxText, planFile] = process.argv.slice(1);
 const maxOutput = Number(maxText);
@@ -1084,16 +1056,67 @@ const TAIL = maxOutput - HEAD;
 const parentPid = process.ppid;
 const ORPHAN_POLL_MS = 1000;
 
-function startIdentity(pid) {
-  if (process.platform === 'linux') {
-    const stat = fs.readFileSync('/proc/' + pid + '/stat', 'utf8');
-    const tail = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\\s+/);
-    if (!tail[19]) throw new Error('cannot read process start identity');
-    return tail[19];
+/** A child run to its exit: its stdout, or its error thrown. Never synchronous; the daemon's runToExit says why. */
+function run(file, args) {
+  return new Promise((resolve, reject) => {
+    const child = execFile(file, args, { encoding: 'utf8' }, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(stdout);
+    });
+    child.stdin.end();
+  });
+}
+
+function linuxStartIdentity(pid) {
+  const stat = fs.readFileSync('/proc/' + pid + '/stat', 'utf8');
+  const tail = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\\s+/);
+  if (!tail[19]) throw new Error('cannot read process start identity');
+  return tail[19];
+}
+
+/** What the daemon reads back with the same ps; empty once the process is gone (ps exits 1). */
+async function psStartIdentity(pid) {
+  try {
+    return (await run('ps', ['-p', String(pid), '-o', 'lstart='])).trim();
+  } catch (err) {
+    if (err && err.code === 1) return '';
+    throw err;
   }
-  const start = execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).trim();
-  if (!start) throw new Error('cannot read process start identity');
-  return start;
+}
+
+/** A start no process has: the daemon then finds the group gone, as it is once its leader is reaped. */
+const REAPED_BEFORE_READ = 'reaped before its start was read';
+
+/** This supervisor's start and its command's. The kernel answers on Linux before the event loop can reap the
+ *  command; elsewhere both ps runs start in this tick, and a command reaped before its row was read has ended. */
+async function startIdentities() {
+  if (process.platform === 'linux') return [linuxStartIdentity(process.pid), linuxStartIdentity(child.pid)];
+  const [own, group] = await Promise.all([psStartIdentity(process.pid), psStartIdentity(child.pid)]);
+  if (!own) throw new Error('cannot read process start identity');
+  return [own, group || REAPED_BEFORE_READ];
+}
+
+/** Startup either publishes an authoritative group or leaves no group at all. A detached child exists only
+ *  after spawn, so every post-spawn failure kills and reaps that exact group rather than abandoning an
+ *  unnameable command. */
+function abandonStartup() {
+  if (child && child.pid) {
+    try { process.kill(-child.pid, 'SIGKILL'); } catch (killError) {
+      if (!killError || killError.code !== 'ESRCH') throw new Error('supervisor startup group cleanup', { cause: killError });
+    }
+  }
+  process.exit(125);
+}
+
+async function publishState() {
+  const [start, groupStart] = await startIdentities();
+  const stateTemporary = stateFile + '.tmp.' + process.pid;
+  fs.writeFileSync(
+    stateTemporary,
+    'pid=' + process.pid + '\\nstart=' + start + '\\ngroup=' + child.pid + '\\ngroupStart=' + groupStart + '\\n',
+    { mode: 0o600 },
+  );
+  fs.renameSync(stateTemporary, stateFile);
 }
 
 function writeTerminalResult(kind, exitCode, signal) {
@@ -1103,7 +1126,7 @@ function writeTerminalResult(kind, exitCode, signal) {
   fs.renameSync(temporary, resultFile);
 }
 
-function processGroupHasLiveProcess(group) {
+async function processGroupHasLiveProcess(group) {
   if (process.platform === 'linux') {
     for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
       if (!entry.isDirectory() || !/^\\d+$/.test(entry.name)) continue;
@@ -1115,7 +1138,7 @@ function processGroupHasLiveProcess(group) {
     }
     return false;
   }
-  const rows = execFileSync('ps', ['-ax', '-o', 'pid=,pgid=,stat='], { encoding: 'utf8' }).trim().split('\\n');
+  const rows = (await run('ps', ['-ax', '-o', 'pid=,pgid=,stat='])).trim().split('\\n');
   return rows.some((row) => {
     const [pid, pgid, stat] = row.trim().split(/\\s+/, 3);
     return Number(pid) > 0 && Number(pgid) === group && stat && !stat.startsWith('Z');
@@ -1263,7 +1286,10 @@ function finish(kind, exitCode, signal) {
   }
   // The cloud may ACK as soon as result appears. Publish an open FIFO before
   // that result, otherwise its writer can create a regular file in the race.
-  execFileSync('mkfifo', [ackFile]);
+  run('mkfifo', [ackFile]).then(() => awaitAcknowledgement(kind, exitCode, signal), () => process.exit(125));
+}
+
+function awaitAcknowledgement(kind, exitCode, signal) {
   writeTerminalResult(kind, exitCode, signal);
   const acknowledgement = fs.createReadStream(ackFile);
   // The daemon is the only writer of this FIFO, so once it is gone the wait can
@@ -1340,40 +1366,24 @@ try {
   });
   child.stdout.on('data', (chunk) => { if (!completed) stdout.write(chunk); });
   child.stderr.on('data', (chunk) => { if (!completed) stderr.write(chunk); });
-  const stateTemporary = stateFile + '.tmp.' + process.pid;
-  fs.writeFileSync(
-    stateTemporary,
-    'pid=' + process.pid + '\\nstart=' + startIdentity(process.pid) +
-      '\\ngroup=' + child.pid + '\\ngroupStart=' + startIdentity(child.pid) + '\\n',
-    { mode: 0o600 },
-  );
-  fs.renameSync(stateTemporary, stateFile);
 } catch (err) {
-  // Startup either publishes an authoritative group or leaves no group at all.
-  // A detached child exists only after spawn, so every post-spawn failure kills
-  // and reaps that exact group rather than abandoning an unnameable command.
-  if (child && child.pid) {
-    try { process.kill(-child.pid, 'SIGKILL'); } catch (killError) {
-      if (!killError || killError.code !== 'ESRCH') throw new Error('supervisor startup group cleanup', { cause: killError });
-    }
-  }
-  process.exit(125);
+  abandonStartup();
 }
+
+publishState().catch(abandonStartup);
 
 
 
 child.once('exit', (code, signal) => {
   const finishAfterDrain = () => {
     if (cancellationRequested && cancellationSignalDelivered) {
-      try {
-        // This confirms only the owned process group. A command can use setsid
-        // to escape that group; same-uid supervision cannot honestly claim it
-        // terminated such a detached descendant.
-        const groupAlive = processGroupHasLiveProcess(child.pid);
-        finish(groupAlive ? 'exited' : 'cancelled', groupAlive ? 125 : 137);
-      } catch {
-        finish('exited', 125);
-      }
+      // This confirms only the owned process group. A command can use setsid
+      // to escape that group; same-uid supervision cannot honestly claim it
+      // terminated such a detached descendant.
+      processGroupHasLiveProcess(child.pid).then(
+        (groupAlive) => finish(groupAlive ? 'exited' : 'cancelled', groupAlive ? 125 : 137),
+        () => finish('exited', 125),
+      );
       return;
     }
     // A signal death is 128 plus that signal's number on this platform (SIGBUS
@@ -1489,7 +1499,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
     return entryFor(requestId);
   }
 
-  function reconcile() {
+  async function reconcile() {
     if (!fs.existsSync(root)) return [];
     const recovered = [];
 
@@ -1502,7 +1512,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
         const state = readSupervisorState(dir);
         const terminal = fs.existsSync(path.join(dir, 'result'));
 
-        if (!terminal && !supervisorStartMatches(state)) {
+        if (!terminal && !(await supervisorStartMatches(state))) {
           removeRequestDirectory(dir);
           continue;
         }
@@ -1535,7 +1545,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
       return { requestId, cancelled: 'unknown' };
     }
 
-    if (!supervisorStartMatches(entry)) {
+    if (!(await supervisorStartMatches(entry))) {
       throw new Error(`cannot terminate ${requestId}: supervisor identity no longer matches`);
     }
 
@@ -1547,7 +1557,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
       throw new Error(`cannot terminate ${requestId}: supervisor exited without a confirmed group termination`);
     }
 
-    if (processGroupHasLiveProcess(entry.group)) {
+    if (await processGroupHasLiveProcess(entry.group)) {
       throw new Error(`cannot terminate ${requestId}: owned process group death is unconfirmed`);
     }
 
@@ -1582,7 +1592,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
     // and this daemon owns the directory instead. The supervisor alone is
     // asked: a finished command's group leader has exited, so the group half
     // of the identity never matches here.
-    if (terminal.kind === 'exited' && startedAs(entry.pid, entry.start)) {
+    if (terminal.kind === 'exited' && (await startedAs(entry.pid, entry.start))) {
       await writeAcknowledgement(entry.dir);
       await waitForDirectoryRemoval(entry.dir);
     } else {
@@ -1606,14 +1616,14 @@ function createInFlight(root = INFLIGHT_ROOT) {
    * landed. Without it the only way to ask was to poll the process table on a
    * deadline, which answers "not yet" and "never" with the same value.
    */
-  function terminateUnanswered() {
+  async function terminateUnanswered() {
     // Reconciled FIRST, because the in-memory registry is not the whole truth:
     // a command whose supervisor has published its state but which
     // `register` has not reached yet is absent from `entries`, so a socket
     // that dropped in that window left the command running with nothing left
     // to name or stop it. `reconcile` reads the request directories, which is
     // where the durable truth is, and is idempotent.
-    reconcile();
+    await reconcile();
     const terminations = [];
 
     for (const [requestId, entry] of entries) {
@@ -1636,9 +1646,21 @@ function createInFlight(root = INFLIGHT_ROOT) {
     return terminations;
   }
 
-  reconcile();
+  /** @param {unknown} error */
+  function reportReconcileFailure(error) {
+    log('Could not reconcile in-flight commands under', root, errorDetail(error));
+  }
+
+  // Startup awaits it only after claiming the machine and probing the sandbox,
+  // and a module a test only requires never does: until then a rejection with
+  // no handler ends the process in Bun. Handled here, it stays startup's refusal.
+  const ready = reconcile();
+  ready.catch(reportReconcileFailure);
 
   return {
+    /** The first reconciliation, which makes a restarted daemon the owner of
+     *  what its predecessor left running; the daemon serves nothing before it. */
+    ready,
     register,
     cancel,
     result,
@@ -1829,7 +1851,7 @@ function rawWorkingDirectory(msg, roots) {
  * takes this daemon's; a terminal session takes the same with `TERM` set to
  * the terminal it was just given, which is the only difference between them.
  */
-function planFromFrame(msg, command, source = process.env) {
+async function planFromFrame(msg, command, source = process.env) {
   const frame = frameSandbox(msg);
 
   if (frame.tier === 'raw') {
@@ -1851,7 +1873,7 @@ function planFromFrame(msg, command, source = process.env) {
   // Created on first use, 0700: the hub computes the path per (device,
   // workspace) and this machine is the only one that can make the directory.
   for (const dir of [agentHome, agentTmp]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  sandbox.ensureUvmNode();
+  await sandbox.ensureUvmNode();
 
   return sandbox.plan({
     tier: 'sandboxed',
@@ -2096,14 +2118,14 @@ function handlePtyFrame(msg, ctx) {
  *  roots they consented to, and a refusal when the machine cannot honour a
  *  sandboxed frame. A terminal is device access, so it is confined exactly as
  *  a command is. */
-function openTerminalSession(msg, ws, ctx) {
-  const { id, params } = msg;
+async function openTerminalSession(msg, ws, ctx) {
+  const { params } = msg;
 
   assertSupervisionSupported();
   assertCommandShellPresent();
 
   if (!ctx || !ctx.sessions) throw new Error('this daemon was started without terminal support');
-  const plan = planFromFrame(msg, SESSION_COMMAND, sessionSource());
+  const plan = await planFromFrame(msg, SESSION_COMMAND, sessionSource());
 
   const opened = ctx.sessions.open({
     session: params[0],
@@ -2114,7 +2136,66 @@ function openTerminalSession(msg, ws, ctx) {
     send: (frame) => sendPtyFrame(ws, frame),
   });
 
-  rpc(ws, id, { session: params[0], pid: opened.pid, cols: opened.cols, rows: opened.rows });
+  return { session: params[0], pid: opened.pid, cols: opened.cols, rows: opened.rows };
+}
+
+/** Answers `id` once `pending` settles: with its value, or with its error's message. */
+function rpcWhenSettled(ws, id, pending) {
+  /** @param {unknown} error */
+  function replyWithFailure(error) {
+    rpc(ws, id, null, error instanceof Error ? error.message : String(error));
+  }
+
+  pending.then((result) => rpc(ws, id, result), replyWithFailure);
+}
+
+/** A mutating frame's work: after the pre-mutation snapshot of `covered` its
+ *  checkpoint hint asks for, in checkpoint-store order, or at once where this
+ *  daemon keeps no store. */
+function mutation(checkpoints, hint, covered, apply) {
+  if (!checkpoints) return new Promise((resolve) => { resolve(apply()); });
+
+  return checkpoints.mutate(hint && covered !== null ? { ...hint, dir: covered } : null, covered ?? undefined, apply);
+}
+
+/** A socket the hub closed: nothing it sent can be answered any more. */
+function socketClosed(ws) {
+  return ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED;
+}
+
+/** Exec requests whose supervisor has not published its state yet, by request
+ *  id. Each waits behind its pre-mutation snapshot in checkpoint-store order;
+ *  a re-delivered frame joins it, and a cancel lets it start before stopping it. */
+const starting = new Map();
+
+/** Starts `id`'s supervisor after the pre-mutation snapshot its frame asks for
+ *  and publishes the start in `starting` until the supervisor's state is on
+ *  disk. A command whose socket closed while it waited is never started: its
+ *  caller is gone, as `terminateUnanswered` has it for one already running. */
+function startCommand(msg, cmd, ws, ctx) {
+  const { id } = msg;
+
+  const published = (async () => {
+    const plan = await planFromFrame(msg, cmd);
+    const checkpoints = ctx && ctx.checkpoints;
+    const covered = checkpoints && msg.checkpoint ? checkpointDirOf(plan.view, hintedDir(msg.checkpoint) ?? plan.cwd) : null;
+
+    const supervisor = await mutation(checkpoints, msg.checkpoint, covered, () => {
+      if (socketClosed(ws)) throw new Error(`the socket that sent ${id} closed before it could start`);
+
+      return startSupervisor(id, cmd, plan);
+    });
+
+    await waitForSupervisorState(supervisor.dir, supervisor.child);
+    inFlight.register(id, supervisor.dir);
+  })();
+
+  const forget = () => { starting.delete(id); };
+
+  starting.set(id, published);
+  published.then(forget, forget);
+
+  return published;
 }
 
 /** Run one command, joining a re-delivered request to its existing supervisor.
@@ -2123,17 +2204,12 @@ function openTerminalSession(msg, ws, ctx) {
 function execCommand(msg, ws, ctx) {
   const { id, params } = msg;
   const cmd = parseString(params[0], 'exec expects a command string');
-  const checkpoints = ctx && ctx.checkpoints;
   assertSupervisionSupported();
   assertCommandShellPresent();
   const dir = requestDirectory(INFLIGHT_ROOT, id);
-  const plan = fs.existsSync(dir) ? null : planFromFrame(msg, cmd);
 
-  if (plan !== null && checkpoints && msg.checkpoint) {
-    const covered = checkpointDirOf(plan.view, hintedDir(msg.checkpoint) ?? plan.cwd);
-
-    if (covered !== null) checkpoints.ensure({ ...msg.checkpoint, dir: covered }, covered);
-  }
+  const started = starting.get(id)
+    ?? (fs.existsSync(dir) ? waitForFile(path.join(dir, 'state')) : startCommand(msg, cmd, ws, ctx));
 
   /** @param {unknown} error */
   function reportExecReplyFailure(error) {
@@ -2142,14 +2218,7 @@ function execCommand(msg, ws, ctx) {
 
   (async () => {
     try {
-      if (plan === null) {
-        await waitForFile(path.join(dir, 'state'));
-      } else {
-        const supervisor = startSupervisor(id, cmd, plan);
-        await waitForSupervisorState(supervisor.dir, supervisor.child);
-        inFlight.register(id, supervisor.dir);
-      }
-
+      await started;
       const completed = await inFlight.result(id);
 
       if (!completed) throw new Error(`missing in-flight command ${id}`);
@@ -2170,7 +2239,7 @@ function handle(msg, ws, ctx) {
 
   try {
     if (method === PTY_OPEN_METHOD) {
-      openTerminalSession(msg, ws, ctx);
+      rpcWhenSettled(ws, id, openTerminalSession(msg, ws, ctx));
     } else if (method === 'exec') {
       execCommand(msg, ws, ctx);
     } else if (method === CANCEL_METHOD || method === EXEC_ACK_METHOD) {
@@ -2183,17 +2252,9 @@ function handle(msg, ws, ctx) {
 
       if (target !== requested) return rpc(ws, id, null, `${method} expects the request id to target`);
       requestDirectory(INFLIGHT_ROOT, target);
-      const operation = method === CANCEL_METHOD ? inFlight.cancel(target) : inFlight.acknowledge(target);
-
-      /** @param {unknown} error */
-      function replyWithOperationFailure(error) {
-        rpc(ws, id, null, error instanceof Error ? error.message : String(error));
-      }
-
-      operation.then(
-        (result) => rpc(ws, id, result),
-        replyWithOperationFailure,
-      );
+      rpcWhenSettled(ws, id, method === CANCEL_METHOD
+        ? Promise.allSettled([starting.get(target)]).then(() => inFlight.cancel(target))
+        : inFlight.acknowledge(target));
     } else if (method === 'readFile') {
       const options = params[1] ?? {};
       const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
@@ -2213,18 +2274,18 @@ function handle(msg, ws, ctx) {
       const options = params[2] ?? {};
       const view = viewFromFrame(msg);
       const confined = confinedDeviceViewPath(view, params[0], 'write');
+      const covers = (candidate) => view.checkpointDirectory(candidate).why === null;
 
-      if (checkpoints && msg.checkpoint) {
-        const hint = msg.checkpoint;
-        const covers = (candidate) => view.checkpointDirectory(candidate).why === null;
-        const covered = checkpointDirOf(view, hintedDir(hint) ?? checkpoints.workdirForPath(confined, covers));
+      const covered = checkpoints && msg.checkpoint
+        ? checkpointDirOf(view, hintedDir(msg.checkpoint) ?? checkpoints.workdirForPath(confined, covers))
+        : null;
 
-        if (covered !== null) checkpoints.ensure({ ...hint, dir: covered }, covered);
-      }
+      rpcWhenSettled(ws, id, mutation(checkpoints, msg.checkpoint, covered, () => {
+        fs.mkdirSync(path.dirname(confined), { recursive: true });
+        fs.writeFileSync(confined, options.encoding === 'base64' ? Buffer.from(String(params[1]), 'base64') : params[1]);
 
-      fs.mkdirSync(path.dirname(confined), { recursive: true });
-      fs.writeFileSync(confined, options.encoding === 'base64' ? Buffer.from(String(params[1]), 'base64') : params[1]);
-      rpc(ws, id, { success: true });
+        return { success: true };
+      }));
     } else if (method === 'listFiles') {
       rpc(ws, id, listFilesAnswer(msg));
     } else if (method === 'statPath') {
@@ -2236,34 +2297,39 @@ function handle(msg, ws, ctx) {
     } else if (method === 'unlinkPath') {
       // The ENTRY, not its target: unlink removes the name the caller gave,
       // and following the link would delete a path they never named.
-      fs.unlinkSync(viewFromFrame(msg).resolveEntryPath(
-        parseString(params[0], 'device paths must be strings'), 'write',
-      ));
-      rpc(ws, id, { success: true });
+      const entry = viewFromFrame(msg).resolveEntryPath(parseString(params[0], 'device paths must be strings'), 'write');
+
+      rpcWhenSettled(ws, id, mutation(checkpoints, null, null, () => {
+        fs.unlinkSync(entry);
+
+        return { success: true };
+      }));
     } else if (method === 'mkdirPath') {
       const options = params[1] ?? {};
-      fs.mkdirSync(confinedDeviceViewPath(viewFromFrame(msg), params[0], 'write'), {
-        recursive: options.recursive === true,
-      });
-      rpc(ws, id, { success: true });
+      const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'write');
+
+      rpcWhenSettled(ws, id, mutation(checkpoints, null, null, () => {
+        fs.mkdirSync(confined, { recursive: options.recursive === true });
+
+        return { success: true };
+      }));
     } else if (method === 'exists') {
       const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
       rpc(ws, id, fs.existsSync(confined));
-    } else if (method === 'listPorts') {
-      rpc(ws, id, listListeningPorts());
     } else if (method === 'which') {
       rpc(ws, id, { present: whichAll(params[0]) });
     } else if (method === 'checkpointStatus') {
-      rpc(ws, id, checkpoints ? checkpoints.status() : { available: false, reason: 'checkpoints are not configured' });
+      if (!checkpoints) return rpc(ws, id, { available: false, reason: 'checkpoints are not configured' });
+      rpcWhenSettled(ws, id, checkpoints.status());
     } else if (method === 'checkpointList') {
       if (!checkpoints) return rpc(ws, id, []);
-      rpc(ws, id, checkpoints.list(params[0], params[1], params[2]));
+      rpcWhenSettled(ws, id, checkpoints.list(params[0], params[1], params[2]));
     } else if (method === 'checkpointPlan') {
       if (!checkpoints) return rpc(ws, id, null, 'checkpoints are not configured');
-      rpc(ws, id, checkpoints.plan(params[0], checkpointDirFor(viewFromFrame(msg), params[1]), params[2]));
+      rpcWhenSettled(ws, id, checkpoints.plan(params[0], checkpointDirFor(viewFromFrame(msg), params[1]), params[2]));
     } else if (method === 'checkpointRestore') {
       if (!checkpoints) return rpc(ws, id, null, 'checkpoints are not configured');
-      rpc(ws, id, checkpoints.restore(params[0], checkpointDirFor(viewFromFrame(msg), params[1]), params[2]));
+      rpcWhenSettled(ws, id, checkpoints.restore(params[0], checkpointDirFor(viewFromFrame(msg), params[1]), params[2]));
     } else {
       rpc(ws, id, null, 'unknown method: ' + method);
     }
@@ -2692,7 +2758,7 @@ function processAlive(pid) {
  * one `kinu connect`, while a second daemon beside the first is the defect this
  * lock exists for.
  */
-function processRunsThisDaemon(pid) {
+async function processRunsThisDaemon(pid) {
   const named = (args) => args.some((arg) => arg === __filename || path.basename(arg) === path.basename(__filename));
 
   try {
@@ -2701,14 +2767,15 @@ function processRunsThisDaemon(pid) {
     }
 
     if (process.platform === 'darwin') {
-      return named(execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).trim().split(/\s+/));
+      return named((await psOutput(['-p', String(pid), '-o', 'command='])).trim().split(/\s+/));
     }
 
     return false;
   } catch (err) {
     if (err && (err.code === 'ENOENT' || err.code === 'EACCES' || err.code === 'EPERM')) return false;
 
-    if (process.platform === 'darwin' && err && err.status === 1) return false;
+    // `ps -p` found no such process.
+    if (process.platform === 'darwin' && err && err.code === 1) return false;
     throw new Error(`check whether pid ${pid} runs this daemon`, { cause: err });
   }
 }
@@ -2733,7 +2800,7 @@ function isPredecessor(pid) {
  * predecessor keeps serving until the hub replaces its socket, and exits
  * without touching a pidfile that no longer names it.
  */
-function claimMachine(pidPath = PID_PATH) {
+async function claimMachine(pidPath = PID_PATH) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let descriptor;
 
@@ -2748,7 +2815,7 @@ function claimMachine(pidPath = PID_PATH) {
 
       if (holder === process.pid) return { held: true, holder: process.pid };
 
-      if (holder !== null && processAlive(holder) && processRunsThisDaemon(holder) && !isPredecessor(holder)) {
+      if (holder !== null && processAlive(holder) && (await processRunsThisDaemon(holder)) && !isPredecessor(holder)) {
         return { held: false, holder };
       }
 
@@ -2794,8 +2861,8 @@ function releaseMachine(pidPath = PID_PATH) {
   }
 }
 
-function main() {
-  const claim = claimMachine();
+async function main() {
+  const claim = await claimMachine();
 
   if (!claim.held) {
     log(`Another Kinu device daemon is already running on this machine (pid ${claim.holder}); this one is exiting.`);
@@ -2849,7 +2916,7 @@ function main() {
     // A successor that died before connecting left the pidfile naming it;
     // this daemon takes the machine back, which claimMachine grants because
     // the holder it finds is dead.
-    reclaim: () => { claimMachine(); },
+    reclaim: () => claimMachine(),
   });
 
   // The daemon's one WebSocket: the runtime's global. Kinu launches this
@@ -2870,7 +2937,7 @@ function main() {
   // file methods work and the owner needs to read the reason — so a probe that
   // cannot even run is recorded as a status, never raised.
   try {
-    SANDBOX_CAPABILITY = sandbox.probe({ deviceHome: DEVICE_HOME });
+    SANDBOX_CAPABILITY = await sandbox.probe({ deviceHome: DEVICE_HOME });
     fs.mkdirSync(AGENT_ROOT, { recursive: true, mode: 0o700 });
   } catch (err) {
     SANDBOX_CAPABILITY = {
@@ -2882,6 +2949,8 @@ function main() {
   if (SANDBOX_CAPABILITY.status !== sandbox.SANDBOX_STATUS.OK) {
     log('Commands cannot be sandboxed on this machine:', SANDBOX_CAPABILITY.detail);
   }
+
+  await inFlight.ready;
 
   const loop = startConnectLoop({
     getTicket: () => getConnectTicket(cfg, HTTP_ORIGIN),
@@ -2903,11 +2972,16 @@ function main() {
         process.exit(0);
       }
 
+      /** @param {unknown} error */
+      function reportSweepFailure(error) {
+        log('Could not sweep the commands this socket left unanswered', error);
+      }
+
       // The commands still waiting to answer can no longer report to anyone,
       // and their ids died with the caller that minted them. Terminating them
       // here is what keeps a dropped socket from leaving work running that
       // nothing can name, stop or observe.
-      inFlight.terminateUnanswered();
+      inFlight.terminateUnanswered().catch(reportSweepFailure);
       // A terminal outlives nothing: the socket that carried its bytes is the
       // socket that carried its keystrokes, so the shell is hung up here
       // rather than left running with no way to reach it.
@@ -3012,6 +3086,12 @@ function main() {
   });
 }
 
+/** @param {unknown} err */
+function reportFatal(err) {
+  console.error('Kinu PC agent:', err instanceof Error ? err.message : String(err));
+  process.exitCode = 1;
+}
+
 if (require.main === module) {
   try {
     // `--selftest`: the landed daemon run once by the one it replaces. The
@@ -3024,11 +3104,10 @@ if (require.main === module) {
       if (stamp === null) throw new Error(`no version stamp beside ${__filename}`);
       console.log(stamp);
     } else {
-      main();
+      main().catch(reportFatal);
     }
   } catch (err) {
-    console.error('Kinu PC agent:', err instanceof Error ? err.message : String(err));
-    process.exitCode = 1;
+    reportFatal(err);
   }
 }
 
@@ -3052,7 +3131,6 @@ module.exports = {
   waitForFile,
   waitForSupervisorState,
   createCheckpoints,
-  listListeningPorts,
   CONFIG_PATH,
   readDeviceConfig,
   startConnectLoop,

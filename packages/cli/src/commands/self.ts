@@ -33,7 +33,7 @@ export async function updateCommand(target: string | undefined, opts: UpdateOpti
   const served = await fetchServedVersion(origin);
 
   if (served) {
-    updateConfigFile((c) => { c.updateCheckedAt = Date.now(); c.updateLatestSeen = served.version; });
+    await updateConfigFile((c) => { c.updateCheckedAt = Date.now(); c.updateLatestSeen = served.version; });
   }
 
   if (served && (opts.force || !isSameBuild(VERSION, served.version))) {

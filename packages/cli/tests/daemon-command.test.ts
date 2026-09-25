@@ -239,8 +239,9 @@ describe('a daemon-hosted agent resolves the same profile authority as an intera
 
     expect(run.printed.some((line) => line.includes('ticked daemonbot'))).toBe(true);
 
-    // An empty list means the session fell back to the bootstrap envelope, where account roles fail on a schedule.
-    expect(run.authorityReads).toEqual([{ source: 'local' }]);
+    // No read means the session fell back to the bootstrap envelope, where account roles fail on a schedule; the
+    // turn and the review after it each read the store.
+    expect(new Set(run.authorityReads.map((read) => read.source))).toEqual(new Set(['local']));
 
     expect(run.interactive).toEqual({ model: 'workers-ai/daemon-catalog-model', version: 1 });
   });

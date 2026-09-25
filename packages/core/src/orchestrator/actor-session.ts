@@ -74,6 +74,8 @@ export interface ActorExecutionInput {
   readonly chat: Omit<ChatOptions, 'history' | 'signal' | 'extensions' | 'meter' | 'dynamicContext'>;
   readonly extensions: readonly KinuExtension[];
   readonly dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
+  /** The turn's unapproved workspace files as one message, null for none. */
+  readonly instructions?: string | null;
   readonly scaffoldSpend?: ModelCallSpend;
   /** Re-checked before each model call, for kinds whose liveness is owned elsewhere (heads, swarm nodes). */
   readonly assertActive?: () => void;
@@ -497,6 +499,11 @@ export class ActorSession {
 
       active.claim = claim;
       admittedMessages = admitted.messages;
+
+      if (profile.tier.replaced !== null) {
+        await emit({ type: 'model-fallback', from: profile.tier.replaced, to: profile.tier.model, reason: 'its provider no longer lists it' });
+      }
+
       durableOutput = new SessionStream(this.canonical, lease.turnId, claim.epoch);
       const stream = durableOutput;
       // Activation names the input's entry after its message; an edit keeps the entry.
@@ -514,7 +521,7 @@ export class ActorSession {
           measureContext: true,
           persistStreamPart: part => stream.nativePart(part),
           persistStep: messages => stream.nativeStep(messages),
-          dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools) },
+          dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools), instructions: input.instructions },
           stepContext: {
             base: async () => {
               const base = await this.canonical.stepBase(assertClaim, claim.turnId, this.options.events ?? null);

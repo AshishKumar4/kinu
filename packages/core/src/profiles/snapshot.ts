@@ -4,13 +4,13 @@
 import * as v from 'valibot';
 
 import { NAMED_SWARM_PRESETS } from '../strategy/swarm-presets';
-import { REASONING_EFFORTS } from '../strategy/effort';
+import { REASONING_EFFORTS, type ReasoningEffort } from '../strategy/effort';
 import type { WorkMode } from '../types/turn';
 import { TierIdSchema,
   ProfileAuthoritySchema, formatProfileValidationIssues,
   type RoleId, type TierId,
 } from './catalog';
-import { type TierSource, type ResolvedTurnProfile } from './resolve';
+import { type TierFallback, type TierSource, type ResolvedTurnProfile } from './resolve';
 
 /** Why each resolved slot carries the value it does. */
 export interface ProfileProvenance {
@@ -25,15 +25,29 @@ const ProvenanceSchema = v.strictObject({
   presetSource: v.picklist(['explicit', 'role_default']),
 });
 
-/** Frozen before fallbacks existed: none. */
-const FallbacksSchema = v.optional(v.array(v.string()), () => []);
+const LevelSchema = v.nullable(v.picklist(REASONING_EFFORTS));
+
+/** None before fallbacks existed; a bare spec before each carried its level. */
+const FallbacksSchema = v.optional(v.array(v.union([
+  v.string(),
+  v.strictObject({ model: v.string(), reasoningEffort: LevelSchema }),
+])), () => []);
+
+function withLevels<Slot extends { readonly reasoningEffort: ReasoningEffort | null; readonly fallbacks: readonly (string | TierFallback)[] }>(
+  slot: Slot,
+): Omit<Slot, 'fallbacks'> & { readonly fallbacks: readonly TierFallback[] } {
+  return {
+    ...slot,
+    fallbacks: slot.fallbacks.map((entry) => (v.is(v.string(), entry) ? { model: entry, reasoningEffort: slot.reasoningEffort } : entry)),
+  };
+}
 
 /** Declared, not derived from {@link ResolvedTurnProfile}, so it keeps checking the frozen shape. */
-const TierSlotSchema = v.strictObject({
+const TierSlotSchema = v.pipe(v.strictObject({
   model: v.string(),
-  reasoningEffort: v.picklist(REASONING_EFFORTS),
+  reasoningEffort: LevelSchema,
   fallbacks: FallbacksSchema,
-});
+}), v.transform(withLevels));
 
 const ResolvedTurnProfileSchema = v.strictObject({
   role: v.strictObject({
@@ -42,13 +56,14 @@ const ResolvedTurnProfileSchema = v.strictObject({
     description: v.string(),
     instructions: v.string(),
   }),
-  tier: v.strictObject({
+  tier: v.pipe(v.strictObject({
     id: TierIdSchema,
     source: v.picklist(['explicit', 'role', 'default', 'workspace', 'actor']),
     model: v.string(),
-    reasoningEffort: v.picklist(REASONING_EFFORTS),
+    reasoningEffort: LevelSchema,
     fallbacks: FallbacksSchema,
-  }),
+    replaced: v.optional(v.nullable(v.string()), null),
+  }), v.transform(withLevels)),
   /** Per slot, so a snapshot missing one fails here rather than at a producer (model-route.ts). */
   tiers: v.strictObject({
     fast: TierSlotSchema,
@@ -76,7 +91,7 @@ const SwarmProfileSnapshotSchema: v.GenericSchema<unknown, SwarmProfileSnapshot>
   sources: ProvenanceSchema,
 });
 
-/** Refuse a stored snapshot that no longer parses rather than resume under a half-read profile. */
+/** A stored snapshot that no longer parses is refused, never resumed half-read. */
 export function validateSwarmProfileSnapshot(input: { value: unknown }): SwarmProfileSnapshot {
   const parsed = v.safeParse(SwarmProfileSnapshotSchema, input.value);
 

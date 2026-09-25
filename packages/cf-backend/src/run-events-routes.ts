@@ -12,7 +12,7 @@ import * as v from 'valibot';
 import {
   resumeIndexFromLastEventId, type RunEvent,
 } from '@kinu.run/core';
-import { err, json, waitOn, type Clock } from "@kinu.run/core";
+import { waitOn, type Clock } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { rawParam, type FamilyEnv } from './api/context';
 import type { WorkspaceVariables } from './api/workspace';
@@ -121,21 +121,6 @@ export function runEventsRoutes<Bindings extends object>(
       signal: request.signal,
       clock,
     });
-  });
-
-  // A failed read is a 500, never a zeroed card.
-  routes.get('/api/workspaces/:name/overview', async (c) => {
-    try {
-      return json({ body: await c.get('workspace').agent.getWorkspaceOverview() });
-    } catch (cause) {
-      diagnostics.failure("http.workspace_overview_failed", toKinuError({
-        doing: `answering a workspace overview request`,
-        cause,
-        otherwise: "unavailable",
-      }), { workspace: rawParam(c, 'name') });
-
-      return err(500, `Workspace overview failed: ${cause instanceof Error ? cause.message : String(cause)}`);
-    }
   });
 
   return routes;

@@ -18,6 +18,7 @@
     "no-near-duplicate-functions",
     "no-output-token-cap",
     "no-sentinel-catch",
+    "no-sync-spawn",
     "no-tui-colour-literal",
     "no-unaccounted-catch",
     "no-untyped-console",
@@ -30,6 +31,9 @@
     "require-variant-utility"
   ],
   "kinuRuleGates": {
+    "no-sync-spawn.gate.test.ts": [
+      "no-sync-spawn"
+    ],
     "no-vacuous-type-predicate.gate.test.ts": [
       "no-vacuous-type-predicate"
     ],
@@ -81,7 +85,7 @@
     },
     "index.ts": {
       "upstream": "9deed4cb455b9a6251001dc3a525d5b5e2c6ef989dd1c01e804c2edf0a697415",
-      "local": "0398e9f840a06d9a5c9c20d615d30df3f8bd3987e310128324e5d7014fda3b63",
+      "local": "a29e501c06b3f2ce6002c513ad9f6e95bc0fe9d7d44e300b462c10360e0f0a16",
       "reason": "Registers the Kinu-local rules declared in kinuRules beside the pinned upstream rules. Upstream has no counterpart for these policy rules."
     },
     "live-tree.gate.test.ts": {
@@ -108,6 +112,9 @@
     "no-untyped-console.gate.test.ts": {
       "kinuOnly": true
     },
+    "no-sync-spawn.gate.test.ts": {
+      "kinuOnly": true
+    },
     "no-vacuous-type-predicate.gate.test.ts": {
       "kinuOnly": true
     },
@@ -121,6 +128,12 @@
       "kinuOnly": true
     },
     "rules/no-ambient-git-in-tests.test.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-sync-spawn.test.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-sync-spawn.ts": {
       "kinuOnly": true
     },
     "rules/no-ambient-git-in-tests.ts": {

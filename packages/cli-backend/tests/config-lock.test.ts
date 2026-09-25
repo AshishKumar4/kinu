@@ -5,7 +5,7 @@ import { scratchDir } from '@kinu.run/test-utils';
 import { tolerate } from '@kinu.run/core/obs';
 import {
   createConfigLock, createProcessIdentityBoundary, darwinStartIdentity, decodeLockOwner, encodeLockOwner,
-  procStartTicks, withConfigLock, withConfigLockAsync, type LockOwner,
+  procStartTicks, withConfigLock, type LockOwner,
 } from '../src/config-lock';
 
 /**
@@ -43,30 +43,57 @@ describe('the config lock is held by a process, not by a path', () => {
     return ticks;
   }
 
-  /** A pid `spawnSync` has already reaped, so `/proc/<pid>` is gone. */
-  function reapedPid(): number {
-    return Bun.spawnSync({ cmd: ['/bin/true'] }).pid;
+  /** A pid whose exit Bun has already reaped, so `/proc/<pid>` is gone. */
+  async function reapedPid(): Promise<number> {
+    const child = Bun.spawn({ cmd: ['/bin/true'] });
+    await child.exited;
+
+    return child.pid;
   }
 
-  test('an async callback smuggled through a void signature is refused', () => {
-    const { configPath, lockPath } = scratchConfig();
-    // No cast: TypeScript assigns `() => Promise<void>` to `() => void`, which is how an async refresh lost its lock.
-    const declaredVoid: () => void = async () => { await Promise.resolve(); };
+  /**
+   * This process's identity, and a signal once a contender has asked twice whether the holder lives: only a
+   * taken lock's owner is asked about, so the second question means the first answer was acted on and the
+   * contender polled again. Acquisition yields before its first attempt, so a test waits on this, not on
+   * the call returning.
+   */
+  function watchedLock() {
+    const waited = Promise.withResolvers<void>();
 
-    expect(() => withConfigLock(configPath, declaredVoid)).toThrow(
-      'withConfigLock ran a callback that returned pending work, which the lock does not cover. Use withConfigLockAsync.',
-    );
-    expect(lockHeld(lockPath)).toBe(false);
-    expect(withConfigLock(configPath, () => 'after')).toBe('after');
-  });
+    const host = createProcessIdentityBoundary('linux', (pid) => (pid === process.pid
+      ? { state: 'read', identity: selfStartTicks() }
+      : { state: 'absent' }));
 
-  test('the await-aware helper holds the lock until the callback settles', async () => {
+    let asked = 0;
+
+    const lock = createConfigLock({
+      self: async (pid) => await host.self(pid),
+      liveness: async (owner) => {
+        asked += 1;
+
+        if (asked === 2) waited.resolve();
+
+        return await host.liveness(owner);
+      },
+    });
+
+    return { lock, waited: waited.promise };
+  }
+
+  /** An unreadable owner is never asked about, so no question marks the attempt. The first attempt reads
+   *  procfs and the lock synchronously, so it is over one event-loop turn after the contender starts. */
+  async function firstAttemptMade(): Promise<void> {
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+  }
+
+  test('a caller outside the holder waits until its async callback settles, and is not refused', async () => {
     const { configPath, lockPath } = scratchConfig();
+    const { lock, waited } = watchedLock();
     const order: string[] = [];
     const entry = Promise.withResolvers<void>();
     const hold = Promise.withResolvers<void>();
 
-    const first = withConfigLockAsync(configPath, async () => {
+    const first = lock.with(configPath, async () => {
       order.push('first enters');
       entry.resolve();
       await hold.promise;
@@ -75,12 +102,14 @@ describe('the config lock is held by a process, not by a path', () => {
 
     await entry.promise;
 
-    // The contender's first attempt is synchronous, so this observes a real refusal, not a race.
-    const second = withConfigLockAsync(configPath, async () => {
+    // Same pid, a different call: the holder's async context does not reach it, so this waits.
+    const second = lock.with(configPath, async () => {
       order.push('second enters');
       await Promise.resolve();
     });
 
+    // A second that got in, or was refused, settles the race first.
+    await Promise.race([waited, second]);
     expect(order).toEqual(['first enters']);
 
     hold.resolve();
@@ -92,7 +121,7 @@ describe('the config lock is held by a process, not by a path', () => {
   test('a holder whose lock was replaced does not delete the replacement', async () => {
     const { configPath, lockPath } = scratchConfig();
 
-    await withConfigLockAsync(configPath, async () => {
+    await withConfigLock(configPath, async () => {
       await Promise.resolve();
       // Someone else owns the path; releasing by path would hand a third caller a doubly held lock.
       unlinkSync(lockPath);
@@ -102,12 +131,12 @@ describe('the config lock is held by a process, not by a path', () => {
     expect(decodeLockOwner(readlinkSync(lockPath))?.token).toBe('00000000-0000-4000-8000-000000000001');
   });
 
-  test('a lock whose process no longer exists is broken at once', () => {
+  test('a lock whose process no longer exists is broken at once', async () => {
     const { configPath, lockPath } = scratchConfig();
-    forgeLock(lockPath, reapedPid(), '12345');
+    forgeLock(lockPath, await reapedPid(), '12345');
 
     let ownerInside = '';
-    withConfigLock(configPath, () => {
+    await withConfigLock(configPath, () => {
       ownerInside = readlinkSync(lockPath);
     });
 
@@ -119,26 +148,28 @@ describe('the config lock is held by a process, not by a path', () => {
     expect(lockHeld(lockPath)).toBe(false);
   });
 
-  test('a lock whose pid was reused by another process is broken', () => {
+  test('a lock whose pid was reused by another process is broken', async () => {
     const { configPath, lockPath } = scratchConfig();
     // Our pid, but a different recorded start time: the owner is gone and its pid reused.
     forgeLock(lockPath, process.pid, '1');
 
-    withConfigLock(configPath, () => undefined);
+    await withConfigLock(configPath, () => undefined);
     expect(lockHeld(lockPath)).toBe(false);
   });
 
   test('a lock held by a live process is never broken, however long it holds', async () => {
     const { configPath, lockPath } = scratchConfig();
+    const { lock, waited } = watchedLock();
     forgeLock(lockPath, process.pid, selfStartTicks());
 
     let ran = false;
 
-    const blocked = withConfigLockAsync(configPath, async () => {
+    const blocked = lock.with(configPath, async () => {
       await Promise.resolve();
       ran = true;
     });
 
+    await Promise.race([waited, blocked]);
     expect(decodeLockOwner(readlinkSync(lockPath))).toMatchObject({
       platform: 'linux',
       pid: process.pid,
@@ -151,34 +182,12 @@ describe('the config lock is held by a process, not by a path', () => {
     expect(ran).toBe(true);
   });
 
-  test('a nested take of a lock this call already holds refuses, sync and async', async () => {
+  test('a nested take of a lock this call already holds refuses', async () => {
     const { configPath, lockPath } = scratchConfig();
     // The holder's `finally` runs when this call returns, so waiting here would never end.
-    expect(() => withConfigLock(configPath, () => withConfigLock(configPath, () => undefined)))
-      .toThrow('this call already holds it');
-    await expect(withConfigLockAsync(configPath, async () => withConfigLockAsync(configPath, async () => 'inner')))
+    await expect(withConfigLock(configPath, async () => await withConfigLock(configPath, () => 'inner')))
       .rejects.toThrow('this call already holds it');
     expect(lockHeld(lockPath)).toBe(false);
-  });
-
-  test('a concurrent independent caller in the same process waits, it is not refused', async () => {
-    const { configPath } = scratchConfig();
-    const order: string[] = [];
-    const gate = Promise.withResolvers<void>();
-
-    const first = withConfigLockAsync(configPath, async () => {
-      order.push('first in');
-      await gate.promise;
-      order.push('first out');
-    });
-
-    await Promise.resolve();
-    // Outside the holder's async context: same pid, different call, so this waits rather than refuses.
-    const second = withConfigLockAsync(configPath, async () => { order.push('second in'); });
-    expect(order).toEqual(['first in']);
-    gate.resolve();
-    await Promise.all([first, second]);
-    expect(order).toEqual(['first in', 'first out', 'second in']);
   });
 
   test('a lock this program did not write is waited out, never stolen', async () => {
@@ -188,13 +197,14 @@ describe('the config lock is held by a process, not by a path', () => {
 
     let ran = false;
 
-    const blocked = withConfigLockAsync(configPath, async () => {
+    const blocked = withConfigLock(configPath, async () => {
       await Promise.resolve();
       ran = true;
     });
 
+    await firstAttemptMade();
     expect(ran).toBe(false);
-    expect(lockHeld(lockPath)).toBe(true);
+    expect(readFileSync(lockPath, 'utf8')).toBe('not a record\n');
 
     unlinkSync(lockPath);
     await blocked;
@@ -208,11 +218,12 @@ describe('the config lock is held by a process, not by a path', () => {
 
     let ran = false;
 
-    const blocked = withConfigLockAsync(configPath, async () => {
+    const blocked = withConfigLock(configPath, async () => {
       await Promise.resolve();
       ran = true;
     });
 
+    await firstAttemptMade();
     expect(ran).toBe(false);
     expect(readlinkSync(lockPath)).toBe('token-only');
 
@@ -232,7 +243,7 @@ describe('the config lock is held by a process, not by a path', () => {
     expect(procStartTicks('no parenthesis here')).toBeNull();
   });
 
-  test('Darwin identity distinguishes live, missing, reused and unreadable processes', () => {
+  test('Darwin identity distinguishes live, missing, reused and unreadable processes', async () => {
     const initial = darwinStartIdentity('Mon Aug 27 12:34:56 2026');
     const reused = darwinStartIdentity('Tue Aug 28 12:34:56 2026');
 
@@ -258,20 +269,20 @@ describe('the config lock is held by a process, not by a path', () => {
 
     // Darwin identity must work without Linux procfs.
     const { configPath, lockPath } = scratchConfig();
-    expect(createConfigLock(boundary).withSync(configPath, () => {
+    expect(await createConfigLock(boundary).with(configPath, () => {
       writeFileSync(configPath, 'darwin config write\n');
 
       return readFileSync(configPath, 'utf8');
     })).toBe('darwin config write\n');
     expect(lockHeld(lockPath)).toBe(false);
-    expect(boundary.self(42)).toEqual({ platform: 'darwin', pid: 42, identity: initial });
-    expect(boundary.liveness(owner)).toBe('live');
-    expect(boundary.liveness({ ...owner, pid: 43 })).toBe('gone');
-    expect(boundary.liveness({ ...owner, pid: 44 })).toBe('gone');
-    expect(boundary.liveness({ ...owner, pid: 45 })).toBe('unknown');
+    expect(await boundary.self(42)).toEqual({ platform: 'darwin', pid: 42, identity: initial });
+    expect(await boundary.liveness(owner)).toBe('live');
+    expect(await boundary.liveness({ ...owner, pid: 43 })).toBe('gone');
+    expect(await boundary.liveness({ ...owner, pid: 44 })).toBe('gone');
+    expect(await boundary.liveness({ ...owner, pid: 45 })).toBe('unknown');
   });
 
-  test('versioned platform records round-trip without cross-platform confusion', () => {
+  test('versioned platform records round-trip without cross-platform confusion', async () => {
     const identity = darwinStartIdentity('Mon Aug 27 12:34:56 2026');
 
     if (identity === null) throw new Error('fixture lost Darwin lstart identity');
@@ -293,7 +304,7 @@ describe('the config lock is held by a process, not by a path', () => {
     });
 
     if (linuxRecord === null) throw new Error('fixture lost Linux versioned record');
-    expect(createProcessIdentityBoundary('darwin', () => ({ state: 'read', identity })).liveness(linuxRecord)).toBe('unknown');
+    expect(await createProcessIdentityBoundary('darwin', () => ({ state: 'read', identity })).liveness(linuxRecord)).toBe('unknown');
     // Unknown or noncanonical records never become another platform's owner.
     expect(decodeLockOwner('00000000-0000-4000-8000-000000000003 42 start')).toBeNull();
     expect(decodeLockOwner('v2 darwin 00000000-0000-4000-8000-000000000003 42 start')).toBeNull();

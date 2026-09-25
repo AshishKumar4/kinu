@@ -24,6 +24,7 @@
     "./plan-announce-probe.ts",
     "./slate-durability-probe.ts",
     "./account-reset-probe.ts",
+    "./store-reset-probe.ts",
     "./deploy-run-probe.ts",
     "./slate-actor-probe.ts",
     "./slate-share-probe.ts",

@@ -22,6 +22,7 @@ import {
 } from '@kinu.run/core';
 import { makeExecRaw, makeSql } from '../../../core/tests/helpers';
 import * as v from 'valibot';
+import type { PictureBucket } from '../../src/slates/pictures';
 
 mockAgentsSdk();
 
@@ -89,6 +90,8 @@ export interface TestUserDO {
   revokedSessionPushes: string[];
   /** Capability re-pushes requested per workspace; only the root holds the token plaintext. */
   capabilityRepushes: string[];
+  /** Workspaces the owner's object asked for their first tile, in order. */
+  overviewNudges: string[];
   consentPrompts: Array<{
     workspace: string;
     method: string;
@@ -141,6 +144,8 @@ export interface TestUserDOOptions {
   deviceResponder?: (frame: DeviceFrame) => JsonValue | Promise<JsonValue>;
   credentialEncryptionKey?: string;
   credentialEncryptionKeyPrevious?: string;
+  /** Lets a stored Cloudflare login renew; absent, its refresh fails for want of a client. */
+  cloudflareOAuthClientId?: string;
   durableObjectId?: string;
   /** In-memory Mossaic per tenant id; absent, the Drive is unbound. */
   drive?: (tenant: string) => MossaicVfs | null;
@@ -153,6 +158,10 @@ export interface TestUserDOOptions {
   capabilityPushMissed?: () => number;
   /** `oauth-app` preset ids the deployment carries a registered app for (fixed values under `MCP_APP_ENV` keys). */
   mcpAppCredentials?: readonly string[];
+  /** How a workspace answers the owner's ask for its first tile; absent, the ask is only recorded. */
+  overviewNudge?: (name: string) => Promise<void>;
+  /** The slate-picture bucket; absent, a teardown has no pictures to delete. */
+  slatePictures?: PictureBucket;
 }
 
 export interface FakeDaemon {
@@ -211,9 +220,11 @@ function servedAsset(pathname: string, build: TestUserDOOptions['servedBuild']):
 
 interface TestUserEnvironment {
   CREDENTIAL_ENCRYPTION_KEY: string;
+  SLATE_PICTURES?: PictureBucket;
   CLI_PUBLIC_ORIGIN?: string;
   ASSETS?: { fetch(input: Request): Promise<Response> };
   CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
+  CLOUDFLARE_OAUTH_CLIENT_ID?: string;
   MCP_GITHUB_CLIENT_ID?: string;
   MCP_GITHUB_CLIENT_SECRET?: string;
   MCP_GOOGLE_CLIENT_ID?: string;
@@ -230,6 +241,7 @@ interface TestUserEnvironment {
       announceDeviceAvailable(device: { id: string; label: string }): Promise<{ ok: boolean }>;
       closeRevokedCliSockets(generation: number): Promise<{ closed: number }>;
       closeRevokedSessionSockets(tokenHash: string): Promise<{ closed: number }>;
+      requestOverviewPush(): Promise<void>;
     };
   };
 }
@@ -283,6 +295,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const aborted = aborts.items;
   const revokedSocketPushes: string[] = [];
   const revokedSessionPushes: string[] = [];
+  const overviewNudges: string[] = [];
   const capabilityRepushes: string[] = [];
   const consentPrompts: TestUserDO['consentPrompts'] = [];
   const raisedConsentIds: TestUserDO['raisedConsentIds'] = [];
@@ -454,8 +467,10 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
 
   const env: TestUserEnvironment = {
     CREDENTIAL_ENCRYPTION_KEY: options.credentialEncryptionKey ?? TEST_CREDENTIAL_ENCRYPTION_KEY,
+    ...(options.cloudflareOAuthClientId !== undefined && { CLOUDFLARE_OAUTH_CLIENT_ID: options.cloudflareOAuthClientId }),
     CLI_PUBLIC_ORIGIN: 'https://kinu.example.com',
     ASSETS: { fetch: async (input: Request) => servedAsset(new URL(input.url).pathname, options.servedBuild) },
+    SLATE_PICTURES: options.slatePictures,
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (name: string) => ({
@@ -504,6 +519,10 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
 
           return { closed: 0 };
         },
+        async requestOverviewPush() {
+          overviewNudges.push(name);
+          await options.overviewNudge?.(name);
+        },
       }),
     },
   };
@@ -539,7 +558,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   return {
     userDO, db, sql, installed, destroyedWorkspaces, aborted, revokedSocketPushes,
     abortRaised: () => aborts.until((reasons) => reasons.length > 0),
-    revokedSessionPushes, capabilityRepushes,
+    revokedSessionPushes, capabilityRepushes, overviewNudges,
     pendingConsents: (workspace) => registryFor(workspace).list(),
     resolveConsent: (workspace, consentId, answer) => ({ ok: registryFor(workspace).resolve(consentId, answer) }),
     consentPrompts, raisedConsentIds, unavailableNotices, availableNotices, deviceFrames, devicePushes,

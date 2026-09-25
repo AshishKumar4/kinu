@@ -1,7 +1,8 @@
-/** InlineExecutor: the `workspace.*` codemode provider over the agent's own filesystem, shell, memory and craft store. */
+/** InlineExecutor: the `workspace.*` codemode provider over its workspace's files, shell, memory and craft store. */
 
 import * as v from 'valibot';
 import type { ExecutorProvider, ExecutorCapability, ResourceLimits } from './types';
+import type { FilesOwner } from '../safety/approval-gate';
 import type { VFS, Memory, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
@@ -57,6 +58,8 @@ export interface InlineExecutorDeps {
   memory: Memory;
   craftStore: CraftStore;
   shell: ShellExec;
+  /** The declaration the host gated `shell` under. */
+  filesOwner: FilesOwner;
   /** Measured limits of where `shell` really runs; none unless the host measured one. */
   resourceLimits?: ResourceLimits;
   /** Used to look up crafted-tool quality columns for listTools(). */
@@ -466,6 +469,7 @@ declare namespace workspace {
     capabilities: new Set<ExecutorCapability>([
       'javascript', 'typescript', 'shell', 'fs_shared', ...(deps.toolchain ?? []),
     ]),
+    filesOwner: deps.filesOwner,
     isAvailable: () => true,
     connect: async () => {},
     disconnect: async () => {},

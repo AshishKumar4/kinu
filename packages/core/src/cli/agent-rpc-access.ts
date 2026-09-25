@@ -121,8 +121,6 @@ export const AGENT_RPC_ACCESS = {
   listCurriculumTasks: 'interactive',
   // An aggregate is as open as its strictest input (changelog, scaffold archive, curriculum).
   listPendingActions: 'interactive',
-  // `decisionsWaiting` counts interactive reads, so the aggregate is interactive too.
-  getWorkspaceOverview: 'interactive',
   listScaffoldVersions: 'interactive',
   listTurnFeedback: 'interactive',
   markChangelogSeen: 'interactive',
@@ -135,6 +133,9 @@ export const AGENT_RPC_ACCESS = {
   recordOutcomeLabeling: 'interactive',
   resetWorkspaceBaseline: 'interactive',
   restoreWorkspaceBaseline: 'interactive',
+  getChangeNotes: 'interactive',
+  saveChangeNotes: 'interactive',
+  sendChangeNotes: 'interactive',
   resolveDeviceConsent: 'interactive',
   restoreFileCheckpoint: 'interactive',
   retryBackgroundJob: 'interactive',
@@ -171,6 +172,10 @@ export function requiredRpcAccess(method: string): AgentRpcAccess | null {
   return isAgentRpcMethod(method)
     ? AGENT_RPC_ACCESS[method]
     : null;
+}
+
+export function rpcMovesOverview(method: string): boolean {
+  return requiredRpcAccess(method) !== 'workspace.read';
 }
 
 export function rpcAccessScope(access: AgentRpcAccess | null): AccessTokenScope | null {

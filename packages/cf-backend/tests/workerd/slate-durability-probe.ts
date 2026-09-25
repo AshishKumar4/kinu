@@ -13,6 +13,7 @@ import { handleNimbusPreviewHostRequest } from '../../src/nimbus-route';
 import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, createDefaultWebSearchProvider, toolsInWorkMode } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
+import { pictureKey, picturePrefix } from '../../src/slates/pictures';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller } from '@kinu.run/core';
 import { workspaceOwner } from '../../src/workspace-owner-rpc';
@@ -278,6 +279,15 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const value = v.parse(RemovedValueSchema, removed.value);
 
     return { ok: value.removed, port: value.port };
+  }
+
+  /** A stand-in for the picture a capture stores. */
+  async putPicture(workspace: string, slate: string, digest: string): Promise<void> {
+    await this.env.SLATE_PICTURES?.put(pictureKey(workspace, slate, digest), new Uint8Array([1]), { httpMetadata: { contentType: 'image/webp' } });
+  }
+
+  async pictureKeys(workspace: string): Promise<string[]> {
+    return (await this.env.SLATE_PICTURES?.list({ prefix: picturePrefix(workspace) }))?.objects.map((object) => object.key) ?? [];
   }
 
   async runInWorkspace(workspace: string, command: string): Promise<{ exitCode: number; stdout: string }> {

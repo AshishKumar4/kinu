@@ -72,20 +72,20 @@ async function liveBackground(page: Page): Promise<void> {
   );
 }
 
-/** One workspace's next overview answer, in the tagged shape the fixture expects. */
-async function setOverview(page: Page, name: string, body: JsonValue): Promise<void> {
+/** One workspace's tile changes, and the roster socket carries it as the owner's object would. */
+async function setOverview(page: Page, name: string, overview: JsonValue): Promise<void> {
   await page.evaluate((target, value) => {
-    window.dispatchEvent(new CustomEvent('gallery:overview', { detail: { name: target, outcome: { kind: 'body', body: value } } }));
-  }, name, body);
+    window.dispatchEvent(new CustomEvent('gallery:overview', { detail: { name: target, overview: value } }));
+  }, name, overview);
 }
 
-/** An idle overview row at this instant. */
+/** A quiet tile. */
 function idleBody(): JsonValue {
-  return { observedAt: Date.now(), activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, primarySlate: null };
+  return { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [] };
 }
 
-/** The mode the tissue reports, with the read model's poll behind it. A frozen
- *  picture ages only by the `step` of tissue seconds each poll advances it. */
+/** The mode the tissue reports once the roster's frames reach it. A frozen
+ *  picture ages only by the `step` of tissue seconds each check advances it. */
 async function waitForMode(page: Page, mode: string, step = 0): Promise<void> {
   await page.waitForFunction(
     (wanted: string, dt: number) => {
@@ -311,7 +311,7 @@ describe('the living background', () => {
     });
   });
 
-  test('follows the overview read model through idle, working and attention', async () => {
+  test('follows the roster through idle, working and attention', async () => {
     await withGallery(async (gallery) => {
       // Frozen: the flash ages by the steps below, never by the frames a loaded
       // machine delivers late (each frame advances at most 0.05 s of tissue time).
@@ -320,23 +320,19 @@ describe('the living background', () => {
       try {
         await liveBackground(page);
 
-        // Quiet every workspace; the 5s poll cadence carries it to the tissue.
+        // Quiet every workspace; each change reaches the tissue as a frame.
         for (const name of DISPLAYED) await setOverview(page, name, idleBody());
         await waitForMode(page, 'idle');
 
         // Everyone working at once.
         for (const name of DISPLAYED) {
-          await setOverview(page, name, {
-            observedAt: Date.now(), activity: 'working', decisionsWaiting: 0, hasUpdates: false, latestRun: null, primarySlate: null,
-          });
+          await setOverview(page, name, { activity: 'working', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [] });
         }
 
         await waitForMode(page, 'working');
 
         // One decision waiting: a flash, then back under the working hum.
-        await setOverview(page, 'checkout-fixes', {
-          observedAt: Date.now(), activity: 'working', decisionsWaiting: 1, hasUpdates: false, latestRun: null, primarySlate: null,
-        });
+        await setOverview(page, 'checkout-fixes', { activity: 'working', decisionsWaiting: 1, hasUpdates: false, latestRun: null, slates: [] });
         await waitForMode(page, 'attention', 1 / 60);
 
         const afterFlash = await page.evaluate(() => {

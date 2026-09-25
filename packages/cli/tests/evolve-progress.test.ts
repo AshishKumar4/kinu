@@ -41,8 +41,8 @@ afterEach(() => {
   for (const name of created.splice(0)) rmSync(agentDir(name), { recursive: true, force: true });
 });
 
-afterAll(() => {
-  updateConfigFile((config) => {
+afterAll(async () => {
+  await updateConfigFile((config) => {
     if (config.agents) delete config.agents[AGENT_NAME];
   });
 });

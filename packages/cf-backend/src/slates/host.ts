@@ -17,7 +17,7 @@ import {
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel, VIEWER_EXCHANGE_PATH,
   type BlueprintBundle, type BlueprintFork, type JsonValue, type SlateAnswer, type SlateProject, type SlateShareRecord,
   type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateOperation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
-  type SlateBindingCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim, type WorkspaceOverviewSlate,
+  type SlateBindingCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim,
   type MissionGovernor,
 } from '@kinu.run/core';
 import { canonicalWorkspacePath, workspacePath, WORKSPACE_ROOT } from '@kinu.run/core';
@@ -47,6 +47,7 @@ export interface SlateHostDeps extends ResidentSlateDeps {
   /** Debits the per-share per-day spend label; absent means no spend bound. */
   budget?(): MissionGovernor;
   ownerTitle?(): Promise<string>;
+  forgetPicture?(slate: string): Promise<void>;
 }
 
 interface ViewerAdmission {
@@ -564,18 +565,6 @@ export class SlateHost {
     }
   }
 
-  /** Reads existing reservations only: an unreserved slate answers `null`, never a launch. */
-  async addressed(caller: SlateCaller): Promise<WorkspaceOverviewSlate[]> {
-    const { slates } = await this.list(caller);
-
-    return Promise.all(slates.map(async (slate) => {
-      const app = await this.deps.apps.reserved(slate.id);
-      const preview = app === null ? null : await this.deps.apps.url(app.port, app.capability);
-
-      return { id: slate.id, title: slate.title, url: preview?.url ?? null };
-    }));
-  }
-
   /** Answers the refusal instead of throwing, so the route can tell `missing` from `bad_input`. */
   async ensureDurable(owner: string): Promise<Refusal | null> {
     try {
@@ -615,6 +604,7 @@ export class SlateHost {
         if (vfs.exists(root)) vfs.removeRecursive(root);
         forgetSlateFiles(this.deps.ctx.storage.sql, new SlateId(id));
       });
+      await this.deps.forgetPicture?.(id);
 
       return { ok: true, value: { id, removed: removed.removed, port: removed.port } };
     } catch (cause) {

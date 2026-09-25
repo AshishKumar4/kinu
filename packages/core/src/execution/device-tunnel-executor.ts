@@ -435,6 +435,7 @@ export function createDeviceTunnelExecutor(
       return deviceFiles(transport, consent, named.id).homeDir();
     },
     kind: 'device',
+    filesOwner: 'user',
     // Rendered into the execution block (prompting/volatile-context.ts), which routes work. Structural: shell,
     // native_binary, fs_owned, net_outbound, process_spawn. Refuted: net_inbound, process_long, process_signal.
     get capabilities() {

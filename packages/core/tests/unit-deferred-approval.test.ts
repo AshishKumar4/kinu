@@ -6,9 +6,9 @@ import { toolExecute } from '@kinu.run/test-utils';
 import {
   DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools,
-  formatApprovalGrant,
+  formatApprovalGrant, createShellSession,
   type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome,
-  type AgentRuntime, type AgentSignal, type Shell,
+  type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT,
 } from '../src/index';
 import { buildPendingActions } from '../src/read-models/pending-actions';
 import { gateProviderExec } from '../src/execution/approval';
@@ -33,6 +33,9 @@ function approvalsDb() {
   };
 }
 
+/** A workspace shell over the agent's own files, with no mount of the user's. */
+const AGENTS_OWN = { filesOwner: 'agent' } as const;
+
 /** Gated on every executor, workspace included: a force-push harms a remote beyond this machine. */
 const GATED = 'git push --force origin main';
 
@@ -43,7 +46,10 @@ function setup(opts: {
   approve?: () => Promise<ShellApprovalOutcome | null>;
   /** Omit the queue: the no-queue path must behave as if deferral did not exist. */
   noQueue?: boolean;
+  /** Whose files the gated shell holds. */
+  filesOwner?: FilesOwner;
 } = {}) {
+  const filesOwner = opts.filesOwner ?? 'agent';
   const { sql, actor } = approvalsDb();
   const store = new DeferredApprovalStore(sql, actor);
 
@@ -86,7 +92,7 @@ function setup(opts: {
   if (opts.approve) policy.requestApproval = opts.approve;
 
   if (!opts.noQueue) policy.deferrals = queue.channel;
-  const shell = withApprovalGatedShell(rawShell, policy);
+  const shell = withApprovalGatedShell(rawShell, { ...AGENTS_OWN, filesOwner }, policy);
   const { rt } = createTestRuntime();
   const runtime: AgentRuntime = { ...rt, shell };
   const tools = buildBuiltinTools({ rt: runtime, history: storesFor(runtime).history });
@@ -116,7 +122,7 @@ describe('a gated action nobody is there to approve', () => {
 
     const shell = withApprovalGatedShell({
       exec: async () => ({ stdout: 'executed', stderr: '', exitCode: 0 }),
-    }, { mode: () => 'strict', requestApproval: null, deferrals: queue.channel });
+    }, AGENTS_OWN, { mode: () => 'strict', requestApproval: null, deferrals: queue.channel });
 
     try {
       await shell.exec(GATED);
@@ -396,6 +402,17 @@ describe('what an approval actually buys', () => {
     expect(delivered).toHaveLength(1);
   });
 
+  test('"always" on a command that harms the user\'s files grants that rule, so the next one runs', async () => {
+    const { shellTool, queue, executed, granted } = setup({ filesOwner: 'user' });
+    await expect(shellTool.execute({ command: 'rm -rf build' })).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
+
+    await queue.decide(['defer-1'], 'always');
+
+    expect(granted).toEqual(['rm-recursive@workspace']);
+    expect(await shellTool.execute({ command: 'rm -rf dist' })).toBe('ran');
+    expect(executed).toEqual(['rm -rf dist']);
+  });
+
   test('an "always" grant does not travel to another rule', async () => {
     const { shellTool, queue, executed, granted } = setup();
     await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
@@ -535,6 +552,80 @@ describe('durability — the wait is a night, not a prompt window', () => {
   });
 });
 
+describe('"always" grants the rules the owner was shown', () => {
+  /** A workspace over the user's device and Drive, gated over the real deferral queue with nobody attending. */
+  function workspaceSetup() {
+    const { sql, actor } = approvalsDb();
+    let seq = 0;
+    const granted: string[] = [];
+
+    const queue = new DeferredApprovalQueue({
+      store: new DeferredApprovalStore(sql, actor),
+      inbox: { send: async () => 'queued' },
+      remember: (grants) => { for (const g of grants) granted.push(formatApprovalGrant(g)); },
+      newId: () => `defer-${++seq}`,
+      now: () => 1_000 + seq,
+    });
+
+    const ran: string[] = [];
+
+    const record = (member: string) => async (...args: unknown[]) => {
+      ran.push(`${member} ${String(args[0])}`);
+
+      return 'ran';
+    };
+
+    const provider: ExecutorProvider = {
+      name: 'workspace',
+      kind: 'workspace',
+      capabilities: new Set(['shell']),
+      filesOwner: 'agent',
+      shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => ['/pc', '/shared'], keepsCwd: true }),
+      homeDir: async () => WORKSPACE_ROOT,
+      isAvailable: () => true,
+      connect: async () => {},
+      disconnect: async () => {},
+      tools: {
+        runCode: { description: 'Run a program', execute: record('code') },
+        startProcess: { description: 'Start a background process', execute: record('start') },
+      },
+    };
+
+    const { tools } = gateProviderExec(provider, {
+      mode: () => 'strict',
+      granted: (grant) => granted.includes(formatApprovalGrant(grant)),
+      deferrals: queue.channel,
+    });
+
+    return { queue, tools, ran, granted };
+  }
+
+  test('"always" for a program over the user\'s files lets the next identical program run', async () => {
+    const { queue, tools, ran, granted } = workspaceSetup();
+    const program = "import shutil; shutil.rmtree('/shared/notes')";
+    const run = () => tools.runCode?.execute(program, { language: 'python' });
+
+    expect(await run()).toMatchObject({ error: expect.stringContaining('defer-1') });
+    await queue.decide(['defer-1'], 'always');
+
+    expect(granted).toEqual(['program-on-user-files@workspace']);
+    expect(await run()).toBe('ran');
+    expect(ran).toEqual([`code ${program}`]);
+  });
+
+  test('"always" for a process started in the user\'s files lets the next one started there run', async () => {
+    const { queue, tools, ran, granted } = workspaceSetup();
+    const start = () => tools.startProcess?.execute('rm -rf build', { cwd: '/pc/laptop/proj' });
+
+    expect(await start()).toMatchObject({ error: expect.stringContaining('defer-1') });
+    await queue.decide(['defer-1'], 'always');
+
+    expect(granted).toEqual(['rm-recursive@workspace']);
+    expect(await start()).toBe('ran');
+    expect(ran).toEqual(['start rm -rf build']);
+  });
+});
+
 /**
  * Approving once must not cause a second ask: a grant spent on an attempt that never reached its
  * machine (classified refusal) is refunded. Spend-before-run otherwise holds.
@@ -564,6 +655,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
       name: 'device',
       kind: 'device',
       capabilities: new Set(['shell']),
+      filesOwner: 'user',
       homeDir: async () => '/home/owner',
       isAvailable: () => true,
       connect: async () => {},
@@ -748,7 +840,7 @@ test('no-execution refusals retain their class before native run and executor te
 
 test('an executed exit-one command remains a command failure even if stdout looks like a refusal', async () => {
   const stdout = JSON.stringify({ reason: 'denied', error: 'ordinary command data' });
-  const shell = withApprovalGatedShell({ exec: async () => ({ stdout, stderr: 'process failure', exitCode: 1 }) });
+  const shell = withApprovalGatedShell({ exec: async () => ({ stdout, stderr: 'process failure', exitCode: 1 }) }, AGENTS_OWN);
   const result = await shell.exec('false');
   const rendered = formatExecResult(result);
   expect(result.exitCode).toBe(1);

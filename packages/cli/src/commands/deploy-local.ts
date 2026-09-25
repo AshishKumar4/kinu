@@ -7,7 +7,7 @@
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { connect } from 'node:net';
 import { get } from 'node:http';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import {
   HealthAnswerSchema, LOCAL_PORT, LocalConfigSchema, fetchReleaseArtifact, fetchReleaseManifest, localLayout, releaseDir,
@@ -54,7 +54,7 @@ export async function localDoor(action: string | undefined, opts: { origin?: str
   }
 
   if (action === 'status') {
-    report();
+    await report();
 
     return;
   }
@@ -146,7 +146,7 @@ async function startLocalInstance(): Promise<LocalInstance | null> {
   const layout = layoutOf();
   const config = localConfig();
 
-  if (readPidFile(layout).kind === 'ours') return null;
+  if ((await readPidFile(layout)).kind === 'ours') return null;
 
   const binary = existsSync(layout.workerd) ? layout.workerd : 'workerd';
   const log = openSync(layout.log, 'a');
@@ -211,7 +211,7 @@ async function unserved(
 /** A pidfile naming a process this command does not own is a refusal, not a kill. */
 async function stopLocalInstance(): Promise<number | null> {
   const layout = layoutOf();
-  const state = readPidFile(layout);
+  const state = await readPidFile(layout);
 
   if (state.kind === 'none') return null;
 
@@ -236,7 +236,7 @@ async function stopLocalInstance(): Promise<number | null> {
   return pid;
 }
 
-function report(): void {
+async function report(): Promise<void> {
   const layout = layoutOf();
 
   if (!existsSync(layout.config)) {
@@ -246,7 +246,7 @@ function report(): void {
   }
 
   const config = localConfig();
-  const state = readPidFile(layout);
+  const state = await readPidFile(layout);
 
   if (state.kind !== 'ours') {
     console.log(`${DIM('Local Kinu')} ${ACCENT(config.version)} ${DIM('is installed and not running')} ${DIM(layout.root)}`);
@@ -293,7 +293,7 @@ function renderPidFile(pid: number, at: Date): string {
 }
 
 /** Clears the file unless argv names `workerd` and this layout's capnp path; a reused pid must never be signalled. */
-function readPidFile(layout: LocalLayout): PidFile {
+async function readPidFile(layout: LocalLayout): Promise<PidFile> {
   const text = tolerate(() => readFileSync(layout.pid, 'utf8'), 'enoent');
 
   if (text === undefined) return { kind: 'none' };
@@ -303,7 +303,7 @@ function readPidFile(layout: LocalLayout): PidFile {
   if (!Number.isInteger(pid) || pid <= 0) return cleared(layout, { kind: 'none' });
 
   // `/proc/<pid>` vanishes on reap, and `ps -p` refuses a pid nothing holds.
-  const args = processArgs(pid);
+  const args = await processArgs(pid);
 
   if (args === null) return cleared(layout, { kind: 'none' });
 
@@ -324,16 +324,20 @@ function clearPidFile(layout: LocalLayout): void {
 }
 
 /** `/proc` on Linux (one read); `ps` elsewhere. */
-function processArgs(pid: number): string | null {
+function processArgs(pid: number): Promise<string | null> {
   if (process.platform === 'linux') {
     const cmdline = tolerate(() => readFileSync(`/proc/${String(pid)}/cmdline`, 'utf8'), 'enoent');
 
-    return cmdline === undefined ? null : cmdline.replaceAll('\0', ' ');
+    return Promise.resolve(cmdline === undefined ? null : cmdline.replaceAll('\0', ' '));
   }
 
-  const listed = spawnSync('ps', ['-o', 'args=', '-p', String(pid)], { encoding: 'utf8' });
+  const { promise, resolve } = Promise.withResolvers<string | null>();
 
-  return listed.status === 0 ? listed.stdout : null;
+  execFile('ps', ['-o', 'args=', '-p', String(pid)], { encoding: 'utf8' }, (cause, stdout) => {
+    resolve(cause === null ? stdout : null);
+  });
+
+  return promise;
 }
 
 async function reaped(pid: number, timeoutMs: number): Promise<boolean> {

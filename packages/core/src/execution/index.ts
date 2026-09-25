@@ -33,7 +33,7 @@ export { DefaultExecutionRouter } from './router';
 
 export { createInlineExecutor, type InlineExecutorDeps } from './inline';
 
-export { withApprovalGatedShell, gateProviderExec } from './approval';
+export { withApprovalGatedShell, gateProviderExec, shellCwd, type ShellReach } from './approval';
 
 export {
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError, SandboxPending,
@@ -45,14 +45,13 @@ export { createDeviceTunnelExecutor, type DeviceTransport } from './device-tunne
 export { explainNativeToolReferenceError } from './sandbox-errors';
 
 export {
-  devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
   deviceToolchainAnswer, freshDeviceToolchain,
   effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason,
   sandboxReasonFix, sandboxCause, describeGpuNodes,
   connectedDevices, deviceByName, deviceFleetAsk,
-  DEVICE_PRESENCE_CONFIG_KEY, DEVICE_TOOLCHAIN_TTL_MS,
+  DEVICE_TOOLCHAIN_TTL_MS,
   DEVICE_TIERS, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS,
-  type DeviceStatus, type DevicePresence, type DevicePresenceStore,
+  type DeviceStatus,
   type DeviceToolchain, type DeviceFleet, type DeviceFleetEntry,
   type DeviceTier, type DeviceMode, type DeviceSandboxStatus,
   type DeviceSandboxCapability, type DeviceSandboxReason,
@@ -79,7 +78,7 @@ export {
 } from './device-tunnel';
 
 export {
-  DeviceSocketHub, deviceIdFromSocket,
+  DeviceSocketHub, deviceIdFromSocket, WS_OPEN,
   DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG,
   type DeviceSocket, type DeviceSocketCtx,
 } from './device-hub';

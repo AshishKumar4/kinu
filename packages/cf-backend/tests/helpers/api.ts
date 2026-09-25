@@ -30,7 +30,6 @@ function claimed(built: Partial<WorkspaceAgent> = {}): WorkspaceAgent {
   };
 
   return {
-    getWorkspaceOverview: built.getWorkspaceOverview ?? refuse('getWorkspaceOverview'),
     evalAbortActivation: built.evalAbortActivation ?? refuse('evalAbortActivation'),
   };
 }

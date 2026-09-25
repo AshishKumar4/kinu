@@ -26,7 +26,7 @@ const DUMMY_LLM: LLMProviderConfig = {
   name: 'openai-compat', baseURL: 'http://localhost:0', headers: { Authorization: 'x' }, model: 'fake-model',
 };
 
-function workspace(name: string, stored: { displayName?: string; nameOrigin?: 'user' | 'auto' } = {}) {
+async function workspace(name: string, stored: { displayName?: string; nameOrigin?: 'user' | 'auto' } = {}) {
   const dir = scratchDir('title-agent');
   const db = new Database(join(dir, 'agent.db'));
   const rt = createCLIRuntime(db, { dbPath: join(dir, 'agent.db'), llm: DUMMY_LLM });
@@ -36,7 +36,7 @@ function workspace(name: string, stored: { displayName?: string; nameOrigin?: 'u
   if (stored.displayName !== undefined) config.setDisplayName(stored.displayName);
 
   if (stored.nameOrigin) config.setNameOrigin(stored.nameOrigin);
-  upsertAgentConfig({ name, mode: 'local', localName: name, displayName: stored.displayName ?? name });
+  await upsertAgentConfig({ name, mode: 'local', localName: name, displayName: stored.displayName ?? name });
 
   return { rt, config };
 }
@@ -48,7 +48,7 @@ const suggests = (title: string) => ({
 /** An agent added to a virtual workspace starts untitled: titling from the shared mission would name every peer the same. */
 describe('local agent auto-titling on its first owner message', () => {
   test('an agent added without a name is titled by that first message, once', async () => {
-    const { rt, config } = workspace('quiet-harbor-1a4e20', { displayName: '', nameOrigin: 'auto' });
+    const { rt, config } = await workspace('quiet-harbor-1a4e20', { displayName: '', nameOrigin: 'auto' });
     const refTitle = loadConfigFile().agents?.['quiet-harbor-1a4e20']?.displayName;
 
     const titleTask = autoTitleLocalWorkspace(
@@ -71,7 +71,7 @@ describe('local agent auto-titling on its first owner message', () => {
   });
 
   test('a name the owner typed is never replaced by a later message', async () => {
-    const { rt, config } = workspace('quiet-harbor-7f159a', { displayName: 'Jarvis', nameOrigin: 'user' });
+    const { rt, config } = await workspace('quiet-harbor-7f159a', { displayName: 'Jarvis', nameOrigin: 'user' });
 
     await autoTitleLocalWorkspace(
       'quiet-harbor-7f159a', rt,

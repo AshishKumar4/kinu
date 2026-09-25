@@ -69,7 +69,7 @@ export function initUserTables(sql: SqlExec): void {
       fork_lease_expires_at INTEGER
     )
   `);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_workspaces_last_visited ON user_workspaces (last_visited DESC)`);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_workspaces_roster ON user_workspaces (last_visited DESC, name)`);
 
   initWorkspaceCapabilityTables(sql);
 
@@ -364,6 +364,25 @@ export function initUserTables(sql: SqlExec): void {
   initReleaseTables(sql);
 
   initExperienceLibraryTables(sql);
+
+  // `activity` and `decisions` repeat the JSON's, which goes last so a count never reads it.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS workspace_overviews (
+      name       TEXT PRIMARY KEY,
+      activity   TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle')),
+      decisions  INTEGER NOT NULL,
+      changed_at INTEGER NOT NULL,
+      overview   TEXT NOT NULL
+    )
+  `);
+
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS workspace_overview_nudges (
+      name     TEXT PRIMARY KEY,
+      attempts INTEGER NOT NULL,
+      next_at  INTEGER NOT NULL
+    )
+  `);
 
   // A projection: every read re-asks the owner's workspace, so a stale row can only list something that refuses.
   sql.exec(`

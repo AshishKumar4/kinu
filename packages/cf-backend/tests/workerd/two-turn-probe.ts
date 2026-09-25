@@ -38,6 +38,7 @@ import type {
   PendingSteer,
   PendingSteerFile,
   PreparedConversation,
+  QueuedConversation,
   QueueProbeMode,
   RawChatProbeResult,
   ReactorEviction,
@@ -54,6 +55,7 @@ import {
   ParityPreparedSchema,
   ParityRowsSchema,
   PreparedConversationSchema,
+  TurnSchema,
   ReactorEvictionSchema,
   WakeDriveResultSchema,
   WakeRowsSchema,
@@ -777,7 +779,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Only the remote model response is held; peer ingress queues a durable event-drain
    * submission while both socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin'>): Promise<HttpCall[]> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin'>): Promise<QueuedConversation> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -890,19 +892,19 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         await send('QUEUE-C');
       }
 
-      if (mode === 'signal') await target.runTaskFromMcp('QUEUE-PROGRAMMATIC');
+      const task = mode === 'signal' ? v.parse(TurnSchema, await target.runTaskFromMcp('QUEUE-PROGRAMMATIC')) : null;
 
       const heldCalls = (await this.httpCalls()).filter((call) => call.model === 'probe-queue');
 
       if (heldCalls.length !== 1) throw new Error('queued requests ran before the held genesis response was released');
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
 
-      // The held genesis, one user-origin rerun of the sends it could not land (a mid-genesis peer
-      // event rides its first step), and the signal's own turn.
-      await awaitSleepTimeSettled(recording, { chat: 2, peer: 2, signal: 3, yield: 1, attach: 2 }[mode]);
+      // The held genesis and one user-origin rerun of the sends it could not land; a signal or peer
+      // event that waited with them rides its first step.
+      await awaitSleepTimeSettled(recording, { chat: 2, peer: 2, signal: 2, yield: 1, attach: 2 }[mode]);
       await awaitQuiet(recording);
 
-      return await this.httpCalls();
+      return { http: await this.httpCalls(), task };
     } finally {
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
       socket?.close(1000, 'queue probe complete');

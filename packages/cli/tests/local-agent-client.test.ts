@@ -75,6 +75,7 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
         return trimmed === undefined || trimmed === '' ? 'fake/fake-model' : trimmed;
       },
     resolveModel: () => model,
+    credentialFor: async () => null,
     listProviders: async () => [{ id: 'fake', label: 'Fake', available: true }],
     listModels: async () => ({ models: [{ id: 'fake-model', label: 'Fake Model', provider: 'fake' }], failures: [] }),
     modelInfo: async () => null,

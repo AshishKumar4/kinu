@@ -16,6 +16,7 @@ import type { VfsListedEntry } from '../vfs/mounts';
 import { looksLikeZip, packZip, unpackZip, type ZipEntry } from '../utils/zip';
 import { SKILL_FOLDER_FILE } from './types';
 import { parseSkillFile, skillNameProblem } from './parse';
+import { refusedSkillFiles, type SkillFileRefusal } from './discover';
 
 export interface DriveEntry {
   readonly name: string;
@@ -25,6 +26,7 @@ export interface DriveEntry {
   readonly target?: string;
   readonly skill: boolean;
   readonly skillProblem?: string;
+  readonly unused?: SkillFileRefusal;
 }
 
 export interface DriveListing {
@@ -40,6 +42,11 @@ const DriveEntrySchema = v.object({
   target: v.optional(v.string()),
   skill: v.boolean(),
   skillProblem: v.optional(v.string()),
+  unused: v.optional(v.variant('reason', [
+    v.object({ reason: v.literal('name'), problem: v.string() }),
+    v.object({ reason: v.literal('builtin') }),
+    v.object({ reason: v.literal('shadowed'), by: v.string() }),
+  ])),
 });
 
 export const DriveListingSchema = v.object({ path: v.string(), entries: v.array(DriveEntrySchema) });
@@ -175,6 +182,8 @@ export async function listDrive(drive: MossaicVfs, rawPath: string): Promise<Dri
   const listed = await reservedTolerant(drive, path);
   const entries: DriveEntry[] = [];
 
+  const refused = path === DRIVE_SKILLS_DIR ? await refusedSkillFiles(drive, path) : new Map<string, SkillFileRefusal>();
+
   if (path === '/') {
     for (const reserved of DRIVE_RESERVED_DIRS) {
       const name = reserved.slice(1);
@@ -191,6 +200,7 @@ export async function listDrive(drive: MossaicVfs, rawPath: string): Promise<Dri
 
     const skillProblem = await listedSkillProblem(drive, { path: full, name, isDir, target });
     const kind = listedKind(isDir, target);
+    const unused = refused.get(kind === 'file' ? full : `${full}/${SKILL_FOLDER_FILE}`);
 
     const entry: DriveEntry = {
       name,
@@ -200,6 +210,7 @@ export async function listDrive(drive: MossaicVfs, rawPath: string): Promise<Dri
       skill: skillProblem === null,
       target,
       skillProblem: skillProblem === null || kind === 'file' ? undefined : skillProblem,
+      ...(unused !== undefined && { unused }),
     };
 
     entries.push(entry);

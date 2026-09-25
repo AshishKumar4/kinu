@@ -25,20 +25,48 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - **Codex works on kinu.run.** chatgpt.com refuses Cloudflare Workers' network, so each user's Codex calls now go through their own small container, which chatgpt.com accepts. The first Codex call after a quiet spell takes about 2 to 4 seconds longer while the container wakes. A refused network now fails a Codex call once instead of three times.
 - **A model list that cannot load says so.** When a provider's live model list fails (Codex's `/models`, models.dev), the model picker still offers the built-in list and names why the live one is missing, instead of showing a stale list as current. The Codex built-in list now carries GPT-6 Sol, Luna and Astra and GPT-5.6 Sol, Terra and Luna. On kinu.run, chatgpt.com refuses the server's network with a block page before sign-in; a Codex turn there now fails as "Codex is unreachable from here", not as a sign-in problem.
 - **A provider that asks for more than a minute's wait ends the call.** A spent plan window answers 429 with a `Retry-After` of hours or days (OpenCode Go asked for 8.4 days); the turn used to sleep it out. Now any wait over 60 s fails the call at once with the provider's name, the reset time and its own message, and a fallback model, when the tier has one, takes over. Waits of a minute or less are still waited, and the top bar counts them down ("waiting on claude · 42s").
+- **A turn's own notes join the agent's live state.** Why a turn runs (a message, a finished background job or
+  another Kinu event, named) and why each active skill is on are sections of the dynamic context, and a machine that
+  connects shows as its devices row changing; the message that restated them before every turn's input and the
+  "your user's PC just connected" notice are gone. The unapproved workspace files (an AGENTS.md the owner has not
+  approved) keep their own message, apart from the state Kinu vouches for, but it goes out once, before the input
+  of the turn that first needs it, and again only when the files or their approval change. Each turn used to drop
+  the previous turn's copies and re-send them before its own input, so the provider re-read the whole previous turn:
+  in a scripted eight-turn conversation over an unapproved AGENTS.md, the eighth turn's first request now opens with
+  all 16 messages of the seventh's, up from 14.
 - **The agent's live state changes by row.** A change to one task, job, delegate, approval, fact or recovery
   re-sent that whole list in the step's state update, so on a 40-step turn with task churn each update (901 bytes)
   outweighed the full state it changed (729). An update now names only the rows that changed (`- t12 [active] …`,
-  `- removed: t12`), and the memory tail only what was appended; a change no smaller than the full state is stated
-  whole. Once the updates since the last full statement outweigh six of them (the longest chain measured: 20
-  updates, which glm-5.3 read back right 10 times in 10), the next change restates the whole state after them;
-  nothing before it is rewritten, so the prompt cache keeps it. On that turn the final request carries 14.0 KB of
-  state instead of 35.9 KB, and the turn re-sends 308 KB of it instead of 834 KB.
+  `- removed: t12`, a new row at the end), and the memory tail only the lines appended; a list whose rows moved or
+  gained one before its end, a memory window that slid, and any change no smaller than the full state are stated
+  whole, so the updates always add up to the state. Once the updates since the last full statement outweigh six of
+  them (the longest chain measured: 20 updates, which glm-5.3 read back right 10 times in 10), the next change
+  restates the whole state after them; nothing before it is rewritten, so the prompt cache keeps it. On that turn
+  the final request carries 14.1 KB of state instead of 35.9 KB, and the turn re-sends 311 KB of it instead of 834 KB.
+- **Home and the Workspaces page no longer ask every workspace for its state.** Each workspace tells its owner's
+  account when its tile changes (working, needs you, its last run, its slates), and an open page hears the change over
+  one socket, so a page left open wakes no workspace. The Workspaces page reads 50 workspaces at a time as you scroll,
+  and its filters and search are answered by the account, so they cover every workspace. A tile no longer runs its
+  slate live. A workspace that has not reported yet says so, and the first visit asks each such workspace once.
+- **A workspace tile shows its slate's picture.** After a slate's page renders, the workspace photographs it with a
+  headless browser (30 seconds after the last render, or 2 minutes into a long run of edits) and keeps the picture in
+  R2, so a tile draws the slate without running it. A failed shot keeps the last picture and tries twice more, and a
+  removed slate or workspace takes its pictures with it. A deployment without Browser Rendering or the
+  `kinu-slate-pictures` bucket keeps today's lettered cover.
+- While a sandbox starts, the workspace says "Sandbox starting…" in a quiet line under the tab, where a failed preview listing reports, and keeps the previews it already had.
 - The Worker's `/api` routes are served by one Hono app whose route order is the old dispatch order, gate for gate. An error no route catches is now answered as JSON with its class's status and a message naming only that class (the cause goes to the log), never cached, instead of the platform's error page; the run-event routes read the workspace whose ownership was just proven, even when the request spells its name with escapes.
 - **The Diffs tab is now Changes.** It lists the changed files as a tree with their counts; a file opens to a diff
   that keeps three lines around each change, folds the rest, marks the changed words and keeps the code's colours.
   Expand shows every file split beside the tree (one column on a phone). A binary file or one over 2 MB says so
   instead of "File exceeds 1000 lines", and a new binary file is listed. Mark reviewed can be undone for 10 seconds.
+- **Notes to the agent on its changes.** In the Changes tab, select words or press a line number (Shift-press
+  another to extend), then Comment or Remove, with plan review's toolbar, popover, marks and list; a file and the
+  whole set take a note too. Unsent notes are kept in the workspace, so a reload or another device finds them, and
+  while there are any, Send feedback stands where Mark reviewed was. Sending posts one message the thread draws as a
+  card; each row opens the diff at its place. A note whose code the agent changes since leaves the diff and says
+  "changed since", and is still sent with its quote.
 - **The Drive is one tiled place for your stuff.** Two tabs: My stuff (slates, blueprints, folders and files, with the Skills folder first) and Shared (what others shared with you, then what you shared), each a grid of one tile. Nothing empty is drawn: a section with no tiles is absent, the Shared tab appears once something is shared, and a first visit lands on the tab that holds something. A file opens in the viewer beside the grid; a slate opens in its workspace. The share dialog (#25) says one sentence per mode, then people, who else can open it, the fork choice, the members it reaches folded behind one row, its limits, and the shares already made with Stop sharing. The Drive's `/blueprints` folder and its Public and People I know lists are gone, and one `/api/shared/revoke` route ends a live share or a blueprint link.
+- **Skills live in the Drive; Plugins lists services.** The Plugins page shows MCP servers only. The Drive's Skills folder is always there, and holds the built-in skills as read-only tiles marked Built in beside your own, in the order agents read them at `/skills`. A built-in opens as the SKILL.md agents read, with Download. A skill of yours that shares a built-in's name says Not used, since the built-in wins.
 - **A new workspace syncs the disk far less while it is created.** Its tables, the row naming it and its main agent are written in one transaction instead of one per statement: `kinu create` went from 269 fsyncs to 88, and creating the tables alone from 708 to 4. A hosted workspace creates its tables in one Durable Object transaction too, so a failure partway leaves none.
 - Hosted actors now use the Agents platform directly, without Think's duplicate session, workspace, inference queue or recovery boot. The shared Kinu chat loop retains the existing browser/CLI protocol and initializes the root transcript through the public session provider. Accepted sends and unfinished workspace work keep the sandbox protected across eviction.
 - **Tool descriptions carry only what a call needs.** Each built-in tool's
@@ -674,13 +702,47 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
-- **A model tier whose model is gone runs on your default.** A tier set to a model no provider lists any more
+- **A workspace's card shows the owner's words, never Kinu's own.** A new workspace's card showed the prompt Kinu
+  starts its first turn with as the owner's latest task, and a background event after the owner's message did the
+  same. Home and the Workspaces page now show the owner's last message, or nothing until there is one.
+
+- **More commands that destroy your work wait for you.** `git -C <dir> reset --hard` and other git commands
+  spelled with global options, `git checkout -- .`, `git restore .`, `git clean -f`, `find … -delete` and
+  `rsync --delete` ran on your files without asking, as did `mv`, `cp` or `>` onto a file under `/pc` or
+  `/shared`. They now wait for you there as `rm -rf` does; on the agent's own files they still run.
+
+- **A delete that reaches your machine or your Drive from the hosted workspace waits for you.** The hosted
+  workspace is the agent's own, but its shell also reaches your connected machine at `/pc` and your Drive at
+  `/shared`, and `rm -rf /pc/proj` ran there without asking. A command that names `/pc` or `/shared`, or runs
+  after a `cd` into one (made by the shell, a background process or a shell program, which share one working
+  directory) or with its working directory there, now waits for you as the same command on your machine does; a
+  program in another language that writes there asks once, and reading a skill asks nobody. A path computed as
+  it runs (a variable, a glob) is not caught; on `/pc` the machine's own consent still applies.
+
+- **The CLI asks before a destructive command in your directory.** In a workspace placed in a directory, `sudo`,
+  `rm -rf`, `git reset --hard`, `chmod u+s` and the other commands whose harm stays on the machine ran without
+  asking: the approval check took the shell's name, `workspace`, for the agent's own disposable workspace. Each
+  executor now declares whose files it holds, and the check reads that. The Cloudflare workspace, its container
+  and the CLI's in-database workspace hold the agent's own; a CLI workspace in your directory, a connected machine
+  and the workspace a fork came from hold yours, so those commands wait for you there.
+
+- **A model tier whose model is gone runs on your default.** A tier set to a model its provider no longer lists
   (retired, or its account disconnected) failed every turn it served. It now runs on your default tier, then on
-  GLM 5.3. A model pinned to a workspace or an agent is still refused, so you can see and fix the pin.
+  GLM 5.3, on the CLI as on the web. A provider that lists no models (an OpenAI-compatible endpoint whose `/models`
+  answers an empty list) proves nothing, so its models still serve. A model pinned to a workspace or an agent is
+  still refused, so you can see and fix the pin. The run names the model it replaced, a hired agent's or a swarm
+  node's run included.
+
+- **A fallback takes over from a model your account cannot reach.** A tier's fallback chain gave up when its first
+  model answered 403 or 404 (a model the account has no access to, or one the provider no longer serves), though the
+  next model could have answered. It now hands the turn on, as it does for a rate limit or an outage; a malformed or
+  too-large request still fails the turn, since the next model would refuse it too. A 401 refuses the credential
+  itself, so the turn passes over the chain's other models that sign in with it to one that does not.
 
 - **Reasoning effort is always a level the model takes.** A stored effort the model does not declare (xhigh on GLM
-  5.3, which takes low, medium and high) was sent as it was. It is now sent as the nearest level the model declares,
-  never a higher one.
+  5.3, which takes low, medium and high) was sent as it was. It is now sent as the nearest level the model declares
+  below it, or the lowest the model takes when none is below, and a model that takes no level (Claude Haiku 4.5) is
+  sent none. Each fallback in a tier's chain gets the level as that fallback declares it, not the first model's.
 
 - **An hour-long prompt-cache write is charged what Anthropic bills.** Anthropic bills a cache write kept an hour at
   twice the input rate. Spend, mission budgets and the Activity totals charged it at the five-minute rate and called

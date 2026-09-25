@@ -44,7 +44,7 @@ export interface BranchCompletionRequest {
   readonly actor: HostedActor;
   readonly spec: string;
   /** The route's own reasoning effort; spec and effort are one decision and travel together. */
-  readonly effort: ReasoningEffort;
+  readonly effort: ReasoningEffort | null;
   readonly system?: string;
   readonly user: string;
 }

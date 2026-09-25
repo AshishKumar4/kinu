@@ -2,16 +2,16 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import * as v from 'valibot';
 import type { AgentRuntime, LLMProviderConfig, WriteEvent, WriteObserver } from '@kinu.run/core';
 import {
-  buildBuiltinTools, discoverSkills, initWorkspaceSchema, isVfsError, WORKSPACE_ROOT, subordinateAgentName,
+  buildBuiltinTools, discoverSkills, initWorkspaceSchema, isVfsError, reviewCommand, WORKSPACE_ROOT, subordinateAgentName,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/identity';
-import { scratchDir, toolExecute } from '@kinu.run/test-utils';
+import { present, scratchDir, toolExecute } from '@kinu.run/test-utils';
 import {
   createCLIRuntime, createHostShell, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
   type CLIRuntime,
@@ -275,6 +275,50 @@ describe('the shell over the bound directory', () => {
 
     await shell.exec('echo from-the-shell > shell-wrote.txt');
     expect(await readText(rt, 'shell-wrote.txt')).toBe('from-the-shell\n');
+  });
+
+  test('a command that can wreck the user\'s files is put to them first; the in-SQLite workspace is the agent\'s own', async () => {
+    const { state, project } = roots('cwd-plane-local-harm');
+    mkdirSync(join(project, 'doomed'));
+    writeFileSync(join(project, 'doomed', 'kept.txt'), 'the user\'s work\n');
+    writeFileSync(join(project, 'tool'), '#!/bin/sh\n', { mode: 0o755 });
+    const commands = ['sudo -n true', 'rm -rf doomed', 'git reset --hard', 'chmod u+s tool'];
+
+    const askedOn = (rt: CLIRuntime): string[] => {
+      const asked: string[] = [];
+      rt.setShellApprovalChannel?.(async (request) => {
+        asked.push(request.command);
+
+        return 'deny';
+      });
+
+      return asked;
+    };
+
+    // Checkpoint storage is global per agent name; a stable name would read stores from prior runs.
+    const placed = agentRuntime(state, `local-harm-${basename(dirname(state))}`, project);
+    const askedPlaced = askedOn(placed);
+
+    for (const command of commands) await present(placed.shell, 'the placed shell').exec(command);
+
+    expect(askedPlaced).toEqual(commands);
+    expect(readdirSync(join(project, 'doomed'))).toEqual(['kept.txt']);
+    expect(statSync(join(project, 'tool')).mode & 0o4000).toBe(0);
+
+    const unplaced = agentRuntime(state, 'local-harm-unplaced');
+    const askedUnplaced = askedOn(unplaced);
+    await unplaced.storage.vfs.writeFile('doomed/kept.txt', 'the agent\'s scratch\n');
+
+    for (const command of commands) await present(unplaced.shell, 'the in-SQLite shell').exec(command);
+
+    expect(askedUnplaced).toEqual([]);
+    expect(await unplaced.storage.vfs.exists('doomed')).toBe(false);
+
+    // Both executors are named 'workspace'; the rules follow what each declares it holds.
+    const declared = (rt: CLIRuntime) => present(rt.executionRouter?.getProvider('workspace'), 'the workspace executor').filesOwner;
+
+    expect(reviewCommand('rm -rf ~/x', declared(placed)).decision).toBe('gate');
+    expect(reviewCommand('rm -rf ~/x', declared(unplaced)).decision).toBe('allow');
   });
 
   test('no tier passes on a planted credential; the host shell keeps the user\'s own settings', async () => {

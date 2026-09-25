@@ -32,6 +32,7 @@ import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
   type ExposedPortList,
+  type PreviewPortState,
   type PinnedPreviewPort,
 } from "@kinu.run/core";
 import {
@@ -88,6 +89,10 @@ export type SendAdmission =
   | null;
 
 type SendLandingResolvers = ReturnType<typeof Promise.withResolvers<SendLanding>>;
+
+type PreviewListing = Omit<PreviewPortState, "ports">;
+
+const NO_PREVIEW_LISTING: PreviewListing = { error: null, starting: [] };
 
 /** A call the actor refused takes the waiter with it; the refusal is the answer. */
 async function landingAfter(
@@ -842,7 +847,8 @@ export function useKinu(target?: string | KinuActorAddress) {
   // Refreshed on every surface. Listing ports never provisions a sandbox: getExposedPorts returns []
   // unless the executor is already active.
   const [pinnedPorts, setPinnedPorts] = useState<PinnedPreviewPort[]>([]);
-  const [previewError, setPreviewError] = useState<string | null>(null);
+  // One state, so a switch clears both.
+  const [previewListing, setPreviewListing] = useState<PreviewListing>(NO_PREVIEW_LISTING);
   const exposedPortsRefreshGeneration = useRef(0);
   /** Held in a ref too: the socket handler's effect must not re-subscribe (its cleanup forgets the
    *  live head paint). Null on the workspace pane and until the load resolves it. */
@@ -1507,7 +1513,9 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (generation !== exposedPortsRefreshGeneration.current) return;
     setPinnedPorts((previous) => {
       const next = reconcilePreviewPorts(previous, results);
-      setPreviewError(next.error);
+      setPreviewListing((before) => (before.error === next.error && before.starting.join() === next.starting.join()
+        ? before
+        : { error: next.error, starting: next.starting }));
 
       if (next.error === null) {
         const ids = next.ports.map(port => `${port.executor}:${port.port}`);
@@ -1739,7 +1747,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     setExecutorOutputs(new Map());
     setLastActiveExecutor(null);
     setPinnedPorts([]);
-    setPreviewError(null);
+    setPreviewListing(NO_PREVIEW_LISTING);
     setBackgroundJobs([]);
     setSlates([]);
     setTabPresence(undefined);
@@ -2019,7 +2027,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     pinnedPorts,
     previewFocus, planFocus,
     workspacePlanArrival,
-    previewError,
+    previewError: previewListing.error,
+    previewStarting: previewListing.starting,
     refreshExposedPorts,
     backgroundJobs,
     refreshBackgroundJobs,

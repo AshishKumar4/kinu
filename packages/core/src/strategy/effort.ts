@@ -46,7 +46,7 @@ export function workersAIEffortOption(
 const ANTHROPIC_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 export function reasoningEffortOptions(
-  effort: ReasoningEffort | undefined,
+  effort: ReasoningEffort | null | undefined,
   providerFamily: string,
 ): ProviderOptions | undefined {
   if (!effort) return undefined;

@@ -13,9 +13,9 @@ import { resolveAgentTarget, type AgentTarget, type ResolveAgentTargetOptions } 
 import { printError } from './display';
 
 /** Adopts an unplaced workspace into the calling project unless `adopt: false`. */
-export function requireLocalAgent(name: string, opts: ResolveLocalAgentOptions = {}): ResolvedLocalAgent {
+export async function requireLocalAgent(name: string, opts: ResolveLocalAgentOptions = {}): Promise<ResolvedLocalAgent> {
   try {
-    return resolveLocalAgent(name, opts);
+    return await resolveLocalAgent(name, opts);
   } catch (error) {
     if (!(error instanceof MissingLocalWorkspaceError)) throw error;
     printError(error.message, error.hint);

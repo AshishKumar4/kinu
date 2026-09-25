@@ -29,6 +29,8 @@ const SNAPSHOT_IGNORED_DIRECTORIES = new Set([
 
 const NOT_GIT_REPO = '__KINU_NOT_GIT_REPO__';
 
+const HeadCommitSchema = v.pipe(v.string(), v.hexadecimal(), v.minLength(40), v.maxLength(64));
+
 /**
  * `hash` is a digest of a file's bytes, null past one row; a text file's body is stored once per hash, a binary file's
  * never. `vfs_baseline_generation` names the generation each one replaced, for Undo.
@@ -62,12 +64,14 @@ export interface WorkspaceDiffResult {
   files: FileDiff[];
   /** When the baseline these changes are measured against was captured. */
   trackedSince: number;
+  baseline: string;
 }
 
 export interface ExecutorDiffResult {
   files: FileDiff[];
   mode: 'git' | 'vfs-baseline';
   trackedSince?: number;
+  baseline?: string;
   notGitRepo?: boolean;
   error?: string;
 }
@@ -249,7 +253,7 @@ export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime): Promise<Wo
 
   files.sort((a, b) => a.path.localeCompare(b.path));
 
-  return { files, trackedSince: manifest.capturedAt };
+  return { files, trackedSince: manifest.capturedAt, baseline: manifest.generation };
 }
 
 /** The generation the active one replaced, kept for Undo. */
@@ -370,13 +374,12 @@ async function getGitDiff(rt: AgentRuntime, executorId: string): Promise<Executo
     if (root === NOT_GIT_REPO) return { files: [], mode: 'git', notGitRepo: true };
 
     const quotedRoot = `'${root.replace(/'/g, `'\\''`)}'`;
-    const headOutput = (await execute(`git -C ${quotedRoot} rev-parse --verify HEAD >/dev/null 2>&1 && printf yes || printf no`)).trim();
+    const head = (await execute(`git -C ${quotedRoot} rev-parse --verify --quiet HEAD || printf no`)).trim();
+    const hasHead = head !== 'no';
 
-    if (headOutput !== 'yes' && headOutput !== 'no') {
-      return { files: [], mode: 'git', error: `Unexpected git HEAD probe output: ${headOutput}` };
+    if (hasHead && !v.safeParse(HeadCommitSchema, head).success) {
+      return { files: [], mode: 'git', error: `Unexpected git HEAD probe output: ${head}` };
     }
-
-    const hasHead = headOutput === 'yes';
 
     const tracked = hasHead
       ? await execute(`git -C ${quotedRoot} --no-pager diff --no-ext-diff --no-renames HEAD --`)
@@ -393,7 +396,9 @@ async function getGitDiff(rt: AgentRuntime, executorId: string): Promise<Executo
     const unified = [tracked === '(no output)' ? '' : tracked, untrackedDiff === '(no output)' ? '' : untrackedDiff]
       .filter(Boolean).join('\n');
 
-    return { files: parseGitDiff(unified), mode: 'git' };
+    const files = parseGitDiff(unified);
+
+    return hasHead ? { files, mode: 'git', baseline: head } : { files, mode: 'git' };
   } catch (err) {
     return { files: [], mode: 'git', error: renderThrownChain({ cause: err }) };
   }
@@ -411,7 +416,7 @@ export async function getExecutorDiff(rt: AgentRuntime, executorId: string): Pro
 
     const r = await getWorkspaceDiff(rt);
 
-    return { files: r.files, mode: 'vfs-baseline', trackedSince: r.trackedSince };
+    return { files: r.files, mode: 'vfs-baseline', trackedSince: r.trackedSince, baseline: r.baseline };
   }
 
   return getGitDiff(rt, executorId);

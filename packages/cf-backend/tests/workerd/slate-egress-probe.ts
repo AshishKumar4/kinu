@@ -45,7 +45,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
     facetManager: async () => this.facets,
     dispatch: async () => { throw new Error('The fixture declares no capability bindings'); },
     apps: {
-      ...probeDurableApps(this.facets, this.ctx),
+      ...probeDurableApps(this.facets),
       url: async () => { throw new Error('The fixture does not publish preview URLs'); },
     },
     catalog: async () => ({ executors: [], mcp: [], tools: [], tiers: [], slates: {} }),

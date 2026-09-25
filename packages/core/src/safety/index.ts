@@ -1,6 +1,7 @@
 
 export {
   reviewCommand,
+  createShellSession,
   formatApproval,
   gatedGrants,
   formatApprovalGrant, holdsGrant,
@@ -14,6 +15,9 @@ export {
   type ApprovalRuleHit,
   type ApprovalResult,
   type ApprovalHarm,
+  type FilesOwner,
+  type GatedExecutor,
+  type ShellSession,
   type ApprovalGrant,
   type ApprovalSpend,
   type ShellApprovalRequest,

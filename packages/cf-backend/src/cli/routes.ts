@@ -23,7 +23,7 @@ import {
   type CliAuthAuthority, type CliTokenIdentity,
 } from './auth-store';
 import {
-  ACCESS_TOKEN_SCOPES, isAgentRpcMethod, requiredRpcAccess, rpcAccessScope, type AccessTokenScope,
+  ACCESS_TOKEN_SCOPES, isAgentRpcMethod, requiredRpcAccess, rpcAccessScope, rpcMovesOverview, type AccessTokenScope,
 } from '@kinu.run/core';
 import type { AgentRpcDispatch } from './rpc-gate';
 import { buildCliInstallCommand } from '@kinu.run/core';
@@ -44,7 +44,7 @@ import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '@kinu.run/core';
 import { rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 import * as v from 'valibot';
-import { classify, renderThrownChain } from '@kinu.run/core/obs';
+import { classify, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 const DeviceRegistrationRequestSchema = v.object({ label: v.optional(v.string()), replaces: v.optional(v.string()) });
 
@@ -72,7 +72,7 @@ export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWork
 >;
 
 export type CliAgentTarget = CloudWorkspaceBirth & CredentialFanoutTarget & AccountLedgerTarget
-  & Pick<OrchestratorAgent, 'createDurableWebhook'> & AgentRpcDispatch;
+  & Pick<OrchestratorAgent, 'createDurableWebhook' | 'requestOverviewPush'> & AgentRpcDispatch;
 
 export interface CliRoutesEnv<Id>
   extends CreateWorkspaceEnv<Id>, UserAIProxyEnv<Id>, AuthEnv<Id>, WebhookRouteEnv {
@@ -154,7 +154,6 @@ const cliBearer: MiddlewareHandler<CliEnv> = async (c, next) => {
   await next();
 };
 
-/** A CLI bearer holding `ai.proxy`. */
 export const inferenceProxyGate: MiddlewareHandler<CliEnv> = async (c, next) => {
   const cli = await authenticateCli(c);
 
@@ -487,15 +486,28 @@ async function handleAgentRpc(c: CliContext, name: string): Promise<Response> {
   if (agent instanceof Response) return agent;
 
   // The table check above is the trust boundary; each method validates its own args.
+  let result: unknown;
+
   try {
     const invoke = v.parse(v.function(), agent[rpcMethod]);
-    const result = await invoke(...args);
-
-    return json({ body: { result: result ?? null } });
+    result = await invoke(...args);
   } catch (e) {
     // Same contract as a websocket rpc-error frame.
     return err(400, renderThrownChain({ cause: e }));
   }
+
+  // A failed fold leaves the write answered.
+  if (rpcMovesOverview(rpcMethod)) {
+    try {
+      await agent.requestOverviewPush();
+    } catch (cause) {
+      diagnostics.failure('cli.overview_fold_failed', toKinuError({
+        doing: 'asking a workspace to fold its tile after a CLI write', cause, otherwise: 'unavailable',
+      }), { workspace: name, method: rpcMethod });
+    }
+  }
+
+  return json({ body: { result: result ?? null } });
 }
 
 /** The session token's mint time (minting requires a live browser approval); access tokens never qualify. */

@@ -1,18 +1,19 @@
 /**
- * Every container image the Worker runs, declared ONCE: where it is pushed, the digest wrangler.jsonc runs, and the
- * tracked directory it is built from with a hash of that directory's tracked files. `release-config.test.ts` holds
- * wrangler.jsonc to these digests and each directory to its hash, so a source change with no new digest fails there;
- * `gate:egress-interception` reads the same record to admit a forwarding container.
+ * Every container image the Worker runs: where it is pushed and the digest wrangler.jsonc runs. The sandbox's is read
+ * from its own artifact record, packages/devbox/block-lower/upstream.json, whose per-file hashes release-config's A8
+ * holds; the Codex forwarder's is declared here with a hash of its tracked source directory, so a source change with
+ * no new digest fails release-config, and `gate:egress-interception` reads the same record to admit it.
  *
- * A new digest, for either image:
- *   bunx wrangler containers build -p -t <image>:<first 12 of the source hash> <source>
- *   (the block layer runs `bun <source>/bundle-sync.ts` first, see its README), then
- *   `docker buildx imagetools inspect registry.cloudflare.com/<account>/<image>:<tag>` for the digest, and move the
- *   digest here, in wrangler.jsonc, and the hash `bun scripts/container-images.ts` prints. deploy.sh builds no image.
+ * A new Codex forwarder digest:
+ *   bunx wrangler containers build -p -t kinu-codex-egress:<first 12 of the source hash> <source>, then
+ *   `docker buildx imagetools inspect registry.cloudflare.com/<account>/kinu-codex-egress:<tag>` for the digest, and
+ *   move the digest here, in wrangler.jsonc, and the hash `bun scripts/container-images.ts` prints. deploy.sh builds
+ *   no image. The sandbox image: packages/devbox/block-lower/README.
  */
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import * as v from 'valibot';
 import { trackedFiles } from './sources';
 
 export interface ContainerImage {
@@ -20,18 +21,23 @@ export interface ContainerImage {
   readonly digest: string;
   /** Tracked directory holding the Dockerfile the image is built from. */
   readonly source: string;
-  /** {@link sourceHash} of `source` when `digest` was pushed. */
-  readonly sourceHash: string;
+  /** {@link sourceHash} of `source` when `digest` was pushed; absent where the source has its own artifact record. */
+  readonly sourceHash?: string;
 }
+
+const BLOCK_LOWER = 'packages/devbox/block-lower';
+
+const SandboxArtifact = v.object({ image: v.string(), digest: v.string() });
+
+const SANDBOX = v.parse(SandboxArtifact, JSON.parse(readFileSync(join(import.meta.dir, '..', BLOCK_LOWER, 'upstream.json'), 'utf8')));
 
 const REGISTRY = 'registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1';
 
 export const CONTAINER_IMAGES = {
   KinuSandbox: {
-    repository: `${REGISTRY}/kinu-devbox-block-layer`,
-    digest: 'sha256:c2c03bdf3b46d22633ffdeab545953d7c0caa0fb562d36e70ebdd4618898c718',
-    source: 'packages/devbox/block-lower',
-    sourceHash: 'sha256:056ba02fe6ef15819393f0e9c98ad4011d40e9388ca6f9025b303fcfb2352b85',
+    repository: SANDBOX.image.slice(0, SANDBOX.image.lastIndexOf('@')),
+    digest: SANDBOX.digest,
+    source: BLOCK_LOWER,
   },
   CodexEgress: {
     repository: `${REGISTRY}/kinu-codex-egress`,

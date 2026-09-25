@@ -940,6 +940,8 @@ async function wireBinding(
       return { type: 'analytics_engine', name, dataset: resource };
     case 'ai':
       return { type: 'ai', name };
+    case 'browser':
+      return { type: 'browser', name };
     case 'assets':
       return { type: 'assets', name };
     case 'version-metadata':

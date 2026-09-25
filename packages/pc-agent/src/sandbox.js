@@ -25,11 +25,11 @@ const os = require('node:os');
 
 const path = require('node:path');
 
-const { spawnSync } = require('node:child_process');
-
 const util = require('node:util');
 
 const update = require('./update.js');
+
+const { runToExit } = update;
 
 /** Why a machine cannot sandbox. `ok` is the only status that runs a command;
  *  every other value is reported to the hub, which refuses `exec` and says so
@@ -228,19 +228,19 @@ function gpuNodes(devDir = '/dev') {
  * once, exactly as nvidia-container-toolkit does. Failure is a detail, never
  * fatal: a machine without CUDA still runs commands.
  */
-function ensureUvmNode(devDir = '/dev') {
+async function ensureUvmNode(devDir = '/dev') {
   if (!fs.existsSync(path.join(devDir, 'nvidiactl'))) return null;
 
   if (fs.existsSync(path.join(devDir, 'nvidia-uvm'))) return null;
-  const run = spawnSync('nvidia-modprobe', ['-u', '-c', '0'], { stdio: 'ignore' });
+  const { error } = await runToExit('nvidia-modprobe', ['-u', '-c', '0'], {});
 
-  if (run.error && run.error.code === 'ENOENT') return 'nvidia-modprobe is not installed, so /dev/nvidia-uvm was not created';
+  if (error === null) return null;
 
-  if (run.error) return `nvidia-modprobe failed: ${run.error.message}`;
+  if (error.code === 'ENOENT') return 'nvidia-modprobe is not installed, so /dev/nvidia-uvm was not created';
 
-  if (run.status !== 0) return `nvidia-modprobe exited ${run.status}, so /dev/nvidia-uvm was not created`;
+  if (!Number.isInteger(error.code)) return `nvidia-modprobe failed: ${error.message}`;
 
-  return null;
+  return `nvidia-modprobe exited ${error.code}, so /dev/nvidia-uvm was not created`;
 }
 
 function trimPath(value) {
@@ -823,7 +823,7 @@ function plan(options) {
  * No timeout: `/bin/true` under bwrap returns in milliseconds, and a bwrap
  * that hangs is a defect to surface rather than to paper over with a deadline.
  */
-function probe(options = {}) {
+async function probe(options = {}) {
   const platform = options.platform ?? os.platform();
   const deviceHome = options.deviceHome ?? path.join(os.homedir(), '.kinu');
 
@@ -865,28 +865,28 @@ function probe(options = {}) {
     fs.mkdirSync(attempt.view.agentHome, { recursive: true, mode: 0o700 });
     fs.mkdirSync(attempt.view.agentTmp, { recursive: true, mode: 0o700 });
 
-    const run = spawnSync(attempt.argv[0], attempt.argv.slice(1), {
-      env: attempt.env, stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8',
+    const { error, stderr: printed } = await runToExit(attempt.argv[0], attempt.argv.slice(1), {
+      env: attempt.env, encoding: 'utf8',
     });
 
-    if (run.error && run.error.code === 'ENOENT') {
+    if (error !== null && error.code === 'ENOENT') {
       const status = platform === 'darwin' ? SANDBOX_STATUS.NO_SANDBOX_EXEC : SANDBOX_STATUS.NO_BWRAP;
 
       return { status, detail: PROBE_HINTS[status] };
     }
 
-    if (run.error) {
-      return { status: SANDBOX_STATUS.PROBE_FAILED, detail: `sandbox probe could not run: ${run.error.message}` };
+    if (error !== null && !Number.isInteger(error.code)) {
+      return { status: SANDBOX_STATUS.PROBE_FAILED, detail: `sandbox probe could not run: ${error.message}` };
     }
 
-    if (run.status === 0) return { status: SANDBOX_STATUS.OK, detail: null };
-    const stderr = String(run.stderr ?? '').trim();
+    if (error === null) return { status: SANDBOX_STATUS.OK, detail: null };
+    const stderr = String(printed).trim();
 
     if (platform === 'linux' && USERNS_REFUSALS.some((refusal) => stderr.includes(refusal))) {
       return { status: SANDBOX_STATUS.NO_USERNS, detail: PROBE_HINTS[SANDBOX_STATUS.NO_USERNS] };
     }
 
-    const firstLine = stderr.split('\n')[0] || `exit ${run.status}`;
+    const firstLine = stderr.split('\n')[0] || `exit ${error.code}`;
 
     return { status: SANDBOX_STATUS.PROBE_FAILED, detail: `sandbox probe failed: ${firstLine}` };
   } finally {

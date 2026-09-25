@@ -12,6 +12,7 @@ import {
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
+  type RosterBucket,
   WorkspaceOverviewSchema,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
@@ -36,6 +37,23 @@ export interface WorkspaceEntry {
   createdAt: number;
   lastVisited: number;
   archivedAt: number | null;
+}
+
+export type RosterEntry = v.InferOutput<typeof RosterEntrySchema>;
+
+export type RosterCounts = v.InferOutput<typeof RosterCountsSchema>;
+
+export type RosterPage = v.InferOutput<typeof RosterPageSchema>;
+
+export type RosterFrame = v.InferOutput<typeof RosterFrameSchema>;
+
+export type RosterFilterBucket = Exclude<RosterBucket, 'unreported'>;
+
+export interface RosterQuery {
+  readonly cursor?: string | null;
+  readonly limit?: number;
+  readonly bucket?: RosterFilterBucket;
+  readonly q?: string;
 }
 
 export interface CredentialSummary {
@@ -91,6 +109,27 @@ const WorkspaceEntrySchema = v.object({
   name: v.string(), displayName: v.string(), createdAt: v.number(), lastVisited: v.number(),
   archivedAt: v.nullable(v.number()),
 });
+
+const RosterEntrySchema = v.object({ ...WorkspaceEntrySchema.entries, overview: v.nullable(WorkspaceOverviewSchema), decisions: v.number() });
+
+const RosterCountsSchema = v.object({
+  all: v.number(), needs: v.number(), working: v.number(), idle: v.number(), unreported: v.number(), decisions: v.number(),
+});
+
+const RosterPageSchema = v.object({
+  entries: v.array(RosterEntrySchema), total: v.number(), nextCursor: v.nullable(v.string()), counts: RosterCountsSchema,
+});
+
+/** `entry` is null once the workspace has left the roster. */
+export const RosterFrameSchema = v.object({
+  type: v.literal('workspace'), name: v.string(), entry: v.nullable(RosterEntrySchema), counts: RosterCountsSchema,
+});
+
+export const ROSTER_SOCKET_ROUTE = '/api/user/workspaces/live';
+
+export function pictureUrl(workspace: string, slate: string, digest: string): string {
+  return `/api/user/pictures/${encodeURIComponent(workspace)}/${encodeURIComponent(slate)}/${digest}`;
+}
 
 const CliSetupSchema = v.object({
   publicOrigin: v.string(), installCommand: v.string(), setupCommand: v.optional(v.string()), authCommand: v.string(),
@@ -151,6 +190,12 @@ type RequestBody =
   | McpServerInput
   | { catalog: ProfileCatalog; expectedVersion: number };
 
+export class UserApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
 async function api<Schema extends v.GenericSchema>(
   schema: Schema, method: string, path: string, body?: RequestBody,
 ): Promise<v.InferOutput<Schema>> {
@@ -162,7 +207,7 @@ async function api<Schema extends v.GenericSchema>(
     signal: method === 'GET' ? AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) : undefined,
   });
 
-  if (!res.ok) throw new Error(`${method} /api/user${path} → ${res.status} ${await errorDetail(res)}`);
+  if (!res.ok) throw new UserApiError(`${method} /api/user${path} → ${res.status} ${await errorDetail(res)}`, res.status);
 
   return v.parse(schema, await res.json());
 }
@@ -179,7 +224,17 @@ export const deleteAccount = (confirm: string) =>
 
 export const getCliSetup = () => api(CliSetupSchema, 'GET', '/cli');
 
-export const listWorkspaces     = () => api(v.object({ entries: v.array(WorkspaceEntrySchema), total: v.number() }), 'GET', '/workspaces');
+export function listWorkspaces(query: RosterQuery = {}) {
+  const params = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
+  }
+
+  const search = params.size === 0 ? '' : `?${params.toString()}`;
+
+  return api(RosterPageSchema, 'GET', `/workspaces${search}`);
+}
 
 // `purpose` is the initial mission; omitting `name` lets the server create the identity with the user's model.
 export const registerWorkspace  = (name?: string, purpose?: string, displayName?: string) =>
@@ -550,7 +605,3 @@ export const cancelTrigger = (agentName: string, trigger_id: string) =>
     agentName,
     path: `/triggers/${encodeURIComponent(trigger_id)}`,
   });
-
-// Agent-scoped: the route re-proves ownership against the session id.
-export const getWorkspaceOverview = (agentName: string) =>
-  agentApi({ schema: WorkspaceOverviewSchema, method: 'GET', agentName, path: '/overview' });

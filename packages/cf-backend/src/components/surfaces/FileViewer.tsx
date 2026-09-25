@@ -8,8 +8,8 @@ import { renderThrownChain } from "@kinu.run/core/obs";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { MarkdownContent, CodeBlock } from "./shared";
 import {
-  FileWriteConflict, fileTextEditable, putFileBytes, sandboxedHtml, textRenderOf, viewerKindOf,
-  type FileText, type TextRender,
+  FileWriteConflict, fileTextEditable, MarkdownFrontmatterError, parseMarkdownFrontmatter, putFileBytes, sandboxedHtml, textRenderOf,
+  viewerKindOf, type FileText, type TextRender,
 } from "@kinu.run/core";
 
 export function FileViewer({ path, read, revision, rawHref, downloadHref, onSaved, onClose }: {
@@ -20,7 +20,7 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
   revision: string;
   rawHref: string;
   downloadHref: string;
-  onSaved: () => void;
+  onSaved?: () => void;
   onClose: () => void;
 }) {
   const name = path.slice(path.lastIndexOf("/") + 1);
@@ -65,7 +65,7 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
       await putFileBytes(rawHref, text, file.revision);
       setDraft(null);
       reload();
-      onSaved();
+      onSaved?.();
     } catch (error) {
       if (error instanceof FileWriteConflict) {
         setConflict(true);
@@ -115,7 +115,7 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
                 className="p-t-control p-text-3 hover:p-text p-1">Cancel</button>
             </>
           )}
-          <a data-files-download href={downloadHref} className="flex items-center gap-1 p-t-control p-text-2 hover:p-text p-1" title={`Download ${name}`}>
+          <a data-files-download href={downloadHref} download={name} className="flex items-center gap-1 p-t-control p-text-2 hover:p-text p-1" title={`Download ${name}`}>
             <DownloadSimpleIcon size={12} />Download
           </a>
           <button onClick={onClose} className="p-text-3 hover:p-text p-1" title="Close preview" aria-label="Close preview">
@@ -175,6 +175,22 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
   );
 }
 
+function frontmatterAsCode(markdown: string): string {
+  let body: string;
+
+  try {
+    body = parseMarkdownFrontmatter(markdown).body;
+  } catch (caught) {
+    if (caught instanceof MarkdownFrontmatterError) return markdown;
+    throw caught;
+  }
+
+  if (body.length === markdown.length) return markdown;
+  const head = markdown.slice(0, markdown.length - body.length);
+
+  return `\`\`\`yaml\n${head.slice(head.indexOf("\n") + 1, head.lastIndexOf("\n---"))}\n\`\`\`\n\n${body}`;
+}
+
 function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
   file: FileText | null;
   body: TextRender | "edit";
@@ -190,7 +206,7 @@ function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
     return (
       <div className="p-4 text-xs space-y-2">
         <div className="p-danger break-words">{file.error}</div>
-        <a href={downloadHref} className="inline-flex items-center gap-1 p-accent hover:underline">
+        <a href={downloadHref} download={name} className="inline-flex items-center gap-1 p-accent hover:underline">
           <DownloadSimpleIcon size={12} />Download instead
         </a>
       </div>
@@ -210,7 +226,7 @@ function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
     );
   }
 
-  if (body === "markdown") return <div className="p-3 text-xs p-text-2"><MarkdownContent content={content} /></div>;
+  if (body === "markdown") return <div className="p-3 text-xs p-text-2"><MarkdownContent content={frontmatterAsCode(content)} /></div>;
 
   if (body === "html") {
     return (

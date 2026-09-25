@@ -213,7 +213,7 @@ flowchart TB
     AS["ActorSession.execute → startActorTurn"]
 
     subgraph Run["runChat (core/src/chat.ts), both backends"]
-        Asm["assembleTurnMessages: attachment sanitize · onTurnStart<br/>· awaited transformContext (compaction) · turn-local tail · admission"]
+        Asm["assembleTurnMessages: attachment sanitize · onTurnStart<br/>· awaited transformContext (compaction) · admission"]
         Step["composePrepareStep per step: extensions · step-prune<br/>· dynamic context · cache breakpoints"]
         Model["streamText → provider · stream-usage-repair"]
         Tools["tool calls → emitToolCall / emitToolResult"]
@@ -227,7 +227,7 @@ flowchart TB
 
 | Stage | What runs | Module |
 |---|---|---|
-| Turn start | `assembleTurnMessages`: attachment sanitize, extension `onTurnStart`, the awaited `transformContext` chain (compaction), then the turn-local tail; then pre-submission admission (one forced compaction, a re-measure, then a refusal) | `packages/core/src/orchestrator/turn-context.ts` |
+| Turn start | `assembleTurnMessages`: attachment sanitize, extension `onTurnStart`, the awaited `transformContext` chain (compaction); then pre-submission admission (one forced compaction, a re-measure, then a refusal) | `packages/core/src/orchestrator/turn-context.ts` |
 | Each step | `composePrepareStep`: extension chain, then step pruning, then the dynamic-context weave, cache-breakpoint markers last | `packages/core/src/prompting/prepare-step.ts` |
 | Tool call and result | `emitToolCall` / `emitToolResult`; the orchestrator's extension ticks the in-episode clock | `packages/core/src/extension.ts`, `packages/core/src/chat.ts` |
 | Evolved program | `scaffoldChatTransform` runs an evolved `agent.js` as the turn's loop; the builtin program passes through | `packages/core/src/scaffold/chat-transform.ts` |

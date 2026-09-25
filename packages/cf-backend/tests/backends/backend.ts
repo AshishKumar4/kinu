@@ -163,6 +163,7 @@ function scriptedResolver(): LocalModelResolver {
   return {
     normalizeSpecSync: (spec) => real.normalizeSpecSync(spec),
     resolveModel: () => DONE_MODEL,
+    credentialFor: (spec) => real.credentialFor(spec),
     listProviders: () => real.listProviders(),
     listModels: () => real.listModels(),
     modelInfo: () => Promise.resolve(null),

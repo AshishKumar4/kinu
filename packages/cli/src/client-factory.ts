@@ -40,7 +40,7 @@ export async function createAgentClient(
   }
 
   // Bind the planes to the recorded placement, not the invocation directory.
-  const local = resolveLocalAgent(target.requestedName);
+  const local = await resolveLocalAgent(target.requestedName);
 
   return openLocalAgentClient(local.name, {
     model: opts.model,

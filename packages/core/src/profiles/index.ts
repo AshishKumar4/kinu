@@ -29,7 +29,7 @@ export {
 } from './model-route';
 
 export {
-  buildProviderCatalogSnapshot, providerListingOf, ProviderListingCache,
+  providerListingOf, providerSnapshotOf, ProviderListingCache,
   type ProviderListing,
 } from './provider-catalog';
 

@@ -16,7 +16,7 @@ export {
 
 export { openWorkspaceCLI, type WorkspaceInfo, type CLIOpenConfig } from './open';
 
-export { withConfigLock, withConfigLockAsync } from './config-lock';
+export { withConfigLock } from './config-lock';
 
 export { createSandboxedExecutor } from './executor';
 

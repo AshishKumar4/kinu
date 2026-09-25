@@ -16,6 +16,8 @@ import { listRecoveryFindings } from '../evolution/recovery';
 import { craftedToolDeclarations } from '../tools/sandbox-contract';
 import type { ResolvedTurnProfile } from '../profiles/resolve';
 import { SUBMIT_PLAN_TOOL } from '../tools/registry';
+import type { ActiveSkillSet } from '../skills/types';
+import type { TurnReason } from '../types/turn';
 import type { ToolSet } from 'ai';
 
 export interface DynamicContextInput {
@@ -23,6 +25,8 @@ export interface DynamicContextInput {
   readonly stores: AgentStores;
   readonly profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools'>;
   readonly tools: ToolSet;
+  readonly turn?: TurnReason;
+  readonly activeSkills?: ActiveSkillSet;
   /** Read once per turn by the caller (the only await in this plane). */
   readonly memoryTail: string | undefined;
   readonly missingCapabilities: readonly MissingCapability[];
@@ -52,6 +56,8 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
   const { profile } = input;
 
   return agentDynamicContext({
+    ...(input.turn !== undefined && { turn: input.turn }),
+    ...(input.activeSkills !== undefined && { activeSkills: input.activeSkills }),
     mode: {
       workMode: profile.workMode,
       planSubmission: profile.allowedTools.includes(SUBMIT_PLAN_TOOL) && input.tools[SUBMIT_PLAN_TOOL] !== undefined,

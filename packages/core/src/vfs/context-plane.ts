@@ -580,5 +580,5 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
 export function contextMount(deps: ContextMountDeps): VfsMount {
   const files = contextFiles(deps);
 
-  return { name: 'context', files: () => files, absentReason: () => 'actor context is unavailable' };
+  return { name: 'context', files: () => files, absentReason: () => 'actor context is unavailable', filesOwner: 'agent' };
 }

@@ -99,7 +99,7 @@ export async function appProbe(): Promise<AppProbe> {
 /** One value per path parameter the /api routes declare; a regex param's sample must satisfy it. */
 const PARAM_SAMPLES = new Map([
   ['name', 'jarvis'], ['id', 'device-1'], ['key', 'openai.bearer'], ['hash', 'a'.repeat(64)], ['run', 'run-1'],
-  ['userId', 'b'.repeat(32)], ['ref', 'ci'],
+  ['userId', 'b'.repeat(32)], ['ref', 'ci'], ['workspace', 'jarvis'], ['slate', 'board'], ['digest', 'a'.repeat(64)],
 ]);
 
 /** A concrete path a route pattern matches: each `:param` (with its `{regex}`) sampled, a trailing wildcard dropped. */

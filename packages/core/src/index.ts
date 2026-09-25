@@ -42,6 +42,8 @@ export { ChatHistoryEntrySchema } from './types/chat';
 // Every composition root calls this and nothing else (tests/contract-workspace-schema.test.ts).
 export { initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
+export { resetGuardedExec, StoragePredatesResetError } from './state/store-reset';
+
 export { initUserTables, PROFILE_CATALOG_CONFIG_KEY } from './state/user-schema';
 
 export {
@@ -790,7 +792,6 @@ export {
   currentDateForPrompt,
   FALLBACK_PURPOSE,
   renderUnverifiedInstructions,
-  unverifiedInstructionsMessage,
   WORKSPACE_INSTRUCTIONS_HEADER,
   type UnverifiedInstructions,
   type AssignedTurnFraming,
@@ -800,6 +801,7 @@ export {
 export {
   splitPromptSections,
   DYNAMIC_CONTEXT_OPEN_TAG,
+  WORKSPACE_INSTRUCTIONS_TAG,
   SOUL_SECTION_TITLE,
   type PromptSection,
 } from './prompting/sections';
@@ -814,12 +816,12 @@ export {
   type ToolDefsLike,
 } from './context-meter';
 
-export { isWorkMode, WorkModeSchema, type TurnProvenance, type WorkMode } from './types/turn';
+export { isWorkMode, WorkModeSchema, type TurnReason, type WorkMode } from './types/turn';
 
 export {
   compilePromptSurface,
   executorIsSelectable,
-  turnProvenanceForMetadata,
+  turnReasonForMetadata,
   workModeForTurnMetadata,
   uniqueBuiltinTools,
   uniqueExternalTools,
@@ -870,10 +872,7 @@ export {
   searchDelegates,
   observeSystemPromptHash,
   renderDynamicContextBlock,
-  renderTurnLocalContext,
-  turnLocalContextMessage,
   DYNAMIC_CONTEXT_HEADER,
-  TURN_CONTEXT_HEADER,
   type DynamicApproval,
   type ActiveRoster,
   type DynamicContext,
@@ -881,7 +880,6 @@ export {
   type DynamicJob,
   type DynamicTask,
   type MissingCapability,
-  type TurnLocalContext,
 } from './prompting/volatile-context';
 
 export {
@@ -1119,19 +1117,18 @@ export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict'
 export {
   DefaultExecutionRouter,
   createInlineExecutor,
-  withApprovalGatedShell, gateProviderExec,
+  withApprovalGatedShell, gateProviderExec, shellCwd, type ShellReach,
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError, SandboxPending,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
   explainNativeToolReferenceError,
-  devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
   deviceToolchainAnswer, freshDeviceToolchain,
   connectedDevices, deviceByName, deviceFleetAsk,
   effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason,
   sandboxReasonFix, sandboxCause, describeGpuNodes,
-  DEVICE_PRESENCE_CONFIG_KEY, DEVICE_TOOLCHAIN_TTL_MS,
+  DEVICE_TOOLCHAIN_TTL_MS,
   DEVICE_TIERS, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS,
-  type DeviceStatus, type DevicePresence, type DevicePresenceStore,
+  type DeviceStatus,
   type DeviceToolchain, type DeviceFleet, type DeviceFleetEntry,
   type DeviceTier, type DeviceMode, type DeviceSandboxStatus,
   type DeviceSandboxCapability, type DeviceSandboxReason,
@@ -1148,7 +1145,7 @@ export {
   DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE, DEVICE_PTY_CLOSE,
   DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_MAX_AXIS,
   type DeviceCancelResult,
-  DeviceSocketHub, deviceIdFromSocket,
+  DeviceSocketHub, deviceIdFromSocket, WS_OPEN,
   DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG,
   type DeviceSocket, type DeviceSocketCtx,
   DeviceRequestLedger, initDeviceInflightTable,
@@ -1298,6 +1295,8 @@ export {
   type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
 
+export { MarkdownFrontmatterError, parseMarkdownFrontmatter } from './utils/markdown-frontmatter';
+
 export { compareCodeUnits } from './utils/text';
 
 // Sleep-time compute
@@ -1426,7 +1425,8 @@ export {
   PlanReviewActions,
   PlanReviewStore,
   PlanReviewSchema,
-  admitPlanReviewAnnotations,
+  admitReviewAnnotations,
+  DiffAnchorSchema,
   applyPlanEdits,
   formatPlanWithLineNumbers,
   initPlanReviewTable,
@@ -1440,7 +1440,9 @@ export {
   type PlanAnnotationMathTarget,
   type PlanAnnotationTextPosition,
   type PlanReview,
-  type PlanReviewAnnotation,
+  type ReviewAnnotation,
+  type DiffAnchor,
+  type DiffSide,
   type PlanReviewDecision,
   type PlanReviewResult,
   type PlanReviewStatus,
@@ -1491,6 +1493,7 @@ export {
 // Safety
 export {
   reviewCommand,
+  createShellSession,
   formatApproval,
   gatedGrants,
   formatApprovalGrant, holdsGrant,
@@ -1504,6 +1507,9 @@ export {
   type ApprovalRuleHit,
   type ApprovalResult,
   type ApprovalHarm,
+  type FilesOwner,
+  type GatedExecutor,
+  type ShellSession,
   type ApprovalGrant,
   type ShellApprovalRequest,
   type ShellApprovalOutcome,
@@ -1817,7 +1823,7 @@ export type {
   SkillHeader, ParsedSkill, DiscoveredSkill, ActiveSkill, SkillBodyRef,
   SkillsIndex, SkillSource, ActiveSkillSet, ActivationReason,
   SkillParseResult,
-  SkillsVfs, DiscoverOpts, SkillsDiscovery, UnreadSkillFile,
+  SkillsVfs, DiscoverOpts, SkillsDiscovery, UnreadSkillFile, SkillFileRefusal,
   LoadActiveSkillsOpts, ActivatedSkill,
 } from './skills/index';
 
@@ -1953,8 +1959,14 @@ export {
 export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff';
 
 export {
-  changeBlocks, changeBody, changeTotals, changeTree, inReadingOrder, keepUnchanged, sideBySide,
+  anchoredText, changeBlocks, changeBody, changeTotals, changeTree, comparePaths, inReadingOrder, keepUnchanged, sideBySide,
 } from './read-models/change-view';
+
+export {
+  ALL_CHANGES_BLOCK, changeNotesCard, initChangeNotesTable, inNoteOrder, readChangeNotes, saveChangeNotes, sendChangeNotes,
+} from './read-models/change-notes';
+
+export type { ChangeNotesCard, ChangeNotesResult, NotedChanges } from './read-models/change-notes';
 
 export type {
   ChangeBlock, ChangeBody, ChangePair, ChangeRow, ChangeSet, ChangeSpan, ChangeTreeRow,
@@ -2054,9 +2066,9 @@ export type { TurnAuthor } from './utils/ui-message';
 
 export type { PendingAction, PendingActionKind, PendingActionInputs, PersonAsks } from './read-models/pending-actions';
 
-export { buildWorkspaceOverview, overviewHeadline, rosterActivity, WorkspaceOverviewSchema } from './read-models/workspace-overview';
+export { buildWorkspaceOverview, rosterBucket, rosterHeadline, rosterMatches, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
-export type { RosterActivity, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewSlate, WorkspaceStatus } from './read-models/workspace-overview';
+export type { RosterBucket, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewSlate, WorkspaceStatus } from './read-models/workspace-overview';
 
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
@@ -2145,7 +2157,7 @@ export {
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
   type FixedTierSource,
   DEFAULT_ROLE_ID,
-  buildProviderCatalogSnapshot, providerListingOf, ProviderListingCache,
+  providerListingOf, providerSnapshotOf, ProviderListingCache,
   type ProviderListing, type ProviderCacheOutcome, type ProviderSnapshotRead,
   changeRoleAsOwner,
   type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,
@@ -2395,6 +2407,7 @@ export {
   isAgentRpcMethod,
   requiredRpcAccess,
   rpcAccessScope,
+  rpcMovesOverview,
   type AgentRpcAccess,
   type AgentRpcMethod,
   type HostedWindowActor,

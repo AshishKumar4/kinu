@@ -604,6 +604,7 @@ declare namespace sandbox {
     files: handle ? sandboxFiles(handle) : undefined,
     homeDir: async () => WORKSPACE_BACKUP_DIR,
     capabilities: new Set(capabilities),
+    filesOwner: 'agent',
     isAvailable: () => connected,
     getStatus: () => {
       const seen = { configured: connected, available: connected, active };

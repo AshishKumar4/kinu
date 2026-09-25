@@ -224,7 +224,7 @@ export async function syncCloudAgentRefs(): Promise<CloudRefSync> {
   const cloudAgents = await listCloudAgents(origin, token);
   const now = new Date().toISOString();
   const collisions: CloudRefCollision[] = [];
-  updateConfigFile((config) => {
+  await updateConfigFile((config) => {
     const current = config.agents ?? {};
     const cloudNames = new Set(cloudAgents.map((agent) => agent.name));
     const next: Record<string, KinuAgentConfig> = {};

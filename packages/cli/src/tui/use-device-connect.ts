@@ -115,8 +115,10 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
       if (result.actionId === 'device.connect') startConnect(false);
       else if (result.actionId === 'device.ssh') startConnect(true);
       else if (result.actionId === 'device.dismiss') {
-        dismissDeviceConnectPrompt();
-        close();
+        startTransition(async () => {
+          await dismissDeviceConnectPrompt();
+          close();
+        });
       } else if (result.actionId === 'device.not-now') close();
 
       return true;
@@ -131,7 +133,7 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
     if (dispatcher.feed(key, ['device']).actionId === 'device.not-now') stopWaitingRef.current?.abort();
 
     return true;
-  }, [close, dispatcher, startConnect]);
+  }, [close, dispatcher, startConnect, startTransition]);
 
   return { state, offerIfUnconnected, open, handleKey };
 }

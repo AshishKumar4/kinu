@@ -16,7 +16,7 @@ import type {
   ActorClaimStore, ChildContextResolver, ContextEventRecorder,
 } from "@kinu.run/core";
 import {
-  nimbusSessionFiles, nimbusSessionShell,
+  nimbusSessionFiles, nimbusSessionShell, shellCwd, createShellSession,
   observeWrites,
   type WorkspaceVFS,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
@@ -36,7 +36,7 @@ import {
   type VectorStore,
 } from "@kinu.run/core";
 import type { DeviceFileScope, SandboxHandle } from "@kinu.run/core";
-import { withHostedNodeExecution, REAL_CLOCK } from '@kinu.run/core';
+import { withHostedNodeExecution, REAL_CLOCK, WORKSPACE_ROOT } from '@kinu.run/core';
 import type { HostedNodeHome } from '@kinu.run/core';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
@@ -319,7 +319,19 @@ export function createCFRuntime(
       ownGrants: () => memoryConfig.getShellApprovalGrants(),
     });
 
-  const shell = withApprovalGatedShell(nimbusSessionShell(executionBox), approvalPolicy);
+  // The agent's own workspace, whose shell also serves the user's device and Drive; codemode runs in it too.
+  const sessionShell = nimbusSessionShell(executionBox);
+
+  const shellSession = createShellSession({
+    home: hooks.workspaceExecution?.home ?? WORKSPACE_ROOT,
+    userRoots: () => agentFileVfs.userRoots(),
+    // A hosted node's box pins every call's cwd to its home (withHostedNodeExecution).
+    keepsCwd: hooks.workspaceExecution === undefined,
+    stored: () => shellCwd(sessionShell),
+  });
+
+  const shell = withApprovalGatedShell(sessionShell, { filesOwner: 'agent', shellSession }, approvalPolicy);
+
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
   // State services keep `baseWorkspaceVfs` and never index foreign bytes. The context mount is last:
   // the only per-actor entry.
@@ -360,6 +372,7 @@ export function createCFRuntime(
   workspaceBox.mountTable?.(agentFileVfs, hooks.workspaceExecution?.cred);
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
+    shellSession,
     // Declared exactly when NIMBUS_RUNTIME_CACHE is bound: without it there is nothing to install.
     runtimeCatalog: env.NIMBUS_RUNTIME_CACHE !== undefined,
     inboundNetwork: nimbusPreviewConfigured(env),
