@@ -46,7 +46,7 @@ import {
 import type { GateCacheRequest, Plan } from './ladder-cache';
 import { auditClosure } from './ladder-audit';
 import { deriveClosure, repoAt } from './ladder-closure';
-import type { Inputs } from './ladder-closure';
+import type { Inputs, Repo } from './ladder-closure';
 import {
   isBunDiscoverableSuite, isParseable, isPythonSuite, isRunnableSuite, isVitestEvalSuite, readMatching,
   trackedFiles,
@@ -2623,6 +2623,38 @@ export function gatesFor(tier: Tier): Gate[] {
   return LADDER.filter((gate) => TIERS.indexOf(gate.tier) <= upto);
 }
 
+/** Every file changed since `ref`, committed or not, and every addition not yet tracked. */
+function changedSince(ref: string, repo: Repo): Set<string> {
+  const run = Bun.spawnSync(['git', 'diff', '--name-only', '-z', ref], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+
+  if (run.exitCode !== 0) throw new Error(`git diff ${ref} exited ${String(run.exitCode)}: ${run.stderr.toString()}`);
+  const additions = repo.files.filter((file) => !repo.tracked.has(file));
+
+  return new Set([...run.stdout.toString().split('\0').filter((file) => file !== ''), ...additions]);
+}
+
+/**
+ * The source rows a change since `ref` can turn red, in deploy order: each whose
+ * derived closure holds a changed file, and each whose closure cannot be
+ * derived, which nothing proves unaffected. A live row has no closure to judge,
+ * so it is named and left out.
+ */
+function affectedSince(ref: string, repo: Repo): Gate[] {
+  const changed = changedSince(ref, repo);
+  const affected: Gate[] = [];
+
+  for (const gate of deployOrder().filter((row) => (row.phase ?? 'source') === 'source')) {
+    const closure = deriveClosure(gate.run, gate.inputs, repo);
+
+    if (closure.kind === 'live') console.log(`not judged, live: ${gate.run}`);
+    else if (closure.kind === 'uncomputable' || closure.files.some((file) => changed.has(file))) affected.push(gate);
+  }
+
+  console.log(`affected since ${ref}: ${String(affected.length)} source row(s), by ${String(changed.size)} changed file(s)`);
+
+  return affected;
+}
+
 /**
  * Every file a test runner would execute, from the one enumeration.
  *
@@ -3337,20 +3369,27 @@ if (import.meta.main) {
     process.exit(2);
   }
 
+  // `--affected=<ref>`: the source rows a change since `ref` can turn red, each
+  // run as `--gate` runs one, so a lane proves a change before it sends it.
+  const affectedFrom = process.argv.find((argument) => argument.startsWith('--affected='))?.slice('--affected='.length);
   const flag = process.argv.find((argument) => argument.startsWith('--tier='));
-  const asked = selectedGate === undefined ? flag?.slice('--tier='.length) : 'deploy';
+  const asked = selectedGate === undefined && affectedFrom === undefined ? flag?.slice('--tier='.length) : 'deploy';
   const tier = TIERS.find((candidate) => candidate === asked);
 
-  if (tier === undefined) {
+  if (tier === undefined || affectedFrom === '') {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --gate <declared-command> | --plan | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --gate <declared-command> | --affected=<ref> | --plan | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
     );
     process.exit(2);
   }
 
-  const gates = selectedGate === undefined
+  const repo = repoAt(root, (run, files) => claims(run, files));
+
+  const declared = selectedGate === undefined
     ? gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT))
     : [selectedGate];
+
+  const gates = affectedFrom === undefined ? declared : affectedSince(affectedFrom, repo);
 
   const measured = assertMeasured(`ladder --tier=${tier}`, [
     ['gates in this tier', gates.length],
@@ -3388,7 +3427,6 @@ if (import.meta.main) {
   // hashes, cache or `--no-cache`, so a recorded verdict and a fresh one are
   // taken in one environment.
   const caching = !process.argv.includes('--no-cache');
-  const repo = repoAt(root, (run, files) => claims(run, files));
   const tools = toolVersions(root);
   const store = storeAt(defaultStoreDirectory());
   const revision = Bun.spawnSync(['git', 'rev-parse', '--short', 'HEAD'], { cwd: root, stdout: 'pipe' }).stdout.toString().trim();
