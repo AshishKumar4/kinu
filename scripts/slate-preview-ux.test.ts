@@ -725,6 +725,48 @@ describe('inline slate previews in the chat', () => {
     });
   });
 
+  test('with reduced motion, a preview folds and unfolds completely in the next frame', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
+        await openSlateThread(page, origin, { width: 1280, height: 860 });
+
+        // Each click on the notes preview's top bar: its body's height before, in the next frame, and once every
+        // finite animation on the page has ended.
+        const steps = await page.$eval('[data-slate-inline="notes"] button[aria-expanded]', async (bar) => {
+          const body = document.getElementById(bar.getAttribute('aria-controls') ?? '');
+
+          if (!(bar instanceof HTMLElement) || body === null) throw new Error('the top bar names no body it folds');
+          const frame = (): Promise<void> => new Promise((resolve) => { requestAnimationFrame(() => resolve()); });
+          const heights: { before: number; next: number; settled: number }[] = [];
+
+          for (const _ of ['fold', 'unfold']) {
+            const before = body.getBoundingClientRect().height;
+
+            bar.click();
+            await frame();
+            const next = body.getBoundingClientRect().height;
+
+            await Promise.allSettled(document.getAnimations()
+              .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
+              .map((animation) => animation.finished));
+            await frame();
+            heights.push({ before, next, settled: body.getBoundingClientRect().height });
+          }
+
+          return heights;
+        });
+
+        for (const { before, next, settled } of steps) {
+          expect(settled).not.toBeCloseTo(before, 0);
+          expect(next).toBeCloseTo(settled, 1);
+        }
+      } finally { await page.close(); }
+    });
+  });
+
   test('on a phone, opening a slate from the chat shows the Workspace pane on it, and the chat keeps its previews', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
