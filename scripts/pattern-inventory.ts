@@ -127,7 +127,6 @@ export const PATTERN_REVIEWS = {
   xml: 'DEFERRED: XML field extraction needs a namespace-aware parser to be a full replacement. A local regex rewrite would keep the same defect class.',
   daemon: 'DEFERRED: Bun.Transpiler.scan returned no require calls in the measured fixture. The owned daemon uses literal sibling requires; a parser replacement needs a different bundled API.',
   handbook: 'DEFERRED: the handbook indexes a flat scaffold and its bridge references. A complete AST replacement must preserve notes and declaration ownership; this inventory records the limitation.',
-  schema: 'DEFERRED: reads a restricted DDL corpus without executing it. Replacing it with SQLite changes validation and side effects; preserve the schema gate contract first.',
   protected: 'DEFERRED: layergate and devbox are explicit non-goals. The inventory includes their candidates without changing their checks.',
   bundleResolver: 'DEFERRED: rewrites the bare specifiers left in an esbuild output because the VFS plugin Nimbus installs resolves before esbuild\'s alias step, so a resolver cannot answer them in the build. Replacing it needs an embedder-supplied onResolve hook in Nimbus\'s EsbuildService; the rewrite is anchored to statement position and pinned by the bundle tests.',
 };
@@ -213,7 +212,10 @@ if (import.meta.main) {
       proof: 'The nested-name smoke fixture returned @wrong before the change and @right after it.' },
     { file: 'scripts/bench-devbox-strategies.ts', owner: 'parseOptions', classification: 'REPLACED',
       replacement: 'node:util.parseArgs tokenizes declared options; benchmark domain validation remains local',
-      proof: 'bun test scripts/bench-restore-probe.test.ts --test-name-pattern "refuses at parse time and names G3|an armed decisive parse succeeds"' }];
+      proof: 'bun test scripts/bench-restore-probe.test.ts --test-name-pattern "refuses at parse time and names G3|an armed decisive parse succeeds"' },
+    { file: 'scripts/schema-drift.ts', owner: 'parseTables, parseViews, parseParts', classification: 'REPLACED',
+      replacement: 'scripts/sql-text.ts folds string expressions off the oxc tree; sql-parser-cst reads each CREATE',
+      proof: 'bun test scripts/schema-drift.test.ts --test-name-pattern "RED: every spelling|RED: a view spelled"' }];
 
   if (process.argv.includes('--write') && pending.length === 0) writeFileSync(new URL('./pattern-inventory.json', import.meta.url), `${JSON.stringify({
     candidates: result.candidates.map(({ file, kind, owner, source, decision }) => ({

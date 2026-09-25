@@ -52,6 +52,18 @@ describe('what counts as egress', () => {
       export const retire = (sql: Sql): void => { void sql\`UPDATE search_nodes SET status = 'failed'\`; };
     `)).toEqual(['UPDATE search_nodes', 'retire']);
   });
+
+  test('RED: a write is the statement SQLite runs, however it is spelled', () => {
+    expect(egressIn(`
+      async function settle(rt: Rt): Promise<void> {
+        void rt.storage.sql\`REPLACE INTO results (id) VALUES (\${1})\`;
+        void rt.storage.sql\`INSERT /* one row */ INTO "drafts" (id) VALUES (\${2})\`;
+        void rt.storage.sql\`INSERT INTO tallies (k) VALUES (\${3}) ON CONFLICT (k) DO UPDATE SET n = n + 1\`;
+        void rt.storage.sql\`SELECT 'DELETE FROM ledger' AS note FROM search_nodes\`;
+        void rt.storage.sql\`WITH gone AS (SELECT id FROM drafts) delete from main.archive WHERE id IN gone\`;
+      }
+    `)).toEqual(['DELETE FROM archive', 'INSERT INTO drafts', 'INSERT INTO tallies', 'REPLACE INTO results', 'settle']);
+  });
 });
 
 describe('what the classification must hold', () => {
