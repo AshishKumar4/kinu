@@ -4,7 +4,7 @@ import { anchoredText, comparePaths, inReadingOrder } from '../src/read-models/c
 import {
   changeNotesCard, initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, type NotedChanges,
 } from '../src/read-models/change-notes';
-import type { ProgrammaticTurn } from '../src/types/backend-host';
+import type { EnqueueTurnResult, ProgrammaticTurn } from '../src/types/backend-host';
 import type { DiffAnchor, ReviewAnnotation } from '../src/types/plans';
 import { turnAuthor } from '../src/utils/ui-message';
 import { diffLines, fileDiff, parseGitDiff } from '../src/vfs/diff';
@@ -113,28 +113,77 @@ describe('notes on a change-set', () => {
     expect(text.endsWith('## All the changes\n\nRun the checkout tests again.')).toBe(true);
   });
 
-  test('the sent message is the operator\'s, its card reads back from the metadata, and the same notes send once', async () => {
+  test('the sent message is the operator\'s words, its card reads back from the metadata, and the notes send once', async () => {
     const turn = await sent(NOTES);
     const card = changeNotesCard({ metadata: turn.metadata });
 
     expect(turnAuthor({ metadata: turn.metadata })).toBe('operator');
+    // Answered at admission, as a message typed in the chat is, never after the turn it starts.
+    expect(turn.origin).toBe('user');
     expect(card?.notes.map((each) => each.id)).toEqual(['clamp', 'legacy', 'test', 'all']);
     expect(card?.notes[0]).toEqual({ id: 'clamp', type: 'COMMENT', text: 'Clamp it, but log it too.', anchor: NOTES[3]?.anchor });
     expect(changeNotesCard({ metadata: { kinuEvent: 'plan_feedback' } })).toBeNull();
-    expect((await sent(NOTES)).idempotencyKey).toBe(turn.idempotencyKey);
-    expect((await sent(NOTES.slice(1))).idempotencyKey).not.toBe(turn.idempotencyKey);
   });
 
-  test('sending clears the notes once the message is queued, and keeps them when it is not', async () => {
+  test('a send takes the notes at once: one saved while the host answers is kept for the next send', async () => {
     const { rt } = createTestRuntime();
     initChangeNotesTable(rt.storage.execRaw);
-    saveChangeNotes(rt, WORKSPACE.source, { value: NOTES });
+    const [first, later] = [NOTES[3], NOTES[2]];
 
-    expect(await sendChangeNotes(rt, { value: WORKSPACE }, () => Promise.resolve({ status: 'skipped' }))).toMatchObject({ ok: false });
-    expect(readChangeNotes(rt, WORKSPACE.source)).toEqual([...NOTES]);
-    expect(await sendChangeNotes(rt, { value: WORKSPACE }, () => Promise.resolve({ status: 'queued' }))).toEqual({ ok: true, notes: [] });
-    expect(readChangeNotes(rt, WORKSPACE.source)).toEqual([]);
-    expect(await sendChangeNotes(rt, { value: WORKSPACE }, () => Promise.resolve({ status: 'queued' }))).toMatchObject({ ok: false });
+    if (first === undefined || later === undefined) throw new Error('the fixture lost its notes');
+    saveChangeNotes(rt, WORKSPACE.source, { value: [first] });
+    const answer = Promise.withResolvers<EnqueueTurnResult>();
+    const sentIds: string[][] = [];
+
+    const enqueue = (turn: ProgrammaticTurn, answered: Promise<EnqueueTurnResult>): Promise<EnqueueTurnResult> => {
+      sentIds.push(changeNotesCard({ metadata: turn.metadata })?.notes.map((each) => each.id) ?? []);
+
+      return answered;
+    };
+
+    const sending = sendChangeNotes(rt, { value: WORKSPACE }, (turn) => enqueue(turn, answer.promise));
+
+    // The operator writes another note before the host has answered.
+    expect(saveChangeNotes(rt, WORKSPACE.source, { value: [later] }).ok).toBe(true);
+    answer.resolve({ status: 'queued' });
+
+    expect(await sending).toEqual({ ok: true, notes: [] });
+    expect(readChangeNotes(rt, WORKSPACE.source)).toEqual([later]);
+    // The next send carries the later note alone: each note is sent once.
+    expect(await sendChangeNotes(rt, { value: WORKSPACE }, (turn) => enqueue(turn, Promise.resolve({ status: 'queued' })))).toMatchObject({ ok: true });
+    expect(sentIds).toEqual([[first.id], [later.id]]);
+  });
+
+  test('a send the host does not admit puts its notes back, ahead of any saved meanwhile', async () => {
+    const { rt } = createTestRuntime();
+    initChangeNotesTable(rt.storage.execRaw);
+    const [clamp, deletion, all] = [NOTES[3], NOTES[1], NOTES[0]];
+
+    if (clamp === undefined || deletion === undefined || all === undefined) throw new Error('the fixture lost its notes');
+    saveChangeNotes(rt, WORKSPACE.source, { value: [clamp, all] });
+    const answer = Promise.withResolvers<EnqueueTurnResult>();
+    const sending = sendChangeNotes(rt, { value: WORKSPACE }, () => answer.promise);
+
+    // The page still shows the notes it sent, so it saves them with a new one, and another note on everything.
+    saveChangeNotes(rt, WORKSPACE.source, { value: [clamp, deletion, { ...all, id: 'all-again' }] });
+    answer.resolve({ status: 'skipped' });
+
+    expect(await sending).toMatchObject({ ok: false });
+    expect(readChangeNotes(rt, WORKSPACE.source).map((each) => each.id)).toEqual(['clamp', 'all', 'test']);
+    // A host that throws puts them back the same way.
+    await expect(sendChangeNotes(rt, { value: WORKSPACE }, () => Promise.reject(new Error('down')))).rejects.toThrow('down');
+    expect(readChangeNotes(rt, WORKSPACE.source).map((each) => each.id)).toEqual(['clamp', 'all', 'test']);
+  });
+
+  test('notes written on different baselines name each file\'s own', async () => {
+    const [clamp] = NOTES.filter((each) => each.id === 'clamp');
+    const rule = note('rule', 'COMMENT', { text: 'Name this.', anchor: { ...lines('packages/checkout/src/rules.ts', 4, 4), baseline: 'gen-9b2e77' } });
+    const { text } = await sent([...clamp === undefined ? [] : [clamp], rule]);
+    const headings = text.split('\n').filter((line) => line.startsWith('## ')).map((line) => line.slice(3));
+
+    expect(headings).toEqual([`${APPLY} (snapshot gen-4f)`, 'packages/checkout/src/rules.ts (snapshot gen-9b)']);
+    expect(text).not.toContain('(snapshot gen-4f).');
+    expect(text).toContain('more than one snapshot; each file names its own.');
   });
 
   test('a note learns its code moved: its quote reads the same at its lines only until they change', () => {

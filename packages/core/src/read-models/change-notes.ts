@@ -4,7 +4,6 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { EnqueueTurnResult, ProgrammaticTurn } from '../types/backend-host';
 import type { DiffAnchor, ReviewAnnotation } from '../types/plans';
 import { admitReviewAnnotations, DiffAnchorSchema } from '../plans/review';
-import { sha256Hex } from '../safety/argument-digest';
 import { TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
 import type { JsonObject } from '../utils/json';
 import { comparePaths } from './change-view';
@@ -39,6 +38,25 @@ export function readChangeNotes(rt: NotesRuntime, source: string): ReviewAnnotat
   if (!admission.ok) throw new Error(`the notes kept on ${source} no longer admit: ${admission.error}`);
 
   return admission.annotations;
+}
+
+/** No await between read and delete: a later note is the next send's. */
+function takeChangeNotes(rt: NotesRuntime, source: string): ReviewAnnotation[] {
+  const notes = readChangeNotes(rt, source);
+
+  void rt.storage.sql`DELETE FROM change_notes WHERE actor_id = ${rt.actor.actorId} AND source = ${source}`;
+
+  return notes;
+}
+
+function putBack(rt: NotesRuntime, source: string, taken: readonly ReviewAnnotation[]): void {
+  const ids = new Set(taken.map((note) => note.id));
+  const since = readChangeNotes(rt, source).filter((note) => !ids.has(note.id));
+  const global = taken.some((note) => note.type === 'GLOBAL_COMMENT');
+  const kept = [...taken, ...since.filter((note) => !global || note.type !== 'GLOBAL_COMMENT')];
+
+  void rt.storage.sql`INSERT OR REPLACE INTO change_notes (actor_id, source, notes_json, updated_at)
+    VALUES (${rt.actor.actorId}, ${source}, ${JSON.stringify(kept)}, ${Date.now()})`;
 }
 
 function refusal(notes: readonly ReviewAnnotation[]): string | null {
@@ -78,14 +96,21 @@ const NotedChangesSchema = v.strictObject({
 
 export type NotedChanges = v.InferOutput<typeof NotedChangesSchema>;
 
-function framing(set: NotedChanges, baseline: string): string {
+function baselineName(set: NotedChanges, baseline: string): string {
+  return set.mode === 'git' ? `commit ${baseline.slice(0, 7)}` : `snapshot ${baseline.slice(0, 6)}`;
+}
+
+function framing(set: NotedChanges, baseline: string | null): string {
   const since = set.trackedSince === undefined ? '' : ` since ${new Date(set.trackedSince).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+  const named = baseline !== null && baseline !== '';
 
   const base = set.mode === 'git'
-    ? `On the uncommitted changes in ${set.label}'s checkout${baseline === '' ? '' : `, against commit ${baseline.slice(0, 7)}`}.`
-    : `On the workspace's changes${since}${baseline === '' ? '' : ` (snapshot ${baseline.slice(0, 6)})`}.`;
+    ? `On the uncommitted changes in ${set.label}'s checkout${named ? `, against ${baselineName(set, baseline)}` : ''}.`
+    : `On the workspace's changes${since}${named ? ` (${baselineName(set, baseline)})` : ''}.`;
 
-  return `${base} A line number is the file as it was when the note was written; "new" is the file now, "old" the file`
+  const each = baseline === null ? ` The notes were written on more than one ${set.mode === 'git' ? 'commit' : 'snapshot'}; each file names its own.` : '';
+
+  return `${base}${each} A line number is the file as it was when the note was written; "new" is the file now, "old" the file`
     + ' before the changes. Each note quotes its lines, so find them by the quote if the file has moved since.';
 }
 
@@ -121,26 +146,29 @@ export function inNoteOrder(notes: readonly ReviewAnnotation[]): ReviewAnnotatio
 
 function changeNotesText(set: NotedChanges, notes: readonly ReviewAnnotation[]): string {
   const sorted = inNoteOrder(notes);
-  const baseline = sorted.find((note) => note.anchor !== undefined)?.anchor?.baseline ?? '';
-  const parts = ['# Notes on the changes', framing(set, baseline)];
-  let file: string | null = null;
+  const baselines = new Set(sorted.flatMap((note) => (note.anchor === undefined ? [] : [note.anchor.baseline])));
+  const one = baselines.size > 1 ? null : [...baselines][0] ?? '';
+  const groups = new Map<string, string[]>();
 
   for (const note of sorted) {
-    const next = note.anchor?.path ?? 'All the changes';
+    const anchor = note.anchor;
+    let title = 'All the changes';
 
-    if (next !== file) parts.push(`## ${next}`);
-    file = next;
+    if (anchor !== undefined) title = one === null && anchor.baseline !== '' ? `${anchor.path} (${baselineName(set, anchor.baseline)})` : anchor.path;
+    const blocks = groups.get(title) ?? [];
 
-    if (note.anchor === undefined) {
-      parts.push(said(note));
+    groups.set(title, blocks);
+
+    if (anchor === undefined) {
+      blocks.push(said(note));
       continue;
     }
 
-    const quote = note.anchor.scope === 'file' || note.originalText === '' ? '' : `\n${fenced(note.originalText)}`;
-    parts.push(`### ${heading(note.anchor)}${quote}\n${said(note)}`);
+    const quote = anchor.scope === 'file' || note.originalText === '' ? '' : `\n${fenced(note.originalText)}`;
+    blocks.push(`### ${heading(anchor)}${quote}\n${said(note)}`);
   }
 
-  return parts.join('\n\n');
+  return ['# Notes on the changes', framing(set, one), ...[...groups].flatMap(([title, blocks]) => [`## ${title}`, ...blocks])].join('\n\n');
 }
 
 const CardNoteSchema = v.object({
@@ -180,23 +208,28 @@ function changeNotesTurn(set: NotedChanges, notes: readonly ReviewAnnotation[]):
   return {
     text: changeNotesText(set, notes),
     metadata: { kinuEvent: CHANGE_NOTES_EVENT, [TURN_AUTHOR_METADATA_KEY]: 'operator', changeNotes: card },
-    idempotencyKey: `change-notes:${set.source}:${sha256Hex(JSON.stringify(notes))}`,
+    origin: 'user',
   };
 }
 
 export async function sendChangeNotes(
   rt: NotesRuntime, set: { value: unknown }, enqueue: (turn: ProgrammaticTurn) => Promise<EnqueueTurnResult>,
 ): Promise<ChangeNotesResult> {
+  rt.actor.assertCurrent();
   const parsed = v.safeParse(NotedChangesSchema, set.value);
 
   if (!parsed.success) return { ok: false, error: `the change-set: ${parsed.issues[0].message}` };
-  const notes = readChangeNotes(rt, parsed.output.source);
+  const { source } = parsed.output;
+  const notes = takeChangeNotes(rt, source);
 
   if (notes.length === 0) return { ok: false, error: 'there are no notes to send' };
-  const queued = await enqueue(changeNotesTurn(parsed.output, notes));
+  let queued = false;
 
-  if (queued.status !== 'queued') return { ok: false, error: 'the notes were not sent: a newer turn took their place' };
-  void rt.storage.sql`DELETE FROM change_notes WHERE actor_id = ${rt.actor.actorId} AND source = ${parsed.output.source}`;
+  try {
+    queued = (await enqueue(changeNotesTurn(parsed.output, notes))).status === 'queued';
+  } finally {
+    if (!queued) putBack(rt, source, notes);
+  }
 
-  return { ok: true, notes: [] };
+  return queued ? { ok: true, notes: [] } : { ok: false, error: 'the notes were not sent: a newer turn took their place' };
 }
