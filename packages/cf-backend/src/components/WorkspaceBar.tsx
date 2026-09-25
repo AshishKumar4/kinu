@@ -7,6 +7,7 @@ import type { ConnectionStatus } from "@/hooks/use-kinu";
 import { useTheme, toggleMode } from "@/hooks/use-theme";
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { fmtSpan } from "@kinu.run/core";
+import { composing } from "@/components/ui/form";
 
 export type Altitude = "run" | "supervise";
 
@@ -194,7 +195,7 @@ export function InlineRenameTitle({ title, editValue, onRename, subject, textCla
           placeholder={title}
           onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => setValue(event.target.value)}
-          onKeyDown={(event) => { if (event.key === "Escape") setEditing(false); }}
+          onKeyDown={(event) => { if (event.key === "Escape" && !composing(event.nativeEvent)) setEditing(false); }}
           onBlur={() => { if (!saving) setEditing(false); }}
           className={`w-48 rounded-md border border-[var(--c-accent)] p-elevated px-2 py-1 ${textClass} p-text outline-none`}
           aria-label={`${subject[0].toUpperCase()}${subject.slice(1)} name`}

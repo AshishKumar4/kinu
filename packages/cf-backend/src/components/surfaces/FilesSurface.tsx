@@ -25,6 +25,7 @@ import { FileViewer } from "./FileViewer";
 import {
   PLANE, entryRevision, nextTreeCache, putFileBytes, type CachedDir, type FileText,
 } from "@kinu.run/core";
+import { composing } from "@/components/ui/form";
 
 interface DirectoryResponse { path?: string; entries?: DirEntry[]; error?: string }
 
@@ -587,6 +588,8 @@ function EntryTile({ entry, badge, selected, previewing, renaming, confirming, d
           onChange={(e) => onRenameDraft(e.currentTarget.value)}
           onKeyDown={(e) => {
             e.stopPropagation();
+
+            if (composing(e.nativeEvent)) return;
 
             if (e.key === "Enter") return onRenameCommit(e.currentTarget.value);
 
