@@ -1,7 +1,7 @@
-import { createLocalModelResolver, type ClaudeCliProviderOptions, type LocalModelResolver } from '@kinu.run/cli-backend';
+import { createLocalModelResolver, type LocalModelResolver } from '@kinu.run/cli-backend';
 import { agentAffinityKey, parseModelSpec, type LLMProviderConfig } from '@kinu.run/core';
 import {
-  createCodexAuthStore,
+  createOAuthStore,
   resolveCloudSession,
   resolveLLMConfig,
   resolveProviderCredentials,
@@ -15,8 +15,6 @@ export interface LocalModelResolverOptions {
   auth?: string;
   /** Pins signed-in proxy turns to one Workers AI replica (x-session-affinity). */
   agentName?: string;
-  /** Test seam; undefined in production. */
-  claudeCli?: ClaudeCliProviderOptions;
 }
 
 export interface ConfiguredLocalModelResolver {
@@ -64,10 +62,9 @@ export function createConfiguredLocalModelResolver(opts: LocalModelResolverOptio
   const resolver = createLocalModelResolver({
     llm: llmConfig,
     credentials: resolveProviderCredentials(),
-    codexAuthStore: createCodexAuthStore(),
+    oauthStore: createOAuthStore(),
     cloud: cloud ?? undefined,
     sessionAffinity: opts.agentName ? agentAffinityKey(opts.agentName) : undefined,
-    claudeCli: opts.claudeCli,
   });
 
   return { llmConfig, resolver };

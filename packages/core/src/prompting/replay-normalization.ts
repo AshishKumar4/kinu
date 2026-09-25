@@ -45,7 +45,7 @@ export function normalizeReplayForDestination(
   const ids = new Map<string, string>();
   let calls = 0;
   let changed = false;
-  const destinationIsAnthropic = destinationProviderId === 'anthropic';
+  const destinationIsAnthropic = destinationProviderId === 'anthropic' || destinationProviderId === 'claude';
 
   const normalized = messages.map((message): ModelMessage => {
     if (message.role === 'assistant' && Array.isArray(message.content)) {

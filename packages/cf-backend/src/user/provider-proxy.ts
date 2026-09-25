@@ -2,13 +2,13 @@
  * Provider proxy for signed-in CLI clients: lists proxyable credentials and forwards one upstream
  * request with the credential attached inside the Worker; the raw secret never reaches the client.
  * The target origin, path, and method are checked against the provider base (`proxyTargetAllowed`)
- * so the key cannot reach other hosts or key-minting/deletion routes; see `PROXY_DENIED_CRED_KEYS`.
+ * so the key cannot reach other hosts or key-minting/deletion routes.
  * Bodies pass through byte-for-byte; no cached-usage repair is applied here.
  */
 import { Hono } from 'hono';
 import {
   PROVIDER_PROXY_PATH,
-  PROXY_CRED_HEADER, PROXY_DENIED_CRED_KEYS, PROXY_TARGET_HEADER,
+  PROXY_CRED_HEADER, PROXY_TARGET_HEADER, isProxyDeniedCredentialKey,
   providerProxyBaseURL, proxyTargetAllowed,
 } from '@kinu.run/core';
 import type { UserDO } from './user-do';
@@ -65,7 +65,7 @@ async function listProxyableCredentials(
   const out: ProxyableCredential[] = [];
 
   for (const { key } of stored) {
-    if (PROXY_DENIED_CRED_KEYS.includes(key)) continue;
+    if (isProxyDeniedCredentialKey(key)) continue;
     let credentialBase: string | null;
 
     try {
@@ -102,7 +102,7 @@ async function forwardUpstream(
   try { validateCredentialKey(credKey); }
   catch (err) { return errorResponse(400, err instanceof Error ? renderCauseChain(err) : 'Invalid credential key.'); }
 
-  if (PROXY_DENIED_CRED_KEYS.includes(credKey)) {
+  if (isProxyDeniedCredentialKey(credKey)) {
     return errorResponse(403, `${credKey} is not served by this proxy — Cloudflare-backed models go through /api/user/ai/v1, and Codex must be connected on the machine that uses it.`);
   }
 

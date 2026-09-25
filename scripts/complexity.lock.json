@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-25",
-  "files": 2663,
-  "functions": 65394,
+  "files": 2680,
+  "functions": 65974,
   "ceiling": 87,
   "line": 32,
   "inventory": [
@@ -210,10 +210,6 @@
       "complexity": 33
     },
     {
-      "key": "packages/cli/src/cloud-agent-client.ts#CloudAgentClient.handleMessage",
-      "complexity": 33
-    },
-    {
       "key": "packages/devbox/src/chunked-delta.ts#planDeltaPublication",
       "complexity": 33
     },
@@ -226,11 +222,11 @@
       "complexity": 32
     },
     {
-      "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>useEffect#7>handler",
+      "key": "packages/cf-backend/src/pages/MCTSExplorer.tsx#ExplorerBody",
       "complexity": 32
     },
     {
-      "key": "packages/cf-backend/src/pages/MCTSExplorer.tsx#ExplorerBody",
+      "key": "packages/cli/src/cloud-agent-client.ts#CloudAgentClient.handleMessage",
       "complexity": 32
     },
     {
@@ -243,10 +239,6 @@
     },
     {
       "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
-      "complexity": 32
-    },
-    {
-      "key": "packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.recordStep",
       "complexity": 32
     },
     {

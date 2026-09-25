@@ -62,7 +62,6 @@ export const ELAPSED_WORK_SOURCE_ROOTS = {
     "packages/cli-backend/src/craft-executor.ts",
     "packages/cli-backend/src/codemode-tool-factory.ts",
     "packages/cli-backend/src/opencode-provider.ts",
-    "packages/cli-backend/src/claude-cli-provider.ts",
     "packages/cf-backend/src/actor-agent.ts",
     "packages/cf-backend/src/orchestrator.ts",
     "packages/cf-backend/src/fiber-recovery.ts",

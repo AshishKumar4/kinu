@@ -129,6 +129,8 @@ export function createParentExecutor(deps: {
     // The parent is a Kinu workspace; its shell starts at the workspace root.
     homeDir: async () => WORKSPACE_ROOT,
     capabilities: new Set<ExecutorCapability>(['shell', 'fs_shared']),
+    // Not the fork's own.
+    filesOwner: 'user',
     isAvailable: () => true,
     getStatus: () => status,
     connect: async () => {},

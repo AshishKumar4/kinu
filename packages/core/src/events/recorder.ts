@@ -17,11 +17,12 @@ import { APP_MUTATIONS, APP_TABLE_SCOPES } from '../types/app-store';
 import {
   SPEND_SOURCES, WORKSPACE_RUN_ID,
   MODEL_OPERATION_KINDS, MODEL_OPERATION_PHASES, MODEL_OPERATION_OUTCOMES,
-  type ModelOperationSink, type SpendSource, type SpendTally,
+  type AccountSpend, type ModelOperationSink, type SpendSource, type SpendTally,
 } from './model-call';
 import { diagnostics, toKinuError } from '../obs/index';
 import { ToolOutcomeSchema } from '../types/tool-outcome';
 import { turnAuthor } from '../utils/ui-message';
+import { CallAccountSchema, QuotaSnapshotSchema } from '../providers/quota';
 
 /** Stored model messages validate against the AI SDK's own schema, not a hand-written copy. */
 const OpenTurnIdentitySchema: v.GenericSchema<OpenTurnIdentity> = v.object({
@@ -73,15 +74,15 @@ export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('step_finish'), stepIndex: v.number(),
     reason: v.optional(v.string()), messages: v.optional(v.array(JsonValueSchema)),
     usage: v.optional(UsageSchema), usd: v.optional(v.number()),
-    usdFloorTokens: v.optional(v.number()),
-    modelId: v.optional(v.string()), context: v.optional(ContextCompositionSchema) }),
+    modelId: v.optional(v.string()), context: v.optional(ContextCompositionSchema),
+    account: v.optional(CallAccountSchema) }),
   v.object({ ...BaseFields, type: v.literal('step_partial'), stepIndex: v.number(), text: v.string(),
     toolCalls: v.array(v.object({ toolCallId: v.string(), toolName: v.string(), args: JsonValueSchema,
       result: v.optional(v.string()), error: v.optional(v.string()) })) }),
   v.object({ ...BaseFields, type: v.literal('model_call'),
     source: v.picklist(SPEND_SOURCES), usage: v.optional(UsageSchema),
-    usd: v.optional(v.number()), usdFloorTokens: v.optional(v.number()),
-    spec: v.optional(v.string()), modelId: v.optional(v.string()) }),
+    usd: v.optional(v.number()),
+    spec: v.optional(v.string()), modelId: v.optional(v.string()), account: v.optional(CallAccountSchema) }),
   v.object({ ...BaseFields, type: v.literal('model_operation'),
     operationId: v.string(), source: v.picklist(SPEND_SOURCES),
     op: v.picklist(MODEL_OPERATION_KINDS), phase: v.picklist(MODEL_OPERATION_PHASES),
@@ -93,6 +94,7 @@ export const RunEventSchema = v.variant('type', [
     waitMs: v.number(), attempt: v.number(),
     status: v.optional(v.number()),
     source: v.picklist(['header', 'backoff', 'cooldown']) }),
+  v.object({ ...BaseFields, type: v.literal('model_fallback'), from: v.string(), to: v.string(), reason: v.string() }),
   v.object({ ...BaseFields, type: v.literal('head_split'), rootId: v.string(),
     headIds: v.array(v.string()), rationale: v.string() }),
   v.object({ ...BaseFields, type: v.literal('head_merge'), rootId: v.string(),
@@ -242,12 +244,17 @@ type SpendAggregateRow = Readonly<Record<keyof Usage, number | null>> & {
   readonly calls: number;
   readonly callsWithoutUsage: number;
   readonly unpricedCalls: number;
-  readonly floorPricedCalls: number;
   readonly usd: number | null;
 };
 
+type AccountAggregateRow = Omit<SpendAggregateRow, 'source'> & {
+  readonly provider: string | null;
+  readonly account: string | null;
+  readonly quotaRow: number | null;
+};
+
 /** SQL NULL means no call reported the field, which is not zero. */
-function spendTallyOf(row: SpendAggregateRow): SpendTally {
+function spendTallyOf(row: Omit<SpendAggregateRow, 'source'>): SpendTally {
   const usage: { -readonly [K in keyof Usage]: number } = {};
 
   for (const field of USAGE_FIELDS) {
@@ -261,7 +268,6 @@ function spendTallyOf(row: SpendAggregateRow): SpendTally {
     callsWithoutUsage: row.callsWithoutUsage,
     usage,
     unpricedCalls: row.unpricedCalls,
-    floorPricedCalls: row.floorPricedCalls,
   };
 
   return row.usd === null ? tally : { ...tally, usd: row.usd };
@@ -604,8 +610,7 @@ export class RunEventRecorder {
   /**
    * Whole-log spend per producer, summed in SQL (not a sample). `step_finish` files under `agent`;
    * `model_operation` is excluded to avoid double counting. No run or actor filter: spend is a
-   * workspace question, including hired actors and WORKSPACE_RUN_ID. NULL sums stay absent, and
-   * `floorPricedCalls` counts the producer's `usdFloorTokens` marker rather than re-pricing.
+   * workspace question, including hired actors and WORKSPACE_RUN_ID. NULL sums stay absent.
    */
   spendByProducer(stepSources: readonly StepSpendSource[] = []): ReadonlyMap<SpendSource, SpendTally> {
     this.actor.assertCurrent();
@@ -623,8 +628,6 @@ export class RunEventRecorder {
                END AS source,
                json_extract(payload, '$.usage') AS usage,
                json_extract(payload, '$.usd') AS usd,
-               json_extract(payload, '$.usdFloorTokens') AS usdFloorTokens,
-               run_events.actor_id AS actor_id,
                type = ${'step_finish' satisfies RunEventType}
                  AND step_source.covered_since IS NOT NULL AND ts >= step_source.covered_since AS covered
         FROM run_events LEFT JOIN step_source ON step_source.actor_id = run_events.actor_id
@@ -632,7 +635,7 @@ export class RunEventRecorder {
            OR type = ${'model_call' satisfies RunEventType})
       ),
       field AS (
-        SELECT source, usd, usdFloorTokens, actor_id, covered,
+        SELECT source, usd, covered,
                json_extract(usage, '$.input') AS input,
                json_extract(usage, '$.output') AS output,
                json_extract(usage, '$.cacheRead') AS cacheRead,
@@ -651,9 +654,6 @@ export class RunEventRecorder {
              SUM(CASE WHEN covered THEN 0 ELSE 1 END) AS calls,
              SUM(CASE WHEN NOT covered AND NOT reported THEN 1 ELSE 0 END) AS callsWithoutUsage,
              SUM(CASE WHEN NOT covered AND reported AND usd IS NULL THEN 1 ELSE 0 END) AS unpricedCalls,
-             -- Aggregated from the row, never re-derived here: see the docblock.
-             SUM(CASE WHEN NOT covered AND reported AND usdFloorTokens IS NOT NULL THEN 1 ELSE 0 END)
-               + COUNT(DISTINCT CASE WHEN covered AND reported AND usdFloorTokens IS NOT NULL THEN actor_id END) AS floorPricedCalls,
              SUM(CASE WHEN reported THEN usd END) AS usd,
              SUM(CASE WHEN NOT covered THEN input END) AS input,
              SUM(CASE WHEN NOT covered THEN output END) AS output,
@@ -688,6 +688,56 @@ export class RunEventRecorder {
     }
 
     return byProducer;
+  }
+
+  spendByAccount(): AccountSpend[] {
+    this.actor.assertCurrent();
+
+    const rows = this.sql<AccountAggregateRow>`
+      WITH call AS (
+        SELECT rowid AS row_id,
+               json_extract(payload, '$.account.provider') AS provider,
+               json_extract(payload, '$.account.name') AS account,
+               json_extract(payload, '$.account.quota') IS NOT NULL AS quoted,
+               json_extract(payload, '$.usd') AS usd,
+               json_extract(payload, '$.usage.input') AS input,
+               json_extract(payload, '$.usage.output') AS output,
+               json_extract(payload, '$.usage.cacheRead') AS cacheRead,
+               json_extract(payload, '$.usage.cacheWrite') AS cacheWrite,
+               json_extract(payload, '$.usage.cacheWrite1h') AS cacheWrite1h,
+               json_extract(payload, '$.usage.reasoning') AS reasoning,
+               json_extract(payload, '$.usage.neurons') AS neurons
+        FROM run_events
+        WHERE type = ${'step_finish' satisfies RunEventType} OR type = ${'model_call' satisfies RunEventType}
+      ),
+      measured AS (
+        SELECT *, COALESCE(input, output, cacheRead, cacheWrite, cacheWrite1h, reasoning, neurons) IS NOT NULL AS reported
+        FROM call
+      )
+      SELECT provider, account,
+             COUNT(*) AS calls,
+             SUM(CASE WHEN reported THEN 0 ELSE 1 END) AS callsWithoutUsage,
+             SUM(CASE WHEN reported AND usd IS NULL THEN 1 ELSE 0 END) AS unpricedCalls,
+             SUM(CASE WHEN reported THEN usd END) AS usd,
+             SUM(input) AS input, SUM(output) AS output, SUM(cacheRead) AS cacheRead, SUM(cacheWrite) AS cacheWrite,
+             SUM(cacheWrite1h) AS cacheWrite1h, SUM(reasoning) AS reasoning, SUM(neurons) AS neurons,
+             MAX(CASE WHEN quoted THEN row_id END) AS quotaRow
+      FROM measured
+      GROUP BY provider, account`;
+
+    const quotaRows = rows.flatMap((row) => (row.quotaRow === null ? [] : [row.quotaRow]));
+
+    const quotas = new Map(this.sql<{ rowId: number; quota: string }>`
+      SELECT rowid AS rowId, json_extract(payload, '$.account.quota') AS quota FROM run_events
+      WHERE rowid IN (SELECT value FROM json_each(${JSON.stringify(quotaRows)}))`
+      .map((row) => [row.rowId, v.parse(QuotaSnapshotSchema, JSON.parse(row.quota))]));
+
+    return rows.map((row) => {
+      const tally = { ...spendTallyOf(row), provider: row.provider, account: row.account };
+      const quota = row.quotaRow === null ? undefined : quotas.get(row.quotaRow);
+
+      return quota === undefined ? tally : { ...tally, quota };
+    });
   }
 
   observe(listener: RunEventListener): () => void {

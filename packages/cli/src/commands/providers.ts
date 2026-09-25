@@ -1,13 +1,15 @@
 import { deleteCloudCredential, listCloudCredentials } from '../cloud-api';
-import { bumpProviderRevision, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
-import { readDefaultTier } from '../profiles';
+import { API_KEY_PROVIDERS, bumpProviderRevision, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
+import { readDefaultAccounts, readDefaultTier } from '../profiles';
+import { updateDefaultAccount } from '../default-model';
 import { ACCENT, DIM, OK, WARN } from '../display';
-import { readProviderConnections } from './provider-connect';
+import { holdsAccounts, readProviderConnections } from './provider-connect';
 import { canonicalProviderName, connectOptions, connectProviderOnConsole } from './setup';
 import * as v from 'valibot';
+import { MAIN_ACCOUNT, accountCredentialKey, catalogCredKey, isAccountName } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-type ProviderAction = 'list' | 'connect' | 'disconnect';
+type ProviderAction = 'list' | 'connect' | 'disconnect' | 'default';
 
 const ProviderNameSchema = v.picklist([
   'cloudflare',
@@ -26,6 +28,7 @@ interface ParsedProviderArgs {
   action: ProviderAction;
   provider?: ProviderName;
   raw?: string;
+  account: string;
 }
 
 interface LocalCredential {
@@ -34,12 +37,13 @@ interface LocalCredential {
   credKey?: string;
 }
 
-export async function providersCommand(actionOrProvider: string | undefined, providerArg: string | undefined, opts: {
-  origin?: string;
-  model?: string;
-  local?: boolean;
-}): Promise<void> {
-  const { action, provider, raw } = parseArgs(actionOrProvider, providerArg);
+export async function providersCommand(
+  actionOrProvider: string | undefined,
+  providerArg: string | undefined,
+  accountArg: string | undefined,
+  opts: { origin?: string; model?: string; local?: boolean },
+): Promise<void> {
+  const { action, provider, raw, account } = parseArgs(actionOrProvider, providerArg, accountArg);
 
   if (action === 'list') {
     await printProviders();
@@ -47,8 +51,14 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
     return;
   }
 
+  if (action === 'default') {
+    await setDefaultAccount(raw, account);
+
+    return;
+  }
+
   if (action === 'disconnect' && !provider && raw) {
-    await disconnectAccountProvider(raw);
+    await disconnectAccountProvider(raw, account);
 
     return;
   }
@@ -58,51 +68,124 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
   }
 
   if (action === 'disconnect') {
-    await disconnectProvider(provider);
+    await (account === MAIN_ACCOUNT ? disconnectProvider(provider) : disconnectAccount(provider, account));
 
     return;
   }
 
-  await connectProviderOnConsole(provider, connectOptions(opts));
+  await connectProviderOnConsole(provider, { ...connectOptions(opts), account });
 }
 
-function parseArgs(actionOrProvider: string | undefined, providerArg: string | undefined): ParsedProviderArgs {
-  if (!actionOrProvider) return { action: 'list' };
+function parseArgs(
+  actionOrProvider: string | undefined,
+  providerArg: string | undefined,
+  accountArg: string | undefined,
+): ParsedProviderArgs {
+  if (!actionOrProvider) return { action: 'list', account: MAIN_ACCOUNT };
 
   const first = actionOrProvider.trim().toLowerCase();
+  const verbs = ['list', 'ls', 'status', 'default', 'connect', 'login', 'add', 'disconnect', 'remove', 'rm', 'delete'];
+  const named = verbs.includes(first) ? accountArg : providerArg;
+  const account = named?.trim().toLowerCase() ?? MAIN_ACCOUNT;
 
-  if (first === 'list' || first === 'ls' || first === 'status') return { action: 'list' };
+  if (!isAccountName(account)) throw new Error(`"${named}" is not an account name: use a-z, 0-9 and dashes.`);
+
+  if (first === 'list' || first === 'ls' || first === 'status') return { action: 'list', account };
+
+  if (first === 'default') return { action: 'default', raw: providerArg, account: named === undefined ? '' : account };
 
   if (first === 'connect' || first === 'login' || first === 'add') {
-    return { action: 'connect', provider: providerArg ? normalizeProvider(providerArg) : undefined };
+    return { action: 'connect', provider: providerArg ? normalizeProvider(providerArg) : undefined, account };
   }
 
   if (first === 'disconnect' || first === 'remove' || first === 'rm' || first === 'delete') {
     // May be a models.dev provider connected in the web UI; resolved against the account, not rejected here.
-    return { action: 'disconnect', provider: providerArg ? maybeProvider(providerArg) : undefined, raw: providerArg };
+    return { action: 'disconnect', provider: providerArg ? maybeProvider(providerArg) : undefined, raw: providerArg, account };
   }
 
-  return { action: 'connect', provider: normalizeProvider(actionOrProvider) };
+  return { action: 'connect', provider: normalizeProvider(actionOrProvider), account };
+}
+
+function specProviderId(name: string): string {
+  const canonical = canonicalProviderName(name);
+
+  if (canonical === 'openai-compatible' || canonical === 'opencode' || canonical === 'cloudflare') {
+    throw new Error(`${canonical} holds one account: accounts are for openai, openrouter, anthropic, codex, claude and API keys connected in the web app.`);
+  }
+
+  return canonical;
+}
+
+async function setDefaultAccount(name: string | undefined, account: string): Promise<void> {
+  if (!name || account === '') throw new Error('Name the provider and the account: kinu provider default <provider> <account>.');
+  const provider = specProviderId(name);
+  await updateDefaultAccount(provider, account);
+  console.log('');
+  console.log(`${OK('✓')} ${ACCENT(provider)} models that name no account now run on ${ACCENT(account)}.`);
+  const connected = (await readProviderConnections()).states.find((state) => state.descriptor.id === provider);
+
+  if (connected !== undefined && account !== MAIN_ACCOUNT && !(connected.accounts ?? []).includes(account)) {
+    console.log(`${WARN('!')} No ${provider} account named ${account} is connected yet: kinu provider connect ${provider} ${account}`);
+  }
+}
+
+async function disconnectAccount(provider: ProviderName, account: string): Promise<void> {
+  if (!holdsAccounts(provider)) throw new Error(`${provider} holds one account.`);
+  console.log('');
+  let removed = false;
+
+  await updateConfigFile((config) => {
+    const accounts = config.providers?.[provider]?.accounts;
+    removed = accounts?.[account] !== undefined;
+    delete accounts?.[account];
+  });
+
+  if (removed) console.log(`${OK('✓')} Removed the ${ACCENT(`${provider} ${account}`)} account from this machine.`);
+  const cloud = provider === 'codex' || provider === 'claude' ? null : resolveCloudSession();
+
+  if (cloud && provider !== 'codex' && provider !== 'claude') {
+    const credKey = accountCredentialKey(API_KEY_PROVIDERS[provider], account);
+
+    if ((await listCloudCredentials(cloud.origin, cloud.token)).some((c) => c.key === credKey)) {
+      await deleteCloudCredential(cloud.origin, cloud.token, credKey);
+      console.log(`${OK('✓')} Removed the ${ACCENT(`${provider} ${account}`)} account from your Kinu account.`);
+      removed = true;
+    }
+  }
+
+  if (!removed) console.log(`${WARN('!')} No ${provider} account named ${account} was connected. Nothing to remove.`);
+  await forgetDefaultAccount(provider, account);
+  await bumpProviderRevision();
+}
+
+async function forgetDefaultAccount(provider: string, account: string): Promise<void> {
+  if (readDefaultAccounts()[provider] !== account) return;
+  await updateDefaultAccount(provider, null);
+  console.log(`${WARN('!')} ${account} was the default ${provider} account; ${provider} models now run on main, or its only account.`);
 }
 
 /** Env vars listed here keep supplying the credential after the file entry is gone. */
 const LOCAL_CREDENTIALS = new Map<ProviderName, LocalCredential>([
   ['codex', {
-    clear: (p) => deleteKey(p, 'codex'),
+    clear: (p) => deleteMain(p, 'codex'),
     envVars: ['CODEX_ACCESS_TOKEN'],
   }],
+  ['claude', {
+    clear: (p) => deleteMain(p, 'claude'),
+    envVars: [],
+  }],
   ['openai', {
-    clear: (p) => deleteKey(p, 'openai'),
+    clear: (p) => deleteMain(p, 'openai'),
     envVars: ['OPENAI_API_KEY'],
     credKey: 'openai.bearer',
   }],
   ['anthropic', {
-    clear: (p) => deleteKey(p, 'anthropic'),
+    clear: (p) => deleteMain(p, 'anthropic'),
     envVars: ['ANTHROPIC_API_KEY'],
     credKey: 'anthropic.bearer',
   }],
   ['openrouter', {
-    clear: (p) => deleteKey(p, 'openrouter'),
+    clear: (p) => deleteMain(p, 'openrouter'),
     envVars: ['OPENROUTER_API_KEY'],
     credKey: 'openrouter.bearer',
   }],
@@ -123,6 +206,17 @@ function deleteKey(
   return true;
 }
 
+function deleteMain(providers: NonNullable<KinuConfig['providers']>, key: 'codex' | 'claude' | 'openai' | 'anthropic' | 'openrouter'): boolean {
+  const entry = providers[key];
+
+  if (entry?.accounts === undefined || Object.keys(entry.accounts).length === 0) return deleteKey(providers, key);
+  const mainFields = Object.keys(entry).filter((field) => field !== 'accounts');
+
+  for (const field of mainFields) Reflect.deleteProperty(entry, field);
+
+  return mainFields.length > 0;
+}
+
 /** A default left on a disconnected provider fails every unpinned turn. */
 const MODEL_SPEC_PREFIXES = new Map<ProviderName, readonly string[]>([
   ['codex', ['codex/']],
@@ -135,7 +229,7 @@ const MODEL_SPEC_PREFIXES = new Map<ProviderName, readonly string[]>([
   ['cloudflare', ['workers-ai/', 'my-gateway/', 'ai-gateway/', '@cf/']],
 ]);
 
-/** Only credentials Kinu stores; the account is `kinu logout`, and claude/opencode own their logins. */
+/** Only credentials Kinu stores; the account is `kinu logout`, and opencode owns its login. */
 async function disconnectProvider(provider: ProviderName): Promise<void> {
   console.log('');
 
@@ -147,11 +241,9 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
     return;
   }
 
-  if (provider === 'claude' || provider === 'opencode') {
-    const tool = provider === 'claude' ? 'Claude Code' : 'opencode';
-    const command = provider === 'claude' ? 'claude logout' : 'opencode auth logout';
-    console.log(`${WARN('!')} Kinu stores no ${tool} credential; it uses your ${tool} sign-in.`);
-    console.log(DIM(`  Sign out of ${tool} itself: ${command}`));
+  if (provider === 'opencode') {
+    console.log(`${WARN('!')} Kinu stores no opencode credential; it uses your opencode sign-in.`);
+    console.log(DIM('  Sign out of opencode itself: opencode auth logout'));
     warnDefaultModelFor(provider);
     // Kinu holds nothing here, but a resident session must re-probe that tool's login.
     await bumpProviderRevision();
@@ -198,7 +290,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
 }
 
 /** A models.dev provider connected in the web UI: a catalog id, not a named provider. */
-async function disconnectAccountProvider(name: string): Promise<void> {
+async function disconnectAccountProvider(name: string, account: string): Promise<void> {
   const cloud = resolveCloudSession();
   console.log('');
 
@@ -206,7 +298,8 @@ async function disconnectAccountProvider(name: string): Promise<void> {
     throw new Error(`Unknown provider "${name}". Sign in with \`kinu auth\` to disconnect a provider held by your account.`);
   }
 
-  const credKey = `${name.trim().toLowerCase()}.bearer`;
+  const provider = name.trim().toLowerCase();
+  const credKey = accountCredentialKey(catalogCredKey(provider), account);
   const connected = (await listCloudCredentials(cloud.origin, cloud.token)).some((c) => c.key === credKey);
 
   if (!connected) {
@@ -214,7 +307,8 @@ async function disconnectAccountProvider(name: string): Promise<void> {
   }
 
   await deleteCloudCredential(cloud.origin, cloud.token, credKey);
-  console.log(`${OK('✓')} Removed the ${ACCENT(name)} credential from your Kinu account.`);
+  console.log(`${OK('✓')} Removed the ${ACCENT(account === MAIN_ACCOUNT ? name : `${name} ${account}`)} credential from your Kinu account.`);
+  await forgetDefaultAccount(provider, account);
   warnDefaultModelPrefixes([`${name}/`]);
   await bumpProviderRevision();
 }
@@ -252,9 +346,17 @@ async function printProviders(): Promise<void> {
   console.log(ACCENT('Model providers'));
   console.log('');
 
+  const defaults = readDefaultAccounts();
+
   for (const state of connections.states) {
     if (state.connected) console.log(`  ${OK('\u2713')} ${ACCENT(state.descriptor.label)} ${DIM(state.detail)}`);
     else console.log(`  ${WARN('!')} ${state.descriptor.label} ${DIM(state.detail)}`);
+
+    if ((state.accounts ?? []).length > 0) {
+      const chosen = defaults[state.descriptor.id] ?? MAIN_ACCOUNT;
+      const names = [MAIN_ACCOUNT, ...state.accounts ?? []].map((name) => (name === chosen ? `${name} (default)` : name));
+      console.log(`    ${DIM(`accounts: ${names.join(', ')}`)}`);
+    }
 
     if (state.descriptor.id === 'cloudflare' && state.connected) {
       console.log(`    ${DIM('Cloud workspaces use your Workers AI quota if you granted AI permissions at sign-in.')}`);
@@ -275,5 +377,6 @@ async function printProviders(): Promise<void> {
   console.log(DIM('  New keys are stored in your Kinu account, not on this computer.'));
   console.log(DIM('  To keep a key on this computer instead: kinu provider connect <name> --local'));
   console.log(DIM('  To remove a key: kinu provider disconnect <name>'));
+  console.log(DIM('  Another account: kinu provider connect <name> <account>; pick the default: kinu provider default <name> <account>'));
   console.log('');
 }

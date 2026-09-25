@@ -72,8 +72,8 @@ interface StagedView { readonly entries: readonly ContextEntry[]; readonly block
 
 interface DesiredEntry { readonly entryId: string; readonly messageId: string; readonly message: JsonObject; readonly prepare: boolean }
 
-/** The pending proposal's preview when staged, else the revision. A preview rewritten from under its
- *  proposal shows as the revision, blocked. */
+/** The pending proposal's preview when staged, else the revision, without runtime context. A preview rewritten
+ *  from under its proposal shows as the revision, blocked. */
 function stagedEntries(history: SessionHistory, selection: ContextSelection | null, pending: PendingContextProposal | undefined): StagedView {
   let entries = selection === null ? [] : history.context.entries(selection);
   let blocked = pending?.deferred_reason ?? undefined;
@@ -88,7 +88,7 @@ function stagedEntries(history: SessionHistory, selection: ContextSelection | nu
     }
   }
 
-  return { entries, blocked, staged };
+  return { entries: selection === null ? entries : history.context.conversationOf(selection.contextId, entries), blocked, staged };
 }
 
 interface WorkingVersionFacts {
@@ -112,9 +112,8 @@ function headerStatus(staged: boolean, selection: ContextSelection | null): Cont
 function revisionEntries(history: SessionHistory, selection: ContextSelection | null, stagedProposalId: string | null): readonly ContextEntry[] {
   if (selection === null) return [];
 
-  if (stagedProposalId !== null) return history.proposals.previewAt(stagedProposalId, selection);
-
-  return history.context.entries(selection);
+  return history.context.conversationOf(selection.contextId, stagedProposalId === null
+    ? history.context.entries(selection) : history.proposals.previewAt(stagedProposalId, selection));
 }
 
 /** Tool-pairing view of a message, or undefined when it carries no tool parts. */
@@ -137,8 +136,8 @@ function workingLines(data: string | Uint8Array, observed: WorkingView, actorId:
   return lines.slice(1);
 }
 
-/** Matches a write's lines against the observed entries. New lines get fresh ids; changed lines are
- *  re-prepared under new ids. `originals` avoids re-reading projections for the pairing check. */
+/** A write's lines against the observed entries: new and changed lines get fresh ids. `originals` spares the
+ *  pairing check re-reading projections. */
 async function desiredEntries(lines: readonly string[], observed: readonly ContextEntry[], messages: SessionMessages): Promise<{ desired: DesiredEntry[]; originals: Map<string, JsonObject> }> {
   const entries = lines.map(line => v.parse(EntrySchema, JSON.parse(line)));
   const visible = new Map(observed.map(entry => [entry.entryId, entry]));
@@ -333,7 +332,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
       const metadata = history.context.revisions(view.selection.contextId).find(row => row.revision === revision);
 
       if (metadata === undefined) return null;
-      const entries = history.context.entries({ contextId: view.selection.contextId, revision });
+      const entries = history.context.conversationOf(view.selection.contextId, history.context.entries({ contextId: view.selection.contextId, revision }));
 
       return { owner: resolved.stores.claims, writable: false, version: token([resolved.stores.claims.actorId, view.selection.contextId, revision]), modified: metadata.recorded_at,
         chunks: async function* () { yield `{"context":${JSON.stringify({ ...metadata, contextId: view.selection?.contextId })},"entries":[`; yield* entryChunks(view, entries, false); yield ']}\n'; } };
@@ -345,7 +344,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
       if (inspected === null) return null;
 
       return { owner: resolved.stores.claims, writable: false, version: token(v.parse(JsonValueSchema, inspected.metadata)), modified: inspected.metadata.recorded_at,
-        chunks: async function* () { yield `{"proposal":${JSON.stringify(inspected.metadata)},"entries":[`; yield* entryChunks(view, inspected.entries, false); yield ']}\n'; } };
+        chunks: async function* () { yield `{"proposal":${JSON.stringify(inspected.metadata)},"entries":[`; yield* entryChunks(view, history.context.conversationOf(inspected.metadata.context_id, inspected.entries), false); yield ']}\n'; } };
     }
 
     if (head === 'requests' && second !== undefined && third !== undefined && resolved.segments.length === 3) {
@@ -581,5 +580,5 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
 export function contextMount(deps: ContextMountDeps): VfsMount {
   const files = contextFiles(deps);
 
-  return { name: 'context', files: () => files, absentReason: () => 'actor context is unavailable' };
+  return { name: 'context', files: () => files, absentReason: () => 'actor context is unavailable', filesOwner: 'agent' };
 }

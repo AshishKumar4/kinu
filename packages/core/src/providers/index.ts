@@ -45,6 +45,15 @@ export * from './cloudflare-oauth';
 
 export * from './anthropic';
 
+export { CLAUDE_CRED_KEY, createClaudeProvider } from './claude';
+
+export {
+  CLAUDE_OAUTH_CALLBACK_PORT, CLAUDE_REFRESH_LEAD_MS, claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn,
+  type ClaudeOAuthClient, type ClaudeSignIn,
+} from './claude-oauth';
+
+export { CLAUDE_LOGIN_ISSUER, CODEX_LOGIN_ISSUER, subscriptionIssuer, type SubscriptionIssuer } from './subscription-login';
+
 export * from './fetch-shim';
 
 export * from './gateway-binding-fetch';
@@ -52,6 +61,13 @@ export * from './gateway-binding-fetch';
 export * from './pacing';
 
 export * from './rate-limit-retry';
+
+export { creditText, readOpenRouterCredit, type AccountCredit } from './openrouter-credit';
+
+export {
+  callAccountOf, CallAccountSchema, QuotaSnapshotSchema, quotaWindowText,
+  type CallAccount, type QuotaSnapshot, type QuotaWindow,
+} from './quota';
 
 export * from './judge-model';
 

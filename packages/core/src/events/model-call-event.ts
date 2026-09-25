@@ -24,19 +24,16 @@ export function buildModelCallEvent(report: ModelCallReport, opts: {
 
   if (report.modelId !== undefined) event.modelId = report.modelId;
 
+  if (report.account !== undefined) event.account = report.account;
+
   const rate = report.spec !== undefined && report.spec === opts.effectiveSpec
     ? opts.pricing
     : null;
 
   if (rate) {
-    const price = priceCall(report.usage, rate);
+    const usd = priceCall(report.usage, rate);
 
-    if (price !== undefined) {
-      event.usd = price.usd;
-
-      // The workspace total counts these to mark its dollar figure a floor.
-      if (price.floorTokens !== undefined) event.usdFloorTokens = price.floorTokens;
-    }
+    if (usd !== undefined) event.usd = usd;
   }
 
   return event;

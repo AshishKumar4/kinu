@@ -71,9 +71,9 @@ import {
   type PromptIdentity,
   activePromptSectionOverrides,
   currentDateForPrompt,
-  turnProvenanceForMetadata,
+  turnReasonForMetadata,
   workModeForTurnMetadata,
-  turnLocalContextMessage, unverifiedInstructionsMessage,
+  renderUnverifiedInstructions,
   observeSystemPromptHash, steerSkillsBlock,
   type DynamicContext, type DynamicApproval, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
@@ -90,7 +90,7 @@ import {
   type AgentsSwarmDeps,
   BUILTIN_TOOLS,
   type BuiltinToolName,
-  type TurnProvenance,
+  type TurnReason,
   type PromptModelContext,
   type WorkMode, isWorkMode,
   nanoid,
@@ -109,7 +109,6 @@ import {
   // Prices a model_call row only when the rate belongs to that call's own model.
   buildModelCallEvent,
   type FactsStore,
-  observeDevicePresence,
   createAgentStores, type AgentConfigStore, collectDynamicContext, subordinateDelegatesOf,
   nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT,
   CHAT_SESSION_ID, type SessionTranscript,
@@ -147,12 +146,12 @@ import {
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
-  parseModelSpec, catalogModelInfo, countRequestInputTokens,
-  ModelCatalogSession, resolveEffectiveModelSpec,
+  accountDeps, callAccountOf, parseModelSpec, catalogModelInfo, countRequestInputTokens,
+  ModelCatalogSession, resolveEffectiveModelSpec, type ModelInfo,
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
   measureCompactionTrigger,
   // AGENTS.md discovery, and the trust authority deciding whether discovered bytes earn system placement.
-  collectWorkspaceAgentsMd, type AgentsMdSources,
+  collectWorkspaceAgentsMd,
   InstructionApprovalStore, trustOfInstructionApprovals,
   type InstructionApproval, type InstructionTrustResolver,
   InstructionApprovalDesk, type AdmittedInstructionDecision,
@@ -170,7 +169,7 @@ import {
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs,
   toolsForInvocation, withTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
-  type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing, type CountableRequest, type InputTokenCount, type DeviceStatus,
+  type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing, type CountableRequest, type InputTokenCount,
   type AgentInbox,
   type NimbusSandboxHandle, childContextResolver,
 } from "@kinu.run/core";
@@ -243,7 +242,6 @@ const UNRESOLVED_MODEL: ModelDimensions = { provider: '', model: '' };
 interface TurnReads {
   readonly profileInputs: ProfileAuthorityInputs;
   readonly mcpTools: ToolSet;
-  readonly deviceStatus: DeviceStatus;
   readonly identity: PromptIdentity;
 }
 
@@ -270,7 +268,8 @@ interface AssembledTurn {
   readonly activeToolSurface: ToolSet;
   /** The durable history with the CLI's cwd context laid over it. */
   readonly rawMessages: readonly ModelMessage[];
-  readonly turnLocal: ModelMessage[];
+  /** The unapproved instruction files as one message, null for none. */
+  readonly instructions: string | null;
   readonly measured: ReturnType<typeof measureCompactionTrigger>;
   /** Window for admission, compaction and pruning; records whether figures are the
    * catalog's or the static table's stand-in. */
@@ -984,6 +983,8 @@ export abstract class ActorAgent extends Agent<Env> {
       return stub.getCredentialsRevision(caller);
     },
     onProviderWait: (info) => { this.noteProviderWait(info); },
+    accountFor: (provider) => this.config.getProviderAccounts()[provider]
+      ?? this.actorSession.profileInputs?.envelope.catalog.accounts?.[provider],
   });
 
   // The bare prototype must read as sound.
@@ -1496,7 +1497,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private priceAt(usage: Usage): number | undefined {
     const pricing = this.modelCatalog.pricing();
 
-    return pricing ? priceCall(usage, pricing)?.usd : undefined;
+    return pricing ? priceCall(usage, pricing) : undefined;
   }
 
   /** Lazy: resolves this actor's handle, whose directory row does not exist until `ensureSchema`
@@ -1949,7 +1950,7 @@ export abstract class ActorAgent extends Agent<Env> {
       actor: this.actorHandle(),
       storage: this.rt.storage,
       // Real USD from catalog rates; null until the lookup lands, then the ledger blends and says so.
-      pricing: () => this.modelCatalog.pricing(),
+      pricing: (spec) => this.modelCatalog.pricing(spec),
       onExhausted: ({ error: _error, ...refusal }) => {
         try {
           if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'budget_exhausted', ...refusal });
@@ -1978,7 +1979,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   async missionDebit(tokens: number, opts: {
-    labels: readonly string[]; calls?: number; spawns?: number; usage?: Usage;
+    labels: readonly string[]; calls?: number; spawns?: number; usage?: Usage; spec?: string;
   }): Promise<void> {
     this.budget.debit(tokens, opts);
   }
@@ -2767,7 +2768,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private operationProfile(): OperationProfile | null {
     return currentOperationProfile(this.actorHandle()) ?? (this._inFlight ? this._turnOperation : null);
   }
-  /** Built in beforeTurn; read by the per-step dynamic context and turn-local context. */
+  /** Built in beforeTurn; read by the per-step dynamic context. */
   private _turnActiveSkills: ActiveSkillSet | null = null;
   /** Instruction trust (KINU-N028): one store over actor SQL, scoped to this workspace so a forked
    *  or copied root starts unapproved. */
@@ -3740,10 +3741,12 @@ export abstract class ActorAgent extends Agent<Env> {
       const modelId = result.response?.modelId;
       const usage = normalizeUsage(result.usage);
       operation.completed({ usage, modelId: modelId ?? spec });
+      const account = callAccountOf(result.response ?? {});
+
       this.reportModelCall(
         modelId
-          ? { source: 'fast', usage, spec, modelId }
-          : { source: 'fast', usage, spec },
+          ? { source: 'fast', usage, spec, modelId, account }
+          : { source: 'fast', usage, spec, account },
       );
 
       return result.text;
@@ -3989,47 +3992,30 @@ export abstract class ActorAgent extends Agent<Env> {
     }
   }
 
-  /** Cached, non-blocking lookup per spec; static fallbacks answer until it lands. */
-  /** Protected: the workspace's mission ledger prices every hosted actor's spend off this catalog,
-   *  so a search's estimate and the ledger read one rate. */
+  /** Cached, non-blocking lookup per spec; static fallbacks answer until it lands. Every hosted actor's spend
+   *  is priced off it, so a search's estimate and the ledger read one rate. */
   protected readonly modelCatalog = new ModelCatalogSession({
     effectiveSpec: () => this.effectiveModelSpec(),
-    lookup: async (spec) => {
-      if (!spec) return null;
-      const { provider, modelId } = parseModelSpec(spec);
-      const reg = this.providerRegistry();
-
-      return catalogModelInfo(reg.registry.get(provider), reg.deps, modelId);
-    },
+    lookup: async (spec) => (spec ? this.catalogEntry(spec) : null),
   });
 
-  /**
-   * Unapproved instruction files ride a sealed user message (agent-writable, not system plane).
-   * Never persisted; placed before the turn's input after the transformContext seam.
-   */
-  private turnLocalMessages(
-    deviceNotice: string | null,
-    agentsMd: AgentsMdSources,
-    activeSkills: ActiveSkillSet | undefined,
-  ): ModelMessage[] {
-    // Provenance rides here, not in the system prompt: it flips mid-session and would rewrite the
-    // cacheable prefix (core prompting/volatile-context.ts).
-    const turnLocalOptions: Parameters<typeof turnLocalContextMessage>[0] = {
-      deviceNotice,
-      provenance: this.turnProvenance(),
-    };
+  protected async catalogEntry(spec: string): Promise<ModelInfo | null> {
+    const { provider, modelId, account } = parseModelSpec(spec);
+    const reg = this.providerRegistry();
 
-    if (this._turnActiveSkills) turnLocalOptions.activeSkills = this._turnActiveSkills;
-    const turnLocal = turnLocalContextMessage(turnLocalOptions);
+    return catalogModelInfo(reg.registry.get(provider), accountDeps(reg.deps, provider, account), modelId);
+  }
 
-    const unverified = unverifiedInstructionsMessage(
-      activeSkills ? { agentsMd, activeSkills } : { agentsMd },
-    );
+  private readonly hostedModels = new Map<string, string>();
 
-    return [
-      ...(unverified ? [unverified] : []),
-      ...(turnLocal ? [turnLocal] : []),
-    ];
+  /** Before the task's first call. */
+  protected async priceHostedModel(actor: ActorHandle, spec: string): Promise<void> {
+    this.hostedModels.set(actor.actorId, spec);
+    await this.modelCatalog.warm([spec]);
+  }
+
+  protected hostedModelOf(actor: ActorHandle): string | undefined {
+    return this.hostedModels.get(actor.actorId);
   }
 
   /** Source for `turnWorkMode`, `turnProvenance`, and `turnUserMetadata`. */
@@ -4082,7 +4068,6 @@ export abstract class ActorAgent extends Agent<Env> {
       attachments: {
         accepts: this.modelCatalog.acceptedMedia(), vfs: this.rt.storage.vfs, budget: this.acc.context,
       },
-      turnLocal: assembled.turnLocal.length > 0 ? assembled.turnLocal : undefined,
       tools: assembled.tools,
       activeTools: assembled.activeTools,
       // No step cap: the loop is bounded by the budget governor and the caller's cancel
@@ -4105,6 +4090,15 @@ export abstract class ActorAgent extends Agent<Env> {
     }
 
     if (assembled.reasoningOptions) liveTurn.providerOptions = assembled.reasoningOptions;
+
+    const providers = this.providerRegistry();
+    liveTurn.modelSpec = providers.normalizeSpecSync(assembled.profile.tier.model);
+    liveTurn.credentialOf = (spec) => this.ownedModelServices.credentialFor(spec);
+    liveTurn.fallbacks = assembled.profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
+      spec: providers.normalizeSpecSync(spec),
+      bind: () => this.ownedModelServices.resolveModelWithEffort(spec, reasoningEffort),
+    }));
+
     const runtime = this.rt;
 
     return {
@@ -4114,6 +4108,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // All registered extensions; the turn adds the orchestrator's inbox extension itself.
         extensions: this.extensions.list(),
         dynamic: (profile, turnTools) => this.dynamicContextSnapshot(profile, turnTools, assembled.memoryTail),
+        instructions: assembled.instructions,
         scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       },
       sessionKey: this.name,
@@ -4150,7 +4145,7 @@ export abstract class ActorAgent extends Agent<Env> {
     if (this._cachedSoulText === null) await this.refreshSoulText();
 
     // Independent UserDO hops, run in parallel; each keeps its own failure arm.
-    const [profileInputs, mcpTools, deviceStatus, identity] = await Promise.all([
+    const [profileInputs, mcpTools, , identity] = await Promise.all([
       this.profileInputs(),
       // The remote catalog is admitted against the context budget left after the builtins.
       // A failed read answers no tools and the turn runs on builtins.
@@ -4161,7 +4156,7 @@ export abstract class ActorAgent extends Agent<Env> {
       this.promptIdentity(),
     ]);
 
-    return { profileInputs, mcpTools, deviceStatus, identity };
+    return { profileInputs, mcpTools, identity };
   }
 
   /** Runs after the turn is open (`orch.beginTurn`, the run row) and before the first model call. */
@@ -4183,7 +4178,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   private async assembleTurn(input: TurnAssemblyInput): Promise<AssembledTurn> {
-    const { profileInputs, mcpTools, deviceStatus, identity } = input.reads;
+    const { profileInputs, mcpTools, identity } = input.reads;
     const activeRoleId = this.activeRoleLabel();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
     this._workspaceInstructionApprovals = null;
@@ -4277,20 +4272,6 @@ export abstract class ActorAgent extends Agent<Env> {
         .filter(([name]) => toolAllowed(name)),
     );
 
-    // The persisted watermark is only a diff anchor for the change notice; the hub is the source
-    // of truth.
-    let deviceNotice: string | null = null;
-
-    try {
-      deviceNotice = observeDevicePresence(this.config, deviceStatus).notice;
-    } catch (err) {
-      diagnostics.failure('device.status_refresh_failed', toKinuError({
-        doing: 'recording the device hub presence for this turn',
-        cause: err,
-        otherwise: 'unavailable',
-      }));
-    }
-
     // AGENTS.md is turn-scoped state, so it rides the beforeTurn system override, not the cached
     // base prompt.
     const agentsMd = await collectWorkspaceAgentsMd(
@@ -4301,7 +4282,7 @@ export abstract class ActorAgent extends Agent<Env> {
     );
 
     // The cache prefix changes only on real agent events (soul, model, skills, tools, AGENTS.md);
-    // system and turn-local state ride the dynamic ledger and turn-local messages instead.
+    // live state rides the dynamic ledger instead.
     const execs = this.rt.executionRouter?.listExecutors() ?? [];
     const model = this.promptModelContext();
 
@@ -4337,7 +4318,7 @@ export abstract class ActorAgent extends Agent<Env> {
     this._turnDurableLength = rawMessages.length;
     // Must be awaited before submission: synchronous catalog reads return static stand-in values
     // while the lookup is in flight (#20).
-    const window = await this.modelCatalog.resolved();
+    const [window] = await Promise.all([this.modelCatalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model))]);
     this._turnContextWindow = window.contextWindow;
     const measured = measureCompactionTrigger(this.compactionState, this.name, rawMessages.length);
 
@@ -4346,7 +4327,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // The reflection loop assumes the model sees its latest MEMORY.md lessons in-turn; read once
     // here since it is the one dynamic-context input needing an await.
     const memoryTail = await readMemoryTail(this.rt.memory);
-    const turnLocal = this.turnLocalMessages(deviceNotice, agentsMd, activeSetForPrompt);
+    const instructions = renderUnverifiedInstructions(activeSetForPrompt ? { agentsMd, activeSkills: activeSetForPrompt } : { agentsMd });
 
     const submittedTools = { ...modeTools, ...effectiveTools };
     const providers = this.providerRegistry();
@@ -4361,7 +4342,8 @@ export abstract class ActorAgent extends Agent<Env> {
     }));
 
     const countInputTokens = (request: CountableRequest): Promise<InputTokenCount> => countRequestInputTokens(
-      providers.registry.get(tierModel.provider), tierModel.modelId, providers.deps, request,
+      providers.registry.get(tierModel.provider), tierModel.modelId,
+      accountDeps(providers.deps, tierModel.provider, tierModel.account), request,
     );
 
     const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan() });
@@ -4386,7 +4368,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return {
       profile, profileInputs, system: systemOverride, model: languageModel, tools, activeTools: effectiveActiveTools, activeToolSurface,
-      rawMessages, turnLocal, measured, window, memoryTail, countInputTokens,
+      rawMessages, instructions, measured, window, memoryTail, countInputTokens,
       cacheOptions, reasoningOptions, promptModel: model,
     };
   }
@@ -4412,6 +4394,8 @@ export abstract class ActorAgent extends Agent<Env> {
       stores: this.stores,
       profile,
       tools,
+      turn: this.turnReason(),
+      ...(this._turnActiveSkills !== null && { activeSkills: this._turnActiveSkills }),
       memoryTail,
       missingCapabilities: [
         ...this._mcpUnavailable,
@@ -4471,8 +4455,8 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Read from the event alone, never from the work mode stamped beside it. */
-  protected turnProvenance(): TurnProvenance {
-    return turnProvenanceForMetadata(this.turnDrivingMetadata());
+  protected turnReason(): TurnReason {
+    return turnReasonForMetadata(this.turnDrivingMetadata());
   }
 
   private turnDrivingMetadata(): JsonObject | undefined {

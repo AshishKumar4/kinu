@@ -8,7 +8,6 @@ import { listModelsDevProviderModels } from './models-dev';
 import { countAnthropicInputTokens } from './anthropic-count';
 import { warmAnthropicCache } from './anthropic-warm';
 import type { JsonObject } from '../utils/json';
-import type { Usage } from '../usage';
 import type { ReasoningEffort } from './reasoning-effort';
 
 export const ANTHROPIC_CRED_KEY = 'anthropic.bearer';
@@ -18,9 +17,11 @@ export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
 export const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-4-7';
 
 /** Evolution's mechanical-call tier. */
-const ANTHROPIC_FAST_MODEL = 'claude-haiku-4-5';
+export const ANTHROPIC_FAST_MODEL = 'claude-haiku-4-5';
 
-/** Offline effort levels per model; the live list reads models.dev. */
+/** Anthropic rejects more than 4 `cache_control` blocks: tools, system, and two on the tail. */
+export const ANTHROPIC_MAX_BREAKPOINTS = 4;
+
 const FIVE: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 const FOUR: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'max'];
@@ -39,18 +40,20 @@ const PREFERRED_MODEL_IDS = [
   'claude-haiku-4-5',
 ];
 
+export function listAnthropicModels(deps: Pick<ProviderDeps, 'fetch'>): Promise<ModelInfo[]> {
+  return listModelsDevProviderModels('anthropic', deps, { fallback: FALLBACK_MODELS, preferredIds: PREFERRED_MODEL_IDS });
+}
+
 export function createAnthropicProvider(): ModelProvider {
   return {
     id: 'anthropic',
+    credentialKey: ANTHROPIC_CRED_KEY,
     label: 'Anthropic (direct API)',
     defaultModel: ANTHROPIC_DEFAULT_MODEL,
     fastModel: ANTHROPIC_FAST_MODEL,
     async isAvailable(deps) { return deps.hasCredential(ANTHROPIC_CRED_KEY); },
     unavailableReason() { return 'No Anthropic API key (cred key: `anthropic.bearer`).'; },
-    listModels: (deps) => listModelsDevProviderModels('anthropic', deps, {
-      fallback: FALLBACK_MODELS,
-      preferredIds: PREFERRED_MODEL_IDS,
-    }),
+    listModels: (deps) => listAnthropicModels(deps),
     createModel(modelId, deps): LanguageModel {
       const customFetch = createAuthedFetch(deps, {
         provider: 'anthropic',
@@ -74,7 +77,7 @@ export function createAnthropicProvider(): ModelProvider {
         missingCredentialError: 'Anthropic API key not configured',
       });
     },
-    warmCache(modelId, deps: ProviderDeps, body: JsonObject): Promise<Usage> {
+    warmCache(modelId, deps: ProviderDeps, body: JsonObject) {
       return warmAnthropicCache({
         modelId,
         deps,

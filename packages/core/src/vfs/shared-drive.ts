@@ -25,5 +25,5 @@ export const SHARED_DRIVE_UNBOUND = 'the shared Drive is not bound on this deplo
 
 /** The `/shared` mount. `drive` is read live per call: the owner claim can land after the plane is built. */
 export function sharedDriveMount(drive: () => MossaicVfs | null, absentReason: () => string): VfsMount {
-  return { name: SHARED_MOUNT, files: drive, absentReason };
+  return { name: SHARED_MOUNT, files: drive, absentReason, filesOwner: 'user' };
 }

@@ -24,7 +24,7 @@ import {
   type BranchReply,
 } from '@kinu.run/core';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver';
-import { createFileCodexAuthStore } from './codex-auth-store';
+import { createFileOAuthStore } from './oauth-store';
 import { LocalActorProcessBootstrapSchema } from './actor-identity';
 import { makeSql } from './runtime';
 
@@ -95,8 +95,8 @@ const modelResolver = createLocalModelResolver({
   llm: llmConfig,
   credentials,
   sessionAffinity: agentAffinityKey(bootstrap.name),
-  codexAuthStore: process.env.KINU_CONFIG_PATH
-    ? createFileCodexAuthStore(process.env.KINU_CONFIG_PATH)
+  oauthStore: process.env.KINU_CONFIG_PATH
+    ? createFileOAuthStore(process.env.KINU_CONFIG_PATH)
     : undefined,
 });
 

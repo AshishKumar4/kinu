@@ -1,18 +1,18 @@
 /**
- * Whole-workspace model spend by producer, read from `step_finish` (as `agent`), `model_call`,
- * and `head_journal`; nothing new is stored. Summed in SQL over the whole log, never windowed.
- * A measured head report replaces its attempt's step usage only. Coverage reports unmeasured and
- * unpriced calls. `producers` and `missions` overlap and must not be added together.
+ * Workspace model spend by producer from `step_finish` (as `agent`), `model_call` and `head_journal`, summed in SQL
+ * over the whole log. A measured head report replaces its attempt's step usage only. `producers`, `missions` and
+ * `accounts` overlap; never sum them.
  */
 
 import type { RunEventRecorder, StepSpendSource } from '../events/recorder';
-import { SPEND_SOURCES, type SpendSource, type SpendTally } from '../events/model-call';
+import { SPEND_SOURCES, type AccountSpend, type SpendSource, type SpendTally } from '../events/model-call';
 import type { SqlExecutor } from '../types/primitives';
 import { addUsage, usageReported, usageTotal, type Usage } from '../usage';
 import { storedUsage } from '../heads/journal';
 import type { StoredHeadUsage } from '../heads/schema';
 import { listMissionSpend, type MissionBudgetSnapshot } from '../mission-budget';
 import type { ActorHandle } from '../identity/actor-handle';
+import { sortAccountSpend } from './account-usage';
 
 export interface ProducerSpend extends SpendTally {
   readonly source: SpendSource;
@@ -22,8 +22,7 @@ export interface SpendCoverage {
   readonly calls: number;
   readonly measured: number;
   readonly reported: number | null;
-  /** Producers with calls but no reported usage. Workers AI utility bindings (`platform`) are
-   *  permanently here: they return no usage field. */
+  /** Producers with calls and no reported usage, always including Workers AI utility bindings (`platform`). */
   readonly silent: readonly SpendSource[];
   readonly partial: readonly SpendSource[];
 }
@@ -35,9 +34,10 @@ export interface WorkspaceSpend {
   readonly coverage: SpendCoverage;
   /** Share of measured tokens not spent by `agent` turns; null when nothing was measured. */
   readonly offTurnShare: number | null;
-  /** Spend per mission label from `mission_budget`, dearest first. Not additive with producers: a
-   *  call sits in one producer row and every mission label above it. */
+  /** Per mission label, dearest first; a call sits in one producer row and every label above it. */
   readonly missions: readonly MissionBudgetSnapshot[];
+  /** Absent when an older deployment answered: not reported, not none. */
+  readonly accounts?: readonly AccountSpend[];
 }
 
 interface Tally {
@@ -46,25 +46,17 @@ interface Tally {
   usage: Usage;
   usd: number | undefined;
   unpricedCalls: number;
-  floorPricedCalls: number;
 }
 
-/** `usd` stays undefined until a call carries one ("unpriced" is not "$0"). Presence of
- *  `floorTokens` marks a floor price from `priceCall`. */
-function record(
-  tally: Tally, usage: Usage, usd: number | undefined, floorTokens?: number,
-): void {
+/** `usd` stays undefined until a call carries one ("unpriced" is not "$0"). */
+function record(tally: Tally, usage: Usage, usd: number | undefined): void {
   tally.calls++;
 
   if (usageReported(usage)) {
     tally.usage = addUsage(tally.usage, usage);
 
     if (usd === undefined) tally.unpricedCalls++;
-    else {
-      tally.usd = (tally.usd ?? 0) + usd;
-
-      if (floorTokens !== undefined) tally.floorPricedCalls++;
-    }
+    else tally.usd = (tally.usd ?? 0) + usd;
   } else {
     tally.callsWithoutUsage++;
   }
@@ -79,7 +71,7 @@ function tallyFor(tallies: Tallies, source: SpendSource): Tally {
 
   const fresh: Tally = {
     calls: 0, callsWithoutUsage: 0, usage: {}, usd: undefined,
-    unpricedCalls: 0, floorPricedCalls: 0,
+    unpricedCalls: 0,
   };
 
   tallies.set(source, fresh);
@@ -97,7 +89,7 @@ export interface WorkspaceSpendDeps {
   readonly actor: ActorHandle;
 }
 
-export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
+export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend & { readonly accounts: readonly AccountSpend[] } {
   deps.actor.assertCurrent();
   const tallies: Tallies = new Map();
   const heads = readHeadSpend(deps.sql);
@@ -131,14 +123,13 @@ export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
 
   const total: Tally = {
     calls: 0, callsWithoutUsage: 0, usage: {}, usd: undefined,
-    unpricedCalls: 0, floorPricedCalls: 0,
+    unpricedCalls: 0,
   };
 
   for (const p of producers) {
     total.calls += p.calls;
     total.callsWithoutUsage += p.callsWithoutUsage;
     total.unpricedCalls += p.unpricedCalls;
-    total.floorPricedCalls += p.floorPricedCalls;
     total.usage = addUsage(total.usage, p.usage);
 
     if (p.usd !== undefined) total.usd = (total.usd ?? 0) + p.usd;
@@ -164,6 +155,7 @@ export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
       ? null
       : (measuredTokens - turnTokens) / measuredTokens,
     missions: listMissionSpend(deps.sql, deps.actor),
+    accounts: sortAccountSpend(deps.events.spendByAccount()),
   };
 }
 
@@ -173,14 +165,12 @@ function finishTotal(tally: Tally): SpendTally {
     callsWithoutUsage: tally.callsWithoutUsage,
     usage: tally.usage,
     unpricedCalls: tally.unpricedCalls,
-    floorPricedCalls: tally.floorPricedCalls,
   };
 
   return tally.usd === undefined ? out : { ...out, usd: tally.usd };
 }
 
-/** One row per head (its steps are already summed into the report). A NULL usage column means
- *  the provider never reported that count; decode via `storedUsage` only. */
+/** One row per head, its steps summed in. A NULL usage column was never reported; decode via `storedUsage`. */
 interface HeadSpendRow extends StoredHeadUsage {
   readonly headActorId: string | null;
   readonly spawnedAt: number;

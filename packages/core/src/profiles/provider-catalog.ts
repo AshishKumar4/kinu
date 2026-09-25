@@ -1,26 +1,45 @@
 // The one builder of provider snapshots, so every backend computes the same `revision`.
 
 import { sha256Hex } from '../safety/argument-digest';
-import type { ProviderFailure } from '../providers/registry';
+import type { ModelMenu, ProviderFailure } from '../providers/registry';
+import type { ReasoningEffort } from '../providers/reasoning-effort';
 import type { ProviderCatalogSnapshot, ProviderCacheOutcome } from './resolve';
 
-/** One credential sweep's result. `models` are joined `<provider>/<modelId>` specs, not rows. */
+/** One credential sweep; `models` are `<provider>/<modelId>` specs. */
 export interface ProviderListing {
   readonly models: readonly string[];
   readonly failures: readonly ProviderFailure[];
+  /** The levels each model declares, by spec; `[]`: none. */
+  readonly reasoningEfforts?: Readonly<Record<string, readonly ReasoningEffort[]>>;
 }
 
-/**
- * Both halves are sorted so answer order never changes the revision. Failures are hashed
- * because a degraded listing admits models unverified; `!` cannot begin a model spec.
- */
-export function buildProviderCatalogSnapshot(
-  models: Iterable<string>,
-  failures: readonly ProviderFailure[],
-): ProviderCatalogSnapshot {
-  const availableModels = [...new Set(models)].sort();
+/** A registry's menu as a listing. */
+export function providerListingOf(menu: ModelMenu): ProviderListing {
+  const reasoningEfforts: Record<string, readonly ReasoningEffort[]> = {};
 
-  const unavailableProviders = failures
+  const models = menu.models.map((model) => {
+    const spec = `${model.provider}/${model.id}`;
+
+    if (model.reasoningEfforts !== undefined) reasoningEfforts[spec] = model.reasoningEfforts;
+
+    return spec;
+  });
+
+  return { models, failures: menu.failures, reasoningEfforts };
+}
+
+/** Both backends' snapshot, as swept; a `pinned` spec moves only the revision. Sorted, so answer order never moves
+ *  the revision; failures hashed, as a degraded listing admits unverified. No spec begins with `!`, `~` or `=`. */
+export function providerSnapshotOf(listing: ProviderListing, pinned: readonly string[] = []): ProviderCatalogSnapshot {
+  const availableModels = [...new Set(listing.models)].sort();
+
+  const reasoningEfforts = Object.fromEntries(availableModels.flatMap((spec) => {
+    const levels = listing.reasoningEfforts?.[spec];
+
+    return levels === undefined ? [] : [[spec, [...levels]]];
+  }));
+
+  const unavailableProviders = listing.failures
     .map(({ provider, label, reason }) => ({ provider, label: label ?? provider, reason }))
     .sort((a, b) => a.provider.localeCompare(b.provider) || a.reason.localeCompare(b.reason));
 
@@ -28,16 +47,16 @@ export function buildProviderCatalogSnapshot(
     revision: sha256Hex([
       ...availableModels,
       ...unavailableProviders.map(({ provider, reason }) => `!${provider}\t${reason}`),
+      ...Object.entries(reasoningEfforts).map(([spec, levels]) => `~${spec}\t${levels.join(',')}`),
+      ...[...new Set(pinned)].sort().map((spec) => `=${spec}`),
     ].join('\n')),
     availableModels,
     unavailableProviders,
+    reasoningEfforts,
   };
 }
 
-/**
- * One shared in-flight sweep; only complete listings are cached, and only if no invalidation
- * landed mid-sweep. Nothing expires by clock: holders call {@link invalidate}.
- */
+/** One in-flight sweep; a complete listing is cached unless invalidated mid-sweep, and never expires by clock. */
 export class ProviderListingCache {
   private readonly sweep: () => Promise<ProviderListing>;
   private cached: ProviderListing | null = null;

@@ -110,6 +110,7 @@ export const FIRST_RUN_CASES = [
   'deploy-door',
   'capability-isolation',
   'steer-correction',
+  'multi-account',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -567,6 +568,23 @@ export const FIRST_RUN_DEFECTS = {
       + 'correction the running turn never read fails correction-applied, steer-is-durable and '
       + 'listing-truthful, and a steer the workspace never answered fails landing.',
   },
+  'multi-account': {
+    id: 'multi-account',
+    found: 'The owner asked on 2026-09-19 (m1447): "I would want multiple accounts per provider '
+      + 'capability for all providers, just like OMP has". The deployed product held one key per '
+      + 'provider: a second OpenAI key under a name could not sit beside the first, so no client could '
+      + 'list both and no workspace could say which one pays.',
+    missedBecause: 'every account proof stores its keys in a store the test built: core over an '
+      + 'in-memory vault, each backend over its own fixture, and the web panel over REST answered from '
+      + 'fixtures in the page. None stores a named key in the DEPLOYED vault and reads it back through '
+      + 'the panel listing, the CLI menu and a workspace\'s own choice.',
+    provedRedAt: 'e1051bd77',
+    redDirection: 'On e1051bd77 all seven subgoals miss on the mechanism: the vault refuses '
+      + '`openai.bearer@<name>` as an invalid credential key, so neither account is stored, listed or '
+      + 'removed; the CLI menu carries no accounts; `setProviderAccount` is no agent RPC method; and '
+      + '`setModel` refuses `openai@<name>/gpt-5.5`. Green needs the build with account keys (b29279646) '
+      + 'and a workspace\'s own account choice (61db52a07).',
+  },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
 /** Which arm this process is — the same split every sibling eval arm declares. */
@@ -690,6 +708,7 @@ const SHORT_SUBJECT = {
   'deploy-door': 'door',
   'capability-isolation': 'isolation',
   'steer-correction': 'steer',
+  'multi-account': 'accounts',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */

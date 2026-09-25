@@ -60,7 +60,7 @@ describe('AgentProviderRegistry composition', () => {
     }
   });
 
-  test('registers all 8 providers in preference order', () => {
+  test('registers all 9 providers in preference order', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: fakeUserDOStub(),
@@ -68,7 +68,7 @@ describe('AgentProviderRegistry composition', () => {
 
     const ids = reg.registry.list().map(p => p.id);
     expect(ids).toEqual([
-      'workers-ai', 'my-gateway', 'ai-gateway', 'codex', 'openai',
+      'workers-ai', 'my-gateway', 'ai-gateway', 'codex', 'claude', 'openai',
       'anthropic', 'openrouter', 'openai-compat',
     ]);
   });
@@ -204,7 +204,7 @@ describe('AgentProviderRegistry composition', () => {
     });
 
     const gated = [
-      'workers-ai', 'my-gateway', 'codex', 'openai', 'anthropic', 'openrouter', 'openai-compat',
+      'workers-ai', 'my-gateway', 'codex', 'claude', 'openai', 'anthropic', 'openrouter', 'openai-compat',
     ];
 
     const list = await reg.registry.listProviders(reg.deps);

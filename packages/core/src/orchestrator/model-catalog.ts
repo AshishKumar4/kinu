@@ -1,7 +1,6 @@
 /**
- * Cached catalog view of the session's resolved model, one lookup per spec, shared by both backends.
- * Synchronous reads never block and fall back to the static table; {@link ModelCatalogSession.resolved}
- * is the awaited read for callers that gate work on the answer (#20).
+ * Cached catalog view per spec for both backends. Synchronous reads fall back to the static table;
+ * {@link ModelCatalogSession.resolved} is the awaited read (#20).
  */
 
 import { contextWindowForModel } from '../context-window';
@@ -31,6 +30,8 @@ export function resolveEffectiveModelSpec(deps: {
 
 export class ModelCatalogSession {
   private cached: { spec: string; info: ModelInfo | null; lookup?: Promise<void> } | null = null;
+  /** Catalog entries of a tier's fallbacks. */
+  private readonly others = new Map<string, ModelInfo>();
 
   constructor(private readonly deps: {
     effectiveSpec: () => string;
@@ -96,9 +97,28 @@ export class ModelCatalogSession {
     return { contextWindow: this.contextWindow(), modelOutputLimit: this.modelOutputLimit() };
   }
 
-  /** Null when the catalog has not landed or prices nothing. */
-  pricing(): ModelPricing | null {
-    return this.info()?.cost ?? null;
+  /** Null until the catalog lands or when it prices nothing; another `spec` only once warmed. */
+  pricing(spec?: string): ModelPricing | null {
+    if (spec === undefined || spec === this.deps.effectiveSpec()) return this.info()?.cost ?? null;
+
+    return this.others.get(spec)?.cost ?? null;
+  }
+
+  /** Warmed before the turn so each step prices at its model's rate; a refused one stays blended. */
+  async warm(specs: readonly string[]): Promise<void> {
+    await Promise.all(specs.filter((spec) => !this.others.has(spec)).map(async (spec) => {
+      try {
+        const info = await this.lookup(spec);
+
+        if (info !== null) this.others.set(spec, info);
+      } catch (cause) {
+        diagnostics.failure(
+          'model.catalog_lookup_failed',
+          toKinuError({ doing: 'price a fallback model', cause, otherwise: 'unavailable' }),
+          { model: spec },
+        );
+      }
+    }));
   }
 
   acceptedMedia(): ReadonlySet<MediaModality> {

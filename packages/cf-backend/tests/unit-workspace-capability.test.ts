@@ -191,7 +191,7 @@ describe('the attenuation matrix', () => {
 describe('model-inference credential keys', () => {
   test('accepts every provider key shape the model picker derives from', () => {
     for (const key of [
-      'codex.oauth', 'cloudflare.oauth', 'cloudflare.ai-gateway',
+      'codex.oauth', 'claude.oauth', 'cloudflare.oauth', 'cloudflare.ai-gateway',
       'openai.bearer', 'anthropic.bearer', 'openrouter.bearer', 'deepseek-v3.bearer',
       'openai-compat.mybox',
     ]) {
@@ -201,6 +201,16 @@ describe('model-inference credential keys', () => {
 
   test('rejects non-model keys — an unrecognized shape is never a model key', () => {
     for (const key of ['github', 'gateway-admin', 'bearer', '.bearer', 'openai-compat.', 'GITHUB.BEARER']) {
+      expect(isModelInferenceCredentialKey(key)).toBe(false);
+    }
+  });
+
+  test('an account carries its base key\'s standing: a model account stays one, a suffix makes nothing a model key', () => {
+    for (const key of ['codex.oauth@work', 'anthropic.bearer@work', 'openai-compat.mybox@lab']) {
+      expect(isModelInferenceCredentialKey(key)).toBe(true);
+    }
+
+    for (const key of ['github@work', 'gateway-admin@x.bearer', 'tavily@bearer']) {
       expect(isModelInferenceCredentialKey(key)).toBe(false);
     }
   });

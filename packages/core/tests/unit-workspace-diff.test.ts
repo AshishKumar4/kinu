@@ -414,7 +414,7 @@ describe('workspace diff lifecycle', () => {
     const responses: CommandResult[] = ['/repo', '3f2a1c0b9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b', { reason: 'io', error: 'Error (exit 128)\nfatal: index corrupt' }];
 
     const provider: ExecutorProvider = {
-      name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']),
+      name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']), filesOwner: 'agent',
       homeDir: async () => '/workspace',
       isAvailable: () => true, connect: async () => {}, disconnect: async () => {},
       tools: {
@@ -459,7 +459,7 @@ describe('workspace diff lifecycle', () => {
     };
 
     const provider: ExecutorProvider = {
-      name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']),
+      name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']), filesOwner: 'agent',
       homeDir: async () => '/workspace',
       isAvailable: () => true, connect: async () => {}, disconnect: async () => {},
       tools: {

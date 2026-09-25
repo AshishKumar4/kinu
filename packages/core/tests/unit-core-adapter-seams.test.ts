@@ -14,7 +14,7 @@ import {
   TOOL_CALLS_PENDING, TURN_ENDED_MID_WORK,
   declareTerminalRoster,
   AgentOrchestrator, type AgentOrchestratorDeps,
-  buildProviderCatalogSnapshot, ProviderListingCache, type ProviderListing,
+  providerSnapshotOf, ProviderListingCache, type ProviderListing,
   defaultSpecFor, DEFAULT_WORKERS_AI_MODEL_SPEC, workersAiSpec,
   DEFAULT_ROLE_ID, REPORT_TOOL, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
   craftedToolDescription, toCraftedToolSource, type CraftedTool,
@@ -386,17 +386,17 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
   });
 });
 
-describe('buildProviderCatalogSnapshot — one formula, deterministic', () => {
+describe('providerSnapshotOf — one formula, deterministic', () => {
   test('input order does not change the revision', () => {
-    const a = buildProviderCatalogSnapshot(['b/2', 'a/1'], []);
-    const b = buildProviderCatalogSnapshot(['a/1', 'b/2'], []);
+    const a = providerSnapshotOf({ models: ['b/2', 'a/1'], failures: [] });
+    const b = providerSnapshotOf({ models: ['a/1', 'b/2'], failures: [] });
     expect(a.revision).toBe(b.revision);
     expect(a.availableModels).toEqual(['a/1', 'b/2']);
   });
 
   test('duplicates collapse rather than changing the identity', () => {
-    const once = buildProviderCatalogSnapshot(['a/1'], []);
-    const twice = buildProviderCatalogSnapshot(['a/1', 'a/1'], []);
+    const once = providerSnapshotOf({ models: ['a/1'], failures: [] });
+    const twice = providerSnapshotOf({ models: ['a/1', 'a/1'], failures: [] });
     expect(twice.availableModels).toEqual(['a/1']);
     expect(twice.revision).toBe(once.revision);
   });
@@ -404,23 +404,23 @@ describe('buildProviderCatalogSnapshot — one formula, deterministic', () => {
   // A snapshot taken while a provider was down is a different availability picture, so it must not
   // share a revision with a complete one.
   test('a failure changes the revision even with an identical model list', () => {
-    const clean = buildProviderCatalogSnapshot(['a/1'], []);
-    const degraded = buildProviderCatalogSnapshot(['a/1'], [{ provider: 'b', reason: '503' }]);
+    const clean = providerSnapshotOf({ models: ['a/1'], failures: [] });
+    const degraded = providerSnapshotOf({ models: ['a/1'], failures: [{ provider: 'b', reason: '503' }] });
     expect(degraded.revision).not.toBe(clean.revision);
     expect(degraded.availableModels).toEqual(clean.availableModels);
   });
 
   test('the failure reason is part of the identity, not just the provider', () => {
-    const a = buildProviderCatalogSnapshot([], [{ provider: 'b', reason: '503' }]);
-    const b = buildProviderCatalogSnapshot([], [{ provider: 'b', reason: 'revoked' }]);
+    const a = providerSnapshotOf({ models: [], failures: [{ provider: 'b', reason: '503' }] });
+    const b = providerSnapshotOf({ models: [], failures: [{ provider: 'b', reason: 'revoked' }] });
     expect(a.revision).not.toBe(b.revision);
   });
 
   test('a failure sorts stably and falls back to the provider id for its label', () => {
-    const snapshot = buildProviderCatalogSnapshot([], [
+    const snapshot = providerSnapshotOf({ models: [], failures: [
       { provider: 'z', reason: 'r' },
       { provider: 'a', label: 'Ay', reason: 'r' },
-    ]);
+    ] });
 
     expect(snapshot.unavailableProviders).toEqual([
       { provider: 'a', label: 'Ay', reason: 'r' },
@@ -431,10 +431,20 @@ describe('buildProviderCatalogSnapshot — one formula, deterministic', () => {
   // The `!` separator is collision-free only because no real spec starts with `!`; what is pinned is
   // that both halves reach the hash.
   test('both halves reach the revision — models and failures each move it', () => {
-    const bare = buildProviderCatalogSnapshot(['a/1'], []);
-    const moreModels = buildProviderCatalogSnapshot(['a/1', 'a/2'], []);
-    const moreFailures = buildProviderCatalogSnapshot(['a/1'], [{ provider: 'b', reason: 'x' }]);
+    const bare = providerSnapshotOf({ models: ['a/1'], failures: [] });
+    const moreModels = providerSnapshotOf({ models: ['a/1', 'a/2'], failures: [] });
+    const moreFailures = providerSnapshotOf({ models: ['a/1'], failures: [{ provider: 'b', reason: 'x' }] });
     expect(new Set([bare.revision, moreModels.revision, moreFailures.revision]).size).toBe(3);
+  });
+
+  test('a pinned spec moves the revision without being listed, so an unlisted pin cannot serve', () => {
+    const listing: ProviderListing = { models: ['a/1'], failures: [] };
+    const bare = providerSnapshotOf(listing);
+    const pinned = providerSnapshotOf(listing, ['a/retired']);
+
+    expect(pinned.availableModels).toEqual(['a/1']);
+    expect(pinned.revision).not.toBe(bare.revision);
+    expect(providerSnapshotOf(listing, ['a/other']).revision).not.toBe(pinned.revision);
   });
 });
 

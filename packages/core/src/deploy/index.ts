@@ -23,8 +23,8 @@ export {
 
 export {
   CLI_DEPLOY_REDIRECT_PORT, CLI_DEPLOY_REDIRECT_URI, CLOUDFLARE_DEPLOY_SCOPES,
-  authorizeUrl, createPkcePair, exchangeDeployCode, refreshDeployToken,
-  type AuthorizeRequest, type DeployToken, type PkcePair, type TokenExchange,
+  authorizeUrl, exchangeDeployCode, refreshDeployToken,
+  type AuthorizeRequest, type DeployToken, type TokenExchange,
 } from './pkce';
 
 export {

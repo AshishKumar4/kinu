@@ -1,12 +1,13 @@
-// Codex via ChatGPT subscription (chatgpt.com/backend-api/codex/responses); auth headers from the AuthResolver.
+// Codex via ChatGPT subscription (chatgpt.com/backend-api/codex/responses).
 // `originator: codex_cli_rs` is the WAF bypass; Cloudflare may still 403 Workers' data-center IPs.
 import { createOpenAI } from '@ai-sdk/openai';
 import { wrapLanguageModel, type LanguageModel } from 'ai';
 import type { AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
 import { MODEL_INPUT_MODALITIES } from './types';
-import { asFetchFunction } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
-import { authCacheKey, cloneModelInfos, copyHeaders, positiveInteger, statelessResponses } from './util';
+import { authCacheKey, cloneModelInfos, positiveInteger, statelessResponses } from './util';
+import { asFetchFunction, copyHeaders } from './fetch-shim';
+import { withCallAccount } from './quota';
 import { nonEmptyString } from '../utils/json';
 import * as v from 'valibot';
 import { OAuthTokenError } from './oauth-token-error';
@@ -50,6 +51,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
 
   return {
     id: 'codex',
+    credentialKey: CODEX_CRED_KEY,
     label: 'ChatGPT Codex (subscription)',
     defaultModel: CODEX_DEFAULT_MODEL,
     fastModel: CODEX_FAST_MODEL,
@@ -96,9 +98,10 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
     },
 
     createModel(modelId, deps): LanguageModel {
-      const baseFetch = withRateLimitRetry(deps.fetch ?? fetch, {
+      const retrying = (lane: string): typeof fetch => withRateLimitRetry(deps.fetch ?? fetch, {
         provider: 'codex',
         modelId,
+        lane,
         ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
       });
 
@@ -145,12 +148,14 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
 
         const requestInit = normalizeCodexResponsesRequest(init);
 
+        const paid = auth.credentialKey ?? CODEX_CRED_KEY;
+
         const send = async (headers: Record<string, string>) => {
           const merged = copyHeaders(init?.headers);
 
           for (const [name, value] of Object.entries(headers)) merged.set(name, value);
 
-          return baseFetch(input, { ...requestInit, headers: merged });
+          return retrying(paid)(input, { ...requestInit, headers: merged });
         };
 
         let res = await send(auth.headers);
@@ -194,14 +199,12 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         }
 
         if (res.status === 401) {
-          // Still 401 after the forced refresh: the stored login is dead upstream.
           return refusedLoginResponse();
         }
 
-        return res;
+        return withCallAccount(res, 'codex', paid);
       });
 
-      // apiKey is unused (customFetch sets Authorization) but the SDK requires a non-empty value.
       const provider = createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: customFetch });
 
       return wrapLanguageModel({ model: provider.responses(modelId), middleware: statelessResponses(true) });
@@ -242,7 +245,6 @@ function parseCodexModels(input: { body: unknown }): ModelInfo[] {
     if (!id) continue;
     const capabilities: NonNullable<ModelInfo['capabilities']> = ['tools', 'streaming'];
 
-    // Each row is a bare level or `{effort, description}`.
     const reasoningEfforts = knownReasoningEfforts((row.supported_reasoning_levels ?? []).map((level) => {
       const named = v.safeParse(CodexReasoningLevelSchema, level);
 

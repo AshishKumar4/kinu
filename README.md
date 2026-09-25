@@ -128,7 +128,8 @@ you grant. Here is why I'm comfortable running it on my own machine:
   device.
 - Every shell command passes an approval check before it runs. Housekeeping in
   the agent's own workspace or container runs without asking; the same
-  destructive command on your machine waits for you. Force-pushes and package
+  destructive command on your machine, your Drive or a CLI workspace in one
+  of your directories waits for you. Force-pushes and package
   publishing need approval everywhere. A standing approval is a rule you grant
   once, and it stays listed in Settings until you revoke it. The agent refuses
   known dangerous patterns, such as wiping the filesystem root.

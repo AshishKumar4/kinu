@@ -94,11 +94,12 @@ describe('recordWorkspaceSpend — one meter, two readers', () => {
     producers: [],
     total: {
       calls, callsWithoutUsage: 0, usage: { input: 10, output: 2 },
-      unpricedCalls: 0, floorPricedCalls: 0,
+      unpricedCalls: 0,
     },
     coverage: { calls, measured: calls, reported: 1, silent: [], partial: [] },
     offTurnShare: null,
     missions: [],
+    accounts: [],
   });
 
   test('a store that accounted for nothing counts as UNMEASURED, never a silent zero', () => {
@@ -141,7 +142,7 @@ describe('recordWorkspaceSpend — one meter, two readers', () => {
       ...spendOf(4),
       total: {
         calls: 4, callsWithoutUsage: 3, usage: { input: 10 },
-        unpricedCalls: 0, floorPricedCalls: 0,
+        unpricedCalls: 0,
       },
     });
     const spend = liveModelSpend();

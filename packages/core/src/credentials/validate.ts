@@ -2,6 +2,7 @@
 import * as v from 'valibot';
 import { KinuError } from '../obs/index';
 import { JsonObjectSchema, JsonValueSchema } from '../utils/json';
+import { accountCredentialKey, MAIN_ACCOUNT, splitAccount } from './accounts';
 import type { Credential } from './store';
 
 const CredentialKindSchema = v.object({
@@ -73,7 +74,13 @@ export function validateCredential(input: { value: unknown }): Credential {
 }
 
 export function validateCredentialKey(key: string): void {
-  if (!/^[a-zA-Z0-9._-]{1,128}$/.test(key)) {
+  const { base, account } = splitAccount(key);
+
+  if (!/^[a-zA-Z0-9._-]{1,128}$/.test(base)) {
     throw new Error('Invalid credential key. Use alphanumerics, dot, underscore and dash only (max 128 chars).');
+  }
+
+  if (account !== null && accountCredentialKey(base, account) !== key) {
+    throw new KinuError('bad_input', `Invalid credential key: the account named ${MAIN_ACCOUNT} is the bare key ${base}.`);
   }
 }

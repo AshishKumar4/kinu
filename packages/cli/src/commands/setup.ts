@@ -1,5 +1,5 @@
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
-import { checkClaudeAvailability } from '@kinu.run/cli-backend';
+import { stripProvider } from '@kinu.run/cli-backend';
 import { loadConfigFile } from '../config';
 import { adoptDefaultModel } from '../default-model';
 import { ACCENT, DIM, OK, WARN } from '../display';
@@ -36,7 +36,7 @@ export function connectOptions(opts: {
 
 export async function connectProviderOnConsole(
   id: ProviderConnectId,
-  opts: { readonly origin?: string; readonly model?: string; readonly local?: boolean } = {},
+  opts: { readonly origin?: string; readonly model?: string; readonly local?: boolean; readonly account?: string } = {},
 ): Promise<ProviderConnectOutcome> {
   const descriptor = PROVIDER_CONNECTORS.find((candidate) => candidate.id === id);
 
@@ -157,7 +157,7 @@ export async function setupCommand(opts: {
       return;
     }
 
-    const named = opts.model === undefined ? DEFAULT_WORKERS_AI_MODEL_SPEC : `workers-ai/${stripProviderPrefix(opts.model, 'workers-ai')}`;
+    const named = opts.model === undefined ? DEFAULT_WORKERS_AI_MODEL_SPEC : `workers-ai/${stripProvider(opts.model, 'workers-ai')}`;
     const current = (await adoptDefaultModel(named))?.model;
     console.log(`${OK('✓')} Using Cloudflare Workers AI`);
 
@@ -185,10 +185,7 @@ async function chooseProvider(cloudReady: boolean): Promise<string> {
 
   if (!cloudReady) console.log(DIM('  Option 1 needs a signed-in account. Run kinu auth first.'));
 
-  // The Claude Code subscription stores no credential here; mention it only when usable on this machine.
-  if ((await checkClaudeAvailability()).loggedIn) {
-    console.log(DIM('  Claude Code is signed in here. To use your Claude subscription, pass --model claude/claude-opus-4-x.'));
-  }
+  console.log(DIM('  For your Claude Pro or Max subscription, enter claude.'));
 
   const value = await ask('Choice', '1');
 
@@ -254,8 +251,4 @@ function normalizeProvider(value: string): 'workers-ai' | 'claude' | 'codex' | '
     default:
       throw new Error('Provider must be workers-ai, codex, openai, openrouter, anthropic, openai-compatible, opencode, or skip.');
   }
-}
-
-function stripProviderPrefix(model: string, provider: string): string {
-  return model.startsWith(`${provider}/`) ? model.slice(provider.length + 1) : model;
 }

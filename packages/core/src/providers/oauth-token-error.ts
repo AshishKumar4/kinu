@@ -3,7 +3,7 @@
 export class OAuthTokenError extends Error {
   override readonly name = 'OAuthTokenError';
 
-  constructor(readonly issuer: 'cloudflare' | 'codex', readonly oauthError: string, message: string) {
+  constructor(readonly issuer: 'cloudflare' | 'codex' | 'claude', readonly oauthError: string, message: string) {
     super(message);
   }
 

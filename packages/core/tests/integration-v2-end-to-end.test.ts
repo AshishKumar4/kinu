@@ -25,6 +25,7 @@ describe('v2 e2e: workspace executor via createInlineExecutor', () => {
     const { rt } = createTestRuntime();
 
     const provider = createInlineExecutor({
+      filesOwner: 'agent',
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async (cmd) => cmd.includes('echo hi')
         ? { stdout: 'hi\n', stderr: '', exitCode: 0 }
@@ -293,12 +294,12 @@ describe('v2 e2e: approval gate', () => {
         return `ran:${cmd}`;
       },
       (msg) => `DENIED:${msg}`,
-      'device',
+      { name: 'device', filesOwner: 'user' },
       { policy: { mode: () => 'strict', requestApproval: async () => 'allow' } },
     );
 
     expect(await gated('ls')).toBe('ran:ls');
-    expect(reviewCommand('ls', 'device').decision).toBe('allow');
+    expect(reviewCommand('ls', 'user').decision).toBe('allow');
     expect(await gated('printenv')).toContain('ran:');
     expect(await gated('sudo apt-get install nginx')).toContain('ran:');
 

@@ -3,11 +3,12 @@
  * expires (docs/research/harness/anthropic-sources.md §2). Armed only after a read with no write.
  */
 
-import type { ModelSpec, CacheRetention } from './types';
+import { formatModelSpec, modelSpecHead, parseModelSpec, type ModelSpec, type CacheRetention } from './types';
 import type { Usage } from '../usage';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ModelCallReport } from '../events/model-call';
+import type { CallAccount } from './quota';
 import { toKinuError } from '../obs/index';
 import * as v from 'valibot';
 import { isJsonObject, JsonObjectSchema, parseJsonObject, type JsonObject } from '../utils/json';
@@ -183,11 +184,11 @@ export class CacheWarmStore {
     if (body.length > CACHE_WARM_MAX_BODY_BYTES) return false;
     void this.sql`
       INSERT INTO cache_warm (actor_id, requests, refreshes, due_at, armed_requests, spec, model_id, retention, body)
-      VALUES (${this.actor.actorId}, 1, 0, ${input.at}, 1, ${input.modelSpec.provider}, ${input.modelSpec.modelId},
+      VALUES (${this.actor.actorId}, 1, 0, ${input.at}, 1, ${modelSpecHead(input.modelSpec)}, ${input.modelSpec.modelId},
               ${input.retention}, ${body})
       ON CONFLICT(actor_id) DO UPDATE SET
         refreshes = 0, due_at = ${input.at}, armed_requests = cache_warm.requests,
-        spec = ${input.modelSpec.provider}, model_id = ${input.modelSpec.modelId},
+        spec = ${modelSpecHead(input.modelSpec)}, model_id = ${input.modelSpec.modelId},
         retention = ${input.retention}, body = ${body}`;
 
     return true;
@@ -216,7 +217,7 @@ export class CacheWarmStore {
     if (retention !== 'short' && retention !== 'long' && retention !== 'none') return null;
 
     return {
-      modelSpec: { provider: row.spec, modelId: row.model_id },
+      modelSpec: parseModelSpec(`${row.spec}/${row.model_id}`),
       retention,
       body: parseJsonObject(row.body),
       refreshes: row.refreshes,
@@ -229,6 +230,17 @@ export class CacheWarmStore {
     void this.sql`
       UPDATE cache_warm SET refreshes = ${input.refreshes}, due_at = ${input.at}
       WHERE actor_id = ${this.actor.actorId}`;
+  }
+
+  /** When warms stop covering `lastRequestAt`'s entry: an owed warm's due plus the lead, else a TTL past the last. */
+  keptAliveUntil(lastRequestAt: number): number | null {
+    const row = this.row();
+
+    if (!row || row.armed_requests !== row.requests) return null;
+
+    if (row.due_at !== null) return row.due_at + CACHE_WARM_LEAD_MS;
+
+    return row.refreshes === 0 ? null : lastRequestAt + row.refreshes * (CACHE_WARM_TTL_MS - CACHE_WARM_LEAD_MS) + CACHE_WARM_TTL_MS;
   }
 
   /** Stop warming this prefix, keeping the counter. */
@@ -244,6 +256,7 @@ export class CacheWarmStore {
 export interface WarmOutcome {
   /** The provider's report for the warm request, `{}` when it said nothing. */
   readonly usage: Usage;
+  readonly account?: CallAccount | undefined;
 }
 
 /** The backend's half of warming: storage, wake arming, provider access, spend recording. */
@@ -265,6 +278,10 @@ export class CacheWarmingLane {
   /** A real provider request is starting. */
   noteRequest(): void {
     this.seams.store.noteRequest();
+  }
+
+  keptAliveUntil(lastRequestAt: number): number | null {
+    return this.seams.store.keptAliveUntil(lastRequestAt);
   }
 
   /** When this actor's next warm is owed, for the backend's wake fold. */
@@ -348,8 +365,8 @@ export class CacheWarmingLane {
       return null;
     }
 
-    const spec = `${due.modelSpec.provider}/${due.modelSpec.modelId}`;
-    this.seams.spend({ source: 'warming', usage: outcome.usage, spec, modelId: due.modelSpec.modelId });
+    const spec = formatModelSpec(due.modelSpec);
+    this.seams.spend({ source: 'warming', usage: outcome.usage, spec, modelId: due.modelSpec.modelId, account: outcome.account });
     const refreshes = due.refreshes + 1;
 
     const next = warmingPlan({

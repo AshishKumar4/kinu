@@ -85,7 +85,7 @@ function makeJournal(): HeadJournal {
 }
 
 interface RouteProbe {
-  readonly asked: Array<{ spec: string; effort: ReasoningEffort }>;
+  readonly asked: Array<{ spec: string; effort: ReasoningEffort | null }>;
 }
 
 /** Head-runtime deps around a fresh parent. The binder answers with the merge model, not `model`, so a merge

@@ -1387,6 +1387,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         end: await target.parityRows(),
         modelCallsAfter: (await this.parityModelCalls()).slice(callsBefore),
         failures: recording.emitted.filter((e) => e.code !== null).map((e) => ({ event: e.event, code: e.code ?? '', cause: e.cause ?? '' })),
+        seed: await (await target.fetch(`https://probe/agents/orchestrator-agent/${prepared.workspace}/get-messages`)).text(),
       });
     } finally {
       restore();

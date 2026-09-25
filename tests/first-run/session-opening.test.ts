@@ -72,7 +72,7 @@ test('a teardown that fails is reported beside the case\'s own failure, never in
       async runEvents() { return []; },
       async history() { return []; },
       async spend() {
-        return { total: { calls: 0, callsWithoutUsage: 0, unpricedCalls: 0, floorPricedCalls: 0, usage: { input: 0, output: 0 } },
+        return { total: { calls: 0, callsWithoutUsage: 0, unpricedCalls: 0, usage: { input: 0, output: 0 } },
           producers: [], missions: [], offTurnShare: null, coverage: { calls: 0, measured: 0, reported: 0, silent: [], partial: [] } };
       },
       async teardown() { throw new Error('DELETE did not answer'); },

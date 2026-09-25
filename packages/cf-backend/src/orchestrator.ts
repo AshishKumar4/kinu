@@ -58,11 +58,11 @@ import {
 } from "@kinu.run/core";
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
-import { TURN_CLAIM_FRAME, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
+import { TURN_CLAIM_FRAME, type AccountSpend, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from '@kinu.run/core';
-import { CacheWarmingLane, CacheWarmStore } from '@kinu.run/core';
+import { accountDeps, CacheWarmingLane, CacheWarmStore } from '@kinu.run/core';
 import {
   EvolutionEngine, initWorkspaceActorTable, WorkspaceActorDirectory, ChildActorOperationSchema, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,
   readActivityLog,
@@ -182,10 +182,10 @@ import {
   jobResult, listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
   type CancelWorkOutcome, type RetryOutcome,
-  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
+  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getProviderAccounts, getReasoningEffort,
   getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
   setAlwaysActiveSkills, setEvolutionConfig,
-  setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
+  setMctsConfig, setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView, type MctsConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   workModeUnderReview,
@@ -529,7 +529,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       resolveProfile: (input) => this.hostedActorProfile(input),
       reportModelCall: (report) => { this.reportModelCall(report); },
       modelOperations: this.modelOperations,
-      pricing: () => this.modelCatalog.pricing(),
+      pricing: (spec) => this.modelCatalog.pricing(spec),
+      hostedModel: (actor) => this.hostedModelOf(actor),
       broadcast: (actorId, event) => {
         // Stamped with the actor for the pane, and addressed to it so a subordinate's cards
         // stay off other sockets. An actor the directory no longer names has no pane.
@@ -595,6 +596,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // head unrestricted.
       profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
+      priceAs: (actor, spec) => this.priceHostedModel(actor.handle, spec),
       webSearch: () => this.ownedModelServices.getWebSearchProvider(),
       // The host's own provisioner, the one every hosted runtime is built over, so the node's
       // disclosed boundary and its real credential are the same fact.
@@ -645,6 +647,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // surface are framed from it.
       profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
+      priceAs: (actor, spec) => this.priceHostedModel(actor.handle, spec),
       suggestTitle: (mission) => this.suggestTitle(mission),
       taskProfile: (turn) => this.hostedTaskProfile(turn),
       dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
@@ -1213,7 +1216,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         if (provider?.warmCache === undefined) return null;
 
-        return { usage: await provider.warmCache(modelSpec.modelId, providers.deps, body) };
+        const deps = accountDeps(providers.deps, modelSpec.provider, modelSpec.account);
+
+        return provider.warmCache(modelSpec.modelId, deps, body);
       },
       spend: (report) => { this.reportModelCall(report); },
       now: () => Date.now(),
@@ -3909,6 +3914,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return getRunSummaries(this.eventRecorder, request?.cursor ?? null, request?.limit);
   }
 
+  async accountSpend(): Promise<AccountSpend[]> {
+    return this.eventRecorder.spendByAccount();
+  }
+
   /**
    * `steps` bounds only the telemetry sample; `spend` is summed in SQL over the whole log, never windowed.
    * `telemetry` is this agent's own turns; `spend` covers every producer in the workspace.
@@ -4849,6 +4858,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable() async setReasoningEffort(effort: ReasoningEffort | null, actor?: string) {
     return setReasoningEffort(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config, effort);
+  }
+
+  @callable() async getProviderAccounts(actor?: string) {
+    return getProviderAccounts(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config);
+  }
+
+  @callable() async setProviderAccount(provider: string, account: string | null, actor?: string) {
+    return setProviderAccount(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config, provider, account);
   }
 
   /** A hosted actor's own model pin, over the workspace's for its turns. */

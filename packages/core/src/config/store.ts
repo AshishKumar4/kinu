@@ -1,6 +1,7 @@
 // AgentConfigStore: typed accessors over the `actor_config` key/value table.
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import { nameOriginOf, type NameOrigin } from '../identity/naming';
+import { isAccountName, isProviderScope } from '../credentials/accounts';
 import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort';
 import { DEFAULT_ROLE_ID, isTierId, isValidRoleId, type RoleId, type TierId } from '../profiles/catalog';
 import {
@@ -23,6 +24,7 @@ export function parseRoleChangePolicy(value: string | null): 'allow' | 'approval
 /** Known config keys; each gets a typed getter/setter. */
 export const AGENT_CONFIG_KEYS = {
   model: 'model',
+  providerAccounts: 'provider_accounts',
   reasoningEffort: 'reasoning_effort',
   /** Prompt-cache prefix retention; unset means the provider default. */
   cacheRetention: 'cache_retention',
@@ -80,7 +82,6 @@ export const SHELL_APPROVAL_AUTHORITY_KEYS: readonly string[] = [
 ];
 
 export interface AgentConfigStore {
-  /** Read a single config value. Returns null if unset. */
   get(key: string): string | null;
   set(key: string, value: string): void;
   delete(key: string): void;
@@ -89,6 +90,9 @@ export interface AgentConfigStore {
 
   getModel(): string | null;
   setModel(spec: string): void;
+  getProviderAccounts(): Readonly<Record<string, string>>;
+  /** Null clears it: the profile's default applies. */
+  setProviderAccount(provider: string, account: string | null): void;
   getReasoningEffort(): ReasoningEffort | null;
   /** Null clears the setting: the tier's level applies again. */
   setReasoningEffort(effort: ReasoningEffort | null): void;
@@ -244,6 +248,15 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     return raw.split(',').map(parseApprovalGrant).filter((g) => g !== null);
   };
 
+  const storedProviderAccounts = (): Record<string, string> => Object.fromEntries(
+    (get(AGENT_CONFIG_KEYS.providerAccounts) ?? '').split(',').flatMap((pair) => {
+      const at = pair.indexOf('=');
+      const account = pair.slice(at + 1);
+
+      return at > 0 && isAccountName(account) ? [[pair.slice(0, at), account]] : [];
+    }),
+  );
+
   const writeGrants = (grants: readonly ApprovalGrant[]): void => {
     const value = [...new Set(grants.map(formatApprovalGrant))].join(',');
 
@@ -266,6 +279,17 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     getModel() { return get(AGENT_CONFIG_KEYS.model); },
     setModel(spec) { set(AGENT_CONFIG_KEYS.model, spec); },
+    getProviderAccounts: storedProviderAccounts,
+    setProviderAccount(provider, account) {
+      if (!isProviderScope(provider)) throw new Error(`Invalid provider id: ${provider}`);
+
+      if (account !== null && !isAccountName(account)) throw new Error(`Invalid account name: ${account}`);
+      const next = { ...storedProviderAccounts(), [provider]: account };
+      const pairs = Object.entries(next).flatMap(([id, name]) => (name === null ? [] : [`${id}=${name}`])).sort();
+
+      if (pairs.length === 0) remove(AGENT_CONFIG_KEYS.providerAccounts);
+      else set(AGENT_CONFIG_KEYS.providerAccounts, pairs.join(','));
+    },
     getReasoningEffort() {
       const effort = get(AGENT_CONFIG_KEYS.reasoningEffort);
 

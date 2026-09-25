@@ -2,7 +2,6 @@
 // refresh token, so no client secret can be shared. The verifier never leaves run storage.
 import * as v from 'valibot';
 import { JsonObjectSchema } from '../utils/json';
-import { base64Url } from '../utils/crypto';
 
 const CLOUDFLARE_AUTHORIZE_URL = 'https://dash.cloudflare.com/oauth2/auth';
 
@@ -21,23 +20,6 @@ export const CLOUDFLARE_DEPLOY_SCOPES: readonly string[] = [
   'secrets_store:write', 'access:write', 'zone:read', 'dns_records:edit',
   'offline_access',
 ];
-
-export interface PkcePair {
-  readonly verifier: string;
-  readonly challenge: string;
-}
-
-const VERIFIER_BYTES = 32;
-
-export async function createPkcePair(): Promise<PkcePair> {
-  const bytes = new Uint8Array(VERIFIER_BYTES);
-
-  crypto.getRandomValues(bytes);
-  const verifier = base64Url(bytes);
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
-
-  return { verifier, challenge: base64Url(new Uint8Array(digest)) };
-}
 
 export interface AuthorizeRequest {
   readonly clientId: string;

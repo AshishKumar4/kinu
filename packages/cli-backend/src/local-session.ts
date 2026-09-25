@@ -9,7 +9,7 @@ import type { ActorHandle } from '@kinu.run/core';
 import { resolve } from 'node:path';
 import {
   generateText, stepCountIs,
-  type LanguageModel, type ModelMessage, type ToolSet,
+  type LanguageModel, type ToolSet,
 } from 'ai';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -77,7 +77,7 @@ import { TierIdSchema,
   buildActorTools, buildMcpToolSet, buildSystemPromptSync, currentDateForPrompt,
   type ActorToolsetDeps,
   activePromptSectionOverrides,
-  turnProvenanceForMetadata,
+  turnReasonForMetadata, type TurnReason,
   runChat, type CountableRequest,
   parseModelSpec, agentAffinityKey,
   normalizeUsage,
@@ -92,7 +92,7 @@ import { TierIdSchema,
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
   createReportCodemodeProvider, REPORT_TOOL, type ReportToolDeps,
   MissionGovernor,
-  DynamicContextLedger, turnLocalContextMessage, unverifiedInstructionsMessage,
+  DynamicContextLedger, renderUnverifiedInstructions,
   observeSystemPromptHash,
   type DynamicContext,
   createReleaseStore, initReleaseTables, releaseSqlFromExec,
@@ -135,9 +135,9 @@ import { TierIdSchema,
   decodeJsonValue, projectJsonValue, JsonValueSchema,
   agentSelfHost, createAgentSelfProvider,
   cancelBackgroundJob, jobResult, listBackgroundJobs,
-  getAlwaysActiveSkills, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
+  getAlwaysActiveSkills, getProviderAccounts, workspaceSpend, type WorkspaceSpend, callAccountOf, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
   getShellApprovalGrants, revokeShellApprovalGrants, gatedGrants, type ApprovalGrant,
-  setAlwaysActiveSkills, setModel, setReasoningEffort, setShellApprovalMode,
+  setAlwaysActiveSkills, setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   getEvolutionChangelog, markChangelogSeen, pickAlternateTake,
   type EvolutionChangelogView,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
@@ -209,7 +209,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     actor: input.runtime.actor,
     storage: input.runtime.storage,
     // Null until the pricing lookup lands; the ledger then blends and says so.
-    pricing: () => input.session().modelPricing(),
+    pricing: (spec) => input.session().modelPricing(spec),
     onExhausted: ({ error: _error, ...refusal }) => { input.session().reportBudgetRefusal(refusal); },
   });
 
@@ -481,7 +481,8 @@ export class LocalAgentSession implements BackendHost {
     this.cwd = opts.cwd ?? this.rt.cwd ?? process.cwd();
     this.workspaceTitleSource = opts.workspaceTitle ?? null;
     this.fallbackModel = opts.model ?? null;
-    this.modelResolver = opts.modelResolver ?? null;
+    this.modelResolver = opts.modelResolver?.withAccountChoice?.((provider) => this.accountChoice(provider))
+      ?? opts.modelResolver ?? null;
     this.rt.setModelForRoute?.((resolution) => this.localRouteLlm(resolution));
 
     if (!opts.model && !this.modelResolver) {
@@ -884,6 +885,18 @@ export class LocalAgentSession implements BackendHost {
     }, spec);
   }
 
+  getProviderAccounts(): ReturnType<typeof getProviderAccounts> {
+    return getProviderAccounts(this.config);
+  }
+
+  workspaceSpend(): WorkspaceSpend {
+    return workspaceSpend({ events: this.eventRecorder, sql: this.rt.storage.sql, actor: this.rt.actor });
+  }
+
+  setProviderAccount(provider: string, account: string | null): ReturnType<typeof setProviderAccount> {
+    return setProviderAccount(this.config, provider, account);
+  }
+
   /** The stored setting, never the claimed tier's own effort. */
   getReasoningEffort(): ReturnType<typeof getReasoningEffort> {
     return getReasoningEffort(this.config);
@@ -902,6 +915,10 @@ export class LocalAgentSession implements BackendHost {
 
   listModelProviders() {
     return this.modelResolver?.listProviders() ?? Promise.resolve([]);
+  }
+
+  private accountChoice(provider: string): string | undefined {
+    return this.config.getProviderAccounts()[provider] ?? this.actorSession.profileInputs?.envelope.catalog.accounts?.[provider];
   }
 
   listAvailableModels() {
@@ -1696,26 +1713,10 @@ export class LocalAgentSession implements BackendHost {
     const systemPrompt = buildSystemPromptSync(this.rt, systemPromptOptions);
     this.recordSystemPromptHash(systemPrompt);
 
-    // Live state rides the dynamic-context ledger, re-read every step; turn-local state rides right before the
-    // turn's input. Neither enters durable history, so the prefix stays cacheable.
-
-    // Provenance flips when a background job lands; in the system prompt it would rewrite the cached
-    // prefix (prompting/volatile-context.ts).
-    const turnLocal: Parameters<typeof turnLocalContextMessage>[0] = {
-      provenance: turnProvenanceForMetadata(item.metadata),
-    };
-
-    if (activeSkills) turnLocal.activeSkills = activeSkills;
-    const turnLocalMsg = turnLocalContextMessage(turnLocal);
-
-    // Unapproved instruction bytes ride as sealed reference material, before the turn-local message so
-    // activation reasons stay nearest the request.
-    const unverifiedMsg = unverifiedInstructionsMessage(
-      activeSkills ? { agentsMd, activeSkills } : { agentsMd },
-    );
-
-    const turnLocalMsgs = [unverifiedMsg, turnLocalMsg]
-      .filter((msg): msg is ModelMessage => msg !== null);
+    // Why the turn runs and the unapproved instruction files ride the dynamic-context ledger, out of the cached
+    // prefix: provenance flips when a background job lands.
+    const turn = turnReasonForMetadata(item.metadata);
+    const instructions = renderUnverifiedInstructions(activeSkills ? { agentsMd, activeSkills } : { agentsMd });
 
     const cache = this.cacheIdentity();
 
@@ -1729,8 +1730,8 @@ export class LocalAgentSession implements BackendHost {
     const historyLength = this.actorSession.history.length;
     const measured = measureCompactionTrigger(this.compactionState, cache.sessionKey, historyLength);
     // Awaited once per turn: the sync catalog reads answer from a static stand-in while the lookup is
-    // in flight, which measured a 1M-window model against 128k (#20).
-    const window = await this.modelCatalog.resolved();
+    // in flight, which measured a 1M-window model against 128k (#20). The fallbacks' rates price their steps.
+    const [window] = await Promise.all([this.modelCatalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model))]);
     const contextWindow = window.contextWindow;
 
     const liveTurn: ActorExecutionInput['chat'] = {
@@ -1747,7 +1748,6 @@ export class LocalAgentSession implements BackendHost {
       attachments: {
         accepts: this.modelCatalog.acceptedMedia(), vfs: this.rt.storage.vfs, budget: this.actorSession.orchestrator.acc.context,
       },
-      turnLocal: turnLocalMsgs.length > 0 ? turnLocalMsgs : undefined,
       tools: turnTools,
       transformTrigger: measured.trigger,
       cache,
@@ -1766,6 +1766,18 @@ export class LocalAgentSession implements BackendHost {
     if (resolver) {
       liveTurn.countInputTokens = (request: CountableRequest) =>
         resolver.countInputTokens(this.effectiveModelSpec(), request);
+
+      const normalize = (spec: string) => this.profiles().normalizeSpec(spec);
+      liveTurn.modelSpec = normalize(profile.tier.model);
+      liveTurn.credentialOf = (spec) => resolver.credentialFor(spec);
+      liveTurn.fallbacks = profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
+        spec: normalize(spec),
+        bind: () => {
+          const { provider } = parseModelSpec(normalize(spec));
+
+          return { model: resolver.resolveModel(spec), provider, providerOptions: reasoningEffortOptions(reasoningEffort, provider) };
+        },
+      }));
     }
 
     return {
@@ -1773,7 +1785,8 @@ export class LocalAgentSession implements BackendHost {
         loopVersion: await this.rt.identity.scaffold.version(),
         chat: liveTurn,
         extensions: [this.compactionExtension],
-        dynamic: (requestProfile, tools) => this.dynamicContextSnapshot(memoryTail, requestProfile, tools),
+        dynamic: (requestProfile, tools) => this.dynamicContextSnapshot(memoryTail, requestProfile, tools, { turn, activeSkills }),
+        instructions,
         scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
       },
       sessionKey: cache.sessionKey,
@@ -2388,12 +2401,17 @@ export class LocalAgentSession implements BackendHost {
 
   /** Live state for one model step (DO dynamicContextSnapshot peer). Nothing clock-derived: a
    *  wall-clock field would re-fingerprint the block every request. */
-  private dynamicContextSnapshot(memoryTail: string | undefined, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext {
+  private dynamicContextSnapshot(
+    memoryTail: string | undefined, profile: ResolvedTurnProfile, tools: ToolSet,
+    turnOf: { readonly turn: TurnReason; readonly activeSkills: ActiveSkillSet | undefined },
+  ): DynamicContext {
     return collectDynamicContext({
       rt: this.rt,
       stores: this.stores,
       profile,
       tools,
+      turn: turnOf.turn,
+      ...(turnOf.activeSkills !== undefined && { activeSkills: turnOf.activeSkills }),
       memoryTail,
       missingCapabilities: this.mcpUnavailable,
       subordinateDelegates: () => subordinateDelegatesOf(this.teamDeps?.snapshot() ?? []),
@@ -2410,8 +2428,8 @@ export class LocalAgentSession implements BackendHost {
   // Ports resolved at call time by `createLocalOrchestration`, which runs before this session exists.
 
   /** Same catalog session as the context window, so estimate and ledger read one rate. */
-  modelPricing(): ModelPricing | null {
-    return this.modelCatalog.pricing();
+  modelPricing(spec?: string): ModelPricing | null {
+    return this.modelCatalog.pricing(spec);
   }
 
   reportModelCall(report: ModelCallReport): void {
@@ -2645,6 +2663,7 @@ export class LocalAgentSession implements BackendHost {
           source: resolution.source,
           spec: resolution.model,
           usage: normalizeUsage(result.usage),
+          account: callAccountOf(result.response ?? {}),
         };
 
         const modelId = result.response?.modelId;

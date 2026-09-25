@@ -43,8 +43,8 @@ const logger: KinuExtension = {
   turn assembly, before streaming. `ctx` carries `sessionKey`, the durable
   `messages`, `system`, `contextWindow`, optional `providerReportedTokens`,
   `trigger: 'auto' | 'force'` and an optional `abortSignal`. It chains. A
-  throwing extension is logged and skipped. It never sees turn-local or
-  per-step dynamic context.
+  throwing extension is logged and skipped. It never sees the runtime
+  context the step weaves in (dynamic context, the unapproved instructions).
 
 ## Wiring
 

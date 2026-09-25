@@ -5,7 +5,6 @@ import * as v from 'valibot';
 import { RunEventRecorder } from '../src/events/recorder';
 import { WORKSPACE_RUN_ID } from '../src/events/model-call';
 import { buildModelCallEvent } from '../src/events/model-call-event';
-import type { ModelPricing } from '../src/providers/types';
 import { HeadJournal } from '../src/heads/journal';
 import { workspaceSpend } from '../src/read-models/workspace-spend';
 import { MissionGovernor } from '../src/mission-budget';
@@ -370,42 +369,6 @@ describe('workspaceSpend', () => {
     // The real run beside it distinguishes "excluded" from "query failed".
     expect(events.listRunsBefore(null, RUN_LIST_LIMIT).map((r) => r.runId)).toEqual(['run-1']);
   });
-
-  test('a 1h-retention write reaches the total as a FLOOR, and an exact call does not', () => {
-    const { ws, events, actor } = rig();
-    // models.dev rates, verbatim. One cache-write rate, so the 1h call is charged at 5m and is short.
-    const pricing: ModelPricing = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
-    const SPEC = 'anthropic/claude-sonnet-4-5';
-
-    // Through the real producer, so a dropped marker fails here.
-    const call = (cacheWrite1h?: number) => buildModelCallEvent({
-      source: 'judge',
-      spec: SPEC,
-      usage: cacheWrite1h === undefined
-        ? { input: 3_084, output: 500, cacheRead: 2_048, cacheWrite: 1_024 }
-        : { input: 3_084, output: 500, cacheRead: 2_048, cacheWrite: 1_024, cacheWrite1h },
-    }, { effectiveSpec: SPEC, pricing });
-
-    events.emit('run-1', call());
-    events.emit('run-1', call(1_000));
-
-    const spend = workspaceSpend({ events, sql: ws.sql, actor });
-    const judge = spend.producers.find((p) => p.source === 'judge');
-    expect(judge?.unpricedCalls).toBe(0);
-    expect(judge?.usd).toBeCloseTo(2 * (12 * 3 + 2_048 * 0.3 + 1_024 * 3.75 + 500 * 15) / 1_000_000, 12);
-    // One estimated call is enough to make the sum a floor; the count says how many.
-    expect(judge?.floorPricedCalls).toBe(1);
-    expect(spend.total.floorPricedCalls).toBe(1);
-  });
-
-  test('a workspace whose writes were all short-retention reports no floor at all', () => {
-    const { ws, events, actor } = rig();
-    // Explicit zero: a presence check could get this wrong.
-    step(events, { input: 3_084, output: 500, cacheRead: 2_048, cacheWrite: 1_024, cacheWrite1h: 0 }, 0.02);
-    const spend = workspaceSpend({ events, sql: ws.sql, actor });
-    expect(spend.total.floorPricedCalls).toBe(0);
-    expect(spend.total.usd).toBeCloseTo(0.02, 10);
-  });
 });
 
 describe('workspaceSpend — the breakdown', () => {
@@ -471,5 +434,37 @@ describe('workspaceSpend — the breakdown', () => {
 
     // No `mission_budget` table here; an unbudgeted workspace must not read as broken.
     expect(workspaceSpend({ events, sql: ws.sql, actor }).missions).toEqual([]);
+  });
+});
+
+describe('workspaceSpend — by the account that paid', () => {
+  test('each account sums its own calls, keeps the newest quota it reported, and calls with no account come last', () => {
+    const { ws, events, actor } = rig();
+
+    const work = (at: number, remaining: number) => ({
+      provider: 'anthropic', name: 'work',
+      quota: { at, windows: [{ measure: 'requests', limit: 50, remaining, resetsAt: at + 60_000 }] },
+    });
+
+    events.emit('run-1', { type: 'step_finish', stepIndex: 0, usage: { input: 900, output: 100 }, usd: 0.02, account: work(1_000, 40) });
+    events.emit('run-1', { type: 'step_finish', stepIndex: 1, usage: { input: 1_900, output: 100 }, usd: 0.03, account: work(2_000, 12) });
+    events.emit('run-1', { type: 'step_finish', stepIndex: 2, usage: { input: 50, output: 5 }, account: { provider: 'anthropic', name: 'main' } });
+    events.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'judge', usage: { input: 10, output: 1 } });
+    events.emit(WORKSPACE_RUN_ID, buildModelCallEvent(
+      { source: 'compaction', usage: { input: 300, output: 20 }, spec: 'anthropic@work/m', account: { provider: 'anthropic', name: 'work' } },
+      { effectiveSpec: null, pricing: null },
+    ));
+
+    const { accounts, total } = workspaceSpend({ events, sql: ws.sql, actor });
+
+    expect(accounts.map((row) => [row.provider, row.account, row.calls])).toEqual([
+      ['anthropic', 'work', 3], ['anthropic', 'main', 1], [null, null, 1],
+    ]);
+    expect(accounts[0]?.usage).toEqual({ input: 3_100, output: 220 });
+    expect(accounts[0]?.usd).toBeCloseTo(0.05, 10);
+    expect(accounts[0]?.unpricedCalls).toBe(1);
+    expect(accounts[0]?.quota?.windows).toEqual([{ measure: 'requests', limit: 50, remaining: 12, resetsAt: 62_000 }]);
+    expect(accounts[1]?.quota).toBeUndefined();
+    expect(accounts.reduce((calls, row) => calls + row.calls, 0)).toBe(total.calls);
   });
 });

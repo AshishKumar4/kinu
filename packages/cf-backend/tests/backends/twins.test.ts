@@ -23,6 +23,7 @@ const SHARED = 'driven by a shared case';
 /** Every twin, classified: a shared case drives it, or the reason each backend answers alone. */
 const TWINS = {
   setReasoningEffort: SHARED, getReasoningEffort: SHARED, setModel: SHARED, getStoredModelSpec: SHARED,
+  getProviderAccounts: SHARED, setProviderAccount: SHARED,
   setRole: SHARED, getShellApprovalMode: SHARED, setShellApprovalMode: SHARED,
   getShellApprovalGrants: SHARED, revokeShellApprovalGrants: SHARED,
   setAlwaysActiveSkills: SHARED, getAlwaysActiveSkills: SHARED,

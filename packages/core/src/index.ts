@@ -410,7 +410,7 @@ export {
 // Chat engine
 export {
   runChat, INTERRUPTED_TURN, isRateLimitedTurnError,
-  type ChatEvent, type ChatOptions, type ChatToolOutput, type ObservedCall, type ObserveStream,
+  type ChatEvent, type ChatFallback, type ChatOptions, type ChatToolOutput, type ObservedCall, type ObserveStream,
 } from './chat';
 
 // Extension seam (public plugin API)
@@ -792,7 +792,6 @@ export {
   currentDateForPrompt,
   FALLBACK_PURPOSE,
   renderUnverifiedInstructions,
-  unverifiedInstructionsMessage,
   WORKSPACE_INSTRUCTIONS_HEADER,
   type UnverifiedInstructions,
   type AssignedTurnFraming,
@@ -802,6 +801,7 @@ export {
 export {
   splitPromptSections,
   DYNAMIC_CONTEXT_OPEN_TAG,
+  WORKSPACE_INSTRUCTIONS_TAG,
   SOUL_SECTION_TITLE,
   type PromptSection,
 } from './prompting/sections';
@@ -816,12 +816,12 @@ export {
   type ToolDefsLike,
 } from './context-meter';
 
-export { isWorkMode, WorkModeSchema, type TurnProvenance, type WorkMode } from './types/turn';
+export { isWorkMode, WorkModeSchema, type TurnReason, type WorkMode } from './types/turn';
 
 export {
   compilePromptSurface,
   executorIsSelectable,
-  turnProvenanceForMetadata,
+  turnReasonForMetadata,
   workModeForTurnMetadata,
   uniqueBuiltinTools,
   uniqueExternalTools,
@@ -872,10 +872,7 @@ export {
   searchDelegates,
   observeSystemPromptHash,
   renderDynamicContextBlock,
-  renderTurnLocalContext,
-  turnLocalContextMessage,
   DYNAMIC_CONTEXT_HEADER,
-  TURN_CONTEXT_HEADER,
   type DynamicApproval,
   type ActiveRoster,
   type DynamicContext,
@@ -883,7 +880,6 @@ export {
   type DynamicJob,
   type DynamicTask,
   type MissingCapability,
-  type TurnLocalContext,
 } from './prompting/volatile-context';
 
 export {
@@ -894,8 +890,8 @@ export {
   markLastToolForAnthropicCache,
   promptCacheOptions,
   promptCachePlan,
+  promptCacheWarm,
   resolvePromptCacheStrategy,
-  ANTHROPIC_MAX_BREAKPOINTS,
   type CacheBreakpointInput,
   type CacheBreakpointPlan,
   type PromptCachePlan,
@@ -977,7 +973,7 @@ export {
   initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
   purgeUnclaimedAlternateTakes, unclaimedAlternateTakeIds,
   listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
-  recordBranchTakeSet, buildTakeContinuationPrompt, takeEvidence,
+  recordBranchTakeSet, buildTakeContinuationPrompt, takeEvidence, AlternateTakeCandidateSchema,
   type AlternateTakeCandidate, type AlternateTakeSet, type AlternateTakeSource,
   type TakePickRecord, type TakePickOutcome,
 } from './mcts/takes';
@@ -1121,19 +1117,18 @@ export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict'
 export {
   DefaultExecutionRouter,
   createInlineExecutor,
-  withApprovalGatedShell, gateProviderExec,
+  withApprovalGatedShell, gateProviderExec, shellCwd, type ShellReach,
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError, SandboxPending,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
   explainNativeToolReferenceError,
-  devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
   deviceToolchainAnswer, freshDeviceToolchain,
   connectedDevices, deviceByName, deviceFleetAsk,
   effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason,
   sandboxReasonFix, sandboxCause, describeGpuNodes,
-  DEVICE_PRESENCE_CONFIG_KEY, DEVICE_TOOLCHAIN_TTL_MS,
+  DEVICE_TOOLCHAIN_TTL_MS,
   DEVICE_TIERS, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS,
-  type DeviceStatus, type DevicePresence, type DevicePresenceStore,
+  type DeviceStatus,
   type DeviceToolchain, type DeviceFleet, type DeviceFleetEntry,
   type DeviceTier, type DeviceMode, type DeviceSandboxStatus,
   type DeviceSandboxCapability, type DeviceSandboxReason,
@@ -1353,6 +1348,7 @@ export {
   type ModelOperationOutcome,
   type ModelOperationPhase,
   type ModelOperationSink,
+  type AccountSpend,
   type SpendSource,
   type SpendTally,
   type DeferredRunEvent,
@@ -1411,6 +1407,16 @@ export {
   validateCredential,
   validateCredentialKey,
 } from './credentials/validate';
+
+export {
+  MAIN_ACCOUNT,
+  accountCredentialKey,
+  accountOf,
+  baseCredentialKey,
+  isAccountName,
+  splitAccount,
+  storedAccounts,
+} from './credentials/accounts';
 
 // Plan review
 export {
@@ -1487,6 +1493,7 @@ export {
 // Safety
 export {
   reviewCommand,
+  createShellSession,
   formatApproval,
   gatedGrants,
   formatApprovalGrant, holdsGrant,
@@ -1500,6 +1507,9 @@ export {
   type ApprovalRuleHit,
   type ApprovalResult,
   type ApprovalHarm,
+  type FilesOwner,
+  type GatedExecutor,
+  type ShellSession,
   type ApprovalGrant,
   type ShellApprovalRequest,
   type ShellApprovalOutcome,
@@ -1616,7 +1626,7 @@ export { nanoid } from './utils/nanoid';
 
 export { abortCause } from './utils/abort';
 
-export { hmacSha256Hex, randomToken, timingSafeEqual } from './utils/crypto';
+export { createPkcePair, hmacSha256Hex, randomToken, timingSafeEqual, type PkcePair } from './utils/crypto';
 
 export { labelSigner, type LabelSigner, type LabelSignerEnv } from './utils/label-signer';
 
@@ -1925,6 +1935,11 @@ export type { RunListEntry, RunSummary } from './read-models/runs';
 
 export { workspaceSpend } from './read-models/workspace-spend';
 
+export {
+  AccountSpendSchema, AccountUsageSchema, mergeAccountSpend, readAccountCredits, readAccountUsage,
+  type AccountCreditSource, type AccountLedgerSource, type AccountUsage,
+} from './read-models/account-usage';
+
 export type {
   ProducerSpend, SpendCoverage, WorkspaceSpend, WorkspaceSpendDeps,
 } from './read-models/workspace-spend';
@@ -2069,10 +2084,10 @@ export type {
 } from './read-models/background-jobs';
 
 export {
-  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
+  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getProviderAccounts, getReasoningEffort,
   getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
   getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
-  setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
+  setMctsConfig, setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
 } from './read-models/config-plane';
 
 export type {
@@ -2142,7 +2157,7 @@ export {
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
   type FixedTierSource,
   DEFAULT_ROLE_ID,
-  buildProviderCatalogSnapshot, ProviderListingCache,
+  providerListingOf, providerSnapshotOf, ProviderListingCache,
   type ProviderListing, type ProviderCacheOutcome, type ProviderSnapshotRead,
   changeRoleAsOwner,
   type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,

@@ -1,7 +1,7 @@
 /**
- * Approval gate: 'allow' | 'warn' | 'gate' (owner decides) | 'deny' (never, on any executor).
- * A decision depends on rule and executor; binary-scoped rules fire only on invoked binaries, falling back to
- * the whole line under an interpreter. Guardrail against accidents, not an adversary model.
+ * Approval gate: 'allow', 'warn', 'gate' (the owner decides) or 'deny' (never). A decision depends on the rule and
+ * whose files the executor holds; binary-scoped rules fire only on invoked binaries, or on the whole line under an
+ * interpreter. Against accidents, not an adversary.
  */
 
 import { CODE_WORK_DID_NOT_START, diagnostics, KinuError, type ErrorCode } from '../obs/index';
@@ -11,8 +11,41 @@ export type ApprovalDecision = 'allow' | 'warn' | 'gate' | 'deny';
 /** Where a rule's harm lands: 'local' (the executing machine only) or 'reaches_out' (leaves the executor). */
 export type ApprovalHarm = 'local' | 'reaches_out';
 
-/** Executors whose local state is the agent's own; local-harm rules are not gated there. Opt-in so new executors fail closed. */
-const AGENT_OWN_EXECUTORS: ReadonlySet<string> = new Set(['workspace', 'sandbox']);
+/** 'agent': its own disposable state, where local harm is not gated; 'user': anything else. Declared, never read
+ *  from a name. */
+export type FilesOwner = 'agent' | 'user';
+
+export interface GatedExecutor {
+  readonly name: string;
+  readonly filesOwner: FilesOwner;
+  readonly shellSession?: ShellSession;
+}
+
+export interface ShellCwd {
+  readonly home: string;
+  readonly cwd: string;
+  readonly mayBeUsers: boolean;
+}
+
+export interface ShellSession {
+  readonly home: string;
+  readonly userRoots: () => readonly string[];
+  /** Behind earlier calls, so a review sees their `cd`s. */
+  serial<R>(call: () => Promise<R>): Promise<R>;
+  /** Where a call without its own `cwd` starts. */
+  at(): Promise<ShellCwd>;
+  /** A foreground call without a `cwd` exited. */
+  ran(command: string, exitCode: number): void;
+}
+
+export interface ShellSessionOptions {
+  readonly home: string;
+  readonly userRoots: () => readonly string[];
+  /** False when the box starts every call at home. */
+  readonly keepsCwd: boolean;
+  /** Its cwd as an earlier process left it; null: unreadable. */
+  readonly stored?: () => Promise<string | null>;
+}
 
 export interface ApprovalRuleHit {
   readonly decision: ApprovalDecision;
@@ -73,10 +106,15 @@ interface Rule {
   name: string;
   why: string;
   harm: ApprovalHarm;
-  /** Binaries this rule is about; when present the rule fires only if one is invoked ({@link invokedBinaries}).
-   *  Absent: the pattern matches the whole line. Deny rules carry none. */
+  /** When present, the rule fires only if one of these is invoked; absent, on the whole line. Deny rules carry none. */
   binaries?: readonly string[];
 }
+
+/** Long options taking the next word as a value (git.c). */
+const GIT_VALUE_OPTION = '(?:git-dir|work-tree|namespace|config-env|super-prefix)';
+
+/** `git` and its global options; each word parses one way, so a failed match stays linear. */
+const GIT = String.raw`\bgit(?:\s+(?:(?:-[Cc]|--${GIT_VALUE_OPTION})\s+\S+|-[pP]|--(?!${GIT_VALUE_OPTION}(?:\s|$))[\w-]+(?:=\S+)?))*\s+`;
 
 /** Every ecosystem's publish command. `binaries` gates whether the rule fires, so extend both together. */
 const PACKAGE_PUBLISH = new RegExp(
@@ -91,7 +129,7 @@ const PACKAGE_PUBLISH = new RegExp(
     .join('|'),
 );
 
-/** Default rule set, resolved per executor by {@link reviewCommand}. `harm: 'local'` claims damage stops at the machine. */
+/** Default rules, resolved by {@link reviewCommand}. `harm: 'local'`: damage stops at the machine. */
 const RULES: Rule[] = [
   {
     pattern: /\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*(?:\s+(?:--[^\s]+|-[a-zA-Z]+))*\s+\/+(?=\s|$|[;&|])/,
@@ -178,12 +216,44 @@ const RULES: Rule[] = [
     binaries: ['rm'],
   },
   {
-    pattern: /\bgit\s+reset\s+--hard/,
+    pattern: new RegExp(`${GIT}reset\\s+--hard`),
     decision: 'gate',
     name: 'git-reset-hard',
     why: 'Discards local changes irreversibly.',
     harm: 'local',
     binaries: ['git'],
+  },
+  {
+    pattern: new RegExp(`${GIT}checkout(?:\\s+\\S+)*\\s+(?:--|\\.)(?:\\s|$)|${GIT}restore\\b(?:(?![^;|&\\n]*--staged)|[^;|&\\n]*--worktree)`),
+    decision: 'gate',
+    name: 'git-discard-changes',
+    why: 'Discards uncommitted changes to tracked files.',
+    harm: 'local',
+    binaries: ['git'],
+  },
+  {
+    pattern: new RegExp(`${GIT}clean\\b[^;|&\\n]*\\s(?:-[a-zA-Z]*f|--force)`),
+    decision: 'gate',
+    name: 'git-clean',
+    why: 'Deletes untracked files.',
+    harm: 'local',
+    binaries: ['git'],
+  },
+  {
+    pattern: /\bfind\b[^;|&\n]*\s-delete\b/,
+    decision: 'gate',
+    name: 'find-delete',
+    why: 'Deletes every file the search matches.',
+    harm: 'local',
+    binaries: ['find'],
+  },
+  {
+    pattern: /\brsync\b[^;|&\n]*\s--del(?:ete[\w-]*)?\b/,
+    decision: 'gate',
+    name: 'rsync-delete',
+    why: 'Deletes destination files the source lacks.',
+    harm: 'local',
+    binaries: ['rsync'],
   },
   {
     pattern: /\bdocker\s+(rm\s+-f|system\s+prune)/,
@@ -194,7 +264,7 @@ const RULES: Rule[] = [
     binaries: ['docker'],
   },
   {
-    pattern: /\bgit\s+push\b[^;|&]*?(?:\s--force\b|\s-f\b)/,
+    pattern: new RegExp(`${GIT}push\\b[^;|&]*?(?:\\s--force\\b|\\s-f\\b)`),
     decision: 'gate',
     name: 'git-force-push',
     why: 'Force-push rewrites history on a remote nobody here owns.',
@@ -280,7 +350,7 @@ function dominant(hits: readonly ApprovalRuleHit[]): ApprovalDecision {
 /** Prefix words that keep the next word in command position. */
 const COMMAND_PREFIXES: ReadonlySet<string> = new Set(['sudo', 'command', 'exec', 'time', 'nice']);
 
-/** Programs that run another program from an argument; binary-scoped rules fall back to whole-line matching under them. */
+/** Programs that run an argument as a program; under them, binary-scoped rules match the whole line. */
 const INLINE_INTERPRETERS: ReadonlySet<string> = new Set([
   'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish',
   'python', 'python3', 'perl', 'ruby', 'node', 'bun', 'deno',
@@ -298,10 +368,8 @@ interface CommandScan {
   readonly unquoted: string;
 }
 
-/**
- * One quote-aware pass: programs in command position (after env assignments and prefix words) and the
- * unquoted text. Over-collection is safe; under-collection is not.
- */
+/** One quote-aware pass: programs in command position (after env assignments and prefix words) and the unquoted
+ *  text. Over-collecting is safe. */
 function scanCommand(command: string): CommandScan {
   const invoked = new Set<string>();
   let unquoted = '';
@@ -351,8 +419,283 @@ function scanCommand(command: string): CommandScan {
   return { invoked, unquoted };
 }
 
-/** Review a command for its executor. `executor` has no default so no caller silently picks a trust tier. */
-export function reviewCommand(command: string, executor: string): ApprovalResult {
+/** null: the shell would expand it. */
+type ShellWord = string | null;
+
+/** `after`: the separator before it, `;` for a newline or parenthesis. */
+interface ShellStep {
+  readonly after: string;
+  readonly words: readonly ShellWord[];
+}
+
+const EXPANDING: ReadonlySet<string> = new Set(['$', '`', '*', '?', '[']);
+
+const STEP_BREAKS: ReadonlySet<string> = new Set([';', '\n', '(', ')']);
+
+/** A subshell's `cd` counts as the session's, which only asks more. */
+function shellSteps(command: string): ShellStep[] {
+  const steps: ShellStep[] = [];
+  let words: ShellWord[] = [];
+  let after = '';
+  let word = '';
+  let started = false;
+  let expands = false;
+  let quote: string | null = null;
+
+  const endWord = () => {
+    if (started) words.push(expands ? null : word);
+    word = '';
+    started = false;
+    expands = false;
+  };
+
+  const endStep = (next: string) => {
+    endWord();
+
+    if (words.length > 0) steps.push({ after, words });
+    words = [];
+    after = next;
+  };
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command.charAt(i);
+
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      else if (quote === '"' && (ch === '$' || ch === '`')) { expands = true; word += ch; }
+      else word += ch;
+      continue;
+    }
+
+    const pair = command.slice(i, i + 2);
+
+    if (ch === '"' || ch === "'") { quote = ch; started = true; }
+    else if (ch === '\\') { word += command.charAt(++i); started = true; }
+    else if (ch === ' ' || ch === '\t') endWord();
+    else if (pair === '&&' || pair === '||') { endStep(pair); i++; }
+    else if (STEP_BREAKS.has(ch)) endStep(';');
+    else if (ch === '|' || ch === '&') endStep(ch);
+    else { word += ch; started = true; expands ||= EXPANDING.has(ch); }
+  }
+
+  endStep('');
+
+  return steps;
+}
+
+function normalizedPath(path: string): string {
+  const parts: string[] = [];
+
+  for (const part of path.split('/')) {
+    if (part === '..') parts.pop();
+    else if (part !== '' && part !== '.') parts.push(part);
+  }
+
+  return `/${parts.join('/')}`;
+}
+
+function shellPath(word: ShellWord, cwd: string, home: string): string | null {
+  if (word === null) return null;
+
+  if (word === '~' || word.startsWith('~/')) return normalizedPath(home + word.slice(1));
+
+  if (word.startsWith('~')) return null;
+
+  return normalizedPath(word.startsWith('/') ? word : `${cwd}/${word}`);
+}
+
+function underRoots(path: string, roots: readonly string[]): boolean {
+  return roots.some((root) => path === root || path.startsWith(`${root}/`));
+}
+
+/** null: unknown; `undefined`: not a `cd`. */
+function cdTarget(step: ShellStep, cwd: string, home: string): string | null | undefined {
+  const [verb, ...args] = step.words;
+
+  if (verb === 'popd') return null;
+
+  if (verb !== 'cd' && verb !== 'pushd') return undefined;
+  const target = args.find((arg) => arg === null || arg === '-' || !arg.startsWith('-'));
+
+  if (target === undefined) return verb === 'cd' ? home : null;
+
+  return target === '-' ? null : shellPath(target, cwd, home);
+}
+
+/** Known when every step ran (`&&`, exit 0) or it ends on the `cd`; else a `cd` that may enter the user's files
+ *  marks the session. `cd "$DIR"` moves nothing. */
+function nextShellCwd(at: ShellCwd, command: string, exitCode: number, userRoots: readonly string[]): ShellCwd {
+  const steps = shellSteps(command);
+  let cwd = at.cwd;
+  let known = true;
+  let mayBeUsers = at.mayBeUsers;
+  let lastCd = -1;
+
+  for (const [index, step] of steps.entries()) {
+    const target = cdTarget(step, cwd, at.home);
+
+    if (target === undefined) continue;
+    lastCd = index;
+
+    if (target === null) {
+      known = false;
+      continue;
+    }
+
+    cwd = target;
+    mayBeUsers ||= underRoots(target, userRoots);
+  }
+
+  if (lastCd === -1) return at;
+  const allRan = steps.every((step, index) => index === 0 || step.after === '&&');
+  const endsOnCd = lastCd === steps.length - 1 && ['', ';', '&&'].includes(steps[lastCd]?.after ?? '');
+
+  if (exitCode === 0 && known && (allRan || endsOnCd)) return { ...at, cwd, mayBeUsers: underRoots(cwd, userRoots) };
+
+  return { ...at, cwd, mayBeUsers };
+}
+
+function namesRoot(command: string, root: string): boolean {
+  const escaped = root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  return new RegExp(`(?<![\\w.~/-])${escaped}(?![\\w.-])`).test(command);
+}
+
+/** A call's session from its `cwd` option; an unresolvable one may be the user's. */
+export function sessionAt(home: string, cwd: string | undefined): ShellCwd {
+  const at = cwd === undefined ? home : shellPath(cwd, home, home);
+
+  return at === null ? { cwd: home, home, mayBeUsers: true } : { cwd: at, home, mayBeUsers: false };
+}
+
+export function createShellSession({ home, userRoots, keepsCwd, stored }: ShellSessionOptions): ShellSession {
+  const atHome: ShellCwd = { home, cwd: home, mayBeUsers: false };
+  let known: ShellCwd | null = keepsCwd && stored !== undefined ? null : atHome;
+  let tail: Promise<unknown> = Promise.resolve();
+
+  return {
+    home,
+    userRoots,
+    serial<R>(call: () => Promise<R>): Promise<R> {
+      const next = tail.then(call, call);
+      tail = next;
+
+      return next;
+    },
+    async at() {
+      if (known !== null) return known;
+      const cwd = stored === undefined ? home : await stored();
+      known = cwd === null ? { ...atHome, mayBeUsers: true } : sessionAt(home, cwd);
+
+      return known;
+    },
+    ran(command, exitCode) {
+      // Unread: the next review reads it.
+      if (keepsCwd && known !== null) known = nextShellCwd(known, command, exitCode, userRoots());
+    },
+  };
+}
+
+/** The user's when the command names or reaches under one of their roots, or its session may be there. */
+export function commandFilesOwner(executor: GatedExecutor, command: string, session: ShellCwd | undefined): FilesOwner {
+  const roots = executor.shellSession?.userRoots() ?? [];
+
+  if (executor.filesOwner === 'user' || roots.length === 0) return executor.filesOwner;
+
+  if (roots.some((root) => namesRoot(command, root))) return 'user';
+
+  if (session === undefined) return 'agent';
+
+  if (session.mayBeUsers || underRoots(session.cwd, roots)) return 'user';
+  let cwd = session.cwd;
+
+  for (const step of shellSteps(command)) {
+    const reached = step.words.map((word) => (word?.startsWith('-') ? null : shellPath(word, cwd, session.home)));
+
+    if (reached.some((path) => path !== null && underRoots(path, roots))) return 'user';
+    cwd = cdTarget(step, cwd, session.home) ?? cwd;
+  }
+
+  return 'agent';
+}
+
+/** A `mv` or `cp` destination: `-t`'s, else the last argument. */
+function copyTarget(step: ShellStep): ShellWord | undefined {
+  const [verb, ...args] = step.words;
+
+  if (verb !== 'mv' && verb !== 'cp') return undefined;
+  const flag = args.indexOf('-t');
+
+  if (flag !== -1) return args[flag + 1];
+  const long = args.find((arg) => arg?.startsWith('--target-directory=') === true);
+
+  return long === undefined ? args.at(-1) : long?.slice('--target-directory='.length) ?? null;
+}
+
+function truncatingRedirect(word: string): number {
+  for (let i = 0; i < word.length; i++) {
+    if (word.charAt(i) === '>' && word.charAt(i - 1) !== '>' && word.charAt(i + 1) !== '>') return i;
+  }
+
+  return -1;
+}
+
+/** Files a `>` truncates; `>>` appends. */
+function redirectTargets(step: ShellStep): ShellWord[] {
+  const targets: ShellWord[] = [];
+
+  for (const [index, word] of step.words.entries()) {
+    const at = word === null ? -1 : truncatingRedirect(word);
+
+    if (word === null || at === -1) continue;
+    const rest = word.slice(at + 1);
+    targets.push(rest === '' ? step.words[index + 1] ?? null : rest);
+  }
+
+  return targets;
+}
+
+function overwritesUserFiles(executor: GatedExecutor, command: string, session: ShellCwd | undefined): boolean {
+  const roots = executor.shellSession?.userRoots() ?? [];
+  const home = session?.home ?? '/';
+  let cwd = session?.cwd ?? '/';
+
+  for (const step of roots.length === 0 ? [] : shellSteps(command)) {
+    const written = [...redirectTargets(step), copyTarget(step)].map((target) => (target === undefined ? null : shellPath(target, cwd, home)));
+
+    if (written.some((path) => path !== null && underRoots(path, roots))) return true;
+    cwd = cdTarget(step, cwd, home) ?? cwd;
+  }
+
+  return false;
+}
+
+const OVERWRITE: ApprovalRuleHit = {
+  decision: 'gate', rule: 'overwrite-user-files', explanation: 'Moves, copies or writes onto the user\'s device or Drive, replacing what is there.',
+};
+
+/** The rule table for whose files a command reaches, and any overwrite onto the user's mounts. */
+export function reviewShellCommand(executor: GatedExecutor, command: string, session: ShellCwd | undefined): ApprovalResult {
+  const review = reviewCommand(command, commandFilesOwner(executor, command, session));
+
+  if (!overwritesUserFiles(executor, command, session)) return review;
+  const hits = [...review.hits, OVERWRITE];
+
+  return { decision: dominant(hits), hits };
+}
+
+/** `runCode` in another language: its text cannot show what it does to the user's files, so it asks there. */
+export function reviewProgram(code: string, filesOwner: FilesOwner): ApprovalResult {
+  const review = reviewCommand(code, filesOwner);
+
+  if (filesOwner === 'agent') return review;
+  const hits = [...review.hits, { decision: 'gate', rule: 'program-on-user-files', explanation: 'Runs a program over the user\'s files.' } as const];
+
+  return { decision: dominant(hits), hits };
+}
+
+/** No default owner: no caller silently picks a trust tier. */
+export function reviewCommand(command: string, filesOwner: FilesOwner): ApprovalResult {
   const { invoked, unquoted } = scanCommand(command);
   let opaque = false;
 
@@ -360,7 +703,7 @@ export function reviewCommand(command: string, executor: string): ApprovalResult
     if (INLINE_INTERPRETERS.has(binary)) { opaque = true; break; }
   }
 
-  const agentsOwn = AGENT_OWN_EXECUTORS.has(executor);
+  const agentsOwn = filesOwner === 'agent';
 
   const hits: ApprovalRuleHit[] = [];
 
@@ -372,7 +715,7 @@ export function reviewCommand(command: string, executor: string): ApprovalResult
       if (!r.pattern.test(unquoted)) continue;
     } else if (!r.pattern.test(command)) continue;
 
-    // Local harm on the agent's own machine is not gated; 'deny' is exempt.
+    // Local harm to the agent's own files is not gated; 'deny' is exempt.
     if (agentsOwn && r.harm === 'local' && r.decision !== 'deny') continue;
     hits.push({ decision: r.decision, rule: r.name, explanation: r.why });
   }
@@ -390,15 +733,15 @@ export function formatApproval(result: ApprovalResult): string {
 
 const APPROVAL_DENIED = 'Denied';
 
-/** Plain union, not imported from config/store.ts: this file is a layergate subject source and stays import-free. */
+/** Not imported from config/store.ts: a layergate subject source stays import-free. */
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 
-/** The live policy each gated exec boundary reads at call time, so mode and channel changes apply to the next command. */
+/** Read at call time, so a mode or channel change applies to the next command. */
 export interface ShellApprovalPolicy {
   mode(): ShellApprovalMode;
   /** Whether the owner granted this rule on this executor; consulted before asking. */
   granted?(grant: ApprovalGrant): boolean;
-  /** Interactive channel for 'gate' under 'strict'. Null means nobody is listening: falls through to `deferrals`, else refuses. Read live. */
+  /** The 'gate' channel under 'strict', read live; null: nobody listens, so `deferrals`, else a refusal. */
   requestApproval?: ((req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>) | null;
   /** Where an unanswered 'gate' decision is parked on the owner. */
   deferrals?: DeferredApprovalChannel;
@@ -423,10 +766,8 @@ export type ApprovalSpendOutcome =
   | 'did-not-run'
   | 'spent';
 
-/**
- * Parks an unanswered 'gate' decision on the owner (vocabulary in safety/deferred-approval.ts; not imported,
- * see {@link ShellApprovalMode}). `run: true` means the grant is already spent; `settle` refunds unrun attempts.
- */
+/** Parks an unanswered 'gate' on the owner (safety/deferred-approval.ts). `run: true`: the grant is spent;
+ *  `settle` refunds unrun attempts. */
 export interface DeferredApprovalChannel {
   park(req: ShellApprovalRequest):
     | { readonly run: true; readonly spent: ApprovalSpend }
@@ -447,19 +788,20 @@ function afterGrants(review: ApprovalResult, policy: ShellApprovalPolicy, execut
 }
 
 /**
- * Wrap any exec-shaped function with the mode-aware approval gate; the single decision point for every
- * boundary that reaches a shell. `denyResult` writes a refusal into the result shape; `refusalCode` reads a
- * classification back out, never matching prose. A proven not-run code refunds a spent deferred grant.
+ * The one gate for every boundary that reaches a shell. `denyResult` writes a refusal into the result; `refusalCode`
+ * reads its classification back, and a proven not-run code refunds a spent grant.
  */
 export interface ExecGateTuning<R> {
   readonly policy?: ShellApprovalPolicy;
   readonly refusalCode?: (result: R) => ErrorCode | null;
+  /** Absent: a shell command from the executor's session. */
+  readonly review?: (command: string, rest: readonly unknown[]) => Promise<ApprovalResult>;
 }
 
 export function gateExec<R>(
   execute: (command: string, ...rest: unknown[]) => Promise<R>,
   denyResult: (error: KinuError) => R,
-  executor: string,
+  executor: GatedExecutor,
   tuning: ExecGateTuning<R> = {},
 ): (...args: unknown[]) => Promise<R> {
   const policy = tuning.policy ?? STRICT_NO_CHANNEL_POLICY;
@@ -470,9 +812,11 @@ export function gateExec<R>(
     const [command, ...rest] = args;
     const cmd = String(command);
 
-    const decision = await decideApproval(
-      { command: cmd, executor }, reviewCommand(cmd, executor), policy,
-    );
+    const review = tuning.review === undefined
+      ? reviewShellCommand(executor, cmd, await executor.shellSession?.at())
+      : await tuning.review(cmd, rest);
+
+    const decision = await decideApproval({ command: cmd, executor: executor.name }, review, policy);
 
     if (!decision.run) return denyResult(decision.error);
     const result = await execute(cmd, ...rest);
@@ -489,10 +833,7 @@ export function gateExec<R>(
   };
 }
 
-/**
- * The mode/grant/channel/deferral ladder over any reviewable action. Standing grants apply here.
- * A `run: true` from a replayed park carries its spend; the caller must settle it once the outcome is known.
- */
+/** The mode/grant/channel/deferral ladder; a `run: true` from a replayed park carries a spend the caller settles. */
 async function decideApproval(
   subject: { readonly command: string; readonly executor: string },
   rawReview: ApprovalResult,
@@ -526,7 +867,7 @@ async function decideApproval(
         : null;
 
       if (outcome === null) {
-        // Under 'strict', no answer parks on the owner if a queue is wired; the queue is consulted only after the channel declines.
+        // Under 'strict', an unanswered ask parks if a queue is wired, only after the channel declines.
         const parked = mode === 'strict'
           ? policy.deferrals?.park({ command: cmd, executor, review })
           : undefined;
@@ -601,8 +942,8 @@ export interface InheritedApprovalSource {
 }
 
 /**
- * A facet's approval policy: no `remember` or `requestApproval`, so a facet cannot widen its own reach.
- * Fails closed (`strict`, nothing granted) until the first resolve lands.
+ * A facet's policy: no `remember` or `requestApproval`, so it cannot widen its reach; `strict` with nothing
+ * granted until the first resolve.
  */
 export function createInheritedApprovalPolicy(
   source: InheritedApprovalSource,

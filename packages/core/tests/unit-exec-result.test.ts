@@ -109,6 +109,7 @@ describe('the surfaces the model reads', () => {
     const { rt } = createTestRuntime();
 
     const provider = createInlineExecutor({
+      filesOwner: 'agent',
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore, shell,
     });
 
@@ -124,6 +125,7 @@ describe('the surfaces the model reads', () => {
     const { rt } = createTestRuntime();
 
     const provider = createInlineExecutor({
+      filesOwner: 'agent',
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => PYTEST },
     });

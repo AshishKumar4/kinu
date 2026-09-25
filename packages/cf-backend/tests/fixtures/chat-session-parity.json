@@ -162,6 +162,10 @@
         "payload": {
           "type": "step_finish",
           "stepIndex": 1,
+          "account": {
+            "provider": "openai-compat",
+            "name": "main"
+          },
           "reason": "stop",
           "eventIndex": 4,
           "timestamp": "<clock>",
@@ -216,6 +220,10 @@
         "payload": {
           "type": "step_finish",
           "stepIndex": 1,
+          "account": {
+            "provider": "openai-compat",
+            "name": "main"
+          },
           "reason": "stop",
           "eventIndex": 4,
           "timestamp": "<clock>",
@@ -273,6 +281,10 @@
         "payload": {
           "type": "step_finish",
           "stepIndex": 1,
+          "account": {
+            "provider": "openai-compat",
+            "name": "main"
+          },
           "reason": "stop",
           "eventIndex": 4,
           "timestamp": "<clock>",
@@ -515,6 +527,10 @@
         "payload": {
           "type": "step_finish",
           "stepIndex": 1,
+          "account": {
+            "provider": "openai-compat",
+            "name": "main"
+          },
           "reason": "stop",
           "eventIndex": 4,
           "timestamp": "<clock>",
@@ -569,6 +585,10 @@
         "payload": {
           "type": "step_finish",
           "stepIndex": 1,
+          "account": {
+            "provider": "openai-compat",
+            "name": "main"
+          },
           "reason": "stop",
           "eventIndex": 4,
           "timestamp": "<clock>",
@@ -626,6 +646,10 @@
         "payload": {
           "type": "step_finish",
           "stepIndex": 1,
+          "account": {
+            "provider": "openai-compat",
+            "name": "main"
+          },
           "reason": "stop",
           "eventIndex": 4,
           "timestamp": "<clock>",
@@ -736,6 +760,10 @@
         "payload": {
           "type": "step_finish",
           "stepIndex": 1,
+          "account": {
+            "provider": "openai-compat",
+            "name": "main"
+          },
           "reason": "tool-calls",
           "eventIndex": 7,
           "timestamp": "<clock>",
@@ -1065,6 +1093,10 @@
         "payload": {
           "type": "step_finish",
           "stepIndex": 1,
+          "account": {
+            "provider": "openai-compat",
+            "name": "main"
+          },
           "reason": "stop",
           "eventIndex": 4,
           "timestamp": "<clock>",
@@ -1119,6 +1151,10 @@
         "payload": {
           "type": "step_finish",
           "stepIndex": 1,
+          "account": {
+            "provider": "openai-compat",
+            "name": "main"
+          },
           "reason": "stop",
           "eventIndex": 4,
           "timestamp": "<clock>",
@@ -1176,6 +1212,10 @@
         "payload": {
           "type": "step_finish",
           "stepIndex": 1,
+          "account": {
+            "provider": "openai-compat",
+            "name": "main"
+          },
           "reason": "stop",
           "eventIndex": 4,
           "timestamp": "<clock>",
@@ -1286,6 +1326,10 @@
         "payload": {
           "type": "step_finish",
           "stepIndex": 1,
+          "account": {
+            "provider": "openai-compat",
+            "name": "main"
+          },
           "reason": "tool-calls",
           "eventIndex": 7,
           "timestamp": "<clock>",
@@ -1327,6 +1371,10 @@
         "payload": {
           "type": "step_finish",
           "stepIndex": 1,
+          "account": {
+            "provider": "openai-compat",
+            "name": "main"
+          },
           "reason": "stop",
           "eventIndex": 11,
           "timestamp": "<clock>",
@@ -1381,6 +1429,10 @@
         "payload": {
           "type": "step_finish",
           "stepIndex": 1,
+          "account": {
+            "provider": "openai-compat",
+            "name": "main"
+          },
           "reason": "stop",
           "eventIndex": 5,
           "timestamp": "<clock>",
@@ -2148,12 +2200,12 @@
       "roles": [
         "system",
         "user",
-        "assistant",
         "user",
         "assistant",
         "user",
         "assistant",
         "user",
+        "assistant",
         "user",
         "user",
         "assistant",
@@ -2178,12 +2230,12 @@
       "roles": [
         "system",
         "user",
-        "assistant",
         "user",
         "assistant",
         "user",
         "assistant",
         "user",
+        "assistant",
         "user",
         "user",
         "assistant",

@@ -17,7 +17,7 @@
  */
 import { createServer as createHttpServer, type ServerResponse } from 'node:http';
 import * as v from 'valibot';
-import { DYNAMIC_CONTEXT_OPEN_TAG, TURN_CONTEXT_HEADER, parseJsonValue, workspacePath } from '@kinu.run/core';
+import { DYNAMIC_CONTEXT_OPEN_TAG, WORKSPACE_INSTRUCTIONS_TAG, parseJsonValue, workspacePath } from '@kinu.run/core';
 
 import { apiJson } from './live-app-harness';
 
@@ -56,8 +56,8 @@ export interface ScriptedAnswer {
  *  would answer it with a tool call the request never offered. */
 export interface ScriptedRequest {
   /** What was said to the agent, oldest first: every user-role message's text but the runtime state the
-   *  product sends in that role after the words (a `<dynamic_context>` block, the turn-local context), so
-   *  the last entry is the latest ask. */
+   *  product sends in that role (a `<dynamic_context>` block, the unapproved workspace files), so the last
+   *  entry is the latest ask. */
   readonly userTexts: readonly string[];
   /** What the agent said, oldest first: every assistant-role message's text. */
   readonly assistantTexts: readonly string[];
@@ -110,10 +110,10 @@ const OutboundBodySchema = v.object({
   }))),
 });
 
-/** A user-role message the product wrote: its live state, sent after the words it describes
+/** A user-role message the product wrote: its live state or the unapproved workspace files
  *  (`prompting/volatile-context.ts`). */
 function isRuntimeState(text: string): boolean {
-  return text.startsWith(DYNAMIC_CONTEXT_OPEN_TAG) || text.startsWith(TURN_CONTEXT_HEADER);
+  return text.startsWith(DYNAMIC_CONTEXT_OPEN_TAG) || text.startsWith(`<${WORKSPACE_INSTRUCTIONS_TAG}>`);
 }
 
 /** The request body as a script reads it. */

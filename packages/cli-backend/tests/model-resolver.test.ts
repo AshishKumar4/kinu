@@ -5,9 +5,12 @@ import {
 } from '@kinu.run/core';
 import type { JsonObject, JsonValue, LLMProviderConfig, ModelCallReport } from '@kinu.run/core';
 import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver';
+import { createFileOAuthStore } from '../src/oauth-store';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { asFetchFunction } from '@kinu.run/core';
 import * as v from 'valibot';
-import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY } from '@kinu.run/test-utils';
+import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir } from '@kinu.run/test-utils';
 
 describe('createLocalModelResolver', () => {
   /** Neither lane may set an output cap, and a config object still carrying one must be inert. */
@@ -220,6 +223,31 @@ describe('createLocalModelResolver', () => {
     for (const id of ['openai', 'anthropic', 'openrouter', 'openai-compat', 'openai-compat:groq']) {
       expect(providers.find((p) => p.id === id)?.available).toBe(true);
     }
+  });
+
+  test('each account of a provider on this machine is spent under its own key', async () => {
+    const sent: string[] = [];
+
+    const resolver = createLocalModelResolver({
+      llm: null,
+      credentials: { anthropicApiKey: 'sk-ant-main', apiKeyAccounts: { 'anthropic.bearer@work': 'sk-ant-work' } },
+      fetch: asFetchFunction(async (_input, init) => {
+        sent.push(new Headers(init?.headers).get('x-api-key') ?? '');
+
+        return Response.json({
+          id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-x',
+          content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn',
+          usage: { input_tokens: 1, output_tokens: 1 },
+        });
+      }),
+    });
+
+    await generateText({ model: resolver.resolveModel('anthropic@work/claude-x'), prompt: 'hi' });
+    await generateText({ model: resolver.resolveModel('anthropic/claude-x'), prompt: 'hi' });
+    const chosen = resolver.withAccountChoice?.((provider) => (provider === 'anthropic' ? 'work' : undefined));
+    await generateText({ model: (chosen ?? resolver).resolveModel('anthropic/claude-x'), prompt: 'hi' });
+
+    expect(sent).toEqual(['sk-ant-work', 'sk-ant-main', 'sk-ant-work']);
   });
 
   test('uses Anthropic as the default provider when the resolved local config is direct Anthropic', async () => {
@@ -548,50 +576,57 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
 });
 
 describe('createLocalModelResolver — claude subscription provider', () => {
-  const openaiLlm: LLMProviderConfig = {
-    name: 'openai',
-    baseURL: 'https://api.openai.com/v1',
-    headers: { Authorization: 'Bearer sk-openai' },
-    model: 'gpt-4o-mini',
+  const MESSAGE = {
+    id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-opus-4-7',
+    content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 },
   };
 
-  test('lists claude/* models when the binary is present and logged in', async () => {
+  test('each Claude login on this machine is spent under its own account, as Claude Code', async () => {
+    const configPath = join(scratchDir('claude-logins'), 'config.json');
+    const later = Date.now() + 3_600_000;
+
+    writeFileSync(configPath, JSON.stringify({ providers: { claude: {
+      accessToken: 'sk-ant-oat01-main', refreshToken: 'rt-main', expiresAt: later,
+      accounts: { work: { accessToken: 'sk-ant-oat01-work', refreshToken: 'rt-work', expiresAt: later } },
+    } } }));
+
+    const sent: [string, string][] = [];
+
     const resolver = createLocalModelResolver({
-      llm: openaiLlm,
+      llm: null,
       credentials: {},
-      fetch: asFetchFunction(async () => new Response('{}')),
-      claudeCli: { probe: async () => ({ binary: true, loggedIn: true }) },
+      oauthStore: createFileOAuthStore(configPath),
+      fetch: asFetchFunction(async (input, init) => {
+        const url = input instanceof Request ? input.url : input.toString();
+
+        if (url.startsWith('https://api.anthropic.com/')) sent.push([url, new Headers(init?.headers).get('authorization') ?? '']);
+
+        return url.startsWith('https://api.anthropic.com/') ? Response.json(MESSAGE) : new Response('{}');
+      }),
     });
 
-    const providers = await resolver.listProviders();
-    expect(providers.find((p) => p.id === 'claude')?.available).toBe(true);
+    expect((await resolver.listProviders()).find((p) => p.id === 'claude')?.available).toBe(true);
+    await generateText({ model: resolver.resolveModel('claude@work/claude-opus-4-7'), prompt: 'hi' });
+    await generateText({ model: resolver.resolveModel('claude/claude-opus-4-7'), prompt: 'hi' });
 
-    const { models } = await resolver.listModels();
-    const opus = models.find((m) => m.provider === 'claude' && m.id === 'claude-opus-4-x');
-    expect(opus).toBeDefined();
-    expect(resolver.normalizeSpecSync('claude/claude-opus-4-x')).toBe('claude/claude-opus-4-x');
+    expect(sent).toEqual([
+      ['https://api.anthropic.com/v1/messages?beta=true', 'Bearer sk-ant-oat01-work'],
+      ['https://api.anthropic.com/v1/messages?beta=true', 'Bearer sk-ant-oat01-main'],
+    ]);
   });
 
-  const loggedOut = [
-    { name: 'stays visible but unavailable with the install hint when the binary is absent', binary: false, hint: /Install Claude Code/i },
-    { name: 'unavailable with a sign-in hint when the binary is present but logged out', binary: true, hint: /sign in to your Claude subscription/i },
-  ];
-
-  for (const c of loggedOut) {
-    test(c.name, async () => {
-      const resolver = createLocalModelResolver({
-        llm: openaiLlm,
-        credentials: {},
-        fetch: asFetchFunction(async () => new Response('{}')),
-        claudeCli: { probe: async () => ({ binary: c.binary, loggedIn: false }) },
-      });
-
-      const providers = await resolver.listProviders();
-      const claude = providers.find((p) => p.id === 'claude');
-      expect(claude?.available).toBe(false);
-      expect(claude?.unavailableReason).toMatch(c.hint);
+  test('without a login it stays listed, unavailable, naming the command that signs in', async () => {
+    const resolver = createLocalModelResolver({
+      llm: null,
+      credentials: {},
+      oauthStore: createFileOAuthStore(join(scratchDir('claude-logins'), 'config.json')),
+      fetch: asFetchFunction(async () => new Response('{}')),
     });
-  }
+
+    const claude = (await resolver.listProviders()).find((p) => p.id === 'claude');
+
+    expect([claude?.available, claude?.unavailableReason]).toEqual([false, expect.stringContaining('kinu provider connect claude')]);
+  });
 });
 
 describe('createLocalModelResolver — signed out', () => {

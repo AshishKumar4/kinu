@@ -13,9 +13,10 @@ import { err, json, safeJson } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import { diagnostics, toKinuError, renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
+import type { AccountLedgerTarget } from './account-usage';
 
 export interface CreateWorkspaceEnv<Id> extends CreateCloudWorkspaceEnv<Id>, CredentialFanoutEnv<Id> {
-  OrchestratorAgent: ObjectNamespace<Id, CloudWorkspaceBirth & CredentialFanoutTarget>;
+  OrchestratorAgent: ObjectNamespace<Id, CloudWorkspaceBirth & CredentialFanoutTarget & AccountLedgerTarget>;
 }
 
 export interface CreateWorkspaceRequest<Id> {

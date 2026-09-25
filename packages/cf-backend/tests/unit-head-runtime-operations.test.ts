@@ -58,6 +58,7 @@ const neverHost: ExplorationHostSeams = {
   watchWrites() { throw new Error("mergeLLM watched an actor's writes"); },
   profile() { throw new Error('mergeLLM resolved an exploration profile'); },
   resolveModel() { throw new Error('mergeLLM resolved a model through the seams'); },
+  priceAs() { throw new Error('mergeLLM priced a hosted model through the seams'); },
   webSearch() { throw new Error('mergeLLM reached the web search provider'); },
   nodeHome() { throw new Error('mergeLLM provisioned a node home'); },
   codemodeTool() { throw new Error('mergeLLM built an eval surface'); },
@@ -70,7 +71,7 @@ const neverHost: ExplorationHostSeams = {
 function runtimeWith(text: string) {
   const operations: ModelOperationEvent[] = [];
   const reports: ModelCallReport[] = [];
-  const resolved: Array<{ spec: string | null | undefined; effort: ReasoningEffort }> = [];
+  const resolved: Array<{ spec: string | null | undefined; effort: ReasoningEffort | null }> = [];
   const calls: LanguageModelV3CallOptions[] = [];
 
   const runtime = createHeadRuntime({
@@ -79,7 +80,7 @@ function runtimeWith(text: string) {
       resolveModelWithEffort: (spec, effort) => {
         resolved.push({ spec, effort });
 
-        return { model: mergeModel(text, calls), providerOptions: undefined };
+        return { model: mergeModel(text, calls), provider: 'mock', providerOptions: undefined };
       },
     },
     profile: async () => mergePolicyProfile(),

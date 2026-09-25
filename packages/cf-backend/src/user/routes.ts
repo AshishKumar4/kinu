@@ -9,6 +9,7 @@ import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
 import { listAvailableModels, listProviderCatalog } from './available-models';
+import { readUserAccountUsage } from './account-usage';
 import {
   handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged, type CreateWorkspaceEnv,
 } from './workspace-access';
@@ -30,7 +31,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'hasWorkspace'
   | 'listDevices' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'revokeDeviceConsent'
-  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'listActiveWorkspaces'
+  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'listActiveWorkspaces' | 'getAuthHeaders'
   | 'getCodexStatus' | 'disconnectCodex' | 'startCodexDeviceFlow' | 'pollCodexDeviceFlow'
   | 'listConfig' | 'getConfig' | 'setConfig' | 'listConnectedProviders'
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
@@ -419,6 +420,8 @@ userRoutes.get('/api/user/providers/catalog', async (c) => json({
 userRoutes.get('/api/user/models', async (c) => json({
   body: await listAvailableModels(c.env, c.get('identity').userId, c.get('owner')),
 }));
+
+userRoutes.get('/api/user/usage', async (c) => json({ body: await readUserAccountUsage(c.env, c.get('stub'), c.get('owner')) }));
 
 userRoutes.get('/api/user/cloudflare/accounts', async (c) => json({ body: await c.get('stub').listCloudflareAccounts(c.get('owner')) }));
 

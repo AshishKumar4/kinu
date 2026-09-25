@@ -24,6 +24,7 @@ export const TierIdSchema = v.pipe(v.string(), v.regex(TIER_ID_RE), v.maxLength(
 export interface TierAssignment {
   model: string;
   reasoningEffort?: ReasoningEffort | undefined;
+  fallbacks?: readonly string[] | undefined;
 }
 
 export interface TierAssignments {
@@ -52,6 +53,8 @@ export type RoleCatalog = Readonly<Record<RoleId, RoleDefinition>>;
 export interface ProfileCatalog {
   roles: RoleCatalog;
   tiers: TierAssignments;
+  /** Per provider: the default account. */
+  accounts?: Readonly<Record<string, string>> | undefined;
 }
 
 export type ProfileAuthority =

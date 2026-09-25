@@ -35,6 +35,7 @@ export function testBackends(raw: string | undefined = process.env.KINU_TEST_BAC
 /** The public methods both backends answer to under one name and one argument list. */
 type SameCall =
   | 'getReasoningEffort' | 'setReasoningEffort' | 'getStoredModelSpec' | 'setModel' | 'setRole'
+  | 'getProviderAccounts' | 'setProviderAccount'
   | 'getShellApprovalMode' | 'setShellApprovalMode' | 'getShellApprovalGrants' | 'revokeShellApprovalGrants'
   | 'getAlwaysActiveSkills'
   | 'approveInstruction' | 'revokeInstruction' | 'listInstructionApprovals' | 'readInstructionApproval'
@@ -94,6 +95,8 @@ function cloudflare(): SharedBackend {
       setReasoningEffort: (effort) => agent.setReasoningEffort(effort),
       getStoredModelSpec: () => agent.getStoredModelSpec(),
       setModel: (spec) => agent.setModel(spec),
+      getProviderAccounts: () => agent.getProviderAccounts(),
+      setProviderAccount: (provider, account) => agent.setProviderAccount(provider, account),
       setRole: (roleId) => agent.setRole(roleId),
       getShellApprovalMode: () => agent.getShellApprovalMode(),
       setShellApprovalMode: (mode) => agent.setShellApprovalMode(mode),
@@ -160,6 +163,7 @@ function scriptedResolver(): LocalModelResolver {
   return {
     normalizeSpecSync: (spec) => real.normalizeSpecSync(spec),
     resolveModel: () => DONE_MODEL,
+    credentialFor: (spec) => real.credentialFor(spec),
     listProviders: () => real.listProviders(),
     listModels: () => real.listModels(),
     modelInfo: () => Promise.resolve(null),
@@ -191,6 +195,8 @@ function cli(): SharedBackend {
       setReasoningEffort: async (effort) => session.setReasoningEffort(effort),
       getStoredModelSpec: async () => session.getStoredModelSpec(),
       setModel: async (spec) => session.setModel(spec),
+      getProviderAccounts: async () => session.getProviderAccounts(),
+      setProviderAccount: async (provider, account) => session.setProviderAccount(provider, account),
       setRole: (roleId) => session.setRole(roleId),
       getShellApprovalMode: async () => session.getShellApprovalMode(),
       setShellApprovalMode: async (mode) => session.setShellApprovalMode(mode),

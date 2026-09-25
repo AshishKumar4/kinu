@@ -234,6 +234,16 @@ describe('mission budget — USD at catalog prices', () => {
     expect(row.spent.usd).not.toBeCloseTo(estimateUsdCost(12_000), 4);
   });
 
+  test('a 1-hour cache write is spent at the 1-hour price', () => {
+    const { governor } = makeGovernor({ pricing: () => SONNET });
+    governor.declare('m', {});
+    governor.activate(['m']);
+    governor.debit(1_000, { calls: 1, usage: { input: 1_000, output: 0, cacheWrite: 1_000, cacheWrite1h: 1_000 } });
+
+    // Twice Sonnet's $3 input rate, where the 5-minute write would cost $3.75.
+    expect(governor.snapshot()[0].spent.usd).toBeCloseTo(1_000 * 6 / 1_000_000, 12);
+  });
+
   test('no cache-read rate published: cached input is charged at the input rate', () => {
     const { governor } = makeGovernor({ pricing: () => ({ input: 3, output: 15 }) });
     governor.declare('m', {});
@@ -301,44 +311,36 @@ describe('priceCall — the one place tokens are multiplied by a rate', () => {
 
   test('a cache WRITE is charged at the catalog cacheWrite rate, not the input rate', () => {
     const expected = (12 * 3 + 2_048 * 0.3 + 1_024 * 3.75 + 500 * 15) / 1_000_000;
-    expect(priceCall(ANTHROPIC, SONNET)?.usd).toBeCloseTo(expected, 12);
+    expect(priceCall(ANTHROPIC, SONNET)).toBeCloseTo(expected, 12);
     const asPlainInput = (1_036 * 3 + 2_048 * 0.3 + 500 * 15) / 1_000_000;
-    expect(priceCall(ANTHROPIC, SONNET)?.usd).toBeGreaterThan(asPlainInput);
+    expect(priceCall(ANTHROPIC, SONNET)).toBeGreaterThan(asPlainInput);
   });
 
   test('a catalog with no cacheWrite rate charges the write at the input rate', () => {
-    expect(priceCall({ input: 1_024, output: 0, cacheWrite: 1_024 }, { input: 3, output: 15 })?.usd)
+    expect(priceCall({ input: 1_024, output: 0, cacheWrite: 1_024 }, { input: 3, output: 15 }))
       .toBeCloseTo(1_024 * 3 / 1_000_000, 12);
   });
 
-  test('cacheWrite1h is a subset of cacheWrite and is never charged twice', () => {
-    // models.dev publishes one cache_write rate, so the 1h split is not charged a second time.
+  test('a 1-hour cache write is charged at twice the input rate, the rest of the write at the catalog rate', () => {
+    // Anthropic bills a 1-hour write at twice the base input rate; models.dev's cache_write is the 5-minute one.
     const withRetention: Usage = { ...ANTHROPIC, cacheWrite1h: 1_000 };
-    expect(priceCall(withRetention, SONNET)?.usd)
-      .toBeCloseTo((12 * 3 + 2_048 * 0.3 + 1_024 * 3.75 + 500 * 15) / 1_000_000, 12);
-  });
-
-  test('a 1h-retention write prices as an ESTIMATE; a call without one prices as exact', () => {
-    // Same figure, but Anthropic prices the 1h tier higher, so the price is a floor and says by how many tokens.
-    const withRetention: Usage = { ...ANTHROPIC, cacheWrite1h: 1_000 };
-    expect(priceCall(withRetention, SONNET)?.floorTokens).toBe(1_000);
-    // Absent on an exact price, never `0`.
-    expect('floorTokens' in (priceCall(ANTHROPIC, SONNET) ?? {})).toBe(false);
-    expect('floorTokens' in (priceCall({ ...ANTHROPIC, cacheWrite1h: 0 }, SONNET) ?? {})).toBe(false);
-    // The floor cannot exceed the write it is a subset of.
-    expect(priceCall({ ...ANTHROPIC, cacheWrite1h: 9_999 }, SONNET)?.floorTokens).toBe(1_024);
+    expect(priceCall(withRetention, SONNET))
+      .toBeCloseTo((12 * 3 + 2_048 * 0.3 + 24 * 3.75 + 1_000 * 6 + 500 * 15) / 1_000_000, 12);
+    // The 1-hour part is a share of the write, so a report past the write charges no more than the whole write.
+    expect(priceCall({ ...ANTHROPIC, cacheWrite1h: 9_999 }, SONNET))
+      .toBeCloseTo((12 * 3 + 2_048 * 0.3 + 1_024 * 6 + 500 * 15) / 1_000_000, 12);
   });
 
   test('nothing token-billable reported means UNPRICED, never free', () => {
     expect(priceCall({}, SONNET)).toBeUndefined();
     // Neurons are Cloudflare's own billing unit; no per-token rate can price them.
     expect(priceCall({ neurons: 42 }, SONNET)).toBeUndefined();
-    expect(priceCall({ input: 0, output: 0 }, SONNET)?.usd).toBe(0);
+    expect(priceCall({ input: 0, output: 0 }, SONNET)).toBe(0);
   });
 
   test('cache parts exceeding the whole cannot drive the fresh remainder negative', () => {
     // A nonsense provider report has to yield a sane price, never a credit.
-    expect(priceCall({ input: 1_000, output: 0, cacheRead: 900, cacheWrite: 900 }, SONNET)?.usd)
+    expect(priceCall({ input: 1_000, output: 0, cacheRead: 900, cacheWrite: 900 }, SONNET))
       .toBeCloseTo((900 * 0.3 + 100 * 3.75) / 1_000_000, 12);
   });
 });

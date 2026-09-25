@@ -2,6 +2,8 @@
  * Static context-window table for callers with only a spec string; prefer ModelInfo.contextWindow when resolved.
  * Entries are read off published catalogs; anything unmatched is a stand-in that may size a budget but never refuse a request (#20).
  */
+import { specWithoutAccount } from './providers/types';
+
 const WINDOWS: Array<[RegExp, number]> = [
   [/minimax\/m3/i, 1_000_000],
   [/^codex\/gpt-5\.(?:5|4)\b/i, 272_000],
@@ -39,7 +41,9 @@ export type ContextWindowEstimate =
 const STANDIN_WINDOW = 128_000;
 
 export function contextWindowForModel(spec: string): ContextWindowEstimate {
-  for (const [re, n] of WINDOWS) if (re.test(spec)) return { measured: true, window: n };
+  const listed = specWithoutAccount(spec);
+
+  for (const [re, n] of WINDOWS) if (re.test(listed)) return { measured: true, window: n };
 
   return { measured: false, window: STANDIN_WINDOW };
 }

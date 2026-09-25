@@ -3,6 +3,7 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
+import { baseCredentialKey } from '../credentials/accounts';
 import type { AuthResolution, ModelInfo, ModelProvider } from './types';
 import { createAuthedFetch, positiveInteger } from './util';
 import { withSseTerminal } from './sse-terminal';
@@ -16,6 +17,12 @@ const ModelListSchema = v.object({
 });
 
 const OPENAI_COMPAT_KEY_PREFIX = 'openai-compat.';
+
+export function openAICompatNameOf(key: string): string | null {
+  const base = baseCredentialKey(key);
+
+  return base.startsWith(OPENAI_COMPAT_KEY_PREFIX) ? base.slice(OPENAI_COMPAT_KEY_PREFIX.length) : null;
+}
 
 /** `openai-compat:groq` → `openai-compat.groq` */
 function credKeyFor(providerId: string): string {
@@ -33,6 +40,7 @@ export function createOpenAICompatProvider(providerId = 'openai-compat'): ModelP
 
   return {
     id: providerId,
+    credentialKey: credKey,
     label: providerId === 'openai-compat'
       ? 'OpenAI-compatible (BYO base URL)'
       : `OpenAI-compatible (${providerId.slice('openai-compat:'.length)})`,

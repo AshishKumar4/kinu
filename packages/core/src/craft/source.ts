@@ -110,11 +110,20 @@ function stripExports(program: acorn.Program, source: string): string {
   return out + source.slice(cursor);
 }
 
+/** Every refusal names the forms a tool takes, so a model that wrote statements reads how to write one. */
+function refused(reason: string): CraftedSourceAdmission {
+  return {
+    ok: false,
+    error: `${reason}. Write the tool as \`async (args) => { … }\`, \`async function name(args) { … }\`, `
+      + 'or `const name = async (args) => { … }`',
+  };
+}
+
 /** Normalize crafted source to one parsed expression; a declaration named `preferredName` wins over later helpers. */
 export function admitCraftedSource(source: string, preferredName: string): CraftedSourceAdmission {
   const trimmed = source.trim().replace(/;+\s*$/, '');
 
-  if (trimmed.length === 0) return { ok: false, error: 'the tool source is empty' };
+  if (trimmed.length === 0) return refused('the tool source is empty');
 
   if (parsesAsExpression(trimmed) === null) return { ok: true, code: trimmed };
 
@@ -123,7 +132,7 @@ export function admitCraftedSource(source: string, preferredName: string): Craft
   try {
     program = acorn.parse(trimmed, ECMA);
   } catch (cause) {
-    return { ok: false, error: `the tool source does not parse as JavaScript: ${renderThrownChain({ cause })}` };
+    return refused(`the tool source does not parse as JavaScript: ${renderThrownChain({ cause })}`);
   }
 
   const exported = exportedExpression(program, trimmed);
@@ -133,21 +142,13 @@ export function admitCraftedSource(source: string, preferredName: string): Craft
   const returned = exported
     ?? (declared.includes(preferredName) ? preferredName : declared[declared.length - 1] ?? null);
 
-  if (returned === null) {
-    return {
-      ok: false,
-      error: 'the tool source declares no function: write `async (args) => { … }`, '
-        + '`async function name(args) { … }`, or `const name = async (args) => { … }`',
-    };
-  }
+  if (returned === null) return refused('the tool source declares no function');
 
   const body = stripExports(program, trimmed);
   const code = `(() => {\n${body}\nreturn (${returned});\n})()`;
   const parseError = parsesAsExpression(code);
 
-  if (parseError !== null) {
-    return { ok: false, error: `the tool source could not be wrapped as an expression: ${parseError}` };
-  }
+  if (parseError !== null) return refused(`the tool source could not be wrapped as an expression: ${parseError}`);
 
   return { ok: true, code };
 }

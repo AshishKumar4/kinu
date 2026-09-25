@@ -15,7 +15,7 @@ import {
   AGENT_HOME,
   agentDbPath,
   CONFIG_PATH,
-  createCodexAuthStore,
+  createOAuthStore,
   ensureAgentHome,
   listLocalRefsAllProjects,
   readProviderRevision,
@@ -330,8 +330,8 @@ async function openDaemonAgent(
   const openConfig = {
     llm: llmConfig,
     providerCredentials: resolveProviderCredentials(),
-    codexAuthStore: createCodexAuthStore(),
-    codexConfigPath: CONFIG_PATH,
+    oauthStore: createOAuthStore(),
+    oauthConfigPath: CONFIG_PATH,
     // The ref's stored directory, never process.cwd(): a daemon serves every project.
     cwd: ref.cwd,
   };

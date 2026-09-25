@@ -853,6 +853,11 @@ export class ChatSession {
     return snapshotCompletedTurn(this.actorSession.orchestrator.acc, completedTurn);
   }
 
+  private recordModelFallback(event: Extract<ChatEvent, { type: 'model-fallback' }>): void {
+    if (this.runId !== null) this.eventRecorder.emit(this.runId, { type: 'model_fallback', from: event.from, to: event.to, reason: event.reason });
+    this.emit({ type: 'broadcast', event: { type: 'model_fallback', message: `${event.to} took over from ${event.from}: ${event.reason}` } });
+  }
+
   /** Everything here may throw; processTurn owns what that means. */
   /** `step_finish` supersedes it; indices count from the steps a continuation already carries. */
   private partialLedger(continuation: TurnContinuation | undefined) {
@@ -896,6 +901,7 @@ export class ChatSession {
 
             return;
           case 'reasoning-delta':
+          case 'model-fallback':
           case 'done':
           case 'error':
             return;
@@ -919,14 +925,21 @@ export class ChatSession {
     /** A Stop before any output leaves the operator's row alone. */
     let streamed = item.continuation?.partial !== null && item.continuation?.partial !== undefined;
 
+    // Before this turn's request voids the lane.
+    const lastRequestAt = this.actorSession.lastRequestAt();
+    const cacheKeptAliveUntil = lastRequestAt === null ? null : this.ports.cacheWarming?.keptAliveUntil(lastRequestAt) ?? null;
+
     // A real request voids any armed warm; the durable counter stops a mid-turn wake from adding a refresh.
     this.ports.cacheWarming?.noteRequest();
 
     const execution = await this.actorSession.execute(lease, {
       task: item.text,
       ...prepared.execution,
+      cacheKeptAliveUntil,
     }, (event) => {
       partial.observe(event);
+
+      if (event.type === 'model-fallback') this.recordModelFallback(event);
 
       if (event.type === 'text-delta' || event.type === 'tool-call') streamed = true;
 

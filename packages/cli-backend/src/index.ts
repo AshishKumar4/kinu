@@ -62,18 +62,12 @@ export { OS_LEASE_PROCESS } from './agent-host/lease-process';
 
 export {
   createLocalModelResolver, cloudProxyBaseURL, CLOUD_PROXY_PROVIDER_IDS,
-  defaultSpecForEndpoint,
+  defaultSpecForEndpoint, stripProvider,
   type LocalModelResolver, type LocalModelResolverConfig, type LocalCloudSession,
   type LocalProviderCredentials, type LocalOpenAICompatCredential,
 } from './model-resolver';
 
-export { createFileCodexAuthStore, type LocalCodexAuthStore } from './codex-auth-store';
-
-export {
-  createClaudeCliProvider, checkClaudeAvailability, buildClaudePrompt,
-  CLAUDE_CLI_PROVIDER_ID,
-  type ClaudeCliProviderOptions, type ClaudeSpawn, type SpawnedClaude, type ClaudeAvailability,
-} from './claude-cli-provider';
+export { createFileOAuthStore, type LocalOAuthStore } from './oauth-store';
 
 export {
   createOpenCodeProvider, checkOpenCodeAvailability,

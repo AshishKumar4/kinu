@@ -38,17 +38,16 @@ access or prepaid AI Gateway credits). Your AI Gateway appears as
 `my-gateway/{author}/{model}` once the OAuth grant includes `aig.write`. Run
 `kinu auth` again if you connected before that scope existed.
 
-Claude subscription (local only):
+Claude Pro or Max subscription (local workspaces):
 
 ```bash
-claude                                    # one-time: sign in to your Claude subscription
-kinu provider connect claude          # status check + next steps (no key is stored)
-kinu create jarvis --mode local --model claude/claude-opus-4-x
+kinu provider connect claude          # sign in with your browser; the login stays on this machine
+kinu create jarvis --mode local --model claude/claude-opus-4-7
 ```
 
-Kinu drives the official `claude` binary, which owns its own login. Kinu never
-reads your credentials. A cloud workspace needs an Anthropic API key instead
-(`kinu provider connect anthropic`).
+The browser sends the sign-in back to this machine. If it cannot, paste the
+address it opened, or the code Claude shows, when Kinu asks. `kinu provider
+connect claude work` signs in a second account, used as `claude@work/<model>`.
 
 Web search needs no keys: the `web` tool's `search` and `fetch` actions run
 over DuckDuckGo and Cloudflare's HTML-to-markdown conversion. For ranked,

@@ -3,11 +3,19 @@
  * (`nimbus.exec`, `sandbox.exec`, `device.exec`). Fails if `ExecutionRouter.register()` stops gating.
  */
 import { describe, test, expect } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import { DefaultExecutionRouter } from '../src/execution/router';
-import { gateProviderExec } from '../src/execution/approval';
+import { gateProviderExec, withApprovalGatedShell } from '../src/execution/approval';
+import { createSandboxExecutor } from '../src/execution/sandbox';
 import type { ExecutorProvider } from '../src/execution/types';
-import type { ShellApprovalPolicy, ShellApprovalRequest } from '../src/safety/approval-gate';
+import { createShellSession, type FilesOwner, type ShellApprovalPolicy, type ShellApprovalRequest } from '../src/safety/approval-gate';
+import type { VFS } from '../src/types/primitives';
+import { withMountTable } from '../src/vfs/mounts';
+import { skillsMount } from '../src/skills/view';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { present } from '@kinu.run/test-utils';
+import { createWorkspaceBundle } from './helpers';
 
 const DENY = 'rm -rf /';
 
@@ -16,13 +24,14 @@ const GATE = 'sudo rm -rf /var/lib/important';
 const ALLOW = 'echo hi';
 
 /** A minimal ExecutorProvider shaped like nimbus/sandbox/device. */
-function fakeShellProvider(name: string, kind: ExecutorProvider['kind'] = 'nimbus') {
+function fakeShellProvider(name: string, kind: ExecutorProvider['kind'] = 'nimbus', filesOwner: FilesOwner = 'user') {
   const executed: string[] = [];
 
   const provider: ExecutorProvider = {
     name,
     kind,
     capabilities: new Set(['shell']),
+    filesOwner,
     homeDir: async () => '/home/main',
     isAvailable: () => true,
     connect: async () => {},
@@ -177,7 +186,7 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
 
   test('BUG REPRO: getProviders() — what eval is actually built from on both backends — returns the gated tool too', async () => {
     const router = new DefaultExecutionRouter(strictNoChannelPolicy());
-    const { provider, executed } = fakeShellProvider('sandbox', 'sandbox');
+    const { provider, executed } = fakeShellProvider('sandbox', 'sandbox', 'agent');
     router.register(provider);
 
     const fromGetProviders = present(router.getProviders().find((p) => p.name === 'sandbox'), 'the sandbox provider from getProviders()');
@@ -231,9 +240,49 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
   });
 });
 
-/** `gateProviderExec` passes `provider.name` into `gateExec`; these differ only in which machine the provider is. */
+/** A strict policy that records every request put to the user and refuses it. */
+function askingRouter() {
+  const asked: ShellApprovalRequest[] = [];
+
+  const policy: ShellApprovalPolicy = {
+    mode: () => 'strict',
+    requestApproval: async (req) => {
+      asked.push(req);
+
+      return 'deny';
+    },
+  };
+
+  return { router: new DefaultExecutionRouter(policy), asked, policy };
+}
+
+/** `gateProviderExec` hands the provider to `gateExec`; these differ only in whose files the provider declares. */
 describe('the executor reaches the gate', () => {
   const HOUSEKEEPING = 'rm -rf node_modules';
+
+  test("cf's sandbox holds the agent's own files: commands that could wreck a user's machine are not put to them", async () => {
+    const { router, asked } = askingRouter();
+    router.register(createSandboxExecutor());
+    const exec = present(router.getProvider('sandbox'), 'the registered sandbox').tools.exec;
+
+    for (const command of ['sudo -n true', 'rm -rf ~/x', 'git reset --hard', 'chmod u+s tool']) {
+      expect(await exec.execute(command)).not.toMatchObject({ error: expect.stringContaining('Denied by the owner') });
+    }
+
+    expect(asked).toEqual([]);
+  });
+
+  test("an executor holding the user's files is asked, whatever it is named", async () => {
+    const { router, asked } = askingRouter();
+    const { provider, executed } = fakeShellProvider('sandbox', 'sandbox', 'user');
+    router.register(provider);
+
+    const result = await present(router.getProvider('sandbox'), 'the registered provider').tools.exec.execute(HOUSEKEEPING);
+
+    expect(result).toMatchObject({ error: expect.stringContaining('Denied by the owner') });
+    expect(executed).toEqual([]);
+    expect(asked.map((r) => r.command)).toEqual([HOUSEKEEPING]);
+  });
 
   test("a recursive delete on the agent's own sandbox runs, unasked", async () => {
     const asked: ShellApprovalRequest[] = [];
@@ -247,7 +296,7 @@ describe('the executor reaches the gate', () => {
       },
     });
 
-    const { provider, executed } = fakeShellProvider('sandbox', 'sandbox');
+    const { provider, executed } = fakeShellProvider('sandbox', 'sandbox', 'agent');
     router.register(provider);
 
     const result = await present(router.getProvider('sandbox'), 'the registered sandbox provider').tools.exec.execute(HOUSEKEEPING);
@@ -303,5 +352,322 @@ describe('the executor reaches the gate', () => {
 
     expect(await device.tools.exec.execute('sudo reboot')).toMatchObject({ error: expect.stringContaining('Denied by the owner') });
     expect(asked.map((r) => r.command)).toEqual(['sudo reboot']);
+  });
+});
+
+/** A machine's project at /pc/proj, recording every file the shell removes from it. */
+function deviceProject() {
+  const files = new Map([['/proj/a.txt', 'A'], ['/proj/b.txt', 'B']]);
+  const removed: string[] = [];
+  const isDir = (path: string) => path === '/' || path === '' || path === '/proj';
+
+  const stat = (path: string) => {
+    if (isDir(path)) return { isDir: true, size: 0, mtimeMs: 0 };
+
+    return files.has(path) ? { isDir: false, size: 1, mtimeMs: 0 } : null;
+  };
+
+  const device: VFS = {
+    readFile: async (path) => new TextEncoder().encode(files.get(path) ?? ''),
+    writeFile: async () => undefined,
+    readdir: async (path) => (path === '/proj' ? [...files.keys()].map((file) => file.slice('/proj/'.length)) : ['proj']),
+    stat: async (path) => stat(path),
+    unlink: async (path) => {
+      removed.push(path);
+      files.delete(path);
+    },
+    mkdir: async () => undefined,
+    exists: async (path) => isDir(path) || files.has(path),
+  };
+
+  return { device, removed };
+}
+
+/** The agent's own workspace shell serving a table with the user's machine at /pc, and a user who says no. */
+function workspaceOverDevice() {
+  const db = new Database(':memory:');
+  const workspace = createWorkspaceBundle(db);
+  const { device, removed } = deviceProject();
+  const mounted = withMountTable(workspace.vfs, [{ name: 'pc', files: () => device, absentReason: () => 'no device', filesOwner: 'user' }]);
+  workspace.mountTable(mounted);
+  const asked: string[] = [];
+
+  const shellSession = createShellSession({ home: WORKSPACE_ROOT, userRoots: () => mounted.userRoots(), keepsCwd: true });
+
+  const shell = withApprovalGatedShell(workspace.shell, { filesOwner: 'agent', shellSession }, {
+    mode: () => 'strict',
+    requestApproval: async (request) => {
+      asked.push(request.command);
+
+      return 'deny';
+    },
+  });
+
+  return { db, shell, asked, removed };
+}
+
+describe('a workspace shell over the user\'s mounts', () => {
+  test('a command naming /pc is put to the user, while the same delete in the agent\'s home is not', async () => {
+    const { db, shell, asked, removed } = workspaceOverDevice();
+
+    try {
+      expect((await shell.exec('rm -rf /pc/proj')).exitCode).not.toBe(0);
+      expect((await shell.exec('mkdir -p scratch/x && rm -rf scratch')).exitCode).toBe(0);
+
+      expect(asked).toEqual(['rm -rf /pc/proj']);
+      expect(removed).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('a session that went into /pc asks before deleting there, and stops asking once it is back home', async () => {
+    const { db, shell, asked, removed } = workspaceOverDevice();
+
+    try {
+      expect((await shell.exec('cd /pc/proj')).exitCode).toBe(0);
+      expect((await shell.exec('rm -rf .')).exitCode).not.toBe(0);
+      expect((await shell.exec('cd ~')).exitCode).toBe(0);
+      expect((await shell.exec('mkdir -p scratch/x && rm -rf scratch')).exitCode).toBe(0);
+
+      expect(asked).toEqual(['rm -rf .']);
+      expect(removed).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+/** The agent's own workspace executor over a table holding the user's machine and Drive, recording what it runs. */
+function mountedWorkspaceProvider() {
+  const ran: string[] = [];
+
+  const record = (label: string) => async (...args: unknown[]) => {
+    ran.push(`${label} ${String(args[0])}`);
+
+    return 'ok';
+  };
+
+  const provider: ExecutorProvider = {
+    name: 'workspace',
+    kind: 'workspace',
+    capabilities: new Set(['shell']),
+    filesOwner: 'agent',
+    shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => ['/pc', '/shared'], keepsCwd: true }),
+    homeDir: async () => WORKSPACE_ROOT,
+    isAvailable: () => true,
+    connect: async () => {},
+    disconnect: async () => {},
+    tools: {
+      startProcess: { description: 'Start a background process', execute: record('start') },
+      runCode: { description: 'Run a program', execute: record('code') },
+    },
+  };
+
+  return { provider, ran };
+}
+
+describe('codemode calls on a workspace over the user\'s mounts', () => {
+  const DENIED = { error: expect.stringContaining('Denied by the owner') };
+
+  test('a program reading the read-only skills view asks nobody, while one writing the user\'s machine asks', async () => {
+    const { router, asked } = askingRouter();
+    const db = new Database(':memory:');
+    const workspace = createWorkspaceBundle(db);
+    const { device } = deviceProject();
+
+    const mounted = withMountTable(workspace.vfs, [
+      skillsMount(() => workspace.vfs),
+      { name: 'pc', files: () => device, absentReason: () => 'no device', filesOwner: 'user' },
+    ]);
+
+    router.register({
+      ...mountedWorkspaceProvider().provider,
+      shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => mounted.userRoots(), keepsCwd: true }),
+    });
+    const run = present(router.getProvider('workspace'), 'the workspace executor').tools.runCode;
+    const write = "open('/pc/laptop/notes.txt', 'w').write('x')";
+
+    try {
+      expect(await run.execute("print(open('/skills/deploy/SKILL.md').read())", { language: 'python' })).toBe('ok');
+      expect(await run.execute(write, { language: 'python' })).toMatchObject(DENIED);
+      expect(asked.map((request) => request.command)).toEqual([write]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('a background process started on the user\'s machine is put to them first', async () => {
+    const { router, asked } = askingRouter();
+    const { provider, ran } = mountedWorkspaceProvider();
+    router.register(provider);
+    const start = present(router.getProvider('workspace'), 'the workspace executor').tools.startProcess;
+
+    expect(await start.execute('rm -rf build', { cwd: '/pc/laptop/proj' })).toMatchObject(DENIED);
+    expect(await start.execute('rm -rf build')).toBe('ok');
+
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf build']);
+    expect(ran).toEqual(['start rm -rf build']);
+  });
+
+  test('a shell program is reviewed as a shell command, and one in another language that names the user\'s files asks', async () => {
+    const { router, asked } = askingRouter();
+    const { provider, ran } = mountedWorkspaceProvider();
+    router.register(provider);
+    const run = present(router.getProvider('workspace'), 'the workspace executor').tools.runCode;
+    const python = "import shutil; shutil.rmtree('/shared/notes')";
+
+    expect(await run.execute('rm -rf /pc/laptop/proj', { language: 'shell' })).toMatchObject(DENIED);
+    expect(await run.execute(python, { language: 'python' })).toMatchObject(DENIED);
+    expect(await run.execute('rm -rf build', { language: 'shell' })).toBe('ok');
+    expect(await run.execute("print('hi')", { language: 'python' })).toBe('ok');
+
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf /pc/laptop/proj', python]);
+    expect(ran).toEqual(['code rm -rf build', "code print('hi')"]);
+  });
+
+  test('a move, copy or redirect onto the user\'s device or Drive asks, while the same write in the agent\'s home runs', async () => {
+    const { router, asked } = askingRouter();
+    const { provider, ran } = mountedWorkspaceProvider();
+    router.register(provider);
+    const start = present(router.getProvider('workspace'), 'the workspace executor').tools.startProcess;
+    const onto = ['mv notes.md /shared/notes.md', 'cp -r build /pc/laptop/proj', 'echo done > /shared/status.txt', 'cp -t /pc/laptop a.txt b.txt'];
+
+    for (const command of onto) expect(await start.execute(command)).toMatchObject(DENIED);
+
+    for (const command of ['mv notes.md done.md', 'echo done >> /shared/log.txt', 'cp /shared/notes.md .']) expect(await start.execute(command)).toBe('ok');
+
+    expect(asked.map((request) => request.command)).toEqual(onto);
+    expect(ran).toEqual(['start mv notes.md done.md', 'start echo done >> /shared/log.txt', 'start cp /shared/notes.md .']);
+  });
+
+  test('a hosted node\'s shell, whose box starts every call at its home, reads each command from there', async () => {
+    const asked: string[] = [];
+    const ran: string[] = [];
+
+    const shell = withApprovalGatedShell({
+      exec: async (command) => {
+        ran.push(command);
+
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+    }, { filesOwner: 'agent', shellSession: createShellSession({ home: '/home/agents/n1', userRoots: () => ['/pc'], keepsCwd: false }) }, {
+      mode: () => 'strict',
+      requestApproval: async (request) => {
+        asked.push(request.command);
+
+        return 'deny';
+      },
+    });
+
+    for (const command of ['cd /pc/proj && ls', 'rm -rf build', 'cd sub && ls', 'rm -rf ../../../pc/x']) await shell.exec(command);
+
+    expect(asked).toEqual(['rm -rf ../../../pc/x']);
+    expect(ran).toEqual(['cd /pc/proj && ls', 'rm -rf build', 'cd sub && ls']);
+  });
+});
+
+describe('one durable shell, reached through the shell tool and through codemode', () => {
+  const DENIED = { error: expect.stringContaining('Denied by the owner') };
+
+  const CwdOption = v.object({ cwd: v.string() });
+
+  /**
+   * A Nimbus named shell as cf drives it: the gated shell and the executor's processes and programs all start where
+   * the last foreground `cd` left it, and `leftAt` is where an earlier process left it.
+   */
+  function durableShell(leftAt = WORKSPACE_ROOT) {
+    const { router, asked, policy } = askingRouter();
+    const ran: string[] = [];
+    let cwd = leftAt;
+
+    const run = (command: string, at: string, keepsCd: boolean) => {
+      if (!command.startsWith('cd ')) ran.push(`${at}$ ${command}`);
+      else if (keepsCd) cwd = command === 'cd ~' ? WORKSPACE_ROOT : command.slice('cd '.length);
+    };
+
+    const shellSession = createShellSession({
+      home: WORKSPACE_ROOT, userRoots: () => ['/pc', '/shared'], keepsCwd: true, stored: async () => cwd,
+    });
+
+    const shell = withApprovalGatedShell({
+      exec: async (command) => {
+        run(command, cwd, true);
+
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+    }, { filesOwner: 'agent', shellSession }, policy);
+
+    router.register({
+      ...mountedWorkspaceProvider().provider,
+      shellSession,
+      tools: {
+        startProcess: {
+          description: 'Start a background process',
+          execute: async (...args: unknown[]) => {
+            const options = v.safeParse(CwdOption, args[1]);
+            run(String(args[0]), options.success ? options.output.cwd : cwd, false);
+
+            return 'started';
+          },
+        },
+        runCode: {
+          description: 'Run a program',
+          execute: async (...args: unknown[]) => {
+            const options = v.safeParse(CwdOption, args[1]);
+            run(String(args[0]), options.success ? options.output.cwd : cwd, !options.success);
+
+            return 'ok';
+          },
+        },
+      },
+    });
+
+    return { shell, tools: present(router.getProvider('workspace'), 'the workspace executor').tools, asked, ran };
+  }
+
+  test('a `cd` into the user\'s machine through the shell carries to a process or a shell program started next', async () => {
+    const { shell, tools, asked, ran } = durableShell();
+
+    await shell.exec('cd /pc/laptop/proj');
+    expect(await tools.startProcess?.execute('rm -rf build')).toMatchObject(DENIED);
+    expect(await tools.runCode?.execute('rm -rf build', { language: 'shell' })).toMatchObject(DENIED);
+
+    await shell.exec('cd ~');
+    expect(await tools.startProcess?.execute('rm -rf build')).toBe('started');
+
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf build', 'rm -rf build']);
+    expect(ran).toEqual([`${WORKSPACE_ROOT}$ rm -rf build`]);
+  });
+
+  test('a `cd` into the user\'s machine through a shell program carries to the shell\'s next command', async () => {
+    const { shell, tools, asked, ran } = durableShell();
+
+    await tools.runCode?.execute('cd /pc/laptop/proj', { language: 'shell' });
+    expect((await shell.exec('rm -rf build')).exitCode).not.toBe(0);
+
+    await tools.runCode?.execute('cd ~', { language: 'shell' });
+    expect((await shell.exec('rm -rf build')).exitCode).toBe(0);
+
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf build']);
+    expect(ran).toEqual([`${WORKSPACE_ROOT}$ rm -rf build`]);
+  });
+
+  test('a shell an earlier process left on the user\'s machine is judged from there', async () => {
+    const { shell, asked, ran } = durableShell('/pc/laptop/proj');
+
+    expect((await shell.exec('rm -rf build')).exitCode).not.toBe(0);
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf build']);
+    expect(ran).toEqual([]);
+  });
+
+  test('calls issued together are judged in turn, each from where the one before left the shell', async () => {
+    const { shell, tools, asked, ran } = durableShell();
+
+    const [, started] = await Promise.all([shell.exec('cd /pc/laptop/proj'), tools.startProcess?.execute('rm -rf build')]);
+
+    expect(started).toMatchObject(DENIED);
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf build']);
+    expect(ran).toEqual([]);
   });
 });

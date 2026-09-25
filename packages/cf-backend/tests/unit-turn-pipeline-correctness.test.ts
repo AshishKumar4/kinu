@@ -50,6 +50,7 @@ function isDynamicContextBlock(message: ModelMessage): boolean {
 /** Drive tools via `toolExecute`: `v.function()` erases the signature, dropping the SDK's `options` argument. */
 const RoleResultSchema = v.object({ role: v.string() });
 
+
 /** Fails loud on any member access: a merge must never reach the exploration substrate. */
 const noExplorationHost: ExplorationHostSeams = new Proxy(Object.create(null), {
   get: (_target, key) => {
@@ -76,8 +77,8 @@ const MERGE_ANSWER_MODEL = scriptedTurnModel({
 
 /** A second judge route differing in both model and effort, so neither can pass alone. */
 const REBOUND_JUDGE = {
-  model: 'fake/deep-rebound', reasoningEffort: 'low',
-} satisfies { model: string; reasoningEffort: ReasoningEffort };
+  model: 'fake/deep-rebound', reasoningEffort: 'low', fallbacks: [],
+} satisfies { model: string; reasoningEffort: ReasoningEffort; fallbacks: readonly string[] };
 
 /** `judge` is a fixed-tier producer, so its route is `profile.tiers.deep`. */
 function reboundJudgeRoute(profile: ResolvedTurnProfile): ResolvedTurnProfile {
@@ -296,6 +297,19 @@ describe('turn-pipeline correctness wiring', () => {
     expect(unpinned.model).toEqual({ model: 'workers-ai/account-default', source: 'role' });
   });
 
+  test('an agent the owner adds by hand runs the general role on the account default model', async () => {
+    // m1421: an added agent came up on a flash model; one the owner adds inherits the general role and the default.
+    const workspace = orchestratorHarness();
+    await workspace.agent.setSoul('# Purpose\n\nShip the deploy gates.');
+
+    const added = await workspace.agent.createSubordinateAgent();
+    const snapshot = await workspace.agent.getActorSnapshot(added.name);
+
+    expect({ role: snapshot.role, model: snapshot.model }).toEqual({
+      role: 'task', model: { model: DEFAULT_WORKERS_AI_MODEL_SPEC, source: 'role' },
+    });
+  });
+
   test('hosted heads run on the registered workspace identity, never a self-named filesystem', async () => {
     // A self-named head would derive a second, empty filesystem; bytes the root wrote must be the head's.
     const workspace = orchestratorHarness();
@@ -395,13 +409,12 @@ describe('turn-pipeline correctness wiring', () => {
 
     expect(efforts).toEqual(['low', 'high']);
   });
-
   // Output caps are owned by the gate below; this is driven because a source scan cannot tell
   // a spent effort from a shadowed one.
   test('an auxiliary call binds the route it resolved — the model AND that route\'s own effort', async () => {
     // Driven twice under routes that differ on both axes, so a constant effort that matches the
     // first route still fails.
-    const asked: Array<{ spec: string | null | undefined; effort: ReasoningEffort }> = [];
+    const asked: Array<{ spec: string | null | undefined; effort: ReasoningEffort | null }> = [];
     let profile = mergePolicyProfile();
 
     const runtime = createHeadRuntime({
@@ -410,7 +423,7 @@ describe('turn-pipeline correctness wiring', () => {
         resolveModelWithEffort: (spec, effort) => {
           asked.push({ spec, effort });
 
-          return { model: MERGE_ANSWER_MODEL, providerOptions: undefined };
+          return { model: MERGE_ANSWER_MODEL, provider: 'mock', providerOptions: undefined };
         },
       },
       profile: async () => profile,
@@ -753,9 +766,9 @@ describe('turn-pipeline correctness wiring', () => {
     const system = config?.system ?? '';
     // Role is a prefix fact: it changes only on a deliberate agent event.
     expect(system).toContain('## Role: Task (task)');
-    // Provenance flips mid-session, so it rides `turnLocalTail`, never system placement.
-    expect(system).not.toContain('the referenced job result first');
-    expect(system).not.toContain('Background-resume');
+    // Provenance flips mid-session, so it rides the dynamic context, never system placement.
+    expect(system).not.toContain('Fetch its result first');
+    expect(system).not.toContain('## Why this turn runs');
   });
 
   test('the turn prompt advertises the temporary rung the child substrate always wires', async () => {

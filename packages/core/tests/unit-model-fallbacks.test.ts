@@ -68,6 +68,25 @@ describe('ModelCatalogSession.pricing', () => {
     expect(session.pricing()).toBeNull();
     expect(session.contextWindow()).toBe(262_144);
   });
+
+  test('another model prices at its own rate once warmed, and never at the session model\u2019s', async () => {
+    const rates = new Map<string, ModelInfo>([
+      ['anthropic/claude-sonnet-4-6', { id: 'claude-sonnet-4-6', cost: { input: 3, output: 15 } }],
+      ['openai/gpt-5.5', { id: 'gpt-5.5', cost: { input: 5, output: 40 } }],
+    ]);
+
+    const session = new ModelCatalogSession({
+      effectiveSpec: () => 'anthropic/claude-sonnet-4-6',
+      lookup: async (spec) => rates.get(spec) ?? null,
+    });
+
+    await session.resolved();
+    expect(session.pricing('openai/gpt-5.5')).toBeNull();
+    await session.warm(['openai/gpt-5.5', 'openai/unlisted']);
+    expect(session.pricing('openai/gpt-5.5')).toEqual({ input: 5, output: 40 });
+    expect(session.pricing('openai/unlisted')).toBeNull();
+    expect(session.pricing('anthropic/claude-sonnet-4-6')).toEqual({ input: 3, output: 15 });
+  });
 });
 
 // KINU-045: admission reserves the answer allowance, so the catalog reports it or nothing, never a guess.

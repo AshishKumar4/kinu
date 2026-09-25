@@ -284,7 +284,7 @@ describe('exact turn admission', () => {
     expect(failure !== null && 'code' in failure ? failure.code : undefined).toBe('bad_input');
   });
 
-  test('what is counted is the request sent: system, messages with the turn-local ones before the input, and the tools', async () => {
+  test('what is counted is the request sent: system, messages with the unapproved instructions, and the tools', async () => {
     const { extensions } = compactionProbe();
     const counter = scriptedCounter([1_000]);
 
@@ -299,11 +299,11 @@ describe('exact turn admission', () => {
       history: [...HISTORY, request],
       extensions,
       trigger: 'auto',
-      admission: { count: counter.count, limits: LIMITS, tools, turnLocal: [{ role: 'user', content: 'turn-local' }] },
+      admission: { count: counter.count, limits: LIMITS, tools, instructions: '<workspace_instructions>\nunapproved\n</workspace_instructions>' },
     });
     const counted = counter.seen[0];
     expect(counted?.system).toBe('SYS');
-    expect(counted?.messages.slice(-2)).toEqual([{ role: 'user', content: 'turn-local' }, request]);
+    expect(counted?.messages.slice(-2)).toEqual([request, { role: 'user', content: '<workspace_instructions>\nunapproved\n</workspace_instructions>' }]);
     expect(Object.keys(counted?.tools ?? {})).toEqual(['look']);
   });
 });

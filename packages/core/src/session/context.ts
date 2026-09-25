@@ -77,6 +77,21 @@ export class SessionContext {
     return rows.map(row => ({ entryId: row.entry_id, position: row.position, messageId: row.message_id }));
   }
 
+  /** A render is runtime context, never conversation. */
+  renderMessages(contextId: string): ReadonlySet<string> {
+    this.actor.assertCurrent();
+
+    return new Set(this.sql<{ message_id: string }>`SELECT DISTINCT m.message_id FROM context_memberships m
+      JOIN session_messages s ON s.actor_id=m.actor_id AND s.message_id=m.message_id
+      WHERE m.actor_id=${this.actor.actorId} AND m.context_id=${contextId} AND s.origin='render'`.map(row => row.message_id));
+  }
+
+  conversationOf(contextId: string, members: readonly ContextEntry[]): ContextEntry[] {
+    const rendered = this.renderMessages(contextId);
+
+    return members.filter(member => !rendered.has(member.messageId));
+  }
+
   /** The mutation callback publishes message rows under the same transaction as their membership. */
   commit(expected: ContextSelection, request: ContextCommitRequest): ContextSelection {
     const { cause, turnId, mutate, assertEpoch, proposal } = request;
@@ -107,6 +122,26 @@ export class SessionContext {
       // An empty authored edit is still recorded: an explicitly empty history is a statement.
       return this.revise(expected, current, next, { author: proposal?.author ?? this.actor.actorId, cause, turnId, proposalId: proposal?.id ?? null,
         recordUnchanged: proposal !== undefined || cause === 'edit' });
+    });
+  }
+
+  /** Before entry `before`, else at the end; one revision, less the renders it `replaces`. */
+  addRender(
+    reference: MessageReference, at: { readonly before: string | null; readonly replaces: boolean },
+    request: { readonly turnId: string | null; readonly assertEpoch: () => void },
+  ): ContextSelection {
+    return this.atomic(() => {
+      this.actor.assertCurrent();
+      request.assertEpoch();
+      const selected = this.selected() ?? this.initialize();
+      const current = this.entries(selected);
+      const kept = at.replaces ? this.conversationOf(selected.contextId, current) : current;
+      const anchor = kept.findIndex(entry => entry.entryId === at.before);
+      const index = anchor < 0 ? kept.length : anchor;
+      const added = { entryId: crypto.randomUUID(), messageId: reference.messageId, position: index };
+      const next = [...kept.slice(0, index), added, ...kept.slice(index)].map((entry, position) => ({ ...entry, position }));
+
+      return this.revise(selected, current, next, { author: this.actor.actorId, cause: 'render', turnId: request.turnId, proposalId: null, recordUnchanged: false });
     });
   }
 

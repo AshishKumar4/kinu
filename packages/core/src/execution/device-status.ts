@@ -225,18 +225,6 @@ export interface DeviceStatus {
   sandbox?: DeviceSandboxStatus;
 }
 
-/** What the turn context says about the user's PC. */
-export type DevicePresence = 'connected' | 'offline' | 'none';
-
-/** Config key under which backends persist the last presence they observed. */
-export const DEVICE_PRESENCE_CONFIG_KEY = 'device_last_presence';
-
-export function devicePresence(status: DeviceStatus): DevicePresence {
-  if (status.connected) return 'connected';
-
-  return status.registered ? 'offline' : 'none';
-}
-
 /** An answer still inside its window, or null (expiry reads as never-probed). */
 export function freshDeviceToolchain(
   toolchain: DeviceToolchain | null | undefined,
@@ -245,51 +233,4 @@ export function freshDeviceToolchain(
   if (!toolchain) return null;
 
   return now - toolchain.probedAt < DEVICE_TOOLCHAIN_TTL_MS ? toolchain : null;
-}
-
-/** Parse a persisted watermark. Unknown/missing values mean "never observed". */
-export function parseDevicePresence(value: string | null | undefined): DevicePresence | null {
-  return value === 'connected' || value === 'offline' || value === 'none' ? value : null;
-}
-
-/** Key-value surface for the presence watermark (AgentConfigStore's generic accessors). */
-export interface DevicePresenceStore {
-  get(key: string): string | null;
-  set(key: string, value: string): void;
-}
-
-/** Diff a fresh hub observation against the persisted presence, advance the watermark, and return
- *  the one-turn change notice or null. Fires exactly once per transition. */
-export function observeDevicePresence(
-  store: DevicePresenceStore,
-  status: DeviceStatus,
-) {
-  const presence = devicePresence(status);
-  const lastSeen = parseDevicePresence(store.get(DEVICE_PRESENCE_CONFIG_KEY));
-
-  if (lastSeen !== presence) store.set(DEVICE_PRESENCE_CONFIG_KEY, presence);
-
-  return { presence, notice: deviceChangeNotice(lastSeen, presence) };
-}
-
-/** Context block for a mid-session availability change. Null when unchanged, on first observation,
- *  or for transitions that don't change reach (offline ↔ none). */
-export function deviceChangeNotice(prev: DevicePresence | null, current: DevicePresence): string | null {
-  if (prev === null || prev === current) return null;
-
-  if (current === 'connected') {
-    return '## Context update\n' +
-      "Your user's PC just connected — the `device` runtime is now available. " +
-      'Consent will be requested on its first use; that prompt is expected, not an error.';
-  }
-
-  if (prev === 'connected') {
-    return '## Context update\n' +
-      "Your user's PC just disconnected — the `device` runtime is offline" +
-      (current === 'offline'
-        ? '. The user can reconnect it by running `kinu connect` on their machine.'
-        : ' and the device is no longer registered.');
-  }
-
-  return null;
 }

@@ -136,6 +136,8 @@ export function runEventToSpan(e: RunEvent): TimelineSpan {
       };
     case 'step_finish':
       return { ...base, kind: 'llm-turn', label: `Step ${e.stepIndex}`, detail: e.reason };
+    case 'model_fallback':
+      return { ...base, kind: 'llm-turn', label: `${e.to} took over from ${e.from}`, detail: e.reason };
     case 'head_split':
       return { ...base, kind: 'head-split', label: 'Heads split', detail: e.rationale, data: { rootId: e.rootId, headIds: e.headIds }, refId: e.rootId };
     case 'head_merge':

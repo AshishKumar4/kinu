@@ -10,6 +10,7 @@ import { createAuthedFetch } from './util';
 import { KinuError } from '../obs/index';
 import type { ProviderDeps } from './types';
 import type { Usage } from '../usage';
+import { callAccountOf, type CallAccount } from './quota';
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
 
 /** The usage block a warm reads; loose so a field the vendor adds cannot fail the parse. */
@@ -23,7 +24,7 @@ export async function warmAnthropicCache(input: {
   baseURL: string;
   credKey: string;
   missingCredentialError: string;
-}): Promise<Usage> {
+}): Promise<{ usage: Usage; account?: CallAccount | undefined }> {
   const authedFetch = createAuthedFetch(input.deps, {
     provider: input.providerId,
     modelId: input.modelId,
@@ -46,6 +47,7 @@ export async function warmAnthropicCache(input: {
   }
 
   const parsed = v.parse(WarmResponseSchema, await response.json());
+  const account = callAccountOf({ headers: Object.fromEntries(response.headers) });
 
-  return parsed.usage === undefined ? {} : warmUsage(parsed.usage);
+  return { usage: parsed.usage === undefined ? {} : warmUsage(parsed.usage), account };
 }

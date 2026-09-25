@@ -130,44 +130,33 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
 });
 
 describe("createConfiguredLocalModelResolver — registry-only providers", () => {
-  test("a claude-subscription spec resolves and turns with no other provider configured", async () => {
+  test("a claude-subscription spec resolves and turns on the stored Claude login with no other provider configured", async () => {
     const kinuHome = scratchDir("cli-resolver-claude");
-    writeFileSync(join(kinuHome, "config.json"), JSON.stringify({}), { mode: 0o600 });
+    const login = { accessToken: "sk-ant-oat01-local", refreshToken: "rt-local", expiresAt: Date.now() + 3_600_000 };
+    writeFileSync(join(kinuHome, "config.json"), JSON.stringify({ providers: { claude: login } }), { mode: 0o600 });
 
     const script = `
       (globalThis).AI_SDK_LOG_WARNINGS = false;
       import { generateText } from 'ai';
       import { createConfiguredLocalModelResolver } from './packages/cli/src/local-model-resolver.ts';
 
-      // A fake \`claude\` binary over the provider's spawn seam: probe answers,
-      // then stream-json lines with one text delta and the result event.
-      const enc = new TextEncoder();
-      const proc = (text) => ({
-        stdout: (async function* () { yield enc.encode(text); })(),
-        stderr: (async function* () {})(),
-        stdin: { end() {} },
-        kill() {},
-        exit: Promise.resolve({ code: 0, signal: null }),
-      });
-      const turnLines = [
-        JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello from the subscription.' } } }),
-        JSON.stringify({ type: 'result', subtype: 'success', is_error: false, usage: { input_tokens: 3, output_tokens: 6 }, stop_reason: 'end_turn' }),
-      ].join('\\n') + '\\n';
-      const spawn = (args) => {
-        if (args[0] === '--version') return proc('2.1.174 (Claude Code)\\n');
-        if (args[0] === 'auth') return proc(JSON.stringify({ loggedIn: true }) + '\\n');
-        return proc(turnLines);
+      // Anthropic's side of one turn; every other host answers nothing.
+      const sent = [];
+      globalThis.fetch = async (input, init) => {
+        const url = String(input);
+        if (!url.startsWith('https://api.anthropic.com/')) return new Response('{}');
+        sent.push(new Headers(init.headers).get('authorization'));
+        return Response.json({
+          id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-opus-4-7', stop_reason: 'end_turn',
+          content: [{ type: 'text', text: 'Hello from the subscription.' }], usage: { input_tokens: 3, output_tokens: 6 },
+        });
       };
 
-
-      const { resolver } = createConfiguredLocalModelResolver({
-        model: 'claude/claude-sonnet-4-x',
-        claudeCli: { spawn },
-      });
+      const { resolver } = createConfiguredLocalModelResolver({ model: 'claude/claude-opus-4-7' });
       const providers = await resolver.listProviders();
       const claude = providers.find((p) => p.id === 'claude');
-      const turn = await generateText({ model: resolver.resolveModel('claude/claude-sonnet-4-x'), prompt: 'ping' });
-      console.log(JSON.stringify({ claudeAvailable: claude?.available === true, turn: turn.text }));
+      const turn = await generateText({ model: resolver.resolveModel('claude/claude-opus-4-7'), prompt: 'ping' });
+      console.log(JSON.stringify({ claudeAvailable: claude?.available === true, turn: turn.text, sent }));
     `;
 
     const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
@@ -197,41 +186,7 @@ describe("createConfiguredLocalModelResolver — registry-only providers", () =>
     expect(JSON.parse(stdout)).toEqual({
       claudeAvailable: true,
       turn: "Hello from the subscription.",
+      sent: ["Bearer sk-ant-oat01-local"],
     });
-  });
-  test("the production composition carries the claude spawn seam without injection", async () => {
-    const kinuHome = scratchDir("cli-resolver-claude-wire");
-    writeFileSync(join(kinuHome, "config.json"), JSON.stringify({}), { mode: 0o600 });
-
-    const script = `
-      import { createConfiguredLocalModelResolver } from './packages/cli/src/local-model-resolver.ts';
-      const { resolver } = createConfiguredLocalModelResolver({ model: 'claude/claude-sonnet-4-x' });
-      const model = resolver.resolveModel('claude/claude-sonnet-4-x');
-      console.log(JSON.stringify({ provider: model.provider, specificationVersion: model.specificationVersion }));
-    `;
-
-    const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
-
-    for (const name of [
-      "KINU_TOKEN", "KINU_ORIGIN", "KINU_MODEL", "KINU_BASE_URL", "KINU_AUTH",
-      "AI_GATEWAY_BASE_URL", "AI_GATEWAY_AUTH", "AI_GATEWAY_MODEL",
-      "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "CODEX_ACCESS_TOKEN",
-    ]) delete env[name];
-
-    const proc = Bun.spawn({
-      cmd: [process.execPath, "-e", script],
-      cwd: resolve(__dirname, "../../.."),
-      env,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-
-    const [stdout, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      proc.exited,
-    ]);
-
-    expect(exitCode).toBe(0);
-    expect(JSON.parse(stdout)).toEqual({ provider: "claude", specificationVersion: "v2" });
   });
 });

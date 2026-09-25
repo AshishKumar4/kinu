@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OwnedModelServices, type OwnedModelEnv } from '../src/owned-model-services';
 import {
-  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, asFetchFunction, profileCatalogDigest,
+  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, asFetchFunction, profileCatalogDigest,
   resolveTurnProfile,
   type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
 } from '@kinu.run/core';
@@ -100,7 +100,7 @@ describe('OwnedModelServices', () => {
     });
 
     expect(services.providerRegistry().registry.list().map((provider) => provider.id)).toEqual([
-      'workers-ai', 'my-gateway', 'ai-gateway', 'codex', 'openai',
+      'workers-ai', 'my-gateway', 'ai-gateway', 'codex', 'claude', 'openai',
       'anthropic', 'openrouter', 'openai-compat',
     ]);
     const model = resolved(services.resolveModel());
@@ -258,6 +258,43 @@ describe('OwnedModelServices — the provider snapshot', () => {
     expect(clean.unavailableProviders).toEqual([]);
     // Different revisions: nothing keyed on revision may serve a partial picture as complete.
     expect(degraded.revision).not.toBe(clean.revision);
+  });
+
+  test("a stored effort a listed model lacks is sent as one it declares, read off the snapshot's listing", async () => {
+    catalogDown();
+    const { snapshot } = await snapshotServices(null).profileProviderSnapshot();
+    // GLM 5.3 as the platform gateway lists it; it declares low, medium and high.
+    const glm = snapshot.availableModels.find((spec) => spec.endsWith(`/${DEFAULT_WORKERS_AI_MODEL_ID}`));
+
+    if (glm === undefined) throw new Error('the platform gateway lists no GLM 5.3');
+    const catalog = { ...BUILTIN_PROFILE_CATALOG, tiers: { default: { model: glm } } };
+
+    const profile = resolveTurnProfile({
+      envelope: { authority: { kind: 'account', accountId: 'acct-1' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
+      provider: snapshot, roleId: 'task', workMode: 'build', availableTools: [], activeSkills: [], explicitEffort: 'xhigh',
+    });
+
+    expect(profile.tier).toMatchObject({ model: glm, reasoningEffort: 'high' });
+  });
+
+  test('a tier model moves only when its own provider lists models and leaves it out; a provider listing nothing proves nothing', async () => {
+    catalogDown();
+    const { snapshot } = await snapshotServices(null).profileProviderSnapshot();
+    const glm = snapshot.availableModels.find((spec) => spec.endsWith(`/${DEFAULT_WORKERS_AI_MODEL_ID}`));
+
+    if (glm === undefined) throw new Error('the platform gateway lists no GLM 5.3');
+
+    // The platform gateway lists its Workers AI models; no OpenAI-compatible endpoint is connected, so it lists nothing.
+    const tiers = { default: { model: glm }, fast: { model: `${glm.slice(0, glm.indexOf('/'))}/@cf/retired/model` }, deep: { model: 'openai-compatible/house-model' } };
+    const catalog = { ...BUILTIN_PROFILE_CATALOG, tiers };
+
+    const profile = resolveTurnProfile({
+      envelope: { authority: { kind: 'account', accountId: 'acct-1' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
+      provider: snapshot, roleId: 'task', workMode: 'build', availableTools: [], activeSkills: [],
+    });
+
+    expect(profile.tiers.fast.model).toBe(glm);
+    expect(profile.tiers.deep.model).toBe('openai-compatible/house-model');
   });
 
   test('a complete listing is memoized, and only a change expires it', async () => {
@@ -442,12 +479,14 @@ describe('a degraded listing versus a confirmed-missing model', () => {
     expect(profile.providerRevision).toBe(degraded.revision);
   });
 
-  test('a provider that answers without the model still refuses', async () => {
+  test('a provider that answers without the model moves its tier to the account default', async () => {
     catalogDown();
     const clean = (await snapshotServices(null).profileProviderSnapshot()).snapshot;
     expect(clean.unavailableProviders).toEqual([]);
 
-    // An empty failure set asserts the listing was complete, so absence is proof.
-    expect(() => resolveWith(clean)).toThrow(/unavailable on provider revision/);
+    // An empty failure set asserts the listing was complete, and Groq answering with another model is proof the
+    // pinned one cannot serve.
+    const profile = resolveWith({ ...clean, availableModels: [...clean.availableModels, 'groq/llama-3.1-8b-instant'] });
+    expect(profile.tiers.deep.model).toBe(profile.tiers.default.model);
   });
 });

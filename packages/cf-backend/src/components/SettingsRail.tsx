@@ -2,7 +2,7 @@
 import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import {
-  BrainIcon, DesktopTowerIcon, PlugIcon, TerminalIcon, UserCircleIcon,
+  BrainIcon, ChartBarIcon, DesktopTowerIcon, PlugIcon, TerminalIcon, UserCircleIcon,
 } from "@phosphor-icons/react";
 import { tabCls } from "@/components/ui/form";
 
@@ -11,6 +11,7 @@ const SETTINGS_SECTIONS = {
   devices: { label: "Devices", Icon: DesktopTowerIcon, about: "Machines linked to this account. A workspace you approve can run commands on them." },
   providers: { label: "Providers", Icon: PlugIcon, about: "Model access for every workspace you own." },
   models: { label: "Models", Icon: BrainIcon, about: "Which model each tier and role uses, in every workspace you own." },
+  usage: { label: "Usage", Icon: ChartBarIcon, about: "What each provider account spent across every workspace you own, and the quota it has left." },
   cli: { label: "CLI", Icon: TerminalIcon, about: "The command line, on a machine of yours." },
 } as const;
 

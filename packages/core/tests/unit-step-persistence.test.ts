@@ -11,6 +11,7 @@ import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { decodeModelMessageValues } from '../src/session/message-codec';
 import { TurnAccumulator, type StepLike } from '../src/orchestrator/turn-accumulator';
 import { makeSql, makeExecRaw } from './helpers';
+import { KinuError, renderThrownChain } from '../src/obs/index';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 
@@ -293,6 +294,78 @@ describe('a completed step is durable at the moment it completes', () => {
       await provider.stop();
       db.close();
     }
+  });
+
+  test('a step whose durable write fails ends the turn with that failure, and no later step runs', async () => {
+    const provider = scriptedProvider([
+      () => toolStep('call_a', 'git status'),
+      () => textStep('never reached'),
+    ]);
+
+    const events: ChatEvent[] = [];
+    let outcome = 'the turn finished';
+
+    try {
+      for await (const ev of runChat({
+        model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }], tools, stopWhen: stepCountIs(20),
+        persistStep: async () => { throw new Error('SQLITE_FULL: database or disk is full'); },
+      })) events.push(ev);
+    } catch (error) {
+      outcome = renderThrownChain({ cause: error });
+    } finally {
+      await provider.stop();
+    }
+
+    expect(outcome).toContain('SQLITE_FULL: database or disk is full');
+    expect(provider.requests()).toBe(1);
+    // The unrecorded step reports nothing as finished, and the turn has no answer.
+    expect(events.filter((ev) => ev.type === 'step-finish' || ev.type === 'done')).toEqual([]);
+  });
+
+  /** One tool step, then a hook that throws `thrown`: the failure the turn ends with, and what was recorded. */
+  const hookThrows = async (thrown: Error) => {
+    const provider = scriptedProvider([
+      () => toolStep('call_a', 'git status'),
+      () => textStep('never reached'),
+    ]);
+
+    const persisted: number[] = [];
+    let failed = new KinuError('io', 'the turn finished');
+
+    try {
+      for await (const _ of runChat({
+        model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }], tools, stopWhen: stepCountIs(20),
+        persistStep: async (messages) => { persisted.push(messages.length); },
+        onStep: async () => { throw thrown; },
+      }));
+    } catch (error) {
+      if (!(error instanceof KinuError)) throw error;
+      failed = error;
+    } finally {
+      await provider.stop();
+    }
+
+    return { failed, persisted, requests: provider.requests() };
+  };
+
+  test('a step hook that throws ends the turn under its own name and class; the step it saw stays recorded', async () => {
+    const { failed, persisted, requests } = await hookThrows(new KinuError('budget', 'the mission is spent'));
+
+    expect({ code: failed.code, message: failed.message }).toEqual({ code: 'budget', message: 'run the step hook' });
+    expect(renderThrownChain({ cause: failed })).toContain('the mission is spent');
+    // The hook saw a step that was already recorded.
+    expect(persisted).toHaveLength(1);
+    expect(requests).toBe(1);
+  });
+
+  test("a step hook's unclassified throw ends the turn as io under the hook's name, its cause kept, after its step", async () => {
+    // obs/error.ts: io is the unclassified failure's answer.
+    const { failed, persisted, requests } = await hookThrows(new Error('the hook tripped over a null'));
+
+    expect({ code: failed.code, message: failed.message }).toEqual({ code: 'io', message: 'run the step hook' });
+    expect(renderThrownChain({ cause: failed })).toContain('the hook tripped over a null');
+    expect(persisted).toHaveLength(1);
+    expect(requests).toBe(1);
   });
 });
 

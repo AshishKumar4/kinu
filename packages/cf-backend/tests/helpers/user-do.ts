@@ -144,6 +144,8 @@ export interface TestUserDOOptions {
   deviceResponder?: (frame: DeviceFrame) => JsonValue | Promise<JsonValue>;
   credentialEncryptionKey?: string;
   credentialEncryptionKeyPrevious?: string;
+  /** Lets a stored Cloudflare login renew; absent, its refresh fails for want of a client. */
+  cloudflareOAuthClientId?: string;
   durableObjectId?: string;
   /** In-memory Mossaic per tenant id; absent, the Drive is unbound. */
   drive?: (tenant: string) => MossaicVfs | null;
@@ -222,6 +224,7 @@ interface TestUserEnvironment {
   CLI_PUBLIC_ORIGIN?: string;
   ASSETS?: { fetch(input: Request): Promise<Response> };
   CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
+  CLOUDFLARE_OAUTH_CLIENT_ID?: string;
   MCP_GITHUB_CLIENT_ID?: string;
   MCP_GITHUB_CLIENT_SECRET?: string;
   MCP_GOOGLE_CLIENT_ID?: string;
@@ -464,6 +467,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
 
   const env: TestUserEnvironment = {
     CREDENTIAL_ENCRYPTION_KEY: options.credentialEncryptionKey ?? TEST_CREDENTIAL_ENCRYPTION_KEY,
+    ...(options.cloudflareOAuthClientId !== undefined && { CLOUDFLARE_OAUTH_CLIENT_ID: options.cloudflareOAuthClientId }),
     CLI_PUBLIC_ORIGIN: 'https://kinu.example.com',
     ASSETS: { fetch: async (input: Request) => servedAsset(new URL(input.url).pathname, options.servedBuild) },
     SLATE_PICTURES: options.slatePictures,

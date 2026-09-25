@@ -2,7 +2,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Combobox, Select } from "@cloudflare/kumo";
 import { ArrowsClockwiseIcon, BrainIcon, WarningCircleIcon } from "@phosphor-icons/react";
-import { formatContextWindow, isReasoningEffort, offeredReasoningEfforts, type ReasoningEffort } from "@kinu.run/core";
+import {
+  formatContextWindow, formatModelSpec, isReasoningEffort, offeredReasoningEfforts, parseModelSpec, specWithoutAccount,
+  type ReasoningEffort,
+} from "@kinu.run/core";
 import {
   cloudflareReconnectPath, listAvailableModels,
   type ModelMenu, type ModelMenuEntry, type ProviderFailure,
@@ -70,10 +73,42 @@ function EffortPicker({ options, value, onChange, disabled }: {
   );
 }
 
+export function specOnAccount(spec: string, account: string): string {
+  const parsed = parseModelSpec(spec);
+
+  return formatModelSpec({ provider: parsed.provider, modelId: parsed.modelId, ...(account !== '' && { account }) });
+}
+
+export function AccountPicker({ spec, accounts, onChange, disabled, label }: {
+  spec: string;
+  accounts: readonly string[];
+  onChange: (spec: string) => void;
+  disabled?: boolean;
+  label: string;
+}) {
+  if (accounts.length < 2) return null;
+
+  return (
+    <Select
+      aria-label={label}
+      size="xs"
+      className="shrink-0 !bg-transparent !shadow-none !ring-0 transition-colors hover:!bg-[var(--c-elevated)] focus-visible:!bg-[var(--c-elevated)]"
+      value={parseModelSpec(spec).account ?? ''}
+      disabled={disabled}
+      onValueChange={(next) => { onChange(specOnAccount(spec, accounts.find((account) => account === next) ?? '')); }}
+      renderValue={(picked) => <span className="p-text-2">{accounts.find((account) => account === picked) ?? 'Default account'}</span>}
+    >
+      <Select.Option value="">Default account</Select.Option>
+      {accounts.map((account) => <Select.Option key={account} value={account}>{account}</Select.Option>)}
+    </Select>
+  );
+}
+
 export interface ModelPickerProps {
   models: ModelMenuEntry[];
   /** Listed so a broken credential is visible instead of silently shortening the menu. */
   failures?: ProviderFailure[];
+  accounts?: ModelMenu['accounts'];
   /** Currently selected spec; '' = no explicit choice. */
   value: string;
   onChange: (spec: string) => void;
@@ -89,15 +124,18 @@ export interface ModelPickerProps {
 }
 
 export function ModelPicker({
-  models, failures, value, onChange, effort,
+  models, failures, accounts, value, onChange, effort,
   size = "base", placeholder = "Select a model…", label = "Model", clearable = false, className, disabled = false,
 }: ModelPickerProps) {
+  const listed = value === '' ? '' : specWithoutAccount(value);
+
   const items = useMemo(
-    () => groupModelMenu(models, value).map((g) => ({ value: g.provider, items: g.models })),
-    [models, value],
+    () => groupModelMenu(models, listed).map((g) => ({ value: g.provider, items: g.models })),
+    [models, listed],
   );
 
-  const selected = useMemo(() => models.find((m) => m.spec === value) ?? null, [models, value]);
+  const selected = useMemo(() => models.find((m) => m.spec === listed) ?? null, [models, listed]);
+  const account = value === '' ? '' : parseModelSpec(value).account ?? '';
 
   const combobox = (
     <Combobox
@@ -106,7 +144,7 @@ export function ModelPicker({
       onValueChange={(next: PickerValue | null) => {
         const entry = next === null ? null : modelMenuEntry(next);
 
-        if (entry) onChange(entry.spec);
+        if (entry) onChange(entry.provider === selected?.provider ? specOnAccount(entry.spec, account) : entry.spec);
         else if (clearable) onChange("");
       }}
       itemToStringLabel={(item: PickerValue) => modelMenuEntry(item)?.label ?? ''}
@@ -145,11 +183,16 @@ export function ModelPicker({
     </Combobox>
   );
 
-  if (!effort) return combobox;
+  const accountPicker = selected === null ? null : (
+    <AccountPicker spec={value} accounts={accounts?.[selected.provider] ?? []} onChange={onChange} disabled={disabled} label={`${label} account`} />
+  );
+
+  if (!effort) return accountPicker === null ? combobox : <>{combobox}{accountPicker}</>;
 
   return (
     <>
       {combobox}
+      {accountPicker}
       <EffortPicker
         options={offeredReasoningEfforts(selected?.reasoningEfforts, effort.value)}
         value={effort.value}
@@ -241,6 +284,7 @@ export function ConnectedModelPicker({
     <ModelPicker
       models={menu.models}
       failures={menu.failures}
+      accounts={menu.accounts}
       value={value}
       onChange={onChange}
       size={size}

@@ -2,11 +2,15 @@ import { createChatModel, type LLMProviderConfig } from '@kinu.run/core';
 import {
   CODEX_CRED_KEY,
   DEFAULT_WORKERS_AI_MODEL_ID,
+  credentialToHeaders,
   normalizeModelMenu,
   codexCredentialToHeaders,
   createAnthropicProvider,
+  createClaudeProvider,
   createCodexProvider,
   availableJudgeSpecs,
+  accountDeps,
+  callAccountOf,
   catalogModelInfo,
   createModelsDevCatalogSource,
   createOpenAICompatProvider,
@@ -17,8 +21,10 @@ import {
   listModelsDevProviderModels,
   normalizeUsage,
   parseModelSpec,
+  specProvider,
   workersAiSpec, WORKERS_AI_MODEL_ID_PREFIX,
-  PROXY_DENIED_CRED_KEYS,
+  catalogProviderOfKey,
+  isProxyDeniedCredentialKey,
   providerProxyCredentialsURL,
   providerProxyForwardURL,
   proxyAuthResolution,
@@ -42,9 +48,8 @@ import {
 import { generateText, streamText } from 'ai';
 import type { LanguageModel, LanguageModelUsage } from 'ai';
 import type { LLM } from '@kinu.run/core';
-import { CLAUDE_CLI_PROVIDER_ID, createClaudeCliProvider, type ClaudeCliProviderOptions } from './claude-cli-provider';
 import { OPENCODE_PROVIDER_ID, createOpenCodeProvider } from './opencode-provider';
-import type { LocalCodexAuthStore } from './codex-auth-store';
+import { isOAuthLoginKey, type LocalOAuthStore } from './oauth-store';
 import * as v from 'valibot';
 import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 
@@ -69,6 +74,7 @@ export interface LocalProviderCredentials {
   openrouterApiKey?: string;
   codexAccessToken?: string;
   openaiCompat?: Record<string, LocalOpenAICompatCredential>;
+  apiKeyAccounts?: Readonly<Record<string, string>>;
 }
 
 export const PROVIDER_CREDENTIAL_ENV = {
@@ -76,7 +82,7 @@ export const PROVIDER_CREDENTIAL_ENV = {
   anthropicApiKey: 'ANTHROPIC_API_KEY',
   openrouterApiKey: 'OPENROUTER_API_KEY',
   codexAccessToken: 'CODEX_ACCESS_TOKEN',
-} as const satisfies Record<Exclude<keyof LocalProviderCredentials, 'openaiCompat'>, string>;
+} as const satisfies Record<Exclude<keyof LocalProviderCredentials, 'openaiCompat' | 'apiKeyAccounts'>, string>;
 
 export const SESSION_CREDENTIAL_ENV = ['KINU_TOKEN', 'KINU_AUTH', 'AI_GATEWAY_AUTH'] as const;
 
@@ -119,6 +125,7 @@ function proxyFetchFor(cloud: LocalCloudSession, base: typeof fetch | undefined)
 export interface LocalModelResolver {
   normalizeSpecSync(specOrNull?: string | null): string;
   resolveModel(specOrNull?: string | null): LanguageModel;
+  credentialFor(specOrNull?: string | null): Promise<string | null>;
   listProviders(): Promise<ProviderInfo[]>;
   /** One broken credential never empties the menu. */
   listModels(): Promise<ModelMenu>;
@@ -135,6 +142,7 @@ export interface LocalModelResolver {
    * shared across sessions, so the last install wins. Unset leaves waits unreported.
    */
   setProviderWaitSink?(sink: ((info: ProviderWaitInfo) => void) | undefined): void;
+  withAccountChoice?(choice: (providerId: string) => string | undefined): LocalModelResolver;
 }
 
 export interface LocalModelResolverConfig {
@@ -142,14 +150,12 @@ export interface LocalModelResolverConfig {
    *  `provider/model` specs still resolve, bare ids fail with the fixes named. */
   llm: LLMProviderConfig | null;
   credentials?: LocalProviderCredentials;
-  codexAuthStore?: LocalCodexAuthStore;
+  oauthStore?: LocalOAuthStore;
   /** When present, workers-ai + my-gateway resolve through the worker's AI proxy;
    *  when absent they list as unavailable with a `kinu auth` hint. */
   cloud?: LocalCloudSession;
   sessionAffinity?: string;
   fetch?: typeof fetch;
-  /** Seam for the local Claude-subscription provider; tests inject a fake `claude` binary. */
-  claudeCli?: ClaudeCliProviderOptions;
   /** Read per call so {@link LocalModelResolver.setProviderWaitSink} can install
    *  the session's sink after construction. */
   onProviderWait?: (info: ProviderWaitInfo) => void;
@@ -161,12 +167,14 @@ function reportCall(
   spend: ModelCallSpend,
   spec: string,
   usage: LanguageModelUsage,
-  modelId: string | undefined,
+  response: { readonly modelId?: string; readonly headers?: Record<string, string> },
 ): void {
   const reported = normalizeUsage(usage);
+  const account = callAccountOf(response);
+  const modelId = response.modelId;
   spend.report(modelId !== undefined && modelId.length > 0
-    ? { source: spend.source, spec, usage: reported, modelId }
-    : { source: spend.source, spec, usage: reported });
+    ? { source: spend.source, spec, usage: reported, modelId, account }
+    : { source: spend.source, spec, usage: reported, account });
 }
 
 /**
@@ -208,7 +216,7 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
       for await (const chunk of result.textStream) yield chunk;
 
       // Usage exists only once the stream drains; an abandoned stream reports nothing.
-      if (spend) reportCall(spend, resolved, await result.totalUsage, (await result.response).modelId);
+      if (spend) reportCall(spend, resolved, await result.totalUsage, await result.response);
     },
     async complete(prompt) {
       const resolved = spec();
@@ -223,7 +231,7 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
       if (providerOptions) request.providerOptions = providerOptions;
       const result = await generateText(request);
 
-      if (spend) reportCall(spend, resolved, result.totalUsage, result.response.modelId);
+      if (spend) reportCall(spend, resolved, result.totalUsage, result.response);
 
       return result.text.trim();
     },
@@ -238,7 +246,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const registry = createProviderRegistry();
   const localEndpoint = opts.llm;
   const credentials = opts.credentials ?? {};
-  const authStore = buildAuthStore(localEndpoint, credentials, opts.codexAuthStore);
+  const authStore = buildAuthStore(localEndpoint, credentials, opts.oauthStore);
 
   const cloud = opts.cloud;
 
@@ -305,7 +313,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     registry.register(createSignedOutCloudProvider('my-gateway', 'Your AI Gateway'));
   }
 
-  registry.register(createClaudeCliProvider(opts.claudeCli));
+  registry.register(createClaudeProvider());
   registry.register(createOpenCodeProvider());
   registry.register(createCodexProvider());
   registry.register(createOpenAIProvider());
@@ -322,7 +330,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const proxied = cloud ? proxyCredentialSourceFor(cloud, opts.fetch) : null;
   registry.registerDynamic(createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] }));
 
-  const deps: ProviderDeps = {
+  const depsFor = (accountFor?: (providerId: string) => string | undefined): ProviderDeps => ({
     env: {},
     sessionAffinity: opts.sessionAffinity,
     fetch: cloud ? proxyFetchFor(cloud, opts.fetch) : opts.fetch,
@@ -340,7 +348,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       if (authStore.has(key)) return true;
 
       // A credential the proxy never fronts: the local answer is complete.
-      if (PROXY_DENIED_CRED_KEYS.includes(key)) return false;
+      if (isProxyDeniedCredentialKey(key)) return false;
       const remote = await proxied?.load();
 
       if (!remote) return false;
@@ -364,7 +372,10 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       return [...keys];
     },
     onProviderWait: (info) => { opts.onProviderWait?.(info); },
-  };
+    accountFor,
+  });
+
+  const deps = depsFor();
 
   /** Null endpoint = no default; fixes live in `noDefaultModelMessage`. */
   const fallback: { provider: string; model: string } | null = localEndpoint
@@ -385,11 +396,9 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
     if (s.startsWith(WORKERS_AI_MODEL_ID_PREFIX)) return workersAiSpec(s);
 
-    const slash = s.indexOf('/');
+    const first = specProvider(s);
 
-    if (slash > 0) {
-      const first = s.slice(0, slash);
-
+    if (first !== null) {
       if (registry.get(first)) return s;
 
       // Account-connected models.dev providers count here. The snapshot is empty
@@ -408,37 +417,45 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     return `${fallback.provider}/${s}`;
   }
 
-  return {
+  const resolverWith = (own: ProviderDeps): LocalModelResolver => ({
     normalizeSpecSync,
     resolveModel(specOrNull) {
-      return registry.resolve(normalizeSpecSync(specOrNull), deps);
+      return registry.resolve(normalizeSpecSync(specOrNull), own);
+    },
+    credentialFor(specOrNull) {
+      return registry.credentialFor(normalizeSpecSync(specOrNull), own);
     },
     listProviders() {
-      return registry.listProviders(deps);
+      return registry.listProviders(own);
     },
     judgeCandidates() {
-      return availableJudgeSpecs(registry, deps);
+      return availableJudgeSpecs(registry, own);
     },
     listModels() {
-      return registry.listAllModels(deps);
+      return registry.listAllModels(own);
     },
     async modelInfo(specOrNull) {
       const spec = normalizeSpecSync(specOrNull);
-      const { provider, modelId } = parseModelSpec(spec);
+      const { provider, modelId, account } = parseModelSpec(spec);
 
-      return catalogModelInfo(registry.get(provider), deps, modelId);
+      return catalogModelInfo(registry.get(provider), accountDeps(own, provider, account), modelId);
     },
     async countInputTokens(specOrNull, request) {
       const spec = normalizeSpecSync(specOrNull);
-      const { provider, modelId } = parseModelSpec(spec);
+      const { provider, modelId, account } = parseModelSpec(spec);
 
-      return countRequestInputTokens(registry.get(provider), modelId, deps, request);
+      return countRequestInputTokens(registry.get(provider), modelId, accountDeps(own, provider, account), request);
     },
     getAuth: deps.getAuth,
     setProviderWaitSink(sink) {
       opts.onProviderWait = sink;
     },
-  };
+    withAccountChoice(choice) {
+      return resolverWith(depsFor(choice));
+    },
+  });
+
+  return resolverWith(deps);
 }
 
 function withAffinity(llm: LLMProviderConfig, sessionAffinity: string | undefined): LLMProviderConfig {
@@ -557,8 +574,6 @@ interface ProxiedCredentials {
 
 const PROXIED_CREDENTIALS_TTL_MS = 60_000;
 
-const CATALOG_CRED_KEY = /^([a-z0-9][a-z0-9._-]*)\.bearer$/;
-
 interface ProxyCredentialSource {
   load(): Promise<ProxiedCredentials>;
   /** Synchronous: `normalizeSpecSync` must decide whether `groq/llama-3.3` starts
@@ -618,7 +633,7 @@ function createProxyCredentialSource(
 
       const value: ProxiedCredentials = { byKey, error: null };
       cached = { at: Date.now(), value };
-      providerIds = new Set([...byKey.keys()].flatMap((key) => CATALOG_CRED_KEY.exec(key)?.[1] ?? []));
+      providerIds = new Set([...byKey.keys()].flatMap((key) => catalogProviderOfKey(key) ?? []));
 
       return value;
     } catch (err) {
@@ -708,7 +723,7 @@ function noDefaultModelMessage(): string {
   return 'No default model is set.'
     + ' Run kinu auth to use Workers AI in your Cloudflare account, run kinu setup to pick a model provider,'
     + ' or name a model with --model'
-    + ' (for example --model claude/claude-sonnet-4-x once you are signed in to Claude Code).';
+    + ' (for example --model claude/claude-opus-4-7 once kinu provider connect claude has signed you in).';
 }
 
 type CliProviderId =
@@ -735,7 +750,7 @@ function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null
 
   if (llm.name === OPENCODE_PROVIDER_ID) return OPENCODE_PROVIDER_ID;
 
-  if (llm.name === CLAUDE_CLI_PROVIDER_ID) return CLAUDE_CLI_PROVIDER_ID;
+  if (llm.name === 'claude') return 'claude';
 
   return 'openai-compat';
 }
@@ -746,10 +761,13 @@ export function defaultSpecForEndpoint(llm: LLMProviderConfig | null): string | 
   const provider = defaultProviderFor(llm);
 
   if (provider === null || llm === null) return null;
-  // Some `codex` configs already carry the prefix; avoid `codex/codex/…`.
-  const model = llm.model.startsWith(`${provider}/`) ? llm.model.slice(provider.length + 1) : llm.model;
 
-  return `${provider}/${model}`;
+  // Some `codex` configs already carry the prefix; avoid `codex/codex/…`.
+  return `${provider}/${stripProvider(llm.model, provider)}`;
+}
+
+export function stripProvider(model: string, provider: string): string {
+  return model.startsWith(`${provider}/`) ? model.slice(provider.length + 1) : model;
 }
 
 interface LocalAuthStore {
@@ -765,7 +783,7 @@ interface OpenAICompatHeaders {
 function buildAuthStore(
   localEndpoint: LLMProviderConfig | null,
   credentials: LocalProviderCredentials,
-  codexAuthStore?: LocalCodexAuthStore,
+  oauthStore?: LocalOAuthStore,
 ): LocalAuthStore {
   const store = new Map<string, AuthResolution>();
 
@@ -831,25 +849,27 @@ function buildAuthStore(
     });
   }
 
-  const hasCodex = (): boolean => (codexAuthStore
-    ? codexAuthStore.hasCredential()
-    : Boolean(credentials.codexAccessToken));
+  for (const [key, token] of Object.entries(credentials.apiKeyAccounts ?? {})) {
+    store.set(key, { headers: credentialToHeaders(key, { kind: 'bearer', token }) });
+  }
+
+  const envCodex = credentials.codexAccessToken ? [CODEX_CRED_KEY] : [];
 
   return {
     has(key: string): boolean {
-      if (key === CODEX_CRED_KEY) return hasCodex();
+      if (isOAuthLoginKey(key)) return oauthStore ? oauthStore.has(key) : envCodex.includes(key);
 
       return store.has(key);
     },
     keys(): string[] {
-      return hasCodex() ? [...store.keys(), CODEX_CRED_KEY] : [...store.keys()];
+      return [...store.keys(), ...(oauthStore?.keys() ?? envCodex)];
     },
     async get(key: string, authOpts?: { forceRefresh?: boolean }): Promise<AuthResolution | null> {
-      if (key !== CODEX_CRED_KEY) return store.get(key) ?? null;
+      if (!isOAuthLoginKey(key)) return store.get(key) ?? null;
 
-      if (codexAuthStore) return codexAuthStore.getAuth(authOpts);
+      if (oauthStore) return oauthStore.getAuth(key, authOpts);
 
-      if (credentials.codexAccessToken) {
+      if (key === CODEX_CRED_KEY && credentials.codexAccessToken) {
         return {
           headers: codexCredentialToHeaders({
             kind: 'oauth',

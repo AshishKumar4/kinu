@@ -1,7 +1,19 @@
 /** Provider connect flows behind a port, shared by the CLI console and the TUI onboarding step; nothing here touches stdout/stdin. */
-import { checkClaudeAvailability, checkOpenCodeAvailability, createOpenCodeProvider } from '@kinu.run/cli-backend';
+import { checkOpenCodeAvailability, createOpenCodeProvider } from '@kinu.run/cli-backend';
 import {
+  ANTHROPIC_DEFAULT_MODEL,
+  CLAUDE_CRED_KEY,
+  CLAUDE_OAUTH_CALLBACK_PORT,
+  CODEX_CRED_KEY,
+  MAIN_ACCOUNT,
+  accountCredentialKey,
+  baseCredentialKey,
+  claudeCodeFrom,
+  storedAccounts,
+  createClaudeOAuthClient,
+  listAnthropicModels,
   createCodexOAuthClient,
+  startClaudeSignIn,
   decodeCodexAccountId,
   decodeJsonValue,
   discoverOpenAICompatibleModels,
@@ -12,15 +24,19 @@ import {
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import { listCloudCredentials, setCloudCredential } from '../cloud-api';
 import {
+  API_KEY_PROVIDERS,
   bumpProviderRevision,
   loadConfigFile,
   resolveCloudSession,
   updateConfigFile,
   type KinuConfig,
+  type LocalApiKeyProvider,
+  type LocalOAuthSession,
 } from '../config';
 import { adoptDefaultModel } from '../default-model';
 import { readDefaultTier } from '../profiles';
 import { authenticateCli, openBrowser } from './auth';
+import { awaitOAuthCallback } from './oauth-callback';
 
 export type ProviderConnectId =
   | 'cloudflare'
@@ -64,6 +80,7 @@ export interface ProviderConnectionState {
   readonly connected: boolean;
   /** The resolved model or store when connected; the connect command when not. */
   readonly detail: string;
+  readonly accounts?: readonly string[];
 }
 
 export interface ProviderConnections {
@@ -79,12 +96,6 @@ const INSTALL_HINT_OPENCODE = 'Install opencode: https://opencode.ai';
 
 const LOGIN_HINT_OPENCODE = 'Sign in to opencode with `opencode auth login`, then run `kinu setup` again.';
 
-const CLAUDE_LOGIN_HINT = 'Run `claude` once to sign in to your Claude subscription.';
-
-const CLAUDE_INSTALL_HINT = 'Install Claude Code: https://docs.claude.com/en/docs/claude-code/setup';
-
-const CLAUDE_READY = 'Your Claude subscription is ready. Use it with: kinu create --model claude/claude-opus-4-x';
-
 export const PROVIDER_CONNECTORS: readonly ProviderDescriptor[] = Object.freeze(([
   {
     id: 'cloudflare',
@@ -95,8 +106,8 @@ export const PROVIDER_CONNECTORS: readonly ProviderDescriptor[] = Object.freeze(
   {
     id: 'claude',
     label: 'Claude subscription',
-    blurb: 'Runs the `claude` command with your Claude Code sign-in. Local workspaces only.',
-    credential: 'binary',
+    blurb: 'Your Claude Pro or Max subscription. You sign in with your browser.',
+    credential: 'browser',
   },
   {
     id: 'codex',
@@ -129,6 +140,7 @@ const NAMED_ACCOUNT_KEYS: Readonly<Record<string, true>> = Object.freeze({
   'cloudflare.oauth': true,
   'cloudflare.ai-gateway': true,
   'codex.oauth': true,
+  'claude.oauth': true,
 });
 
 /** A local key wins at resolution, so both stores are read before a row says "connected". */
@@ -139,14 +151,57 @@ const ACCOUNT_CREDENTIAL_KEYS: Readonly<Record<string, string>> = Object.freeze(
   'openai-compatible': 'openai-compat.default',
 });
 
+interface ConnectionFacts {
+  readonly providers: NonNullable<KinuConfig['providers']>;
+  readonly heldKeys: readonly string[];
+  readonly defaultModel: string | undefined;
+}
+
+function namedAccounts(baseKey: string, localNames: readonly string[], facts: ConnectionFacts): string[] {
+  return [...new Set([...localNames, ...storedAccounts(baseKey, facts.heldKeys)])]
+    .filter((name) => name !== MAIN_ACCOUNT)
+    .sort();
+}
+
+function loginState(descriptor: ProviderDescriptor & { readonly id: 'codex' | 'claude' }, facts: ConnectionFacts): ProviderConnectionState {
+  const login = facts.providers[descriptor.id];
+  const accounts = namedAccounts(descriptor.id === 'codex' ? CODEX_CRED_KEY : CLAUDE_CRED_KEY, Object.keys(login?.accounts ?? {}), facts);
+
+  if (login?.accessToken === undefined && login?.refreshToken === undefined && accounts.length === 0) {
+    return { descriptor, connected: false, detail: `kinu provider connect ${descriptor.id}` };
+  }
+
+  return { descriptor, connected: true, detail: currentModel(facts.defaultModel, descriptor.id) ?? 'your subscription', accounts };
+}
+
+function apiKeyState(
+  descriptor: ProviderDescriptor & { readonly id: ApiKeyProviderId | 'openai-compatible' },
+  facts: ConnectionFacts,
+): ProviderConnectionState {
+  const id = descriptor.id;
+  const credKey = ACCOUNT_CREDENTIAL_KEYS[id];
+  const model = currentModel(facts.defaultModel, id === 'openai-compatible' ? 'openai-compat' : id);
+  const accounts = id === 'openai-compatible' ? [] : namedAccounts(API_KEY_PROVIDERS[id], Object.keys(facts.providers[id]?.accounts ?? {}), facts);
+  const local = localApiKey(facts.providers, id);
+
+  if (local || (credKey !== undefined && facts.heldKeys.includes(credKey))) {
+    return { descriptor, connected: true, detail: [model, local ? 'this machine' : 'your account'].filter(Boolean).join(' · '), accounts };
+  }
+
+  return accounts.length > 0
+    ? { descriptor, connected: true, detail: 'no main account', accounts }
+    : { descriptor, connected: false, detail: `kinu provider connect ${id}` };
+}
+
 export async function readProviderConnections(): Promise<ProviderConnections> {
   const config = loadConfigFile();
   const account = await accountCredentials();
   const held = 'credentials' in account ? account.credentials : [];
-  const inAccount = (credKey: string): boolean => held.some((credential) => credential.key === credKey);
   const providers = config.providers ?? {};
   const defaultModel = readDefaultTier()?.model;
-  const [claude, opencode] = await Promise.all([checkClaudeAvailability(), checkOpenCodeAvailability()]);
+  const opencode = await checkOpenCodeAvailability();
+  const heldKeys = held.map((credential) => credential.key);
+  const facts: ConnectionFacts = { providers, heldKeys, defaultModel };
 
   const states = PROVIDER_CONNECTORS.map((descriptor): ProviderConnectionState => {
     const hint = `kinu provider connect ${descriptor.id}`;
@@ -157,13 +212,7 @@ export async function readProviderConnections(): Promise<ProviderConnections> {
           ? { descriptor, connected: false, detail: hint }
           : { descriptor, connected: true, detail: config.user?.email ?? 'your account' };
       case 'claude':
-        if (claude.binary && claude.loggedIn) return { descriptor, connected: true, detail: 'claude/claude-opus-4-x' };
-
-        return { descriptor, connected: false, detail: claude.binary ? CLAUDE_LOGIN_HINT : hint };
-      case 'codex':
-        return providers.codex?.accessToken === undefined && providers.codex?.refreshToken === undefined
-          ? { descriptor, connected: false, detail: hint }
-          : { descriptor, connected: true, detail: currentModel(defaultModel, 'codex') ?? 'your subscription' };
+      case 'codex': return loginState({ ...descriptor, id: descriptor.id }, facts);
       case 'opencode':
         if (opencode.binary && opencode.authenticated) {
           return { descriptor, connected: true, detail: currentModel(defaultModel, 'opencode') ?? 'your opencode install' };
@@ -173,23 +222,11 @@ export async function readProviderConnections(): Promise<ProviderConnections> {
       case 'openai':
       case 'openrouter':
       case 'anthropic':
-      case 'openai-compatible': {
-        const localKey = localApiKey(providers, descriptor.id);
-        const credKey = ACCOUNT_CREDENTIAL_KEYS[descriptor.id];
-        const model = currentModel(defaultModel, descriptor.id === 'openai-compatible' ? 'openai-compat' : descriptor.id);
-
-        if (localKey) return { descriptor, connected: true, detail: [model, 'this machine'].filter(Boolean).join(' · ') };
-
-        if (credKey !== undefined && inAccount(credKey)) {
-          return { descriptor, connected: true, detail: [model, 'your account'].filter(Boolean).join(' · ') };
-        }
-
-        return { descriptor, connected: false, detail: hint };
-      }
+      case 'openai-compatible': return apiKeyState({ ...descriptor, id: descriptor.id }, facts);
     }
   });
 
-  const extras = held.filter((credential) => NAMED_ACCOUNT_KEYS[credential.key] !== true).map((credential) => credential.key);
+  const extras = [...new Set(heldKeys.map(baseCredentialKey))].filter((key) => NAMED_ACCOUNT_KEYS[key] !== true);
 
   const connections: ProviderConnections = {
     states,
@@ -239,52 +276,68 @@ function currentModel(model: string | undefined, prefix: string): string | undef
   return model.slice(prefix.length + 1);
 }
 
+export type ApiKeyProviderId = keyof typeof API_KEY_PROVIDERS;
+
+const API_KEY_CONNECTORS: Readonly<Record<ApiKeyProviderId, { readonly label: string; readonly defaultModel: string }>> = {
+  openai: { label: 'OpenAI', defaultModel: 'gpt-4o-mini' },
+  openrouter: { label: 'OpenRouter', defaultModel: 'openai/gpt-4o-mini' },
+  anthropic: { label: 'Anthropic', defaultModel: 'claude-sonnet-4-5' },
+};
+
+export function holdsAccounts(id: string): id is ApiKeyProviderId | 'codex' | 'claude' {
+  return id === 'codex' || id === 'claude' || id in API_KEY_PROVIDERS;
+}
+
 /** Stores and answers `connected`, or stores nothing and answers `blocked`; failures the person cannot act on throw. */
 export async function connectProvider(
   id: ProviderConnectId,
   port: ProviderConnectPort,
-  opts: { readonly origin?: string; readonly model?: string; readonly local?: boolean } = {},
+  opts: { readonly origin?: string; readonly model?: string; readonly local?: boolean; readonly account?: string } = {},
 ): Promise<ProviderConnectOutcome> {
+  const account = opts.account ?? MAIN_ACCOUNT;
+
+  if (account !== MAIN_ACCOUNT && !holdsAccounts(id)) {
+    return { kind: 'blocked', reason: `${id} holds one account here.`, hint: 'Accounts are for openai, openrouter, anthropic, codex and claude.' };
+  }
+
   switch (id) {
     case 'cloudflare': return await connectCloudflare(port, opts.origin);
-    case 'claude': return await connectClaude(port);
-    case 'codex': return await connectCodex(port, opts.model);
+    case 'claude': return await connectClaude(port, opts.model, account);
+    case 'codex': return await connectCodex(port, opts.model, account);
     case 'opencode': return await connectOpenCode(port, opts.model);
     case 'openai':
-      return await connectApiKeyProvider(port, {
-        label: 'OpenAI',
-        prefix: 'openai',
-        credKey: 'openai.bearer',
-        defaultModel: 'gpt-4o-mini',
-        model: opts.model,
-        local: opts.local ?? false,
-        store: async (key) => { await updateConfigFile((config) => withProvider(config, { openai: { apiKey: key } })); },
-        clear: async () => { await updateConfigFile((config) => { delete config.providers?.openai; }); },
-      });
     case 'openrouter':
-      return await connectApiKeyProvider(port, {
-        label: 'OpenRouter',
-        prefix: 'openrouter',
-        credKey: 'openrouter.bearer',
-        defaultModel: 'openai/gpt-4o-mini',
-        model: opts.model,
-        local: opts.local ?? false,
-        store: async (key) => { await updateConfigFile((config) => withProvider(config, { openrouter: { apiKey: key } })); },
-        clear: async () => { await updateConfigFile((config) => { delete config.providers?.openrouter; }); },
-      });
     case 'anthropic':
       return await connectApiKeyProvider(port, {
-        label: 'Anthropic',
-        prefix: 'anthropic',
-        credKey: 'anthropic.bearer',
-        defaultModel: 'claude-sonnet-4-5',
+        ...API_KEY_CONNECTORS[id],
+        prefix: id,
+        credKey: accountCredentialKey(API_KEY_PROVIDERS[id], account),
+        account,
         model: opts.model,
         local: opts.local ?? false,
-        store: async (key) => { await updateConfigFile((config) => withProvider(config, { anthropic: { apiKey: key } })); },
-        clear: async () => { await updateConfigFile((config) => { delete config.providers?.anthropic; }); },
+        store: async (key) => { await updateConfigFile((config) => withLocalApiKey(config, id, account, key)); },
+        clear: async () => { await updateConfigFile((config) => withLocalApiKey(config, id, account, null)); },
       });
     case 'openai-compatible': return await connectOpenAiCompatible(port, opts.model, opts.local ?? false);
   }
+}
+
+function withLocalApiKey(config: KinuConfig, id: ApiKeyProviderId, account: string, key: string | null): KinuConfig {
+  const next: LocalApiKeyProvider = { ...config.providers?.[id] };
+  const accounts = { ...next.accounts };
+
+  if (account !== MAIN_ACCOUNT) {
+    delete accounts[account];
+
+    if (key !== null) accounts[account] = { apiKey: key };
+    next.accounts = accounts;
+  } else if (key === null) {
+    delete next.apiKey;
+  } else {
+    next.apiKey = key;
+  }
+
+  return withProvider(config, { [id]: next });
 }
 
 async function connectCloudflare(port: ProviderConnectPort, origin: string | undefined): Promise<ProviderConnectOutcome> {
@@ -303,38 +356,82 @@ async function connectCloudflare(port: ProviderConnectPort, origin: string | und
   return { kind: 'connected', summary: `Signed in as ${email}` };
 }
 
-/** A probe only: the `claude` binary owns its login. Local only; cloud agents need an Anthropic API key. */
-async function connectClaude(port: ProviderConnectPort): Promise<ProviderConnectOutcome> {
-  const { binary, loggedIn } = await checkClaudeAvailability();
+/** The stored default only while Claude serves it. */
+async function suggestedClaudeModel(): Promise<string> {
+  const current = currentModel(readDefaultTier()?.model, 'claude');
 
-  if (binary && loggedIn) {
-    // Nothing is written, but a resident session learns of the connection only through this bump.
-    await bumpProviderRevision();
+  if (current === undefined) return ANTHROPIC_DEFAULT_MODEL;
+  const served = await listAnthropicModels({ fetch });
 
-    return { kind: 'connected', summary: CLAUDE_READY, detail: 'Cloud workspaces cannot use this subscription. Connect an Anthropic API key for them.' };
-  }
-
-  if (binary) return { kind: 'blocked', reason: CLAUDE_LOGIN_HINT, hint: 'Cloud workspaces cannot use this subscription. Connect an Anthropic API key for them.' };
-  port.report('Then run `claude` once to sign in.');
-
-  return { kind: 'blocked', reason: CLAUDE_INSTALL_HINT, hint: 'Cloud workspaces cannot use this subscription. Connect an Anthropic API key for them.' };
+  return served.some((model) => model.id === current) ? current : ANTHROPIC_DEFAULT_MODEL;
 }
 
-async function connectCodex(port: ProviderConnectPort, requestedModel: string | undefined): Promise<ProviderConnectOutcome> {
+async function connectClaude(port: ProviderConnectPort, requestedModel: string | undefined, account: string): Promise<ProviderConnectOutcome> {
+  const answered = account === MAIN_ACCOUNT
+    ? requestedModel ?? await port.ask({ label: 'Default Claude model', fallback: await suggestedClaudeModel() })
+    : null;
+
+  const credential = await runClaudeSignIn(port);
+  await updateConfigFile((next) => withOAuthSession(next, 'claude', account, credential));
+
+  if (answered === null) return { kind: 'connected', summary: `Connected the Claude account ${account}`, detail: accountDetail('claude', account) };
+
+  return { kind: 'connected', summary: 'Connected your Claude subscription', detail: await defaultModelDetail(`claude/${answered.replace(/^claude\//, '')}`) };
+}
+
+/** The browser returns to this machine; where it cannot, the person pastes what Claude showed them. */
+async function runClaudeSignIn(port: ProviderConnectPort): Promise<LocalOAuthSession> {
+  const signIn = await startClaudeSignIn();
+
+  port.report(`Open: ${signIn.url}`);
+
+  const code = await port.skippable('Waiting for Claude to send your browser back here.', (signal) => {
+    const returned = awaitOAuthCallback(CLAUDE_OAUTH_CALLBACK_PORT, signIn.state, signal);
+
+    openBrowser(signIn.url);
+
+    return returned;
+  });
+
+  const pasted = code ?? claudeCodeFrom(await port.ask({ label: 'Paste the code Claude showed you, or the address it sent you to', secret: true }), signIn.state);
+
+  return createClaudeOAuthClient().exchange(signIn, pasted);
+}
+
+async function connectCodex(port: ProviderConnectPort, requestedModel: string | undefined, account: string): Promise<ProviderConnectOutcome> {
+  if (account !== MAIN_ACCOUNT) {
+    const credential = await runCodexDeviceFlow(port);
+    await updateConfigFile((next) => withOAuthSession(next, 'codex', account, credential));
+
+    return { kind: 'connected', summary: `Connected the ChatGPT Codex account ${account}`, detail: accountDetail('codex', account) };
+  }
+
   const current = currentModel(readDefaultTier()?.model, 'codex') ?? 'gpt-5.5';
   const answered = requestedModel ?? await port.ask({ label: 'Default Codex model', fallback: current });
   const model = answered.startsWith('codex/') ? answered.slice('codex/'.length) : answered;
   const credential = await runCodexDeviceFlow(port);
-  await updateConfigFile((next) => withProvider(next, {
-    codex: {
-      accessToken: credential.accessToken,
-      refreshToken: credential.refreshToken,
-      expiresAt: credential.expiresAt,
-      metadata: credential.metadata,
-    },
-  }));
+  await updateConfigFile((next) => withOAuthSession(next, 'codex', MAIN_ACCOUNT, credential));
 
   return { kind: 'connected', summary: 'Connected ChatGPT Codex subscription', detail: await defaultModelDetail(`codex/${model}`) };
+}
+
+function withOAuthSession(config: KinuConfig, issuer: 'codex' | 'claude', account: string, credential: LocalOAuthSession): KinuConfig {
+  const stored = config.providers?.[issuer] ?? {};
+
+  const session: LocalOAuthSession = {
+    accessToken: credential.accessToken,
+    refreshToken: credential.refreshToken,
+    expiresAt: credential.expiresAt,
+    metadata: credential.metadata,
+  };
+
+  return withProvider(config, {
+    [issuer]: account === MAIN_ACCOUNT ? { ...stored, ...session } : { ...stored, accounts: { ...stored.accounts, [account]: session } },
+  });
+}
+
+function accountDetail(provider: string, account: string): string {
+  return `Use it with ${provider}@${account}/<model>, or make it the default: kinu provider default ${provider} ${account}`;
 }
 
 async function runCodexDeviceFlow(port: ProviderConnectPort) {
@@ -370,6 +467,7 @@ interface ApiKeyProvider {
   readonly label: string;
   readonly prefix: string;
   readonly credKey: string;
+  readonly account: string;
   readonly defaultModel: string;
   readonly model: string | undefined;
   readonly local: boolean;
@@ -378,10 +476,27 @@ interface ApiKeyProvider {
 }
 
 async function connectApiKeyProvider(port: ProviderConnectPort, provider: ApiKeyProvider): Promise<ProviderConnectOutcome> {
-  const key = await port.ask({ label: `${provider.label} API key`, secret: true });
+  const named = provider.account !== MAIN_ACCOUNT;
+  const key = await port.ask({ label: `${provider.label} API key${named ? ` for ${provider.account}` : ''}`, secret: true });
 
   if (key.trim() === '') {
     return { kind: 'blocked', reason: `No ${provider.label} key was given.`, hint: `Run kinu provider connect ${provider.prefix} when you have one.` };
+  }
+
+  if (named) {
+    const where = await storeProviderSecret({
+      local: provider.local,
+      credKey: provider.credKey,
+      credential: { kind: 'bearer', token: key },
+      storeLocally: () => provider.store(key),
+      clearLocally: provider.clear,
+    });
+
+    return {
+      kind: 'connected',
+      summary: `Added the ${provider.label} account ${provider.account} to ${where === 'account' ? 'your Kinu account' : 'this machine'}.`,
+      detail: accountDetail(provider.prefix, provider.account),
+    };
   }
 
   const current = currentModel(readDefaultTier()?.model, provider.prefix) ?? provider.defaultModel;

@@ -2,10 +2,11 @@
 // Registration order is the model picker's listing order. Auth goes through the UserDO stub; no credential material here.
 import {
   createProviderRegistry, createCodexProvider, createOpenAIProvider,
-  createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider,
+  createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider, createClaudeProvider,
   createModelsDevCatalogSource,
   type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver,
   type ProviderWaitInfo,
+  specProvider,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
 import { createWorkersAIProvider } from '@kinu.run/core';
@@ -51,6 +52,7 @@ export interface AgentProviderDeps {
   onProviderWait?: (info: ProviderWaitInfo) => void;
   appTitle?: string;
   sessionAffinity?: string;
+  accountFor?: (providerId: string) => string | undefined;
 }
 
 export interface AgentProviderRegistry {
@@ -98,6 +100,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   registry.register(createMyGatewayProvider());
   registry.register(createAIGatewayProvider());
   registry.register(createCodexProvider());
+  registry.register(createClaudeProvider());
   registry.register(createOpenAIProvider());
   registry.register(createAnthropicProvider());
   registry.register(createOpenRouterProvider({
@@ -128,6 +131,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     listCredentialKeys: credentialKeys,
     fetch: opts.fetch,
     onProviderWait: opts.onProviderWait,
+    accountFor: opts.accountFor,
   };
 
   // Without a UserDO stub, workers-ai is a guaranteed 401, so the default falls back to the env-bound ai-gateway.
@@ -173,7 +177,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
       if (s.startsWith('@cf/')) return `workers-ai/${s}`;
 
       if (s.includes('/')) {
-        const first = s.slice(0, s.indexOf('/'));
+        const first = specProvider(s) ?? '';
 
         // Optimistic for catalog-shaped ids: the catalog cannot be consulted synchronously; typos surface at request time.
         if (registry.canResolve(first)) return s;

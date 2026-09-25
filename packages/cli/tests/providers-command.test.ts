@@ -1,6 +1,6 @@
 import { runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 import { delimiter, join, resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
@@ -9,36 +9,14 @@ import * as v from 'valibot';
 
 const repoRoot = resolve(__dirname, '../../..');
 
-/** A fake `claude` on PATH exercises the real spawn + `claude auth status` probe. */
-function runProviders(
-  args: string[],
-  opts: { claude?: 'ready' | 'logged-out'; home: string; env?: Record<string, string> },
-) {
-  const binDir = scratchDir('claude-bin');
-  // Controlled PATH excludes the real `claude`; /usr/bin + /bin keep `bash`/`env` for the fake's shebang.
-  let path = ['/usr/bin', '/bin'].join(delimiter);
-
-  if (opts.claude) {
-    const loggedIn = opts.claude === 'ready';
-
-    const script = [
-      '#!/usr/bin/env bash',
-      'if [ "$1" = "--version" ]; then echo "claude 1.0.0"; exit 0; fi',
-      `if [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo '{"loggedIn": ${loggedIn}}'; exit 0; fi`,
-      'exit 0',
-    ].join('\n');
-
-    const claudePath = join(binDir, 'claude');
-    writeFileSync(claudePath, script);
-    chmodSync(claudePath, 0o755);
-    path = `${binDir}${delimiter}${path}`;
-  }
-
+/** A controlled PATH keeps a real `opencode` on this machine out of the listing. */
+function runProviders(args: string[], opts: { home: string; env?: Record<string, string> }) {
+  const path = ['/usr/bin', '/bin'].join(delimiter);
   const argv = JSON.stringify(args);
 
   const runner = `
     const { providersCommand } = await import('./packages/cli/src/commands/providers.ts');
-    await providersCommand(${argv}[0], ${argv}[1], {});
+    await providersCommand(${argv}[0], ${argv}[1], ${argv}[2], {});
   `;
 
   return runToExit([process.execPath, '-e', runner], {
@@ -59,38 +37,97 @@ function freshHome(): string {
   return home;
 }
 
+/** The default model, set the way the home screen's Defaults set it. */
+async function withDefaultModel(home: string, model: string): Promise<void> {
+  const proc = await runToExit([process.execPath, '-e', `
+      const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
+      await updateDefaultTier({ model: ${JSON.stringify(model)} });
+    `], {
+    cwd: repoRoot,
+    env: { ...process.env, KINU_HOME: home },
+  });
+
+  expect(proc.exitCode, proc.stderr).toBe(0);
+}
+
 describe('providers command — Claude subscription', () => {
-  test('connect claude reports ready and the create command when installed + logged in', async () => {
-    const res = await runProviders(['connect', 'claude'], { claude: 'ready', home: freshHome() });
-    expect(res.exitCode).toBe(0);
-    expect(res.stdout).toContain('Your Claude subscription is ready');
-    expect(res.stdout).toContain('claude/claude-opus-4-x');
-    expect(res.stdout).toContain('Anthropic API key');
+  /** The token endpoint answers inside the child; the person pastes what Claude showed them. */
+  async function connectClaude(home: string, account: string) {
+    const runner = `
+      const { connectProvider } = await import('./packages/cli/src/commands/provider-connect.ts');
+      const sent = [];
+      globalThis.fetch = async (input, init) => {
+        sent.push([String(input), JSON.parse(init.body)]);
+        return Response.json({
+          access_token: 'sk-ant-oat01-fresh', refresh_token: 'rt-fresh', expires_in: 28800,
+          account: { uuid: 'acct-1', email_address: 'a@example.com' }, organization: { uuid: 'org-1', name: 'Team' },
+        });
+      };
+      let opened = '';
+      const offered = [];
+      const port = {
+        report: (line) => { if (line.startsWith('Open: ')) opened = line.slice('Open: '.length); },
+        ask: async (request) => {
+          if (request.secret) return 'code-from-claude#' + new URL(opened).searchParams.get('state');
+          offered.push(request.fallback);
+
+          return 'claude-opus-4-7';
+        },
+        skippable: async () => null,
+      };
+      const outcome = await connectProvider('claude', port, { account: ${JSON.stringify(account)} });
+      console.log(JSON.stringify({ outcome, opened, sent, offered }));
+    `;
+
+    const proc = await runToExit([process.execPath, '-e', runner], {
+      cwd: repoRoot,
+      // An empty PATH leaves no `xdg-open` to start a real browser.
+      env: { ...process.env, KINU_HOME: home, PATH: scratchDir('no-browser'), NO_COLOR: '1' },
+    });
+
+    expect(proc.exitCode, proc.stderr).toBe(0);
+
+    return v.parse(v.object({
+      outcome: v.object({ kind: v.string(), summary: v.string(), detail: v.optional(v.string()) }),
+      opened: v.string(),
+      sent: v.array(v.tuple([v.string(), v.record(v.string(), v.string())])),
+      offered: v.array(v.string()),
+    }), JSON.parse(proc.stdout));
+  }
+
+  test('a pasted sign-in code is exchanged as Claude Code does and stores the login on this machine', async () => {
+    const home = freshHome();
+    const run = await connectClaude(home, 'main');
+    const opened = new URL(run.opened);
+
+    expect([opened.origin + opened.pathname, opened.searchParams.get('redirect_uri'), opened.searchParams.get('code')])
+      .toEqual(['https://claude.ai/oauth/authorize', 'http://localhost:54545/callback', 'true']);
+    expect(run.outcome).toEqual({ kind: 'connected', summary: 'Connected your Claude subscription', detail: 'Default model: claude/claude-opus-4-7' });
+    expect(run.sent.map(([url, body]) => [url, body.grant_type, body.code, body.state])).toEqual([
+      ['https://api.anthropic.com/v1/oauth/token', 'authorization_code', 'code-from-claude', opened.searchParams.get('state') ?? 'no state'],
+    ]);
+
+    const stored = v.parse(v.object({ providers: v.object({ claude: v.object({ accessToken: v.string(), refreshToken: v.string() }) }) }), parseJsonObject(readFileSync(join(home, 'config.json'), 'utf8')));
+
+    expect(stored.providers.claude).toMatchObject({ accessToken: 'sk-ant-oat01-fresh', refreshToken: 'rt-fresh' });
   });
 
-  test('connect claude tells an installed-but-logged-out user to sign in', async () => {
-    const res = await runProviders(['connect', 'claude'], { claude: 'logged-out', home: freshHome() });
-    expect(res.exitCode).toBe(0);
-    expect(res.stdout).toContain('Run `claude` once to sign in');
-    expect(res.stdout).not.toContain('Your Claude subscription is ready');
+  test('a default the retired claude binary made up is not offered again; a model Claude serves is', async () => {
+    const home = freshHome();
+
+    await withDefaultModel(home, 'claude/claude-opus-4-x');
+    expect((await connectClaude(home, 'main')).offered).toEqual(['claude-opus-4-7']);
   });
 
-  test('connect claude prints install guidance when the binary is absent', async () => {
-    const res = await runProviders(['connect', 'claude'], { home: freshHome() });
-    expect(res.exitCode).toBe(0);
-    expect(res.stdout).toContain('Install Claude Code');
-    expect(res.stdout).not.toContain('Your Claude subscription is ready');
-  });
+  test('a second account signs in beside the first and is listed by name', async () => {
+    const home = freshHome();
 
-  test('list shows the Claude subscription status inline', async () => {
-    const ready = await runProviders(['list'], { claude: 'ready', home: freshHome() });
-    expect(ready.exitCode).toBe(0);
-    expect(ready.stdout).toContain('Claude subscription');
-    expect(ready.stdout).toContain('claude/claude-opus-4-x');
+    await connectClaude(home, 'main');
+    expect((await connectClaude(home, 'work')).outcome.summary).toBe('Connected the Claude account work');
+    const listed = (await runProviders(['list'], { home })).stdout.split('\n');
+    const claude = listed.findIndex((line) => line.includes('Claude subscription'));
 
-    const absent = await runProviders(['list'], { home: freshHome() });
-    expect(absent.stdout).toContain('Claude subscription');
-    expect(absent.stdout).toContain('kinu provider connect claude');
+    expect(listed.slice(claude, claude + 3).join('\n')).toContain('accounts: main (default), work');
   });
 });
 
@@ -120,18 +157,14 @@ describe('providers command — the provider revision', () => {
     expect(revisionOf(home)).toBe(1);
   });
 
-  test('the subscription bridges advance it too, and each command advances it once', async () => {
+  test('the opencode bridge advances it too, and each command advances it once', async () => {
     const home = freshHome();
-    // Kinu stores no credential for the claude bridge, but a listing sweep probes it, so availability
-    // changes bump the revision.
-    expect((await runProviders(['connect', 'claude'], { claude: 'ready', home })).exitCode).toBe(0);
+    // Kinu stores no opencode credential, but a listing sweep probes that login, so a disconnect bumps the revision.
+    expect((await runProviders(['disconnect', 'opencode'], { home })).exitCode).toBe(0);
     expect(revisionOf(home)).toBe(1);
 
-    expect((await runProviders(['disconnect', 'claude'], { home })).exitCode).toBe(0);
-    expect(revisionOf(home)).toBe(2);
-
     expect((await runProviders(['list'], { home })).exitCode).toBe(0);
-    expect(revisionOf(home)).toBe(2);
+    expect(revisionOf(home)).toBe(1);
   });
 });
 
@@ -147,18 +180,6 @@ describe('providers command — disconnect', () => {
     return parseJsonObject(readFileSync(join(home, 'config.json'), 'utf8'));
   }
 
-  /** The default model, set the way the home screen's Defaults set it. */
-  async function withDefaultModel(home: string, model: string): Promise<void> {
-    const proc = await runToExit([process.execPath, '-e', `
-        const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
-        await updateDefaultTier({ model: ${JSON.stringify(model)} });
-      `], {
-      cwd: repoRoot,
-      env: { ...process.env, KINU_HOME: home },
-    });
-
-    expect(proc.exitCode, proc.stderr).toBe(0);
-  }
 
   const DefaultModelSchema = v.object({
     localProfile: v.object({ catalog: v.object({ tiers: v.object({ default: v.object({ model: v.string() }) }) }) }),
@@ -184,6 +205,30 @@ describe('providers command — disconnect', () => {
     expect(readFileSync(join(home, 'config.json'), 'utf8')).not.toContain('secret');
   });
 
+  test('an account is picked as the default, listed as it, and taken out of the default when removed', async () => {
+    const home = homeWith({ providers: { anthropic: { apiKey: 'sk-main', accounts: { work: { apiKey: 'sk-work' } } } } });
+    await withDefaultModel(home, 'anthropic/claude-x');
+    const accountsLine = (out: string): string => out.split('\n').find((line) => line.includes('accounts:'))?.trim() ?? '';
+
+    expect((await runProviders(['default', 'anthropic', 'work'], { home })).exitCode).toBe(0);
+    expect(accountsLine((await runProviders(['list'], { home })).stdout)).toBe('accounts: main, work (default)');
+
+    const removed = await runProviders(['disconnect', 'anthropic', 'work'], { home });
+    expect(removed.exitCode).toBe(0);
+    expect(removed.stdout).toContain('was the default anthropic account');
+
+    const config = readConfig(home);
+    expect(config.providers).toEqual({ anthropic: { apiKey: 'sk-main', accounts: {} } });
+    expect(v.parse(v.object({ localProfile: v.object({ catalog: v.object({ accounts: v.record(v.string(), v.string()) }) }) }), config)
+      .localProfile.catalog.accounts).toEqual({});
+  });
+
+  test('disconnecting a provider takes its main account and keeps the others', async () => {
+    const home = homeWith({ providers: { openai: { apiKey: 'sk-main', accounts: { work: { apiKey: 'sk-work' } } } } });
+    expect((await runProviders(['disconnect', 'openai'], { home })).exitCode).toBe(0);
+    expect(readConfig(home).providers).toEqual({ openai: { accounts: { work: { apiKey: 'sk-work' } } } });
+  });
+
   test('says nothing about a default model that runs on another provider', async () => {
     const home = homeWith({ providers: { codex: { accessToken: 'at' }, openai: { apiKey: 'sk' } } });
     await withDefaultModel(home, 'openai/gpt-5.5');
@@ -207,11 +252,18 @@ describe('providers command — disconnect', () => {
     expect(res.stdout).toContain('OPENAI_API_KEY is still set');
   });
 
-  test('points the account and subscription bridges at the login that owns them', async () => {
+  test('points the account and the opencode bridge at the login that owns them', async () => {
     const home = homeWith({});
     expect((await runProviders(['disconnect', 'cloudflare'], { home })).stdout).toContain('kinu logout');
-    expect((await runProviders(['disconnect', 'claude'], { home })).stdout).toContain('claude logout');
     expect((await runProviders(['disconnect', 'opencode'], { home })).stdout).toContain('opencode auth logout');
+  });
+
+  test('a Claude login is removed from this machine like any stored credential', async () => {
+    const home = homeWith({ providers: { claude: { accessToken: 'sk-ant-oat01-secret', refreshToken: 'rt-secret' }, openai: { apiKey: 'sk' } } });
+    const res = await runProviders(['disconnect', 'claude'], { home });
+
+    expect(res.stdout).toContain('Removed the claude credential from this machine');
+    expect(readConfig(home).providers).toEqual({ openai: { apiKey: 'sk' } });
   });
 
   test('remove and rm are accepted spellings', async () => {

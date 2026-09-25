@@ -14,17 +14,20 @@ import {
   effectiveRoleCatalog,
   isValidRoleId,
   offeredReasoningEfforts,
+  parseModelSpec,
+  specWithoutAccount,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
   type RoleDefinition,
   type RoleCatalog,
   type RoleId,
+  type TierAssignment,
   type TierId,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { getProfileCatalog, listAvailableModels, updateProfileCatalog, type ModelMenu } from '../lib/user-api';
-import { ModelPicker, reasoningEffortLabel } from './ModelPicker';
+import { AccountPicker, ModelPicker, reasoningEffortLabel, specOnAccount } from './ModelPicker';
 import { BrandMark, providerBrand } from './ui/BrandMark';
 import { Card, Choice, Field, inputCls, tabCls } from './ui/form';
 import { FilledButton } from './ui/FilledButton';
@@ -205,24 +208,37 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
     setDraft({ ...draft, tiers });
   };
 
-  const setTierEffort = (id: TierId, effort: ReasoningEffort | '') => {
+  const editTier = (id: TierId, edit: (tier: TierAssignment) => TierAssignment) => {
     if (!draft) return;
     const tiers = { ...draft.tiers };
-    const current = id === 'default' ? tiers.default : tiers[id] ?? tiers.default;
-    const next = { ...current };
-
-    if (effort) next.reasoningEffort = effort;
-    else delete next.reasoningEffort;
+    const next = edit({ ...(id === 'default' ? tiers.default : tiers[id] ?? tiers.default) });
 
     if (id === 'default') tiers.default = next;
     else tiers[id] = next;
     setDraft({ ...draft, tiers });
   };
 
+  const setTierEffort = (id: TierId, effort: ReasoningEffort | '') => editTier(id, (tier) => {
+    const next = { ...tier };
+
+    if (effort) next.reasoningEffort = effort;
+    else delete next.reasoningEffort;
+
+    return next;
+  });
+
+  const setTierFallbacks = (id: TierId, fallbacks: readonly string[]) => editTier(id, (tier) => {
+    const next: TierAssignment = { ...tier, fallbacks: [...fallbacks] };
+
+    if (fallbacks.length === 0) delete next.fallbacks;
+
+    return next;
+  });
+
   const saveWhat = tiersOnly ? 'Save tiers' : 'Save roles and tiers';
 
   const defaultModel = draft === null ? '' : draft.tiers.default.model;
-  const defaultLabel = menu.models.find((model) => model.spec === defaultModel)?.label ?? defaultModel;
+  const defaultLabel = labelOfSpec(menu, defaultModel);
 
   return (
     <>
@@ -242,7 +258,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                 const resolved = assignment ?? draft.tiers.default;
                 const builtin = TIER_IDS.some((id) => id === tierId);
 
-                const entry = menu.models.find((model) => model.spec === resolved.model);
+                const entry = menu.models.find((model) => model.spec === specWithoutAccount(resolved.model));
 
                 const efforts = offeredReasoningEfforts(
                   entry?.reasoningEfforts,
@@ -272,6 +288,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                     <ModelPicker
                       models={menu.models}
                       failures={menu.failures}
+                      accounts={menu.accounts}
                       value={assignment?.model ?? ''}
                       onChange={(model) => setTier(tierId, model)}
                       clearable={tierId !== 'default'}
@@ -289,6 +306,13 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                         ...efforts.map((effort) => ({ value: effort, label: reasoningEffortLabel(effort) })),
                       ]}
                       onChange={(effort) => setTierEffort(tierId, effort)}
+                    />
+                    <TierFallbacks
+                      tierId={tierId}
+                      chain={resolved.fallbacks ?? []}
+                      model={resolved.model}
+                      menu={menu}
+                      onChange={(fallbacks) => setTierFallbacks(tierId, fallbacks)}
                     />
                   </div>
                 );
@@ -413,6 +437,62 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
         </div>
       )}
     </>
+  );
+}
+
+function labelOfSpec(menu: ModelMenu, spec: string): string {
+  const label = menu.models.find((entry) => entry.spec === specWithoutAccount(spec))?.label ?? spec;
+  const account = spec === '' ? undefined : parseModelSpec(spec).account;
+
+  return account === undefined ? label : `${label} · ${account}`;
+}
+
+function TierFallbacks(props: {
+  tierId: TierId;
+  chain: readonly string[];
+  model: string;
+  menu: ModelMenu;
+  onChange: (fallbacks: readonly string[]) => void;
+}) {
+  const taken = new Set([props.model, ...props.chain]);
+  const accountsOf = (spec: string) => props.menu.accounts?.[parseModelSpec(spec).provider] ?? [];
+
+  const variants = (spec: string) => [
+    spec, ...(accountsOf(spec).length > 1 ? accountsOf(spec).map((account) => specOnAccount(spec, account)) : []),
+  ];
+
+  const freeVariant = (spec: string) => variants(spec).find((variant) => !taken.has(variant));
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 md:col-span-2 md:col-start-2" role="group" aria-label={`${props.tierId} fallbacks`}>
+      <span className="p-meta p-text-3">Fallbacks</span>
+      {props.chain.map((spec, index) => (
+        <span key={spec} data-spec={spec} className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-0.5 text-xs p-text">
+          <span className="p-text-3">{index + 1}.</span>
+          {labelOfSpec(props.menu, spec)}
+          <AccountPicker spec={spec} accounts={accountsOf(spec)} label={`${props.tierId} fallback ${index + 1} account`}
+            onChange={(next) => props.onChange(props.chain.map((entry, at) => (at === index ? next : entry)))} />
+          <button type="button" className="p-text-3 hover:p-text" aria-label={`Remove ${spec} from the ${props.tierId} fallbacks`}
+            onClick={() => props.onChange(props.chain.filter((entry) => entry !== spec))}>
+            <XIcon size={11} />
+          </button>
+        </span>
+      ))}
+      <ModelPicker
+        models={props.menu.models.filter((entry) => freeVariant(entry.spec) !== undefined)}
+        failures={props.menu.failures}
+        value=""
+        onChange={(spec) => {
+          const free = spec === '' ? undefined : freeVariant(spec);
+
+          if (free !== undefined) props.onChange([...props.chain, free]);
+        }}
+        placeholder={props.chain.length === 0 ? 'Add a fallback model…' : 'Add another…'}
+        label={`${props.tierId} add fallback`}
+        size="sm"
+        className="w-56"
+      />
+    </div>
   );
 }
 

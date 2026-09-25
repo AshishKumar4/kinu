@@ -26,7 +26,7 @@ import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Modal } from "@/components/ui/Modal";
 import { RevertTurnDialog, type DeviceRestorePlan } from "@/components/RevertTurnDialog";
-import { ChatLiveTail, DeviceOfflineRow, MessageView, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
+import { ChatLiveTail, DeviceOfflineRow, MessageView, ModelFallbackRows, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@kinu.run/core";
 import { classifyProgrammaticTurn, messageSignalId, threadLiveTail } from "@kinu.run/core";
@@ -968,6 +968,7 @@ export default function WorkspacePage() {
               {state.subordinateEvents.map((event) => (
                 <SubordinateEventCard key={event.id} event={event} workspace={agentId} />
               ))}
+              <ModelFallbackRows notices={state.modelFallbacks} />
               <DeviceOfflineRow devices={state.unavailableDevices} />
               {state.chatError && (
                 <ChatErrorCard

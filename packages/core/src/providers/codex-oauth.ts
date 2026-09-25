@@ -48,7 +48,7 @@ function sanitizeErrorBody(body: string): string {
     .slice(0, 512);
 }
 
-/** Read the token endpoint's rejection; a body without an `error` code yields `unknown`, never a terminal code. */
+/** A body without an `error` code yields `unknown`, never a terminal code. */
 async function codexTokenEndpointError(res: Response): Promise<OAuthTokenError> {
   const body = await res.text();
 

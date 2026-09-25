@@ -1,20 +1,23 @@
 // Header mapping lives beside the store so secret material never leaves it.
 import { codexCredentialToHeaders } from '../providers/codex-oauth';
+import { baseCredentialKey } from './accounts';
 import type { Credential } from './store';
 
 export interface CredentialHeaders {
   [name: string]: string;
 }
 
-/** The credential key picks the header flavor (codex.oauth = WAF-bypass set; others Bearer, plus extras for compat). */
+/** The base key picks the header flavor (codex.oauth = WAF-bypass set; others Bearer, plus extras for compat). */
 export function credentialToHeaders(key: string, cred: Credential): CredentialHeaders {
-  if (key === 'codex.oauth') {
+  const base = baseCredentialKey(key);
+
+  if (base === 'codex.oauth') {
     if (cred.kind !== 'oauth') throw new Error('codex.oauth credential must be oauth kind');
 
     return codexCredentialToHeaders(cred);
   }
 
-  if (key === 'anthropic.bearer') {
+  if (base === 'anthropic.bearer') {
     if (cred.kind !== 'bearer') throw new Error('anthropic.bearer credential must be bearer kind');
 
     return {

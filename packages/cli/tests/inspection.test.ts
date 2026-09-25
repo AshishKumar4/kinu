@@ -255,8 +255,8 @@ describe("CLI inspection commands", () => {
     }
   });
 
-  /** `kinu spend` marks the total as a floor, naming unpriced calls and `cacheWrite1h` calls priced at the 5m rate. */
-  test("kinu spend names BOTH reasons its dollar total is a floor", async () => {
+  /** `kinu spend` marks the total as a floor while a measured call carried no rate, and says how many. */
+  test("kinu spend names the unpriced calls that make its dollar total a floor", async () => {
     const home = scratchDir("cli-spend");
     await createLocalAgent(home, "localtest");
 
@@ -269,15 +269,9 @@ describe("CLI inspection commands", () => {
         source: SpendSource;
         usage: Usage;
         usd?: number;
-        usdFloorTokens?: number;
       }> = [
         { source: "judge", usage: { input: 1_000, output: 100 }, usd: 0.0165 },
-        {
-          source: "judge",
-          usage: { input: 2_048, output: 100, cacheWrite: 1_024, cacheWrite1h: 512 },
-          usd: 0.0175,
-          usdFloorTokens: 512,
-        },
+        { source: "judge", usage: { input: 2_048, output: 100, cacheWrite: 1_024, cacheWrite1h: 512 }, usd: 0.0175 },
         { source: "fast", usage: { input: 500, output: 50 } },
       ];
 
@@ -294,19 +288,17 @@ describe("CLI inspection commands", () => {
     expect([json.exitCode, json.stderr]).toEqual([0, ""]);
 
     const parsed = v.parse(
-      v.object({ total: v.object({ unpricedCalls: v.number(), floorPricedCalls: v.number() }) }),
+      v.object({ total: v.object({ unpricedCalls: v.number() }) }),
       JSON.parse(json.stdout),
     );
 
-    expect(parsed.total).toEqual({ unpricedCalls: 1, floorPricedCalls: 1 });
+    expect(parsed.total).toEqual({ unpricedCalls: 1 });
 
     const printed = await runCli(home, ["spend", "localtest"]);
     expect([printed.exitCode, printed.stderr]).toEqual([0, ""]);
     const out = printed.stdout;
     expect(out).toContain("$0.0340");
-    expect(out).toContain("The dollar total is a floor");
-    expect(out).toContain("1 measured call carried no models.dev rate");
-    expect(out).toContain("1 priced call wrote cache at a retention tier the catalog does not rate");
+    expect(out).toContain("The dollar total is a floor: 1 measured call carried no models.dev rate");
   });
 });
 

@@ -10,6 +10,7 @@ import {
   markLastToolForAnthropicCache,
   promptCacheOptions,
   promptCachePlan,
+  promptCacheWarm,
   resolvePromptCacheStrategy,
   type PromptCacheStrategy,
   ANTHROPIC_MAX_BREAKPOINTS,
@@ -59,6 +60,7 @@ function anthropicMarkerCount(messages: ReadonlyArray<ModelMessage>): number {
 describe('resolvePromptCacheStrategy', () => {
   test('closed provider map', () => {
     expect(resolvePromptCacheStrategy('anthropic')).toEqual({ kind: 'anthropic' });
+    expect(resolvePromptCacheStrategy('claude', 'claude-opus-4-7')).toEqual({ kind: 'anthropic', ttl: '1h' });
     expect(resolvePromptCacheStrategy('openai', 'gpt-5.5')).toEqual({ kind: 'openai-cache-key' });
     expect(resolvePromptCacheStrategy('codex', 'gpt-5.5')).toEqual({ kind: 'openai-cache-key' });
     expect(resolvePromptCacheStrategy('openai-compat')).toEqual({ kind: 'openai-compat', bodyNamespace: 'openai-compat', markers: false });
@@ -76,7 +78,6 @@ describe('resolvePromptCacheStrategy', () => {
 
   test('no-cache-concept providers resolve to none', () => {
     expect(resolvePromptCacheStrategy('workers-ai', '@cf/moonshotai/kimi-k2.6')).toEqual({ kind: 'none' });
-    expect(resolvePromptCacheStrategy('claude-cli', 'claude-opus-4-7')).toEqual({ kind: 'none' });
     expect(resolvePromptCacheStrategy('something-new')).toEqual({ kind: 'none' });
     expect(resolvePromptCacheStrategy(undefined)).toEqual({ kind: 'none' });
   });
@@ -346,5 +347,38 @@ describe('markLastToolForAnthropicCache', () => {
     const off: ToolSet = { a: cacheTool('a'), b: cacheTool('b') };
     markLastToolForAnthropicCache(off, 'none');
     expect(providerOptions({ value: off.b })).toBeUndefined();
+  });
+});
+
+describe('promptCacheWarm', () => {
+  const MINUTE = 60_000;
+  const AT = 1_700_000_000_000;
+
+  test('an Anthropic entry is warm inside its five minutes and its hour, and cold past them', () => {
+    const short = { at: AT, providerId: 'anthropic', retention: 'short' } as const;
+
+    expect(promptCacheWarm(short, AT + 4 * MINUTE)).toBe(true);
+    expect(promptCacheWarm(short, AT + 5 * MINUTE)).toBe(false);
+    expect(promptCacheWarm({ ...short, retention: 'long' }, AT + 59 * MINUTE)).toBe(true);
+    expect(promptCacheWarm({ ...short, retention: 'long' }, AT + 60 * MINUTE)).toBe(false);
+    // Claude Code's retention is the hour whatever the setting.
+    expect(promptCacheWarm({ ...short, providerId: 'claude' }, AT + 30 * MINUTE)).toBe(true);
+  });
+
+  test('OpenAI keeps an in-memory entry at most an hour and a 24h one a day; a provider with no lifetime gets the hour', () => {
+    const openai = { at: AT, providerId: 'openai', retention: 'short' } as const;
+
+    expect(promptCacheWarm(openai, AT + 59 * MINUTE)).toBe(true);
+    expect(promptCacheWarm(openai, AT + 61 * MINUTE)).toBe(false);
+    expect(promptCacheWarm({ ...openai, retention: 'long' }, AT + 23 * 60 * MINUTE)).toBe(true);
+    expect(promptCacheWarm({ at: AT, providerId: 'workers-ai', retention: 'short' }, AT + 59 * MINUTE)).toBe(true);
+    expect(promptCacheWarm({ at: AT, providerId: 'workers-ai', retention: 'short' }, AT + 61 * MINUTE)).toBe(false);
+  });
+
+  test('no cache is never warm, nor is an actor with no request; a warming lane keeps an expired entry warm', () => {
+    expect(promptCacheWarm({ at: AT, providerId: 'anthropic', retention: 'none' }, AT + 1)).toBe(false);
+    expect(promptCacheWarm(null, AT)).toBe(false);
+    expect(promptCacheWarm({ at: AT, providerId: 'anthropic', retention: 'short' }, AT + 10 * MINUTE, AT + 11 * MINUTE)).toBe(true);
+    expect(promptCacheWarm({ at: AT, providerId: 'anthropic', retention: 'short' }, AT + 12 * MINUTE, AT + 11 * MINUTE)).toBe(false);
   });
 });

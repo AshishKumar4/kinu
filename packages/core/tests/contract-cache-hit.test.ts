@@ -395,9 +395,9 @@ const CACHING_PROVIDERS: readonly ProviderCase[] = [
 
 /** A provider id the strategy map resolves to `none`: unaddressed request, plain usage. */
 const UNADDRESSED_PROVIDER: ProviderCase = {
-  label: 'unaddressed', providerId: 'claude', modelId: 'claude-sonnet-4-x', dialect: 'compat',
+  label: 'unaddressed', providerId: 'opencode', modelId: 'claude-sonnet-4-x', dialect: 'compat',
   unaddressed: true,
-  credentials: { 'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: 'https://claude.example/v1' } },
+  credentials: { 'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: 'https://opencode.example/v1' } },
   model: (deps) => createOpenAICompatProvider().createModel('claude-sonnet-4-x', deps),
 };
 
@@ -467,10 +467,10 @@ interface TurnResult {
 
 /** One three-step turn (tool call, tool call, answer) against the provider's mocked cache. `durable` re-reads the
  *  stored history at every step and names where the turn's input sits, as a claimed turn's context plane does;
- *  `turnLocal` rides it. */
+ *  `instructions` (the unapproved workspace files) ride the dynamic context's ledger. */
 async function driveTurn(
   entry: ProviderCase,
-  opts: { decoy?: boolean; extension?: KinuExtension; dynamic?: () => DynamicContext; durable?: true; turnLocal?: ModelMessage[] } = {},
+  opts: { decoy?: boolean; extension?: KinuExtension; dynamic?: () => DynamicContext; durable?: true; instructions?: string } = {},
 ): Promise<TurnResult> {
   const oracle = new PrefixCacheOracle();
 
@@ -496,7 +496,9 @@ async function driveTurn(
   const extensions = opts.extension ? new ExtensionHost().register(opts.extension) : undefined;
   let stored: ModelMessage[] = [...HISTORY];
 
-  const plane = opts.durable === undefined ? {} : {
+  // runChat's own option types: a spread escapes the excess-property check, so an option runChat no longer takes
+  // fails to compile here instead of being dropped.
+  const plane: Partial<Pick<Parameters<typeof runChat>[0], 'stepContext' | 'persistStep'>> = opts.durable === undefined ? {} : {
     stepContext: { base: async () => ({ messages: [...stored], changed: false, turnStart: HISTORY.length - 1 }), consume: async () => {} },
     persistStep: async (produced: readonly ModelMessage[]) => { stored = [...HISTORY, ...produced]; },
   };
@@ -508,9 +510,8 @@ async function driveTurn(
     tools: chatTools(),
     stopWhen: stepCountIs(5),
     extensions,
-    dynamicContext: opts.dynamic ? { ledger: new DynamicContextLedger(), snapshot: opts.dynamic } : undefined,
+    dynamicContext: opts.dynamic ? { ledger: new DynamicContextLedger(), snapshot: opts.dynamic, instructions: opts.instructions } : undefined,
     cache: { providerId: entry.providerId, modelId: entry.modelId, sessionKey: SESSION_KEY },
-    ...(opts.turnLocal !== undefined && { turnLocal: opts.turnLocal }),
     ...plane,
   })) {
     if (event.type === 'step-finish') {
@@ -642,22 +643,23 @@ describe('a stable prefix reads back as a nonzero cache hit', () => {
     expect(total.cacheRead ?? 0).toBe(0);
   });
 
-  test('a turn\'s runtime notice rides one position before the request, so every step of a re-read history reads the cache', async () => {
-    const notice: ModelMessage[] = [{ role: 'user', content: "[Turn context]\n## Context update\nYour user's PC just connected." }];
+  test('the unapproved instructions ride before the request, so every step of a re-read history reads the cache', async () => {
+    const instructions = '<workspace_instructions>\nAGENTS.md: use tabs.\n</workspace_instructions>';
     const lines: string[] = [];
 
     for (const entry of CACHING_PROVIDERS) {
-      const { mock, steps } = await driveTurn(entry, { durable: true, turnLocal: notice, dynamic: () => ({ factsBlock: 'The workspace is ready.' }) });
+      const { mock, steps } = await driveTurn(entry, { durable: true, instructions, dynamic: () => ({ factsBlock: 'The workspace is ready.' }) });
       const input = steps.reduce((sum, step) => sum + (step.input ?? 0), 0);
       const read = steps.reduce((sum, step) => sum + (step.cacheRead ?? 0), 0);
 
       expect(mock.requests.length).toBe(3);
+      expect(requestAt(mock, 0).body).toContain('AGENTS.md: use tabs.');
       expect(steps[1]?.cacheRead ?? 0).toBeGreaterThan(0);
       expect(steps[2]?.cacheRead ?? 0).toBeGreaterThan(steps[1]?.cacheRead ?? 0);
       lines.push(`${entry.label}: cached input ${String(read)}/${String(input)} = ${(read / Math.max(1, input)).toFixed(3)}`);
     }
 
-    console.log(`cached-input share, 3-step turn with a turn-local notice:\n${lines.join('\n')}`);
+    console.log(`cached-input share, 3-step turn with the unapproved instructions:\n${lines.join('\n')}`);
   });
 
   test('a per-step mutation before the deepest breakpoint drops the hit to 0', async () => {

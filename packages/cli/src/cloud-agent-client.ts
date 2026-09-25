@@ -17,12 +17,12 @@ import {
   type StagedSkillResult,
 } from '@kinu.run/core';
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
-import type {
-  CheckpointAvailability, FileCheckpointEntry, FileCheckpointListing,
-  FileRestorePlan, FileRestoreResult,
-  PlanReviewResult,
+import {
+  AlternateTakeCandidateSchema, CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema,
+  FileRestoreResultSchema, type FileCheckpointListing, type PlanReviewResult, type WorkspaceSpend,
 } from '@kinu.run/core';
 import {
+  ActivitySpendSchema,
   callAgentRpc,
   CloudAgentStatusSchema,
   CloudBackgroundJobSchema,
@@ -87,38 +87,6 @@ const PendingDeviceConsentSchema: v.GenericSchema<PendingDeviceConsent> = v.obje
 });
 
 const ResolveDeviceConsentSchema = v.object({ ok: v.boolean() });
-
-const FileRestoreChangeSchema = v.object({
-  path: v.string(),
-  kind: v.picklist(['modify', 'create', 'delete']),
-});
-
-const FileCheckpointEntrySchema: v.GenericSchema<FileCheckpointEntry> = v.object({
-  id: v.string(),
-  dir: v.string(),
-  at: v.number(),
-  turnId: v.nullable(v.string()),
-  sessionId: v.nullable(v.string()),
-  reason: v.string(),
-});
-
-const FileRestorePlanSchema: v.GenericSchema<FileRestorePlan> = v.object({
-  dir: v.string(),
-  id: v.string(),
-  files: v.array(FileRestoreChangeSchema),
-});
-
-const FileRestoreResultSchema: v.GenericSchema<FileRestoreResult> = v.object({
-  dir: v.string(),
-  id: v.string(),
-  files: v.array(FileRestoreChangeSchema),
-  preRestoreId: v.nullable(v.string()),
-});
-
-const CheckpointAvailabilitySchema: v.GenericSchema<CheckpointAvailability> = v.object({
-  available: v.boolean(),
-  reason: v.optional(v.string()),
-});
 
 const FileCheckpointListingSchema: v.GenericSchema<FileCheckpointListing> = v.object({
   availability: CheckpointAvailabilitySchema,
@@ -227,15 +195,6 @@ const ChangelogRevertResultSchema: v.GenericSchema<ChangelogRevertResult> = v.ob
   error: v.optional(v.string()),
 });
 
-const AlternateTakeCandidateSchema = v.object({
-  nodeId: v.string(),
-  text: v.string(),
-  score: v.number(),
-  visits: v.number(),
-  depth: v.number(),
-  origin: v.optional(v.picklist(['live', 'branch'])),
-});
-
 const AlternateTakeSetSchema: v.GenericSchema<AlternateTakeSet> = v.object({
   id: v.string(),
   turnId: v.nullable(v.string()),
@@ -281,6 +240,8 @@ const ReasoningEffortResultSchema = v.object({ effort: v.nullable(ReasoningEffor
 
 const SetReasoningEffortResultSchema = v.object({ ok: v.literal(true), effort: ReasoningEffortSchema });
 
+const ProviderAccountsResultSchema = v.object({ accounts: v.record(v.string(), v.string()) });
+
 const SocketFrameSchema = v.objectWithRest({
   type: v.string(),
   id: v.optional(v.string()),
@@ -305,8 +266,13 @@ const BranchStatusEventSchema = v.variant('status', [
   }),
   v.object({
     type: v.literal('branch_status'), status: v.literal('error'), branchId: v.string(), task: v.string(),
-    message: v.optional(v.string()),
+    message: v.optional(v.string(), 'branch failed'),
   }),
+]);
+
+const BroadcastFrameSchema = v.union([
+  BranchStatusEventSchema,
+  v.object({ type: v.literal('model_fallback'), message: v.string() }),
 ]);
 
 export interface CloudAgentClientOptions {
@@ -829,6 +795,18 @@ export class CloudAgentClient implements AgentClient {
     };
   }
 
+  async workspaceSpend(): Promise<WorkspaceSpend> {
+    return (await this.callHttp('getActivitySnapshot', ActivitySpendSchema)).spend;
+  }
+
+  async getProviderAccounts(): Promise<Readonly<Record<string, string>>> {
+    return (await this.callHttp('getProviderAccounts', ProviderAccountsResultSchema)).accounts;
+  }
+
+  async setProviderAccount(provider: string, account: string | null): Promise<Readonly<Record<string, string>>> {
+    return (await this.callHttp('setProviderAccount', ProviderAccountsResultSchema, [provider, account])).accounts;
+  }
+
   async getEvolutionConfig(): Promise<EvolutionConfigView> {
     return await this.callHttp('getEvolutionConfig', EvolutionConfigSchema);
   }
@@ -966,10 +944,10 @@ export class CloudAgentClient implements AgentClient {
       return;
     }
 
-    if (payload.type === 'branch_status') {
-      const branchStatus = parseBranchStatusEvent(payload);
+    const broadcast = v.safeParse(BroadcastFrameSchema, payload);
 
-      if (branchStatus) this.emit({ type: 'broadcast', event: branchStatus });
+    if (broadcast.success) {
+      this.emit({ type: 'broadcast', event: broadcast.output });
 
       return;
     }
@@ -1109,17 +1087,6 @@ export class CloudAgentClient implements AgentClient {
   private requestStreamResume(): void {
     this.ws?.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_REQUEST }));
   }
-}
-
-function parseBranchStatusEvent(payload: SocketFrame): BranchStatusEvent | null {
-  const result = v.safeParse(BranchStatusEventSchema, payload);
-
-  if (!result.success) return null;
-  const event = result.output;
-
-  if (event.status !== 'error') return event;
-
-  return { ...event, message: event.message ?? 'branch failed' };
 }
 
 function frameText(

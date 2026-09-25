@@ -4,6 +4,7 @@
  */
 
 import type { Usage } from '../usage';
+import type { CallAccount, QuotaSnapshot } from '../providers/quota';
 import { nanoid } from '../utils/nanoid';
 import { renderThrownChain } from '../obs/index';
 
@@ -73,6 +74,7 @@ export interface ModelCallReport {
   readonly usage: Usage;
   readonly spec?: string;
   readonly modelId?: string;
+  readonly account?: CallAccount | undefined;
 }
 
 /** Aggregate spend; usage fields no call reported stay absent, and `usd` stays absent until some
@@ -86,9 +88,12 @@ export interface SpendTally {
   readonly usd?: number;
   /** Measured in tokens, no catalog rate; one reason `usd` is a floor. */
   readonly unpricedCalls: number;
-  /** Calls priced at a floor (`priceCall`'s `floorTokens`); nonzero means `usd` is under the
-   *  real bill. Zero is a measurement here. */
-  readonly floorPricedCalls: number;
+}
+
+export interface AccountSpend extends SpendTally {
+  readonly provider: string | null;
+  readonly account: string | null;
+  readonly quota?: QuotaSnapshot;
 }
 
 /** Injected at construction so the seam holding the SDK result is the one place that reports. */

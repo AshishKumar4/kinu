@@ -41,7 +41,7 @@ import {
 import { describePromptAttachment, resolvePromptAttachments } from '../attachments';
 import { listSidebarAgents } from '../agent-list';
 import { watchDeviceConsents } from '../consent-watch';
-import { contextWindowForSpec, EMPTY_MODEL_MENU, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
+import { contextWindowForSpec, EMPTY_MODEL_MENU, specWithoutAccount, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
 import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
 import { loadActiveProfile } from '../default-model';
 import { canonicalProjectRoot } from '../config';
@@ -860,14 +860,14 @@ function ChatScene({
     }
   }, [client]);
 
-  const selectModel = useCallback(async (model: AgentModelEntry) => {
+  const selectModel = useCallback(async (spec: string) => {
     if (selectionPendingRef.current) return;
     setReady(false);
     selectionPendingRef.current = true;
     setActiveSurface(null);
 
     try {
-      const result = await client.setModel(model.spec);
+      const result = await client.setModel(spec);
       setModelSpec(result.spec);
       addMessage({ role: 'system', content: `Model: ${result.spec}` });
     } catch (err) {
@@ -1249,6 +1249,13 @@ function ChatScene({
       return;
     }
 
+    if (event.event.type === 'model_fallback' && event.event.message !== undefined) {
+      sealSegment();
+      addMessage({ role: 'system', content: event.event.message });
+
+      return;
+    }
+
     if (!isBranchStatusEvent(event.event)) return;
     const branchStatus = event.event;
     setBranchTasks((prev) => {
@@ -1262,7 +1269,7 @@ function ChatScene({
 
     // The settle/error line is the takes affordance; running state lives in the status bar.
     if (branchStatus.status !== 'running') addMessage({ role: 'system', content: describeBranchStatus(branchStatus) });
-  }, [addMessage, setBranchTasks]);
+  }, [addMessage, sealSegment, setBranchTasks]);
 
   const handleClientEvent = useCallback(async (event: AgentClientEvent) => {
     switch (event.type) {
@@ -1808,6 +1815,7 @@ function ChatScene({
         <ModelPickerOverlay
           models={modelPicker.menu.models}
           failures={modelPicker.menu.failures}
+          accounts={modelPicker.menu.accounts}
           currentSpec={modelSpec}
           terminal={{ width: sceneWidth, height }}
           loading={modelPicker.loading}
@@ -1885,7 +1893,6 @@ function ChatScene({
 
       <scrollbox
         ref={(value) => { historyRef.current = value; }}
-        focused={!isProcessing}
         stickyScroll={true}
         stickyStart="bottom"
         onMouseScroll={() => queueMicrotask(scrollAnchor.remember)}
@@ -2129,5 +2136,7 @@ function effortsForModel(
   spec: string,
   status: AgentClientStatus | null,
 ): ReasoningEffort[] {
-  return offeredReasoningEfforts(catalog.find((model) => model.spec === spec)?.reasoningEfforts, status?.reasoningEffort);
+  const listed = specWithoutAccount(spec);
+
+  return offeredReasoningEfforts(catalog.find((model) => model.spec === listed)?.reasoningEfforts, status?.reasoningEffort);
 }

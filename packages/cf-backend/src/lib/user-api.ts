@@ -1,7 +1,7 @@
 /** Typed client for `/api/user/*`; the session rides the HttpOnly cookie (dev synthesizes DEV_USER_EMAIL server-side). */
 import {
   DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
-  ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
+  AccountUsageSchema, ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
   type Credential,
   type DeviceSandboxStatus,
   type DeviceTier,
@@ -88,6 +88,7 @@ export interface ProviderFailure {
 export interface ModelMenu {
   models: ModelMenuEntry[];
   failures: ProviderFailure[];
+  accounts?: Readonly<Record<string, readonly string[]>>;
 }
 
 const ErrorBodySchema = v.object({ error: v.optional(v.string()) });
@@ -148,6 +149,7 @@ const ProviderFailureSchema = v.object({
 
 const ModelMenuSchema = v.object({
   models: v.array(ModelMenuEntrySchema), failures: v.array(ProviderFailureSchema),
+  accounts: v.optional(v.record(v.string(), v.array(v.string()))),
 });
 
 export interface DeviceFlowStart {
@@ -373,6 +375,8 @@ export const disconnectCodex  = () => api(OkSchema, 'DELETE', '/codex')
   .then((r) => { invalidateModelsCache();
 
  return r; });
+
+export const getAccountUsage = () => api(AccountUsageSchema, 'GET', '/usage');
 
 export const getProfileCatalog = (): Promise<ProfileCatalogEnvelope> =>
   api(ProfileCatalogEnvelopeSchema, 'GET', '/profile-catalog');

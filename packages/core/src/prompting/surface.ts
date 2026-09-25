@@ -13,7 +13,7 @@ import {
   type PromptModelProfile,
 } from './model-profile';
 import * as v from 'valibot';
-import type { TurnProvenance, WorkMode } from '../types/turn';
+import type { TurnReason, WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 
 export type PromptBackend = 'cf' | 'cli-local' | 'cli-cloud';
@@ -23,6 +23,11 @@ const TurnMetadataSchema = v.object({
   kinuEvent: v.optional(v.unknown()),
 });
 
+const KinuEventSchema = v.object({ kinuEvent: v.pipe(v.string(), v.nonEmpty()) });
+
+/** A background job's wake (jobs/runner.ts). */
+const JobWakeSchema = v.object({ jobId: v.string(), kind: v.string(), status: v.string() });
+
 const ExternalToolSchema = v.object({
   name: v.string(),
   source: v.optional(v.picklist(['mcp', 'crafted', 'external'])),
@@ -30,21 +35,19 @@ const ExternalToolSchema = v.object({
 });
 
 
-/**
- * Why the turn is running, from `kinuEvent` metadata alone. The `kinuMode`
- * stamped beside it (never null for jobs) must not win, or the resume overlay
- * never renders. Shared by both backends.
- */
-export function turnProvenanceForMetadata(metadata: JsonObject | null | undefined): TurnProvenance {
-  const parsed = v.safeParse(TurnMetadataSchema, metadata);
+/** From `kinuEvent` metadata alone: the `kinuMode` stamped beside it (never null for jobs) must not win. */
+export function turnReasonForMetadata(metadata: JsonObject | null | undefined): TurnReason {
+  const stamped = v.safeParse(KinuEventSchema, metadata);
 
-  if (!parsed.success) return 'chat';
+  if (!stamped.success) return { provenance: 'chat' };
 
-  return parsed.output.kinuEvent === 'background_job' ? 'background_resume' : 'chat';
+  if (stamped.output.kinuEvent !== 'background_job') return { provenance: 'signal', event: stamped.output.kinuEvent };
+  const job = v.safeParse(JobWakeSchema, metadata);
+
+  return { provenance: 'background_resume', job: job.success ? `job ${job.output.jobId}, ${job.output.kind}, ${job.output.status}` : null };
 }
 
-/** Only an explicit, recognized `kinuMode` raises the Plan bar. Delegated children
- *  inherit it, so an autonomous wake never weakens one. */
+/** Only an explicit, recognized `kinuMode` raises the Plan bar; delegated children inherit it. */
 export function workModeForTurnMetadata(metadata: JsonObject | null | undefined): WorkMode {
   const parsed = v.safeParse(TurnMetadataSchema, metadata);
 

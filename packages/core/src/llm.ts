@@ -10,6 +10,7 @@ import { beginModelOperation, type ModelCallSpend } from './events/model-call';
 import { normalizeUsage } from './usage';
 import { parseModelSpec, type ProviderWaitInfo } from './providers/types';
 import { withRateLimitRetry } from './providers/rate-limit-retry';
+import { callAccountOf } from './providers/quota';
 import {
   reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE, type InferenceStage,
 } from './strategy/effort';
@@ -55,11 +56,12 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
 
       // Usage is known only once the stream finishes; `totalUsage` because `usage` is the last step only.
       const usage = normalizeUsage(await result.totalUsage);
-      const modelId = (await result.response).modelId;
+      const response = await result.response;
+      const modelId = response.modelId;
       operation.completed({ usage, modelId });
 
       if (spend) {
-        spend.report({ source: spend.source, usage, modelId });
+        spend.report({ source: spend.source, usage, modelId, account: callAccountOf(response) });
       }
     },
 
@@ -82,7 +84,7 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
       const usage = normalizeUsage(result.totalUsage);
       const modelId = result.response.modelId;
       operation.completed({ usage, modelId });
-      spend?.report({ source: spend.source, usage, modelId });
+      spend?.report({ source: spend.source, usage, modelId, account: callAccountOf(result.response) });
 
       return result.text.trim();
     },
@@ -136,6 +138,7 @@ export function createCompletionLLM(opts: {
         usage,
         spec: opts.spec,
         modelId,
+        account: callAccountOf(result.response),
       });
 
       return result.text.trim();

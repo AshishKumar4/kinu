@@ -10,6 +10,8 @@ import { Database } from 'bun:sqlite';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import { createBranchSpawner } from '../src/branch-process';
+import { openWorkspaceCLI } from '../src/open';
+import { createWorkspace } from '@kinu.run/core/identity';
 
 const dir = scratchDir('branch-test');
 
@@ -19,9 +21,12 @@ const realFork = childProcess.fork;
 
 let lastForked: ChildProcess | null = null;
 
+let lastForkEnv: NodeJS.ProcessEnv | undefined;
+
 await mock.module('node:child_process', () => ({
   ...childProcess,
   fork: (...args: Parameters<typeof childProcess.fork>): ChildProcess => {
+    lastForkEnv = args[2]?.env;
     lastForked = realFork(...args);
 
     return lastForked;
@@ -190,6 +195,27 @@ describe('branch-worker protocol — no self-rating', () => {
       );
     } finally {
       await handle.release();
+    }
+  });
+});
+
+// `openWorkspaceCLI` spreads its options into the runtime's, where a misnamed field is dropped without a type error.
+describe('branch worker logins', () => {
+  test('a branch of a workspace opened for the CLI reads subscription logins from the same config file', async () => {
+    const workspaceDir = scratchDir('branch-logins');
+    const dbPath = join(workspaceDir, 'agent.db');
+    const db = new Database(dbPath, { create: true });
+    const llm = { name: 'workers-ai', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
+
+    await createWorkspace(db, { name: 'logins', purpose: 'Hold subscription logins.', llm });
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm, oauthConfigPath: join(workspaceDir, 'config.json') });
+    const handle = await rt.spawnBranch('login-branch');
+
+    try {
+      expect(lastForkEnv?.KINU_CONFIG_PATH).toBe(join(workspaceDir, 'config.json'));
+    } finally {
+      await handle.release();
+      db.close();
     }
   });
 });

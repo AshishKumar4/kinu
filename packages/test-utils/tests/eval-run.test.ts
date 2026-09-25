@@ -146,7 +146,7 @@ describe('an episode keeps its evidence', () => {
 
     const spend: WorkspaceSpend = {
       total: {
-        calls: 8, callsWithoutUsage: 0, unpricedCalls: 8, floorPricedCalls: 0,
+        calls: 8, callsWithoutUsage: 0, unpricedCalls: 8,
         usage: { input: 234433, output: 29531 },
       },
       producers: [], missions: [], offTurnShare: null,
@@ -194,7 +194,7 @@ describe('an episode keeps its evidence', () => {
     const root = scratchDir('budget-evidence');
 
     const spend: WorkspaceSpend = {
-      total: { calls: 3, callsWithoutUsage: 0, unpricedCalls: 3, floorPricedCalls: 0, usage: { input: 10, output: 5 } },
+      total: { calls: 3, callsWithoutUsage: 0, unpricedCalls: 3, usage: { input: 10, output: 5 } },
       producers: [], missions: [], offTurnShare: null,
       coverage: { calls: 3, measured: 3, reported: 1, silent: [], partial: [] },
     };
@@ -254,7 +254,7 @@ describe('an episode keeps its evidence', () => {
       async history() { return []; },
       async spend(): Promise<WorkspaceSpend> {
         return {
-          total: { calls: 1, callsWithoutUsage: 0, unpricedCalls: 1, floorPricedCalls: 0, usage: { input: 1, output: 1 } },
+          total: { calls: 1, callsWithoutUsage: 0, unpricedCalls: 1, usage: { input: 1, output: 1 } },
           producers: [], missions: [], offTurnShare: null,
           coverage: { calls: 1, measured: 1, reported: 1, silent: [], partial: [] },
         };
@@ -296,7 +296,7 @@ describe('an episode keeps its evidence', () => {
     const root = scratchDir('wedged-episode-evidence');
 
     const spend: WorkspaceSpend = {
-      total: { calls: 3, callsWithoutUsage: 0, unpricedCalls: 3, floorPricedCalls: 0, usage: { input: 10, output: 5 } },
+      total: { calls: 3, callsWithoutUsage: 0, unpricedCalls: 3, usage: { input: 10, output: 5 } },
       producers: [], missions: [], offTurnShare: null,
       coverage: { calls: 3, measured: 3, reported: 1, silent: [], partial: [] },
     };

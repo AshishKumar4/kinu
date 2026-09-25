@@ -12,8 +12,32 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ## [Unreleased]
 
+### Added
+
+- **Several accounts per provider.** `kinu provider connect anthropic work` adds an account named `work` beside the provider's first one, `main`, in your Kinu account or with `--local` on this machine; Codex accounts stay on the machine that signs them in. `kinu provider default anthropic work` picks the account a model runs on when it names none, and `kinu provider disconnect anthropic work` removes one. A model names its account as `anthropic@work/<model>`, so a tier or its fallback chain can run one model on two accounts. Inside a chain, an account that hits its rate limit hands the turn to the next entry at once, and the switch says so; a lone model still waits the limit out. `/accounts use anthropic work` gives a workspace its own account, and the model picker asks which account when a provider has several. On the web, the providers settings list each account, take an account name when you add a key, and pick each provider's default account; the workspace and tier model pickers ask which account when a provider has several, and a tier's fallback chain can run one model on each account.
+- **`/stats`: usage per account.** Every model call now records the provider account that paid for it and the quota the provider reported with the answer (Anthropic, OpenAI and ChatGPT-plan windows). `/stats` in the TUI and the web's Usage settings count every workspace you hold (on this machine and, signed in, in the cloud) per account: calls, tokens and API-equivalent cost, with the quota left and when it resets, and they name any workspace they could not read. Each OpenRouter key also shows the credit it has left, read live from OpenRouter. `kinu spend` and the web Activity panel show the same per workspace.
+- **Claude Pro and Max subscriptions sign in to Kinu.** `kinu provider connect claude` opens Claude's sign-in in your browser and keeps the login on this machine; `kinu provider connect claude work` adds a second account. Kinu sends each request as Claude Code's CLI does (after oh-my-pi), refreshes the login before it expires, and names the fix when Claude refuses it. When Anthropic asks for a newer Claude Code, the call is retried once at that version. This replaces running the `claude` command: Claude Code need not be installed, and `claude logout` no longer disconnects Kinu (`kinu provider disconnect claude` does).
+
 ### Changed
 
+- **A turn's own notes join the agent's live state.** Why a turn runs (a message, a finished background job or
+  another Kinu event, named) and why each active skill is on are sections of the dynamic context, and a machine that
+  connects shows as its devices row changing; the message that restated them before every turn's input and the
+  "your user's PC just connected" notice are gone. The unapproved workspace files (an AGENTS.md the owner has not
+  approved) keep their own message, apart from the state Kinu vouches for, but it goes out once, before the input
+  of the turn that first needs it, and again only when the files or their approval change. Each turn used to drop
+  the previous turn's copies and re-send them before its own input, so the provider re-read the whole previous turn:
+  in a scripted eight-turn conversation over an unapproved AGENTS.md, the eighth turn's first request now opens with
+  all 16 messages of the seventh's, up from 14.
+- **The agent's live state changes by row.** A change to one task, job, delegate, approval, fact or recovery
+  re-sent that whole list in the step's state update, so on a 40-step turn with task churn each update (901 bytes)
+  outweighed the full state it changed (729). An update now names only the rows that changed (`- t12 [active] …`,
+  `- removed: t12`, a new row at the end), and the memory tail only the lines appended; a list whose rows moved or
+  gained one before its end, a memory window that slid, and any change no smaller than the full state are stated
+  whole, so the updates always add up to the state. Once the updates since the last full statement outweigh six of
+  them (the longest chain measured: 20 updates, which glm-5.3 read back right 10 times in 10), the next change
+  restates the whole state after them; nothing before it is rewritten, so the prompt cache keeps it. On that turn
+  the final request carries 14.1 KB of state instead of 35.9 KB, and the turn re-sends 311 KB of it instead of 834 KB.
 - **Home and the Workspaces page no longer ask every workspace for its state.** Each workspace tells its owner's
   account when its tile changes (working, needs you, its last run, its slates), and an open page hears the change over
   one socket, so a page left open wakes no workspace. The Workspaces page reads 50 workspaces at a time as you scroll,
@@ -677,11 +701,61 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   starts its first turn with as the owner's latest task, and a background event after the owner's message did the
   same. Home and the Workspaces page now show the owner's last message, or nothing until there is one.
 
+- **More commands that destroy your work wait for you.** `git -C <dir> reset --hard` and other git commands
+  spelled with global options, `git checkout -- .`, `git restore .`, `git clean -f`, `find … -delete` and
+  `rsync --delete` ran on your files without asking, as did `mv`, `cp` or `>` onto a file under `/pc` or
+  `/shared`. They now wait for you there as `rm -rf` does; on the agent's own files they still run.
+
+- **A delete that reaches your machine or your Drive from the hosted workspace waits for you.** The hosted
+  workspace is the agent's own, but its shell also reaches your connected machine at `/pc` and your Drive at
+  `/shared`, and `rm -rf /pc/proj` ran there without asking. A command that names `/pc` or `/shared`, or runs
+  after a `cd` into one (made by the shell, a background process or a shell program, which share one working
+  directory) or with its working directory there, now waits for you as the same command on your machine does; a
+  program in another language that writes there asks once, and reading a skill asks nobody. A path computed as
+  it runs (a variable, a glob) is not caught; on `/pc` the machine's own consent still applies.
+
+- **The CLI asks before a destructive command in your directory.** In a workspace placed in a directory, `sudo`,
+  `rm -rf`, `git reset --hard`, `chmod u+s` and the other commands whose harm stays on the machine ran without
+  asking: the approval check took the shell's name, `workspace`, for the agent's own disposable workspace. Each
+  executor now declares whose files it holds, and the check reads that. The Cloudflare workspace, its container
+  and the CLI's in-database workspace hold the agent's own; a CLI workspace in your directory, a connected machine
+  and the workspace a fork came from hold yours, so those commands wait for you there.
+
+- **A model tier whose model is gone runs on your default.** A tier set to a model its provider no longer lists
+  (retired, or its account disconnected) failed every turn it served. It now runs on your default tier, then on
+  GLM 5.3, on the CLI as on the web. A provider that lists no models (an OpenAI-compatible endpoint whose `/models`
+  answers an empty list) proves nothing, so its models still serve. A model pinned to a workspace or an agent is
+  still refused, so you can see and fix the pin. The run names the model it replaced, a hired agent's or a swarm
+  node's run included.
+
+- **A fallback takes over from a model your account cannot reach.** A tier's fallback chain gave up when its first
+  model answered 403 or 404 (a model the account has no access to, or one the provider no longer serves), though the
+  next model could have answered. It now hands the turn on, as it does for a rate limit or an outage; a malformed or
+  too-large request still fails the turn, since the next model would refuse it too. A 401 refuses the credential
+  itself, so the turn passes over the chain's other models that sign in with it to one that does not.
+
+- **Reasoning effort is always a level the model takes.** A stored effort the model does not declare (xhigh on GLM
+  5.3, which takes low, medium and high) was sent as it was. It is now sent as the nearest level the model declares
+  below it, or the lowest the model takes when none is below, and a model that takes no level (Claude Haiku 4.5) is
+  sent none. Each fallback in a tier's chain gets the level as that fallback declares it, not the first model's.
+
+- **An hour-long prompt-cache write is charged what Anthropic bills.** Anthropic bills a cache write kept an hour at
+  twice the input rate. Spend, mission budgets and the Activity totals charged it at the five-minute rate and called
+  the total a floor; they now charge the hour rate, and the floor note names only calls no rate priced.
+
 - **The request is the last thing the agent reads in a turn.** Runtime news for the turn (a device that just
   connected, skills it activated, a background job it resumes) and changed live state used to follow the request, and
   a model read that news as the turn: asked to read a file back, it acknowledged the device instead. They now ride
   right before the request, in one place for every step of the turn, so the steps of a turn also read the cache. This
   also holds for a turn picked up after a restart, and when a later message repeats the request word for word.
+
+- **A pause or a restart no longer costs the prompt cache.** The live state the agent reads was kept in memory
+  only. A hosted workspace leaves memory after ten idle seconds, so most turns after a pause, and every turn after a
+  restart or redeploy, put that state somewhere new and the provider re-read the whole conversation. It is now stored
+  with the conversation. While the provider still holds the conversation in its cache (five minutes to a day,
+  depending on the provider and setting), the state is read back exactly where it was: a turn picked up after its
+  process died re-sends 8 of the 9 messages it sent before, up from 1 in a test turn. Once the cache has expired and
+  re-reading is free anyway, the stale state collapses into one fresh block.
 
 - **Responses models see their own earlier steps.** On the models.dev catalog
   (Muse on opencode's gateway), the CLI's opencode bridge and Codex, every step

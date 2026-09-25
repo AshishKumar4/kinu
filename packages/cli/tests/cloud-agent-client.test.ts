@@ -7,6 +7,7 @@ import {
   type JsonObject, type JsonValue, type ReasoningEffort,
 } from '@kinu.run/core';
 import { CloudAgentClient } from '../src/cloud-agent-client';
+import { renderAccountSpendLines } from '../src/display';
 import { watchDeviceConsents } from '../src/consent-watch';
 import type { AgentClientEvent } from '../src/agent-client';
 import * as v from 'valibot';
@@ -35,6 +36,15 @@ const MENU_MODEL = { spec: 'openai/gpt-5.5', label: 'GPT-5.5', provider: 'openai
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((mock) => mock.close()));
 });
+
+/** `getActivitySnapshot`'s spend as a deployment before 6de08b071 answers it: no `accounts`. */
+const SPEND_BEFORE_ACCOUNTS = {
+  producers: [],
+  total: { calls: 3, callsWithoutUsage: 0, usage: { input: 1200, output: 300 }, usd: 0.01, unpricedCalls: 0 },
+  coverage: { calls: 3, measured: 3, reported: null, silent: [], partial: [] },
+  offTurnShare: null,
+  missions: [],
+};
 
 /** `serve` answers a socket frame as it lands, as the workspace object would; null leaves it to the test. */
 function startMockAgentServer(options: ({
@@ -100,6 +110,8 @@ function startMockAgentServer(options: ({
         }
 
         if (method === 'getReasoningEffort') return Response.json({ result: { effort: 'medium' } });
+
+        if (method === 'getActivitySnapshot') return Response.json({ result: { spend: SPEND_BEFORE_ACCOUNTS } });
 
         if (method === 'setReasoningEffort') return Response.json({ result: { ok: true, effort: args[0] ?? null } });
 
@@ -272,6 +284,20 @@ describe('CloudAgentClient protocol', () => {
     try {
       const { models } = await client.listModels();
       expect(models.map((model) => [model.spec, model.reasoningEfforts])).toEqual([[MENU_MODEL.spec, MENU_MODEL.reasoningEfforts]]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  test('spend from a server before per-account spend keeps its totals and says accounts are not reported', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+
+    try {
+      const spend = await client.workspaceSpend();
+
+      expect([spend.total.calls, spend.total.usage]).toEqual([3, { input: 1200, output: 300 }]);
+      expect(renderAccountSpendLines(spend.accounts, Date.now())).toEqual(['Spend per account: this deployment does not report it.']);
     } finally {
       await client.close();
     }

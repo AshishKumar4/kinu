@@ -5,7 +5,7 @@
 import { asFetchFunction } from './fetch-shim';
 import type { GatewayRunRequest, WorkersAIBinding } from './types';
 import { renderThrownChain } from '../obs/index';
-import { copyHeaders } from './util';
+import { copyHeaders } from './fetch-shim';
 
 /** An AI Gateway HTTPS base parsed into what the binding addresses; `AI_GATEWAY_URL` is the source for both. */
 export interface GatewayTarget {

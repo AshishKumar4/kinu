@@ -83,7 +83,7 @@ export function egressHostMatches(pattern: string, host: string): boolean {
   return new RegExp(`^${escaped.join('.*')}$`).test(target);
 }
 
-/** Review shown when a secret is bound to a host. Always `gate`, bypassing `AGENT_OWN_EXECUTORS`; a standing grant still short-circuits it. */
+/** Review shown when a secret is bound to a host. Always `gate`, whoever's files the executor holds; a standing grant still short-circuits it. */
 export function reviewEgressBinding(
   binding: Pick<EgressSecretBinding, 'id' | 'label' | 'host'>,
 ): ApprovalResult {

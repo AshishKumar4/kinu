@@ -10,6 +10,7 @@ import type { AgentConfigStore } from '../config/store';
 import { clampGepaEvalBudget } from '../config/store';
 import { beginModelOperation, type ModelCallSink, type ModelOperationSink } from '../events/model-call';
 import { normalizeUsage } from '../usage';
+import { callAccountOf } from '../providers/quota';
 import { effortFor } from '../strategy/effort';
 import { evidenceWindow } from '../prompts/evidence-window';
 import { EVIDENCE_BUDGETS } from '../types/evidence';
@@ -457,7 +458,7 @@ function reflectionLmFor(control: ScaffoldControl, model: LanguageModel): Reflec
     const usage = normalizeUsage(result.totalUsage);
     const modelId = result.response.modelId;
     operation.completed({ usage, modelId });
-    control.reportModelCall?.({ source: 'reflection', usage, modelId });
+    control.reportModelCall?.({ source: 'reflection', usage, modelId, account: callAccountOf(result.response) });
 
     return result.text;
   };

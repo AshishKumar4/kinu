@@ -29,6 +29,7 @@ import type { AgentRpcDispatch } from './rpc-gate';
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell, cliPlatformShell } from '@kinu.run/core';
 import { listAvailableModels } from '../user/available-models';
+import { readUserAccountUsage, type AccountLedgerTarget } from '../user/account-usage';
 import { answerCatalogPut } from '../user/routes';
 import { WebhookRequestSchema } from '../events/routes';
 import type { CloudWorkspaceBirth, CloudWorkspaceRegistry } from '../user/workspace-create';
@@ -67,10 +68,10 @@ export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWork
   | 'issueCliAgentConnectTicket' | 'registerDevice'
   | 'hasWorkspace' | 'listDevices' | 'listActiveWorkspaces'
   | 'getProfileCatalog' | 'putProfileCatalog'
-  | 'listCredentials' | 'setCredential' | 'deleteCredential'
+  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'getAuthHeaders'
 >;
 
-export type CliAgentTarget = CloudWorkspaceBirth & CredentialFanoutTarget
+export type CliAgentTarget = CloudWorkspaceBirth & CredentialFanoutTarget & AccountLedgerTarget
   & Pick<OrchestratorAgent, 'createDurableWebhook' | 'requestOverviewPush'> & AgentRpcDispatch;
 
 export interface CliRoutesEnv<Id>
@@ -306,6 +307,9 @@ cliRoutes.get('/api/cli/workspaces', async (c) =>
 cliRoutes.get('/api/cli/models', async (c) =>
   json({ body: await listAvailableModels(c.env, c.get('cli').userId, await ownerCaller(c.env)) }));
 
+cliRoutes.get('/api/cli/usage', async (c) =>
+  json({ body: await readUserAccountUsage(c.env, c.get('cli').userDO, await ownerCaller(c.env)) }));
+
 cliRoutes.post('/api/cli/workspaces', async (c) => {
   const cli = c.get('cli');
 
@@ -525,7 +529,7 @@ function accessTokenDenial(
 }
 
 function requiredAccessScope(method: string, path: string): AccessTokenScope | null {
-  if (method === 'GET' && (path === '/workspaces' || path === '/models')) return 'workspace.read';
+  if (method === 'GET' && (path === '/workspaces' || path === '/models' || path === '/usage')) return 'workspace.read';
 
   if (method === 'POST' && /^\/workspaces\/[^/]+\/connect-ticket$/.test(path)) return 'workspace.exec';
 

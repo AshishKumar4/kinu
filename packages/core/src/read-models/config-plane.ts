@@ -66,6 +66,19 @@ export function getReasoningEffort(config: AgentConfigStore) {
   return { effort: config.getReasoningEffort() };
 }
 
+export function getProviderAccounts(config: AgentConfigStore) {
+  return { accounts: config.getProviderAccounts() };
+}
+
+export function setProviderAccount(config: AgentConfigStore, provider: JsonValue, account: JsonValue) {
+  const parsed = v.safeParse(v.tuple([v.string(), v.nullable(v.string())]), [provider, account]);
+
+  if (!parsed.success) throw new Error('setProviderAccount takes a provider id and an account name or null');
+  config.setProviderAccount(parsed.output[0], parsed.output[1]);
+
+  return { ok: true as const, accounts: config.getProviderAccounts() };
+}
+
 export interface ReasoningEffortWrite<Effort extends ReasoningEffort | null> { ok: true; effort: Effort }
 
 /** Null clears the setting: the tier's level applies again. */

@@ -18,6 +18,9 @@ import {
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
   type WorkspaceSpend,
+  AccountSpendSchema,
+  AccountUsageSchema,
+  type AccountUsage,
   type AgentRpcMethod,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
@@ -235,7 +238,6 @@ const CreatedAccessTokenSchema = v.object({ token: v.string(), name: v.string(),
 const ProducerSpendSchema: v.GenericSchema<ProducerSpend> = v.object({
   source: v.picklist(SPEND_SOURCES), calls: v.number(), callsWithoutUsage: v.number(),
   usage: UsageSchema, usd: v.optional(v.number()), unpricedCalls: v.number(),
-  floorPricedCalls: v.number(),
 });
 
 const MissionBudgetSnapshotSchema: v.GenericSchema<MissionBudgetSnapshot> = v.object({
@@ -254,7 +256,6 @@ const WorkspaceSpendSchema: v.GenericSchema<WorkspaceSpend> = v.object({
   total: v.object({
     calls: v.number(), callsWithoutUsage: v.number(), usage: UsageSchema,
     usd: v.optional(v.number()), unpricedCalls: v.number(),
-    floorPricedCalls: v.number(),
   }),
   coverage: v.object({
     calls: v.number(), measured: v.number(), reported: v.nullable(v.number()),
@@ -262,6 +263,7 @@ const WorkspaceSpendSchema: v.GenericSchema<WorkspaceSpend> = v.object({
   }),
   offTurnShare: v.nullable(v.number()),
   missions: v.array(MissionBudgetSnapshotSchema),
+  accounts: v.optional(v.array(AccountSpendSchema)),
 });
 
 export const ActivitySpendSchema = v.object({ spend: WorkspaceSpendSchema });
@@ -353,6 +355,10 @@ export async function listCloudAgents(origin: string, token: string): Promise<Cl
 
 /** Admitted by the rule both backends share, so every field the hub sends (each model's reasoning levels
  *  included) reaches the TUI. */
+export async function getCloudAccountUsage(origin: string, token: string): Promise<AccountUsage> {
+  return cloudJson(AccountUsageSchema, origin, '/api/cli/usage', { token });
+}
+
 export async function listCloudAvailableModels(origin: string, token: string): Promise<AgentModelMenu> {
   return normalizeModelMenu({ payload: await cloudJson(v.unknown(), origin, '/api/cli/models', { token }) });
 }

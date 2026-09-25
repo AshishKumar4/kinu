@@ -6,7 +6,7 @@
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
-import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
+import { DYNAMIC_CONTEXT_OPEN_TAG, JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import { parityNormalizer, type ParityNormalizer } from '@kinu.run/test-utils/parity-normalizer';
 import recorded from '../../fixtures/chat-session-parity.json';
 import {
@@ -88,6 +88,9 @@ describe('ChatSession parity — the hosted root changes no durable row and no f
 
     console.log(`chat-session-parity snapshot ${JSON.stringify(snapshot)}`);
     expect(completed.failures).toEqual([]);
+    // The runtime context the restarted turns re-wove is the model's, never the page's chat.
+    expect(completed.seed).toContain('PARITY-FIVE');
+    expect(completed.seed).not.toContain(DYNAMIC_CONTEXT_OPEN_TAG);
     expect(snapshot).toEqual(recorded);
   });
 });

@@ -61,7 +61,7 @@ function priceProjection(totalCalls: number, model: CostModel | undefined) {
 
     if (priced !== undefined) {
       return {
-        estimatedUSD: priced.usd,
+        estimatedUSD: priced,
         basis: { source: 'catalog', model: model.spec, rates: pricing } satisfies CostBasis,
       };
     }

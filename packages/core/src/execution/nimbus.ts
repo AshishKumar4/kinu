@@ -15,6 +15,7 @@ import { commandResult, exposedPortText, formatExecResult, type CommandResult } 
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { ShellSession } from '../safety/approval-gate';
 
 /** Shell-fallback constants: path and offsets travel as JSON in one env value, never quoted into shell text. */
 const NIMBUS_RANGE_ENV = 'KINU_NIMBUS_RANGE_REQUEST';
@@ -166,7 +167,8 @@ export interface NimbusSandboxHandle {
 
 export interface NimbusWorkspaceExecutorOpts {
   box: NimbusSandboxHandle;
-  inline: InlineExecutorDeps;
+  inline: Omit<InlineExecutorDeps, 'filesOwner'>;
+  shellSession?: ShellSession;
   /** Whether session ports can be published as preview URLs; false when the backend's preview origin is unconfigured. */
   inboundNetwork?: boolean;
   /** Whether interpreter runtimes (python, ruby, clang) can be installed; gates declaring `python`/`native_binary`. */
@@ -609,10 +611,10 @@ function nimbusSession(opts: NimbusWorkspaceExecutorOpts) {
 
 /** Kinu's durable workspace tools plus the same Nimbus session's process/runtime/port surface, registered once as `workspace`. */
 export function createNimbusWorkspaceExecutor(opts: NimbusWorkspaceExecutorOpts): PortAnsweringExecutor {
-  const inline = createInlineExecutor(opts.inline);
+  const inline = createInlineExecutor({ ...opts.inline, filesOwner: 'agent' });
   const session = nimbusSession(opts);
 
-  return {
+  const provider: PortAnsweringExecutor = {
     ...inline,
     capabilities: new Set<ExecutorCapability>([...inline.capabilities, ...session.capabilities]),
     getStatus: session.getStatus,
@@ -624,6 +626,8 @@ export function createNimbusWorkspaceExecutor(opts: NimbusWorkspaceExecutorOpts)
     unexposePort: session.unexposePort,
     listExposedPorts: session.listExposedPorts,
   };
+
+  return opts.shellSession === undefined ? provider : { ...provider, shellSession: opts.shellSession };
 }
 
 /** Shell over the bytes nimbusSessionFiles exposes. `cred` is fixed at construction, never per call

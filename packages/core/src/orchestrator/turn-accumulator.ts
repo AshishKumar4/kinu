@@ -14,6 +14,7 @@ import { USAGE_FIELDS, addUsage, usageReported, usageTotal, type Usage } from '.
 import * as v from 'valibot';
 import { digestJsonValue, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { ToolOutcomeSchema, type ToolOutcome } from '../tools/outcome';
+import type { CallAccount } from '../providers/quota';
 
 const UndefinedSchema = v.undefined();
 
@@ -31,8 +32,11 @@ export interface StepLike {
   response?: { modelId?: string; messages?: readonly ModelMessage[] };
   /** The request body this step sent and when; a cache warm replays the turn's last one. */
   request?: { body?: unknown; sentAt?: number };
+  account?: CallAccount | undefined;
   /** The breakdown of the request this step sent. */
   context?: ContextComposition;
+  /** The fallback spec that served this step; absent for the turn's own model. */
+  fallback?: string | undefined;
 }
 
 /** ai-SDK v6 tool-result hook shape. */
@@ -82,8 +86,7 @@ export class TurnAccumulator {
   readonly escalations = new TurnEscalationLedger();
   /** Written by craft-cycle.ts: crafted tools run inside `eval`, never as `toolCalls` names. */
   private readonly craftUsed = new Set<string>();
-  /** Cumulative messages already written durably. A shorter array means a re-drive: resync
-   *  downward and record nothing, since re-recording would duplicate the step. */
+  /** Messages already durable; a shorter array is a re-drive, resynced without recording the step twice. */
   private durableMessages = 0;
 
   constructor(
@@ -188,7 +191,7 @@ export class TurnAccumulator {
     this.usage = addUsage(this.usage, usage);
 
     // Debit only a real report. `cacheRead`/`cacheWrite` are subsets of `input`.
-    if (reported) this.budget?.debit(usageTotal(usage) ?? 0, { calls: 1, usage });
+    if (reported) this.budget?.debit(usageTotal(usage) ?? 0, { calls: 1, usage, spec: ctx.fallback });
 
     this.noteLastRequest(ctx, usage);
 
@@ -218,6 +221,7 @@ export class TurnAccumulator {
 
     const stepEvent: Parameters<NonNullable<TurnSinks['onStepEvent']>>[0] = {
       stepIndex: this.stepCount,
+      account: ctx.account,
     };
 
     const reason = v.safeParse(StringSchema, ctx.finishReason);
@@ -231,23 +235,19 @@ export class TurnAccumulator {
 
     if (ctx.context) stepEvent.context = ctx.context;
 
-    // Priced with the same rate and arithmetic as the mission ledger; no rate means no `usd`.
+    // Priced as the mission ledger prices it, at the serving model's rate; no rate means no `usd`.
     if (reported) {
       stepEvent.usage = usage;
-      const pricing = this.budget?.pricing() ?? null;
-      const price = pricing ? priceCall(usage, pricing) : undefined;
+      const pricing = this.budget?.pricing(ctx.fallback) ?? null;
+      const usd = pricing ? priceCall(usage, pricing) : undefined;
 
-      if (price !== undefined) {
-        stepEvent.usd = price.usd;
-
-        // See `buildModelCallEvent`.
-        if (price.floorTokens !== undefined) stepEvent.usdFloorTokens = price.floorTokens;
-      }
+      if (usd !== undefined) stepEvent.usd = usd;
 
       const modelId = v.safeParse(StringSchema, ctx.response?.modelId);
 
       if (modelId.success && modelId.output.length > 0) stepEvent.modelId = modelId.output;
     }
+
 
     this.sinks.onStepEvent?.(stepEvent);
   }

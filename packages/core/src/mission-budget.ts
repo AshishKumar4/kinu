@@ -1,6 +1,6 @@
 /**
- * Opt-in durable spend ledger keyed by label: every model call and spawn under a label debits it and all its ancestors.
- * USD is priced at debit time from catalog rates (blended fallback is counted); exhaustion is a structured refusal at the seam.
+ * Durable spend ledger by label: a call or spawn under a label debits it and its ancestors, priced at debit time
+ * (blended fallback counted); exhaustion is a structured refusal at the seam.
  */
 
 import * as v from 'valibot';
@@ -23,38 +23,27 @@ export interface MissionSpendProvenance {
   source: 'catalog' | 'blended' | 'mixed';
 }
 
-/** Unexported on purpose: `gate:wired` reports exported names no production module references. */
-interface CallPrice {
-  /** A floor, never an over-charge, when `floorTokens` is present. */
-  readonly usd: number;
-  /**
-   * `cacheWrite1h` tokens billed at models.dev's single (5m) `cache_write` rate; Anthropic prices 1h higher.
-   * Absent on an exact price, never `0`; no second rate, as that would be policy drift.
-   */
-  readonly floorTokens?: number;
-}
+/** Anthropic bills a cache write kept an hour at twice the base input rate; models.dev's `cache_write` is the
+ *  5-minute rate. */
+const HOUR_CACHE_WRITE_INPUT_MULTIPLE = 2;
 
 /** Rates are USD per 1M tokens; undefined means unpriced, never free. Shared with per-step cost telemetry. */
-export function priceCall(usage: Usage, pricing: ModelPricing): CallPrice | undefined {
+export function priceCall(usage: Usage, pricing: ModelPricing): number | undefined {
   if (usageTotal(usage) === undefined) return undefined;
   const prompt = usage.input ?? 0;
   // Parts of a cache-inclusive prompt total, clamped so `fresh` never goes negative.
   const cacheRead = Math.min(Math.max(0, usage.cacheRead ?? 0), prompt);
   const cacheWrite = Math.min(Math.max(0, usage.cacheWrite ?? 0), prompt - cacheRead);
+  const hourWrite = Math.min(Math.max(0, usage.cacheWrite1h ?? 0), cacheWrite);
   const fresh = prompt - cacheRead - cacheWrite;
 
-  // `cacheWrite1h` is a subset of `cacheWrite`, already charged below.
-  const usd = (
+  return (
     fresh * pricing.input
     + cacheRead * (pricing.cacheRead ?? pricing.input)
-    + cacheWrite * (pricing.cacheWrite ?? pricing.input)
+    + (cacheWrite - hourWrite) * (pricing.cacheWrite ?? pricing.input)
+    + hourWrite * pricing.input * HOUR_CACHE_WRITE_INPUT_MULTIPLE
     + (usage.output ?? 0) * pricing.output
   ) / 1_000_000;
-
-  // Counted, not corrected: `cache-breakpoints.ts` emits Anthropic `ttl: '1h'`.
-  const floorTokens = Math.min(Math.max(0, usage.cacheWrite1h ?? 0), cacheWrite);
-
-  return floorTokens > 0 ? { usd, floorTokens } : { usd };
 }
 
 export type MissionSeam = 'model_call' | 'spawn';
@@ -228,10 +217,7 @@ function toRow(row: MissionBudgetColumns): MissionRow {
   };
 }
 
-/**
- * Every label, dearest first; cumulative lifetime figures, as caps are. A pure read (no DDL) for read-only surfaces.
- * A missing table is an unbudgeted workspace, not an error.
- */
+/** Every label, dearest first, in lifetime figures as caps are; no DDL. A missing table is an unbudgeted workspace. */
 export function listMissionSpend(sql: SqlExecutor, actor: ActorHandle): MissionBudgetSnapshot[] {
   actor.assertCurrent();
 
@@ -299,8 +285,8 @@ export interface MissionGovernorDeps {
   actor: ActorHandle;
   /** Once per label, on its first refusal. */
   onExhausted?(refusal: MissionBudgetRefusal): void;
-  /** Read per debit, as the model can change between turns; null means the blended fallback. */
-  pricing?(): ModelPricing | null;
+  /** Per debit: `spec`'s rate, else the current model's. Null: blended. */
+  pricing?(spec?: string): ModelPricing | null;
   /** A property, not a method: held unbound. */
   now?: () => number;
 }
@@ -355,20 +341,20 @@ export class MissionGovernor {
     return null;
   }
 
-  /** Pass `usage` only for calls on the actor's current model; anything unpriceable is counted as blended. */
+  /** `usage` goes with the `spec` that served the call, else the current model's; unpriceable counts as blended. */
   debit(tokens: number, opts?: {
-    labels?: readonly string[]; calls?: number; spawns?: number; usage?: Usage;
+    labels?: readonly string[]; calls?: number; spawns?: number; usage?: Usage; spec?: string;
   }): void {
     const labels = opts?.labels ?? this.active;
 
     if (labels.length === 0) return;
     const total = Math.max(0, Math.round(tokens));
-    const pricing = opts?.usage ? this.deps.pricing?.() ?? null : null;
+    const pricing = opts?.usage ? this.pricing(opts.spec) : null;
     const priced = pricing && opts?.usage ? priceCall(opts.usage, pricing) : undefined;
 
     const delta: MissionDebit = {
       tokens: total,
-      usd: priced?.usd ?? estimateUsdCost(total),
+      usd: priced ?? estimateUsdCost(total),
       blendedTokens: priced === undefined ? total : 0,
       calls: opts?.calls ?? 0,
       spawns: opts?.spawns ?? 0,
@@ -380,8 +366,8 @@ export class MissionGovernor {
   }
 
   /** The single pricing source for telemetry too. */
-  pricing(): ModelPricing | null {
-    return this.deps.pricing?.() ?? null;
+  pricing(spec?: string): ModelPricing | null {
+    return this.deps.pricing?.(spec) ?? null;
   }
 
   snapshot(label?: string): MissionBudgetSnapshot[] {
@@ -390,10 +376,7 @@ export class MissionGovernor {
     return labels.map((l) => this.ledger.get(l)).filter((r): r is MissionRow => r !== null).map(toSnapshot);
   }
 
-  /**
-   * `stream` is guarded but not metered: turn loops already debit it from provider usage.
-   * `complete` is estimated from chars at the blended rate; the model is often not the actor's.
-   */
+  /** `stream` is guarded, not metered (turn loops debit it); `complete` is estimated from chars at the blended rate. */
   govern(llm: LLM, labels: readonly string[] = this.active): LLM {
     if (labels.length === 0) return llm;
 
@@ -447,7 +430,7 @@ export class MissionGovernor {
 export interface MissionBudgetPort {
   guard(seam: MissionSeam, labels: readonly string[]): Promise<MissionBudgetRefusal | null>;
   debit(tokens: number, opts: {
-    labels: readonly string[]; calls?: number; spawns?: number; usage?: Usage;
+    labels: readonly string[]; calls?: number; spawns?: number; usage?: Usage; spec?: string;
   }): Promise<void>;
 }
 

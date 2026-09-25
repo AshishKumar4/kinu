@@ -3,11 +3,12 @@
 import { describe, test, expect } from 'bun:test';
 import { createMockFetch, createTestActorsOver, createTestSql, handClock, present, readTranscriptRows, scratchDir, scratchPath, toolExecute, scriptedTurnModel, type HandClock, type TranscriptRow, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { MissionGovernor } from '@kinu.run/core';
+import { KinuError } from '@kinu.run/core/obs';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { LanguageModel, ModelMessage } from 'ai';
+import { APICallError, type LanguageModel, type ModelMessage } from 'ai';
 import type { ToolExecutionOptions } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type {
@@ -33,7 +34,7 @@ import {
   type EventVariant,
   createAgentSelfProvider, openWorkspaceMainActor, defaultLoopOrigin,
   InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER,
-  workspaceSkillPath, WORKSPACE_SKILLS_DIR, TURN_CONTEXT_HEADER, MergeOutputSchema, SWARM_PRESET_DOCTRINE,
+  workspaceSkillPath, WORKSPACE_SKILLS_DIR, MergeOutputSchema, SWARM_PRESET_DOCTRINE,
   createProviderRegistry, createModelsDevCatalogSource,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeExecRaw, makeSql, makeSqlExec, type CLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
@@ -48,6 +49,7 @@ import * as v from 'valibot';
 const resolverRest = {
   judgeCandidates: async () => [],
   getAuth: async () => null,
+  credentialFor: async () => null,
   countInputTokens: async () => ({
     kind: 'unsupported' as const,
     provider: 'fake',
@@ -701,12 +703,14 @@ describe('LocalAgentSession.send — a user turn', () => {
       },
     });
 
-    const { session, events } = setup('unused', model, { rt, db });
+    // No AGENTS.md over its directory: the turn's first step bears the block alone.
+    const { session, events } = setup('unused', model, { rt, db, cwd: scratchDir('local-session-stream-rows') });
     await session.send('say a lot', { id: crypto.randomUUID() });
     expect(openRows).toBe(1);
     const turnId = turnStarts(events)[0]?.turnId;
+    // The input, the block the turn's first step bore, then the answer: one output revision, not one per part.
     expect(db.query<{ cause: string }, [string]>('SELECT cause FROM context_revisions WHERE turn_id = ? ORDER BY revision').all(turnId ?? '').map((row) => row.cause))
-      .toEqual(['input', 'output']);
+      .toEqual(['input', 'render', 'output']);
 
     expect(streamRows()).toBe(0);
 
@@ -1146,7 +1150,7 @@ describe('LocalAgentSession — tool success/error + cache telemetry fidelity', 
 });
 
 function isDynamicBlock(text: string): boolean {
-  return /^<dynamic_context fingerprint="[0-9a-f]{16}" kind="(?:full|delta)">\n/.test(text)
+  return /^<dynamic_context fingerprint="[0-9a-f]{16}" (?:kind="full"|kind="delta" state="[0-9a-f]{16}")>\n/.test(text)
     && text.endsWith('\n</dynamic_context>');
 }
 
@@ -1432,7 +1436,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const executed: string[] = [];
 
     router.register({
-      name: 'sandbox', kind: 'sandbox', capabilities: new Set(['shell']), isAvailable: () => true,
+      name: 'sandbox', kind: 'sandbox', capabilities: new Set(['shell']), filesOwner: 'agent', isAvailable: () => true,
       homeDir: async () => '/', connect: async () => {}, disconnect: async () => {},
       tools: { exec: { description: 'record execution', execute: async (input) => {
         executed.push(String(input));
@@ -1481,6 +1485,32 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         .toBe(true);
     } finally {
       await reopened.end();
+    }
+  });
+
+  test('on a placed workspace a recursive delete waits for the user, and "always" lets the next one run', async () => {
+    const project = scratchDir('local-session-placed');
+    mkdirSync(join(project, 'build'));
+    mkdirSync(join(project, 'dist'));
+    const db = new Database(scratchPath('local-session-placed', 'agent.db'));
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM, cwd: project });
+    const session = new LocalAgentSession({ rt, db, model: fakeModel('noted'), onEvent: () => {}, noAutoEvolve: true });
+    const shell = present(rt.shell, 'the placed shell');
+
+    try {
+      const first = await shell.exec('rm -rf build');
+      const parked = present((await session.listDeferredApprovals())[0], 'the parked delete');
+
+      expect(first.stderr).toContain(`NOT RUN — queued for owner approval (${parked.id})`);
+      expect(existsSync(join(project, 'build'))).toBe(true);
+      expect(await session.decideDeferredApprovals([parked.id], 'always')).toEqual({ decided: [parked.id] });
+
+      expect((await shell.exec('rm -rf dist')).exitCode).toBe(0);
+      expect(existsSync(join(project, 'dist'))).toBe(false);
+      expect(await session.listDeferredApprovals()).toEqual([]);
+    } finally {
+      await session.end();
     }
   });
 
@@ -1810,6 +1840,158 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     ]));
   });
 
+  test('a stored effort the listed model does not declare reaches the provider as one it does', async () => {
+    let sent: unknown;
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async (options) => {
+        sent = options.providerOptions;
+
+        return fakeModel('ok').doStream(options);
+      },
+    });
+
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: () => 'openai/gpt-x',
+      resolveModel: () => model,
+      listProviders: async () => [],
+      // The listing declares low, medium and high for the model, as a catalog would.
+      listModels: async () => ({
+        models: [{ provider: 'openai', id: 'gpt-x', label: 'GPT X', reasoningEfforts: ['low', 'medium', 'high'] }],
+        failures: [],
+      }),
+      modelInfo: async () => null,
+      ...resolverRest,
+    };
+
+    const catalog = { roles: {}, tiers: { default: { model: 'openai/gpt-x', reasoningEffort: 'xhigh' as const } } };
+
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
+    };
+
+    const { session } = setupWithResolver(resolver, { profileAuthority: () => envelope });
+    await session.send('hello', { id: crypto.randomUUID() });
+
+    expect(sent).toMatchObject({ openai: { reasoningEffort: 'high' } });
+  });
+
+  test('a fallback is sent the level the tier wants as the fallback declares it, and a model declaring none is sent none', async () => {
+    const sent = new Map<string, string | null>();
+    const OpenAIOptions = v.object({ openai: v.object({ reasoningEffort: v.optional(v.string()) }) });
+
+    const listening = (modelId: string, refuse: boolean) => new TestLanguageModelV2({
+      provider: 'fake',
+      modelId,
+      doStream: async (options) => {
+        sent.set(modelId, v.parse(OpenAIOptions, options.providerOptions).openai.reasoningEffort ?? null);
+
+        if (!refuse) return fakeModel('ok').doStream(options);
+
+        throw new APICallError({ message: 'payment required', url: 'https://x.example/v1', requestBodyValues: {}, statusCode: 402, isRetryable: false });
+      },
+    });
+
+    const models = new Map([
+      ['openai/gpt-x', listening('gpt-x', true)], ['openai/gpt-y', listening('gpt-y', true)], ['openai/gpt-z', listening('gpt-z', false)],
+    ]);
+
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => spec?.trim() ?? 'openai/gpt-x',
+      resolveModel: (spec) => models.get(spec ?? '') ?? listening('unknown', true),
+      listProviders: async () => [],
+      listModels: async () => ({
+        models: [
+          { provider: 'openai', id: 'gpt-x', reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] },
+          { provider: 'openai', id: 'gpt-y', reasoningEfforts: ['low', 'medium', 'high'] },
+          { provider: 'openai', id: 'gpt-z', reasoningEfforts: [] },
+        ],
+        failures: [],
+      }),
+      modelInfo: async () => null,
+      ...resolverRest,
+    };
+
+    const catalog = { roles: {}, tiers: { default: { model: 'openai/gpt-x', reasoningEffort: 'xhigh' as const, fallbacks: ['openai/gpt-y', 'openai/gpt-z'] } } };
+
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
+    };
+
+    const { session } = setupWithResolver(resolver, { profileAuthority: () => envelope });
+    await session.send('hello', { id: crypto.randomUUID() });
+
+    expect(Object.fromEntries(sent)).toEqual({ 'gpt-x': 'xhigh', 'gpt-y': 'high', 'gpt-z': null });
+  });
+
+  /** A session over a resolver whose complete listing is `models`, with the machine's Defaults at `defaults` and
+   *  the workspace pinned to `pin`; `sent` names every model a request went to. */
+  const listedAs = (
+    models: Awaited<ReturnType<LocalModelResolver['listModels']>>['models'],
+    placement: { readonly pin?: string; readonly defaults?: string },
+  ) => {
+    const sent: string[] = [];
+
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => spec?.trim() ?? DEFAULT_WORKERS_AI_MODEL_SPEC,
+      resolveModel: (spec) => {
+        sent.push(spec ?? '');
+
+        return fakeModel('answered');
+      },
+      listProviders: async () => [],
+      listModels: async () => ({ models, failures: [] }),
+      modelInfo: async () => null,
+      ...resolverRest,
+    };
+
+    const catalog = { roles: {}, tiers: { default: { model: placement.defaults ?? DEFAULT_WORKERS_AI_MODEL_SPEC } } };
+
+    const opened = setupWithResolver(resolver, {
+      profileAuthority: () => ({ authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog }),
+    });
+
+    if (placement.pin !== undefined) opened.rt.actor.config.setModel(placement.pin);
+
+    return { ...opened, sent };
+  };
+
+  const errorsOf = (events: readonly SessionEvent[]) => events.flatMap((event) => (event.type === 'error' ? [event.message] : []));
+
+  test('a workspace pinned to a model its provider no longer lists is refused, naming the pin, and nothing is sent to it', async () => {
+    const { session, events, sent } = listedAs([{ provider: 'openai', id: 'gpt-live' }], { pin: 'openai/retired' });
+    await session.send('hello', { id: crypto.randomUUID() });
+
+    expect(errorsOf(events)).toEqual([expect.stringContaining('model "openai/retired" configured for the default tier is unavailable')]);
+    expect(sent).not.toContain('openai/retired');
+    await session.end();
+  });
+
+  test('a default model its provider no longer lists runs on Kinu\'s default, and the person is told which model runs and why', async () => {
+    const { session, events, sent } = listedAs([{ provider: 'openai', id: 'gpt-live' }], { defaults: 'openai/retired' });
+    await session.send('hello', { id: crypto.randomUUID() });
+
+    const told = events.flatMap((event) => (event.type === 'broadcast' && event.event.type === 'model_fallback' ? [event.event] : []));
+
+    expect(told).toEqual([{ type: 'model_fallback', message: `${DEFAULT_WORKERS_AI_MODEL_SPEC} took over from openai/retired: its provider no longer lists it` }]);
+    expect(session.getRunEvents(session.listRuns().items[0].runId).filter((row) => row.type === 'model_fallback'))
+      .toMatchObject([{ from: 'openai/retired', to: DEFAULT_WORKERS_AI_MODEL_SPEC }]);
+    expect(sent).toContain(DEFAULT_WORKERS_AI_MODEL_SPEC);
+    expect(sent).not.toContain('openai/retired');
+    await session.end();
+  });
+
+  test('a model on an endpoint whose listing is empty is sent, as an empty listing proves nothing', async () => {
+    const { session, events, sent } = listedAs([], { pin: 'openai-compatible/house-model' });
+    await session.send('hello', { id: crypto.randomUUID() });
+
+    expect(errorsOf(events)).toEqual([]);
+    expect(sent).toContain('openai-compatible/house-model');
+    await session.end();
+  });
+
   test('an explicit tier applies to one turn and is consumed', async () => {
     const resolver: LocalModelResolver = {
       normalizeSpecSync: (spec) => namedSpec(spec) ?? 'local/a',
@@ -2112,7 +2294,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await session.send('/focused remember this', { id: crypto.randomUUID() });
 
     const users = prompt.filter((message) => message.role === 'user').map(messageText);
-    const activation = users.findIndex((text) => text.includes('## Skills activated this turn'));
+    const activation = users.findIndex((text) => text.includes('- focused: explicit /focused'));
 
     expect(activation).toBeGreaterThanOrEqual(0);
     expect(users.at(-1)).toContain('remember this');
@@ -2958,7 +3140,7 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
     await session.end();
   });
 
-  test('the sealed instruction block precedes the turn-local context block', async () => {
+  test('the sealed instructions go out once, before the block naming why each skill is on, and stay put', async () => {
     const root = scratchDir('local-session-agentsmd-order');
     const agentsPath = join(root, 'AGENTS.md');
     writeFileSync(agentsPath, 'Root: unapproved doctrine.');
@@ -2977,13 +3159,17 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
       .revoke(agentsPath);
     await writeFocusedSkill(rt);
     await session.send('/focused remember this', { id: crypto.randomUUID() });
+    const first = observed.map(messageText);
+    await session.send('/focused and this too', { id: crypto.randomUUID() });
+    const second = observed.map(messageText);
 
-    const texts = observed.map(messageText);
-    const sealed = texts.findIndex(isWorkspaceInstructions);
-    const turnLocal = texts.findIndex((t) => t.startsWith(TURN_CONTEXT_HEADER));
+    const sealed = first.findIndex(isWorkspaceInstructions);
     expect(sealed).toBeGreaterThan(-1);
-    expect(turnLocal).toBeGreaterThan(-1);
-    expect(sealed).toBeLessThan(turnLocal);
+    expect(first[sealed + 1]).toContain('- focused: explicit /focused');
+    expect(first.at(-1)).toContain('remember this');
+    // The next request opens with the whole first one, its copy of the instructions included.
+    expect(second.slice(0, first.length)).toEqual(first);
+    expect(second.filter(isWorkspaceInstructions)).toHaveLength(1);
     await session.end();
   });
 
@@ -3168,7 +3354,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     const third = present(prompts[2], 'the step after the steer landed');
     const roles = third.map((message) => message.role);
-    const activation = third.findIndex((message) => messageText(message).includes('## Skills activated this turn'));
+    const activation = third.findIndex((message) => messageText(message).includes('- focused: explicit /focused'));
     const landed = third.map((message) => message.role === 'user' ? messageText(message) : null).lastIndexOf('/focused remember this');
 
     expect(landed).toBeGreaterThan(roles.indexOf('tool'));
@@ -4837,6 +5023,110 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(session.getEffectiveModelSpec()).toBe('openai-compatible/house-model');
     await session.end();
   });
+
+  test('a step a fallback served is priced at that model\'s rate, in its row and in the mission it debits', async () => {
+    const { db, rt } = workspaceRuntime();
+
+    const refused = new TestLanguageModelV2({
+      provider: 'fake', modelId: 'house-model',
+      doStream: async () => {
+        throw new APICallError({
+          message: 'payment required', url: 'https://house.example/v1', requestBodyValues: {}, statusCode: 402, isRetryable: false,
+        });
+      },
+    });
+
+    const backup = fakeModel('from backup', { inputTokens: 1_000_000, outputTokens: 0, totalTokens: 1_000_000 });
+    const BACKUP = 'openai-compatible/backup-model';
+
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => {
+        const trimmed = spec?.trim() ?? '';
+
+        return trimmed === '' || trimmed === 'house-model' ? 'openai-compatible/house-model' : trimmed;
+      },
+      resolveModel: (spec) => (spec === BACKUP ? backup : refused),
+      listProviders: async () => [],
+      listModels: async () => ({ models: [], failures: [{ provider: 'openai-compatible', reason: 'offline' }] }),
+      // The backup costs ten times the turn's own model, so a step priced at the wrong rate is off by ten.
+      modelInfo: async (spec) => ({
+        id: spec ?? '', label: 'house', capabilities: ['tools', 'streaming'],
+        cost: spec === BACKUP ? { input: 20, output: 80 } : { input: 2, output: 8 },
+      }),
+      ...resolverRest,
+    };
+
+    const catalog = { roles: {}, tiers: { default: { model: 'house-model', fallbacks: [BACKUP] } } };
+
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
+    };
+
+    const events: SessionEvent[] = [];
+
+    const session = new LocalAgentSession({
+      rt, db, model: fakeModel('fallback'), modelResolver: resolver, profileAuthority: () => envelope,
+      onEvent: (event) => events.push(event), noAutoEvolve: true,
+    });
+
+    await waitFor(() => session.modelPricing() !== null);
+    session.budget.declare('q3', {});
+    const fireAt = Date.now() + 60_000;
+    await session.createTimerTrigger({ atMs: fireAt, label: 'nightly review', trust: 'owner', missionLabel: 'q3' });
+    await session.fireDueTriggers(fireAt);
+    await waitFor(() => events.some((event) => event.type === 'turn-end'));
+
+    const runId = session.listRuns().items[0].runId;
+    const rows = session.getRunEvents(runId);
+    expect(rows.filter((row) => row.type === 'model_fallback')).toMatchObject([{ from: 'openai-compatible/house-model', to: BACKUP }]);
+    expect(rows.filter((row) => row.type === 'step_finish'))
+      .toMatchObject([{ usage: { input: 1_000_000, output: 0 }, usd: 20, modelId: 'fake-model' }]);
+    expect(session.budget.snapshot('q3')[0]?.spent.usd).toBe(20);
+    await session.end();
+  });
+
+  test('a fallback the catalog refuses to price leaves the turn to start, and the turn\'s own model answers it', async () => {
+    const { db, rt } = workspaceRuntime();
+    const BACKUP = 'openai-compatible/backup-model';
+
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => {
+        const trimmed = spec?.trim() ?? '';
+
+        return trimmed === '' || trimmed === 'house-model' ? 'openai-compatible/house-model' : trimmed;
+      },
+      resolveModel: () => fakeModel('from the house'),
+      listProviders: async () => [],
+      listModels: async () => ({ models: [], failures: [{ provider: 'openai-compatible', reason: 'offline' }] }),
+      // A profile may name a fallback on a provider this machine has not connected.
+      modelInfo: async (spec) => {
+        if (spec === BACKUP) throw new KinuError('denied', 'the backup provider is not connected');
+
+        return { id: spec ?? '', label: 'house', capabilities: ['tools', 'streaming'], cost: { input: 2, output: 8 } };
+      },
+      ...resolverRest,
+    };
+
+    const catalog = { roles: {}, tiers: { default: { model: 'house-model', fallbacks: [BACKUP] } } };
+
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
+    };
+
+    const events: SessionEvent[] = [];
+
+    const session = new LocalAgentSession({
+      rt, db, model: fakeModel('fallback'), modelResolver: resolver, profileAuthority: () => envelope,
+      onEvent: (event) => events.push(event), noAutoEvolve: true,
+    });
+
+    await session.send('hi', { id: crypto.randomUUID() });
+    const turnEnd = events.find((event) => event.type === 'turn-end');
+
+    if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
+    expect(turnEnd.turn.assistantResponse).toBe('from the house');
+    await session.end();
+  });
 });
 
 // agents.* in the node codemode sandbox: the real `new Function` sandbox over real bindings. Searches run their branches
@@ -5164,14 +5454,14 @@ describe('LocalAgentSession — the one-shot completion gate', () => {
 
 // Asserted on the system prompt the model is actually handed (`systemCapturingModel`).
 describe('LocalAgentSession — provenance and durable roles reach the model', () => {
-  test('a background-job wake carries the resume guidance in its own turn, not in the prefix', async () => {
-    // jobs/runner.ts stamps both kinuEvent and kinuMode on the wake; the guidance must still reach the model, from the
-    // turn-local tier so a wake between chat turns leaves the cacheable prefix intact.
+  test('a background-job wake carries the resume guidance, naming its job, in the dynamic context, not in the prefix', async () => {
+    // jobs/runner.ts stamps kinuMode and the job beside the wake's kinuEvent; the guidance must still reach the model,
+    // from the dynamic context so a wake between chat turns leaves the cacheable prefix intact.
     let observed: PromptMessage[] = [];
     const { session } = setup('ok', historyCapturingModel('ok', (messages) => { observed = messages; }));
     await session.enqueueTurn({
       text: 'job bgjob-1 finished',
-      metadata: { kinuEvent: 'background_job', kinuMode: 'build' },
+      metadata: { kinuEvent: 'background_job', kinuMode: 'build', jobId: 'bgjob-1', kind: 'agents', status: 'completed' },
     });
 
     const system = observed
@@ -5179,10 +5469,11 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
       .map((message) => message.content)
       .join('\n');
 
-    const turnMessages = observed.filter((message) => message.role !== 'system').map(messageText).join('\n');
-    expect(system).not.toContain('the referenced job result first');
-    expect(system).not.toContain('Background-resume');
-    expect(turnMessages).toContain('the referenced job result first');
+    const turnMessages = observed.filter((message) => message.role !== 'system').map(messageText);
+    expect(system).not.toContain('Fetch its result first');
+    expect(system).not.toContain('## Why this turn runs');
+    expect(present(turnMessages.at(-2), 'the block before the wake')).toContain('a background job finished (job bgjob-1, agents, completed)');
+    expect(turnMessages.at(-1)).toBe('job bgjob-1 finished');
     await session.end();
   });
 

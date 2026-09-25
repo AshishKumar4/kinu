@@ -73,7 +73,11 @@ function networkFetch(opts: {
   });
 }
 
-function resolverWith(fetchImpl: typeof fetch, credentials?: Parameters<typeof createLocalModelResolver>[0]['credentials']) {
+function resolverWith(
+  fetchImpl: typeof fetch,
+  credentials?: Parameters<typeof createLocalModelResolver>[0]['credentials'],
+  accountFor?: (providerId: string) => string | undefined,
+) {
   const options: Parameters<typeof createLocalModelResolver>[0] = {
     llm: LLM,
     cloud: { origin: ORIGIN, token: 'ptc_test' },
@@ -81,8 +85,9 @@ function resolverWith(fetchImpl: typeof fetch, credentials?: Parameters<typeof c
   };
 
   if (credentials) options.credentials = credentials;
+  const resolver = createLocalModelResolver(options);
 
-  return createLocalModelResolver(options);
+  return accountFor ? resolver.withAccountChoice?.(accountFor) ?? resolver : resolver;
 }
 
 describe('web-UI-connected providers reach local agents', () => {
@@ -171,5 +176,51 @@ describe('what an unreachable account does and does not claim', () => {
     const codex = (await resolver.listProviders()).find((p) => p.id === 'codex');
     expect(codex?.available).toBe(false);
     expect(codex?.unavailableReason).not.toContain('Kinu account');
+  });
+
+  test('a Codex account is answered here too, never asked of the proxy', async () => {
+    const recorded: Recorded[] = [];
+    const resolver = resolverWith(networkFetch({ credentialsStatus: 503, recorded }), undefined, () => 'work');
+    const codex = (await resolver.listProviders()).find((p) => p.id === 'codex');
+    expect(codex?.available).toBe(false);
+    expect(codex?.unavailableReason).not.toContain('Kinu account');
+  });
+});
+
+describe('several accounts of a web-connected provider', () => {
+  const forwardedCredential = (recorded: Recorded[]): string | null | undefined => recorded
+    .find((r) => r.url.endsWith('/api/user/ai/proxy/forward'))?.headers.get('x-kinu-proxy-cred');
+
+  test('a spec naming an account is forwarded under that account\'s key', async () => {
+    const recorded: Recorded[] = [];
+
+    const resolver = resolverWith(networkFetch({
+      credentials: [{ key: 'openrouter.bearer' }, { key: 'openrouter.bearer@work' }], recorded,
+    }));
+
+    const result = await generateText({ model: resolver.resolveModel('openrouter@work/anthropic/claude-x'), prompt: 'hello' });
+
+    expect(result.text).toBe('proxied');
+    expect(forwardedCredential(recorded)).toBe('openrouter.bearer@work');
+  });
+
+  test('a spec naming none is forwarded under the chosen account, else main', async () => {
+    const chosen: Recorded[] = [];
+
+    const withChoice = resolverWith(networkFetch({
+      credentials: [{ key: 'openrouter.bearer' }, { key: 'openrouter.bearer@work' }], recorded: chosen,
+    }), undefined, (provider) => (provider === 'openrouter' ? 'work' : undefined));
+
+    await generateText({ model: withChoice.resolveModel('openrouter/anthropic/claude-x'), prompt: 'hello' });
+    expect(forwardedCredential(chosen)).toBe('openrouter.bearer@work');
+
+    const unchosen: Recorded[] = [];
+
+    const withoutChoice = resolverWith(networkFetch({
+      credentials: [{ key: 'openrouter.bearer' }, { key: 'openrouter.bearer@work' }], recorded: unchosen,
+    }));
+
+    await generateText({ model: withoutChoice.resolveModel('openrouter/anthropic/claude-x'), prompt: 'hello' });
+    expect(forwardedCredential(unchosen)).toBe('openrouter.bearer');
   });
 });

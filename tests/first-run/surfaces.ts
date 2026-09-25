@@ -61,7 +61,7 @@ export const STRIP_ROWS = {
 /** The ways in that are not pages. */
 export const ENTRY_ROWS = {
   tui: ['enter-sends'],
-  cli: ['workspace-title', 'preview-address', 'command-refusal'],
+  cli: ['workspace-title', 'preview-address', 'command-refusal', 'multi-account'],
   daemon: ['device-link', 'two-machines', 'approve-clears'],
   shareHost: ['public-share', 'share-capability-cut'],
 } as const satisfies Record<string, Rows>;
@@ -79,4 +79,5 @@ export const CAPABILITY_ROWS = {
   'a live web search': ['web-search'],
   'an internal address refused on every fetch path': ['capability-isolation'],
   'a correction sent while the agent works': ['steer-correction'],
+  'several accounts of one provider, each listed and chosen per workspace': ['multi-account'],
 } as const satisfies Record<string, Rows>;

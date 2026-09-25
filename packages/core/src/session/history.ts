@@ -46,6 +46,20 @@ interface LandedInput {
   readonly publish?: (selection: ContextSelection) => void;
 }
 
+/** `before`/`after`: the conversation messages around it. */
+export interface CarriedRender {
+  readonly message: ModelMessage;
+  readonly before: ModelMessage | null;
+  readonly after: ModelMessage | null;
+}
+
+/** `entries` index with `messages`, the conversation; `rendered` is runtime context. */
+export interface MaterializedContext {
+  readonly entries: readonly ContextEntry[];
+  readonly messages: ModelMessage[];
+  readonly rendered: readonly CarriedRender[];
+}
+
 export class SessionHistory {
   readonly messages: SessionMessages;
   readonly context: SessionContext;
@@ -113,7 +127,7 @@ export class SessionHistory {
     });
   }
 
-  /** Continue from before `entryId`: the context its nearest recorded ancestor held becomes a new branch, and later entries leave the head's ancestry. */
+  /** Continue from before `entryId`: its nearest recorded ancestor's context branches; later entries leave the head. */
   revertTo(sessionId: string, entryId: string, assertIdle: () => void): ContextSelection {
     return this.dependencies.transactionSync(() => {
       this.dependencies.actor.assertCurrent();
@@ -141,11 +155,39 @@ export class SessionHistory {
     });
   }
 
-  async materialize(): Promise<{ selection: ContextSelection; entries: readonly ContextEntry[]; messages: ModelMessage[] }> {
+  async materialize(): Promise<MaterializedContext & { readonly selection: ContextSelection }> {
     const selection = this.context.selected() ?? this.context.initialize();
-    const entries = this.context.entries(selection);
 
-    return { selection, entries, messages: await this.messages.materializeAll(entries) };
+    return { selection, ...await this.partition(this.context.entries(selection), this.context.renderMessages(selection.contextId)) };
+  }
+
+  private async partition(members: readonly ContextEntry[], rendered: ReadonlySet<string>): Promise<MaterializedContext> {
+    const all = await this.messages.materializeAll(members);
+    const entries: ContextEntry[] = [];
+    const messages: ModelMessage[] = [];
+    const renders: { readonly message: ModelMessage; readonly at: number }[] = [];
+
+    for (const [index, member] of members.entries()) {
+      const message = all[index];
+
+      if (message === undefined) throw new KinuError('io', 'a context member did not materialize');
+
+      if (rendered.has(member.messageId)) renders.push({ message, at: messages.length });
+      else { entries.push(member); messages.push(message); }
+    }
+
+    return { entries, messages, rendered: renders.map(({ message, at }) => ({ message, before: messages[at] ?? null, after: messages[at - 1] ?? null })) };
+  }
+
+  /** The render row its request names too. */
+  async recordRender(message: ModelMessage, at: { readonly before: string | null; readonly replaces: boolean }, turnId: string, assertOwner: () => void): Promise<void> {
+    const prepared = await this.messages.prepareRender(message);
+
+    this.dependencies.transactionSync(() => {
+      assertOwner();
+      this.messages.insertRender(prepared);
+      this.context.addRender({ messageId: prepared.id }, at, { turnId, assertEpoch: assertOwner });
+    });
   }
 
   stagePrepared(proposal: Omit<ContextProposal, 'base'> & { readonly base: ContextSelection | null }, messages: readonly PreparedMessage[], assertOwner: () => void, events: ContextEventRecorder | null = null): void {
@@ -212,12 +254,12 @@ export class SessionHistory {
       WHERE m.actor_id=${actorId} AND m.context_id=${contextId} AND m.to_revision IS NULL AND r.turn_id=${turnId}`.map(row => row.entry_id));
   }
 
-  async stepBase(assertOwner: () => void, turnId: string | null = null, events: ContextEventRecorder | null = null): Promise<{ readonly messages: ModelMessage[]; readonly entries: readonly ContextEntry[]; readonly changed: boolean }> {
+  async stepBase(assertOwner: () => void, turnId: string | null = null, events: ContextEventRecorder | null = null): Promise<MaterializedContext & { readonly changed: boolean }> {
     assertOwner();
     const current = await this.materialize();
     const pending = this.proposals.pending(current.selection.contextId).at(-1);
 
-    if (pending === undefined) return { messages: current.messages, entries: current.entries, changed: false };
+    if (pending === undefined) return { ...current, changed: false };
     let candidate: readonly ContextEntry[];
 
     try { candidate = this.proposals.preview(pending.proposal_id); } catch (cause) {
@@ -225,12 +267,12 @@ export class SessionHistory {
       assertOwner();
       this.proposals.close(pending.proposal_id, 'history_rewritten');
 
-      return { messages: current.messages, entries: current.entries, changed: false };
+      return { ...current, changed: false };
     }
 
-    const messages = await this.messages.materializeAll(candidate);
+    const staged = await this.partition(candidate, this.context.renderMessages(current.selection.contextId));
     const before = toolPairingGaps(current.messages);
-    const after = toolPairingGaps(messages);
+    const after = toolPairingGaps(staged.messages);
     const refusal = before.calls.size > 0 || after.calls.size > 0 || after.results.size > 0 ? 'unpaired_tool_call' : null;
 
     const committed = this.dependencies.transactionSync(() => {
@@ -246,10 +288,10 @@ export class SessionHistory {
 
     committed.publication?.publish();
 
-    if (committed.applied !== null) return { messages, entries: candidate, changed: true };
+    if (committed.applied !== null) return { ...staged, changed: true };
     const settled = await this.materialize();
 
-    return { messages: settled.messages, entries: settled.entries, changed: false };
+    return { ...settled, changed: false };
   }
 
   private editEvent(edit: ContextEditAudit): { publish(): void } | null {
@@ -367,8 +409,7 @@ export class SessionHistory {
     return reference;
   }
 
-  /** Publish one message and its transcript entry together, outside working
-   *  context: search trajectories and other non-chat sessions. */
+  /** One message and its transcript entry, outside working context: search trajectories, other non-chat sessions. */
   async record(sessionId: string, input: { readonly id: string; readonly parentId: string | null; readonly message: ModelMessage; readonly origin: MessageOrigin; readonly metadata?: JsonObject }): Promise<MessageReference> {
     const prepared = await this.messages.prepare(input.message, input.id);
     const metadata = input.metadata === undefined ? null : await this.messages.payloads.prepare(input.metadata);

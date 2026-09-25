@@ -29,6 +29,18 @@ export const CONFIG_PLANE_CASES: readonly SharedCase[] = [
     },
   },
   {
+    title: 'the account a workspace pays a provider with is read back; null clears it; a bad name is refused',
+    covers: ['getProviderAccounts', 'setProviderAccount'],
+    async run({ surface }) {
+      expect(await surface.getProviderAccounts()).toEqual({ accounts: {} });
+      expect(await surface.setProviderAccount('openai', 'work')).toEqual({ ok: true, accounts: { openai: 'work' } });
+      expect(await surface.getProviderAccounts()).toEqual({ accounts: { openai: 'work' } });
+      await expect(surface.setProviderAccount('openai', 'Work!')).rejects.toThrow('Invalid account name: Work!');
+      expect(await surface.setProviderAccount('openai', null)).toEqual({ ok: true, accounts: {} });
+      expect(await surface.getProviderAccounts()).toEqual({ accounts: {} });
+    },
+  },
+  {
     title: 'a role the catalog holds becomes the selection; one it does not is refused',
     covers: ['setRole'],
     async run({ surface }) {

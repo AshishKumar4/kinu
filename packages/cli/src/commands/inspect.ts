@@ -14,7 +14,7 @@ import {
   ActivitySpendSchema, callAgentRpc, createCloudWebhookTrigger,
   type CloudWebhookTriggerInput,
 } from '../cloud-api';
-import { ACCENT, DIM, ERR, OK, plural, printJson, printSearchTree, WARN } from '../display';
+import { ACCENT, DIM, ERR, OK, plural, printJson, printSearchTree, renderAccountSpendLines, WARN } from '../display';
 import { asRecord, normalizeWebhookAuthMode, parsePositiveInt, parseTime, stringField } from '../options';
 import {
   executeLocalExecutor,
@@ -240,6 +240,11 @@ function printSpend(spend: WorkspaceSpend): void {
     }
   }
 
+  const [accountsHeading, ...accountLines] = renderAccountSpendLines(spend.accounts, Date.now());
+  console.log(DIM(accountsHeading ?? ''));
+
+  for (const line of accountLines) console.log(line);
+
   const reported = spend.coverage.reported;
 
   if (reported !== null) {
@@ -254,21 +259,9 @@ function printSpend(spend: WorkspaceSpend): void {
       + 'tokens went on work no turn of this agent ran'));
   }
 
-  // The dollar column is a floor: unpriced calls, and calls priced at another cache-retention tier's rate.
-  // Both reasons or neither, in the same words as ActivitySurface `spendCaveat`.
-  const floorReasons: string[] = [];
-
+  // In the same words as ActivitySurface `spendCaveat`.
   if (spend.total.unpricedCalls > 0) {
-    floorReasons.push(`${plural(spend.total.unpricedCalls, 'measured call')} carried no models.dev rate`);
-  }
-
-  if (spend.total.floorPricedCalls > 0) {
-    floorReasons.push(`${plural(spend.total.floorPricedCalls, 'priced call')} wrote cache `
-      + 'at a retention tier the catalog does not rate');
-  }
-
-  if (floorReasons.length > 0) {
-    console.log(DIM(`The dollar total is a floor: ${floorReasons.join('; ')}`));
+    console.log(DIM(`The dollar total is a floor: ${plural(spend.total.unpricedCalls, 'measured call')} carried no models.dev rate`));
   }
 }
 

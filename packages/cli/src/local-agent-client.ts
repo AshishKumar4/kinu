@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
+import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
 import { applyWorkspaceTitle, getChatHistoryPage, persistAutoTitle, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, decodeJsonValue, usageReported, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
@@ -22,7 +22,7 @@ import {
 import {
   CONFIG_PATH,
   agentDbPath,
-  createCodexAuthStore,
+  createOAuthStore,
   loadConfigFile,
   readProviderRevision,
   resolveMcpServers,
@@ -93,11 +93,11 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
 
   const { llmConfig, resolver } = createConfiguredLocalModelResolver({ ...opts, agentName: name });
   const providerCredentials = resolveProviderCredentials();
-  const codexAuthStore = createCodexAuthStore();
+  const oauthStore = createOAuthStore();
   const db = new Database(dbPath);
 
   const openConfig = {
-    llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH,
+    llm: llmConfig, providerCredentials, oauthStore, oauthConfigPath: CONFIG_PATH,
     checkpointKeep: loadConfigFile().checkpointKeep,
     cwd: opts.cwd,
   };
@@ -562,6 +562,18 @@ export class LocalAgentClient implements AgentClient {
 
   async setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
     return { effort: this.session.setReasoningEffort(effort).effort };
+  }
+
+  async workspaceSpend(): Promise<WorkspaceSpend> {
+    return this.session.workspaceSpend();
+  }
+
+  async getProviderAccounts(): Promise<Readonly<Record<string, string>>> {
+    return this.session.getProviderAccounts().accounts;
+  }
+
+  async setProviderAccount(provider: string, account: string | null): Promise<Readonly<Record<string, string>>> {
+    return this.session.setProviderAccount(provider, account).accounts;
   }
 
   async getEvolutionConfig(): Promise<EvolutionConfigView> {

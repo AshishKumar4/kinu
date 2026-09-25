@@ -37,6 +37,7 @@ export function createOpenAIProvider(opts: OpenAIOptions = {}): ModelProvider {
 
   return {
     id: 'openai',
+    credentialKey: OPENAI_CRED_KEY,
     label: 'OpenAI (direct API)',
     defaultModel: OPENAI_DEFAULT_MODEL,
     fastModel: OPENAI_FAST_MODEL,

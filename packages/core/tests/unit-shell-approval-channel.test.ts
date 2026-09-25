@@ -45,7 +45,7 @@ function harness(opts: {
       };
   }
 
-  const shell = withApprovalGatedShell(rawShell, policy);
+  const shell = withApprovalGatedShell(rawShell, { filesOwner: 'agent' }, policy);
   const runtime: AgentRuntime = { ...rt, shell };
   const tools = buildBuiltinTools({ rt: runtime, history: storesFor(runtime).history });
 

@@ -1,7 +1,7 @@
 /** Model menu and connectable-provider catalog for HTTP clients. The provider registry is the
  *  source of truth for models; models.dev for which providers a BYO key can connect. */
 import {
-  catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL,
+  catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL, openAICompatNameOf,
   type ModelsDevProviderInfo, type ProviderFailure, type ReasoningEffort,
 } from '@kinu.run/core';
 import { createAgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
@@ -25,6 +25,7 @@ export interface ModelMenuEntry {
 export interface ModelMenuResponse {
   models: ModelMenuEntry[];
   failures: ProviderFailure[];
+  accounts?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface AvailableModelsEnv<Id> extends ProviderEnv {
@@ -57,19 +58,18 @@ export async function listAvailableModels<Id>(
   // Retried: a dropped read would show no connected accounts and prompt needless re-authorisation.
   const creds = await retryTransientDO('listCredentials', () => stub.listCredentials(caller));
 
-  for (const c of creds) {
-    if (c.key.startsWith('openai-compat.')) {
-      const name = c.key.slice('openai-compat.'.length);
-      out.push({
-        spec: `openai-compat:${name}/<modelId>`,
-        label: `${name} (custom model id)`,
-        provider: `openai-compat:${name}`,
-        capabilities: ['tools', 'streaming'],
-      });
-    }
+  const compatNames = new Set(creds.flatMap((c) => openAICompatNameOf(c.key) ?? []));
+
+  for (const name of compatNames) {
+    out.push({
+      spec: `openai-compat:${name}/<modelId>`,
+      label: `${name} (custom model id)`,
+      provider: `openai-compat:${name}`,
+      capabilities: ['tools', 'streaming'],
+    });
   }
 
-  return { models: out, failures: menu.failures };
+  return { models: out, failures: menu.failures, ...(menu.accounts !== undefined && { accounts: menu.accounts }) };
 }
 
 export interface ProviderCatalogEntry {

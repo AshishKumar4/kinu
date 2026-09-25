@@ -1,11 +1,13 @@
 /** Slash commands shared by the TUI and classic REPL; outcomes are presentation-neutral. */
 
+import { fmtUsd, MAIN_ACCOUNT, specWithoutAccount, usageTotal } from '@kinu.run/core';
 import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECISIONS, offeredReasoningEfforts, formatPlanWithLineNumbers, planTitle, type PlanReview, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentRefinementView } from './agent-client';
 import type { InstructionSourceRow } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { loadActiveProfile } from './default-model';
-import { renderSearchTreeLines } from './display';
+import { loadActiveProfile, updateDefaultAccount } from './default-model';
+import { readAllAccountUsage } from './account-usage';
+import { plural, renderAccountSpendLines, renderCreditLines, renderSearchTreeLines } from './display';
 
 export interface SlashCommandInfo {
   name: string;
@@ -33,12 +35,16 @@ interface SlashCommand extends SlashCommandInfo {
   readonly hidden?: true;
 }
 
+const ACCOUNTS_USAGE = '/accounts [use <provider> <account|default>] [default <provider> <account>]';
+
 const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/help', description: 'List commands and keys', run: helpCommand },
   { name: '/status', description: 'Show this agent\'s mission, model and counts', run: statusCommand },
   { name: '/tools', description: 'List the tools this agent can use', run: toolsCommand },
   { name: '/model', description: 'Show or set this workspace\'s model', usage: '/model [spec]', run: modelCommand },
   { name: '/effort', description: 'Show or set this workspace\'s reasoning effort', usage: '/effort [level]', run: effortCommand },
+  { name: '/stats', description: 'Show usage, quota and API-equivalent cost per provider account', usage: '/stats', run: statsCommand },
+  { name: '/accounts', description: 'Show each provider\'s accounts; choose this workspace\'s or the default', usage: ACCOUNTS_USAGE, run: accountsCommand },
   { name: '/role', description: 'Show or choose this agent\'s role', usage: '/role [id]', run: roleCommand },
   { name: '/rename', description: 'Rename this agent. Kinu never renames over a name you chose', usage: '/rename <name>', requires: 'rename', run: renameCommand },
   { name: '/settings', description: 'Open interactive settings', run: settingsCommand },
@@ -216,6 +222,56 @@ async function modelCommand({ client, arg }: SlashContext): Promise<SlashOutcome
   const result = await client.setModel(arg);
 
   return { kind: 'model-set', spec: result.spec };
+}
+
+async function statsCommand({ client }: SlashContext): Promise<SlashOutcome> {
+  const [usage, spend] = await Promise.all([readAllAccountUsage(), client.workspaceSpend()]);
+  const tokens = usageTotal(spend.total.usage);
+  const usd = spend.total.usd === undefined ? 'unpriced' : fmtUsd(spend.total.usd);
+  const here = `This workspace: ${tokens === undefined ? 'unmeasured' : `${tokens.toLocaleString()} tokens`}, ${usd}, ${plural(spend.total.calls, 'call')}`;
+  const unread = usage.unread.length === 0 ? [] : [`Not counted, could not be read: ${usage.unread.join(', ')}`];
+
+  return {
+    kind: 'text',
+    text: [
+      `Across your ${plural(usage.workspaces, 'workspace')}`, ...renderAccountSpendLines(usage.accounts, Date.now()),
+      ...renderCreditLines(usage.credits ?? []), ...unread, here,
+    ].join('\n'),
+  };
+}
+
+async function accountsCommand({ client, rest }: SlashContext): Promise<SlashOutcome> {
+  const [verb, provider, account] = rest.map((word) => word.trim().toLowerCase());
+
+  if (verb === 'use' && provider && account) {
+    const own = await client.setProviderAccount(provider, account === 'default' ? null : account);
+    const chosen = own[provider];
+
+    return { kind: 'text', text: chosen === undefined ? `This workspace runs ${provider} on its default account.` : `This workspace runs ${provider} on ${chosen}.` };
+  }
+
+  if (verb === 'default' && provider && account) {
+    await updateDefaultAccount(provider, account);
+
+    return { kind: 'text', text: `${provider} runs on ${account} in every workspace that has not chosen its own.` };
+  }
+
+  if (verb !== undefined) return { kind: 'text', text: `Usage: ${ACCOUNTS_USAGE}` };
+  const [menu, own, profile] = await Promise.all([client.listModels(), client.getProviderAccounts(), loadActiveProfile()]);
+  const held = menu.accounts ?? {};
+  const providers = [...new Set([...Object.keys(held), ...Object.keys(own)])].sort();
+
+  if (providers.length === 0) return { kind: 'text', text: 'No provider holds an account yet. Connect one with kinu provider connect <provider>.' };
+
+  const lines = providers.map((id) => {
+    const fallback = profile.catalog.accounts?.[id] ?? MAIN_ACCOUNT;
+    const names = (held[id] ?? []).map((name) => (name === fallback ? `${name} (default)` : name));
+    const here = own[id] === undefined ? '' : ` · this workspace: ${own[id]}`;
+
+    return `  ${id}: ${names.join(', ') || 'none connected'}${here}`;
+  });
+
+  return { kind: 'text', text: ['Accounts', ...lines, `Choose: ${ACCOUNTS_USAGE}`].join('\n') };
 }
 
 async function roleCommand({ client, arg }: SlashContext): Promise<SlashOutcome> {
@@ -705,7 +761,8 @@ async function effortCommand({ client, arg }: SlashContext): Promise<SlashOutcom
     let levels: string;
 
     try {
-      const declared = (await client.listModels()).models.find((entry) => entry.spec === model)?.reasoningEfforts;
+      const listed = specWithoutAccount(model);
+      const declared = (await client.listModels()).models.find((entry) => entry.spec === listed)?.reasoningEfforts;
       levels = declared === undefined
         ? `${REASONING_EFFORTS.join(', ')} (the catalog does not say which ${model} accepts)`
         : offeredReasoningEfforts(declared, current).join(', ') || 'none; the model takes no effort setting';

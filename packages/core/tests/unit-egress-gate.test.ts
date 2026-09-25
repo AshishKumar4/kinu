@@ -259,7 +259,7 @@ describe('inherited approval policy', () => {
         return `ran:${command}`;
       },
       (error) => error.message,
-      'sandbox',
+      { name: 'sandbox', filesOwner: 'agent' },
       { policy },
     );
 

@@ -16,7 +16,7 @@ import type {
   ActorClaimStore, ChildContextResolver, ContextEventRecorder,
 } from "@kinu.run/core";
 import {
-  nimbusSessionFiles, nimbusSessionShell,
+  nimbusSessionFiles, nimbusSessionShell, shellCwd, createShellSession,
   observeWrites,
   type WorkspaceVFS,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
@@ -36,7 +36,7 @@ import {
   type VectorStore,
 } from "@kinu.run/core";
 import type { DeviceFileScope, SandboxHandle } from "@kinu.run/core";
-import { withHostedNodeExecution, REAL_CLOCK } from '@kinu.run/core';
+import { withHostedNodeExecution, REAL_CLOCK, WORKSPACE_ROOT } from '@kinu.run/core';
 import type { HostedNodeHome } from '@kinu.run/core';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
@@ -67,7 +67,7 @@ import {
 import { ownerCaller, type UserCaller } from "@kinu.run/core";
 import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
 import {
-  agentAffinityKey, normalizeUsage,
+  agentAffinityKey, callAccountOf, normalizeUsage,
 } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
 
@@ -319,7 +319,19 @@ export function createCFRuntime(
       ownGrants: () => memoryConfig.getShellApprovalGrants(),
     });
 
-  const shell = withApprovalGatedShell(nimbusSessionShell(executionBox), approvalPolicy);
+  // The agent's own workspace, whose shell also serves the user's device and Drive; codemode runs in it too.
+  const sessionShell = nimbusSessionShell(executionBox);
+
+  const shellSession = createShellSession({
+    home: hooks.workspaceExecution?.home ?? WORKSPACE_ROOT,
+    userRoots: () => agentFileVfs.userRoots(),
+    // A hosted node's box pins every call's cwd to its home (withHostedNodeExecution).
+    keepsCwd: hooks.workspaceExecution === undefined,
+    stored: () => shellCwd(sessionShell),
+  });
+
+  const shell = withApprovalGatedShell(sessionShell, { filesOwner: 'agent', shellSession }, approvalPolicy);
+
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
   // State services keep `baseWorkspaceVfs` and never index foreign bytes. The context mount is last:
   // the only per-actor entry.
@@ -360,6 +372,7 @@ export function createCFRuntime(
   workspaceBox.mountTable?.(agentFileVfs, hooks.workspaceExecution?.cred);
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
+    shellSession,
     // Declared exactly when NIMBUS_RUNTIME_CACHE is bound: without it there is nothing to install.
     runtimeCatalog: env.NIMBUS_RUNTIME_CACHE !== undefined,
     inboundNetwork: nimbusPreviewConfigured(env),
@@ -587,15 +600,16 @@ function reportCall(
   report: ModelCallSink | undefined,
   source: SpendSource,
   spec: string,
-  result: { usage?: LanguageModelUsage; response?: { modelId?: string } },
+  result: { usage?: LanguageModelUsage; response?: { modelId?: string; headers?: Record<string, string> } },
 ): void {
   if (!report) return;
   const usage = normalizeUsage(result.usage);
   const modelId = result.response?.modelId;
+  const account = callAccountOf(result.response ?? {});
   // `modelId` absent has to mean absent.
   report(modelId !== undefined && modelId.length > 0
-    ? { source, spec, usage, modelId }
-    : { source, spec, usage });
+    ? { source, spec, usage, modelId, account }
+    : { source, spec, usage, account });
 }
 
 /** `resolveProfile` absent means no lane to build. */

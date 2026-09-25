@@ -10,6 +10,7 @@ import type { EscalationSnapshot } from '../execution/escalation';
 import type { MissionBudgetRefusal } from '../mission-budget';
 import type { HeadFileChangeSet } from '../types/heads';
 import type { Usage } from '../usage';
+import type { CallAccount } from '../providers/quota';
 import type { ToolOutcome } from '../types/tool-outcome';
 import type { WorkMode } from '../types/turn';
 import type {
@@ -30,6 +31,7 @@ export type RunEventType =
   | 'step_partial'
   | 'model_call'
   | 'provider_wait'
+  | 'model_fallback'
   | 'model_operation'
   | 'head_split'
   | 'head_merge'
@@ -105,7 +107,7 @@ export type RunEvent =
   | (RunEventBase & { type: 'tool_call_end'; name: string; toolCallId: string;
       args?: JsonValue; result?: JsonValue; error?: string; durationMs?: number; outcome?: ToolOutcome })
   /** The durable record of one step's output; pairing holds within a row, so a run's rows
-   *  concatenate into a valid request. `usdFloorTokens` is present only when `usd` is a floor. */
+   *  concatenate into a valid request. */
   | (RunEventBase & {
       type: 'step_finish';
       stepIndex: number;
@@ -114,9 +116,9 @@ export type RunEvent =
       messages?: JsonValue[];
       usage?: Usage;
       usd?: number;
-      usdFloorTokens?: number;
       modelId?: string;
       context?: ContextComposition;
+      account?: CallAccount | undefined;
     })
   /** Superseded by the step's `step_finish`; the newest row of an unfinished step is where a
    *  continuation resumes. */
@@ -128,9 +130,9 @@ export type RunEvent =
       source: SpendSource;
       usage?: Usage;
       usd?: number;
-      usdFloorTokens?: number;
       spec?: string;
       modelId?: string;
+      account?: CallAccount;
     })
   /** Start/end pair: a start without an end marks a dead process
    *  (`RunEventRecorder.unterminatedModelOperations`). The census reads `model_call`, not this. */
@@ -157,6 +159,7 @@ export type RunEvent =
       status?: number;
       source: 'header' | 'backoff' | 'cooldown';
     })
+  | (RunEventBase & { type: 'model_fallback'; from: string; to: string; reason: string })
   | (RunEventBase & { type: 'head_split'; rootId: string; headIds: string[]; rationale: string })
   /** `totalTokens` is absent when no head reported usage: unknown, not zero. */
   | (RunEventBase & { type: 'head_merge'; rootId: string; headCount: number;

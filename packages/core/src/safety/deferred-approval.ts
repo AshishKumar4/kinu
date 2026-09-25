@@ -1,8 +1,6 @@
 /**
- * Deferred approval: a gated action parks on the owner instead of blocking or being auto-denied, and
- * the agent is told it is parked. Honesty invariant: a queued action returns through `denyResult`, so a
- * success-shaped result for an action that did not run is unreachable; 'approved' is permission, not an
- * effect; parked actions are re-stated every step. The queue is SQL because it must survive eviction.
+ * Deferred approval: a gated action parks on the owner and the agent is told so. A queued action returns through
+ * `denyResult`, so nothing unrun looks like a success; 'approved' is permission, not an effect. SQL, to survive eviction.
  */
 
 import type { DynamicApproval } from '../types/dynamic-context';
@@ -12,7 +10,7 @@ import type { AgentInbox } from '../types/signals';
 import type { ApprovalConsumedRecord } from '../events/types';
 import * as v from 'valibot';
 import {
-  formatApproval, gatedGrants, reviewCommand,
+  formatApproval,
   type ApprovalGrant, type ApprovalSpend, type ApprovalSpendOutcome,
   type DeferredApprovalChannel, type ShellApprovalRequest,
 } from './approval-gate';
@@ -30,15 +28,15 @@ export type DeferredApprovalStatus =
   | 'approved'
   /** The owner said no. Stands for {@link DENIAL_STANDING_MS}, then is swept. */
   | 'denied'
-  /** The grant is out with a running command and answers nobody. The gate deletes the row or restores
-   *  'approved'; a row left here means a process died mid-command, and the grant is lost (safe direction). */
+  /** Out with a running command; answers nobody. The gate deletes the row or restores 'approved'; a row
+   *  left here is a process that died mid-command, its grant lost (the safe direction). */
   | 'spent';
 
 /** What the owner can pick. `always` is `approved` plus a standing grant for the tripped rules on that executor. */
 export type DeferredApprovalAnswer = Extract<DeferredApprovalStatus, 'approved' | 'denied'> | 'always';
 
-/** How long a denial answers before the queue asks again. Denied rows expire so old refusals
- *  don't govern today and don't accumulate; standing policy lives in actor_config. */
+/** How long a denial answers before the queue asks again, so old refusals neither govern today nor
+ *  accumulate; standing policy lives in actor_config. */
 export const DENIAL_STANDING_MS = 24 * 60 * 60 * 1000;
 
 /** One action parked on the owner. */
@@ -114,8 +112,8 @@ export class DeferredApprovalStore {
     this.actorId = actor.actorId;
   }
 
-  /** The live row for this command on this executor: 'queued', 'approved', or a still-standing 'denied'.
-   *  'spent' is excluded. A decision outranks a pending ask; among decisions the newest wins. */
+  /** This command's live row on this executor ('queued', 'approved' or a standing 'denied', never 'spent'); a
+   *  decision outranks an ask, and the newest decision wins. */
   standing(command: string, executor: string, now: number): DeferredApproval | null {
     this.actor.assertCurrent();
 
@@ -166,8 +164,8 @@ export class DeferredApprovalStore {
     return this.get(id);
   }
 
-  /** Hand an approved grant to a command about to run. It leaves `standing()` before the command runs,
-   *  so a crash loses an approval rather than granting twice. Returns null if another call won. */
+  /** Hand an approved grant to a command about to run, out of `standing()` first so a crash loses an approval
+   *  rather than granting twice; null if another call won. */
   spend(id: string): { readonly action: DeferredApproval; readonly spend: ApprovalSpend } | null {
     this.actor.assertCurrent();
 
@@ -186,8 +184,8 @@ export class DeferredApprovalStore {
     };
   }
 
-  /** Close a spend: consume the grant or give it back. Guarded on the spend counter, so it is
-   *  idempotent and a stale settle cannot reach a later attempt. Reports whether this call moved the row. */
+  /** Consume the grant or give it back, guarded on the spend counter so a stale settle cannot reach a later
+   *  attempt; reports whether the row moved. */
   settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): boolean {
     this.actor.assertCurrent();
 
@@ -234,8 +232,8 @@ function clip(text: string): string {
   return text.length <= COMMAND_ECHO_MAX_CHARS ? text : `${text.slice(0, COMMAND_ECHO_MAX_CHARS)}…`;
 }
 
-/** The one-line result for a parked action: nothing ran, which rule, which machine, and the id.
- *  Standing doctrine lives in the system prompt. Still returned through `denyResult`. */
+/** A parked action's one-line result: nothing ran, which rule, which machine, the id. Returned through
+ *  `denyResult`; the doctrine lives in the system prompt. */
 function queuedActionMessage(action: DeferredApproval): string {
   return `NOT RUN — queued for owner approval (${action.id}): ${ruleNames(action)} on ${action.executor}. `
     + 'A decision will wake you.';
@@ -246,9 +244,16 @@ function deniedActionMessage(action: DeferredApproval): string {
   return `NOT RUN — the owner refused this (${action.id}). Not a timeout; find another way.`;
 }
 
+const SHOWN_HIT = /^• ([\w-]+) \((\w+)\): /gm;
+
+/** The hits {@link formatApproval} showed the owner. */
+function shownHits(action: DeferredApproval): Array<{ rule: string; decision: string }> {
+  return [...action.reason.matchAll(SHOWN_HIT)].flatMap(([, rule, decision]) => (rule && decision ? [{ rule, decision }] : []));
+}
+
 /** The rules the review named, for a one-line result; full prose is in `action.reason`. */
 function ruleNames(action: DeferredApproval): string {
-  const names = [...action.reason.matchAll(/^• ([\w-]+) \(/gm)].map((m) => m[1]);
+  const names = shownHits(action).map((hit) => hit.rule);
 
   return names.length > 0 ? names.join(', ') : 'needs approval';
 }
@@ -356,8 +361,8 @@ export class DeferredApprovalQueue {
     return { outcome: 'queued', action };
   }
 
-  /** Close a spend {@link park} made. 'spent' consumes the grant and writes the `approval_consumed`
-   *  audit; 'did-not-run' restores the row and writes nothing. Reports whether this call closed it. */
+  /** Close a spend {@link park} made: 'spent' consumes the grant and audits it, 'did-not-run' restores the row.
+   *  Reports whether this call closed it. */
   settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): boolean {
     const action = this.deps.store.get(spent.approvalId);
 
@@ -395,9 +400,9 @@ export class DeferredApprovalQueue {
     if (decided.length === 0) return decided;
 
     if (answer === 'always') {
-      // Recomputed, not stored: the rule table is the source of truth.
-      this.deps.remember(decided.flatMap(
-        (a) => gatedGrants(reviewCommand(a.command, a.executor), a.executor)));
+      // Not re-reviewed: that would lose the call's member and cwd.
+      this.deps.remember(decided.flatMap((a) => shownHits(a)
+        .filter((hit) => hit.decision === 'gate').map((hit) => ({ rule: hit.rule, executor: a.executor }))));
     }
 
     this.notify({ kind: 'decided', actions: decided });

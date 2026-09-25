@@ -213,6 +213,23 @@ describe('GET /credentials', () => {
     const body = v.parse(CredentialListSchema, await handled(res).json());
     expect(body.credentials.map((c) => c.key)).toEqual(['openai.bearer']);
   });
+
+  test('lists each account of a proxyable provider, and no account of Codex', async () => {
+    const env = setupEnv([
+      { key: 'openai.bearer', headers: { Authorization: 'Bearer sk-main' } },
+      { key: 'openai.bearer@work', headers: { Authorization: 'Bearer sk-work' } },
+      { key: 'codex.oauth@work', headers: { Authorization: 'Bearer codex-work' } },
+    ]);
+
+    captureUpstream(() => new Response('unused'));
+
+    const res = await providerProxy(new Request(CREDENTIALS_URL, {
+      headers: { authorization: `Bearer ${SESSION_TOKEN}` },
+    }), env);
+
+    const body = v.parse(CredentialListSchema, await handled(res).json());
+    expect(body.credentials.map((c) => c.key).sort()).toEqual(['openai.bearer', 'openai.bearer@work']);
+  });
 });
 
 describe('POST /forward', () => {
@@ -276,16 +293,46 @@ describe('POST /forward', () => {
     expect(await handled(res).text()).toContain('attacker.example');
   });
 
-  test('refuses the Cloudflare login outright', async () => {
-    const env = setupEnv([{ key: 'cloudflare.oauth', baseURL: 'https://api.cloudflare.com/client/v4/accounts/a/ai/v1', headers: { authorization: 'Bearer cf' } }]);
-    const seen = captureUpstream(() => new Response('should not happen'));
+  test('refuses the Cloudflare login and every account of Codex and Claude outright', async () => {
+    for (const denied of [
+      {
+        key: 'cloudflare.oauth',
+        baseURL: 'https://api.cloudflare.com/client/v4/accounts/a/ai/v1',
+        target: 'https://api.cloudflare.com/client/v4/accounts/a/ai/v1/chat/completions',
+      },
+      { key: 'codex.oauth@x', target: 'https://chatgpt.com/backend-api/codex/responses' },
+      { key: 'claude.oauth@x', target: 'https://api.anthropic.com/v1/messages' },
+    ]) {
+      const env = setupEnv([{ ...denied, headers: { authorization: 'Bearer denied' } }]);
+      const seen = captureUpstream(() => new Response('should not happen'));
+      const res = await providerProxy(forwardRequest({ cred: denied.key, target: denied.target }), env);
+
+      expect(res?.status).toBe(403);
+      expect(seen).toHaveLength(0);
+    }
+  });
+
+  test('an account is spent under its provider\'s endpoint with its own key, not main\'s', async () => {
+    const env = setupEnv([
+      { key: 'openai.bearer', headers: { Authorization: 'Bearer sk-main' } },
+      { key: 'openai.bearer@work', headers: { Authorization: 'Bearer sk-work' } },
+    ]);
+
+    const seen = captureUpstream(() => Response.json({ ok: true }));
 
     const res = await providerProxy(forwardRequest({
-      cred: 'cloudflare.oauth', target: 'https://api.cloudflare.com/client/v4/accounts/a/ai/v1/chat/completions',
+      cred: 'openai.bearer@work', target: 'https://api.openai.com/v1/chat/completions',
     }), env);
 
-    expect(res?.status).toBe(403);
-    expect(seen).toHaveLength(0);
+    expect(res?.status).toBe(200);
+    expect(seen[0]?.headers.get('authorization')).toBe('Bearer sk-work');
+
+    const stray = await providerProxy(forwardRequest({
+      cred: 'openai.bearer@work', target: 'https://attacker.example/v1/chat/completions',
+    }), env);
+
+    expect(stray?.status).toBe(403);
+    expect(seen).toHaveLength(1);
   });
 
   test('a credential that is not connected is a 401 naming the key', async () => {

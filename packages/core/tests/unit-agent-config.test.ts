@@ -349,6 +349,7 @@ describe('AgentConfigStore — lifetime counters', () => {
 describe('AgentConfigStore — every key has a write path', () => {
   const WRITERS: ReadonlyArray<(c: ReturnType<typeof setup>) => void> = [
     (c) => c.setModel('openai/gpt-5'),
+    (c) => c.setProviderAccount('anthropic', 'work'),
     (c) => c.setReasoningEffort('high'),
     (c) => c.setCacheRetention('long'),
     (c) => c.setDisplayName('Ada'),
@@ -403,6 +404,25 @@ describe('AgentConfigStore — every key has a write path', () => {
     const written = new Set([...Object.keys(c.all()), ...GENERIC_WRITE_PATH]);
     expect(Object.values(AGENT_CONFIG_KEYS).filter((k) => !written.has(k)))
       .toEqual([AGENT_CONFIG_KEYS.model]);
+  });
+});
+
+describe('an actor\'s own account per provider', () => {
+  test('choosing one provider\'s account leaves the others, and clearing it hands back to the default', () => {
+    const c = setup();
+    c.setProviderAccount('anthropic', 'work');
+    c.setProviderAccount('openai-compat:box', 'lab');
+    expect(c.getProviderAccounts()).toEqual({ anthropic: 'work', 'openai-compat:box': 'lab' });
+
+    c.setProviderAccount('anthropic', null);
+    expect(c.getProviderAccounts()).toEqual({ 'openai-compat:box': 'lab' });
+  });
+
+  test('a name that could not address an account is refused, not stored', () => {
+    const c = setup();
+    expect(() => c.setProviderAccount('anthropic', 'Work Account')).toThrow('Invalid account name');
+    expect(() => c.setProviderAccount('anthropic=x', 'work')).toThrow('Invalid provider id');
+    expect(c.getProviderAccounts()).toEqual({});
   });
 });
 

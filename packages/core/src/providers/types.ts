@@ -1,12 +1,15 @@
 // Provider abstraction: providers get ready-to-attach headers from a resolver, never raw
 // secrets; createModel is sync, with auth resolved inside customFetch.
 import type { LanguageModel } from 'ai';
+import { isAccountName, splitAccount } from '../credentials/accounts';
 import type { CountableRequest, InputTokenCount } from './input-tokens';
 import type { ReasoningEffort } from './reasoning-effort';
 import type { JsonObject } from '../utils/json';
 import type { Usage } from '../usage';
+import type { CallAccount } from './quota';
 
-export interface ModelSpec { provider: string; modelId: string; }
+/** Parsed `<provider>[@<account>]/<modelId>`. */
+export interface ModelSpec { provider: string; modelId: string; account?: string; }
 
 /** USD per 1M tokens, the models.dev `cost` block verbatim. It publishes one cache-write
  *  rate per model, so a 1h-retention write prices at that rate and `priceCall` is a floor. */
@@ -20,7 +23,7 @@ export interface ModelPricing {
 /**
  * How long a provider should keep the prefix a request writes.
  *   none   no breakpoints or cache key at all.
- *   short  the provider's default TTL; sends nothing extra.
+ *   short  the provider's default TTL.
  *   long   the extended TTL; costlier writes.
  */
 export type CacheRetention = 'none' | 'short' | 'long';
@@ -77,6 +80,8 @@ export interface ProviderInfo {
 export interface AuthResolution {
   headers: Record<string, string>;
   baseURL?: string;
+  /** The stored key that answered. */
+  credentialKey?: string;
 }
 
 /** Returns null when no credential is configured for `key`. */
@@ -124,20 +129,20 @@ export interface ProviderDeps {
   env: ProviderEnv;
   /** Stable conversation identity for provider routing and prompt caching. */
   sessionAffinity?: string;
-  /** Returns auth headers + baseURL for `key`, or null if not configured. */
   getAuth: AuthResolver;
-  /** Credential presence check used by isAvailable(). */
   hasCredential: (key: string) => Promise<boolean>;
   /** Stored credential keys; without it the dynamic source lists nothing. */
   listCredentialKeys?: () => Promise<string[]>;
   fetch?: typeof fetch;
   /** Called before each rate-limit sleep, including joined sibling cooldowns. */
   onProviderWait?: (info: ProviderWaitInfo) => void;
+  accountFor?: (providerId: string) => string | undefined;
 }
 
 export interface ModelProvider {
   readonly id: string;
   readonly label?: string;
+  readonly credentialKey?: string;
   readonly defaultModel?: string;
   /** The vendor's cheap tier for mechanical work, same credential; omitted where no
    *  meaningful smaller tier exists. */
@@ -147,7 +152,6 @@ export interface ModelProvider {
   unavailableReason?(deps: ProviderDeps): Promise<string | undefined> | string | undefined;
   listModels(deps: ProviderDeps): Promise<ModelInfo[]> | ModelInfo[];
 
-  /** Synchronous; auth/refresh happens in customFetch. */
   createModel(modelId: string, deps: ProviderDeps): LanguageModel;
 
   /** Pre-request token count via the provider's documented endpoint; absent means none.
@@ -160,17 +164,55 @@ export interface ModelProvider {
 
   /** Re-send a frozen body with no completion to keep its cache entry alive; only direct
    *  Anthropic implements it. Failure throws. */
-  warmCache?(modelId: string, deps: ProviderDeps, body: JsonObject): Promise<Usage>;
+  warmCache?(modelId: string, deps: ProviderDeps, body: JsonObject): Promise<{ usage: Usage; account?: CallAccount | undefined }>;
 }
 
-/** Split on the FIRST slash so slashful ids such as `@cf/deepseek-ai/deepseek-v4-pro-0813` survive intact. */
+/** Split on the FIRST slash so slashful ids such as `@cf/deepseek-ai/deepseek-v4-pro-0813` survive
+ *  intact. A leading `@` is a bare Workers AI id, not an account. */
+function splitSpec(spec: string): { provider: string; account: string | null; modelId: string } | null {
+  const i = spec.indexOf('/');
+
+  if (i < 1) return null;
+  const head = spec.slice(0, i);
+  const { base, account } = splitAccount(head);
+  const modelId = spec.slice(i + 1);
+
+  return account === null || base === ''
+    ? { provider: head, account: null, modelId }
+    : { provider: base, account, modelId };
+}
+
 export function parseModelSpec(spec: string): ModelSpec {
   const s = (spec ?? '').trim();
 
   if (!s) throw new Error('Empty model spec');
-  const i = s.indexOf('/');
+  const parts = splitSpec(s);
 
-  if (i < 1) throw new Error(`Invalid model spec ${JSON.stringify(spec)} — expected "<provider>/<modelId>".`);
+  if (parts === null) throw new Error(`Invalid model spec ${JSON.stringify(spec)} — expected "<provider>/<modelId>".`);
 
-  return { provider: s.slice(0, i), modelId: s.slice(i + 1) };
+  if (parts.account === null) return { provider: parts.provider, modelId: parts.modelId };
+
+  if (!isAccountName(parts.account)) {
+    throw new Error(`Invalid model spec ${JSON.stringify(spec)} — "${parts.account}" is not an account name.`);
+  }
+
+  return { provider: parts.provider, modelId: parts.modelId, account: parts.account };
+}
+
+export function modelSpecHead(spec: Pick<ModelSpec, 'provider' | 'account'>): string {
+  return spec.account === undefined ? spec.provider : `${spec.provider}@${spec.account}`;
+}
+
+export function formatModelSpec(spec: ModelSpec): string {
+  return `${modelSpecHead(spec)}/${spec.modelId}`;
+}
+
+export function specProvider(spec: string): string | null {
+  return splitSpec(spec)?.provider ?? null;
+}
+
+export function specWithoutAccount(spec: string): string {
+  const parts = splitSpec(spec);
+
+  return parts === null || parts.account === null ? spec : `${parts.provider}/${parts.modelId}`;
 }

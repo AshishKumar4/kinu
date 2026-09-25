@@ -1,15 +1,13 @@
 /**
- * Provider-agnostic prompt-cache breakpoints: a closed provider-id → strategy
- * map plus pure marker placement, applied by both backends at message assembly.
- * Workers AI affinity is wired at model construction instead
- * (providers/workers-ai.ts `agentAffinityKey`).
- *
- * Anthropic layout (hermes `system_and_3`, within the 4-breakpoint cap): last
- * tool, end of system prompt, and two rolled onto the message tail every step
- * so each request reads the previous request's prefix.
+ * Prompt-cache breakpoints: a closed provider-id → strategy map and pure marker placement, applied by both backends
+ * at assembly (Workers AI affinity is set at model construction, `agentAffinityKey`). Anthropic layout (hermes
+ * `system_and_3`, in the 4-breakpoint cap): last tool, end of system, and two rolled onto the tail every step, so
+ * each request reads the previous one's prefix.
  */
 import type { ModelMessage, SystemModelMessage, ToolSet } from 'ai';
+import * as v from 'valibot';
 import { DEFAULT_CACHE_RETENTION, type CacheRetention } from '../providers/types';
+import { ANTHROPIC_MAX_BREAKPOINTS } from '../providers/anthropic';
 
 /** The AI SDK's provider-options bag (not re-exported by `ai` itself). */
 type ProviderOptions = NonNullable<ModelMessage['providerOptions']>;
@@ -17,7 +15,7 @@ type ProviderOptions = NonNullable<ModelMessage['providerOptions']>;
 /** Unknown provider ids are `none`. `ttl` is the provider's extended-retention wire value,
  *  present only for `long` so default requests stay byte-identical. */
 export type PromptCacheStrategy =
-  /** workers-ai uses affinity headers; claude-cli owns its context; unknown providers. */
+  /** workers-ai uses affinity headers; unknown providers. */
   | { kind: 'none' }
   | { kind: 'anthropic'; ttl?: '1h' }
   /** Typed `promptCacheKey`, serialized as `prompt_cache_key`. */
@@ -25,9 +23,6 @@ export type PromptCacheStrategy =
   /** `prompt_cache_key` via the provider's options namespace. `markers` adds `cache_control`
      *  breakpoints through `openaiCompatible` metadata for Claude models (OpenRouter passes them through). */
   | { kind: 'openai-compat'; bodyNamespace: string; markers: boolean; ttl?: '1h' };
-
-/** Anthropic rejects more than 4 `cache_control` blocks: tools, system, and two on the tail. */
-export const ANTHROPIC_MAX_BREAKPOINTS = 4;
 
 const TAIL_BREAKPOINTS = ANTHROPIC_MAX_BREAKPOINTS - 2;
 
@@ -74,6 +69,10 @@ export function resolvePromptCacheStrategy(
       return strategy;
     }
 
+    // Claude Code's retention.
+    case 'claude':
+      return { kind: 'anthropic', ttl: '1h' };
+
     case 'openai':
     case 'codex': {
       const strategy: Extract<PromptCacheStrategy, { kind: 'openai-cache-key' }> = { kind: 'openai-cache-key' };
@@ -107,6 +106,49 @@ export function resolvePromptCacheStrategy(
 
       return { kind: 'none' };
   }
+}
+
+const MINUTE_MS = 60_000;
+
+/** An idle entry's longest documented lifetime, null for none: expiring a live one costs a re-read. */
+function promptCacheLifetimeMs(providerId?: string, modelId?: string, retention: CacheRetention = DEFAULT_CACHE_RETENTION): number | null {
+  const strategy = resolvePromptCacheStrategy(providerId, modelId, retention);
+
+  if (retention === 'none') return null;
+
+  if (strategy.kind === 'anthropic') return strategy.ttl === '1h' ? 60 * MINUTE_MS : 5 * MINUTE_MS;
+
+  if (strategy.kind === 'openai-cache-key') return strategy.ttl === '24h' ? 24 * 60 * MINUTE_MS : 60 * MINUTE_MS;
+
+  if (strategy.kind === 'openai-compat' && strategy.markers) return strategy.ttl === '1h' ? 60 * MINUTE_MS : 5 * MINUTE_MS;
+
+  return 60 * MINUTE_MS;
+}
+
+export interface PromptCacheRoute {
+  readonly providerId?: string;
+  readonly modelId?: string;
+  readonly retention: CacheRetention;
+}
+
+export interface CachedRequest extends PromptCacheRoute {
+  readonly at: number;
+}
+
+export const PromptCacheRouteSchema = v.object({
+  providerId: v.optional(v.string()),
+  modelId: v.optional(v.string()),
+  retention: v.picklist(['none', 'short', 'long']),
+});
+
+/** `keptAliveUntil`: a warming lane's cover. */
+export function promptCacheWarm(last: CachedRequest | null, now: number, keptAliveUntil: number | null = null): boolean {
+  if (keptAliveUntil !== null && now < keptAliveUntil) return true;
+
+  if (last === null) return false;
+  const lifetime = promptCacheLifetimeMs(last.providerId, last.modelId, last.retention);
+
+  return lifetime !== null && now < last.at + lifetime;
 }
 
 function markerOptions(ns: 'anthropic' | 'openaiCompatible', ttl?: '1h'): ProviderOptions {

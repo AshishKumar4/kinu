@@ -293,6 +293,8 @@ export const ParityCompletedSchema = v.object({
   end: ParityRowsSchema,
   modelCallsAfter: v.array(ParityModelCallSchema),
   failures: v.array(DiagnosticFailureSchema),
+  /** The chat history `/get-messages` serves the page after the restart, as its body. */
+  seed: v.string(),
 });
 
 export type ParityCompleted = v.InferOutput<typeof ParityCompletedSchema>;

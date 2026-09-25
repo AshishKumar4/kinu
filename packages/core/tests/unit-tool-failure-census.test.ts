@@ -655,6 +655,7 @@ describe('each executor tool files its own failure in the right part', () => {
     const { rt } = createTestRuntime();
 
     const workspace = createInlineExecutor({
+      filesOwner: 'agent',
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
     });
@@ -669,6 +670,7 @@ describe('each executor tool files its own failure in the right part', () => {
     const { rt } = createTestRuntime();
 
     const workspace = createInlineExecutor({
+      filesOwner: 'agent',
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
     });

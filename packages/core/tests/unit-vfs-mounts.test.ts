@@ -64,7 +64,7 @@ function fakeTree(entries: Record<string, string>): VFS {
 }
 
 function mountOf(name: string, files: VFS | null, reason = 'not live'): VfsMount {
-	return { name, files: () => files, absentReason: () => reason };
+	return { name, files: () => files, absentReason: () => reason, filesOwner: 'user' };
 }
 
 describe('the workspace plane mount table', () => {

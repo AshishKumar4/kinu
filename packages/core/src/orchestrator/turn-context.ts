@@ -1,15 +1,15 @@
 /**
  * The one turn-assembly ordering both backends run: sanitize → onTurnStart → transformContext
  * → pairing invariant → admission. Sanitization never changes message count; the transform sees
- * only durable history. Dynamic context and the turn-local messages stay out: the step pipeline
- * places them (prompting/prepare-step.ts), and admission measures the turn-local ones with the request.
+ * only durable history. Dynamic context stays out: the step pipeline weaves it (prompting/prepare-step.ts), and
+ * admission measures the unapproved instructions with the request.
  */
 
 import type { ModelMessage, ToolSet } from 'ai';
 import { sanitizeAttachmentsForModel, type AttachmentPolicy } from '../prompting/attachment-sanitizer';
 import { settleUnpairedToolCalls } from '../prompting/interrupted-tool-calls';
 import { stepContextLimit, type ResolvedModelWindow } from '../prompting/step-prune';
-import { placeTurnLocal, turnInputStart } from '../prompting/volatile-context';
+import { turnInputStart } from '../prompting/volatile-context';
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
 import type { ExtensionHost } from '../extension';
 import { KinuError, diagnostics } from '../obs/index';
@@ -46,8 +46,8 @@ export interface TurnAdmission {
   count?(request: CountableRequest): Promise<InputTokenCount>;
   /** Part of what the provider prices, so part of what is measured. */
   tools?: ToolSet | undefined;
-  /** Placed per step right before the turn's input, so measured there. */
-  turnLocal?: readonly ModelMessage[] | undefined;
+  /** The unapproved instructions message the step pipeline weaves in. */
+  instructions?: string | null | undefined;
   limits: ResolvedModelWindow;
 }
 
@@ -76,10 +76,8 @@ export interface MeasuredCompactionTrigger {
   trigger: 'auto' | 'force';
 }
 
-/**
- * `durableLength` is measured without the turn-local messages. `takeForceCompaction` consumes the
- * flag, so it runs exactly once per assembly.
- */
+/** `durableLength` is measured without runtime context. `takeForceCompaction` consumes the flag, so it runs
+ *  exactly once per assembly. */
 export function measureCompactionTrigger(
   state: CompactionTriggerReader,
   sessionKey: string,
@@ -137,9 +135,8 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Ass
   const limit = stepContextLimit(admission.limits);
 
   const measure = async (turn: AssembledTurn): Promise<number> => {
-    const messages = admission.turnLocal === undefined
-      ? turn.messages
-      : placeTurnLocal(turn.messages, { at: turn.turnStart, messages: admission.turnLocal });
+    const instructions = admission.instructions ?? null;
+    const messages = instructions === null ? turn.messages : [...turn.messages, { role: 'user' as const, content: instructions }];
 
     if (admission.count) {
       const counted = await admission.count({
