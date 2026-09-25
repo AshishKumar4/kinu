@@ -237,6 +237,78 @@ describe('UserDO subscription login renewed by two calls at once', () => {
     }
   };
 
+  /** A renewed access token as Codex reads one: a JWT whose `exp` is an hour out. */
+  const FRESH = [{ alg: 'none' }, { exp: Math.floor(Date.now() / 1000) + 3600 }]
+    .map((part) => Buffer.from(JSON.stringify(part)).toString('base64url')).join('.') + '.unsigned';
+
+  /** Each login renews at its issuer's endpoint; a refresh token is spent on first use, as each issuer rotates it. */
+  const LOGINS = [
+    { key: 'claude.oauth', url: CLAUDE_TOKEN_URL, stored: {} },
+    { key: 'codex.oauth@work', url: CODEX_TOKEN_URL, stored: {} },
+    { key: 'cloudflare.oauth', url: 'https://dash.cloudflare.com/oauth2/token', stored: { metadata: { accountId: 'a'.repeat(32) } } },
+  ] as const;
+
+  for (const login of LOGINS) {
+    test(`a call that read ${login.key} before another call's renewal committed gets the renewal and spends nothing`, async () => {
+      const originalFetch = globalThis.fetch;
+      const originalDecrypt = crypto.subtle.decrypt.bind(crypto.subtle);
+      const spent: string[] = [];
+      const firstArrival = Promise.withResolvers<void>();
+      const firstAnswer = Promise.withResolvers<Response>();
+
+      globalThis.fetch = asFetchFunction(async (input, init) => {
+        // A Cloudflare login's headers also name its AI gateway, from the account's (here empty) listing.
+        if (requestUrl(input) !== login.url) return Response.json({ success: true, result: [] });
+        const body = await requestBodyText(input, init);
+        spent.push(body.includes('rt-1') ? 'rt-1' : body);
+
+        if (spent.length > 1) return Response.json({ error: 'invalid_grant' }, { status: 400 });
+        firstArrival.resolve();
+
+        return firstAnswer.promise;
+      });
+
+      // The decrypt of B's read is held, so B carries the login it read past the moment A's renewal commits.
+      const readHeld = Promise.withResolvers<void>();
+      const released = Promise.withResolvers<void>();
+      let holding = false;
+
+      crypto.subtle.decrypt = async (...args: Parameters<SubtleCrypto['decrypt']>) => {
+        if (holding) {
+          holding = false;
+          readHeld.resolve();
+          await released.promise;
+        }
+
+        return originalDecrypt(...args);
+      };
+
+      try {
+        const harness = createTestUserDO({ cloudflareOAuthClientId: 'cf-client' });
+        const owner = await testOwner();
+        await harness.userDO.setCredential(owner, login.key, { kind: 'oauth', accessToken: 'old', refreshToken: 'rt-1', ...login.stored });
+
+        // Both calls renew, as two whose requests the old token failed would.
+        const a = harness.userDO.getAuthHeaders(owner, login.key, { forceRefresh: true });
+        await firstArrival.promise;
+        holding = true;
+        const b = harness.userDO.getAuthHeaders(owner, login.key, { forceRefresh: true });
+        await readHeld.promise;
+
+        firstAnswer.resolve(Response.json({ access_token: FRESH, refresh_token: 'rt-2', expires_in: 3600 }));
+        expect((await a)?.Authorization).toBe(`Bearer ${FRESH}`);
+        released.resolve();
+        expect((await b)?.Authorization).toBe(`Bearer ${FRESH}`);
+        expect((await harness.userDO.getAuthHeaders(owner, login.key))?.Authorization).toBe(`Bearer ${FRESH}`);
+        expect(spent).toEqual(['rt-1']);
+        harness.close();
+      } finally {
+        globalThis.fetch = originalFetch;
+        crypto.subtle.decrypt = originalDecrypt;
+      }
+    });
+  }
+
   for (const order of ['rejection lands first', 'renewal lands first'] as const) {
     test(`both calls get the one renewal, and the renewed login stays stored, when the ${order.replace(' lands first', '')} lands first`, async () => {
       expect(await raceRenewal(order)).toEqual({ headers: ['Bearer fresh', 'Bearer fresh'], spent: ['rt-1'], next: 'Bearer fresh' });
