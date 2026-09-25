@@ -22,7 +22,6 @@ import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-execu
 import { createStateCodemodeProvider } from '../src/tools/state-codemode';
 import { createAgentsCodemodeProvider } from '../src/delegation/agents-codemode';
 import { createReportCodemodeProvider } from '../src/delegation/report-codemode';
-import { createReleaseCodemodeProvider } from '../src/release/codemode';
 import { createMemoryCodemodeProvider } from '../src/tools/memory-codemode';
 import { createTasksCodemodeProvider } from '../src/tools/tasks-codemode';
 import { createDbCodemodeProvider } from '../src/tools/db-codemode';
@@ -160,8 +159,6 @@ test('every member of every namespace refuses with the one declared Refusal, and
     createStateCodemodeProvider(refusingDouble()),
     createAgentsCodemodeProvider(() => refusingDouble()),
     createReportCodemodeProvider(() => refusingDouble()),
-    createReleaseCodemodeProvider(() => refusingDouble()),
-    createReleaseCodemodeProvider(() => refusingDouble(new Set(['engine']))),
     createMemoryCodemodeProvider(() => refusingDouble()),
     createTasksCodemodeProvider(refusingDouble(), refusingDouble()),
     createDbCodemodeProvider(refusingDouble()),

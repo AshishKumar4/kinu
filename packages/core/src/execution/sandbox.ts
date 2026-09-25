@@ -153,7 +153,7 @@ export class SandboxPending extends KinuError {
 }
 
 /** Retries only transient errors, with exponential backoff; non-transient errors throw immediately. */
-export async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
   let lastErr: unknown;
 
   for (let i = 0; i < attempts; i++) {

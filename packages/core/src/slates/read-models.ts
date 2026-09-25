@@ -5,7 +5,6 @@ export const SLATE_READ_MODELS = [
   'getHeadRuns',
   'getMctsTree',
   'getOutcomeCalibration',
-  'getReleaseBoard',
   'getRunTimeline',
   'getToolDescriptions',
   'getWorkspaceSnapshot',

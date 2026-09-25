@@ -335,51 +335,6 @@ export {
   SlateFrameMessageSchema, type SlateHostContext,
 } from './slates/host-context';
 
-// Release lane (separate from scaffold evolution)
-export {
-  assertReleaseTransition,
-  RELEASE_STATUSES,
-  ReleaseEngine,
-  ReleaseStore,
-  approvalTypeForEnvironment,
-  createReleaseStore,
-  createSandboxReleaseExec,
-  deployApprovalDigest,
-  deployTargetAsCommand,
-  initReleaseTables,
-  isEngineOwnedTransitionTarget,
-  isSecretReleasePath,
-  normalizeReleasePath,
-  parseDeployOutput,
-  releaseSqlFromExec,
-  redactReleaseDiff,
-  validateReleasePatchPath,
-  type ApplyResult,
-  type CheckRunResult,
-  type DeployApprovalBinding,
-  type DeployResult,
-  type PreviewResult,
-  type ReleaseBoard,
-  type ReleaseApproval,
-  type ReleaseCheck,
-  type ReleaseDetail,
-  type ReleaseEngineOptions,
-  type ReleaseExec,
-  type ReleaseLedger,
-  type ReleaseChange,
-  type ReleaseSqlStore,
-  type ReleaseStatus,
-  type ReleaseStoreOptions,
-  type ReleaseTransitionResult,
-  type ReleaseDeployment,
-  type ReleasePathValidation,
-  type ReleaseSource,
-  type ReleaseSourceInput,
-  type ReleaseSourceKind,
-  type RollbackResult,
-  type RunChecksResult,
-} from './release/index';
-
 // Cross-workspace experience transfer
 export {
   createExperienceLibrary,
@@ -739,10 +694,6 @@ export {
 export * from './web/index';
 
 // Codemode-only, no native tool: see tools/builtins.ts.
-export {
-  createReleaseCodemodeProvider, runReleaseAction,
-  type ReleaseToolDeps, type ReleaseActionInput,
-} from './release/codemode';
 
 export { createMemoryCodemodeProvider } from './tools/memory-codemode';
 
@@ -2189,7 +2140,7 @@ export { buildTree, explorationForkTree, type MctsRow } from './read-models/fork
 
 export {
   executorLabel, executorSortKey, isActiveExecutionDevice, isExecutorActive,
-  pickDefaultExecutor, releaseSubstrate, type ExecutorAvailability, type ReleaseSubstrate,
+  pickDefaultExecutor, type ExecutorAvailability,
 } from './read-models/executors';
 
 export {

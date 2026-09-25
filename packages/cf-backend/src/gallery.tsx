@@ -41,7 +41,6 @@ import { SlateFallbackFrame, SLATE_GALLERY_URL } from "@/gallery-slate-fallback"
 import PlanReviewView from "@/components/surfaces/PlanReviewView";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { SlateInlineContext } from "@/components/slates/context";
-import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { CacheBlock, LogBlock } from "@/components/surfaces/ActivitySurface";
 import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
@@ -1036,7 +1035,7 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     timeline: [], executors: [], executorOutputs: [], lastActiveExecutor: null,
     // Mirrors the server snapshot: `loadAllData` replaces state wholesale, so an omitted field is `undefined`.
     pendingSteers: [], branchRuns: [],
-    tabPresence: { releases: true, explorations: true, work: true },
+    tabPresence: { explorations: true, work: true },
     activePlan: null,
     slates: [],
     turnClaim: { kind: "settled" },
@@ -1500,7 +1499,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
   // Without an answer the strip hides Work on first paint.
-  getWorkspaceTabPresence: () => ({ work: true, releases: true, explorations: true }),
+  getWorkspaceTabPresence: () => ({ work: true, explorations: true }),
   listPendingConsents: () => [],
   // The seed is the whole conversation, so the storage walk is exhausted at once.
   getChatHistoryPage: () => ({ status: "end", items: [] }),
@@ -3940,7 +3939,7 @@ function MarksFrame() {
 }
 
 /* At the width Column C gets. */
-/* Real docstrings from the registry, so length problems are visible. `release` is illustrative: getToolDescriptions() lists only
+/* Real docstrings from the registry, so length problems are visible; getToolDescriptions() lists only
    BUILTIN_TOOLS. `exposure` is declared reach (TOOL_REACH); `wired` is whether this agent has it (`report` is false on an orchestrator). */
 function galleryTool(info: ToolInfo): ToolInfo { return info; }
 
@@ -3955,7 +3954,6 @@ const BRAIN_TOOLS: ToolInfo[] = [
     qualityScore: 1,
     usageCount: 0,
   })),
-  galleryTool({ name: "release", summary: "Governed release pipeline over a bound source repo.", description: "Governed release pipeline over a bound source repo — patch it, run its checks, preview, take owner approval, deploy, roll back.", learned: false, exposure: "codemode", wired: true, qualityScore: 1, usageCount: 0 }),
   galleryTool({ name: "bisect_migration", summary: "Walk a migration's revisions to find the one that changed a column's shape.", description: "Walk a migration's revisions to find the one that changed a column's shape.", learned: true, exposure: "codemode", wired: true, qualityScore: 0.82, usageCount: 14 }),
   galleryTool({ name: "coupon_replay", summary: "Replay a checkout against a coupon code and diff the response.", description: "Replay a checkout against a coupon code and diff the response.", learned: true, exposure: "codemode", wired: true, qualityScore: 0.61, usageCount: 3 }),
 ];
@@ -4023,61 +4021,6 @@ function ChatSlateFrame() {
     </SlateInlineContext.Provider>
   );
 }
-
-// One pending approval: the digest binds the source's deployTarget, which the owner must be able to read first.
-const RELEASE_BOARD = {
-  bindings: [{
-    id: "src_1", kind: "local", label: "kinu", repoUrl: null, defaultBranch: "main",
-    localDeviceId: null, localRoot: "~/Kinu", deployTarget: "bunx wrangler deploy --env production",
-    createdAt: NOW - 9 * 864e5, updatedAt: NOW - 9 * 864e5,
-  }],
-  changes: [{
-    id: "chg_4f2", bindingId: "src_1", agentName: "jarvis",
-    userPrompt: "Warm up the empty-state copy", plan: "Rewrite the six EMPTY_HINTS in the owner's voice.",
-    summary: null,
-    patch: "--- a/packages/cf-backend/src/components/surfaces/shared.tsx\n+++ b/packages/cf-backend/src/components/surfaces/shared.tsx\n@@\n-  memory: \"Your agent will remember important information here.\",\n+  memory: \"Anything worth keeping lands here. Ask me to remember something.\",",
-    status: "awaiting_approval", previewUrl: null, createdAt: NOW - 36e5, updatedAt: NOW - 12e5,
-  }],
-  checks: [
-    { id: "chk_1", changeId: "chg_4f2", name: "typecheck", status: "passed", stdout: null, stderr: null, durationMs: 41_000, createdAt: NOW - 30e5, updatedAt: NOW - 30e5 },
-    { id: "chk_2", changeId: "chg_4f2", name: "bun test", status: "passed", stdout: "920 pass, 0 fail", stderr: null, durationMs: 9_300, createdAt: NOW - 28e5, updatedAt: NOW - 28e5 },
-  ],
-  approvals: [{
-    id: "apr_1", changeId: "chg_4f2", approvalType: "deploy_production", decision: "pending",
-    approvedBy: null, note: null, decidedAt: null, argumentDigest: "9f2c…", createdAt: NOW - 12e5,
-  }],
-  deployments: [],
-};
-
-const releaseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "getReleaseBoard") return rpcResult(RELEASE_BOARD).json<T>();
-
-  return stubRpc<T>(method, args);
-};
-
-const RELEASE_EXECUTORS: ExecutorInfo[] = [
-  { name: "sandbox", kind: "sandbox", capabilities: [], available: true, configured: true, active: false, status: "idle" },
-];
-
-/** The engine's substrate missing: nothing on the pipeline can run. */
-const RELEASE_EXECUTORS_OFFLINE: ExecutorInfo[] = [
-  {
-    name: "sandbox", kind: "sandbox", capabilities: [], available: false, configured: false,
-    active: false, status: "not_configured",
-    reason: "Sandbox executor not configured. Add the @cloudflare/sandbox binding and Container to wrangler.jsonc (see docs/EXECUTION-LAYER-SPEC.md).",
-  },
-];
-
-function ReleasesFrame({ executors = RELEASE_EXECUTORS }: { executors?: ExecutorInfo[] }) {
-  return (
-    <div className="p-bg min-h-screen flex justify-center">
-      <div className="w-[1100px] min-h-screen border-x p-border p-5">
-        <ReleasesSurface rpc={releaseRpc} executors={executors} />
-      </div>
-    </div>
-  );
-}
-
 
 // The plan at its real shape: several steps, one active, one with subtasks, one dropped.
 const AGENT_TASKS = [
@@ -4183,7 +4126,7 @@ const CHANGELOG = {
   ],
 };
 
-/** Without it a release approval lights nothing while a running job carries a digit. */
+/** Without it a waiting decision lights nothing while a running job carries a digit. */
 const PENDING_ACTIONS: PendingAction[] = [
   // Parked commands, the one kind decided in the queue itself.
   {
@@ -4195,11 +4138,6 @@ const PENDING_ACTIONS: PendingAction[] = [
     id: "defer-4k1m2pqw7z", kind: "deferred_action", at: NOW - 36 * 60e3,
     title: "Approve: a command the agent wants to run on device",
     detail: "sudo launchctl kickstart -k system/com.docker.dockerd",
-  },
-  {
-    id: "apr_1", kind: "release_approval", at: NOW - 12e5,
-    title: "Approve: deploy to production",
-    detail: "Warm up the empty-state copy",
   },
   {
     id: "plan:main:plan-gateway:3", kind: "plan_review", at: NOW - 9e5,
@@ -4219,7 +4157,7 @@ const PENDING_ACTIONS: PendingAction[] = [
   },
 ];
 
-const SHELL_PENDING_ACTIONS = PENDING_ACTIONS.filter((action) => action.kind === "release_approval");
+const SHELL_PENDING_ACTIONS = PENDING_ACTIONS.filter((action) => action.kind === "plan_review");
 
 
 const BLUEPRINT_BINDINGS: SlateBindingDeclaration[] = [
@@ -4411,7 +4349,7 @@ function WorkFrame() {
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={lane.jobs} onRefreshJobs={() => {}} pendingActions={lane.queue}
-          tabPresence={{ releases: true, explorations: true, work: true }}
+          tabPresence={{ explorations: true, work: true }}
           rpc={lane.rpc}
         />
       </div>
@@ -4472,7 +4410,7 @@ function WorkEmptyFrame() {
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
-          tabPresence={{ releases: false, explorations: false, work: false }}
+          tabPresence={{ explorations: false, work: false }}
           rpc={settledEmptyRpc}
         />
       </div>
@@ -6271,8 +6209,6 @@ async function mount() {
   else if (frame === "transcript") node = <TranscriptFrame />;
   else if (frame === "slate") node = <SlatePreviewFrame />;
   else if (frame === "workslatefallback") node = <SlateFallbackFrame rpc={workRpc} />;
-  else if (frame === "releases") node = <ReleasesFrame />;
-  else if (frame === "releasesoffline") node = <ReleasesFrame executors={RELEASE_EXECUTORS_OFFLINE} />;
   else if (frame === "previewtabs") ({ node, entries } = previewTabsFrame());
   else if (frame === "compactpreview") node = <CompactPreviewGallery />;
   else if (frame === "work") node = <WorkFrame />;

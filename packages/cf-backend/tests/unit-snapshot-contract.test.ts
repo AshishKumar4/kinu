@@ -214,6 +214,6 @@ describe('the workspace snapshot contract', () => {
   test('the tab-presence read the live cycle calls is a real, tiered RPC', () => {
     // The capability-tier map is also what puts the method on the orchestrator's declared RPC surface.
     expect(AGENT_RPC_ACCESS).toHaveProperty('getWorkspaceTabPresence', 'workspace.read');
-    expect(returnedKeys(SERVER, 'getWorkspaceTabPresence')).toEqual(['work', 'releases', 'explorations']);
+    expect(returnedKeys(SERVER, 'getWorkspaceTabPresence')).toEqual(['work', 'explorations']);
   });
 });

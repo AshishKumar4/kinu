@@ -8,7 +8,7 @@ import { diagnostics } from '../log';
 import { boundaryOf, eventFamily } from './boundaries';
 import { analyticsDigest } from './privacy';
 import {
-  AGENT_METRICS_SCHEMA, CONTROL_PLANE_OPS_SCHEMA,
+  AGENT_METRICS_SCHEMA,
   type AnalyticsRow, type AnalyticsSchema,
 } from './schemas';
 import { analyticsPlane, type AnalyticsEnv, type AnalyticsWriter } from './writer';
@@ -25,8 +25,6 @@ export type RowOutcome = 'ok' | 'refused' | 'failed' | 'denied';
 export type AgentRowKind = 'turn' | 'model' | 'tool' | 'ttft' | 'event';
 
 type AgentRow = AnalyticsRow<typeof AGENT_METRICS_SCHEMA>;
-
-type OpsRow = AnalyticsRow<typeof CONTROL_PLANE_OPS_SCHEMA>;
 
 /** Absent fields default to `''`/0, never a plausible stand-in value. */
 interface AgentRowInput {
@@ -212,34 +210,4 @@ export function recordSandboxRecovery(env: AnalyticsEnv, input: RecoveryRowInput
     attempts: input.attempts,
     durationMs: input.durationMs,
   }));
-}
-
-/** Written to the control-plane dataset, beside the audit rows it is compared with. */
-export interface ReleaseRowInput {
-  /** Digested; never written raw. */
-  readonly actor: string;
-  /** `transition` | `deployment`. */
-  readonly operation: string;
-  /** Status or environment; a closed vocabulary, never free text. */
-  readonly reason: string;
-  /** The change id, digested. */
-  readonly target: string;
-  readonly outcome: RowOutcome;
-  readonly code: ErrorCode | '';
-}
-
-export function recordReleaseTransition(env: AnalyticsEnv, input: ReleaseRowInput): void {
-  emit(analyticsPlane(env).ops, {
-    actor: analyticsDigest(input.actor),
-    kind: 'op',
-    operation: `release_${input.operation}`,
-    outcome: input.outcome,
-    code: input.code,
-    targetKind: 'release_change',
-    reason: input.reason,
-    target: analyticsDigest(input.target),
-    count: 1,
-    durationMs: 0,
-    affected: 1,
-  } satisfies OpsRow);
 }

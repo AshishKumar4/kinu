@@ -11,7 +11,6 @@ const WORKSPACE_LIST_LIMIT = 200;
 
 export interface RosterEntry extends WorkspaceEntry {
   overview: WorkspaceOverview | null;
-  /** With the owner's pending release approvals, which a tile cannot know. */
   decisions: number;
 }
 
@@ -49,18 +48,15 @@ export interface RosterFrame {
 const ACTIVE = 'w.archived_at IS NULL AND w.delete_pending = 0 AND w.create_pending = 0';
 
 const FROM = `FROM user_workspaces w
-  LEFT JOIN workspace_overviews o ON o.name = w.name
-  LEFT JOIN (SELECT c.agent_name AS name, COUNT(*) AS pending FROM release_approvals p
-             JOIN release_changes c ON c.id = p.change_id WHERE p.decision = 'pending' GROUP BY c.agent_name) a
-    ON a.name = w.name`;
+  LEFT JOIN workspace_overviews o ON o.name = w.name`;
 
-const DECISIONS = 'COALESCE(o.decisions, 0) + COALESCE(a.pending, 0)';
+const DECISIONS = 'COALESCE(o.decisions, 0)';
 
 const BUCKET = `CASE WHEN ${DECISIONS} > 0 THEN 'needs' WHEN o.activity IS NULL THEN 'unreported'
   WHEN o.activity = 'working' THEN 'working' ELSE 'idle' END`;
 
 const ENTRY = `SELECT w.name, w.display_name AS displayName, w.created_at AS createdAt, w.last_visited AS lastVisited,
-  w.archived_at AS archivedAt, o.overview, COALESCE(o.decisions, 0) + COALESCE(a.pending, 0) AS decisions`;
+  w.archived_at AS archivedAt, o.overview, COALESCE(o.decisions, 0) AS decisions`;
 
 const RosterRowSchema = v.object({
   name: v.string(),

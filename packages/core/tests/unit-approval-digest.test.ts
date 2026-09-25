@@ -3,7 +3,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
   argumentDigest, sha256Hex, stableStringify,
-  deployApprovalDigest,
 } from '../src/index';
 
 describe('argumentDigest', () => {
@@ -26,30 +25,5 @@ describe('argumentDigest', () => {
   test('a single-byte change in the arguments changes the digest', () => {
     expect(argumentDigest({ cmd: 'wrangler deploy' }))
       .not.toBe(argumentDigest({ cmd: 'wrangler deploy ' }));
-  });
-});
-
-describe('deployApprovalDigest', () => {
-  const base = { approvalType: 'deploy_production' as const, patch: 'diff X', command: 'bunx wrangler deploy' };
-  test('stable for identical deploy identity', () => {
-    // Pinned, not self-compared: a self-comparison holds for any pure function, including a constant.
-    expect(deployApprovalDigest(base)).toBe('5fce46126467ba99c1e9ba275c7c9c7f86310cc15a6d3e51ed0ccbe16aea0101');
-  });
-
-  test('changes when the patch changes (artifact swap)', () => {
-    expect(deployApprovalDigest(base)).not.toBe(deployApprovalDigest({ ...base, patch: 'diff X mutated' }));
-  });
-
-  test('changes when the command changes (argument swap)', () => {
-    expect(deployApprovalDigest(base)).not.toBe(deployApprovalDigest({ ...base, command: 'bunx wrangler deploy --evil' }));
-  });
-
-  test('changes when the environment/approval type changes', () => {
-    expect(deployApprovalDigest(base)).not.toBe(deployApprovalDigest({ ...base, approvalType: 'deploy_staging' }));
-  });
-
-  test('null command and null patch are bound distinctly (not conflated)', () => {
-    expect(deployApprovalDigest({ approvalType: 'apply', patch: null, command: null }))
-      .not.toBe(deployApprovalDigest({ approvalType: 'apply', patch: '', command: null }));
   });
 });

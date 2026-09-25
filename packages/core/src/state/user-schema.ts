@@ -3,7 +3,6 @@
 
 import type { SqlExec } from '../types/primitives';
 import { initExperienceLibraryTables } from '../experience/library';
-import { initReleaseTables } from '../release/sql-store';
 import { initDeviceInflightTable } from '../execution/device-inflight';
 import { initEgressVaultTables } from '../safety/egress-vault';
 import { initWorkspaceCapabilityTables } from '../safety/workspace-capability';
@@ -360,8 +359,6 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_cli_agent_connect_tickets_exp ON cli_agent_connect_tickets (expires_at, used_at)`);
-
-  initReleaseTables(sql);
 
   initExperienceLibraryTables(sql);
 

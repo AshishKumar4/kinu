@@ -27,9 +27,9 @@ const oneTree = (): ReadonlyMap<string, ForkNode> => new Map([
   }],
 ]);
 
-const FRESH: TabPresence = { releases: false, explorations: false, work: false };
+const FRESH: TabPresence = { explorations: false, work: false };
 
-const FULL: TabPresence = { releases: true, explorations: true, work: true };
+const FULL: TabPresence = { explorations: true, work: true };
 
 const SILENT_RPC: Rpc = () => Promise.withResolvers<never>().promise;
 
@@ -63,8 +63,7 @@ const renderStrip = (tabPresence: TabPresence | undefined, presencePending = fal
 
 
 describe('the gated tabs appear only with content', () => {
-  test('a fresh workspace shows neither Releases nor Swarms', () => {
-    expect(surfaceHasContent('Releases', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] })).toBe(false);
+  test('a fresh workspace does not show Swarms', () => {
     expect(surfaceHasContent('Swarms', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] })).toBe(false);
   });
 
@@ -84,21 +83,15 @@ describe('the gated tabs appear only with content', () => {
       expect(html).toContain(`aria-label="${surface}"`);
     }
 
-    expect(html).not.toContain('aria-label="Releases"');
     expect(html).not.toContain('aria-label="Swarms"');
   });
 
   test('a workspace with content shows the gated tabs in the strip', () => {
     const html = renderStrip(FULL);
     expect(html).toContain('aria-label="Work"');
-    expect(html).toContain('aria-label="Releases"');
     expect(html).toContain('aria-label="Swarms"');
   });
 
-
-  test('a release change makes Releases appear', () => {
-    expect(surfaceHasContent('Releases', { tabPresence: { ...FRESH, releases: true }, mctsTrees: EMPTY_TREES, slates: [] })).toBe(true);
-  });
 
   test('an exploration run makes Swarms appear', () => {
     expect(surfaceHasContent('Swarms', { tabPresence: { ...FRESH, explorations: true }, mctsTrees: EMPTY_TREES, slates: [] })).toBe(true);
@@ -111,7 +104,6 @@ describe('the gated tabs appear only with content', () => {
 
   test('an absent presence keeps every tab visible — fixture frames claim nothing about ledgers', () => {
     expect(surfaceHasContent('Work', { tabPresence: undefined, mctsTrees: EMPTY_TREES, slates: [] })).toBe(true);
-    expect(surfaceHasContent('Releases', { tabPresence: undefined, mctsTrees: EMPTY_TREES, slates: [] })).toBe(true);
     expect(surfaceHasContent('Swarms', { tabPresence: undefined, mctsTrees: EMPTY_TREES, slates: [] })).toBe(true);
   });
 });
@@ -162,8 +154,7 @@ describe('Slate tab presence', () => {
 
 describe('the first landing yields a gated tab with no content', () => {
   test('it lands on the first surface that has content', () => {
-    expect(landedSurface('Releases', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe('Files');
-    expect(landedSurface('Releases', { tabPresence: { ...FRESH, work: true }, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe('Work');
+    expect(landedSurface('Swarms', { tabPresence: { ...FRESH, work: true }, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe('Work');
     expect(landedSurface('Swarms', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe('Files');
     expect(landedSurface('Work', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe('Files');
   });
@@ -171,7 +162,7 @@ describe('the first landing yields a gated tab with no content', () => {
   test('a gated tab with content, and every ungated one, lands where it was asked', () => {
     expect(landedSurface('Swarms', { tabPresence: FRESH, mctsTrees: oneTree(), slates: [] }, [], false)).toBe('Swarms');
     expect(landedSurface('Work', { tabPresence: { ...FRESH, work: true }, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe('Work');
-    expect(landedSurface('Releases', { tabPresence: FULL, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe('Releases');
+    expect(landedSurface('Swarms', { tabPresence: FULL, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe('Swarms');
 
     // Changes shows only once its change-set is read (`hasChanges`), a gate lane counts cannot carry.
     for (const surface of ['Files', 'Agent', 'Environment'] as const) {
@@ -185,7 +176,7 @@ describe('after the first landing the selection never moves on its own', () => {
   // by itself once its first turn settled, because Work had content mid-turn
   // and none at the end, and every render re-ran the first landing's gate.
   test('a tab whose content emptied stays selected', () => {
-    for (const surface of ['Work', 'Releases', 'Swarms'] as const) {
+    for (const surface of ['Work', 'Swarms'] as const) {
       expect(landedSurface(surface, { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] }, [], true)).toBe(surface);
     }
   });

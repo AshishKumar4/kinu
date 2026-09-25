@@ -9,7 +9,6 @@ import type { PlanReview } from '../types/plans';
 import { planTitle } from '../plans/review';
 
 export type PendingActionKind =
-  | 'release_approval'
   /** Decided here: the queue is this action's only home. */
   | 'deferred_action'
   | 'scaffold_version'
@@ -39,7 +38,6 @@ export interface PersonAsks {
 /** Rows holding the person's work until they decide; the agent's own proposals and notes do not (#21). */
 const HOLDS_THE_PERSON = {
   deferred_action: true,
-  release_approval: true,
   plan_review: true,
   scaffold_version: false,
   curriculum_task: false,
@@ -54,10 +52,6 @@ export function needsTheUser(asks: PersonAsks): boolean {
 }
 
 export interface PendingActionInputs {
-  readonly approvals: ReadonlyArray<{
-    id: string; changeId: string; approvalType: string; decision: string; createdAt: number;
-  }>;
-  readonly changes: ReadonlyArray<{ id: string; userPrompt: string }>;
   readonly scaffoldVersions: ReadonlyArray<{
     version: number; status: string; rationale: string; written_at: number;
   }>;
@@ -74,31 +68,8 @@ export interface PendingActionInputs {
   }>;
 }
 
-interface ApprovalLabels {
-  [approvalType: string]: string;
-}
-
-const APPROVAL_LABEL: ApprovalLabels = {
-  apply: 'apply the patch',
-  deploy_staging: 'deploy to staging',
-  deploy_production: 'deploy to production',
-  rollback: 'roll back',
-};
-
 export function buildPendingActions(input: PendingActionInputs): PendingAction[] {
-  const changeTitle = new Map(input.changes.map((c) => [c.id, c.userPrompt]));
   const actions: PendingAction[] = [];
-
-  for (const approval of input.approvals) {
-    if (approval.decision !== 'pending') continue;
-    actions.push({
-      id: approval.id,
-      kind: 'release_approval',
-      title: `Approve: ${APPROVAL_LABEL[approval.approvalType] ?? approval.approvalType}`,
-      detail: changeTitle.get(approval.changeId) ?? approval.changeId,
-      at: approval.createdAt,
-    });
-  }
 
   for (const action of input.deferredActions) {
     if (action.status !== 'queued') continue;

@@ -184,10 +184,9 @@ the embedder silent".
 On [kinu.run](https://kinu.run) a workspace has two views, Work and Supervise.
 Its tabs are Work (plans, jobs and decisions waiting on you), Changes (what
 changed since you last marked it reviewed, when anything did, where a note on
-any line goes back to the agent), Files, Releases (deliverables and approvals),
-Swarms, Agent (identity, memory, tools and what it changed about itself) and
-Env (executors, files and terminals). Each slate the agent writes gets a tab
-of its own. The gauge beside the tab strip shows context, cost and cache use.
+any line goes back to the agent), Files, Swarms, Agent (identity, memory,
+tools and what it changed about itself) and Env (executors, files and
+terminals). Each slate the agent writes gets a tab of its own. The gauge beside the tab strip shows context, cost and cache use.
 Work counts the items waiting on you and opens each one where you decide it.
 
 I open Swarms when the agent tried more than one thing. The `agents` tool's

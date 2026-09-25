@@ -669,6 +669,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Removed
 
+- **Releases.** The Releases tab, the `release.*` eval namespace, the MCP server's `release` tool and `kinu release <name>` are gone, with the release board's tables. A workspace's pending release approvals no longer count toward its roster tile.
 - **Every schema compatibility path, because production is reset.** A table's
   `CREATE TABLE IF NOT EXISTS` is now its genesis. Gone: the column reconcile
   (`reconcileColumns`, `reconcileSqlExecColumns`) and its 30 call sites, the

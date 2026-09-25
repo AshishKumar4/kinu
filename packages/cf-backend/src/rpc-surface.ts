@@ -102,9 +102,7 @@ function inheritedDescriptor(instance: RpcSurfaceSubject, name: string): Propert
 
 /** The RPC counterpart of the `requireTier` gate: every entry gates itself on a `UserCaller`. */
 const USER_DO_METHODS = [
-  'createReleaseChange',
   'completeOnboarding',
-  'decideReleaseApproval',
   'deleteAccount',
   'deleteCredential',
   'deviceRpc',
@@ -119,8 +117,6 @@ const USER_DO_METHODS = [
   'getDeviceFileView',
   'getWorkspaceTitle',
   'getExperienceEntry',
-  'getReleaseBoard',
-  'getReleaseDetail',
   'getProfile',
   'getProfileCatalog',
   'getWorkspaceProfileCatalog',
@@ -149,8 +145,6 @@ const USER_DO_METHODS = [
   'putEgressSecret',
   'putProfileCatalog',
   'putWorkspaceOverview',
-  'recordReleaseCheck',
-  'recordReleaseDeployment',
   'registerBrowserSession',
   'registerDevice',
   'registerWorkspace',
@@ -159,7 +153,6 @@ const USER_DO_METHODS = [
   'renameDevice',
   'renewWorkspaceReservation',
   'reserveWorkspace',
-  'requestReleaseApproval',
   'resolveEgressInjection',
   'revokeAccessToken',
   'revokeBrowserSession',
@@ -181,9 +174,6 @@ const USER_DO_METHODS = [
   'setWorkspaceDisplayName',
   'startCodexDeviceFlow',
   'touchWorkspace',
-  'transitionReleaseChange',
-  'updateReleaseChange',
-  'upsertReleaseSource',
   'transferDeviceRequestToBackgroundJob',
   'userMcp_add',
   'userMcp_callTool',
@@ -300,7 +290,6 @@ const ORCHESTRATOR_METHODS = [
   'setEmailNotifications',
   'setInitialDisplayName',
   'startExecutorFileDownload',
-  'transitionReleaseChange',
   'writeExecutorFileChunk',
   // No file operation gets a uid-bearing forwarding RPC: `NimbusExecOptions.cred` names a uid.
   'routeWorkspacePreview',

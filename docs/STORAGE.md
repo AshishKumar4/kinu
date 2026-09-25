@@ -436,7 +436,6 @@ These are created outside that pass, by the root that owns each:
 
 | Subsystem | Tables | Owner |
 |---|---|---|
-| Release lane | `release_sources`, `release_changes`, `release_checks`, `release_approvals`, `release_deployments` | `core/src/release/sql-store.ts`: the CLI session's database; on cf the board lives in the owner's `UserDO` |
 | Subordinate roster | `actor_subordinates` (every actor that can hire) | `core/src/subordinates/roster.ts` |
 | Local subordinate identity | `subordinate_identity` (CLI only; a hosted actor's identity is its `workspace_actors` row) | `core/src/subordinates/support.ts` |
 | Workspace-diff baseline | `vfs_baseline` | `core/src/read-models/workspace-diff.ts`, called by each root's schema pass |

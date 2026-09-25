@@ -1,5 +1,5 @@
 {
-  "measured": "d4f75a04c6: 1208 test files, 1047 runnable suites, 13154 tests, 43 runners, 1443 non-public product members, 8612 product function bodies",
+  "measured": "bb127547c4: 1201 test files, 1038 runnable suites, 12961 tests, 43 runners, 1424 non-public product members, 8490 product function bodies",
   "entries": [
     {
       "key": "tautology_suspect :: packages/cf-backend/tests/unit-copy-label.test.ts :: only a resolved write reads as copied :: expected side computed by the code under test",
@@ -106,70 +106,6 @@
             [
               "return sha256Hex(stableStringify(args));",
               "return sha256Hex(stableStringify(args).replaceAll(' ', ''));"
-            ]
-          ]
-        }
-      ]
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: changes when the command changes (argument swap) :: expected side computed by the code under test",
-      "count": 1,
-      "plants": [
-        {
-          "defect": "the command left out of the approval digest",
-          "file": "packages/core/src/release/approval-digest.ts",
-          "edits": [
-            [
-              "command: binding.command ?? null,",
-              "command: null,"
-            ]
-          ]
-        }
-      ]
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: changes when the environment/approval type changes :: expected side computed by the code under test",
-      "count": 1,
-      "plants": [
-        {
-          "defect": "the approval type left out",
-          "file": "packages/core/src/release/approval-digest.ts",
-          "edits": [
-            [
-              "approvalType: binding.approvalType,",
-              "approvalType: 'deploy_production',"
-            ]
-          ]
-        }
-      ]
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: changes when the patch changes (artifact swap) :: expected side computed by the code under test",
-      "count": 1,
-      "plants": [
-        {
-          "defect": "the patch left out of the approval digest",
-          "file": "packages/core/src/release/approval-digest.ts",
-          "edits": [
-            [
-              "patch: binding.patch ?? null,",
-              "patch: null,"
-            ]
-          ]
-        }
-      ]
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: null command and null patch are bound distinctly (not conflated) :: expected side computed by the code under test",
-      "count": 1,
-      "plants": [
-        {
-          "defect": "an empty patch conflated with none",
-          "file": "packages/core/src/release/approval-digest.ts",
-          "edits": [
-            [
-              "patch: binding.patch ?? null,",
-              "patch: binding.patch || null,"
             ]
           ]
         }
