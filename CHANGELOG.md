@@ -718,6 +718,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   tile keeps its letter cover.
 - **A live share of yours shows its slate's picture.** In Shared, the tile of a slate you share live draws that
   slate's picture, as its own tile does; a blueprint and a share someone gave you keep their covers.
+- **Stop sharing reads as a sentence, and an empty folder shows a folder.** The confirmation names the people
+  who lose access as "Sam and Lee" rather than a comma list, and says the slate can be shared again later. An
+  empty folder in the Drive shows a folder, not the Drive's own icon.
 - **Hired agents make slates.** Slates lived in the main agent's home, so an agent you hired could not create one
   ("can't promote to /home/main/slates/widgets (EACCES)"). They now live at `/slates`, the workspace's own
   directory. Every chat in the workspace makes, edits, previews and removes slates there as the main chat does, and

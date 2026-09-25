@@ -254,12 +254,14 @@ export function PrimaryAction({ inSkills, ...rest }: NewProps & { readonly inSki
   );
 }
 
+const PEOPLE = new Intl.ListFormat("en-GB", { type: "conjunction" });
+
 function whoLoses(row: SharedRow): string {
   const users = row.users ?? [];
 
   if (row.kind === "blueprint" || row.visibility === "public" || users.length === 0) return "Everyone with the link loses";
 
-  return `${users.join(", ")} ${users.length === 1 ? "loses" : "lose"}`;
+  return `${PEOPLE.format(users)} ${users.length === 1 ? "loses" : "lose"}`;
 }
 
 export type DriveDialogState =
@@ -309,7 +311,7 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
     case "stop":
       return (
         <ConfirmDialog title={`Stop sharing ${dialog.row.title}?`} action="Stop sharing" marker="data-drive-stop-confirm"
-          body={`${whoLoses(dialog.row)} access right away, and the link stops working.`}
+          body={`${whoLoses(dialog.row)} access right away, and the link stops working. You can share it again later.`}
           onConfirm={async () => {
             const workspace = dialog.row.workspace;
 

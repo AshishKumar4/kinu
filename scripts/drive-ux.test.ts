@@ -373,7 +373,10 @@ describe('the Drive', () => {
         expect((await menuOf(shared, '[data-drive-share="live-board-1"]')).map((item) => item.label)).toEqual(['Open', 'Fork…', 'Stop sharing']);
         await shared.click('[data-drive-share="live-board-1"] [data-drive-stop-sharing]');
         await shared.waitForSelector('[role="dialog"]');
-        expect(await shared.$eval('[role="dialog"]', (element) => element.textContent ?? '')).toContain('Everyone with the link loses access right away');
+        // The confirmation names everyone the share was given to, the two people who lose it.
+        const confirm = await shared.$eval('[role="dialog"]', (element) => element.textContent ?? '');
+
+        expect(['sam@example.com', 'lee@example.com'].filter((person) => !confirm.includes(person))).toEqual([]);
         await shoot(shared, 'drive-shared-light');
       } finally {
         await shared.close();

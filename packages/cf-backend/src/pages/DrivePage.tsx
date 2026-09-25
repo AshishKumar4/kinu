@@ -3,7 +3,7 @@ import { startTransition, useCallback, useEffect, useRef, useState, type ReactNo
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
-  ArrowSquareOutIcon, BookOpenIcon, CaretRightIcon, CopyIcon, DownloadSimpleIcon, GitForkIcon, GlobeIcon, HardDrivesIcon,
+  ArrowSquareOutIcon, BookOpenIcon, CaretRightIcon, CopyIcon, DownloadSimpleIcon, FolderSimpleIcon, GitForkIcon, GlobeIcon, HardDrivesIcon,
   PencilSimpleIcon, ProhibitIcon, ShareNetworkIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon, UsersIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import * as v from "valibot";
@@ -302,7 +302,7 @@ function MineBody({ resource, onRetry, empty, children }: {
   return (
     <div data-drive-empty className="flex flex-col items-center px-6 py-16 text-center sm:py-24">
       <span className="flex size-14 items-center justify-center rounded-2xl p-text-3 bg-[color-mix(in_srgb,var(--c-text)_7%,transparent)]">
-        <HardDrivesIcon size={26} />
+        <FolderSimpleIcon size={26} />
       </span>
       <h2 className="mt-5 p-heading text-[19px] p-text">This folder is empty</h2>
       <p className="mt-2 max-w-[26rem] p-row-text p-text-3">Drop files here, or use New.</p>
