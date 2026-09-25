@@ -131,7 +131,7 @@ interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
   route(path?: string, chain?: string[]): Promise<{ status: number; body: string; contentType: string | null }>;
   artifacts(): Promise<{ application: string; client?: string; shell?: string }>;
   paths(): Promise<{ kinuInSlateRoot: boolean; entries: string[] }>;
-  compileProbe(source: string, cred?: VfsCred): Promise<{ ok?: boolean; code?: string; detail?: string }>;
+  compileProbe(source: string | null, cred?: VfsCred, project?: Record<string, JsonValue>): Promise<{ ok?: boolean; code?: string; detail?: string }>;
   seedPrivateSource(): Promise<void>;
   seedGroupSource(): Promise<void>;
   readPrivateSourceAsAgent(): Promise<{ content?: string; error?: string }>;
