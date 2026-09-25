@@ -4039,8 +4039,10 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (assembled.reasoningOptions) liveTurn.providerOptions = assembled.reasoningOptions;
 
+    const providers = this.providerRegistry();
+    liveTurn.modelSpec = providers.normalizeSpecSync(assembled.profile.tier.model);
     liveTurn.fallbacks = assembled.profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
-      spec,
+      spec: providers.normalizeSpecSync(spec),
       bind: () => this.ownedModelServices.resolveModelWithEffort(spec, reasoningEffort),
     }));
 

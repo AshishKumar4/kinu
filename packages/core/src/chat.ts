@@ -55,8 +55,8 @@ export type ChatEvent =
   /** `result` is the rendered output or error text; `output` is the returned value projected to JSON, for the
    *  ledger. `durationMs` is absent for a call the SDK never dispatched here. */
   | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string; output?: JsonValue; error?: string; durationMs?: number } & ToolOutcome)
-  /** `usage` is only what the provider reported for this step: absent is not zero. `responseMessages` is the SDK's
-   *  cumulative array, carried by reference so a long turn does not re-serialize its transcript per step. */
+  /** `usage` is what the provider reported for this step; absent is not zero. `responseMessages` is the SDK's
+   *  cumulative array by reference, so a long turn does not re-serialize its transcript per step. */
   | {
     type: 'step-finish'; stepIndex: number; responseMessages: readonly ModelMessage[]; usage?: Usage;
     finishReason?: string;
@@ -68,8 +68,8 @@ export type ChatEvent =
      *  (providers/cache-warming.ts). */
     request?: { body?: unknown; sentAt?: number };
     account?: CallAccount;
-    /** The breakdown of the request this step sent, taken when the SDK finished the step and before it
-     *  prepares the next one: a reader that lags the model still records each step's own request. */
+    /** The request this step sent, taken when the SDK finished it and before the next, so a lagging reader still
+     *  records each step's own request. */
     context?: ContextComposition;
     /** The fallback spec that served the step; absent for the turn's own model. */
     fallback?: string;
@@ -119,6 +119,8 @@ export interface ChatOptions {
    *  changes, so downstream indices hold. */
   attachments?: AttachmentPolicy;
   modelContext?: PromptModelContext;
+  /** The turn model's spec, normalized as its fallbacks' are. */
+  modelSpec?: string;
   /** Provider-reported prompt tokens of the previous turn's final request, the measured compaction trigger. */
   providerReportedTokens?: number;
   /** 'force' when the caller consumed an armed force-compaction flag after an overflow. */
@@ -240,8 +242,8 @@ interface CallOutcome {
   readonly failure: CallFailure | null;
 }
 
-/** A fallback takes a failed call only before its step streamed, and only for a provider or account failure
- *  (unavailable, slow, out of allowance, a model it cannot reach); a malformed or too-large request fails the turn. */
+/** A fallback takes a call that failed before streaming, for a provider or account failure (unavailable, slow, out
+ *  of allowance, a model it cannot reach); a malformed or too-large request fails the turn. */
 function handsOver(failure: CallFailure): boolean {
   if (failure.streamed) return false;
   const { status } = providerFailureFacts({ cause: failure.cause });
@@ -250,6 +252,26 @@ function handsOver(failure: CallFailure): boolean {
   const code = classifyErrorCode({ cause: failure.error });
 
   return code === null || code === 'unavailable' || code === 'timeout';
+}
+
+/** `anthropic@work`, or `anthropic` for the default account. */
+function specAccount(spec: string): string {
+  const slash = spec.indexOf('/');
+
+  return slash < 1 ? spec : spec.slice(0, slash);
+}
+
+/** A 401 or 403 refuses the whole account, so its other entries are passed over. */
+function nextFallback(chain: ChatFallback[], failed: string, failure: CallFailure): ChatFallback | undefined {
+  if (!handsOver(failure)) return undefined;
+  const { status } = providerFailureFacts({ cause: failure.cause });
+  const refused = status === 401 || status === 403 ? specAccount(failed) : null;
+
+  for (let next = chain.shift(); next !== undefined; next = chain.shift()) {
+    if (specAccount(next.spec) !== refused) return next;
+  }
+
+  return undefined;
 }
 
 const DEAD_STREAM = 'Model stream ended without output: the provider stream terminated prematurely '
@@ -448,10 +470,8 @@ class ProviderCall {
   }
 }
 
-/**
- * A call that never finishes a step makes the SDK reject its deferred accessors; unread, that is an unhandled
- * rejection. Tolerated for zero steps and cuts; anything else is recorded as a defect.
- */
+/** A call that finishes no step rejects the SDK's deferred accessors, unhandled if unread: tolerated for zero steps
+ *  and cuts, anything else recorded as a defect. */
 function suppressDeferredRejections(
   result: { steps: PromiseLike<unknown>; finishReason: PromiseLike<unknown>; rawFinishReason: PromiseLike<unknown>; totalUsage: PromiseLike<unknown> },
   tolerated: () => boolean,
@@ -512,9 +532,8 @@ function turnText(streamed: string, steps: readonly StepResult<ToolSet>[], answe
 }
 
 /**
- * Run one chat turn. Callers must append the returned response messages (tool calls and results included) to
- * history. A cut turn yields `done`, then throws {@link INTERRUPTED_TURN}; a dead provider stream throws without
- * `done`.
+ * One chat turn; callers append its response messages (tool calls and results included) to history. A cut turn
+ * yields `done`, then throws {@link INTERRUPTED_TURN}; a dead provider stream throws without `done`.
  */
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const extensions = opts.extensions;
@@ -588,7 +607,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const rollTail = hasCacheMarkers(cache.strategy);
 
   let current = {
-    spec: opts.modelContext?.id ?? 'the turn model',
+    spec: opts.modelSpec ?? opts.modelContext?.id ?? 'the turn model',
     provider: opts.modelContext?.provider ?? opts.cache?.providerId,
     model: opts.model,
     providerOptions: mergeProviderOptions(cache.providerOptions, opts.providerOptions),
@@ -626,8 +645,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     });
   };
 
-  /** One provider call; a continuation or fallback is another. `stepOffset` keeps the turn's step numbers, which
-   *  the injection ledger (prompting/step-injections.ts) places steers by. */
+  /** One provider call; a continuation or fallback is another. `stepOffset` keeps the turn's step numbers, by which
+   *  prompting/step-injections.ts places steers. */
   const callModel = async function* (
     request: readonly ModelMessage[],
     stepOffset: number,
@@ -775,7 +794,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     const outcome = yield* callModel(request, stepOffset);
 
     if (outcome.failure === null) return outcome;
-    const next = handsOver(outcome.failure) ? chain.shift() : undefined;
+    const next = nextFallback(chain, current.spec, outcome.failure);
 
     if (next === undefined) throw outcome.failure.error;
     yield { type: 'model-fallback', from: current.spec, to: next.spec, reason: describeProviderError({ cause: outcome.failure.cause }) };

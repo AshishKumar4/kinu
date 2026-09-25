@@ -19,6 +19,7 @@ import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../src/prompts/evidence-window';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
+import { getRunEvents } from '../src/read-models/runs';
 
 /** One text step, finishReason 'stop', so the head ends in a single step. */
 function fakeHeadModel(answer: string, opts?: { throwError?: string; usage?: { inputTokens: number; outputTokens: number } }): LanguageModel {
@@ -126,6 +127,24 @@ describe('runHeadInference — report assembly', () => {
     expect(report.status).toBe('errored');
     expect(report.errorMessage).toContain('model exploded');
     expect(report.stepCount).toBe(0);
+  });
+
+  test('a hosted run records that its tier model was swapped for one its provider lists, as a root turn does', async () => {
+    const base = await deps(fakeHeadModel('done'));
+    const served: string[] = [];
+
+    const profile: HeadInferenceDeps['profile'] = async (request) => {
+      const resolved = await base.profile(request);
+      served.push(resolved.profile.tier.model);
+
+      return { ...resolved, profile: { ...resolved.profile, tier: { ...resolved.profile.tier, replaced: 'anthropic/claude-retired' } } };
+    };
+
+    await runHeadInference(headInput(), { ...base, profile });
+
+    expect(getRunEvents(base.actor.stores.eventRecorder, base.runId).filter((event) => event.type === 'model_fallback')).toMatchObject([
+      { type: 'model_fallback', from: 'anthropic/claude-retired', to: served[0], reason: 'its provider no longer lists it' },
+    ]);
   });
 
   test('no prose + recorded evidence → summary synthesized from findings', async () => {

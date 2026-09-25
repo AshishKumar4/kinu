@@ -303,9 +303,8 @@ export function buildHeadMessages(input: HeadInput): ModelMessage[] {
 }
 
 /**
- * 'tool' cannot be emitted as role:'tool': the SDK requires a matching assistant tool-call id,
- * which a SerializedMessage lacks. 'system' would compete with the head's system prompt.
- * Both become user messages that keep their identity in the text.
+ * 'tool' cannot be role:'tool' (the SDK wants a matching tool-call id a SerializedMessage lacks) and 'system' would
+ * compete with the head's system prompt, so both become user messages naming their role.
  */
 export function inheritedAsModelMessage(m: SerializedMessage): ModelMessage {
   switch (m.role) {
@@ -407,10 +406,8 @@ export interface HeadInferenceDeps {
    * which merges findings rather than forking a conversation.
    */
   reportMessages?: (messages: readonly ModelMessage[]) => void;
-  /**
-   * The next turn's messages, or `null` to end the run. Absent is exactly one turn (every head).
-   * A node's turn may end with detached work still running; only `null` makes the run terminal.
-   */
+  /** The next turn's messages, or `null` to end the run; absent is one turn (every head). A node's turn may end
+   *  with detached work running; only `null` makes the run terminal. */
   resume?: () => Promise<readonly ModelMessage[] | null>;
 }
 
@@ -576,9 +573,9 @@ function streamRelay(deps: HeadInferenceDeps): { observeStream?: HeadInferenceDe
 }
 
 /**
- * Runs one reporting agent over as many turns as {@link HeadInferenceDeps.resume} grants and assembles its report.
- * Never throws: a failure becomes an `errored` report that keeps the run's steps and usage, which a thrown run() loses.
- * No turn reaches `AgentOrchestrator.recordTurn`; tests/unit-headless-learning.test.ts guards that.
+ * One reporting agent over the turns {@link HeadInferenceDeps.resume} grants, and its report. Never throws: a failure
+ * is an `errored` report keeping the run's steps and usage. No turn reaches `AgentOrchestrator.recordTurn`
+ * (tests/unit-headless-learning.test.ts).
  */
 export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
   const { capture, mission, clock } = deps;
@@ -729,6 +726,13 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
 
           if (event.type === 'reasoning-delta') {
             deps.reportDelta?.('reasoning', event.delta);
+
+            return;
+          }
+
+          // Recorded as a root turn records them.
+          if (event.type === 'model-fallback') {
+            deps.actor.stores.eventRecorder.emit(deps.runId, { type: 'model_fallback', from: event.from, to: event.to, reason: event.reason });
 
             return;
           }
