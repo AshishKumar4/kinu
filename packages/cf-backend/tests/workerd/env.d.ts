@@ -179,6 +179,7 @@ type ProbeAnswer = { ok: true; value: unknown } | { ok: false; reason: string; e
 
 interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   start(): Promise<void>;
+  previewAsHire(): Promise<ProbeAnswer>;
   share(approved?: readonly { binding: string; member: string }[]): Promise<ProbeAnswer>;
   liveShares(): Promise<ProbeAnswer>;
   importBlueprint(): Promise<{ fork: string; running: number }>;

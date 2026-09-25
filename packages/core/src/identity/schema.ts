@@ -1,4 +1,4 @@
-/** Identity and actor DDL; `state/workspace-schema.ts` composes every table. Idempotent (IF NOT EXISTS). */
+/** Identity and actor DDL; `state/workspace-schema.ts` composes every table. */
 
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 

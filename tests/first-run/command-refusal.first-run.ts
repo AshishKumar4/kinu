@@ -45,11 +45,11 @@ describe(SUITE, () => {
           return v.parse(Answer, await session.rpc('slate', [{ op: 'call', id: 'gate', method: 'exec', args: [command] }]));
         };
 
-        const setup = await exec(`mkdir -p /home/main/slates/gate
-cat > /home/main/slates/gate/package.json <<'END'
+        const setup = await exec(`mkdir -p /slates/gate
+cat > /slates/gate/package.json <<'END'
 {"main":"server.js","slate":{"bindings":{"FILES":{"kind":"namespace","namespace":"workspace","members":["exec"]}}}}
 END
-cat > /home/main/slates/gate/server.js <<'END'
+cat > /slates/gate/server.js <<'END'
 export default { async fetch(request, env) { const [command] = await request.json(); return Response.json(await env.FILES.exec(command)); } };
 END`);
 

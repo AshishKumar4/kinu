@@ -78,7 +78,7 @@ function workspaceBindings(): HostedWorkspaceEnv<string> {
   };
 }
 
-const SLATE_CWD = '/home/main/slates/a';
+const SLATE_CWD = '/slates/a';
 
 async function listen(workspace: HostedWorkspace, port: number, argv: string[], target: RouteableFacetTarget): Promise<number> {
   const session = await workspace.bundle.session();
@@ -510,7 +510,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       ensureSlate: async (owner) => {
         asked.push(owner);
 
-        return { reason: 'missing', error: `slate ${owner} durable app: ENOENT: home/user/slates/${owner}` };
+        return { reason: 'missing', error: `slate ${owner} durable app: ENOENT: slates/${owner}` };
       },
     });
 
@@ -563,7 +563,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     kv.set('resident-launch:41', {
       pid: 41, command: 'slate keeper', attempt: 0, phase: 'starting', owner: 'keeper', restart: 'never', port: 20000,
       recipe: {
-        kind: 'worker', owner: 'keeper', port: 20000, cwd: '/home/main/slates/keeper', mainModule: 'runner.js',
+        kind: 'worker', owner: 'keeper', port: 20000, cwd: '/slates/keeper', mainModule: 'runner.js',
         image: { runner: 'a'.repeat(64), application: 'b'.repeat(64) }, compatibilityDate: '2025-12-01', compatibilityFlags: ['nodejs_compat'],
       },
     });

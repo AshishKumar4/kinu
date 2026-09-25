@@ -38,9 +38,9 @@ test('a real Plan turn reads files but cannot edit them, even after a Build turn
 test('Plan blocks slate source restoration and authored calls without converting an existing Build app', async () => {
   const { agent } = orchestratorHarness();
   const files = workspaceFiles(agent);
-  const path = '/home/main/slates/app/server.ts';
-  await files.mkdir('/home/main/slates/app', { recursive: true });
-  await files.writeFile('/home/main/slates/app/package.json', JSON.stringify({ main: 'server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace' }, PEER: { kind: 'app', id: 'app' } } } }));
+  const path = '/slates/app/server.ts';
+  await files.mkdir('/slates/app', { recursive: true });
+  await files.writeFile('/slates/app/package.json', JSON.stringify({ main: 'server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace' }, PEER: { kind: 'app', id: 'app' } } } }));
   await files.writeFile(path, 'first');
   const committed = await agent.slate({ op: 'commit', id: 'app' });
 

@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import * as v from 'valibot';
 import type { AgentRuntime, LLMProviderConfig, WriteEvent, WriteObserver } from '@kinu.run/core';
 import {
-  buildBuiltinTools, discoverSkills, initWorkspaceSchema, isVfsError, reviewCommand, WORKSPACE_ROOT, subordinateAgentName,
+  buildBuiltinTools, discoverSkills, initWorkspaceSchema, isVfsError, reviewCommand, SLATES_ROOT, WORKSPACE_ROOT, subordinateAgentName,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { present, scratchDir, toolExecute } from '@kinu.run/test-utils';
@@ -214,6 +214,18 @@ describe('addressing the bound directory', () => {
     expect(await rt.storage.vfs.readdir('/')).toContain('notes');
     expect(await rt.storage.vfs.readdir('/workspace')).toContain('notes');
     expect(await rt.storage.vfs.readdir(WORKSPACE_ROOT)).toContain('notes');
+  });
+
+  test('a slate the agent writes at /slates is in the project\'s own slates/ folder', async () => {
+    const { state, project } = roots('cwd-plane-slates');
+    const rt = agentRuntime(state, 'solo', project);
+
+    await rt.storage.vfs.writeFile(`${SLATES_ROOT}/widgets/package.json`, '{"main":"server.ts"}');
+
+    expect(readFileSync(join(project, 'slates/widgets/package.json'), 'utf8')).toBe('{"main":"server.ts"}');
+    expect(await rt.storage.vfs.readdir(SLATES_ROOT)).toEqual(['widgets']);
+    expect(await refusalOf(() => rt.storage.vfs.writeFile(`${SLATES_ROOT}/../../outside.txt`, 'escaped'))).toBe('EACCES');
+    expect(existsSync(join(project, '..', 'outside.txt'))).toBe(false);
   });
 
   test('a path that leaves the directory is refused, and writes nothing', async () => {

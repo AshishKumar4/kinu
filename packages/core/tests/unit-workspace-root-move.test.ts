@@ -2,6 +2,7 @@
  * FEAT-17: the workspace root is `/home/main`. A workspace made when it was `/home/user` boots with its
  * whole tree moved there, and `/home/user` stays a link to it, so an absolute path written before still
  * reaches its file. A new workspace gets the same layout, and a move cut short finishes on the next boot.
+ * Slates are the workspace's, at `/slates`, where every agent makes and changes them; they move there too.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -9,7 +10,7 @@ import * as v from 'valibot';
 import { CRED_KERNEL, CRED_SESSION_USER, type SqlDatabase, type SqlRow, type SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import {
-  SESSION_UID, agentIdentity, provisionAgentHome, settleWorkspaceRoot, subordinateAgentName, type RootMoveVfs,
+  SESSION_UID, agentCred, agentIdentity, provisionAgentHome, settleWorkspaceRoot, subordinateAgentName, type RootMoveVfs,
 } from '../src/vfs/agent-home';
 import { createWorkspace, workspaceGenerationStorage } from '../src/vfs/nimbus-workspace';
 
@@ -77,12 +78,14 @@ async function legacyWorkspace(): Promise<Database> {
 const utf8 = { encoding: 'utf8' } as const;
 
 describe('a workspace made before the move', () => {
-  test('boots with its files, slates and SOUL.md at /home/main', async () => {
+  test('boots with its files and SOUL.md at /home/main, and its slates at /slates', async () => {
     const { kernel } = await boot(await legacyWorkspace());
 
     expect(kernel.isDirectory('/home/main')).toBe(true);
     expect(kernel.readFileString('/home/main/notes.md')).toBe('# coupon regression\n');
-    expect(kernel.readFileString('/home/main/slates/queue/package.json')).toBe('{"name":"queue"}');
+    expect(kernel.readFileString('/slates/queue/package.json')).toBe('{"name":"queue"}');
+    // One path: the old one is gone, not a link.
+    expect(kernel.exists('/home/main/slates')).toBe(false);
     expect(kernel.readFileString('/home/main/data/2026/rows.csv')).toBe('id,kind\n1,percent\n');
     expect(kernel.readFileString('/home/main/SOUL.md')).toBe(SOUL);
     // Moved, not copied: SOUL.md keeps the kernel ownership that protects it.
@@ -181,7 +184,7 @@ describe('a move cut short', () => {
     const booted = (await boot(database)).kernel;
 
     expect(booted.readFileString('/home/main/data/2026/rows.csv')).toBe('id,kind\n1,percent\n');
-    expect(booted.readFileString('/home/main/slates/queue/package.json')).toBe('{"name":"queue"}');
+    expect(booted.readFileString('/slates/queue/package.json')).toBe('{"name":"queue"}');
     expect(booted.readFileString('/home/main/SOUL.md')).toBe(SOUL);
     expect(booted.readlink('/home/user')).toBe('/home/main');
   });
@@ -227,5 +230,93 @@ describe('a move cut short', () => {
 
     expect(booted.readlink('/home/user')).toBe('/home/main');
     expect(booted.readFileString('/home/user/notes.md')).toBe('# coupon regression\n');
+  });
+});
+
+/** One boot with an agent hired into the workspace, and the plane as each credential reaches it. */
+async function withHire(database: Database) {
+  const { bundle, kernel, user } = await boot(database);
+  const agent = subordinateAgentName('builder');
+  const identity = agentIdentity(workspaceSql(database), agent);
+  const home = provisionAgentHome(kernel, agent, identity);
+  const builder = (await bundle.session()).vfs.as(agentCred(identity));
+
+  return { kernel, user, builder, home };
+}
+
+describe('slates', () => {
+  test('a hired agent makes a slate at /slates, and the main agent and it each change the other\'s', async () => {
+    const { kernel, user, builder, home } = await withHire(await legacyWorkspace());
+
+    builder.mkdir('/slates/widgets/src', { recursive: true });
+    builder.writeFile('/slates/widgets/package.json', '{"name":"widgets"}');
+    // Past one storage transaction, so the substrate stages it rather than writing one batch.
+    builder.writeFile('/slates/widgets/src/atlas.bin', new Uint8Array(3 * 1024 * 1024).fill(7));
+    user.writeFile('/slates/widgets/package.json', '{"name":"widgets","title":"Widgets"}');
+    user.writeFile('/slates/widgets/src/atlas.bin', new Uint8Array(3 * 1024 * 1024).fill(9));
+    builder.writeFile('/slates/queue/package.json', '{"name":"queue","title":"Queue"}');
+
+    expect(kernel.readFileString('/slates/widgets/package.json')).toBe('{"name":"widgets","title":"Widgets"}');
+    expect(kernel.readFile('/slates/widgets/src/atlas.bin')[0]).toBe(9);
+    expect(kernel.readFileString('/slates/queue/package.json')).toBe('{"name":"queue","title":"Queue"}');
+    // Each home is still its own agent's.
+    expect(() => builder.writeFile('/home/main/notes.md', 'mine now')).toThrow('EACCES');
+    expect(() => user.writeFile(`${home}/draft.md`, 'mine now')).toThrow('EACCES');
+  });
+
+  test('a slate built in a hired agent\'s home and moved to /slates is shared as if made there', async () => {
+    const { kernel, user, builder, home } = await withHire(await legacyWorkspace());
+
+    builder.mkdir(`${home}/gauges/src`, { recursive: true });
+    builder.writeFile(`${home}/gauges/package.json`, '{"name":"gauges"}');
+    builder.writeFile(`${home}/gauges/src/app.tsx`, 'export default null;\n');
+    builder.rename(`${home}/gauges`, '/slates/gauges');
+
+    user.writeFile('/slates/gauges/src/app.tsx', 'export default () => null;\n');
+    user.mkdir('/slates/gauges/assets');
+    builder.writeFile('/slates/gauges/assets/logo.svg', '<svg/>');
+
+    expect(kernel.readFileString('/slates/gauges/src/app.tsx')).toBe('export default () => null;\n');
+    expect(kernel.readFileString('/slates/gauges/assets/logo.svg')).toBe('<svg/>');
+  });
+
+  test('no agent changes who shares /slates, and a /slates an agent made is the workspace\'s on the next boot', async () => {
+    const database = await legacyWorkspace();
+    const { kernel, user, builder } = await withHire(database);
+
+    expect(() => user.chmod('/slates', 0o755)).toThrow('EPERM');
+    expect(() => builder.chmod('/slates', 0o755)).toThrow('EPERM');
+
+    // As an agent could have made it before /slates was the workspace's: its own, and a slate in it.
+    kernel.chown('/slates', SESSION_UID, SESSION_UID);
+    kernel.chmod('/slates', 0o755);
+    kernel.chmod('/slates/queue', 0o755);
+    kernel.chmod('/slates/queue/package.json', 0o644);
+
+    const booted = await withHire(database);
+
+    booted.builder.writeFile('/slates/queue/package.json', '{"name":"queue","title":"Queue"}');
+    booted.builder.mkdir('/slates/tracker');
+    expect(booted.kernel.readFileString('/slates/queue/package.json')).toBe('{"name":"queue","title":"Queue"}');
+  });
+
+  test('a slates move cut short finishes on the next boot', async () => {
+    const database = await legacyWorkspace();
+    await boot(database);
+    // What a boot that stopped after moving the first slate left behind: the rest still under the old root.
+    const { kernel } = await substrate(database);
+    kernel.mkdir('/home/main/slates/board', { recursive: true });
+    kernel.writeFile('/home/main/slates/board/package.json', '{"name":"board"}');
+
+    for (const path of ['/home/main/slates', '/home/main/slates/board', '/home/main/slates/board/package.json']) {
+      kernel.chown(path, SESSION_UID, SESSION_UID);
+    }
+
+    const booted = await withHire(database);
+
+    expect(booted.kernel.readdir('/slates').map((entry) => entry.name).sort((a, b) => a.localeCompare(b))).toEqual(['board', 'queue']);
+    expect(booted.kernel.exists('/home/main/slates')).toBe(false);
+    booted.builder.writeFile('/slates/board/package.json', '{"name":"board","title":"Board"}');
+    expect(booted.kernel.readFileString('/slates/board/package.json')).toBe('{"name":"board","title":"Board"}');
   });
 });

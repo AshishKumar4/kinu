@@ -6,7 +6,7 @@
 import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { FileCheckpoints, VFS, VfsErrorCode } from '@kinu.run/core';
-import { ERRNO, LEGACY_WORKSPACE_ROOT, makeVfsError, WORKSPACE_ROOT } from '@kinu.run/core';
+import { ERRNO, LEGACY_WORKSPACE_ROOT, makeVfsError, SLATES_ROOT, WORKSPACE_ROOT } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
@@ -91,8 +91,8 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
 /**
  * The working directory as the workspace file plane; agent state stays in
  * `agentStateVfs`. Accepts relative paths, plane-root aliases (`/workspace`,
- * `/home/main`, `/`) and real absolute paths inside the tree; anything else is
- * EACCES. A lexical guard against path confusion, not a sandbox.
+ * `/home/main`, `/`, and `/slates` for its `slates/`) and real absolute paths inside
+ * the tree; anything else is EACCES. A lexical guard against path confusion, not a sandbox.
  */
 export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined): VFS {
   const root = resolve(cwd);
@@ -125,15 +125,23 @@ export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | un
   };
 }
 
-/** One table, so a new spelling cannot be honoured by only some operations. */
-const PLANE_ROOTS: readonly string[] = ['/', WORKSPACE_ROOT, LEGACY_WORKSPACE_ROOT, '/workspace'];
+/** One table, so a new spelling cannot be honoured by only some operations: each root and the directory it names. */
+const PLANE_ROOTS: readonly (readonly [root: string, directory: string])[] = [
+  ['/', ''], [WORKSPACE_ROOT, ''], [LEGACY_WORKSPACE_ROOT, ''], ['/workspace', ''],
+  // The workspace's slates are the project's own.
+  [SLATES_ROOT, 'slates'],
+];
 
 function planeRootRelative(path: string): string | null {
-  for (const planeRoot of PLANE_ROOTS) {
-    if (path === planeRoot) return '';
+  for (const [planeRoot, directory] of PLANE_ROOTS) {
+    if (path === planeRoot) return directory;
 
     // `/` names the root only: `/etc/passwd` is never `<cwd>/etc/passwd`.
-    if (planeRoot !== '/' && path.startsWith(`${planeRoot}/`)) return path.slice(planeRoot.length + 1);
+    if (planeRoot !== '/' && path.startsWith(`${planeRoot}/`)) {
+      const inner = path.slice(planeRoot.length + 1);
+
+      return directory === '' ? inner : `${directory}/${inner}`;
+    }
   }
 
   return null;

@@ -1,6 +1,6 @@
 # Live UI: slates
 
-A slate is a small app under `/home/main/slates/<id>/` in the workspace file
+A slate is a small app under `/slates/<id>/` in the workspace file
 plane: a server class, an optional React client and a `package.json`. The
 source and its committed versions persist. The compiled bundle, the running
 process and the preview URL all derive from that source.
