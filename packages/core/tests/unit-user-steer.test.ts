@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
+import { workspaceGenesisSignal } from '../src/identity/soul';
 import { Inbox } from '../src/orchestrator/inbox';
 import type { UserSteer } from '../src/orchestrator/inbox';
 import type {
@@ -540,6 +541,34 @@ describe('Inbox — the user kind beside the event kind', () => {
       { role: 'user', content: 'mid-turn: bound by the tick' },
     ]);
     expect(inbox.settle({ completed: true }).absorbed.map((signal) => signal.text)).toEqual(['bound by the tick']);
+  });
+
+  test('an offer left over beside users yields to them instead of riding their rerun', async () => {
+    // The genesis offer yields to an operator message, and the users this rerun carries spoke first: carried, its
+    // first step would tell their turn that nobody has typed anything.
+    const offer = workspaceGenesisSignal('Fix the checkout coupon bug');
+
+    if (offer === null) throw new Error('a real mission makes a genesis offer');
+    const { inbox, queued, broadcasts } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'operator words'));
+    await inbox.send(offer);
+
+    inbox.settle({ completed: true });
+    await Promise.resolve();
+
+    expect(queued.map((turn) => ({ text: turn.text, origin: turn.origin }))).toEqual([
+      { text: 'operator words', origin: 'user' },
+    ]);
+
+    // Nothing rides the rerun's first step, and its turn absorbs nothing.
+    inbox.beginTurn(false);
+    expect(await inbox.prepareStep(step(0, [{ role: 'user', content: 'operator words' }]))).toBeUndefined();
+    expect(inbox.settle({ completed: true }).absorbed).toEqual([]);
+
+    const cards = broadcasts.filter((broadcast) => broadcast.type === 'signal_card');
+    const offered = cards.find((card) => card.state === 'pending' && card.text === offer.text);
+    expect(cards.filter((card) => card.id === offered?.id).at(-1)?.state).toBe('undelivered');
   });
 
   test('a rerun the host never opens strands the events that waited for it to turns of their own', async () => {

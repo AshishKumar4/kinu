@@ -510,7 +510,8 @@ export class Inbox implements AgentInbox {
     return attempt;
   }
 
-  /** Users as one user-origin turn, its first step carrying the events; with no users, each event is its own turn. */
+  /** Users as one user-origin turn, its first step carrying the events that do not yield to them; with no users,
+   *  each event is its own turn. */
   private redeliver(users: readonly DeliveredUserSignal[], events: readonly DeliveredSignal[]): void {
     const [first, ...rest] = users;
 
@@ -523,6 +524,11 @@ export class Inbox implements AgentInbox {
     }
 
     for (const signal of events) {
+      if (signal.yieldsToUserMessage === true) {
+        this.moveCard(signal.cardId, 'undelivered');
+        continue;
+      }
+
       this.pending.push(signal);
       this.openCard(signal, stepBody(signal));
     }
@@ -551,7 +557,7 @@ export class Inbox implements AgentInbox {
 
       const result = await this.startTurn(() => this.host.enqueueTurn(turn));
 
-      // Operator already speaking: a consumed offer, not a failure. No compensate; card withdrawn.
+      // The operator spoke first: a consumed offer, not a failure.
       if (result.status === 'yielded') {
         this.moveCard(signal.cardId, 'undelivered');
 
