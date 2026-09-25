@@ -62,7 +62,7 @@ test('a delegated turn sends the same typed native error feedback in its NEXT pr
     mission: 'Try the file operation.',
   });
 
-  await runDelegatedTask(workspace, child.actor, 'Try the file operation.');
+  await runDelegatedTask(workspace, child.actor.handle.actorId, 'Try the file operation.');
   const next = gateway.runs.map(requestOf).find((request) => request.messages.some((message) => message.role === 'tool'));
   const results = next?.messages.filter((message) => message.role === 'tool') ?? [];
 

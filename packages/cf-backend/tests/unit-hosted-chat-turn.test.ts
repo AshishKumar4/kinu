@@ -10,7 +10,7 @@ import { expect, test } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import { terminalChatError } from '@kinu.run/core';
 import * as v from 'valibot';
-import { gatewayWorkspace, runDelegatedTask, workspaceMainActor } from './helpers/actor-harness';
+import { gatewayWorkspace, runDelegatedTask } from './helpers/actor-harness';
 import { chatCompletion, stubAiBinding, type RecordedGatewayRun } from './helpers/platform-gateway';
 
 const ChatResponseSchema = v.looseObject({
@@ -60,11 +60,6 @@ async function firstTask(answer: (run: RecordedGatewayRun) => Response): Promise
   const { subordinate } = await workspace.agent.createSubordinateAgent();
 
   if (subordinate.actorId === null) throw new Error('the added agent has no actor');
-  const main = workspaceMainActor(workspace.db);
-
-  const agent = await workspace.agent.observeActorHost().acquire({
-    actorId: subordinate.actorId, workspaceId: main.workspaceId, parentActorId: main.actorId,
-  });
 
   Object.defineProperty(workspace.agent, 'broadcast', {
     configurable: true,
@@ -81,7 +76,7 @@ async function firstTask(answer: (run: RecordedGatewayRun) => Response): Promise
     },
   });
 
-  await runDelegatedTask(workspace, agent, 'Say hello.');
+  await runDelegatedTask(workspace, subordinate.actorId, 'Say hello.');
 
   return { seen, shown };
 }

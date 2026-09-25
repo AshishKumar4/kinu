@@ -9,7 +9,7 @@ import type { LanguageModel } from 'ai';
 import { AwaitedList, scriptedTurnModel } from '@kinu.run/test-utils';
 import { fleetEnvForTest } from './helpers/analytics-plane';
 import {
-  makeEnv, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, storedChat, workspaceMainActor,
+  makeEnv, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, storedChat, until, workspaceMainActor,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { changeNotesCard, RunEventRecorder, turnAuthor, type ReviewAnnotation } from '@kinu.run/core';
@@ -284,9 +284,9 @@ describe('notes sent from the Changes tab', () => {
     const next = await reactivateOrchestratorHarness(harness.db);
     await next.agent.activateActor();
     next.agent.harnessSupplyTurnModel(scriptedAnswer('Noted.'));
-    const loop = next.agent.harnessChatLoop;
-    await Promise.resolve();
-    await loop.pumpPromise;
+    // The wake the owed send arms is what reruns it on the fresh activation.
+    await next.agent.terminalRetryPass();
+    await until(() => owed(next).sends === 0, 'the notes\' turn takes its send');
 
     const cards = (await storedChat(next)).filter((message) => changeNotesCard({ metadata: message.metadata }) !== null);
 
@@ -319,10 +319,10 @@ describe('notes sent from the Changes tab', () => {
     await turns.prepare({ messages: [{ role: 'user', content: 'the long job' }] });
 
     // A typed message the running turn never reads, then the notes: both wait on that turn.
-    await agent.harnessChatLoop.admit('check staging', { id: 'typed-1' });
+    await agent.send('check staging', 'typed-1');
     expect(await agent.sendChangeNotes(CHANGES)).toEqual({ ok: true, notes: [] });
     await turns.settle({ messageId: 'answer-long', text: 'Done.' });
-    await agent.harnessChatLoop.pumpPromise;
+    await until(() => owed(harness).sends === 0, 'the leftover sends rerun');
 
     const users = (await storedChat(harness)).filter((message) => message.role === 'user');
     const texts = users.map((message) => message.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join(''));
@@ -341,7 +341,7 @@ describe('notes sent from the Changes tab', () => {
     agent.harnessRefuseDriving({ reason: 'unavailable', error: 'another activation is driving' });
 
     expect(await agent.sendChangeNotes(CHANGES)).toEqual({ ok: true, notes: [] });
-    await agent.harnessChatLoop.pumpPromise;
+    await until(() => owed(harness).sends === 0, 'the refused send leaves the queue');
     expect(owed(harness)).toEqual({ sends: 0, metadata: 0 });
   });
 });
