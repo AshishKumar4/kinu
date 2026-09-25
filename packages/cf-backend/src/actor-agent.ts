@@ -491,7 +491,7 @@ export abstract class ActorAgent extends Agent<Env> {
   abstract actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult>;
 
   private actorRuntimeRefusal(): Refusal | null {
-    if (this.storageRefusal !== null) return refusalOf(this.storageRefusal);
+    if (this.storageRefusal !== undefined) return refusalOf(this.storageRefusal);
 
     try {
       this.actorHandle();
@@ -505,7 +505,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   override async alarm(): Promise<void> {
     // Returned, not thrown: the platform retries a thrown alarm.
-    if (this.storageRefusal !== null) return;
+    if (this.storageRefusal !== undefined) return;
     const refusal = this.actorRuntimeRefusal();
 
     if (refusal) throw new KinuError(refusal.reason, refusal.error);
@@ -986,7 +986,8 @@ export abstract class ActorAgent extends Agent<Env> {
     onProviderWait: (info) => { this.noteProviderWait(info); },
   });
 
-  protected storageRefusal: StoragePredatesResetError | null = null;
+  // The bare prototype must read as sound.
+  protected storageRefusal?: StoragePredatesResetError;
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
@@ -1074,8 +1075,8 @@ export abstract class ActorAgent extends Agent<Env> {
     this.onConnect = async (connection, ctx) => {
       if (await this.refuseRevokedSocketAuthority(connection, '')) return;
 
-      // Before anything reads the store. The page shows it where a failed turn shows.
-      if (this.storageRefusal !== null) {
+      // Before anything reads the store.
+      if (this.storageRefusal !== undefined) {
         connection.send(JSON.stringify({
           type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: 'storage-refused', reason: this.storageRefusal.code,
           body: this.storageRefusal.message, done: true, error: true,
@@ -1095,7 +1096,7 @@ export abstract class ActorAgent extends Agent<Env> {
     };
 
     this.onClose = async (connection, code, reason, wasClean) => {
-      if (this.storageRefusal !== null) return await baseOnClose(connection, code, reason, wasClean);
+      if (this.storageRefusal !== undefined) return await baseOnClose(connection, code, reason, wasClean);
       const terminal = await this.terminalFor(connection);
 
       if (terminal) terminal.terminalClose(connection);
@@ -1113,7 +1114,7 @@ export abstract class ActorAgent extends Agent<Env> {
     this.onRequest = async (request) => {
       const url = new URL(request.url);
 
-      if (this.storageRefusal !== null) {
+      if (this.storageRefusal !== undefined) {
         return Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] });
       }
 

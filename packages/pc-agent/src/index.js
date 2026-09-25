@@ -1646,10 +1646,21 @@ function createInFlight(root = INFLIGHT_ROOT) {
     return terminations;
   }
 
+  /** @param {unknown} error */
+  function reportReconcileFailure(error) {
+    log('Could not reconcile in-flight commands under', root, errorDetail(error));
+  }
+
+  // Startup awaits it only after claiming the machine and probing the sandbox,
+  // and a module a test only requires never does: until then a rejection with
+  // no handler ends the process in Bun. Handled here, it stays startup's refusal.
+  const ready = reconcile();
+  ready.catch(reportReconcileFailure);
+
   return {
     /** The first reconciliation, which makes a restarted daemon the owner of
      *  what its predecessor left running; the daemon serves nothing before it. */
-    ready: reconcile(),
+    ready,
     register,
     cancel,
     result,
