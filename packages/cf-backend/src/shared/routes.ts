@@ -6,24 +6,19 @@ import { Hono } from 'hono';
 import * as v from 'valibot';
 import {
   err, json, safeJson, retryTransientDO,
-  formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, LiveShareRecordSchema, labelSigner,
+  formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, labelSigner,
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
-  type LiveShareVisibility, LiveShareCreatedSchema,
+  LiveShareCreatedSchema,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
 import type { AuthIdentity } from '../auth/session';
 import { deriveUserId } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
-import { sharesGiven } from '../user/shares-given';
 import type { SharedBlueprintReceipt } from '../user/user-do';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { ROOT_SLATE_CALLER } from '../slates/bindings';
 import type { ErrorCode } from '@kinu.run/core/obs';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
-
-const SlateListingSchema = v.object({
-  slates: v.array(v.object({ id: v.string(), title: v.string(), bindings: v.array(v.string()) })),
-});
 
 /** Its own salt and info, so preview and blueprint tokens never verify each other. */
 const blueprintSigner = labelSigner('kinu.blueprint.salt', 'kinu.blueprint.v1');
@@ -109,52 +104,30 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
   const slates: OwnedSlate[] = [];
   const mine: SharedRow[] = [];
 
-  for (const { workspace, shares } of await sharesGiven(env, owner, identity.userId)) {
-    const owned = workspaceOwner(env, workspace);
-
-    for (const share of shares) {
-      if (share.revokedAt !== null) continue;
-      const reading = await owned.readBlueprint(share.id);
-
-      if (!reading.ok) continue;
-      const id = await mintBlueprintId(env, workspace, share.id);
-
-      if (id === null) continue;
-
-      mine.push({
-        id, kind: 'blueprint', share: share.id, title: reading.value.view.title, description: reading.value.view.description,
-        createdAt: share.createdAt, bindings: reading.value.view.bindings.length, workspace, users: share.users,
+  for (const { workspace, overview } of await userDO.libraryTiles(owner)) {
+    for (const slate of overview.slates) {
+      slates.push({
+        id: slate.id, title: slate.title, workspace, bindings: slate.bindings, ...(slate.visibility !== null && { visibility: slate.visibility }),
       });
     }
 
-    const live = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'liveShares' });
+    for (const share of overview.shares) {
+      const row = {
+        share: share.share, title: share.title, description: share.description, createdAt: share.createdAt,
+        bindings: share.bindings, workspace, users: share.users,
+      };
 
-    if (!live.ok) throw new Error(`listing live shares of ${workspace}: ${live.reason}: ${live.error}`);
-    const shared = new Map<string, LiveShareVisibility>();
+      if (share.kind === 'live') {
+        mine.push({
+          ...row, id: share.share, kind: 'live',
+          ...(share.visibility !== undefined && { visibility: share.visibility }), ...(share.fork !== undefined && { fork: share.fork }),
+        });
+        continue;
+      }
 
-    for (const share of v.parse(v.array(LiveShareRecordSchema), live.value)) {
-      if (share.revokedAt !== null) continue;
-      const reading = await owned.readLiveShare(share.id);
+      const id = await mintBlueprintId(env, workspace, share.share);
 
-      if (!reading.ok) continue;
-
-      // Two shares of one slate: the badge shows the wider reach, never understating who can see it.
-      if (share.visibility === 'public' || shared.get(share.slate) === undefined) shared.set(share.slate, share.visibility);
-
-      mine.push({
-        id: share.id, kind: 'live', share: share.id, title: reading.value.title, description: reading.value.description,
-        createdAt: share.createdAt, bindings: share.grant.members.length, visibility: share.visibility,
-        workspace, users: share.users, fork: share.grant.fork !== false,
-      });
-    }
-
-    // A slate this workspace cannot read is left out: a tile that opens nothing is worse than none.
-    const owns = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'list' });
-
-    if (!owns.ok) throw new Error(`listing slates of ${workspace}: ${owns.reason}: ${owns.error}`);
-
-    for (const slate of v.parse(SlateListingSchema, owns.value).slates) {
-      slates.push({ id: slate.id, title: slate.title, workspace, bindings: slate.bindings.length, visibility: shared.get(slate.id) });
+      if (id !== null) mine.push({ ...row, id, kind: 'blueprint' });
     }
   }
 
@@ -192,6 +165,10 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
   }
 
   return { slates, mine, received };
+}
+
+function listed(answer: { readonly listing?: 'pending' }): { listing?: 'pending' } {
+  return answer.listing === undefined ? {} : { listing: answer.listing };
 }
 
 function slateRefusalStatus(reason: ErrorCode): number {
@@ -239,7 +216,7 @@ async function publish(request: Request, env: Env, identity: AuthIdentity, owner
     }
   }
 
-  return json({ body: { id, share: share.id, users, published: published.value } }, { status: 201 });
+  return json({ body: { id, share: share.id, users, published: published.value, ...listed(published) } }, { status: 201 });
 }
 
 async function fork(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
@@ -323,7 +300,7 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity, own
     }
   }
 
-  return json({ body: { share, url } }, { status: 201 });
+  return json({ body: { share, url, ...listed(created) } }, { status: 201 });
 }
 
 /** A live share and a blueprint link revoke alike: the owner's object knows which it holds. */
@@ -338,7 +315,7 @@ async function revoke(request: Request, env: Env, identity: AuthIdentity): Promi
 
   if (!revoked.ok) return err(revoked.reason === 'missing' ? 404 : 409, revoked.error);
 
-  return json({ body: revoked.value });
+  return json({ body: { ...v.parse(v.record(v.string(), v.unknown()), revoked.value), ...listed(revoked) } });
 }
 
 async function openLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {

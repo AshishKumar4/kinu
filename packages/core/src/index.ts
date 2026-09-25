@@ -910,7 +910,6 @@ export {
 
 export { EVIDENCE_BUDGETS, evidenceWindow, renderToolResult } from './prompts/evidence-window';
 
-// Runtime builder
 export { buildRuntime } from './runtime-builder';
 
 export type { RuntimeComponents } from './runtime-builder';
@@ -2068,7 +2067,9 @@ export type { PendingAction, PendingActionKind, PendingActionInputs, PersonAsks 
 
 export { buildWorkspaceOverview, rosterBucket, rosterHeadline, rosterMatches, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
-export type { RosterBucket, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewSlate, WorkspaceStatus } from './read-models/workspace-overview';
+export type {
+  RosterBucket, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewShare, WorkspaceOverviewSlate, WorkspaceStatus,
+} from './read-models/workspace-overview';
 
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,

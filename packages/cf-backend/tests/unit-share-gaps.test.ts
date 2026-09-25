@@ -18,6 +18,7 @@ import { serveFamily } from './helpers/api';
 import { handleSlateShareHostRequest } from '../src/slate-share-route';
 import type { AuthIdentity } from '../src/auth/session';
 import { present } from '@kinu.run/test-utils';
+import { KinuError } from '@kinu.run/core/obs';
 
 function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, schema: Schema): v.InferOutput<Schema> {
   if (!result.ok) throw new Error(result.reason + ': ' + result.error);
@@ -52,6 +53,8 @@ interface World {
   readonly owner: ActorHarness<HarnessOrchestratorAgent>;
   readonly viewer: ActorHarness<HarnessOrchestratorAgent>;
   readonly ownerUser: TestUserDO;
+  /** Each workspace object the edge acquired, by name. */
+  readonly acquired: string[];
   readonly close: () => void;
 }
 
@@ -88,6 +91,7 @@ async function twoUserWorld(): Promise<World> {
   ]);
 
   const users = new Map<string, TestUserDO>([[OWNER_ID, ownerSide.user], [VIEWER_ID, viewerSide.user]]);
+  const acquired: string[] = [];
 
   const partialEnv: Partial<Env> = {};
   Object.assign(partialEnv, {
@@ -96,7 +100,11 @@ async function twoUserWorld(): Promise<World> {
     AUTH_KV: kv,
     OrchestratorAgent: {
       idFromName: (name: string) => name,
-      get: (id: string) => present(agents.get(id), `the OrchestratorAgent stub ${id}`),
+      get: (id: string) => {
+        acquired.push(id);
+
+        return present(agents.get(id), `the OrchestratorAgent stub ${id}`);
+      },
     },
     UserDO: {
       idFromName: (name: string) => name,
@@ -117,7 +125,7 @@ async function twoUserWorld(): Promise<World> {
   await authorIssuesSlate(workspaceFiles(ownerSide.agent.agent));
 
   return {
-    env, owner: ownerSide.agent, viewer: viewerSide.agent, ownerUser: ownerSide.user,
+    env, owner: ownerSide.agent, viewer: viewerSide.agent, ownerUser: ownerSide.user, acquired,
     close: () => { ownerSide.user.close(); viewerSide.user.close(); resetRecordedMcp(); },
   };
 }
@@ -298,4 +306,83 @@ test('D2: one revoke route ends a public live share and a blueprint link', async
   expect((await page())?.status).toBe(200);
   expect((await revoke(blueprint.share))?.status).toBe(200);
   expect((await page())?.status).toBe(404);
+});
+
+test("the owner's Drive lists its slates and shares from the tiles its workspaces pushed, asking no workspace", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+
+  const library = async () => {
+    world.acquired.length = 0;
+    const read = await jsonBody(present(await sharedRequest(world.env, owner, new Request('https://app.test/api/shared')), 'the library'), SharedLibrarySchema);
+
+    expect(world.acquired).toEqual([]);
+
+    return read;
+  };
+
+  const live = await sharePublic(world, 'public');
+  const committed = answered(await world.owner.agent.slate({ op: 'commit', id: 'issues' }), v.object({ id: v.string() }));
+
+  const published = present(await sharedRequest(world.env, owner,
+    post('/api/shared/publish', { workspace: 'issues-owner', slate: 'issues', version: committed.id })), 'the publish answer');
+
+  const blueprint = await jsonBody(published, v.object({ id: v.string(), share: v.string() }));
+  const shared = await library();
+
+  expect(shared.slates).toEqual([{ id: 'issues', title: 'Issue triage', workspace: 'issues-owner', bindings: 2, visibility: 'public' }]);
+  expect(new Set(shared.mine.map((row) => `${row.kind} ${row.id} ${row.title}`))).toEqual(new Set([
+    `blueprint ${blueprint.id} Issue triage`,
+    `live ${live.share.id} Issue triage`,
+  ]));
+
+  expect((await sharedRequest(world.env, owner, post('/api/shared/revoke', { workspace: 'issues-owner', share: live.share.id })))?.status).toBe(200);
+  const after = await library();
+
+  expect(after.mine.map((row) => row.kind)).toEqual(['blueprint']);
+  expect(after.slates[0]?.visibility).toBeUndefined();
+});
+
+test('a change whose card cannot reach the tile is made and says the list is behind; a revoke during the backoff still moves it', async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const userDO = world.ownerUser.userDO;
+  const push = userDO.putWorkspaceOverview.bind(userDO);
+  const failing = async () => { throw new KinuError('unavailable', 'the roster is unavailable'); };
+
+  const Made = v.object({ share: v.object({ id: v.string() }), listing: v.optional(v.literal('pending')) });
+
+  const share = async (visibility: 'users' | 'public') => jsonBody(present(await sharedRequest(world.env, owner,
+    post('/api/shared/live', { workspace: 'issues-owner', slate: 'issues', visibility })), 'the share answer'), Made);
+
+  const revoke = async (id: string) => present(await sharedRequest(world.env, owner, post('/api/shared/revoke', { workspace: 'issues-owner', share: id })), 'the revoke answer');
+  const listed = async () => (await jsonBody(present(await sharedRequest(world.env, owner, new Request('https://app.test/api/shared')), 'the library'), SharedLibrarySchema)).mine;
+
+  const lives = async () => answered(await world.owner.agent.slate({ op: 'liveShares' }), v.array(LiveShareRecordSchema));
+
+  const first = await share('public');
+
+  expect(first.listing).toBeUndefined();
+
+  // Its push fails: the share is made and answered, so a retry would mint a second.
+  Object.assign(userDO, { putWorkspaceOverview: failing });
+  const second = await share('users');
+  Object.assign(userDO, { putWorkspaceOverview: push });
+
+  expect(second.listing).toBe('pending');
+  expect(new Set((await lives()).filter((row) => row.revokedAt === null).map((row) => row.id))).toEqual(new Set([first.share.id, second.share.id]));
+
+  // During the backoff that failure left, a revoke still moves the tile, and the next fold lists the second share.
+  const revoked = await revoke(first.share.id);
+
+  expect(await jsonBody(revoked, v.object({ listing: v.optional(v.literal('pending')) }))).toEqual({});
+  expect((await listed()).map((row) => row.id)).toEqual([second.share.id]);
+
+  Object.assign(userDO, { putWorkspaceOverview: failing });
+  const behind = await revoke(second.share.id);
+
+  expect(behind.status).toBe(200);
+  expect(await jsonBody(behind, v.object({ listing: v.optional(v.literal('pending')) }))).toEqual({ listing: 'pending' });
 });

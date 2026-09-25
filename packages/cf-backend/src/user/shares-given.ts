@@ -1,5 +1,5 @@
 /**
- * Shares an account has given, read by both the shared library and the account-delete sweep.
+ * Shares an account has given, read by the account-delete sweep.
  * Delete needs revoked shares too: their recipients still hold the `sharesReceived_add` row.
  * Worker code only: it claims ownership via the session plane and derives ids from emails.
  */
@@ -20,7 +20,7 @@ const ShareRowSchema = v.object({
   users: v.array(v.string()),
 });
 
-export interface WorkspaceShares {
+interface WorkspaceShares {
   workspace: string;
   shares: Array<v.InferOutput<typeof ShareRowSchema>>;
 }
@@ -35,7 +35,7 @@ export interface SharesGivenEnv<Id>
   UserDO: ObjectNamespace<Id, ShareRosterAuthority>;
 }
 
-export async function sharesGiven<Id>(
+async function sharesGiven<Id>(
   env: SharesGivenEnv<Id>, owner: UserCaller, userId: string,
 ): Promise<WorkspaceShares[]> {
   const userDO = env.UserDO.get(env.UserDO.idFromName(userId));

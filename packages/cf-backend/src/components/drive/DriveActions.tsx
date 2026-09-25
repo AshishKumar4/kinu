@@ -180,10 +180,10 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
   );
 }
 
-function DriveShareSheet({ slate, onClose }: { slate: OwnedSlate; onClose: () => void }) {
+function DriveShareSheet({ slate, onClose, onListingPending }: { slate: OwnedSlate; onClose: () => void; onListingPending: () => void }) {
   const { rpc } = useWorkspaceRpc(slate.workspace);
 
-  return <ShareSlateDialog workspace={slate.workspace} slate={slate.id} title={slate.title} rpc={rpc} onClose={onClose} />;
+  return <ShareSlateDialog workspace={slate.workspace} slate={slate.id} title={slate.title} rpc={rpc} onClose={onClose} onListingPending={onListingPending} />;
 }
 
 const NEW_BUTTON = "h-8 gap-1.5 px-3 text-sm max-sm:!size-9 max-sm:rounded-full max-sm:!p-0";
@@ -280,7 +280,7 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
   folder: string;
   onClose: () => void;
   onListingChanged: () => void;
-  onSharesChanged: () => void;
+  onSharesChanged: (listing?: "pending") => void;
   onSkillAdded: () => void;
 }) {
   const act = async (work: () => Promise<void>): Promise<void> => {
@@ -309,7 +309,7 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
     case "add-skill":
       return <AddSkillDialog onClose={onClose} onAdded={onSkillAdded} />;
     case "share":
-      return <DriveShareSheet slate={dialog.slate} onClose={() => { onClose(); onSharesChanged(); }} />;
+      return <DriveShareSheet slate={dialog.slate} onClose={() => { onClose(); onSharesChanged(); }} onListingPending={() => onSharesChanged("pending")} />;
     case "stop":
       return (
         <ConfirmDialog title={`Stop sharing ${dialog.row.title}?`} action="Stop sharing" marker="data-drive-stop-confirm"
@@ -318,8 +318,7 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
             const workspace = dialog.row.workspace;
 
             if (workspace === undefined) throw new Error("this share names no workspace");
-            await revokeShare({ workspace, share: dialog.row.share });
-            onSharesChanged();
+            onSharesChanged((await revokeShare({ workspace, share: dialog.row.share })).listing);
           }}
           onClose={onClose} />
       );

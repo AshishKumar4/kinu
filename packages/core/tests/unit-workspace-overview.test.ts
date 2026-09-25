@@ -22,6 +22,7 @@ const EMPTY: WorkspaceOverviewInputs = {
   scaffoldAutoApply: true,
   latestRun: null,
   slates: [],
+  shares: [],
 };
 
 describe('buildWorkspaceOverview', () => {

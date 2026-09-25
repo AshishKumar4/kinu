@@ -134,6 +134,19 @@ function searchClause(query: string) {
   return { sql: " AND (w.display_name LIKE ? ESCAPE '\\' OR w.name LIKE ? ESCAPE '\\')", bindings: [pattern, pattern] };
 }
 
+const TileRowSchema = v.object({ name: v.string(), overview: v.string() });
+
+/** An unreadable tile lists nothing until it pushes again. */
+export function libraryTiles(sql: SqlExec): Array<{ workspace: string; overview: WorkspaceOverview }> {
+  return sql.exec(`SELECT w.name, o.overview FROM user_workspaces w JOIN workspace_overviews o ON o.name = w.name
+    WHERE ${ACTIVE} ORDER BY w.last_visited DESC, w.name`).toArray().flatMap((raw) => {
+    const row = v.parse(TileRowSchema, raw);
+    const tile = v.safeParse(WorkspaceOverviewSchema, JSON.parse(row.overview));
+
+    return tile.success ? [{ workspace: row.name, overview: tile.output }] : [];
+  });
+}
+
 export function rosterCounts(sql: SqlExec): RosterCounts {
   const counts: RosterCounts = { all: 0, needs: 0, working: 0, idle: 0, unreported: 0, decisions: 0 };
 

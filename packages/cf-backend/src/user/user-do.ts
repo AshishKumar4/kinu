@@ -155,7 +155,7 @@ import {
   type McpPresetAvailability, type McpServerSummary, type McpToolListing, type McpTransport,
 } from './mcp';
 import {
-  acceptRosterSocket, isRosterSocket, rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame, unreportedWorkspaces,
+  acceptRosterSocket, isRosterSocket, libraryTiles, rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame, unreportedWorkspaces,
   ROSTER_SOCKET_PATH, type RosterPage, type RosterQuery,
 } from './roster';
 import { deletePictures, picturePrefix } from '../slates/pictures';
@@ -885,13 +885,17 @@ export class UserDO extends Agent<Env> {
   }
 
   async listWorkspaces(caller: UserCaller, query?: RosterQuery): Promise<RosterPage> {
-    await this.requireTier(caller, 'workspaces.read');
+    const resolved = await this.requireTier(caller, 'workspaces.read');
     // This read is the retry for unfinished teardowns and for stale fork reservations nothing else frees.
     await this.resumePendingDeletions();
     await this.reclaimStaleForkReservations();
     this.nudgeUnreported();
+    const page = rosterPage(this.ctx.storage.sql, query);
 
-    return rosterPage(this.ctx.storage.sql, query);
+    // Never whom siblings share with.
+    return resolved.kind === 'owner_session' ? page : {
+      ...page, entries: page.entries.map((entry) => ({ ...entry, overview: entry.overview === null ? null : { ...entry.overview, shares: [] } })),
+    };
   }
 
   /** So two reads never ask one twice. */
@@ -4238,6 +4242,12 @@ export class UserDO extends Agent<Env> {
        ON CONFLICT (owner_user_id, workspace, share_id) DO UPDATE SET title = excluded.title, owner_email = excluded.owner_email`,
       row.ownerUserId, row.ownerEmail, row.workspace, row.shareId, row.title,
     );
+  }
+
+  async libraryTiles(caller: UserCaller): Promise<Array<{ workspace: string; overview: WorkspaceOverview }>> {
+    await this.requireTier(caller, 'drive');
+
+    return libraryTiles(this.ctx.storage.sql);
   }
 
   async sharesReceived_list(caller: UserCaller): Promise<SharedBlueprintReceipt[]> {
