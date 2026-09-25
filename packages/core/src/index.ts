@@ -1148,6 +1148,8 @@ export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observ
 
 export { ensureDir, vfsBasename, vfsDirname } from './utils/vfs-helpers';
 
+export { oneAtATime } from './utils/one-at-a-time';
+
 export { mossaicVfs, type MossaicClient, type MossaicVfs, type MossaicStat, type MossaicChild } from './vfs/mossaic-vfs';
 
 export {
@@ -1895,7 +1897,8 @@ export type {
 } from './read-models/tool-failures';
 
 export {
-  getExecutorDiff, getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline, restoreWorkspaceBaseline,
+  CHANGES_MOVED_EVENT, ChangeSetCache, getExecutorDiff, getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
+  restoreWorkspaceBaseline,
 } from './read-models/workspace-diff';
 
 export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff';

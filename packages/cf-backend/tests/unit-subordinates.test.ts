@@ -225,6 +225,8 @@ describe('an agent\'s window hears only what it may act on', () => {
       await agent.setShellApprovalMode('strict');
       await agent.executeInExecutor('workspace', 'git push --force origin main');
       await agent.listSlates();
+      // The workspace's page has read its Changes, so the next write it reviews is news.
+      await agent.getExecutorDiff('workspace');
       await workspaceFiles(agent).mkdir('/slates/tally', { recursive: true });
       await workspaceFiles(agent).writeFile('/slates/tally/server.ts', 'export default { fetch() { return new Response("ok"); } };');
       await agent.announceDeviceAvailable({ id: 'device-1', label: 'studio' });
@@ -232,7 +234,9 @@ describe('an agent\'s window hears only what it may act on', () => {
       fanout.mockRestore();
     }
 
-    const own = ['subordinates_changed', 'workspace_plan_updated', 'work_cancelled', 'pending_actions_changed', 'slates_changed'];
+    const own = [
+      'subordinates_changed', 'workspace_plan_updated', 'work_cancelled', 'pending_actions_changed', 'slates_changed', 'changes_moved',
+    ];
 
     expect(heard.get('workspace')).toEqual(expect.arrayContaining([...own, 'device_available']));
     expect(heard.get('agent')?.filter((type) => own.includes(type))).toEqual([]);

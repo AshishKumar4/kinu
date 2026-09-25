@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo, type SetStateAction 
 import { useAgent } from "agents/react";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
-  branchHeadId, ORCHESTRATOR_AGENT_SLUG, SLATES_CHANGED_EVENT, hostedActorSocketPath,
+  branchHeadId, CHANGES_MOVED_EVENT, ORCHESTRATOR_AGENT_SLUG, SLATES_CHANGED_EVENT, hostedActorSocketPath,
   type PendingAction, type PlanReview, type ReasoningEffort, type RoleId, type SlateProblem, type SlateSummary, type TierSource,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
@@ -71,7 +71,6 @@ const KinuActorAddressSchema = v.object({
   subordinate: v.optional(v.string()),
 });
 
-/** Driven entirely by the server's branch_status broadcasts. */
 export interface BranchRun {
   branchId: string;
   task: string;
@@ -344,6 +343,7 @@ const SocketMessageSchema = v.variant("type", [
   v.object({ type: v.literal("work_cancelled") }),
   v.object({ type: v.literal("pending_actions_changed") }),
   v.object({ type: v.literal(SLATES_CHANGED_EVENT), ids: v.array(v.string()) }),
+  v.object({ type: v.literal(CHANGES_MOVED_EVENT) }),
   v.object({
     type: v.literal("branch_status"), branchId: v.string(), task: v.optional(v.string()),
     status: v.optional(v.string()), takeSetId: v.optional(v.string()),
@@ -408,7 +408,6 @@ function admitsActorFrame(
   return pane.isSubordinate && pane.ownActorId === msg.actorId;
 }
 
-/** A branch as the pane draws it: settled, failed, or still running. */
 function branchRunStatus(status: string | undefined): "settled" | "error" | "running" {
   if (status === "settled") return "settled";
 
@@ -855,7 +854,6 @@ export function useKinu(target?: string | KinuActorAddress) {
   const ownActorIdRef = useRef<string | null>(null);
   const [paneActorId, setPaneActorId] = useState<string | null>(null);
   const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
-  // The slates_changed broadcast re-lists at once and bumps the remount counter of open tabs among its ids.
   const [slates, setSlates] = useState<SlateSummary[]>([]);
   const sendLandings = useRef(new Map<string, SendLandingResolvers>());
   const knownSlates = useRef<Set<string> | null>(null);
@@ -869,6 +867,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   const claimedWorkspacePlans = useRef(new Set<string>());
   const knownPlans = useRef(new Set<string>());
   const [slateReloads, setSlateReloads] = useState<ReadonlyMap<string, number>>(new Map());
+  const [changesMoved, setChangesMoved] = useState(0);
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
   /** A connect clears it. */
   const [unavailableDevices, setUnavailableDevices] = useState<UnavailableDevice[] | null>(null);
@@ -1324,6 +1323,15 @@ export function useKinu(target?: string | KinuActorAddress) {
       }
     };
 
+    const adoptPlan = (plan: PlanReview | null): void => {
+      if (!plan) return;
+      const key = `${plan.id}:${plan.revision}`;
+
+      if (!knownPlans.current.has(key) && plan.status === "pending") setPlanFocus(key);
+      knownPlans.current.add(key);
+      setActivePlan(plan);
+    };
+
     const handler = async (event: MessageEvent) => {
       const msg = paneFrame(event.data, { isSubordinate, ownActorId: ownActorIdRef.current });
 
@@ -1364,7 +1372,6 @@ export function useKinu(target?: string | KinuActorAddress) {
         } else if (msg.type === "pending_actions_changed") {
           await reread('pending_actions', refreshPendingActions);
         } else if (msg.type === SLATES_CHANGED_EVENT) {
-          // Re-list now and remount changed tabs so their preview URLs re-read.
           setSlateReloads((previous) => {
             const next = new Map(previous);
 
@@ -1374,6 +1381,8 @@ export function useKinu(target?: string | KinuActorAddress) {
           });
 
           await reread('slates', refreshSlates);
+        } else if (msg.type === CHANGES_MOVED_EVENT) {
+          setChangesMoved((moved) => moved + 1);
         } else if (msg.type === "branch_status") {
           const status = branchRunStatus(msg.status);
 
@@ -1414,15 +1423,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
           if (card) setSignalCards((current) => applySignalCard(current, card));
         } else if (msg.type === "plan_updated") {
-          const plan = parsePlanReview({ value: msg.plan });
-
-          if (plan) {
-            const key = `${plan.id}:${plan.revision}`;
-
-            if (!knownPlans.current.has(key) && plan.status === "pending") setPlanFocus(key);
-            knownPlans.current.add(key);
-            setActivePlan(plan);
-          }
+          adoptPlan(parsePlanReview({ value: msg.plan }));
         } else if (msg.type === 'workspace_plan_updated') {
           const key = JSON.stringify(msg.reference);
 
@@ -2013,6 +2014,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     tabPresence,
     slates,
     slateReloads,
+    changesMoved,
     pendingConsents,
     resolveConsent,
     unavailableDevices,

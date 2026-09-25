@@ -613,9 +613,79 @@ async function getGitDiff(rt: AgentRuntime, executorId: string): Promise<Executo
   }
 }
 
-export async function getExecutorDiff(rt: AgentRuntime, executorId: string): Promise<ExecutorDiffResult> {
+/** Whether a write at `path`, absolute as the workspace's file events name it, can move the change-set. */
+function reviewsPath(path: string): boolean {
+  const names = path.split('/').filter((name) => name !== '');
+  const [top] = names;
+
+  return top !== undefined && REVIEWED_UNDER_ROOT.includes(top) && names.every(reviewed);
+}
+
+/** The frame a workspace sends its pages when its change-set moved: Changes reads again, shown or not. */
+export const CHANGES_MOVED_EVENT = 'changes_moved';
+
+/**
+ * The workspace's change-set, read again only after something it reviews moved: a file event on a reviewed path, or
+ * a baseline that Mark reviewed or Undo moved. A poll while nothing moved walks nothing.
+ */
+export class ChangeSetCache {
+  private generation = 0;
+  private held: { readonly generation: number; readonly result: WorkspaceDiffResult } | null = null;
+  /** The one walk running; every read waits on it rather than starting its own. */
+  private walk: Promise<void> | null = null;
+  /** A frame went out and no walk has finished since: each finished walk earns at most one more. */
+  private announced = false;
+
+  /** `announce` tells the workspace's pages that the change-set moved. */
+  constructor(private readonly announce: () => void) {}
+
+  /** Paths a write touched, as the workspace's file events name them. */
+  touched(paths: readonly string[]): void {
+    if (paths.some(reviewsPath)) this.move();
+  }
+
+  /** After Mark reviewed or Undo has moved the baseline. */
+  moved(): void {
+    this.move();
+  }
+
+  /** The change-set as of this call or later, from the walk running if it started after the last move. */
+  async read(load: () => Promise<WorkspaceDiffResult>): Promise<WorkspaceDiffResult> {
+    const wanted = this.generation;
+
+    for (;;) {
+      if (this.held !== null && this.held.generation >= wanted) return this.held.result;
+      this.walk ??= this.walkAt(this.generation, load);
+      await this.walk;
+    }
+  }
+
+  private async walkAt(generation: number, load: () => Promise<WorkspaceDiffResult>): Promise<void> {
+    try {
+      this.held = { generation, result: await load() };
+    } finally {
+      this.walk = null;
+      this.announced = false;
+
+      if (this.generation !== generation) this.tell();
+    }
+  }
+
+  private move(): void {
+    this.generation += 1;
+    this.tell();
+  }
+
+  private tell(): void {
+    if (this.announced) return;
+    this.announced = true;
+    this.announce();
+  }
+}
+
+export async function getExecutorDiff(rt: AgentRuntime, executorId: string, changes?: ChangeSetCache): Promise<ExecutorDiffResult> {
   if (executorId === 'workspace') {
-    const r = await getWorkspaceDiff(rt);
+    const r = await (changes === undefined ? getWorkspaceDiff(rt) : changes.read(() => getWorkspaceDiff(rt)));
 
     return { files: r.files, mode: 'vfs-baseline', trackedSince: r.trackedSince, baseline: r.baseline };
   }

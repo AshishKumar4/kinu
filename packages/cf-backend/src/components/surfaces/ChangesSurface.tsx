@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  executorLabel, executorSortKey, isActiveExecutionDevice, keepUnchanged, pickDefaultExecutor,
+  executorLabel, executorSortKey, isActiveExecutionDevice, keepUnchanged, oneAtATime, pickDefaultExecutor,
   workspacePath, type ChangeNotesResult, type ChangeSet, type ExecutorDiffResult, type ExecutorInfo, type ReviewAnnotation, type Rpc,
 } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -85,13 +85,30 @@ function reviewedAtOf(reviewed: Reviewed | null, sets: readonly ChangeSet[] | nu
 
 type Restored = { readonly ok: true } | { readonly ok: false; readonly error: string };
 
+function useDocumentVisible(): boolean {
+  // A render with no document (the static renderer) is as seen as a visible page.
+  const [visible, setVisible] = useState(() => !("document" in globalThis) || document.visibilityState === "visible");
+
+  useEffect(() => {
+    const follow = (): void => setVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", follow);
+
+    return () => document.removeEventListener("visibilitychange", follow);
+  }, []);
+
+  return visible;
+}
+
 const UNDO_MS = 10_000;
 
-export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = null, turnLive, onOpenFile, onCount }: {
+export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = null, active, moved, turnLive, onOpenFile, onCount }: {
   executors: ExecutorInfo[];
   lastActiveExecutor?: string | null;
   rpc: Rpc;
   focus?: ChangesFocus | null;
+  /** Whether Changes is the surface shown: only then does it poll. */
+  active: boolean;
+  moved?: number;
   /** Whether the workspace's turn is running: its writes are all in once it closes. */
   turnLive: boolean;
   onOpenFile: (path: string) => void;
@@ -134,9 +151,32 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
     };
   }, [rpc, sourceKey]);
 
-  const revalidate = useCallback(() => 2_000, []);
-  const { resource, reload } = useAsyncResource(load, revalidate);
+  const visible = useDocumentVisible();
+  const seen = active && visible;
+  // Unseen, it reads only when the workspace says its change-set moved, a turn closes, it comes into view or the
+  // window takes focus.
+  const revalidate = useCallback(() => (seen ? 2_000 : null), [seen]);
+  const serialLoad = useMemo(() => oneAtATime(load), [load]);
+  const { resource, reload } = useAsyncResource(serialLoad, revalidate);
   const wasLive = useRef(turnLive);
+  const wasSeen = useRef(seen);
+  const wasMoved = useRef(moved);
+
+  useEffect(() => {
+    if (moved !== wasMoved.current) reload();
+    wasMoved.current = moved;
+  }, [moved, reload]);
+
+  useEffect(() => {
+    if (seen && !wasSeen.current) reload();
+    wasSeen.current = seen;
+  }, [seen, reload]);
+
+  useEffect(() => {
+    window.addEventListener("focus", reload);
+
+    return () => window.removeEventListener("focus", reload);
+  }, [reload]);
 
   // The poll alone shows a turn's writes up to one period after it closes.
   useEffect(() => {

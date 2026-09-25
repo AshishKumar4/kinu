@@ -764,6 +764,13 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   listed as itself, its target as its text, and never followed: its target's files are listed where they live, or
   not at all.
 
+- **Changes costs nothing while nothing changes.** Every open workspace page read the workspace's whole change-set
+  every 2 seconds, with Changes closed or the tab in the background too. A page now reads it every 2 seconds only
+  while Changes is open and in view, and once when a turn ends, the tab comes back into view or the window takes
+  focus. A workspace write that the page's own turn did not make, such as a hire's, a background job's or a slate
+  server's, also makes an open page read Changes, so its tab and count appear without a click. A read with nothing
+  changed since the last one no longer walks the workspace's files.
+
 - **Changes for a PC or the sandbox shows every repository in its folder.** It showed only the git repository that
   held the working folder, so a folder of projects read "not a git repository". Now the repository holding the
   folder and every repository up to three folders below it are listed, nested ones included, each as a folder of
