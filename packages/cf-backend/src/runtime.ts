@@ -22,7 +22,7 @@ import {
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
   withMountTable, standardMounts, contextMount, skillsMount,
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
-  withApprovalGatedShell, createInheritedApprovalPolicy, holdsGrant,
+  withApprovalGatedShell, withApprovalGatedFiles, createInheritedApprovalPolicy, holdsGrant,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
   type EgressSecretBinding,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
@@ -370,6 +370,7 @@ export function createCFRuntime(
   const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
   // The shell this actor runs as serves its file tool's mount points.
   workspaceBox.mountTable?.(agentFileVfs, hooks.workspaceExecution?.cred);
+  const toolFiles = withApprovalGatedFiles(agentFileVfs, 'workspace', { userRoots: () => agentFileVfs.userRoots() }, approvalPolicy);
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
     shellSession,
@@ -377,7 +378,7 @@ export function createCFRuntime(
     runtimeCatalog: env.NIMBUS_RUNTIME_CACHE !== undefined,
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
-      vfs: agentFileVfs, memory, craftStore, shell,
+      vfs: toolFiles, files: agentFileVfs, memory, craftStore, shell,
       sql,
       ledger: () => access.acc?.().files,
       budget: () => access.acc?.().context,
@@ -518,6 +519,7 @@ export function createCFRuntime(
     actor: actor.actor,
     storage: { vfs: agentFileVfs, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
     agentStateVfs: originVfs,
+    toolFiles,
     workspaceIsMachine: false,
     startupWork,
     memory, executor, llm, schedule, identity, craftStore,

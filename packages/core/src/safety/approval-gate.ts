@@ -1,8 +1,5 @@
-/**
- * Approval gate: 'allow', 'warn', 'gate' (the owner decides) or 'deny' (never). A decision depends on the rule and
- * whose files the executor holds; binary-scoped rules fire only on invoked binaries, or on the whole line under an
- * interpreter. Against accidents, not an adversary.
- */
+/** Approval gate: 'allow', 'warn', 'gate' (the owner decides) or 'deny' (never), by the rule and whose files the
+ *  executor holds. Against accidents, not an adversary. */
 
 import { CODE_WORK_DID_NOT_START, diagnostics, KinuError, type ErrorCode } from '../obs/index';
 
@@ -115,6 +112,10 @@ const GIT_VALUE_OPTION = '(?:git-dir|work-tree|namespace|config-env|super-prefix
 
 /** `git` and its global options; each word parses one way, so a failed match stays linear. */
 const GIT = String.raw`\bgit(?:\s+(?:(?:-[Cc]|--${GIT_VALUE_OPTION})\s+\S+|-[pP]|--(?!${GIT_VALUE_OPTION}(?:\s|$))[\w-]+(?:=\S+)?))*\s+`;
+
+const SECRET_PATH = /(\.env|\.npmrc|\.pypirc|\.aws|\.ssh|credentials)/i;
+
+const SECRET_READ = { name: 'secret-file-read', why: 'Reads a file likely to contain secrets.' } as const;
 
 /** Every ecosystem's publish command. `binaries` gates whether the rule fires, so extend both together. */
 const PACKAGE_PUBLISH = new RegExp(
@@ -323,10 +324,10 @@ const RULES: Rule[] = [
     binaries: ['printenv', 'env'],
   },
   {
-    pattern: /\bcat\s+.*(\.env|\.npmrc|\.pypirc|\.aws|\.ssh|credentials)/i,
+    pattern: new RegExp(String.raw`\bcat\s+.*` + SECRET_PATH.source, 'i'),
     decision: 'warn',
-    name: 'secret-file-read',
-    why: 'Reads a file likely to contain secrets.',
+    name: SECRET_READ.name,
+    why: SECRET_READ.why,
     harm: 'reaches_out',
     binaries: ['cat'],
   },
@@ -508,6 +509,11 @@ function underRoots(path: string, roots: readonly string[]): boolean {
   return roots.some((root) => path === root || path.startsWith(`${root}/`));
 }
 
+/** On a user mount, by its first segment or once `..` resolves. */
+export function onUserRoots(path: string, roots: readonly string[]): boolean {
+  return path.startsWith('/') && (roots.includes(`/${path.split('/')[1] ?? ''}`) || underRoots(normalizedPath(path), roots));
+}
+
 /** null: unknown; `undefined`: not a `cd`. */
 function cdTarget(step: ShellStep, cwd: string, home: string): string | null | undefined {
   const [verb, ...args] = step.words;
@@ -684,6 +690,46 @@ export function reviewShellCommand(executor: GatedExecutor, command: string, ses
   return { decision: dominant(hits), hits };
 }
 
+/** Judged by the shell's rules for the same act. */
+export interface FileAccess {
+  readonly op: 'read' | 'write' | 'delete' | 'mkdir';
+  /** As written: what a `cat` rule would see. */
+  readonly path: string;
+  readonly hostPath: string;
+  readonly reaches: 'own' | 'outside-directory' | 'user-mount';
+}
+
+const FILE_CHANGE_HITS: Readonly<Record<FileAccess['reaches'], ApprovalRuleHit | null>> = {
+  own: null,
+  'outside-directory': { decision: 'gate', rule: 'write-outside-directory', explanation: 'Changes a file outside the workspace directory.' },
+  'user-mount': { decision: 'gate', rule: 'write-user-files', explanation: 'Changes a file on the user\'s device or Drive.' },
+};
+
+function reviewFileAccess(access: FileAccess): ApprovalResult {
+  const hits: ApprovalRuleHit[] = [];
+
+  if (access.op === 'read' && SECRET_PATH.test(access.path)) {
+    hits.push({ decision: 'warn', rule: SECRET_READ.name, explanation: SECRET_READ.why });
+  }
+
+  const change = access.op === 'read' ? null : FILE_CHANGE_HITS[access.reaches];
+
+  if (change !== null) hits.push(change);
+
+  return { decision: dominant(hits), hits };
+}
+
+/** Asked, never parked: a parked approval answers a later request with the same text, which cannot bind a write's
+ *  bytes. */
+export async function approveFileAccess(access: FileAccess, executor: string, policy: ShellApprovalPolicy): Promise<void> {
+  const review = reviewFileAccess(access);
+
+  if (review.decision === 'allow') return;
+  const decision = await decideApproval({ command: `file ${access.op} ${access.hostPath}`, executor }, review, policy, { park: false });
+
+  if (!decision.run) throw decision.error;
+}
+
 /** `runCode` in another language: its text cannot show what it does to the user's files, so it asks there. */
 export function reviewProgram(code: string, filesOwner: FilesOwner): ApprovalResult {
   const review = reviewCommand(code, filesOwner);
@@ -747,7 +793,7 @@ export interface ShellApprovalPolicy {
   deferrals?: DeferredApprovalChannel;
   /** Remember 'allow_always' for every rule the command tripped on this executor. */
   remember?(grants: readonly ApprovalGrant[]): void;
-  /** Refresh `mode()` and `granted()` before a decision; needed by facets whose grants live in the root's storage. */
+  /** Refreshes `mode()` and `granted()` before a decision, for facets whose grants are the root's. */
   resolve?(): Promise<void>;
 }
 
@@ -787,10 +833,7 @@ function afterGrants(review: ApprovalResult, policy: ShellApprovalPolicy, execut
   return hits.length === review.hits.length ? review : { decision: dominant(hits), hits };
 }
 
-/**
- * The one gate for every boundary that reaches a shell. `denyResult` writes a refusal into the result; `refusalCode`
- * reads its classification back, and a proven not-run code refunds a spent grant.
- */
+/** The one gate for every boundary that reaches a shell; a proven not-run code refunds a spent grant. */
 export interface ExecGateTuning<R> {
   readonly policy?: ShellApprovalPolicy;
   readonly refusalCode?: (result: R) => ErrorCode | null;
@@ -838,6 +881,7 @@ async function decideApproval(
   subject: { readonly command: string; readonly executor: string },
   rawReview: ApprovalResult,
   policy: ShellApprovalPolicy,
+  options: { readonly park: boolean } = { park: true },
 ): Promise<
   | { readonly run: true; readonly spent?: ApprovalSpend }
   | { readonly run: false; readonly error: KinuError }
@@ -868,7 +912,7 @@ async function decideApproval(
 
       if (outcome === null) {
         // Under 'strict', an unanswered ask parks if a queue is wired, only after the channel declines.
-        const parked = mode === 'strict'
+        const parked = mode === 'strict' && options.park
           ? policy.deferrals?.park({ command: cmd, executor, review })
           : undefined;
 

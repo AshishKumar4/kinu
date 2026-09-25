@@ -1,14 +1,15 @@
-/** Approval gating where a command reaches a shell: the workspace `Shell`, and every other provider's shell-reaching
- *  tools on `ExecutionRouter.register()`. */
+/** Approval gating where a command reaches a shell (the workspace `Shell`, each provider's shell tools on register)
+ *  and where the agent's tools reach a file. */
 
 import {
-  commandFilesOwner, gateExec, reviewProgram, reviewShellCommand, sessionAt, STRICT_NO_CHANNEL_POLICY,
-  type ApprovalResult, type GatedExecutor, type ShellApprovalPolicy, type ShellCwd,
+  approveFileAccess, commandFilesOwner, gateExec, onUserRoots, reviewProgram, reviewShellCommand, sessionAt,
+  STRICT_NO_CHANNEL_POLICY, type ApprovalResult, type FileAccess, type GatedExecutor, type ShellApprovalPolicy, type ShellCwd,
 } from '../safety/approval-gate';
 import * as v from 'valibot';
 import { answeredRefusal, CommandResultSchema } from './exec-result';
 import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
-import type { Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
+import type { Shell, ShellExecOptions, ShellExecResult, VFS } from '../types/primitives';
+import type { VfsNativeMutations, VfsNativeReads } from '../vfs/mounts';
 import { requireBuild } from './work-mode';
 import { refusalOf } from '../obs/error';
 
@@ -37,8 +38,7 @@ export async function shellCwd(shell: Shell): Promise<string | null> {
   return result.refusal === undefined && result.exitCode === 0 && cwd.startsWith('/') ? cwd : null;
 }
 
-/** A refusal is shaped as a command that did not run: exit 1, message on stderr, classification in `refusal`,
- *  which alone `refusalCode` reads; a spent grant is refunded only if the command never started. */
+/** A refusal reads as a command that did not run: exit 1, message on stderr, its code in `refusal`. */
 export function withApprovalGatedShell(
   shell: Shell,
   reach: ShellReach,
@@ -69,6 +69,111 @@ export function withApprovalGatedShell(
       return session === undefined ? run(command, stdinOrOptions) : session.serial(() => run(command, stdinOrOptions));
     },
   };
+}
+
+export interface FileReach {
+  readonly userRoots: () => readonly string[];
+  /** Absent: nothing is outside. */
+  readonly locate?: (path: string) => { readonly hostPath: string; readonly outside: boolean };
+}
+
+/** A change past the agent's own files is asked, never parked; a secret-looking read follows `cat`'s rule. */
+export function withApprovalGatedFiles(vfs: VFS, executor: string, reach: FileReach, policy: ShellApprovalPolicy): VFS {
+  const approve = async (op: FileAccess['op'], path: string): Promise<void> => {
+    const onUser = onUserRoots(path, reach.userRoots());
+    const at = onUser ? undefined : reach.locate?.(path);
+    let reaches: FileAccess['reaches'] = at?.outside === true ? 'outside-directory' : 'own';
+
+    if (onUser) reaches = 'user-mount';
+    await approveFileAccess({ op, path, hostPath: at?.hostPath ?? path, reaches }, executor, policy);
+  };
+
+  const gated: VFS & Partial<VfsNativeMutations & VfsNativeReads> = {
+    async readFile(path, opts) {
+      await approve('read', path);
+
+      return vfs.readFile(path, opts);
+    },
+    async writeFile(path, data) {
+      await approve('write', path);
+
+      return vfs.writeFile(path, data);
+    },
+    readdir: (path) => vfs.readdir(path),
+    stat: (path) => vfs.stat(path),
+    async unlink(path) {
+      await approve('delete', path);
+
+      return vfs.unlink(path);
+    },
+    async mkdir(path, opts) {
+      // An existing one changes nothing; the file tool makes each write's parent.
+      if (!await vfs.exists(path)) await approve('mkdir', path);
+
+      return vfs.mkdir(path, opts);
+    },
+    exists: (path) => vfs.exists(path),
+  };
+
+  forwardNative(vfs, gated, approve);
+
+  return gated;
+}
+
+function forwardNative(
+  vfs: VFS & Partial<VfsNativeMutations & VfsNativeReads>,
+  gated: VFS & Partial<VfsNativeMutations & VfsNativeReads>,
+  approve: (op: FileAccess['op'], path: string) => Promise<void>,
+): void {
+  const conditional = vfs.writeFileIfRevision?.bind(vfs);
+  const atRevision = vfs.readFileAtRevision;
+  const readRange = vfs.readRange?.bind(vfs);
+  const readdirStats = vfs.readdirStats?.bind(vfs);
+  const rename = vfs.rename?.bind(vfs);
+  const removeRecursive = vfs.removeRecursive?.bind(vfs);
+
+  if (conditional) {
+    gated.writeFileIfRevision = async (path, data, expected) => {
+      await approve('write', path);
+
+      return conditional(path, data, expected);
+    };
+  }
+
+  if (atRevision) {
+    gated.readFileAtRevision = async (path, revision, range) => {
+      await approve('read', path);
+
+      return atRevision(path, revision, range);
+    };
+  }
+
+  if (readRange) {
+    gated.readRange = async (path, offset, length) => {
+      await approve('read', path);
+
+      return readRange(path, offset, length);
+    };
+  }
+
+  if (readdirStats) gated.readdirStats = readdirStats;
+
+  if (rename) {
+    gated.rename = async (from, to) => {
+      await approve('delete', from);
+      await approve('write', to);
+
+      return rename(from, to);
+    };
+  }
+
+  if (removeRecursive) {
+    gated.removeRecursive = async (path) => {
+      await approve('delete', path);
+
+      return removeRecursive(path);
+    };
+  }
 }
 
 /** Tools taking a shell command or a program first; VFS-shaped tools are out of scope. */

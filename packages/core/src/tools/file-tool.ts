@@ -1,5 +1,5 @@
 /**
- * `file` — the built-in file plane: read, edit, write, all through `rt.storage.vfs`.
+ * `file` — the built-in file plane: read, edit, write, all through `rt.toolFiles`.
  * No second filesystem path; another environment is reached through its own namespace.
  */
 
@@ -50,7 +50,7 @@ function boundListing(path: string, entries: readonly string[]): JsonValue {
 }
 
 export interface FileToolDeps {
-  /** The agent's canonical workspace filesystem (rt.storage.vfs). */
+  /** `rt.toolFiles`. */
   vfs: VFS;
   ledger: TurnFileLedger;
   /** The turn-cumulative bulk budget; a file read counts as bulk. */
@@ -130,8 +130,7 @@ async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, p
   return { reason, error: `${err.message}${hint}` };
 }
 
-/** The file plane's dispatch logic, shared by the native `file` tool and codemode's
- *  `workspace.writeFile`/`editFile` so both use one TurnFileLedger and refuse identically. */
+/** Shared by the native `file` tool and codemode's `workspace.writeFile`/`editFile`: one ledger, one refusal. */
 export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput) => Promise<JsonValue> {
   const { vfs, ledger, budget } = deps;
 

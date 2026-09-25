@@ -116,6 +116,7 @@ function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().v
   return {
     workspaceIsMachine: false,
     actor,
+    toolFiles: vfs,
     storage: {
       vfs,
       sql: w.sql,

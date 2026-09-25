@@ -55,6 +55,8 @@ interface ShellExec {
 
 export interface InlineExecutorDeps {
   vfs: VFS;
+  /** The owner's files surface; absent: `vfs`, the plane the tools reach. */
+  files?: VFS;
   memory: Memory;
   craftStore: CraftStore;
   shell: ShellExec;
@@ -66,10 +68,8 @@ export interface InlineExecutorDeps {
   sql?: SqlExecutor;
   /** Present exactly when `sql` is: vetoes land in actor-scoped `evolution_events`. */
   actor?: ActorHandle;
-  /**
-   * The turn's read/edit ledger, shared with the native `file` tool so both enforce one read-before-write gate.
-   * A thunk because the ledger resets per turn and this executor is built earlier; undefined → private ledger.
-   */
+  /** The turn's read-before-write ledger, shared with the native `file` tool; a thunk, as it resets per turn.
+   *  Undefined: a private one. */
   ledger?: () => TurnFileLedger | undefined;
   /** Shared like `ledger`; required by the shared dispatcher's deps shape. */
   budget?: () => TurnContextBudget | undefined;
@@ -464,7 +464,7 @@ declare namespace workspace {
   const provider: ExecutorProvider = {
     name: TOOL_REACH.slate.codemode,
     kind: 'workspace',
-    files: vfs,
+    files: deps.files ?? vfs,
     homeDir: async () => WORKSPACE_ROOT,
     capabilities: new Set<ExecutorCapability>([
       'javascript', 'typescript', 'shell', 'fs_shared', ...(deps.toolchain ?? []),

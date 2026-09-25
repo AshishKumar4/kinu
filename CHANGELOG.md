@@ -697,6 +697,13 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **The agent's file tools ask before changing your files.** Its `file` tool and its programs' `workspace.*` calls
+  wrote, renamed and deleted files on your connected machine (`/pc`) and your Drive (`/shared`) without asking,
+  while the shell asked before the same change. They now wait for you there, and in a CLI workspace before changing
+  a file outside its directory, which they can now reach by its absolute path. Reads stay unasked, except a file that
+  looks like a secret (`.env`, `.npmrc`, credentials), which follows the rule `cat` does. With nobody there to
+  answer, the change is refused, never queued.
+
 - **A workspace's card shows the owner's words, never Kinu's own.** A new workspace's card showed the prompt Kinu
   starts its first turn with as the owner's latest task, and a background event after the owner's message did the
   same. Home and the Workspaces page now show the owner's last message, or nothing until there is one.
