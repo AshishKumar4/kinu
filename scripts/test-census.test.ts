@@ -28,15 +28,16 @@
 // measures while it runs.
 
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { scratchDir } from '@kinu.run/test-utils';
 
 import {
   BLIND_SPOTS, bannedKeys, bridgesOf, CATEGORIES, type Category, type CensusInputs, checkRatchet,
   classNonPublicMembers, type Finding, gateTests, isCensusFile, lockText, measureFile, mergeFindings,
   noFindings, nonPublicMembers, productUnitsOf, ratchetCounts, ratchetKey, runnerClaims, runCensus,
 } from './test-census';
-import { parseLock, type Plant } from './census-plants';
+import { failedPlanted, parseLock, type Plant } from './census-plants';
 import { isParseable, isRunnableSuite, isTestFile, trackedFiles } from './sources';
 
 /* ── The seam ──────────────────────────────────────────────────────────── */
@@ -947,6 +948,26 @@ describe('the ratchet', () => {
       .entries.map((entry) => [entry.key, entry.plants ?? []])));
 
     expect(parseLock(relocked).entries).toEqual([{ key, count: 1, plants: [PLANT] }]);
+  });
+
+  test('a plant reaches its test and never the tree, which every gate beside it reads', () => {
+    const dir = scratchDir('census-plant');
+    const module = join(dir, 'double.ts');
+    const suite = join(dir, 'double.test.ts');
+    const seen = join(dir, 'seen');
+    const original = 'export const double = (n: number): number => n * 2;\n';
+    writeFileSync(module, original);
+    // The suite writes down what the tree held while the plant ran.
+    writeFileSync(suite, [
+      "import { test, expect } from 'bun:test';",
+      "import { readFileSync, writeFileSync } from 'node:fs';",
+      "import { double } from './double';",
+      `writeFileSync(${JSON.stringify(seen)}, readFileSync(${JSON.stringify(module)}, 'utf8'));`,
+      "test('doubles', () => { expect(double(3)).toBe(6); });",
+    ].join('\n'));
+
+    expect(failedPlanted(suite, 'doubles', module, original.replace('n * 2', 'n + 2'))).toBe(true);
+    expect(readFileSync(seen, 'utf8')).toBe(original);
   });
 });
 
