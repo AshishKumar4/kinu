@@ -1140,14 +1140,13 @@ export const LADDER: readonly Gate[] = [
     catches: 'a test browser that outlives the process that launched it. The launcher is killed with '
       + 'SIGKILL mid-use, which runs no teardown, and every Chrome process on its profile must still '
       + 'end, and the abandoned-root reap that `preflight --reclaim` runs must remove the profile left '
-      + 'in RAM; a closed browser leaves no process and no profile. With the port-driven launch it '
-      + 'replaced, the killed launcher\'s Chrome ran on under PID 1 and the case waited on it until the '
-      + 'deadline.',
-    blind: 'a browser started outside `scripts/test-chrome.ts`: the first-run tier, liveness-capture, '
-      + 'review-round2 and ws-reconnect-drill still launch their own. `preflight --reclaim` ends one '
-      + 'orphaned under a test\'s scratch home, and none a bare script left. An orphan a subreaper '
-      + 'adopts instead of PID 1 is not seen.',
-    inputs: { ...AMBIENT_BY_NAME, reads: ['scripts/fixtures/test-chrome/'] },
+      + 'in RAM, as must the next launch; abandon removes the profile only once the group has ended; and '
+      + 'no other file in the corpus launches a local Chrome. A closed browser leaves no process and no '
+      + 'profile. With the port-driven launch it replaced, the killed launcher\'s Chrome ran on under PID 1 '
+      + 'and the case waited on it until the deadline.',
+    blind: 'a browser started without puppeteer, or through a module the case reads as not importing it '
+      + '(a re-export, a dynamic import). An orphan a subreaper adopts instead of PID 1 is not seen.',
+    inputs: { ...AMBIENT_BY_NAME, corpus: true, reads: ['scripts/fixtures/test-chrome/'] },
   },
   {
     run: 'bun test --timeout=0 scripts/gate-set-equality.test.ts',

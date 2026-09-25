@@ -7,28 +7,16 @@
  * row acts as. Everything else is the product: its own bundle, its own socket,
  * its own render.
  */
-import puppeteer, { type Browser, type LaunchOptions, type Page } from 'puppeteer';
+import type { Browser, Page } from 'puppeteer';
 
 import { declaredSettings } from '../../scripts/browser-declarations';
+import { launchTestChrome, type TestChrome } from '../../scripts/test-chrome';
 import { webHeaders, type PublicWebIdentity } from '../../evals/src/session';
 
 /** Chrome, with the pointer and colour scheme declared (`declaredSettings`), as
- *  the gallery and live-app harnesses launch it. */
-export async function openBrowser(): Promise<Browser> {
-  const options: LaunchOptions = {
-    defaultViewport: { width: 1440, height: 900 },
-    args: [
-      '--no-sandbox',
-      '--disable-dev-shm-usage',
-      declaredSettings({ mouse: true }),
-    ],
-  };
-
-  const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH ?? process.env.CHROME_PATH;
-
-  if (executablePath !== undefined && executablePath.length > 0) options.executablePath = executablePath;
-
-  return puppeteer.launch(options);
+ *  the gallery and live-app harnesses launch it: it ends with the row's runner. */
+export async function openBrowser(): Promise<TestChrome> {
+  return launchTestChrome({ args: [declaredSettings({ mouse: true })] });
 }
 
 /** A page signed in as `identity`, the same authority the row's sockets use, so

@@ -6,12 +6,13 @@
  * ladder's deadline.
  */
 import { expect, test } from 'bun:test';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
-import { BROWSER_PROFILE_PARENT } from '../packages/test-utils/src/scratch';
+import { BROWSER_PROFILE_PARENT, scratchDir } from '../packages/test-utils/src/scratch';
 import { argsOf, testBrowserProfile } from './preflight';
-import { procFile, reapAbandonedRoots } from './process-owner';
+import { currentOwner, OWNER_RECORD, procFile, reapAbandonedRoots } from './process-owner';
+import { trackedFiles } from './sources';
 import { launchTestChrome } from './test-chrome';
 
 const HELD = join(import.meta.dir, 'fixtures', 'test-chrome', 'held.ts');
@@ -79,3 +80,44 @@ test('a launcher killed outright takes its browser with it, and the profile it l
   expect(reapAbandonedRoots(BROWSER_PROFILE_PARENT, '')).toContain(dirname(profile));
   expect(existsSync(dirname(profile))).toBe(false);
 });
+
+test('a launcher abandoning its browser removes the profile only after the browser has ended', async () => {
+  const chrome = await launchTestChrome();
+  const profile = profileOf(chrome.browser.process()?.pid);
+  await (await chrome.browser.newPage()).goto('data:text/html,<p>open</p>');
+
+  chrome.abandon();
+
+  expect(runningFrom(profile)).toEqual([]);
+  expect(existsSync(dirname(profile))).toBe(false);
+});
+
+test('a launch reaps the profile a dead launcher left in RAM, and keeps a live one\'s', async () => {
+  const owner = currentOwner();
+
+  if (owner === null) throw new Error('/proc cannot name this process, so no owner can be recorded');
+  const dead = scratchDir('chrome', BROWSER_PROFILE_PARENT);
+  const live = scratchDir('chrome', BROWSER_PROFILE_PARENT);
+  mkdirSync(join(dead, 'profile'));
+  writeFileSync(join(dead, OWNER_RECORD), JSON.stringify({ ...owner, startTicks: owner.startTicks - 1 }));
+  writeFileSync(join(live, OWNER_RECORD), JSON.stringify(owner));
+
+  const chrome = await launchTestChrome();
+  await chrome.close();
+
+  expect(existsSync(dead)).toBe(false);
+  expect(existsSync(live)).toBe(true);
+});
+
+test('every Chrome this repository starts on this box starts through the launcher', () => {
+  const launchers = trackedFiles()
+    .filter((file) => /\.[cm]?tsx?$/u.test(file) && existsSync(file))
+    .filter((file) => {
+      const text = readFileSync(file, 'utf8');
+
+      return /from\s+['"]puppeteer['"]/u.test(text) && /\.launch\(/u.test(text);
+    });
+
+  expect(launchers).toEqual(['scripts/test-chrome.ts']);
+});
+

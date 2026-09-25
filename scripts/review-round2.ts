@@ -5,13 +5,14 @@
  * table of numbers rather than an impression. One vite, one browser, both
  * closed before exit.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
-import puppeteer, { type Browser, type Page } from 'puppeteer';
+import type { Browser, Page } from 'puppeteer';
 import { tolerate } from '@kinu.run/core/obs';
+import { launchTestChrome, type TestChrome } from './test-chrome';
 
 const OUT = '/tmp/review-LandingV3';
 
@@ -276,8 +277,6 @@ async function waitArtifactSettled(page: Page): Promise<void> {
   }, { timeout: 20_000, polling: 'raf' });
 }
 
-const chromePath = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium']
-  .find((p) => existsSync(p));
 
 /** Tear down a dev server's whole process GROUP. `bunx` parents the real vite
  *  process, which parents workerd, so signalling the lone parent orphans both
@@ -293,6 +292,8 @@ async function reapGroup(child: ChildProcess): Promise<void> {
   if (child.exitCode === null && child.signalCode === null) await once(child, 'exit');
   tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
 }
+
+let chrome: TestChrome | null = null;
 
 let browser: Browser | null = null;
 
@@ -319,7 +320,8 @@ try {
 
   if (!up) throw new Error('vite never came up');
 
-  browser = await puppeteer.launch({ headless: true, executablePath: chromePath ?? undefined, args: ['--no-sandbox'] });
+  chrome = await launchTestChrome();
+  browser = chrome.browser;
   const report: Record<string, DriftReport | LabelReport | Record<string, SideAnatomy>> = {};
 
   for (const [label, width, height] of [['1280', 1280, 900], ['1920', 1920, 1000]] as const) {
@@ -399,7 +401,7 @@ try {
   writeFileSync(`${OUT}/drift.json`, JSON.stringify(report, null, 1));
   console.log(JSON.stringify(report, null, 1));
 } finally {
-  await browser?.close();
+  await chrome?.close();
   design.kill();
   await reapGroup(vite);
 }
@@ -424,8 +426,9 @@ function secsTable(a: SectionYs, p: SectionYs): DriftReport['sectionHeights'] {
 {
   // A fresh browser for the second pass: under memory pressure the long
   //-lived one was dying between passes and taking the light set with it.
-  await browser?.close();
-  browser = await puppeteer.launch({ headless: true, executablePath: chromePath ?? undefined, args: ['--no-sandbox'] });
+  await chrome?.close();
+  chrome = await launchTestChrome();
+  browser = chrome.browser;
 
   const viteL = spawn('bunx', ['vite', 'dev', '--config', 'gallery.vite.config.ts', '--port', String(vitePort + 1)],
     { cwd: CF, stdio: 'ignore', detached: true });

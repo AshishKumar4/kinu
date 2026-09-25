@@ -44,6 +44,7 @@ import type { DeviceAccount } from './device-session';
 import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine } from './daemon';
 import { approvalClearsSelection, isApprovalButtonLabel } from './approval-observation';
 import { openBrowser, signedInPage } from './browser';
+import type { TestChrome } from '../../scripts/test-chrome';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
@@ -144,7 +145,7 @@ describe(SUITE, () => {
           await session.execute('device', clickCommand);
           const browser = await openBrowser();
           held.browser = browser;
-          const clicked = await approveThroughTheButton(browser, PLAN, session.workspace, clickCommand);
+          const clicked = await approveThroughTheButton(browser.browser, PLAN, session.workspace, clickCommand);
           const clickStillQueued = (await session.parkedCommands()).some((entry) => entry.command === clickCommand);
 
           // The RPC/browser work can finish before genesis makes its first
@@ -220,7 +221,7 @@ describe(SUITE, () => {
  *  its initializer afterwards and every teardown line would be unreachable. */
 interface CaseState {
   machine: AttachedMachine | null;
-  browser: Browser | null;
+  browser: TestChrome | null;
 }
 
 /** What the click did, and what the card looked like on both sides of it. */
