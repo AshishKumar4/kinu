@@ -176,7 +176,7 @@ test('a module graph a network change failed is loaded again, once, and the wait
     'ip link set lo up && ip link add dummy0 type dummy && ip link set dummy0 up && exec "$0" "$1"',
     process.execPath, NETWORK_CHANGE_SCENARIO]);
 
-  expect(run.exitCode).toBe(0);
+  expect(run.exitCode, run.stderr).toBe(0);
   expect(v.parse(ScenarioSchema, JSON.parse(run.stdout))).toEqual({ loads: 2, reasons: [HOST_NETWORK_CHANGED] });
   expect(run.stderr).toContain(`the host's network changed while the page loaded (${HOST_NETWORK_CHANGED} on `);
 });

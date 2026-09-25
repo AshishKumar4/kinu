@@ -89,9 +89,10 @@ export default defineConfig(({ command }) => ({
   // nothing and a page's module graph is never re-bundled under it. Vite's default, `node_modules/.vite`, is the
   // primary checkout's in every worktree (setup-worktree.sh), so two dev servers on different lockfiles
   // re-optimized into one directory and deleted each other's deps: "The file does not exist at
-  // .../.vite/deps_kinu/..." (2026-09-23). The ladder boots one dev server per checkout at a time
-  // (SHARED_RESOURCES in scripts/ladder.ts), so no two boots of a checkout optimize into it at once.
-  cacheDir: '.vite',
+  // .../.vite/deps_kinu/..." (2026-09-23). The harness names a directory of its own (`KINU_DEV_CACHE_DIR`), so a
+  // developer's `bun run dev` beside a gate's boot never shares one; the ladder boots one harness dev server per
+  // checkout at a time (SHARED_RESOURCES in scripts/ladder.ts).
+  cacheDir: process.env.KINU_DEV_CACHE_DIR ?? '.vite',
   plugins: [
     promptText(), slateVendor(), stubClientNodeBuiltins, workerSourceMaps, wgslClientOnly, agents(), react(),
     cloudflare({
