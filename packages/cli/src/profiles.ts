@@ -49,10 +49,10 @@ export function loadLocalProfileAuthority(): ProfileCatalogEnvelope | null {
 }
 
 /** Replaces whole; the version counts replacements. */
-export function writeLocalProfile(catalog: ProfileCatalog, mode: 'replace' | 'seed' = 'replace'): ProfileCatalogEnvelope {
+export async function writeLocalProfile(catalog: ProfileCatalog, mode: 'replace' | 'seed' = 'replace'): Promise<ProfileCatalogEnvelope> {
   const validated = validateProfileCatalog({ value: catalog });
   let envelope!: ProfileCatalogEnvelope;
-  updateConfigFile((config) => {
+  await updateConfigFile((config) => {
     if (mode === 'seed' && config.localProfile) {
       envelope = config.localProfile;
 
@@ -112,10 +112,10 @@ function loadCachedAccountProfile(accountId: string): ProfileCatalogEnvelope | n
   return entry;
 }
 
-function cacheAccountProfile(accountId: string, envelope: ProfileCatalogEnvelope): void {
+async function cacheAccountProfile(accountId: string, envelope: ProfileCatalogEnvelope): Promise<void> {
   assertCachedEntry(accountId, envelope);
   const path = profileCachePath();
-  withConfigLock(path, () => {
+  await withConfigLock(path, () => {
     const cache = readAccountCache();
     const existing = cache.accounts[accountId];
 
@@ -160,7 +160,7 @@ export async function readAccountProfile(accountId: string): Promise<AccountRead
 
   try {
     const envelope = await getCloudProfile(auth.origin, auth.token);
-    cacheAccountProfile(accountId, envelope);
+    await cacheAccountProfile(accountId, envelope);
 
     return { envelope, source: 'server' };
   } catch (error) {
@@ -224,7 +224,7 @@ export async function writeAccountProfile(
     );
   }
 
-  cacheAccountProfile(accountId, result.envelope);
+  await cacheAccountProfile(accountId, result.envelope);
 
   return result.envelope;
 }

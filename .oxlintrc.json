@@ -83,6 +83,7 @@
     "anti-slop/no-runtime-typeof": "error",
     "anti-slop/no-sentinel-catch": "error",
     "anti-slop/no-shape-in-symbol-names": "error",
+    "anti-slop/no-sync-spawn": "error",
     "anti-slop/no-unknown-parameters": "error",
     "anti-slop/no-unknown-returns": "error",
     "anti-slop/no-unknown-type-aliases": "error",

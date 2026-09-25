@@ -8,6 +8,8 @@
 
 const { scratchDir } = require('../../test-utils/src/scratch');
 
+const { runToExit } = require('../../test-utils/src/spawn');
+
 const { afterAll, afterEach, describe, expect, spyOn, test } = require('bun:test');
 
 const fs = require('node:fs');
@@ -92,6 +94,46 @@ function setup(opts = {}) {
   const ctx = { checkpoints: createCheckpoints({ base: path.join(root, 'shadow'), keep: opts.keep, gitBin: opts.gitBin }) };
 
   return { root, work, ctx };
+}
+
+/**
+ * A git that holds the first staging it is asked for, a snapshot's `add`, until the test lets it go. The hold is
+ * a directory the held git makes and the release a FIFO it reads, so each side waits on the other's act.
+ */
+async function heldGit() {
+  const dir = scratchDir('held-git');
+  const marker = path.join(dir, 'held');
+  const release = path.join(dir, 'release');
+  const made = await runToExit(['mkfifo', release]);
+
+  if (made.exitCode !== 0) throw new Error(`mkfifo failed: ${made.stderr}`);
+  const bin = path.join(dir, 'git');
+  fs.writeFileSync(bin, [
+    '#!/bin/bash',
+    `if [ "$1" = add ] && mkdir '${marker}' 2>/dev/null; then read -r _ < '${release}'; fi`,
+    'exec git "$@"',
+    '',
+  ].join('\n'), { mode: 0o755 });
+
+  const held = Promise.withResolvers();
+
+  const watcher = fs.watch(dir, () => {
+    if (fs.existsSync(marker)) held.resolve();
+  });
+
+  watcher.unref();
+
+  return {
+    bin,
+    held: held.promise.finally(() => { watcher.close(); }),
+    release: () => fs.promises.writeFile(release, 'go\n'),
+  };
+}
+
+/** A write no queue holds lands within microtasks of its frame, since nothing in it waits on I/O: one turn of
+ *  the event loop later it is on disk. */
+async function oneTurn() {
+  await new Promise((resolve) => { setImmediate(resolve); });
 }
 
 // A sub-millisecond red of the two fixture-first tests below identifies the
@@ -802,6 +844,62 @@ describe('daemon checkpoint protocol', () => {
     expect((await ws.response('l')).result).toEqual([]);
   });
 
+  test('a write waits for the snapshot taken before it, which holds neither it nor a frame after it', async () => {
+    const git = await heldGit();
+    const { work, ctx } = setup({ gitBin: git.bin });
+    const target = path.join(work, 'data.txt');
+    const later = path.join(work, 'later.txt');
+    fs.writeFileSync(target, 'original');
+    const ws = fakeWs();
+
+    handle({
+      id: 'w-hinted', method: 'writeFile', sandbox: RAW, params: [target, 'written'],
+      checkpoint: { agent: 'a', turnId: 't1', sessionId: 's', dir: work },
+    }, ws, ctx);
+    await git.held;
+    // No hint, so it asks for no snapshot of its own, and it still lands in store order.
+    handle({ id: 'w-later', method: 'writeFile', sandbox: RAW, params: [later, 'later'] }, ws, ctx);
+
+    try {
+      await oneTurn();
+      expect(fs.readFileSync(target, 'utf8')).toBe('original');
+      expect(fs.existsSync(later)).toBe(false);
+    } finally {
+      await git.release();
+    }
+
+    expect((await ws.response('w-hinted')).result).toEqual({ success: true });
+    expect((await ws.response('w-later')).result).toEqual({ success: true });
+    handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
+    const [checkpoint] = (await ws.response('l')).result;
+    handle({ id: 'p', method: 'checkpointPlan', sandbox: RAW, params: ['a', work, checkpoint.id] }, ws, ctx);
+    const kinds = Object.fromEntries((await ws.response('p')).result.files.map((f) => [f.path, f.kind]));
+    expect(kinds).toEqual({ 'data.txt': 'modify', 'later.txt': 'delete' });
+  });
+
+  test('the checkpoint store runs one operation at a time, in the order they arrived', async () => {
+    const git = await heldGit();
+    const { work, ctx } = setup({ gitBin: git.bin });
+    const order = [];
+
+    const snapshot = ctx.checkpoints.ensure({ agent: 'a', turnId: 't1', sessionId: 's', dir: work }, work)
+      .then(() => { order.push('snapshot'); });
+
+    await git.held;
+    const listed = ctx.checkpoints.list('a', 50).then(() => { order.push('list'); });
+    const mutated = ctx.checkpoints.mutate(null, work, () => { order.push('mutation'); });
+
+    try {
+      await oneTurn();
+      expect(order).toEqual([]);
+    } finally {
+      await git.release();
+    }
+
+    await Promise.all([snapshot, listed, mutated]);
+    expect(order).toEqual(['snapshot', 'list', 'mutation']);
+  });
+
   test('degrades honestly when git is missing — operations still run, status says why', async () => {
     const { work, ctx } = setup({ gitBin: '/nonexistent/definitely-not-git' });
 
@@ -1396,7 +1494,7 @@ describe('daemon process under Bun against a local hub', () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
     const sandbox = require('../src/sandbox.js');
 
-    if (sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+    if ((await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     await withDaemon(undefined, async ({ hub, root, reply }) => {
       const agentHome = path.join(root, 'agents', 'ws-1', 'home');
       const consented = scratchDir('daemon-consented');
@@ -1436,7 +1534,7 @@ describe('daemon process under Bun against a local hub', () => {
     if (process.platform !== 'linux') return;
     const sandbox = require('../src/sandbox.js');
 
-    if (sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+    if ((await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     await withDaemon(undefined, async ({ hub, root, reply }) => {
       const block = { tier: 'sandboxed', agentHome: path.join(root, 'agents', 'ws-spill', 'home'), roots: [] };
       // System tools only: the runtime that runs this suite lives in a home the sandbox hides.

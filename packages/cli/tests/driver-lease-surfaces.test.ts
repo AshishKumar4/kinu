@@ -54,7 +54,7 @@ async function scenario(body: string): Promise<JsonObject> {
       seed.close();
     }
     const now = new Date().toISOString();
-    upsertAgentConfig({
+    await upsertAgentConfig({
       name: 'leasebot', mode: 'local', localName: 'leasebot',
       cwd: process.env.KINU_PROJECT, workspaceId: 'lease',
       createdAt: now, updatedAt: now,

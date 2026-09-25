@@ -65,6 +65,8 @@ const root = new URL('..', import.meta.url).pathname;
 /** Backend and core product code. */
 const PRODUCT_SOURCE = /^packages\/[^/]+\/src\/.+\.tsx?$/;
 
+const SHIPPED_SOURCE = /^packages\/[^/]+\/src\/.+\.(?:[cm]?[jt]s|tsx)$/;
+
 /** What `syntax.ts` can parse. A `tests/` directory holds Python and fixture
  *  data too, and handing one of those to the parser is a crash rather than a
  *  finding. */
@@ -231,6 +233,11 @@ export function workspaceScope(): string {
  *  duplicated logic. */
 export const isProductSource = (file: string): boolean =>
   PRODUCT_SOURCE.test(file) && !TEST_FILE.test(file) && !file.endsWith('.d.ts');
+
+/** What runs on a user's machine or in the Worker: every package's `src` in either language (the device daemon is
+ *  plain JavaScript), but the suites' own helpers, tests and declarations. `no-sync-spawn` governs this set. */
+export const isShippedSource = (file: string): boolean =>
+  SHIPPED_SOURCE.test(file) && !TEST_FILE.test(file) && !isTestScaffold(file) && !file.endsWith('.d.ts');
 
 /** Test code, by the SAME pattern `no-ambient-git-in-tests` governs it with.
  *  Both arms: a `.test.` / `.eval.` / `.spec.` basename, and anything under a

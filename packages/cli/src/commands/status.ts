@@ -66,7 +66,7 @@ export async function statusCommand(name: string): Promise<void> {
     return;
   }
 
-  const local = requireLocalAgent(target.requestedName, { adopt: false });
+  const local = await requireLocalAgent(target.requestedName, { adopt: false });
   const info = getLocalAgentInfo(local.name);
   const coordinates = getLocalProfileCoordinates(local.name);
   const envelope = await createProfileAuthorityReader()();

@@ -258,8 +258,8 @@ export async function connectProvider(
         defaultModel: 'gpt-4o-mini',
         model: opts.model,
         local: opts.local ?? false,
-        store: (key) => updateConfigFile((config) => withProvider(config, { openai: { apiKey: key } })),
-        clear: () => updateConfigFile((config) => { delete config.providers?.openai; }),
+        store: async (key) => { await updateConfigFile((config) => withProvider(config, { openai: { apiKey: key } })); },
+        clear: async () => { await updateConfigFile((config) => { delete config.providers?.openai; }); },
       });
     case 'openrouter':
       return await connectApiKeyProvider(port, {
@@ -269,8 +269,8 @@ export async function connectProvider(
         defaultModel: 'openai/gpt-4o-mini',
         model: opts.model,
         local: opts.local ?? false,
-        store: (key) => updateConfigFile((config) => withProvider(config, { openrouter: { apiKey: key } })),
-        clear: () => updateConfigFile((config) => { delete config.providers?.openrouter; }),
+        store: async (key) => { await updateConfigFile((config) => withProvider(config, { openrouter: { apiKey: key } })); },
+        clear: async () => { await updateConfigFile((config) => { delete config.providers?.openrouter; }); },
       });
     case 'anthropic':
       return await connectApiKeyProvider(port, {
@@ -280,8 +280,8 @@ export async function connectProvider(
         defaultModel: 'claude-sonnet-4-5',
         model: opts.model,
         local: opts.local ?? false,
-        store: (key) => updateConfigFile((config) => withProvider(config, { anthropic: { apiKey: key } })),
-        clear: () => updateConfigFile((config) => { delete config.providers?.anthropic; }),
+        store: async (key) => { await updateConfigFile((config) => withProvider(config, { anthropic: { apiKey: key } })); },
+        clear: async () => { await updateConfigFile((config) => { delete config.providers?.anthropic; }); },
       });
     case 'openai-compatible': return await connectOpenAiCompatible(port, opts.model, opts.local ?? false);
   }
@@ -309,7 +309,7 @@ async function connectClaude(port: ProviderConnectPort): Promise<ProviderConnect
 
   if (binary && loggedIn) {
     // Nothing is written, but a resident session learns of the connection only through this bump.
-    bumpProviderRevision();
+    await bumpProviderRevision();
 
     return { kind: 'connected', summary: CLAUDE_READY, detail: 'Cloud workspaces cannot use this subscription. Connect an Anthropic API key for them.' };
   }
@@ -325,7 +325,7 @@ async function connectCodex(port: ProviderConnectPort, requestedModel: string | 
   const answered = requestedModel ?? await port.ask({ label: 'Default Codex model', fallback: current });
   const model = answered.startsWith('codex/') ? answered.slice('codex/'.length) : answered;
   const credential = await runCodexDeviceFlow(port);
-  updateConfigFile((next) => withProvider(next, {
+  await updateConfigFile((next) => withProvider(next, {
     codex: {
       accessToken: credential.accessToken,
       refreshToken: credential.refreshToken,
@@ -334,7 +334,7 @@ async function connectCodex(port: ProviderConnectPort, requestedModel: string | 
     },
   }));
 
-  return { kind: 'connected', summary: 'Connected ChatGPT Codex subscription', detail: defaultModelDetail(`codex/${model}`) };
+  return { kind: 'connected', summary: 'Connected ChatGPT Codex subscription', detail: await defaultModelDetail(`codex/${model}`) };
 }
 
 async function runCodexDeviceFlow(port: ProviderConnectPort) {
@@ -373,8 +373,8 @@ interface ApiKeyProvider {
   readonly defaultModel: string;
   readonly model: string | undefined;
   readonly local: boolean;
-  store(key: string): void;
-  clear: () => void;
+  store(key: string): Promise<void>;
+  clear: () => Promise<void>;
 }
 
 async function connectApiKeyProvider(port: ProviderConnectPort, provider: ApiKeyProvider): Promise<ProviderConnectOutcome> {
@@ -402,7 +402,7 @@ async function connectApiKeyProvider(port: ProviderConnectPort, provider: ApiKey
     summary: where === 'account'
       ? `Connected ${provider.label} to your Kinu account. No key stored on this machine.`
       : `Saved ${provider.label} credentials to this machine.`,
-    detail: defaultModelDetail(spec),
+    detail: await defaultModelDetail(spec),
   };
 }
 
@@ -425,8 +425,8 @@ async function connectOpenAiCompatible(port: ProviderConnectPort, requestedModel
     local,
     credKey: 'openai-compat.default',
     credential: { kind: 'openai-compat', baseURL, apiKey },
-    storeLocally: () => updateConfigFile((config) => withProvider(config, { openaiCompat: { default: { baseURL, apiKey } } })),
-    clearLocally: () => updateConfigFile((config) => { delete config.providers?.openaiCompat?.default; }),
+    storeLocally: async () => { await updateConfigFile((config) => withProvider(config, { openaiCompat: { default: { baseURL, apiKey } } })); },
+    clearLocally: async () => { await updateConfigFile((config) => { delete config.providers?.openaiCompat?.default; }); },
     // Usually Ollama or vLLM on this machine; the proxy is https-only and a Worker cannot reach loopback.
     endpoint: baseURL,
   });
@@ -436,7 +436,7 @@ async function connectOpenAiCompatible(port: ProviderConnectPort, requestedModel
     summary: where === 'account'
       ? 'Connected the OpenAI-compatible endpoint to your Kinu account. No key stored on this machine.'
       : 'Saved the OpenAI-compatible endpoint credentials to this machine.',
-    detail: defaultModelDetail(spec),
+    detail: await defaultModelDetail(spec),
   };
 }
 
@@ -490,12 +490,12 @@ async function connectOpenCode(port: ProviderConnectPort, requestedModel: string
     model = first.id;
   }
 
-  updateConfigFile((config) => withProvider(config, {}));
+  await updateConfigFile((config) => withProvider(config, {}));
 
   return {
     kind: 'connected',
     summary: 'Connected OpenCode',
-    detail: `${defaultModelDetail(`opencode/${model}`)} Kinu reads models and auth from your local opencode install at request time.`,
+    detail: `${await defaultModelDetail(`opencode/${model}`)} Kinu reads models and auth from your local opencode install at request time.`,
   };
 }
 
@@ -504,9 +504,9 @@ async function storeProviderSecret(opts: {
   local: boolean;
   credKey: string;
   credential: unknown;
-  storeLocally: () => void;
+  storeLocally: () => Promise<void>;
   /** Runs after an account write: a local key wins at resolution and would shadow it. */
-  clearLocally: () => void;
+  clearLocally: () => Promise<void>;
   /** An endpoint the proxy cannot reach (loopback, private range, plain http) forces local storage. */
   endpoint?: string;
 }): Promise<'account' | 'local'> {
@@ -514,7 +514,7 @@ async function storeProviderSecret(opts: {
   const cloud = opts.local || !reachable ? null : resolveCloudSession();
 
   if (!cloud) {
-    opts.storeLocally();
+    await opts.storeLocally();
 
     return 'local';
   }
@@ -530,8 +530,8 @@ async function storeProviderSecret(opts: {
     );
   }
 
-  opts.clearLocally();
-  bumpProviderRevision();
+  await opts.clearLocally();
+  await bumpProviderRevision();
 
   return 'account';
 }
@@ -588,8 +588,8 @@ function withProvider(config: KinuConfig, providers: NonNullable<KinuConfig['pro
   };
 }
 
-function defaultModelDetail(spec: string): string {
-  const current = adoptDefaultModel(spec)?.model;
+async function defaultModelDetail(spec: string): Promise<string> {
+  const current = (await adoptDefaultModel(spec))?.model;
 
   if (current === spec) return `Default model: ${spec}`;
 

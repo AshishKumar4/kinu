@@ -1,4 +1,3 @@
-import * as v from 'valibot';
 import { classify, tolerate } from '@kinu.run/core/obs';
 import { lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
@@ -51,44 +50,21 @@ interface ProcessIdentity {
 /** Linux reads procfs; Darwin runs absolute `/bin/ps` with `LC_ALL=C` (no shell,
  *  no locale drift). Unsupported systems refuse rather than write an unprovable record. */
 export interface ProcessIdentityBoundary {
-  self(pid: number): ProcessIdentity;
-  liveness(owner: LockOwner): Liveness;
+  self(pid: number): Promise<ProcessIdentity>;
+  liveness(owner: LockOwner): Promise<Liveness>;
 }
-
-/** Makes `withConfigLock(path, async () => …)` fail to compile. */
-type RefuseAsync<T> = T extends PromiseLike<unknown> ? [useWithConfigLockAsync: never] : [];
-
-/** A structural `then` detector would itself be thenable. */
-const pendingWorkSchema = v.instance(Promise);
 
 export interface ConfigLock {
-  withSync<T>(configPath: string, fn: () => T, ...refuseAsync: RefuseAsync<T>): T;
-  withAsync<T>(configPath: string, fn: () => T | Promise<T>): Promise<T>;
+  with<T>(configPath: string, fn: () => T | Promise<T>): Promise<T>;
 }
 
+/** Asynchronous throughout: a synchronous wait could only spawn `ps` synchronously on Darwin, and Bun can
+ *  wedge a synchronous spawn for good when a collection lands inside it (oven-sh/bun#34069). */
 export function createConfigLock(boundary = hostProcessIdentity()): ConfigLock {
   return {
-    withSync<T>(configPath: string, fn: () => T, ..._refuseAsync: RefuseAsync<T>): T {
+    async with<T>(configPath: string, fn: () => T | Promise<T>): Promise<T> {
       const lockPath = lockPathFor(configPath);
-      const held = acquireSync(lockPath, boundary);
-
-      try {
-        const result = holding(lockPath, held.token, fn);
-
-        // `() => Promise<void>` is assignable to `() => void`, so the type alone cannot refuse.
-        if (v.is(pendingWorkSchema, result)) {
-          throw new TypeError('withConfigLock ran a callback that returned pending work, which the '
-            + 'lock does not cover. Use withConfigLockAsync.');
-        }
-
-        return result;
-      } finally {
-        release(held);
-      }
-    },
-    async withAsync<T>(configPath: string, fn: () => T | Promise<T>): Promise<T> {
-      const lockPath = lockPathFor(configPath);
-      const held = await acquireAsync(lockPath, boundary);
+      const held = await acquire(lockPath, boundary);
 
       try {
         return await holding(lockPath, held.token, fn);
@@ -99,14 +75,9 @@ export function createConfigLock(boundary = hostProcessIdentity()): ConfigLock {
   };
 }
 
-/** Serialize every read-modify-write against one config file across processes. */
-export function withConfigLock<T>(configPath: string, fn: () => T, ...refuseAsync: RefuseAsync<T>): T {
-  return createConfigLock().withSync(configPath, fn, ...refuseAsync);
-}
-
-/** `withConfigLock` for a callback that awaits; release follows settlement. */
-export async function withConfigLockAsync<T>(configPath: string, fn: () => T | Promise<T>): Promise<T> {
-  return await createConfigLock().withAsync(configPath, fn);
+/** Serialize every read-modify-write against one config file across processes; release follows settlement. */
+export async function withConfigLock<T>(configPath: string, fn: () => T | Promise<T>): Promise<T> {
+  return await createConfigLock().with(configPath, fn);
 }
 
 function lockPathFor(configPath: string): string {
@@ -122,23 +93,11 @@ function holding<T>(lockPath: string, token: string, fn: () => T): T {
   return heldByCall.run(held, fn);
 }
 
-function acquireSync(lockPath: string, boundary: ProcessIdentityBoundary): Held {
-  const self = boundary.self(process.pid);
+async function acquire(lockPath: string, boundary: ProcessIdentityBoundary): Promise<Held> {
+  const self = await boundary.self(process.pid);
 
   for (;;) {
-    const held = tryAcquire(lockPath, self, boundary);
-
-    if (held !== null) return held;
-    assertNotSelfHeld(lockPath);
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_POLL_MS);
-  }
-}
-
-async function acquireAsync(lockPath: string, boundary: ProcessIdentityBoundary): Promise<Held> {
-  const self = boundary.self(process.pid);
-
-  for (;;) {
-    const held = tryAcquire(lockPath, self, boundary);
+    const held = await tryAcquire(lockPath, self, boundary);
 
     if (held !== null) return held;
     assertNotSelfHeld(lockPath);
@@ -149,7 +108,7 @@ async function acquireAsync(lockPath: string, boundary: ProcessIdentityBoundary)
 }
 
 /** Owner info lands in the same syscall as the name, so a crash cannot leave an unidentifiable lock. */
-function tryAcquire(lockPath: string, self: ProcessIdentity, boundary: ProcessIdentityBoundary): Held | null {
+async function tryAcquire(lockPath: string, self: ProcessIdentity, boundary: ProcessIdentityBoundary): Promise<Held | null> {
   const token = randomUUID();
 
   const created = tolerate(() => {
@@ -159,7 +118,7 @@ function tryAcquire(lockPath: string, self: ProcessIdentity, boundary: ProcessId
   }, 'eexist');
 
   if (created === undefined) {
-    breakAbandonedLock(lockPath, boundary);
+    await breakAbandonedLock(lockPath, boundary);
 
     return null;
   }
@@ -168,10 +127,10 @@ function tryAcquire(lockPath: string, self: ProcessIdentity, boundary: ProcessId
 }
 
 /** No duration removes a lock; only a process the kernel proves gone. */
-function breakAbandonedLock(lockPath: string, boundary: ProcessIdentityBoundary): void {
+async function breakAbandonedLock(lockPath: string, boundary: ProcessIdentityBoundary): Promise<void> {
   const owner = readOwner(lockPath);
 
-  if (owner === null || boundary.liveness(owner) !== 'gone') return;
+  if (owner === null || await boundary.liveness(owner) !== 'gone') return;
   release({ lockPath, token: owner.token });
 }
 
@@ -233,11 +192,11 @@ export function darwinStartIdentity(lstart: string): string | null {
 
 export function createProcessIdentityBoundary(
   platform: SupportedPlatform,
-  read: (pid: number) => ProcessIdentityProbe,
+  read: (pid: number) => ProcessIdentityProbe | Promise<ProcessIdentityProbe>,
 ): ProcessIdentityBoundary {
   return {
-    self(pid): ProcessIdentity {
-      const probe = read(pid);
+    async self(pid): Promise<ProcessIdentity> {
+      const probe = await read(pid);
 
       if (probe.state !== 'read') {
         throw new Error(`Refusing to take the config lock: cannot read this ${platform} process's `
@@ -246,9 +205,9 @@ export function createProcessIdentityBoundary(
 
       return { platform, pid, identity: probe.identity };
     },
-    liveness(owner): Liveness {
+    async liveness(owner): Promise<Liveness> {
       if (owner.platform !== platform) return 'unknown';
-      const probe = read(owner.pid);
+      const probe = await read(owner.pid);
 
       if (probe.state !== 'read') return probe.state === 'absent' ? 'gone' : 'unknown';
 
@@ -275,19 +234,23 @@ function readLinuxIdentity(pid: number): ProcessIdentityProbe {
   }
 }
 
-function readDarwinIdentity(pid: number): ProcessIdentityProbe {
+/** `ps` runs to its exit rather than synchronously: 1 names a pid no process holds, and a `ps` that could not
+ *  run at all refuses rather than guess whether a lock is abandoned. */
+async function readDarwinIdentity(pid: number): Promise<ProcessIdentityProbe> {
   try {
-    const result = Bun.spawnSync({
+    const ps = Bun.spawn({
       cmd: ['/bin/ps', '-p', String(pid), '-o', 'lstart='],
       env: { LC_ALL: 'C', LANG: 'C' },
       stdout: 'pipe',
-      stderr: 'pipe',
+      stderr: 'ignore',
     });
 
-    if (result.exitCode === 1) return { state: 'absent' };
+    const [stdout, exitCode] = await Promise.all([new Response(ps.stdout).text(), ps.exited]);
 
-    if (result.exitCode !== 0) return { state: 'unreadable' };
-    const identity = darwinStartIdentity(result.stdout.toString());
+    if (exitCode === 1) return { state: 'absent' };
+
+    if (exitCode !== 0) return { state: 'unreadable' };
+    const identity = darwinStartIdentity(stdout);
 
     return identity === null ? { state: 'unreadable' } : { state: 'read', identity };
   } catch (error) {

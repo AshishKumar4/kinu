@@ -158,7 +158,7 @@ export async function setupCommand(opts: {
     }
 
     const named = opts.model === undefined ? DEFAULT_WORKERS_AI_MODEL_SPEC : `workers-ai/${stripProviderPrefix(opts.model, 'workers-ai')}`;
-    const current = adoptDefaultModel(named)?.model;
+    const current = (await adoptDefaultModel(named))?.model;
     console.log(`${OK('✓')} Using Cloudflare Workers AI`);
 
     if (current !== undefined) console.log(DIM(`Default model: ${current}`));

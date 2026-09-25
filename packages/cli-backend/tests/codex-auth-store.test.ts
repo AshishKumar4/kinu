@@ -114,7 +114,7 @@ describe('createFileCodexAuthStore', () => {
   });
 
   // An unparseable config must not read as `{}`, or `save()` deletes every other provider's key.
-  test('an unparseable config is a failure, not an empty one', () => {
+  test('an unparseable config is a failure, not an empty one', async () => {
     const dir = scratchDir('codex-auth-store');
     const configPath = join(dir, 'config.json');
 
@@ -127,15 +127,15 @@ describe('createFileCodexAuthStore', () => {
 
     const store = createFileCodexAuthStore(configPath);
     expect(() => store.hasCredential()).toThrow();
-    expect(() => store.save({ kind: 'oauth', accessToken: 'a', refreshToken: 'r' })).toThrow();
+    await expect(store.save({ kind: 'oauth', accessToken: 'a', refreshToken: 'r' })).rejects.toThrow();
     expect(readFileSync(configPath, 'utf-8')).toBe(intact.slice(0, -12));
   });
 
-  test('a config that has never been written reads as empty', () => {
+  test('a config that has never been written reads as empty', async () => {
     const dir = scratchDir('codex-auth-store');
     const store = createFileCodexAuthStore(join(dir, 'nested', 'config.json'));
     expect(store.hasCredential()).toBe(false);
-    store.save({ kind: 'oauth', accessToken: 'a', refreshToken: 'r' });
+    await store.save({ kind: 'oauth', accessToken: 'a', refreshToken: 'r' });
     expect(store.hasCredential()).toBe(true);
   });
 });

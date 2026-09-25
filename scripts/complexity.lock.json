@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-24",
-  "files": 2658,
-  "functions": 65253,
+  "measuredAt": "2026-09-25",
+  "files": 2663,
+  "functions": 65394,
   "ceiling": 87,
   "line": 32,
   "inventory": [
@@ -42,10 +42,6 @@
       "complexity": 46
     },
     {
-      "key": "packages/pc-agent/src/index.js#handle",
-      "complexity": 44
-    },
-    {
       "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
       "complexity": 43
     },
@@ -75,6 +71,10 @@
     },
     {
       "key": "packages/cli/src/tui/home-app.tsx#HomeScene",
+      "complexity": 41
+    },
+    {
+      "key": "packages/pc-agent/src/index.js#handle",
       "complexity": 41
     },
     {
