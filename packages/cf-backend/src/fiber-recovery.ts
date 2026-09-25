@@ -122,6 +122,8 @@ export const MCP_WARM_LANE_FIBER = 'mcp:warm';
 
 export const TERMINAL_LANE_FIBER = 'terminal:effects';
 
+export const DELEGATION_LANE_FIBER = 'delegation:drain';
+
 /** Fork-journal recovery notice lane: an eviction replays the delivery, not the reconcile;
  *  the signal's idempotency key dedupes a delivery that already landed. */
 const FORK_NOTICE_LANE_FIBER = 'fork:notice';
@@ -176,6 +178,9 @@ export function classifyRecoveredFiber(
     if (ctx.name === SEARCH_FIBER_NAME) return recordInterruptedSearch(transports, ctx);
 
     if (ctx.name === MCP_WARM_LANE_FIBER) return recoverMcpWarmLane();
+
+    // Its turn claim is re-pended by the wake an owed claim arms.
+    if (ctx.name === DELEGATION_LANE_FIBER) return { status: 'completed', snapshot: { lane: DELEGATION_LANE_FIBER, redrive: 'turn-claim' } };
 
     // Replay nothing in the init gate (it awaits SMTP, peers, models); arm the ledger's own
     // retry wake, whose alarm replays under the claim join.

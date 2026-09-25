@@ -31,6 +31,7 @@ import { CHAT_SESSION_ID, turnInputMessage, type HeadReport, type SessionTranscr
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
+import { DELEGATION_LANE_FIBER } from './fiber-recovery';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
@@ -1049,10 +1050,36 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     ).toArray().length > 0;
   }
 
+  /** One drain per isolate: a second would open two turns on one actor's chat room. */
+  private _delegationDrain: Promise<void> | null = null;
+
   /**
-   * Runs admitted delegated turns on the durable wake; admission must not run them (`waitUntil` shape).
-   * Per-queue policy lives in core's `drainAssignments`; this is the cf budget and runner.
+   * Admitted delegated turns run on a fiber, off the wake: inside it a turn held the alarm to its
+   * 15-minute wall, whose reset closed every socket (warm-forge-4d6acc02, 2026-09-25).
    */
+  private startDelegationDrain(): void {
+    if (this._delegationDrain !== null) return;
+
+    const drain = (async () => {
+      try {
+        await this.runFiber(DELEGATION_LANE_FIBER, async (ctx) => {
+          ctx.stash({ lane: DELEGATION_LANE_FIBER });
+          let truncated = true;
+
+          while (truncated) truncated = await this.drainAdmittedDelegations();
+        });
+      } catch (cause) {
+        diagnostics.failure('subordinate.delegation_drain_failed', toKinuError({
+          doing: 'draining the delegated turns this workspace admitted', cause, otherwise: 'io',
+        }), { workspace: this.name });
+      } finally {
+        this._delegationDrain = null;
+      }
+    })();
+
+    this._delegationDrain = drain;
+  }
+
   private async drainAdmittedDelegations(): Promise<boolean> {
     const seams = this.subordinateSeams();
     const exec = this.boundExec();
@@ -2759,9 +2786,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     this.rependRecoveredAssignments(owedClaims);
     // Retained claims still fence new work; verification alone is not execution.
-    const delegationsTruncated = await this.drainAdmittedDelegations();
+    this.startDelegationDrain();
 
-    if (!this.activationRecoveryPending) return delegationsTruncated || await super.maintenanceWork();
+    if (!this.activationRecoveryPending) return await super.maintenanceWork();
 
     // Wait for the branch seal to drain: the fork reconcile would retire a pre-cutoff running
     // steer branch head as lost fork work.
@@ -2806,7 +2833,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }), { workspace: this.name });
     }
 
-    return delegationsTruncated || await super.maintenanceWork();
+    return await super.maintenanceWork();
   }
   /**
    * Retire exploration actors a reset left behind, against ledgers fork reconciliation settled (S13).

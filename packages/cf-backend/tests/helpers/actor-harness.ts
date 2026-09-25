@@ -597,6 +597,7 @@ export async function runDelegatedTask(
     fromWorkspace: child.workspaceId, kind: 'task', body: task, mode: 'build', now: Date.now(),
   });
   await workspace.agent.terminalRetryPass();
+  await joinHarnessFibers();
 }
 
 /** Core's background-job journal over the object's stored rows. */
