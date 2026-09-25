@@ -1,8 +1,8 @@
 // Kinu-only gate; see upstream.json's `kinuRules` and `kinuRuleGates`.
 //
 // `rules/no-sync-spawn.test.ts` proves the rule function behaves. This file proves the rule fires through the real
-// `oxlint` binary on planted synchronous spawns in shipped source, replayed from the sites 8dcca981a shipped, and that
-// their asynchronous forms pass. It also proves the rule is on at error in `.oxlintrc.json` and that the live shipped
+// `oxlint` binary on planted synchronous spawns in shipped source, replayed from the sites 8dcca981a shipped and in each
+// other spelling Bun offers, and that their asynchronous forms pass. It also proves the rule is on at error in `.oxlintrc.json` and that the live shipped
 // tree has no finding, across the set `isShippedSource` in scripts/sources.ts names, which is the rule's own scope.
 //
 // Why: under Bun 1.4 a collection that finalizes a stderr FileSink while `spawnSync` waits wedges the process. A later
@@ -51,12 +51,17 @@ const bad: readonly { readonly file: string; readonly code: string; readonly fin
   { file: "lock.ts", code: `declare const pid: number;\nexport function read(): unknown {\n${HISTORICAL[0].line}\n      cmd: ['/bin/ps', '-p', String(pid), '-o', 'lstart='],\n    });\n\n    return result;\n}\n`, findings: 1 },
   { file: "deploy-local.ts", code: `${HISTORICAL[1].line}\nexport const listed = spawnSync('ps', ['-o', 'args=']);\nexport const started = spawn('workerd');\n`, findings: 1 },
   { file: "daemon.js", code: `${HISTORICAL[2].line}\nmodule.exports = { spawn, spawnSync, execFileSync };\n`, findings: 2 },
+  { file: "bun-named.ts", code: "import { spawnSync } from 'bun';\nexport const listed = spawnSync(['ls']);\n", findings: 1 },
+  { file: "bun-namespace.ts", code: "import * as B from 'bun';\nexport const listed = B.spawnSync(['ls']);\n", findings: 1 },
+  { file: "bun-destructured.ts", code: "const { spawnSync } = Bun;\nexport const listed = spawnSync(['ls']);\n", findings: 1 },
+  { file: "bun-global.ts", code: "export const listed = globalThis.Bun.spawnSync(['ls']);\n", findings: 1 },
 ];
 
 const good: readonly { readonly file: string; readonly code: string }[] = [
   { file: "lock.ts", code: "export async function read(): Promise<number> {\n  const ps = Bun.spawn({ cmd: ['/bin/ps'], stdout: 'pipe' });\n\n  return await ps.exited;\n}\n" },
   { file: "deploy-local.ts", code: "import { execFile } from 'node:child_process';\nexport function list(done: (out: string) => void): void {\n  execFile('ps', ['-o', 'args='], (_error, stdout) => { done(stdout); });\n}\n" },
   { file: "daemon.js", code: "const { spawn, execFile } = require('node:child_process');\nmodule.exports = { spawn, execFile };\n" },
+  { file: "bun.ts", code: "import { spawn } from 'bun';\nexport const exited = [spawn(['ls']).exited, globalThis.Bun.spawn(['ps']).exited];\n" },
 ];
 
 const governed = trackedFiles().filter((file) => isLintSource(file) && isShippedSource(file)).sort();
@@ -101,7 +106,7 @@ export default eslintCompatPlugin({ meta: { name: "spawn-stage" }, rules: { "no-
   const live = lintJson(["-c", configPath, ...governed]);
   assert.equal(live.number_of_files, governed.length);
   assert.deepEqual(live.diagnostics.filter((item) => item.code === diagnosticCode || item.code === undefined).map(describeDiagnostic), []);
-  process.stdout.write(`no-sync-spawn: ${bad.length} planted red and ${good.length} green cases; ${governed.length} shipped files, zero live findings. Blind spots: a spawner reached through a binding the rule does not follow, a dynamic import of child_process, process.binding.\n`);
+  process.stdout.write(`no-sync-spawn: ${bad.length} planted red and ${good.length} green cases; ${governed.length} shipped files, zero live findings. Blind spots: a spawner reached through a binding the rule does not follow, a dynamic import of bun or child_process, process.binding.\n`);
 } finally {
   rmSync(workspace, { recursive: true, force: true });
 }

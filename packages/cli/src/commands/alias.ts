@@ -5,7 +5,7 @@ export async function aliasCommand(agentName: string, aliasName: string | undefi
   const agent = resolveAgentRef(agentName);
   const canonical = agent?.name ?? agentName;
   const alias = aliasName ?? canonical;
-  const path = writeAliasShim(canonical, alias);
+  const path = await writeAliasShim(canonical, alias);
   console.log(`${OK('✓')} ${ACCENT(alias)} ${DIM('→')} ${ACCENT(canonical)} ${DIM(path)}`);
   const hint = pathHint();
 

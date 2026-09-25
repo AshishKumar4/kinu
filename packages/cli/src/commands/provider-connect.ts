@@ -258,8 +258,8 @@ export async function connectProvider(
         defaultModel: 'gpt-4o-mini',
         model: opts.model,
         local: opts.local ?? false,
-        store: (key) => updateConfigFile((config) => withProvider(config, { openai: { apiKey: key } })),
-        clear: () => updateConfigFile((config) => { delete config.providers?.openai; }),
+        store: async (key) => { await updateConfigFile((config) => withProvider(config, { openai: { apiKey: key } })); },
+        clear: async () => { await updateConfigFile((config) => { delete config.providers?.openai; }); },
       });
     case 'openrouter':
       return await connectApiKeyProvider(port, {
@@ -269,8 +269,8 @@ export async function connectProvider(
         defaultModel: 'openai/gpt-4o-mini',
         model: opts.model,
         local: opts.local ?? false,
-        store: (key) => updateConfigFile((config) => withProvider(config, { openrouter: { apiKey: key } })),
-        clear: () => updateConfigFile((config) => { delete config.providers?.openrouter; }),
+        store: async (key) => { await updateConfigFile((config) => withProvider(config, { openrouter: { apiKey: key } })); },
+        clear: async () => { await updateConfigFile((config) => { delete config.providers?.openrouter; }); },
       });
     case 'anthropic':
       return await connectApiKeyProvider(port, {
@@ -280,8 +280,8 @@ export async function connectProvider(
         defaultModel: 'claude-sonnet-4-5',
         model: opts.model,
         local: opts.local ?? false,
-        store: (key) => updateConfigFile((config) => withProvider(config, { anthropic: { apiKey: key } })),
-        clear: () => updateConfigFile((config) => { delete config.providers?.anthropic; }),
+        store: async (key) => { await updateConfigFile((config) => withProvider(config, { anthropic: { apiKey: key } })); },
+        clear: async () => { await updateConfigFile((config) => { delete config.providers?.anthropic; }); },
       });
     case 'openai-compatible': return await connectOpenAiCompatible(port, opts.model, opts.local ?? false);
   }
@@ -373,8 +373,8 @@ interface ApiKeyProvider {
   readonly defaultModel: string;
   readonly model: string | undefined;
   readonly local: boolean;
-  store(key: string): void;
-  clear: () => void;
+  store(key: string): Promise<void>;
+  clear: () => Promise<void>;
 }
 
 async function connectApiKeyProvider(port: ProviderConnectPort, provider: ApiKeyProvider): Promise<ProviderConnectOutcome> {
@@ -425,8 +425,8 @@ async function connectOpenAiCompatible(port: ProviderConnectPort, requestedModel
     local,
     credKey: 'openai-compat.default',
     credential: { kind: 'openai-compat', baseURL, apiKey },
-    storeLocally: () => updateConfigFile((config) => withProvider(config, { openaiCompat: { default: { baseURL, apiKey } } })),
-    clearLocally: () => updateConfigFile((config) => { delete config.providers?.openaiCompat?.default; }),
+    storeLocally: async () => { await updateConfigFile((config) => withProvider(config, { openaiCompat: { default: { baseURL, apiKey } } })); },
+    clearLocally: async () => { await updateConfigFile((config) => { delete config.providers?.openaiCompat?.default; }); },
     // Usually Ollama or vLLM on this machine; the proxy is https-only and a Worker cannot reach loopback.
     endpoint: baseURL,
   });
@@ -504,9 +504,9 @@ async function storeProviderSecret(opts: {
   local: boolean;
   credKey: string;
   credential: unknown;
-  storeLocally: () => void;
+  storeLocally: () => Promise<void>;
   /** Runs after an account write: a local key wins at resolution and would shadow it. */
-  clearLocally: () => void;
+  clearLocally: () => Promise<void>;
   /** An endpoint the proxy cannot reach (loopback, private range, plain http) forces local storage. */
   endpoint?: string;
 }): Promise<'account' | 'local'> {
@@ -514,7 +514,7 @@ async function storeProviderSecret(opts: {
   const cloud = opts.local || !reachable ? null : resolveCloudSession();
 
   if (!cloud) {
-    opts.storeLocally();
+    await opts.storeLocally();
 
     return 'local';
   }
@@ -530,7 +530,7 @@ async function storeProviderSecret(opts: {
     );
   }
 
-  opts.clearLocally();
+  await opts.clearLocally();
   await bumpProviderRevision();
 
   return 'account';

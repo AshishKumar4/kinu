@@ -19,12 +19,17 @@ import { isShippedSource } from "../../../../scripts/sources.ts";
  * own helpers. Tests are outside it.
  *
  * KNOWN MISSED: a spawner reached through a binding this rule does not follow (`const run = cp.execFileSync`, a
- * module that re-exports one), `await import('node:child_process')`, and `process.binding`.
+ * second name for a local module, `const c = cp`, a module that re-exports one), `await import('bun')` and
+ * `await import('node:child_process')`, and `process.binding`.
  */
 
 const SYNC_SPAWNERS: ReadonlySet<string> = new Set(["spawnSync", "execSync", "execFileSync"]);
 
-const CHILD_PROCESS: ReadonlySet<string> = new Set(["child_process", "node:child_process"]);
+/** The modules that export a synchronous spawner: node's, in either spelling, and Bun's own. */
+const SPAWNER_MODULES: ReadonlySet<string> = new Set(["child_process", "node:child_process", "bun"]);
+
+/** The names the global object goes by, so `globalThis.Bun` is Bun. */
+const GLOBAL_OBJECT: ReadonlySet<string> = new Set(["globalThis", "global"]);
 
 /** Shipped source by the enumeration's own predicate, asked of the path from its `packages/` root. */
 function inScope(filename: string): boolean {
@@ -34,12 +39,18 @@ function inScope(filename: string): boolean {
 	return root !== -1 && isShippedSource(normalized.slice(root + 1));
 }
 
-/** `require("child_process")`, either spelling. */
-function requiresChildProcess(node: ESTree.Node | null | undefined): boolean {
+/** An expression that is a spawner module itself: the `Bun` global, `globalThis.Bun`, or `require` of one. */
+function isSpawnerModule(node: ESTree.Node | null | undefined): boolean {
+	if (node?.type === "Identifier") return node.name === "Bun";
+
+	if (node?.type === "MemberExpression") {
+		return node.object.type === "Identifier" && GLOBAL_OBJECT.has(node.object.name) && memberName(node) === "Bun";
+	}
+
 	if (node?.type !== "CallExpression" || node.callee.type !== "Identifier" || node.callee.name !== "require") return false;
 	const [specifier] = node.arguments;
 
-	return specifier?.type === "Literal" && typeof specifier.value === "string" && CHILD_PROCESS.has(specifier.value);
+	return specifier?.type === "Literal" && typeof specifier.value === "string" && SPAWNER_MODULES.has(specifier.value);
 }
 
 /** The name a member expression reads, when it is spelled out. */
@@ -72,10 +83,14 @@ export const noSyncSpawnRule = defineRule({
 	},
 	createOnce(context) {
 		let governed = false;
-		/** Local names bound to the module itself: `import * as cp`, `import cp`, `const cp = require(...)`. */
+		/** Local names bound to a spawner module: `import * as cp`, `import B from "bun"`, `const cp = require(...)`. */
 		let modules = new Set<string>();
-		/** `cp.spawnSync` on a local name, judged once every binding in the file has been seen. */
-		let reads: { readonly node: ESTree.MemberExpression; readonly object: string; readonly name: string }[] = [];
+		/** `cp.spawnSync` and `const { spawnSync } = cp` on a local name, judged once every binding in the file is seen. */
+		let reads: { readonly node: ESTree.Node; readonly object: string; readonly name: string }[] = [];
+
+		const report = (node: ESTree.Node, name: string) => {
+			context.report({ node, messageId: "syncSpawn", data: { name } });
+		};
 
 		return {
 			Program() {
@@ -84,7 +99,7 @@ export const noSyncSpawnRule = defineRule({
 				reads = [];
 			},
 			ImportDeclaration(node) {
-				if (!governed || typeof node.source.value !== "string" || !CHILD_PROCESS.has(node.source.value)) return;
+				if (!governed || typeof node.source.value !== "string" || !SPAWNER_MODULES.has(node.source.value)) return;
 
 				for (const specifier of node.specifiers) {
 					if (specifier.type !== "ImportSpecifier") {
@@ -94,24 +109,28 @@ export const noSyncSpawnRule = defineRule({
 
 					const imported = specifier.imported.type === "Identifier" ? specifier.imported.name : String(specifier.imported.value);
 
-					if (SYNC_SPAWNERS.has(imported)) context.report({ node: specifier, messageId: "syncSpawn", data: { name: imported } });
+					if (SYNC_SPAWNERS.has(imported)) report(specifier, imported);
 				}
 			},
 			VariableDeclarator(node) {
-				if (!governed || !requiresChildProcess(node.init)) return;
+				if (!governed) return;
+				const direct = isSpawnerModule(node.init);
 
-				if (node.id.type === "Identifier") {
+				if (direct && node.id.type === "Identifier") {
 					modules.add(node.id.name);
 
 					return;
 				}
 
-				if (node.id.type !== "ObjectPattern") return;
+				if (node.id.type !== "ObjectPattern" || (!direct && node.init?.type !== "Identifier")) return;
 
 				for (const property of node.id.properties) {
 					const name = propertyKey(property);
 
-					if (name !== null && SYNC_SPAWNERS.has(name)) context.report({ node: property, messageId: "syncSpawn", data: { name } });
+					if (name === null || !SYNC_SPAWNERS.has(name)) continue;
+
+					if (direct) report(property, name);
+					else if (node.init?.type === "Identifier") reads.push({ node: property, object: node.init.name, name });
 				}
 			},
 			MemberExpression(node) {
@@ -120,15 +139,12 @@ export const noSyncSpawnRule = defineRule({
 
 				if (name === null || !SYNC_SPAWNERS.has(name)) return;
 
-				if ((node.object.type === "Identifier" && node.object.name === "Bun") || requiresChildProcess(node.object)) {
-					context.report({ node, messageId: "syncSpawn", data: { name } });
-				} else if (node.object.type === "Identifier") {
-					reads.push({ node, object: node.object.name, name });
-				}
+				if (isSpawnerModule(node.object)) report(node, name);
+				else if (node.object.type === "Identifier") reads.push({ node, object: node.object.name, name });
 			},
 			"Program:exit"() {
 				for (const { node, object, name } of reads) {
-					if (modules.has(object)) context.report({ node, messageId: "syncSpawn", data: { name } });
+					if (modules.has(object)) report(node, name);
 				}
 			},
 		};

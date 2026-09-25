@@ -27,6 +27,10 @@ tester.run("anti-slop/no-sync-spawn", noSyncSpawnRule, {
     { code: "const shim = { execSync: asyncOnly('child_process.execSync', viaExec) };", filename: "packages/core/src/execution/codemode-node-shim.ts" },
     // A method of something that is not the module.
     { code: "db.execSync('SELECT 1');", filename: cli },
+    // Bun's asynchronous spawner, in each spelling the synchronous one is refused in.
+    { code: "import { spawn } from 'bun'; await spawn(['ls']).exited;", filename: lock },
+    { code: "const { spawn } = Bun; await spawn(['ls']).exited;", filename: lock },
+    { code: "await globalThis.Bun.spawn(['ls']).exited;", filename: lock },
     // Outside shipped source: suites, their helpers and scripts are not on a user's machine.
     { code: "import { spawnSync } from 'node:child_process'; spawnSync('tar', ['-czf', 'x']);", filename: "packages/cf-backend/tests/unit-install-script.test.ts" },
     { code: "import { execFileSync } from 'node:child_process'; execFileSync('git', ['status']);", filename: "packages/test-utils/src/git.ts" },
@@ -80,6 +84,30 @@ tester.run("anti-slop/no-sync-spawn", noSyncSpawnRule, {
       code: "Bun['spawnSync'](['ls']);",
       filename: lock,
       errors: [error],
+    },
+    {
+      name: "Bun's module, named",
+      code: "import { spawnSync } from 'bun'; spawnSync(['ls']);",
+      filename: lock,
+      errors: [error],
+    },
+    {
+      name: "Bun's module as a namespace, and as its default",
+      code: "import * as B from 'bun'; import Runtime from 'bun'; B.spawnSync(['ls']); Runtime.spawnSync(['ps']);",
+      filename: lock,
+      errors: [error, error],
+    },
+    {
+      name: "the Bun global destructured, and a name given to it",
+      code: "const { spawnSync } = Bun; const runtime = Bun; runtime.spawnSync(['ls']);",
+      filename: lock,
+      errors: [error, error],
+    },
+    {
+      name: "the Bun global read off the global object, and Bun's module required",
+      code: "globalThis.Bun.spawnSync(['ls']); global['Bun'].spawnSync(['ps']); const { spawnSync } = require('bun');",
+      filename: daemon,
+      errors: [error, error, error],
     },
   ],
 });
