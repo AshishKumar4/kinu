@@ -5,6 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { tolerate } from '@kinu.run/core/obs';
+import { runToExit } from '@kinu.run/test-utils';
 import { DEADLINE_EXIT_CODE, deadlineLine, leftoverLine, runUnderDeadline } from './deadline';
 import { GATE_DEADLINE_SECONDS, LADDER, scriptDeadline } from './ladder';
 
@@ -51,6 +52,25 @@ describe('a run under a deadline', () => {
     const outcome = await runUnderDeadline({ argv: ['sh', '-c', 'sleep 30 & kill $!; wait $!; exit 0'], seconds: 30, label: 'ends its own', stdio: 'pipe' });
 
     expect(outcome).toMatchObject({ exitCode: 0, leftovers: [] });
+  });
+
+  test('a run beside a process of this user that holds a capability it lacks still ends, and that process is left', async () => {
+    // Its environment is this user's file, and the kernel still refuses the read: the user manager holds
+    // CAP_WAKE_ALARM and grants it to a unit that asks, as it holds it between fork and exec for every unit.
+    const unit = `kinu-deadline-capability-${String(process.pid)}`;
+    const started = await runToExit(['systemd-run', '--user', '--quiet', '--collect', `--unit=${unit}`, '-p', 'AmbientCapabilities=CAP_WAKE_ALARM', 'sleep', '60']);
+
+    // A machine whose user manager cannot start the unit has no such process for a run to meet.
+    if (started.exitCode !== 0) return;
+
+    try {
+      const outcome = await runUnderDeadline({ argv: ['bun', '-e', 'process.exit(0)'], seconds: 30, label: 'beside a capability', stdio: 'pipe' });
+
+      expect(outcome).toMatchObject({ killed: false, exitCode: 0, leftovers: [] });
+      expect((await runToExit(['systemctl', '--user', 'is-active', unit])).stdout.trim()).toBe('active');
+    } finally {
+      await runToExit(['systemctl', '--user', 'stop', unit]);
+    }
   });
 
   test('a given environment is the child\'s whole environment, and none inherits this process\'s', async () => {

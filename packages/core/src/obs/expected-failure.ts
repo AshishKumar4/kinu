@@ -13,6 +13,7 @@ export type ExpectedFailure =
   | 'enoent'
   | 'eexist'
   | 'esrch'
+  | 'eacces'
   | 'malformed-input';
 
 /** `no such table: X`, raised for reads and `ALTER TABLE`; usually create the table, not tolerate. */
@@ -58,6 +59,8 @@ export function classify(options: { cause: unknown }): ExpectedFailure | null {
   if (code === 'EEXIST') return 'eexist';
 
   if (code === 'ESRCH') return 'esrch';
+
+  if (code === 'EACCES') return 'eacces';
 
   if (code === 'ERR_INVALID_URL') return 'malformed-input';
 
