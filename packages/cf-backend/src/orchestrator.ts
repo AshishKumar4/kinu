@@ -4464,10 +4464,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** The root's tabs read the claim when they load, and hear every change to it here. */
+  /** The root's tabs hear the claim when they connect ({@link ActorAgent}'s connect), and every change to it here. */
   protected override turnClaimChanged(): void {
-    this.broadcastToActor(null, JSON.stringify({ type: TURN_CLAIM_FRAME, claim: this.turnClaimState() }));
+    this.broadcastToActor(null, this.turnClaimFrame());
     this.overviewChanged();
+  }
+
+  protected override turnClaimFrame(): string {
+    return JSON.stringify({ type: TURN_CLAIM_FRAME, claim: this.turnClaimState() });
   }
 
   /**

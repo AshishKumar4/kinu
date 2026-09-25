@@ -1069,30 +1069,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (isNewerDeployedBuild(baseline, live)) setNewerDeployedBuild(true);
   }, []);
 
-  // Resume the durable stream on every reconnect: the framework's resume effect fires only once.
-  const isFirstOpen = useRef(true);
-  useEffect(() => {
-    if (!agent) return;
-
-    const onOpen = () => {
-      // useChat's mount-time resume handles the first open.
-      if (isFirstOpen.current) {
-        isFirstOpen.current = false;
-
-        return;
-      }
-
-      if (agent.readyState !== WebSocket.OPEN) return;
-      agent.send(JSON.stringify({ type: "cf_agent_stream_resume_request" }));
-    };
-
-    agent.addEventListener("open", onOpen);
-
-    return () => agent.removeEventListener("open", onOpen);
-  }, [agent]);
-
-
-
   const isConnected = connectionStatus === "connected";
 
   // A socket can replay a frame after reconnect; `pushSeq` is per root, so frames for different
@@ -1729,7 +1705,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     setLoadGeneration(0);
     failureStreak.current = 0;
     wasStreaming.current = false;
-    isFirstOpen.current = true;
     // The abandoned turn's stale owner token can no longer release the latch, so a late
     // completion cannot open it for the next holder.
     abandonTurn(sendLatch.current);
