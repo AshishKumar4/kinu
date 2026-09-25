@@ -724,12 +724,18 @@ describe('completedWorkTurns — the auto-GEPA cadence source query', () => {
 });
 
 describe('RunEventRecorder.latestRunHeader', () => {
+  /** A run the person started, recorded as `processTurn` records a user turn: under its own id. */
+  const asked = (text: string) => ({
+    type: 'run_start' as const, agentId: 'a', userMessage: text,
+    turn: { turnId: `turn-${text}`, messageId: `msg-${text}`, kind: 'user' as const, text },
+  });
+
   test('the newest real run leads, over many intervening events and the reserved aggregate', () => {
     const { recorder } = setup();
 
-    recorder.emit('run-older', { type: 'run_start', agentId: 'a', userMessage: 'older task' });
+    recorder.emit('run-older', asked('older task'));
     recorder.emit('run-older', { type: 'run_end', reason: 'completed' });
-    recorder.emit('run-newest', { type: 'run_start', agentId: 'a', userMessage: 'newest task' });
+    recorder.emit('run-newest', asked('newest task'));
 
     // Rows between the boundaries exist to be skipped; skipping them is the cost claim.
     for (let i = 0; i < 400; i++) {
@@ -746,7 +752,7 @@ describe('RunEventRecorder.latestRunHeader', () => {
   test('an unsealed run reports no status rather than a guessed one', () => {
     const { recorder } = setup();
 
-    recorder.emit('run-open', { type: 'run_start', agentId: 'a', userMessage: 'still going' });
+    recorder.emit('run-open', asked('still going'));
 
     expect(recorder.latestRunHeader()).toEqual({ status: null, userMessage: 'still going' });
   });
@@ -759,6 +765,25 @@ describe('RunEventRecorder.latestRunHeader', () => {
     recorder.emit('run-bare', { type: 'run_end', reason: 'completed' });
 
     expect(recorder.latestRunHeader()).toEqual({ status: 'completed', userMessage: null });
+  });
+
+  test("a run the harness opened, or one recorded without a turn, never gives the person's words", () => {
+    const { recorder } = setup();
+
+    recorder.emit('run-person', asked('Sort the receipts'));
+    recorder.emit('run-person', { type: 'run_end', reason: 'completed' });
+    // As the inbox queues a signal: stamped the harness's and keyed `programmatic:`.
+    recorder.emit('run-genesis', {
+      type: 'run_start', agentId: 'a', caused_by: 'workspace_created', userMessage: 'This workspace has just been created.',
+      turn: {
+        turnId: 'programmatic:sig-1', messageId: 'msg-genesis', kind: 'programmatic', text: 'This workspace has just been created.',
+        metadata: { kinuEvent: 'workspace_created', kinuAuthor: 'harness' },
+      },
+    });
+    recorder.emit('run-genesis', { type: 'run_end', reason: 'error' });
+    recorder.emit('run-side', { type: 'run_start', agentId: 'a', userMessage: 'a side lane' });
+
+    expect(recorder.latestRunHeader()).toEqual({ status: null, userMessage: 'Sort the receipts' });
   });
 });
 

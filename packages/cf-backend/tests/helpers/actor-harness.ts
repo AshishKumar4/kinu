@@ -662,6 +662,15 @@ export function tapDiagnostics(logger: Logger): () => void {
   };
 }
 
+/** Replace, not update: `workspace_identity` has no primary key and `onStart` seeds its own row after its first await. */
+export function seedMission(db: Database, mission: string): void {
+  db.prepare('DELETE FROM workspace_identity').run();
+  db.prepare(
+    `INSERT INTO workspace_identity (id, name, owner_user_id, mission)
+     VALUES ('harness-actor', 'harness-actor', 'harness-owner', ?)`,
+  ).run(mission);
+}
+
 /** The workspace's main actor as its durable identity rows name it, read through core's directory. */
 export function workspaceMainActor(db: Database): ActorHandle {
   return openWorkspaceMainActor(sqlOver(db));

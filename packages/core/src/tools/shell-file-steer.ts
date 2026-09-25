@@ -31,7 +31,6 @@ const RULES: readonly Rule[] = [
   },
 ];
 
-/** Which hand-rolled file write this command uses, or null. */
 export function handRolledFileWrite(command: string): string | null {
   for (const rule of RULES) {
     if (!rule.pattern.test(command)) continue;

@@ -673,6 +673,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A workspace's card shows the owner's words, never Kinu's own.** A new workspace's card showed the prompt Kinu
+  starts its first turn with as the owner's latest task, and a background event after the owner's message did the
+  same. Home and the Workspaces page now show the owner's last message, or nothing until there is one.
+
 - **The request is the last thing the agent reads in a turn.** Runtime news for the turn (a device that just
   connected, skills it activated, a background job it resumes) and changed live state used to follow the request, and
   a model read that news as the turn: asked to read a file back, it acknowledged the device instead. They now ride

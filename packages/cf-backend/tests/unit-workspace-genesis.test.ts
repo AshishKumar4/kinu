@@ -11,7 +11,7 @@ import { MockLanguageModelV3 } from 'ai/test';
 import { createTestUserDO, testOwner } from './helpers/user-do';
 import type { ModelMessage } from 'ai';
 import {
-  orchestratorHarness, chatSessionTurns, storedChat, workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent,
+  orchestratorHarness, chatSessionTurns, seedMission, storedChat, workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 
@@ -48,15 +48,6 @@ function activityEvents(db: Database): string[] {
   return db.prepare<{ event: string }, []>(
     'SELECT event FROM activity_log ORDER BY created_at, rowid',
   ).all().map((row) => row.event);
-}
-
-/** Replace, not update: `workspace_identity` has no primary key and `onStart` seeds its own row after its first await. */
-function seedMission(db: Database, mission: string): void {
-  db.prepare('DELETE FROM workspace_identity').run();
-  db.prepare(
-    `INSERT INTO workspace_identity (id, name, owner_user_id, mission)
-     VALUES ('harness-actor', 'harness-actor', 'harness-owner', ?)`,
-  ).run(mission);
 }
 
 describe('the workspace takes its own first turn', () => {
