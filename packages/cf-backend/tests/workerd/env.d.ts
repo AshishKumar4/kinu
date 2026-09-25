@@ -12,6 +12,7 @@ import type { DbCapabilityProbeDO } from './db-capability-probe';
 import type { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
 import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
+import type { ChatAnswers, SeedAnswer } from './store-reset-shapes';
 import type {
   DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState, DeployFakeWeight,
 } from './deploy-fake';
@@ -131,6 +132,15 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
   hashes(): Promise<Record<'ws-alpha' | 'ws-beta', string | null>>;
   reset(): Promise<{ ok: true; workspaces: number }>;
   freshProfile(): Promise<{ email: string; displayName: string | null; onboardedAt: number | null; workspaceCount: number } | null>;
+}
+
+interface StoreResetProbeRpc extends Rpc.DurableObjectBranded {
+  plantRefusedWorkspace(workspace: string): Promise<string>;
+  seed(workspace: string): Promise<SeedAnswer>;
+  overview(workspace: string): Promise<string>;
+  chat(workspace: string): Promise<ChatAnswers>;
+  wake(workspace: string): Promise<string>;
+  exportedLines(workspace: string): Promise<number>;
 }
 
 interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
@@ -268,6 +278,7 @@ declare global {
       USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;
       SLATE_DURABILITY_PROBE: DurableObjectNamespace<SlateDurabilityProbeRpc>;
       ACCOUNT_RESET_PROBE: DurableObjectNamespace<AccountResetProbeRpc>;
+      STORE_RESET_PROBE: DurableObjectNamespace<StoreResetProbeRpc>;
   // Readiness refusal must serialise over Workers RPC as data, not a thrown class name; not a sandbox stub.
   DEVBOX_NOT_READY_PROBE: DurableObjectNamespace<DevboxNotReadyProbeDO>;
       LOADER: WorkerLoader;
