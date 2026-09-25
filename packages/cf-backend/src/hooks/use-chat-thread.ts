@@ -1,8 +1,5 @@
-/**
- * Derivation is staged: restored rows move only when a page lands, the overlap filter only when
- * the live ID set changes, so a streamed token re-folds the live window alone.
- */
-import { useCallback, useMemo } from "react";
+/** Staged derivation: a streamed token re-folds only the live window. */
+import { useCallback, useEffect, useMemo, useState } from "react";
 import * as v from "valibot";
 import {
   EMPTY_TRANSCRIPT_FOLD, ChatHistoryEntrySchema, extendTranscript, pageSchema,
@@ -40,9 +37,38 @@ export interface ChatThreadInput {
   readonly actor?: string | null;
 }
 
+const NO_MESSAGES: readonly UIMessage[] = [];
+
+/** Rows shown before `next`'s front: a frame holds only the newest window. */
+interface Slide { readonly live: readonly UIMessage[]; readonly slid: readonly UIMessage[]; readonly gaps: number }
+
+/** Keeps rows that left the window. An empty frame, or a window disjoint from the last, starts over. */
+function slideWindow(prev: Slide, next: readonly UIMessage[]): Slide {
+  const first = next[0]?.id;
+
+  if (first === undefined) return { live: next, slid: NO_MESSAGES, gaps: prev.gaps };
+  const at = prev.live.findIndex((message) => message.id === first);
+
+  if (at > 0) return { live: next, slid: [...prev.slid, ...prev.live.slice(0, at)], gaps: prev.gaps };
+
+  if (at === 0 || prev.live.length === 0) return { live: next, slid: prev.slid, gaps: prev.gaps };
+
+  return { live: next, slid: NO_MESSAGES, gaps: prev.gaps + 1 };
+}
+
 export function useChatThread({
-  rpc, live, seeded, steerRuns = NO_STEER_RUNS, actor,
+  rpc, live: frame, seeded, steerRuns = NO_STEER_RUNS, actor,
 }: ChatThreadInput): ChatThread {
+  const [slide, setSlide] = useState<Slide>(() => ({ live: frame, slid: NO_MESSAGES, gaps: 0 }));
+  const current = slideWindow(slide, frame);
+
+  // Derived in render: it moves when a row joins or leaves, never per token.
+  if (current.slid !== slide.slid || current.gaps !== slide.gaps || frame.length !== slide.live.length) setSlide(current);
+
+  const live = useMemo(
+    () => current.slid.length === 0 ? frame : [...current.slid, ...frame],
+    [current.slid, frame]);
+
   const oldest = live[0]?.id;
 
   const history = usePagedScroll<ChatHistoryEntry>({
@@ -59,6 +85,12 @@ export function useChatThread({
       () => actor === null ? null : walkStart(oldest, seeded),
       [actor, oldest, seeded]),
   });
+
+  const { reset } = history;
+
+  useEffect(() => {
+    if (current.gaps > 0) reset();
+  }, [current.gaps, reset]);
 
   // Row identities are minted once per page, so memo(MessageView) holds across ticks.
   const restored = useMemo(() => restoredRows(history.fetched), [history.fetched]);

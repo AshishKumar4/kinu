@@ -1,10 +1,7 @@
 /**
- * The chat rooms of one workspace object: core's {@link ChatTransport} over the Agents
- * SDK's `cf_agent_*` chat protocol. The transport writes no row: the loop is the one
- * writer and decides where a message lands.
- * One room per addressed actor, chosen by the socket's `actorConnectionTag`. A hosted
- * actor's room has no resume store: {@link ResumableStream} keeps one active stream per
- * database, so a second store would read the root's live turn as the actor's.
+ * Core's {@link ChatTransport} over the SDK's `cf_agent_*` protocol, one room per actor tag. It writes no
+ * row; the loop does. A hosted actor's room has no resume store: {@link ResumableStream} keeps one active
+ * stream per database, so a second store would read the root's live turn as the actor's.
  */
 import type { Connection } from 'agents';
 import {
@@ -29,7 +26,7 @@ export interface ChatWire {
   broadcast(message: string, exclude?: string[]): void;
   /** The handshake asks by id before it replays to a replacement. */
   getConnection(id: string): ChatSocket | undefined;
-  history(): Promise<UIMessage[]>;
+  history(limit?: number): Promise<UIMessage[]>;
   /** A durable row or an accepted send's reservation: the hook resends its whole list per request. */
   admitted(id: string): boolean;
   /** Rejects when the loop refuses the message: nothing was written and no turn ran. */
@@ -119,6 +116,9 @@ class OpenParts {
   }
 }
 
+/** A frame's newest messages; the pane pages older rows from storage. */
+export const TRANSCRIPT_WINDOW = 60;
+
 function transcriptFrame(history: readonly UIMessage[]): string {
   return JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: history });
 }
@@ -188,10 +188,10 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     return this.answers.get(id) ?? null;
   }
 
-  /** A socket opening mid-turn also reads the current transcript: seed and connect are separate fetches. */
+  /** The connect frame is the pane's only seed, so a socket opening mid-turn gets the current window. */
   async onConnect(connection: Connection): Promise<void> {
     const resume = this.resume;
-    const history = await this.wire.history();
+    const history = await this.wire.history(TRANSCRIPT_WINDOW);
 
     if (resume !== null && resume.resumable.hasActiveStream()) resume.handshake.notifyStreamResuming(connection);
     sendIfOpen(connection, transcriptFrame(history));
@@ -270,7 +270,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       return;
     }
 
-    const storedMessages = await this.wire.history();
+    // The client resends only its window, so reconcile against the window.
+    const storedMessages = await this.wire.history(TRANSCRIPT_WINDOW);
 
     const fresh = reconcileMessages(parsed.output.messages, storedMessages, sanitizeMessage)
       .filter((message) => message.role === 'user' && !this.wire.admitted(message.id));
@@ -329,7 +330,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), cadence: partialFlushCadence(), taken: false, broken: false, failure: null };
 
-    if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history()));
+    if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history(TRANSCRIPT_WINDOW)));
   }
 
   /** The answer row is durable before this. */
@@ -340,7 +341,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.live = null;
 
     if (!live.taken && !live.broken && live.accumulator.parts.length > 0) this.answers.set(live.accumulator.messageId, live.accumulator.toMessage());
-    const history = await this.wire.history();
+    const history = await this.wire.history(TRANSCRIPT_WINDOW);
 
     this.resume?.resumable.complete(live.streamId);
     this.pendingResume.clear();
@@ -383,7 +384,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
       // The walk-back moved the durable head; every tab needs the stored transcript.
       case 'history-reverted':
-        this.wire.broadcast(transcriptFrame(await this.wire.history()));
+        this.wire.broadcast(transcriptFrame(await this.wire.history(TRANSCRIPT_WINDOW)));
 
         return;
 
@@ -396,11 +397,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
   }
 
-  /**
-   * One provider call's UIMessage chunks, stored for resume and broadcast. The loop settles
-   * the turn after this drains. A continuation call renews the accumulator seeded with the
-   * turn's parts, so a second `start` cannot rename the answer.
-   */
+  /** Stored for resume and broadcast; a continuation renews from the turn's parts, keeping one answer id. */
   async observe(stream: ReadableStream<UIMessageChunk>, call: ObservedCall): Promise<void> {
     const live = this.live;
 

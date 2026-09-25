@@ -26,11 +26,11 @@ import {
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
-import { CHAT_SESSION_ID, turnInputMessage, type HeadReport, type SessionTranscript, type VfsRevision } from '@kinu.run/core';
+import { CHAT_SESSION_ID, conversationCount, turnInputMessage, type HeadReport, type SessionTranscript, type VfsRevision } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
-import type { ChatWire } from './chat-transport';
+import { TRANSCRIPT_WINDOW, type ChatWire } from './chat-transport';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
@@ -1297,7 +1297,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
             this.broadcast(JSON.stringify({
               type: 'cf_agent_chat_messages',
-              messages: [...await this.chatTranscript.history(), message],
+              messages: [...await this.chatTranscript.history(undefined, TRANSCRIPT_WINDOW), message],
             }));
 
             return { delivered: true };
@@ -1768,7 +1768,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       sql: null,
       getConnection: (id) => this.getConnection(id),
       broadcast: (message, exclude) => { this.broadcastToActor(name, message, exclude); },
-      history: () => rows.history(),
+      history: (limit) => rows.history(undefined, limit),
       admitted: (id) => rows.has(id),
       send: async (input) => {
         // Opening row first, under the client's id: the hook resends its whole list, and `admitted`
@@ -3791,6 +3791,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       model: { model: profile.tier.model, source: profile.tier.source },
       reasoningEffort: profile.tier.reasoningEffort,
       activePlan: child.stores.planReviews.getActive(CHAT_SESSION_ID),
+      // Counted in the store: the pane holds only a window.
+      messageCount: conversationCount(this.boundSql, child.handle),
       // Read with the child's actor id; same rule as `pendingSteerRuns()`: a steer is a row bound to a turn.
       pendingSteers: new PendingSendStore(this.boundSql, child.handle.actorId).restore()
         .filter((row) => row.turnId !== null)

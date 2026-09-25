@@ -1805,7 +1805,7 @@ export abstract class ActorAgent extends Agent<Env> {
       sql: this.boundSql,
       broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
       getConnection: (id) => this.getConnection(id),
-      history: () => this.chatTranscript.history(),
+      history: (limit) => this.chatTranscript.history(undefined, limit),
       admitted: (id) => this.admittedSend(id),
       send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
       interrupt: () => { this.chatLoop.interrupt(); },

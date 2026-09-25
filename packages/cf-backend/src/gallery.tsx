@@ -1631,6 +1631,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
       model: { model: "anthropic/claude-opus-4", source: "workspace" },
       reasoningEffort: "medium",
       activePlan: galleryAgentPlan,
+      messageCount: 0,
       pendingSteers: [],
     } satisfies SubordinateSnapshot,
   };

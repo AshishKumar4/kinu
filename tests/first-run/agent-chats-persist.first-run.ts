@@ -328,10 +328,10 @@ describe(SUITE, () => {
           const reachable: string[] = [];
           const lost: string[] = [];
 
-          // The pane's two reads, exactly as the client makes them: the SDK's
-          // own `get-messages` seed on the actor's socket path (use-kinu.ts,
-          // `hostedActorSocketPath`), and its pager, `getChatHistoryPage`
-          // with the pane's actor id (use-chat-thread.ts). A page request
+          // The store under the pane's two reads: `get-messages` on the actor's
+          // socket path (`hostedActorSocketPath`) reads the transcript the
+          // socket's connect frame is cut from, and the pager asks
+          // `getChatHistoryPage` with the pane's actor id (use-chat-thread.ts). A page request
           // WITHOUT the actor id answers the workspace's own rows by
           // contract, so a row that omitted it read an empty workspace chat
           // as a lost conversation — measured 2026-09-22 on fd6e888fe.
