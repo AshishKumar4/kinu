@@ -475,6 +475,11 @@ export async function painted(page: Page): Promise<void> {
   }));
 }
 
+/** The composer of `agent`'s own pane, live: the pane that sends to that agent's chat. */
+function agentComposer(workspace: string, agent: string): string {
+  return `document.querySelector(${JSON.stringify(`[data-agent-pane="${workspace}/agents/${agent}"] textarea:not([disabled])`)}) !== null`;
+}
+
 /** What the reader sees of one agent: its tab in the strip and its entry in
  *  the sidebar, each by the agent's own name and each with the title shown. */
 export interface AgentPresence {
@@ -534,9 +539,12 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
     const agentPath = `/workspace/${encodeURIComponent(workspace)}/agents/`;
 
     await until(page, "the new agent's page", `location.pathname.startsWith(${JSON.stringify(agentPath)})`);
-    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
 
     const agent = v.parse(v.string(), await page.evaluate(`decodeURIComponent(location.pathname.slice(${String(agentPath.length)}))`));
+
+    // The address changes a render before the pane does, and the Main pane's composer is live until then: words
+    // typed into it went to the Main chat, and this row read the agent's empty one (2026-09-25).
+    await until(page, "the new agent's own composer", agentComposer(workspace, agent));
     const said = `Reply with one word: ${agent}.`;
     const renamed = `Flow ${agent.slice(-6)}`;
 
@@ -574,7 +582,7 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
       ledger.restart();
       await back.click(`nav[aria-label="Workspace agents"] [data-agent-tab="${agent}"] a`);
       await until(back, "the agent's page", `location.pathname === ${JSON.stringify(`${agentPath}${encodeURIComponent(agent)}`)}`);
-      await until(back, "the agent's live composer", CHAT_COMPOSER_LIVE);
+      await until(back, "the agent's own composer", agentComposer(workspace, agent));
       await settledAfter(back, ledger, 'getChatHistoryPage');
       conversation = v.parse(v.string(), await back.evaluate(`document.querySelector('#chat')?.textContent ?? ''`));
     }
