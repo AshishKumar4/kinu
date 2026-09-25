@@ -58,6 +58,7 @@ import * as v from 'valibot';
 import { isPreviewHostRequest, previewHostSuffix } from '../packages/core/src/preview/preview-origin';
 import { SANDBOX_TRANSPORT } from '../packages/core/src/preview/sandbox-id';
 import { parseJsonc } from './jsonc';
+import { CONTAINER_IMAGES, imageReference, readSource, sourceHash } from './container-images';
 import { readRepositoryFile, trackedFiles } from './sources';
 // The config module itself, not its text: the failure being guarded is a hook
 // that exists and decides the wrong thing, which no source-text assertion sees.
@@ -77,34 +78,16 @@ const SETUP_LEAN = '.github/actions/setup-lean/action.yml';
 
 const LEAN_VERIFY = '.github/workflows/lean-verify.yml';
 
-/**
- * The sandbox container image every environment runs, declared ONCE.
- *
- * `version` is the `@cloudflare/sandbox` release whose container the SDK expects,
- * held below against the dependency that actually ships. The image itself is the
- * block layer built on that upstream base: `packages/devbox/block-lower/Dockerfile`
- * compiles `devbox-block-lower` and `devbox-squashfuse` into the upstream
- * `docker.io/cloudflare/sandbox@sha256:4a56a37a…` base and the result is pushed
- * to this account's registry, so `digest` is the pushed manifest's digest — the
- * same sha256 both wrangler blocks carry — rather than a tag resolution.
- *
- * wrangler.jsonc repeats the reference once per environment because a JSONC file
- * cannot import a constant. This is the declaration those two are held to, so a
- * version bump edits this record and both config blocks and nothing else.
- */
-const SANDBOX_IMAGE = {
-  repository: 'registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer',
-  version: '0.12.9',
-  digest: 'sha256:c2c03bdf3b46d22633ffdeab545953d7c0caa0fb562d36e70ebdd4618898c718',
-} as const;
+/** The `@cloudflare/sandbox` release whose container the SDK expects; the sandbox image is built on its upstream base,
+ *  and its digest is declared with every other image in `container-images.ts`. */
+const SANDBOX_VERSION = '0.12.9';
 
-const PINNED_IMAGE = `${SANDBOX_IMAGE.repository}@${SANDBOX_IMAGE.digest}`;
+const SANDBOX_IMAGE = CONTAINER_IMAGES.KinuSandbox;
 
-/** Codex's egress forwarder, built from `packages/cf-backend/containers/codex-egress`. */
-const CODEX_EGRESS_IMAGE = 'registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-codex-egress@sha256:cd159d53d8e3e713c6ae024264867a2a36b94a66db5e998567849990da45ab48';
+const PINNED_IMAGE = imageReference(SANDBOX_IMAGE);
 
 /** Each container class and the one image the release record declares for it. */
-const PINNED_IMAGES = new Map([['KinuSandbox', PINNED_IMAGE], ['CodexEgress', CODEX_EGRESS_IMAGE]]);
+const PINNED_IMAGES = new Map(Object.entries(CONTAINER_IMAGES).map(([className, image]) => [className, imageReference(image)]));
 
 /** A vite plugin that decides something per environment — the one shape this
  *  file calls. `PluginOption` also admits arrays, promises and `false`, so the
@@ -169,7 +152,17 @@ describe('the sandbox container image is pinned', () => {
     }
   });
 
-  test('the pin names the @cloudflare/sandbox version that ships', () => {
+  test('each image\'s source is the source its digest was built from', () => {
+    for (const [className, image] of Object.entries(CONTAINER_IMAGES)) {
+      const files = readSource(REPO_ROOT, image.source);
+
+      expect({ className, files: files.size > 0 }).toEqual({ className, files: true });
+      expect({ className, sourceHash: sourceHash(files) }, `${image.source} changed with no new digest: see container-images.ts`)
+        .toEqual({ className, sourceHash: image.sourceHash });
+    }
+  });
+
+    test('the pin names the @cloudflare/sandbox version that ships', () => {
     const manifest = v.parse(
       v.object({ dependencies: v.record(v.string(), v.string()) }),
       JSON.parse(readFileSync(join(REPO_ROOT, PACKAGE), 'utf8')),
@@ -178,7 +171,7 @@ describe('the sandbox container image is pinned', () => {
     // Exact, not a range: the container reports one SANDBOX_VERSION and the SDK
     // compares it to the installed one, so `^0.12.8` would let an install decide
     // which container is correct.
-    expect(manifest.dependencies['@cloudflare/sandbox']).toBe(SANDBOX_IMAGE.version);
+    expect(manifest.dependencies['@cloudflare/sandbox']).toBe(SANDBOX_VERSION);
   });
 
   test('a re-pointable reference is refused, in both directions', () => {

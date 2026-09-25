@@ -36,6 +36,8 @@ export * from './openai';
 
 export * from './codex';
 
+export { EGRESS_REFUSAL_HEADER, EgressCalls, refusalError } from './egress-calls';
+
 export * from './codex-oauth';
 
 export { OAuthTokenError } from './oauth-token-error';

@@ -239,7 +239,7 @@ describe('provider model catalogs', () => {
     expect(classified.message + String(classified.cause)).toMatch(/refused this server's network/);
   });
 
-  test('the Codex egress route carries the Codex API and plan usage, nothing else', () => {
+  test('the Codex egress route carries the Codex API, nothing else', () => {
     const carried = [
       ['GET', 'https://chatgpt.com/backend-api/codex/models?client_version=1.0.0'],
       ['POST', 'https://chatgpt.com/backend-api/codex/responses'],
@@ -257,7 +257,6 @@ describe('provider model catalogs', () => {
     expect(carried.filter(([, , allowed]) => allowed).map(([method, url]) => `${String(method)} ${String(url)}`)).toEqual([
       'GET https://chatgpt.com/backend-api/codex/models?client_version=1.0.0',
       'POST https://chatgpt.com/backend-api/codex/responses',
-      'GET https://chatgpt.com/backend-api/wham/usage',
     ]);
   });
 });

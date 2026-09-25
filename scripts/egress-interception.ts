@@ -82,7 +82,9 @@ import * as v from 'valibot';
 import { parseJsonc } from './jsonc';
 import { readSources } from './sources';
 import { assertMeasured, finding } from './gate-ratchet';
-import { classMembers, declaredName, literalText, parse, superClassName, walk, type SyntaxNode } from './syntax';
+import { classMembers, declaredName, importBindings, literalText, parse, superClassName, walk, type SyntaxNode } from './syntax';
+import { CONTAINER_IMAGES, imageReference, readSource, sourceHash, type ContainerImage } from './container-images';
+import { tolerate } from '../packages/core/src/obs/index';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -105,7 +107,7 @@ const FORBIDDEN_FIELDS: readonly string[] = ['allowedHosts', 'deniedHosts'];
  *  at the top level and under every named environment. Parsed where the file is
  *  required; Bun decodes JSONC natively, so a commented-out block never reaches
  *  the schema. */
-const ContainerList = v.optional(v.array(v.object({ class_name: v.string() })));
+const ContainerList = v.optional(v.array(v.object({ class_name: v.string(), image: v.optional(v.string()) })));
 
 export const WranglerContainers = v.object({
   containers: ContainerList,
@@ -179,9 +181,7 @@ export function sandboxLineage(sources: ReadonlyMap<string, string>): ReadonlySe
   return lineage;
 }
 
-/** Bound containers that run only their own image's program, never agent code: direct `Container` subclasses, since
- *  agent execution comes through the Sandbox SDK. No vault placeholder enters them, so they are outside this gate's
- *  set; each is named on every run. */
+/** Direct `Container` subclasses in the deployment source: candidates for the forwarder admission below. */
 export function declaredForwarderClasses(sources: ReadonlyMap<string, string>): string[] {
   const names = new Set<string>();
 
@@ -195,6 +195,132 @@ export function declaredForwarderClasses(sources: ReadonlyMap<string, string>): 
   }
 
   return [...names].sort();
+}
+
+/** What a forwarder class may never touch: each is a way to run or read something other than one forwarded request. */
+const FORWARDER_FORBIDDEN = /\b(exec|execStream|startProcess|getTcpPort|mountBucket|writeFile|readFile|interceptHttps|outboundHandlers|outboundByHost|setOutboundHandler|setOutboundByHost|allowedHosts)\b|\bctx\.container\b/u;
+
+/** The interpreters a forwarder's CMD may name besides its own tracked script. */
+const FORWARDER_INTERPRETERS: readonly string[] = ['node'];
+
+export interface ForwarderInputs {
+  readonly owner: string;
+  /** The file declaring the class, whole: its imports name the predicates. */
+  readonly fileText: string;
+  readonly file: string;
+  /** Its record in `container-images.ts`, if any. */
+  readonly image: ContainerImage | undefined;
+  /** The image wrangler.jsonc binds to the class. */
+  readonly boundImage: string | undefined;
+  /** Every tracked file under the record's source directory, with its bytes. */
+  readonly sourceFiles: ReadonlyMap<string, string | Uint8Array>;
+}
+
+/**
+ * A direct `Container` runs guest code only if its image or its class lets it, so it leaves the interception set only
+ * when all three are proven: (a) its image is the pinned build of a tracked directory whose hash is recorded; (b) that
+ * Dockerfile copies only tracked files, runs nothing at build, and its CMD runs a tracked script; (c) the class reaches
+ * the container only through `containerFetch`, each call preceded in its method by a refusing check of a core
+ * `…EgressAllowed` predicate, and uses no exec, process, mount or file API. The reasons it fails, empty when admitted.
+ */
+export function auditForwarder(input: ForwarderInputs): string[] {
+  const reasons: string[] = [];
+  const { image } = input;
+
+  if (image === undefined) return ['has no record in scripts/container-images.ts, so nothing says what its image runs'];
+
+  if (input.boundImage !== imageReference(image)) reasons.push(`is bound to ${String(input.boundImage)}, not its recorded ${imageReference(image)}`);
+
+  if (input.sourceFiles.size === 0) reasons.push(`records source ${image.source}, which holds no tracked file`);
+  else if (sourceHash(input.sourceFiles) !== image.sourceHash) reasons.push(`${image.source} no longer hashes to the source its digest was built from`);
+
+  const dockerfile = input.sourceFiles.get(`${image.source}/Dockerfile`);
+
+  if (dockerfile === undefined) reasons.push(`${image.source} tracks no Dockerfile`);
+  else reasons.push(...dockerfileReasons(image.source, String(dockerfile), input.sourceFiles));
+
+  reasons.push(...classReasons(input));
+
+  return reasons;
+}
+
+function dockerfileReasons(source: string, dockerfile: string, files: ReadonlyMap<string, unknown>): string[] {
+  const reasons: string[] = [];
+  const copied = new Set<string>();
+  let command: string | undefined;
+
+  for (const line of dockerfile.split('\n').map((text) => text.trim()).filter((text) => text !== '' && !text.startsWith('#'))) {
+    const [instruction = '', ...rest] = line.split(/\s+/u);
+    const verb = instruction.toUpperCase();
+
+    if (verb === 'FROM' && !/@sha256:[0-9a-f]{64}$/u.test(rest[0] ?? '')) reasons.push(`builds FROM ${rest[0] ?? ''}, not a pinned digest`);
+
+    if (verb === 'RUN' || verb === 'ADD') reasons.push(`runs \`${verb}\` at build, so the image holds more than tracked files`);
+
+    if (verb === 'COPY') {
+      if (rest.some((word) => word.startsWith('--'))) reasons.push(`copies with a flag (${line}), not tracked files alone`);
+
+      for (const from of rest.slice(0, -1)) {
+        if (!files.has(`${source}/${from}`)) reasons.push(`copies ${from}, which is not a tracked file of ${source}`);
+        else copied.add(from);
+      }
+    }
+
+    if (verb === 'CMD' || verb === 'ENTRYPOINT') command = rest.join(' ');
+  }
+
+  const words = command === undefined ? null : v.safeParse(v.array(v.string()), tolerate<unknown>(() => JSON.parse(command), 'malformed-input'));
+
+  if (words === null || !words.success) {
+    reasons.push('has no exec-form CMD, so what the container runs is not a named file');
+  } else if (!words.output.some((word) => copied.has(word)) || words.output.some((word) => !copied.has(word) && !FORWARDER_INTERPRETERS.includes(word))) {
+    reasons.push(`runs ${JSON.stringify(words.output)}, not one tracked script under a known interpreter`);
+  }
+
+  return reasons;
+}
+
+function classReasons(input: ForwarderInputs): string[] {
+  const parsed = parse(input.file, input.fileText);
+  const predicates = new Set<string>();
+
+  for (const statement of parsed.root.children) {
+    if (statement.raw.type !== 'ImportDeclaration' || statement.raw.source.value !== '@kinu.run/core') continue;
+
+    for (const { local } of importBindings(statement)) if (local.endsWith('EgressAllowed')) predicates.add(local);
+  }
+
+  const reasons: string[] = [];
+  let found = false;
+
+  walk(parsed.root, (node) => {
+    if (node.type !== 'ClassDeclaration' || declaredName(node) !== input.owner) return;
+    found = true;
+    const text = input.fileText.slice(node.start, node.end);
+    const forbidden = FORWARDER_FORBIDDEN.exec(text);
+
+    if (forbidden !== null) reasons.push(`uses \`${forbidden[0]}\`, which reaches the container other than by one forwarded request`);
+
+    let fetches = 0;
+
+    for (const member of classMembers(node)) {
+      const body = input.fileText.slice(member.start, member.end);
+      const first = body.indexOf('containerFetch(');
+
+      if (first < 0) continue;
+      fetches++;
+      const guard = /if\s*\(\s*!\s*(\w+)\s*\([^]*?\)\s*\)\s*\{?\s*(throw|return)\b/gu;
+      const guarded = [...body.matchAll(guard)].some((match) => predicates.has(match[1] ?? '') && match.index < first);
+
+      if (!guarded) reasons.push(`${declaredName(member) ?? 'a member'} calls containerFetch with no refusing check of a core …EgressAllowed predicate before it`);
+    }
+
+    if (fetches === 0) reasons.push('never calls containerFetch, so the container is reached some other way or not at all');
+  });
+
+  if (!found) reasons.push(`is not declared in ${input.file}`);
+
+  return reasons;
 }
 
 export function declaredSandboxClasses(sources: ReadonlyMap<string, string>): string[] {
@@ -406,7 +532,27 @@ export function catchAllIsBound(sources: ReadonlyMap<string, string>): boolean {
 if (import.meta.main) {
   const sources = readSources();
   const bound = wranglerContainerClasses(parseJsonc(readFileSync(`${root}${WRANGLER}`, 'utf8'), WranglerContainers, WRANGLER));
-  const forwarders = declaredForwarderClasses(sources).filter((name) => bound.includes(name));
+  const declaredContainers = parseJsonc(readFileSync(`${root}${WRANGLER}`, 'utf8'), WranglerContainers, WRANGLER).containers ?? [];
+  const records = new Map<string, ContainerImage>(Object.entries(CONTAINER_IMAGES));
+  const forwarderReasons = new Map<string, string[]>();
+
+  for (const owner of declaredForwarderClasses(sources).filter((name) => bound.includes(name))) {
+    const file = [...sources.keys()].find((path) => path.startsWith('packages/cf-backend/') && sources.get(path)?.includes(`class ${owner} `) === true);
+    const image = records.get(owner);
+
+    forwarderReasons.set(owner, file === undefined ? ['has no source file'] : auditForwarder({
+      owner, file, fileText: sources.get(file) ?? '', image,
+      boundImage: declaredContainers.find((entry) => entry.class_name === owner)?.image,
+      sourceFiles: image === undefined ? new Map() : readSource(root, image.source),
+    }));
+  }
+
+  const forwarders = [...forwarderReasons].filter(([, reasons]) => reasons.length === 0).map(([owner]) => owner);
+
+  for (const [owner, reasons] of forwarderReasons) {
+    for (const reason of reasons) console.error(`egress-interception: ${owner} is not an admitted forwarder: it ${reason}`);
+  }
+
   const fromWrangler = bound.filter((name) => !forwarders.includes(name));
   const fromSource = declaredSandboxClasses(sources);
   const classes = [...new Set([...fromWrangler, ...fromSource])].sort();
@@ -490,8 +636,10 @@ if (import.meta.main) {
   }
 
   console.log(`egress-interception: ok — ${measured}`);
-  console.log(`egress-interception: OUTSIDE THE SET — ${forwarders.join(', ') || 'none'}: bound containers that extend `
-    + 'Container directly and run their own image\'s program, so no agent code and no vault placeholder is inside');
+  console.log(`egress-interception: ADMITTED FORWARDERS — ${forwarders.join(', ') || 'none'}: each proved its image is the `
+    + 'pinned build of a hashed tracked directory running one tracked script, and its class reaches the container only '
+    + 'through containerFetch behind a core …EgressAllowed check. Blind spot: the check is read from source order, not '
+    + 'from control flow, and the tracked script itself is not read');
   console.log(`egress-interception: read the SDK default from ${CONTAINERS} ${containers.version} `
     + `at ${relative(root, containers.module)}, the copy ${CONTAINERS_HOST} resolves for itself and `
     + 'the only copy the artifact binds');

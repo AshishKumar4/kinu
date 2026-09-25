@@ -1,7 +1,5 @@
-// Why a container, and why no allowed-host list: docs/DEPLOYMENT.md § Codex egress.
-
 import { Container } from '@cloudflare/containers';
-import { codexEgressAllowed } from '@kinu.run/core';
+import { codexEgressAllowed, EgressCalls } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 
 const TARGET_HEADER = 'x-kinu-target';
@@ -15,7 +13,9 @@ export class CodexEgress extends Container<Env> {
 
   enableInternet = true;
 
-  async forward(ownerUserId: string, request: Request): Promise<Response> {
+  readonly #calls = new EgressCalls();
+
+  async forward(ownerUserId: string, callId: string, request: Request): Promise<Response> {
     if (!this.env.CodexEgress.idFromName(ownerUserId).equals(this.ctx.id)) {
       throw new KinuError('denied', 'a Codex egress container serves only the user it is named for');
     }
@@ -29,10 +29,18 @@ export class CodexEgress extends Container<Env> {
     for (const name of HOP_HEADERS) headers.delete(name);
     headers.set(TARGET_HEADER, request.url);
 
-    return this.containerFetch(new Request('http://codex-egress/forward', {
-      method: request.method,
-      headers,
-      body: request.body,
-    }));
+    return this.#calls.run(callId, {
+      start: async (signal) => { await this.startAndWaitForPorts(this.defaultPort, { abort: signal }); },
+      fetch: async (signal) => this.containerFetch(new Request('http://codex-egress/forward', {
+        method: request.method,
+        headers,
+        body: request.body,
+        signal,
+      })),
+    });
+  }
+
+  cancel(callId: string): void {
+    this.#calls.cancel(callId);
   }
 }
