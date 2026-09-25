@@ -10,13 +10,14 @@ import type { HeadDeltas } from "@kinu.run/core";
 import { tabCls, tabStripH } from "@/components/ui/form";
 import type { AgentStatus, ExecutorOutput } from "@/hooks/use-kinu";
 import type { AsyncResource } from "@/hooks/use-async-resource";
-import type { ExecutorInfo } from "@kinu.run/core";
+import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import type { ToolInfo, MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { ChangesSurface } from "./ChangesSurface";
 import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { Loader } from "@cloudflare/kumo";
 import { AgentSurface } from "./AgentSurface";
 import { ExplorationSurface } from "./ExplorationSurface";
 import { WorkTab } from "./WorkTab";
@@ -59,6 +60,7 @@ export interface WorkSurfaceProps {
   onSurface: (s: SurfaceKind) => void;
   pinnedPorts: PinnedPort[];
   previewError: string | null;
+  previewStarting?: readonly string[];
   onRefreshPorts: () => void;
   plan: PlanReview | null;
   planRpc?: Rpc;
@@ -128,6 +130,22 @@ function OpenSlatePanel(props: WorkSurfaceProps & { readonly slate: string; read
   if (props.summary === undefined) return <SlateFrame id={props.slate} rpc={props.rpc} reloadKey={reloadKey} />;
 
   return props.slateBody?.(props.summary) ?? <SlateFrame id={props.summary.id} rpc={props.rpc} reloadKey={reloadKey} onReady={props.onRefreshPorts} />;
+}
+
+const LISTING_STRIP = "shrink-0 border-t p-border px-3 py-2";
+
+/** A failed listing, else a starting one, in one strip under the surface. */
+function ListingStatus({ error, starting, onRetry }: { error: string | null; starting: readonly string[]; onRetry: () => void }) {
+  if (error) return <LoadFailure what="preview listings" message={error} onRetry={onRetry} className={LISTING_STRIP} />;
+
+  if (starting.length === 0) return null;
+
+  return (
+    <div role="status" className={`flex items-center gap-2 text-xs p-text-3 ${LISTING_STRIP}`} data-preview-starting>
+      <Loader size="sm" />
+      <span className="min-w-0 truncate">{starting.map(executorLabel).join(" and ")} starting…</span>
+    </div>
+  );
 }
 
 export function WorkSurface(props: WorkSurfaceProps) {
@@ -323,7 +341,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
       <div className={surface === "Changes" ? "flex-1 min-h-0" : "hidden"}>
         <ChangesSurface executors={props.executors} lastActiveExecutor={props.lastActiveExecutor} rpc={props.rpc} onOpenFile={openChangedFile} onCount={setChangeCount} />
       </div>
-      {props.previewError && <LoadFailure what="preview listings" message={props.previewError} onRetry={props.onRefreshPorts} />}
+      <ListingStatus error={props.previewError} starting={props.previewStarting ?? []} onRetry={props.onRefreshPorts} />
       {connecting && <ConnectDeviceDialog onClose={closeConnect} />}
     </div>
   );

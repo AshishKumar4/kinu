@@ -14,6 +14,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- While a sandbox starts, the workspace says "Sandbox starting…" in a quiet line under the tab, where a failed preview listing reports, and keeps the previews it already had.
 - The Worker's `/api` routes are served by one Hono app whose route order is the old dispatch order, gate for gate. An error no route catches is now answered as JSON with its class's status and a message naming only that class (the cause goes to the log), never cached, instead of the platform's error page; the run-event routes read the workspace whose ownership was just proven, even when the request spells its name with escapes.
 - **The Diffs tab is now Changes.** It lists the changed files as a tree with their counts; a file opens to a diff
   that keeps three lines around each change, folds the rest, marks the changed words and keeps the code's colours.

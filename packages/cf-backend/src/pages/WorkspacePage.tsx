@@ -1041,6 +1041,7 @@ export default function WorkspacePage() {
             onSurface={setSurface}
             pinnedPorts={state.pinnedPorts}
             previewError={state.previewError}
+            previewStarting={state.previewStarting}
             onRefreshPorts={state.refreshExposedPorts}
             plan={visiblePlan}
             snapshot={state.snapshot}

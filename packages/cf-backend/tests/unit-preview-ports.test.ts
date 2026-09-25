@@ -21,6 +21,7 @@ describe('preview port refresh reconciliation', () => {
     expect(reconcilePreviewPorts([port('workspace', 8080)], refreshes, acceptsUrl)).toEqual({
       ports: [port('workspace', 8080), port('sandbox', 4173)],
       error: 'workspace: Nimbus is temporarily unavailable',
+      starting: [],
     });
   });
 
@@ -35,6 +36,7 @@ describe('preview port refresh reconciliation', () => {
     expect(reconcilePreviewPorts(previous, refreshes, acceptsUrl)).toEqual({
       ports: [port('sandbox', 4173)],
       error: null,
+      starting: [],
     });
   });
 
@@ -47,6 +49,7 @@ describe('preview port refresh reconciliation', () => {
     expect(reconcilePreviewPorts([port('workspace', 8080)], refreshes, acceptsUrl)).toEqual({
       ports: [port('workspace', 8080)],
       error: 'workspace: invalid preview registration for port 8080',
+      starting: [],
     });
   });
 });
