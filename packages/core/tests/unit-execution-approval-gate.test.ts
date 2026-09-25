@@ -4,9 +4,10 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { DefaultExecutionRouter } from '../src/execution/router';
-import { gateProviderExec } from '../src/execution/approval';
+import { declaredFilesOwner, gateProviderExec } from '../src/execution/approval';
+import { createSandboxExecutor } from '../src/execution/sandbox';
 import type { ExecutorProvider } from '../src/execution/types';
-import type { ShellApprovalPolicy, ShellApprovalRequest } from '../src/safety/approval-gate';
+import type { FilesOwner, ShellApprovalPolicy, ShellApprovalRequest } from '../src/safety/approval-gate';
 import { present } from '@kinu.run/test-utils';
 
 const DENY = 'rm -rf /';
@@ -16,13 +17,14 @@ const GATE = 'sudo rm -rf /var/lib/important';
 const ALLOW = 'echo hi';
 
 /** A minimal ExecutorProvider shaped like nimbus/sandbox/device. */
-function fakeShellProvider(name: string, kind: ExecutorProvider['kind'] = 'nimbus') {
+function fakeShellProvider(name: string, kind: ExecutorProvider['kind'] = 'nimbus', filesOwner: FilesOwner = 'user') {
   const executed: string[] = [];
 
   const provider: ExecutorProvider = {
     name,
     kind,
     capabilities: new Set(['shell']),
+    filesOwner,
     homeDir: async () => '/home/main',
     isAvailable: () => true,
     connect: async () => {},
@@ -177,7 +179,7 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
 
   test('BUG REPRO: getProviders() — what eval is actually built from on both backends — returns the gated tool too', async () => {
     const router = new DefaultExecutionRouter(strictNoChannelPolicy());
-    const { provider, executed } = fakeShellProvider('sandbox', 'sandbox');
+    const { provider, executed } = fakeShellProvider('sandbox', 'sandbox', 'agent');
     router.register(provider);
 
     const fromGetProviders = present(router.getProviders().find((p) => p.name === 'sandbox'), 'the sandbox provider from getProviders()');
@@ -231,9 +233,57 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
   });
 });
 
-/** `gateProviderExec` passes `provider.name` into `gateExec`; these differ only in which machine the provider is. */
+/** `gateProviderExec` hands the provider to `gateExec`; these differ only in whose files the provider declares. */
 describe('the executor reaches the gate', () => {
   const HOUSEKEEPING = 'rm -rf node_modules';
+
+  /** A strict policy that records every request put to the user and refuses it. */
+  function askingRouter() {
+    const asked: ShellApprovalRequest[] = [];
+
+    const router = new DefaultExecutionRouter({
+      mode: () => 'strict',
+      requestApproval: async (req) => {
+        asked.push(req);
+
+        return 'deny';
+      },
+    });
+
+    return { router, asked };
+  }
+
+  test("cf's sandbox holds the agent's own files: commands that could wreck a user's machine are not put to them", async () => {
+    const { router, asked } = askingRouter();
+    router.register(createSandboxExecutor());
+    const exec = present(router.getProvider('sandbox'), 'the registered sandbox').tools.exec;
+
+    for (const command of ['sudo -n true', 'rm -rf ~/x', 'git reset --hard', 'chmod u+s tool']) {
+      expect(await exec.execute(command)).not.toMatchObject({ error: expect.stringContaining('Denied by the owner') });
+    }
+
+    expect(asked).toEqual([]);
+  });
+
+  test('a parked command whose executor is no longer registered is re-reviewed as the user\'s, keeping every rule', () => {
+    const { router } = askingRouter();
+    router.register(createSandboxExecutor());
+
+    expect(declaredFilesOwner(router, 'sandbox')).toBe('agent');
+    expect(declaredFilesOwner(router, 'device')).toBe('user');
+  });
+
+  test("an executor holding the user's files is asked, whatever it is named", async () => {
+    const { router, asked } = askingRouter();
+    const { provider, executed } = fakeShellProvider('sandbox', 'sandbox', 'user');
+    router.register(provider);
+
+    const result = await present(router.getProvider('sandbox'), 'the registered provider').tools.exec.execute(HOUSEKEEPING);
+
+    expect(result).toMatchObject({ error: expect.stringContaining('Denied by the owner') });
+    expect(executed).toEqual([]);
+    expect(asked.map((r) => r.command)).toEqual([HOUSEKEEPING]);
+  });
 
   test("a recursive delete on the agent's own sandbox runs, unasked", async () => {
     const asked: ShellApprovalRequest[] = [];
@@ -247,7 +297,7 @@ describe('the executor reaches the gate', () => {
       },
     });
 
-    const { provider, executed } = fakeShellProvider('sandbox', 'sandbox');
+    const { provider, executed } = fakeShellProvider('sandbox', 'sandbox', 'agent');
     router.register(provider);
 
     const result = await present(router.getProvider('sandbox'), 'the registered sandbox provider').tools.exec.execute(HOUSEKEEPING);

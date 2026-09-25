@@ -1,7 +1,7 @@
 /**
  * Approval gate: 'allow' | 'warn' | 'gate' (owner decides) | 'deny' (never, on any executor).
- * A decision depends on rule and executor; binary-scoped rules fire only on invoked binaries, falling back to
- * the whole line under an interpreter. Guardrail against accidents, not an adversary model.
+ * A decision depends on the rule and whose files the executor holds; binary-scoped rules fire only on invoked
+ * binaries, else on the whole line under an interpreter. Guardrail against accidents, not an adversary model.
  */
 
 import { CODE_WORK_DID_NOT_START, diagnostics, KinuError, type ErrorCode } from '../obs/index';
@@ -11,8 +11,14 @@ export type ApprovalDecision = 'allow' | 'warn' | 'gate' | 'deny';
 /** Where a rule's harm lands: 'local' (the executing machine only) or 'reaches_out' (leaves the executor). */
 export type ApprovalHarm = 'local' | 'reaches_out';
 
-/** Executors whose local state is the agent's own; local-harm rules are not gated there. Opt-in so new executors fail closed. */
-const AGENT_OWN_EXECUTORS: ReadonlySet<string> = new Set(['workspace', 'sandbox']);
+/** Whose files an executor reaches, as it declares: 'agent' (its own disposable state; local-harm rules are not
+ *  gated) or 'user' (anything else). Never read from a name, so a rename cannot inherit an exemption. */
+export type FilesOwner = 'agent' | 'user';
+
+export interface GatedExecutor {
+  readonly name: string;
+  readonly filesOwner: FilesOwner;
+}
 
 export interface ApprovalRuleHit {
   readonly decision: ApprovalDecision;
@@ -91,7 +97,7 @@ const PACKAGE_PUBLISH = new RegExp(
     .join('|'),
 );
 
-/** Default rule set, resolved per executor by {@link reviewCommand}. `harm: 'local'` claims damage stops at the machine. */
+/** Default rule set, resolved by {@link reviewCommand}. `harm: 'local'` claims damage stops at the machine. */
 const RULES: Rule[] = [
   {
     pattern: /\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*(?:\s+(?:--[^\s]+|-[a-zA-Z]+))*\s+\/+(?=\s|$|[;&|])/,
@@ -351,8 +357,8 @@ function scanCommand(command: string): CommandScan {
   return { invoked, unquoted };
 }
 
-/** Review a command for its executor. `executor` has no default so no caller silently picks a trust tier. */
-export function reviewCommand(command: string, executor: string): ApprovalResult {
+/** Review a command for an executor holding `filesOwner`'s files. No default: no caller silently picks a trust tier. */
+export function reviewCommand(command: string, filesOwner: FilesOwner): ApprovalResult {
   const { invoked, unquoted } = scanCommand(command);
   let opaque = false;
 
@@ -360,7 +366,7 @@ export function reviewCommand(command: string, executor: string): ApprovalResult
     if (INLINE_INTERPRETERS.has(binary)) { opaque = true; break; }
   }
 
-  const agentsOwn = AGENT_OWN_EXECUTORS.has(executor);
+  const agentsOwn = filesOwner === 'agent';
 
   const hits: ApprovalRuleHit[] = [];
 
@@ -372,7 +378,7 @@ export function reviewCommand(command: string, executor: string): ApprovalResult
       if (!r.pattern.test(unquoted)) continue;
     } else if (!r.pattern.test(command)) continue;
 
-    // Local harm on the agent's own machine is not gated; 'deny' is exempt.
+    // Local harm to the agent's own files is not gated; 'deny' is exempt.
     if (agentsOwn && r.harm === 'local' && r.decision !== 'deny') continue;
     hits.push({ decision: r.decision, rule: r.name, explanation: r.why });
   }
@@ -423,10 +429,8 @@ export type ApprovalSpendOutcome =
   | 'did-not-run'
   | 'spent';
 
-/**
- * Parks an unanswered 'gate' decision on the owner (vocabulary in safety/deferred-approval.ts; not imported,
- * see {@link ShellApprovalMode}). `run: true` means the grant is already spent; `settle` refunds unrun attempts.
- */
+/** Parks an unanswered 'gate' on the owner (safety/deferred-approval.ts, not imported). `run: true`: the grant
+ *  is spent; `settle` refunds unrun attempts. */
 export interface DeferredApprovalChannel {
   park(req: ShellApprovalRequest):
     | { readonly run: true; readonly spent: ApprovalSpend }
@@ -447,9 +451,8 @@ function afterGrants(review: ApprovalResult, policy: ShellApprovalPolicy, execut
 }
 
 /**
- * Wrap any exec-shaped function with the mode-aware approval gate; the single decision point for every
- * boundary that reaches a shell. `denyResult` writes a refusal into the result shape; `refusalCode` reads a
- * classification back out, never matching prose. A proven not-run code refunds a spent deferred grant.
+ * The one approval gate for every boundary that reaches a shell. `denyResult` writes a refusal into the result
+ * shape; `refusalCode` reads its classification back, never prose. A proven not-run code refunds a spent grant.
  */
 export interface ExecGateTuning<R> {
   readonly policy?: ShellApprovalPolicy;
@@ -459,7 +462,7 @@ export interface ExecGateTuning<R> {
 export function gateExec<R>(
   execute: (command: string, ...rest: unknown[]) => Promise<R>,
   denyResult: (error: KinuError) => R,
-  executor: string,
+  executor: GatedExecutor,
   tuning: ExecGateTuning<R> = {},
 ): (...args: unknown[]) => Promise<R> {
   const policy = tuning.policy ?? STRICT_NO_CHANNEL_POLICY;
@@ -471,7 +474,7 @@ export function gateExec<R>(
     const cmd = String(command);
 
     const decision = await decideApproval(
-      { command: cmd, executor }, reviewCommand(cmd, executor), policy,
+      { command: cmd, executor: executor.name }, reviewCommand(cmd, executor.filesOwner), policy,
     );
 
     if (!decision.run) return denyResult(decision.error);
@@ -489,10 +492,8 @@ export function gateExec<R>(
   };
 }
 
-/**
- * The mode/grant/channel/deferral ladder over any reviewable action. Standing grants apply here.
- * A `run: true` from a replayed park carries its spend; the caller must settle it once the outcome is known.
- */
+/** The mode/grant/channel/deferral ladder over any reviewable action. A `run: true` from a replayed park carries
+ *  its spend, which the caller settles once the outcome is known. */
 async function decideApproval(
   subject: { readonly command: string; readonly executor: string },
   rawReview: ApprovalResult,
@@ -526,7 +527,7 @@ async function decideApproval(
         : null;
 
       if (outcome === null) {
-        // Under 'strict', no answer parks on the owner if a queue is wired; the queue is consulted only after the channel declines.
+        // Under 'strict', an unanswered ask parks if a queue is wired, only after the channel declines.
         const parked = mode === 'strict'
           ? policy.deferrals?.park({ command: cmd, executor, review })
           : undefined;

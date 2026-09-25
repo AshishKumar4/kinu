@@ -166,7 +166,7 @@ export interface NimbusSandboxHandle {
 
 export interface NimbusWorkspaceExecutorOpts {
   box: NimbusSandboxHandle;
-  inline: InlineExecutorDeps;
+  inline: Omit<InlineExecutorDeps, 'filesOwner'>;
   /** Whether session ports can be published as preview URLs; false when the backend's preview origin is unconfigured. */
   inboundNetwork?: boolean;
   /** Whether interpreter runtimes (python, ruby, clang) can be installed; gates declaring `python`/`native_binary`. */
@@ -609,7 +609,7 @@ function nimbusSession(opts: NimbusWorkspaceExecutorOpts) {
 
 /** Kinu's durable workspace tools plus the same Nimbus session's process/runtime/port surface, registered once as `workspace`. */
 export function createNimbusWorkspaceExecutor(opts: NimbusWorkspaceExecutorOpts): PortAnsweringExecutor {
-  const inline = createInlineExecutor(opts.inline);
+  const inline = createInlineExecutor({ ...opts.inline, filesOwner: 'agent' });
   const session = nimbusSession(opts);
 
   return {

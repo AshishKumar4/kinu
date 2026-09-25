@@ -6,7 +6,7 @@ import { MissionGovernor } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { APICallError, type LanguageModel, type ModelMessage } from 'ai';
 import type { ToolExecutionOptions } from 'ai';
@@ -1434,7 +1434,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const executed: string[] = [];
 
     router.register({
-      name: 'sandbox', kind: 'sandbox', capabilities: new Set(['shell']), isAvailable: () => true,
+      name: 'sandbox', kind: 'sandbox', capabilities: new Set(['shell']), filesOwner: 'agent', isAvailable: () => true,
       homeDir: async () => '/', connect: async () => {}, disconnect: async () => {},
       tools: { exec: { description: 'record execution', execute: async (input) => {
         executed.push(String(input));
@@ -1483,6 +1483,32 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         .toBe(true);
     } finally {
       await reopened.end();
+    }
+  });
+
+  test('on a placed workspace a recursive delete waits for the user, and "always" lets the next one run', async () => {
+    const project = scratchDir('local-session-placed');
+    mkdirSync(join(project, 'build'));
+    mkdirSync(join(project, 'dist'));
+    const db = new Database(scratchPath('local-session-placed', 'agent.db'));
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM, cwd: project });
+    const session = new LocalAgentSession({ rt, db, model: fakeModel('noted'), onEvent: () => {}, noAutoEvolve: true });
+    const shell = present(rt.shell, 'the placed shell');
+
+    try {
+      const first = await shell.exec('rm -rf build');
+      const parked = present((await session.listDeferredApprovals())[0], 'the parked delete');
+
+      expect(first.stderr).toContain(`NOT RUN — queued for owner approval (${parked.id})`);
+      expect(existsSync(join(project, 'build'))).toBe(true);
+      expect(await session.decideDeferredApprovals([parked.id], 'always')).toEqual({ decided: [parked.id] });
+
+      expect((await shell.exec('rm -rf dist')).exitCode).toBe(0);
+      expect(existsSync(join(project, 'dist'))).toBe(false);
+      expect(await session.listDeferredApprovals()).toEqual([]);
+    } finally {
+      await session.end();
     }
   });
 

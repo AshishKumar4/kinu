@@ -122,7 +122,7 @@ describe('a facet holds the root set, or a subset of it', () => {
         return `ran:${command}`;
       },
       (error) => error.message,
-      'sandbox',
+      { name: 'sandbox', filesOwner: 'agent' },
       { policy: createInheritedApprovalPolicy(probe.deps) },
     );
 

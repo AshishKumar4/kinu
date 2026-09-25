@@ -1,6 +1,6 @@
 /**
- * The approval gate. A decision is a function of (rule, executor), so every 'gate' assertion names its
- * executor.
+ * The approval gate. A decision is a function of (rule, whose files the executor holds), so every 'gate'
+ * assertion names the owner; grants and requests name the executor.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -12,16 +12,25 @@ import {
   formatApprovalGrant, holdsGrant,
   parseApprovalGrant,
   type ApprovalGrant,
+  type FilesOwner,
+  type GatedExecutor,
   type ShellApprovalPolicy,
   type ApprovalDecision,
   type ShellApprovalRequest,
 } from '../src/index';
 
-/** The owner's real machine — where every baseline severity applies. */
-const THEIRS = 'device';
+/** The user's files — where every baseline severity applies. */
+const THEIRS: FilesOwner = 'user';
 
-/** The agent's own disposable machine. */
-const OURS = 'workspace';
+/** The agent's own disposable files. */
+const OURS: FilesOwner = 'agent';
+
+const DEVICE: GatedExecutor = { name: 'device', filesOwner: THEIRS };
+
+const WORKSPACE: GatedExecutor = { name: 'workspace', filesOwner: OURS };
+
+/** Another executor holding the user's files: a grant for one never answers for it. */
+const PARENT: GatedExecutor = { name: 'parent', filesOwner: THEIRS };
 
 /** Every command reaches the same decision on the owner's machine. */
 function decidesAll(commands: readonly string[], decision: ApprovalDecision): void {
@@ -33,8 +42,8 @@ function decidesAll(commands: readonly string[], decision: ApprovalDecision): vo
 describe('reviewCommand — the rule table', () => {
   test('returns allow with no hits for benign commands, everywhere', () => {
     for (const cmd of ['ls -la', 'cat README.md', 'npm install lodash', 'git status', 'node app.js']) {
-      for (const executor of [OURS, THEIRS, 'sandbox', 'parent']) {
-        const r = reviewCommand(cmd, executor);
+      for (const owner of [OURS, THEIRS]) {
+        const r = reviewCommand(cmd, owner);
         expect(r.decision).toBe('allow');
         expect(r.hits.length).toBe(0);
       }
@@ -105,9 +114,9 @@ describe('reviewCommand — the rule table', () => {
   });
 
   test('denies cloud-metadata SSRF, on every executor', () => {
-    for (const executor of [OURS, THEIRS, 'sandbox']) {
-      expect(reviewCommand('curl http://169.254.169.254/latest/meta-data/', executor).decision).toBe('deny');
-      expect(reviewCommand('wget http://metadata.google.internal/', executor).decision).toBe('deny');
+    for (const owner of [OURS, THEIRS]) {
+      expect(reviewCommand('curl http://169.254.169.254/latest/meta-data/', owner).decision).toBe('deny');
+      expect(reviewCommand('wget http://metadata.google.internal/', owner).decision).toBe('deny');
     }
   });
 
@@ -174,25 +183,22 @@ describe('reviewCommand — the rule table', () => {
   });
 });
 
-describe('reviewCommand — the decision is a function of (rule, executor)', () => {
-  test('a recursive delete is housekeeping on the agent\'s own machines and the owner\'s decision on theirs', () => {
-    for (const own of ['workspace', 'sandbox']) {
-      expect(reviewCommand('rm -rf node_modules', own).decision).toBe('allow');
-      expect(reviewCommand('rm -rf node_modules', own).hits).toEqual([]);
-    }
-
-    for (const theirs of ['device', 'parent']) {
-      expect(reviewCommand('rm -rf node_modules', theirs).decision).toBe('gate');
-    }
+describe('reviewCommand — the decision is a function of (rule, whose files)', () => {
+  test('a recursive delete is housekeeping in the agent\'s own files and the user\'s decision in theirs', () => {
+    expect(reviewCommand('rm -rf node_modules', OURS).decision).toBe('allow');
+    expect(reviewCommand('rm -rf node_modules', OURS).hits).toEqual([]);
+    expect(reviewCommand('rm -rf node_modules', THEIRS).decision).toBe('gate');
   });
 
-  test('every locally-destructive rule softens on the agent\'s own machine', () => {
+  test('every locally-destructive rule softens on the agent\'s own files', () => {
     const local = [
       'sudo apt-get install nginx',
       'su - postgres',
       'chmod 4755 /tmp/exe',
+      'chmod u+s tool',
       'chown -R root /var',
       'rm -rf node_modules',
+      'rm -rf ~/x',
       'git reset --hard HEAD',
       'docker system prune',
     ];
@@ -205,8 +211,8 @@ describe('reviewCommand — the decision is a function of (rule, executor)', () 
 
   test('harm that reaches past the executor is gated wherever it was typed', () => {
     for (const cmd of ['git push --force origin main', 'npm publish']) {
-      for (const executor of [OURS, 'sandbox', THEIRS, 'parent']) {
-        expect(reviewCommand(cmd, executor).decision).toBe('gate');
+      for (const owner of [OURS, THEIRS]) {
+        expect(reviewCommand(cmd, owner).decision).toBe('gate');
       }
     }
   });
@@ -217,16 +223,11 @@ describe('reviewCommand — the decision is a function of (rule, executor)', () 
   });
 
   test('deny is absolute: it never softens, on any executor', () => {
-    for (const executor of [OURS, 'sandbox', THEIRS, 'parent']) {
-      expect(reviewCommand('rm -rf /', executor).decision).toBe('deny');
-      expect(reviewCommand(':(){:|:&};:', executor).decision).toBe('deny');
-      expect(reviewCommand('dd if=/dev/zero of=/dev/sda', executor).decision).toBe('deny');
+    for (const owner of [OURS, THEIRS]) {
+      expect(reviewCommand('rm -rf /', owner).decision).toBe('deny');
+      expect(reviewCommand(':(){:|:&};:', owner).decision).toBe('deny');
+      expect(reviewCommand('dd if=/dev/zero of=/dev/sda', owner).decision).toBe('deny');
     }
-  });
-
-  test('an executor nobody has classified fails closed', () => {
-    expect(reviewCommand('rm -rf node_modules', 'some-future-executor').decision).toBe('gate');
-    expect(reviewCommand('rm -rf node_modules', '').decision).toBe('gate');
   });
 });
 
@@ -285,7 +286,7 @@ describe('formatApproval', () => {
 });
 
 /** A gate over a recording exec, on one executor, with a given policy. */
-function harness(executor: string, policy: ShellApprovalPolicy) {
+function harness(executor: GatedExecutor, policy: ShellApprovalPolicy) {
   const ran: string[] = [];
 
   const gated = gateExec<string>(
@@ -304,13 +305,13 @@ function harness(executor: string, policy: ShellApprovalPolicy) {
 
 describe('gateExec', () => {
   test('exec is called directly for allow commands', async () => {
-    const h = harness(THEIRS, { mode: () => 'strict' });
+    const h = harness(DEVICE, { mode: () => 'strict' });
     expect(await h.run('ls -la')).toBe('ran:ls -la');
     expect(h.ran).toEqual(['ls -la']);
   });
 
   test('warn passes through and exec runs', async () => {
-    const h = harness(THEIRS, { mode: () => 'strict' });
+    const h = harness(DEVICE, { mode: () => 'strict' });
     expect(await h.run('printenv')).toBe('ran:printenv');
   });
 
@@ -323,7 +324,7 @@ describe('gateExec', () => {
 
   for (const refused of refusals) {
     test(refused.name, async () => {
-      const h = harness(THEIRS, { mode: () => 'strict', requestApproval: async () => refused.approval });
+      const h = harness(DEVICE, { mode: () => 'strict', requestApproval: async () => refused.approval });
       const result = await h.run(refused.command);
 
       expect(h.ran).toEqual([]);
@@ -334,7 +335,7 @@ describe('gateExec', () => {
   test('a gate-tier command asks the channel; approved → exec runs', async () => {
     const asked: ShellApprovalRequest[] = [];
 
-    const h = harness(THEIRS, {
+    const h = harness(DEVICE, {
       mode: () => 'strict',
       requestApproval: async (req) => {
         asked.push(req);
@@ -345,13 +346,13 @@ describe('gateExec', () => {
 
     expect(await h.run('sudo apt-get install nginx')).toBe('ran:sudo apt-get install nginx');
     expect(asked).toHaveLength(1);
-    expect(asked[0]?.executor).toBe(THEIRS);
+    expect(asked[0]?.executor).toBe(DEVICE.name);
   });
 
   test('the channel is never consulted for a command the executor makes harmless', async () => {
     const asked: ShellApprovalRequest[] = [];
 
-    const h = harness(OURS, {
+    const h = harness(WORKSPACE, {
       mode: () => 'strict',
       requestApproval: async (req) => {
         asked.push(req);
@@ -365,7 +366,7 @@ describe('gateExec', () => {
   });
 
   test('a gate-tier command with no approver wired is refused, not silently allowed', async () => {
-    const h = harness(THEIRS, { mode: () => 'strict' });
+    const h = harness(DEVICE, { mode: () => 'strict' });
     const result = await h.run('sudo something');
     expect(h.ran).toEqual([]);
     expect(result).toContain('needs owner approval, nobody to ask');
@@ -381,13 +382,13 @@ describe('gateExec — standing grants', () => {
     return {
       held,
       asked,
-      on(executor: string, answer: 'allow' | 'allow_always' | 'deny') {
+      on(executor: GatedExecutor, answer: 'allow' | 'allow_always' | 'deny') {
         const policy: ShellApprovalPolicy = {
           mode: () => 'strict',
           granted: (grant) => held.has(formatApprovalGrant(grant)),
           remember: (grants) => { for (const g of grants) held.add(formatApprovalGrant(g)); },
           requestApproval: async () => {
-            asked.push(executor);
+            asked.push(executor.name);
 
             return answer;
           },
@@ -400,13 +401,13 @@ describe('gateExec — standing grants', () => {
 
   test('an already-granted rule stops re-prompting on that executor', async () => {
     const store = grantStore(['rm-recursive@device']);
-    expect(await store.on(THEIRS, 'deny').run('rm -rf /tmp/scratch')).toBe('ran:rm -rf /tmp/scratch');
+    expect(await store.on(DEVICE, 'deny').run('rm -rf /tmp/scratch')).toBe('ran:rm -rf /tmp/scratch');
     expect(store.asked).toEqual([]);
   });
 
   test('the grant does not leak to another executor', async () => {
     const store = grantStore(['rm-recursive@device']);
-    expect(await store.on('parent', 'deny').run('rm -rf /tmp/scratch')).toContain('Denied by the owner');
+    expect(await store.on(PARENT, 'deny').run('rm -rf /tmp/scratch')).toContain('Denied by the owner');
     expect(store.asked).toEqual(['parent']);
   });
 
@@ -419,32 +420,32 @@ describe('gateExec — standing grants', () => {
     test(asks.name, async () => {
       const store = grantStore(['rm-recursive@device']);
 
-      expect(await store.on(THEIRS, 'deny').run(asks.command)).toContain('Denied by the owner');
-      expect(store.asked).toEqual([THEIRS]);
+      expect(await store.on(DEVICE, 'deny').run(asks.command)).toContain('Denied by the owner');
+      expect(store.asked).toEqual([DEVICE.name]);
     });
   }
 
   test('"allow always" remembers exactly the rules it was asked about, and then stops asking', async () => {
     const store = grantStore();
-    expect(await store.on(THEIRS, 'allow_always').run('rm -rf /tmp/one')).toBe('ran:rm -rf /tmp/one');
+    expect(await store.on(DEVICE, 'allow_always').run('rm -rf /tmp/one')).toBe('ran:rm -rf /tmp/one');
     expect([...store.held]).toEqual(['rm-recursive@device']);
-    expect(store.asked).toEqual([THEIRS]);
+    expect(store.asked).toEqual([DEVICE.name]);
 
     // A different command of the same kind, in the same place: no second ask.
-    expect(await store.on(THEIRS, 'deny').run('rm -r /tmp/two')).toBe('ran:rm -r /tmp/two');
-    expect(store.asked).toEqual([THEIRS]);
+    expect(await store.on(DEVICE, 'deny').run('rm -r /tmp/two')).toBe('ran:rm -r /tmp/two');
+    expect(store.asked).toEqual([DEVICE.name]);
   });
 
   test('the same command on an executor the owner never granted still asks', async () => {
     const store = grantStore();
-    expect(await store.on(THEIRS, 'allow_always').run('rm -rf /tmp/one')).toBe('ran:rm -rf /tmp/one');
-    expect(await store.on('parent', 'deny').run('rm -rf /tmp/one')).toContain('Denied by the owner');
-    expect(store.asked).toEqual([THEIRS, 'parent']);
+    expect(await store.on(DEVICE, 'allow_always').run('rm -rf /tmp/one')).toBe('ran:rm -rf /tmp/one');
+    expect(await store.on(PARENT, 'deny').run('rm -rf /tmp/one')).toContain('Denied by the owner');
+    expect(store.asked).toEqual([DEVICE.name, PARENT.name]);
   });
 
   test('a grant never softens a deny', async () => {
     const store = grantStore(['rm-rf-root@device', 'cloud-metadata-ip@device']);
-    const h = store.on(THEIRS, 'allow');
+    const h = store.on(DEVICE, 'allow');
     expect(await h.run('rm -rf /')).toContain('rm-rf-root');
     expect(await h.run('curl http://169.254.169.254/')).toContain('cloud-metadata-ip');
     expect(h.ran).toEqual([]);
@@ -465,13 +466,13 @@ describe('the grant vocabulary', () => {
   });
 
   test('an always-answer buys the gated rules on the asked executor and nothing else', () => {
-    const review = reviewCommand('sudo rm -rf /var/tmp/x', 'device');
+    const review = reviewCommand('sudo rm -rf /var/tmp/x', THEIRS);
     expect(gatedGrants(review, 'device')).toEqual([
       { rule: 'sudo', executor: 'device' },
       { rule: 'rm-recursive', executor: 'device' },
     ]);
     // Warn-tier hits are not questions, so they buy nothing.
-    expect(gatedGrants(reviewCommand('printenv', 'device'), 'device')).toEqual([]);
+    expect(gatedGrants(reviewCommand('printenv', THEIRS), 'device')).toEqual([]);
   });
 
   test('a grant covers its rule on its executor and nothing wider, on every policy that asks', () => {

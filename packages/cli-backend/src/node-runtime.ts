@@ -43,7 +43,8 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
     if (node.isolation === 'private-home') {
       const plane = await deps.workspace.asAgent({ cred: node.cred, home: node.home, tmp: node.tmp });
       requireLocalActorWorkspace(origin.actor, actor);
-      shell = withApprovalGatedShell(plane.shell, deps.approvalPolicy);
+      // A private home is a plane of the in-SQLite workspace, never the user's directory.
+      shell = withApprovalGatedShell(plane.shell, 'agent', deps.approvalPolicy);
       const ownRouter = new DefaultExecutionRouter(deps.approvalPolicy);
       const files = observer ? observeWrites(plane.vfs, observer) : plane.vfs;
 
@@ -56,7 +57,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
 
       deps.workspace.mountTable(mounted, node.cred);
       vfs = mounted;
-      ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs, shell }));
+      ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs, shell, filesOwner: 'agent' }));
 
       for (const info of origin.executionRouter?.listExecutors() ?? []) {
         if (info.name === 'workspace') continue;

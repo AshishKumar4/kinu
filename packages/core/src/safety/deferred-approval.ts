@@ -1,8 +1,7 @@
 /**
- * Deferred approval: a gated action parks on the owner instead of blocking or being auto-denied, and
- * the agent is told it is parked. Honesty invariant: a queued action returns through `denyResult`, so a
- * success-shaped result for an action that did not run is unreachable; 'approved' is permission, not an
- * effect; parked actions are re-stated every step. The queue is SQL because it must survive eviction.
+ * Deferred approval: a gated action parks on the owner, and the agent is told so. A queued action returns
+ * through `denyResult`, so nothing that did not run looks like a success; 'approved' is permission, not an
+ * effect; parked actions are re-stated every step. SQL, to survive eviction.
  */
 
 import type { DynamicApproval } from '../types/dynamic-context';
@@ -14,7 +13,7 @@ import * as v from 'valibot';
 import {
   formatApproval, gatedGrants, reviewCommand,
   type ApprovalGrant, type ApprovalSpend, type ApprovalSpendOutcome,
-  type DeferredApprovalChannel, type ShellApprovalRequest,
+  type DeferredApprovalChannel, type FilesOwner, type ShellApprovalRequest,
 } from './approval-gate';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, toKinuError } from '../obs/index';
@@ -30,15 +29,15 @@ export type DeferredApprovalStatus =
   | 'approved'
   /** The owner said no. Stands for {@link DENIAL_STANDING_MS}, then is swept. */
   | 'denied'
-  /** The grant is out with a running command and answers nobody. The gate deletes the row or restores
-   *  'approved'; a row left here means a process died mid-command, and the grant is lost (safe direction). */
+  /** Out with a running command; answers nobody. The gate deletes the row or restores 'approved'; a row
+   *  left here is a process that died mid-command, its grant lost (the safe direction). */
   | 'spent';
 
 /** What the owner can pick. `always` is `approved` plus a standing grant for the tripped rules on that executor. */
 export type DeferredApprovalAnswer = Extract<DeferredApprovalStatus, 'approved' | 'denied'> | 'always';
 
-/** How long a denial answers before the queue asks again. Denied rows expire so old refusals
- *  don't govern today and don't accumulate; standing policy lives in actor_config. */
+/** How long a denial answers before the queue asks again, so old refusals neither govern today nor
+ *  accumulate; standing policy lives in actor_config. */
 export const DENIAL_STANDING_MS = 24 * 60 * 60 * 1000;
 
 /** One action parked on the owner. */
@@ -234,8 +233,8 @@ function clip(text: string): string {
   return text.length <= COMMAND_ECHO_MAX_CHARS ? text : `${text.slice(0, COMMAND_ECHO_MAX_CHARS)}…`;
 }
 
-/** The one-line result for a parked action: nothing ran, which rule, which machine, and the id.
- *  Standing doctrine lives in the system prompt. Still returned through `denyResult`. */
+/** A parked action's one-line result: nothing ran, which rule, which machine, the id. Returned through
+ *  `denyResult`; the doctrine lives in the system prompt. */
 function queuedActionMessage(action: DeferredApproval): string {
   return `NOT RUN — queued for owner approval (${action.id}): ${ruleNames(action)} on ${action.executor}. `
     + 'A decision will wake you.';
@@ -279,6 +278,8 @@ export interface DeferredApprovalQueueDeps {
   readonly inbox: AgentInbox;
   /** Record a standing grant from an 'always' answer; the host owns storage (actor_config). */
   remember(grants: readonly ApprovalGrant[]): void;
+  /** Whose files the named executor declares, to re-review an 'always'. */
+  filesOwner(executor: string): FilesOwner;
   /** Durable audit sink for `approval_consumed`. Optional only for tests; production must wire it. */
   audit?(record: ApprovalConsumedRecord): void;
   /** Mint a request id; injected for host id vocabulary and deterministic tests. */
@@ -397,7 +398,7 @@ export class DeferredApprovalQueue {
     if (answer === 'always') {
       // Recomputed, not stored: the rule table is the source of truth.
       this.deps.remember(decided.flatMap(
-        (a) => gatedGrants(reviewCommand(a.command, a.executor), a.executor)));
+        (a) => gatedGrants(reviewCommand(a.command, this.deps.filesOwner(a.executor)), a.executor)));
     }
 
     this.notify({ kind: 'decided', actions: decided });

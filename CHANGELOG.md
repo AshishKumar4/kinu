@@ -670,6 +670,13 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **The CLI asks before a destructive command in your directory.** In a workspace placed in a directory, `sudo`,
+  `rm -rf`, `git reset --hard`, `chmod u+s` and the other commands whose harm stays on the machine ran without
+  asking: the approval check took the shell's name, `workspace`, for the agent's own disposable workspace. Each
+  executor now declares whose files it holds, and the check reads that. The Cloudflare workspace, its container
+  and the CLI's in-database workspace hold the agent's own; a CLI workspace in your directory, a connected machine
+  and the workspace a fork came from hold yours, so those commands wait for you there.
+
 - **A model tier whose model is gone runs on your default.** A tier set to a model its provider no longer lists
   (retired, or its account disconnected) failed every turn it served. It now runs on your default tier, then on
   GLM 5.3, on the CLI as on the web. A provider that lists no models (an OpenAI-compatible endpoint whose `/models`

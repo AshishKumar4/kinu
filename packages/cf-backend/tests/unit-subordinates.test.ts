@@ -222,7 +222,7 @@ describe('an agent\'s window hears only what it may act on', () => {
       await rosterSent.promise;
       await agent.announceSubordinatePlan({ path: [name], id: 'plan-1', revision: 1 });
       await agent.cancelCurrentWork();
-      agent.observeDeferrals().park({ command: 'git push --force origin main', executor: 'workspace', review: reviewCommand('git push --force origin main', 'workspace') });
+      agent.observeDeferrals().park({ command: 'git push --force origin main', executor: 'workspace', review: reviewCommand('git push --force origin main', 'agent') });
       await agent.listSlates();
       await workspaceFiles(agent).mkdir('/home/main/slates/tally', { recursive: true });
       await workspaceFiles(agent).writeFile('/home/main/slates/tally/server.ts', 'export default { fetch() { return new Response("ok"); } };');

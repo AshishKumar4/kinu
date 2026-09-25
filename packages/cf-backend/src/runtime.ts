@@ -319,7 +319,7 @@ export function createCFRuntime(
       ownGrants: () => memoryConfig.getShellApprovalGrants(),
     });
 
-  const shell = withApprovalGatedShell(nimbusSessionShell(executionBox), approvalPolicy);
+  const shell = withApprovalGatedShell(nimbusSessionShell(executionBox), 'agent', approvalPolicy);
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
   // State services keep `baseWorkspaceVfs` and never index foreign bytes. The context mount is last:
   // the only per-actor entry.

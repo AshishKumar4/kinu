@@ -3,10 +3,10 @@
  * and every other ExecutorProvider's `exec`/`startProcess`, gated on `ExecutionRouter.register()`.
  */
 
-import { gateExec, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
+import { gateExec, STRICT_NO_CHANNEL_POLICY, type FilesOwner, type ShellApprovalPolicy } from '../safety/approval-gate';
 import * as v from 'valibot';
 import { answeredRefusal } from './exec-result';
-import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
+import type { ExecutionRouter, ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
 import type { Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
 import { requireBuild } from './work-mode';
 import { refusalOf } from '../obs/error';
@@ -31,13 +31,14 @@ function parseShellExecOptions(input: { value: unknown }): string | ShellExecOpt
  */
 export function withApprovalGatedShell(
   shell: Shell,
+  filesOwner: FilesOwner,
   policy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY,
 ): Shell {
   // 'workspace' only: gateProviderExec skips the workspace `exec` because it is gated here.
   const execute = gateExec<ShellExecResult>(
     (command, ...rest) => shell.exec(command, parseShellExecOptions({ value: rest[0] })),
     (error) => ({ stdout: '', stderr: error.message, exitCode: 1, refusal: refusalOf(error) }),
-    'workspace',
+    { name: 'workspace', filesOwner },
     { policy, refusalCode: (result) => result.refusal?.reason ?? null },
   );
 
@@ -48,6 +49,11 @@ export function withApprovalGatedShell(
       return execute(command, stdinOrOptions);
     },
   };
+}
+
+/** Whose files the named executor declares; an unregistered name is the user's, so a re-review keeps every rule. */
+export function declaredFilesOwner(router: ExecutionRouter | undefined, executor: string): FilesOwner {
+  return router?.getProvider(executor)?.filesOwner ?? 'user';
 }
 
 /** Tools taking a raw shell command as first argument; VFS-shaped tools are out of scope. */
@@ -67,11 +73,11 @@ export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprov
 
     if (!entry || GATED_EXECUTES.has(entry.execute)) continue;
 
-    // Keyed on `name`, not `kind`: standing grants are written against the executor name.
+    // Grants name the executor; its declared files pick the rules.
     const gated = gateExec<ExecutorToolResult>(
       (command, ...rest) => entry.execute(command, ...rest),
       (error) => refusalOf(error),
-      provider.name,
+      provider,
       { policy, refusalCode: (result) => result === undefined ? null : answeredRefusal(result)?.reason ?? null },
     );
 

@@ -36,6 +36,7 @@ const VfsMessageSchema = v.object({ message: v.string(), code: v.string() });
 
 function buildExec(rt: ReturnType<typeof createTestRuntime>['rt'], slate?: InlineExecutorDeps['slate']) {
   const deps: InlineExecutorDeps = {
+    filesOwner: 'agent',
     vfs: rt.storage.vfs,
     memory: rt.memory,
     craftStore: rt.craftStore,
@@ -93,6 +94,7 @@ describe('workspace provider (InlineExecutor)', () => {
     };
 
     const exec = createInlineExecutor({
+      filesOwner: 'agent',
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: { ...rt.craftStore, list: () => [ghost] },
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
       sql: rt.storage.sql,
@@ -242,6 +244,7 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     const vfs = rt.storage.vfs;
 
     const exec = createInlineExecutor({
+      filesOwner: 'agent',
       vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
       sql: rt.storage.sql,
@@ -352,6 +355,7 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     const ledger = new TurnFileLedger();
 
     const exec = createInlineExecutor({
+      filesOwner: 'agent',
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
       sql: rt.storage.sql,
@@ -390,6 +394,7 @@ describe('declared resource limits', () => {
     const { rt } = createTestRuntime();
     const router = new DefaultExecutionRouter();
     router.register(createInlineExecutor({
+      filesOwner: 'agent',
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
       resourceLimits: { cpus: 1, memBytes: 2 * 1024 ** 3 },
@@ -409,6 +414,7 @@ describe('workspace.* VFS errors carry the addressing correction', () => {
     const vfs = rt.storage.vfs;
 
     return createInlineExecutor({
+      filesOwner: 'agent',
       vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
       sql: rt.storage.sql,
@@ -452,6 +458,7 @@ describe('workspace.* VFS errors carry the addressing correction', () => {
     const { rt } = createTestRuntime();
 
     const exec = createInlineExecutor({
+      filesOwner: 'agent',
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => { throw new Error('shell is not available'); } },
       sql: rt.storage.sql,

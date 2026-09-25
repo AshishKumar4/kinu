@@ -42,7 +42,7 @@ import { TierIdSchema,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
   backgroundJobNotice,
-  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
+  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, declaredFilesOwner,
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore,
@@ -674,6 +674,7 @@ export class LocalAgentSession implements BackendHost {
       store: new DeferredApprovalStore(this.rt.storage.sql, this.rt.actor),
       inbox: this.actorSession.orchestrator.inbox,
       remember: (grants) => { this.config.grantShellApproval(grants); },
+      filesOwner: (executor) => declaredFilesOwner(this.rt.executionRouter, executor),
       audit: (record) => {
         this.eventRecorder.emit(this.chat.currentRunId ?? WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
       },

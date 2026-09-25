@@ -1119,7 +1119,7 @@ export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict'
 export {
   DefaultExecutionRouter,
   createInlineExecutor,
-  withApprovalGatedShell, gateProviderExec,
+  withApprovalGatedShell, gateProviderExec, declaredFilesOwner,
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError, SandboxPending,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
@@ -1504,6 +1504,8 @@ export {
   type ApprovalRuleHit,
   type ApprovalResult,
   type ApprovalHarm,
+  type FilesOwner,
+  type GatedExecutor,
   type ApprovalGrant,
   type ShellApprovalRequest,
   type ShellApprovalOutcome,

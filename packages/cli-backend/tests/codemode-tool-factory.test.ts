@@ -480,7 +480,7 @@ test('each workspace.slates member reaches the slate host as one operation, and 
 
   const workspace = createInlineExecutor({
     vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
-    shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
+    shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) }, filesOwner: 'agent',
     slate: async (operation) => {
       operations.push(operation);
 

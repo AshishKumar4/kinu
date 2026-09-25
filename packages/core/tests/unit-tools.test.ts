@@ -613,7 +613,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // The gate lives at the execution seam (execution/approval.ts), so this needs a real gated shell.
     // The message must not name setShellApprovalMode, an RPC the model cannot reach.
     const { rt } = createTestRuntime();
-    const shell = withApprovalGatedShell({ exec: async () => ({ stdout: 'ran', stderr: '', exitCode: 0 }) });
+    const shell = withApprovalGatedShell({ exec: async () => ({ stdout: 'ran', stderr: '', exitCode: 0 }) }, 'agent');
     const t = tools({ ...rt, shell });
     const shellTool = { execute: toolExecute<{ command: string }, string>(t.shell) };
     // Force-push is gated even on the agent's own workspace: the harm lands on a remote.

@@ -8,7 +8,7 @@ import {
   DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools,
   formatApprovalGrant,
   type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome,
-  type AgentRuntime, type AgentSignal, type Shell,
+  type AgentRuntime, type AgentSignal, type FilesOwner, type Shell,
 } from '../src/index';
 import { buildPendingActions } from '../src/read-models/pending-actions';
 import { gateProviderExec } from '../src/execution/approval';
@@ -43,7 +43,10 @@ function setup(opts: {
   approve?: () => Promise<ShellApprovalOutcome | null>;
   /** Omit the queue: the no-queue path must behave as if deferral did not exist. */
   noQueue?: boolean;
+  /** Whose files the gated shell holds; the queue re-reviews under the same declaration. */
+  filesOwner?: FilesOwner;
 } = {}) {
+  const filesOwner = opts.filesOwner ?? 'agent';
   const { sql, actor } = approvalsDb();
   const store = new DeferredApprovalStore(sql, actor);
 
@@ -63,6 +66,7 @@ function setup(opts: {
       return 'queued';
     } },
     remember: (grants) => { for (const g of grants) granted.push(formatApprovalGrant(g)); },
+    filesOwner: () => filesOwner,
     newId: () => `defer-${++seq}`,
     now: () => 1_000 + seq + elapsed,
     audit: (record) => { audited.push(record); },
@@ -86,7 +90,7 @@ function setup(opts: {
   if (opts.approve) policy.requestApproval = opts.approve;
 
   if (!opts.noQueue) policy.deferrals = queue.channel;
-  const shell = withApprovalGatedShell(rawShell, policy);
+  const shell = withApprovalGatedShell(rawShell, filesOwner, policy);
   const { rt } = createTestRuntime();
   const runtime: AgentRuntime = { ...rt, shell };
   const tools = buildBuiltinTools({ rt: runtime, history: storesFor(runtime).history });
@@ -110,13 +114,13 @@ describe('a gated action nobody is there to approve', () => {
 
     const queue = new DeferredApprovalQueue({
       store: new DeferredApprovalStore(sql, actor),
-      inbox: { send: async () => 'queued' }, remember: () => {},
+      inbox: { send: async () => 'queued' }, remember: () => {}, filesOwner: () => 'agent',
       audit: () => { throw new Error('audit unavailable'); },
     });
 
     const shell = withApprovalGatedShell({
       exec: async () => ({ stdout: 'executed', stderr: '', exitCode: 0 }),
-    }, { mode: () => 'strict', requestApproval: null, deferrals: queue.channel });
+    }, 'agent', { mode: () => 'strict', requestApproval: null, deferrals: queue.channel });
 
     try {
       await shell.exec(GATED);
@@ -396,6 +400,17 @@ describe('what an approval actually buys', () => {
     expect(delivered).toHaveLength(1);
   });
 
+  test('"always" on a command that harms the user\'s files grants that rule, so the next one runs', async () => {
+    const { shellTool, queue, executed, granted } = setup({ filesOwner: 'user' });
+    await expect(shellTool.execute({ command: 'rm -rf build' })).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
+
+    await queue.decide(['defer-1'], 'always');
+
+    expect(granted).toEqual(['rm-recursive@workspace']);
+    expect(await shellTool.execute({ command: 'rm -rf dist' })).toBe('ran');
+    expect(executed).toEqual(['rm -rf dist']);
+  });
+
   test('an "always" grant does not travel to another rule', async () => {
     const { shellTool, queue, executed, granted } = setup();
     await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
@@ -528,6 +543,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
       store,
       inbox: { send: () => Promise.reject(new Error('no host')) },
       remember: () => { throw new Error('not an always answer'); },
+      filesOwner: () => 'agent',
     });
 
     await expect(queue.decide(['defer-7'], 'approved')).rejects.toThrow('no host');
@@ -551,6 +567,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
       store,
       inbox: { send: async () => 'queued' },
       remember: () => { throw new Error('not an always answer'); },
+      filesOwner: () => 'user',
       newId: () => `defer-${++seq}`,
       now: () => 1_000 + seq,
       audit: (record) => { audited.push(record); },
@@ -564,6 +581,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
       name: 'device',
       kind: 'device',
       capabilities: new Set(['shell']),
+      filesOwner: 'user',
       homeDir: async () => '/home/owner',
       isAvailable: () => true,
       connect: async () => {},
@@ -748,7 +766,7 @@ test('no-execution refusals retain their class before native run and executor te
 
 test('an executed exit-one command remains a command failure even if stdout looks like a refusal', async () => {
   const stdout = JSON.stringify({ reason: 'denied', error: 'ordinary command data' });
-  const shell = withApprovalGatedShell({ exec: async () => ({ stdout, stderr: 'process failure', exitCode: 1 }) });
+  const shell = withApprovalGatedShell({ exec: async () => ({ stdout, stderr: 'process failure', exitCode: 1 }) }, 'agent');
   const result = await shell.exec('false');
   const rendered = formatExecResult(result);
   expect(result.exitCode).toBe(1);

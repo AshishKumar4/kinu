@@ -215,6 +215,7 @@ describe('criteria immutability from agent-reachable paths', () => {
 describe('craft_tool surface — the agent-authored tool the model writes mid-turn', () => {
   function inlineCreateTool(rt: AgentRuntime) {
     const executor = createInlineExecutor({
+      filesOwner: 'agent',
       vfs: rt.storage.vfs,
       memory: rt.memory,
       craftStore: rt.craftStore,

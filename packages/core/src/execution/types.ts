@@ -6,6 +6,7 @@
 import type { VFS } from '../types/primitives';
 import type { JsonValue } from '../utils/json';
 import type { DeviceSandboxStatus } from './device-status';
+import type { FilesOwner } from '../safety/approval-gate';
 
 /**
  * "No work deadline" for a mechanism that insists on a timer: the largest `setTimeout` delay; larger values
@@ -101,6 +102,9 @@ export interface ExecutorProvider {
   homeDir(segment?: string): Promise<string>;
 
   readonly capabilities: ReadonlySet<ExecutorCapability>;
+
+  /** Whose files its commands reach (safety/approval-gate.ts). */
+  readonly filesOwner: FilesOwner;
 
   /** Capabilities that can be neither claimed nor ruled out (e.g. GPU on a tunnelled machine). Disjoint from `capabilities`. */
   readonly unmeasuredCapabilities?: ReadonlySet<ExecutorCapability>;

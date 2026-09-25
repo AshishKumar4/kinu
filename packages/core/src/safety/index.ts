@@ -14,6 +14,8 @@ export {
   type ApprovalRuleHit,
   type ApprovalResult,
   type ApprovalHarm,
+  type FilesOwner,
+  type GatedExecutor,
   type ApprovalGrant,
   type ApprovalSpend,
   type ShellApprovalRequest,

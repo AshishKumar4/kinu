@@ -87,6 +87,7 @@ describe('the inline executor `exec` honours the same contract', () => {
     const { rt } = createTestRuntime();
 
     return createInlineExecutor({
+      filesOwner: 'agent',
       vfs: rt.storage.vfs,
       memory: rt.memory,
       craftStore: rt.craftStore,

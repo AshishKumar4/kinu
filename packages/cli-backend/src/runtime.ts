@@ -12,7 +12,7 @@ import type {
 import type {
   Schedule, Memory, VFS, VfsNativeReads, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql,
 } from '@kinu.run/core';
-import type { DeferredApprovalChannel, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
+import type { DeferredApprovalChannel, FilesOwner, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, rmSync, chmodSync, writeSync } from 'node:fs';
 import { constants as osConstants } from 'node:os';
@@ -380,20 +380,23 @@ export function createCLIRuntime(
     get deferrals() { return approvalDeferrals ?? undefined; },
   };
 
-  // A directory-bound shell may mutate the tree, so it snapshots first; the
-  // in-SQLite shell touches no host file.
+  // A directory-bound shell runs on the user's machine and may mutate the tree, so it
+  // snapshots first; the in-SQLite shell touches no host file and is the agent's own.
+  const filesOwner: FilesOwner = cwd === null ? 'agent' : 'user';
+
   const facetShell = cwd === null ? null : (facet: string | undefined): Shell => withApprovalGatedShell(
     withCheckpointedShell(
       createHostShell(cwd, facet === undefined ? process.env : facetShellEnv(cwd, facet)),
       checkpoints,
       cwd,
     ),
+    filesOwner,
     approvalPolicy,
   );
 
   const shell: Shell = facetShell
     ? facetShell(config.facet)
-    : withApprovalGatedShell(workspace.shell, approvalPolicy);
+    : withApprovalGatedShell(workspace.shell, filesOwner, approvalPolicy);
 
   const executionRouter = new DefaultExecutionRouter(approvalPolicy);
 
@@ -447,6 +450,7 @@ export function createCLIRuntime(
     memory,
     craftStore,
     shell,
+    filesOwner,
     sql,
     ledger: () => turnFileLedgerProvider?.(),
     // A directory-bound shell declares what this machine's PATH proves.
@@ -646,6 +650,8 @@ async function buildCLIHeadRuntime(
 
   const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
     vfs, memory: parent.memory, craftStore: parent.craftStore, shell, sql,
+    // The same machine the parent's shell runs on.
+    filesOwner: parent.cwd ? 'user' : 'agent',
     toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
   };
 
