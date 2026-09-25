@@ -12,7 +12,7 @@ import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { SlateId } from '@agent-core/core/slates';
 import {
-  DynamicContextLedger, MAIN_AGENT, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory,
+  ChangeSetCache, DynamicContextLedger, MAIN_AGENT, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory,
   agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables,
   initAgentConfigTable, initCodemodeStateTable, initWorkspaceActorTable, initWorkspaceBaselineTable, initWorkspaceSchema,
   nimbusSessionFiles, resetWorkspaceBaseline, standardMounts, withMountTable,
@@ -461,6 +461,39 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
       const diff = await getWorkspaceDiff(runtime);
 
       if (diff.files.length !== 1) throw new Error(`the Diffs read saw ${String(diff.files.length)} changed files, not the 1 edited`);
+
+      return null;
+    });
+  }
+
+  /**
+   * The Changes poll with nothing changed since the last one, as the orchestrator serves it: its change-set held by a
+   * `ChangeSetCache` the workspace's file events keep, after one edit's read has refreshed it.
+   */
+  async diffPoll(files: number): Promise<OperationCost> {
+    const actor = this.main();
+    const vfs = this.agentFiles();
+    const changes = new ChangeSetCache();
+
+    (await this.workspace()).events.on((batch) => changes.touched(batch.flatMap((event) => (event.oldPath === undefined ? [event.path] : [event.path, event.oldPath]))));
+    initWorkspaceBaselineTable(this.execRaw);
+
+    for (let index = 0; index < files; index += 1) await vfs.writeFile(filePath(index), fileText(index));
+
+    const runtime = {
+      storage: { vfs, sql: this.executor, execRaw: this.execRaw, transactionSync: <T,>(write: () => T): T => this.ctx.storage.transactionSync(write) },
+      actor,
+    };
+
+    await resetWorkspaceBaseline(runtime);
+    changes.moved();
+    await vfs.writeFile(filePath(Math.floor(files / 2)), fileText(Math.floor(files / 2), 1));
+    const first = await changes.read(() => getWorkspaceDiff(runtime));
+
+    return await this.meter.measure(async () => {
+      const again = await changes.read(() => getWorkspaceDiff(runtime));
+
+      if (again.files.length !== 1 || first.files.length !== 1) throw new Error(`the poll saw ${String(again.files.length)} changed files, not the 1 edited`);
 
       return null;
     });

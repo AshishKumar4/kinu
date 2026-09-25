@@ -305,7 +305,8 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
         restoreAgentTmpConfinements(opts.sql, root, workspace.vfs);
         workspace.vfs.events.on((batch) => {
           if (fileListeners.size === 0) return;
-          const paths = batch.map((event) => event.path);
+          // A rename names where the file left as well as where it went.
+          const paths = batch.flatMap((event) => (event.oldPath === undefined ? [event.path] : [event.path, event.oldPath]));
 
           for (const listener of fileListeners) listener(paths);
         });

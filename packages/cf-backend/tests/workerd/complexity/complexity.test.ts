@@ -57,6 +57,14 @@ const SUBJECTS: readonly Subject[] = [{
   why: 'a read compares the tree with the baseline manifest, which it reads whole; it reads the bytes of '
     + 'only the files whose size or mtime moved (file_chunks, vfs_baseline_blob) and writes nothing',
 }, {
+  name: 'workspace Diffs, a poll with nothing changed',
+  unit: 'files in the workspace',
+  sizes: [1_000, 10_000],
+  run: async (probe, size) => await probe.diffPoll(size),
+  rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
+  why: 'the change-set is held until a file event on a reviewed path or a review moves it, so a poll with '
+    + 'nothing changed reads neither the tree nor the manifest',
+}, {
   name: 'slate, eight new versions in a row',
   unit: 'versions already taken',
   // Both well past Nimbus's content maintenance page (50 content ids a write): below it the page

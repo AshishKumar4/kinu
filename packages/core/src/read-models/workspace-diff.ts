@@ -516,9 +516,46 @@ async function getGitDiff(rt: AgentRuntime, executorId: string): Promise<Executo
   }
 }
 
-export async function getExecutorDiff(rt: AgentRuntime, executorId: string): Promise<ExecutorDiffResult> {
+/** Whether a write at `path`, absolute as the workspace's file events name it, can move the change-set. */
+function reviewsPath(path: string): boolean {
+  const names = path.split('/').filter((name) => name !== '');
+  const [top] = names;
+
+  return top !== undefined && REVIEWED_UNDER_ROOT.includes(top) && names.every(reviewed);
+}
+
+/**
+ * The workspace's change-set, read again only after something it reviews moved: a file event on a reviewed path, or
+ * a baseline that Mark reviewed or Undo moved. A poll while nothing moved walks nothing.
+ */
+export class ChangeSetCache {
+  private generation = 0;
+  private held: { readonly generation: number; readonly result: WorkspaceDiffResult } | null = null;
+
+  /** Paths a write touched, as the workspace's file events name them. */
+  touched(paths: readonly string[]): void {
+    if (paths.some(reviewsPath)) this.generation += 1;
+  }
+
+  /** After Mark reviewed or Undo has moved the baseline. */
+  moved(): void {
+    this.generation += 1;
+  }
+
+  async read(load: () => Promise<WorkspaceDiffResult>): Promise<WorkspaceDiffResult> {
+    const { generation } = this;
+
+    if (this.held?.generation === generation) return this.held.result;
+    const result = await load();
+    this.held = { generation, result };
+
+    return result;
+  }
+}
+
+export async function getExecutorDiff(rt: AgentRuntime, executorId: string, changes?: ChangeSetCache): Promise<ExecutorDiffResult> {
   if (executorId === 'workspace') {
-    const r = await getWorkspaceDiff(rt);
+    const r = await (changes === undefined ? getWorkspaceDiff(rt) : changes.read(() => getWorkspaceDiff(rt)));
 
     return { files: r.files, mode: 'vfs-baseline', trackedSince: r.trackedSince, baseline: r.baseline };
   }

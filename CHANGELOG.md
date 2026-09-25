@@ -717,6 +717,11 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   `.config/`, `.git/`), and installed dependencies (`node_modules`, `venv`, `__pycache__`). A symbolic link is
   not followed: its target's files are listed where they live, or not at all.
 
+- **Changes costs nothing while nothing changes.** Every open workspace page read the workspace's whole change-set
+  every 2 seconds, with Changes closed or the tab in the background too. A page now reads it every 2 seconds only
+  while Changes is open and in view, and once when a turn ends, the tab comes back into view or the window takes
+  focus. A read with nothing changed since the last one no longer walks the workspace's files.
+
 - **Changes for a PC or the sandbox shows every repository in its folder.** It showed only the git repository that
   held the working folder, so a folder of projects read "not a git repository". Now every repository up to three
   folders below it is listed, nested ones included, each as a folder of the list with its uncommitted changes,

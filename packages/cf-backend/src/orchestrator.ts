@@ -167,7 +167,7 @@ import {
   type Page, type PageRequest,
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunEventText, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
-  getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline, restoreWorkspaceBaseline,
+  ChangeSetCache, getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceDiffResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes,
   type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
@@ -398,12 +398,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Shared across boot retries. */
   private _workspace: HostedWorkspace | undefined;
 
+  /** The change-set the Changes poll reads, held until a file event or a baseline move makes it stale. */
+  private readonly changes = new ChangeSetCache();
+
   private hostedWorkspace(): HostedWorkspace {
     this._workspace ??= createHostedWorkspace({
       ctx: this.ctx,
       env: this.env,
       previewUrl: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
       onFilesChanged: (paths) => {
+        this.changes.touched(paths);
         const ids = this.slates.filesChanged(paths);
 
         if (ids.length === 0) return;
@@ -3567,23 +3571,31 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Cumulative workspace change-set since the baseline (reset via resetWorkspaceBaseline).
    *  A read never changes the review boundary. */
   async getWorkspaceDiff(): Promise<WorkspaceDiffResult> {
-    return getWorkspaceDiff(this.rt);
+    return this.changes.read(() => getWorkspaceDiff(this.rt));
   }
 
   /** VFS snapshot baseline for the agent workspace; a real `git diff` of /workspace for shell executors. */
   @callable()
   async getExecutorDiff(executorId: string): Promise<ExecutorDiffResult> {
-    return getExecutorDiff(this.rt, executorId);
+    return getExecutorDiff(this.rt, executorId, this.changes);
   }
 
   @callable()
   async resetWorkspaceBaseline(): Promise<{ ok: true; files: number }> {
-    return resetWorkspaceBaseline(this.rt);
+    try {
+      return await resetWorkspaceBaseline(this.rt);
+    } finally {
+      this.changes.moved();
+    }
   }
 
   @callable()
   async restoreWorkspaceBaseline(): Promise<{ ok: true; capturedAt: number } | { ok: false; error: string }> {
-    return restoreWorkspaceBaseline(this.rt);
+    try {
+      return restoreWorkspaceBaseline(this.rt);
+    } finally {
+      this.changes.moved();
+    }
   }
 
   @callable()
@@ -4993,7 +5005,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     await this.ensureOwnedScaffold();
-    await resetWorkspaceBaseline(this.rt);
+    await this.resetWorkspaceBaseline();
 
     return {
       ok: true, status: 'published', agentId: this.ctx.id.toString(),

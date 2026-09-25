@@ -7,6 +7,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { createWorkspace } from '../src/workspace-birth';
 import {
+  ChangeSetCache,
   getExecutorDiff,
   getWorkspaceDiff,
   initWorkspaceBaselineTable,
@@ -383,6 +384,55 @@ describe('workspace diff lifecycle', () => {
     await resetWorkspaceBaseline(rt);
 
     expect((await getWorkspaceDiff(rt)).files).toEqual([]);
+  });
+
+  test('a poll while nothing reviewed moved walks nothing; a write, a shell write, a rename away or a review reads again', async () => {
+    const { rt, workspace } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    const changes = new ChangeSetCache();
+    let delivered = Promise.withResolvers<void>();
+
+    workspace.onFilesChanged((paths) => {
+      changes.touched(paths);
+      delivered.resolve();
+    });
+    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+    await resetWorkspaceBaseline(rt);
+    const lstat = rt.storage.vfs.lstat?.bind(rt.storage.vfs);
+    let walked = 0;
+
+    rt.storage.vfs.lstat = async (path) => {
+      walked += 1;
+
+      return (await lstat?.(path)) ?? null;
+    };
+
+    const landed = async (write: () => Promise<void>): Promise<void> => {
+      delivered = Promise.withResolvers<void>();
+      await write();
+      await delivered.promise;
+    };
+
+    const poll = async (): Promise<{ readonly walked: boolean; readonly listed: string[] }> => {
+      walked = 0;
+      const listed = (await changes.read(() => getWorkspaceDiff(rt))).files.map((file) => `${file.status} ${file.path}`);
+
+      return { walked: walked !== 0, listed };
+    };
+
+    expect(await poll()).toEqual({ walked: true, listed: [] });
+    expect(await poll()).toEqual({ walked: false, listed: [] });
+    await landed(() => rt.storage.vfs.writeFile('.cache/state.json', '{}'));
+    expect(await poll()).toEqual({ walked: false, listed: [] });
+    await landed(() => rt.storage.vfs.writeFile('notes.md', 'two\n'));
+    expect(await poll()).toEqual({ walked: true, listed: ['changed notes.md'] });
+    await landed(async () => { await workspace.shell.exec('echo from the shell > shell.txt'); });
+    expect(await poll()).toEqual({ walked: true, listed: ['changed notes.md', 'added shell.txt'] });
+    await landed(() => workspace.vfs.rename(`${WORKSPACE_ROOT}/shell.txt`, '/tmp/shell.txt'));
+    expect(await poll()).toEqual({ walked: true, listed: ['changed notes.md'] });
+    await resetWorkspaceBaseline(rt);
+    changes.moved();
+    expect(await poll()).toEqual({ walked: true, listed: [] });
   });
 
   test('the change-set never holds more than one baseline body at a time', async () => {
