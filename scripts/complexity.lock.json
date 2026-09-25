@@ -74,10 +74,6 @@
       "complexity": 41
     },
     {
-      "key": "packages/pc-agent/src/index.js#handle",
-      "complexity": 41
-    },
-    {
       "key": "scripts/bench-devbox-strategies.ts#render",
       "complexity": 41
     },
@@ -139,6 +135,10 @@
     },
     {
       "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
+      "complexity": 37
+    },
+    {
+      "key": "packages/pc-agent/src/index.js#handle",
       "complexity": 37
     },
     {

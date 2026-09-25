@@ -14,7 +14,7 @@ import type {
   DiffAnchor, PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult,
   PlanReviewStatus,
 } from '../types/plans';
-import type { EnqueueTurnResult, ProgrammaticTurn } from '../types/backend-host';
+import type { BackendHost, EnqueueTurnResult, ProgrammaticTurn } from '../types/backend-host';
 
 export type {
   PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanDecisionOutcome, PlanEdit,
@@ -698,11 +698,11 @@ export class PlanReviewStore {
 export class PlanReviewActions {
   constructor(
     private readonly store: PlanReviewStore,
-    private readonly announce: (plan: PlanReview) => void,
+    private readonly host: Pick<BackendHost, 'broadcast'>,
   ) {}
 
   private announced(result: PlanReviewResult): PlanReviewResult {
-    if (result.ok) this.announce(result.plan);
+    if (result.ok) this.host.broadcast({ type: 'plan_updated', plan: result.plan });
 
     return result;
   }

@@ -5,15 +5,19 @@
  */
 import { Database } from 'bun:sqlite';
 import {
-  initWorkspaceSchema, type ActorHandle, type EvolutionChangelogView, type LLMProviderConfig,
+  initWorkspaceSchema, type ActorHandle, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig,
   type RefinementRequestView, type SessionHistory, type SqlExecutor, type VFS,
 } from '@kinu.run/core';
 import { scratchPath, scriptedTurnModel, sqlOver } from '@kinu.run/test-utils';
 import {
   historyOver, orchestratorHarness, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
+import { deviceHarness, WORKSPACE } from '../helpers/device-harness';
+import { pcAgentDaemon } from '../helpers/pc-agent-daemon';
+import { testOwner } from '../helpers/user-do';
 import type { OrchestratorAgent } from '../../src/orchestrator';
 import { LocalAgentSession } from '../../../cli-backend/src/local-session';
+import { createHostCheckpoints } from '../../../cli-backend/src/checkpoints';
 import { createLocalModelResolver, type LocalModelResolver } from '../../../cli-backend/src/model-resolver';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../../../cli-backend/src/runtime';
 
@@ -77,11 +81,20 @@ export interface SharedBackend {
   readonly files: VFS;
   /** The main actor's conversation store, as each backend records its turns. */
   readonly history: SessionHistory;
+  /** Snapshot `dir` into the store this backend's checkpoint methods read, as a turn's first
+   *  mutation there does: the owner's device for cf, this machine for the CLI. */
+  readonly snapshot: (dir: string, turn: CheckpointTurnMeta) => Promise<void>;
 }
 
-/** The cf Durable Object, in process over bun:sqlite. */
-function cloudflare(): SharedBackend {
-  const harness = orchestratorHarness();
+/** The cf Durable Object, in process over bun:sqlite, owned by a real UserDO whose one device is the
+ *  real daemon with Sandbox off, so a checkpoint call crosses the hub and its consent gate. */
+async function cloudflare(): Promise<SharedBackend> {
+  const daemon = pcAgentDaemon();
+  const device = await deviceHarness('ashish@studio', async (frame) => await daemon.answer(frame) ?? null);
+  await device.userDO.setDeviceTier(await testOwner(), device.deviceId, 'raw');
+  device.consentDecision = 'always';
+  const harness = orchestratorHarness(undefined, { userDO: device.userDO, workspace: WORKSPACE, ownerUserId: 'test-user-do' });
+  harness.agent.harnessHoldsCapability(device.workspace.workspaceToken);
   const { agent, db } = harness;
 
   return {
@@ -90,6 +103,7 @@ function cloudflare(): SharedBackend {
     actor: workspaceMainActor(db),
     files: workspaceFiles(agent),
     history: historyOver(harness),
+    snapshot: (dir, turn) => daemon.snapshot({ agent: WORKSPACE, dir, ...turn }),
     surface: {
       getReasoningEffort: () => agent.getReasoningEffort(),
       setReasoningEffort: (effort) => agent.setReasoningEffort(effort),
@@ -173,11 +187,13 @@ function scriptedResolver(): LocalModelResolver {
   };
 }
 
-/** The CLI session over its own workspace database. */
+/** The CLI session over its own workspace database, with its checkpoint store under scratch. */
 function cli(): SharedBackend {
   const db = new Database(scratchPath('shared-backend', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath: db.filename, llm: NO_ENDPOINT });
+  const checkpoints = createHostCheckpoints({ agent: WORKSPACE, base: scratchPath('shared-backend-checkpoints', 'store') });
+  rt.checkpoints = checkpoints;
   const modelResolver = scriptedResolver();
 
   const session = new LocalAgentSession({
@@ -190,6 +206,10 @@ function cli(): SharedBackend {
     actor: rt.actor,
     files: rt.storage.vfs,
     history: rt.stores.history,
+    snapshot: async (dir, turn) => {
+      checkpoints.beginTurn(turn);
+      await checkpoints.ensureCheckpoint(dir);
+    },
     surface: {
       getReasoningEffort: async () => session.getReasoningEffort(),
       setReasoningEffort: async (effort) => session.setReasoningEffort(effort),
@@ -242,6 +262,6 @@ function cli(): SharedBackend {
   };
 }
 
-export function openBackend(name: BackendName): SharedBackend {
-  return name === 'cf' ? cloudflare() : cli();
+export function openBackend(name: BackendName): Promise<SharedBackend> {
+  return name === 'cf' ? cloudflare() : Promise.resolve(cli());
 }

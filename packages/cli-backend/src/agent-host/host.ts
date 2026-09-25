@@ -626,9 +626,7 @@ export class LocalAgentHost {
       hosted: {
         actor: input.actor,
         host: input.tree.host,
-        engine: orchestration.engine,
-        budget: orchestration.budget,
-        eventLog: orchestration.eventLog,
+        orchestration,
       },
       cwd: input.ref.cwd,
       onEvent: (event) => this.onSessionEvent(input.key, event),
@@ -1056,7 +1054,7 @@ export class LocalAgentHost {
         };
 
         if (report.task) metadata.task = report.task;
-        parent.session.broadcast(metadataBroadcastEvent(
+        parent.session.host.broadcast(metadataBroadcastEvent(
           'subordinate_event', metadata, { status: report.status, text: report.content },
         ));
       },
@@ -1112,8 +1110,8 @@ export class LocalAgentHost {
       originContext: async () => parent.actor.session.history,
       ownMission: () => localActorMission(parent.ws.rt, makeSqlExec(parent.tree.db)) ?? '',
       createName: mintSubordinateName,
-      broadcast: (event) => parent.session.broadcast(event),
-      broadcastTask: (event) => parent.session.broadcast(metadataBroadcastEvent(
+      broadcast: (event) => parent.session.host.broadcast(event),
+      broadcastTask: (event) => parent.session.host.broadcast(metadataBroadcastEvent(
         'subordinate_event',
         { subordinate: event.subordinate, timestamp: event.timestamp },
         { status: 'task', text: event.content },
@@ -1169,7 +1167,7 @@ export class LocalAgentHost {
       rename: async (name, displayName, nameOrigin) => {
         const child = await this.openChildEntry(parentOf(), name);
         child.config.setDisplayNameOrigin(displayName, nameOrigin);
-        child.session.broadcast({ type: 'workspace_renamed', displayName });
+        child.session.host.broadcast({ type: 'workspace_renamed', displayName });
       },
       dismiss: async (name, keepHistory, reference) => {
         await this.removeChild(parentOf(), name, keepHistory, reference);

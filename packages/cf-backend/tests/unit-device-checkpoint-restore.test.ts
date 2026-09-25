@@ -3,47 +3,27 @@
  * changed nothing" and "no history here". The hub's checkpoint client (`deviceFileCheckpoints`) drives
  * the real daemon (`packages/pc-agent/src/index.js`) with the frames the hub sends.
  */
-import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
-import { createRequire } from 'node:module';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import * as v from 'valibot';
 import {
-  CHECKPOINTS_UNAVAILABLE_NO_GIT, deviceFileCheckpoints, fileCheckpointListing, JsonValueSchema,
+  CHECKPOINTS_UNAVAILABLE_NO_GIT, deviceFileCheckpoints, fileCheckpointListing,
   type JsonValue, type UserCaller,
 } from '@kinu.run/core';
-
-const require_ = createRequire(import.meta.url);
-
-const pcAgent = v.parse(
-  v.object({ handle: v.function(), createCheckpoints: v.function() }),
-  require_(join(import.meta.dir, '../../pc-agent/src/index.js')),
-);
+import { scratchDir } from '@kinu.run/test-utils';
+import { pcAgentDaemon } from './helpers/pc-agent-daemon';
 
 const WORKSPACE = 'workspace-a';
 
 const CALLER: UserCaller = { workspaceToken: 'workspace-a-token' };
 
-const ReplySchema = v.object({ id: v.string(), result: v.optional(JsonValueSchema), error: v.optional(v.string()) });
-
 /** One machine: the daemon with its own checkpoint store, reached as the hub reaches it. */
 function machine(gitBin?: string) {
-  const ctx = { checkpoints: pcAgent.createCheckpoints({ base: join(scratchDir('device-checkpoint-store'), 'store'), gitBin }) };
+  const daemon = pcAgentDaemon({ gitBin });
   let next = 0;
 
-  const send = (frame: Record<string, JsonValue>) => new Promise<JsonValue | undefined>((resolve, reject) => {
-    const id = `rpc-ckptrevert-${String(next += 1)}`;
-
-    pcAgent.handle({ id, ...frame, sandbox: { tier: 'raw', agentHome: '', roots: [] } }, {
-      readyState: 1,
-      send(data: string) {
-        const reply = v.parse(ReplySchema, JSON.parse(data));
-
-        if (reply.error !== undefined) reject(new Error(reply.error));
-        else resolve(reply.result);
-      },
-    }, ctx);
+  const send = (frame: { method: string; params: JsonValue[]; checkpoint?: JsonValue }) => daemon.answer({
+    id: `rpc-ckptrevert-${String(next += 1)}`, ...frame, sandbox: { tier: 'raw', agentHome: '', roots: [] },
   });
 
   const checkpoints = deviceFileCheckpoints({
