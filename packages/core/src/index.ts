@@ -2476,14 +2476,16 @@ export {
   STACK_FRAME,
   COMPONENT_STACK_FRAME,
   stackFrames,
-  ClientErrorReportSchema,
   type ClientErrorReport,
   fitClientErrorReport,
+  CLIENT_CHAT_STREAM_FAILED,
+  ClientReportSchema,
   type ReleaseMatch,
 } from './read-models/client-error-contract';
 
 export {
   type PageIdentity,
+  reportChatStreamFailure,
   reportRenderFailure,
 } from './read-models/client-error-report';
 

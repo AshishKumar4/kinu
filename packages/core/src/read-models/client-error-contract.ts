@@ -14,6 +14,8 @@ export const CLIENT_ERROR_ENDPOINT = '/api/client-errors';
 
 export const CLIENT_RENDER_FAILED = 'client.render_failed';
 
+export const CLIENT_CHAT_STREAM_FAILED = 'client.chat_stream_failed';
+
 /** The only size in this contract: Analytics Engine's per-point blob budget, which silently drops
  *  oversized points. Checked against arriving bytes, never `content-length`. */
 export const CLIENT_ERROR_MAX_REQUEST_BYTES = MAX_BLOB_BYTES;
@@ -41,7 +43,7 @@ function framesSchema(frame: RegExp) {
 }
 
 /** `release` is optional (`vite dev` has no build stamp); the server does not trust it. */
-export const ClientErrorReportSchema = v.object({
+const ClientErrorReportSchema = v.object({
   event: v.literal(CLIENT_RENDER_FAILED),
   release: v.optional(v.pipe(v.string(), v.regex(/^[0-9a-z]{1,64}$/u))),
   route: v.picklist(REPORTED_ROUTES),
@@ -52,6 +54,27 @@ export const ClientErrorReportSchema = v.object({
 });
 
 export type ClientErrorReport = v.InferOutput<typeof ClientErrorReportSchema>;
+
+/** A part's type and the id its provider gave it (`reasoning-0`, `call_x`): coordinates, never its text. */
+const PartTokenSchema = v.pipe(v.string(), v.regex(/^[\w.:-]{1,64}$/u));
+
+/** A `useChat` stream the tab could not read, from the root pane or an actor's. */
+const ChatStreamFailureReportSchema = v.object({
+  event: v.literal(CLIENT_CHAT_STREAM_FAILED),
+  release: ClientErrorReportSchema.entries.release,
+  route: ClientErrorReportSchema.entries.route,
+  pane: v.picklist(['root', 'actor']),
+  errorName: ClientErrorReportSchema.entries.errorName,
+  stack: framesSchema(STACK_FRAME),
+  part: v.optional(v.object({ type: PartTokenSchema, id: PartTokenSchema })),
+});
+
+export type ChatStreamFailureReport = v.InferOutput<typeof ChatStreamFailureReportSchema>;
+
+export const ClientReportSchema = v.variant('event', [ClientErrorReportSchema, ChatStreamFailureReportSchema]);
+
+/** The protocol-error fields `ai`'s `UIMessageStreamError` carries, when the part tokens are well-formed. */
+export const StreamPartErrorSchema = v.looseObject({ chunkType: PartTokenSchema, chunkId: PartTokenSchema });
 
 const ENCODER = new TextEncoder();
 
@@ -98,6 +121,13 @@ export function fitClientErrorReport(report: ClientErrorReport): ClientErrorRepo
     stack: fitFrames(report.stack.split('\n'), stackShare),
     componentStack: fitFrames(report.componentStack.split('\n'), room - stackShare),
   };
+}
+
+export function fitChatStreamFailureReport(report: ChatStreamFailureReport): ChatStreamFailureReport {
+  const bare = { ...report, stack: '' };
+  const room = CLIENT_ERROR_MAX_REQUEST_BYTES - ENCODER.encode(JSON.stringify(bare)).byteLength;
+
+  return room <= 0 ? bare : { ...report, stack: fitFrames(report.stack.split('\n'), room) };
 }
 
 /** `stale`: a tab that rode through a deploy and runs code the origin no longer serves. */
