@@ -1,10 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { EgressCalls, toProviderError } from '@kinu.run/core';
-import { forwardedHeaders, refusal } from '../containers/codex-egress/policy.mjs';
-import type { Container, ContainerStartConfigOptions } from '@cloudflare/containers';
-import { CodexEgress } from '../src/egress/codex-egress';
+import { codexEgressAllowed, EgressCalls, toProviderError } from '@kinu.run/core';
+import { ALLOWED_ROUTES, forwardedHeaders, refusal } from '../containers/codex-egress/policy.mjs';
 import { codexEgressFetch, type CodexEgressNamespace } from '../src/egress/codex-egress-route';
 
 function egressOver(opts: {
@@ -101,65 +99,6 @@ describe('the Codex egress route', () => {
   });
 });
 
-describe('what a holder of the CodexEgress binding can start', () => {
-  type Ports = Parameters<Container['startAndWaitForPorts']>[0];
-
-  /** How a caller of the base class would ask: every start option the SDK takes. */
-  interface BaseCaller {
-    start(options?: ContainerStartConfigOptions): Promise<void>;
-    startAndWaitForPorts(ports?: Ports, cancellation?: { readonly abort?: AbortSignal }, options?: ContainerStartConfigOptions): Promise<void>;
-  }
-
-  /** A CodexEgress whose base start path records what it would hand the platform and stops there. */
-  function startRecorder() {
-    const handed: Array<{ readonly port: number | undefined; readonly options: ContainerStartConfigOptions | undefined }> = [];
-    const egress: CodexEgress = Object.create(CodexEgress.prototype);
-
-    Object.assign(egress, {
-      defaultPort: 8080,
-      getPortsToCheck: async (ports: number | number[]) => (Array.isArray(ports) ? ports : [ports]),
-      syncPendingStoppedEvents: async () => {},
-      startContainerIfNotRunning: async (wait: { readonly portToCheck?: number }, options?: ContainerStartConfigOptions) => {
-        handed.push({ port: wait.portToCheck, options });
-
-        throw new Error('recorded');
-      },
-    });
-
-    const caller: BaseCaller = egress;
-
-    return { egress, caller, handed };
-  }
-
-  test('start, startAndWaitForPorts in both forms, and a scheduled start all run the image\'s own command', async () => {
-    const { caller, handed } = startRecorder();
-    const entrypoint: ContainerStartConfigOptions = { entrypoint: ['sh', '-c', 'id'], envVars: { NODE_OPTIONS: '--require /tmp/x' } };
-
-    await expect(caller.start(entrypoint)).rejects.toThrow('recorded');
-    await expect(caller.startAndWaitForPorts(9999, {}, entrypoint)).rejects.toThrow('recorded');
-    await expect(caller.startAndWaitForPorts({ ports: 9999, startOptions: entrypoint })).rejects.toThrow('recorded');
-
-    // schedule(0, 'start', payload) and a raw container_schedules row both end in `this[callback](payload)`.
-    const scheduled: Pick<BaseCaller, 'start'> = { start: (payload) => caller.start(payload) };
-    await expect(scheduled.start(entrypoint)).rejects.toThrow('recorded');
-
-    expect(handed).toEqual(Array.from({ length: 4 }, () => ({ port: 8080, options: undefined })));
-  });
-
-  test('every outbound-policy mutator refuses', async () => {
-    const { egress } = startRecorder();
-
-    // @cloudflare/containers 0.3.7, container.js:433-553.
-    const mutators: ReadonlyArray<() => Promise<void>> = [
-      () => egress.setOutboundHandler(), () => egress.setOutboundByHost(), () => egress.removeOutboundByHost(),
-      () => egress.setOutboundByHosts(), () => egress.setAllowedHosts(), () => egress.setDeniedHosts(), () => egress.allowHost(),
-      () => egress.denyHost(), () => egress.removeAllowedHost(), () => egress.removeDeniedHost(),
-    ];
-
-    for (const mutate of mutators) await expect(mutate()).rejects.toThrow('keeps its own outbound policy');
-  });
-});
-
 describe('the egress container forwards only the Codex API', () => {
   test('another host, another path, another method or a credential in the URL is refused', () => {
     const cases: ReadonlyArray<readonly [string, string, number | null]> = [
@@ -175,6 +114,12 @@ describe('the egress container forwards only the Codex API', () => {
       ['POST', 'https://chatgpt.com/backend-api/codex/models', 403],
       ['DELETE', 'https://chatgpt.com/backend-api/codex/responses', 405],
       ['GET', 'not a url', 403],
+      ['GET', 'https://chatgpt.com/backend-api/codex/%2e%2e/conversation', 403],
+      ['GET', 'https://chatgpt.com/backend-api/codex%2Fmodels', 403],
+      ['GET', 'https://chatgpt.com/backend-api/codex/models;x', 403],
+      ['GET', 'https://chatgpt.com//backend-api/codex/models', 403],
+      ['GET', 'https://chatgpt.com/backend-api/codex/models/', 403],
+      ['GET', 'https://chatgpt.com/backend-api/codex/../conversation', 403],
     ];
 
     expect(cases.map(([method, target]) => [method, target, refusal(method, target)?.status ?? null] as const)).toEqual([...cases]);
@@ -187,5 +132,19 @@ describe('the egress container forwards only the Codex API', () => {
     });
 
     expect([...sent.keys()].sort()).toEqual(['authorization', 'content-type']);
+  });
+
+  test('the container and core allow the same routes, so one list is the rule', () => {
+    const core = ALLOWED_ROUTES.filter((route) => {
+      const [method = '', path = ''] = route.split(' ');
+
+      return codexEgressAllowed({ method, url: `https://chatgpt.com${path}` });
+    });
+
+    expect(core).toEqual([...ALLOWED_ROUTES]);
+
+    for (const [method, url] of [['GET', 'https://chatgpt.com/backend-api/conversation'], ['POST', 'https://chatgpt.com/backend-api/codex/models']] as const) {
+      expect({ url, core: codexEgressAllowed({ method, url }), container: refusal(method, url) === null }).toEqual({ url, core: false, container: false });
+    }
   });
 });

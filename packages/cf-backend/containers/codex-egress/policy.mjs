@@ -2,8 +2,10 @@
 
 const ALLOWED_HOST = 'chatgpt.com';
 
-// Mirrors core codexEgressAllowed; this copy is the one that holds for fetch and containerFetch.
-const ALLOWED = new Set(['GET /backend-api/codex/models', 'POST /backend-api/codex/responses', 'GET /backend-api/wham/usage']);
+// Equal to core codexEgressAllowed; unit-codex-egress asserts it.
+export const ALLOWED_ROUTES = Object.freeze(['GET /backend-api/codex/models', 'POST /backend-api/codex/responses', 'GET /backend-api/wham/usage']);
+
+const ALLOWED = new Set(ALLOWED_ROUTES);
 
 export const TARGET_HEADER = 'x-kinu-target';
 

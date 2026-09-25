@@ -1,3 +1,4 @@
+import { DurableObject } from 'cloudflare:workers';
 import { Container } from '@cloudflare/containers';
 import { codexEgressAllowed, EgressCalls } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
@@ -6,46 +7,24 @@ const TARGET_HEADER = 'x-kinu-target';
 
 const HOP_HEADERS = ['host', 'content-length', 'connection', 'transfer-encoding'];
 
-const refuseOutbound = (): never => {
-  throw new KinuError('denied', 'the Codex egress container keeps its own outbound policy');
-};
-
-export class CodexEgress extends Container<Env> {
+class EgressBox extends Container<Env> {
   defaultPort = 8080;
 
   sleepAfter = '5m';
 
   enableInternet = true;
+}
+
+// RPC: forward, cancel, alarm.
+export class CodexEgress extends DurableObject<Env> {
+  readonly #box: EgressBox;
 
   readonly #calls = new EgressCalls();
 
-  override async start(): Promise<void> {
-    await super.start();
+  constructor(ctx: DurableObjectState<{}>, env: Env) {
+    super(ctx, env);
+    this.#box = new EgressBox(ctx, env);
   }
-
-  override async startAndWaitForPorts(_ports?: Parameters<Container['startAndWaitForPorts']>[0], cancellation?: { readonly abort?: AbortSignal }): Promise<void> {
-    await super.startAndWaitForPorts(this.defaultPort, cancellation?.abort === undefined ? undefined : { abort: cancellation.abort });
-  }
-
-  override async setOutboundHandler(): Promise<void> { refuseOutbound(); }
-
-  override async setOutboundByHost(): Promise<void> { refuseOutbound(); }
-
-  override async removeOutboundByHost(): Promise<void> { refuseOutbound(); }
-
-  override async setOutboundByHosts(): Promise<void> { refuseOutbound(); }
-
-  override async setAllowedHosts(): Promise<void> { refuseOutbound(); }
-
-  override async setDeniedHosts(): Promise<void> { refuseOutbound(); }
-
-  override async allowHost(): Promise<void> { refuseOutbound(); }
-
-  override async denyHost(): Promise<void> { refuseOutbound(); }
-
-  override async removeAllowedHost(): Promise<void> { refuseOutbound(); }
-
-  override async removeDeniedHost(): Promise<void> { refuseOutbound(); }
 
   async forward(ownerUserId: string, callId: string, request: Request): Promise<Response> {
     if (!this.env.CodexEgress.idFromName(ownerUserId).equals(this.ctx.id)) {
@@ -60,10 +39,11 @@ export class CodexEgress extends Container<Env> {
 
     for (const name of HOP_HEADERS) headers.delete(name);
     headers.set(TARGET_HEADER, request.url);
+    const box = this.#box;
 
     return this.#calls.run(callId, {
-      start: async (signal) => { await this.startAndWaitForPorts(this.defaultPort, { abort: signal }); },
-      fetch: async (signal) => this.containerFetch(new Request('http://codex-egress/forward', {
+      start: async (signal) => { await box.startAndWaitForPorts(box.defaultPort, { abort: signal }); },
+      fetch: async (signal) => box.containerFetch(new Request('http://codex-egress/forward', {
         method: request.method,
         headers,
         body: request.body,
@@ -74,5 +54,9 @@ export class CodexEgress extends Container<Env> {
 
   cancel(callId: string): void {
     this.#calls.cancel(callId);
+  }
+
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    await this.#box.alarm(alarmInfo);
   }
 }

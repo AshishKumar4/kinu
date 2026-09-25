@@ -35,9 +35,9 @@ export const CONTAINER_IMAGES = {
   },
   CodexEgress: {
     repository: `${REGISTRY}/kinu-codex-egress`,
-    digest: 'sha256:b68674fa627a77f7320b2f07db824264cca9d1d7699f636d9571c2e53ba99c28',
+    digest: 'sha256:6e64016f2d96aafdbe7129181b5579d7222d5d6240c86b7a5da7f40e0e0a5110',
     source: 'packages/cf-backend/containers/codex-egress',
-    sourceHash: 'sha256:9b2fcf2df21673a0722534095f4f05d7c4d77677dae653875d409c60e3368ec3',
+    sourceHash: 'sha256:686ed63b2f83afec02e8b14b3cbfce234414d77e0bb3f16ed1fec3f790877f07',
   },
 } satisfies Record<string, ContainerImage>;
 

@@ -1,3 +1,5 @@
+export declare const ALLOWED_ROUTES: readonly string[];
+
 export declare const TARGET_HEADER: string;
 
 export declare const HOP_BY_HOP: ReadonlySet<string>;

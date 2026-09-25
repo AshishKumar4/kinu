@@ -41,6 +41,7 @@
     "tests/workerd/two-turn-probe.ts",
     "tests/workerd/user-socket-probe.ts",
     "tests/workerd/public-surface-probe.ts",
-    "tests/workerd/hire-probe.ts"
+    "tests/workerd/hire-probe.ts",
+    "tests/workerd/codex-egress-probe.ts"
   ]
 }

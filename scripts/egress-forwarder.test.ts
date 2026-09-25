@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CONTAINER_IMAGES, imageReference, readSource, sourceHash } from './container-images';
-import { auditForwarder, type ForwarderInputs } from './egress-interception';
+import { auditForwarder, loadForwarderSurface, surfaceOf, surfaceReasons, type ForwarderInputs, type ForwarderSurface } from './egress-interception';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -14,6 +14,8 @@ const IMAGE = CONTAINER_IMAGES.CodexEgress;
 
 const DOCKERFILE = `${IMAGE.source}/Dockerfile`;
 
+const SURFACE: ForwarderSurface = await loadForwarderSurface(join(REPO, FILE), 'CodexEgress') ?? { parentIsDurableObject: false, methods: [] };
+
 function live(): ForwarderInputs {
   return {
     owner: 'CodexEgress',
@@ -22,6 +24,7 @@ function live(): ForwarderInputs {
     image: IMAGE,
     boundImage: imageReference(IMAGE),
     sourceFiles: readSource(REPO, IMAGE.source),
+    surface: SURFACE,
   };
 }
 
@@ -70,27 +73,43 @@ describe('a direct Container is admitted only with all three proofs', () => {
     }
   });
 
-  test('(c) a way for a caller to change what the container runs keeps it in the set', () => {
-    const text = live().fileText;
-    const start = '  override async start(): Promise<void> {\n    await super.start();\n  }\n';
-    const ports = 'await super.startAndWaitForPorts(this.defaultPort, cancellation?.abort === undefined ? undefined : { abort: cancellation.abort });';
+  test('(c) the loaded class exposes exactly the classified surface, and a base class on it is red', () => {
+    expect({ parent: SURFACE.parentIsDurableObject, methods: [...SURFACE.methods].sort() })
+      .toEqual({ parent: true, methods: ['alarm', 'cancel', 'constructor', 'forward'] });
 
-    expect(text).toContain(start);
-    expect(text).toContain(ports);
+    class DurableObject {}
+
+    class Base extends DurableObject {
+      doStartContainer(): string { return 'base'; }
+    }
+
+    class Inheriting extends Base {}
+
+    class Extra extends DurableObject {
+      persistOutboundConfiguration(): string { return 'extra'; }
+    }
+
+    expect(surfaceReasons(surfaceOf(Inheriting, DurableObject)).join('\n')).toContain('does not extend DurableObject directly');
+    expect(surfaceReasons(surfaceOf(Extra, DurableObject)).join('\n')).toContain('exposes `persistOutboundConfiguration`');
+  });
+
+  test('(c) the private box declares only its three fields and never leaves the class', () => {
+    const text = live().fileText;
 
     const cases: ReadonlyArray<readonly [string, string]> = [
-      ['super.start with arguments', text.replace(start, '  override async start(options?: object): Promise<void> {\n    await super.start(options);\n  }\n')],
-      ['does not override `start`', text.replace(start, '')],
-      ['super.startAndWaitForPorts with other than', text.replace(ports, 'await super.startAndWaitForPorts(_ports as number, undefined, { entrypoint: [\'sh\'] });')],
-      ['declares `entrypoint`', text.replace('  sleepAfter = \'5m\';', '  sleepAfter = \'5m\';\n\n  entrypoint = [\'sh\', \'-c\', \'id\'];')],
-      ['touches `this.envVars`', text.replace('    await super.start();', '    this.envVars = { NODE_OPTIONS: \'--require /tmp/x\' };\n    await super.start();')],
+      ['its box declares `entrypoint`', text.replace("  enableInternet = true;\n}", "  enableInternet = true;\n\n  entrypoint = ['sh', '-c', 'id'];\n}")],
+      ['its box declares `envVars`', text.replace("  enableInternet = true;\n}", "  enableInternet = true;\n\n  envVars = { NODE_OPTIONS: '--require /tmp/x' };\n}")],
+      ['its box declares `start`', text.replace("  enableInternet = true;\n}", "  enableInternet = true;\n\n  override async start() { await super.start({ entrypoint: ['sh'] }); }\n}")],
+      ['exports its box', text.replace('class EgressBox extends', 'export class EgressBox extends')],
+      ['uses its box other than', text.replace('  cancel(callId: string): void {', '  box() { return this.#box; }\n\n  cancel(callId: string): void {')],
+      ['uses its box other than', text.replace("fetch: async (signal) => box.containerFetch(", "fetch: async (signal) => box['containerFetch'](")],
+      ['uses its box other than', text.replace('    this.#calls.cancel(callId);', '    this.#calls.cancel(callId);\n    void this.#box.ctx;')],
+      ['uses its box other than', text.replace('    this.#calls.cancel(callId);', "    void this.#box.start({ entrypoint: ['sh'] });")],
       ['carries a decorator', text.replace('export class CodexEgress', '@withRun\nexport class CodexEgress')],
-      ['does not override `allowHost`', text.replace('  override async allowHost(): Promise<void> { refuseOutbound(); }\n', '')],
-      ['computed name', text.replace('    await super.start();', '    await this[\'st\' + \'art\']();')],
     ];
 
     for (const [reason, planted] of cases) {
-      expect(planted).not.toBe(text);
+      expect({ reason, changed: planted !== text }).toEqual({ reason, changed: true });
       const found = auditForwarder({ ...live(), fileText: planted }).join('\n');
 
       expect({ reason, found: found.includes(reason) }).toEqual({ reason, found: true });

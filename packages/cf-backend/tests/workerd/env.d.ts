@@ -7,6 +7,7 @@ import type {
 import type { EvictionProbeDO, WitnessDO } from './eviction-probe';
 import type { HireObservation } from './hire-shapes';
 import type { SpendProbeDO } from './spend-probe';
+import type { HostileCalls, ProbeRecords } from './codex-egress-records';
 import type { TerminalEffectProbeDO } from './terminal-effect-probe';
 import type { DbCapabilityProbeDO } from './db-capability-probe';
 import type { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
@@ -94,6 +95,15 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   backgroundWakeConversation(where: WakeHoldPlacement): Promise<WakeDriveResult>;
   rawChat(): Promise<RawChatProbeResult>;
   longTurn(priorTurns: number, deltas: number, priorDeltas?: number): Promise<{ priorMs: number; longMs: number; calls: number }>;
+}
+
+interface CodexEgressProbeRpc extends Rpc.DurableObjectBranded, HostileCalls {
+  forward(ownerUserId: string, callId: string, request: Request): Promise<Response>;
+  cancel(callId: string): void;
+}
+
+interface CodexEgressRecordsRpc extends Rpc.WorkerEntrypointBranded {
+  read(id: string): ProbeRecords;
 }
 
 interface HireProbeRpc extends Rpc.DurableObjectBranded {
@@ -265,6 +275,8 @@ declare global {
       PLAN_ANNOUNCE_ROOT: DurableObjectNamespace<PlanAnnounceRpc>;
       TWO_TURN_PROBE: DurableObjectNamespace<TwoTurnProbeRpc>;
       HIRE_PROBE: DurableObjectNamespace<HireProbeRpc>;
+      CODEX_EGRESS_PROBE: DurableObjectNamespace<CodexEgressProbeRpc>;
+      CODEX_EGRESS_RECORDS: Service<CodexEgressRecordsRpc>;
       USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;
       SLATE_DURABILITY_PROBE: DurableObjectNamespace<SlateDurabilityProbeRpc>;
       ACCOUNT_RESET_PROBE: DurableObjectNamespace<AccountResetProbeRpc>;

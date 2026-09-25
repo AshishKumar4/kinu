@@ -182,14 +182,14 @@ export function sandboxLineage(sources: ReadonlyMap<string, string>): ReadonlySe
   return lineage;
 }
 
-/** Direct `Container` subclasses in the deployment source: candidates for the forwarder admission below. */
+/** Direct `DurableObject` subclasses in the deployment source: bound to a container, candidates for forwarder admission. */
 export function declaredForwarderClasses(sources: ReadonlyMap<string, string>): string[] {
   const names = new Set<string>();
 
   for (const [file, text] of sources) {
     if (!file.startsWith('packages/cf-backend/') || !text.includes('Container')) continue;
     walk(parse(file, text).root, (node) => {
-      const name = superClassName(node) === 'Container' ? declaredName(node) : undefined;
+      const name = superClassName(node) === 'DurableObject' ? declaredName(node) : undefined;
 
       if (name !== undefined) names.add(name);
     });
@@ -205,19 +205,29 @@ const FORWARDER_INTERPRETERS: readonly string[] = ['node'];
  *  program other than CMD's. */
 const FORWARDER_INSTRUCTIONS: readonly string[] = ['FROM', 'COPY', 'WORKDIR', 'ENV', 'EXPOSE', 'USER', 'LABEL', 'CMD'];
 
-/** Fields that change what the container runs; a forwarder declares none, and never assigns them. */
-const COMMAND_FIELDS: readonly string[] = ['entrypoint', 'envVars'];
+/** Everything RPC can call on an admitted forwarder, each with why it cannot change what the container runs or where it
+ *  may connect. The class's own function properties must equal this table; one more, from the class or its base, is red. */
+export const FORWARDER_SURFACE: ReadonlyMap<string, string> = new Map([
+  ['constructor', 'not callable over RPC; builds the private container box on this object\'s ctx'],
+  ['forward', 'checks the owner and core codexEgressAllowed, then the container\'s policy.mjs checks again'],
+  ['cancel', 'aborts one of this object\'s own in-flight calls by id'],
+  ['alarm', 'runs the box\'s sleepAfter and schedules; takes only the platform\'s alarm info'],
+]);
 
-/** @cloudflare/containers 0.3.7 methods that take start options (container.js:580, 598); each override drops them. */
-const STARTERS: readonly string[] = ['start', 'startAndWaitForPorts'];
+/** The only fields the private box may declare: none names a command, env or outbound policy. */
+const BOX_FIELDS: readonly string[] = ['defaultPort', 'sleepAfter', 'enableInternet'];
 
-/** 0.3.7's outbound-policy mutators (container.js:433-553); a forwarder overrides each to refuse. */
-export const OUTBOUND_MUTATORS: readonly string[] = [
-  'setOutboundHandler', 'setOutboundByHost', 'removeOutboundByHost', 'setOutboundByHosts',
-  'setAllowedHosts', 'setDeniedHosts', 'allowHost', 'denyHost', 'removeAllowedHost', 'removeDeniedHost',
-];
+/** How the owner may touch its box: a member read or call, never the box itself. */
+const BOX_USES: readonly string[] = ['startAndWaitForPorts', 'containerFetch', 'defaultPort', 'alarm'];
+
+export interface ForwarderSurface {
+  readonly parentIsDurableObject: boolean;
+  readonly methods: readonly string[];
+}
 
 export interface ForwarderInputs {
+  /** What the loaded class exposes: its parent, and its own function property names. */
+  readonly surface: ForwarderSurface;
   readonly owner: string;
   /** The file declaring the class, whole: its imports name the predicates. */
   readonly fileText: string;
@@ -231,11 +241,11 @@ export interface ForwarderInputs {
 }
 
 /**
- * A direct `Container` runs guest code only if its image or its start command lets it, so it leaves the interception
- * set only when all three hold: (a) its image is the pinned build of a tracked directory whose hash is recorded; (b)
- * that Dockerfile copies only tracked files, runs nothing at build, and its CMD runs a tracked script; (c) the class
- * overrides start and startAndWaitForPorts to drop every caller start option, overrides each outbound mutator, and has
- * no entrypoint or envVars and no decorator. The reasons it fails, empty when admitted.
+ * A container-bound object runs guest code only if its image or its start command lets it, so it leaves the
+ * interception set only when all three hold: (a) its image is the pinned build of a tracked directory whose hash is
+ * recorded; (b) that Dockerfile copies only tracked files, runs nothing at build, and its CMD runs a tracked script;
+ * (c) it extends DurableObject, its RPC surface equals FORWARDER_SURFACE, and the Container it holds privately declares
+ * only BOX_FIELDS and is touched only through BOX_USES. The reasons it fails, empty when admitted.
  */
 export function auditForwarder(input: ForwarderInputs): string[] {
   const reasons: string[] = [];
@@ -253,7 +263,7 @@ export function auditForwarder(input: ForwarderInputs): string[] {
   if (dockerfile === undefined) reasons.push(`${image.source} tracks no Dockerfile`);
   else reasons.push(...dockerfileReasons(image.source, String(dockerfile), input.sourceFiles));
 
-  reasons.push(...classReasons(input));
+  reasons.push(...surfaceReasons(input.surface), ...classReasons(input));
 
   return reasons;
 }
@@ -310,77 +320,137 @@ function nameOf(node: Node | null | undefined): string | undefined {
   return node?.type === 'PrivateIdentifier' ? `#${node.name}` : undefined;
 }
 
-/** `super.<method>(…)` calls in `member`, by method. */
-function superCalls(member: SyntaxNode): Array<{ readonly method: string; readonly args: readonly Node[] }> {
-  const calls: Array<{ readonly method: string; readonly args: readonly Node[] }> = [];
+export function surfaceReasons(surface: ForwarderSurface): string[] {
+  const reasons: string[] = [];
 
-  walk(member, (inner) => {
-    const { raw } = inner;
+  if (!surface.parentIsDurableObject) reasons.push('does not extend DurableObject directly, so a base class\'s methods are on its RPC surface');
 
-    if (raw.type !== 'CallExpression' || raw.callee.type !== 'MemberExpression' || raw.callee.object.type !== 'Super') return;
-    calls.push({ method: nameOf(raw.callee.property) ?? '[computed]', args: raw.arguments });
-  });
+  for (const method of surface.methods) if (!FORWARDER_SURFACE.has(method)) reasons.push(`exposes \`${method}\` over RPC, which FORWARDER_SURFACE does not classify`);
 
-  return calls;
+  for (const method of FORWARDER_SURFACE.keys()) if (!surface.methods.includes(method)) reasons.push(`lacks \`${method}\`, which FORWARDER_SURFACE expects`);
+
+  return reasons;
 }
 
-const isThisField = (node: Node | undefined, field: string): boolean => node?.type === 'MemberExpression'
-  && node.object.type === 'ThisExpression' && !node.computed && nameOf(node.property) === field;
+/** Why the private box could change what runs: a declaration beyond BOX_FIELDS, or any member at all besides them. */
+function boxReasons(box: SyntaxNode): string[] {
+  const reasons: string[] = [];
 
-/** Why `super.<method>(…)` could carry a caller's start options: the only allowed calls take none, or, for
- *  startAndWaitForPorts, the class's own port and a cancellation that cannot name a command. */
-function starterCallReasons(method: string, args: readonly Node[]): string[] {
-  if (method === 'start') return args.length === 0 ? [] : ['calls super.start with arguments, which can carry an entrypoint or env'];
+  for (const member of classMembers(box)) {
+    const name = member.raw.type === 'PropertyDefinition' || member.raw.type === 'MethodDefinition' ? nameOf(member.raw.key) : undefined;
 
-  if (method !== 'startAndWaitForPorts') return [];
-
-  if (args.length > 2 || !isThisField(args[0], 'defaultPort')) {
-    return ['calls super.startAndWaitForPorts with other than (this.defaultPort, cancellation), which can carry start options'];
+    if (name === undefined || !BOX_FIELDS.includes(name) || member.raw.type !== 'PropertyDefinition' || member.raw.static) {
+      reasons.push(`its box declares \`${name ?? member.raw.type}\`, outside ${BOX_FIELDS.join(', ')}`);
+    }
   }
 
-  return [];
+  walk(box, (inner) => { if (inner.type === 'Decorator') reasons.push('its box carries a decorator'); });
+
+  return reasons;
+}
+
+function inConstructor(node: SyntaxNode): boolean {
+  for (let up = node.parent; up !== undefined; up = up.parent) {
+    if (up.raw.type === 'MethodDefinition') return up.raw.kind === 'constructor';
+  }
+
+  return false;
+}
+
+/** Why the owner could hand its box out: a use of `this.#box`, or an alias of it, other than a BOX_USES member. */
+function boxUseReasons(owner: SyntaxNode, field: string): string[] {
+  const reasons: string[] = [];
+  const aliases = new Set<string>();
+
+  walk(owner, (inner) => {
+    const { raw } = inner;
+
+    if (raw.type === 'VariableDeclarator' && raw.init?.type === 'MemberExpression' && raw.init.object.type === 'ThisExpression' && nameOf(raw.init.property) === field) {
+      const alias = nameOf(raw.id);
+
+      if (alias === undefined) reasons.push('destructures its box');
+      else aliases.add(alias);
+    }
+  });
+
+  walk(owner, (inner) => {
+    const { raw } = inner;
+
+    const isBox = (raw.type === 'MemberExpression' && raw.object.type === 'ThisExpression' && nameOf(raw.property) === field)
+      || (raw.type === 'Identifier' && aliases.has(raw.name) && inner.parent?.raw.type !== 'VariableDeclarator');
+
+    if (isBox && !allowedBoxUse(inner)) reasons.push(`uses its box other than to read ${BOX_USES.join(', ')}, so the box or its ctx could leave the class`);
+  });
+
+  return reasons;
+}
+
+/** A box reference used as a declaration, the constructor's assignment, or a BOX_USES read or call. */
+function allowedBoxUse(inner: SyntaxNode): boolean {
+  const { raw } = inner;
+  const up = inner.parent?.raw;
+
+  if ((up?.type === 'VariableDeclarator' && up.init === raw) || (up?.type === 'PropertyDefinition' && up.key === raw)) return true;
+
+  if (up?.type === 'AssignmentExpression' && up.left === raw) return inConstructor(inner);
+
+  if (up?.type !== 'MemberExpression' || up.object !== raw || up.computed) return false;
+  const member = nameOf(up.property) ?? '';
+  const called = inner.parent?.parent?.raw;
+
+  return BOX_USES.includes(member) && (member === 'defaultPort' || (called?.type === 'CallExpression' && called.callee === up));
 }
 
 function classReasons(input: ForwarderInputs): string[] {
   const reasons: string[] = [];
-  let found = false;
+  const tree = parse(input.file, input.fileText).root;
+  const boxes: SyntaxNode[] = [];
+  let owner: SyntaxNode | undefined;
 
-  walk(parse(input.file, input.fileText).root, (node) => {
-    if (node.type !== 'ClassDeclaration' || declaredName(node) !== input.owner) return;
-    found = true;
-    const declared = new Set<string>();
+  walk(tree, (node) => {
+    if (node.type !== 'ClassDeclaration') return;
 
-    walk(node, (inner) => {
-      const { raw } = inner;
-
-      if (raw.type === 'Decorator') reasons.push('carries a decorator, which can add or rewrite members');
-
-      if (raw.type === 'MemberExpression' && raw.object.type === 'ThisExpression' && raw.computed) reasons.push('reaches `this[…]` by a computed name');
-
-      if (raw.type === 'MemberExpression' && raw.object.type === 'ThisExpression' && COMMAND_FIELDS.includes(nameOf(raw.property) ?? '')) {
-        reasons.push(`touches \`this.${nameOf(raw.property) ?? ''}\`, which sets what the container runs`);
-      }
-    });
-
-    for (const member of classMembers(node)) {
-      const { raw } = member;
-      const name = raw.type === 'PropertyDefinition' || raw.type === 'MethodDefinition' ? nameOf(raw.key) ?? '[computed]' : '';
-
-      if (raw.type === 'PropertyDefinition' && COMMAND_FIELDS.includes(name)) reasons.push(`declares \`${name}\`, which sets what the container runs`);
-
-      if (raw.type === 'MethodDefinition') declared.add(name);
-
-      for (const call of superCalls(member)) reasons.push(...starterCallReasons(call.method, call.args));
-    }
-
-    for (const starter of STARTERS) if (!declared.has(starter)) reasons.push(`does not override \`${starter}\`, so a caller's start options reach the base class`);
-
-    for (const mutator of OUTBOUND_MUTATORS) if (!declared.has(mutator)) reasons.push(`does not override \`${mutator}\` to refuse`);
+    if (declaredName(node) === input.owner) owner = node;
+    else if (superClassName(node) === 'Container') boxes.push(node);
   });
 
-  if (!found) reasons.push(`is not declared in ${input.file}`);
+  if (owner === undefined) return [`is not declared in ${input.file}`];
+
+  if (boxes.length !== 1) return [`declares ${String(boxes.length)} Container classes beside it, not one private box`];
+  const [box] = boxes;
+
+  if (box === undefined) return reasons;
+
+  for (const statement of tree.children) {
+    if (statement.raw.type === 'ExportNamedDeclaration' && statement.children.some((child) => child === box)) reasons.push('exports its box');
+  }
+
+  walk(owner, (inner) => { if (inner.type === 'Decorator') reasons.push('carries a decorator, which can add or rewrite members'); });
+  reasons.push(...boxReasons(box));
+
+  const field = classMembers(owner)
+    .flatMap((member) => (member.raw.type === 'PropertyDefinition' && member.raw.key.type === 'PrivateIdentifier' ? [member.raw.key.name] : []))
+    .find((name) => name === 'box');
+
+  if (field === undefined) reasons.push('holds no private #box');
+  else reasons.push(...boxUseReasons(owner, `#${field}`));
 
   return reasons;
+}
+
+const Callable = v.custom<(...args: never[]) => void>((value) => value instanceof Function);
+
+/** A loaded class: a function whose prototype is an object. */
+const LoadedClass = v.custom<{ readonly prototype: object }>((value) => value instanceof Function && Object.getPrototypeOf(value.prototype) !== undefined);
+
+/** The loaded class's parent and own function properties, for {@link surfaceReasons}. */
+export function surfaceOf(cls: { readonly prototype: object }, durableObject: { readonly prototype: object }): ForwarderSurface {
+  const { prototype } = cls;
+
+  return {
+    parentIsDurableObject: Object.getPrototypeOf(prototype) === durableObject.prototype,
+    methods: Object.getOwnPropertyNames(prototype).filter((name) => v.is(Callable, Object.getOwnPropertyDescriptor(prototype, name)?.value)),
+  };
 }
 
 export function declaredSandboxClasses(sources: ReadonlyMap<string, string>): string[] {
@@ -589,6 +659,31 @@ export function catchAllIsBound(sources: ReadonlyMap<string, string>): boolean {
   return registered && bound;
 }
 
+/** What RPC can reach on `name` exported from `path`, read off the loaded class. `cloudflare:workers` is shimmed as
+ *  scripts/test-preload.ts does, unless something already provides it; the class and the comparison use one module. */
+export async function loadForwarderSurface(path: string, name: string): Promise<ForwarderSurface | undefined> {
+  class DurableObject<Ctx, Env> {
+    constructor(readonly ctx: Ctx, readonly env: Env) {}
+  }
+
+  Bun.plugin({
+    name: 'egress-interception:cloudflare-workers',
+    setup(build) {
+      build.module('cloudflare:workers', () => ({
+        exports: { DurableObject, WorkerEntrypoint: class {}, RpcTarget: class {}, env: {}, exports: {} },
+        loader: 'object',
+      }));
+    },
+  });
+
+  const workersModule = 'cloudflare:workers';
+  const base = v.safeParse(v.object({ DurableObject: LoadedClass }), await import(workersModule));
+  const cls = v.safeParse(v.object({ [name]: LoadedClass }), await import(path));
+  const loaded = cls.success ? cls.output[name] : undefined;
+
+  return base.success && loaded !== undefined ? surfaceOf(loaded, base.output.DurableObject) : undefined;
+}
+
 if (import.meta.main) {
   const sources = readSources();
   const bound = wranglerContainerClasses(parseJsonc(readFileSync(`${root}${WRANGLER}`, 'utf8'), WranglerContainers, WRANGLER));
@@ -596,12 +691,14 @@ if (import.meta.main) {
   const records = new Map<string, ContainerImage>(Object.entries(CONTAINER_IMAGES));
   const forwarderReasons = new Map<string, string[]>();
 
+  // The loaded class, not its source text, answers what RPC can reach: a base's methods are enumerable here.
   for (const owner of declaredForwarderClasses(sources).filter((name) => bound.includes(name))) {
     const file = [...sources.keys()].find((path) => path.startsWith('packages/cf-backend/') && sources.get(path)?.includes(`class ${owner} `) === true);
     const image = records.get(owner);
+    const surface = file === undefined ? undefined : await loadForwarderSurface(join(root, file), owner);
 
-    forwarderReasons.set(owner, file === undefined ? ['has no source file'] : auditForwarder({
-      owner, file, fileText: sources.get(file) ?? '', image,
+    forwarderReasons.set(owner, file === undefined || surface === undefined ? ['has no loadable source file'] : auditForwarder({
+      owner, file, fileText: sources.get(file) ?? '', image, surface,
       boundImage: declaredContainers.find((entry) => entry.class_name === owner)?.image,
       sourceFiles: image === undefined ? new Map() : readSource(root, image.source),
     }));
@@ -697,10 +794,11 @@ if (import.meta.main) {
 
   console.log(`egress-interception: ok — ${measured}`);
   console.log(`egress-interception: ADMITTED FORWARDERS — ${forwarders.join(', ') || 'none'}: each proved its image is the `
-    + 'pinned build of a hashed tracked directory running one tracked script, and its class drops every caller start '
-    + 'option and refuses every outbound mutator, so no holder of its binding changes what runs. Residual: server.mjs\'s '
-    + 'allowlist is proved by its unit test, not parsed, and is the enforcement point for fetch and containerFetch; sql() '
-    + 'on the object\'s own storage, and stop/destroy, which only affect availability');
+    + 'pinned build of a hashed tracked directory running one tracked script, and its loaded class extends DurableObject '
+    + 'with exactly this RPC surface:');
+
+  for (const [method, why] of FORWARDER_SURFACE) console.log(`egress-interception:   ${method} — ${why}`);
+  console.log('egress-interception: residual: policy.mjs is proved by its unit test, not parsed, and holds for every forward');
   console.log(`egress-interception: read the SDK default from ${CONTAINERS} ${containers.version} `
     + `at ${relative(root, containers.module)}, the copy ${CONTAINERS_HOST} resolves for itself and `
     + 'the only copy the artifact binds');
