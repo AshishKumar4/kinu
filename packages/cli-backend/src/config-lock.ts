@@ -14,11 +14,11 @@ const LOCK_POLL_MS = 50;
 
 const LOCK_RECORD_VERSION = 'v1';
 
-export type SupportedPlatform = 'linux' | 'darwin';
+type SupportedPlatform = 'linux' | 'darwin';
 
 type Liveness = 'live' | 'gone' | 'unknown';
 
-export type ProcessIdentityProbe =
+type ProcessIdentityProbe =
   | { readonly state: 'read'; readonly identity: string }
   | { readonly state: 'absent' }
   | { readonly state: 'unreadable' };
@@ -49,12 +49,12 @@ interface ProcessIdentity {
 
 /** Linux reads procfs; Darwin runs absolute `/bin/ps` with `LC_ALL=C` (no shell,
  *  no locale drift). Unsupported systems refuse rather than write an unprovable record. */
-export interface ProcessIdentityBoundary {
+interface ProcessIdentityBoundary {
   self(pid: number): Promise<ProcessIdentity>;
   liveness(owner: LockOwner): Promise<Liveness>;
 }
 
-export interface ConfigLock {
+interface ConfigLock {
   with<T>(configPath: string, fn: () => T | Promise<T>): Promise<T>;
 }
 

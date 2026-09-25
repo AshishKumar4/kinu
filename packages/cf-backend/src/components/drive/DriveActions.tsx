@@ -4,7 +4,7 @@ import { Button } from "@cloudflare/kumo";
 import {
   BookOpenIcon, FileArchiveIcon, FolderPlusIcon, FolderSimpleIcon, PencilSimpleIcon, PlusIcon, UploadSimpleIcon,
 } from "@phosphor-icons/react";
-import type { DriveEntry, MarkedSkill, OwnedSlate, SharedRow } from "@kinu.run/core";
+import { joinDir, type DriveEntry, type MarkedSkill, type OwnedSlate, type SharedRow } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import {
   addSkillArchive, addSkillFolder, addSkillText, deleteEntry, makeFolder, renameEntry, type PickedFile,
@@ -17,10 +17,6 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { inputCls } from "@/components/ui/form";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
-
-export function childPath(folder: string, name: string): string {
-  return folder === "/" ? `/${name}` : `${folder}/${name}`;
-}
 
 function relativePathOf(file: File): string {
   return file.webkitRelativePath === "" ? file.name : file.webkitRelativePath;
@@ -292,19 +288,19 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
     case "new-folder":
       return (
         <NameDialog title="New folder" icon={<FolderPlusIcon size={18} className="p-info" />} initial="" label="Folder name" action="Create"
-          onCommit={(name) => act(() => makeFolder(childPath(folder, name)))} onClose={onClose} />
+          onCommit={(name) => act(() => makeFolder(joinDir(folder, name)))} onClose={onClose} />
       );
     case "rename":
       return (
         <NameDialog title={`Rename ${dialog.entry.name}`} icon={<PencilSimpleIcon size={18} className="p-text-3" />}
           initial={dialog.entry.name} label="New name" action="Rename"
-          onCommit={(name) => act(() => renameEntry(childPath(folder, dialog.entry.name), childPath(folder, name)))} onClose={onClose} />
+          onCommit={(name) => act(() => renameEntry(joinDir(folder, dialog.entry.name), joinDir(folder, name)))} onClose={onClose} />
       );
     case "delete":
       return (
         <ConfirmDialog title={`Delete ${dialog.entry.name}?`} action="Delete" marker="data-drive-delete-confirm"
           body={<>This deletes <span className="font-medium p-text">{dialog.entry.name}</span>{DELETE_ALSO[dialog.entry.kind]}. It cannot be undone.</>}
-          onConfirm={() => act(() => deleteEntry(childPath(folder, dialog.entry.name)))} onClose={onClose} />
+          onConfirm={() => act(() => deleteEntry(joinDir(folder, dialog.entry.name)))} onClose={onClose} />
       );
     case "add-skill":
       return <AddSkillDialog onClose={onClose} onAdded={onSkillAdded} />;

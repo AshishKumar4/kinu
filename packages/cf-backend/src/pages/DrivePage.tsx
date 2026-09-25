@@ -8,7 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import * as v from "valibot";
 import {
-  APP_ROUTES, BUILTIN_SKILL_FILES, DRIVE_SKILLS_DIR, blueprintPagePath, compareSkillNames, entryRevision, formatBytes, parseSkillFile, shortAge,
+  APP_ROUTES, BUILTIN_SKILL_FILES, DRIVE_SKILLS_DIR, blueprintPagePath, compareSkillNames, entryRevision, formatBytes, joinDir, parseSkillFile, shortAge,
   skillViewPath, workspaceDisplayTitle,
   type DriveEntry, type DriveListing, type FileText, type LiveShareVisibility, type OwnedSlate, type SharedLibrary, type SharedRow,
   type SkillFileRefusal,
@@ -26,7 +26,7 @@ import { inputCls } from "@/components/ui/form";
 import {
   Cover, FileCover, FOLDER_ICON, FolderTile, GRID, LINK_ICON, SHARE_ICON, SKILLS_ICON, SLATE_ICON, Tile, fileIcon, type MenuItem,
 } from "@/components/drive/DriveTiles";
-import { childPath, DriveDialog, pickedFolderName, PrimaryAction, type DriveDialogState } from "@/components/drive/DriveActions";
+import { DriveDialog, pickedFolderName, PrimaryAction, type DriveDialogState } from "@/components/drive/DriveActions";
 import { FileViewer } from "@/components/surfaces/FileViewer";
 
 export type DriveTab = "mine" | "shared";
@@ -456,7 +456,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   }, [listing]);
 
   const uploadFiles = (files: File[]): void => {
-    for (const file of files) transfer(file.name, () => uploadFile(childPath(path, file.name), file));
+    for (const file of files) transfer(file.name, () => uploadFile(joinDir(path, file.name), file));
   };
 
   const background = (work: () => Promise<void>): void => {
@@ -503,7 +503,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   if (redirect !== null) return redirect;
 
   const folderMenu = (entry: DriveEntry): MenuItem[] => {
-    const full = childPath(path, entry.name);
+    const full = joinDir(path, entry.name);
     const reserved = full === DRIVE_SKILLS_DIR;
     const items: MenuItem[] = [];
 
@@ -528,7 +528,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
 
   const fileMenu = (entry: DriveEntry): MenuItem[] => [
     { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => show("file", entry.name) },
-    { label: "Download", icon: <DownloadSimpleIcon size={15} />, marker: "data-drive-download", onSelect: () => window.location.assign(downloadUrl(childPath(path, entry.name))) },
+    { label: "Download", icon: <DownloadSimpleIcon size={15} />, marker: "data-drive-download", onSelect: () => window.location.assign(downloadUrl(joinDir(path, entry.name))) },
     { label: "Rename", icon: <PencilSimpleIcon size={15} />, marker: "data-drive-rename", onSelect: () => setDialog({ kind: "rename", entry }) },
     { label: "Delete", icon: <TrashIcon size={15} />, marker: "data-drive-delete", danger: true, apart: true, onSelect: () => setDialog({ kind: "delete", entry }) },
   ];
@@ -575,7 +575,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   );
 
   const folderTile = (entry: DriveEntry): ReactNode => {
-    const full = childPath(path, entry.name);
+    const full = joinDir(path, entry.name);
     const opens = entry.kind === "symlink" && entry.target !== undefined ? entry.target : full;
     const attributes = { "data-drive-entry": entry.name, "data-drive-kind": entry.kind, "data-drive-skill": entry.skill ? "true" : "false" };
     let icon = entry.skill ? SKILLS_ICON : FOLDER_ICON;
@@ -609,7 +609,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   ].sort((a, b) => compareSkillNames(a.name, b.name)).map((each) => each.tile);
 
   const fileTile = (entry: DriveEntry): ReactNode => {
-    const full = childPath(path, entry.name);
+    const full = joinDir(path, entry.name);
     const age = entry.mtimeMs > 0 ? shortAge(entry.mtimeMs) : null;
 
     return (
@@ -636,7 +636,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
             <div className="ml-auto">
               <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
                 onFolder={(picks) => { if (picks.length > 0) transfer(pickedFolderName(picks) ?? "folder", () => uploadFolder(path, picks)); }}
-                onZip={(file) => transfer(file.name, () => uploadZip(childPath(path, file.name.replace(/\.zip$/iu, "")), file))}
+                onZip={(file) => transfer(file.name, () => uploadZip(joinDir(path, file.name.replace(/\.zip$/iu, "")), file))}
                 onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
             </div>
           )}
@@ -673,7 +673,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
         )}
       </div>
 
-      {opened !== undefined && <FileDrawer path={childPath(path, opened.name)} entry={opened} onClose={() => show("file", null)} />}
+      {opened !== undefined && <FileDrawer path={joinDir(path, opened.name)} entry={opened} onClose={() => show("file", null)} />}
       {builtin !== undefined && <BuiltinSkillDrawer name={builtin} onClose={() => show("skill", null)} />}
       {dialog !== null && (
         <DriveDialog dialog={dialog} folder={path} onClose={() => setDialog(null)} onListingChanged={listing.reload}

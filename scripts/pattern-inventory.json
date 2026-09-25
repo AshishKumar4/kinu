@@ -260,13 +260,6 @@
       "decision": "traversal"
     },
     {
-      "file": "packages/core/src/tools/report-tool.ts",
-      "kind": "hand-parser",
-      "owner": "parseHandoff",
-      "sourceSha256": "b130de84adc4e447bc1da97d90e65d2639c5cde032394a304825a3a6e4f04500",
-      "decision": "traversal"
-    },
-    {
       "file": "packages/core/src/events/ingress/email.ts",
       "kind": "regex-literal",
       "owner": "angled",
@@ -412,6 +405,13 @@
       "owner": "parseSkillFile",
       "sourceSha256": "ff56a1a2ae37b6386d4ab996a2e4c30e3cdcec9e05a2970aee2032c4e1f0c246",
       "decision": "lexical"
+    },
+    {
+      "file": "packages/core/src/tools/report-tool.ts",
+      "kind": "hand-parser",
+      "owner": "parseHandoff",
+      "sourceSha256": "b130de84adc4e447bc1da97d90e65d2639c5cde032394a304825a3a6e4f04500",
+      "decision": "traversal"
     },
     {
       "file": "packages/core/src/tui/context-status.ts",
@@ -951,13 +951,6 @@
       "owner": "parseArgs",
       "sourceSha256": "14ecc19b299e0aa7fe22213b31c53b5d312c2a24671d446ed5d3fac34e9cbfe1",
       "decision": "cli"
-    },
-    {
-      "file": "scripts/fixtures/fuse-probe/core.ts",
-      "kind": "hand-parser",
-      "owner": "decodeCapabilitiesV3",
-      "sourceSha256": "a14a9a99d4e404f657bb8820c51dd6ba5c11d2c024f287977f37b64bf89e5527",
-      "decision": "traversal"
     },
     {
       "file": "scripts/ladder-audit.ts",

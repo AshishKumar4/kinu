@@ -345,7 +345,6 @@
   "packages/devbox/src/incidents.ts#reapDeliveredIncidents (unreached-export)",
   "packages/devbox/src/lifecycle.ts#INCIDENT_STAGES (unreached-export)",
   "packages/devbox/src/lifecycle.ts#PORT_TOKEN_ALPHABET (unreached-export)",
-  "packages/devbox/src/lifecycle.ts#RECOVERY_STAGES (unreached-export)",
   "packages/devbox/src/lifecycle.ts#canonicalPath (unreached-export)",
   "packages/devbox/src/lifecycle.ts#healthProbeCommand (unreached-export)",
   "packages/devbox/src/lifecycle.ts#scopesOverlap (unreached-export)",

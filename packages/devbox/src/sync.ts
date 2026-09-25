@@ -81,7 +81,7 @@ const RequestSchema = v.variant('op', [
 
 type ReceivedRequest = v.InferOutput<typeof RequestSchema>;
 
-export type SyncRequest =
+type SyncRequest =
   | { readonly op: 'readState' }
   | { readonly op: 'writeState'; readonly state: ChainState; readonly expectedRev: number | null }
   | { readonly op: 'checkChanges'; readonly dir: string; readonly since: string | null }
@@ -110,7 +110,7 @@ type SyncValue = ChainState | { readonly status: ChangeStatus; readonly version:
 
 type SyncReply = { readonly ok: true; readonly value: SyncValue } | v.InferOutput<typeof RefusalSchema>;
 
-export interface SyncHost {
+interface SyncHost {
   readonly ports: SnapshotChainPorts;
   readonly generation: () => Promise<string | undefined>;
 }
@@ -227,9 +227,9 @@ async function assertLayersHeld(ports: SnapshotChainPorts, root: string, next: C
   }
 }
 
-export type SyncTransport = (body: string) => Promise<{ readonly status: number; readonly text: string }>;
+type SyncTransport = (body: string) => Promise<{ readonly status: number; readonly text: string }>;
 
-export type SyncCall = (request: SyncRequest) => Promise<StoredValue>;
+type SyncCall = (request: SyncRequest) => Promise<StoredValue>;
 
 /** A fenced refusal surfaces as {@link ChainRecordAdvanced}, so the checkpoint re-reads. */
 export function syncCaller(transport: SyncTransport, generation: () => Promise<string | undefined>): SyncCall {
@@ -251,7 +251,7 @@ export function syncCaller(transport: SyncTransport, generation: () => Promise<s
   };
 }
 
-export interface SyncIo {
+interface SyncIo {
   readonly exec: SnapshotChainPorts['exec'];
   readonly call: SyncCall;
   readonly generation: () => Promise<string | undefined>;

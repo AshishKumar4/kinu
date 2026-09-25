@@ -9,10 +9,10 @@ import {
   DeploySnapshotSchema, UpdateOfferSchema,
   type DeploySnapshot, type UpdateBuild, type UpdateOffer,
 } from "@kinu.run/core/deploy";
-import { renderThrownChain } from "@kinu.run/core/obs";
 import * as v from "valibot";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { StepRow } from "@/components/deploy/DeployStepRow";
+import { showRejection } from "@/hooks/use-async-resource";
 
 const RUN_POLL_MS = 2000;
 
@@ -58,7 +58,7 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
     if (!live) return;
     let mounted = true;
 
-    const failed = (...rejection: [unknown]): void => { if (mounted) setErr(renderThrownChain({ cause: rejection[0] })); };
+    const failed = showRejection(setErr, () => mounted);
 
     read(UpdateOfferSchema, "/api/updates")
       .then((held) => { if (mounted) setOffer(held); })
@@ -78,11 +78,7 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
     if (!live || !going) return;
     let mounted = true;
 
-    // A mid-run read failure is the Worker being replaced; the cause is held beside the restart notice, never dropped.
-    const late = (...rejection: [unknown]): void => {
-      if (mounted) setRestarting(renderThrownChain({ cause: rejection[0] }));
-    };
-
+    // A mid-run read failure is the Worker being replaced; its cause shows beside the restart notice.
     const timer = setInterval(() => {
       read(DeploySnapshotSchema, "/api/updates/run")
         .then((held) => {
@@ -90,7 +86,7 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
           setRestarting(null);
           setRun(held);
         })
-        .catch(late);
+        .catch(showRejection(setRestarting, () => mounted));
     }, RUN_POLL_MS);
 
     return () => {
@@ -103,11 +99,9 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
     setBusy(true);
     setErr(null);
 
-    const failed = (...rejection: [unknown]): void => setErr(renderThrownChain({ cause: rejection[0] }));
-
     read(DeploySnapshotSchema, "/api/updates/apply", { method: "POST" })
       .then(setRun)
-      .catch(failed)
+      .catch(showRejection(setErr))
       .finally(() => setBusy(false));
   }, []);
 

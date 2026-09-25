@@ -62,10 +62,6 @@
       "complexity": 42
     },
     {
-      "key": "scripts/bench-r2-workspace.ts#main",
-      "complexity": 42
-    },
-    {
       "key": "scripts/platform-catalog.ts#auditSchema",
       "complexity": 42
     },

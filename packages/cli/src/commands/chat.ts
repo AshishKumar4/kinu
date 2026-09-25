@@ -11,7 +11,7 @@ import { installTurnDiagnostics } from '../turn-log';
 import { listKnownAgents } from '../agent-list';
 import { ask } from '../prompt';
 
-export interface ChatCommandOptions {
+interface ChatCommandOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;

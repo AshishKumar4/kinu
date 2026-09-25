@@ -19,7 +19,7 @@ import { AGENT_HOME, loadConfigFile, requireStoredAuthConfig, updateConfigFile, 
 import { getCloudProfile, updateCloudProfile } from './cloud-api';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
-export type ProfileAuthoritySource = { kind: 'local' } | { kind: 'account'; accountId: string };
+type ProfileAuthoritySource = { kind: 'local' } | { kind: 'account'; accountId: string };
 
 /** Account store only for a live session with a known user id; a bare `KINU_TOKEN` reads local. */
 export function resolveProfileAuthority(): ProfileAuthoritySource {

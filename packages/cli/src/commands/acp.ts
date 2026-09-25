@@ -8,7 +8,7 @@ import { requireAgentTarget } from '../local-target';
 import { ensureLocalDaemonRunning } from './daemon';
 import { VERSION } from '../display';
 
-export interface AcpCommandOptions {
+interface AcpCommandOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;

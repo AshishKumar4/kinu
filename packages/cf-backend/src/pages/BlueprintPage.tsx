@@ -7,12 +7,12 @@ import { useParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import { FileIcon, FolderIcon, GitBranchIcon, LinkIcon, WarningIcon, type Icon } from "@phosphor-icons/react";
 import type { BlueprintView, SlateBindingDeclaration, SlateBindingKind } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { getBlueprint, signedInEmail } from "@/lib/shared-api";
 import type { WorkspaceEntry } from "@/lib/user-api";
+import { showRejection } from "@/hooks/use-async-resource";
 
 export const BINDING_KIND_LABEL: Record<SlateBindingKind, string> = {
   mcp: "MCP server",
@@ -116,7 +116,7 @@ export default function BlueprintPage({ fixture, viewer, workspaces }: {
   useEffect(() => {
     if (fixture !== undefined) return;
     let live = true;
-    const failed = (...rejection: [unknown]): void => { if (live) setErr(renderThrownChain({ cause: rejection[0] })); };
+    const failed = showRejection(setErr, () => live);
 
     getBlueprint(id).then((loaded) => { if (live) setView(loaded); }).catch(failed);
     signedInEmail().then((who) => { if (live) setEmail(who); }).catch(failed);

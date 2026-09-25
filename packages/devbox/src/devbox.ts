@@ -3,7 +3,7 @@
 
 import { Sandbox } from '@cloudflare/sandbox';
 import type {
-  BackupOptions, CheckChangesOptions, ExecOptions, ExecResult, ListFilesOptions,
+  CheckChangesOptions, ExecOptions, ExecResult, ListFilesOptions,
 } from '@cloudflare/sandbox';
 import * as v from 'valibot';
 
@@ -34,9 +34,6 @@ import {
   type IncidentDisposition,
   type IncidentStage,
   type PortExposureSpec,
-  type QuiesceAction,
-  type RecoveryRow,
-  type RecoveryStage,
   type ResourceScope,
   type SupervisedProcessSpec,
   openStartBudget, awaitListenerCommand,
@@ -47,6 +44,12 @@ import {
 } from './lifecycle';
 import { shellPath } from './chunked-delta';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
+import {
+  admissionOf, isSettledRestoration, recoveryRow, settledRestoration, unreadyOf,
+  type RecoveryClaim, type RestoreAdmission, type RestoreClockPhase, type RestoreReadiness,
+  type Restoration, type SettledRestoration, type StampOutcome,
+} from './restoration';
+import type { DevboxReport, HeartbeatTick, IncidentReasonRow, SupervisedProcessRow } from './report';
 import {
   deliverIncidents, INCIDENT_PREFIX, incidentTotals, recordIncident,
   type IncidentRow,
@@ -59,7 +62,6 @@ import {
   seedStampPorts,
   snapshotChainStorage,
   storeObjectUrl,
-  type ChainState,
   type SnapshotChainPorts,
 } from './snapshot-chain';
 import {
@@ -97,15 +99,6 @@ const CONTAINER_STOP_INTERVAL_MS = 100;
 
 /** The SDK's default poll interval; the retry count derives from it. */
 const ADMISSION_POLL_INTERVAL_MS = 100;
-
-/** `delivered` separates a failure the host already saw from one it never did. */
-export interface IncidentReasonRow {
-  readonly stage: IncidentStage;
-  readonly reason: string;
-  readonly at: number;
-  readonly attempts: number;
-  readonly delivered: boolean;
-}
 
 /** All durable keys share the `devbox:` prefix so a host's own keys cannot collide with them. */
 const STORAGE_KEY = 'devbox:storage-state';
@@ -160,6 +153,13 @@ function isProcessLive(status: string): boolean {
   return status === 'starting' || status === 'running';
 }
 
+/** A restore step's `onLate`: the race already answered `late`, so its eventual outcome is only logged. */
+function logLate(step: string): (failure: LateStartFailure) => void {
+  return (failure) => {
+    console.error(`[devbox] ${step} outran its allowance; it later settled with: ${describe({ cause: failure.cause })}`);
+  };
+}
+
 /** Absence is the SDK's `PROCESS_NOT_FOUND` code, not message text: prose like `not found`
  *  or `unknown` also appears in unrelated failures. A value with no SDK code is not absence. */
 const ProcessAbsentSchema = v.object({ code: v.literal('PROCESS_NOT_FOUND') });
@@ -172,158 +172,9 @@ interface PortExposeOptions {
   name?: string;
 }
 
-
-/** Durable so a stalled lease can still answer when it last ticked and what it decided
- *  after the object is evicted. */
-export interface HeartbeatTick {
-  readonly at: number;
-  readonly running: boolean;
-  /** The control-plane ping outcome, or why it was not attempted. */
-  readonly ping: string;
-  /** Did this tick leave a successor armed? `false` is only correct when the box
-   *  is stopping. */
-  readonly armedNext: boolean;
-  readonly decision?: QuiesceAction;
-  readonly replaced?: boolean;
-}
-
-/** `restartable` means a durable spec exists: only such a process comes back after a recycle. */
-export interface SupervisedProcessRow {
-  readonly processId: string;
-  readonly pid: number | undefined;
-  readonly status: string;
-  readonly command: string;
-  readonly restartable: boolean;
-}
-
-/** Everything a caller can ask about a box without touching the container. */
-export interface DevboxReport {
-  readonly strategy: DevboxStrategyName;
-  readonly durable: boolean;
-  readonly running: boolean;
-  /** `repair` still admits operations: only the agent can fix a failed service, so `exec` stays open.
-   *  `unattached` is terminal until an explicit repair; poll this, not a stale attach record. */
-  readonly restoration: 'unstarted' | 'restoring' | 'attached' | 'repair' | 'unattached';
-  /** Every supervised process back, every exposed port's listener answering and re-exposed.
-   *  Equals `restoration === 'attached'`; a half-restored box is `repair`, never ready. */
-  readonly ready: boolean;
-  /** One sentence on why the box is not ready, undefined when ready; the incident ledger
-   *  holds the detail. */
-  readonly unready: string | undefined;
-  readonly lastInteractionAt: number | undefined;
-  readonly quietSince: number | undefined;
-  readonly chain: ChainState | null;
-  /** Durable: an eviction between the start and the question would erase the only evidence. */
-  readonly lastAttach: AttachOutcome | undefined;
-  /** A `lastTick.at` far in the past means the box stopped ticking; the row says what
-   *  the last tick saw. */
-  readonly lastTick: HeartbeatTick | undefined;
-  readonly bootId: string | undefined;
-  /** Platform replacements of this box's container: a fact about the platform, not a failure. */
-  readonly replacedCount: number;
-  readonly supervised: readonly SupervisedProcessSpec[];
-  readonly ports: readonly PortExposureSpec[];
-  readonly incidents: {
-    readonly total: number;
-    readonly undelivered: number;
-  };
-  /** Startup flight: allocation and control-listener proof; hook flight: restore. Null if none.
-   *  `unstarted` with a long-open startup flight is waiting on the platform, not a caller. */
-  readonly flights: {
-    readonly startupMs: number | null;
-    readonly hookMs: number | null;
-  };
-  /** The persistence path's whole share of this object's wire since it activated (D29). */
-  readonly wire: { readonly sent: number; readonly received: number };
-}
-
-/** One value per container generation, so a superseded attempt cannot leave readiness and
- *  failure disagreeing; `repair` and `restoring` keep partial and in-flight states distinct. */
-type Restoration =
-  /** No attempt has begun for this container generation. NOT "an attempt is
-   *  running and has said nothing yet" — that is `restoring`. */
-  | { readonly phase: 'unstarted' }
-  /** An attempt is in flight; the answer is "wait", never "drive": a second driver
-   *  would open a rival restoration against the same container. */
-  | { readonly phase: 'restoring'; readonly where: 'start'; readonly since: number }
-  /** The work directory is attached AND every supervised process, listener and
-   *  port came back. The only phase that is `ready`. */
-  | { readonly phase: 'attached' }
-  /** Operations stay admitted: a box refusing `exec` could not be repaired by its agent.
-   *  `incomplete` names what did not come back; a `repair` with nothing incomplete is `attached`. */
-  | { readonly phase: 'repair'; readonly incomplete: string }
-  /** Operations refuse. `retry` false is terminal until `attachNow()`; it is a field so a lost
-   *  arming write cannot leave a box refusing on a retry nothing holds. */
-  | { readonly phase: 'unattached'; readonly reason: string; readonly retry: boolean };
-
-/** Adopted only beside a container boot id that still names this instance, so a row never
- *  settles a box onto a container it did not restore; deleted on every generation turnover. */
-type SettledRestoration = Extract<Restoration, { readonly phase: 'attached' | 'repair' | 'unattached' }>;
-
-/** The readiness gate's answer for the first admitted operation: a caller let into a `repair`
- *  box learns from the call itself that a named service did not come back. */
-export type RestoreAdmission =
-  | { readonly kind: 'restored' }
-  | { readonly kind: 'repair'; readonly incomplete: string };
-
-/** `pending` is returned, not thrown: Workers RPC normalises a thrown error's `name` to
- *  `Error`, so a thrown refusal loses the transient classification the caller needs. */
-export type RestoreReadiness =
-  | RestoreAdmission
-  | { readonly kind: 'pending'; readonly reason: string };
-
-/** `opened` once, each {@link RestorePhase} as it lands, then `settled` once. */
-export type RestoreClockPhase = 'opened' | RestorePhase | 'settled';
-
 interface RestoreClock {
   readonly openedAt: number;
   stamps: RestorePhaseStamps;
-}
-
-/** `pending` deliberately reports the failed wording: the next repair reads that sentence
- *  to decide it must retry the stamp, so changing it silently disables the retry. */
-const STAMP_MISSING = {
-  late: 'the boot id stamp is still pending',
-  failed: 'the boot id stamp failed',
-  pending: 'the boot id stamp failed',
-} as const;
-
-/** One builder for restore and repair: nothing missing is `attached`, else `repair` names it. */
-function settledRestoration(
-  down: readonly string[],
-  stamp: keyof typeof STAMP_MISSING | 'done',
-): Restoration {
-  const missing = stamp === 'done' ? down : [...down, STAMP_MISSING[stamp]];
-
-  if (missing.length === 0) return { phase: 'attached' };
-
-  return { phase: 'repair', incomplete: missing.join('; ') };
-}
-
-/** Refuses a malformed row rather than adopting it: a half-shaped phase would admit callers
- *  into a state the box never established. Parsed strictly from `StoredValue`, never narrowed. */
-const SettledRestorationSchema = v.variant('phase', [
-  v.strictObject({ phase: v.literal('attached') }),
-  v.strictObject({ phase: v.literal('repair'), incomplete: v.string() }),
-  v.strictObject({ phase: v.literal('unattached'), reason: v.string(), retry: v.boolean() }),
-]);
-
-function isSettledRestoration(stored: StoredValue): stored is SettledRestoration {
-  return stored !== undefined && v.safeParse(SettledRestorationSchema, stored).success;
-}
-
-/** One attempt's hold on the ladder row: the token it claimed, the stage that
- *  claim preserved, and whether the row it read was readable at all. */
-interface RecoveryClaim {
-  readonly token: string;
-  readonly admit: boolean;
-  readonly stage: RecoveryStage | undefined;
-}
-
-/** An absent stage is an absent key, never a key holding undefined: the row is parsed
- *  strictly, and this single builder is what lets that parse stay strict. */
-function recoveryRow(owner: string, stage: RecoveryStage | undefined): RecoveryRow {
-  return stage === undefined ? { owner } : { owner, stage };
 }
 
 /** Infers both `readFile` arms from the SDK's declaration, so a changed one fails to compile. */
@@ -889,8 +740,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       const command = syncFlushCommand(this.#syncConfig(store), kind);
       const session = await this.getSession(DEVBOX_SYNC_SESSION);
       const flushed = await session.exec(command, { cwd: DEVBOX_RUNTIME_DIR });
-      this.#containerCommandBytes.sent += Buffer.byteLength(command);
-      this.#containerCommandBytes.received += Buffer.byteLength(flushed.stdout) + Buffer.byteLength(flushed.stderr);
+      this.#meter(command, flushed.stdout, flushed.stderr);
 
       return parseSyncOutcome(flushed.stdout, flushed.stderr, flushed.exitCode);
     } finally {
@@ -902,8 +752,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   async #moveDefaultShell(dir: string): Promise<void> {
     const command = `cd ${shellPath(dir)}`;
     const moved = await super.exec(command);
-    this.#containerCommandBytes.sent += Buffer.byteLength(command);
-    this.#containerCommandBytes.received += Buffer.byteLength(moved.stdout) + Buffer.byteLength(moved.stderr);
+    this.#meter(command, moved.stdout, moved.stderr);
 
     if (moved.exitCode !== 0) {
       throw new Error(`the default session's shell did not move to ${dir}: ${moved.stderr.trim() || `exit ${String(moved.exitCode)}`}`);
@@ -920,8 +769,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       generation: async () => await this.ctx.storage.get<string>(BOOT_ID_KEY),
     }, body);
 
-    this.#containerCommandBytes.received += Buffer.byteLength(body);
-    this.#containerCommandBytes.sent += Buffer.byteLength(reply.body);
+    this.#meter(reply.body, body);
 
     return reply;
   }
@@ -994,20 +842,14 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       },
     );
 
-    await this.#restorePhases(generation, claim, steps, outcome);
-  }
-
-  async #restorePhases(
-    generation: number,
-    claim: RecoveryClaim,
-    steps: RestoreSteps,
-    outcome: AttachOutcome,
-  ): Promise<void> {
     // The attach is the long await and everything after is a write: the generation may have
     // turned over, leaving an outcome for a container that no longer exists.
     if (!this.#owns(generation)) return;
     this.#stampPhase('attached');
-    await this.#recordAttach(outcome);
+    // Written only by a drive that reaches `attached` through an attach; a service-only rerun
+    // keeps its generation's record.
+    await this.ctx.storage.put(LAST_ATTACH_KEY, outcome);
+    console.log(`[devbox] attach ${outcome.kind}: ${outcome.detail}`);
     // Boot proof and durable settlement still need their shares after services.
     steps.declare(2);
     const restored = await this.#restartWorkloads(generation, steps);
@@ -1017,12 +859,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // Re-prove the early instance stamp before publishing its settled phase.
     const stamped = await steps.run(
       async () => await this.#stampBootId(generation),
-      (failure) => {
-        console.error(
-          '[devbox] the boot-id stamp outran its allowance; it later settled with: '
-          + describe({ cause: failure.cause }),
-        );
-      },
+      logLate('the boot-id stamp'),
     );
 
     if (!this.#owns(generation)) return;
@@ -1032,13 +869,6 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // Only a successful attempt clears the ladder, and only while the row still names it: a
     // partial restore (work dir but not every service) still clears it; `repair` reports the rest.
     await this.#releaseRecovery(claim, generation);
-  }
-
-  /** Written only by a drive that reaches `attached` through an attach; a service-only rerun keeps
-   *  its generation's record. Callers fence with `#owns` after their last await, before this put. */
-  async #recordAttach(outcome: AttachOutcome): Promise<void> {
-    await this.ctx.storage.put(LAST_ATTACH_KEY, outcome);
-    console.log(`[devbox] attach ${outcome.kind}: ${outcome.detail}`);
   }
 
   /** Only the start coordinator opens restoration; recovery first retires unsafe work. */
@@ -1237,7 +1067,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     if (!this.#owns(generation)) return;
 
-    let stamped: keyof typeof STAMP_MISSING | 'done' = expected === undefined ? 'pending' : 'done';
+    let stamped: StampOutcome = expected === undefined ? 'pending' : 'done';
 
     if (expected === undefined && retryBootStamp) {
       stamped = (await steps.run(async () => await this.#stampBootId(generation), () => undefined)).kind;
@@ -1462,12 +1292,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
             autoCleanup: false,
           });
         },
-        (failure) => {
-          console.error(
-            `[devbox] process ${spec.processId} outran its allowance; it later settled with: `
-            + describe({ cause: failure.cause }),
-          );
-        },
+        logLate(`process ${spec.processId}`),
       );
 
       if (started.kind === 'done') continue;
@@ -1523,12 +1348,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       async () => await this.#rawExec(
         awaitListenerCommand(port, Math.floor(windowMs / Math.max(1, interval)), interval),
       ),
-      (failure) => {
-        console.error(
-          `[devbox] the listener proof for port ${port} outran its allowance; it later settled `
-          + `with: ${describe({ cause: failure.cause })}`,
-        );
-      },
+      logLate(`the listener proof for port ${port}`),
     );
 
     // A step that was refused or abandoned proves nothing, and a port whose
@@ -1558,12 +1378,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       // `super`: the restoration is the readiness gate, so it must not wait on that gate
       // nor queue behind a caller already waiting at it (see `#restartWorkloads`).
       async () => await super.exposePort(spec.port, options),
-      (failure) => {
-        console.error(
-          `[devbox] the exposure of port ${spec.port} outran its allowance; it later settled `
-          + `with: ${describe({ cause: failure.cause })}`,
-        );
-      },
+      logLate(`the exposure of port ${spec.port}`),
     );
 
     if (exposed.kind === 'done') return true;
@@ -1647,13 +1462,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   }
 
   #admission(): RestoreAdmission | undefined {
-    const held = this.#restoration;
-
-    if (held.phase === 'attached') return { kind: 'restored' };
-
-    if (held.phase === 'repair') return { kind: 'repair', incomplete: held.incomplete };
-
-    return undefined;
+    return admissionOf(this.#restoration);
   }
 
   /** Defaults cwd to `DEVBOX_WORKDIR`: commands landing outside the durable directory are
@@ -1672,28 +1481,22 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     this.stampInteraction();
 
     if (this.#restoration.phase === 'repair') {
-      const generation = this.#generation;
-      await this.#repairAttached(generation);
-      const outcome = await this.ctx.storage.get<AttachOutcome>(LAST_ATTACH_KEY);
+      await this.#repairAttached(this.#generation);
+    } else {
+      if (this.#unready() !== undefined) {
+        await this.#settle({ phase: 'unstarted' });
+        await this.#startContainer();
 
-      return outcome ?? { kind: 'empty', detail: 'this box has attached nothing' };
-    }
-
-    if (this.#unready() !== undefined) {
-      await this.#settle({ phase: 'unstarted' });
-      await this.#startContainer();
-
-      if (this.#admission() === undefined) {
-        throw new Error(`this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}`);
+        if (this.#admission() === undefined) {
+          throw new Error(`this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}`);
+        }
       }
+
+      await this.ensureReady();
     }
 
-    await this.ensureReady();
-    const outcome = await this.ctx.storage.get<AttachOutcome>(LAST_ATTACH_KEY);
-
-    if (outcome === undefined) return { kind: 'empty', detail: 'this box has attached nothing' };
-
-    return outcome;
+    return await this.ctx.storage.get<AttachOutcome>(LAST_ATTACH_KEY)
+      ?? { kind: 'empty', detail: 'this box has attached nothing' };
   }
 
   async checkpointNow(kind: CheckpointKind): Promise<CheckpointOutcome> {
@@ -1844,13 +1647,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       );
     }
 
-    const holders = parseWorkdirHolders(released.stdout);
-
-    if (holders.length > 0) {
-      this.#lastWorkdirHolders = holders;
-    } else {
-      this.#lastWorkdirHolders = undefined;
-    }
+    this.#lastWorkdirHolders = parseWorkdirHolders(released.stdout);
   }
 
   /** Rethrows a still-busy refusal naming the holders the release pass found; the SDK's bare
@@ -2031,25 +1828,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     });
   }
 
-  /** The one sentence behind `ready: false`, from the same value `ready` is
-   *  read off — so the flag and the reason cannot disagree. */
   #unready(): string | undefined {
-    const held = this.#restoration;
-
-    if (held.phase === 'unstarted') return 'no restoration has run for this container yet';
-
-    if (held.phase === 'unattached') return held.reason;
-
-    if (held.phase === 'repair') return held.incomplete;
-
-    // An in-flight attempt must not report "nothing has run": a poller would read `pending` forever.
-    // The elapsed duration makes the answer actionable.
-    if (held.phase === 'restoring') {
-      return `a restoration has been running in the ${held.where} for `
-        + `${String(Math.max(0, Date.now() - held.since))} ms`;
-    }
-
-    return this.#gateRestore === undefined ? undefined : 'the container start hook has not settled';
+    return unreadyOf(this.#restoration, this.#gateRestore !== undefined);
   }
 
   /** Answers without attaching storage. A poll may reactivate a stopped container so its
@@ -2423,13 +2203,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         await this.onIncident(incident, attempt)));
   }
 
-  /** Renews only the SDK clock: `Sandbox` calls this on every control RPC, including internal
-   *  traffic, so stamping the durable interaction here would keep the idle gate shut forever. */
-  override renewActivityTimeout(): void {
-    super.renewActivityTimeout();
-  }
-
-  /** Caller-facing operations only: a scheduled callback stamping it would keep the box awake. */
+  /** Caller-facing operations only: a scheduled callback stamping it would keep the box awake.
+   *  `Sandbox` renews its own clock on every control RPC, internal traffic included, so the
+   *  durable stamp lives here and never in `renewActivityTimeout`, or the idle gate never opens. */
   protected stampInteraction(): void {
     this.renewActivityTimeout();
     const now = Date.now();
@@ -2459,20 +2235,14 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     }
   }
 
-  /** Durable BEFORE anyone is told. An eviction between recording and
-   *  delivering loses nothing, because delivery is itself a schedule row. */
+  /** Files the incident, then arms its delivery (`recordIncident`). */
   async #record(
     stage: IncidentStage,
     reason: string,
     extra?: { readonly processId?: string; readonly port?: number },
-  ): Promise<string> {
-    // Delegates to `recordIncident`, which owns the row shape and the reason bound shared with
-    // the host validator (INCIDENT_REASON_MAX_CHARS); this side mints the id and arms delivery.
-    const incidentId = crypto.randomUUID();
+  ): Promise<void> {
     await recordIncident(this.ctx.storage, stage, reason, extra);
     await this.#arm(INCIDENT_CALLBACK, Math.ceil(incidentRetryDelayMs(0) / 1000));
-
-    return incidentId;
   }
 
   #requireStorage(): DevboxStorage {
@@ -2563,8 +2333,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
         return {
           bytes: head.size,
-          digest: sha256 === undefined ? undefined : [...new Uint8Array(sha256)]
-            .map((byte) => byte.toString(16).padStart(2, '0')).join(''),
+          digest: sha256 === undefined ? undefined : Buffer.from(sha256).toString('hex'),
           objectVersion: head.version,
         };
       },
@@ -2575,8 +2344,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       // the lease, so a checkpoint would count as a caller and refuse its own stop (D18).
       countEntries: async (dir) => (await super.listFiles(dir)).files.length,
       restoreExtract: async (backup) => await this.restoreBackup(backup),
-      createExtractSnapshot: async (options) =>
-        await this.createBackup(mutableBackupOptions(options)),
+      // The SDK's `BackupOptions` takes a mutable `excludes`; a shared constant must stay readonly.
+      createExtractSnapshot: async (options) => await this.createBackup({
+        ...options, excludes: options.excludes === undefined ? undefined : [...options.excludes],
+      }),
       now: () => Date.now(),
       log: (message) => {
         console.log(`[devbox] ${message}`);
@@ -2604,8 +2375,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     const result = await super.exec(command, { cwd });
     this.#stampPhase('containerStart');
-    this.#containerCommandBytes.sent += Buffer.byteLength(command);
-    this.#containerCommandBytes.received += Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr);
+    this.#meter(command, result.stdout, result.stderr);
 
     return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
   }
@@ -2616,30 +2386,26 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   readonly #containerCommandBytes = { sent: 0, received: 0 };
 
-  async #specs<T>(prefix: string): Promise<readonly T[]> {
-    const rows = await this.ctx.storage.list<T>({ prefix });
+  #meter(sent: string, ...received: readonly string[]): void {
+    this.#containerCommandBytes.sent += Buffer.byteLength(sent);
 
-    return [...rows.values()];
+    for (const text of received) this.#containerCommandBytes.received += Buffer.byteLength(text);
   }
 
   async #procSpecs(): Promise<readonly SupervisedProcessSpec[]> {
-    return this.#specs<SupervisedProcessSpec>(PROC_SPEC_PREFIX);
+    return [...(await this.ctx.storage.list<SupervisedProcessSpec>({ prefix: PROC_SPEC_PREFIX })).values()];
   }
 
   async #portSpecs(): Promise<readonly PortExposureSpec[]> {
-    return this.#specs<PortExposureSpec>(PORT_SPEC_PREFIX);
+    return [...(await this.ctx.storage.list<PortExposureSpec>({ prefix: PORT_SPEC_PREFIX })).values()];
   }
 
-  /** Idempotent: `onStart` fires at least once per container start (D14). */
+  /** Idempotent: `onStart` fires at least once per container start (D14). A callback dispatching
+   *  its own row looks past it; any other caller counts a due row, because it is still owed and
+   *  arming beside it moves the alarm away (D14). */
   async #arm(callback: string, delaySeconds: number): Promise<void> {
-    if (await this.#pending(callback)) return;
+    if (!needsArming(await this.listSchedules(callback), Date.now() / 1000, this.#dispatching.has(callback))) return;
     await this.schedule(delaySeconds, callback, null);
-  }
-
-  /** A callback dispatching its own row looks past it; any other caller counts a due row,
-   *  because it is still owed and arming beside it moves the alarm away (D14). */
-  async #pending(callback: string): Promise<boolean> {
-    return !needsArming(await this.listSchedules(callback), Date.now() / 1000, this.#dispatching.has(callback));
   }
 
   readonly #dispatching = new Set<string>();
@@ -2669,10 +2435,4 @@ export function devboxSyncHandlers<E>(namespaceOf: (env: E) => DurableObjectName
       return new Response(reply.body, { status: reply.status, headers: { 'content-type': 'application/json' } });
     },
   };
-}
-
-/** The SDK's `BackupOptions` takes a mutable `excludes`; a shared constant must
- *  be readonly. One copy at the boundary rather than a mutable shared array. */
-function mutableBackupOptions(options: BackupOptions): BackupOptions {
-  return { ...options, excludes: options.excludes === undefined ? undefined : [...options.excludes] };
 }
