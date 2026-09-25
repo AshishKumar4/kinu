@@ -133,8 +133,16 @@ describe('redactSecrets — secret-shaped VALUES in free text', () => {
     expect(redactPayload(`API key: ${TOKEN}`)).toBe('API key: <redacted>');
   });
 
-  test('a benign line is left verbatim — the same adjudication the scan applies', () => {
-    const line = `sk_live_${'x'.repeat(16)} — a documented example placeholder`;
+  test('a benign word elsewhere on the line does not spare a real key', () => {
+    // The scan adjudicates whole source lines; a transcript's prose around a live key is not a placeholder.
+    const key = ['sk-ant-', 'api03-', 'k'.repeat(24)].join('');
+
+    expect(redactSecrets(`for example key ${key}`)).toBe('for example key <redacted>');
+    expect(redactSecrets(`placeholder replaced by ${key}`)).toBe('placeholder replaced by <redacted>');
+  });
+
+  test('a match that is itself a placeholder stays, as the scan reads it', () => {
+    const line = `set STRIPE_KEY=sk_live_example${'x'.repeat(16)} first`;
 
     expect(redactSecrets(line)).toBe(line);
   });

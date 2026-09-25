@@ -60,16 +60,22 @@ export function redactPayload(value: JsonValue): JsonValue {
   return redacted;
 }
 
-/** Applies `SECRET_PATTERNS` and `REDACTION_ONLY_PATTERNS` per line (a pattern's `benign` form
- *  suppresses it on that line) and masks with `<redacted>`, the marker `redactErrorText` prints. */
+/** Each pattern with a non-global copy, so a match's mask expands its own groups. */
+const REDACTION_PASSES = [...SECRET_PATTERNS, ...REDACTION_ONLY_PATTERNS].map((pattern) => ({
+  pattern,
+  one: new RegExp(pattern.regex.source, pattern.regex.flags.replace('g', '')),
+}));
+
+/** Applies `SECRET_PATTERNS` and `REDACTION_ONLY_PATTERNS` per line (a match that is itself a
+ *  pattern's `benign` form stays) and masks with `<redacted>`, the marker `redactErrorText` prints. */
 export function redactSecrets(text: string): string {
   return text.split('\n').map((line) => {
     let redacted = line;
 
-    for (const pattern of [...SECRET_PATTERNS, ...REDACTION_ONLY_PATTERNS]) {
-      if (pattern.benign?.test(line)) continue;
-
-      redacted = redacted.replaceAll(pattern.regex, pattern.mask ?? '<redacted>');
+    for (const { pattern, one } of REDACTION_PASSES) {
+      // `benign` judges the match, not the line: prose beside a live key never spares it.
+      redacted = redacted.replaceAll(pattern.regex, (match) =>
+        pattern.benign?.test(match) === true ? match : match.replace(one, pattern.mask ?? '<redacted>'));
     }
 
     return redacted;
