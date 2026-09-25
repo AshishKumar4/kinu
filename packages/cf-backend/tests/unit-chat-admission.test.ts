@@ -12,7 +12,7 @@ import {
   makeEnv, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, storedChat, workspaceMainActor,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
-import { RunEventRecorder } from '@kinu.run/core';
+import { changeNotesCard, RunEventRecorder, turnAuthor, type ReviewAnnotation } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
 import { socketConnection } from './helpers/bindings';
 
@@ -248,5 +248,64 @@ describe('a chat request through the production gate', () => {
     expect(done?.id).toBe('req-no');
     expect(done?.error).toMatch(/another session is driving/);
     expect(await userRows(harness)).toEqual([]);
+  });
+});
+
+describe('notes sent from the Changes tab', () => {
+  const CLAMP: ReviewAnnotation = {
+    id: 'clamp', type: 'COMMENT', blockId: 'src/apply.ts', startOffset: 0, endOffset: 0, originalText: 'const rule = rules[kind];', createdA: 1,
+    text: 'Clamp it, but log it too.',
+    anchor: { scope: 'lines', path: 'src/apply.ts', side: 'new', lineStart: 1, lineEnd: 1, baseline: 'gen-4f1c9a' },
+  };
+
+  const CHANGES = { source: 'workspace', label: 'Workspace', mode: 'vfs-baseline' } as const;
+
+  /** The sends the workspace still owes, and the metadata rows kept for them. */
+  function owed(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'db'>) {
+    const count = (table: string): number => harness.db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n ?? -1;
+
+    return { sends: count('pending_steers'), metadata: count('pending_steer_metadata') };
+  }
+
+  test('notes sent during a turn and evicted before their own arrive once, with their card, and never come back', async () => {
+    const harness = orchestratorHarness();
+    const { agent } = harness;
+    await agent.activateActor();
+    expect((await agent.saveChangeNotes('workspace', [CLAMP])).ok).toBe(true);
+    // A turn is running, so the notes wait for a turn of their own.
+    await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
+
+    expect(await agent.sendChangeNotes(CHANGES)).toEqual({ ok: true, notes: [] });
+    expect(await agent.getChangeNotes('workspace')).toEqual([]);
+    // The running turn's own send, and the notes' with their card.
+    expect(owed(harness)).toEqual({ sends: 2, metadata: 1 });
+
+    // Evicted before the notes' turn starts: a fresh activation over the same storage.
+    const next = await reactivateOrchestratorHarness(harness.db);
+    await next.agent.activateActor();
+    next.agent.harnessSupplyTurnModel(scriptedAnswer('Noted.'));
+    const loop = next.agent.harnessChatLoop;
+    await Promise.resolve();
+    await loop.pumpPromise;
+
+    const cards = (await storedChat(next)).filter((message) => changeNotesCard({ metadata: message.metadata }) !== null);
+
+    expect(cards.map((message) => [message.role, changeNotesCard({ metadata: message.metadata })?.notes.map((each) => each.id)]))
+      .toEqual([['user', ['clamp']]]);
+    expect(turnAuthor({ metadata: cards[0]?.metadata })).toBe('operator');
+    expect(await next.agent.getChangeNotes('workspace')).toEqual([]);
+    expect(owed(next)).toEqual({ sends: 0, metadata: 0 });
+  });
+
+  test('a queued send the loop refuses takes its card row with it', async () => {
+    const harness = orchestratorHarness();
+    const { agent } = harness;
+    await agent.activateActor();
+    await agent.saveChangeNotes('workspace', [CLAMP]);
+    agent.harnessRefuseDriving({ reason: 'unavailable', error: 'another activation is driving' });
+
+    expect(await agent.sendChangeNotes(CHANGES)).toEqual({ ok: true, notes: [] });
+    await agent.harnessChatLoop.pumpPromise;
+    expect(owed(harness)).toEqual({ sends: 0, metadata: 0 });
   });
 });

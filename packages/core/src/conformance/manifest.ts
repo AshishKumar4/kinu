@@ -392,6 +392,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     pending_steers: EVERYWHERE,
     // File parts of a pending send, one row per part.
     pending_steer_files: EVERYWHERE,
+    pending_steer_metadata: EVERYWHERE,
     // Created by `initWorkspaceSchema` (CLI) and the `ActorAgent` constructor (cf),
     // ahead of the `onStart` recovery sweep.
     actor_turn_claims: EVERYWHERE,

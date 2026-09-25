@@ -845,6 +845,12 @@
     "media_type TEXT NOT NULL",
     "url TEXT NOT NULL"
   ],
+  "pending_steer_metadata@packages/core/src/orchestrator/inbox.ts": [
+    "actor_id TEXT NOT NULL",
+    "steer_id TEXT NOT NULL",
+    "metadata_json TEXT NOT NULL",
+    "PRIMARY KEY (actor_id, steer_id)"
+  ],
   "pending_steers@packages/core/src/orchestrator/inbox.ts": [
     "seq INTEGER PRIMARY KEY AUTOINCREMENT",
     "actor_id TEXT NOT NULL",

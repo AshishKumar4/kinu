@@ -1,10 +1,8 @@
 import * as v from 'valibot';
 import type { RawSqlExec } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { EnqueueTurnResult, ProgrammaticTurn } from '../types/backend-host';
 import type { DiffAnchor, ReviewAnnotation } from '../types/plans';
 import { admitReviewAnnotations, DiffAnchorSchema } from '../plans/review';
-import { TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
 import type { JsonObject } from '../utils/json';
 import { comparePaths } from './change-view';
 
@@ -40,7 +38,6 @@ export function readChangeNotes(rt: NotesRuntime, source: string): ReviewAnnotat
   return admission.annotations;
 }
 
-/** No await between read and delete: a later note is the next send's. */
 function takeChangeNotes(rt: NotesRuntime, source: string): ReviewAnnotation[] {
   const notes = readChangeNotes(rt, source);
 
@@ -191,7 +188,13 @@ export function changeNotesCard(row: { metadata: unknown }): ChangeNotesCard | n
   return parsed.success ? parsed.output.changeNotes : null;
 }
 
-function changeNotesTurn(set: NotedChanges, notes: readonly ReviewAnnotation[]): ProgrammaticTurn {
+export interface ChangeNotesMessage {
+  readonly id: string;
+  readonly text: string;
+  readonly metadata: JsonObject;
+}
+
+function changeNotesMessage(set: NotedChanges, notes: readonly ReviewAnnotation[]): ChangeNotesMessage {
   const card: JsonObject = {
     source: set.source, label: set.label,
     notes: inNoteOrder(notes).map((note) => {
@@ -206,14 +209,14 @@ function changeNotesTurn(set: NotedChanges, notes: readonly ReviewAnnotation[]):
   };
 
   return {
+    id: `change-notes-${crypto.randomUUID()}`,
     text: changeNotesText(set, notes),
-    metadata: { kinuEvent: CHANGE_NOTES_EVENT, [TURN_AUTHOR_METADATA_KEY]: 'operator', changeNotes: card },
-    origin: 'user',
+    metadata: { kinuEvent: CHANGE_NOTES_EVENT, changeNotes: card },
   };
 }
 
 export async function sendChangeNotes(
-  rt: NotesRuntime, set: { value: unknown }, enqueue: (turn: ProgrammaticTurn) => Promise<EnqueueTurnResult>,
+  rt: NotesRuntime, set: { value: unknown }, admit: (message: ChangeNotesMessage) => Promise<void>,
 ): Promise<ChangeNotesResult> {
   rt.actor.assertCurrent();
   const parsed = v.safeParse(NotedChangesSchema, set.value);
@@ -223,13 +226,13 @@ export async function sendChangeNotes(
   const notes = takeChangeNotes(rt, source);
 
   if (notes.length === 0) return { ok: false, error: 'there are no notes to send' };
-  let queued = false;
 
   try {
-    queued = (await enqueue(changeNotesTurn(parsed.output, notes))).status === 'queued';
-  } finally {
-    if (!queued) putBack(rt, source, notes);
+    await admit(changeNotesMessage(parsed.output, notes));
+  } catch (cause) {
+    putBack(rt, source, notes);
+    throw cause;
   }
 
-  return queued ? { ok: true, notes: [] } : { ok: false, error: 'the notes were not sent: a newer turn took their place' };
+  return { ok: true, notes: [] };
 }

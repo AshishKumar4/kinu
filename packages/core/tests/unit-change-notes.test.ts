@@ -2,11 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { admitReviewAnnotations, MAX_PLAN_ANNOTATIONS_BYTES } from '../src/plans/review';
 import { anchoredText, comparePaths, inReadingOrder } from '../src/read-models/change-view';
 import {
-  changeNotesCard, initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, type NotedChanges,
+  changeNotesCard, initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, type ChangeNotesMessage, type NotedChanges,
 } from '../src/read-models/change-notes';
-import type { EnqueueTurnResult, ProgrammaticTurn } from '../src/types/backend-host';
 import type { DiffAnchor, ReviewAnnotation } from '../src/types/plans';
-import { turnAuthor } from '../src/utils/ui-message';
 import { diffLines, fileDiff, parseGitDiff } from '../src/vfs/diff';
 import { createTestRuntime } from './helpers';
 
@@ -37,22 +35,22 @@ const NOTES: readonly ReviewAnnotation[] = [
 
 const WORKSPACE: NotedChanges = { source: 'workspace', label: 'Workspace', mode: 'vfs-baseline', trackedSince: Date.UTC(2026, 8, 24, 14, 14) };
 
-/** The message a source's notes become when sent: the turn the workspace is handed. */
-async function sent(notes: readonly ReviewAnnotation[]): Promise<ProgrammaticTurn> {
+/** The message a source's notes become when sent, as the chat's admission takes it. */
+async function sent(notes: readonly ReviewAnnotation[]): Promise<ChangeNotesMessage> {
   const { rt } = createTestRuntime();
   initChangeNotesTable(rt.storage.execRaw);
   saveChangeNotes(rt, WORKSPACE.source, { value: notes });
-  const turns: ProgrammaticTurn[] = [];
+  const messages: ChangeNotesMessage[] = [];
 
-  const result = await sendChangeNotes(rt, { value: WORKSPACE }, (turn) => {
-    turns.push(turn);
+  const result = await sendChangeNotes(rt, { value: WORKSPACE }, (message) => {
+    messages.push(message);
 
-    return Promise.resolve({ status: 'queued' });
+    return Promise.resolve();
   });
 
-  if (!result.ok || turns[0] === undefined) throw new Error('the notes were not sent');
+  if (!result.ok || messages[0] === undefined) throw new Error('the notes were not sent');
 
-  return turns[0];
+  return messages[0];
 }
 
 describe('notes on a change-set', () => {
@@ -113,65 +111,61 @@ describe('notes on a change-set', () => {
     expect(text.endsWith('## All the changes\n\nRun the checkout tests again.')).toBe(true);
   });
 
-  test('the sent message is the operator\'s words, its card reads back from the metadata, and the notes send once', async () => {
-    const turn = await sent(NOTES);
-    const card = changeNotesCard({ metadata: turn.metadata });
+  test('the sent message is one card: its metadata reads back as the notes, in the tree\'s order', async () => {
+    const message = await sent(NOTES);
+    const card = changeNotesCard({ metadata: message.metadata });
 
-    expect(turnAuthor({ metadata: turn.metadata })).toBe('operator');
-    // Answered at admission, as a message typed in the chat is, never after the turn it starts.
-    expect(turn.origin).toBe('user');
     expect(card?.notes.map((each) => each.id)).toEqual(['clamp', 'legacy', 'test', 'all']);
     expect(card?.notes[0]).toEqual({ id: 'clamp', type: 'COMMENT', text: 'Clamp it, but log it too.', anchor: NOTES[3]?.anchor });
     expect(changeNotesCard({ metadata: { kinuEvent: 'plan_feedback' } })).toBeNull();
+    // Each send is a message of its own, never a retry of another's.
+    expect((await sent(NOTES)).id).not.toBe(message.id);
   });
 
-  test('a send takes the notes at once: one saved while the host answers is kept for the next send', async () => {
+  test('a send takes the notes at once: one saved before admission answers is kept for the next send', async () => {
     const { rt } = createTestRuntime();
     initChangeNotesTable(rt.storage.execRaw);
     const [first, later] = [NOTES[3], NOTES[2]];
 
     if (first === undefined || later === undefined) throw new Error('the fixture lost its notes');
     saveChangeNotes(rt, WORKSPACE.source, { value: [first] });
-    const answer = Promise.withResolvers<EnqueueTurnResult>();
+    const answer = Promise.withResolvers<void>();
     const sentIds: string[][] = [];
 
-    const enqueue = (turn: ProgrammaticTurn, answered: Promise<EnqueueTurnResult>): Promise<EnqueueTurnResult> => {
-      sentIds.push(changeNotesCard({ metadata: turn.metadata })?.notes.map((each) => each.id) ?? []);
+    const admit = (message: ChangeNotesMessage, answered: Promise<void>): Promise<void> => {
+      sentIds.push(changeNotesCard({ metadata: message.metadata })?.notes.map((each) => each.id) ?? []);
 
       return answered;
     };
 
-    const sending = sendChangeNotes(rt, { value: WORKSPACE }, (turn) => enqueue(turn, answer.promise));
+    const sending = sendChangeNotes(rt, { value: WORKSPACE }, (message) => admit(message, answer.promise));
 
-    // The operator writes another note before the host has answered.
+    // The operator writes another note before admission has answered.
     expect(saveChangeNotes(rt, WORKSPACE.source, { value: [later] }).ok).toBe(true);
-    answer.resolve({ status: 'queued' });
+    answer.resolve();
 
     expect(await sending).toEqual({ ok: true, notes: [] });
     expect(readChangeNotes(rt, WORKSPACE.source)).toEqual([later]);
     // The next send carries the later note alone: each note is sent once.
-    expect(await sendChangeNotes(rt, { value: WORKSPACE }, (turn) => enqueue(turn, Promise.resolve({ status: 'queued' })))).toMatchObject({ ok: true });
+    expect(await sendChangeNotes(rt, { value: WORKSPACE }, (message) => admit(message, Promise.resolve()))).toMatchObject({ ok: true });
     expect(sentIds).toEqual([[first.id], [later.id]]);
   });
 
-  test('a send the host does not admit puts its notes back, ahead of any saved meanwhile', async () => {
+  test('a refused admission puts the notes back, ahead of any saved meanwhile', async () => {
     const { rt } = createTestRuntime();
     initChangeNotesTable(rt.storage.execRaw);
     const [clamp, deletion, all] = [NOTES[3], NOTES[1], NOTES[0]];
 
     if (clamp === undefined || deletion === undefined || all === undefined) throw new Error('the fixture lost its notes');
     saveChangeNotes(rt, WORKSPACE.source, { value: [clamp, all] });
-    const answer = Promise.withResolvers<EnqueueTurnResult>();
+    const answer = Promise.withResolvers<void>();
     const sending = sendChangeNotes(rt, { value: WORKSPACE }, () => answer.promise);
 
     // The page still shows the notes it sent, so it saves them with a new one, and another note on everything.
     saveChangeNotes(rt, WORKSPACE.source, { value: [clamp, deletion, { ...all, id: 'all-again' }] });
-    answer.resolve({ status: 'skipped' });
+    answer.reject(new Error('the workspace is closing'));
 
-    expect(await sending).toMatchObject({ ok: false });
-    expect(readChangeNotes(rt, WORKSPACE.source).map((each) => each.id)).toEqual(['clamp', 'all', 'test']);
-    // A host that throws puts them back the same way.
-    await expect(sendChangeNotes(rt, { value: WORKSPACE }, () => Promise.reject(new Error('down')))).rejects.toThrow('down');
+    await expect(sending).rejects.toThrow('the workspace is closing');
     expect(readChangeNotes(rt, WORKSPACE.source).map((each) => each.id)).toEqual(['clamp', 'all', 'test']);
   });
 
