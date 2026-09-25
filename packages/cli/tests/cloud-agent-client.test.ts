@@ -37,7 +37,7 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((mock) => mock.close()));
 });
 
-/** `getActivitySnapshot`'s spend as a deployment before d9bb108d9 answers it: no `accounts`. */
+/** `getActivitySnapshot`'s spend as a deployment before 6de08b071 answers it: no `accounts`. */
 const SPEND_BEFORE_ACCOUNTS = {
   producers: [],
   total: { calls: 3, callsWithoutUsage: 0, usage: { input: 1200, output: 300 }, usd: 0.01, unpricedCalls: 0 },

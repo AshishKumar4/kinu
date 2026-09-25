@@ -578,12 +578,12 @@ export const FIRST_RUN_DEFECTS = {
       + 'in-memory vault, each backend over its own fixture, and the web panel over REST answered from '
       + 'fixtures in the page. None stores a named key in the DEPLOYED vault and reads it back through '
       + 'the panel listing, the CLI menu and a workspace\'s own choice.',
-    provedRedAt: '2036733d0',
-    redDirection: 'On 2036733d0 all seven subgoals miss on the mechanism: the vault refuses '
+    provedRedAt: 'e1051bd77',
+    redDirection: 'On e1051bd77 all seven subgoals miss on the mechanism: the vault refuses '
       + '`openai.bearer@<name>` as an invalid credential key, so neither account is stored, listed or '
       + 'removed; the CLI menu carries no accounts; `setProviderAccount` is no agent RPC method; and '
-      + '`setModel` refuses `openai@<name>/gpt-5.5`. Green needs the build with account keys (d1f5fbf07) '
-      + 'and a workspace\'s own account choice (2d5a4421d).',
+      + '`setModel` refuses `openai@<name>/gpt-5.5`. Green needs the build with account keys (b29279646) '
+      + 'and a workspace\'s own account choice (61db52a07).',
   },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
