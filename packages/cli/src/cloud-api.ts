@@ -22,6 +22,8 @@ import {
   AccountUsageSchema,
   type AccountUsage,
   type AgentRpcMethod,
+  ModelTestResultSchema,
+  type ModelTestResult,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -355,12 +357,16 @@ export async function listCloudAgents(origin: string, token: string): Promise<Cl
 
 /** Admitted by the rule both backends share, so every field the hub sends (each model's reasoning levels
  *  included) reaches the TUI. */
-export async function getCloudAccountUsage(origin: string, token: string): Promise<AccountUsage> {
-  return cloudJson(AccountUsageSchema, origin, '/api/cli/usage', { token });
+export async function getCloudAccountUsage(origin: string, token: string, refresh = false): Promise<AccountUsage> {
+  return cloudJson(AccountUsageSchema, origin, refresh ? '/api/cli/usage?refresh=1' : '/api/cli/usage', { token });
 }
 
 export async function listCloudAvailableModels(origin: string, token: string): Promise<AgentModelMenu> {
   return normalizeModelMenu({ payload: await cloudJson(v.unknown(), origin, '/api/cli/models', { token }) });
+}
+
+export async function testCloudModel(origin: string, token: string, spec: string, signal: AbortSignal): Promise<ModelTestResult> {
+  return cloudJson(ModelTestResultSchema, origin, '/api/cli/models/test', { method: 'POST', token, body: { spec }, signal });
 }
 
 /** Always an envelope: an uncustomized account gets version 0 over the builtin catalog. */
@@ -517,6 +523,7 @@ interface CloudRequestOpts {
   method?: string;
   body?: JsonValue;
   token?: string;
+  signal?: AbortSignal;
 }
 
 /** Keeps the server's body on failure statuses so callers can act on structured errors (a conflict is data). */
@@ -531,6 +538,7 @@ async function cloudRequest(origin: string, path: string, opts: CloudRequestOpts
     method: opts.method ?? 'GET',
     headers,
     body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+    ...(opts.signal !== undefined && { signal: opts.signal }),
   });
 
   const contentType = res.headers.get('content-type') ?? '';

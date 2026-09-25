@@ -59,6 +59,7 @@ import * as v from 'valibot';
 import { isPreviewHostRequest, previewHostSuffix } from '../packages/core/src/preview/preview-origin';
 import { SANDBOX_TRANSPORT } from '../packages/core/src/preview/sandbox-id';
 import { parseJsonc } from './jsonc';
+import { CONTAINER_IMAGES, imageReference, readSource, sourceHash, type ContainerImage } from './container-images';
 import { readRepositoryFile, trackedFiles } from './sources';
 // The config module itself, not its text: the failure being guarded is a hook
 // that exists and decides the wrong thing, which no source-text assertion sees.
@@ -108,6 +109,9 @@ const SANDBOX_IMAGE = {
 } as const;
 
 const PINNED_IMAGE = ARTIFACT.image;
+
+/** Each container class and the one image the release record declares for it. */
+const PINNED_IMAGES = new Map(Object.entries(CONTAINER_IMAGES).map(([className, image]) => [className, imageReference(image)]));
 
 /** A vite plugin that decides something per environment — the one shape this
  *  file calls. `PluginOption` also admits arrays, promises and `false`, so the
@@ -166,13 +170,26 @@ const CONFIG = parseJsonc(readFileSync(join(REPO_ROOT, WRANGLER), 'utf8'), Wrang
 
 describe('the sandbox container image is pinned', () => {
   test('the Worker runs the pinned digest and names no tag', () => {
-    const images = (CONFIG.containers ?? []).map((container) => container.image);
+    const containers = CONFIG.containers ?? [];
 
-    expect(images.length, 'the Worker declares no container').toBeGreaterThan(0);
+    expect(containers.map((container) => container.class_name).sort(), 'the Worker declares other containers than the record')
+      .toEqual([...PINNED_IMAGES.keys()].sort());
 
-    for (const image of images) {
+    for (const { class_name: className, image } of containers) {
       expect(isImmutableImageReference(image), 'the Worker runs a re-pointable image').toBe(true);
-      expect(image, 'the Worker runs an image the release record does not declare').toBe(PINNED_IMAGE);
+      expect(image, 'the Worker runs an image the release record does not declare').toBe(PINNED_IMAGES.get(className) ?? `no pin for ${className}`);
+    }
+  });
+
+  test('each image\'s source is the source its digest was built from', () => {
+    // The sandbox's sources are held by its own artifact record (A8).
+    for (const [className, image] of Object.entries<ContainerImage>(CONTAINER_IMAGES)) {
+      if (image.sourceHash === undefined) continue;
+      const files = readSource(REPO_ROOT, image.source);
+
+      expect({ className, files: files.size > 0 }).toEqual({ className, files: true });
+      expect({ className, sourceHash: sourceHash(files) }, `${image.source} changed with no new digest: see container-images.ts`)
+        .toEqual({ className, sourceHash: image.sourceHash });
     }
   });
 
@@ -541,7 +558,10 @@ describe('the block-lower image is built from this tree', () => {
 
     for (const host of CONTAINER_HOSTS) {
       const config = parseJsonc(readRepositoryFile(REPO_ROOT, host), ContainerHostSchema, host);
-      expect(config.containers.map((container) => container.image), host).toEqual(config.containers.map(() => PINNED_IMAGE));
+      // The Codex forwarder beside it is held by the pin test above.
+      const sandboxes = config.containers.filter((container) => container.class_name !== 'CodexEgress');
+
+      expect(sandboxes.map((container) => container.image), host).toEqual(sandboxes.map(() => PINNED_IMAGE));
     }
   });
 });

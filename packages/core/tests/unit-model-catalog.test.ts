@@ -1,9 +1,15 @@
 import { describe, expect, test } from 'bun:test';
+import { generateText } from 'ai';
 import {
   CODEX_CRED_KEY,
+  PROVIDER_SDK_RETRIES,
   OPENAI_CRED_KEY,
+  catalogModelInfo,
+  codexEgressAllowed,
   createCodexProvider,
   createOpenAIProvider,
+  createProviderRegistry,
+  toProviderError,
   type AuthResolution,
   type ProviderDeps,
 } from '../src/index';
@@ -172,5 +178,86 @@ describe('provider model catalogs', () => {
       inputModalities: ['text', 'image'],
       reasoningEfforts: ['low', 'high'],
     }]);
+  });
+
+  const blockPage = (): Response => new Response(
+    '<html><body><p>Unable to load site</p><p>If you are using a VPN, try turning it off.</p></body></html>',
+    { status: 403, headers: { 'content-type': 'text/html; charset=UTF-8', server: 'cloudflare' } },
+  );
+
+  const codexDeps = (fetchFn: typeof fetch) => deps({ [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-token' } } }, fetchFn);
+
+  test('a refused Codex model list is a named failure beside the built-in list, never a silent stale list', async () => {
+    const registry = createProviderRegistry();
+    registry.register(createCodexProvider({ baseURL: 'https://chatgpt.test/backend-api/codex' }));
+
+    const menu = await registry.listAllModels(codexDeps(fetchStub(async () => blockPage())));
+
+    expect(menu.failures.map((failure) => failure.provider)).toEqual(['codex']);
+    expect(menu.failures[0]?.reason).toContain('HTTP 403');
+    expect(menu.models.some((model) => model.provider === 'codex' && model.id === 'gpt-5.5')).toBe(true);
+  });
+
+  test('an unreadable models.dev list is a named failure beside the built-in list', async () => {
+    const registry = createProviderRegistry();
+    registry.register(createOpenAIProvider());
+
+    const menu = await registry.listAllModels(deps(
+      { [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } },
+      fetchStub(async () => new Response('upstream down', { status: 503 })),
+    ));
+
+    expect(menu.failures.map((failure) => failure.provider)).toEqual(['openai']);
+    expect(menu.models.some((model) => model.provider === 'openai')).toBe(true);
+  });
+
+  test('a turn keeps the built-in entry for its model when the live list is refused', async () => {
+    const info = await catalogModelInfo(createCodexProvider(), codexDeps(fetchStub(async () => blockPage())), 'gpt-5.5');
+
+    expect(info?.contextWindow).toBe(272_000);
+  });
+
+  test('a Codex call refused by the block page fails once, as an unreachable network, not a login problem', async () => {
+    let requests = 0;
+
+    const model = createCodexProvider({ baseURL: 'https://chatgpt.test/backend-api/codex' })
+      .createModel('gpt-5.5', codexDeps(fetchStub(async () => {
+        requests++;
+
+        return blockPage();
+      })));
+
+    let classified = toProviderError({ doing: 'calling the model', cause: new Error('a blocked call succeeded') });
+
+    try {
+      await generateText({ model, prompt: 'hi', maxRetries: PROVIDER_SDK_RETRIES });
+    } catch (error) {
+      classified = toProviderError({ doing: 'calling the model', cause: error });
+    }
+
+    expect({ requests, code: classified.code }).toEqual({ requests: 1, code: 'unavailable' });
+    expect(classified.message + String(classified.cause)).toMatch(/refused this server's network/);
+  });
+
+  test('the Codex egress route carries the Codex API and the plan usage /stats reads, nothing else', () => {
+    const carried = [
+      ['GET', 'https://chatgpt.com/backend-api/codex/models?client_version=1.0.0'],
+      ['POST', 'https://chatgpt.com/backend-api/codex/responses'],
+      ['GET', 'https://chatgpt.com/backend-api/wham/usage'],
+      ['GET', 'https://chatgpt.com/backend-api/conversation'],
+      ['POST', 'https://chatgpt.com/backend-api/codex/models'],
+      ['DELETE', 'https://chatgpt.com/backend-api/codex/responses'],
+      ['POST', 'http://chatgpt.com/backend-api/codex/responses'],
+      ['POST', 'https://chatgpt.com:8443/backend-api/codex/responses'],
+      ['POST', 'https://chatgpt.com.example.com/backend-api/codex/responses'],
+      ['POST', 'https://example.com/backend-api/codex/responses'],
+      ['POST', 'https://chatgpt.com/backend-api/codex/responses/../../conversation'],
+    ].map(([method, url]) => [method, url, codexEgressAllowed({ method: method ?? '', url: url ?? '' })]);
+
+    expect(carried.filter(([, , allowed]) => allowed).map(([method, url]) => `${String(method)} ${String(url)}`)).toEqual([
+      'GET https://chatgpt.com/backend-api/codex/models?client_version=1.0.0',
+      'POST https://chatgpt.com/backend-api/codex/responses',
+      'GET https://chatgpt.com/backend-api/wham/usage',
+    ]);
   });
 });

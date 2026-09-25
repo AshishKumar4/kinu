@@ -12,6 +12,7 @@ import {
   storedAccounts,
   createClaudeOAuthClient,
   listAnthropicModels,
+  settleModelList,
   createCodexOAuthClient,
   startClaudeSignIn,
   decodeCodexAccountId,
@@ -361,7 +362,8 @@ async function suggestedClaudeModel(): Promise<string> {
   const current = currentModel(readDefaultTier()?.model, 'claude');
 
   if (current === undefined) return ANTHROPIC_DEFAULT_MODEL;
-  const served = await listAnthropicModels({ fetch });
+  // Offline, the built-in list stands in, as it does for a turn.
+  const { models: served } = await settleModelList(listAnthropicModels({ fetch }));
 
   return served.some((model) => model.id === current) ? current : ANTHROPIC_DEFAULT_MODEL;
 }

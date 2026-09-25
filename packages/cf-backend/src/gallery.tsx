@@ -101,7 +101,7 @@ import type {
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
   AccountSpend, PendingAction, ProducerSpend, RunSummary, SearchTreeRow, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
-import type { McpServerSummary, ModelMenuEntry, RosterCounts, RosterEntry, RosterFrame, RosterPage, UserDevice, WorkspaceEntry } from "@/lib/user-api";
+import type { McpServerSummary, ModelMenuEntry, ModelTestResult, RosterCounts, RosterEntry, RosterFrame, RosterPage, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import { McpServerSummarySchema, ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
 import * as v from "valibot";
 import { galleryServerPush, seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
@@ -278,6 +278,10 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
     return fixtureJson({ deleted: true });
   }
 
+  if (path === "/api/user/models/test" && method === "POST") {
+    return fixtureJson({ ok: true, firstTokenMs: 410, totalMs: 620 });
+  }
+
   if (path === "/api/user/profile" && method === "PATCH") {
     const patch = v.safeParse(v.object({ displayName: v.string() }), JSON.parse(v.parse(v.string(), body)));
     const displayName = patch.success ? patch.output.displayName : "Owner";
@@ -320,10 +324,23 @@ async function settingsSectionsFixture(path: string): Promise<Response | null> {
       accounts: ACTIVITY_ACCOUNTS,
       workspaces: 4,
       unread: ["old-bot"],
-      credits: [{
-        provider: "openrouter", account: "main", at: NOW - 5e3,
-        limit: 10, remaining: 4.12, reset: "monthly", usedToday: 1.03, usedThisMonth: 5.88,
-      }],
+      limitsUnread: [{ provider: "claude", account: "work", reason: "Claude answered HTTP 401 for the work account" }],
+      limits: [
+        { provider: "claude", account: "main", at: NOW - 5e3, windows: [
+          { name: "5h", usedPercent: 62, resetsAt: NOW + 2 * 36e5 + 3 * 6e4 },
+          { name: "weekly", usedPercent: 18, resetsAt: NOW + 3.5 * 864e5 },
+        ] },
+        { provider: "codex", account: "main", at: NOW - 5e3, windows: [
+          { name: "5h", usedPercent: 40, resetsAt: NOW + 36e5 },
+          { name: "weekly", usedPercent: 7, resetsAt: NOW + 6 * 864e5 },
+        ] },
+        { provider: "opencode-go", account: "main", at: NOW - 12 * 6e4, undocumented: true, windows: [
+          { name: "5h", usedPercent: 12, resetsAt: NOW + 3 * 36e5 },
+          { name: "weekly", usedPercent: 55, resetsAt: NOW + 3 * 864e5 },
+          { name: "monthly", usedPercent: 100, resetsAt: NOW + 8.4 * 864e5 },
+        ] },
+        { provider: "openrouter", account: "main", at: NOW - 5e3, windows: [{ name: "credit", used: 5.88, limit: 10, resets: "monthly" }] },
+      ],
     });
   }
 
@@ -2694,7 +2711,7 @@ function ForkLiveFrame({ pinned }: { pinned: number | null }) {
 }
 
 /* The real component: there is exactly one identity row. */
-function GalleryWorkspaceBar({ providerWait }: { providerWait?: { provider: string; waitMs: number } | null }) {
+function GalleryWorkspaceBar({ providerWait }: { providerWait?: { provider: string; untilMs: number } | null }) {
   return (
     <WorkspaceBar
       title="Checkout coupon bug"
@@ -2805,7 +2822,7 @@ function Shell(
     /** Empty is the liveness case: with no running job or streaming turn the fork list drops to its idle cadence. */
     backgroundJobs?: BackgroundJob[];
     /** Empty by default: only the provider-wait frame pins it. */
-    providerWait?: { provider: string; waitMs: number } | null;
+    providerWait?: { provider: string; untilMs: number } | null;
     /** Empty by default: a neighbour stuck in failure makes the photographed surface look broken. */
     notices?: readonly ComposerNotice[];
   },
@@ -3033,7 +3050,7 @@ function ChatEmptyFrame() {
 
 /* A turn waiting on the provider: the wait is named on the task indicator rather than guessed from silence. */
 function ProviderWaitFrame() {
-  return <Shell providerWait={{ provider: "anthropic", waitMs: 45_000 }} />;
+  return <Shell providerWait={{ provider: "anthropic", untilMs: Date.now() + 45_000 }} />;
 }
 
 /* A workspace with history before its transcript arrives: must read "not yet", distinct from ChatEmptyFrame's "nothing here". */
@@ -3090,6 +3107,58 @@ function ComposerFrame() {
           <div className="p-eyebrow px-4">With a status row</div>
           <Composer {...shared} value="" liveness={IDLE_TURN} modelPicker={picker()} notices={MCTS_NOTICE} />
         </div>
+        <ModelPickerStates />
+      </div>
+    </div>
+  );
+}
+
+const PICKER_MODELS: ModelMenuEntry[] = [
+  { spec: "codex/gpt-5.5", label: "GPT-5.5 (Codex)", provider: "codex", providerLabel: "ChatGPT Codex (subscription)", contextWindow: 272_000, capabilities: ["reasoning", "vision"] },
+  { spec: "codex/gpt-6-sol", label: "GPT-6 Sol (Codex)", provider: "codex", providerLabel: "ChatGPT Codex (subscription)", contextWindow: 272_000, capabilities: ["reasoning", "vision"] },
+  { spec: "claude/claude-opus-4-8", label: "Claude Opus 4.8", provider: "claude", providerLabel: "Claude (subscription)", contextWindow: 1_000_000, capabilities: ["reasoning", "vision"] },
+  { spec: "claude/claude-sonnet-4-8", label: "Claude Sonnet 4.8", provider: "claude", providerLabel: "Claude (subscription)", contextWindow: 1_000_000, capabilities: ["reasoning"] },
+  { spec: "workers-ai/@cf/zai-org/glm-5.3", label: "GLM 5.3", provider: "workers-ai", providerLabel: "Workers AI", contextWindow: 1_048_576, capabilities: ["reasoning"] },
+  { spec: "openrouter/qwen/qwen3.6-max", label: "Qwen 3.6 Max", provider: "openrouter", providerLabel: "OpenRouter", contextWindow: 262_144 },
+  { spec: "opencode-go/glm-5", label: "GLM-5 (OpenCode Go)", provider: "opencode-go", providerLabel: "OpenCode Go", contextWindow: 200_000 },
+];
+
+const PICKER_FAILURES = [{ provider: "codex", label: "ChatGPT Codex (subscription)", reason: "Codex models could not be read: chatgpt.com refused this server's network (HTTP 403 block page, before sign-in); showing the built-in list" }];
+
+const PICKER_TEST_RESULTS = new Map<string, ModelTestResult>([
+  ["opencode-go", { ok: false, failure: "spent", until: Date.parse("2026-10-03T14:56:00Z"), message: "opencode-go is rate-limited until 2026-10-03 14:56 UTC (in 8d 10h): Monthly usage limit reached. (HTTP 429)" }],
+  ["codex", { ok: false, failure: "unreachable", message: "Codex is unreachable from here (HTTP 503, codex_unavailable)" }],
+]);
+
+function galleryModelTest(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
+  const { promise, resolve, reject } = Promise.withResolvers<ModelTestResult>();
+  const result = PICKER_TEST_RESULTS.get(spec.split("/")[0] ?? "") ?? { ok: true, firstTokenMs: 640, totalMs: 910 };
+  const timer = setTimeout(() => resolve(result), 700);
+
+  signal.addEventListener("abort", () => { clearTimeout(timer); reject(signal.reason); });
+
+  return promise;
+}
+
+function ModelPickerStates() {
+  const [model, setModel] = useState("codex/gpt-5.5");
+  const [tier, setTier] = useState("");
+  const models = PICKER_MODELS;
+  const failures = PICKER_FAILURES;
+  const test = galleryModelTest;
+
+  return (
+    <div className="space-y-6 px-4" data-model-picker-states>
+      <div className="space-y-1">
+        <div className="p-eyebrow">Model picker, a failed Codex list</div>
+        <div className="flex items-center gap-1">
+          <ModelPicker models={models} failures={failures} value={model} onChange={setModel} size="xs" test={test} label="Picker" />
+        </div>
+      </div>
+      <div className="space-y-1">
+        <div className="p-eyebrow">Settings tier, inheriting the default</div>
+        <ModelPicker models={models} failures={failures} value={tier} onChange={setTier} clearable size="sm"
+          label="deep model" placeholder="Use default: GPT-5.5 (Codex)" test={test} />
       </div>
     </div>
   );

@@ -17,7 +17,7 @@ const OPENAI_FAST_MODEL = 'gpt-5.4-mini';
 
 /** Offline levels per model (from https://developers.openai.com/api/docs/models/<id>),
  *  shared with codex.ts; live lists read models.dev. */
-export const GPT54_EFFORTS: readonly ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh'];
+const GPT54_EFFORTS: readonly ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh'];
 
 const FALLBACK_MODELS: ModelInfo[] = [
   { id: OPENAI_DEFAULT_MODEL, label: 'GPT-5.5', capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: GPT54_EFFORTS },

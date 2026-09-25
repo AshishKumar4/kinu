@@ -1939,8 +1939,8 @@ export type { RunListEntry, RunSummary } from './read-models/runs';
 export { workspaceSpend } from './read-models/workspace-spend';
 
 export {
-  AccountSpendSchema, AccountUsageSchema, mergeAccountSpend, readAccountCredits, readAccountUsage,
-  type AccountCreditSource, type AccountLedgerSource, type AccountUsage,
+  AccountSpendSchema, AccountUsageSchema, mergeAccountSpend, readAccountUsage,
+  type AccountLedgerSource, type AccountUsage,
 } from './read-models/account-usage';
 
 export type {
@@ -2177,7 +2177,7 @@ export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
 
 export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';
 
-export { fmtPct, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
+export { fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
 
 export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './utils/do-rpc';
 

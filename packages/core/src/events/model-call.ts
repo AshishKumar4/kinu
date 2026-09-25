@@ -23,6 +23,7 @@ export const SPEND_SOURCES = [
   'advisor',
   'slate',
   'warming',
+  'test',
 ] as const;
 
 export type SpendSource = (typeof SPEND_SOURCES)[number];
@@ -42,6 +43,7 @@ export const SPEND_SOURCE_LABEL = {
   advisor: 'Advisor',
   slate: 'Slates',
   warming: 'Cache warming',
+  test: 'Model tests',
 } as const satisfies Readonly<Record<SpendSource, string>>;
 
 export const SPEND_SOURCE_DETAIL = {
@@ -63,6 +65,7 @@ export const SPEND_SOURCE_DETAIL = {
   slate: 'an authored slate\'s `ai` binding: one call per `shell`, at the tier the binding or the call named',
   warming: 'keeping an idle prompt-cache prefix alive: one zero-output replay of the last request, '
     + 'at most three per idle stretch (providers/cache-warming.ts)',
+  test: 'a model\'s Test button: one request asking for one word through the path a turn takes',
 } as const satisfies Readonly<Record<SpendSource, string>>;
 
 /**

@@ -271,6 +271,28 @@ describe('ChatApp terminal interaction', () => {
     expect(row).not.toMatch(/· GPT 5\.5/u);
   });
 
+  test('Ctrl+T in the model picker tests the highlighted model and says what it found, without picking it', async () => {
+    const tested: string[] = [];
+
+    const controlled = fakeClient({
+      name: 'alpha',
+      testModel: async (spec) => {
+        tested.push(spec);
+
+        return { ok: false, failure: 'spent', message: 'opencode-go is rate-limited until 2026-10-03 14:56 UTC (in 8d 10h)' };
+      },
+    });
+
+    const screen = await mountChat(controlled.client);
+    screen.mockInput.pressKey('l', { ctrl: true });
+    await screen.waitFor('the model row', () => screen.frame().includes('openai/gpt-5.5'));
+    screen.mockInput.pressKey('t', { ctrl: true });
+    await screen.waitFor('the test result', () => screen.frame().includes('allowance is spent'));
+
+    expect(tested).toEqual(['openai/gpt-5.5']);
+    expect(screen.frame()).toContain('Select model');
+  });
+
   test('in a wide chat the workspace key is named in /help, not drawn over the header', async () => {
     const screen = await mountChat(fakeClient({ name: 'alpha' }).client, { width: 140 });
     await screen.waitFor('the header', () => screen.frame().includes('alpha'));

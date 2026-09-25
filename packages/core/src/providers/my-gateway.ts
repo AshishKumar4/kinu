@@ -3,7 +3,7 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import { type ModelProvider, type ModelInfo, type ProviderDeps } from './types';
-import { authCacheKey, cloneModelInfos } from './util';
+import { authCacheKey, cloneModelInfos, settleModelList, StaleModelList } from './util';
 import { listModelsDevProviderModels } from './models-dev';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from './cloudflare-oauth';
 import { createCloudflareAIFetch, mapGatewayError } from './cloudflare-ai-fetch';
@@ -75,17 +75,23 @@ export function createMyGatewayProvider(): ModelProvider {
       }
 
       const models: ModelInfo[] = [];
+      const stale: StaleModelList[] = [];
 
       for (const slug of discovered.slugs) {
         const catalogId = GATEWAY_SLUG_TO_CATALOG.get(slug);
 
         if (!catalogId) continue; // slug the OpenAI-compat surface can't serve
 
-        for (const model of await listModelsDevProviderModels(catalogId, deps)) {
-          models.push({ ...model, id: `${catalogId}/${model.id}` });
-        }
+        const listed = await settleModelList(listModelsDevProviderModels(catalogId, deps));
+
+        if (listed.stale !== null) stale.push(listed.stale);
+
+        for (const model of listed.models) models.push({ ...model, id: `${catalogId}/${model.id}` });
       }
 
+      const [first] = stale;
+
+      if (first !== undefined) throw new StaleModelList(models, { reason: first.reason, cause: first.cause });
       catalogCache.set(cacheKey, { at: Date.now(), models });
 
       return cloneModelInfos(models);

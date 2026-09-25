@@ -7,6 +7,8 @@ import {
   type DeviceTier,
   type DeviceUpdateState,
   type JsonValue,
+  ModelTestResultSchema,
+  type ModelTestResult,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
@@ -72,6 +74,7 @@ export interface ModelMenuEntry {
   spec: string;
   label: string;
   provider: string;
+  providerLabel?: string;
   capabilities?: string[];
   contextWindow?: number;
   /** Absent when the catalog could not say; empty when the model takes none. */
@@ -138,7 +141,7 @@ const CredentialSummarySchema = v.object({
 });
 
 const ModelMenuEntrySchema = v.object({
-  spec: v.string(), label: v.string(), provider: v.string(),
+  spec: v.string(), label: v.string(), provider: v.string(), providerLabel: v.optional(v.string()),
   capabilities: v.optional(v.array(v.string())), contextWindow: v.optional(v.number()),
   reasoningEfforts: v.optional(v.array(v.picklist(REASONING_EFFORTS))),
 });
@@ -376,7 +379,7 @@ export const disconnectCodex  = () => api(OkSchema, 'DELETE', '/codex')
 
  return r; });
 
-export const getAccountUsage = () => api(AccountUsageSchema, 'GET', '/usage');
+export const getAccountUsage = (refresh = false) => api(AccountUsageSchema, 'GET', refresh ? '/usage?refresh=1' : '/usage');
 
 export const getProfileCatalog = (): Promise<ProfileCatalogEnvelope> =>
   api(ProfileCatalogEnvelopeSchema, 'GET', '/profile-catalog');
@@ -404,6 +407,21 @@ export function listAvailableModels(): Promise<ModelMenu> {
 }
 
 function invalidateModelsCache(): void { _modelsCache = null; }
+
+export type { ModelTestResult };
+
+export async function testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
+  const res = await fetch('/api/user/models/test', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ spec }),
+    signal,
+  });
+
+  if (!res.ok) throw new Error(`POST /api/user/models/test → ${res.status} ${await errorDetail(res)}`);
+
+  return v.parse(ModelTestResultSchema, await res.json());
+}
 
 export interface ProviderCatalogEntry {
   id: string;

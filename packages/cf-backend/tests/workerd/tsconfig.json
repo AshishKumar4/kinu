@@ -31,6 +31,7 @@
     "./two-turn-probe.ts",
     "./user-socket-probe.ts",
     "./public-surface-probe.ts",
-    "./hire-probe.ts"
+    "./hire-probe.ts",
+    "./codex-egress-probe.ts"
   ]
 }

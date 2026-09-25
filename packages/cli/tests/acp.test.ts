@@ -122,6 +122,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     getEvolutionConfig: async () => { throw new Error('no evolution config'); },
     setEvolutionConfig: async () => { throw new Error('no evolution config'); },
     listModels: async () => ({ models: [], failures: [] }),
+    testModel: async () => ({ ok: true, firstTokenMs: 0, totalMs: 0 }),
     inspectSubordinate: async (request) => missingSubordinateHistory(request.path),
   };
 

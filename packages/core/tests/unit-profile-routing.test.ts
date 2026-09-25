@@ -61,7 +61,7 @@ const FIXED_LANES = [
 const INVOCATION_LANES = ['agent', 'head', 'mcts', 'swarm'] as const;
 
 /** Producers no turn profile routes: a binding-bound platform call, and a cache warm replaying a frozen spec. */
-const UNROUTED: readonly SpendSource[] = ['platform', 'warming'];
+const UNROUTED: readonly SpendSource[] = ['platform', 'warming', 'test'];
 
 describe('exhaustive model routing', () => {
   test('every producer resolves, and only the unrouted pair refuses', () => {

@@ -6,6 +6,7 @@ import { CheckIcon, GitBranchIcon, PencilSimpleIcon, SunIcon, MoonIcon } from "@
 import type { ConnectionStatus } from "@/hooks/use-kinu";
 import { useTheme, toggleMode } from "@/hooks/use-theme";
 import { renderThrownChain } from '@kinu.run/core/obs';
+import { fmtSpan } from "@kinu.run/core";
 
 export type Altitude = "run" | "supervise";
 
@@ -33,7 +34,8 @@ export interface WorkspaceBarProps {
   onRename: (displayName: string) => Promise<string>;
   connectionStatus: ConnectionStatus;
   working: boolean;
-  providerWait?: { provider: string; waitMs: number } | null;
+  /** `untilMs` is the wait's end on this browser's clock. */
+  providerWait?: { provider: string; untilMs: number } | null;
   waitingOnYou?: boolean;
   forkParent?: { workspace: string; forkedAt: number };
   altitude: Altitude;
@@ -60,13 +62,24 @@ function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
 }
 
 // No stopped state: a turn nobody executes offers Recover in the composer, and nothing here says it runs.
-function TaskIndicator({ working, providerWait, waitingOnYou }: { working: boolean; providerWait: { provider: string; waitMs: number } | null; waitingOnYou: boolean }) {
+function TaskIndicator({ working, providerWait, waitingOnYou }: { working: boolean; providerWait: { provider: string; untilMs: number } | null; waitingOnYou: boolean }) {
+  const [now, setNow] = useState(Date.now);
+
+  useEffect(() => {
+    if (providerWait === null) return undefined;
+    setNow(Date.now());
+    const tick = setInterval(() => setNow(Date.now()), 1_000);
+
+    return () => clearInterval(tick);
+  }, [providerWait]);
+
+  const left = providerWait === null ? "" : fmtSpan(Math.max(0, providerWait.untilMs - now));
   let tone = { cls: "p-text-3 p-border p-fill", dot: "p-dot-neutral", word: "idle" };
 
   if (waitingOnYou) {
     tone = { cls: "p-warning border p-border p-fill", dot: "p-dot-warning", word: "waiting on you" };
   } else if (providerWait) {
-    tone = { cls: "text-[var(--c-accent)] border-[rgba(224,164,88,.28)] bg-[rgba(224,164,88,.1)]", dot: "p-dot-accent p-dot-pulse", word: `waiting on ${providerWait.provider} · ${Math.ceil(providerWait.waitMs / 1000)}s` };
+    tone = { cls: "text-[var(--c-accent)] border-[rgba(224,164,88,.28)] bg-[rgba(224,164,88,.1)]", dot: "p-dot-accent p-dot-pulse", word: `waiting on ${providerWait.provider} · ${left}` };
   } else if (working) {
     tone = { cls: "text-[var(--c-accent)] border-[rgba(224,164,88,.28)] bg-[rgba(224,164,88,.1)]", dot: "p-dot-accent p-dot-pulse", word: "working" };
   }
@@ -76,7 +89,7 @@ function TaskIndicator({ working, providerWait, waitingOnYou }: { working: boole
       role="status"
       aria-label="Task state"
       className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-[3px] text-[11.5px] font-medium ${tone.cls}`}
-      title={providerWait ? `Retry in ${Math.ceil(providerWait.waitMs / 1000)}s` : undefined}
+      title={providerWait ? `Retry in ${left}` : undefined}
     >
       <span className={`size-1.5 rounded-full ${tone.dot}`} />
       {tone.word}

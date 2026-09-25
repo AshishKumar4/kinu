@@ -1,15 +1,15 @@
 import {
-  MAIN_ACCOUNT, OPENROUTER_CRED_KEY, accountOf, baseCredentialKey, credentialToHeaders, mergeAccountSpend,
-  readAccountCredits, readAccountUsage, readOpenRouterCredit, type AccountUsage,
+  LimitCache, OPENROUTER_CRED_KEY, baseCredentialKey, credentialToHeaders, limitReadable, mergeAccountSpend,
+  readAccountUsage, type AccountUsage, type LimitSource,
 } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { getCloudAccountUsage } from './cloud-api';
-import { listLocalRefsAllProjects, listUnplacedAgentNames, resolveCloudSession, resolveProviderCredentials } from './config';
+import { createOAuthStore, listLocalRefsAllProjects, listUnplacedAgentNames, resolveCloudSession, resolveProviderCredentials } from './config';
 import { getLocalAccountSpend } from './local-inspection';
 
-async function cloudAccountUsage(session: { origin: string; token: string }): Promise<AccountUsage> {
+async function cloudAccountUsage(session: { origin: string; token: string }, refresh: boolean): Promise<AccountUsage> {
   try {
-    return await getCloudAccountUsage(session.origin, session.token);
+    return await getCloudAccountUsage(session.origin, session.token, refresh);
   } catch (cause) {
     diagnostics.failure('spend.cloud_usage_unread', toKinuError({
       doing: 'reading your cloud workspaces\' spend per account',
@@ -21,34 +21,40 @@ async function cloudAccountUsage(session: { origin: string; token: string }): Pr
   }
 }
 
-function localOpenRouterKeys(): Array<{ account: string; token: string }> {
+function localLimitSources(): LimitSource[] {
+  const store = createOAuthStore();
   const { openrouterApiKey, apiKeyAccounts = {} } = resolveProviderCredentials();
 
-  const named = Object.entries(apiKeyAccounts)
-    .filter(([key]) => baseCredentialKey(key) === OPENROUTER_CRED_KEY)
-    .map(([key, token]) => ({ account: accountOf(key), token }));
+  const keys = [
+    ...(openrouterApiKey ? [[OPENROUTER_CRED_KEY, openrouterApiKey] as const] : []),
+    ...Object.entries(apiKeyAccounts).filter(([key]) => baseCredentialKey(key) === OPENROUTER_CRED_KEY),
+  ];
 
-  return openrouterApiKey ? [{ account: MAIN_ACCOUNT, token: openrouterApiKey }, ...named] : named;
+  return [
+    ...store.keys().filter(limitReadable).map((key): LimitSource => ({ key, headers: async () => (await store.getAuth(key))?.headers ?? null })),
+    ...keys.map(([key, token]): LimitSource => ({ key, headers: async () => credentialToHeaders(OPENROUTER_CRED_KEY, { kind: 'bearer', token }) })),
+  ];
 }
 
-export async function readAllAccountUsage(): Promise<AccountUsage> {
+const LIMITS = new LimitCache();
+
+export async function readAllAccountUsage(opts: { readonly refresh?: boolean } = {}): Promise<AccountUsage> {
   const session = resolveCloudSession();
   const names = [...listLocalRefsAllProjects().map((ref) => ref.name), ...listUnplacedAgentNames()];
 
   const [local, live, cloud] = await Promise.all([
     readAccountUsage(names.map((name) => ({ name, read: async () => getLocalAccountSpend(name) }))),
-    readAccountCredits(localOpenRouterKeys().map(({ account, token }) => ({
-      provider: 'openrouter',
-      account,
-      read: () => readOpenRouterCredit({ account, headers: credentialToHeaders(OPENROUTER_CRED_KEY, { kind: 'bearer', token }) }),
-    }))),
-    session === null ? null : cloudAccountUsage(session),
+    LIMITS.read(localLimitSources(), { refresh: opts.refresh === true }),
+    session === null ? null : cloudAccountUsage(session, opts.refresh === true),
   ]);
+
+  const seen = new Set(live.limits.map((report) => `${report.provider}@${report.account}`));
 
   return {
     accounts: mergeAccountSpend([local.accounts, cloud?.accounts ?? []]),
     workspaces: local.workspaces + (cloud?.workspaces ?? 0),
-    unread: [...local.unread, ...live.unread, ...cloud?.unread ?? []],
-    credits: [...live.credits, ...cloud?.credits ?? []],
+    unread: [...local.unread, ...cloud?.unread ?? []],
+    limits: [...live.limits, ...(cloud?.limits ?? []).filter((report) => !seen.has(`${report.provider}@${report.account}`))],
+    limitsUnread: [...live.limitsUnread, ...(cloud?.limitsUnread ?? []).filter((entry) => !seen.has(`${entry.provider}@${entry.account}`))],
   };
 }

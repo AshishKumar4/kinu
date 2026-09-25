@@ -62,7 +62,7 @@ const MERGED = {
 };
 
 describe('the owner\'s usage per account, across workspaces', () => {
-  test('the web route sums each account over the workspaces, keeps its newest quota, reads each OpenRouter key\'s credit, and names what it could not read', async () => {
+  test('the web route sums each account over the workspaces, keeps its newest quota, reads what each OpenRouter key has left, and names what it could not read', async () => {
     const identity: AuthIdentity = { userId: USER_ID, email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now() };
 
     const stub = userAccount({
@@ -99,10 +99,11 @@ describe('the owner\'s usage per account, across workspaces', () => {
 
       expect(v.parse(AccountUsageSchema, await response?.json())).toEqual({
         ...MERGED,
-        unread: ['gone', 'openrouter · team credit'],
-        credits: [{
+        unread: ['gone'],
+        limitsUnread: [{ provider: 'openrouter', account: 'team', reason: expect.any(String) }],
+        limits: [{
           provider: 'openrouter', account: 'main', at: expect.any(Number),
-          limit: 10, remaining: 4.12, reset: 'monthly', usedToday: 1.03, usedThisMonth: 5.88,
+          windows: [{ name: 'credit', used: 5.88, limit: 10, resets: 'monthly' }],
         }],
       });
 

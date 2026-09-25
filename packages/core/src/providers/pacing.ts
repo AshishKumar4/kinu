@@ -34,7 +34,7 @@ export class ProviderPacer {
   private readonly now: () => number;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Each host's declared cooldown, as a deadline. */
-  private readonly coolUntilMs = new Map<string, number>();
+  private readonly cooldowns = new Map<string, { readonly untilMs: number; readonly reason: string | undefined }>();
 
   constructor(opts: ProviderPacerOptions = {}) {
     this.now = opts.now ?? Date.now;
@@ -43,22 +43,28 @@ export class ProviderPacer {
 
   /** Waits out the host's cooldown, re-read after each sleep as a sibling may extend it. `onCooldown` gets the
    *  deadline so a caller can skip announcing its own. */
-  async admit(host: string, signal?: AbortSignal, opts?: { onCooldown?: (waitMs: number, untilMs: number) => void }): Promise<void> {
+  async admit(
+    host: string,
+    signal?: AbortSignal,
+    opts?: { onCooldown?: (waitMs: number, untilMs: number, reason: string | undefined) => void },
+  ): Promise<void> {
     for (;;) {
       if (signal?.aborted) throw abortCause(signal);
-      const untilMs = this.coolUntilMs.get(host) ?? 0;
-      const cooling = untilMs - this.now();
+      const cooldown = this.cooldowns.get(host);
+      const cooling = (cooldown?.untilMs ?? 0) - this.now();
 
-      if (cooling <= 0) return;
-      opts?.onCooldown?.(cooling, untilMs);
+      if (cooldown === undefined || cooling <= 0) return;
+      opts?.onCooldown?.(cooling, cooldown.untilMs, cooldown.reason);
       await this.sleep(cooling, signal);
     }
   }
 
   /** Record a host cooldown of `ms`; the deadline only moves forward. */
-  declareWait(host: string, ms: number): void {
+  declareWait(host: string, ms: number, reason?: string): void {
     if (!(ms > 0)) return;
-    this.coolUntilMs.set(host, Math.max(this.coolUntilMs.get(host) ?? 0, this.now() + ms));
+    const untilMs = this.now() + ms;
+
+    if (untilMs > (this.cooldowns.get(host)?.untilMs ?? 0)) this.cooldowns.set(host, { untilMs, reason });
   }
 }
 

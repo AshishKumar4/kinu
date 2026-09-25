@@ -126,6 +126,16 @@ const twoTurnProbe = buildSync({
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
+// Imports src, so it builds apart.
+const codexEgressProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/codex-egress-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/codex-egress-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
+  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles;
+
 const hireProbe = buildSync({
   entryPoints: [fileURLToPath(new URL('./tests/workerd/hire-probe.ts', import.meta.url))],
   outfile: fileURLToPath(new URL('./tests/workerd/.compiled/hire-probe.js', import.meta.url)),
@@ -261,6 +271,11 @@ export default defineConfig({
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         }, {
+          name: 'codex-egress-probe', ...workerCompatibility,
+          modules: probeModules(codexEgressProbe),
+
+          durableObjects: { CODEX_EGRESS_PROBE: { className: 'CodexEgressProbe', useSQLite: true }, CodexEgress: { className: 'CodexEgressProbe', useSQLite: true } },
+        }, {
           // A real hire: the child's `workers-ai/` tier arrives on the AI binding, the root's
           // `openai-compat` lane on outbound.
           name: 'hire-probe',
@@ -375,6 +390,7 @@ export default defineConfig({
           SURFACE_CONTROL: { name: 'public-surface-probe', entrypoint: 'SurfaceControl' },
           DEPLOY_FAKE: { name: 'deploy-probe', entrypoint: 'DeployFakeControl' },
           UPDATES_PROBE: { name: 'deploy-probe', entrypoint: 'UpdatesProbe' },
+          CODEX_EGRESS_RECORDS: { name: 'codex-egress-probe', entrypoint: 'Records' },
           DEPLOY_DOOR_PROBE: { name: 'deploy-probe', entrypoint: 'DeployDoorProbe' },
         },
         durableObjects: {
@@ -407,6 +423,7 @@ export default defineConfig({
           TWO_TURN_PROBE: { className: 'TwoTurnProbeRoot', scriptName: 'two-turn-probe', useSQLite: true },
           HIRE_PROBE: { className: 'HireProbeRoot', scriptName: 'hire-probe', useSQLite: true },
           DEVBOX_NOT_READY_PROBE: { className: 'DevboxNotReadyProbeDO', useSQLite: true },
+          CODEX_EGRESS_PROBE: { className: 'CodexEgressProbe', scriptName: 'codex-egress-probe', useSQLite: true },
           SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', scriptName: 'slate-durability-probe', useSQLite: true },
           ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', scriptName: 'account-reset-probe', useSQLite: true },
           STORE_RESET_PROBE: { className: 'StoreResetProbeRoot', scriptName: 'store-reset-probe', useSQLite: true },

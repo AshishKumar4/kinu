@@ -3,7 +3,7 @@ import type {
 } from './types';
 import * as v from 'valibot';
 import { MODEL_INPUT_MODALITIES } from './types';
-import { cloneModelInfos, positiveInteger } from './util';
+import { cloneModelInfos, positiveInteger, StaleModelList } from './util';
 import { nonEmptyString } from '../utils/json';
 import type { JsonValue } from '../utils/json';
 import { diagnostics, renderThrownChain } from '../obs/index';
@@ -131,29 +131,41 @@ export async function listModelsDevProviderModels(
   deps: Pick<ProviderDeps, 'fetch'>,
   opts: ModelsDevListOptions = {},
 ): Promise<ModelInfo[]> {
+  const stale = (failure: { readonly reason: string; readonly cause?: unknown }): StaleModelList => {
+    if (failure.cause !== undefined) diagnostics.event('models_dev.catalog_fallback', { error: renderThrownChain({ cause: failure.cause }) });
+
+    return new StaleModelList(cloneModelInfos(opts.fallback), failure);
+  };
+
+  let data: Record<string, ModelsDevProvider>;
+
   try {
-    const data = await getModelsDevCatalog(deps.fetch, opts.ttlMs ?? DEFAULT_TTL_MS);
-    const provider = data[providerId];
-    const models = provider?.models;
-
-    if (!models) return cloneModelInfos(opts.fallback);
-
-    const out: ModelInfo[] = [];
-
-    for (const [key, model] of Object.entries(models)) {
-      const info = modelInfoFromModelsDev(key, model, opts.toolCallOnly ?? true);
-
-      if (info) out.push(info);
-    }
-
-    if (out.length === 0) return cloneModelInfos(opts.fallback);
-
-    return orderModels(out, opts.preferredIds);
-  } catch (error) {
-    diagnostics.event('models_dev.catalog_fallback', { error: renderThrownChain({ cause: error }) });
-
-    return cloneModelInfos(opts.fallback);
+    data = await getModelsDevCatalog(deps.fetch, opts.ttlMs ?? DEFAULT_TTL_MS);
+  } catch (cause) {
+    throw stale({ reason: 'models.dev could not be read', cause });
   }
+
+  const models = data[providerId]?.models;
+
+  if (!models) {
+    if (opts.fallback === undefined) return [];
+    throw stale({ reason: `models.dev lists no ${providerId} models` });
+  }
+
+  const out: ModelInfo[] = [];
+
+  for (const [key, model] of Object.entries(models)) {
+    const info = modelInfoFromModelsDev(key, model, opts.toolCallOnly ?? true);
+
+    if (info) out.push(info);
+  }
+
+  if (out.length === 0) {
+    if (opts.fallback === undefined) return [];
+    throw stale({ reason: `models.dev lists no usable ${providerId} models` });
+  }
+
+  return orderModels(out, opts.preferredIds);
 }
 
 /** Provider metadata, or null when not in the catalog; an unreadable catalog throws rather than returning null. */

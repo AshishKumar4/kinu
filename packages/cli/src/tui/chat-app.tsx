@@ -1821,6 +1821,7 @@ function ChatScene({
           loading={modelPicker.loading}
           error={modelPicker.error}
           onSelect={selectModel}
+          test={(spec, signal) => client.testModel(spec, signal)}
         />
       );
     }

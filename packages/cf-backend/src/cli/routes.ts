@@ -28,7 +28,7 @@ import {
 import type { AgentRpcDispatch } from './rpc-gate';
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell, cliPlatformShell } from '@kinu.run/core';
-import { listAvailableModels } from '../user/available-models';
+import { listAvailableModels, testAvailableModel } from '../user/available-models';
 import { readUserAccountUsage, type AccountLedgerTarget } from '../user/account-usage';
 import { answerCatalogPut } from '../user/routes';
 import { WebhookRequestSchema } from '../events/routes';
@@ -307,8 +307,20 @@ cliRoutes.get('/api/cli/workspaces', async (c) =>
 cliRoutes.get('/api/cli/models', async (c) =>
   json({ body: await listAvailableModels(c.env, c.get('cli').userId, await ownerCaller(c.env)) }));
 
+cliRoutes.post('/api/cli/models/test', async (c) => {
+  const body = await safeJson(c.req.raw, v.object({ spec: v.pipe(v.string(), v.minLength(3)) }));
+
+  if (!body) return err(400, 'spec (string) required');
+
+  return json({ body: await testAvailableModel({
+    env: c.env, userId: c.get('cli').userId, caller: await ownerCaller(c.env), spec: body.spec, signal: c.req.raw.signal,
+  }) });
+});
+
 cliRoutes.get('/api/cli/usage', async (c) =>
-  json({ body: await readUserAccountUsage(c.env, c.get('cli').userDO, await ownerCaller(c.env)) }));
+  json({ body: await readUserAccountUsage({
+    env: c.env, userDO: c.get('cli').userDO, owner: await ownerCaller(c.env), userId: c.get('cli').userId, refresh: c.req.query('refresh') === '1',
+  }) }));
 
 cliRoutes.post('/api/cli/workspaces', async (c) => {
   const cli = c.get('cli');

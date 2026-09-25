@@ -548,12 +548,19 @@ Two policies apply to every provider:
 - The catalog is live. `models-dev.ts` fetches `https://models.dev/api.json`
   behind a 5-minute cache and derives each model's window and capabilities from
   it. The static lists (`WORKERS_AI_FALLBACK_MODEL_CATALOG`, per-provider
-  `FALLBACK_MODELS`) cover a failed fetch or an empty filter.
-- Every model fetch waits out rate limits, with no ceiling on the wait.
+  `FALLBACK_MODELS`) cover a failed fetch or an empty filter, and never
+  silently: `listModels` throws `StaleModelList` carrying the static list, and
+  the menu shows those models beside a failure naming why the live list is
+  missing.
+- Every model fetch waits out rate limits of a minute or less.
   `withRateLimitRetry` (`rate-limit-retry.ts`) wraps all four fetch paths: the
   shared `createAuthedFetch`, Workers AI, AI Gateway, and codex. A rate-limited
   request follows the provider's `Retry-After` until success, another failure,
-  or caller cancel; elapsed time and attempt count never end it. It treats 429
+  or caller cancel; elapsed time and attempt count never end it. A `Retry-After`
+  (seconds or HTTP date) above 60 s (`maxRetryDelayMs`, after oh-my-pi) ends the
+  call at once as a spent allowance (`budget`) naming the reset time, and a
+  sibling that meets that declared cooldown in the pacer ends the same way; the
+  turn's model fallback decides what follows. It treats 429
   and 529 as rate limits always, and a 503 only when the status text,
   `x-error-code`, or body reads as overload, capacity, or too many requests. An
   unreadable 503 propagates. Without `Retry-After` it draws full-jitter waits

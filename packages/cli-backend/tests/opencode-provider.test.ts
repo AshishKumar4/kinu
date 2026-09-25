@@ -344,6 +344,45 @@ describe('OpenCode provider', () => {
     expect(modelCalls).toBe(2);
   });
 
+  test('a spent OpenCode Go window leaves Zen on the same host serving', async () => {
+    const zenConfig = JSON.stringify({
+      provider: {
+        'opencode-go': { options: { baseURL: 'https://opencode.example.com/zen/go/v1', headers: { Authorization: 'Bearer {env:TOKEN}' } } },
+        opencode: { options: { baseURL: 'https://opencode.example.com/zen/v1', headers: { Authorization: 'Bearer {env:TOKEN}' } } },
+      },
+    });
+
+    const served: string[] = [];
+
+    const fetchImpl = asFetchFunction(mock(async (input: RequestInfo | URL) => {
+      const url = new Request(input).url;
+
+      if (url.endsWith('/.well-known/opencode')) return new Response(FAKE_WELLKNOWN);
+
+      if (url.includes('/config/opencode.json')) return new Response(zenConfig);
+      served.push(url);
+
+      return url.includes('/zen/go/')
+        ? new Response(JSON.stringify({ error: { message: 'Monthly usage limit reached.' } }), { status: 429, headers: { 'Retry-After': '729883' } })
+        : Response.json(FAKE_CHAT_REPLY);
+    }));
+
+    const listed = ['opencode-go/glm-5', 'opencode/glm-5'].flatMap((id) => [id, JSON.stringify({
+      name: id, capabilities: { output: { text: true }, toolcall: true, reasoning: false }, api: { id: 'glm-5', npm: '@ai-sdk/openai-compatible' },
+    }), '']).join('\n');
+
+    const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl, spawn: makeSpawn(listed) }));
+    const deps = { env: {}, getAuth: async () => null, hasCredential: async () => false };
+
+    await expect(generateText({ model: provider.createModel('opencode-go/glm-5', deps), prompt: 'hi', maxRetries: 0 })).rejects.toThrow(/rate-limited until/);
+    const zen = await generateText({ model: provider.createModel('opencode/glm-5', deps), prompt: 'hi', maxRetries: 0 });
+
+    expect({ text: zen.text, served }).toEqual({
+      text: 'ok',
+      served: ['https://opencode.example.com/zen/go/v1/chat/completions', 'https://opencode.example.com/zen/v1/chat/completions'],
+    });
+  });
+
   test('a Responses model sends an earlier step whole, with storage off', async () => {
     const { fetchImpl, requestBodies } = makeRoutingFetch();
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));

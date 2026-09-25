@@ -1,20 +1,22 @@
 /** Model menu and connectable-provider catalog for HTTP clients. The provider registry is the
  *  source of truth for models; models.dev for which providers a BYO key can connect. */
 import {
-  catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL, openAICompatNameOf,
-  type ModelsDevProviderInfo, type ProviderFailure, type ReasoningEffort,
+  catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL, openAICompatNameOf, testModel,
+  type ModelTestResult, type ModelsDevProviderInfo, type ProviderFailure, type ReasoningEffort,
 } from '@kinu.run/core';
 import { createAgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { ProviderEnv } from '@kinu.run/core';
 import { retryTransientDO } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
+import type { CodexEgressNamespace } from '../egress/codex-egress-route';
 
 export interface ModelMenuEntry {
   /** `<provider>/<modelId>`, used as the actor_config.model value. */
   spec: string;
   label: string;
   provider: string;
+  providerLabel?: string;
   capabilities?: string[];
   contextWindow?: number;
   /** The settings control renders exactly these after "model default". */
@@ -29,6 +31,7 @@ export interface ModelMenuResponse {
 }
 
 export interface AvailableModelsEnv<Id> extends ProviderEnv {
+  CodexEgress?: CodexEgressNamespace;
   UserDO: ObjectNamespace<Id, UserCredentialClient>;
 }
 
@@ -39,6 +42,7 @@ export async function listAvailableModels<Id>(
 
   const { registry, deps } = createAgentProviderRegistry({
     env,
+    ownerUserId: userId,
     userDO: { stub, caller },
     fetch,
   });
@@ -49,6 +53,7 @@ export async function listAvailableModels<Id>(
     spec: `${model.provider}/${model.id}`,
     label: model.label ?? model.id,
     provider: model.provider,
+    providerLabel: registry.get(model.provider)?.label,
     capabilities: model.capabilities ? [...model.capabilities] : undefined,
     contextWindow: model.contextWindow,
     reasoningEfforts: model.reasoningEfforts,
@@ -111,7 +116,7 @@ export async function listProviderCatalog<Id>(
   env: AvailableModelsEnv<Id>, userId: string, caller: UserCaller,
 ): Promise<ProviderCatalogEntry[]> {
   const stub = env.UserDO.get(env.UserDO.idFromName(userId));
-  const { registry } = createAgentProviderRegistry({ env, userDO: { stub, caller }, fetch });
+  const { registry } = createAgentProviderRegistry({ env, ownerUserId: userId, userDO: { stub, caller }, fetch });
 
   const [providers, creds] = await Promise.all([
     listModelsDevProviders({ fetch }),
@@ -123,4 +128,18 @@ export async function listProviderCatalog<Id>(
     new Set(registry.list().map((p) => p.id)),
     new Set(creds.map((c) => c.key)),
   );
+}
+
+export async function testAvailableModel<Id>(input: {
+  readonly env: AvailableModelsEnv<Id>;
+  readonly userId: string;
+  readonly caller: UserCaller;
+  readonly spec: string;
+  readonly signal: AbortSignal;
+}): Promise<ModelTestResult> {
+  const { env, userId, caller } = input;
+  const stub = env.UserDO.get(env.UserDO.idFromName(userId));
+  const registry = createAgentProviderRegistry({ env, ownerUserId: userId, userDO: { stub, caller }, fetch });
+
+  return testModel({ spec: input.spec, resolve: (spec) => registry.resolveModel(spec), signal: input.signal });
 }

@@ -119,6 +119,9 @@
       // proxyToSandbox hardcodes `env.Sandbox` lookup (see
       // @cloudflare/sandbox/dist/file-stream-*.js:3448).
       { "class_name": "KinuSandbox", "name": "Sandbox" },
+      // One Codex egress container per user (src/egress/codex-egress.ts):
+      // chatgpt.com refuses Workers egress and serves a container's own.
+      { "class_name": "CodexEgress", "name": "CodexEgress" },
       // Control plane — one instance ("site"), the singleton the admin surface
       // reads. It is a singleton because its questions are fleet-wide: "who are
       // the users", "which workspaces exist", "what did an admin do" have no
@@ -177,6 +180,15 @@
         "memory_mib": 6144,
         "disk_mb": 8000
       }
+    },
+    {
+      // Built from containers/codex-egress (node:22-alpine pinned by digest) and
+      // pushed with `wrangler containers build -p`. One instance per user who
+      // is using Codex right now; each sleeps after 5 idle minutes.
+      "class_name": "CodexEgress",
+      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-codex-egress@sha256:6e64016f2d96aafdbe7129181b5579d7222d5d6240c86b7a5da7f40e0e0a5110",
+      "max_instances": 50,
+      "instance_type": "lite"
     }
   ],
   // The genesis of a RESET deployment is the first tag: every SQLite-backed
@@ -208,7 +220,8 @@
       ]
     },
     { "tag": "v2", "new_sqlite_classes": ["DeployRunDO"] },
-    { "tag": "v3", "new_sqlite_classes": ["MossaicUserDO", "MossaicShardDO"] }
+    { "tag": "v3", "new_sqlite_classes": ["MossaicUserDO", "MossaicShardDO"] },
+    { "tag": "v4", "new_sqlite_classes": ["CodexEgress"] }
   ],
   // Synthetic monitoring. Every 15 minutes the worker probes its own public
   // surface and emails OPS_ALERT_EMAIL when something breaks — the checks

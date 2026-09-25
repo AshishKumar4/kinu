@@ -967,14 +967,6 @@ body { background: var(--c-bg); color: var(--c-text); }
   outline-offset: 1px;
 }
 
-/* Kumo's combobox trigger always renders a clear button and always reserves
-   its width (`pr-7` at xs). A picker that cannot be cleared therefore ships a
-   dead control on top of a label that is already clipping. Kumo's own
-   utilities are emitted into the utilities layer, so this has to sit above
-   it to win. The label below is the one ModelPicker passes as `clearLabel`;
-   the two are held together by unit-combobox-clear-affordance.test.ts. */
-.p-combobox-no-clear > [aria-label="Clear selection (unused)"] { display: none; }
-.p-combobox-no-clear > input { padding-right: calc(var(--spacing) * 5); }
 
 /* ── Animations ────────────────────────────────────────────────────── */
 @keyframes fade-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }

@@ -8,7 +8,8 @@ import { filterModels, formatModelSpec, parseModelSpec, specWithoutAccount, type
 import type { ProviderFailure, ShellApprovalRequest } from '@kinu.run/core';
 import type { AgentChangelogView, ForkPoint } from '../agent-client';
 import type { DeviceConnectPromptState } from './use-device-connect';
-import { clipText } from '@kinu.run/core';
+import { clipText, modelTestText, type ModelTestResult } from '@kinu.run/core';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import { createKeyDispatcher, useKeybindingRegistry, type TuiActionId } from './actions';
 import {
   REFERENCE_TERMINAL_GROUNDS,
@@ -316,9 +317,10 @@ interface ModelPickerProps {
   loading?: boolean;
   error?: string | null;
   onSelect: (spec: string) => void;
+  test?: (spec: string, signal: AbortSignal) => Promise<ModelTestResult>;
 }
 
-export function ModelPickerOverlay({ models, failures, accounts, currentSpec, terminal, loading, error, onSelect }: ModelPickerProps) {
+export function ModelPickerOverlay({ models, failures, accounts, currentSpec, terminal, loading, error, onSelect, test }: ModelPickerProps) {
   const [pending, setPending] = useState<AgentModelEntry | null>(null);
   const pendingAccounts = pending === null ? [] : accounts?.[pending.provider] ?? [];
 
@@ -334,6 +336,7 @@ export function ModelPickerOverlay({ models, failures, accounts, currentSpec, te
       terminal={terminal}
       loading={loading}
       error={error}
+      test={test}
       onSelect={(model) => ((accounts?.[model.provider]?.length ?? 0) > 1 ? setPending(model) : onSelect(model.spec))}
     />
   );
@@ -404,11 +407,16 @@ interface ModelListProps {
   loading?: boolean | undefined;
   error?: string | null | undefined;
   onSelect: (model: AgentModelEntry) => void;
+  test?: ((spec: string, signal: AbortSignal) => Promise<ModelTestResult>) | undefined;
 }
 
-function ModelListOverlay({ models, failures, currentSpec, terminal, loading, error, onSelect }: ModelListProps) {
+function ModelListOverlay({ models, failures, currentSpec, terminal, loading, error, onSelect, test }: ModelListProps) {
   const { colors } = useTuiTheme();
   const [filter, setFilter] = useState('');
+  const [tested, setTested] = useState<{ readonly label: string; readonly text: string; readonly ok: boolean } | null>(null);
+  const testing = useRef<AbortController | null>(null);
+
+  useEffect(() => () => testing.current?.abort(), []);
   const selectRef = useRef<SelectRenderable | null>(null);
   const paletteWidth = boundedPaletteWidth(terminal, 0.52, 56, 84);
   const innerWidth = Math.max(1, paletteWidth - 4);
@@ -466,13 +474,33 @@ function ModelListOverlay({ models, failures, currentSpec, terminal, loading, er
       top={position.top}
     >
       {!compact && (
-        <PaletteLine text="Type to filter · ↑/↓ move · Enter select · Esc close" width={innerWidth} color={colors.text.muted} />
+        <PaletteLine text={`Type to filter · ↑/↓ move · Enter select${test === undefined ? '' : ' · Ctrl+T test'} · Esc close`} width={innerWidth} color={colors.text.muted} />
       )}
       <PaletteSearchInput
         placeholder="Filter models…"
         onInput={setFilter}
         selectRef={selectRef}
+        onExtraAction={(action) => {
+          const model = filteredModels[selectRef.current?.getSelectedIndex() ?? -1];
+
+          if (action !== 'modal.test' || test === undefined || model === undefined) return false;
+          testing.current?.abort();
+          const controller = new AbortController();
+          testing.current = controller;
+          setTested({ label: model.label, text: 'testing…', ok: true });
+          test(model.spec, controller.signal).then(
+            (result) => { if (!controller.signal.aborted) setTested({ label: model.label, text: modelTestText(result, { provider: model.provider, from: 'here' }), ok: result.ok }); },
+            (...rejection: [unknown]) => {
+              if (!controller.signal.aborted) setTested({ label: model.label, text: `the test couldn't run: ${renderThrownChain({ cause: rejection[0] })}`, ok: false });
+            },
+          );
+
+          return true;
+        }}
       />
+      {tested !== null && (
+        <PaletteLine text={`${tested.label}: ${tested.text}`} width={innerWidth} color={tested.ok ? colors.text.muted : colors.intent.warning} />
+      )}
       {loading && <PaletteLine text="Loading models…" width={innerWidth} color={colors.intent.accent} />}
       {!loading && error !== null && error !== undefined && (
         <PaletteLine text={error} width={innerWidth} color={colors.intent.danger} />

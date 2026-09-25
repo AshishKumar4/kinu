@@ -1,42 +1,52 @@
 import {
-  accountOf, baseCredentialKey, OPENROUTER_CRED_KEY, readAccountCredits, readAccountUsage, readOpenRouterCredit,
+  LimitCache, baseCredentialKey, limitReadable, readAccountUsage,
   type AccountUsage, type ObjectNamespace, type OwnerCapabilityEnv, type UserCaller,
 } from '@kinu.run/core';
-import { KinuError } from '@kinu.run/core/obs';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from './user-do';
+import { codexEgressFetch, type CodexEgressNamespace } from '../egress/codex-egress-route';
 
 export type AccountLedgerTarget = Pick<OrchestratorAgent, 'accountSpend'>;
 
 export interface AccountUsageEnv<Id> extends OwnerCapabilityEnv {
   OrchestratorAgent: ObjectNamespace<Id, AccountLedgerTarget>;
+  CodexEgress?: CodexEgressNamespace;
 }
 
-export async function readUserAccountUsage<Id>(
-  env: AccountUsageEnv<Id>,
-  userDO: Pick<UserDO, 'listActiveWorkspaces' | 'listCredentials' | 'getAuthHeaders'>,
-  owner: UserCaller,
-): Promise<AccountUsage> {
+const LIMITS = new Map<string, LimitCache>();
+
+export async function readUserAccountUsage<Id>(input: {
+  readonly env: AccountUsageEnv<Id>;
+  readonly userDO: Pick<UserDO, 'listActiveWorkspaces' | 'listCredentials' | 'getAuthHeaders'>;
+  readonly owner: UserCaller;
+  readonly userId: string;
+  readonly refresh?: boolean;
+}): Promise<AccountUsage> {
+  const { env, userDO, owner, userId } = input;
   const [workspaces, held] = await Promise.all([userDO.listActiveWorkspaces(owner), userDO.listCredentials(owner)]);
-  const openRouterKeys = held.map((credential) => credential.key).filter((key) => baseCredentialKey(key) === OPENROUTER_CRED_KEY);
+
+  for (const [holder, cached] of LIMITS) {
+    cached.prune();
+
+    if (cached.size === 0 && holder !== userId) LIMITS.delete(holder);
+  }
+
+  const cache = LIMITS.get(userId) ?? new LimitCache();
+
+  LIMITS.set(userId, cache);
+  const codex = env.CodexEgress === undefined ? undefined : codexEgressFetch(env.CodexEgress, userId);
 
   const [usage, live] = await Promise.all([
     readAccountUsage(workspaces.map(({ name }) => ({
       name,
       read: () => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(name)).accountSpend(),
     }))),
-    readAccountCredits(openRouterKeys.map((key) => ({
-      provider: 'openrouter',
-      account: accountOf(key),
-      async read() {
-        const headers = await userDO.getAuthHeaders(owner, key);
-
-        if (headers === null) throw new KinuError('missing', `${key} is not connected`);
-
-        return readOpenRouterCredit({ account: accountOf(key), headers });
-      },
-    }))),
+    cache.read(held.map(({ key }) => key).filter(limitReadable).map((key) => ({
+      key,
+      headers: () => userDO.getAuthHeaders(owner, key),
+      ...(baseCredentialKey(key) === 'codex.oauth' && codex !== undefined && { fetch: codex }),
+    })), { refresh: input.refresh === true }),
   ]);
 
-  return { ...usage, unread: [...usage.unread, ...live.unread], credits: live.credits };
+  return { ...usage, limits: live.limits, limitsUnread: live.limitsUnread };
 }

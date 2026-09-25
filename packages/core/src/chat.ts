@@ -248,7 +248,7 @@ function handsOver(failure: CallFailure): boolean {
   if (status !== undefined) return [401, 402, 403, 404, 408, 429].includes(status) || status >= 500;
   const code = classifyErrorCode({ cause: failure.error });
 
-  return code === null || code === 'unavailable' || code === 'timeout';
+  return code === null || code === 'unavailable' || code === 'timeout' || code === 'budget';
 }
 
 /** A failed lookup is logged and unknown: it skips nothing. */

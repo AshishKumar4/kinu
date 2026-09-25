@@ -68,3 +68,18 @@ export function formatBytes(n: number): string {
 
 	return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
+
+const SPAN_UNITS: ReadonlyArray<readonly [string, number]> = [["d", 86_400], ["h", 3_600], ["m", 60], ["s", 1]];
+
+export function fmtSpan(ms: number): string {
+	const seconds = Math.max(0, Math.round(ms / 1_000));
+	const index = SPAN_UNITS.findIndex(([, size]) => seconds >= size);
+	const major = SPAN_UNITS[index];
+
+	if (major === undefined) return "0s";
+	const minor = SPAN_UNITS[index + 1];
+	const minorCount = minor === undefined ? 0 : Math.floor((seconds % major[1]) / minor[1]);
+	const head = `${String(Math.floor(seconds / major[1]))}${major[0]}`;
+
+	return minor === undefined || minorCount === 0 ? head : `${head} ${String(minorCount)}${minor[0]}`;
+}

@@ -162,7 +162,9 @@ Keep `createModel` synchronous and keep auth and refresh in the AI SDK
 Do not hardcode `listModels`. Hydrate from models.dev:
 `listModelsDevProviderModels` in `packages/core/src/providers/models-dev.ts`
 caches for 5 minutes. Provide a static `FALLBACK_MODELS` array for a failed,
-non-200, or empty filtered fetch, as Anthropic, OpenAI and Codex do. If
+non-200, or empty filtered fetch, as Anthropic, OpenAI and Codex do; throw it
+as `new StaleModelList(FALLBACK_MODELS, { reason })` so the menu names the
+failure, and map a derived list with `mapModelList`. If
 models.dev already carries your provider, skip the handwritten provider:
 `registry.registerDynamic` in `packages/cf-backend/src/providers/agent-registry.ts`
 makes every catalog id usable once the user stores a `<id>.bearer` credential.
@@ -331,8 +333,10 @@ truncates useful "when to use" guidance.
 - Rate-limit patience on every model fetch. `withRateLimitRetry`
   (`packages/core/src/providers/rate-limit-retry.ts`) wraps shared `createAuthedFetch`,
   Workers AI, AI Gateway, codex and opencode. On 429, 529 or overload-shaped
-  503 it honors `Retry-After`. Otherwise it waits a full-jitter draw under a
-  ceiling that doubles from 2 s to 60 s. No elapsed time or attempt count ends the loop.
+  503 it honors a `Retry-After` of 60 s or less; a longer one ends the call as a
+  spent allowance naming the reset time (`maxRetryDelayMs`, after oh-my-pi).
+  Otherwise it waits a full-jitter draw under a ceiling that doubles from 2 s to
+  60 s. No elapsed time or attempt count ends the loop.
   It stops on success, definitive failure or caller cancellation.
   Non-replayable bodies pass through untouched. Do not cap attempts and count
   on the SDK for the rest: `PROVIDER_SDK_RETRIES` is 2, and a cap under a

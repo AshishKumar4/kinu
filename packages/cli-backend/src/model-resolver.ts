@@ -19,6 +19,7 @@ import {
   createProviderRegistry,
   listModelsDevProviderModels,
   generateReported,
+  mapModelList,
   streamTextReported,
   parseModelSpec,
   specProvider,
@@ -467,20 +468,16 @@ function createGatewayBackedProvider(opts: {
 
       if (!opts.catalogProviderId) return fallback;
 
-      const models = await listModelsDevProviderModels(opts.catalogProviderId, deps, {
-        fallback,
-        preferredIds: [opts.defaultModel.replace(/^workers-ai\//, '')],
-      });
-
       const prefix = opts.catalogModelPrefix ?? '';
 
-      if (!prefix) return models;
-
-      return models.map((model) => ({
+      return mapModelList(listModelsDevProviderModels(opts.catalogProviderId, deps, {
+        fallback,
+        preferredIds: [opts.defaultModel.replace(/^workers-ai\//, '')],
+      }), (models) => models.map((model) => ({
         ...model,
-        id: model.id.startsWith(prefix) ? model.id : `${prefix}${model.id}`,
+        id: prefix === '' || model.id.startsWith(prefix) ? model.id : `${prefix}${model.id}`,
         capabilities: model.capabilities ? [...model.capabilities] : undefined,
-      }));
+      })));
     },
     createModel(modelId, deps): LanguageModel {
       return createChatModel({

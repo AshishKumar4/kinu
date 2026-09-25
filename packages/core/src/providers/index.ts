@@ -36,6 +36,10 @@ export * from './openai';
 
 export * from './codex';
 
+export * from './model-test';
+
+export { EGRESS_REFUSAL_HEADER, EgressCalls, refusalError } from './egress-calls';
+
 export * from './codex-oauth';
 
 export { OAuthTokenError } from './oauth-token-error';
@@ -62,7 +66,7 @@ export * from './pacing';
 
 export * from './rate-limit-retry';
 
-export { creditText, readOpenRouterCredit, type AccountCredit } from './openrouter-credit';
+export * from './usage-limits';
 
 export {
   callAccountOf, CallAccountSchema, QuotaSnapshotSchema, quotaWindowText,
