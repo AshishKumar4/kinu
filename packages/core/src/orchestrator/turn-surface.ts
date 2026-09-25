@@ -8,7 +8,7 @@ import { discoverSkills, BUILTIN_SKILL_HEADERS, type SkillsVfs } from '../skills
 import { unionAllowedTools, toolAllowedBySkills, trustedActiveSkills, renderActiveSkillsSection } from '../skills/render';
 import type { ActiveSkillSet, SkillsIndex } from '../skills/types';
 import type { InstructionTrustResolver } from '../types/instruction-trust';
-import { stepContextLimit, type ModelWindow } from '../prompting/step-prune';
+import { stepContextLimit, type ModelWindow } from '../context-window';
 import { renderFactsBlock, type FactsStore } from '../memory/facts';
 import { diagnostics, toKinuError } from '../obs/index';
 

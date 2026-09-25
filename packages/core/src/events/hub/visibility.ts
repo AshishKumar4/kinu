@@ -2,7 +2,7 @@
 
 import { createHash, createHmac } from 'node:crypto';
 import * as v from 'valibot';
-import { evidenceWindow } from '../../prompts/evidence-window';
+import { evidenceWindow } from '../../utils/evidence-window';
 import { SECRET_PATTERNS } from '../../safety/secret-patterns';
 import {
   SUBORDINATE_REPORT_HANDOFF_FIELDS,

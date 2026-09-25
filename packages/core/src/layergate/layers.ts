@@ -8,7 +8,7 @@ import { TurnAccumulator } from '../orchestrator/turn-accumulator';
 import { CraftCycle } from '../orchestrator/craft-cycle';
 import type { CraftLedger } from '../craft/in-episode';
 import { TurnContextBudget } from '../context-budget';
-import { TurnFileLedger } from '../tools/file-ledger';
+import { TurnFileLedger } from '../vfs/file-ledger';
 import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry';
 import { isVfsError } from '../vfs/errno';
 import { DEFAULT_SHADOW_CONFIG } from '../scaffold/shadow';

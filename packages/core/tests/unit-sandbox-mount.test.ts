@@ -8,7 +8,7 @@ import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { TurnContextBudget } from '../src/context-budget';
 import { createSandboxExecutor, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '../src/execution/sandbox';
-import { TurnFileLedger } from '../src/tools/file-ledger';
+import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
 import { isVfsError } from '../src/vfs/errno';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';

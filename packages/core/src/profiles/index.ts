@@ -1,13 +1,14 @@
+export { isTierId, ROLE_ID_RE, DEFAULT_ROLE_ID, isValidRoleId, type BuiltinRoleId } from '../types/profile';
+
 export {
-  TIER_IDS, TierIdSchema, tierIdsOf, isTierId, ROLE_ID_RE, DEFAULT_ROLE_ID,
-  isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
+  TIER_IDS, TierIdSchema, tierIdsOf, validateProfileCatalog, validateProfileCatalogEnvelope,
   profileCatalogCanonical, profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
   ProfileCatalogEnvelopeSchema,
 } from './catalog';
 
 export type {
-  TierId, BuiltinTierId, BuiltinRoleId, RoleId,
+  TierId, BuiltinTierId, RoleId,
   TierAssignment, TierAssignments, RoleDefinition, RoleCatalog, ProfileCatalog,
   ProfileAuthority, ProfileCatalogEnvelope,
 } from './catalog';
@@ -32,6 +33,8 @@ export {
   providerListingOf, providerSnapshotOf, ProviderListingCache,
   type ProviderListing,
 } from './provider-catalog';
+
+export { agentRoleSwitch } from './agent-role-switch';
 
 export {
   changeRoleAsOwner,

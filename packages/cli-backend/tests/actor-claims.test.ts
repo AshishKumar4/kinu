@@ -15,7 +15,7 @@ import type {
   StoredActorClaim, WorkMode,
 } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
-import { TurnFileLedger } from '../../core/src/tools/file-ledger';
+import { TurnFileLedger } from '../../core/src/vfs/file-ledger';
 import { initEventsHubTables, EventLog } from '../../core/src/events/hub/index';
 import { createTestRuntime, makeSqlExec } from '../../core/tests/helpers';
 import { createSandboxedExecutor } from '../src/executor';

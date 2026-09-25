@@ -4,13 +4,9 @@
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { AgentStores } from './agent-stores';
 import {
-  agentDynamicContext,
-  type DynamicApproval,
-  type DynamicContext,
-  type DynamicDelegate,
-  type MissingCapability,
-  type ActiveRoster,
+  agentDynamicContext, type DynamicApproval, type DynamicContext, type DynamicDelegate, type MissingCapability,
 } from '../prompting/volatile-context';
+import type { ActiveRoster } from '../types/dynamic-context';
 import { renderFactsForTurn } from '../orchestrator/turn-surface';
 import { listRecoveryFindings } from '../evolution/recovery';
 import { craftedToolDeclarations } from '../tools/sandbox-contract';

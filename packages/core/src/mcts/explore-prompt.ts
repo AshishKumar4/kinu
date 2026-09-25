@@ -1,7 +1,7 @@
 /** What an MCTS branch is asked and how its answer is read back, shared by every substrate so branches stay comparable. */
 
 import { diversityDirective } from './diversity';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import type { WorkMode } from '../types/turn';
 
 /** A crafted tool as a branch is told about it; a branch reasons, it does not call tools. */

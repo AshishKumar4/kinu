@@ -7,9 +7,9 @@ import type { LLM } from '../types/primitives';
 import type { FactsStore } from './facts';
 import { normalizeFactKey } from './facts';
 import type { ConversationProjection } from '../session/transcript';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { tolerate } from '../obs/index';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 
 export const SLEEP_TIME_CADENCE = {

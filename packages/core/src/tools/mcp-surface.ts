@@ -4,7 +4,7 @@
 import * as v from 'valibot';
 import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
 import { estimateTokens } from '../llm';
-import { stepContextLimit } from '../prompting/step-prune';
+import { stepContextLimit } from '../context-window';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { KinuError } from '../obs/index';
 import { permitInPlan } from '../execution/work-mode';
@@ -158,7 +158,7 @@ function nonBlank(value: string | undefined): string | undefined {
   return value !== undefined && value.trim() !== '' ? value : undefined;
 }
 
-/** Line-start `## ` headings (prompting/sections.ts splits on them) and `<word>` blocks. */
+/** Line-start `## ` headings (utils/prompt-sections.ts splits on them) and `<word>` blocks. */
 const HEADING_LINE = /^#{1,6}[ \t]+/gm;
 
 const TAG_LINE = /^<(?=\/?[a-zA-Z])/gm;

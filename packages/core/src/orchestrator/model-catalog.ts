@@ -3,11 +3,10 @@
  * {@link ModelCatalogSession.resolved} is the awaited read (#20).
  */
 
-import { contextWindowForModel } from '../context-window';
+import { contextWindowForModel, type ModelWindow, type ResolvedModelWindow } from '../context-window';
 import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer';
 import type { ModelInfo, ModelPricing } from '../providers/types';
 import type { PromptModelContext } from '../prompting/model-profile';
-import type { ModelWindow, ResolvedModelWindow } from '../prompting/step-prune';
 import { classifyErrorCode, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
 /** Tier, then stored spec, through the backend's normalization, so every row names one spelling. Falls back to the raw value rather than throwing. */

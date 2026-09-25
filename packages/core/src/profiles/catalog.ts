@@ -9,14 +9,14 @@ import * as v from 'valibot';
 import { definePromptSection } from '../prompting/template';
 
 import { NAMED_SWARM_PRESETS } from '../strategy/swarm-presets';
-import { REASONING_EFFORTS } from '../strategy/effort';
+import { REASONING_EFFORTS } from '../providers/effort';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../providers/workers-ai';
 import { isAccountName, isProviderScope } from '../credentials/accounts';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import { JsonValueSchema } from '../utils/json';
 import {
-  TIER_IDS, TierIdSchema,
-  type ProfileCatalog, type RoleCatalog, type RoleId,
+  BUILTIN_ROLE_IDS, RoleIdSchema, TIER_IDS, TierIdSchema,
+  type BuiltinRoleId, type ProfileCatalog, type RoleCatalog, type RoleId,
   type TierAssignments, type TierId, type RoleDefinition, type ProfileCatalogEnvelope,
 } from '../types/profile';
 
@@ -26,31 +26,6 @@ export type {
 } from '../types/profile';
 
 export { TIER_IDS, TierIdSchema } from '../types/profile';
-
-/** Roles every authority implicitly ships; a catalog may override but not remove them. */
-const BUILTIN_ROLE_IDS = [
-  'task', 'researcher', 'planner', 'auditor', 'designer',
-] as const;
-
-export type BuiltinRoleId = (typeof BUILTIN_ROLE_IDS)[number];
-
-/** Declared, not the array's first slot, so reordering builtins cannot move the default. */
-export const DEFAULT_ROLE_ID = 'task' as const satisfies BuiltinRoleId;
-
-export const ROLE_ID_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
-
-const ROLE_ID_MAX_LEN = 64;
-
-const RoleIdSchema = v.pipe(v.string(), v.regex(ROLE_ID_RE), v.maxLength(ROLE_ID_MAX_LEN));
-
-export function isValidRoleId(value: string): value is RoleId {
-  return value.length <= ROLE_ID_MAX_LEN && ROLE_ID_RE.test(value);
-}
-
-/** Well-formedness only (durable rows may come from another build); existence is checked at resolve time. */
-export function isTierId(value: string): value is TierId {
-  return v.safeParse(TierIdSchema, value).success;
-}
 
 const ModelSpecSchema = v.pipe(v.string(), v.minLength(1));
 

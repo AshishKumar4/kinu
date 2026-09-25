@@ -3,7 +3,7 @@
  * `tools.<name>(input)` correction; every other error passes through untouched.
  */
 
-import { isBuiltinToolName, TOOL_REACH } from '../tools/registry';
+import { isBuiltinToolName, TOOL_REACH } from './registry';
 import { CRAFTED_TOOL_NAMESPACE } from '../types/codemode';
 
 /** Exact V8 message shape, so model-constructed text containing "is not defined" never misfires. */

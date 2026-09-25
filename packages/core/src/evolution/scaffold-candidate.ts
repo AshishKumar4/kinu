@@ -4,7 +4,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { ResolvedTurnProfile } from '../profiles/resolve';
 import { resolveModelRoute } from '../profiles/model-route';
 import { parseModelSpec } from '../providers/types';
-import { reasoningEffortOptions } from '../strategy/effort';
+import { reasoningEffortOptions } from '../providers/effort';
 import { buildSystemPromptSync, currentDateForPrompt } from '../prompt';
 import { createScaffoldCallTool, createScaffoldDefaultInference, createScaffoldLLMStream } from '../orchestrator/scaffold-host';
 import type { ScaffoldRunControl } from '../scaffold/executor';

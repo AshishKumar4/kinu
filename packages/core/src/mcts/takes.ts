@@ -15,7 +15,7 @@ import { conversationTurnPair } from '../identity/conversation-store';
 import type { SessionTranscriptReader } from '../session/transcript';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 
 /** One branch settlement's take set; set ids are fresh, so replays are caught by settlement key. */
 const BRANCH_SCOPE = 'branch_take';

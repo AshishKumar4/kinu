@@ -110,7 +110,7 @@
       "complexity": 39
     },
     {
-      "key": "packages/core/src/tools/release-tool.ts#runReleaseAction",
+      "key": "packages/core/src/release/tool.ts#runReleaseAction",
       "complexity": 39
     },
     {

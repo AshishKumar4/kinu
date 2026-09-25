@@ -6,7 +6,7 @@ import * as v from 'valibot';
 import type { LanguageModel, ModelMessage } from 'ai';
 import { diversityAngle, siblingAngles } from '../mcts/diversity';
 import { explorePrompt, type ExplorePrompt } from '../mcts/explore-prompt';
-import { extractJsonObject } from '../prompts/structured';
+import { extractJsonObject } from '../providers/structured';
 import { renderIssues } from '../utils/json';
 import { renderThrownChain, type Logger } from '../obs/index';
 import { estimateTokens } from '../llm';

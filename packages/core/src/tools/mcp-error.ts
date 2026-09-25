@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import type { JsonValue } from '../utils/json';
-import { renderToolResult } from '../prompts/evidence-window';
+import { renderToolResult } from '../utils/evidence-window';
 
 export const McpProtocolFailureSchema = v.object({ isError: v.literal(true) });
 

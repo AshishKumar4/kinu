@@ -1,7 +1,7 @@
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
 import type { ModelCallSpend } from '../events/model-call';
-import { generateReported, type GenerateRequest } from '../providers/model-invocation';
+import { generateReported, type GenerateRequest } from './model-invocation';
 import { parseJsonArray, parseJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 
 const JSON_FENCE = /```json\s*([\s\S]*?)```/i;

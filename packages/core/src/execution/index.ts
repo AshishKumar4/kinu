@@ -31,8 +31,6 @@ export {
 
 export { DefaultExecutionRouter } from './router';
 
-export { createInlineExecutor, type InlineExecutorDeps } from './inline';
-
 export { withApprovalGatedShell, gateProviderExec, shellCwd, type ShellReach } from './approval';
 
 export {
@@ -41,8 +39,6 @@ export {
 } from './sandbox';
 
 export { createDeviceTunnelExecutor, type DeviceTransport } from './device-tunnel-executor';
-
-export { explainNativeToolReferenceError } from './sandbox-errors';
 
 export {
   deviceToolchainAnswer, freshDeviceToolchain,
@@ -96,9 +92,7 @@ export {
 
 // Cloudflare composes the Nimbus session as its authoritative workspace.
 export {
-  createNimbusWorkspaceExecutor,
   nimbusSessionShell,
-  type NimbusWorkspaceExecutorOpts,
   type NimbusSandboxHandle,
   type NimbusExecOptions,
   type NimbusExecResult,

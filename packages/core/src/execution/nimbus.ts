@@ -4,18 +4,16 @@ import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
 import type { Shell, VFS } from '../types/primitives';
 import type { MountedVfs, VfsNativeReads } from '../vfs/mounts';
-import { createInlineExecutor, type InlineExecutorDeps } from './inline';
 import { atVfsPath, makeVfsError } from '../vfs/errno';
 import { workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
 import { base64ToBytes } from '../utils/base64';
-import type { ExecutorCapability, ExecutorProvider, ExecutorStatus, PortAnsweringExecutor, PortExposureResult, PreviewRouteCheck } from './types';
+import type { ExecutorCapability, ExecutorProvider, ExecutorStatus, PortExposureResult, PreviewRouteCheck } from './types';
 import { commandResult, exposedPortText, formatExecResult, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { ShellSession } from '../safety/approval-gate';
 
 /** Shell-fallback constants: path and offsets travel as JSON in one env value, never quoted into shell text. */
 const NIMBUS_RANGE_ENV = 'KINU_NIMBUS_RANGE_REQUEST';
@@ -165,10 +163,8 @@ export interface NimbusSandboxHandle {
   mountTable?(plane: MountedVfs, cred?: VfsCred): void;
 }
 
-export interface NimbusWorkspaceExecutorOpts {
+export interface NimbusSessionOpts {
   box: NimbusSandboxHandle;
-  inline: Omit<InlineExecutorDeps, 'filesOwner'>;
-  shellSession?: ShellSession;
   /** Whether session ports can be published as preview URLs; false when the backend's preview origin is unconfigured. */
   inboundNetwork?: boolean;
   /** Whether interpreter runtimes (python, ruby, clang) can be installed; gates declaring `python`/`native_binary`. */
@@ -318,7 +314,7 @@ const SESSION_TYPES = `
   function listRuntimes(): Promise<string | Refusal>;`;
 
 /** The live Nimbus session's process, port and runtime members, and the lifecycle the workspace executor reports. */
-function nimbusSession(opts: NimbusWorkspaceExecutorOpts) {
+export function nimbusSession(opts: NimbusSessionOpts) {
   const box = opts.box;
   let active = false;
   let lastError: string | undefined;
@@ -571,6 +567,7 @@ function nimbusSession(opts: NimbusWorkspaceExecutorOpts) {
 
   return {
     tools,
+    types: SESSION_TYPES,
     capabilities,
     // A recorded failure outranks activity.
     getStatus: (): ExecutorStatus => (lastError === undefined
@@ -607,27 +604,6 @@ function nimbusSession(opts: NimbusWorkspaceExecutorOpts) {
       })).filter((p) => p.url);
     },
   };
-}
-
-/** Kinu's durable workspace tools plus the same Nimbus session's process/runtime/port surface, registered once as `workspace`. */
-export function createNimbusWorkspaceExecutor(opts: NimbusWorkspaceExecutorOpts): PortAnsweringExecutor {
-  const inline = createInlineExecutor({ ...opts.inline, filesOwner: 'agent' });
-  const session = nimbusSession(opts);
-
-  const provider: PortAnsweringExecutor = {
-    ...inline,
-    capabilities: new Set<ExecutorCapability>([...inline.capabilities, ...session.capabilities]),
-    getStatus: session.getStatus,
-    connect: session.connect,
-    disconnect: session.disconnect,
-    tools: { ...inline.tools, ...session.tools },
-    types: (inline.types ?? '').replace(/\n}\s*$/, `${SESSION_TYPES}\n}`),
-    exposePort: session.exposePort,
-    unexposePort: session.unexposePort,
-    listExposedPorts: session.listExposedPorts,
-  };
-
-  return opts.shellSession === undefined ? provider : { ...provider, shellSession: opts.shellSession };
 }
 
 /** Shell over the bytes nimbusSessionFiles exposes. `cred` is fixed at construction, never per call

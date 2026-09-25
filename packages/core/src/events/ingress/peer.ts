@@ -16,7 +16,7 @@ import {
   PEER_REPLY_TOPIC,
   type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
 } from '../../types/peers';
-import { countMsgReceived } from '../../tools/msg-counters';
+import { countMsgReceived } from '../../obs/msg-counters';
 import type { SqlExec, VFS } from '../../types/primitives';
 import type { WorkMode } from '../../types/turn';
 import {

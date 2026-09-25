@@ -4,10 +4,8 @@
  * the operator. A signal card and its durable message are joined by `metadata.signalId`.
  */
 
-import {
-  ADVISOR_SIGNAL_KIND, DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity,
-  type AdvisorSeverity,
-} from '../advisor/review';
+import { ADVISOR_SIGNAL_KIND } from '../advisor/review';
+import { DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity, type AdvisorSeverity } from '../types/advisor';
 import type { BroadcastEvent } from '../types/backend-host';
 import { SIGNAL_ID_METADATA_KEY } from '../types/signals';
 import type { SignalCardEvent, SignalCardState } from '../types/signals';

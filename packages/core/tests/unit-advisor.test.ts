@@ -7,7 +7,7 @@ import { ADVISOR_LANE_FIBER, startAdvisorLane, type AdvisorLaneStart } from '../
 import { initEffectTombstoneTable } from '../src/identity/effect-tombstones';
 import { createHash } from 'node:crypto';
 import { createMemoryVfs, testActorHandle } from '@kinu.run/test-utils';
-import { stepContextLimit } from '../src/prompting/step-prune';
+import { stepContextLimit } from '../src/context-window';
 import { CHARS_PER_TOKEN } from '../src/llm';
 import { advisorWorkspaceGuidance, renderInstructionOmission } from '../src/prompting/agents-md';
 import type { AdvisorWorkspace } from '../src/prompting/agents-md';

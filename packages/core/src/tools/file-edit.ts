@@ -2,11 +2,8 @@
  * Exact-match file editor behind the `file` tool's `edit`/`read`: an edit that cannot be placed exactly once
  * fails without touching the file. No fuzzy fallback; line endings and BOM round-trip.
  */
-import { KinuError } from '../obs/error';
 import { headEnd, lineCount } from '../utils/text';
-import {
-  FILE_REFUSAL_REASONS, type FileEditFailure,
-} from '../types/file-edits';
+import type { FileEditFailure } from '../types/file-edits';
 
 export {
   FILE_REFUSAL_REASONS, type FileEditFailure,
@@ -16,12 +13,6 @@ export {
 export interface FileEdit {
   oldText: string;
   newText: string;
-}
-
-export class FileRefusalError extends KinuError {
-  constructor(readonly verdict: (typeof FILE_REFUSAL_REASONS)[number], message: string) {
-    super('bad_input', message);
-  }
 }
 
 export interface AppliedEdit {

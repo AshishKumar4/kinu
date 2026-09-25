@@ -379,7 +379,7 @@ It does not reject network calls. The same codemode Worker exposes raw network
 globals before the tool is saved, so blocking only the persisted copy would add
 no containment. The remaining checks limit the longer blast radius that
 persistence creates. `SURFACE_CRITERIA` in `core/src/scaffold/misevolution.ts`
-owns this split, and `core/src/execution/inline.ts` applies it.
+owns this split, and `core/src/tools/inline-executor.ts` applies it.
 
 Plan mode keeps ordinary tools but removes Release structurally:
 `SUBMIT_PLAN_TOOL` exists only on Plan turns (`core/src/tools/registry.ts`,

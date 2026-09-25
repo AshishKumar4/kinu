@@ -1,5 +1,5 @@
 // Identity
-export { initActorTables, initAllTables, initFiberTable, tableExists } from './identity/schema';
+export { initFiberTable, tableExists } from './identity/schema';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult } from './subordinates/inspection';
 
@@ -40,7 +40,7 @@ export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './iden
 export { ChatHistoryEntrySchema } from './types/chat';
 
 // Every composition root calls this and nothing else (tests/contract-workspace-schema.test.ts).
-export { initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
+export { initActorTables, initAllTables, initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
 export { resetGuardedExec, StoragePredatesResetError } from './state/store-reset';
 
@@ -458,12 +458,7 @@ export { SessionTranscript, SessionTranscriptReader, readSessionTranscript, type
 export { encodeModelMessageValues, decodeModelMessageValues } from './session/message-codec';
 
 export {
-  pruneStepToolOutputs,
-  stepContextLimit,
-  outputReserveTokens,
-  type ModelWindow,
-  type ResolvedModelWindow,
-  type StepPruneBudget,
+  pruneStepToolOutputs, type StepPruneBudget,
 } from './prompting/step-prune';
 
 export {
@@ -509,7 +504,10 @@ export {
 
 export type { Usage } from './usage';
 
-export { contextWindowForModel, type ContextWindowEstimate } from './context-window';
+export {
+  contextWindowForModel, stepContextLimit, outputReserveTokens,
+  type ContextWindowEstimate, type ModelWindow, type ResolvedModelWindow,
+} from './context-window';
 
 // The per-turn bulk ledger: the cumulative clamp budget + the M1 trip counters.
 export {
@@ -719,7 +717,7 @@ export {
   type ReportToolDeps,
 } from './tools/builtins';
 
-// An actor surface is buildBuiltinTools plus `agents`; see tools/actor-tools.ts.
+// An actor surface is buildBuiltinTools plus `agents`; see delegation/actor-tools.ts.
 export {
   buildActorTools, PEER_REPLY_TOPIC,
   type ActorToolsetDeps,
@@ -728,7 +726,7 @@ export {
   type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
   type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
-} from './tools/actor-tools';
+} from './delegation/actor-tools';
 
 // Applied inside buildActorTools; backends never wrap tools themselves.
 export {
@@ -744,7 +742,7 @@ export * from './web/index';
 export {
   createReleaseCodemodeProvider, runReleaseAction,
   type ReleaseToolDeps, type ReleaseActionInput,
-} from './tools/release-codemode';
+} from './release/codemode';
 
 export { createMemoryCodemodeProvider } from './tools/memory-codemode';
 
@@ -808,7 +806,7 @@ export {
   WORKSPACE_INSTRUCTIONS_TAG,
   SOUL_SECTION_TITLE,
   type PromptSection,
-} from './prompting/sections';
+} from './utils/prompt-sections';
 
 // A local estimate, carried beside the provider totals, never reconciled into them.
 export {
@@ -870,21 +868,10 @@ export {
 } from './prompting/attachment-sanitizer';
 
 export {
-  DynamicContextLedger,
-  agentDynamicContext,
-  executorAvailabilityLabel,
-  searchDelegates,
-  observeSystemPromptHash,
-  renderDynamicContextBlock,
-  DYNAMIC_CONTEXT_HEADER,
-  type DynamicApproval,
-  type ActiveRoster,
-  type DynamicContext,
-  type DynamicDelegate,
-  type DynamicJob,
-  type DynamicTask,
-  type MissingCapability,
+  DynamicContextLedger, agentDynamicContext, executorAvailabilityLabel, searchDelegates, observeSystemPromptHash, renderDynamicContextBlock, DYNAMIC_CONTEXT_HEADER, type DynamicApproval, type DynamicContext, type DynamicDelegate, type DynamicJob, type DynamicTask, type MissingCapability,
 } from './prompting/volatile-context';
+
+export type { ActiveRoster } from './types/dynamic-context';
 
 export {
   applyCacheBreakpoints,
@@ -910,9 +897,9 @@ export {
   jsonArrayOnlyInstruction,
   jsonObjectOnlyInstruction,
   stripMarkdownFences,
-} from './prompts/structured';
+} from './providers/structured';
 
-export { EVIDENCE_BUDGETS, evidenceWindow, renderToolResult } from './prompts/evidence-window';
+export { EVIDENCE_BUDGETS, evidenceWindow, renderToolResult } from './utils/evidence-window';
 
 export { buildRuntime } from './runtime-builder';
 
@@ -1119,12 +1106,10 @@ export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict'
 // Execution
 export {
   DefaultExecutionRouter,
-  createInlineExecutor,
   withApprovalGatedShell, gateProviderExec, shellCwd, type ShellReach,
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError, SandboxPending,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
-  explainNativeToolReferenceError,
   deviceToolchainAnswer, freshDeviceToolchain,
   connectedDevices, deviceByName, deviceFleetAsk,
   effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason,
@@ -1156,13 +1141,13 @@ export {
   type DeviceCancelOutcome, type DeviceTransferOutcome,
   DeviceTerminalHub, terminalFromSocket,
   type TerminalHolder,
-  createNimbusWorkspaceExecutor, nimbusSessionShell,
-  type NimbusWorkspaceExecutorOpts, type NimbusSandboxHandle,
+  nimbusSessionShell,
+  type NimbusSandboxHandle,
   type NimbusStartResult, type NimbusExecOptions, type NimbusExecResult, type NimbusPortInfo,
   EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,
-  type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits, type PreviewRouteCheck,
+  type ExecutorInfo, type ExecutionRouter, type ResourceLimits, type PreviewRouteCheck,
   commandResult, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
   BoundedOutput, COMMAND_OUTPUT_LIMITS, type OutputSpill, type SpillOutcome,
   unsandboxedCommandEnvironment,
@@ -1172,6 +1157,13 @@ export {
   type ParentWorkspaceHandle, type ParentExecResult, type DeviceFileConsent, type DeviceFileScope,
   type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
 } from './execution/index';
+
+export {
+  createInlineExecutor, createNimbusWorkspaceExecutor,
+  type InlineExecutorDeps, type NimbusWorkspaceExecutorOpts,
+} from './tools/inline-executor';
+
+export { explainNativeToolReferenceError } from './tools/sandbox-errors';
 
 export { currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
 
@@ -1376,6 +1368,8 @@ export * from './events/hub/index';
 
 // Ingress
 export * from './events/ingress/index';
+
+export * from './subordinates/ingress';
 
 // Swarm
 export * from './strategy/index';
@@ -1674,7 +1668,7 @@ export {
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
   type HeadInferenceDeps, type HeadWorkspaceLayout,
-  buildHeadToolSet, HEAD_BUILTIN_TOOLS, keepBuiltins,
+  buildHeadToolSet, HEAD_BUILTIN_TOOLS,
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
   HeadFileChanges,
 } from './heads/index';
@@ -1698,9 +1692,9 @@ export {
   TaskListStore, initTaskListTable, TASK_STATUSES, MAX_TASK_TITLE_CHARS,
   type AgentTask, type AgentTaskTree, type TaskStatus,
   type TaskAddResult, type TaskAddRejection,
-} from './tasks/store';
+} from './tools/task-store';
 
-export { withTaskPlan, bindTaskPlan, type TaskPlan, type TaskPlanContext } from './tasks/plan-scope';
+export { withTaskPlan, bindTaskPlan, type TaskPlan, type TaskPlanContext } from './tools/task-plan-scope';
 
 export {
   TaskReminders, TASK_REMINDER_EVENT,
@@ -2117,7 +2111,6 @@ export {
   reviewRecordedTurn,
   AdvisorRecoverySnapshotSchema,
   buildAdvisorPrompt,
-  isAdvisorSeverity,
   isContentFree,
   isDuplicateNote,
   judgeNote,
@@ -2132,6 +2125,8 @@ export {
   type NoteVerdict,
   type SuppressionRule,
 } from './advisor/review';
+
+export { isAdvisorSeverity } from './types/advisor';
 
 export {
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
@@ -2164,14 +2159,14 @@ export {
   DEFAULT_ROLE_ID,
   providerListingOf, providerSnapshotOf, ProviderListingCache,
   type ProviderListing, type ProviderCacheOutcome, type ProviderSnapshotRead,
-  changeRoleAsOwner,
+  agentRoleSwitch, changeRoleAsOwner,
   type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,
   type RoleChangeRefusal, type RoleStateStore,
 } from './profiles';
 
-export type { ReasoningEffort } from './strategy/effort';
+export type { ReasoningEffort } from './providers/effort';
 
-export { REASONING_EFFORTS, REASONING_EFFORT_FOR_STAGE } from './strategy/effort';
+export { REASONING_EFFORTS, REASONING_EFFORT_FOR_STAGE } from './providers/effort';
 
 export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
 

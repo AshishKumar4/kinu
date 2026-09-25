@@ -16,7 +16,7 @@ import { composePrepareStep, type StepContextPlane } from '../src/prompting/prep
 import type { StepPruneBudget } from '../src/prompting/step-prune';
 import { DynamicContextLedger } from '../src/prompting/volatile-context';
 import { createFileDispatcher } from '../src/tools/file-tool';
-import { TurnFileLedger } from '../src/tools/file-ledger';
+import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 import type { ActorContextStores, ChildContextResolver, ContextFileHeader } from '../src/vfs/context-plane';
 import type { ContextEditEvent } from '../src/types/context-plane';

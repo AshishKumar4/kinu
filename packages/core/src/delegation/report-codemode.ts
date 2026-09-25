@@ -2,7 +2,7 @@
 import * as v from 'valibot';
 import type { CodemodeProvider } from '../tools/sandbox-contract';
 import type { ReportToolDeps } from '../tools/builtins';
-import { dispatchReport } from './report-tool';
+import { dispatchReport } from '../tools/report-tool';
 import {
   SUBORDINATE_REPORT_HANDOFF_FIELDS, SUBORDINATE_REPORT_STATUSES,
 } from '../events/hub/types';

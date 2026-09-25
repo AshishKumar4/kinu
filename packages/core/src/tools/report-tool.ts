@@ -6,8 +6,8 @@ import {
   SUBORDINATE_REPORT_STATUSES,
   type SubordinateReportHandoff, type SubordinateReportHandoffField,
 } from '../events/hub/types';
-import { unknownActionError } from '../tools/registry';
-import type { ReportToolDeps } from '../tools/builtins';
+import { unknownActionError } from './registry';
+import type { ReportToolDeps } from './builtins';
 import type { JsonValue } from '../utils/json';
 import { KinuError } from '../obs/index';
 

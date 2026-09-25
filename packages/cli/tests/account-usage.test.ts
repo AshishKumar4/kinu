@@ -9,7 +9,7 @@ import {
   AccountUsageSchema, initWorkspaceSchema, openWorkspaceMainActor,
   type AccountUsage, type CallAccount, type LLMProviderConfig, type Usage,
 } from '@kinu.run/core';
-import { createWorkspace } from '@kinu.run/core/identity';
+import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { makeSql, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import { scratchDir } from '@kinu.run/test-utils';
 

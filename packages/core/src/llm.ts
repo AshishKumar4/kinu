@@ -3,7 +3,7 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import type { LanguageModel } from 'ai';
-import { synthesizeToolFallback } from './prompts/evidence-window';
+import { synthesizeToolFallback } from './utils/evidence-window';
 import type { LLM } from './types/primitives';
 import type { ModelCallSpend } from './events/model-call';
 import { generateReported, streamTextReported } from './providers/model-invocation';
@@ -11,7 +11,7 @@ import { parseModelSpec, type ProviderWaitInfo } from './providers/types';
 import { withRateLimitRetry } from './providers/rate-limit-retry';
 import {
   reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE, type InferenceStage,
-} from './strategy/effort';
+} from './providers/effort';
 
 export interface LLMProviderConfig {
   name: string;

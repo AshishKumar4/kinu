@@ -6,8 +6,8 @@ import type {
   EvalInstance, GepaCandidate, GepaMetric, MetricOutcome, ReflectionLM,
 } from './types';
 import { renderInput, truncate } from './text';
-import { stripMarkdownFences } from '../../prompts/structured';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../../prompts/evidence-window';
+import { stripMarkdownFences } from '../../providers/structured';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../../utils/evidence-window';
 import { DELEGATION_RUBRIC } from '../delegation-features';
 
 export interface MutationContext<I = unknown, E = unknown> {

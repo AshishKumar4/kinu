@@ -24,7 +24,7 @@ import { initRefinementTables, createRefinementStore } from '../src/evolution/re
 import {
   initGepaTables, startGepaRun, persistGepaCandidate, listGepaRuns, loadGepaCandidates,
 } from '../src/evolution/gepa/persistence';
-import { initActorTables } from '../src/identity/schema';
+import { initActorTables } from '../src/state/workspace-schema';
 import { initSessionContextTables } from '../src/session/schema';
 import { initSessionTranscriptTables } from '../src/session/transcript-schema';
 import { SessionHistory } from '../src/session/history';

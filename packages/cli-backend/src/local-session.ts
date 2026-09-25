@@ -89,7 +89,7 @@ import { TierIdSchema,
   createDefaultWebSearchProvider, createWebCodemodeProvider, REAL_CLOCK, type Clock, type WebSearchProvider,
   createAgentsCodemodeProvider, createReleaseCodemodeProvider, createStateCodemodeProvider,
   type CodemodeProvider,
-  createMemoryCodemodeProvider, createTasksCodemodeProvider,
+  agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider,
   createReportCodemodeProvider, REPORT_TOOL, type ReportToolDeps,
   MissionGovernor,
   DynamicContextLedger, renderUnverifiedInstructions,
@@ -2805,7 +2805,7 @@ export class LocalAgentSession implements BackendHost {
       createTasksCodemodeProvider(
         this.taskList,
         this.config,
-        () => this.actorSession.profileInputs?.envelope ?? null,
+        agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null),
       ),
       ...(mode === 'build' ? [createReleaseCodemodeProvider(() => this.releaseToolDeps())] : []),
       // Same gate as the native `report` tool.
@@ -2983,7 +2983,7 @@ export class LocalAgentSession implements BackendHost {
         })({ ...surface, native });
       },
       agents: this.agentsToolDeps(mode),
-      roleAuthority: () => this.actorSession.profileInputs?.envelope ?? null,
+      roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null),
       facts: this.factsStore,
       webSearch: this.getWebSearchProvider(),
     };

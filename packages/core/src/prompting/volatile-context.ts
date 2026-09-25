@@ -18,7 +18,7 @@ import { fnv1a64 } from '../utils/fnv1a';
 import { isDeepStrictEqual } from 'node:util';
 import {
   DYNAMIC_CONTEXT_DELIMITER, DYNAMIC_CONTEXT_OPEN_TAG, WORKSPACE_INSTRUCTIONS_TAG, sealDelimiters,
-} from './sections';
+} from '../utils/prompt-sections';
 import { executorIsSelectable, type PromptExecutorInfo } from './surface';
 import { type TurnReason, type WorkMode } from '../types/turn';
 import { EXECUTOR_CAPABILITIES } from '../execution/types';
@@ -31,7 +31,7 @@ import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import type { ActiveSkillSet } from '../skills/types';
 import { describeActivationReason } from '../skills/render';
 import { compareSkillNames } from '../skills/discover';
-import type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
+import type { ActiveRoster, DynamicApproval, MissingCapability } from '../types/dynamic-context';
 import { renderCraftedToolsDeclaration, type CraftedDeclaration } from '../tools/sandbox-contract';
 
 export type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
@@ -43,7 +43,7 @@ export interface DynamicJob {
   readonly label: string | null;
 }
 
-/** One agent_tasks row (tasks/store.ts), flattened: a subtask follows its parent and names it. */
+/** One agent_tasks row (tools/task-store.ts), flattened: a subtask follows its parent and names it. */
 export interface DynamicTask {
   readonly id: string;
   readonly title: string;
@@ -57,12 +57,6 @@ export interface DynamicDelegate {
   readonly name: string;
   readonly phase: string;
   readonly task?: string | null;
-}
-
-/** `total` counts past the page, so the renderer states elision. */
-export interface ActiveRoster<T> {
-  readonly items: readonly T[];
-  readonly total: number;
 }
 
 /** Callers order lists; the renderer caps them. */

@@ -10,8 +10,9 @@ import {
   DeviceTunnel, TUNNEL_DISCONNECTED, type TunnelSocket,
 } from '../src/execution/device-tunnel';
 import type { JsonValue } from '../src/utils/json';
+import { createNimbusWorkspaceExecutor } from '../src/tools/inline-executor';
 import {
-  createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell,
+  nimbusSessionFiles, nimbusSessionShell,
   type NimbusExecResult,
   type NimbusSandboxHandle,
 } from '../src/execution/nimbus';

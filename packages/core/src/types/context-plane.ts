@@ -1,5 +1,21 @@
 /** Cross-layer context-edit metadata. Canonical content and selection are relational, not array snapshots. */
 
+import type { SessionHistory } from '../session/history';
+
+export interface ContextTurnClaim {
+  readonly turnId: string;
+  readonly epoch: number;
+  readonly status: 'admitted' | 'settled';
+}
+
+/** Implemented by `orchestrator/actor-claims.ts`. */
+export interface ActorClaimReader {
+  readonly actorId: string;
+  readonly history: SessionHistory;
+  turns(): readonly ContextTurnClaim[];
+  latestTurn(): ContextTurnClaim | null;
+}
+
 export const STAGED_CONTEXT_DEFERRALS = ['unpaired_tool_call', 'history_rewritten'] as const;
 
 export type StagedContextDeferral = (typeof STAGED_CONTEXT_DEFERRALS)[number];

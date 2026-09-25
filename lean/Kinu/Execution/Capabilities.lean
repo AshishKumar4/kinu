@@ -3,7 +3,7 @@
   0 sorry, 0 axioms.
 
   One function per executor constructor, over the inputs that constructor reads:
-  `packages/core/src/execution/inline.ts#createInlineExecutor` (the workspace,
+  `packages/core/src/tools/inline-executor.ts#createInlineExecutor` (the workspace,
   plus its host toolchain), `nimbus.ts#createNimbusWorkspaceExecutor` (the
   workspace with a Nimbus session attached, whose inputs are ports and a runtime
   catalog), `sandbox.ts#createSandboxExecutor`,

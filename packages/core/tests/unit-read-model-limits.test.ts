@@ -7,7 +7,7 @@ import { boundedInt } from '../src/utils/bounds';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { getRunSummaries, listRuns } from '../src/read-models/runs';
 import { getRunTimeline } from '../src/read-models/timeline';
-import { initAllTables } from '../src/identity/schema';
+import { initAllTables } from '../src/state/workspace-schema';
 import { createTestActors, createTestSql } from '@kinu.run/test-utils';
 
 function seededRuns(count: number) {

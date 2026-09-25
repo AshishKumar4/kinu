@@ -1,25 +1,23 @@
-import type { AgentRuntime } from '../types/agent-runtime';
-import type { RawSqlExec, SqlExecutor, Storage } from '../types/primitives';
-import type { LLMProviderConfig } from '../llm';
-import { initAllTables } from './schema';
-import { seedSoul, UNTITLED_WORKSPACE_NAME } from './soul';
+import type { AgentRuntime } from './types/agent-runtime';
+import type { RawSqlExec, SqlExecutor, Storage } from './types/primitives';
+import type { LLMProviderConfig } from './llm';
+import { initAllTables } from './state/workspace-schema';
+import { seedSoul, UNTITLED_WORKSPACE_NAME } from './identity/soul';
 import {
   createInlineCraftStore, createInlineExecutor, createInlineMemory,
   createInlineSchedule, createInlineWorkspace, wrapDatabase, type AgentDatabase,
-} from './inline-primitives';
-import { INITIAL_SCAFFOLD_SOURCE } from '../scaffold/bootstrap';
-import { nanoid } from '../utils/nanoid';
-import { nowMs } from '../utils/date';
-import { createVercelAILLM } from '../llm';
-import { unpricedLedgerSink } from '../events/model-call-event';
-import { initRunEventTables, RunEventRecorder } from '../events/recorder';
-import { buildRuntime } from '../runtime-builder';
-import { initWorkspaceBaselineTable, resetWorkspaceBaseline } from '../read-models/workspace-diff';
-import type { WorkspaceBundle } from '../vfs/nimbus-workspace';
-import type { ActorHandle } from './actor-handle';
-import { initWorkspaceActorTable, WorkspaceActorDirectory } from './workspace-actors';
-
-export { wrapDatabase, type AgentDatabase } from './inline-primitives';
+} from './identity/inline-primitives';
+import { INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap';
+import { nanoid } from './utils/nanoid';
+import { nowMs } from './utils/date';
+import { createVercelAILLM } from './llm';
+import { unpricedLedgerSink } from './events/model-call-event';
+import { initRunEventTables, RunEventRecorder } from './events/recorder';
+import { buildRuntime } from './runtime-builder';
+import { initWorkspaceBaselineTable, resetWorkspaceBaseline } from './read-models/workspace-diff';
+import type { WorkspaceBundle } from './vfs/nimbus-workspace';
+import type { ActorHandle } from './identity/actor-handle';
+import { initWorkspaceActorTable, WorkspaceActorDirectory } from './identity/workspace-actors';
 
 export interface WorkspaceBirthConfig {
   /** The address slug (`workspaceSlug`), held by `workspace_identity.name` for life. */

@@ -4,9 +4,9 @@
  */
 
 import type { ToolSet } from 'ai';
-import { buildToolSurface, type BuiltinToolDeps, type CodemodeBuilder } from './builtins';
-import { createAgentsTool, type AgentsToolDeps } from '../delegation/agents-tool';
-import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
+import { buildToolSurface, type BuiltinToolDeps, type CodemodeBuilder } from '../tools/builtins';
+import { createAgentsTool, type AgentsToolDeps } from './agents-tool';
+import { withEffectClaims, type EffectClaimDeps } from '../tools/effect-claim';
 
 // Not `ActorToolDeps`: cf-backend's actor-agent.ts already owns that name.
 export interface ActorToolsetDeps extends BuiltinToolDeps {
@@ -36,4 +36,4 @@ export {
   type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
   type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
-} from '../delegation/agents-tool';
+} from './agents-tool';

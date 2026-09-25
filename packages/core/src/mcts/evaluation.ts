@@ -29,9 +29,9 @@ import * as v from 'valibot';
 import type { LLM, Executor } from '../types/primitives';
 import type { EvaluationGrounding } from '../types/evaluation';
 import { fencedBlocks, readProposalCode } from '../execution/code-fence';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { renderThrownChain, tolerate } from '../obs/index';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { DEFAULT_CONFIG } from '../config';
 
 export interface EvaluateBranchOptions {

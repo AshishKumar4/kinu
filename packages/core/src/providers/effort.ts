@@ -4,12 +4,12 @@
 // and serialize reasoning_effort, overwriting a wire-spelled option.
 
 import type { streamText } from 'ai';
-import type { ReasoningEffort } from '../providers/reasoning-effort';
+import type { ReasoningEffort } from './reasoning-effort';
 
 export {
   REASONING_EFFORTS, isReasoningEffort, knownReasoningEfforts,
   type ReasoningEffort,
-} from '../providers/reasoning-effort';
+} from './reasoning-effort';
 
 export type ProviderOptions = NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
 

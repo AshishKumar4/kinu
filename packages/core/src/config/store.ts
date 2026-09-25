@@ -2,8 +2,8 @@
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import { nameOriginOf, type NameOrigin } from '../identity/naming';
 import { isAccountName, isProviderScope } from '../credentials/accounts';
-import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort';
-import { DEFAULT_ROLE_ID, isTierId, isValidRoleId, type RoleId, type TierId } from '../profiles/catalog';
+import { isReasoningEffort, type ReasoningEffort } from '../providers/reasoning-effort';
+import { DEFAULT_ROLE_ID, isTierId, isValidRoleId, type RoleId, type TierId } from '../types/profile';
 import {
   DEFAULT_CACHE_RETENTION, isCacheRetention, type CacheRetention,
 } from '../providers/types';
@@ -12,7 +12,7 @@ import {
 } from '../safety/approval-gate';
 import {
   DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity, type AdvisorSeverity,
-} from '../advisor/review';
+} from '../types/advisor';
 
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 

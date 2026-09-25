@@ -5,8 +5,8 @@ import {
   workersAIEffortOption, effortFor, reasoningEffortOptions,
   mergeProviderOptions, REASONING_EFFORT_FOR_STAGE, createChatModel, JsonObjectSchema, asFetchFunction, type JsonObject,
 } from '../src/index';
-import { REASONING_EFFORTS } from '../src/strategy/effort';
-import type { ReasoningEffort } from '../src/strategy/effort';
+import { REASONING_EFFORTS } from '../src/providers/effort';
+import type { ReasoningEffort } from '../src/providers/effort';
 
 describe('reasoning_effort plumbing', () => {
   test('REASONING_EFFORT_FOR_STAGE has all stages', () => {

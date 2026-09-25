@@ -4,8 +4,8 @@ import { Database } from 'bun:sqlite';
 import {
   readSoul, readMission, writeSoul, seedSoul, summarizeSoul, summarizeSoulBytes, SOUL_PATH,
 } from '../src/identity/soul';
-import { initAllTables } from '../src/identity/schema';
-import { createWorkspace } from '../src/identity/create';
+import { initAllTables } from '../src/state/workspace-schema';
+import { createWorkspace } from '../src/workspace-birth';
 import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers';
 
 const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };

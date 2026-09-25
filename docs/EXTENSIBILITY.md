@@ -232,7 +232,7 @@ workspace without its own setting runs `tiers.default.reasoningEffort` from the
 active profile (the account catalog when signed in, the local profile
 otherwise), which the TUI home screen's Defaults and the web's Model tiers card change.
 `reasoningEffortOptions(effort, providerFamily)` in
-`packages/core/src/strategy/effort.ts` translates the level to each provider's
+`packages/core/src/providers/effort.ts` translates the level to each provider's
 native option.
 
 | Family | Emitted `providerOptions` |

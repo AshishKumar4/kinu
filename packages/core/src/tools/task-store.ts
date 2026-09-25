@@ -4,9 +4,9 @@
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import * as v from 'valibot';
-import type { ActiveRoster } from '../prompting/volatile-context';
+import type { ActiveRoster } from '../types/dynamic-context';
 import { sqlCheckList } from '../identity/schema';
-import { taskPlanScope, type TaskPlan } from './plan-scope';
+import { taskPlanScope, type TaskPlan } from './task-plan-scope';
 
 export const TASK_STATUSES = ['open', 'active', 'done', 'dropped'] as const;
 

@@ -37,7 +37,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { initWorkspaceSchema, type LLMProviderConfig } from '../../packages/core/src/index';
-import { createWorkspace } from '../../packages/core/src/identity/index';
+import { createWorkspace } from '../../packages/core/src/workspace-birth';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import { makeWorkspaceSchemaSql, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { installPreTurnProfile, requireExecutorSurface, requireSandboxedExecutors } from './harness';

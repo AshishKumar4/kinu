@@ -48,11 +48,11 @@ The CLI runs the model's program in-process (`packages/cli-backend/src/codemode-
 
 `tools.<name>(args)` is the one form on every backend, for a native tool as much as a crafted one. There is no alias and no second spelling. `CRAFTED_TOOL_NAMESPACE` in `packages/core/src/types/codemode.ts` is the constant both sandboxes build from. A name outside `tools` is not a tool.
 
-The one near-miss the sandbox answers is a bare identifier naming a native tool. `explainNativeToolReferenceError` (`packages/core/src/execution/sandbox-errors.ts`) turns V8's `ReferenceError` into a sentence that names `tools.<name>(input)` and the input object that call takes. Both backends answer it the same way: Cloudflare in `packages/cf-backend/src/codemode-sandbox.ts`, the CLI in `packages/cli-backend/src/codemode-tool-factory.ts`.
+The one near-miss the sandbox answers is a bare identifier naming a native tool. `explainNativeToolReferenceError` (`packages/core/src/tools/sandbox-errors.ts`) turns V8's `ReferenceError` into a sentence that names `tools.<name>(input)` and the input object that call takes. Both backends answer it the same way: Cloudflare in `packages/cf-backend/src/codemode-sandbox.ts`, the CLI in `packages/cli-backend/src/codemode-tool-factory.ts`.
 
 Both backends declare crafted tools the same way. The `eval` description declares no `tools.*` member: a native tool is declared once, by its own schema, and `tools.<name>(input)` takes that input. Each backend attaches a live reader of the crafted set to its `eval` tool (`withCraftedToolDeclarations`), and the per-step dynamic context lists crafted names and descriptions from it (`craftedToolDeclarations`, `packages/core/src/state/dynamic-context.ts`).
 
-`workspace.createTool`'s docstring in `packages/core/src/execution/inline.ts` names `tools.<name>(args)` on the next `eval` call. Read it from source.
+`workspace.createTool`'s docstring in `packages/core/src/tools/inline-executor.ts` names `tools.<name>(args)` on the next `eval` call. Read it from source.
 
 ## 6. Wiring
 

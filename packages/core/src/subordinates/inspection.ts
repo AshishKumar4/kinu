@@ -14,7 +14,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import { SubordinateRosterEntrySchema, SubordinateRosterStore } from './roster';
 import { DELEGATION_MAX_DEPTH } from './depth';
 import { PlanReviewStore, PlanReviewSchema } from '../plans/review';
-import { readPlanTasks, AgentTaskTreeSchema } from '../tasks/store';
+import { readPlanTasks, AgentTaskTreeSchema } from '../tools/task-store';
 
 const PathSchema = v.pipe(v.array(v.pipe(v.string(), v.nonEmpty(), v.regex(/^[^/\0]+$/))), v.maxLength(DELEGATION_MAX_DEPTH));
 

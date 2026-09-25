@@ -7,7 +7,7 @@ import {
   reflectionPrompt,
   type ExplorePromptInput,
 } from '../src/mcts/explore-prompt';
-import { EVIDENCE_BUDGETS } from '../src/prompts/evidence-window';
+import { EVIDENCE_BUDGETS } from '../src/utils/evidence-window';
 
 describe('diversity angles', () => {
   test('single branch gets no siblings and an empty directive', () => {

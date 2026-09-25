@@ -30,7 +30,7 @@ import {
   type LLMProviderConfig,
   type SqlExecutor,
 } from '@kinu.run/core';
-import { createWorkspace } from '@kinu.run/core/identity';
+import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import type { Subprocess } from 'bun';
 import {
   LocalAgentHost,

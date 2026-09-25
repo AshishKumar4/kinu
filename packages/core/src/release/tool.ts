@@ -1,6 +1,6 @@
 /**
  * Release lane dispatch: ledger actions, no-engine record_* twins, and engine actions gated on
- * `releases.engine`. Reached only through the `release.*` codemode namespace (tools/release-codemode.ts).
+ * `releases.engine`. Reached only through the `release.*` codemode namespace (release/codemode.ts).
  */
 import {
   isEngineOwnedTransitionTarget,
@@ -12,8 +12,8 @@ import {
   type ReleaseStatus,
   type ReleaseDeployment,
   type ReleaseSource,
-} from '../release/index';
-import type { ReleaseToolAction } from './registry';
+} from './index';
+import type { ReleaseToolAction } from '../tools/registry';
 import { KinuError } from '../obs/index';
 
 export interface ReleaseToolDeps {

@@ -115,13 +115,13 @@
     "consumed_at INTEGER",
     "PRIMARY KEY (actor_id, id)"
   ],
-  "agent_task_notes@packages/core/src/tasks/store.ts": [
+  "agent_task_notes@packages/core/src/tools/task-store.ts": [
     "actor_id TEXT NOT NULL",
     "task_id TEXT NOT NULL",
     "note TEXT NOT NULL",
     "PRIMARY KEY (actor_id, task_id)"
   ],
-  "agent_tasks@packages/core/src/tasks/store.ts": [
+  "agent_tasks@packages/core/src/tools/task-store.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
     "seq INTEGER NOT NULL",
@@ -880,7 +880,7 @@
     "decided_at INTEGER",
     "PRIMARY KEY (actor_id, id, revision)"
   ],
-  "plan_task_links@packages/core/src/tasks/store.ts": [
+  "plan_task_links@packages/core/src/tools/task-store.ts": [
     "actor_id TEXT NOT NULL",
     "task_id TEXT NOT NULL",
     "plan_id TEXT NOT NULL",
