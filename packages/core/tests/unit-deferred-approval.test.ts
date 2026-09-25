@@ -6,7 +6,7 @@ import { toolExecute } from '@kinu.run/test-utils';
 import {
   DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools,
-  formatApprovalGrant, reviewCommand,
+  formatApprovalGrant,
   type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome,
   type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT,
 } from '../src/index';
@@ -46,7 +46,7 @@ function setup(opts: {
   approve?: () => Promise<ShellApprovalOutcome | null>;
   /** Omit the queue: the no-queue path must behave as if deferral did not exist. */
   noQueue?: boolean;
-  /** Whose files the gated shell holds; the queue re-reviews under the same declaration. */
+  /** Whose files the gated shell holds. */
   filesOwner?: FilesOwner;
 } = {}) {
   const filesOwner = opts.filesOwner ?? 'agent';
@@ -69,7 +69,6 @@ function setup(opts: {
       return 'queued';
     } },
     remember: (grants) => { for (const g of grants) granted.push(formatApprovalGrant(g)); },
-    review: (_executor, command) => reviewCommand(command, filesOwner),
     newId: () => `defer-${++seq}`,
     now: () => 1_000 + seq + elapsed,
     audit: (record) => { audited.push(record); },
@@ -117,7 +116,7 @@ describe('a gated action nobody is there to approve', () => {
 
     const queue = new DeferredApprovalQueue({
       store: new DeferredApprovalStore(sql, actor),
-      inbox: { send: async () => 'queued' }, remember: () => {}, review: (_executor, command) => reviewCommand(command, 'agent'),
+      inbox: { send: async () => 'queued' }, remember: () => {},
       audit: () => { throw new Error('audit unavailable'); },
     });
 
@@ -546,11 +545,84 @@ describe('durability — the wait is a night, not a prompt window', () => {
       store,
       inbox: { send: () => Promise.reject(new Error('no host')) },
       remember: () => { throw new Error('not an always answer'); },
-      review: (_executor, command) => reviewCommand(command, 'agent'),
     });
 
     await expect(queue.decide(['defer-7'], 'approved')).rejects.toThrow('no host');
     expect(store.get('defer-7')?.status).toBe('approved');
+  });
+});
+
+describe('"always" grants the rules the owner was shown', () => {
+  /** A workspace over the user's device and Drive, gated over the real deferral queue with nobody attending. */
+  function workspaceSetup() {
+    const { sql, actor } = approvalsDb();
+    let seq = 0;
+    const granted: string[] = [];
+
+    const queue = new DeferredApprovalQueue({
+      store: new DeferredApprovalStore(sql, actor),
+      inbox: { send: async () => 'queued' },
+      remember: (grants) => { for (const g of grants) granted.push(formatApprovalGrant(g)); },
+      newId: () => `defer-${++seq}`,
+      now: () => 1_000 + seq,
+    });
+
+    const ran: string[] = [];
+
+    const record = (member: string) => async (...args: unknown[]) => {
+      ran.push(`${member} ${String(args[0])}`);
+
+      return 'ran';
+    };
+
+    const provider: ExecutorProvider = {
+      name: 'workspace',
+      kind: 'workspace',
+      capabilities: new Set(['shell']),
+      filesOwner: 'agent',
+      userRoots: () => ['/pc', '/shared'],
+      homeDir: async () => WORKSPACE_ROOT,
+      isAvailable: () => true,
+      connect: async () => {},
+      disconnect: async () => {},
+      tools: {
+        runCode: { description: 'Run a program', execute: record('code') },
+        startProcess: { description: 'Start a background process', execute: record('start') },
+      },
+    };
+
+    const { tools } = gateProviderExec(provider, {
+      mode: () => 'strict',
+      granted: (grant) => granted.includes(formatApprovalGrant(grant)),
+      deferrals: queue.channel,
+    });
+
+    return { queue, tools, ran, granted };
+  }
+
+  test('"always" for a program over the user\'s files lets the next identical program run', async () => {
+    const { queue, tools, ran, granted } = workspaceSetup();
+    const program = "import shutil; shutil.rmtree('/shared/notes')";
+    const run = () => tools.runCode?.execute(program, { language: 'python' });
+
+    expect(await run()).toMatchObject({ error: expect.stringContaining('defer-1') });
+    await queue.decide(['defer-1'], 'always');
+
+    expect(granted).toEqual(['program-on-user-files@workspace']);
+    expect(await run()).toBe('ran');
+    expect(ran).toEqual([`code ${program}`]);
+  });
+
+  test('"always" for a process started in the user\'s files lets the next one started there run', async () => {
+    const { queue, tools, ran, granted } = workspaceSetup();
+    const start = () => tools.startProcess?.execute('rm -rf build', { cwd: '/pc/laptop/proj' });
+
+    expect(await start()).toMatchObject({ error: expect.stringContaining('defer-1') });
+    await queue.decide(['defer-1'], 'always');
+
+    expect(granted).toEqual(['rm-recursive@workspace']);
+    expect(await start()).toBe('ran');
+    expect(ran).toEqual(['start rm -rf build']);
   });
 });
 
@@ -570,7 +642,6 @@ describe('an approval outlives an attempt that never reached the machine', () =>
       store,
       inbox: { send: async () => 'queued' },
       remember: () => { throw new Error('not an always answer'); },
-      review: (_executor, command) => reviewCommand(command, 'user'),
       newId: () => `defer-${++seq}`,
       now: () => 1_000 + seq,
       audit: (record) => { audited.push(record); },

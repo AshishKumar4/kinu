@@ -5,12 +5,13 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { DefaultExecutionRouter } from '../src/execution/router';
-import { declaredReview, gateProviderExec, withApprovalGatedShell } from '../src/execution/approval';
+import { gateProviderExec, withApprovalGatedShell } from '../src/execution/approval';
 import { createSandboxExecutor } from '../src/execution/sandbox';
 import type { ExecutorProvider } from '../src/execution/types';
 import type { FilesOwner, ShellApprovalPolicy, ShellApprovalRequest } from '../src/safety/approval-gate';
 import type { VFS } from '../src/types/primitives';
 import { withMountTable } from '../src/vfs/mounts';
+import { skillsMount } from '../src/skills/view';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { present } from '@kinu.run/test-utils';
 import { createWorkspaceBundle } from './helpers';
@@ -270,14 +271,6 @@ describe('the executor reaches the gate', () => {
     expect(asked).toEqual([]);
   });
 
-  test('a parked command whose executor is no longer registered is re-reviewed as the user\'s, keeping every rule', () => {
-    const { router } = askingRouter();
-    router.register(createSandboxExecutor());
-
-    expect(declaredReview(router, 'sandbox', 'rm -rf build').decision).toBe('allow');
-    expect(declaredReview(router, 'device', 'rm -rf build').decision).toBe('gate');
-  });
-
   test("an executor holding the user's files is asked, whatever it is named", async () => {
     const { router, asked } = askingRouter();
     const { provider, executed } = fakeShellProvider('sandbox', 'sandbox', 'user');
@@ -473,6 +466,30 @@ function mountedWorkspaceProvider() {
 
 describe('codemode calls on a workspace over the user\'s mounts', () => {
   const DENIED = { error: expect.stringContaining('Denied by the owner') };
+
+  test('a program reading the read-only skills view asks nobody, while one writing the user\'s machine asks', async () => {
+    const { router, asked } = askingRouter();
+    const db = new Database(':memory:');
+    const workspace = createWorkspaceBundle(db);
+    const { device } = deviceProject();
+
+    const mounted = withMountTable(workspace.vfs, [
+      skillsMount(() => workspace.vfs),
+      { name: 'pc', files: () => device, absentReason: () => 'no device', filesOwner: 'user' },
+    ]);
+
+    router.register({ ...mountedWorkspaceProvider().provider, userRoots: () => mounted.userRoots() });
+    const run = present(router.getProvider('workspace'), 'the workspace executor').tools.runCode;
+    const write = "open('/pc/laptop/notes.txt', 'w').write('x')";
+
+    try {
+      expect(await run.execute("print(open('/skills/deploy/SKILL.md').read())", { language: 'python' })).toBe('ok');
+      expect(await run.execute(write, { language: 'python' })).toMatchObject(DENIED);
+      expect(asked.map((request) => request.command)).toEqual([write]);
+    } finally {
+      db.close();
+    }
+  });
 
   test('a background process started on the user\'s machine is put to them first', async () => {
     const { router, asked } = askingRouter();

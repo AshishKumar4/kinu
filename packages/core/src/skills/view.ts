@@ -100,5 +100,7 @@ export function skillsMount(plane: () => VFS): VfsMount {
   };
 
   // Skills live in the owner's Drive too.
-  return { name: SKILLS_VIEW.slice(1), files: () => files, absentReason: () => 'the skills view is always mounted', filesOwner: 'user' };
+  return {
+    name: SKILLS_VIEW.slice(1), files: () => files, absentReason: () => 'the skills view is always mounted', filesOwner: 'user', readOnly: true,
+  };
 }

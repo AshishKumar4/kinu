@@ -2,12 +2,12 @@
  *  tools on `ExecutionRouter.register()`. */
 
 import {
-  commandFilesOwner, gateExec, nextShellCwd, reviewCommand, reviewProgram, reviewShellCommand, sessionAt, STRICT_NO_CHANNEL_POLICY,
+  commandFilesOwner, gateExec, nextShellCwd, reviewProgram, reviewShellCommand, sessionAt, STRICT_NO_CHANNEL_POLICY,
   type ApprovalResult, type FilesOwner, type ShellApprovalPolicy, type ShellCwd,
 } from '../safety/approval-gate';
 import * as v from 'valibot';
 import { answeredRefusal } from './exec-result';
-import type { ExecutionRouter, ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
+import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
 import type { Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
 import { requireBuild } from './work-mode';
 import { refusalOf } from '../obs/error';
@@ -66,13 +66,6 @@ export function withApprovalGatedShell(
       });
     },
   };
-}
-
-/** An unregistered executor's command is reviewed as the user's. */
-export function declaredReview(router: ExecutionRouter | undefined, executor: string, command: string): ApprovalResult {
-  const provider = router?.getProvider(executor);
-
-  return provider === undefined ? reviewCommand(command, 'user') : reviewShellCommand(provider, command);
 }
 
 /** Tools taking a shell command or a program first; VFS-shaped tools are out of scope. */

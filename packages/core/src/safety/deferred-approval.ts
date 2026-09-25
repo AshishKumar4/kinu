@@ -10,9 +10,9 @@ import type { AgentInbox } from '../types/signals';
 import type { ApprovalConsumedRecord } from '../events/types';
 import * as v from 'valibot';
 import {
-  formatApproval, gatedGrants,
+  formatApproval,
   type ApprovalGrant, type ApprovalSpend, type ApprovalSpendOutcome,
-  type ApprovalResult, type DeferredApprovalChannel, type ShellApprovalRequest,
+  type DeferredApprovalChannel, type ShellApprovalRequest,
 } from './approval-gate';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, toKinuError } from '../obs/index';
@@ -244,9 +244,16 @@ function deniedActionMessage(action: DeferredApproval): string {
   return `NOT RUN — the owner refused this (${action.id}). Not a timeout; find another way.`;
 }
 
+const SHOWN_HIT = /^• ([\w-]+) \((\w+)\): /gm;
+
+/** The hits {@link formatApproval} showed the owner. */
+function shownHits(action: DeferredApproval): Array<{ rule: string; decision: string }> {
+  return [...action.reason.matchAll(SHOWN_HIT)].flatMap(([, rule, decision]) => (rule && decision ? [{ rule, decision }] : []));
+}
+
 /** The rules the review named, for a one-line result; full prose is in `action.reason`. */
 function ruleNames(action: DeferredApproval): string {
-  const names = [...action.reason.matchAll(/^• ([\w-]+) \(/gm)].map((m) => m[1]);
+  const names = shownHits(action).map((hit) => hit.rule);
 
   return names.length > 0 ? names.join(', ') : 'needs approval';
 }
@@ -277,8 +284,6 @@ export interface DeferredApprovalQueueDeps {
   readonly inbox: AgentInbox;
   /** Record a standing grant from an 'always' answer; the host owns storage (actor_config). */
   remember(grants: readonly ApprovalGrant[]): void;
-  /** Re-reviews an 'always'. */
-  review(executor: string, command: string): ApprovalResult;
   /** Durable audit sink for `approval_consumed`. Optional only for tests; production must wire it. */
   audit?(record: ApprovalConsumedRecord): void;
   /** Mint a request id; injected for host id vocabulary and deterministic tests. */
@@ -395,9 +400,9 @@ export class DeferredApprovalQueue {
     if (decided.length === 0) return decided;
 
     if (answer === 'always') {
-      // Recomputed, not stored: the rule table is the source of truth.
-      this.deps.remember(decided.flatMap(
-        (a) => gatedGrants(this.deps.review(a.executor, a.command), a.executor)));
+      // Not re-reviewed: that would lose the call's member and cwd.
+      this.deps.remember(decided.flatMap((a) => shownHits(a)
+        .filter((hit) => hit.decision === 'gate').map((hit) => ({ rule: hit.rule, executor: a.executor }))));
     }
 
     this.notify({ kind: 'decided', actions: decided });

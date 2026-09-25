@@ -18,6 +18,8 @@ export interface VfsMount {
 	readonly absentReason: () => string;
 	/** Whose files it holds; a shell over the table reads it. */
 	readonly filesOwner: FilesOwner;
+	/** Refuses every write: nothing through it is harmed. */
+	readonly readOnly?: true;
 }
 
 export const EXECUTOR_MOUNTS = {
@@ -319,7 +321,7 @@ function siblingPath(path: string, purpose: string, nonce: string): string {
 export interface VfsMountRouting {
 	mountOf(path: string): string | null;
 	mountPoints(): readonly string[];
-	/** The user's mount roots, connected or not. */
+	/** The user's writable mount roots, connected or not. */
 	userRoots(): readonly string[];
 }
 
@@ -357,7 +359,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 	};
 
 	const mountPoints = (): string[] => [...byName.values()].filter((m) => m.files() !== null).map((m) => m.name);
-	const userRoots = [...byName.values()].filter((m) => m.filesOwner === 'user').map((m) => `/${m.name}`);
+	const userRoots = [...byName.values()].filter((m) => m.filesOwner === 'user' && m.readOnly !== true).map((m) => `/${m.name}`);
 
 	/** `..` may never climb out of a mounted tree's root. */
 	const routeOf = (path: string): { mount: VfsMount; native: string } | { base: string } => {
