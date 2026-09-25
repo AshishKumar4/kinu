@@ -6,8 +6,8 @@ import * as v from "valibot";
 import Sidebar from "@/components/Sidebar";
 import {
   addSkill, APP_ROUTES, deleteDriveEntry, listDrive, makeDriveFolder, markAsSkill, mossaicVfs, packDriveFolder, receiveDriveUpload,
-  renameDriveEntry, SKILL_FOLDER_FILE, type DriveListing, type DriveUploadOutcome, type DriveUploadTarget,
-  type MarkedSkill, type MossaicVfs, type SharedLibrary,
+  renameDriveEntry, SKILL_FOLDER_FILE, type DriveUploadTarget,
+  type MossaicVfs, type SharedLibrary,
 } from "@kinu.run/core";
 import { KinuError, renderThrownChain, type ErrorCode } from "@kinu.run/core/obs";
 import { fakeMossaic } from "@kinu.run/test-utils/mossaic";
@@ -40,12 +40,6 @@ const STATUS: Readonly<Record<ErrorCode, number>> = {
   bad_input: 400, denied: 403, missing: 404, unsupported: 415, budget: 413, unavailable: 503, timeout: 504, cancelled: 400, oom: 507, io: 500,
 };
 
-type DriveAnswerBody = DriveListing | DriveUploadOutcome | MarkedSkill | { error: string };
-
-function answer(body: DriveAnswerBody, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-}
-
 const PathBody = v.object({ path: v.string() });
 
 const RenameBody = v.object({ from: v.string(), to: v.string() });
@@ -77,46 +71,46 @@ async function serveDrive(drive: MossaicVfs, request: Request): Promise<Response
 
   try {
     switch (route) {
-      case "GET ": return answer(await listDrive(drive, url.searchParams.get("path") ?? "/"));
+      case "GET ": return Response.json(await listDrive(drive, url.searchParams.get("path") ?? "/"));
 
       case "DELETE ": {
         await deleteDriveEntry(drive, url.searchParams.get("path") ?? "");
 
-        return answer({ ok: true });
+        return Response.json({ ok: true });
       }
 
       case "POST /folders": {
         await makeDriveFolder(drive, (await bodyJson(request, PathBody)).path);
 
-        return answer({ ok: true });
+        return Response.json({ ok: true });
       }
 
       case "POST /rename": {
         const { from, to } = await bodyJson(request, RenameBody);
         await renameDriveEntry(drive, from, to);
 
-        return answer({ ok: true });
+        return Response.json({ ok: true });
       }
 
-      case "POST /skills/mark": return answer(await markAsSkill(drive, (await bodyJson(request, PathBody)).path));
+      case "POST /skills/mark": return Response.json(await markAsSkill(drive, (await bodyJson(request, PathBody)).path));
 
       case "POST /skills": {
         const { skill } = await bodyJson(request, SkillBody);
 
-        return answer(await addSkill(drive, [{ path: SKILL_FOLDER_FILE, bytes: new TextEncoder().encode(skill) }], null));
+        return Response.json(await addSkill(drive, [{ path: SKILL_FOLDER_FILE, bytes: new TextEncoder().encode(skill) }], null));
       }
 
       case "PUT /skills": {
         const bytes = new Uint8Array(await request.arrayBuffer());
         const { skill } = await receiveDriveUpload(drive, { kind: "skill", name: url.searchParams.get("name") }, bytes);
 
-        return answer(skill ?? { ok: true });
+        return Response.json(skill ?? { ok: true });
       }
 
       case "PUT /files": {
         const bytes = new Uint8Array(await request.arrayBuffer());
 
-        return answer(await receiveDriveUpload(drive, uploadTarget(url), bytes));
+        return Response.json(await receiveDriveUpload(drive, uploadTarget(url), bytes));
       }
 
       case "GET /files": {
@@ -131,12 +125,12 @@ async function serveDrive(drive: MossaicVfs, request: Request): Promise<Response
         return new Response(owned, { headers: { "content-type": "application/octet-stream" } });
       }
 
-      default: return answer({ error: "gallery drive stub" }, 404);
+      default: return Response.json({ error: "gallery drive stub" }, { status: 404 });
     }
   } catch (cause) {
     const code = cause instanceof KinuError ? cause.code : "io";
 
-    return answer({ error: renderThrownChain({ cause }) }, STATUS[code]);
+    return Response.json({ error: renderThrownChain({ cause }) }, { status: STATUS[code] });
   }
 }
 
@@ -184,7 +178,7 @@ export function installDriveFixture(frame: string): void {
     if (path === "/api/drive" || path.startsWith("/api/drive/")) return drive.then((tenant) => serveDrive(tenant, request));
 
     if (path === "/api/shared" && request.method === "GET") {
-      return Promise.resolve(new Response(JSON.stringify(fixture.library), { headers: { "content-type": "application/json" } }));
+      return Promise.resolve(Response.json(fixture.library));
     }
 
     return next(input, init);
