@@ -194,6 +194,7 @@ html, body, #root {
   --dur-fast: 120ms;
   --dur-base: 150ms;
   --dur-enter: 220ms;
+  --dur-fold: 300ms;  /* a block that folds: longer than a control's change, since it moves a whole block */
 
   /* ── DARK (default) — the owner's app mock, verbatim ───────────────
      Every value below is the mock's own dark theme (Kinu App v2.dc.html,
@@ -740,6 +741,26 @@ body { background: var(--c-bg); color: var(--c-text); }
   border-bottom-color: var(--c-accent);
 }
 .p-tab-active:hover { color: var(--c-accent-fg); border-bottom-color: var(--c-accent); }
+
+/* ── Fold ──────────────────────────────────────────────────────────
+   A block folds by its height and its opacity together, on one curve, so
+   nothing jumps and nothing moves twice. The grid's one row goes from the
+   content's height to none, and its child clips. Inside `data-fold-still`
+   (a card's first frame) nothing moves: a card that mounts folded is drawn
+   folded, not folded in view. */
+.p-fold {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--dur-fold) var(--ease-out-strong), opacity var(--dur-fold) var(--ease-out-strong);
+}
+.p-fold[data-folded] { grid-template-rows: 0fr; opacity: 0; }
+.p-fold > * { min-height: 0; overflow: hidden; }
+.p-fold-turn { transition: rotate var(--dur-fold) var(--ease-out-strong); }
+.p-fold-frame { transition: height var(--dur-fold) var(--ease-out-strong); }
+[data-fold-still] :is(.p-fold, .p-fold-turn) { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  .p-fold, .p-fold-turn, .p-fold-frame { transition: none; }
+}
 
 /* Tab strip — scrolls when its column is narrower than the set of surfaces,
    rather than clipping a label. It carries the scroll-edge affordance above;
