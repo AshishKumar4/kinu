@@ -212,8 +212,9 @@ describe('the ladder measures something', () => {
    */
 
   /** A browser launcher, as the tree spells one. Independent of the import
-   *  closure by construction: text in the file that claims it. */
-  const BROWSER_LAUNCHER = /puppeteer\.launch|from ['"]puppeteer['"]|['"]playwright['"]|--headless|chrome-headless-shell|CHROME_PATH|google-chrome/u;
+   *  closure by construction: text in the file that claims it, and no import,
+   *  which is the closure's to read (a type-only import launches nothing). */
+  const BROWSER_LAUNCHER = /puppeteer\.launch|['"]playwright['"]|--headless|chrome-headless-shell|CHROME_PATH|google-chrome/u;
 
   /** Browser Rendering's client. Its `puppeteer.launch(binding)` drives a
    *  browser on Cloudflare through a Worker binding, so in a file that names
@@ -343,18 +344,13 @@ describe('the ladder measures something', () => {
   // — a suite that imports neither is not in the closure, so the assertion
   // above is not passing over a set that holds everything.
   test('a new suite that reaches a browser two hops out is derived, and one that does not is not', () => {
-    // The import lines are COMPOSED from the module name rather than written
-    // out: a fixture that spells `puppeteer` as a literal makes this very file
-    // a browser module, and the row that runs it joins the browser lane —
-    // measured here on the first run of this test, which marked `Gate ladder
-    // wiring and cache soundness` as a browser row.
-    const importing = (specifier: string, symbol = 'value'): string => `import ${symbol} from '${specifier}';\n`;
-
+    // Literal import lines in strings: the closure reads syntax, so this file stays out of the
+    // browser lane, which the plan's browser-row list above pins.
     const fixture = new Map([
-      ['scripts/new-harness.ts', `${importing('puppeteer', 'driver')}export const launch = driver.launch;\n`],
-      ['scripts/new-middle.ts', `${importing('./new-harness', '{ launch }')}export const open = launch;\n`],
-      ['scripts/new-thing.test.ts', `${importing('./new-middle', '{ open }')}test('x', () => open());\n`],
-      ['scripts/new-quiet.test.ts', `${importing('node:fs', '{ readFileSync }')}test('y', () => readFileSync('x'));\n`],
+      ['scripts/new-harness.ts', "import driver from 'puppeteer';\nexport const launch = driver.launch;\n"],
+      ['scripts/new-middle.ts', "import { launch } from './new-harness';\nexport const open = launch;\n"],
+      ['scripts/new-thing.test.ts', "import { open } from './new-middle';\ntest('x', () => open());\n"],
+      ['scripts/new-quiet.test.ts', "import { readFileSync } from 'node:fs';\ntest('y', () => readFileSync('x'));\n"],
     ]);
 
     const reaching = browserModules(fixture);
@@ -370,6 +366,22 @@ describe('the ladder measures something', () => {
     expect(sharedOf(row, ['scripts/new-thing.test.ts'], reaching)).toBe('browser');
     expect(sharedOf({ ...row, run: 'bun test --timeout=0 scripts/new-quiet.test.ts' }, ['scripts/new-quiet.test.ts'], reaching))
       .toBeUndefined();
+  });
+
+  // The shapes a text match on `from 'puppeteer'` read backwards: a load through a `const`
+  // specifier and through `require` reach Chrome; a type-only import and a mention in a string do not.
+  test('a module loading the browser by a named specifier or require is derived; a type import is not', () => {
+    const fixture = new Map([
+      ['scripts/named-harness.ts', "const driver = 'puppeteer';\nexport const open = async () => (await import(driver)).default.launch();\n"],
+      ['scripts/required-harness.ts', "const driver = require('puppeteer');\nexport const launch = driver.launch;\n"],
+      ['scripts/lazy.test.ts', "test('x', async () => (await import('./named-harness')).open());\n"],
+      ['scripts/typed.test.ts', "import type { Page } from 'puppeteer';\nexport type Seen = Page;\n"],
+      ['scripts/prose.test.ts', "export const doc = \"import puppeteer from 'puppeteer'\";\n"],
+    ]);
+
+    expect([...browserModules(fixture)].sort()).toEqual([
+      'scripts/lazy.test.ts', 'scripts/named-harness.ts', 'scripts/required-harness.ts',
+    ]);
   });
 
   test('git reports a non-empty set of test files', () => {
@@ -602,17 +614,34 @@ describe('CI is not a silent subset of deploy', () => {
     expect(stale).toEqual([]);
   });
 
+  const Workflow = v.object({
+    jobs: v.record(v.string(), v.object({ steps: v.optional(v.array(v.object({ run: v.optional(v.string()) })), []) })),
+  });
+
+  /** Every command line a workflow's steps run, off the parsed YAML: a `run: |` block is several, and a
+   *  step inside a comment is none. */
+  const workflowCommands = (text: string): string[] => Object.values(v.parse(Workflow, Bun.YAML.parse(text)).jobs)
+    .flatMap((job) => job.steps.flatMap((step) => (step.run ?? '').split('\n').map((line) => line.trim()).filter((line) => line !== '')));
+
+  const enumerates = (command: string): boolean => /^bun (test|run (test|layergate|check|gate:))/.test(command);
+
   test('ci.yml delegates to the ladder instead of keeping its own list', () => {
     // Three lists is worse than two. CI must not be able to enumerate suites
     // independently, because that is how it came to skip five packages.
-    const workflow = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8');
-    expect(workflow).toContain('scripts/ladder.ts --tier=ci');
+    const commands = workflowCommands(readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8'));
 
-    const enumerated = workflow
-      .split('\n')
-      .filter((line) => /^\s*run:\s*bun (test|run (test|layergate|check|gate:))/.test(line));
+    expect(commands).toContain('bun scripts/ladder.ts --tier=ci');
+    expect(commands.filter(enumerates)).toEqual([]);
+  });
 
-    expect(enumerated).toEqual([]);
+  test('a commented-out ladder step delegates nothing, and a suite inside a run block is enumerated', () => {
+    const commands = workflowCommands([
+      'jobs:', '  gate:', '    steps:', '      # - run: bun scripts/ladder.ts --tier=ci',
+      '      - run: |', '          bun install', '          bun test packages/core', '',
+    ].join('\n'));
+
+    expect(commands).toEqual(['bun install', 'bun test packages/core']);
+    expect(commands.filter(enumerates)).toEqual(['bun test packages/core']);
   });
 });
 

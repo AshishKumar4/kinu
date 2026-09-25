@@ -939,13 +939,6 @@
       "decision": "protected"
     },
     {
-      "file": "scripts/egress-interception.ts",
-      "kind": "regex-literal",
-      "owner": "exportsContainerProxy",
-      "sourceSha256": "a3bef5c2d179a2dceabca634dcd5cafff60a2364ca00cc58156e2a2b7a65a8f6",
-      "decision": "sourceGate"
-    },
-    {
       "file": "scripts/eval-workspaces.ts",
       "kind": "hand-parser",
       "owner": "parseArgs",
@@ -974,32 +967,11 @@
       "decision": "lexical"
     },
     {
-      "file": "scripts/payload-transport.test.ts",
-      "kind": "regex-literal",
-      "owner": "reaches",
-      "sourceSha256": "9fc4569ca194c73301508b8cb2869622ed2fc1d203b140267844601d40df1bcc",
-      "decision": "sourceGate"
-    },
-    {
       "file": "scripts/plan-demo-film.test.ts",
       "kind": "regex-literal",
       "owner": "tag",
       "sourceSha256": "02b50202baeb02cf6091c74dccc9e047ef372e1a9374f7b3301cffaf4612d3e1",
       "decision": "lexical"
-    },
-    {
-      "file": "scripts/preflight.test.ts",
-      "kind": "regex-literal",
-      "owner": "declared",
-      "sourceSha256": "bd7adcd66ea785a250f69c4353f2500d7023c715fb8525341b85511552913c07",
-      "decision": "sourceGate"
-    },
-    {
-      "file": "scripts/preflight.test.ts",
-      "kind": "regex-literal",
-      "owner": "names",
-      "sourceSha256": "c890b6ca4e934d9ba8522f9f890f7509ae75016c738025ec8e270224bd441e9b",
-      "decision": "sourceGate"
     },
     {
       "file": "scripts/review-package.ts",
@@ -1014,13 +986,6 @@
       "owner": "html",
       "sourceSha256": "7eb623284311613b1d5f5d089b629a265cfd2d210d9b1ee62fa659c6f51f7aa0",
       "decision": "lexical"
-    },
-    {
-      "file": "scripts/silent-drop.ts",
-      "kind": "regex-literal",
-      "owner": "handlesAnError",
-      "sourceSha256": "eb4423df0e8bb23b4a133a82a51ece326465a92e5e5096ed70356771143adbad",
-      "decision": "sourceGate"
     },
     {
       "file": "scripts/skip-ratchet.ts",
@@ -1052,45 +1017,10 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "kind": "hand-parser",
-      "owner": "parseRuleRegistry",
-      "sourceSha256": "c67e4ce33e44f075fdf33ca7096ae2e586a6c3b58ac54dfc10d45e87d24319e7",
-      "decision": "sourceGate"
-    },
-    {
-      "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "kind": "regex-literal",
-      "owner": "parseRuleRegistry",
-      "sourceSha256": "408168a623ebe41f0f0e905927b8ec5e6a39fe2df87668c7336de1f6f89f698c",
-      "decision": "sourceGate"
-    },
-    {
-      "file": "tools/oxlint/anti-slop/gate.test.ts",
       "kind": "regex-literal",
       "owner": "directive",
       "sourceSha256": "3f3bdb4f981fd5a0047a98a39654cb32820f29fd05e6dd49a07032b5ffdfeb94",
       "decision": "lexical"
-    },
-    {
-      "file": "tools/oxlint/anti-slop/import-extension.gate.test.ts",
-      "kind": "regex-literal",
-      "owner": "relativeSpecifiers",
-      "sourceSha256": "42c2dbd17474dc4370802af719134e4d634b82564bfe210baf52b32d0c516175",
-      "decision": "sourceGate"
-    },
-    {
-      "file": "tools/oxlint/anti-slop/import-extension.gate.test.ts",
-      "kind": "regex-literal",
-      "owner": "relativeSpecifiers",
-      "sourceSha256": "81eaf4f60a1cf2b3bdd58487c4f56e5ae94bab1fdeb0c63b54bd2fb8eaad35ac",
-      "decision": "sourceGate"
-    },
-    {
-      "file": "tools/oxlint/anti-slop/no-ambient-git.gate.test.ts",
-      "kind": "regexp-constructor",
-      "owner": "remedyExports",
-      "sourceSha256": "3b8aa939245f3459ef59eb42f5200ee436ed0b074603389689af1b8507d07749",
-      "decision": "sourceGate"
     },
     {
       "file": "tools/oxlint/anti-slop/vendor/eslint-stylistic/padding-line-between-statements.ts",

@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 
 import { isParseable, isRawNodeModule, readMatching, trackedFiles } from "../../../scripts/sources.ts";
+import { moduleSpecifiers, parse } from "../../../scripts/syntax.ts";
 import { lintJson, type LintDiagnostic } from "./shared/oxlint-json.ts";
 
 const repoRoot = process.cwd();
@@ -85,39 +86,12 @@ function rawNodeEntrypoints(): readonly string[] {
 
 const sourceText = readMatching(isParseable);
 
-/**
- * Relative specifiers of one tracked file, for the closure walk only.
- *
- * A text scan, anchored to statement position, because this half of the tree is where the
- * RuleTester fixtures live: `code: "import { x } from './y'"` is a string, not an import, and an
- * unanchored scan reads eleven of them as edges. Anchoring plus the resolve filter below leaves the
- * walk an OVER-approximation at worst — a fixture that happens to name a real neighbouring file
- * adds a node and fails the boundary assertion loudly. It cannot silently drop an edge, which is
- * the direction that would matter.
- */
-function relativeSpecifiers(file: string): readonly string[] {
-  const text = sourceText.get(file);
-  assert.ok(text !== undefined, `${file} is tracked and parseable but was not read`);
-  const found = new Set<string>();
-  for (const pattern of [
-    // `[^;]` spans newlines, because an import clause may: `import {\n  A,\n} from "./x.ts"`.
-    // Missing one of those dropped `shared/dictionary-types.ts` out of the measured closure.
-    /^[ \t]*(?:import|export)\b[^;]*?\bfrom\s*["'](\.[^"']*)["']/gmu,
-    /^[ \t]*import\s+["'](\.[^"']*)["']/gmu,
-  ]) {
-    for (const match of text.matchAll(pattern)) found.add(match[1]!);
-  }
-  return [...found];
-}
-
-const trackedSet = new Set(trackedFiles());
-
 /** The repo-relative path a specifier names verbatim, before any resolver guessing. */
 const verbatim = (from: string, specifier: string): string =>
   relative(repoRoot, resolve(repoRoot, dirname(from), specifier.split("?")[0]!));
 
 /** What a specifier names on disk, under either regime's spelling. `null` when nothing does. */
-function resolveSpecifier(from: string, specifier: string): string | null {
+function resolveSpecifier(from: string, specifier: string, tracked: ReadonlySet<string>): string | null {
   const base = verbatim(from, specifier);
   const stem = base.replace(/\.[cm]?[jt]sx?$/u, "");
   for (const candidate of [
@@ -127,24 +101,46 @@ function resolveSpecifier(from: string, specifier: string): string | null {
       `${base}/index${ext}`,
     ]),
   ]) {
-    if (trackedSet.has(candidate)) return candidate;
+    if (tracked.has(candidate)) return candidate;
   }
   return null;
 }
 
-const closure = new Set<string>();
-{
-  const queue = [...rawNodeEntrypoints()];
+/** Every module reachable from `entrypoints` through relative edges over `texts`: each static and
+ *  literal dynamic specifier the parser finds, so a RuleTester fixture's `code: "import …"` stays a
+ *  string and not an edge. */
+function rawNodeClosure(entrypoints: readonly string[], texts: ReadonlyMap<string, string>, tracked: ReadonlySet<string>): Set<string> {
+  const closure = new Set<string>();
+  const queue = [...entrypoints];
   while (queue.length > 0) {
     const file = queue.pop()!;
     if (closure.has(file)) continue;
     closure.add(file);
-    for (const specifier of relativeSpecifiers(file)) {
-      const target = resolveSpecifier(file, specifier);
+    const text = texts.get(file);
+    assert.ok(text !== undefined, `${file} is tracked and parseable but was not read`);
+    for (const specifier of moduleSpecifiers(parse(file, text).root).filter((named) => named.startsWith("."))) {
+      const target = resolveSpecifier(file, specifier, tracked);
       if (target !== null && !closure.has(target)) queue.push(target);
     }
   }
+  return closure;
 }
+
+// A planted closure: a dynamic import and a mid-line `export *` are edges raw Node follows, and a
+// string holding an import is not.
+const planted = new Map([
+  ["p/entry.ts", 'const lazy = await import("./dynamic.ts");\nexport const code = "import { x } from \'./fixture.ts\'";\nexport default lazy;\n'],
+  ["p/dynamic.ts", '/* barrel */ export * from "./barrel.ts";\n'],
+  ["p/barrel.ts", "export const leaf = 1;\n"],
+  ["p/fixture.ts", "export const x = 1;\n"],
+]);
+assert.deepEqual(
+  [...rawNodeClosure(["p/entry.ts"], planted, new Set(planted.keys()))].sort(),
+  ["p/barrel.ts", "p/dynamic.ts", "p/entry.ts"],
+  "the closure walk must follow dynamic imports and mid-line re-exports, and must not follow an import spelled inside a string",
+);
+
+const closure = rawNodeClosure(rawNodeEntrypoints(), sourceText, new Set(trackedFiles()));
 
 const claimed = trackedFiles().filter((file) => isRawNodeModule(file));
 assert.deepEqual(
@@ -251,7 +247,7 @@ try {
   }
 
   process.stdout.write(
-    `import-extension: ${cases.length} directions proven red->green through oxlint; clean over the ${closure.size}-file raw-Node closure; the bundled/Bun half is linted once in live-tree.gate.test.ts\n`,
+    `import-extension: ${cases.length} directions proven red->green through oxlint; clean over the ${closure.size}-file raw-Node closure; the bundled/Bun half is linted once in live-tree.gate.test.ts; blind: a computed \`import(expr)\` is no edge, so rules.test.ts's suites are seeded from the enumeration\n`,
   );
 } finally {
   rmSync(fixtures, { recursive: true, force: true });

@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { assertMeasured } from './gate-ratchet';
+import { declaredName, literalString, parse, walk } from './syntax';
 import { PROJECT_MARKERS, engineBoundsTempWalk, judge, measuredCounts, type Environment } from './preflight';
 
 const REPO_ROOT = new URL('..', import.meta.url).pathname;
@@ -23,6 +24,19 @@ const REPO_ROOT = new URL('..', import.meta.url).pathname;
 const ENGINE = 'packages/cli-backend/src/checkpoints.ts';
 
 const engineSource = readFileSync(join(REPO_ROOT, ENGINE), 'utf8');
+
+/** The string elements of `PROJECT_MARKERS`'s array literal in `source`. */
+function declaredMarkers(file: string, source: string): (string | undefined)[] {
+  const markers: (string | undefined)[] = [];
+  walk(parse(file, source).root, (node) => {
+    if (node.raw.type !== 'VariableDeclarator' || declaredName(node) !== 'PROJECT_MARKERS') return;
+    const init = node.raw.init?.type === 'TSAsExpression' ? node.raw.init.expression : node.raw.init;
+
+    if (init?.type === 'ArrayExpression') markers.push(...init.elements.map((element) => (element === null ? undefined : literalString(element))));
+  });
+
+  return markers;
+}
 
 /** A healthy machine, so each case below moves exactly one fact. */
 const HEALTHY: Environment = {
@@ -42,10 +56,13 @@ describe('the markers this gate probes', () => {
   test('are exactly the markers the engine treats as a project root', () => {
     // The header claims this sync, and a hardcoded copy that drifted would make
     // the check pass over the very directory it is guarding.
-    const declared = /const PROJECT_MARKERS = \[(?<list>[^\]]+)\]/u.exec(engineSource)?.groups?.list;
-    expect(declared).toBeDefined();
-    const names = [...(declared ?? '').matchAll(/'(?<name>[^']+)'/gu)].map((m) => m.groups?.name);
-    expect(names).toEqual([...PROJECT_MARKERS]);
+    expect(declaredMarkers(ENGINE, engineSource)).toEqual([...PROJECT_MARKERS]);
+  });
+
+  test('are read as the array literal, whatever its quoting, layout or comments', () => {
+    const spelled = "const PROJECT_MARKERS = [\n  '.git', // the 'repo' root\n  \"package.json\",\n] as const;\n";
+
+    expect(declaredMarkers('markers.ts', spelled)).toEqual(['.git', 'package.json']);
   });
 });
 
@@ -65,6 +82,16 @@ describe('the engine bound this gate reads', () => {
 
     expect(unbounded).not.toBe(engineSource);
     expect(engineBoundsTempWalk(unbounded)).toBe(false);
+  });
+
+  test('reads the bound as a statement: a braced break counts, a commented-out one does not', () => {
+    const bound = 'if (probe === temp || real === realTemp) break;';
+    const braced = engineSource.replace(bound, 'if (real === realTemp || probe === temp) {\n          break;\n        }');
+    const commented = engineSource.replace(bound, `// ${bound}`);
+
+    expect(braced).not.toBe(engineSource);
+    expect(engineBoundsTempWalk(braced)).toBe(true);
+    expect(engineBoundsTempWalk(commented)).toBe(false);
   });
 });
 

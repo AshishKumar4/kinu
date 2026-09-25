@@ -42,9 +42,9 @@ import type { ESTree } from "@oxlint/plugins";
  *
  * `RAW_NODE_MODULE` is the boundary, and it carries entries beyond the plugin directory because
  * `scripts/sources.ts` — the repository's single file enumeration — is imported by the plugin's
- * suites and imports `no-ambient-git-in-tests.ts` back, and the enumerator spawns git through
- * `packages/test-utils/src/git.ts`'s rebuilt environment so a hook-exported `GIT_DIR` cannot
- * re-point it. `import-extension.gate.test.ts` recomputes the transitive closure from the `node`
+ * suites and imports `no-ambient-git-in-tests.ts` back, the suites parse source through
+ * `scripts/syntax.ts`, and the enumerator spawns git through `packages/test-utils/src/git.ts`'s
+ * rebuilt environment so a hook-exported `GIT_DIR` cannot re-point it. `import-extension.gate.test.ts` recomputes the transitive closure from the `node`
  * entrypoints in `package.json` and asserts it equals exactly what this pattern matches, so the
  * boundary cannot drift away from the measurement: a new import out of the plugin into another
  * file fails the gate naming that file, instead of silently widening the exception.
@@ -61,7 +61,7 @@ import type { ESTree } from "@oxlint/plugins";
  * entrypoints reach. Repo-relative paths. Proven exact by `import-extension.gate.test.ts`.
  */
 export const RAW_NODE_MODULE =
-	/^(?:tools\/oxlint\/anti-slop\/.+\.ts|scripts\/sources\.ts|packages\/test-utils\/src\/git\.ts)$/u;
+	/^(?:tools\/oxlint\/anti-slop\/.+\.ts|scripts\/(?:sources|syntax)\.ts|packages\/test-utils\/src\/git\.ts)$/u;
 
 /** Extensions TypeScript would have emitted from. A specifier ending in one of these names a build
  *  output, and there are no build outputs. Set membership over `extname`, not a pattern: the

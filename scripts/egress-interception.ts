@@ -83,7 +83,9 @@ import type { Node } from 'oxc-parser';
 import { parseJsonc } from './jsonc';
 import { readSources } from './sources';
 import { assertMeasured, finding } from './gate-ratchet';
-import { classMembers, declaredName, literalText, parse, superClassName, walk, type SyntaxNode } from './syntax';
+import {
+  classMembers, declaredName, literalText, memberCalleeName, parse, publishedNames, superClassName, walk, type SyntaxNode,
+} from './syntax';
 import { CONTAINER_IMAGES, imageReference, readSource, sourceHash, type ContainerImage } from './container-images';
 import { tolerate } from '../packages/core/src/obs/index';
 
@@ -182,20 +184,21 @@ export function sandboxLineage(sources: ReadonlyMap<string, string>): ReadonlySe
   return lineage;
 }
 
-/** Direct `DurableObject` subclasses in the deployment source: bound to a container, candidates for forwarder admission. */
-export function declaredForwarderClasses(sources: ReadonlyMap<string, string>): string[] {
-  const names = new Set<string>();
+/** Direct `DurableObject` subclasses in the deployment source, each with the file declaring it: bound to a container,
+ *  candidates for forwarder admission. */
+export function declaredForwarderClasses(sources: ReadonlyMap<string, string>): ReadonlyMap<string, string> {
+  const declared = new Map<string, string>();
 
   for (const [file, text] of sources) {
     if (!file.startsWith('packages/cf-backend/') || !text.includes('Container')) continue;
     walk(parse(file, text).root, (node) => {
       const name = superClassName(node) === 'DurableObject' ? declaredName(node) : undefined;
 
-      if (name !== undefined) names.add(name);
+      if (name !== undefined && !declared.has(name)) declared.set(name, file);
     });
   }
 
-  return [...names].sort();
+  return declared;
 }
 
 /** The interpreters a forwarder's CMD may name besides its own tracked script. */
@@ -633,11 +636,12 @@ export function auditInterception(
   return { inspected, violations };
 }
 
-/** Whether the Worker entry re-exports `ContainerProxy`. Without it the Sandbox
- *  DO cannot build an interception fetcher at all, and every request leaves
- *  unintercepted while the vault still believes it is substituting. */
+/** Whether the Worker entry publishes `ContainerProxy` under that name, bound to the SDK's own class. Without it the
+ *  Sandbox DO cannot build an interception fetcher at all, and every request leaves unintercepted while the vault
+ *  still believes it is substituting. An `export * from` is not credited: this file cannot list what it publishes. */
 export function exportsContainerProxy(entry: string): boolean {
-  return /export\s*\{[^}]*\bContainerProxy\b[^}]*\}/.test(entry);
+  return publishedNames(parse(WORKER_ENTRY, entry).root).some(({ name, origin }) =>
+    name === 'ContainerProxy' && origin?.specifier === CONTAINERS_HOST && origin.imported === 'ContainerProxy');
 }
 
 /** The SDK whose default this gate re-measures, and the package that resolves
@@ -723,10 +727,30 @@ export function boundContainers(): BoundContainers {
   return { module, version: copyVersion(module) };
 }
 
-/** Re-measure the upstream default this whole posture exists to correct. True
- *  while the SDK still leaves HTTPS interception OFF by default. */
-export function sdkDefaultsHttpsInterceptionOff(containerBundle: string): boolean {
-  return /interceptHttps\s*=\s*false/.test(containerBundle);
+/** Re-measure the upstream default this whole posture exists to correct. True while the SDK still declares a class
+ *  field `interceptHttps = false`. */
+export function sdkDefaultsHttpsInterceptionOff(containerModule: string): boolean {
+  let off = false;
+  walk(parse('container.js', containerModule).root, (node) => {
+    if (node.type === 'PropertyDefinition' && declaredName(node) === 'interceptHttps' && fieldValue(node) === 'false') off = true;
+  });
+
+  return off;
+}
+
+const isEgressHandler = (raw: Node | undefined): boolean => raw?.type === 'Identifier' && raw.name === 'EGRESS_HANDLER';
+
+/** An `outboundHandlers` registry, as a class field or an assignment, whose object keys the catch-all. */
+function registersCatchAll(node: SyntaxNode): boolean {
+  const { raw } = node;
+  let registry: Node | null | undefined;
+
+  if (raw.type === 'PropertyDefinition' && declaredName(node) === 'outboundHandlers') registry = raw.value;
+  else if (raw.type === 'AssignmentExpression' && raw.left.type === 'MemberExpression' && !raw.left.computed
+    && nameOf(raw.left.property) === 'outboundHandlers') registry = raw.right;
+
+  return registry?.type === 'ObjectExpression'
+    && registry.properties.some((entry) => entry.type === 'Property' && entry.computed && isEgressHandler(entry.key));
 }
 
 /** Whether a catch-all handler is registered AND bound. Both halves matter: a
@@ -736,10 +760,14 @@ export function catchAllIsBound(sources: ReadonlyMap<string, string>): boolean {
   let registered = false;
   let bound = false;
 
-  for (const [, text] of sources) {
-    if (/outboundHandlers\s*=\s*\{/.test(text) && text.includes('EGRESS_HANDLER')) registered = true;
+  for (const [file, text] of sources) {
+    if (!text.includes('EGRESS_HANDLER')) continue;
+    walk(parse(file, text).root, (node) => {
+      if (registersCatchAll(node)) registered = true;
 
-    if (/setOutboundHandler\(\s*EGRESS_HANDLER/.test(text)) bound = true;
+      if (node.raw.type === 'CallExpression' && memberCalleeName(node) === 'setOutboundHandler'
+        && isEgressHandler(node.raw.arguments[0])) bound = true;
+    });
   }
 
   return registered && bound;
@@ -778,12 +806,12 @@ if (import.meta.main) {
   const forwarderReasons = new Map<string, string[]>();
 
   // The loaded class, not its source text, answers what RPC can reach: a base's methods are enumerable here.
-  for (const owner of declaredForwarderClasses(sources).filter((name) => bound.includes(name))) {
-    const file = [...sources.keys()].find((path) => path.startsWith('packages/cf-backend/') && sources.get(path)?.includes(`class ${owner} `) === true);
+  for (const [owner, file] of [...declaredForwarderClasses(sources)].sort(([a], [b]) => a.localeCompare(b))) {
+    if (!bound.includes(owner)) continue;
     const image = records.get(owner);
-    const surface = file === undefined ? undefined : await loadForwarderSurface(join(root, file), owner);
+    const surface = await loadForwarderSurface(join(root, file), owner);
 
-    forwarderReasons.set(owner, file === undefined || surface === undefined ? ['has no loadable source file'] : auditForwarder({
+    forwarderReasons.set(owner, surface === undefined ? ['has no loadable source file'] : auditForwarder({
       owner, file, fileText: sources.get(file) ?? '', image, surface,
       boundImage: declaredContainers.find((entry) => entry.class_name === owner)?.image,
       sourceFiles: image === undefined ? new Map() : readSource(root, image.source),
@@ -885,6 +913,9 @@ if (import.meta.main) {
 
   for (const [method, why] of FORWARDER_SURFACE) console.log(`egress-interception:   ${method} — ${why}`);
   console.log('egress-interception: residual: policy.mjs is proved by its unit test, not parsed, and holds for every forward');
+  console.log('egress-interception: blind: ContainerProxy counts only as a named export bound to '
+    + `${CONTAINERS_HOST}'s own class, never through \`export *\`; the catch-all counts only as a computed `
+    + '`[EGRESS_HANDLER]` registry key and a `setOutboundHandler(EGRESS_HANDLER, …)` call naming that identifier');
   console.log(`egress-interception: read the SDK default from ${CONTAINERS} ${containers.version} `
     + `at ${relative(root, containers.module)}, the copy ${CONTAINERS_HOST} resolves for itself and `
     + 'the only copy the artifact binds');
