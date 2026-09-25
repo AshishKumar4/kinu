@@ -13,6 +13,7 @@ import { KinuLogo } from "@/components/ui/KinuLogo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Field, inputCls } from "@/components/ui/form";
 import { StepRow } from "@/components/deploy/DeployStepRow";
+import { showRejection } from "@/hooks/use-async-resource";
 
 /** The run key is a capability: `sessionStorage` under the run id, sent in an `authorization` header, never a URL. */
 function heldRunKey(runId: string): string {
@@ -97,7 +98,7 @@ function Answered({ options, runId, onStarted }: {
 
   useEffect(() => {
     let live = true;
-    const failed = (...rejection: [unknown]): void => { if (live) setErr(renderThrownChain({ cause: rejection[0] })); };
+    const failed = showRejection(setErr, () => live);
 
     const door = doorFor(runId);
 
@@ -257,9 +258,7 @@ export default function DeployPage({ fixture, fixtureOptions }: {
     if (!live) return;
     let mounted = true;
 
-    const failed = (...rejection: [unknown]): void => { if (mounted) setErr(renderThrownChain({ cause: rejection[0] })); };
-
-    deployOptions(location.origin).then((offer) => { if (mounted) setOptions(offer); }).catch(failed);
+    deployOptions(location.origin).then((offer) => { if (mounted) setOptions(offer); }).catch(showRejection(setErr, () => mounted));
 
     return () => { mounted = false; };
   }, [live]);
@@ -268,11 +267,9 @@ export default function DeployPage({ fixture, fixtureOptions }: {
     if (!live || runId === "" || heldRunKey(runId) === "") return;
     let mounted = true;
 
-    const failed = (...rejection: [unknown]): void => { if (mounted) setErr(renderThrownChain({ cause: rejection[0] })); };
-
     const door = doorFor(runId);
 
-    door.snapshot().then((held) => { if (mounted) setSnapshot(held); }).catch(failed);
+    door.snapshot().then((held) => { if (mounted) setSnapshot(held); }).catch(showRejection(setErr, () => mounted));
 
     // The key rides the subprotocol list: a WebSocket URL cannot carry it and a browser sets no upgrade header.
     const opened = new WebSocket(door.socketUrl(), [...door.socketProtocols()]);
@@ -303,9 +300,7 @@ export default function DeployPage({ fixture, fixtureOptions }: {
   };
 
   const retry = useCallback((stepId: string): void => {
-    const failed = (...rejection: [unknown]): void => setErr(renderThrownChain({ cause: rejection[0] }));
-
-    doorFor(runId).retry(stepId).then(setSnapshot).catch(failed);
+    doorFor(runId).retry(stepId).then(setSnapshot).catch(showRejection(setErr));
   }, [runId]);
 
   const ownerEmail = snapshot?.steps.flatMap((row) => Object.entries(row.facts))

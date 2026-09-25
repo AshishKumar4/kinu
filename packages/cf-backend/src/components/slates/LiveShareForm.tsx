@@ -14,6 +14,7 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { revokeShare, shareLive } from "@/lib/shared-api";
 import { answered } from "./BlueprintShareForm";
 import { AccessPicker, EmailsField, emailsOf, Failure, Lead, StopButton, type AccessOption } from "./ShareParts";
+import { showRejection } from "@/hooks/use-async-resource";
 
 export interface LiveShareFixture {
   graph: SlateCapabilityGraph;
@@ -210,8 +211,6 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
   useEffect(() => {
     if (fixture !== undefined) return;
     let live = true;
-    const failed = (...rejection: [unknown]): void => { if (live) setErr(renderThrownChain({ cause: rejection[0] })); };
-
     Promise.all([
       rpc<SlateAnswer<unknown>>("slate", [{ op: "graph", id: slate }]),
       rpc<SlateAnswer<unknown>>("slate", [{ op: "liveShares" }]),
@@ -219,7 +218,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
       if (!live) return;
       setGraph(answered(drawn, SlateCapabilityGraphSchema));
       setShares(answered(rows, v.array(LiveShareRecordSchema)).filter((share) => share.slate === slate && share.revokedAt === null));
-    }).catch(failed);
+    }).catch(showRejection(setErr, () => live));
 
     return () => { live = false; };
   }, [fixture, rpc, slate]);

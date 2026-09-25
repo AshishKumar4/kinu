@@ -1,4 +1,4 @@
-import { startTransition, useState, useRef, useEffect, useCallback, useMemo, type DragEvent as ReactDragEvent } from "react";
+import { startTransition, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -20,6 +20,7 @@ import { useConversationUiState, usePlanGatedMode } from "@/hooks/use-conversati
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
+import { useFileDrop } from "@/hooks/use-file-drop";
 import { touchWorkspace } from "@/lib/user-api";
 import { describeError } from "@/hooks/use-async-resource";
 import { ConnectedModelPicker } from "@/components/ModelPicker";
@@ -587,25 +588,7 @@ export default function WorkspacePage() {
   // The hook spends the per-message aggregate cap (one DO row, see core/cloud-wire) inside its
   // reducer, so concurrent additions cannot reserve the same remaining capacity.
   const attachments = usePendingAttachments(CLOUD_MAX_INLINE_ATTACHMENT_BYTES);
-  const [dragOver, setDragOver] = useState(false);
-
-  const onChatDragOver = useCallback((e: ReactDragEvent) => {
-    if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragOver(true); }
-  }, []);
-
-  const onChatDragLeave = useCallback((e: ReactDragEvent) => {
-    if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
-    setDragOver(false);
-  }, []);
-
-  const onChatDrop = useCallback((e: ReactDragEvent) => {
-    const files = e.dataTransfer.files;
-
-    if (!files.length) return;
-    e.preventDefault();
-    setDragOver(false);
-    attachments.add(files);
-  }, [attachments]);
+  const { dragOver, handlers: chatDrop } = useFileDrop(attachments.add);
 
   useAutogrow(chatInputRef, chatInput);
 
@@ -901,7 +884,7 @@ export default function WorkspacePage() {
               );
             })() : (
             <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${agentId}/main`}
-              onDragOver={onChatDragOver} onDragLeave={onChatDragLeave} onDrop={onChatDrop}>
+              {...chatDrop}>
             {dragOver && (
               <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center rounded-lg border-2 border-dashed"
                 style={{ borderColor: "var(--c-accent)", background: "var(--c-accent-subtle)" }}>
