@@ -1552,6 +1552,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected actorHandle(): ActorHandle {
+    if (this.storageRefusal !== null) throw this.storageRefusal;
+
     return this._rootActor ??= this.workspaceActors().main();
   }
 
@@ -2606,6 +2608,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Order is the contract: DDL, then identity/main-actor rows, then anything resolving a handle.
    */
   protected ensureSchema(): void {
+    if (this.storageRefusal !== null) throw this.storageRefusal;
+
     if (this._schemaReady) return;
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
 
@@ -2658,6 +2662,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    *  resets the object at 30s (`do.block_concurrency.cancel_ms`); `scripts/do-init-gate.ts` enforces. */
   async onStart(): Promise<void> {
     this.installClientMessageGate();
+
+    if (this.storageRefusal !== null) return;
     this.ensureSchema();
     // Every budgeted sweep via the alarm-frame seam; row-budgeted because this is the init gate,
     // and a truncated pass is drained by the wake below in alarm frames.

@@ -12,6 +12,7 @@ import {
 import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, actorReadHandle, readSessionTranscript,
+  resetGuardedExec, StoragePredatesResetError, ERROR_STATUS,
   type SubordinateInspectionAuthority, type SessionTranscriptReader,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
@@ -491,6 +492,8 @@ export abstract class ActorAgent extends Agent<Env> {
   abstract actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult>;
 
   private actorRuntimeRefusal(): Refusal | null {
+    if (this.storageRefusal !== null) return refusalOf(this.storageRefusal);
+
     try {
       this.actorHandle();
 
@@ -502,6 +505,8 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   override async alarm(): Promise<void> {
+    // Returned, not thrown: the platform retries a thrown alarm.
+    if (this.storageRefusal !== null) return;
     const refusal = this.actorRuntimeRefusal();
 
     if (refusal) throw new KinuError(refusal.reason, refusal.error);
@@ -579,9 +584,19 @@ export abstract class ActorAgent extends Agent<Env> {
     // backend shares the table names with a nullable `turn_id`; one writer keeps creation order
     // from picking the shape.
     initPendingSendTables((ddl: string) => this.ctx.storage.sql.exec(ddl));
+
     // Per-actor admission ledger (one workspace-wide pointer cannot distinguish concurrent actors).
     // Initialized here because onStart recovery can read it before a root's ensureSchema runs.
-    initActorClaimTables((ddl: string) => this.ctx.storage.sql.exec(ddl));
+    try {
+      initActorClaimTables(resetGuardedExec((ddl: string) => this.ctx.storage.sql.exec(ddl), this.ctx.storage.sql));
+    } catch (cause) {
+      if (!(cause instanceof StoragePredatesResetError)) throw cause;
+      this.storageRefusal = cause;
+      diagnostics.failure('workspace.storage_predates_reset', cause, { table: cause.table });
+
+      return;
+    }
+
     // Same reason: the onStart recovery sweep can read it before a root's `ensureSchema`.
     initTerminalEffectTable((ddl: string) => this.ctx.storage.sql.exec(ddl));
   }
@@ -970,6 +985,8 @@ export abstract class ActorAgent extends Agent<Env> {
     onProviderWait: (info) => { this.noteProviderWait(info); },
   });
 
+  protected storageRefusal: StoragePredatesResetError | null = null;
+
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     // Must precede any read or write of it; see initCapabilitySchema.
@@ -1053,9 +1070,21 @@ export abstract class ActorAgent extends Agent<Env> {
 
     this.onConnect = async (connection, ctx) => {
       if (await this.refuseRevokedSocketAuthority(connection, '')) return;
+
+      // Before anything reads the store. The page shows it where a failed turn shows.
+      if (this.storageRefusal !== null) {
+        connection.send(JSON.stringify({
+          type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: 'storage-refused', reason: this.storageRefusal.code,
+          body: this.storageRefusal.message, done: true, error: true,
+        }));
+
+        return;
+      }
+
       this.connectionOpened();
 
       await baseOnConnect(connection, ctx);
+
       const terminal = await this.terminalFor(connection);
 
       if (terminal) await terminal.attachTerminal(connection);
@@ -1063,6 +1092,7 @@ export abstract class ActorAgent extends Agent<Env> {
     };
 
     this.onClose = async (connection, code, reason, wasClean) => {
+      if (this.storageRefusal !== null) return await baseOnClose(connection, code, reason, wasClean);
       const terminal = await this.terminalFor(connection);
 
       if (terminal) terminal.terminalClose(connection);
@@ -1079,6 +1109,10 @@ export abstract class ActorAgent extends Agent<Env> {
 
     this.onRequest = async (request) => {
       const url = new URL(request.url);
+
+      if (this.storageRefusal !== null) {
+        return Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] });
+      }
 
       if (url.pathname === '/get-messages' || url.pathname.endsWith('/get-messages')) {
         // The seed is fetched on the same path the pane's socket opens, so each pane gets its own

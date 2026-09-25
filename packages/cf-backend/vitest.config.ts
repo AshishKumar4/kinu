@@ -144,6 +144,15 @@ const accountResetProbe = buildSync({
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
+const storeResetProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/store-reset-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/store-reset-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
+  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
 const slateDurabilityProbe = buildSync({
   entryPoints: [fileURLToPath(new URL('./tests/workerd/slate-durability-probe.ts', import.meta.url))],
   outfile: fileURLToPath(new URL('./tests/workerd/.compiled/slate-durability-probe.js', import.meta.url)),
@@ -304,6 +313,19 @@ export default defineConfig({
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         }, {
+          // The probe's `OrchestratorAgent` is the production class plus the one method that plants the old table.
+          name: 'store-reset-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
+          modules: probeModules(storeResetProbe),
+          bindings: { CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
+          outboundService: async (request) => {
+            throw new Error('Unmatched test egress is disabled: ' + request.url);
+          },
+          durableObjects: {
+            STORE_RESET_PROBE: { className: 'StoreResetProbeRoot', useSQLite: true },
+            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+            UserDO: { className: 'UserDO', useSQLite: true },
+          },
+        }, {
           // The production Worker entry (`route()`), reached over `PUBLIC_SURFACE`; same
           // `enable_abortsignal_rpc` reason as two-turn-probe.
           name: 'public-surface-probe',
@@ -385,6 +407,7 @@ export default defineConfig({
           DEVBOX_NOT_READY_PROBE: { className: 'DevboxNotReadyProbeDO', useSQLite: true },
           SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', scriptName: 'slate-durability-probe', useSQLite: true },
           ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', scriptName: 'account-reset-probe', useSQLite: true },
+          STORE_RESET_PROBE: { className: 'StoreResetProbeRoot', scriptName: 'store-reset-probe', useSQLite: true },
           DEPLOY_RUN_PROBE: { className: 'DeployRunProbeDO', scriptName: 'deploy-probe', useSQLite: true },
         },
       },

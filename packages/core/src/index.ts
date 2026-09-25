@@ -42,6 +42,8 @@ export { ChatHistoryEntrySchema } from './types/chat';
 // Every composition root calls this and nothing else (tests/contract-workspace-schema.test.ts).
 export { initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
+export { resetGuardedExec, StoragePredatesResetError } from './state/store-reset';
+
 export { initUserTables, PROFILE_CATALOG_CONFIG_KEY } from './state/user-schema';
 
 export {
