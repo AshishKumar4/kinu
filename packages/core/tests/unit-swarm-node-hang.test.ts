@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';
-import { handClock, scriptedTurnModel, type HandClock } from '@kinu.run/test-utils';
+import { handClock, scriptedTurnModel, type HandClock, unobservedSpend } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
@@ -268,6 +268,7 @@ function nodeFixture(over?: { readonly runtimeForWorkspace?: NodeAgentDeps['runt
   };
 
   const deps: NodeAgentDeps = {
+    reportModelCall: unobservedSpend,
     // The node's own actor, per node id: a shared handle would give a wave one claim ledger and loop pointer.
     hostNode: hostedSeatsOver({ rt, db }).hostNode,
     model: RAISING_MODEL,
@@ -343,7 +344,7 @@ async function runWith(
   const logger = createRecordingLogger();
 
   const result = await runSwarm(
-    { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, mode: 'build', logger, clock },
+    { reportModelCall: unobservedSpend, rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, mode: 'build', logger, clock },
     call,
   );
 

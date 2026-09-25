@@ -3,14 +3,16 @@ import { generateText } from 'ai';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, KINU_USER_AGENT, usageTotal,
 } from '@kinu.run/core';
-import type { JsonObject, JsonValue, LLMProviderConfig, ModelCallReport } from '@kinu.run/core';
+import type { JsonObject, JsonValue, LLMProviderConfig, ModelCallReport, ModelCallSpend } from '@kinu.run/core';
 import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver';
 import { createFileOAuthStore } from '../src/oauth-store';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { asFetchFunction } from '@kinu.run/core';
 import * as v from 'valibot';
-import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir } from '@kinu.run/test-utils';
+import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, unobservedSpend } from '@kinu.run/test-utils';
+
+const UNOBSERVED: ModelCallSpend = { source: 'reflection', report: unobservedSpend };
 
 describe('createLocalModelResolver', () => {
   /** Neither lane may set an output cap, and a config object still carrying one must be inert. */
@@ -56,11 +58,11 @@ describe('createLocalModelResolver', () => {
     const staleCap = { maxTokens: 123 };
 
     try {
-      await createLocalProviderLLM({ llm }).complete('uncapped');
-      await createLocalProviderLLM({ llm: { ...llm, ...staleCap } }).complete('stale cap');
+      await createLocalProviderLLM({ llm, spend: UNOBSERVED }).complete('uncapped');
+      await createLocalProviderLLM({ llm: { ...llm, ...staleCap }, spend: UNOBSERVED }).complete('stale cap');
       let streamed = '';
 
-      for await (const chunk of createLocalProviderLLM({ llm: { ...llm, ...staleCap } })
+      for await (const chunk of createLocalProviderLLM({ llm: { ...llm, ...staleCap }, spend: UNOBSERVED })
         .stream({ system: 'be brief', messages: [{ role: 'user', content: 'stream' }] })) {
         streamed += chunk;
       }

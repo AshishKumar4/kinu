@@ -83,9 +83,10 @@ const RECOVERY_CLASSIFIER = 'classifyRecoveredFiber';
  *
  *   • `suggestTitle`, `applyAutoTitle` — the titling chain
  *     that shipped inside `OrchestratorAgent.onStart`, ending in `generateText`.
- *   • `generateText`, `streamText`, `generateJson` — the provider entry points
- *     this repo calls, so a hook that skips the lanes and reaches the SDK
- *     directly is refused by the same rule.
+ *   • `generateText`, `streamText`, `generateJson`, `generateReported`,
+ *     `streamTextReported` — the provider entry points this repo calls, so a
+ *     hook that skips the lanes and reaches a model directly is refused by the
+ *     same rule.
  *   • `runDueSessionEvolution`, `reviewCompletedTurn` — the cadence and advisor
  *     passes, each a model call behind one name.
  *   • `resumeAll`, `replayOwedAndRearm`, `owedDeliveryWork` — the delivery
@@ -101,7 +102,7 @@ const RECOVERY_CLASSIFIER = 'classifyRecoveredFiber';
  */
 export const MODEL_SINKS: readonly string[] = [
   'suggestTitle', 'applyAutoTitle',
-  'generateText', 'streamText', 'generateJson',
+  'generateText', 'streamText', 'generateJson', 'generateReported', 'streamTextReported',
   'runDueSessionEvolution', 'reviewCompletedTurn',
   'resumeAll', 'replayOwedAndRearm', 'owedDeliveryWork',
 ];

@@ -567,15 +567,16 @@ test('a slate ai binding runs one model call under the caller authority, as a sl
   expect(JSON.stringify(gateway.runs[0]?.query)).toContain('summarize');
   expect(JSON.stringify(gateway.runs[0]?.query)).toContain('be brief');
 
-  const operations = new RunEventRecorder(sqlOver(actor.db), openWorkspaceMainActor(sqlOver(actor.db)))
-    .read(WORKSPACE_RUN_ID)
-    .flatMap((event) => (event.type === 'model_operation' ? [event] : []));
+  const ledger = new RunEventRecorder(sqlOver(actor.db), openWorkspaceMainActor(sqlOver(actor.db)));
+  const operations = ledger.read(WORKSPACE_RUN_ID).flatMap((event) => (event.type === 'model_operation' ? [event] : []));
 
   expect(operations.map((row) => row.source)).toEqual(['slate', 'slate']);
   expect(operations.map((row) => row.phase)).toEqual(['start', 'end']);
 
   expect(await call([{ prompt: 'p', tier: 'imaginary' }])).toMatchObject({ ok: false, reason: 'bad_input' });
   expect(gateway.runs).toHaveLength(1);
+  // The call reached the spend total as the slate's, and the refused one reached nothing.
+  expect(ledger.spendByProducer().get('slate')).toMatchObject({ calls: 1, callsWithoutUsage: 0, usage: { input: 1, output: 1 } });
 });
 
 test('a path-scoped workspace binding reaches inside its prefixes and nowhere else', async () => {

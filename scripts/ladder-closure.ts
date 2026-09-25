@@ -24,6 +24,8 @@
  *     closure is every tracked file. A corpus gate re-runs on any change.
  *   - Every `package.json`, `tsconfig.json` and `bunfig.toml` on the path of a
  *     closure file; `bun.lock` and `patches/` standing in for `node_modules`.
+ *   - The row's declared `suites`, walked like a `bun test` entry with the
+ *     preload, for a gate that runs tests in a child process.
  *   - The row's declared `reads`, expanded against the tracked corpus, and
  *     the row's declared `env` names beside every literal `process.env.NAME`
  *     the graph carries. Those names, and the base names in
@@ -77,6 +79,9 @@ export type Inputs =
      *  walker cannot follow the string, so `--audit-closure` is what checks
      *  the declaration against the file the process really loaded. */
     readonly imports?: readonly string[];
+    /** Test files the gate runs in a child `bun test`: walked as entries beside the preload, so
+     *  their module graphs are in the key rather than their bytes alone. */
+    readonly suites?: readonly string[];
     /** The gate reads the tree: every tracked file is an input, as for a
      *  graph that reaches `scripts/sources.ts`. Declared when the audit shows
      *  a suite scanning sources by path, where a `reads` list would be a
@@ -447,6 +452,11 @@ function vitestForm(run: string, words: readonly string[], repo: Repo): Form | U
   };
 }
 
+/** Test files `bun test` runs: each suite beside the preload `bunfig.toml` names. */
+function suiteForm(suites: readonly string[], repo: Repo): Form {
+  return { entries: [...suites, ...repo.preload], reads: [], corpus: false };
+}
+
 /** One command's entry files, or why it has none. Recurses through `bun run`. */
 function resolveForm(run: string, repo: Repo, depth: number): Form | Uncomputable {
   if (depth > 4) return { kind: 'uncomputable', why: `${run}: package scripts nest deeper than four levels` };
@@ -460,7 +470,7 @@ function resolveForm(run: string, repo: Repo, depth: number): Form | Uncomputabl
 
     if (suites.length === 0) return { kind: 'uncomputable', why: `${run}: resolves to no entry file` };
 
-    return { entries: [...suites, ...repo.preload], reads: [], corpus: false };
+    return suiteForm(suites, repo);
   }
 
   if ((first === 'bun' || first === 'node') && second !== undefined && isParseable(second) && !second.startsWith('-')) {
@@ -612,9 +622,11 @@ function configsOf(files: ReadonlySet<string>, repo: Repo, universe: ReadonlySet
 /** The closure of one gate command under its row's declaration. */
 export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure {
   if (inputs.kind === 'live') return { kind: 'live', why: inputs.why };
-  const form = resolveForm(run, repo, 0);
+  const command = resolveForm(run, repo, 0);
 
-  if ('kind' in form) return form;
+  if ('kind' in command) return command;
+  const children = inputs.suites === undefined ? undefined : suiteForm(inputs.suites, repo);
+  const form: Form = children === undefined ? command : { ...command, entries: [...command.entries, ...children.entries] };
 
   if (form.entries.length === 0 && !form.corpus) {
     return { kind: 'uncomputable', why: `${run}: resolves to no entry file` };

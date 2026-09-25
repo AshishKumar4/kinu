@@ -882,6 +882,28 @@
       "samples": 192,
       "loadAtStart": 2.12,
       "exit": 0
+    },
+    "bun scripts/census-plants.ts packages/": {
+      "wallSeconds": 9.64,
+      "cpuSeconds": 9.68,
+      "peakRssMb": 85.22,
+      "peakRunnable": 15,
+      "peakCpuThreads": 1.35,
+      "meanThreads": 1,
+      "samples": 80,
+      "loadAtStart": 2.79,
+      "exit": 0
+    },
+    "bun scripts/census-plants.ts scripts/": {
+      "wallSeconds": 5.05,
+      "cpuSeconds": 5.46,
+      "peakRssMb": 161.01,
+      "peakRunnable": 8,
+      "peakCpuThreads": 1.27,
+      "meanThreads": 1.08,
+      "samples": 61,
+      "loadAtStart": 3.74,
+      "exit": 0
     }
   }
 }

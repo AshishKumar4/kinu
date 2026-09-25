@@ -1,5 +1,6 @@
 /** E2E provider; credentials from AI_GATEWAY_BASE_URL, AI_GATEWAY_AUTH and optional AI_GATEWAY_MODEL, never hardcoded. */
 
+import { unobservedSpend } from '@kinu.run/test-utils';
 import { createVercelAILLM } from '../../src/llm';
 
 function getRequiredEnv(name: string): string {
@@ -32,7 +33,7 @@ export function loadAIGatewayProviders() {
   };
 
   return {
-    primary: createVercelAILLM(config),
-    judge: createVercelAILLM({ ...config, name: 'workers-ai-judge' }),
+    primary: createVercelAILLM(config, { source: 'reflection', report: unobservedSpend }),
+    judge: createVercelAILLM({ ...config, name: 'workers-ai-judge' }, { source: 'judge', report: unobservedSpend }),
   };
 }

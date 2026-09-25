@@ -178,8 +178,7 @@ describe('the production seams open the frame before the request', () => {
       baseURL: 'https://kinu-operation-test.invalid/',
       headers: {},
       model: '@cf/deepseek-ai/deepseek-v4-pro-0813',
-      spend: { source: 'reflection', report: () => {}, operations: sink },
-    });
+    }, { source: 'reflection', report: () => {}, operations: sink });
 
     await expect(llm.complete('reflect')).rejects.toThrow();
 

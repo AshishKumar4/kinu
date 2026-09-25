@@ -97,6 +97,7 @@ function scriptedControl(rt: AgentRuntime, history: SessionHistory, score: (cand
   };
 
   return {
+    reportModelCall: unobservedSpend,
     events: new RunEventRecorder(rt.storage.sql, rt.actor),
     rt,
     sql: rt.storage.sql,

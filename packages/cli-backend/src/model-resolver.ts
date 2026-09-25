@@ -10,7 +10,6 @@ import {
   createCodexProvider,
   availableJudgeSpecs,
   accountDeps,
-  callAccountOf,
   catalogModelInfo,
   createModelsDevCatalogSource,
   createOpenAICompatProvider,
@@ -19,7 +18,8 @@ import {
   createProviderProxyFetch,
   createProviderRegistry,
   listModelsDevProviderModels,
-  normalizeUsage,
+  generateReported,
+  streamTextReported,
   parseModelSpec,
   specProvider,
   workersAiSpec, WORKERS_AI_MODEL_ID_PREFIX,
@@ -41,12 +41,13 @@ import {
   type ProviderInfo,
   type ProviderWaitInfo,
   type ModelCallSpend,
+  type GenerateRequest,
+  type StreamRequest,
   countRequestInputTokens,
   type CountableRequest,
   type InputTokenCount,
 } from '@kinu.run/core';
-import { generateText, streamText } from 'ai';
-import type { LanguageModel, LanguageModelUsage } from 'ai';
+import type { LanguageModel } from 'ai';
 import type { LLM } from '@kinu.run/core';
 import { OPENCODE_PROVIDER_ID, createOpenCodeProvider } from './opencode-provider';
 import { isOAuthLoginKey, type LocalOAuthStore } from './oauth-store';
@@ -161,22 +162,6 @@ export interface LocalModelResolverConfig {
   onProviderWait?: (info: ProviderWaitInfo) => void;
 }
 
-/** Reported even when the provider said nothing (`{}`), so a silent provider
- *  stays distinguishable from a free one. */
-function reportCall(
-  spend: ModelCallSpend,
-  spec: string,
-  usage: LanguageModelUsage,
-  response: { readonly modelId?: string; readonly headers?: Record<string, string> },
-): void {
-  const reported = normalizeUsage(usage);
-  const account = callAccountOf(response);
-  const modelId = response.modelId;
-  spend.report(modelId !== undefined && modelId.length > 0
-    ? { source: spend.source, spec, usage: reported, modelId, account }
-    : { source: spend.source, spec, usage: reported, account });
-}
-
 /**
  * The workspace LLM seam over the local registry. `spec` overrides the model
  * (chosen by the turn profile's tier route); omitted = configured chat model.
@@ -185,8 +170,8 @@ function reportCall(
 export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
   spec?: string | null;
   /** Sink and producer label together: only the consumer knows which producer
-   *  a call belongs to. Unset leaves spend unattributed. */
-  spend?: ModelCallSpend;
+   *  a call belongs to. */
+  spend: ModelCallSpend;
 }): LLM {
   const resolver = createLocalModelResolver(opts);
   // Normalized per call: an unresolvable id fails at the call, not at construction.
@@ -196,10 +181,10 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
   const effortOptions = (resolved: string) => reasoningEffortOptions('low', parseModelSpec(resolved).provider);
 
   return {
-    async *stream(input) {
+    stream(input) {
       const resolved = spec();
 
-      const request: Parameters<typeof streamText>[0] = {
+      const request: StreamRequest = {
         model: model(resolved),
         system: input.system,
         messages: input.messages.map(m => ({
@@ -211,17 +196,14 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
       const providerOptions = effortOptions(resolved);
 
       if (providerOptions) request.providerOptions = providerOptions;
-      const result = streamText(request);
 
-      for await (const chunk of result.textStream) yield chunk;
-
-      // Usage exists only once the stream drains; an abandoned stream reports nothing.
-      if (spend) reportCall(spend, resolved, await result.totalUsage, await result.response);
+      // Usage exists only once the stream drains; an abandoned stream files no row.
+      return streamTextReported(request, { spend, spec: resolved });
     },
     async complete(prompt) {
       const resolved = spec();
 
-      const request: Parameters<typeof generateText>[0] = {
+      const request: GenerateRequest = {
         model: model(resolved),
         prompt,
       };
@@ -229,11 +211,8 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
       const providerOptions = effortOptions(resolved);
 
       if (providerOptions) request.providerOptions = providerOptions;
-      const result = await generateText(request);
 
-      if (spend) reportCall(spend, resolved, result.totalUsage, result.response);
-
-      return result.text.trim();
+      return (await generateReported(request, { spend, spec: resolved })).text.trim();
     },
   };
 }

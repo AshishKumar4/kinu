@@ -96,6 +96,19 @@ describe('ladder-closure — what a closure holds', () => {
     expect(files).toContain('scripts/data.json');
   });
 
+  test('a suite the gate runs as a child is walked like a bun test entry, preload and all', () => {
+    const repo = fixture({
+      'scripts/g.ts': "import { spawnSync } from 'node:child_process';\nexport const g = spawnSync('bun', ['test']);",
+      'packages/a/src/helper.ts': 'export const helper = 1;',
+      'packages/a/tests/a.test.ts': "import { helper } from '../src/helper';\nexport const t = helper;",
+    });
+
+    const files = derived(deriveClosure('bun scripts/g.ts', { kind: 'derived', reads: [], suites: ['packages/a/tests/a.test.ts'] }, repo));
+    expect(files).toContain('packages/a/src/helper.ts');
+    expect(files).toContain('scripts/preload.ts');
+    expect(derived(deriveClosure('bun scripts/g.ts', DECLARED, repo))).not.toContain('packages/a/src/helper.ts');
+  });
+
   test('bun run over a file path runs that file', () => {
     const repo = fixture({ 'scripts/one.ts': 'export const one = 1;' });
     expect(derived(deriveClosure('bun run scripts/one.ts --matrix', DERIVED, repo))).toContain('scripts/one.ts');

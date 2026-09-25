@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { tool, jsonSchema, type ToolSet } from 'ai';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
@@ -201,6 +201,7 @@ function fixture(over: {
   };
 
   const deps: NodeAgentDeps = {
+    reportModelCall: unobservedSpend,
     hostNode: async (node) => {
       const seat = await seats.hostNode(node);
       nodeActorId = seat.actor.handle.actorId;

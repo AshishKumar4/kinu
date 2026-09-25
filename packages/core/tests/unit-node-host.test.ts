@@ -1,7 +1,7 @@
 /** One node run through `runNodeAgent`, asserted on what a caller sees. */
 import { describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
@@ -168,6 +168,7 @@ async function fixture(opts?: {
   };
 
   const deps: NodeAgentDeps = {
+    reportModelCall: unobservedSpend,
     hostNode: seats.hostNode,
     model: opts?.model
       ?? scriptedReporter(opts?.answer ?? 'sort once instead of comparing every pair', opts?.offered),

@@ -19,6 +19,7 @@ import { scoreInterval } from '../src/utils/stats';
 import { RunEventRecorder } from '../src/events/recorder';
 import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
+import { unpricedLedgerSink } from '../src/events/model-call-event';
 
 /** Above `clampGepaEvalBudget`'s floor of 4, so the requested budget is used. */
 const EVAL_SIZE = 8;
@@ -70,6 +71,7 @@ function refusingControl(rt: AgentRuntime) {
     surface: () => refuse('surface'),
     model: () => refuse('model'),
     judge: () => refuse('judge'),
+    reportModelCall: () => refuse('reportModelCall'),
   } satisfies ScaffoldControl;
 
   return { control, calls };
@@ -79,6 +81,8 @@ interface RunnableControl {
   control: ScaffoldControl;
   reflectionPrompts: string[];
   judgePrompts: string[];
+  /** The ledger the control's spend files into. */
+  ledger: RunEventRecorder;
 }
 
 /** The judge scores everything the same, so the split decides the winner. */
@@ -91,11 +95,16 @@ function runnableControl(rt: AgentRuntime): RunnableControl {
     outputTokens: { total: 7, text: 7, reasoning: undefined },
   };
 
+  const events = new RunEventRecorder(rt.storage.sql, rt.actor);
+
   return {
     reflectionPrompts,
     judgePrompts,
+    ledger: events,
     control: {
-      events: new RunEventRecorder(rt.storage.sql, rt.actor),
+      // The reflection LM's calls file into the workspace ledger the spend total reads.
+      reportModelCall: unpricedLedgerSink(events),
+      events,
       rt,
       sql: rt.storage.sql,
       history: storesFor(rt).history,
@@ -202,7 +211,7 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
   test('hands reflection the train set only, and reports what selection rested on', async () => {
     const rt = await evolvableRuntime();
     seedLedger(rt, { failures: 6, guards: 4 });
-    const { control, reflectionPrompts, judgePrompts } = runnableControl(rt);
+    const { control, reflectionPrompts, judgePrompts, ledger } = runnableControl(rt);
 
     const split = await buildOutcomeEvalSplit(rt.storage.sql, rt.actor, storesFor(rt).history.transcript(CHAT_SESSION_ID), EVAL_SIZE);
     expect(split.degeneracy).toBeNull();
@@ -217,6 +226,9 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
     expect(result.ok).toBe(true);
 
     expect(reflectionPrompts.length).toBeGreaterThan(0);
+    // Every reflection the pass asked for is reflection spend, measured.
+    expect(ledger.spendByProducer().get('reflection'))
+      .toMatchObject({ calls: reflectionPrompts.length, callsWithoutUsage: 0 });
 
     for (const prompt of reflectionPrompts) {
       expect(split.train.some((instance) => prompt.includes(instance.input))).toBe(true);

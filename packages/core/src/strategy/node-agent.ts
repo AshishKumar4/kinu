@@ -132,7 +132,7 @@ export interface NodeAgentDeps {
   logger: Logger;
   signal?: AbortSignal;
   clock?: Clock;
-  reportModelCall?: ModelCallSink;
+  reportModelCall: ModelCallSink;
   publishHeadStream?: PublishHeadStream;
   mission?: MissionScope;
   /** Absent on a host with no uid-0 view; the shared plane is then reported. */
@@ -606,7 +606,7 @@ export async function runNodeAgent(
   }
 
   deps.journal.recordReport(run.report);
-  deps.reportModelCall?.({ source: 'swarm', usage: run.report.usage });
+  deps.reportModelCall({ source: 'swarm', usage: run.report.usage });
 
   const read = readNodeReport({
     report: run.report,

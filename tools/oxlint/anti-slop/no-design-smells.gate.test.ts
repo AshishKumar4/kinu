@@ -116,6 +116,22 @@ export const warning = { fg: roles.warning, border: roles.border };
 `,
   },
   {
+    rule: "no-dynamic-model-import",
+    // A helper that loads the SDK at runtime: its call reaches no spend total.
+    at: "packages/core/src",
+    bad: `export async function ask(model: never, prompt: string): Promise<string> {
+  const { generateText } = await import("ai");
+
+  return (await generateText({ model, prompt })).text;
+}
+`,
+    good: `declare function generateReported(request: { model: never; prompt: string }, call: { spend: never }): Promise<{ text: string }>;
+export async function ask(model: never, prompt: string, spend: never): Promise<string> {
+  return (await generateReported({ model, prompt }, { spend })).text;
+}
+`,
+  },
+  {
     rule: "require-variant-utility",
     // A hover state on a plain components rule: Tailwind emits no rule for it, so it never paints.
     beside: {

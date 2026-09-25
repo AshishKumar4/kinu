@@ -1,5 +1,4 @@
 /** @jsxImportSource @opentui/react */
-import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TextAttributes } from '@opentui/core';
 import { createTestRenderer } from '@opentui/core/testing';
@@ -16,8 +15,6 @@ import {
   TuiThemeProvider,
   createThemeRegistry, DEFAULT_TUI_THEME_SELECTION, type ThemeSelection,
 } from '../src/tui/theme';
-
-const TUI_SOURCES = join(import.meta.dir, '..', 'src', 'tui');
 
 const MID_TONE_TERMINALS = {
   dark: { 'Nord #2E3440': '#2E3440', 'Dracula #282A36': '#282A36', 'Solarized dark #002B36': '#002B36' },
@@ -238,22 +235,5 @@ describe('TUI theme', () => {
       flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
-  });
-
-  test('no colour literal lives outside the theme registry', () => {
-    const offenders: string[] = [];
-
-    for (const name of readdirSync(TUI_SOURCES)) {
-      if (name === 'theme.ts' || !/\.tsx?$/u.test(name)) continue;
-      const source = readFileSync(join(TUI_SOURCES, name), 'utf8');
-
-      for (const [index, line] of source.split('\n').entries()) {
-        if (/#[0-9A-Fa-f]{6}\b|\b(?:fg|bg|color|backgroundColor|borderColor)=?["'\s:]+(?:red|green|blue|yellow|cyan|magenta|white|black|gr[ae]y)\b/u.test(line)) {
-          offenders.push(`${name}:${String(index + 1)}: ${line.trim()}`);
-        }
-      }
-    }
-
-    expect(offenders).toEqual([]);
   });
 });

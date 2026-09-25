@@ -11,6 +11,8 @@ import { INITIAL_SCAFFOLD_SOURCE } from '../scaffold/bootstrap';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import { createVercelAILLM } from '../llm';
+import { unpricedLedgerSink } from '../events/model-call-event';
+import { initRunEventTables, RunEventRecorder } from '../events/recorder';
 import { buildRuntime } from '../runtime-builder';
 import { initWorkspaceBaselineTable, resetWorkspaceBaseline } from '../read-models/workspace-diff';
 import type { WorkspaceBundle } from '../vfs/nimbus-workspace';
@@ -45,7 +47,13 @@ function buildComponents(components: WorkspaceComponents) {
   const memory = createInlineMemory(db, vfs);
   const craftStore = createInlineCraftStore(db);
   const executor = createInlineExecutor();
-  const llm = createVercelAILLM(components.llm);
+  initRunEventTables(execRaw);
+
+  // A birth-time call is the new workspace's spend, unpriced: nothing is resolved yet.
+  const llm = createVercelAILLM(components.llm, {
+    source: 'reflection', report: unpricedLedgerSink(new RunEventRecorder(sql, actor)),
+  });
+
   const schedule = createInlineSchedule(sql, actor);
 
   return buildRuntime({

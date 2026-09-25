@@ -21,6 +21,7 @@ const expectedRules = [
   "anti-slop/require-rpc-seal",
   "anti-slop/require-super-alarm",
   "anti-slop/no-tui-colour-literal",
+  "anti-slop/no-dynamic-model-import",
   "anti-slop/require-variant-utility",
   "anti-slop/no-cli-credential-flag",
   "anti-slop/no-reduce-accumulator-copy",

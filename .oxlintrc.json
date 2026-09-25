@@ -74,6 +74,7 @@
     "anti-slop/require-rpc-seal": "error",
     "anti-slop/require-super-alarm": "error",
     "anti-slop/no-tui-colour-literal": "error",
+    "anti-slop/no-dynamic-model-import": "error",
     "anti-slop/require-variant-utility": "error",
     "anti-slop/no-cli-credential-flag": "error",
     "anti-slop/no-unaccounted-catch": "error",
@@ -106,7 +107,59 @@
     },
     {
       "files": ["packages/*/src/**"],
-      "excludeFiles": ["packages/cf-backend/src/sandbox-exec-lane.ts"],
+      "rules": {
+        "no-restricted-imports": ["error", {
+          "paths": [{
+            "name": "@cloudflare/sandbox",
+            "importNames": ["getSandbox"],
+            "message": "Reach a sandbox through `openSandbox` (packages/cf-backend/src/sandbox-exec-lane.ts). It fixes the transport, which the SDK persists per sandbox; a client naming another loses its in-flight requests."
+          }, {
+            "name": "ai",
+            "importNames": ["generateText", "streamText", "generateObject", "streamObject", "embed", "embedMany", "rerank", "generateImage", "experimental_generateImage", "experimental_transcribe", "experimental_generateSpeech"],
+            "allowTypeImports": true,
+            "message": "Invoke a model through packages/core/src/providers/model-invocation.ts (generateReported, streamTextReported): each takes the spend it reports, so the call reaches the workspace total. Exempt, each for a property of its code: core/src/chat.ts is the turn loop, whose steps reach the total as step_finish, so a model_call row would count them twice; core/src/mcts/rollout.ts hands its usage back to the MCTS engine, which reports it on both backends because the CLI's branch worker has no sink, only IPC; cli/src/agent-create.ts names a workspace before it exists, so no workspace ledger exists to report to."
+          }],
+          "patterns": [{
+            "group": ["**/node_modules/**"],
+            "message": "A dependency is used through its export map. If the package exports no subpath for what you need, patch its package.json under patches/ (bun patchedDependencies) and say so there; never reach through the installed tree."
+          }]
+        }],
+        "no-restricted-properties": ["error", {
+          "property": "AI",
+          "message": "Read the Workers AI binding in packages/core/src/providers/model-invocation.ts, where each utility call (an embedding, an HTML conversion) is counted as `platform` spend. Exempt: core/src/providers/ai-gateway.ts, cf-backend/src/providers/agent-registry.ts and cf-backend/src/user/ai-proxy.ts hand the binding to an AI SDK transport, and the model call made over it reports the spend."
+        }, {
+          "property": "doGenerate",
+          "message": "A provider model's doGenerate spends without reaching the workspace total; call a model through packages/core/src/providers/model-invocation.ts. Exempt: core/src/providers/catalog.ts, the adapter that forwards a resolved model's calls, and test-utils/src/turn-model.ts, the scripted model tests run on."
+        }, {
+          "property": "doStream",
+          "message": "A provider model's doStream spends without reaching the workspace total; call a model through packages/core/src/providers/model-invocation.ts. Exempt: core/src/providers/catalog.ts, the adapter that forwards a resolved model's calls, and test-utils/src/turn-model.ts, the scripted model tests run on."
+        }]
+      }
+    },
+    {
+      "files": ["packages/cf-backend/src/sandbox-exec-lane.ts"],
+      "rules": {
+        "no-restricted-imports": ["error", {
+          "paths": [{
+            "name": "ai",
+            "importNames": ["generateText", "streamText", "generateObject", "streamObject", "embed", "embedMany", "rerank", "generateImage", "experimental_generateImage", "experimental_transcribe", "experimental_generateSpeech"],
+            "allowTypeImports": true,
+            "message": "Invoke a model through packages/core/src/providers/model-invocation.ts (generateReported, streamTextReported): each takes the spend it reports, so the call reaches the workspace total."
+          }],
+          "patterns": [{
+            "group": ["**/node_modules/**"],
+            "message": "A dependency is used through its export map. If the package exports no subpath for what you need, patch its package.json under patches/ (bun patchedDependencies) and say so there; never reach through the installed tree."
+          }]
+        }]
+      }
+    },
+    {
+      "files": [
+        "packages/core/src/providers/model-invocation.ts",
+        "packages/core/src/chat.ts",
+        "packages/core/src/mcts/rollout.ts",
+        "packages/cli/src/agent-create.ts"
+      ],
       "rules": {
         "no-restricted-imports": ["error", {
           "paths": [{
@@ -118,6 +171,32 @@
             "group": ["**/node_modules/**"],
             "message": "A dependency is used through its export map. If the package exports no subpath for what you need, patch its package.json under patches/ (bun patchedDependencies) and say so there; never reach through the installed tree."
           }]
+        }]
+      }
+    },
+    {
+      "files": [
+        "packages/core/src/providers/model-invocation.ts",
+        "packages/core/src/providers/ai-gateway.ts",
+        "packages/cf-backend/src/providers/agent-registry.ts",
+        "packages/cf-backend/src/user/ai-proxy.ts"
+      ],
+      "rules": {
+        "no-restricted-properties": ["error", {
+          "property": "doGenerate",
+          "message": "A provider model's doGenerate spends without reaching the workspace total; call a model through packages/core/src/providers/model-invocation.ts. Exempt: core/src/providers/catalog.ts, the adapter that forwards a resolved model's calls, and test-utils/src/turn-model.ts, the scripted model tests run on."
+        }, {
+          "property": "doStream",
+          "message": "A provider model's doStream spends without reaching the workspace total; call a model through packages/core/src/providers/model-invocation.ts. Exempt: core/src/providers/catalog.ts, the adapter that forwards a resolved model's calls, and test-utils/src/turn-model.ts, the scripted model tests run on."
+        }]
+      }
+    },
+    {
+      "files": ["packages/core/src/providers/catalog.ts", "packages/test-utils/src/turn-model.ts"],
+      "rules": {
+        "no-restricted-properties": ["error", {
+          "property": "AI",
+          "message": "Read the Workers AI binding in packages/core/src/providers/model-invocation.ts, where each utility call (an embedding, an HTML conversion) is counted as `platform` spend. Exempt: core/src/providers/ai-gateway.ts, cf-backend/src/providers/agent-registry.ts and cf-backend/src/user/ai-proxy.ts hand the binding to an AI SDK transport, and the model call made over it reports the spend."
         }]
       }
     }

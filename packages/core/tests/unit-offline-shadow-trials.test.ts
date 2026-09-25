@@ -91,6 +91,7 @@ function countedControl(
   const verdict = opts?.verdict ?? 'pending';
 
   const control: ScaffoldControl = {
+    reportModelCall: unobservedSpend,
     events: new RunEventRecorder(rt.storage.sql, rt.actor),
     rt,
     sql: rt.storage.sql,

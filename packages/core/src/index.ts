@@ -493,6 +493,10 @@ export {
 
 export type { LLMProviderConfig, ChatModelConfig, LLMUsage } from './llm';
 
+export {
+  createWorkersAIEmbedder, generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
+} from './providers/model-invocation';
+
 // Every surface that counts tokens speaks this usage report.
 export {
   USAGE_FIELDS,
@@ -944,7 +948,7 @@ export {
   type ExplorePrompt, type ExplorePromptInput, type ExploreToolHint,
 } from './mcts/explore-prompt';
 
-export { exploreRollout, reflectRollout, type BranchRoute } from './mcts/rollout';
+export { branchCompletion, exploreRollout, reflectRollout, type BranchRoute } from './mcts/rollout';
 
 export {
   canonicalLanguage, fencedBlocks, readProposalCode,
@@ -1249,7 +1253,6 @@ export {
 export {
   reciprocalRankFusion,
   createCloudflareVectorStore,
-  createWorkersAIEmbedder,
   createNoopVectorStore,
   VECTOR_BACKEND_COOLDOWN_MS,
   type VectorStore,
@@ -1338,6 +1341,7 @@ export {
   MODEL_OPERATION_OUTCOMES,
   beginModelOperation,
   buildModelCallEvent,
+  unpricedLedgerSink,
   type ModelCallReport,
   type ModelCallSpend,
   type ModelCallSink,

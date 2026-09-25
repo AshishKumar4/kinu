@@ -38,6 +38,7 @@ import { resolve } from 'node:path';
 import { cpus } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
+import { plantedInputs, readCensusLock } from './census-plants';
 import { DEADLINE_EXIT_CODE, LEFTOVER_BLIND_SPOTS, runUnderDeadline } from './deadline';
 import {
   CACHE_BLIND_SPOTS, defaultStoreDirectory, gateEnvironment, gateEnvNames, planGate, recordGreen, storeAt, toolVersions,
@@ -796,22 +797,46 @@ export const LADDER: readonly Gate[] = [
     // Measured 2026-09-23 on the 24-thread box at load 5: 3.88/4.05/5.14 s.
     tier: 'commit',
     seconds: 4.1,
-    catches: 'a NEW coupled test, by the five axes a test review judges on — an assertion '
-      + "over the implementation's TEXT, a constant restating a module's own, a matcher that "
-      + 'cannot fail on the defect its title names, a reach into a member production declares '
-      + 'non-public, and a mock of an internal module. Keyed by category, file, TEST TITLE and '
-      + 'finding shape rather than by line, so moving a test does not read as a new one and '
-      + 'renaming one does. It also refuses a STALE key, so a coupling that was repaired is '
-      + 'recorded as repaired rather than left in the lock as budget for the next one.',
+    catches: 'a coupled test, by the axes a test review judges on. BANNED, whatever the lock holds: '
+      + "an assertion over the implementation's TEXT, a test function or constant restating the "
+      + "product's own, a reach into a member production declares non-public, and a mock of an "
+      + 'internal module. RATCHETED, the lock only shrinking: a matcher that cannot fail on the '
+      + 'defect its title names, keyed by category, file, TEST TITLE and finding shape, each locked '
+      + 'key naming the plants that turn it red. It also refuses a STALE key, so a repaired '
+      + 'coupling is recorded as repaired rather than left in the lock as budget for the next one.',
     blind: 'everything in its own `BLIND_SPOTS` list, printed on the GREEN path: a mirror by '
-      + 'DERIVATION rather than by a shared named literal, a path or asserted string built by '
-      + 'concatenation, a table-driven suite counted as one test, a tautology through a stored '
-      + 'value, and a test asserting over an installed dependency\'s shipped text — resolution '
-      + 'runs against the enumeration and `node_modules` is not tracked. It also cannot tell a '
-      + 'SHAPE GATE from a coupled test: whether a source-text assertion guards a rule no '
-      + 'behavioural test can express is a judgement, so the reach is reported and the ruling '
-      + 'left to the reviewer.',
+      + 'DERIVATION rather than by a shared named literal, a restated function renamed past its '
+      + 'structure, a path or asserted string built by concatenation, a table-driven suite counted '
+      + 'as one test, a tautology through a stored value, a mock echo, and a test asserting over an '
+      + "installed dependency's shipped text — resolution runs against the enumeration and "
+      + '`node_modules` is not tracked. A `scripts/` suite a ladder row runs is a gate test and may '
+      + 'read the tree it governs.',
     inputs: AMBIENT_BY_NAME,
+  },
+  {
+    run: 'bun scripts/census-plants.ts packages/',
+    label: 'Census suspects proven (packages/)',
+    tier: 'push',
+    // Measured 2026-09-25 on the 24-thread box at load 2.8: 9.6 s (gate-cost.json).
+    seconds: 9.6,
+    catches: 'a locked tautology suspect that no longer catches the defect its lock entry plants, '
+      + 'a plant whose planted text is gone, and a suspect red before any plant.',
+    blind: 'every defect a title claims beyond the planted ones, and a relational check nobody '
+      + 'planted against because the lock only holds what the census flags.',
+    inputs: { kind: 'derived', ...plantedInputs(readCensusLock(), 'packages/') },
+  },
+  {
+    run: 'bun scripts/census-plants.ts scripts/',
+    label: 'Census suspects proven (scripts/)',
+    tier: 'push',
+    // Keyed to the corpus: bench.test.ts and infra.test.ts reach scripts/sources.ts.
+    // Measured 2026-09-25 on the 24-thread box at load 3.7: 5.0 s (gate-cost.json).
+    seconds: 5,
+    catches: 'a locked tautology suspect that no longer catches the defect its lock entry plants, '
+      + 'a plant whose planted text is gone, and a suspect red before any plant.',
+    blind: 'every defect a title claims beyond the planted ones, and a relational check nobody '
+      + 'planted against because the lock only holds what the census flags.',
+    inputs: { kind: 'derived', ...plantedInputs(readCensusLock(), 'scripts/') },
   },
   {
     run: 'bun run gate:complexity',

@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
-import { scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
+import { scriptedTurnModel, toolExecute, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime, storesFor } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
@@ -215,6 +215,7 @@ describe('node proposal merges after the eval finish', () => {
     };
 
     const deps: NodeAgentDeps = {
+      reportModelCall: unobservedSpend,
       // One seat per node: a shared `rt` would give every node of a wave one actor.
       hostNode: hostedSeatsOver({ rt, db }).hostNode,
       model,

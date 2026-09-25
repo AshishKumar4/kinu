@@ -1,6 +1,7 @@
 /** The two model calls a toolless MCTS branch answers (explore, reflection), shared by every branch substrate. */
 
 import { generateText, type LanguageModel } from 'ai';
+import { beginModelOperation, type ModelOperationSink } from '../events/model-call';
 import type { BranchExploration, BranchReflection } from '../types/agent-runtime';
 import type { ProviderOptions } from '../strategy/effort';
 import { normalizeUsage } from '../usage';
@@ -12,28 +13,47 @@ export interface BranchRoute {
   readonly providerOptions?: ProviderOptions;
 }
 
-async function completion(
+/** A hosted branch's operation frame; the CLI's worker has none. */
+export interface BranchCallFrame {
+  readonly operations: ModelOperationSink | undefined;
+  readonly spec: string;
+}
+
+export async function branchCompletion(
   route: BranchRoute,
-  system: string | undefined,
-  user: string,
+  prompt: { readonly system?: string; readonly user: string },
+  frame?: BranchCallFrame,
 ): Promise<{ text: string; usage: BranchExploration['usage'] }> {
   const call: Parameters<typeof generateText>[0] = {
     model: route.model,
-    messages: [{ role: 'user', content: user }],
+    messages: [{ role: 'user', content: prompt.user }],
   };
 
-  if (system !== undefined) call.system = system;
+  if (prompt.system !== undefined) call.system = prompt.system;
 
   if (route.providerOptions) call.providerOptions = route.providerOptions;
-  const result = await generateText(call);
 
-  return { text: result.text.trim(), usage: normalizeUsage(result.usage) };
+  const operation = beginModelOperation(
+    { source: 'mcts', operations: frame?.operations }, 'complete', { spec: frame?.spec },
+  );
+
+  let result;
+
+  try {
+    result = await generateText(call);
+  } catch (cause) {
+    operation.failed({ cause });
+    throw cause;
+  }
+
+  const usage = normalizeUsage(result.usage);
+  operation.completed({ usage, modelId: frame?.spec ?? result.response.modelId });
+
+  return { text: result.text.trim(), usage };
 }
 
 export function exploreRollout(route: BranchRoute, input: ExplorePromptInput): Promise<BranchExploration> {
-  const { system, user } = explorePrompt(input);
-
-  return completion(route, system, user);
+  return branchCompletion(route, explorePrompt(input));
 }
 
 /** The post-mortem on one attempt. `attempt` is empty on a substrate with no trace store. */
@@ -41,5 +61,5 @@ export function reflectRollout(
   route: BranchRoute,
   input: { readonly task: string; readonly attempt: string; readonly outcome?: string },
 ): Promise<BranchReflection> {
-  return completion(route, undefined, reflectionPrompt(input.task, input.attempt, input.outcome));
+  return branchCompletion(route, { user: reflectionPrompt(input.task, input.attempt, input.outcome) });
 }
