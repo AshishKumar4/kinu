@@ -3,7 +3,7 @@
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
  */
 
-import { callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
+import { callable, type AgentContext, type Connection, type ConnectionContext, type Schedule } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
@@ -2853,7 +2853,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // `(trigger_id, scheduled_fire_at)` makes a re-fire after eviction a no-op publish.
   // A wake is a separate invocation from whatever armed it; `tracing.invocation` revokes the handle
   // when this promise settles, so spans cannot cover both.
-  async _kinuTimerTick(): Promise<void> {
+  async _kinuTimerTick(_payload?: undefined, own?: Schedule<undefined>): Promise<void> {
+    if (own === undefined) return this.timerTickPass();
+    await this.runWakeRow(own, () => this.timerTickPass());
+  }
+
+  private async timerTickPass(): Promise<void> {
     const now = Date.now();
     await this.tracing.invocation('alarm', 'tick', async (tick) => {
       await tick.span('alarm.due_triggers', async (span) => {

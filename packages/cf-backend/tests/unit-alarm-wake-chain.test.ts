@@ -529,8 +529,7 @@ describe('the workspace keeps exactly one wake row', () => {
     expect((await agent.listSchedules()).map((row) => row.id)).toEqual([armed.id]);
   });
 
-  test('a due row is not counted as armed, so the chain re-arms over it', async () => {
-    // A due row belongs to the running tick; an arm for later work writes its own future row.
+  test('a due row no tick is running counts as armed: it fires now, and its pass re-arms the later work', async () => {
     const { agent, db } = orchestratorHarness();
     await agent.createTimerTrigger({ atMs: Date.now() + 4 * DAY_MS, label: 'far' });
     const [armed] = await agent.listSchedules();
@@ -539,12 +538,30 @@ describe('the workspace keeps exactly one wake row', () => {
     const dueSec = Math.floor(Date.now() / 1000) - 5;
     db.prepare(`UPDATE cf_agents_schedules SET time = ? WHERE id = ?`).run(dueSec, armed.id);
 
-    const laterAtMs = Date.now() + 2 * DAY_MS;
-    await agent.createTimerTrigger({ atMs: laterAtMs, label: 'later' });
+    await agent.createTimerTrigger({ atMs: Date.now() + 2 * DAY_MS, label: 'later' });
 
     const rows = (await agent.listSchedules()).filter((row) => row.callback === KINU_TIMER_CALLBACK);
-    expect(rows.map((row) => row.time).sort((a, b) => a - b))
-      .toEqual([dueSec, Math.ceil(laterAtMs / 1000)]);
+    expect(rows.map((row) => row.time)).toEqual([dueSec]);
+  });
+
+  test('restarts that each died inside their wake leave one tick row, not one per restart', async () => {
+    // warm-forge-4d6acc02, 2026-09-25: each 15-minute alarm wall kill left its row and its armed next lap due, and the
+    // next activation armed a fresh row over them, until one alarm read 57 due ticks.
+    const { agent, db } = orchestratorHarness();
+    await agent.activateActor();
+    const turns = chatSessionTurns(agent);
+    const tickRows = "SELECT COUNT(*) AS held FROM cf_agents_schedules WHERE callback = '_kinuTerminalRetryTick'";
+
+    await turns.prepare({ messages: [{ role: 'user', content: 'a turn the restarts interrupt' }] });
+
+    for (let restart = 0; restart < 5; restart++) {
+      db.prepare(`UPDATE cf_agents_schedules SET time = ? WHERE callback = '_kinuTerminalRetryTick'`)
+        .run(Math.floor(Date.now() / 1000) - 60);
+      await agent.activateActor();
+      await joinHarnessFibers();
+    }
+
+    expect(held(db, tickRows)).toBe(1);
   });
 
   test('a root turn arms the wake when it opens', async () => {
@@ -639,10 +656,11 @@ describe('the workspace keeps exactly one wake row', () => {
       expect(admission).toMatchObject({ admitted: true, duplicate: false });
       expect(refusals).toEqual(['send']);
 
-      // The inbound email's drain wake falls due as the retry is armed. Arming collapses future rows only
-      // (a due row is the next alarm's, which re-derives the wake), so the retry rides the one future row.
+      // The inbound email's drain wake falls due as the retry is armed. A due row no tick is running fires now and
+      // its pass re-derives the retry from the outbox, so the retry rides that one row.
       const wakes = (await agent.listSchedules()).filter((row) => row.callback === KINU_TIMER_CALLBACK);
-      expect(wakes.filter((row) => row.time > clock.seconds())).toHaveLength(1);
+      expect(wakes).toHaveLength(1);
+      expect(wakes[0]?.time).toBeLessThanOrEqual(clock.seconds());
     } finally {
       setSystemTime();
     }
