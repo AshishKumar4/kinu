@@ -14,7 +14,7 @@ import {
   restoreWorkspaceBaseline,
 } from '../src/read-models/workspace-diff';
 import type { ExecutorProvider, ExecutionRouter } from '../src/execution/types';
-import type { SqlValue } from '../src/types/primitives';
+import type { SqlValue, VfsEntryStat } from '../src/types/primitives';
 import { MAX_LINES_PER_FILE } from '../src/vfs/diff';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
 import { createTestRuntime } from './helpers';
@@ -490,6 +490,28 @@ describe('workspace diff lifecycle', () => {
     };
 
     await expect(getWorkspaceDiff(rt)).rejects.toThrow('could not read directory');
+  });
+
+  test('an entry gone between its directory\'s listing and its own read is absent from the diff and from a review', async () => {
+    const { rt, db } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('kept.txt', 'kept');
+    const file: VfsEntryStat = { size: 4, mtimeMs: Date.now(), isDir: false };
+    // A turn deletes each while the walk runs: listed, then gone at the stat, at the read, or at the directory's
+    // own listing.
+    const gone = new Map<string, VfsEntryStat | null>([['deleted.txt', null], ['renamed.txt', file], ['removed', { ...file, isDir: true }]]);
+    const readdir = rt.storage.vfs.readdir.bind(rt.storage.vfs);
+    const stat = rt.storage.vfs.stat.bind(rt.storage.vfs);
+    rt.storage.vfs.readdir = async (path) => (path === '' ? [...await readdir(path), ...gone.keys()] : readdir(path));
+    rt.storage.vfs.stat = async (path) => (gone.has(path) ? gone.get(path) ?? null : stat(path));
+
+    expect((await getWorkspaceDiff(rt)).files.map((diff) => `${diff.status} ${diff.path}`)).toEqual(['added kept.txt']);
+    await resetWorkspaceBaseline(rt);
+    const reviewed = db.query<{ path: string }, []>("SELECT path FROM vfs_baseline_manifest WHERE active = 1").all().map((row) => row.path);
+
+    expect(reviewed).toContain('kept.txt');
+    expect(reviewed.filter((path) => gone.has(path))).toEqual([]);
   });
 
   test('a file read failure cannot advance or partially replace the active baseline', async () => {

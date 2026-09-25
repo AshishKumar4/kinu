@@ -122,10 +122,7 @@ describe('a file the agent wrote shows where a reader looks for it', () => {
   });
 
   test('the Changes tab appears and lists it as a change', () => {
-    const written = verdictOf(observed.writtenFile, 'written-file');
-
-    expect(written.changesTab).toBe(true);
-    expect(written.changedPaths.some((path) => path.endsWith(FLOW_PROBE))).toBe(true);
+    expect(verdictOf(observed.writtenFile, 'written-file').changedPaths.some((path) => path.endsWith(FLOW_PROBE))).toBe(true);
   });
 });
 

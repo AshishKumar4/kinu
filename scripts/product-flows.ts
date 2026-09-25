@@ -900,9 +900,7 @@ export interface WrittenFileVerdict {
   readonly workspace: string;
   /** Every entry the Files tab listed once its listing settled. */
   readonly filesListed: readonly string[];
-  /** Whether the strip drew a Changes tab once the turn had written. */
-  readonly changesTab: boolean;
-  /** The Changes tab's changed paths; empty when it drew no Changes tab. */
+  /** The changed paths the Changes tab lists once it appears. */
   readonly changedPaths: readonly string[];
 }
 
@@ -910,7 +908,10 @@ export interface WrittenFileVerdict {
  * Row: a file the agent writes shows in the Files tab and in the Changes tab.
  *
  * One turn writes one file; the reader opens the inspector, reads the Files
- * tab's listing, and opens the Changes tab the write should have raised.
+ * tab's listing, and opens the Changes tab the write should have raised. The
+ * tab appears once the surface's own read of the change-set has the write, so
+ * the row waits for it: a single look failed whenever it came before that read
+ * (2026-09-25).
  */
 export async function writtenFileShowsInFilesAndChanges(target: FlowTarget): Promise<WrittenFileVerdict> {
   const workspace = await createFlowWorkspace(target, 'files-diffs');
@@ -934,18 +935,15 @@ export async function writtenFileShowsInFilesAndChanges(target: FlowTarget): Pro
     }
 
     const filesListed = v.parse(v.array(v.string()), await page.evaluate(FILES_LISTED));
-    const changesTab = v.parse(v.boolean(), await page.evaluate(stripHas('Changes')));
-    let changedPaths: readonly string[] = [];
 
-    if (changesTab) {
-      await page.evaluate(stripTab('Changes'));
-      await until(page, "the Changes tab's change-set", CHANGES_SETTLED);
-      changedPaths = v.parse(v.array(v.string()), await page.evaluate(CHANGED_PATHS));
-    }
+    await until(page, 'the Changes tab the write raised', stripHas('Changes'));
+    await page.evaluate(stripTab('Changes'));
+    await until(page, "the Changes tab's change-set", CHANGES_SETTLED);
+    const changedPaths = v.parse(v.array(v.string()), await page.evaluate(CHANGED_PATHS));
 
     await page.close();
 
-    return { workspace, filesListed, changesTab, changedPaths };
+    return { workspace, filesListed, changedPaths };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }
@@ -999,7 +997,8 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
       const frame = await (await page.$(frameSelector))?.contentFrame();
 
       if (frame !== null && frame !== undefined) {
-        await waitOn(page, "the slate's preview to load", frame.waitForFunction('document.readyState === "complete"', { polling: 100 }));
+        // The frame first holds its initial about:blank, which is already complete and empty.
+        await waitOn(page, "the slate's preview to load", frame.waitForFunction('location.href !== "about:blank" && document.readyState === "complete"', { polling: 100 }));
         frameText = v.parse(v.string(), await frame.evaluate('(document.body?.textContent ?? "").trim()'));
       }
     }
