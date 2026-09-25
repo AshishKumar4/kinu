@@ -186,6 +186,7 @@ async function timeline(page: Page): Promise<Timeline> {
   let t0 = performance.now();
   let row: Row = {};
   let sockets = new Set<string>();
+  let requests: string[] = [];
   const rpcMethod = new Map<string, string>();
   const rpcSent = new Map<string, number>();
   const at = (): number => Math.round(performance.now() - t0);
@@ -202,6 +203,7 @@ async function timeline(page: Page): Promise<Timeline> {
     const frame = frameOf(event.response.payloadData);
 
     if (frame?.type !== 'rpc' || frame.id === undefined) return;
+    row[`rpc:${frame.method ?? '?'}:count`] = (row[`rpc:${frame.method ?? '?'}:count`] ?? 0) + 1;
     rpcMethod.set(`${event.requestId}:${frame.id}`, frame.method ?? '?');
     rpcSent.set(`${event.requestId}:${frame.id}`, at());
   });
@@ -231,6 +233,8 @@ async function timeline(page: Page): Promise<Timeline> {
   cdp.on('Network.requestWillBeSent', (event) => {
     const path = new URL(event.request.url).pathname;
 
+    if (process.env.BENCH_OPEN_RAW === '1') requests.push(`${String(at())} ${path}`);
+
     if (!path.startsWith('/api/') && !path.endsWith('/get-messages')) return;
     const key = path.endsWith('/get-messages') ? 'get-messages' : path.replace(/\/workspace(s)?\/[^/]+/u, '/workspace$1/:name');
     urls.set(event.requestId, key);
@@ -245,8 +249,12 @@ async function timeline(page: Page): Promise<Timeline> {
   });
 
   return {
-    start: () => { t0 = performance.now(); row = {}; sockets = new Set(); urls.clear(); },
-    read: () => row,
+    start: () => { t0 = performance.now(); row = {}; sockets = new Set(); urls.clear(); requests = []; },
+    read: () => {
+      if (requests.length > 0) process.stderr.write(`raw requests: ${requests.join(' | ')}\n`);
+
+      return row;
+    },
   };
 }
 
@@ -254,8 +262,12 @@ async function timeline(page: Page): Promise<Timeline> {
 interface Target { name: string; last: string }
 
 /** Clicks the sidebar link to `to` while `from` is shown; `left` is `from`'s answer leaving the chat. */
+/** A person reads the page before switching: the click lands after the open's own reads have landed. */
+const SETTLE_MS = 1500;
+
 async function spaSwitch(page: Page, to: Target, from: Target, network: Timeline): Promise<Row> {
   await page.waitForSelector(`a[href="/workspace/${to.name}"]`);
+  await Bun.sleep(SETTLE_MS);
   network.start();
   await page.evaluate((workspace: string) => {
     document.documentElement.dataset.benchSince = String(performance.now());
