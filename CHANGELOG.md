@@ -743,6 +743,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - **Publishing a blueprint, the secrets warning speaks to you.** It told the publisher to "check them before you
   use this blueprint", the advice meant for someone forking it. It now says the lines go out with the blueprint
   and to remove them before you publish; the blueprint's own page keeps its advice for readers.
+- **The share dialog's Reach row names what a slate reaches.** Folded, it listed the slate's own binding keys
+  ("GITHUB, FILES, NOTES"). It now names what they reach, as the unfolded rows do: "GitHub, workspace executor,
+  your workspace memory", and the count of changes allowed stays whole beside them however long the list runs.
 - **Hired agents make slates.** Slates lived in the main agent's home, so an agent you hired could not create one
   ("can't promote to /home/main/slates/widgets (EACCES)"). They now live at `/slates`, the workspace's own
   directory. Every chat in the workspace makes, edits, previews and removes slates there as the main chat does, and
