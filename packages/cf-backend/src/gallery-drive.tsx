@@ -138,10 +138,16 @@ const NOW = Date.now();
 
 const DESCRIPTION = "Reads the open issues of a repository, groups them by area, and writes a triage note every morning.";
 
+/** A capture's digest. The gallery serves no pictures, so its tiles show covers; a browser test answers these. */
+const SLATE_PICTURES = {
+  "issue-triage": "3f1c7a0d9e5b28c4a6f0e1d2b3c4a5968778695a4b3c2d1e0f9e8d7c6b5a4938",
+  lighthouse: "a9b8c7d6e5f4031928374655647382910abcdef0123456789abcdef012345678",
+} as const;
+
 const LIBRARY: SharedLibrary = {
   slates: [
-    { id: "issue-triage", title: "Issue triage", workspace: "checkout-fixes", bindings: 4, visibility: "public" },
-    { id: "lighthouse", title: "Landing perf report", workspace: "perf-audit", bindings: 1 },
+    { id: "issue-triage", title: "Issue triage", workspace: "checkout-fixes", bindings: 4, visibility: "public", picture: SLATE_PICTURES["issue-triage"] },
+    { id: "lighthouse", title: "Landing perf report", workspace: "perf-audit", bindings: 1, picture: SLATE_PICTURES.lighthouse },
     { id: "standup", title: "Standup notes", workspace: "email-triage", bindings: 0 },
   ],
   mine: [

@@ -261,6 +261,7 @@ const OwnedSlateSchema = v.object({
   workspace: v.string(),
   bindings: v.number(),
   visibility: v.optional(LiveShareVisibilitySchema),
+  picture: v.optional(v.string()),
 });
 
 export type OwnedSlate = v.InferOutput<typeof OwnedSlateSchema>;

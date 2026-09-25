@@ -344,6 +344,25 @@ test("the owner's Drive lists its slates and shares from the tiles its workspace
   expect(after.slates[0]?.visibility).toBeUndefined();
 });
 
+test("a slate's picture in its workspace's tile reaches the Drive's row for it", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const userDO = world.ownerUser.userDO;
+  const push = userDO.putWorkspaceOverview.bind(userDO);
+  const digest = 'ab'.repeat(32);
+
+  // The capture is Browser Rendering's, so here the tile the workspace pushes is handed one.
+  Object.assign(userDO, {
+    putWorkspaceOverview: (...[caller, name, overview]: Parameters<typeof push>) =>
+      push(caller, name, { ...overview, slates: overview.slates.map((slate) => ({ ...slate, picture: digest })) }),
+  });
+  await sharePublic(world, 'public');
+  const shared = await jsonBody(present(await sharedRequest(world.env, owner, new Request('https://app.test/api/shared')), 'the library'), SharedLibrarySchema);
+
+  expect(shared.slates.map((slate) => [slate.id, slate.picture])).toEqual([['issues', digest]]);
+});
+
 test('a change whose card cannot reach the tile is made and says the list is behind; a revoke during the backoff still moves it', async () => {
   const world = await twoUserWorld();
   cleanups.push(world.close);

@@ -33,6 +33,9 @@ mkdirSync(SHOTS, { recursive: true });
 
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 844 } } as const;
 
+/** A one-pixel PNG: what a slate's picture route answers here, since the gallery serves none. */
+const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+
 async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light', viewport: keyof typeof VIEWPORTS): Promise<Page> {
   const page = await gallery.newPage();
   await page.setViewport(VIEWPORTS[viewport]);
@@ -169,6 +172,41 @@ describe('the Drive', () => {
         // The keyboard reaches the refused item too, and hears why.
         expect(await tabTo(page, 'Mark as skill')).toEqual({ disabled: 'true', reason: 'no SKILL.md in /projects/ops/staging' });
         await shoot(page, 'drive-folder-dark');
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('a slate tile shows its picture, and its cover while it has none or when the picture fails', async () => {
+    await withGallery(async (gallery) => {
+      const page = await gallery.newPage();
+
+      try {
+        // Issue triage's picture answers; Landing perf report's is missing; Standup notes has none yet.
+        await page.setRequestInterception(true);
+        page.on('request', async (request) => {
+          const { pathname } = new URL(request.url());
+
+          if (!pathname.startsWith('/api/user/pictures/')) await request.continue();
+          else if (pathname.startsWith('/api/user/pictures/checkout-fixes/issue-triage/')) await request.respond({ status: 200, contentType: 'image/png', body: PIXEL });
+          else await request.respond({ status: 404, body: 'No such picture.' });
+        });
+        await page.setViewport(VIEWPORTS.desktop);
+        await page.goto(`${gallery.origin}/gallery.html?frame=drive`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-drive-slate]');
+        // Every picture has answered, and a frame has drawn what its tile made of the answer.
+        await page.waitForFunction(() => [...document.querySelectorAll('[data-drive-slate] img')].every((img) => img instanceof HTMLImageElement && img.complete));
+        await page.evaluate(() => new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); }));
+
+        expect(await page.$$eval('[data-drive-slate]', (tiles) => tiles.map((tile) => {
+          const img = tile.querySelector('img');
+          let drawn = 'cover';
+
+          if (img !== null) drawn = img.naturalWidth > 0 ? 'picture' : 'broken';
+
+          return [tile.getAttribute('data-drive-slate'), drawn];
+        }))).toEqual([['issue-triage', 'picture'], ['lighthouse', 'cover'], ['standup', 'cover']]);
       } finally {
         await page.close();
       }

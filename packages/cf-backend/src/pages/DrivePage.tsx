@@ -28,6 +28,7 @@ import {
 } from "@/components/drive/DriveTiles";
 import { DriveDialog, pickedFolderName, PrimaryAction, type DriveDialogState } from "@/components/drive/DriveActions";
 import { FileViewer } from "@/components/surfaces/FileViewer";
+import { SlatePicture } from "@/components/slates/SlatePicture";
 
 export type DriveTab = "mine" | "shared";
 
@@ -563,7 +564,9 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   };
 
   const slateTile = (slate: OwnedSlate): ReactNode => (
-    <Tile key={`${slate.workspace}:${slate.id}`} title={slate.title} picture={<Cover title={slate.title} seed={`${slate.workspace}/${slate.id}`} />}
+    <Tile key={`${slate.workspace}:${slate.id}`} title={slate.title}
+      picture={<SlatePicture workspace={slate.workspace} slate={slate} className="absolute inset-0 size-full object-cover object-top"
+        fallback={<Cover title={slate.title} seed={`${slate.workspace}/${slate.id}`} />} />}
       icon={SLATE_ICON} href={slateHref(slate)}
       meta={<><span className="truncate">{titleOf(slate.workspace)}</span><VisibilityGlyph visibility={slate.visibility} /></>}
       attributes={{ "data-drive-slate": slate.id, "data-drive-workspace": slate.workspace }}

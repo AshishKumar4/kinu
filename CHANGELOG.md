@@ -713,6 +713,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   "here": its icon and label in the accent, over a soft accent wash. A row under the pointer takes a neutral lift,
   and rows sit 4 px apart, so the two never merge into one block. A closed chat tab under the pointer brightens
   over a neutral bar, and the open tab keeps its accent bar.
+- **Slates show their picture in the Drive.** A slate's tile in My stuff draws its latest picture, as its
+  workspace's card does, instead of a letter; until the slate first renders, or if the picture fails to load, the
+  tile keeps its letter cover.
 - **Hired agents make slates.** Slates lived in the main agent's home, so an agent you hired could not create one
   ("can't promote to /home/main/slates/widgets (EACCES)"). They now live at `/slates`, the workspace's own
   directory. Every chat in the workspace makes, edits, previews and removes slates there as the main chat does, and
