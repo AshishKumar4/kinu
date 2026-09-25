@@ -231,6 +231,52 @@ describe('ladder-closure — what a closure holds', () => {
     expect(closure.kind === 'derived' ? closure.env : []).toContain('ALPHA');
   });
 
+  test('the wrapper\'s own graph is an input, but not the corpus that graph can enumerate', () => {
+    const repo = fixture({
+      'scripts/ladder.ts': "import { trackedFiles } from './sources';\nexport const ladder = trackedFiles;",
+      'scripts/sources.ts': 'export const trackedFiles = (): string[] => [];',
+      'packages/a/tests/a.test.ts': 'export const t = 1;',
+      'docs/unrelated.md': 'no gate reads this',
+    }, { 'test:a': 'bun scripts/ladder.ts --run bun test packages/a/' });
+
+    const closure = deriveClosure('bun run test:a', DERIVED, repo);
+    const files = derived(closure);
+
+    expect(files).toContain('scripts/ladder.ts');
+    expect(files).toContain('scripts/sources.ts');
+    expect(files).not.toContain('docs/unrelated.md');
+    expect(closure.kind === 'derived' && closure.corpus).toBe(false);
+  });
+
+  test('a module the vitest config names by path is walked, so the worker it bundles is an input', () => {
+    const repo = fixture({
+      'packages/w/vitest.config.ts': "export default { test: { poolOptions: { workers: { main: './tests/workerd/worker.ts' } } } };",
+      'packages/w/tests/workerd/worker.ts': "import { app } from '../../../app/src/app';\nexport default app;",
+      'packages/w/tests/workerd/sub/a.test.ts': 'export const t = 1;',
+      'packages/app/src/app.ts': 'export const app = 1;',
+    }, { 'test:w': 'vitest run --root packages/w tests/workerd/sub/' });
+
+    expect(derived(deriveClosure('bun run test:w', DERIVED, repo))).toContain('packages/app/src/app.ts');
+  });
+
+  test('a graph that reaches a built output\'s source holds every input its build reads', () => {
+    const repo = fixture({
+      'packages/a/src/a.ts': "import { sdk } from '../../../third_party/mossaic/sdk/src/index';\nexport const a = sdk;",
+      'third_party/mossaic/sdk/src/index.ts': 'export const sdk = 1;',
+      'third_party/mossaic/sdk/tsdown.config.ts': 'export default {};',
+      'third_party/mossaic/upstream.json': '{}',
+      'scripts/mossaic-sdk.ts': 'export const build = 1;',
+      'packages/b/src/b.ts': 'export const b = 1;',
+    });
+
+    const reaching = derived(deriveClosure('bun packages/a/src/a.ts', DERIVED, repo));
+
+    expect(reaching).toContain('third_party/mossaic/upstream.json');
+    expect(reaching).toContain('third_party/mossaic/sdk/tsdown.config.ts');
+    expect(reaching).toContain('scripts/mossaic-sdk.ts');
+    expect(derived(deriveClosure('bun packages/b/src/b.ts', DERIVED, repo))).not.toContain('scripts/mossaic-sdk.ts');
+  });
+
   test('the configs a tsconfig on the path extends are inputs', () => {
     const repo = fixture({
       'tsconfig.base.json': '{ "compilerOptions": {} }',

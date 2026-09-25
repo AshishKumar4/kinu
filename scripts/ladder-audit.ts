@@ -17,7 +17,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import type { Derived } from './ladder-closure';
+import { BUILT_OUTPUTS, type Derived } from './ladder-closure';
 
 export interface Audit {
   /** Repo-relative files the gate opened that the closure does not hold. */
@@ -26,6 +26,8 @@ export interface Audit {
   readonly covered: number;
   /** Absolute paths outside the tree, counted and not judged. */
   readonly outside: number;
+  /** The traced gate's exit status: a trace of a run that failed is a partial run's opens. */
+  readonly exitCode: number | null;
 }
 
 /** Parse strace's `-y`-less openat lines: `openat(AT_FDCWD, "path", flags)`. */
@@ -45,6 +47,11 @@ function openedPaths(trace: string, cwd: string): string[] {
 
 /** Run `argv` under strace in `root`, with the environment the ladder gives
  *  the gate, and compare what it opened with `closure`. */
+/** Whether the closure holds `input`, a tracked file or a directory with a trailing slash. */
+function heldInput(held: ReadonlySet<string>, input: string): boolean {
+  return input.endsWith('/') ? [...held].some((file) => file.startsWith(input)) : held.has(input);
+}
+
 export function auditClosure(argv: readonly string[], root: string, closure: Derived, env: Record<string, string>): Audit {
   const scratch = mkdtempSync(join(tmpdir(), 'kinu-ladder-audit-'));
   const trace = join(scratch, 'trace');
@@ -81,6 +88,12 @@ export function auditClosure(argv: readonly string[], root: string, closure: Der
 
       if (file.includes('/__pycache__/') && file.endsWith('.pyc')) continue;
 
+      // A build output the closure holds every input of is held (`BUILT_OUTPUTS`).
+      if (BUILT_OUTPUTS.some((built) => file.startsWith(built.output) && built.inputs.every((input) => heldInput(held, input)))) {
+        covered += 1;
+        continue;
+      }
+
       if (held.has(file)) {
         covered += 1;
         continue;
@@ -92,7 +105,7 @@ export function auditClosure(argv: readonly string[], root: string, closure: Der
       if (existsSync(opened) && statSync(opened).isFile()) undeclared.add(file);
     }
 
-    return { undeclared: [...undeclared].sort(), covered, outside };
+    return { undeclared: [...undeclared].sort(), covered, outside, exitCode: proc.exitCode };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

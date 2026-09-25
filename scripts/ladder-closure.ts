@@ -165,6 +165,24 @@ export type Closure = Derived | Uncomputable | { readonly kind: 'live'; readonly
 /** The module that enumerates the repository for every corpus gate. */
 export const CORPUS_MODULE = 'scripts/sources.ts';
 
+/** A gitignored build output under the tree that a module graph runs from, and
+ *  the tracked inputs every install rebuilds it from, so those inputs stand for
+ *  its bytes as the lock and the patches stand for `node_modules`. A closure
+ *  whose graph reaches `source` holds `inputs`, and `--audit-closure` counts an
+ *  open under `output` as held only then. */
+export interface BuiltOutput {
+  readonly output: string;
+  readonly source: string;
+  readonly inputs: readonly string[];
+}
+
+export const BUILT_OUTPUTS: readonly BuiltOutput[] = [
+  // `@mossaic/sdk` resolves through its export map to `dist/`, which the root
+  // `prepare` builds on every install from the vendored source, after checking
+  // that source against `upstream.json` (scripts/mossaic-sdk.ts).
+  { output: 'third_party/mossaic/sdk/dist/', source: 'third_party/mossaic/sdk/', inputs: ['third_party/mossaic/', 'scripts/mossaic-sdk.ts'] },
+];
+
 
 /** Files standing in for `node_modules`: the lock and the patches applied over it. */
 function dependencyInputs(repo: Repo): string[] {
@@ -387,6 +405,8 @@ function walkGraph(entries: readonly string[], repo: Repo): Walk {
 
 interface Form {
   readonly entries: readonly string[];
+  /** Entries only loaded, never run as the gate's work: their graph is an input, not what it can enumerate. */
+  readonly loaded: readonly string[];
   /** Directory prefixes read whole, beyond the graph. */
   readonly reads: readonly string[];
   readonly corpus: boolean;
@@ -394,7 +414,11 @@ interface Form {
 
 /** The ladder's own deadline wrapper, as a package script spells it:
  *  `bun scripts/ladder.ts --run <command…>` runs the command, so the
- *  command's closure is the gate's, beside the wrapper's own graph. */
+ *  command's closure is the gate's, beside the wrapper's own graph. That graph
+ *  is loaded, not run: `--run` is the first branch of the ladder's main, and
+ *  it looks up its row's deadline and spawns the command, so what the ladder's
+ *  other modes enumerate through {@link CORPUS_MODULE} is no input of it.
+ *  Measured by `--audit-closure` 2026-09-24 on the workerd rows. */
 const RUNNER_SCRIPT = 'scripts/ladder.ts';
 
 const RUNNER_FLAG = '--run';
@@ -403,7 +427,7 @@ const RUNNER_FLAG = '--run';
  *  script the name holds, beside the manifest that holds it. */
 function scriptForm(run: string, name: string | undefined, repo: Repo, depth: number): Form | Uncomputable {
   // `bun run <file>` runs the file, as `bun <file>` does.
-  if (name !== undefined && isParseable(name)) return { entries: [name], reads: [], corpus: false };
+  if (name !== undefined && isParseable(name)) return { entries: [name], loaded: [], reads: [], corpus: false };
   const body = name === undefined ? undefined : repo.scripts[name];
 
   if (name === undefined || body === undefined || name.startsWith('-')) {
@@ -411,6 +435,7 @@ function scriptForm(run: string, name: string | undefined, repo: Repo, depth: nu
   }
 
   const entries: string[] = [];
+  const loaded: string[] = [];
   const reads: string[] = [];
   let corpus = false;
 
@@ -419,24 +444,54 @@ function scriptForm(run: string, name: string | undefined, repo: Repo, depth: nu
 
     if ('kind' in inner) return inner;
     entries.push(...inner.entries);
+    loaded.push(...inner.loaded);
     reads.push(...inner.reads);
     corpus ||= inner.corpus;
   }
 
-  return { entries: [...entries, 'package.json'], reads, corpus };
+  return { entries: [...entries, 'package.json'], loaded, reads, corpus };
 }
 
 /** `bun <file> …` or `node <file> …`; through the deadline wrapper, the
  *  wrapped command's closure beside the wrapper's own. */
 function fileForm(file: string, rest: readonly string[], repo: Repo, depth: number): Form | Uncomputable {
-  if (file !== RUNNER_SCRIPT || rest[0] !== RUNNER_FLAG) return { entries: [file], reads: [], corpus: false };
+  if (file !== RUNNER_SCRIPT || rest[0] !== RUNNER_FLAG) return { entries: [file], loaded: [], reads: [], corpus: false };
   const inner = resolveForm(rest.slice(1).join(' '), repo, depth + 1);
 
-  return 'kind' in inner ? inner : { entries: [file, ...inner.entries], reads: inner.reads, corpus: inner.corpus };
+  return 'kind' in inner ? inner : { ...inner, loaded: [file, ...inner.loaded] };
+}
+
+/** The vitest configs vitest resolves in a `--root` base. */
+const VITEST_CONFIGS = ['vitest.config.ts', 'vitest.config.mts', 'vitest.config.js', 'vitest.config.mjs'];
+
+/** Every module a vitest config under `base` names by a relative path: a
+ *  workers pool's `main`, its setup files. vitest loads each, so each is an
+ *  entry whose graph is walked. */
+function configNamedModules(base: string, repo: Repo): string[] {
+  const universe = new Set(repo.files);
+  const named: string[] = [];
+
+  for (const config of VITEST_CONFIGS.map((name) => `${base}/${name}`).filter((file) => universe.has(file))) {
+    named.push(config);
+    walk(parse(config, repo.read(config)).root, (node) => {
+      const text = literalString(node.raw);
+
+      if (text === undefined || !/^\.\.?\//u.test(text)) return;
+      const path = collapsePath(`${base}/${text}`);
+
+      if (universe.has(path) && isParseable(path)) named.push(path);
+    });
+  }
+
+  return named;
 }
 
 /** `vitest run --root <base> <target>`: every parseable file under the
- *  target, with the base read whole for the configs vitest resolves in it. */
+ *  target and every module the config names, walked, with the base read whole
+ *  for the configs vitest resolves in it. A read is not walked, so the base
+ *  alone missed the graph of the worker a workers pool bundles (2026-09-24,
+ *  the complexity row opened 78 files in core, devbox, compaction and the
+ *  Mossaic SDK that its closure lacked). */
 function vitestForm(run: string, words: readonly string[], repo: Repo): Form | Uncomputable {
   const rootAt = words.indexOf('--root');
   const base = rootAt === -1 ? undefined : words[rootAt + 1];
@@ -446,7 +501,8 @@ function vitestForm(run: string, words: readonly string[], repo: Repo): Form | U
   const prefix = `${base}/${target}`;
 
   return {
-    entries: repo.files.filter((file) => file.startsWith(prefix) && isParseable(file)),
+    entries: [...repo.files.filter((file) => file.startsWith(prefix) && isParseable(file)), ...configNamedModules(base, repo)],
+    loaded: [],
     reads: [`${base}/`],
     corpus: false,
   };
@@ -454,7 +510,7 @@ function vitestForm(run: string, words: readonly string[], repo: Repo): Form | U
 
 /** Test files `bun test` runs: each suite beside the preload `bunfig.toml` names. */
 function suiteForm(suites: readonly string[], repo: Repo): Form {
-  return { entries: [...suites, ...repo.preload], reads: [], corpus: false };
+  return { entries: [...suites, ...repo.preload], loaded: [], reads: [], corpus: false };
 }
 
 /** One command's entry files, or why it has none. Recurses through `bun run`. */
@@ -480,10 +536,10 @@ function resolveForm(run: string, repo: Repo, depth: number): Form | Uncomputabl
   if (first === 'node') {
     const file = words.slice(1).find((word) => !word.startsWith('-'));
 
-    if (file !== undefined && isParseable(file)) return { entries: [file], reads: [], corpus: false };
+    if (file !== undefined && isParseable(file)) return { entries: [file], loaded: [], reads: [], corpus: false };
   }
 
-  if (first === 'tsc' || first === 'oxlint') return { entries: [], reads: [], corpus: true };
+  if (first === 'tsc' || first === 'oxlint') return { entries: [], loaded: [], reads: [], corpus: true };
 
   if (first === 'vitest' && second === 'run') return vitestForm(run, words, repo);
 
@@ -574,8 +630,13 @@ function refusal(run: string, walked: Walk, inputs: Declared, corpus: boolean): 
 
 /** What the walker could not prove and `--audit-closure` checks instead, one
  *  note apiece, printed beside the gate on a miss. */
-function closureNotes(walked: Walk, inputs: Declared, corpus: boolean): string[] {
+function closureNotes(walked: Walk, loaded: Walk, inputs: Declared, corpus: boolean): string[] {
   const notes: string[] = [];
+
+  if (loaded.files.size > 0) {
+    notes.push(`loads the deadline wrapper's graph (${String(loaded.files.size)} file(s)) and runs none of it, so what `
+      + `that graph can enumerate through ${CORPUS_MODULE} is no input — checked by --audit-closure, not by the walker`);
+  }
 
   if (corpus) {
     if (walked.corpus) notes.push(`reads the corpus through ${CORPUS_MODULE}: every tracked file is an input`);
@@ -635,12 +696,15 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
   const walked = walkGraph(form.entries, repo);
 
   if (walked.failure !== undefined) return { kind: 'uncomputable', why: `${run}: ${walked.failure}` };
+  const loaded = walkGraph(form.loaded, repo);
+
+  if (loaded.failure !== undefined) return { kind: 'uncomputable', why: `${run}: ${loaded.failure}` };
   const corpus = form.corpus || walked.corpus || inputs.corpus === true;
   const refused = refusal(run, walked, inputs, corpus);
 
   if (refused !== undefined) return { kind: 'uncomputable', why: refused };
   const universe = new Set(repo.files);
-  const files = new Set<string>(walked.files);
+  const files = new Set<string>([...walked.files, ...loaded.files]);
 
   if (corpus) for (const file of repo.files) files.add(file);
 
@@ -662,6 +726,10 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
     return { kind: 'uncomputable', why: `${run}: ${generated} is generated or untracked, so the tree cannot name its bytes` };
   }
 
+  for (const built of BUILT_OUTPUTS.filter((entry) => [...files].some((file) => file.startsWith(entry.source)))) {
+    for (const file of repo.files) if (built.inputs.some((input) => file === input || file.startsWith(input))) files.add(file);
+  }
+
   for (const config of configsOf(files, repo, universe)) files.add(config);
 
   for (const file of dependencyInputs(repo)) files.add(file);
@@ -669,8 +737,8 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
   return {
     kind: 'derived',
     files: [...files].sort(),
-    env: [...new Set([...walked.env, ...(inputs.env ?? [])])].sort(),
+    env: [...new Set([...walked.env, ...loaded.env, ...(inputs.env ?? [])])].sort(),
     corpus,
-    notes: closureNotes(walked, inputs, corpus),
+    notes: closureNotes(walked, loaded, inputs, corpus),
   };
 }

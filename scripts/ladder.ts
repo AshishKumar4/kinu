@@ -58,13 +58,16 @@ import { COST_TABLE, type CostTable, costRssMb, costThreads, machineName, readCo
 
 /** DERIVED, because it was hardcoded as 21 while the config carried 22 — a stale count in the
  *  document that tells a reader what a rung catches. Read from the enabled rules rather than from the
- *  plugin's registry: a rule registered and not enabled catches nothing. */
-const ANTI_SLOP_RULE_COUNT = Object.keys(
-  v.parse(
-    v.object({ rules: v.record(v.string(), v.unknown()) }),
-    JSON.parse(readFileSync(new URL('../.oxlintrc.json', import.meta.url).pathname, 'utf8')),
-  ).rules,
-).filter((rule) => rule.startsWith('anti-slop/')).length;
+ *  plugin's registry: a rule registered and not enabled catches nothing. Read when the row's text is,
+ *  never at load: `--run` loads this module and reads no tracked file beyond its modules. */
+function antiSlopRuleCount(): number {
+  return Object.keys(
+    v.parse(
+      v.object({ rules: v.record(v.string(), v.unknown()) }),
+      JSON.parse(readFileSync(new URL('../.oxlintrc.json', import.meta.url).pathname, 'utf8')),
+    ).rules,
+  ).filter((rule) => rule.startsWith('anti-slop/')).length;
+}
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -183,7 +186,7 @@ export interface Gate {
  *  projections read rather than restated — a name added to `LIVE_MODEL_ENV`
  *  widens the cache key by itself. `KINU_EVAL_LIVE` is the preload's own
  *  consent switch. */
-const AMBIENT_BY_NAME: Inputs = {
+const AMBIENT_BY_NAME: Extract<Inputs, { kind: 'derived' }> = {
   kind: 'derived',
   env: [
     ...AMBIENT_CREDENTIAL_ENV, ...AMBIENT_DECORATION_ENV, ...Object.values(EVAL_IDENTITY_ENV),
@@ -196,6 +199,14 @@ const AMBIENT_BY_NAME: Inputs = {
  *  an input. Measured by `--audit-closure` 2026-09-23: React runtime identity
  *  opened 1,319 tracked files off its module graph. */
 const CLIENT_BUILD: Inputs = { ...AMBIENT_BY_NAME, corpus: true };
+
+/** A row vitest runs in a workers pool rooted at `base`: its config bundles
+ *  with esbuild and writes by path inside the base, and the worker the config
+ *  names is walked from it (`configNamedModules`, ladder-closure.ts). Measured
+ *  by `--audit-closure` 2026-09-24 on the complexity row. */
+function workersPool(base: string): Inputs {
+  return { ...AMBIENT_BY_NAME, reads: [`${base}/`] };
+}
 
 /** Gates that run before the deploy tier. The deploy tier is parsed from
  *  deploy.sh — see the header. Cheapest first inside each tier, so the first
@@ -250,8 +261,10 @@ export const LADDER: readonly Gate[] = [
     // its exit status. Interleaved at load 64-170: 149/181 CPU-s before,
     // 90/96 after. The 21.4 s stands until a quiet re-measure.
     seconds: 21.4,
-    catches: `the ${String(ANTI_SLOP_RULE_COUNT)} anti-slop rules across every file, every line, and the `
-      + 'rule suites that prove each rule red-to-green under node.',
+    get catches() {
+      return `the ${String(antiSlopRuleCount())} anti-slop rules across every file, every line, and the `
+        + 'rule suites that prove each rule red-to-green under node.';
+    },
     blind: 'types and behaviour. A lint-clean call to the wrong function passes.',
     // `anti-slop/rules.test.ts` imports every rule suite it discovers through
     // `sources.ts`; the suites are tracked under this directory.
@@ -824,7 +837,8 @@ export const LADDER: readonly Gate[] = [
       + 'a plant whose planted text is gone, and a suspect red before any plant.',
     blind: 'every defect a title claims beyond the planted ones, and a relational check nobody '
       + 'planted against because the lock only holds what the census flags.',
-    inputs: { kind: 'derived', ...plantedInputs(readCensusLock(), 'packages/') },
+    // Read when a closure is derived, never at load: `--run` loads this table, and its closure holds no census lock.
+    get inputs(): Inputs { return { kind: 'derived', ...plantedInputs(readCensusLock(), 'packages/') }; },
   },
   {
     run: 'bun scripts/census-plants.ts scripts/',
@@ -837,7 +851,8 @@ export const LADDER: readonly Gate[] = [
       + 'a plant whose planted text is gone, and a suspect red before any plant.',
     blind: 'every defect a title claims beyond the planted ones, and a relational check nobody '
       + 'planted against because the lock only holds what the census flags.',
-    inputs: { kind: 'derived', ...plantedInputs(readCensusLock(), 'scripts/') },
+    // Read when a closure is derived, never at load: `--run` loads this table, and its closure holds no census lock.
+    get inputs(): Inputs { return { kind: 'derived', ...plantedInputs(readCensusLock(), 'scripts/') }; },
   },
   {
     run: 'bun run gate:complexity',
@@ -1869,7 +1884,7 @@ export const LADDER: readonly Gate[] = [
       + 'ran for two months is still only a regex\'s problem. And '
       + '`abortAllDurableObjects` is a hard reset, NOT a hibernation wake — it drops the '
       + 'sockets with the isolate, so what survives a real eviction is still unmeasured.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: workersPool('packages/cf-backend'),
   },
   {
     run: 'bun run test:workerd:cf-long',
@@ -1889,7 +1904,7 @@ export const LADDER: readonly Gate[] = [
       + 'Object across a real wake, a retention sweep, a spend aggregate over 20,000 rows, '
       + 'an EIO on files, a step cap and a stream lifecycle — the long-running half.',
     blind: 'the same as the row above.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: workersPool('packages/cf-backend'),
   },
   {
     run: 'bun run test:workerd:devbox',
@@ -1900,7 +1915,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'the devbox bench worker\'s admission and selected-arm guards as workerd runs '
       + 'them (`packages/devbox/tests/workerd`), which no bun test can express.',
     blind: 'everything above the platform, as the cf-backend row states.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: workersPool('packages/devbox'),
   },
   {
     run: 'bun run test:workerd:cf-complexity',
@@ -1924,7 +1939,7 @@ export const LADDER: readonly Gate[] = [
       + 'rewritten in place; and a step that prunes, which the session subject\'s messages are '
       + 'too small to make. The suite prints the list with its figures after the file, which '
       + 'vitest\'s agent reporter shows only when the file fails.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: workersPool('packages/cf-backend'),
   },
   {
     run: 'bun run gate:policy-drift',
@@ -3123,15 +3138,12 @@ if (import.meta.main) {
     if (cause.code !== 'EPIPE') throw cause;
   });
 
-  if (process.argv.includes('--plan')) {
-    console.log(printPlan(deployPlan()));
-    process.exit(0);
-  }
-
   // `--run <argv…>`: run a package script's command under its own row's
   // deadline. `bun run` sets `npm_lifecycle_event` to the script's name, so
   // the script needs no argument to find its row; a script no row runs gets
-  // the shared default. The hand run and the ladder row are one figure.
+  // the shared default. The hand run and the ladder row are one figure. It is
+  // the first branch, so a wrapped command's closure is the wrapper's graph
+  // loaded and nothing another mode reads (`RUNNER_SCRIPT`, ladder-closure.ts).
   const runAt = process.argv.indexOf('--run');
 
   if (runAt !== -1) {
@@ -3144,6 +3156,11 @@ if (import.meta.main) {
 
     const outcome = await runUnderDeadline({ argv, ...scriptDeadline(process.env.npm_lifecycle_event) });
     process.exit(outcome.exitCode);
+  }
+
+  if (process.argv.includes('--plan')) {
+    console.log(printPlan(deployPlan()));
+    process.exit(0);
   }
 
   if (process.argv.includes('--matrix')) {
@@ -3238,6 +3255,7 @@ if (import.meta.main) {
 
     let holes = 0;
     let audited = 0;
+    let unproven = 0;
 
     for (const gate of gates) {
       const closure = deriveClosure(gate.run, gate.inputs, repo);
@@ -3250,22 +3268,26 @@ if (import.meta.main) {
       const audit = auditClosure(runnableArgv(gate.run, tracked), root, closure, gateEnvironment(closure));
       audited += 1;
 
-      if (audit.undeclared.length === 0) {
-        console.log(`ok    ${gate.run}  (${String(audit.covered)} closure files opened, ${String(audit.outside)} outside the tree)`);
-        continue;
+      // A run that failed stopped short of what a green one opens, so its trace proves nothing about one.
+      if (audit.exitCode !== 0) {
+        unproven += 1;
+        console.error(`RED   ${gate.run}  exited ${String(audit.exitCode)} under the trace: a partial run's opens prove nothing`);
       }
 
-      holes += 1;
-      console.error(`HOLE  ${gate.run}  opened ${String(audit.undeclared.length)} file(s) its closure does not hold:`);
-
-      for (const file of audit.undeclared) console.error(`        ${file}`);
+      if (audit.undeclared.length > 0) {
+        holes += 1;
+        console.error(`HOLE  ${gate.run}  opened ${String(audit.undeclared.length)} file(s) its closure does not hold:\n`
+          + audit.undeclared.map((file) => `        ${file}`).join('\n'));
+      } else if (audit.exitCode === 0) {
+        console.log(`ok    ${gate.run}  (${String(audit.covered)} closure files opened, ${String(audit.outside)} outside the tree)`);
+      }
     }
 
     console.log(
       `\naudit-closure ${named === -1 ? `--tier=${tier}` : '--gate'}: ${String(audited)} gate(s) audited, `
-      + `${String(holes)} with undeclared reads`,
+      + `${String(holes)} with undeclared reads, ${String(unproven)} red under the trace`,
     );
-    process.exit(holes === 0 ? 0 : 1);
+    process.exit(holes === 0 && unproven === 0 ? 0 : 1);
   }
 
   if (process.argv.includes('--check-budget')) {
