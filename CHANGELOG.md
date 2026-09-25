@@ -710,10 +710,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   a slate one chat made the others can change. Sharing one with other people or the public is still the main
   chat's alone. Existing slates move there on the next start; a CLI workspace keeps them in the project's own
   `slates/` folder.
-- **Changes shows the whole workspace again.** It listed only the main agent's home, so a slate at `/slates` or a
-  file a hired agent wrote in its own home never appeared. It now lists every change to the workspace's own files:
-  every agent's home by path, the slates, and the rest of the filesystem. Mounted drives (`/pc`, `/shared`,
-  `/sandbox`, `/context`) and the platform's own state stay out.
+- **Changes shows every agent's work.** It listed only the main agent's home, so a slate at `/slates` or a
+  file a hired agent wrote in its own home never appeared. It now lists every agent's home (`/home/*`) and the
+  slates, and nothing else: `/usr`, `/tmp`, mounted drives (`/pc`, `/shared`, `/sandbox`, `/context`) and the
+  platform's own state stay out.
 
 - **A workspace's card shows the owner's words, never Kinu's own.** A new workspace's card showed the prompt Kinu
   starts its first turn with as the owner's latest task, and a background event after the owner's message did the

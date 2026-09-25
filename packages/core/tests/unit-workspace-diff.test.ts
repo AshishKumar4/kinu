@@ -234,7 +234,7 @@ describe('workspace diff lifecycle', () => {
     expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['added app.ts']);
   });
 
-  test('the change-set is the workspace\'s own plane: every agent\'s home and the slates, never a mount or platform state', async () => {
+  test('the change-set is every agent\'s home and the slates: never /usr, /tmp, a mount or platform state', async () => {
     const { rt, workspace } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
     const drive = mossaicVfs(fakeMossaic().tenant('owner'));
@@ -256,6 +256,10 @@ describe('workspace diff lifecycle', () => {
     await drive.writeFile('/notes.md', 'from the Drive\n');
     kernel.mkdir('/etc/kinu-slate-content', { recursive: true });
     kernel.writeFile('/etc/kinu-slate-content/blob', 'stored');
+    kernel.mkdir('/tmp', { recursive: true });
+    kernel.writeFile('/tmp/build.log', 'scratch\n');
+    kernel.mkdir('/usr/local/lib', { recursive: true });
+    kernel.writeFile('/usr/local/lib/tool.py', 'installed\n');
 
     expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual([
       `added ${home}/draft.md`, 'added /slates/board/app.tsx', 'added notes.md',

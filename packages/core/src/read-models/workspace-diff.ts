@@ -29,11 +29,13 @@ const SNAPSHOT_IGNORED_DIRECTORIES = new Set([
 
 const WORKING_DIRECTORY_NAMES = [WORKSPACE_ROOT, LEGACY_WORKSPACE_ROOT];
 
-const PLATFORM_PATHS = ['/etc', '/dev', '/proc'];
+const UNREVIEWED_PATHS: ReadonlySet<string> = new Set(WORKING_DIRECTORY_NAMES);
 
-const UNREVIEWED_PATHS: ReadonlySet<string> = new Set([...WORKING_DIRECTORY_NAMES, ...PLATFORM_PATHS]);
+/** Also a manifest row: a generation that holds it walked the plane root, so its slates are already at /slates. */
+const PLANE_ROOT = '/';
 
-const WHOLE_PLANE = '/';
+/** Under the plane root the change-set reviews every agent's home and the slates, and nothing else (owner, 2026-09-25). */
+const REVIEWED_UNDER_ROOT = ['home', SLATES_ROOT.slice(1)];
 
 const NOT_GIT_REPO = '__KINU_NOT_GIT_REPO__';
 
@@ -99,7 +101,7 @@ async function walkWorkspaceFiles(
   visit: (path: string, stat: VfsEntryStat) => void | Promise<void>,
 ): Promise<void> {
   const routed: VFS & Partial<Pick<VfsMountRouting, 'mountOf'>> = rt.storage.vfs;
-  const directories = ['', WHOLE_PLANE];
+  const directories = ['', PLANE_ROOT];
 
   for (let next = 0; next < directories.length; next++) {
     const dir = directories[next];
@@ -108,7 +110,9 @@ async function walkWorkspaceFiles(
 
     for (const name of names ?? []) {
       if (isSystemManaged(name) || SNAPSHOT_IGNORED_DIRECTORIES.has(name)) continue;
-      const full = dir === '' ? name : `${dir === WHOLE_PLANE ? '' : dir}/${name}`;
+
+      if (dir === PLANE_ROOT && !REVIEWED_UNDER_ROOT.includes(name)) continue;
+      const full = dir === '' ? name : `${dir === PLANE_ROOT ? '' : dir}/${name}`;
 
       if (UNREVIEWED_PATHS.has(full) || (routed.mountOf?.(full) ?? null) !== null) continue;
       const st = await statOf(rt, full);
@@ -183,17 +187,17 @@ function activeManifest(rt: WorkspaceBaselineRuntime): BaselineManifest | null {
 
   const entries = new Map<string, ManifestEntry>();
   let marker: { readonly capturedAt: number; readonly generation: string } | null = null;
-  let wholePlane = false;
+  let planeWalked = false;
 
   for (const row of rows) {
     if (row.path === '') marker = { capturedAt: row.mtime_ms, generation: row.generation };
-    else if (row.path === WHOLE_PLANE) wholePlane = true;
+    else if (row.path === PLANE_ROOT) planeWalked = true;
     else entries.set(row.path, { size: row.size, mtimeMs: row.mtime_ms, hash: row.hash });
   }
 
   if (marker === null) return null;
 
-  return { ...marker, entries: wholePlane ? entries : slatesMovedToRoot(entries) };
+  return { ...marker, entries: planeWalked ? entries : slatesMovedToRoot(entries) };
 }
 
 function slatesMovedToRoot(entries: Map<string, ManifestEntry>): Map<string, ManifestEntry> {
@@ -329,7 +333,7 @@ async function capture(rt: WorkspaceBaselineRuntime, held: BaselineManifest | nu
 
   try {
     // The marker makes an intentionally empty snapshot representable.
-    for (const marker of ['', WHOLE_PLANE]) {
+    for (const marker of ['', PLANE_ROOT]) {
       void rt.storage.sql`INSERT INTO vfs_baseline_manifest (actor_id, generation, path, size, mtime_ms, hash, active)
         VALUES (${actorId}, ${generation}, ${marker}, ${0}, ${capturedAt}, ${null}, ${0})`;
     }
