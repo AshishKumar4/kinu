@@ -84,11 +84,13 @@ type Restored = { readonly ok: true } | { readonly ok: false; readonly error: st
 
 const UNDO_MS = 10_000;
 
-export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = null, onOpenFile, onCount }: {
+export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = null, turnLive, onOpenFile, onCount }: {
   executors: ExecutorInfo[];
   lastActiveExecutor?: string | null;
   rpc: Rpc;
   focus?: ChangesFocus | null;
+  /** Whether the workspace's turn is running: its writes are all in once it closes. */
+  turnLive: boolean;
   onOpenFile: (path: string) => void;
   onCount: (count: number | null) => void;
 }) {
@@ -131,6 +133,13 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
 
   const revalidate = useCallback(() => 2_000, []);
   const { resource, reload } = useAsyncResource(load, revalidate);
+  const wasLive = useRef(turnLive);
+
+  // The poll alone shows a turn's writes up to one period after it closes.
+  useEffect(() => {
+    if (wasLive.current && !turnLive) reload();
+    wasLive.current = turnLive;
+  }, [turnLive, reload]);
   const read = lastValue(resource);
   const sets = read?.sets ?? null;
   // Read after an await: the listing and reload of now, not of the click.
