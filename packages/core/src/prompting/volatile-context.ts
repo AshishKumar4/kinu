@@ -212,6 +212,8 @@ const DYNAMIC_DELTA_HEADER = 'Kinu runtime state update, not conversation or use
 function renderTurnReason(turn: TurnReason): string {
   if (turn.provenance === 'chat') return 'Chat: this turn answers the conversation\'s newest message.';
 
+  if (turn.provenance === 'signal') return `Signal: the harness delivered this turn's message (${turn.event}).`;
+
   return `Background resume: a background job finished${turn.job === null ? '' : ` (${turn.job})`} and nobody typed `
     + 'anything. Fetch its result first, synthesize it, then continue or close the work you backgrounded.';
 }

@@ -23,6 +23,8 @@ const TurnMetadataSchema = v.object({
   kinuEvent: v.optional(v.unknown()),
 });
 
+const KinuEventSchema = v.object({ kinuEvent: v.pipe(v.string(), v.nonEmpty()) });
+
 /** A background job's wake (jobs/runner.ts). */
 const JobWakeSchema = v.object({ jobId: v.string(), kind: v.string(), status: v.string() });
 
@@ -35,16 +37,17 @@ const ExternalToolSchema = v.object({
 
 /** From `kinuEvent` metadata alone: the `kinuMode` stamped beside it (never null for jobs) must not win. */
 export function turnReasonForMetadata(metadata: JsonObject | null | undefined): TurnReason {
-  const parsed = v.safeParse(TurnMetadataSchema, metadata);
+  const stamped = v.safeParse(KinuEventSchema, metadata);
 
-  if (!parsed.success || parsed.output.kinuEvent !== 'background_job') return { provenance: 'chat' };
+  if (!stamped.success) return { provenance: 'chat' };
+
+  if (stamped.output.kinuEvent !== 'background_job') return { provenance: 'signal', event: stamped.output.kinuEvent };
   const job = v.safeParse(JobWakeSchema, metadata);
 
   return { provenance: 'background_resume', job: job.success ? `job ${job.output.jobId}, ${job.output.kind}, ${job.output.status}` : null };
 }
 
-/** Only an explicit, recognized `kinuMode` raises the Plan bar. Delegated children
- *  inherit it, so an autonomous wake never weakens one. */
+/** Only an explicit, recognized `kinuMode` raises the Plan bar; delegated children inherit it. */
 export function workModeForTurnMetadata(metadata: JsonObject | null | undefined): WorkMode {
   const parsed = v.safeParse(TurnMetadataSchema, metadata);
 

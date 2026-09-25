@@ -753,11 +753,21 @@ describe('buildSystemPromptSync', () => {
     expect(planPrompt).toContain('Fetch its result first');
   });
 
+  test('a turn the harness woke names its event, and only an unstamped turn claims to answer a message', () => {
+    for (const event of ['event_drain', 'workspace_created', 'fork_interrupted', 'completion_gate', 'plan_approved']) {
+      const block = renderDynamicContextBlock({ turn: turnReasonForMetadata({ kinuEvent: event }) });
+
+      expect(block).toContain(`Signal: the harness delivered this turn's message (${event})`);
+      expect(block).not.toContain('answers the conversation');
+    }
+
+    expect(renderDynamicContextBlock({ turn: turnReasonForMetadata({ author: 'owner' }) })).toContain('Chat: this turn answers');
+  });
+
   test('the two axes are read from different metadata keys and neither can suppress the other', () => {
-    expect(turnReasonForMetadata({ kinuEvent: 'event_drain' })).toEqual({ provenance: 'chat' });
     expect(turnReasonForMetadata(null)).toEqual({ provenance: 'chat' });
     expect(turnReasonForMetadata({})).toEqual({ provenance: 'chat' });
-    expect(turnReasonForMetadata({ kinuEvent: 'timer_cron', kinuMode: 'plan' })).toEqual({ provenance: 'chat' });
+    expect(turnReasonForMetadata({ kinuEvent: 'timer_cron', kinuMode: 'plan' })).toEqual({ provenance: 'signal', event: 'timer_cron' });
 
     expect(workModeForTurnMetadata({ kinuMode: 'plan' })).toBe('plan');
     expect(workModeForTurnMetadata({ kinuMode: 'build' })).toBe('build');
