@@ -106,7 +106,7 @@ import {
   AGENT_CONFIG_KEYS,
   listProposedTasks, updateProposedTaskStatus,
   hybridSearch, memorySnippetRehydrator, type HybridHit,
-  type BackgroundJob, type AgentTaskTree, TriggerRegistry, ReplyChannelStore,
+  type BackgroundJob, TriggerRegistry, ReplyChannelStore,
   type ReasoningEffort, type ShellApprovalMode, type ResolvedTurnProfile,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
@@ -2459,13 +2459,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async clearBackgroundJobs(): Promise<{ ok: boolean }> {
     return this.countJobOperation('clear', await clearBackgroundJobs(this.jobs));
-  }
-
-  /** Read-only: the agent maintains this list via the `tasks` tool; a second writer would
-   *  swap its plan silently. Changes go through chat. */
-  @callable()
-  async listAgentTasks(): Promise<AgentTaskTree[]> {
-    return this.taskList.list();
   }
 
   /** Roster includes retired actors: a dismissed subordinate's rows still show on the board. */

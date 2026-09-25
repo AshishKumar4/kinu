@@ -48,7 +48,7 @@ describe('no Durable Object awaits anything unadmitted inside its init gate', ()
   test('a cold activation answers a pure read, and the boot cannot wedge it', async () => {
     // NIMBUS_SESSION is `{}` here; a boot failure is classified rather than thrown, so a pure read still answers.
     const harness = orchestratorHarness();
-    expect(await harness.agent.listAgentTasks()).toEqual([]);
+    expect(await harness.agent.listBackgroundJobs()).toEqual([]);
   });
 });
 

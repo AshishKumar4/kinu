@@ -102,6 +102,7 @@ test('actual owner approval admits the real Think program and attributes its nat
   db.query("INSERT INTO scaffold_versions(actor_id,version,written_at,rationale,status) VALUES(?,1,1,'plan scope regression','current')")
     .run(actor.actorId);
   const plans = new PlanReviewStore(sqlOver(db), actor);
+  const agentTasks = () => new TaskListStore(sqlOver(db), actor, (write) => db.transaction(write)()).list();
   const submitted = plans.submit('default', [{ start: 1, content: '# Implement the two tasks' }]);
 
   if (!submitted.ok) throw new Error(submitted.error);
@@ -122,13 +123,13 @@ test('actual owner approval admits the real Think program and attributes its nat
   await chatSessionTurns(agent).run('This unrelated turn is not an approved-plan submission.');
   expect((await planTasks()).map(task => task.id)).toEqual(['t1']);
   // Queued reminder turns add tasks of their own: pin presence, not count.
-  expect((await agent.listAgentTasks()).map(task => task.id)).toEqual(expect.arrayContaining(['t1', 't2']));
+  expect(agentTasks().map(task => task.id)).toEqual(expect.arrayContaining(['t1', 't2']));
   const metadata = { kinuEvent: 'plan_approved', planId: submitted.plan.id, revision: submitted.plan.revision, decision: 'approve' };
   await chatSessionTurns(agent).enqueue('Metadata is not approval authority.', { id: 'unkeyed-approval-metadata', metadata });
   await chatSessionTurns(agent).drainEnqueued();
   // The metadata-only turn adds a task without admitting the plan again.
-  expect((await agent.listAgentTasks()).length).toBeGreaterThanOrEqual(3);
-  expect((await agent.listAgentTasks()).map(task => task.id)).toEqual(expect.arrayContaining(['t1', 't2']));
+  expect(agentTasks().length).toBeGreaterThanOrEqual(3);
+  expect(agentTasks().map(task => task.id)).toEqual(expect.arrayContaining(['t1', 't2']));
   const page = await agent.inspectSubordinate({ path: [], view: 'plans', page: { limit: 1 } });
   expect(page).toMatchObject({ view: 'plans', page: { status: 'end', items: [{ id: submitted.plan.id }] } });
   const progress = await agent.inspectSubordinate({ path: [], view: 'planTasks', id: submitted.plan.id, revision: submitted.plan.revision });
