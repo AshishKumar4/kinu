@@ -10,8 +10,6 @@ import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contr
 import { seedBaseFilesystem } from '@nimbus-sh/core/workspace';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
-import { workspaceGenerationStorage } from '@kinu.run/core/workspace';
-import { adoptGeneration, generation } from '@nimbus-sh/fabric/generation.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import {
@@ -58,7 +56,6 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly host: SlateHost;
   private _budget: MissionGovernor | undefined;
   private readonly sql: SqlExecutor;
-  private readonly gen: Parameters<typeof adoptGeneration>[0];
   private lastCall: string | null = null;
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
@@ -82,8 +79,15 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     seedBaseFilesystem(this.vfs, ['home', 'etc']);
     // As the Kinu boot leaves every workspace: slates are the workspace's, not its main agent's.
     settleWorkspaceSlates(this.vfs.as(CRED_KERNEL));
-    // Pids are generation-scoped per boot so a re-spawned process never gets a pid with a live append writer.
-    this.gen = workspaceGenerationStorage(ctx.storage.sql);
+    // Pids are generation-scoped per boot so a re-spawned process never gets a pid with a live append writer. The
+    // probe hosts no Kinu workspace, so it keeps its own counter, one atomic statement per construction.
+    ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS probe_generation (id INTEGER PRIMARY KEY, value INTEGER NOT NULL)');
+
+    const generation = ctx.storage.sql.exec<{ value: number }>(
+      'INSERT INTO probe_generation (id, value) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET value = value + 1 RETURNING value',
+    ).one().value;
+
+    this.processes.setPidBase(generation * PID_GEN_STRIDE);
     const facets = probeFacetManager({ ctx, env, processes: this.processes, portRegistry: this.ports, vfs: this.vfs });
 
     this.host = new SlateHost({
@@ -126,8 +130,6 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   async start(): Promise<void> {
-    await adoptGeneration(this.gen);
-    this.processes.setPidBase(generation(this.gen) * PID_GEN_STRIDE);
     const root = '/slates/board';
     const files = this.vfs.as(CRED_KERNEL);
     files.mkdir(root, { recursive: true });
@@ -170,8 +172,6 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
    * and, as the main agent would, removes it.
    */
   async previewAsHire(): Promise<{ preview: SlateCallResult; removed: SlateCallResult; left: boolean }> {
-    await adoptGeneration(this.gen);
-    this.processes.setPidBase(generation(this.gen) * PID_GEN_STRIDE);
     const identity = { uid: 2001, gid: 2001 };
     const home = provisionAgentHome(this.vfs.as(CRED_KERNEL), subordinateAgentName('builder'), identity);
     const hire: SlateCaller = { path: [{ name: 'builder' }], cred: agentCred(identity), workMode: 'build' };
