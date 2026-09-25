@@ -10,7 +10,7 @@ import {
   type CleanupProbes, type TeardownEntry, type TeardownManifest,
 } from './fixtures/storage-matrix/cleanup';
 import type { ProcessOwner } from './process-owner';
-import { R2_OP_VOCABULARY } from './fixtures/storage-matrix/admission';
+import { R2_OPERATION_NAMES as R2_OP_VOCABULARY } from '../packages/devbox/bench/r2-operations';
 
 function probes(overrides: Partial<CleanupProbes> = {}): CleanupProbes {
   return {

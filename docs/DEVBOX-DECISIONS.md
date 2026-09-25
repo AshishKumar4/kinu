@@ -520,7 +520,7 @@ The mechanism. `wrangler deploy` returns while the application's one
 instance is still `scheduling` or `starting`, and every `container.start()`
 until it is provisioned answers "There is no container instance that can be
 provided to this Durable Object, try again later". `deployFixture`
-(`scripts/bench-devbox-strategies.ts`) waited only for the Worker to accept
+(`scripts/bench-devbox-fixture.ts`) waited only for the Worker to accept
 the run's token, so both drivers kicked `/create` 11 to 24 s after the
 run started and the remaining rollout landed inside `pollForAttach`'s
 55 s window. The box cut that wait into the bench fixture's 6,000 ms admission
@@ -646,7 +646,7 @@ The four decisions, in landing order, each with its measurement:
 `unobserved execution` on the box's own `A startup is armed, so ask again`,
 read after the fixture's 6,000 ms admission window against a box that had
 just been quiesced, while `pollForAttach` beside them re-drove the same
-refusal. `askWhileStarting` in `scripts/bench-devbox-strategies.ts` is the
+refusal. `askWhileStarting` in `scripts/bench-devbox-fixture.ts` is the
 one rule: `execInBox`, `writeFileInBox` and the readiness drive ask again
 every 250 ms while the reply is the re-askable refusal, until the startup
 observation ceiling, and return the box's own last words after it; a
@@ -1031,7 +1031,8 @@ ran a real recycle: stop 8578 ms, wake 579 store calls in 45917 ms, boot
 `fd48f635` then `64b07fe4`, and the publish-time and wake-time control rows
 were identical. No write was lost. The cause stays an inference: stops that
 never completed were measured as recycles. `requireConfirmedStop` in
-`scripts/bench-devbox-strategies.ts` refuses a wake after an unconfirmed stop.
+`scripts/bench-devbox-strategies.ts` refused a wake after an unconfirmed stop;
+it left the tree with D27's comparison instruments.
 
 D26. Restore runs inside the SDK start block again (2026-09-23,
 `2a2716881` and `423c294c9`, `@cloudflare/sandbox` 0.12.9). This reverses D8's placement
@@ -1138,7 +1139,17 @@ decision, 2026-09-23, checklist row DBX-10; asked first in m1191). The
 evidence is D18: settlement `20260915065241` admitted snapshot-chain on all
 ten gates, and no other design measured under the contract below was shown
 better (D5's table). A new design reopens the search only with a comparison
-run under that contract; none is scheduled (O3).
+run under that contract; none is scheduled (O3). The comparison instruments
+were removed on 2026-09-25 by the commit that carries this sentence:
+`scripts/bench-devbox-strategies.ts` (driver, arms, frozen controls, decisive
+workloads, G0-G9 admission, ranking report), `scripts/fixtures/storage-matrix/`
+`admission.ts`, `protocol.ts`, `manifest.ts` and `confirmatory-plan.json`,
+`scripts/fixtures/r2-bench/` `decision.ts`, `decisive.ts`, `layouts.ts`,
+`probe.ts`, `report.ts` and `security/cells.ts`, and the fixture Worker's G4
+security cells and G3 publication cut (`packages/devbox/bench/security-cells.ts`,
+`publication-cut.ts`, `publication-bucket.ts`). Reopening the search starts by
+restoring them from that commit's parent. The fixture the live drivers share
+stays as `scripts/bench-devbox-fixture.ts`.
 
 D28. The Durable Object batches the container calls it keeps (DBX-7,
 `527e15417`, 2026-09-23; asked in m712: "combine multiple exec api calls to single ones
@@ -1301,7 +1312,8 @@ Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
 separately, on identical committed trees. Capture pre-admission metadata
 bytes, CPU work, request count, peak memory and elapsed hook time. A request
 count is not a cost. A local workerd clock is not a cloud latency. A run is
-admitted only when every G gate passes; a refused run ranks nothing.
+admitted only when every G gate passes; a refused run ranks nothing. The
+admission code that enforced this left the tree with D27's instruments.
 
 ## Open
 

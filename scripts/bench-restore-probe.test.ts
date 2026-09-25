@@ -1,15 +1,7 @@
-import { scratchDir } from '../packages/test-utils/src/scratch';
 
 import { describe, expect, test } from 'bun:test';
 
-import {
-  decodeRestoreProbeRows,
-  parseOptions,
-  readArmArtifact,
-  readRestoreProbe,
-  writeArmArtifact,
-} from './bench-devbox-strategies';
-import type { Fixture, RestoreProbeRow } from './bench-devbox-strategies';
+import { readRestoreProbe, type Fixture } from './bench-devbox-fixture';
 import { stopContainer } from '../packages/devbox/bench/container-stop';
 
 // ── the restore poll ────────────────────────────────────────────────
@@ -222,61 +214,5 @@ describe('the restore poll', () => {
       globalThis.fetch = real;
     }
   });
-
-  test('old artifacts without the field read as unmeasured', () => {
-    expect(decodeRestoreProbeRows(undefined)).toEqual([]);
-
-    // BYTES, because bytes are what the driver decodes: a hand-edited file
-    // can hold a row no typed literal can spell, and the decoder must drop
-    // that row rather than trust it.
-    const mixed = JSON.parse(
-      '[{"kind":"post-ladder-wake","treeBytes":100,"wallMs":200,"probeAt":300,"outcome":"ok"},'
-      + '{"kind":"post-ladder-wake","treeBytes":"huge","wallMs":null,"probeAt":null,"outcome":"ok"}]',
-    );
-
-    expect(decodeRestoreProbeRows(mixed)).toEqual([
-      { kind: 'post-ladder-wake', treeBytes: 100, wallMs: 200, probeAt: 300, outcome: 'ok' },
-    ]);
-  });
-
-  test('polled rows survive the durable arm artifact', () => {
-    const rows: RestoreProbeRow[] = [
-      { kind: 'cold-attach', treeBytes: 0, wallMs: 2347, probeAt: 1_786_000_000_000, outcome: 'ok' },
-      { kind: 'post-ladder-wake', treeBytes: 4_259_840, wallMs: null, probeAt: null, outcome: 'absent: the box wrote no probe row for its last start' },
-      {
-        kind: 'post-ladder-wake', treeBytes: 4_259_840, wallMs: 4542, probeAt: 1_786_000_004_000, outcome: 'ok',
-        phases: { containerStart: 900, storeMount: 2100, baseAttach: 3300, attached: 4100, bootId: 4500 },
-      },
-    ];
-
-    const root = scratchDir("restore-probe");
-
-    writeArmArtifact(root, 'probe-artifact', 'snapshot-chain', { restoreProbes: rows });
-    const read = readArmArtifact(root, 'probe-artifact', 'snapshot-chain');
-    expect(read.error).toBeNull();
-    expect(decodeRestoreProbeRows(read.artifact?.row.restoreProbes)).toEqual(rows);
-  });
 });
 
-// ── the unarmed decisive launch ─────────────────────────────────────────────
-//
-// G3 judges a publication the rendezvous holds, and the rendezvous is armed
-// only at Worker boot by --fault-cuts. Every decisive run on record before
-// 2026-09-10 launched unarmed and learned it at judgment time, after the paid
-// ladder. The refusal moves to argv parse, before anything is provisioned.
-
-describe('an unarmed decisive launch', () => {
-  test('refuses at parse time and names G3 and the flag', () => {
-    expect(() => parseOptions(['--decisive'])).toThrow(/G3/);
-    expect(() => parseOptions(['--decisive'])).toThrow(/--fault-cuts/);
-  });
-
-  test('an armed decisive parse succeeds, and the flag stays optional elsewhere', () => {
-    expect(parseOptions(['--decisive', '--fault-cuts']).decisive).toBe(true);
-    expect(parseOptions([]).faultCuts).toBe(false);
-    expect(parseOptions(['--verify-only']).decisive).toBe(false);
-    // Verify-only wins over decisive, so the combination is a probe and
-    // measures no gate: no refusal.
-    expect(parseOptions(['--decisive', '--verify-only']).decisive).toBe(false);
-  });
-});

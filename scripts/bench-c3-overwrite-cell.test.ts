@@ -4,10 +4,10 @@ import { join } from 'node:path';
 import { present, scratchDir } from '@kinu.run/test-utils';
 import { C3_WORKLOAD, C3_OVERWRITE_SHA256 } from '../packages/devbox/bench/witness-files';
 import { evaluateLiveC3, type LiveC3Observation } from '../packages/devbox/bench/c3-result';
-import { measureLiveC3 } from './bench-devbox-strategies';
+import { measureLiveC3 } from './bench-devbox-fixture';
 import type { PublicationWindow } from '../packages/devbox/bench/publication-meter';
 import * as v from 'valibot';
-import type { StartupCompletion } from './bench-devbox-strategies';
+import type { StartupCompletion } from '../packages/devbox/bench/observation-schema';
 
 function startup(bootId: string, startedAt: number, kind: string): StartupCompletion {
   return {

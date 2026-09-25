@@ -72,12 +72,6 @@ import {
   type R2OperationTally as OpTally,
 } from './r2-operations';
 import { storePrefixOf, strategyIsDeployed } from './strategy-dispatch';
-import { runBenchSecurityCells, type SecurityCellsObservation } from './security-cells';
-import {
-  armPublicationCut, finishPublicationCut, holdPublicationAcknowledgement,
-  reachPublicationCut, type PublicationCut,
-} from './publication-cut';
-import { publicationBucket } from './publication-bucket';
 import { stopContainer } from './container-stop';
 import type { PublicationOperation, PublicationWindow } from './publication-meter';
 import { meterPublicationBucket, observePublicationRequest, type PublicationFinish } from './publication-transport';
@@ -91,8 +85,6 @@ interface BenchEnv {
   BENCH_TOKEN?: string;
   /** The arm whose bindings the generated fixture config declares. */
   BENCH_SELECTED_ARMS?: string;
-  /** Immutable per deployment. Absent and zero leave object writes uninstrumented. */
-  BENCH_PUBLICATION_CUT?: string;
   /** '1' runs the container's own sync at the shipped period, as production does, for the
    *  loss-window measurement (`scripts/bench-devbox-sync-window.ts`); absent, `checkpointNow`
    *  is the only tick source. */
@@ -207,22 +199,11 @@ async function maybeFlush(): Promise<void> {
   await flushOps(flushEnv);
 }
 
-/** The counter owns the rendezvous across the proxy and box isolates. */
-async function holdPublicationAck(env: BenchEnv, key: string, bytes: number): Promise<void> {
-  const counter = env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops'));
-  await holdPublicationAcknowledgement({
-    reach: (objectKey, size) => counter.reachCut(objectKey, size),
-    read: (token) => counter.readCut(token),
-    wait: () => scheduler.wait(100),
-  }, key, bytes);
-}
-
 /** The existing meter wraps the boot-selected object store. */
 function countingBucket(bucket: R2Bucket, env: BenchEnv): R2Bucket {
   const counter = env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops'));
 
-  const observed = meterPublicationBucket(publicationBucket(bucket, env.BENCH_PUBLICATION_CUT,
-    (key, bytes) => holdPublicationAck(env, key, bytes)), {
+  const observed = meterPublicationBucket(bucket, {
     begin: async (key, operation, uploadId) => await counter.beginPublicationAttempt(key, operation, uploadId),
     finish: async (id, result) => await counter.finishPublicationAttempt(id, result),
   });
@@ -418,61 +399,6 @@ export class BenchOpCounter extends DurableObject<BenchEnv> {
       await txn.put('publication-meter-window', window);
 
       return window;
-    });
-  }
-
-  async armCut(token: string, prefix: string): Promise<void> {
-    await this.ctx.storage.transaction(async (txn) => {
-      const current = await txn.get<PublicationCut>('publication-cut');
-
-      if (current?.token === token) return;
-
-      if (current?.state === 'armed' || current?.state === 'held') {
-        throw new Error('another publication cut is active');
-      }
-
-      await txn.put('publication-cut', armPublicationCut(token, prefix));
-    });
-  }
-
-  async readCut(token: string): Promise<PublicationCut> {
-    const row = await this.ctx.storage.get<PublicationCut>('publication-cut');
-
-    if (row?.token !== token) throw new Error('no publication cut has this token');
-
-    return row;
-  }
-
-  async reachCut(key: string, bytes: number): Promise<PublicationCut | null> {
-    return await this.ctx.storage.transaction(async (txn) => {
-      const row = await txn.get<PublicationCut>('publication-cut');
-
-      if (row === undefined || !key.startsWith(row.prefix)) return null;
-      const next = reachPublicationCut(row, key, bytes);
-
-      if (next !== row) await txn.put('publication-cut', next);
-
-      return next;
-    });
-  }
-
-  async finishCut(token: string, stopped: boolean): Promise<PublicationCut> {
-    return await this.ctx.storage.transaction(async (txn) => {
-      const row = await txn.get<PublicationCut>('publication-cut');
-
-      if (row === undefined) throw new Error('no publication cut is armed');
-      const next = finishPublicationCut(row, token, stopped);
-      await txn.put('publication-cut', next);
-
-      return next;
-    });
-  }
-
-  async clearCut(token: string): Promise<void> {
-    await this.ctx.storage.transaction(async (txn) => {
-      const row = await txn.get<PublicationCut>('publication-cut');
-
-      if (row?.token === token) await txn.delete('publication-cut');
     });
   }
 
@@ -705,50 +631,6 @@ class BenchBox extends Devbox<BenchEnv> {
     await flushOps(this.env);
   }
 
-  /**
-   * Run the G4 security fault cells (F7 stale writer, F10 hostile metadata,
-   * F11 capability escape/replay, F12 credential exposure) inside this box.
-   *
-   * Storage-only: no container exec, no mount, no checkpoint. The cells run
-   * the production controls against an isolated per-call namespace
-   * `<boxPrefix>security-cells/<nonce>/` with isolated durable keys, so the
-   * live control record and live payload prefixes are never touched. The box
-   * prefix is derived from this object's own id — the same id
-   * `storePrefixOf` derives from the driver's box name — so the cells cannot
-   * name another box's keys whatever nonce the driver supplies.
-   *
-   * The live fixture secret (BENCH_TOKEN) is read from this object's own env
-   * for the F12 scan and never leaves in the answer: F12 reports surfaces,
-   * never values. This env carries no account credential to copy.
-   */
-  async runSecurityCells(nonce: string): Promise<SecurityCellsObservation> {
-    const strategy = this.strategy;
-    const boxPrefix = `boxes/${this.ctx.id.toString()}/`;
-    // The F12 scan surface: the declared string env beside the token, named
-    // one by one so no representation check decides what counts. BENCH_TOKEN
-    // itself is the scanned secret, never a scanned surface.
-    const envValues: Array<{ readonly name: string; readonly value: string }> = [];
-
-    for (const entry of [
-      { name: 'ALLOW_EXTRACTION', value: this.env.ALLOW_EXTRACTION },
-      { name: 'BENCH_SELECTED_ARMS', value: this.env.BENCH_SELECTED_ARMS },
-    ]) {
-      if (entry.value !== undefined && entry.value.length > 0) {
-        envValues.push({ name: entry.name, value: entry.value });
-      }
-    }
-
-    return await runBenchSecurityCells({
-      strategy,
-      boxPrefix,
-      nonce,
-      bucket: this.env.BACKUP_BUCKET,
-      storage: this.ctx.storage,
-      fixtureSecret: this.env.BENCH_TOKEN ?? '',
-      envValues,
-    });
-  }
-
   /** Release the benchmark container without preserving state. The caller is
    * deleting that state and must free the class's only instance first. */
   async stopForTeardown(): Promise<void> {
@@ -881,29 +763,6 @@ class BenchBox extends Devbox<BenchEnv> {
         error: describeThrown({ cause: error }),
       });
     }
-  }
-
-  /**
-   * Stop the container WITHOUT a final checkpoint, the way a platform
-   * replacement does.
-   *
-   * The witness instrument for a recovery replay, and the only way to reach it
-   * from outside: `quiesce` takes the final checkpoint, so after an ordinary
-   * stop the store already holds the generation an attach would restore and the
-   * recovery path this box's restore claim is about never runs. A container the
-   * platform replaced left exactly this state — the last committed generation
-   * in the store, uncommitted work on a disk that is gone — and the next wake
-   * restores from it, which is what makes the replay observable.
-   */
-  async killWithoutQuiesce(): Promise<boolean> {
-    if (this.ctx.container?.running !== true) return false;
-    await stopContainer({
-      stop: async () => await this.stop('SIGKILL'),
-      running: () => this.ctx.container?.running === true,
-      wait: async () => await scheduler.wait(100),
-    });
-
-    return true;
   }
 
   /**
@@ -1117,7 +976,6 @@ function benchCheckpointIntervalMs(env: BenchEnv): number {
 /** One instrument request: the route and its body, and the box it addresses. */
 interface InstrumentRequest {
   readonly route: string;
-  readonly input: DriverBody;
   readonly env: BenchEnv;
   readonly strategy: DevboxStrategyName;
   readonly box: BenchStub;
@@ -1128,9 +986,9 @@ interface InstrumentRequest {
   readonly counter: DurableObjectStub<BenchOpCounter>;
 }
 
-/** Diagnostic reads and fault injection share the instrument route boundary. */
+/** Diagnostic reads share the instrument route boundary. */
 async function serveInstrumentRoutes(
-  { route, input, env, strategy, box, name, started, url, counter }: InstrumentRequest,
+  { route, env, strategy, box, name, started, url, counter }: InstrumentRequest,
 ): Promise<Response | null> {
   switch (route) {
     case 'GET /state': {
@@ -1166,21 +1024,6 @@ async function serveInstrumentRoutes(
       return json({ payload: { ok: probe !== undefined, strategy, box: name, probe, ms: Date.now() - started } });
     }
 
-    case 'POST /checkpoint-cut': {
-      if (env.BENCH_PUBLICATION_CUT !== '1') {
-        throw new Error('NOT-CUT: this Worker boot did not enable --fault-cuts');
-      }
-
-      const op = input.op ?? '';
-
-      if (op.length === 0) return json({ payload: { ok: false, error: 'op is required' }, status: 400 });
-      const kind: CheckpointKind = input.kind === 'tick' ? 'tick' : 'quiesce';
-      await counter.armCut(op, storePrefixOf(env, strategy, name));
-      const row = await box.armBenchOperation({ op, operation: 'checkpoint', kind });
-
-      return json({ payload: { ok: true, token: row.token, kind, state: row.state, ms: Date.now() - started }, status: 202 });
-    }
-
     case 'POST /publication-window/open': {
       const token = url.searchParams.get('token') ?? '';
 
@@ -1189,29 +1032,6 @@ async function serveInstrumentRoutes(
 
     case 'POST /publication-window/close':
       return json({ payload: { ok: true, window: await counter.closePublicationWindow(url.searchParams.get('token') ?? '') } });
-    case 'GET /fault-cut':
-      return json({ payload: { ...await counter.readCut(url.searchParams.get('token') ?? '') } });
-    case 'POST /fault-cut/kill': {
-      const token = url.searchParams.get('token') ?? '';
-      const receipt = await counter.readCut(token);
-
-      if (receipt.prefix !== storePrefixOf(env, strategy, name)) {
-        throw new Error('the publication cut belongs to another box');
-      }
-
-      if (receipt.state !== 'held') return json({ payload: { ...await counter.finishCut(token, false) } });
-      const stopped = await box.killWithoutQuiesce();
-
-      return json({ payload: { ...await counter.finishCut(token, stopped) } });
-    }
-
-    case 'POST /fault-cut/cancel':
-      return json({ payload: { ...await counter.finishCut(url.searchParams.get('token') ?? '', false) } });
-    case 'POST /fault-cut/clear': {
-      await counter.clearCut(url.searchParams.get('token') ?? '');
-
-      return json({ payload: { ok: true } });
-    }
   }
 
   if (route === 'GET /incidents') {
@@ -1221,25 +1041,6 @@ async function serveInstrumentRoutes(
     const incidents = await box.devboxIncidentReasons();
 
     return json({ payload: { ok: true, strategy, box: name, incidents, ms: Date.now() - started } });
-  }
-
-  if (route === 'POST /security') {
-    // G4 FAULT CELLS, storage-only. `op` doubles as the isolated namespace
-    // nonce: one call, one `security-cells/<op>/` prefix and one set of
-    // `__security:*:<op>` durable keys, so a re-post with the same op reuses
-    // the namespace and a new op cannot collide with it. No new body field:
-    // DriverBodySchema stays closed.
-    const nonce = input.op ?? '';
-
-    if (nonce.length === 0) return json({ payload: { ok: false, error: 'op is required' }, status: 400 });
-
-    if (!/^[A-Za-z0-9-]{8,64}$/.test(nonce)) {
-      return json({ payload: { ok: false, error: 'op must be an 8-64 char id for the isolated namespace' }, status: 400 });
-    }
-
-    const security = await box.runSecurityCells(nonce);
-
-    return json({ payload: { ok: true, strategy, box: name, security, ms: Date.now() - started } });
   }
 
   return null;
@@ -1289,7 +1090,7 @@ export default {
       const route = `${request.method} ${url.pathname}`;
 
       const aside = await serveInstrumentRoutes({
-        route, input, env, strategy, box, name, started, url, counter,
+        route, env, strategy, box, name, started, url, counter,
       });
 
       if (aside !== null) return aside;
@@ -1407,14 +1208,6 @@ export default {
             // driver's poll cadence never enters a measured number.
             ms: row.ms,
           } });
-        }
-
-        case 'POST /kill': {
-          // A container stop with NO final checkpoint: the witness instrument
-          // for a recovery replay. See `killWithoutQuiesce`.
-          await box.killWithoutQuiesce();
-
-          return json({ payload: { ok: true, strategy, box: name, ms: Date.now() - started } });
         }
 
         case 'POST /destroy': {

@@ -531,16 +531,16 @@
       "loadAtStart": 5.15,
       "exit": 1
     },
-    "bun test --timeout=0 scripts/bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts": {
-      "wallSeconds": 9.97,
-      "cpuSeconds": 6.34,
-      "peakRssMb": 305.13,
-      "peakRunnable": 7,
-      "peakCpuThreads": 2.67,
-      "meanThreads": 0.64,
-      "samples": 79,
-      "loadAtStart": 4.13,
-      "exit": 1
+    "bun test --timeout=0 scripts/bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts": {
+      "wallSeconds": 6.34,
+      "cpuSeconds": 6.29,
+      "peakRssMb": 200.52,
+      "peakRunnable": 10,
+      "peakCpuThreads": 2.59,
+      "meanThreads": 0.99,
+      "samples": 65,
+      "loadAtStart": 6.09,
+      "exit": 0
     },
     "bun test --timeout=0 scripts/public-pages.test.ts scripts/plan-demo-film.test.ts": {
       "wallSeconds": 42.06,

@@ -14,8 +14,7 @@ permissions:
 #   RefinementFixtures      lean/** and lean/fixtures/
 #   check-traceability.mjs  lean/traceability.yaml, lean/**, AND every `.ts` file
 #                           a tsRef or a refinement entry names — measured 143
-#                           cited declarations, including packages/core/tests/ and
-#                           scripts/fixtures/storage-matrix/
+#                           cited declarations, including packages/core/tests/
 #   lean-citations.ts       EVERY tracked text source. Measured: 1,987 files, 95
 #                           module / 47 theorem / 1 line citations.
 #   bun test                the refinement tests and the deployed code they import
@@ -23,8 +22,8 @@ permissions:
 # Any filter narrow enough to write down is a strict SUBSET of what the gates
 # read, and the gap is not hypothetical: Lean citations live in `docs/` (3
 # files), `scripts/` (5), `packages/core/tests/` (6) and `bench/corpus/patches/`
-# (1), and the traceability manifest cites `packages/core/tests/` and
-# `scripts/fixtures/storage-matrix/` directly. Under a filter of `lean/**`,
+# (1), and the traceability manifest cites `packages/core/tests/` directly.
+# Under a filter of `lean/**`,
 # `packages/**/src/**/*.ts`, `scripts/verify-lean.sh`,
 # `.github/actions/setup-lean/**` and the two workflow files, neither
 # `scripts/lean-citations.ts` nor `lean/check-traceability.mjs` — two of the four
