@@ -254,6 +254,7 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
 
   return {
     fetch: refuse('fetch'),
+    hasWorkspace: refuse('hasWorkspace'),
     ensureProfile: refuse('ensureProfile'),
     getProfile: refuse('getProfile'),
     getProfileCatalog: refuse('getProfileCatalog'),

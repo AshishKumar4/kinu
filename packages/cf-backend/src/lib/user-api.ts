@@ -123,6 +123,10 @@ export const RosterFrameSchema = v.object({
 
 export const ROSTER_SOCKET_ROUTE = '/api/user/workspaces/live';
 
+export function pictureUrl(workspace: string, slate: string, digest: string): string {
+  return `/api/user/pictures/${encodeURIComponent(workspace)}/${encodeURIComponent(slate)}/${digest}`;
+}
+
 const CliSetupSchema = v.object({
   publicOrigin: v.string(), installCommand: v.string(), setupCommand: v.optional(v.string()), authCommand: v.string(),
 });

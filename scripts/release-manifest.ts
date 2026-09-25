@@ -93,6 +93,7 @@ const BindingBlocksSchema = v.object({
   send_email: v.optional(v.array(v.object({ name: v.string() }))),
   version_metadata: v.optional(v.object({ binding: v.string() })),
   ai: v.optional(v.object({ binding: v.string() })),
+  browser: v.optional(v.object({ binding: v.string() })),
   migrations: v.optional(v.array(v.object({
     tag: v.string(),
     new_sqlite_classes: v.optional(v.array(v.string())),
@@ -145,6 +146,8 @@ export function releaseBindings(config: BindingBlocks, optional: ReadonlySet<str
   for (const email of config.send_email ?? []) add(email.name, 'send-email', '');
 
   if (config.ai !== undefined) add(config.ai.binding, 'ai', '');
+
+  if (config.browser !== undefined) add(config.browser.binding, 'browser', '');
 
   if (config.assets !== undefined) add(config.assets.binding, 'assets', '');
 

@@ -156,7 +156,6 @@ export function WorkspaceDrilldown(
     if (ok) setPending(null);
   }, [act, pending]);
 
-  // The typed name must equal the workspace name exactly.
   const retypeRequired = pending?.action.action === 'workspace.remove';
   const confirmBlocked = busy || (retypeRequired && typedName !== workspace);
   const confirmWord = pending?.danger === true ? 'Remove' : 'Confirm';

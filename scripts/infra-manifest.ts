@@ -86,6 +86,7 @@ const WorkerSchema = v.object({
   vars: v.optional(v.record(v.string(), v.string())),
   send_email: v.optional(v.array(v.object({ name: v.string() }))),
   ai: v.optional(v.object({ binding: v.string() })),
+  browser: v.optional(v.object({ binding: v.string() })),
   worker_loaders: v.optional(v.array(v.object({ binding: v.string() }))),
   version_metadata: v.optional(v.object({ binding: v.string() })),
   r2_buckets: v.optional(v.array(v.object({ binding: v.string(), bucket_name: v.string() }))),
@@ -518,6 +519,7 @@ const R2_PURPOSE = {
     'the Nimbus runtime artifact store a hosted workspace installs its toolchain from',
   FEEDBACK_BUCKET: 'screenshots attached to in-product feedback reports',
   RELEASES_BUCKET: 'the worker release artifact each self-hosted deployment installs and updates from',
+  SLATE_PICTURES: 'the picture of each slate a workspace tile draws, taken by Browser Rendering after the slate renders',
 } satisfies Record<string, string>;
 
 const R2_HOLDS = {
@@ -530,6 +532,8 @@ const R2_HOLDS = {
   RELEASES_BUCKET: 'every published worker release tarball. Deleting it leaves `release.json` '
     + 'naming an artifact that answers 404, so a self-hosted deployment cannot install or update '
     + 'until the next deploy republishes one.',
+  SLATE_PICTURES: 'one WebP per slate, named by its digest. Deleting it leaves each tile naming a picture '
+    + 'that answers 404, so the tile draws its lettered cover until the slate next renders.',
 } satisfies Record<string, string>;
 
 /** Read one of the two closed tables above by a binding name the config supplied.
@@ -790,6 +794,7 @@ function workerRow(config: WorkerConfig): InfraWorker {
     ...(config.ai === undefined ? [] : [config.ai.binding]),
     ...(config.assets === undefined ? [] : [config.assets.binding]),
     ...singleBinding(config.version_metadata),
+    ...singleBinding(config.browser),
   ];
 
   return {
@@ -1095,6 +1100,8 @@ function draftsFor(
     ...(config.send_email ?? []).map((e) => [e.name, 'outbound Mission Inbox replies and owner notifications'] as const),
     ...singleBinding(config.version_metadata).map((binding) =>
       [binding, 'the deployed Worker version — the installed-build identity a durable turn claim records'] as const),
+    ...singleBinding(config.browser).map((binding) =>
+      [binding, 'Browser Rendering — the headless browser that photographs a slate for its tile'] as const),
   ];
 
   for (const [binding, purpose] of inert) {

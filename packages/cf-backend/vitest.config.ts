@@ -281,6 +281,8 @@ export default defineConfig({
           // `abortAllDurableObjects()`.
           name: 'slate-durability-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
           modules: probeModules(slateDurabilityProbe),
+          // A removed slate takes its picture; with no `BROWSER`, nothing is photographed here.
+          r2Buckets: ['SLATE_PICTURES'],
           bindings: {
             PREVIEW_HOST_SUFFIX: 'preview.test',
             DEV_USER_EMAIL: 'probe@local',

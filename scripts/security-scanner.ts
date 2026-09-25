@@ -321,6 +321,16 @@ export const REVIEWED_ADVISORIES = {
     ids: [1112706],
   },
 
+  'extract-zip': {
+    reason: 'TRANSITIVE: @cloudflare/puppeteer 1.4.0 (the slate-picture capture) pins @puppeteer/browsers '
+      + '2.2.4, which requires it. The Worker imports the package\'s workers entry, '
+      + 'puppeteer-cloudflare.js, whose import graph reaches 116 files and never @puppeteer/browsers: only '
+      + 'the Node launchers (node/ChromeLauncher, FirefoxLauncher, ProductLauncher, PuppeteerNode) import '
+      + 'it, and nothing in this repository calls them. extract-zip\'s only use there is unpacking a '
+      + 'downloaded browser archive, which never happens in a Worker; worker-bundle-reach.test.ts fails '
+      + 'if either package enters the Worker bundle. No fixed release exists: 2.0.1 is its last publish.',
+    ids: [1139346, 1193685],
+  },
   'ip-address': {
     reason: 'transitive: express-rate-limit 8.5.2 <- @modelcontextprotocol/sdk. Leading-zero '
       + 'octet and IPv4-mapped misclassification that can bypass an SSRF check — in the rate '

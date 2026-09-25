@@ -6,7 +6,6 @@ import type { ReasoningEffort } from './reasoning-effort';
 import type { JsonObject } from '../utils/json';
 import type { Usage } from '../usage';
 
-/** Parsed `<provider>/<modelId>`. */
 export interface ModelSpec { provider: string; modelId: string; }
 
 /** USD per 1M tokens, the models.dev `cost` block verbatim. It publishes one cache-write

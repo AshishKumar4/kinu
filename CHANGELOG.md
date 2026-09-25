@@ -19,6 +19,11 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   one socket, so a page left open wakes no workspace. The Workspaces page reads 50 workspaces at a time as you scroll,
   and its filters and search are answered by the account, so they cover every workspace. A tile no longer runs its
   slate live. A workspace that has not reported yet says so, and the first visit asks each such workspace once.
+- **A workspace tile shows its slate's picture.** After a slate's page renders, the workspace photographs it with a
+  headless browser (30 seconds after the last render, or 2 minutes into a long run of edits) and keeps the picture in
+  R2, so a tile draws the slate without running it. A failed shot keeps the last picture and tries twice more, and a
+  removed slate or workspace takes its pictures with it. A deployment without Browser Rendering or the
+  `kinu-slate-pictures` bucket keeps today's lettered cover.
 - While a sandbox starts, the workspace says "Sandbox starting…" in a quiet line under the tab, where a failed preview listing reports, and keeps the previews it already had.
 - The Worker's `/api` routes are served by one Hono app whose route order is the old dispatch order, gate for gate. An error no route catches is now answered as JSON with its class's status and a message naming only that class (the cause goes to the log), never cached, instead of the platform's error page; the run-event routes read the workspace whose ownership was just proven, even when the request spells its name with escapes.
 - **The Diffs tab is now Changes.** It lists the changed files as a tree with their counts; a file opens to a diff
@@ -667,6 +672,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   is `NOT NULL`.
 
 ### Fixed
+
+- **A workspace's card shows the owner's words, never Kinu's own.** A new workspace's card showed the prompt Kinu
+  starts its first turn with as the owner's latest task, and a background event after the owner's message did the
+  same. Home and the Workspaces page now show the owner's last message, or nothing until there is one.
 
 - **The request is the last thing the agent reads in a turn.** Runtime news for the turn (a device that just
   connected, skills it activated, a background job it resumes) and changed live state used to follow the request, and

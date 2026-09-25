@@ -12,6 +12,8 @@ import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { unreachableNamespace, userAccount, workerContext } from './helpers/bindings';
 import type { AuthIdentity } from '../src/auth/session';
 import { orchestratorHarness } from './helpers/actor-harness';
+import { memoryBucket } from './helpers/r2';
+import { pictureKey, type PictureBucket } from '../src/slates/pictures';
 
 const OVERFLOW = 205;
 
@@ -253,6 +255,57 @@ describe('a deletion that could not finish', () => {
     expect(harness.destroyedWorkspaces).toEqual([]);
     expect(pendingRows(harness)).toEqual([]);
     expect((await harness.userDO.listWorkspaces(owner)).total).toBe(0);
+    harness.close();
+  });
+});
+
+describe("a removed workspace's pictures", () => {
+  const WEBP = new Uint8Array([82, 73, 70, 70]);
+
+  async function pictured(bucket: PictureBucket, keys: readonly string[]): Promise<void> {
+    for (const key of keys) await bucket.put(key, WEBP, { httpMetadata: { contentType: 'image/webp' } });
+  }
+
+  test('go with it, every page of them, and no other workspace\'s', async () => {
+    // One key a page, as R2 answers a thousand, so the teardown must page.
+    const bucket = memoryBucket(1);
+    const harness = createTestUserDO({ durableObjectId: USER_ID, slatePictures: bucket });
+    const owner = await testOwner();
+    await harness.userDO.registerWorkspace(owner, 'gone');
+    await harness.userDO.registerWorkspace(owner, 'kept');
+    await pictured(bucket, [pictureKey('gone', 'board', 'a'.repeat(64)), pictureKey('gone', 'queue', 'b'.repeat(64)), pictureKey('kept', 'board', 'a'.repeat(64))]);
+
+    await harness.userDO.removeWorkspace(owner, 'gone', USER_ID);
+
+    expect([...bucket.objects.keys()]).toEqual([pictureKey('kept', 'board', 'a'.repeat(64))]);
+    harness.close();
+  });
+
+  test('R2 refused keeps the workspace marked, and the next read deletes them', async () => {
+    const bucket = memoryBucket();
+    let refused = true;
+
+    const refusing: PictureBucket = {
+      ...bucket,
+      delete: async (keys) => {
+        if (refused) throw new Error('R2 is unavailable');
+        await bucket.delete(keys);
+      },
+    };
+
+    const harness = createTestUserDO({ durableObjectId: USER_ID, slatePictures: refusing });
+    const owner = await testOwner();
+    await harness.userDO.registerWorkspace(owner, 'gone');
+    await pictured(bucket, [pictureKey('gone', 'board', 'a'.repeat(64))]);
+
+    await expect(harness.userDO.removeWorkspace(owner, 'gone', USER_ID)).rejects.toThrow('R2 is unavailable');
+    expect((await harness.userDO.listWorkspaces(owner)).total).toBe(0);
+
+    refused = false;
+    await harness.userDO.listWorkspaces(owner);
+
+    expect([...bucket.objects.keys()]).toEqual([]);
+    expect(harness.db.prepare(`SELECT name FROM user_workspaces`).all()).toEqual([]);
     harness.close();
   });
 });

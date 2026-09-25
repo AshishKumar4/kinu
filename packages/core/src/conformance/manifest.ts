@@ -340,6 +340,11 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': WIRED,
       cli: { absent: 'a local workspace has no Changes tab, so nothing writes notes on a change-set' },
     },
+    slate_pictures: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
+      cli: { absent: 'a local slate has no tile to draw and no Browser Rendering to shoot one' },
+    },
     // Container lifecycle announcement dedupe, keyed to the workspace's container.
     sandbox_lifecycle_incidents: {
       'cf-orchestrator': WIRED,

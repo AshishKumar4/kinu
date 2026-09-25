@@ -4,9 +4,12 @@
  */
 import { sqlOver } from '@kinu.run/test-utils';
 import { describe, expect, setSystemTime, test } from 'bun:test';
-import { RunEventRecorder, WORKSPACE_RUN_ID, DeferredApprovalStore, formatApproval, type WorkspaceOverview } from '@kinu.run/core';
 import {
-  nextTurn, orchestratorHarness, hostedSubordinateHarness, until, workspaceMainActor, type RecordedUserPlaneCalls,
+  RunEventRecorder, TURN_AUTHOR_METADATA_KEY, WORKSPACE_RUN_ID, DeferredApprovalStore, formatApproval, type WorkspaceOverview,
+} from '@kinu.run/core';
+import {
+  chatSessionTurns, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission, until, workspaceMainActor,
+  type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
@@ -71,13 +74,18 @@ describe('the folded tile', () => {
     expect((await agent.foldOverview()).activity).toBe('idle');
   });
 
-  test('the newest sealed run is the card line; the reserved aggregate is skipped', async () => {
+  test('the newest run\'s end and the person\'s newest words are the card line; the reserved aggregate is skipped', async () => {
     const { agent, db } = orchestratorHarness();
     const recorder = new RunEventRecorder(sqlOver(db), workspaceMainActor(db));
 
-    recorder.emit('run-older', { type: 'run_start', agentId: 'main', userMessage: 'first task' });
+    const asked = (text: string) => ({
+      type: 'run_start' as const, agentId: 'main', userMessage: text,
+      turn: { turnId: `turn-${text}`, messageId: `msg-${text}`, kind: 'user' as const, text },
+    });
+
+    recorder.emit('run-older', asked('first task'));
     recorder.emit('run-older', { type: 'run_end', reason: 'completed' });
-    recorder.emit('run-newer', { type: 'run_start', agentId: 'main', userMessage: 'latest task' });
+    recorder.emit('run-newer', asked('latest task'));
     recorder.emit('run-newer', { type: 'run_end', reason: 'error' });
     // The reserved between-run aggregate is not a run and must never lead the card.
     recorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'agent' });
@@ -103,6 +111,36 @@ describe('the folded tile', () => {
 
     await agent.declareTurnInFlight(false);
     expect((await agent.foldOverview()).latestRun).toEqual({ status: 'completed', task: 'a live turn' });
+  });
+});
+
+describe("the card line is the person's own words", () => {
+  const MISSION = 'Keep the ledger balanced and flag anything odd.';
+
+  test('never the first turn the harness takes, and the words the owner sends, however they arrive', async () => {
+    const { agent, db } = orchestratorHarness();
+    seedMission(db, MISSION);
+    const turns = chatSessionTurns(agent);
+    const genesis = turns.park();
+
+    expect(await agent.beginGenesisTurn()).toEqual({ started: true });
+    await genesis;
+    await turns.settle({ messageId: 'a-genesis', text: 'ok' });
+
+    expect((await agent.foldOverview()).latestRun).toEqual({ status: 'completed', task: null });
+
+    await turns.run("Sort this week's receipts into the ledger");
+    expect((await agent.foldOverview()).latestRun?.task).toBe("Sort this week's receipts into the ledger");
+
+    // What the owner types while a turn runs is queued as a programmatic turn, stamped theirs.
+    await turns.enqueue('And flag anything over $500', { metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' } });
+    await turns.drainEnqueued();
+    expect((await agent.foldOverview()).latestRun?.task).toBe('And flag anything over $500');
+
+    // A drain, a wake or a gate after it leaves the owner's words on the card.
+    await turns.enqueue('Two background jobs finished.', { metadata: { kinuEvent: 'background_jobs' } });
+    await turns.drainEnqueued();
+    expect((await agent.foldOverview()).latestRun).toEqual({ status: 'completed', task: 'And flag anything over $500' });
   });
 });
 

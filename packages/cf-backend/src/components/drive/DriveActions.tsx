@@ -180,7 +180,6 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
   );
 }
 
-/** The share sheet talks to the slate's own workspace. */
 function DriveShareSheet({ slate, onClose }: { slate: OwnedSlate; onClose: () => void }) {
   const { rpc } = useWorkspaceRpc(slate.workspace);
 

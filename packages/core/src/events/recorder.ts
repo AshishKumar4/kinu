@@ -21,6 +21,7 @@ import {
 } from './model-call';
 import { diagnostics, toKinuError } from '../obs/index';
 import { ToolOutcomeSchema } from '../types/tool-outcome';
+import { turnAuthor } from '../utils/ui-message';
 
 /** Stored model messages validate against the AI SDK's own schema, not a hand-written copy. */
 const OpenTurnIdentitySchema: v.GenericSchema<OpenTurnIdentity> = v.object({
@@ -449,8 +450,10 @@ export class RunEventRecorder {
     return events.filter((event) => event.phase === 'start' && !ended.has(event.operationId));
   }
 
-  /** Excludes WORKSPACE_RUN_ID. `status` is null when the run never sealed; do not read that as
-   *  success. */
+  /**
+   * The latest run's end (null if unsealed, never success) and the person's newest words: `turnAuthor` of a run's
+   * recorded turn, so no harness run or turn-less row. Excludes WORKSPACE_RUN_ID.
+   */
   latestRunHeader(): { status: string | null; userMessage: string | null } | null {
     this.actor.assertCurrent();
 
@@ -463,27 +466,31 @@ export class RunEventRecorder {
 
     if (runId === undefined) return null;
 
-    const boundaries = this.sql<{ payload: string }>`
+    const [end] = this.sql<{ payload: string }>`
       SELECT payload FROM run_events
-      WHERE actor_id = ${this.actorId} AND run_id = ${runId}
-        AND event_index IN (
-          SELECT MAX(event_index) FROM run_events
-          WHERE actor_id = ${this.actorId} AND run_id = ${runId}
-            AND type IN (${'run_start'}, ${'run_end'}) GROUP BY type)
-      ORDER BY event_index ASC`;
+      WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'run_end'}
+      ORDER BY event_index DESC LIMIT 1`;
 
-    let status: string | null = null;
-    let userMessage: string | null = null;
+    const sealed = end === undefined ? null : parseStoredRunEvent(end.payload);
 
-    for (const row of boundaries) {
-      const event = parseStoredRunEvent(row.payload);
+    return { status: sealed?.type === 'run_end' ? sealed.reason ?? null : null, userMessage: this.operatorWords() };
+  }
 
-      if (event.type === 'run_start') userMessage = event.userMessage ?? null;
+  private operatorWords(window = 50): string | null {
+    const starts = this.sql<{ payload: string }>`
+      SELECT payload FROM run_events
+      WHERE actor_id = ${this.actorId} AND type = ${'run_start'}
+      ORDER BY ts DESC, rowid DESC LIMIT ${window}`;
 
-      if (event.type === 'run_end') status = event.reason ?? null;
+    for (const row of starts) {
+      const start = parseStoredRunEvent(row.payload);
+
+      if (start.type !== 'run_start' || start.turn === undefined) continue;
+
+      if (turnAuthor({ id: start.turn.turnId, metadata: start.turn.metadata }) === 'operator') return start.userMessage ?? null;
     }
 
-    return { status, userMessage };
+    return null;
   }
 
   /** Auto-GEPA's durable denominator. Rows without `workMode` count nothing; a turn in the same

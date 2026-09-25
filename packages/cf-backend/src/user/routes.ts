@@ -2,6 +2,8 @@
 import { Hono, type Context } from 'hono';
 import type { UserDO } from './user-do';
 import { ROSTER_SOCKET_PATH } from './roster';
+import { pictureKey, type PictureBucket } from '../slates/pictures';
+import { SlateDirectoryName } from '@kinu.run/core/slates';
 import { PROFILE_CATALOG_CONFIG_KEY } from '@kinu.run/core';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
@@ -12,7 +14,7 @@ import {
 } from './workspace-access';
 import type { CloudWorkspaceRegistry } from './workspace-create';
 import type { ObjectNamespace } from '@kinu.run/core';
-import { err, json, safeJson } from '@kinu.run/core';
+import { err, isWorkspaceName, json, safeJson } from '@kinu.run/core';
 import { retryTransientDO } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 import { isControlPlaneOperator, type AdminGateEnv } from '../control-plane/admin-caller';
@@ -25,7 +27,7 @@ const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
 export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   UserDO,
   'ensureProfile' | 'userMcp_warmConnections' | 'getProfile' | 'getProfileCatalog' | 'putProfileCatalog'
-  | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace'
+  | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'hasWorkspace'
   | 'listDevices' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'revokeDeviceConsent'
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'listActiveWorkspaces'
@@ -38,6 +40,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
 
 export interface UserRoutesEnv<Id> extends CreateWorkspaceEnv<Id>, AdminGateEnv {
   UserDO: ObjectNamespace<Id, UserRoutesAuthority>;
+  SLATE_PICTURES?: PictureBucket;
   CLI_PUBLIC_ORIGIN?: string;
 }
 
@@ -202,6 +205,29 @@ userRoutes.get('/api/user/workspaces', listWorkspaceRoster);
 
 // A socket cannot cross RPC; its upgrade request can.
 userRoutes.get('/api/user/workspaces/live', async (c) => c.get('stub').fetch(new Request(new URL(ROSTER_SOCKET_PATH, c.req.url), c.req.raw)));
+
+const PictureSchema = v.object({
+  workspace: v.pipe(v.string(), v.check(isWorkspaceName)),
+  slate: SlateDirectoryName,
+  digest: v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/u)),
+});
+
+userRoutes.get('/api/user/pictures/:workspace/:slate/:digest', async (c) => {
+  const picture = v.safeParse(PictureSchema, c.req.param());
+  const bucket = c.env.SLATE_PICTURES;
+
+  if (!picture.success || bucket === undefined) return err(404, 'No such picture.');
+  const { workspace, slate, digest } = picture.output;
+
+  if (!await c.get('stub').hasWorkspace(c.get('owner'), workspace)) return err(404, 'No such picture.');
+  const object = await bucket.get(pictureKey(workspace, slate, digest));
+
+  if (object === null) return err(404, 'No such picture.');
+
+  return new Response(object.body, {
+    headers: { 'content-type': 'image/webp', 'cache-control': 'private, max-age=31536000, immutable', etag: object.httpEtag },
+  });
+});
 
 userRoutes.post('/api/user/workspaces', async (c) => handleCreateWorkspaceRequest({
   request: c.req.raw, env: c.env, userId: c.get('identity').userId, userDO: c.get('stub'),

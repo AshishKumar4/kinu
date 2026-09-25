@@ -40,6 +40,7 @@ const MANIFEST: ReleaseManifest = {
     { binding: 'Sandbox', kind: 'durable-object', resource: 'KinuSandbox', required: false },
     { binding: 'AGENT_METRICS', kind: 'analytics-engine', resource: 'kinu_agent_metrics', required: false },
     { binding: 'AI', kind: 'ai', resource: '', required: false },
+    { binding: 'BROWSER', kind: 'browser', resource: '', required: false },
     { binding: 'ASSETS', kind: 'assets', resource: '', required: true },
     { binding: 'LOADER', kind: 'worker-loader', resource: '', required: true },
   ],
@@ -572,6 +573,8 @@ describe('a guided run', () => {
     expect(bindings.find((binding) => binding.name === 'AUTH_KV')).toMatchObject({
       type: 'kv_namespace', namespace_id: 'id-kinu-auth-kv',
     });
+    // Wrangler's own metadata for a `browser` block; an unknown type fails the whole upload.
+    expect(bindings.find((binding) => binding.name === 'BROWSER')).toEqual({ type: 'browser', name: 'BROWSER' });
     expect(upload?.body?.migrations).toEqual({ new_tag: 'v1', new_sqlite_classes: ['OrchestratorAgent', 'KinuSandbox'] });
     expect(upload?.body?.compatibility_date).toBe('2025-12-01');
   });
@@ -856,7 +859,7 @@ describe('the workerd configuration for a local instance', () => {
 
     expect(config).not.toContain('MEMORY_VECTORS');
     expect(config).not.toContain('LOADER');
-    expect(unhostedBindings(MANIFEST)).toEqual(['BACKUP_BUCKET', 'MEMORY_VECTORS', 'AGENT_METRICS', 'AI', 'LOADER']);
+    expect(unhostedBindings(MANIFEST)).toEqual(['BACKUP_BUCKET', 'MEMORY_VECTORS', 'AGENT_METRICS', 'AI', 'BROWSER', 'LOADER']);
 
     // workerd refuses to start on a disk service whose directory is absent.
     expect(workerdDirectories(MANIFEST)).toEqual(['state/do', 'state/kv/kinu-auth-kv']);
