@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { ArrowsClockwiseIcon, ChartBarIcon, GaugeIcon } from "@phosphor-icons/react";
 import {
-  fmtTokens, fmtUsd, limitHeading, limitWindowText, quotaWindowText, timeAgo, usageTotal,
+  fmtTokens, fmtUsd, limitHeading, limitUnreadText, limitWindowText, quotaWindowText, timeAgo, usageTotal,
   type AccountSpend, type AccountUsage, type LimitReport, type LimitWindow,
 } from "@kinu.run/core";
 import { getAccountUsage } from "@/lib/user-api";
@@ -65,12 +65,19 @@ function AccountRow({ row, now, live }: { row: AccountSpend; now: number; live: 
 function LimitsTable({ usage, onRefresh }: { usage: AccountUsage; onRefresh: () => void }) {
   const now = Date.now();
   const limits = usage.limits ?? [];
+  const unread = usage.limitsUnread ?? [];
 
   return (
     <div className="space-y-3">
-      {limits.length === 0
-        ? <p className="p-row-text p-text-3">No connected account reports its limits.</p>
-        : <div className="p-group">{limits.map((report) => <LimitRow key={`${report.provider}@${report.account}`} report={report} now={now} />)}</div>}
+      {limits.length === 0 && unread.length === 0 && <p className="p-row-text p-text-3">No connected account reports its limits.</p>}
+      {(limits.length > 0 || unread.length > 0) && (
+        <div className="p-group">
+          {limits.map((report) => <LimitRow key={`${report.provider}@${report.account}`} report={report} now={now} />)}
+          {unread.map((entry) => (
+            <p key={`${entry.provider}@${entry.account}`} className="px-4 py-2.5 p-row-text p-warning">{limitUnreadText(entry)}</p>
+          ))}
+        </div>
+      )}
       <button type="button" onClick={onRefresh} className="inline-flex items-center gap-1 p-meta p-text-3 hover:p-text-2">
         <ArrowsClockwiseIcon size={11} /> Read again
       </button>

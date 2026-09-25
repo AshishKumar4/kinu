@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 import type { AccountSpend } from '../events/model-call';
 import { QuotaSnapshotSchema, type QuotaSnapshot } from '../providers/quota';
-import { LimitReportSchema, type LimitReport } from '../providers/usage-limits';
+import { LimitReportSchema, LimitUnreadSchema, type LimitReport, type LimitUnread } from '../providers/usage-limits';
 import { diagnostics, toKinuError } from '../obs/index';
 import { addUsage, usageTotal, UsageSchema } from '../usage';
 
@@ -11,6 +11,7 @@ export interface AccountUsage {
   /** Never counted as zero spend. */
   readonly unread: readonly string[];
   readonly limits?: readonly LimitReport[];
+  readonly limitsUnread?: readonly LimitUnread[];
 }
 
 export const AccountSpendSchema: v.GenericSchema<AccountSpend> = v.object({
@@ -22,6 +23,7 @@ export const AccountSpendSchema: v.GenericSchema<AccountSpend> = v.object({
 export const AccountUsageSchema: v.GenericSchema<AccountUsage> = v.object({
   accounts: v.array(AccountSpendSchema), workspaces: v.number(), unread: v.array(v.string()),
   limits: v.optional(v.array(LimitReportSchema)),
+  limitsUnread: v.optional(v.array(LimitUnreadSchema)),
 });
 
 export function sortAccountSpend(rows: readonly AccountSpend[]): AccountSpend[] {

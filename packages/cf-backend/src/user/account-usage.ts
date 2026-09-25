@@ -24,6 +24,13 @@ export async function readUserAccountUsage<Id>(input: {
 }): Promise<AccountUsage> {
   const { env, userDO, owner, userId } = input;
   const [workspaces, held] = await Promise.all([userDO.listActiveWorkspaces(owner), userDO.listCredentials(owner)]);
+
+  for (const [holder, cached] of LIMITS) {
+    cached.prune();
+
+    if (cached.size === 0 && holder !== userId) LIMITS.delete(holder);
+  }
+
   const cache = LIMITS.get(userId) ?? new LimitCache();
 
   LIMITS.set(userId, cache);
@@ -41,5 +48,5 @@ export async function readUserAccountUsage<Id>(input: {
     })), { refresh: input.refresh === true }),
   ]);
 
-  return { ...usage, unread: [...usage.unread, ...live.unread], limits: live.limits };
+  return { ...usage, limits: live.limits, limitsUnread: live.limitsUnread };
 }

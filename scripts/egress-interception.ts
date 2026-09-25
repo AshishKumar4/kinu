@@ -211,7 +211,7 @@ export const FORWARDER_SURFACE: ReadonlyMap<string, string> = new Map([
   ['constructor', 'not callable over RPC; builds the private container box on this object\'s ctx'],
   ['forward', 'checks the owner and core codexEgressAllowed, then the container\'s policy.mjs checks again'],
   ['cancel', 'aborts one of this object\'s own in-flight calls by id'],
-  ['alarm', 'runs the box\'s sleepAfter and schedules; takes only the platform\'s alarm info'],
+  ['alarm', 'a runtime handler, not RPC-callable (reserved); runs the box\'s sleepAfter and schedules'],
 ]);
 
 /** The only fields the private box may declare: none names a command, env or outbound policy. */
@@ -398,7 +398,82 @@ function allowedBoxUse(inner: SyntaxNode): boolean {
   const member = nameOf(up.property) ?? '';
   const called = inner.parent?.parent?.raw;
 
-  return BOX_USES.includes(member) && (member === 'defaultPort' || (called?.type === 'CallExpression' && called.callee === up));
+  if (member === 'defaultPort') return true;
+
+  return called?.type === 'CallExpression' && called.callee === up && boxCallAllowed(member, called.arguments, inner);
+}
+
+/** The only box calls: startAndWaitForPorts(box.defaultPort, { abort: X }), containerFetch(new Request(…)), and
+ *  alarm(<the alarm parameter>). */
+function boxCallAllowed(member: string, args: readonly Node[], inner: SyntaxNode): boolean {
+  if (args.some((arg) => arg.type === 'SpreadElement')) return false;
+
+  if (member === 'containerFetch') return args.length === 1 && args[0]?.type === 'NewExpression' && nameOf(args[0].callee) === 'Request';
+
+  if (member === 'startAndWaitForPorts') {
+    const [port, cancellation] = args;
+
+    const onlyAbort = cancellation?.type === 'ObjectExpression' && cancellation.properties.length === 1
+      && cancellation.properties[0]?.type === 'Property' && !cancellation.properties[0].computed && nameOf(cancellation.properties[0].key) === 'abort';
+
+    return args.length === 2 && port?.type === 'MemberExpression' && !port.computed && nameOf(port.property) === 'defaultPort' && onlyAbort;
+  }
+
+  if (member !== 'alarm') return false;
+  const method = enclosingMethod(inner);
+  const param = method?.raw.type === 'MethodDefinition' ? nameOf(method.raw.value.params[0]) : undefined;
+
+  return method !== undefined && nameOf(method.raw.type === 'MethodDefinition' ? method.raw.key : null) === 'alarm'
+    && args.length <= 1 && (args.length === 0 || (param !== undefined && nameOf(args[0]) === param));
+}
+
+function enclosingMethod(node: SyntaxNode): SyntaxNode | undefined {
+  for (let up = node.parent; up !== undefined; up = up.parent) if (up.raw.type === 'MethodDefinition') return up;
+
+  return undefined;
+}
+
+/** A getter or setter is a function RPC can reach under a property name. */
+function accessorReasons(owner: SyntaxNode): string[] {
+  return classMembers(owner).flatMap((member) => (member.raw.type === 'MethodDefinition' && (member.raw.kind === 'get' || member.raw.kind === 'set')
+    ? [`declares a ${member.raw.kind}ter \`${nameOf(member.raw.key) ?? '[computed]'}\`, which RPC can reach`]
+    : []));
+}
+
+/** A function or arrow that captures `this` or a box alias can carry the box out unless it is called where it is made
+ *  or handed to `#calls.run`, which only calls it. */
+function closureReasons(owner: SyntaxNode): string[] {
+  const reasons: string[] = [];
+
+  walk(owner, (inner) => {
+    const { raw } = inner;
+
+    if (raw.type !== 'ArrowFunctionExpression' && raw.type !== 'FunctionExpression') return;
+
+    if (inner.parent?.raw.type === 'MethodDefinition') return;
+    let captures = false;
+
+    walk(inner, (deep) => {
+      if (deep.raw.type === 'ThisExpression' || (deep.raw.type === 'Identifier' && deep.raw.name === 'box')) captures = true;
+    });
+
+    if (!captures) return;
+    const up = inner.parent?.raw;
+    const calledHere = up?.type === 'CallExpression' && up.callee === raw;
+
+    const runArgument = up?.type === 'Property' && inner.parent?.parent?.parent?.raw.type === 'CallExpression'
+      && isCallsRun(inner.parent.parent.parent.raw);
+
+    if (!calledHere && !runArgument) reasons.push('makes a function that captures `this` or the box and is not called where it is made');
+  });
+
+  return reasons;
+}
+
+/** `this.#calls.run(…)`: EgressCalls only calls the functions it is given. */
+function isCallsRun(call: Node): boolean {
+  return call.type === 'CallExpression' && call.callee.type === 'MemberExpression' && nameOf(call.callee.property) === 'run'
+    && call.callee.object.type === 'MemberExpression' && call.callee.object.object.type === 'ThisExpression' && nameOf(call.callee.object.property) === '#calls';
 }
 
 function classReasons(input: ForwarderInputs): string[] {
@@ -426,6 +501,7 @@ function classReasons(input: ForwarderInputs): string[] {
   }
 
   walk(owner, (inner) => { if (inner.type === 'Decorator') reasons.push('carries a decorator, which can add or rewrite members'); });
+  reasons.push(...accessorReasons(owner), ...closureReasons(owner));
   reasons.push(...boxReasons(box));
 
   const field = classMembers(owner)
@@ -438,8 +514,6 @@ function classReasons(input: ForwarderInputs): string[] {
   return reasons;
 }
 
-const Callable = v.custom<(...args: never[]) => void>((value) => value instanceof Function);
-
 /** A loaded class: a function whose prototype is an object. */
 const LoadedClass = v.custom<{ readonly prototype: object }>((value) => value instanceof Function && Object.getPrototypeOf(value.prototype) !== undefined);
 
@@ -449,7 +523,8 @@ export function surfaceOf(cls: { readonly prototype: object }, durableObject: { 
 
   return {
     parentIsDurableObject: Object.getPrototypeOf(prototype) === durableObject.prototype,
-    methods: Object.getOwnPropertyNames(prototype).filter((name) => v.is(Callable, Object.getOwnPropertyDescriptor(prototype, name)?.value)),
+    // Every own key, accessors and symbols included: a getter can return a function RPC then calls.
+    methods: [...Object.getOwnPropertyNames(prototype), ...Object.getOwnPropertySymbols(prototype).map(String)],
   };
 }
 

@@ -15,7 +15,7 @@ class EgressBox extends Container<Env> {
   enableInternet = true;
 }
 
-// RPC: forward, cancel, alarm.
+// RPC: forward, cancel.
 export class CodexEgress extends DurableObject<Env> {
   readonly #box: EgressBox;
 

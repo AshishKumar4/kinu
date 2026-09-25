@@ -99,7 +99,8 @@ describe('the owner\'s usage per account, across workspaces', () => {
 
       expect(v.parse(AccountUsageSchema, await response?.json())).toEqual({
         ...MERGED,
-        unread: ['gone', expect.stringContaining('OpenRouter · team limits (')],
+        unread: ['gone'],
+        limitsUnread: [{ provider: 'openrouter', account: 'team', reason: expect.any(String) }],
         limits: [{
           provider: 'openrouter', account: 'main', at: expect.any(Number),
           windows: [{ name: 'credit', used: 5.88, limit: 10, resets: 'monthly' }],

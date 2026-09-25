@@ -89,8 +89,13 @@ describe('a direct Container is admitted only with all three proofs', () => {
       persistOutboundConfiguration(): string { return 'extra'; }
     }
 
+    class Accessor extends DurableObject {
+      get boot(): () => string { return () => 'box'; }
+    }
+
     expect(surfaceReasons(surfaceOf(Inheriting, DurableObject)).join('\n')).toContain('does not extend DurableObject directly');
     expect(surfaceReasons(surfaceOf(Extra, DurableObject)).join('\n')).toContain('exposes `persistOutboundConfiguration`');
+    expect(surfaceReasons(surfaceOf(Accessor, DurableObject)).join('\n')).toContain('exposes `boot`');
   });
 
   test('(c) the private box declares only its three fields and never leaves the class', () => {
@@ -106,6 +111,13 @@ describe('a direct Container is admitted only with all three proofs', () => {
       ['uses its box other than', text.replace('    this.#calls.cancel(callId);', '    this.#calls.cancel(callId);\n    void this.#box.ctx;')],
       ['uses its box other than', text.replace('    this.#calls.cancel(callId);', "    void this.#box.start({ entrypoint: ['sh'] });")],
       ['carries a decorator', text.replace('export class CodexEgress', '@withRun\nexport class CodexEgress')],
+      ['declares a getter `boot`', text.replace('  cancel(callId: string): void {', '  get boot() {\n    const box = this.#box;\n\n    return (options: object) => box.start(options);\n  }\n\n  cancel(callId: string): void {')],
+      ['declares a setter `port`', text.replace('  cancel(callId: string): void {', '  set port(value: number) { void value; }\n\n  cancel(callId: string): void {')],
+      ['captures `this` or the box', text.replace('    this.#calls.cancel(callId);', '    this.#calls.cancel(callId);\n    const later = () => this.#box;\n    void later;')],
+      ['uses its box other than', text.replace('box.startAndWaitForPorts(box.defaultPort, { abort: signal })', "box.startAndWaitForPorts(box.defaultPort, { abort: signal }, { entrypoint: ['sh'] })")],
+      ['uses its box other than', text.replace('box.startAndWaitForPorts(box.defaultPort, { abort: signal })', "box.startAndWaitForPorts(box.defaultPort, { abort: signal, entrypoint: ['sh'] })")],
+      ['uses its box other than', text.replace("box.containerFetch(new Request('http://codex-egress/forward', {", "box.containerFetch(request, 22, new Request('http://codex-egress/forward', {")],
+      ['uses its box other than', text.replace('    await this.#box.alarm(alarmInfo);', "    await this.#box.alarm({ retryCount: 0, isRetry: false });")],
     ];
 
     for (const [reason, planted] of cases) {

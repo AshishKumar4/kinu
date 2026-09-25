@@ -328,7 +328,8 @@ async function settingsSectionsFixture(path: string): Promise<Response | null> {
     return fixtureJson({
       accounts: ACTIVITY_ACCOUNTS,
       workspaces: 4,
-      unread: ["old-bot", "Claude · work limits (Claude answered HTTP 401 for the work account)"],
+      unread: ["old-bot"],
+      limitsUnread: [{ provider: "claude", account: "work", reason: "Claude answered HTTP 401 for the work account" }],
       limits: [
         { provider: "claude", account: "main", at: NOW - 5e3, windows: [
           { name: "5h", usedPercent: 62, resetsAt: NOW + 2 * 36e5 + 3 * 6e4 },

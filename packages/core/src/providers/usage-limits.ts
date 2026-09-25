@@ -28,6 +28,18 @@ const LimitWindowSchema = v.object({
   resetsAt: v.optional(v.number()), resets: v.optional(v.string()),
 });
 
+export interface LimitUnread {
+  readonly provider: string;
+  readonly account: string;
+  readonly reason: string;
+}
+
+export const LimitUnreadSchema: v.GenericSchema<LimitUnread> = v.object({ provider: v.string(), account: v.string(), reason: v.string() });
+
+export function limitUnreadText(unread: LimitUnread): string {
+  return `${providerName(unread.provider)} · ${unread.account}: couldn't be read (${unread.reason})`;
+}
+
 export const LimitReportSchema: v.GenericSchema<LimitReport> = v.object({
   provider: v.string(), account: v.string(), at: v.number(), windows: v.array(LimitWindowSchema), undocumented: v.optional(v.boolean()),
 });
@@ -56,21 +68,47 @@ const isoMs = (value: string | null | undefined): number | undefined => {
 
 const ClaudeBucketSchema = v.nullish(v.object({ utilization: v.nullish(v.number()), resets_at: v.nullish(v.string()) }));
 
+const ClaudeLimitEntrySchema = v.object({
+  kind: v.string(), percent: v.nullish(v.number()), resets_at: v.nullish(v.string()),
+  scope: v.nullish(v.object({ model: v.nullish(v.object({ display_name: v.nullish(v.string()) })) })),
+});
+
 const ClaudeUsageSchema = v.object({
   five_hour: ClaudeBucketSchema, seven_day: ClaudeBucketSchema, seven_day_opus: ClaudeBucketSchema, seven_day_sonnet: ClaudeBucketSchema,
+  limits: v.nullish(v.array(v.unknown())),
 });
 
 async function claudeLimits(read: LimitRead): Promise<readonly LimitWindow[]> {
   const body = await getJson(ClaudeUsageSchema, read, 'https://api.anthropic.com/api/oauth/usage', { headers: { 'anthropic-beta': 'oauth-2025-04-20' }, what: 'Claude' });
 
-  return ([['5h', body.five_hour], ['weekly', body.seven_day], ['weekly Opus', body.seven_day_opus], ['weekly Sonnet', body.seven_day_sonnet]] as const)
+  const buckets = ([['5h', body.five_hour], ['weekly', body.seven_day], ['weekly Opus', body.seven_day_opus], ['weekly Sonnet', body.seven_day_sonnet]] as const)
     .flatMap(([name, bucket]) => (bucket?.utilization === undefined || bucket.utilization === null ? [] : [{
       name, usedPercent: bucket.utilization, ...(isoMs(bucket.resets_at) !== undefined && { resetsAt: isoMs(bucket.resets_at) }),
     }]));
+
+  const named = new Set<string>(buckets.map((window) => window.name));
+
+  // Per-model caps are `weekly_scoped` limits (OMP usage/claude.ts:119-146).
+  const scoped = (body.limits ?? []).flatMap((raw): LimitWindow[] => {
+    const entry = v.safeParse(ClaudeLimitEntrySchema, raw);
+    const display = entry.success ? entry.output.scope?.model?.display_name?.trim() : undefined;
+
+    if (!entry.success || entry.output.kind !== 'weekly_scoped' || display === undefined || display === '') return [];
+    const name = `weekly ${display}`;
+
+    if (named.has(name) || (entry.output.percent === undefined || entry.output.percent === null)) return [];
+    named.add(name);
+    const resetsAt = isoMs(entry.output.resets_at);
+
+    return [{ name, usedPercent: entry.output.percent, ...(resetsAt !== undefined && { resetsAt }) }];
+  });
+
+  return [...buckets, ...scoped];
 }
 
 const CodexWindowSchema = v.nullish(v.object({
   used_percent: v.nullish(v.number()), limit_window_seconds: v.nullish(v.number()), reset_at: v.nullish(v.number()),
+  reset_after_seconds: v.nullish(v.number()),
 }));
 
 const CodexUsageSchema = v.object({ rate_limit: v.nullish(v.object({ primary_window: CodexWindowSchema, secondary_window: CodexWindowSchema })) });
@@ -81,14 +119,19 @@ function windowName(seconds: number | null | undefined): string {
   return seconds === null || seconds === undefined ? 'window' : fmtSpan(seconds * 1_000).replaceAll(' ', '');
 }
 
-async function codexLimits(read: LimitRead): Promise<readonly LimitWindow[]> {
+async function codexLimits(read: LimitRead, now: number): Promise<readonly LimitWindow[]> {
   const body = await getJson(CodexUsageSchema, read, 'https://chatgpt.com/backend-api/wham/usage', { headers: {}, what: 'ChatGPT' });
 
-  return [body.rate_limit?.primary_window, body.rate_limit?.secondary_window].flatMap((window) => (
-    window?.used_percent === undefined || window.used_percent === null ? [] : [{
-      name: windowName(window.limit_window_seconds), usedPercent: window.used_percent,
-      ...(window.reset_at !== undefined && window.reset_at !== null && { resetsAt: window.reset_at * 1_000 }),
-    }]));
+  return [body.rate_limit?.primary_window, body.rate_limit?.secondary_window].flatMap((window) => {
+    if (window?.used_percent === undefined || window.used_percent === null) return [];
+
+    let resetsAt: number | undefined;
+
+    if (window.reset_at !== undefined && window.reset_at !== null) resetsAt = window.reset_at * 1_000;
+    else if (window.reset_after_seconds !== undefined && window.reset_after_seconds !== null) resetsAt = now + window.reset_after_seconds * 1_000;
+
+    return [{ name: windowName(window.limit_window_seconds), usedPercent: window.used_percent, ...(resetsAt !== undefined && { resetsAt }) }];
+  });
 }
 
 const OpenRouterKeySchema = v.object({
@@ -116,7 +159,7 @@ async function openCodeGoLimits(read: LimitRead): Promise<readonly LimitWindow[]
   }]));
 }
 
-const LIMIT_READERS = new Map<string, { readonly provider: string; readonly read: (read: LimitRead) => Promise<readonly LimitWindow[]>; readonly undocumented?: true }>([
+const LIMIT_READERS = new Map<string, { readonly provider: string; readonly read: (read: LimitRead, now: number) => Promise<readonly LimitWindow[]>; readonly undocumented?: true }>([
   ['claude.oauth', { provider: 'claude', read: claudeLimits }],
   ['codex.oauth', { provider: 'codex', read: codexLimits }],
   ['openrouter.bearer', { provider: 'openrouter', read: openRouterLimits }],
@@ -142,7 +185,7 @@ export class LimitCache {
 
   async read(sources: readonly LimitSource[], opts: { readonly refresh?: boolean; readonly fetch?: typeof fetch } = {}): Promise<{
     readonly limits: LimitReport[];
-    readonly unread: string[];
+    readonly limitsUnread: LimitUnread[];
   }> {
     const readable = sources.filter((source) => limitReadable(source.key));
 
@@ -155,7 +198,7 @@ export class LimitCache {
 
       if (reader === undefined || headers === null) throw new KinuError('missing', `${source.key} is not connected`);
       const account = accountOf(source.key);
-      const windows = await reader.read({ account, headers, fetch: source.fetch ?? opts.fetch ?? fetch });
+      const windows = await reader.read({ account, headers, fetch: source.fetch ?? opts.fetch ?? fetch }, this.now());
       const report: LimitReport = { provider: reader.provider, account, at: this.now(), windows, ...(reader.undocumented && { undocumented: true }) };
       this.#reports.set(source.key, report);
 
@@ -163,7 +206,7 @@ export class LimitCache {
     }));
 
     const limits: LimitReport[] = [];
-    const unread: string[] = [];
+    const limitsUnread: LimitUnread[] = [];
 
     for (const [index, outcome] of settled.entries()) {
       const source = readable[index];
@@ -179,10 +222,18 @@ export class LimitCache {
       const last = this.#reports.get(source.key);
 
       if (last !== undefined) limits.push(last);
-      else unread.push(`${providerName(LIMIT_READERS.get(baseCredentialKey(source.key))?.provider ?? source.key)} · ${accountOf(source.key)} limits (${renderThrownChain({ cause: outcome.reason })})`);
+      else limitsUnread.push({ provider: LIMIT_READERS.get(baseCredentialKey(source.key))?.provider ?? source.key, account: accountOf(source.key), reason: renderThrownChain({ cause: outcome.reason }) });
     }
 
-    return { limits, unread };
+    return { limits, limitsUnread };
+  }
+
+  prune(): void {
+    for (const [key, report] of this.#reports) if (this.now() - report.at >= LIMIT_TTL_MS) this.#reports.delete(key);
+  }
+
+  get size(): number {
+    return this.#reports.size;
   }
 }
 
@@ -209,11 +260,11 @@ export function limitHeading(report: LimitReport, now: number): string {
   return `${providerName(report.provider)} · ${report.account}${age}${report.undocumented === true ? ' · undocumented source' : ''}`;
 }
 
-export function limitLines(limits: readonly LimitReport[], now: number): string[] {
-  if (limits.length === 0) return [];
+export function limitLines(limits: readonly LimitReport[], unread: readonly LimitUnread[], now: number): string[] {
+  if (limits.length === 0 && unread.length === 0) return [];
 
   return ['Limits, read from each provider', ...limits.flatMap((report) => [
     `  ${limitHeading(report, now)}`,
     ...(report.windows.length === 0 ? ['    no limit reported'] : report.windows.map((window) => `    ${limitWindowText(window, now)}`)),
-  ])];
+  ]), ...unread.map((entry) => `  ${limitUnreadText(entry)}`)];
 }

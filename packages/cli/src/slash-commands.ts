@@ -234,7 +234,7 @@ async function statsCommand({ client, arg }: SlashContext): Promise<SlashOutcome
   return {
     kind: 'text',
     text: [
-      ...limitLines(usage.limits ?? [], Date.now()),
+      ...limitLines(usage.limits ?? [], usage.limitsUnread ?? [], Date.now()),
       `Across your ${plural(usage.workspaces, 'workspace')}`, ...renderAccountSpendLines(usage.accounts, Date.now()),
       ...unread, here,
     ].join('\n'),

@@ -53,7 +53,8 @@ export async function readAllAccountUsage(opts: { readonly refresh?: boolean } =
   return {
     accounts: mergeAccountSpend([local.accounts, cloud?.accounts ?? []]),
     workspaces: local.workspaces + (cloud?.workspaces ?? 0),
-    unread: [...local.unread, ...live.unread, ...cloud?.unread ?? []],
+    unread: [...local.unread, ...cloud?.unread ?? []],
     limits: [...live.limits, ...(cloud?.limits ?? []).filter((report) => !seen.has(`${report.provider}@${report.account}`))],
+    limitsUnread: [...live.limitsUnread, ...(cloud?.limitsUnread ?? []).filter((entry) => !seen.has(`${entry.provider}@${entry.account}`))],
   };
 }
