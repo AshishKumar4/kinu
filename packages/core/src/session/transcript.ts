@@ -316,13 +316,21 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return rows;
   }
 
+  /** Walks up from the leaf and stops at the first user entry: the newest user row is one or two hops
+   *  away, where materialising the whole ancestry cost two reads per entry (600 ms at 300 turns). */
   lastUserMetadataReference(): SessionPayload | null {
-    const chain = this.ancestry();
+    const seen = new Set<string>();
+    let id = this.newestId();
 
-    for (let index = chain.length - 1; index >= 0; index--) {
-      const entry = chain[index];
+    while (id !== null) {
+      if (seen.has(id)) throw new KinuError('io', 'conversation ancestry contains a cycle');
+      seen.add(id);
+      const entry = this.read(id);
 
-      if (entry !== undefined && entry.role === 'user') return entry.metadata;
+      if (entry === null) throw new KinuError('missing', 'conversation ancestry entry is missing');
+
+      if (entry.role === 'user') return entry.metadata;
+      id = entry.parentId;
     }
 
     return null;
