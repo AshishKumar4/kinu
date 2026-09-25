@@ -21,6 +21,12 @@ const PEOPLE = ["Lovelace, Ada", "Hopper, Grace", "Turing, Alan", "Johnson, Kath
 const CUSTOMERS = ["id,name,plan,seats", ...Array.from({ length: 180 }, (_, index) =>
   `${String(index + 1)},"${PEOPLE[index % PEOPLE.length] ?? ""}",${["Team", "Pro", "Free"][index % 3] ?? ""},${String(2 + (index * 7) % 38)}`)].join("\n");
 
+const RUNBOOK = [
+  "# Runbook", "", "When checkout errors climb, start here.", "", "## First five minutes", "",
+  "1. Check the error budget on the dashboard.", "2. Roll back the last deploy if it is under an hour old.", "3. Page the on-call owner.", "",
+  "## Useful", "", "- `wrangler tail --env production`", "- The [status page](https://status.example.com)", "",
+].join("\n");
+
 const DEPLOY_SCRIPT = [
   "#!/bin/sh", "# Ship the current branch to production.", "set -eu", "",
   "branch=$(git rev-parse --abbrev-ref HEAD)", "echo \"Shipping $branch\"", "",
@@ -37,7 +43,7 @@ async function seededDrive(): Promise<MossaicVfs> {
   await write("/data/notes.txt", "call back on Tuesday");
   await write("/projects/ops/deploy/SKILL.md", SKILL("deploy", "Ship the current branch to production"));
   await write("/projects/ops/deploy/scripts/run.sh", DEPLOY_SCRIPT);
-  await write("/projects/ops/runbook.md", "# Runbook\n");
+  await write("/projects/ops/runbook.md", RUNBOOK);
   await write("/notes/todo.md", "- write the skill\n");
   await write("/skills/review/SKILL.md", SKILL("review", "Review a pull request the way this team does"));
   await write("/skills/slates/SKILL.md", SKILL("slates", "The team's own notes on building slates"));

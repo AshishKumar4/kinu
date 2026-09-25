@@ -95,16 +95,46 @@ const TEXT = /\.(?:md|markdown|txt|csv|tsv|json|ya?ml|toml|ts|tsx|js|jsx|py|sh|c
 
 const PROSE = /\.(?:md|markdown|txt)$/iu;
 
+const MARKDOWN = /\.(?:md|markdown)$/iu;
+
 const SHEET = /\.(?:csv|tsv)$/iu;
 
-/** A SKILL.md is drawn as its name over its description and steps; any other file as its first lines. */
-function coverLines(text: string, skill: boolean): [string | null, string[]] {
-  const parsed = skill ? parseSkillFile(text) : null;
+interface CoverLine { readonly text: string; readonly heading: boolean }
 
-  if (parsed?.ok !== true) return [null, text.split("\n").slice(0, 14)];
-  const steps = parsed.skill.body.split("\n").filter((line) => line.trim() !== "");
+const blank = (line: CoverLine): boolean => line.text.trim() === "";
 
-  return [parsed.skill.name, [parsed.skill.description, "", ...steps].slice(0, 12)];
+/** A Markdown line as its page reads: marks gone, headings kept. */
+function pageLine(line: string): CoverLine {
+  const heading = /^#{1,6}\s+(.*)$/u.exec(line)?.[1];
+  const text = (heading ?? line).replace(/^(\s*)[-*+]\s+/u, "$1• ").replace(/\[([^\]]*)\]\([^)]*\)/gu, "$1").replace(/\*\*|__|`/gu, "");
+
+  return { text, heading: heading !== undefined };
+}
+
+const pageLines = (markdown: string): CoverLine[] =>
+  markdown.replace(/^---\n[\s\S]*?\n---\n/u, "").split("\n").filter((line) => !line.startsWith("```")).map(pageLine);
+
+/** A skill's name over its description and steps, Markdown's first heading over the rest, else first lines. */
+function coverLines(text: string, name: string): [string | null, CoverLine[]] {
+  if (!MARKDOWN.test(name)) return [null, text.split("\n").slice(0, 14).map((line) => ({ text: line, heading: false }))];
+  const parsed = parseSkillFile(text);
+
+  if (parsed.ok) {
+    const { name: skill, description, body } = parsed.skill;
+    const steps = pageLines(body).filter((line) => !blank(line) && !(line.heading && line.text.toLowerCase() === skill.toLowerCase()));
+
+    return [skill, [{ text: description, heading: false }, { text: "", heading: false }, ...steps].slice(0, 12)];
+  }
+
+  const lines = pageLines(text);
+  const first = lines.findIndex((line) => !blank(line));
+  const title = lines[first];
+
+  if (title?.heading !== true) return [null, lines.slice(0, 14)];
+  const rest = lines.slice(first + 1);
+  const start = Math.max(0, rest.findIndex((line) => !blank(line)));
+
+  return [title.text, rest.slice(start, start + 12)];
 }
 
 function sheetRows(text: string, name: string): string[][] {
@@ -163,17 +193,21 @@ function TextPage({ text, name }: { text: string | null; name: string }) {
   const rows = text !== null && SHEET.test(name) ? sheetRows(text, name) : [];
 
   if (rows.length > 0) return <SheetCover rows={rows} />;
-  const [heading, lines] = text === null ? [null, []] : coverLines(text, name === "SKILL.md");
+  const [heading, lines] = text === null ? [null, []] : coverLines(text, name);
 
-  if (lines.length === 0) return <FileCover name={name} />;
+  if (heading === null && lines.length === 0) return <FileCover name={name} />;
 
-  if (heading === null && !PROSE.test(name)) return <CodeCover lines={lines} />;
+  if (heading === null && !PROSE.test(name)) return <CodeCover lines={lines.map((line) => line.text)} />;
 
   return (
     <span className="absolute inset-0 overflow-hidden p-recessed px-[14%] pt-[5%]">
       <span className="block h-full overflow-hidden rounded-t-md border border-b-0 p-border p-surface px-3 pt-2.5 text-[8.5px] leading-[1.45] p-text-3">
-        {heading !== null && <span className="mb-1 block truncate text-[11px] font-semibold p-text">{heading}</span>}
-        {lines.map((line, index) => <span key={index} className="block truncate">{line === "" ? "\u00a0" : line}</span>)}
+        {heading !== null && <span data-drive-page-heading className="mb-1 block truncate text-[11px] font-semibold p-text">{heading}</span>}
+        {lines.map((line, index) => (
+          <span key={index} data-drive-page-line className={`block truncate ${line.heading ? "mt-0.5 font-semibold p-text-2" : ""}`}>
+            {line.text === "" ? "\u00a0" : line.text}
+          </span>
+        ))}
       </span>
     </span>
   );

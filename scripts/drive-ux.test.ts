@@ -330,7 +330,7 @@ describe('the Drive', () => {
     });
   });
 
-  test('a sheet\'s tile draws its first rows as cells, and a code file\'s its lines numbered', async () => {
+  test('a sheet\'s tile draws its first rows as cells, a code file\'s its lines numbered, and Markdown\'s its page', async () => {
     await withGallery(async (gallery) => {
       // A cover is drawn once its file is read, when the tile holds the file's first words however it draws them.
       const read = async (query: string, entry: string, words: string): Promise<Page> => {
@@ -360,6 +360,22 @@ describe('the Drive', () => {
         expect(lines.map(([number]) => number)).toEqual(lines.map((_, index) => String(index + 1)));
       } finally {
         await code.close();
+      }
+
+      const prose = await read('drive&path=/projects/ops', 'runbook.md', 'Runbook');
+
+      try {
+        const drawnPage = await prose.$eval('[data-drive-entry="runbook.md"]', (tile) => ({
+          heading: tile.querySelector('[data-drive-page-heading]')?.textContent ?? null,
+          lines: [...tile.querySelectorAll('[data-drive-page-line]')].map((line) => line.textContent?.trim() ?? ''),
+        }));
+
+        // The first heading titles the page, a list keeps its bullets, and no line shows Markdown's own marks.
+        expect(drawnPage.heading).toBe('Runbook');
+        expect(drawnPage.lines.some((line) => line.startsWith('• '))).toBe(true);
+        expect(drawnPage.lines.filter((line) => /^#|^[-*+] |`|\*\*|\]\(/u.test(line))).toEqual([]);
+      } finally {
+        await prose.close();
       }
     });
   });
@@ -410,6 +426,11 @@ describe('the Drive', () => {
           ['standup.md', expect.stringMatching(/^\d+ B · /u), null],
         ]);
         // The reserved folder is not renamed or deleted, and its skills say who uses them.
+        // A built-in skill's tile reads as its page: its steps show none of Markdown's own marks.
+        const builtinLines = await page.$$eval('[data-drive-builtin] [data-drive-page-line]', (lines) => lines.map((line) => line.textContent ?? ''));
+
+        expect(builtinLines.length).toBeGreaterThan(0);
+        expect(builtinLines.filter((line) => /^#|`|\*\*/u.test(line))).toEqual([]);
         expect(await page.evaluate(() => document.body.innerText)).toContain('Every workspace you own uses these skills.');
         await shoot(page, 'drive-skills-light');
 
