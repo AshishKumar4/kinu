@@ -151,7 +151,7 @@ import {
   type McpPresetAvailability, type McpServerSummary, type McpToolListing, type McpTransport,
 } from './mcp';
 import {
-  acceptRosterSocket, isRosterSocket, rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame,
+  acceptRosterSocket, isRosterSocket, rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame, unreportedWorkspaces,
   ROSTER_SOCKET_PATH, type RosterPage, type RosterQuery,
 } from './roster';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
@@ -214,6 +214,8 @@ const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
 
 /** Renewed as each fork frame lands, so this bounds the gap between frames, not the transfer. */
 const FORK_RESERVATION_LEASE_MS = 5 * 60 * 1000;
+
+const ROSTER_NUDGE_LANES = 4;
 
 const DEVICE_NAME_MAX_LENGTH = 80;
 
@@ -638,7 +640,6 @@ export class UserDO extends Agent<Env> {
 
   private _initialized = false;
 
-  /** See {@link retireActivationRestore}. */
   private readonly restoreUserMcp = retireActivationRestore(this.mcp);
 
   private _userMcpHydrated = false;
@@ -870,8 +871,41 @@ export class UserDO extends Agent<Env> {
     // This read is the retry for unfinished teardowns and for stale fork reservations nothing else frees.
     await this.resumePendingDeletions();
     await this.reclaimStaleForkReservations();
+    this.nudgeUnreported();
 
     return rosterPage(this.ctx.storage.sql, query);
+  }
+
+  /** So two reads never ask one workspace twice. */
+  private readonly nudging = new Set<string>();
+
+  /** Held, not awaited: the read never waits. A lane never rejects. */
+  private nudges: Promise<unknown> = Promise.resolve();
+
+  /** Once ever per workspace with no tile: marked as asked, so a failed ask is not repeated; a reset leaves the rest. */
+  private nudgeUnreported(): void {
+    const queue = unreportedWorkspaces(this.ctx.storage.sql).filter((name) => !this.nudging.has(name));
+
+    if (queue.length === 0) return;
+
+    for (const name of queue) this.nudging.add(name);
+
+    const lane = async (): Promise<void> => {
+      for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
+        try {
+          this.sqlx(`INSERT OR IGNORE INTO workspace_overview_nudges (name, nudged_at) VALUES (?, ?)`, name, Date.now());
+          await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name)).requestOverviewPush();
+        } catch (cause) {
+          diagnostics.failure('roster.overview_nudge_failed', toKinuError({
+            doing: 'asking a workspace with no tile for its first one', cause, otherwise: 'unavailable',
+          }), { workspace: name });
+        } finally {
+          this.nudging.delete(name);
+        }
+      }
+    };
+
+    this.nudges = Promise.all([this.nudges, ...Array.from({ length: Math.min(ROSTER_NUDGE_LANES, queue.length) }, lane)]);
   }
 
   /** With no page open, nothing is read. */
@@ -1211,6 +1245,7 @@ export class UserDO extends Agent<Env> {
 
     this.sqlx(`DELETE FROM user_workspaces WHERE name = ?`, name);
     this.sqlx(`DELETE FROM workspace_overviews WHERE name = ?`, name);
+    this.sqlx(`DELETE FROM workspace_overview_nudges WHERE name = ?`, name);
     // Re-run for a resumed row whose identity a pre-fence delete could have left registered.
     revokeWorkspaceCapability(this.ctx.storage.sql, name);
   }
@@ -1478,7 +1513,6 @@ export class UserDO extends Agent<Env> {
     return { token, tokenHash, expiresAt };
   }
 
-  /** Called by Worker HTTP routes after routing here via the user id embedded in the token. */
   async verifyCliToken(caller: UserCaller, token: string): Promise<CliTokenVerification> {
     await this.requireTier(caller, 'auth_tokens');
     const userId = parseCliTokenUserId(token);

@@ -376,6 +376,13 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS workspace_overview_nudges (
+      name      TEXT PRIMARY KEY,
+      nudged_at INTEGER NOT NULL
+    )
+  `);
+
   // A projection: every read re-asks the owner's workspace, so a stale row can only list something that refuses.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_shares_received (

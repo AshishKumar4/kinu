@@ -6,6 +6,7 @@
 import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import type { UserCaller, WorkspaceOverview } from '@kinu.run/core';
+import { nextTurn, until } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
@@ -75,6 +76,47 @@ describe('the pushed tile', () => {
     await harness.userDO.registerWorkspace(owner, 'ledger');
 
     expect((await harness.userDO.listWorkspaces(owner)).entries[0]?.overview).toBeNull();
+    harness.close();
+  });
+});
+
+describe('workspaces from before tiles existed', () => {
+  test('one roster read asks each for its tile, four at a time, so Needs you is right; the next read asks none', async () => {
+    const names = ['ledger', 'notes', 'budget', 'garden', 'plans', 'music'];
+    const callers = new Map<string, UserCaller>();
+    const answer = Promise.withResolvers<void>();
+    const reported = new Set<string>();
+
+    const harness: TestUserDO = createTestUserDO({
+      durableObjectId: USER_ID,
+      // What the workspace does when asked: folds its stores and pushes. Held, so the asks in flight can be counted.
+      overviewNudge: async (name) => {
+        await answer.promise;
+        const caller = callers.get(name);
+
+        if (caller === undefined) throw new Error(`no capability for ${name}`);
+        await harness.userDO.putWorkspaceOverview(caller, name, name === 'ledger' ? { ...QUIET, decisionsWaiting: 1 } : QUIET);
+        reported.add(name);
+      },
+    });
+
+    const owner = await testOwner();
+
+    for (const name of names) callers.set(name, await workspace(harness, name));
+
+    expect((await harness.userDO.listWorkspaces(owner)).counts.unreported).toBe(6);
+    await until(() => harness.overviewNudges.length === 4, 'four asks in flight');
+
+    for (let lap = 0; lap < 10; lap++) await nextTurn();
+    expect(harness.overviewNudges).toHaveLength(4);
+    answer.resolve();
+    await until(() => reported.size === 6, 'every workspace reports');
+    const needs = await harness.userDO.listWorkspaces(owner, { bucket: 'needs' });
+    expect(needs.entries.map((each) => each.name)).toEqual(['ledger']);
+    expect(needs.counts.unreported).toBe(0);
+
+    await harness.userDO.listWorkspaces(owner);
+    expect([...harness.overviewNudges].sort()).toEqual([...names].sort());
     harness.close();
   });
 });

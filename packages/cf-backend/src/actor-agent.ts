@@ -486,7 +486,6 @@ function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider) {
 export abstract class ActorAgent extends Agent<Env> {
   // Actor profile: these members are the whole difference between actor kinds.
 
-  /** Owner userId, or null while unclaimed. */
   protected abstract getOwnerUserId(): string | null;
   protected abstract actorHandle(): ActorHandle;
   abstract actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult>;
@@ -553,6 +552,8 @@ export abstract class ActorAgent extends Agent<Env> {
     void this.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${token})
              ON CONFLICT(id) DO UPDATE SET token = excluded.token`;
     this.invalidateModelCaches();
+    // The first tile, so a workspace nobody opens still shows.
+    this.overviewChanged();
 
     // Hosted actors read the single capability row through their runtime, so a reissue applies on
     // their next call; no per-actor copies exist, so `missed` is always zero (callers report it).

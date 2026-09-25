@@ -78,6 +78,8 @@ const CountRowSchema = v.object({ bucket: v.picklist(['needs', 'working', 'idle'
 
 const SearchRowSchema = v.object({ name: v.string(), displayName: v.string() });
 
+const NameRowSchema = v.object({ name: v.string() });
+
 function encodeRosterCursor(entry: Pick<WorkspaceEntry, 'name' | 'lastVisited'>): string {
   return encodeURIComponent(JSON.stringify({ v: entry.lastVisited, n: entry.name }));
 }
@@ -203,6 +205,12 @@ function rosterTotal(sql: SqlExec, query: RosterQuery, counts: RosterCounts): nu
   }
 
   return total;
+}
+
+export function unreportedWorkspaces(sql: SqlExec): string[] {
+  return sql.exec(`SELECT w.name FROM user_workspaces w
+    LEFT JOIN workspace_overviews o ON o.name = w.name LEFT JOIN workspace_overview_nudges n ON n.name = w.name
+    WHERE ${ACTIVE} AND o.name IS NULL AND n.name IS NULL`).toArray().map((row) => v.parse(NameRowSchema, row).name);
 }
 
 export function rosterRow(sql: SqlExec, name: string): RosterEntry | null {

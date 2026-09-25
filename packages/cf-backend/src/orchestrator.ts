@@ -2418,7 +2418,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   // Background jobs (#173): lifecycle lives in core BackgroundJobRunner; below is the @callable transport.
 
-  /** Called by the synthesis turn. */
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
     return jobResult(this.jobs, jobId);
   }
@@ -2576,7 +2575,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._deferrals;
   }
 
-  /** Overrides the base actor's "no queue here". */
   protected override deferralChannel(): DeferredApprovalChannel {
     return this.deferrals.channel;
   }
@@ -4441,6 +4439,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private overviewDirty = false;
   private overviewPushing = false;
 
+  async requestOverviewPush(): Promise<void> {
+    this.overviewChanged();
+  }
+
   /** A burst of changes folds once more after the push in flight. */
   protected override overviewChanged(): void {
     this.overviewDirty = true;
@@ -5013,8 +5015,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** Create a durable webhook trigger; returns the signed public URL.
-   * Not @callable: creation is step-up gated in the web and CLI trigger routes only. */
+  /** Not @callable: creation is step-up gated in the web and CLI trigger routes only. */
   async createDurableWebhook(opts: {
     label: string;
     auth_mode: 'hmac' | 'bearer' | 'mtls';

@@ -135,6 +135,15 @@ describe('the pushed tile', () => {
     expect(overviews.map((each) => each.decisionsWaiting)).toEqual([1, 0]);
   });
 
+  test('a new workspace reports its first tile once its capability is installed, with nothing else happening', async () => {
+    const { plane, overviews } = recordingOwner();
+    const { agent } = orchestratorHarness(plane);
+
+    await agent.installWorkspaceCapability('workspace-capability-token');
+    await until(() => overviews.length === 1, 'the first tile is pushed');
+    expect(overviews[0]).toMatchObject({ activity: 'idle', decisionsWaiting: 0 });
+  });
+
   test('a turn reads Working from its admission until its leftovers close, then the tile it leaves', async () => {
     const { plane, overviews } = recordingOwner();
     const { agent } = orchestratorHarness(plane);
