@@ -434,3 +434,35 @@ test('after Mark reviewed, the source menu still reaches a machine\'s changes', 
     } finally { await page.close(); }
   });
 });
+
+declare global {
+  interface Window {
+    /** The workspace frame's router (`GalleryNavigator` in gallery.tsx). */
+    galleryNavigate?: (path: string) => Promise<void>;
+  }
+}
+
+test('a workspace switch clears the sandbox-starting line of the workspace left behind', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+
+    try {
+      await page.setViewport({ width: 1280, height: 860 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-composer-root]');
+      // The sandbox lists a port the page pins, then its next listing answers as starting: the pin stays, the line shows.
+      await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
+      await page.waitForSelector('[aria-label="Arrived app"]');
+      await page.evaluate(() => { document.documentElement.dataset.sandboxStarting = '1'; });
+      await page.waitForSelector('[data-preview-starting]');
+      // The next workspace's listing never lands, so only the switch itself can clear the line.
+      await page.evaluate(async () => {
+        document.documentElement.dataset.listingHeld = '1';
+        await window.galleryNavigate?.('/workspace/billing-cleanup');
+      });
+      // The switch's reset drops the pin and the line in one render, so once the pin has gone the line must be gone.
+      await page.waitForFunction(() => document.querySelector('[aria-label="Arrived app"]') === null);
+      expect(await page.$('[data-preview-starting]')).toBeNull();
+    } finally { await page.close(); }
+  });
+});
