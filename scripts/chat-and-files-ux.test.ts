@@ -1857,6 +1857,43 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
 });
 
 /**
+ * iOS Safari zooms the page when a text field under 16px takes focus, and leaves it zoomed. On a touch phone every
+ * text field, on the pages that carry one, must compute to at least 16px.
+ */
+describe('text fields on a touch phone', () => {
+  test('every visible text field computes to at least 16px, so iOS does not zoom on focus', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const small: string[] = [];
+
+      for (const frame of ['workspacepage', 'home', 'files', 'usersettingsstate&section=providers']) {
+        const page = await newPage();
+        await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+        await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('input, textarea');
+
+        const measured = await page.$$eval(
+          'input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"]), textarea, select',
+          (fields) => ({
+            coarse: matchMedia('(pointer: coarse)').matches,
+            fields: fields.filter((field) => field.checkVisibility()).map((field) => ({
+              name: field.getAttribute('aria-label') ?? field.getAttribute('placeholder') ?? field.tagName,
+              px: Number.parseFloat(getComputedStyle(field).fontSize),
+            })),
+          }),
+        );
+
+        expect(measured.coarse).toBe(true);
+        expect(measured.fields.length).toBeGreaterThan(0);
+        small.push(...measured.fields.filter((field) => field.px < 16).map((field) => `${frame}: ${field.name} ${String(field.px)}px`));
+        await page.close();
+      }
+
+      expect(small).toEqual([]);
+    });
+  });
+});
+
+/**
  * An IME delivers the Enter that picks a candidate, and the Escape that drops one, as ordinary keydowns: Chrome marks them
  * `isComposing`, and WebKit, which ends the composition first, marks them keyCode 229. Neither may commit or cancel.
  */

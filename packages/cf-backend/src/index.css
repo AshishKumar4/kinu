@@ -460,7 +460,7 @@ body { background: var(--c-bg); color: var(--c-text); }
    `border-radius` overrode `rounded-t-md`. The active chat tab asked for
    both, got neither, and rendered as a floating four-sided box.
 
-   Two rules stay out of the layer on purpose; each says why.
+   Some rules stay out of the layer on purpose; each says why.
    ════════════════════════════════════════════════════════════════════ */
 /* ── Single-property roles, as real utilities ─────────────────────────
    These are `@utility` rather than plain rules inside `@layer components`
@@ -1471,4 +1471,10 @@ body > .annotation-toolbar {
 @media (prefers-reduced-motion: reduce) {
   .p-card-lift:hover { transform: none; }
 }
+}
+
+/* iOS zooms the page when a text field under 16px takes focus. Unlayered, so it outranks each field's size utility. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"]),
+  textarea, select { font-size: max(16px, 1em); }
 }
