@@ -42,7 +42,9 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import type { CallExpression, Node } from 'oxc-parser';
 import { assertMeasured, finding } from './gate-ratchet';
+import { declaredName, parse, walk } from './syntax';
 import { SCRATCH_PREFIXES } from '@kinu.run/test-utils';
 
 /** This checkout, so the merge-state probe reads THIS tree's git directory
@@ -187,14 +189,37 @@ const ENGINE = 'packages/cli-backend/src/checkpoints.ts';
  * the bound, that marker owns every host write beneath it — measured at
  * 24,483 ms for one `device.writeFile`, which surfaces as a 5,000 ms timeout
  * in whichever suite wrote first. So the marker is a FINDING only while the
- * bound is missing, and this is the half that decides which.
+ * bound is missing, and this is the half that decides which. Read as syntax:
+ * `temp` bound to `resolve(tmpdir())`, and an `if` comparing `probe === temp`
+ * and `real === realTemp` (either order) whose whole branch is `break`.
  */
 export function engineBoundsTempWalk(source: string): boolean {
-  const walk = source.slice(source.indexOf('workdirForPath(path: string): string {'));
-  const body = walk.slice(0, walk.indexOf('\n    },'));
+  const calls = (raw: Node | null | undefined, name: string): raw is CallExpression =>
+    raw?.type === 'CallExpression' && raw.callee.type === 'Identifier' && raw.callee.name === name;
 
-  return body.includes('resolve(tmpdir())')
-    && /if \(probe === temp \|\| real === realTemp\) break;/u.test(body);
+  const compares = (raw: Node, pair: readonly [string, string]): boolean => raw.type === 'BinaryExpression' && raw.operator === '==='
+    && raw.left.type === 'Identifier' && raw.right.type === 'Identifier' && [raw.left.name, raw.right.name].sort().join() === [...pair].sort().join();
+
+  let tempIsTmpdir = false;
+  let breaksAtTemp = false;
+
+  walk(parse(ENGINE, source).root, (method) => {
+    if (declaredName(method) !== 'workdirForPath') return;
+    walk(method, ({ raw }) => {
+      if (raw.type === 'VariableDeclarator' && raw.id.type === 'Identifier' && raw.id.name === 'temp'
+        && calls(raw.init, 'resolve') && calls(raw.init.arguments[0], 'tmpdir')) tempIsTmpdir = true;
+
+      if (raw.type !== 'IfStatement' || raw.test.type !== 'LogicalExpression' || raw.test.operator !== '||') return;
+      const branch = raw.consequent.type === 'BlockStatement' && raw.consequent.body.length === 1 ? raw.consequent.body[0] : raw.consequent;
+      const { left, right } = raw.test;
+
+      if (branch?.type === 'BreakStatement'
+        && ((compares(left, ['probe', 'temp']) && compares(right, ['real', 'realTemp']))
+          || (compares(right, ['probe', 'temp']) && compares(left, ['real', 'realTemp'])))) breaksAtTemp = true;
+    });
+  });
+
+  return tempIsTmpdir && breaksAtTemp;
 }
 
 export interface Environment {

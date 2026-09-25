@@ -7,7 +7,10 @@ import { scratchDir } from '@kinu.run/test-utils';
 import { findDuplicateGroups } from './ast-duplication';
 import { findMovable, withoutComments } from './capability-parity';
 import { classify, exportedDeclarations, inScope, keyOf } from './dead-code';
-import { auditInterception, declaredSandboxClasses, WranglerContainers, wranglerContainerClasses } from './egress-interception';
+import {
+  auditInterception, catchAllIsBound, declaredSandboxClasses, exportsContainerProxy, sdkDefaultsHttpsInterceptionOff,
+  WranglerContainers, wranglerContainerClasses,
+} from './egress-interception';
 import { assertMeasured, reconcile, writeLock } from './gate-ratchet';
 import { parseJsonc } from './jsonc';
 import { configuredScanner, judgeAdvisories } from './dependency-advisory-gate';
@@ -817,5 +820,31 @@ describe('egress interception invariant — red in every direction it claims', (
 
   test('a class wrangler does not bind is outside the denominator, whatever it declares', () => {
     expect(auditInterception(at('  enableInternet = true;'), ['Other']).inspected).toEqual([]);
+  });
+});
+
+/** The three module-level reads, each over a shape a text match reads backwards: a commented-out
+ *  statement, an alias, and a mention outside the construct it is meant to find. */
+describe('egress interception reads the entry, the handlers and the SDK default as syntax', () => {
+  test('the entry exports ContainerProxy only under that name, from the SDK, outside a comment', () => {
+    expect(exportsContainerProxy('export { ContainerProxy } from "@cloudflare/sandbox";')).toBe(true);
+    expect(exportsContainerProxy("import { ContainerProxy as P } from '@cloudflare/sandbox';\nexport { P as ContainerProxy };")).toBe(true);
+    expect(exportsContainerProxy('// export { ContainerProxy } from "@cloudflare/sandbox";\nexport {};')).toBe(false);
+    expect(exportsContainerProxy('export { ContainerProxy as Proxy } from "@cloudflare/sandbox";')).toBe(false);
+    expect(exportsContainerProxy('class ContainerProxy {}\nexport { ContainerProxy };')).toBe(false);
+  });
+
+  const sandbox = (body: string): ReadonlyMap<string, string> => new Map([['packages/cf-backend/src/kinu-sandbox.ts', body]]);
+  const bind = 'class S { async start(p: unknown) { await this.setOutboundHandler(EGRESS_HANDLER, p); } }\n';
+
+  test('the catch-all counts only when a registry keys it and a call binds it', () => {
+    expect(catchAllIsBound(sandbox(`${bind}S.outboundHandlers = { [EGRESS_HANDLER]: h };`))).toBe(true);
+    expect(catchAllIsBound(sandbox(`${bind}S.outboundHandlers = { [EVENT_HANDLER]: h };`))).toBe(false);
+    expect(catchAllIsBound(sandbox('// this.setOutboundHandler(EGRESS_HANDLER, p);\nS.outboundHandlers = { [EGRESS_HANDLER]: h };'))).toBe(false);
+  });
+
+  test('the SDK default is the class field, not a mention of it', () => {
+    expect(sdkDefaultsHttpsInterceptionOff('export class Container { interceptHttps = false; }')).toBe(true);
+    expect(sdkDefaultsHttpsInterceptionOff('// interceptHttps = false was the old default\nexport class Container { interceptHttps = true; }')).toBe(false);
   });
 });
