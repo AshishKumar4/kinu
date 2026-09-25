@@ -28,8 +28,8 @@ export function daemon(frame: DeviceFrame): JsonValue {
 
 export interface DeviceHarness extends TestUserDO {
   deviceId: string;
-  workspace: UserCaller;
-  sibling: UserCaller;
+  workspace: { readonly workspaceToken: string };
+  sibling: { readonly workspaceToken: string };
   closeDeviceHarness(): Promise<void>;
 }
 

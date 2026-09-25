@@ -4,6 +4,7 @@
  * the twins the two classes actually share, less their declared adapter seams.
  */
 import type { SharedBackend } from './backend';
+import { CHECKPOINT_CASES } from './cases/checkpoints';
 import { CONFIG_PLANE_CASES } from './cases/config-plane';
 import { CONVERSATION_CASES } from './cases/conversation';
 import { EVOLUTION_CASES } from './cases/evolution';
@@ -23,4 +24,5 @@ export const SHARED_CASES: readonly SharedCase[] = [
   ...WORK_LEDGER_CASES,
   ...EVOLUTION_CASES,
   ...CONVERSATION_CASES,
+  ...CHECKPOINT_CASES,
 ];

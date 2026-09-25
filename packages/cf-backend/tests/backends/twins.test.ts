@@ -37,11 +37,7 @@ const TWINS = {
   getActivePlanReview: SHARED, savePlanReviewAnnotations: SHARED, decidePlanReview: SHARED,
   requestRefinement: SHARED, listRefinements: SHARED, showRefinement: SHARED, decideRefinement: SHARED,
   send: SHARED, revertConversation: SHARED,
-  broadcast: 'cf overrides Agent.broadcast over its connection tags; the CLI emits to its one listener',
-  checkpointStatus: 'cf reads the connected device\'s checkpoint store over deviceRpc; the CLI reads its own machine\'s',
-  listFileCheckpoints: 'the store lives where the files are: a connected device for cf, this machine for the CLI',
-  planFileRestore: 'the store lives where the files are: a connected device for cf, this machine for the CLI',
-  restoreFileCheckpoint: 'the store lives where the files are: a connected device for cf, this machine for the CLI',
+  checkpointStatus: SHARED, listFileCheckpoints: SHARED, planFileRestore: SHARED, restoreFileCheckpoint: SHARED,
 } as const satisfies Record<PublicTwin, string>;
 
 const twins = Object.entries(TWINS);

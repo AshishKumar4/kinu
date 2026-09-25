@@ -22,7 +22,7 @@ import type {
   ChatOptions,
   TurnContinuity, FiberCtx,
   LLM, ModelCallReport, ModelCallSink, ModelRouteResolution, HeadMergeModelBinding,
-  BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions,
+  BackendHost, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions,
   ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
@@ -31,7 +31,7 @@ import type {
   MissingCapability, DynamicApproval,
   RunEvent, RunEventInput, RunEventQuery,
   ReleaseStore, ReleaseToolDeps, BuiltinToolName,
-  FileCheckpoints, FileCheckpointListing, FileRestorePlan, FileRestoreResult,
+  FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   CheckpointAvailability,
   WorkMode, JsonValue, SessionHistory,
 } from '@kinu.run/core';
@@ -150,7 +150,7 @@ import { TierIdSchema,
   PlanReviewActions, SUBMIT_PLAN_TOOL, workModeUnderReview,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
-  ChatSession, CHAT_SESSION_ID, CHECKPOINTS_UNCONFIGURED, checkpointAvailability, fileCheckpointListing,
+  ChatSession, CHAT_SESSION_ID, checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
   type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
@@ -177,9 +177,7 @@ import {
 export interface LocalHostedSession {
   readonly actor: HostedActor;
   readonly host: ActorHost;
-  readonly engine: EvolutionEngine;
-  readonly budget: MissionGovernor;
-  readonly eventLog: EventLog;
+  readonly orchestration: LocalOrchestration;
 }
 
 /**
@@ -238,7 +236,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     eventLog: input.eventLog,
     deps: {
       host: {
-        broadcast: (event) => { input.session().broadcast(event); },
+        broadcast: (event) => { input.session().emit({ type: 'broadcast', event }); },
         enqueueTurn: (turn) => input.session().enqueueTurn(turn),
         // A seat that is gone runs nothing and has ended: `settled`/`busy` can read it after host teardown.
         // The cf seam (`seams.turnInFlight`) answers the same.
@@ -362,7 +360,9 @@ function tierFromMetadata(metadata: ProgrammaticTurn['metadata']): TierId | unde
   return parsed.success ? parsed.output.profile_tier : undefined;
 }
 
-export class LocalAgentSession implements BackendHost {
+export class LocalAgentSession {
+  /** The seam core publishes and enqueues through, as cf's actor holds one; outside callers publish here too. */
+  readonly host: BackendHost;
   private readonly rt: CLIRuntime;
   private readonly fallbackModel: LanguageModel | null;
   private readonly modelResolver: LocalModelResolver | null;
@@ -455,10 +455,10 @@ export class LocalAgentSession implements BackendHost {
 
   private readonly headJournal: HeadJournal;
   private readonly headActivity: AnnounceHeadActivity = (headId) => {
-    this.broadcast({ type: 'head_activity', headId });
+    this.host.broadcast({ type: 'head_activity', headId });
   };
   private readonly publishHeadStream: PublishHeadStream = (frame) => {
-    this.broadcast({ type: 'head_stream', ...frame });
+    this.host.broadcast({ type: 'head_stream', ...frame });
   };
 
   private readonly compactionState: CompactionStateStore;
@@ -498,7 +498,7 @@ export class LocalAgentSession implements BackendHost {
     });
 
     // One engine, governor and event rail per logical actor: hosted, the root's host built them.
-    const own = opts.hosted ? null : createLocalOrchestration({
+    const orchestration = opts.hosted?.orchestration ?? createLocalOrchestration({
       runtime: this.rt,
       history: this.rt.stores.history,
       eventLog: new EventLog(hubSql, this.rt.actor),
@@ -507,9 +507,7 @@ export class LocalAgentSession implements BackendHost {
       noAutoEvolve: opts.noAutoEvolve === true,
     });
 
-    const orchestration = opts.hosted ?? own;
-
-    if (!orchestration) throw new KinuError('missing', 'This session has no orchestration to run its loop under.');
+    this.host = orchestration.deps.host;
     this.budget = orchestration.budget;
     this.engine = orchestration.engine;
     this.eventLog = orchestration.eventLog;
@@ -581,7 +579,7 @@ export class LocalAgentSession implements BackendHost {
     this.eventRecorder.observe((event) => this.emit({ type: 'run-event', event }));
 
     // Hosted, this is the same ActorSession the host holds, so spawned heads claim turns on it.
-    this.actorSession = 'actor' in orchestration ? orchestration.actor.session : new ActorSession({
+    this.actorSession = opts.hosted?.actor.session ?? new ActorSession({
       runtime: this.rt,
       claims: this.stores.claims,
       history: this.stores.history,
@@ -681,7 +679,7 @@ export class LocalAgentSession implements BackendHost {
       audit: (record) => {
         this.eventRecorder.emit(this.chat.currentRunId ?? WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
       },
-      announce: () => { this.broadcast({ type: 'pending_actions_changed' }); },
+      announce: () => { this.host.broadcast({ type: 'pending_actions_changed' }); },
     });
 
     this.rt.setApprovalDeferrals?.(this.deferrals.channel);
@@ -758,27 +756,21 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /** File checkpoints with store reachability. Pass `turnId` rather than filtering: the limit is
-   *  global, so a self-filtered window drops turns (see FileCheckpoints.list). */
+   *  global, so a self-filtered window drops turns (see FileCheckpointReads.list). */
   async listFileCheckpoints(limit?: number, turnId?: string): Promise<FileCheckpointListing> {
     return fileCheckpointListing(this.rt.checkpoints ?? null, { limit, turnId });
   }
 
   async planFileRestore(dir: string, id: string): Promise<FileRestorePlan> {
-    return this.requireCheckpoints().plan(dir, id);
+    return fileRestorePlan(this.rt.checkpoints ?? null, dir, id);
   }
 
   async restoreFileCheckpoint(dir: string, id: string): Promise<FileRestoreResult> {
-    return this.requireCheckpoints().restore(dir, id);
+    return fileCheckpointRestore(this.rt.checkpoints ?? null, dir, id);
   }
 
   checkpointStatus(): Promise<CheckpointAvailability> {
     return checkpointAvailability(this.rt.checkpoints ?? null);
-  }
-
-  private requireCheckpoints(): FileCheckpoints {
-    if (!this.rt.checkpoints) throw new Error(CHECKPOINTS_UNCONFIGURED);
-
-    return this.rt.checkpoints;
   }
 
   getShellApprovalMode(): { mode: ShellApprovalMode } {
@@ -999,7 +991,7 @@ export class LocalAgentSession implements BackendHost {
   }
 
   private get planActions(): PlanReviewActions {
-    this._planActions ??= new PlanReviewActions(this.stores.planReviews, (plan) => this.broadcast({ type: 'plan_updated', plan }));
+    this._planActions ??= new PlanReviewActions(this.stores.planReviews, this.host);
 
     return this._planActions;
   }
@@ -1044,10 +1036,6 @@ export class LocalAgentSession implements BackendHost {
     }
 
     return this.planActions.decideAndHandOff({ id, revision, decision, feedback }, (turn) => this.enqueueTurn(turn));
-  }
-
-  broadcast(event: BroadcastEvent): void {
-    this.emit({ type: 'broadcast', event });
   }
 
   logActivity(event: string, detail?: string): void {
@@ -1135,7 +1123,7 @@ export class LocalAgentSession implements BackendHost {
     }));
 
     this.pendingBranches.push({ id, task, handle });
-    this.broadcast({ type: 'branch_status', status: 'running', branchId: id, task } satisfies BranchStatusEvent);
+    this.host.broadcast({ type: 'branch_status', status: 'running', branchId: id, task } satisfies BranchStatusEvent);
 
     return true;
   }
@@ -1489,7 +1477,8 @@ export class LocalAgentSession implements BackendHost {
     }).then((value) => value === undefined ? undefined : decodeJsonValue({ value }));
   }
 
-  private emit(event: SessionEvent): void {
+  /** The one channel to the frontend listener: this backend's transport, as the SDK's `broadcast` is cf's. */
+  emit(event: SessionEvent): void {
     this.chat.emit(event);
   }
 
@@ -1902,7 +1891,7 @@ export class LocalAgentSession implements BackendHost {
         sql: this.rt.storage.sql,
         actor: this.rt.actor,
         sessionId: this.sessionId,
-        broadcast: (event) => this.broadcast(event),
+        broadcast: (event) => this.host.broadcast(event),
         pending: this.pendingBranches,
         journal: this.headJournal,
       }),
@@ -2128,7 +2117,7 @@ export class LocalAgentSession implements BackendHost {
     await applyWorkspaceTitle(state, {
       persist: (name) => {
         if (!persistAutoTitle(this.config, name)) return false;
-        this.broadcast({ type: 'workspace_renamed', displayName: name });
+        this.host.broadcast({ type: 'workspace_renamed', displayName: name });
 
         return true;
       },

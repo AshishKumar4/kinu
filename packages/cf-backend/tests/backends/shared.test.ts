@@ -9,7 +9,7 @@ import { SHARED_CASES } from './cases';
 for (const name of testBackends()) {
   describe(`${name} backend`, () => {
     for (const shared of SHARED_CASES) {
-      test(shared.title, () => shared.run(openBackend(name)));
+      test(shared.title, async () => shared.run(await openBackend(name)));
     }
   });
 }

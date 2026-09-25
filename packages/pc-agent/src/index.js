@@ -2319,16 +2319,12 @@ function handle(msg, ws, ctx) {
     } else if (method === 'which') {
       rpc(ws, id, { present: whichAll(params[0]) });
     } else if (method === 'checkpointStatus') {
-      if (!checkpoints) return rpc(ws, id, { available: false, reason: 'checkpoints are not configured' });
       rpcWhenSettled(ws, id, checkpoints.status());
     } else if (method === 'checkpointList') {
-      if (!checkpoints) return rpc(ws, id, []);
       rpcWhenSettled(ws, id, checkpoints.list(params[0], params[1], params[2]));
     } else if (method === 'checkpointPlan') {
-      if (!checkpoints) return rpc(ws, id, null, 'checkpoints are not configured');
       rpcWhenSettled(ws, id, checkpoints.plan(params[0], checkpointDirFor(viewFromFrame(msg), params[1]), params[2]));
     } else if (method === 'checkpointRestore') {
-      if (!checkpoints) return rpc(ws, id, null, 'checkpoints are not configured');
       rpcWhenSettled(ws, id, checkpoints.restore(params[0], checkpointDirFor(viewFromFrame(msg), params[1]), params[2]));
     } else {
       rpc(ws, id, null, 'unknown method: ' + method);

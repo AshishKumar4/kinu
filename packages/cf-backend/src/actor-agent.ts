@@ -676,7 +676,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private _planActions: PlanReviewActions | null = null;
 
   private get planActions(): PlanReviewActions {
-    this._planActions ??= new PlanReviewActions(this.stores.planReviews, (plan) => this.host.broadcast({ type: 'plan_updated', plan }));
+    this._planActions ??= new PlanReviewActions(this.stores.planReviews, this.host);
 
     return this._planActions;
   }
