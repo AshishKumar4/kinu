@@ -65,3 +65,14 @@ test('a candidate review belongs to its source bytes, not every parser in its fi
   expect(decisions(`${source}\nconst newParser = ${pattern};`)).toEqual(['framing', null]);
   expect(decisions(String.raw`const matcher = /import\s+(.*)/;`)).toEqual([null]);
 });
+
+test('a pattern is classified by the literal text it requires, not by how its source looks', () => {
+  const categories = (pattern: string) => inventoryJavaScript('scripts/fixture.ts', `const p = ${pattern};`)
+    .map(site => site.category);
+
+  expect(categories(String.raw`/(?<major>\d+)\.(?<minor>\d+)/`)).toEqual(['lexical']);
+  expect(categories(String.raw`/\bclass\s+(\w+)\s+extends/`)).toEqual(['code']);
+  expect(categories(String.raw`/<testcase\s+([^>]*)>/`)).toEqual(['code']);
+  expect(categories(String.raw`/[<a>]/`)).toEqual(['lexical']);
+  expect(categories(String.raw`new RegExp('^\\s*export\\s')`)).toEqual(['code']);
+});

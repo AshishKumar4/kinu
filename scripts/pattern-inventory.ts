@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import * as v from 'valibot';
 import { isParseable, isPatternSource, readMatching, trackedFiles } from './sources';
-import { declaredName, memberCalleeName, ownerName, parse, regexPattern, walk } from './syntax';
+import { declaredName, literalString, literalText, memberCalleeName, ownerName, parse, regexPattern, type SyntaxNode, walk } from './syntax';
 
 export const PATTERN_CATEGORIES = {
   lexical: 'NECESSARY: recognizes or transforms a regular-language token, text fragment, or output format.',
@@ -25,13 +25,157 @@ export interface PatternSite {
   readonly category: PatternCategory;
 }
 
-const CODE_PATTERN = /(?:\^.*\b(?:import|export|function|class|interface)\b|\b(?:import|export|require|function|interface)\\[s(]|<a\[|<[^>]+>)/;
+/** Escapes that match a class, a boundary, a property or a back-reference: no fixed character. */
+const SET_ESCAPES = new Set(['d', 'D', 'w', 'W', 's', 'S', 'b', 'B', 'p', 'P', 'k']);
+
+/**
+ * The literal text a regex source requires, as runs cut at every token that is
+ * not one fixed character. A token walk over the ECMAScript Pattern grammar:
+ * a class `[…]`, a group opener (`(`, `(?:`, `(?=`, `(?!`, `(?<=`, `(?<!`,
+ * `(?<name>`), `)`, `|`, `^`, `$` and `.` cut a run; a quantifier (`*`, `+`,
+ * `?`, `{n}`, `{n,}`, `{n,m}`) cuts it and takes back the character it repeats;
+ * `\d \w \s \b \p{…} \k<…> \1` cut it; `\n \t \xHH \uHHHH` and an identity
+ * escape are one character. So `(?<name>…)` is a group, not markup.
+ */
+export function patternLiteralRuns(pattern: string): string[] {
+  const runs: string[] = [];
+  let run = '';
+
+  for (let at = 0; at < pattern.length;) {
+    const token = patternToken(pattern, at);
+
+    if (token.literal !== undefined) {
+      run += token.literal;
+    } else {
+      if (token.repeats) run = run.slice(0, -1);
+
+      if (run !== '') runs.push(run);
+      run = '';
+    }
+
+    at = token.end;
+  }
+
+  if (run !== '') runs.push(run);
+
+  return runs;
+}
+
+/** One pattern token at `at`: its end, and the character it matches when it is exactly one. */
+interface PatternToken {
+  readonly end: number;
+  readonly literal?: string;
+  /** A quantifier: the character before it is not required. */
+  readonly repeats?: true;
+}
+
+function patternToken(pattern: string, at: number): PatternToken {
+  const char = pattern[at] ?? '';
+  const next = pattern[at + 1] ?? '';
+
+  if (char === '\\') return escapeToken(pattern, at);
+
+  if (char === '[') return { end: classEnd(pattern, at) };
+
+  if (char === '(') {
+    if (next !== '?') return { end: at + 1 };
+
+    const lookbehind = pattern[at + 3] === '=' || pattern[at + 3] === '!';
+
+    if (pattern[at + 2] === '<' && !lookbehind) return { end: pattern.indexOf('>', at) + 1 };
+
+    return { end: at + (pattern[at + 2] === '<' ? 4 : 3) };
+  }
+
+  let close = at + 1;
+
+  while (char === '{' && '0123456789,'.includes(pattern[close] ?? '|')) close += 1;
+
+  if (char === '*' || char === '+' || char === '?' || (char === '{' && close > at + 1 && pattern[close] === '}')) {
+    const end = (char === '{' ? close : at) + 1;
+
+    return { end: end + (pattern[end] === '?' ? 1 : 0), repeats: true };
+  }
+
+  return char === ')' || char === '|' || char === '^' || char === '$' || char === '.' ? { end: at + 1 } : { end: at + 1, literal: char };
+}
+
+/** Past the `]` closing the class at `at`; a leading `]` (or `^]`) is a member. */
+function classEnd(pattern: string, at: number): number {
+  let end = at + (pattern[at + 1] === '^' ? 2 : 1);
+  end += pattern[end] === ']' ? 1 : 0;
+
+  while (end < pattern.length && pattern[end] !== ']') end += pattern[end] === '\\' ? 2 : 1;
+
+  return end + 1;
+}
+
+function escapeToken(pattern: string, at: number): PatternToken {
+  const next = pattern[at + 1] ?? '';
+
+  if (next === 'k') return { end: pattern.indexOf('>', at) + 1 || pattern.length };
+
+  if ((next === 'p' || next === 'P') && pattern[at + 2] === '{') return { end: pattern.indexOf('}', at) + 1 || pattern.length };
+
+  if (SET_ESCAPES.has(next) || (next >= '1' && next <= '9')) return { end: at + 2 };
+
+  if (next === 'x' || next === 'u') {
+    const braced = next === 'u' && pattern[at + 2] === '{';
+    const end = braced ? pattern.indexOf('}', at) : at + (next === 'x' ? 4 : 6);
+    const code = Number.parseInt(pattern.slice(at + (braced ? 3 : 2), end), 16) || 0;
+
+    return { end: braced ? end + 1 : end, literal: String.fromCodePoint(code) };
+  }
+
+  // A control escape (`\n`, `\t`, `\cJ`, `\0`) is one character that is never part of a word.
+  return { end: at + (next === 'c' ? 3 : 2), literal: isWordChar(next) ? ' ' : next };
+}
+
+const CODE_KEYWORDS = new Set(['import', 'export', 'require', 'function', 'class', 'interface']);
+
+const isWordChar = (char: string): boolean =>
+  (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char === '_' || char === '$';
+
+/** A pattern extracts code when its required literal text holds a declaration keyword as a whole word, or opens markup (`<tag`, `</`). */
+function namesCode(fragments: readonly string[]): boolean {
+  return fragments.flatMap(patternLiteralRuns).some((run) => {
+    let word = '';
+
+    for (let at = 0; at <= run.length; at += 1) {
+      const char = run[at] ?? ' ';
+
+      if (char === '<' && (run[at + 1] === '/' || isWordChar(run[at + 1] ?? ' '))) return true;
+
+      if (isWordChar(char)) {
+        word += char;
+        continue;
+      }
+
+      if (CODE_KEYWORDS.has(word)) return true;
+      word = '';
+    }
+
+    return false;
+  });
+}
 
 const SCANNER_NAME = /^(?:parse|scan|strip|tokenize|lex|extract|split|decode)/i;
 
 const STRING_OPERATIONS = {
   slice: true, split: true, charAt: true, charCodeAt: true, indexOf: true,
 } satisfies Readonly<Record<string, true>>;
+
+/** The literal pattern text a `RegExp(…)` call is handed: a string argument, or each chunk of a template. */
+function patternFragments(call: SyntaxNode): string[] {
+  const [argument] = call.children.filter((child) => child.start > (call.raw.type === 'NewExpression' || call.raw.type === 'CallExpression' ? call.raw.callee.end : call.start));
+
+  if (argument === undefined) return [];
+  const direct = literalString(argument.raw);
+
+  if (direct !== undefined) return [direct];
+
+  return argument.raw.type === 'TemplateLiteral' ? argument.children.map(literalText).filter((text) => text !== undefined) : [];
+}
 
 export function inventoryJavaScript(file: string, source: string): PatternSite[] {
   const tree = parse(file, source);
@@ -41,7 +185,7 @@ export function inventoryJavaScript(file: string, source: string): PatternSite[]
 
     if (pattern !== undefined) {
       sites.push({ file, line: tree.lineAt(node.start), kind: 'regex-literal', owner: ownerName(node) ?? '<module>',
-        source: source.slice(node.start, node.end), category: CODE_PATTERN.test(pattern) ? 'code' : 'lexical' });
+        source: source.slice(node.start, node.end), category: namesCode([pattern]) ? 'code' : 'lexical' });
 
       return;
     }
@@ -51,7 +195,7 @@ export function inventoryJavaScript(file: string, source: string): PatternSite[]
     if ((raw.type === 'NewExpression' || raw.type === 'CallExpression')
       && raw.callee.type === 'Identifier' && raw.callee.name === 'RegExp') {
       sites.push({ file, line: tree.lineAt(node.start), kind: 'regexp-constructor', owner: ownerName(node) ?? '<module>',
-        source: source.slice(node.start, node.end), category: /\b(?:import|export|require|function|class|interface)\b/.test(source.slice(node.start, node.end)) ? 'code' : 'composition' });
+        source: source.slice(node.start, node.end), category: namesCode(patternFragments(node)) ? 'code' : 'composition' });
     }
 
     if (raw.type !== 'FunctionDeclaration' && raw.type !== 'FunctionExpression' && raw.type !== 'ArrowFunctionExpression') return;
@@ -115,6 +259,7 @@ const SiteSchema = v.object({
 
 /** Decisions apply to grammar families. Every candidate remains in the output. */
 export const PATTERN_REVIEWS = {
+  grammar: 'NECESSARY: an owned reader over the grammar stated in its header, for a format no installed parser reads; its gate test plants the shapes a regex missed.',
   framing: 'NECESSARY: locates records in mixed prose or a line protocol before a real parser validates each record.',
   lexical: 'NECESSARY: matches a token or rendered fragment; it does not claim to parse the enclosing language.',
   traversal: 'NECESSARY: traverses parsed objects, AST ranges, or byte buffers. The name-based candidate detector is conservative.',
@@ -213,7 +358,13 @@ if (import.meta.main) {
       proof: 'The nested-name smoke fixture returned @wrong before the change and @right after it.' },
     { file: 'scripts/bench-devbox-strategies.ts', owner: 'parseOptions', classification: 'REPLACED',
       replacement: 'node:util.parseArgs tokenizes declared options; benchmark domain validation remains local',
-      proof: 'bun test scripts/bench-restore-probe.test.ts --test-name-pattern "refuses at parse time and names G3|an armed decisive parse succeeds"' }];
+      proof: 'bun test scripts/bench-restore-probe.test.ts --test-name-pattern "refuses at parse time and names G3|an armed decisive parse succeeds"' },
+    { file: 'scripts/skip-ratchet.ts', owner: 'parseJUnit', classification: 'REPLACED',
+      replacement: 'scripts/xml.ts reads the report as XML; outcomes are child elements',
+      proof: 'bun test scripts/skip-ratchet.test.ts' },
+    { file: 'lean/check-traceability.mjs', owner: 'tsScan', classification: 'REPLACED',
+      replacement: 'lean/ts-refs.mjs resolves tsRefs through oxc-parser',
+      proof: 'bun test scripts/lean-ts-refs.test.ts' }];
 
   if (process.argv.includes('--write') && pending.length === 0) writeFileSync(new URL('./pattern-inventory.json', import.meta.url), `${JSON.stringify({
     candidates: result.candidates.map(({ file, kind, owner, source, decision }) => ({

@@ -200,6 +200,25 @@ describe('the false positives that shaped the adjacency rule', () => {
   });
 });
 
+describe('a TypeScript source is read as comments and strings, not as text', () => {
+  test('a citation list continued on the next `//` line is one list, and each name is checked', () => {
+    const findings = auditCitations(
+      'packages/core/src/FIXTURE.ts',
+      `// Formal spec: ${ARBITRATION} — ${LIVE},\n//   ${UNDECLARED}\nexport const x = 1;\n`,
+      citations(),
+    );
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toContain(UNDECLARED);
+  });
+
+  test('code shaped like a module path is not a citation', () => {
+    const code = `export const mode = (options: { lean: boolean }) => options${'.lean'} ? 1 : 0;\n`;
+
+    expect(auditCitations('packages/core/src/FIXTURE.ts', code, citations())).toEqual([]);
+  });
+});
+
 describe('the gate cannot certify an empty scan', () => {
   test('no module and no name reference is itself a finding', () => {
     expect(auditCoverage(citations())[0]).toContain('certifies nothing');

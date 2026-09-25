@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stringValues, tsDeclarations } from "./ts-refs.mjs";
 
 const leanRoot = dirname(fileURLToPath(import.meta.url));
 
@@ -411,279 +412,24 @@ function relativePath(path) {
 // It holds that a cited declaration EXISTS. It says nothing about what that
 // declaration does, so a body rewritten to do the opposite of the requirement's
 // statement still resolves, and no theorem here is evidence about the shipped
-// code's behaviour. The scanner is also textual: it indexes declarations by
-// brace depth rather than by parsing TypeScript, so a same-named local one brace
-// deep inside a member-owning declaration can answer for a deleted member, and a
-// file TypeScript cannot even PARSE can still satisfy every citation into it.
-// That last one is measured rather than assumed: a stray backtick inside a
-// comment inside a SQL template ends the literal early, and because the SQL
-// carries no braces the depth survives and all four cited members still resolve.
-// Deciding parseability is tsc's job and this gate must not be read as doing it.
-// A `.js` file is scanned the same way: the device daemon (`packages/pc-agent`) is
-// plain JavaScript, and its declarations have the same top-level shapes.
+// code's behaviour. Declarations are read by oxc (`ts-refs.mjs`): a file that
+// does not parse resolves no citation, and a nested template literal or a regex
+// cannot hide what follows it. A `.js` file is read the same way: the device
+// daemon (`packages/pc-agent`) is plain JavaScript.
 const tsRefPattern =
   /^([A-Za-z0-9_.\-/]+\.(?:ts|js))#([A-Za-z_$][A-Za-z0-9_$]*)(?:\.([A-Za-z_$][A-Za-z0-9_$]*))?$/;
-
-const tsTopDeclarationPattern =
-  /^\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(function\s*\*?|class|interface|type|enum|const\s+enum|const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)/;
-
-// A member name is followed immediately by `(`, `<`, `:`, `,`, `;` or `}`, or by
-// an `=` after optional space. `if (x) {` and `for (const c of cs) {` are the
-// shapes that separate a declaration from a statement, and neither has the name
-// against its bracket. A keyword list would be wrong here: `delete`, `new`,
-// `default` and `in` are all legal member names.
-const tsMemberDeclarationPattern =
-  /^\s*(?:(?:public|private|protected|static|readonly|abstract|override|async|get|set|declare)\s+)*\*?\s*([A-Za-z_$][A-Za-z0-9_$]*)[?!]?(?:\s*=(?![=>])|(?=[(<:,;}]|$))/;
-
-// Members are addressable under these kinds only. A function body sits at the
-// same brace depth as a class body, so without this a local would answer to
-// `Owner.member` and outlive the member it was standing in for.
-const tsMemberOwnerKinds = new Set(["class", "interface", "type", "enum", "const enum", "const", "let", "var"]);
-
-const regexOpensAfter = new Set([
-  "return", "typeof", "case", "in", "of", "new", "delete", "void", "await", "yield", "throw", "do", "else",
-]);
-
-/**
- * One pass over a TypeScript source, producing two line-aligned views: `code`
- * blanks comments and string bodies, which is what brace depth and declaration
- * matching read, and `text` blanks comments only, which is where a mirrored
- * declaration's string literals come from.
- */
-function tsScan(source) {
-  let code = "";
-  let text = "";
-  // A `/` opens a regular expression rather than dividing when the code before it
-  // cannot end an expression: one of these characters, or one of these keywords.
-  // `return /["'{}]/.test(x)` is the shape that makes this load-bearing. Read as
-  // division, its quotes open a string and swallow the rest of the file.
-  let previous = "\n";
-  let word = "";
-  let lastWord = "";
-  const blank = (char) => (char === "\n" ? "\n" : " ");
-
-  const emit = (into) => {
-    code += into;
-    text += into;
-  };
-
-  const closes = (char) => {
-    previous = char;
-    word = "";
-    lastWord = "";
-  };
-
-  let i = 0;
-
-  while (i < source.length) {
-    const char = source[i];
-    const next = source[i + 1];
-
-    if (char === "/" && next === "/") {
-      while (i < source.length && source[i] !== "\n") i += 1;
-      continue;
-    }
-
-    if (char === "/" && next === "*") {
-      i += 2;
-
-      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
-        emit(blank(source[i]));
-        i += 1;
-      }
-
-      i += 2;
-      continue;
-    }
-
-    if (char === "'" || char === '"') {
-      emit(char);
-      i += 1;
-
-      while (i < source.length && source[i] !== char && source[i] !== "\n") {
-        if (source[i] === "\\") {
-          code += `${blank(source[i])}${blank(source[i + 1] ?? " ")}`;
-          text += source.slice(i, i + 2);
-          i += 2;
-          continue;
-        }
-
-        code += blank(source[i]);
-        text += source[i];
-        i += 1;
-      }
-
-      if (source[i] === char) {
-        emit(char);
-        i += 1;
-      }
-
-      closes(char);
-      continue;
-    }
-
-    if (char === "`") {
-      emit(char);
-      i += 1;
-      // A template's own text is not a declared set, so it is blanked in both
-      // views; the substitution depth is tracked only to find the closing tick.
-      let substitution = 0;
-
-      while (i < source.length) {
-        if (source[i] === "\\") {
-          emit(`${blank(source[i])}${blank(source[i + 1] ?? " ")}`);
-          i += 2;
-          continue;
-        }
-
-        if (substitution === 0 && source[i] === "`") break;
-
-        if (source[i] === "$" && source[i + 1] === "{") {
-          substitution += 1;
-          emit("  ");
-          i += 2;
-          continue;
-        }
-
-        if (substitution > 0 && source[i] === "}") substitution -= 1;
-        emit(blank(source[i]));
-        i += 1;
-      }
-
-      if (source[i] === "`") {
-        emit("`");
-        i += 1;
-      }
-
-      closes("`");
-      continue;
-    }
-
-    if (char === "/" && (regexOpensAfter.has(lastWord) || "(,=:[!&|?{};+-*%~^<>\n".includes(previous))) {
-      let end = i + 1;
-      let inClass = false;
-      let closed = false;
-
-      while (end < source.length && source[end] !== "\n") {
-        if (source[end] === "\\") {
-          end += 2;
-          continue;
-        }
-
-        if (source[end] === "[") inClass = true;
-        else if (source[end] === "]") inClass = false;
-        else if (source[end] === "/" && !inClass) {
-          closed = true;
-          break;
-        }
-
-        end += 1;
-      }
-
-      if (closed) {
-        emit(" ".repeat(end - i + 1));
-        i = end + 1;
-        closes("/");
-        continue;
-      }
-    }
-
-    emit(char);
-
-    if (/[A-Za-z0-9_$]/.test(char)) word += char;
-    else {
-      if (word !== "") {
-        lastWord = word;
-        word = "";
-      }
-
-      // Punctuation ends the keyword's reach; whitespace does not.
-      if (char.trim() !== "") lastWord = "";
-    }
-
-    if (char.trim() !== "") previous = char;
-    else if (char === "\n") previous = "\n";
-    i += 1;
-  }
-
-  return { code, text };
-}
-
-/**
- * Every top-level declaration of one file by name, each with the members
- * declared one brace deep inside it. A declaration's `bound` is the last line
- * before the next declaration at the same or an outer depth.
- */
-function tsDeclarations(codeLines) {
-  const found = [];
-  let depth = 0;
-
-  for (const [index, line] of codeLines.entries()) {
-    if (depth === 0) {
-      const top = tsTopDeclarationPattern.exec(line);
-
-      if (top !== null) {
-        const kind = top[1].startsWith("function") ? "function" : top[1].replace(/\s+/g, " ");
-        found.push({ name: top[2], kind, line: index + 1, depth, source: line });
-      }
-    } else if (depth === 1) {
-      const member = tsMemberDeclarationPattern.exec(line);
-
-      if (member !== null) {
-        found.push({ name: member[1], kind: "member", line: index + 1, depth, source: line });
-      }
-    }
-
-    for (const char of line) {
-      if (char === "{") depth += 1;
-      else if (char === "}" && depth > 0) depth -= 1;
-    }
-  }
-
-  const declarations = new Map();
-  let owner;
-
-  for (const [position, entry] of found.entries()) {
-    let bound = codeLines.length;
-
-    for (let after = position + 1; after < found.length; after += 1) {
-      if (found[after].depth <= entry.depth) {
-        bound = found[after].line - 1;
-        break;
-      }
-    }
-
-    if (entry.depth === 0) {
-      owner = {
-        line: entry.line,
-        bound,
-        members: new Map(),
-        // A value declared as a function is not a member owner however it is spelled.
-        ownsMembers: tsMemberOwnerKinds.has(entry.kind) && !/=>|\bfunction\b/.test(entry.source),
-      };
-
-      if (!declarations.has(entry.name)) declarations.set(entry.name, owner);
-    } else if (owner !== undefined && owner.ownsMembers && !owner.members.has(entry.name)) {
-      owner.members.set(entry.name, { line: entry.line, bound });
-    }
-  }
-
-  return declarations;
-}
 
 const tsFiles = new Map();
 
 function tsFile(path) {
-  let file = tsFiles.get(path);
+  let declarations = tsFiles.get(path);
 
-  if (file === undefined) {
-    const scanned = tsScan(readFileSync(path, "utf8"));
-    const code = scanned.code.split("\n");
-    file = { code, text: scanned.text.split("\n"), declarations: tsDeclarations(code) };
-    tsFiles.set(path, file);
+  if (declarations === undefined) {
+    declarations = tsDeclarations(path, readFileSync(path, "utf8"));
+    tsFiles.set(path, declarations);
   }
 
-  return file;
+  return declarations;
 }
 
 /** The declaration a reference names, or the reason it names none. */
@@ -695,41 +441,30 @@ function resolveTsRef(reference) {
   const path = resolve(repoRoot, relative);
 
   if (!path.startsWith(`${repoRoot}/`)) return { error: "escapes the repository root" };
-  let file;
+  let declarations;
 
   try {
-    file = tsFile(path);
+    declarations = tsFile(path);
   } catch (error) {
-    // A read that fails carries an errno; anything else is this scanner's own
+    if (error instanceof SyntaxError) return { error: `names a file TypeScript cannot parse: ${error.message}` };
+
+    // A read that fails carries an errno; anything else is this checker's own
     // bug and must not read as a missing file.
     if (error.code === undefined) throw error;
 
     return { error: "names a file that does not exist" };
   }
 
-  const declaration = file.declarations.get(symbol);
+  const declaration = declarations.get(symbol);
 
   if (declaration === undefined) return { error: `names \`${symbol}\`, which ${relative} does not declare` };
 
-  if (member === undefined) return { file, span: declaration };
+  if (member === undefined) return { node: declaration.node };
   const owned = declaration.members.get(member);
 
   if (owned === undefined) return { error: `names \`${member}\`, which \`${symbol}\` does not declare` };
 
-  return { file, span: owned };
-}
-
-/** The single-quoted literals one declaration lists, up to its first blank line. */
-function tsStringLiterals(file, span) {
-  const values = [];
-
-  for (let line = span.line; line <= span.bound; line += 1) {
-    if (line > span.line && file.code[line - 1].trim() === "") break;
-
-    for (const match of file.text[line - 1].matchAll(/'([^']+)'/g)) values.push(match[1]);
-  }
-
-  return values;
+  return { node: owned };
 }
 
 /**
@@ -961,7 +696,7 @@ function auditStateMirrors(inductives) {
       continue;
     }
 
-    const values = tsStringLiterals(resolved.file, resolved.span);
+    const values = stringValues(resolved.node);
 
     if (values.length === 0) {
       fail(`state mirror ${lean}: ${ts} lists no string literal, so the comparison would pass on nothing`);
