@@ -62,19 +62,11 @@
       "complexity": 42
     },
     {
-      "key": "scripts/bench-r2-workspace.ts#main",
-      "complexity": 42
-    },
-    {
       "key": "scripts/platform-catalog.ts#auditSchema",
       "complexity": 42
     },
     {
       "key": "packages/cli/src/tui/home-app.tsx#HomeScene",
-      "complexity": 41
-    },
-    {
-      "key": "packages/pc-agent/src/index.js#handle",
       "complexity": 41
     },
     {
@@ -110,7 +102,7 @@
       "complexity": 39
     },
     {
-      "key": "packages/core/src/tools/release-tool.ts#runReleaseAction",
+      "key": "packages/core/src/release/tool.ts#runReleaseAction",
       "complexity": 39
     },
     {
@@ -139,6 +131,10 @@
     },
     {
       "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
+      "complexity": 37
+    },
+    {
+      "key": "packages/pc-agent/src/index.js#handle",
       "complexity": 37
     },
     {

@@ -1,6 +1,6 @@
 /** Compaction content spec: what a summary must say. @kinu.run/compaction's last-resort prefix summary builds its prompt here. */
 
-import { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window';
+import { EVIDENCE_BUDGETS, evidenceWindow } from './utils/evidence-window';
 
 /** First line of every stored summary; `stripCheckpointPreamble` recovers the body for iterative updates. */
 export const CONTEXT_CHECKPOINT_PREFIX = '[CONTEXT CHECKPOINT — reference only]';

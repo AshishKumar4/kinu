@@ -231,32 +231,30 @@ export class ExtensionHost {
     return out;
   }
 
-  async emitTurnStart(ctx: TurnStartContext): Promise<void> {
+  private async observe(
+    hook: 'onTurnStart' | 'onToolCall' | 'onToolResult' | 'onTurnEnd',
+    call: (ext: KinuExtension) => void | Promise<void>,
+  ): Promise<void> {
     for (const ext of this.extensions) {
-      if (!ext.onTurnStart) continue;
-      await this.guardHook('onTurnStart', ext.name, () => ext.onTurnStart?.(ctx));
+      if (ext[hook] === undefined) continue;
+      await this.guardHook(hook, ext.name, () => call(ext));
     }
+  }
+
+  async emitTurnStart(ctx: TurnStartContext): Promise<void> {
+    await this.observe('onTurnStart', (ext) => ext.onTurnStart?.(ctx));
   }
 
   async emitToolCall(ctx: ToolCallContext): Promise<void> {
-    for (const ext of this.extensions) {
-      if (!ext.onToolCall) continue;
-      await this.guardHook('onToolCall', ext.name, () => ext.onToolCall?.(ctx));
-    }
+    await this.observe('onToolCall', (ext) => ext.onToolCall?.(ctx));
   }
 
   async emitToolResult(ctx: ToolResultContext): Promise<void> {
-    for (const ext of this.extensions) {
-      if (!ext.onToolResult) continue;
-      await this.guardHook('onToolResult', ext.name, () => ext.onToolResult?.(ctx));
-    }
+    await this.observe('onToolResult', (ext) => ext.onToolResult?.(ctx));
   }
 
   async emitTurnEnd(ctx: TurnEndContext): Promise<void> {
-    for (const ext of this.extensions) {
-      if (!ext.onTurnEnd) continue;
-      await this.guardHook('onTurnEnd', ext.name, () => ext.onTurnEnd?.(ctx));
-    }
+    await this.observe('onTurnEnd', (ext) => ext.onTurnEnd?.(ctx));
   }
 
 }

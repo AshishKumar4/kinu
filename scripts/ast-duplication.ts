@@ -14,10 +14,20 @@
  * fingerprint over node kinds where identifiers are replaced by their order of
  * first appearance, so renaming every variable, parameter and callee does not
  * hide a copy — which is what a token- or line-similarity tool (jscpd) matches
- * on. Literal TEXT is kept, deliberately: two functions that differ only in a
- * SQL statement, an error message or a line of UI copy are not the same
- * function, and leaving those tokens out fingerprinted an INSERT and an
- * INSERT … ON CONFLICT identically.
+ * on. Literal text is abstracted too, so a copy whose units, keys, numbers or
+ * messages were edited is still one group. Two kinds of text stay, because they
+ * decide what the code does rather than how it reads: query text handed to the
+ * SQL port (a tagged template, or the first argument of `.exec`), and intrinsic
+ * JSX tags (`<dt>` is the string `'dt'` to React).
+ *
+ * Measured 2026-09-25 over 1,130 files at the 26-node floor: literal text kept
+ * found 0 groups; every literal abstracted found 47, and 16 of those differ
+ * only in their query or their markup (rowid cursors in `fork-transfer.ts`,
+ * single-row reads in `hub/log.ts`, two JSX wrappers with different tags, and
+ * six methods of the blueprint and live-share stores over parallel tables).
+ * Keeping query text and intrinsic tags found 31, each read and each merged at
+ * its source, including `seededRandom` copied into the gallery with its hex
+ * constant respelled and `base64Url` twice in core.
  *
  * MIN_NODES = 26 is measured, not chosen, and it was re-measured after the
  * parser changed. Against the TypeScript AST the floor was 30; ESTree carries
@@ -41,10 +51,8 @@
  * are mostly SQL-row-fetch and React-handler boilerplate, which is duplication a
  * blocking gate should not die on.
  *
- * The limit that follows from keeping literal text: a near-copy whose literals
- * were also edited is not reported. `fmtSize` in cf-backend and `formatBytes`
- * in the CLI are the same algorithm over different unit strings, and this gate
- * does not see them.
+ * The limit that follows from keeping query text: two stores whose methods
+ * differ only in table and column names are not reported. See BLIND_SPOTS.
  *
  * WHAT `--lock` MAY WRITE. The lock only shrinks or is re-keyed. A group that
  * was fixed drops out and a group that lost a copy is recorded with the copies
@@ -100,7 +108,10 @@ export interface DuplicateGroup {
 /** One function body: where it lives and its identifier-normalised structure. */
 export interface Unit extends DuplicateMember {
   readonly size: number;
+  /** Structure with literal text kept: a body another file repeats verbatim. */
   readonly hash: string;
+  /** Structure with literal text abstracted except SQL: what this gate groups by. */
+  readonly likeness: string;
   readonly start: number;
   readonly end: number;
 }
@@ -116,40 +127,73 @@ function slot(map: Map<string, number>, key: string): number {
 
 interface Fingerprint {
   readonly hash: string;
+  readonly likeness: string;
   readonly size: number;
 }
 
 /**
+ * Text handed to the SQL port: a tagged template (`SqlExecutor`) or the first
+ * argument of `.exec(...)` (`SqlExec`). Two getters over different tables are
+ * different queries, so this text stays in the likeness fingerprint.
+ */
+function isQueryText(n: SyntaxNode): boolean {
+  const text = n.type === 'TemplateElement' ? n.parent : n;
+  const holder = text?.parent;
+
+  if (holder?.type === 'TaggedTemplateExpression') return true;
+
+  return holder?.type === 'CallExpression' && holder.children[1] === text && memberCalleeName(holder) === 'exec';
+}
+
+/**
  * Structure, with identifiers reduced to first-use order so a renamed copy still
- * matches, and literal text kept because it is content rather than plumbing: SQL,
- * prompts, error strings, UI copy. The node type is the stable string name, not
- * TypeScript's numeric `SyntaxKind`, which moved between compiler versions.
+ * matches. `hash` keeps every literal's text. `likeness` keeps only query text and
+ * intrinsic JSX tags (`<dt>` is the string `'dt'` to React, not a binding), so a
+ * copy whose units, keys, numbers or messages were edited still matches. The node
+ * type is the stable string name, not TypeScript's numeric `SyntaxKind`, which
+ * moved between compiler versions.
  */
 function fingerprintOf(body: SyntaxNode): Fingerprint {
   const names = new Map<string, number>();
-  const parts: string[] = [];
+  const exact: string[] = [];
+  const likeness: string[] = [];
   let size = 0;
 
   const visit = (n: SyntaxNode): void => {
     size += 1;
-    parts.push('(', n.type);
+    exact.push('(', n.type);
+    likeness.push('(', n.type);
     const identifier = identifierText(n);
 
     if (identifier !== undefined) {
-      parts.push('#' + slot(names, identifier));
+      const name = '#' + slot(names, identifier);
+      exact.push(name);
+
+      const intrinsic = n.type === 'JSXIdentifier' && /^[a-z]/u.test(identifier)
+        && (n.parent?.type === 'JSXOpeningElement' || n.parent?.type === 'JSXClosingElement');
+
+      likeness.push(intrinsic ? '=' + identifier : name);
     } else {
       const literal = literalText(n);
 
-      if (literal !== undefined) parts.push('=' + literal);
+      if (literal !== undefined) {
+        exact.push('=' + literal);
+
+        if (isQueryText(n)) likeness.push('=' + literal);
+      }
     }
 
     for (const child of n.children) visit(child);
-    parts.push(')');
+    exact.push(')');
+    likeness.push(')');
   };
 
   for (const child of body.children) visit(child);
 
-  return { hash: createHash('sha256').update(parts.join('')).digest('hex').slice(0, 16), size };
+  const digest = (parts: readonly string[]): string =>
+    createHash('sha256').update(parts.join('')).digest('hex').slice(0, 16);
+
+  return { hash: digest(exact), likeness: digest(likeness), size };
 }
 
 /** A callback passed to `useCallback` or `.map` has no name of its own, and
@@ -184,7 +228,7 @@ export function unitsOf(file: string, parsed: Parsed): Unit[] {
     const body = blockBodyOf(node);
 
     if (body === undefined) return;
-    const { hash, size } = fingerprintOf(body);
+    const { hash, likeness, size } = fingerprintOf(body);
     // The span and the name come from the member a function implements, not the
     // function expression ESTree hangs off it, so output points at the method.
     const unit = functionOwner(node);
@@ -194,6 +238,7 @@ export function unitsOf(file: string, parsed: Parsed): Unit[] {
       name: nameOf(unit),
       size,
       hash,
+      likeness,
       start: unit.start,
       end: unit.end,
     });
@@ -212,21 +257,21 @@ export function findDuplicateGroups(
   sources: ReadonlyMap<string, string>,
   minNodes = MIN_NODES,
 ): DuplicateGroup[] {
-  const byHash = new Map<string, Unit[]>();
+  const byLikeness = new Map<string, Unit[]>();
 
   for (const [file, text] of sources) {
     for (const unit of unitsOf(file, parse(file, text))) {
       if (unit.size < minNodes) continue;
-      const bucket = byHash.get(unit.hash);
+      const bucket = byLikeness.get(unit.likeness);
 
-      if (bucket) bucket.push(unit); else byHash.set(unit.hash, [unit]);
+      if (bucket) bucket.push(unit); else byLikeness.set(unit.likeness, [unit]);
     }
   }
 
   const candidates: { group: DuplicateGroup; units: readonly Unit[] }[] = [];
   const seen = new Map<string, number>();
 
-  for (const units of byHash.values()) {
+  for (const units of byLikeness.values()) {
     if (units.length < 2) continue;
 
     const members = [...units].sort((a, b) =>
@@ -317,11 +362,12 @@ export function shrinkGroups(
  * when somebody decides how far to trust the signal.
  */
 export const BLIND_SPOTS: readonly string[] = [
-  'A NEAR-COPY WHOSE LITERALS WERE ALSO EDITED — NOT DETECTED. Literal text is '
-  + 'part of the fingerprint, so the same algorithm over different unit strings '
-  + 'or messages is a different body. Live pair: `fmtSize` in '
-  + '`packages/cf-backend/src/components/surfaces/FilesSurface.tsx` and '
-  + '`formatBytes` in `packages/cli/src/display.ts`.',
+  'A COPY WHOSE ONLY EDIT IS ITS SQL OR ITS JSX TAGS — NOT DETECTED. Query text '
+  + '(a tagged template or the first argument of `.exec`) and intrinsic JSX tags '
+  + 'stay in the fingerprint, so one algorithm over two tables is two bodies. '
+  + 'Live pairs: `craftedToolRows`/`memoryChunkRows` in '
+  + '`packages/core/src/identity/fork-transfer.ts` and '
+  + '`stageCraftedTools`/`stageMemoryChunks` in `fork-writer.ts`.',
   'DUPLICATED POLICY IN DIFFERENT CODE SHAPES — NOT DETECTED. Two '
   + 'implementations of one rule with different structure share no fingerprint. '
   + 'Only identical structure is governed here.',

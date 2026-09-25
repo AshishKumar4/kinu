@@ -3,8 +3,8 @@
   0 sorry, 0 axioms.
 
   One function per executor constructor, over the inputs that constructor reads:
-  `packages/core/src/execution/inline.ts#createInlineExecutor` (the workspace,
-  plus its host toolchain), `nimbus.ts#createNimbusWorkspaceExecutor` (the
+  `packages/core/src/tools/inline-executor.ts#createInlineExecutor` (the workspace,
+  plus its host toolchain), `inline-executor.ts#createNimbusWorkspaceExecutor` (the
   workspace with a Nimbus session attached, whose inputs are ports and a runtime
   catalog), `sandbox.ts#createSandboxExecutor`,
   `device-tunnel-executor.ts#createDeviceTunnelExecutor` (what the device's
@@ -48,7 +48,7 @@ def probed : List Capability := [.javascript, .typescript, .python, .npm, .git]
 /-- A toolchain as its producers make it: drawn from `probed`. -/
 def FromProbe (cs : List Capability) : Prop := ∀ c ∈ cs, c ∈ probed
 
-/-- A Nimbus session's inputs (`createNimbusWorkspaceExecutor`'s options): ports it
+/-- A Nimbus session's inputs (`tools/inline-executor.ts#createNimbusWorkspaceExecutor`'s options): ports it
     may expose inbound, and a runtime catalog for `python` and native binaries. -/
 structure NimbusConfig where
   inbound : Bool

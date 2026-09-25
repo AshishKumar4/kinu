@@ -80,7 +80,7 @@ import {
 import {
   countedMsgSend,
   type MsgSendResult,
-} from '../tools/msg-counters';
+} from '../obs/msg-counters';
 
 export {
   PEER_REPLY_TOPIC,

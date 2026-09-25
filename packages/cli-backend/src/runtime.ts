@@ -69,7 +69,7 @@ import {
 } from './profile-authority';
 import type { LocalOAuthStore } from './oauth-store';
 import type { FileCheckpoints } from '@kinu.run/core';
-import { diagnostics, KinuError, renderCauseChain, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderCauseChain, settleLogged, toKinuError } from '@kinu.run/core/obs';
 import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalDatabasePath, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from './actor-identity';
 import * as v from 'valibot';
 
@@ -322,15 +322,9 @@ export function createCLIRuntime(
     // Unreferenced so a one-shot `kinu` command still exits with a timer pending.
     after: async (ms, fn) => {
       // No caller remains when this runs; a rejection is recorded as a domain failure.
-      const deferred = async (): Promise<void> => {
-        try {
-          await fn();
-        } catch (cause) {
-          diagnostics.failure('schedule.deferred_failed', toKinuError({
-            doing: 'running work this session deferred', cause, otherwise: 'io',
-          }));
-        }
-      };
+      const deferred = (): Promise<void> => settleLogged('schedule.deferred_failed', {
+        doing: 'running work this session deferred', otherwise: 'io',
+      }, fn);
 
       const timer = setTimeout(deferred, Math.max(0, ms));
       timer.unref?.();

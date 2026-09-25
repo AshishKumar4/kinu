@@ -33,7 +33,7 @@ export interface CheckpointOutcome {
 
 /** The failure stamp the durable state row carries, so a repeatedly failing
  *  checkpoint stays visible across restarts. */
-export interface RecordedFailure {
+interface RecordedFailure {
   readonly at: number;
   readonly reason: string;
 }

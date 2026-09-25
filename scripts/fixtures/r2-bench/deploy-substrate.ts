@@ -1,14 +1,5 @@
 /**
- * The deployment plumbing both benchmark drivers need, owned once.
- *
- * `scripts/bench-r2-workspace.ts` and `scripts/bench-devbox-strategies.ts` each
- * grew their own copy of this while they were being built against a platform that
- * refused them in a new way every run. Both copies now work, and they had already
- * begun to drift: the same `accountId` with two different error messages, the same
- * `wrangler` wrapper with two different ways of describing a thrown value. That
- * drift is the reason to extract rather than a reason to wait — two copies of
- * recovery logic diverge silently, and the next platform lesson gets learned by
- * one of them.
+ * The deployment plumbing every ephemeral devbox benchmark needs, owned once.
  *
  * What belongs here is what is true of ANY ephemeral deployed benchmark on this
  * platform, each line bought with a failed run:

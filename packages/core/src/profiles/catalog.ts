@@ -9,14 +9,14 @@ import * as v from 'valibot';
 import { definePromptSection } from '../prompting/template';
 
 import { NAMED_SWARM_PRESETS } from '../strategy/swarm-presets';
-import { REASONING_EFFORTS } from '../strategy/effort';
+import { REASONING_EFFORTS } from '../providers/effort';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../providers/workers-ai';
 import { isAccountName, isProviderScope } from '../credentials/accounts';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import { JsonValueSchema } from '../utils/json';
 import {
-  TIER_IDS, TierIdSchema,
-  type ProfileCatalog, type RoleCatalog, type RoleId,
+  BUILTIN_ROLE_IDS, RoleIdSchema, TIER_IDS, TierIdSchema,
+  type BuiltinRoleId, type ProfileCatalog, type RoleCatalog, type RoleId,
   type TierAssignments, type TierId, type RoleDefinition, type ProfileCatalogEnvelope,
 } from '../types/profile';
 
@@ -26,31 +26,6 @@ export type {
 } from '../types/profile';
 
 export { TIER_IDS, TierIdSchema } from '../types/profile';
-
-/** Roles every authority implicitly ships; a catalog may override but not remove them. */
-const BUILTIN_ROLE_IDS = [
-  'task', 'researcher', 'planner', 'auditor', 'designer',
-] as const;
-
-export type BuiltinRoleId = (typeof BUILTIN_ROLE_IDS)[number];
-
-/** Declared, not the array's first slot, so reordering builtins cannot move the default. */
-export const DEFAULT_ROLE_ID = 'task' as const satisfies BuiltinRoleId;
-
-export const ROLE_ID_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
-
-const ROLE_ID_MAX_LEN = 64;
-
-const RoleIdSchema = v.pipe(v.string(), v.regex(ROLE_ID_RE), v.maxLength(ROLE_ID_MAX_LEN));
-
-export function isValidRoleId(value: string): value is RoleId {
-  return value.length <= ROLE_ID_MAX_LEN && ROLE_ID_RE.test(value);
-}
-
-/** Well-formedness only (durable rows may come from another build); existence is checked at resolve time. */
-export function isTierId(value: string): value is TierId {
-  return v.safeParse(TierIdSchema, value).success;
-}
 
 const ModelSpecSchema = v.pipe(v.string(), v.minLength(1));
 
@@ -147,33 +122,27 @@ export const ProfileCatalogEnvelopeSchema = v.strictObject({
   catalog: ProfileCatalogSchema,
 });
 
-export function formatProfileValidationIssues(issues: readonly v.BaseIssue<unknown>[]): string {
-  return issues.slice(0, 3).map((issue) => {
+/** Throws, naming up to three offending paths, on any shape violation of `what`. */
+export function parseProfileValue<T>(schema: v.GenericSchema<unknown, T>, what: string, input: { value: unknown }): T {
+  const parsed = v.safeParse(schema, input.value);
+
+  if (parsed.success) return parsed.output;
+
+  const issues = parsed.issues.slice(0, 3).map((issue) => {
     const path = issue.path?.map((item) => String(item.key)).join('.') ?? '(root)';
 
     return `${path}: ${issue.message}`;
   }).join('; ');
+
+  throw new Error(`invalid ${what}: ${issues}`);
 }
 
-/** Throws, naming the offending paths, on any shape violation. */
 export function validateProfileCatalog(input: { value: unknown }): ProfileCatalog {
-  const parsed = v.safeParse(ProfileCatalogSchema, input.value);
-
-  if (!parsed.success) {
-    throw new Error(`invalid profile catalog: ${formatProfileValidationIssues(parsed.issues)}`);
-  }
-
-  return parsed.output;
+  return parseProfileValue(ProfileCatalogSchema, 'profile catalog', input);
 }
 
 export function validateProfileCatalogEnvelope(input: { value: unknown }): ProfileCatalogEnvelope {
-  const parsed = v.safeParse(ProfileCatalogEnvelopeSchema, input.value);
-
-  if (!parsed.success) {
-    throw new Error(`invalid profile catalog envelope: ${formatProfileValidationIssues(parsed.issues)}`);
-  }
-
-  return parsed.output;
+  return parseProfileValue(ProfileCatalogEnvelopeSchema, 'profile catalog envelope', input);
 }
 
 /** Canonical JSON the digest covers (catalog only, never version or authority); exposed for WebCrypto hashing. */

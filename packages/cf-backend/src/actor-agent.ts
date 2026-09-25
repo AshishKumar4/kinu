@@ -13,7 +13,7 @@ import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, actorReadHandle, readSessionTranscript,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS,
-  type SubordinateInspectionAuthority, type SessionTranscriptReader,
+  type RunEventInput, type SubordinateInspectionAuthority, type SessionTranscriptReader,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
@@ -163,7 +163,7 @@ import {
   resolveAgentTurnProfile, resolveRoutingProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
-  createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
+  agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
@@ -235,6 +235,12 @@ interface ModelDimensions {
 
 /** No model resolved. Empty rather than a plausible default, so unknowns are not misattributed. */
 const UNRESOLVED_MODEL: ModelDimensions = { provider: '', model: '' };
+
+const RUN_EVENT_EMIT_FAILED = {
+  tool_call_end: 'event.tool_call_end_emit_failed',
+  step_finish: 'event.step_finish_emit_failed',
+  budget_exhausted: 'event.budget_exhausted_emit_failed',
+} as const;
 
 /** The overflow retry earned and the one end reason, already sealed in `run_end`.
  * The terminal roster's `status` is this reason; callers must not reclassify. */
@@ -676,7 +682,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private _planActions: PlanReviewActions | null = null;
 
   private get planActions(): PlanReviewActions {
-    this._planActions ??= new PlanReviewActions(this.stores.planReviews, (plan) => this.host.broadcast({ type: 'plan_updated', plan }));
+    this._planActions ??= new PlanReviewActions(this.stores.planReviews, this.host);
 
     return this._planActions;
   }
@@ -1925,27 +1931,9 @@ export abstract class ActorAgent extends Agent<Env> {
               durationMs: ev.durationMs ?? 0,
             });
 
-            try {
-              if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'tool_call_end', ...ev });
-            } catch (err) {
-              diagnostics.failure('event.tool_call_end_emit_failed', toKinuError({
-                doing: 'recording a tool_call_end run event',
-                cause: err,
-                otherwise: 'io',
-              }));
-            }
+            this.emitRunEvent({ type: 'tool_call_end', ...ev });
           },
-          onStepEvent: (ev) => {
-            try {
-              if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'step_finish', ...ev });
-            } catch (err) {
-              diagnostics.failure('event.step_finish_emit_failed', toKinuError({
-                doing: 'recording a step_finish run event',
-                cause: err,
-                otherwise: 'io',
-              }));
-            }
-          },
+          onStepEvent: (ev) => this.emitRunEvent({ type: 'step_finish', ...ev }),
         },
       };
     }
@@ -1963,19 +1951,20 @@ export abstract class ActorAgent extends Agent<Env> {
       // Real USD from catalog rates; null until the lookup lands, then the ledger blends and says so.
       pricing: (spec) => this.modelCatalog.pricing(spec),
       onExhausted: ({ error: _error, ...refusal }) => {
-        try {
-          if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'budget_exhausted', ...refusal });
-        } catch (err) {
-          diagnostics.failure('event.budget_exhausted_emit_failed', toKinuError({
-            doing: 'recording a budget_exhausted run event',
-            cause: err,
-            otherwise: 'io',
-          }));
-        }
+        this.emitRunEvent({ type: 'budget_exhausted', ...refusal });
       },
     });
 
     return this._budget;
+  }
+
+  /** A run event for the turn in flight; a failed write is logged, never thrown into the turn. */
+  private emitRunEvent(event: Extract<RunEventInput, { type: keyof typeof RUN_EVENT_EMIT_FAILED }>): void {
+    try {
+      if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, event);
+    } catch (err) {
+      diagnostics.failure(RUN_EVENT_EMIT_FAILED[event.type], toKinuError({ doing: `recording a ${event.type} run event`, cause: err, otherwise: 'io' }));
+    }
   }
 
   /**
@@ -3781,7 +3770,7 @@ export abstract class ActorAgent extends Agent<Env> {
         escalations: this.acc.escalations,
         // Owner resolution stays lazy per action, so the cached toolset stays valid across claimOwner.
         agents: this.getAgentsToolDeps(mode),
-        roleAuthority: () => this.operationProfile()?.inputs?.envelope ?? null,
+        roleSwitch: agentRoleSwitch(() => this.operationProfile()?.inputs?.envelope ?? null),
         // memory.search uses hybrid retrieval when available; otherwise FTS5-only.
         vectorStore: this.rt.vectorStore,
         facts: this.facts,

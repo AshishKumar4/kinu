@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { createTestRuntime, present } from '@kinu.run/test-utils';
-import { stepContextLimit } from '../prompting/step-prune';
+import { stepContextLimit } from '../context-window';
 import { estimateTokens } from '../llm';
 import {
   parseSkillFile, stringifySkillFile,

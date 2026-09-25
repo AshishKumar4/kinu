@@ -1,7 +1,7 @@
-diff --git a/packages/core/src/prompts/structured.ts b/packages/core/src/prompts/structured.ts
+diff --git a/packages/core/src/providers/structured.ts b/packages/core/src/providers/structured.ts
 index 91993547a..a1e95b33d 100644
---- a/packages/core/src/prompts/structured.ts
-+++ b/packages/core/src/prompts/structured.ts
+--- a/packages/core/src/providers/structured.ts
++++ b/packages/core/src/providers/structured.ts
 @@ -64,7 +64,7 @@ function extractBalancedJson(text: string, open: '{' | '[', close: '}' | ']'): s
  
      if (ch === '"') inString = true;

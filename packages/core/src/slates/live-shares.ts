@@ -2,7 +2,7 @@
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
 import { KinuError } from '../obs/error';
-import type { ShareUser } from './shares';
+import { ShareStore, type ShareTable } from './shares';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
 import {
   ShareGrantSchema, ViewerCallSchema,
@@ -29,15 +29,28 @@ const LiveShareRow = v.object({
   handle: v.string(), grant_json: v.string(), created_at: v.number(), revoked_at: v.nullable(v.number()),
 });
 
-const UserRow = v.object({ share_id: v.string(), email: v.string() });
-
 const RequestRow = v.object({
   id: v.number(), share_id: v.string(), viewer: v.string(), slate_id: v.string(), path: v.string(),
   calls: v.string(), outcome: v.string(), created_at: v.number(), settled_at: v.nullable(v.number()),
 });
 
-export class SlateLiveShareStore {
-  constructor(private readonly db: SqlExec, private readonly now: () => number = () => Date.now()) {}
+const LIVE_SHARES: ShareTable<v.InferOutput<typeof LiveShareRow>, LiveShareRecord> = {
+  shares: 'slate_live_shares',
+  users: 'slate_live_share_users',
+  row: LiveShareRow,
+  missing: 'No such share',
+  revoked: 'This slate is no longer shared',
+  record: (row, users) => ({
+    id: row.id, slate: row.slate_id, visibility: row.visibility, handle: row.handle,
+    grant: v.parse(ShareGrantSchema, JSON.parse(row.grant_json)),
+    createdAt: row.created_at, revokedAt: row.revoked_at, users,
+  }),
+};
+
+export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveShareRow>, LiveShareRecord> {
+  constructor(db: SqlExec, now: () => number = () => Date.now()) {
+    super(db, now, LIVE_SHARES);
+  }
 
   add(share: { id: string; slate: string; visibility: 'users' | 'public'; handle: string; grant: ShareGrant }): LiveShareRecord {
     const createdAt = this.now();
@@ -52,24 +65,6 @@ export class SlateLiveShareStore {
     };
   }
 
-  /** The row, revoked or not. Callers that serve a viewer use `live`. */
-  get(id: string): LiveShareRecord | undefined {
-    const row = this.db.exec('SELECT * FROM slate_live_shares WHERE id = ?', id).toArray()[0];
-
-    return row === undefined ? undefined : this.record(v.parse(LiveShareRow, row), this.users([id]));
-  }
-
-  /** Present and unrevoked, re-read on this call. */
-  live(id: string): LiveShareRecord {
-    const share = this.get(id);
-
-    if (share === undefined) throw new KinuError('missing', 'No such share');
-
-    if (share.revokedAt !== null) throw new KinuError('denied', 'This slate is no longer shared');
-
-    return share;
-  }
-
   /** A revoked share has no address. */
   byHandle(handle: string): LiveShareRecord | undefined {
     const row = this.db.exec('SELECT * FROM slate_live_shares WHERE handle = ? AND revoked_at IS NULL', handle).toArray()[0];
@@ -78,41 +73,6 @@ export class SlateLiveShareStore {
     const parsed = v.parse(LiveShareRow, row);
 
     return this.record(parsed, this.users([parsed.id]));
-  }
-
-  list(): LiveShareRecord[] {
-    const rows = this.db.exec('SELECT * FROM slate_live_shares ORDER BY created_at DESC, id').toArray()
-      .map((row) => v.parse(LiveShareRow, row));
-
-    const users = this.users(rows.map((row) => row.id));
-
-    return rows.map((row) => this.record(row, users));
-  }
-
-  revoke(id: string): LiveShareRecord {
-    const share = this.get(id);
-
-    if (share === undefined) throw new KinuError('missing', 'No such share');
-
-    if (share.revokedAt !== null) return share;
-    const revokedAt = this.now();
-    this.db.exec('UPDATE slate_live_shares SET revoked_at = ? WHERE id = ?', revokedAt, id);
-
-    return { ...share, revokedAt };
-  }
-
-  addUsers(id: string, users: readonly ShareUser[]): LiveShareRecord {
-    const share = this.live(id);
-    const createdAt = this.now();
-
-    for (const user of users) {
-      this.db.exec(
-        'INSERT INTO slate_live_share_users (share_id, user_id, email, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (share_id, user_id) DO NOTHING',
-        id, user.userId, user.email, createdAt,
-      );
-    }
-
-    return { ...share, users: this.users([id]).filter((row) => row.share_id === id).map((row) => row.email) };
   }
 
   hasUser(id: string, userId: string): boolean {
@@ -148,23 +108,6 @@ export class SlateLiveShareStore {
   requests(share: string): ViewerRequestRecord[] {
     return this.db.exec('SELECT * FROM slate_viewer_requests WHERE share_id = ? ORDER BY id DESC', share)
       .toArray().map((row) => this.request(v.parse(RequestRow, row)));
-  }
-
-  private users(ids: readonly string[]): v.InferOutput<typeof UserRow>[] {
-    if (ids.length === 0) return [];
-    const placeholders = ids.map(() => '?').join(', ');
-
-    return this.db.exec(`SELECT share_id, email FROM slate_live_share_users WHERE share_id IN (${placeholders}) ORDER BY created_at, email`, ...ids)
-      .toArray().map((row) => v.parse(UserRow, row));
-  }
-
-  private record(row: v.InferOutput<typeof LiveShareRow>, users: readonly v.InferOutput<typeof UserRow>[]): LiveShareRecord {
-    return {
-      id: row.id, slate: row.slate_id, visibility: row.visibility, handle: row.handle,
-      grant: v.parse(ShareGrantSchema, JSON.parse(row.grant_json)),
-      createdAt: row.created_at, revokedAt: row.revoked_at,
-      users: users.filter((user) => user.share_id === row.id).map((user) => user.email),
-    };
   }
 
   private request(row: v.InferOutput<typeof RequestRow>): ViewerRequestRecord {

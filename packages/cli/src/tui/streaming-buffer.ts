@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 type TimeoutHandle = ReturnType<typeof setTimeout>;
 
-export interface StreamingBufferController {
+interface StreamingBufferController {
   start(): void;
   append(delta: string): void;
   finish(finalText?: string): void;
@@ -11,7 +11,7 @@ export interface StreamingBufferController {
 }
 
 /** Structural rather than `typeof setTimeout`: platform timer globals differ in their extras. */
-export interface StreamingBufferTimers {
+interface StreamingBufferTimers {
   setTimeout(callback: () => void, ms: number): TimeoutHandle;
   clearTimeout(handle: TimeoutHandle): void;
 }
@@ -41,12 +41,14 @@ export function createStreamingBufferController(
     timer = timers.setTimeout(flush, intervalMs);
   };
 
+  const reset = () => {
+    cancelTimer();
+    buffer = '';
+    setStreamingText(null);
+  };
+
   return {
-    start() {
-      cancelTimer();
-      buffer = '';
-      setStreamingText(null);
-    },
+    start: reset,
     append(delta: string) {
       buffer += delta;
       schedule();
@@ -55,14 +57,8 @@ export function createStreamingBufferController(
       if (finalText !== undefined) buffer = finalText;
       flush();
     },
-    clear() {
-      cancelTimer();
-      buffer = '';
-      setStreamingText(null);
-    },
-    dispose() {
-      cancelTimer();
-    },
+    clear: reset,
+    dispose: cancelTimer,
   };
 }
 

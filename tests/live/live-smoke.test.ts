@@ -47,7 +47,7 @@ import puppeteer, { type LaunchOptions, type Page } from 'puppeteer';
 import * as v from 'valibot';
 
 import { initWorkspaceSchema, openWorkspaceMainActor, type LLMProviderConfig } from '../../packages/core/src/index';
-import { createWorkspace } from '../../packages/core/src/identity/index';
+import { createWorkspace } from '../../packages/core/src/workspace-birth';
 import { LocalAgentSession, type SessionEvent } from '../../packages/cli-backend/src/local-session';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';

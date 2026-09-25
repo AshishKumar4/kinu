@@ -3,7 +3,7 @@
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
 import { upsertCraftedTool } from './conflict';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { EVIDENCE_BUDGETS } from '../types/evidence';
 import { tolerate } from '../obs/index';
 

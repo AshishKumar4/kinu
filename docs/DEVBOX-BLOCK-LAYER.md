@@ -96,7 +96,7 @@ collapse of the mounted delta cannot stay.
 ovl_do_open→get_node_up→copyup copies the inode before an O_RDWR/O_WRONLY open
 succeeds, even with no write. The work is O(size of that file), bounded by F,
 plus ancestor metadata. Sparse upper holes never consult lower ranges.
-devbox.ts #restorePhases restarts arbitrary saved workloads before settlement.
+devbox.ts #attachAndRestore restarts arbitrary saved workloads before settlement.
 Deferring their writable opens would block database-backed listeners or
 falsely report them restored.
 

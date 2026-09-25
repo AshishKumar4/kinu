@@ -10,7 +10,7 @@ import { CRAFT_NEUTRAL_PRIOR } from '../craft/in-episode';
 import type { CraftStore } from '../types/agent-runtime';
 import type { VFS, SqlExecutor } from '../types/primitives';
 import type { CraftedTool } from '../types/craft';
-import type { ReasoningEffort } from '../strategy/effort';
+import type { ReasoningEffort } from '../providers/effort';
 import { transcriptRole } from '../utils/ui-message';
 import type { ChatHistoryEntry } from '../types/chat';
 import { mapPage, type Page, type PageRequest } from '../session/page';

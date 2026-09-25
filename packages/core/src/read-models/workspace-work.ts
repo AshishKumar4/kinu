@@ -4,7 +4,7 @@
  */
 import { bindActorHandle, type ActorHandle, type ActorIdentity } from '../identity/actor-handle';
 import type { WorkspaceActor } from '../identity/workspace-actors';
-import { readPlanTasks, TaskListStore, type AgentTaskTree } from '../tasks/store';
+import { readPlanTasks, TaskListStore, type AgentTaskTree } from '../tools/task-store';
 import { PlanReviewStore, type PlanReview } from '../plans/review';
 import { tableExists } from '../identity/schema';
 import { KinuError } from '../obs/error';

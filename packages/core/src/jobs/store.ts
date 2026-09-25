@@ -6,7 +6,7 @@ import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { WorkMode } from '../types/turn';
 import { renderThrownChain } from '../obs/index';
-import type { ActiveRoster } from '../prompting/volatile-context';
+import type { ActiveRoster } from '../types/dynamic-context';
 import type { BackgroundJob, BackgroundJobStatus } from '../types/jobs';
 
 export type { BackgroundJob, BackgroundJobStatus } from '../types/jobs';

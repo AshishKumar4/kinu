@@ -20,8 +20,8 @@ import {
 } from '../types/evolution';
 
 import { renderThrownChain, tolerate } from '../obs/index';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';

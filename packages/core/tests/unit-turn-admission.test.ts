@@ -7,7 +7,7 @@ import { assembleTurnMessages } from '../src/orchestrator/turn-context';
 import { runChat } from '../src/chat';
 import { ExtensionHost } from '../src/extension';
 import { classifyTurnFailure, planOverflowRecovery } from '../src/turn-failure';
-import { stepContextLimit } from '../src/prompting/step-prune';
+import { stepContextLimit } from '../src/context-window';
 import {
   countRequestInputTokens, NO_COUNT_ENDPOINT,
   type CountableRequest, type InputTokenCount,

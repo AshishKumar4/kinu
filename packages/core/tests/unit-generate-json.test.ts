@@ -3,7 +3,7 @@ import { describe, test, expect } from "bun:test";
 import * as v from "valibot";
 import { MockLanguageModelV3 } from "ai/test";
 import { unobservedSpend } from "@kinu.run/test-utils";
-import { extractJsonObject, generateJson } from "../src/prompts/structured";
+import { extractJsonObject, generateJson } from "../src/providers/structured";
 import type { ModelCallSpend } from "../src/events/model-call";
 
 const UNOBSERVED: ModelCallSpend = { source: "judge", report: unobservedSpend };

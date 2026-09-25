@@ -5,7 +5,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { sqlCheckList } from '../identity/schema';
-import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
+import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/misevolution';
 import { modifyScaffold } from '../scaffold/modify';
 import { getPendingScaffold } from '../scaffold/shadow';
 import { upsertCraftedTool } from '../craft/conflict';

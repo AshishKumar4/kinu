@@ -11,6 +11,7 @@ import { inputCls } from "@/components/ui/form";
 import { listWorkspaces, type WorkspaceEntry } from "@/lib/user-api";
 import { createWorkspaceFromMission } from "@/lib/create-workspace";
 import { forkBlueprint, forkLiveShare } from "@/lib/shared-api";
+import { showRejection } from "@/hooks/use-async-resource";
 
 const NEW_WORKSPACE = "\u0000new";
 
@@ -37,13 +38,11 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces }: {
   useEffect(() => {
     if (workspaces !== undefined) return;
     let mounted = true;
-    const failed = (...rejection: [unknown]): void => { if (mounted) setErr(renderThrownChain({ cause: rejection[0] })); };
-
     listWorkspaces().then((list) => {
       if (!mounted) return;
       setRoster(list.entries);
       setTarget(list.entries[0]?.name ?? NEW_WORKSPACE);
-    }).catch(failed);
+    }).catch(showRejection(setErr, () => mounted));
 
     return () => { mounted = false; };
   }, [workspaces]);

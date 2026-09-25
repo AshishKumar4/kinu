@@ -24,9 +24,9 @@ import type {
   EvolutionConfig,
 } from './types';
 import { DEFAULT_EVOLUTION_CONFIG } from './types';
-import { extractJsonObject, jsonObjectOnlyInstruction, stripMarkdownFences } from '../prompts/structured';
+import { extractJsonObject, jsonObjectOnlyInstruction, stripMarkdownFences } from '../providers/structured';
 import { renderThrownChain, tolerate } from '../obs/index';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { upsertCraftedTool } from '../craft/conflict';
 import { periodicCraftConsolidation } from '../craft/consolidation';
 import { updateCraftScores } from '../craft/ema';

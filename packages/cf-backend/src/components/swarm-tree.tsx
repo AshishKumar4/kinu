@@ -319,21 +319,16 @@ function applyEmphasis(
 	const onPath = new Set(hovered ? hovered.ancestors().map((d) => d.data.id) : []);
 	const lit = (id: string) => region.pv.has(id) || onPath.has(id);
 
+	const linkTone = <T,>(onLit: T, status: ForkNode["status"], onStatus: T, rest: T) =>
+		(d: d3.HierarchyPointLink<ForkNode>): T => {
+			if (lit(d.target.data.id)) return onLit;
+
+			return d.target.data.status === status ? onStatus : rest;
+		};
+
 	group.selectAll<SVGPathElement, d3.HierarchyPointLink<ForkNode>>("path.mcts-link")
-		.attr("stroke", (d) => {
-			if (lit(d.target.data.id)) return "var(--c-accent)";
-
-			if (d.target.data.status === "failed") return "var(--c-danger)";
-
-			return "var(--c-border-strong)";
-		})
-		.attr("stroke-opacity", (d) => {
-			if (lit(d.target.data.id)) return 0.95;
-
-			if (d.target.data.status === "pruned") return 0.4;
-
-			return 0.6;
-		})
+		.attr("stroke", linkTone("var(--c-accent)", "failed", "var(--c-danger)", "var(--c-border-strong)"))
+		.attr("stroke-opacity", linkTone(0.95, "pruned", 0.4, 0.6))
 		.attr("stroke-width", (d) => {
 			const w = region.competed ? linkWidth(d.target.data.visits, region.visitMax) : 1.2;
 

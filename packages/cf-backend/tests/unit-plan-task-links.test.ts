@@ -3,7 +3,7 @@ import { createTestRuntime } from '../../core/tests/helpers';
 import {
   actorScaffoldPath, MAIN_AGENT, PlanReviewStore, TaskListStore, withTaskPlan, bindTaskPlan, initPlanReviewTable,
 } from '@kinu.run/core';
-import { readPlanTasks } from '../../core/src/tasks/store';
+import { readPlanTasks } from '../../core/src/tools/task-store';
 import { createTasksDispatcher } from '../../core/src/tools/tasks-tool';
 import { createTasksCodemodeProvider } from '../../core/src/tools/tasks-codemode';
 import { jsonSchema, tool } from 'ai';

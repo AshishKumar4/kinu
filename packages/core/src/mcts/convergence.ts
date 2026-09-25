@@ -12,7 +12,7 @@ import { isCraftable, maybeStoreCraftedTool } from '../craft/discovery';
 import { captureAlternateTakes, findNearTiedRivals, inPopulation, searchTree } from './takes';
 import { selectWinnerByTest } from './test-selection';
 import { DEFAULT_CONFIG } from '../config';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { isoDate } from '../utils/date';
 import type { WorkMode } from '../types/turn';
 

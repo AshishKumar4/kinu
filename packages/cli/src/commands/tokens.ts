@@ -11,7 +11,7 @@ import { ACCENT, DIM, formatWhen, OK, printJson, WARN } from '../display';
 /** The server's accepted scopes (`cf-backend/src/cli/access-token-store.ts`), restated since the CLI does not depend on the backend. */
 export const ACCESS_TOKEN_SCOPES = ['workspace.read', 'workspace.exec', 'ai.proxy'] as const;
 
-export interface TokensOpts {
+interface TokensOpts {
   name?: string;
   scopes?: string;
   json?: boolean;

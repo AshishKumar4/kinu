@@ -1,5 +1,6 @@
 import * as v from 'valibot';
 import type { CodemodeProvider } from './sandbox-contract';
+import type { CodemodeResult } from '../types/codemode';
 import { KeySchema, type ProgramStateStore } from '../identity/program-state';
 import { JsonValueSchema } from '../utils/json';
 import { KinuError, refusalOf } from '../obs/error';
@@ -16,54 +17,50 @@ export declare const state: {
   list(prefix?: string): Promise<string[] | Refusal>;
 };`;
 
+function onFirst<T>(
+  schema: v.GenericSchema<unknown, T>,
+  refusal: string,
+  run: (first: T, rest: readonly unknown[]) => CodemodeResult | Promise<CodemodeResult>,
+): (...args: unknown[]) => Promise<CodemodeResult> {
+  return async (...args) => {
+    const first = v.safeParse(schema, args[0]);
+
+    if (!first.success) return refusalOf(new KinuError('bad_input', refusal));
+
+    return run(first.output, args.slice(1));
+  };
+}
+
 export function createStateCodemodeProvider(state: ProgramStateStore): CodemodeProvider {
   return {
     name: STATE_NAMESPACE, types: STATE_TYPES, positionalArgs: true,
     tools: {
       get: {
         planAllowed: true, description: 'Read a saved JSON value; null when absent.',
-        execute: async (...args) => {
-          const key = v.safeParse(KeySchema, args[0]);
-
-          if (!key.success) return refusalOf(new KinuError('bad_input', 'state.get(key): key must be a non-empty string'));
-
-          return state.get(key.output);
-        },
+        execute: onFirst(KeySchema, 'state.get(key): key must be a non-empty string', (key) => state.get(key)),
       },
       set: {
         planAllowed: true, description: 'Save a JSON value under a key.',
-        execute: async (...args) => {
-          const key = v.safeParse(KeySchema, args[0]);
-
-          if (!key.success) return refusalOf(new KinuError('bad_input', 'state.set(key, value): key must be a non-empty string'));
-          const value = v.safeParse(JsonValueSchema, args[1] === undefined ? null : args[1]);
+        execute: onFirst(KeySchema, 'state.set(key, value): key must be a non-empty string', (key, [raw]) => {
+          const value = v.safeParse(JsonValueSchema, raw === undefined ? null : raw);
 
           if (!value.success) return refusalOf(new KinuError('bad_input', 'state.set(key, value): value must be JSON-serializable'));
-          state.set(key.output, value.output);
+          state.set(key, value.output);
 
           return { ok: true };
-        },
+        }),
       },
       delete: {
         planAllowed: true, description: 'Remove a saved key.',
-        execute: async (...args) => {
-          const key = v.safeParse(KeySchema, args[0]);
-
-          if (!key.success) return refusalOf(new KinuError('bad_input', 'state.delete(key): key must be a non-empty string'));
-          state.delete(key.output);
+        execute: onFirst(KeySchema, 'state.delete(key): key must be a non-empty string', (key) => {
+          state.delete(key);
 
           return { ok: true };
-        },
+        }),
       },
       list: {
         planAllowed: true, description: 'List saved keys, optionally under a prefix.',
-        execute: async (...args) => {
-          const prefix = v.safeParse(PrefixSchema, args[0]);
-
-          if (!prefix.success) return refusalOf(new KinuError('bad_input', 'state.list(prefix?): prefix must be a string'));
-
-          return state.list(prefix.output);
-        },
+        execute: onFirst(PrefixSchema, 'state.list(prefix?): prefix must be a string', (prefix) => state.list(prefix)),
       },
     },
   };

@@ -2,7 +2,7 @@ export * from './objective';
 
 export * from './swarm';
 
-export * from './effort';
+export * from '../providers/effort';
 
 export * from './exec-ratio';
 

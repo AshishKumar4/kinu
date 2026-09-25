@@ -3,6 +3,7 @@
 import * as v from 'valibot';
 import { tolerate } from '../obs/index';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
+import type { EvolvedArtifact } from '../safety/misevolution';
 
 /** Canonical order: the CHECK constraint and every enum surface derive from this list. */
 export const EXPERIENCE_KINDS = ['craft', 'lesson', 'fact', 'scaffold'] as const;
@@ -39,9 +40,18 @@ export interface ExperienceEntry extends PublishableCandidate {
   publishedAt: number;
 }
 
-/** Exactly the text that will land inside the agent, for every kind (memory decays alignment as much as tools). */
-export function misevolutionSourceOf(payload: ExperiencePayload): string {
-  return payloadText(payload, ': ');
+/** Exactly what will land inside the agent, for every kind (memory decays alignment as much as tools):
+ *  a tool's and a scaffold's code as code, everything else as the prose the agent reads. */
+export function misevolutionSourceOf(payload: ExperiencePayload): EvolvedArtifact {
+  switch (payload.kind) {
+    case 'craft':
+      return { code: payload.code, prose: payload.description };
+    case 'scaffold':
+      return { code: payload.code, prose: payload.rationale };
+    case 'lesson':
+    case 'fact':
+      return { prose: payloadText(payload, ': ') };
+  }
 }
 
 function payloadText(payload: ExperiencePayload, factSeparator: string): string {

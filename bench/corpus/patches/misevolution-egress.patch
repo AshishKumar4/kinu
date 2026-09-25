@@ -1,12 +1,12 @@
-diff --git a/packages/core/src/scaffold/misevolution.ts b/packages/core/src/scaffold/misevolution.ts
---- a/packages/core/src/scaffold/misevolution.ts
-+++ b/packages/core/src/scaffold/misevolution.ts
-@@ -71,7 +71,7 @@
- const MISEVOLUTION_CRITERIA: readonly MisevolutionCriterion[] = Object.freeze([
-   criterion({
-     id: 'network-egress',
--    pattern: /\bfetch\s*\(|\bXMLHttpRequest\b|\bnew\s+WebSocket\b|\bsendBeacon\s*\(|\bEventSource\b/,
-+    pattern: /\bXMLHttpRequest\b|\bnew\s+WebSocket\b|\bsendBeacon\s*\(|\bEventSource\b/,
-     reason: 'direct network egress — evolved code must reach the outside world only through the audited tool surface (host.callTool / sandbox tools)',
-   }),
-   criterion({
+diff --git a/packages/core/src/safety/misevolution.ts b/packages/core/src/safety/misevolution.ts
+--- a/packages/core/src/safety/misevolution.ts
++++ b/packages/core/src/safety/misevolution.ts
+@@ -36,7 +36,7 @@
+   readonly reason: string;
+ }
+ 
+-const EGRESS_NAMES: ReadonlySet<string> = new Set(['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'sendBeacon']);
++const EGRESS_NAMES: ReadonlySet<string> = new Set(['XMLHttpRequest', 'WebSocket', 'EventSource', 'sendBeacon']);
+ 
+ const GLOBAL_OBJECTS: ReadonlySet<string> = new Set(['globalThis', 'self', 'window', 'global']);
+ 

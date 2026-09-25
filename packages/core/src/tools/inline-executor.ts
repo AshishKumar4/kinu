@@ -1,26 +1,27 @@
 /** InlineExecutor: the `workspace.*` codemode provider over its workspace's files, shell, memory and craft store. */
 
 import * as v from 'valibot';
-import type { ExecutorProvider, ExecutorCapability, ResourceLimits } from './types';
-import type { FilesOwner } from '../safety/approval-gate';
+import type { ExecutorProvider, ExecutorCapability, PortAnsweringExecutor, ResourceLimits } from '../execution/types';
+import { nimbusSession, type NimbusSessionOpts } from '../execution/nimbus';
+import type { FilesOwner, ShellSession } from '../safety/approval-gate';
 import type { VFS, Memory, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
 import { appendMemoryNote } from '../memory/note';
 import { isVfsError, vfsAddressingHint, withVfsErrorHint } from '../vfs/errno';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
-import { readExecSignal } from './signal';
-import { commandResult } from './exec-result';
+import { readExecSignal } from '../execution/signal';
+import { commandResult, existsTool } from '../execution/exec-result';
 import { diagnostics, KinuError, refusalOf, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
-import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
+import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/misevolution';
 import { SlateOperationSchema, requireSlateWorkMode, type SlateOperation, type SlateCallResult } from '../slates/rpc';
-import { currentWorkMode } from './work-mode';
-import { TOOL_REACH } from '../tools/registry';
-import { createFileDispatcher } from '../tools/file-tool';
-import { TurnFileLedger } from '../tools/file-ledger';
-import { branchableToolCall } from '../tools/outcome';
+import { currentWorkMode } from '../execution/work-mode';
+import { TOOL_REACH } from './registry';
+import { createFileDispatcher } from './file-tool';
+import { TurnFileLedger } from '../vfs/file-ledger';
+import { branchableToolCall } from './outcome';
 import { TurnContextBudget } from '../context-budget';
 import type { JsonValue } from '../utils/json';
 
@@ -184,20 +185,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       },
     },
 
-    exists: {
-      planAllowed: true,
-      description: 'Check if a path exists.',
-      execute: async (...args: unknown[]) => {
-        const path = parseInput(StringSchema, { value: args[0] });
+    exists: existsTool(vfs, { description: 'Check if a path exists.', operation: 'workspace.exists' }),
 
-        // A failed check is not an absence.
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'workspace.exists: path must be a string'));
-        }
-
-        return vfs.exists(path);
-      },
-    },
 
     exec: {
       description:
@@ -316,7 +305,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           const desc = description;
           const codeStr = admitted.code;
           // Misevolution gate on the `craft_tool` surface, without `network-egress` (see SURFACE_CRITERIA).
-          const misevolution = checkMisevolutionForSurface(codeStr, 'craft_tool');
+          const misevolution = checkMisevolutionForSurface({ code: codeStr }, 'craft_tool');
 
           if (!misevolution.ok) {
             if (sql && actor) {
@@ -499,4 +488,30 @@ declare namespace workspace {
   }
 
   return provider;
+}
+
+export interface NimbusWorkspaceExecutorOpts extends NimbusSessionOpts {
+  inline: Omit<InlineExecutorDeps, 'filesOwner'>;
+  shellSession?: ShellSession;
+}
+
+/** Kinu's durable workspace tools plus the same Nimbus session's process/runtime/port surface, registered once as `workspace`. */
+export function createNimbusWorkspaceExecutor(opts: NimbusWorkspaceExecutorOpts): PortAnsweringExecutor {
+  const inline = createInlineExecutor({ ...opts.inline, filesOwner: 'agent' });
+  const session = nimbusSession(opts);
+
+  const provider: PortAnsweringExecutor = {
+    ...inline,
+    capabilities: new Set<ExecutorCapability>([...inline.capabilities, ...session.capabilities]),
+    getStatus: session.getStatus,
+    connect: session.connect,
+    disconnect: session.disconnect,
+    tools: { ...inline.tools, ...session.tools },
+    types: (inline.types ?? '').replace(/\n}\s*$/, `${session.types}\n}`),
+    exposePort: session.exposePort,
+    unexposePort: session.unexposePort,
+    listExposedPorts: session.listExposedPorts,
+  };
+
+  return opts.shellSession === undefined ? provider : { ...provider, shellSession: opts.shellSession };
 }

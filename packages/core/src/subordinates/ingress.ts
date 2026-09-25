@@ -1,19 +1,19 @@
 /** Report ingress for durable and task-lifetime children: a live waiter consumes its answer;
  *  every other admitted report enters the parent event rail. */
 
-import type { EventLog } from '../hub/log';
-import type { VFS } from '../../types/primitives';
-import { spillEventContent } from '../hub/content-spill';
-import { subordinateReportDedupeKey } from '../hub/dedupe';
-import { renderSubordinateHandoff } from '../hub/visibility';
-import type { SubordinateReportHandoff, SubordinateReportStatus } from '../hub/types';
-import type { WorkMode } from '../../types/turn';
+import type { EventLog } from '../events/hub/log';
+import type { VFS } from '../types/primitives';
+import { spillEventContent } from '../events/hub/content-spill';
+import { subordinateReportDedupeKey } from '../events/hub/dedupe';
+import { renderSubordinateHandoff } from '../events/hub/visibility';
+import type { SubordinateReportHandoff, SubordinateReportStatus } from '../events/hub/types';
+import type { WorkMode } from '../types/turn';
 import {
   admitSubordinateReport, normalizeReportContent, parentAdmitsSubordinateReport,
   type SubordinateReportOrigin,
-} from '../../subordinates/support';
-import type { SubordinateRosterStore } from '../../subordinates/roster';
-import type { TemporaryAgentPort } from '../../types/subordinates';
+} from './support';
+import type { SubordinateRosterStore } from './roster';
+import type { TemporaryAgentPort } from '../types/subordinates';
 
 export interface SubordinateEventInput {
   fromSubordinate: string;

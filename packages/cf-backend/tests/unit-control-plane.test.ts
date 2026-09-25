@@ -9,7 +9,7 @@ import type { ControlPlaneSql } from '@kinu.run/core/control-plane';
 import type { AuthIdentity } from '../src/auth/session';
 import type { AccessIdentity } from '../src/control-plane/access-gate';
 import {
-  adminCaller, adminDenialStatus, authorizeAdmin as authorizeAdminGate, internalCaller,
+  adminCaller, adminDenialAnswer, authorizeAdmin as authorizeAdminGate, internalCaller,
   type AdminAuthorization, type AdminGateEnv,
 } from '../src/control-plane/admin-caller';
 import { requireControl } from '@kinu.run/core/control-plane';
@@ -74,7 +74,7 @@ describe('who may reach the control plane', () => {
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('not_admin');
     // Not 403: a 403 confirms the admin surface exists.
-    expect(adminDenialStatus(answer.denial)).toBe(404);
+    expect(adminDenialAnswer(answer.denial).status).toBe(404);
   });
 
   test('a dev-synthesized identity is refused even with its email on the list', () => {
@@ -126,7 +126,7 @@ describe('who may reach the control plane', () => {
 
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('unconfigured');
-    expect(adminDenialStatus(answer.denial)).toBe(503);
+    expect(adminDenialAnswer(answer.denial).status).toBe(503);
   });
 
   test('a mutation needs a fresh sign-in; a read does not', () => {
@@ -145,7 +145,7 @@ describe('who may reach the control plane', () => {
     if (write.ok) throw new Error('unreachable');
     expect(write.denial).toBe('stale_auth');
     // 403, not 404: a known operator whose remedy is to sign in again.
-    expect(adminDenialStatus(write.denial)).toBe(403);
+    expect(adminDenialAnswer(write.denial).status).toBe(403);
   });
 
   test('a sign-in inside the window may mutate', () => {

@@ -23,7 +23,7 @@ import { nowMs } from '../utils/date';
 import { diagnostics, toKinuError, KinuError } from '../obs/index';
 import { parseJsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
-import { checkMisevolution, recordMisevolutionVeto } from './misevolution';
+import { checkMisevolution, recordMisevolutionVeto } from '../safety/misevolution';
 import type { RunEventRecorder } from '../events/recorder';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
 

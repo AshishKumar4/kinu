@@ -2,7 +2,7 @@
 
 export { Devbox, devboxSyncHandlers } from './devbox';
 
-export type { RestoreClockPhase } from './devbox';
+export type { RestoreClockPhase } from './restoration';
 
 export { DEFAULT_DEVBOX_STRATEGY, parseDevboxStrategyName } from './storage';
 

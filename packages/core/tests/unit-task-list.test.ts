@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { TaskListStore, initTaskListTable, MAX_TASK_TITLE_CHARS } from '../src/tasks/store';
+import { TaskListStore, initTaskListTable, MAX_TASK_TITLE_CHARS } from '../src/tools/task-store';
 import type { SqlValue } from '../src/types/primitives';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActorsOver } from '@kinu.run/test-utils';

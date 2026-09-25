@@ -6,8 +6,8 @@
 import * as v from 'valibot';
 import { nanoid } from '../utils/nanoid';
 import { REAL_CLOCK, type Clock } from '../types/clock';
-import { jsonObjectOnlyInstruction } from '../prompts/structured';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { jsonObjectOnlyInstruction } from '../providers/structured';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import {
   type HeadId,
   type HeadInput,

@@ -65,7 +65,7 @@ export interface FileCheckpointReads {
   restore(dir: string, id: string): Promise<FileRestoreResult>;
 }
 
-export const CHECKPOINTS_UNCONFIGURED = 'checkpoints are not configured for this session';
+const CHECKPOINTS_UNCONFIGURED = 'checkpoints are not configured for this session';
 
 export function checkpointAvailability(reads: FileCheckpointReads | null): Promise<CheckpointAvailability> {
   return reads === null ? Promise.resolve({ available: false, reason: CHECKPOINTS_UNCONFIGURED }) : reads.status();
@@ -91,6 +91,20 @@ export async function fileCheckpointListing(
   if (reads === null || !availability.available) return { availability, entries: [] };
 
   return { availability, entries: await reads.list(query) };
+}
+
+function requireCheckpointReads(reads: FileCheckpointReads | null): FileCheckpointReads {
+  if (reads === null) throw new Error(CHECKPOINTS_UNCONFIGURED);
+
+  return reads;
+}
+
+export function fileRestorePlan(reads: FileCheckpointReads | null, dir: string, id: string): Promise<FileRestorePlan> {
+  return requireCheckpointReads(reads).plan(dir, id);
+}
+
+export function fileCheckpointRestore(reads: FileCheckpointReads | null, dir: string, id: string): Promise<FileRestoreResult> {
+  return requireCheckpointReads(reads).restore(dir, id);
 }
 
 export interface FileCheckpoints extends FileCheckpointReads {

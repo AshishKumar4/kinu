@@ -6,6 +6,7 @@ import { type ProviderFailure } from './registry';
 import { MODEL_CAPABILITIES, specProvider, specWithoutAccount, type ModelCapability } from './types';
 import * as v from 'valibot';
 import { nonEmptyString } from '../utils/json';
+import { positiveInteger } from './util';
 import { isAccountName } from '../credentials/accounts';
 
 const ModelMenuPayloadSchema = v.object({
@@ -153,7 +154,7 @@ function normalizeModelEntries(input: { rows: unknown[] }): AgentModelEntry[] {
     const filteredCapabilities = MODEL_CAPABILITIES.filter((capability) => capabilityNames.includes(capability));
 
     if (filteredCapabilities.length > 0) entry.capabilities = filteredCapabilities;
-    const contextWindow = numberValue({ value: item.contextWindow });
+    const contextWindow = positiveInteger({ value: item.contextWindow });
 
     if (contextWindow !== undefined) entry.contextWindow = contextWindow;
     const efforts = v.safeParse(v.array(v.unknown()), item.reasoningEfforts);
@@ -216,10 +217,4 @@ function sharedPrefixLength(left: string, right: string): number {
   while (index < limit && left[index] === right[index]) index++;
 
   return index;
-}
-
-function numberValue(input: { value: unknown }): number | undefined {
-  const parsed = v.safeParse(v.pipe(v.number(), v.finite(), v.minValue(1)), input.value);
-
-  return parsed.success ? Math.floor(parsed.output) : undefined;
 }

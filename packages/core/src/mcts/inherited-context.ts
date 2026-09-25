@@ -3,7 +3,7 @@
  * evidence window bounds total size.
  */
 
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 
 export interface InheritedMessage {
   readonly role: string;

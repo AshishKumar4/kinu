@@ -357,7 +357,7 @@ export function layerIntegrityFailure(input: {
 
 /** `chain` is the production lazy-mount path; `extract` is local development.
  *  Persisted: a box always attaches the way it was checkpointed. */
-export type ChainMode = 'chain' | 'extract';
+type ChainMode = 'chain' | 'extract';
 
 /** Mirrors the SDK's `CheckChangesResult.status`. `resync` means the retained
  *  change state was lost, so the directory counts as changed. */

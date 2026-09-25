@@ -3,7 +3,7 @@
  * Logging & Traceability). Failing cases are proven in `unit-obs-log-ban.test.ts`.
  */
 
-import { renderCauseChain, type ErrorCode, type KinuError } from './error';
+import { renderCauseChain, toKinuError, type ErrorCode, type KinuError } from './error';
 
 /**
  * Field names that may never appear on a log line (AGENTS.md § Errors). `content`, `body` and
@@ -155,6 +155,19 @@ export const diagnostics: Logger = {
     diagnosticsSink.failure(name, error, fields);
   },
 };
+
+/** A rejection is logged under `event`, for work nobody awaits. */
+export async function settleLogged(
+  event: LogEventName,
+  failure: { readonly doing: string; readonly otherwise: ErrorCode },
+  work: () => Promise<void>,
+): Promise<void> {
+  try {
+    await work();
+  } catch (cause) {
+    diagnostics.failure(event, toKinuError({ ...failure, cause }));
+  }
+}
 
 export interface RecordedLog {
   readonly event: LogEventName;

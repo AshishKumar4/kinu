@@ -16,7 +16,7 @@
 import * as v from 'valibot';
 import type { LLM, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { tolerate } from '../obs/index';
 import { formatScoreInterval } from '../utils/stats';
 import {

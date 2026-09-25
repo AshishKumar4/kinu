@@ -10,7 +10,7 @@ import type { AgentRuntime, LLMProviderConfig, WriteEvent, WriteObserver } from 
 import {
   buildBuiltinTools, discoverSkills, initWorkspaceSchema, isVfsError, reviewCommand, WORKSPACE_ROOT, subordinateAgentName,
 } from '@kinu.run/core';
-import { createWorkspace } from '@kinu.run/core/identity';
+import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { present, scratchDir, toolExecute } from '@kinu.run/test-utils';
 import {
   createCLIRuntime, createHostShell, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,

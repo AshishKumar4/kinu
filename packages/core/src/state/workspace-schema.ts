@@ -3,7 +3,11 @@
 
 import type { RawSqlExec, SqlExec, SqlExecutor, Storage } from '../types/primitives';
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
-import { initActorTables, initWorkspaceOwnershipTables } from '../identity/schema';
+import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
+import { initActorDdl, initWorkspaceOwnershipTables } from '../identity/schema';
+import { initCodemodeStateTable } from '../identity/program-state';
+import { initSearchTables } from '../mcts/schemas';
+import { initScaffoldTables } from '../scaffold/schemas';
 import { initSlateShareTables } from '../slates/shares';
 import { initSlateLiveShareTables } from '../slates/live-shares';
 import { initWorkspaceActorTable } from '../identity/workspace-actors';
@@ -30,13 +34,28 @@ import { initAlternateTakesTable } from '../mcts/takes';
 import { initMctsSearchTable } from '../mcts/search-store';
 import { initFactsTable } from '../memory/facts';
 import { initShadowTables } from '../scaffold/shadow';
-import { initTaskListTable } from '../tasks/store';
+import { initTaskListTable } from '../tools/task-store';
 import { initPromptSectionTables } from '../prompting/section-store';
 import { initSlateStateTable } from '../slates/state';
 import { initExplorationRecordsTable } from '../strategy/records';
 import { initSwarmNodeRecords } from '../strategy/swarm-resume';
 import { initAgentDataTables } from '../tools/db-codemode';
 import { initCacheWarmTable } from '../providers/cache-warming';
+
+/** Actor-local state, without a workspace ownership root or fork lineage. */
+export function initActorTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
+  initActorDdl(execRaw);
+  initSearchTables(execRaw);
+  initScaffoldTables(execRaw);
+  // Workspace-wide by design: role eligibility filters the tool surface, not storage (PRODUCT-SPEC.md:371).
+  initCraftedToolsTables(sql);
+  initCodemodeStateTable(execRaw);
+}
+
+export function initAllTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
+  initWorkspaceOwnershipTables(execRaw);
+  initActorTables(execRaw, sql);
+}
 
 /** Three handle shapes onto one database; initializers need each. */
 export interface WorkspaceSchemaSql {

@@ -8,11 +8,11 @@ import {
   slateInlineHeight, SLATE_HOST_CONTEXT_MESSAGE, SLATE_THEME_TOKENS,
   SlateFrameMessageSchema,
 } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
 import { useElementSize } from "@/hooks/use-element-size";
 import { useTheme } from "@/hooks/use-theme";
 import { PreviewChrome } from "@/components/PreviewFrame";
 import { SlateInlineContext } from "./context";
+import { showRejection } from "@/hooks/use-async-resource";
 
 
 const SlatePreviewSchema = v.strictObject({
@@ -73,10 +73,6 @@ export function InlineSlate({ id, rpc, display, reloadKey = 0, onReady }: {
     setRefusal(null);
     setHeight(null);
 
-    const previewUnreachable = (...rejection: [unknown]): void => {
-      if (live) setRefusal(renderThrownChain({ cause: rejection[0] }));
-    };
-
     void rpc<SlateCallResult>("previewSlate", [id]).then((result) => {
       if (!live) return;
 
@@ -99,7 +95,7 @@ export function InlineSlate({ id, rpc, display, reloadKey = 0, onReady }: {
       if (display === 'inline') setHeight(slateInlineHeight(parsed.output.inline.height));
 
       onReady?.();
-    }).catch(previewUnreachable);
+    }).catch(showRejection(setRefusal, () => live));
 
     return () => { live = false; };
   }, [id, rpc, display, reloadKey, onReady]);

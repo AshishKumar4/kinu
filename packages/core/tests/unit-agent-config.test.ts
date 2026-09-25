@@ -6,7 +6,7 @@ import {
 } from '../src/index';
 import { Database } from 'bun:sqlite';
 import { createTestSql } from '@kinu.run/test-utils';
-import { wrapDatabase } from '../src/identity/create';
+import { wrapDatabase } from '../src/identity/inline-primitives';
 import { createTestActor } from './helpers';
 
 function setup() {

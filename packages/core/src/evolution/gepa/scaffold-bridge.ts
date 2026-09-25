@@ -6,9 +6,7 @@
 
 import type { AgentRuntime } from '../../types/agent-runtime';
 import { modifyScaffold } from '../../scaffold/modify';
-import {
-  SCAFFOLD_FORBIDDEN_PATTERNS, SCAFFOLD_REQUIRED_SIGNATURE,
-} from '../../scaffold/safety-patterns';
+import { scaffoldRefusal } from '../../scaffold/safety-patterns';
 import { formatScoreInterval, scoreInterval, type ScoreInterval } from '../../utils/stats';
 import { runGepa } from './engine';
 import type {
@@ -63,8 +61,7 @@ export async function runScaffoldGepa<I = unknown, E = unknown>(
     onCandidate: opts.onCandidate,
     constraints: {
       maxSizeBytes: SCAFFOLD_MAX_BYTES,
-      requiredPattern: SCAFFOLD_REQUIRED_SIGNATURE,
-      forbiddenPatterns: [...SCAFFOLD_FORBIDDEN_PATTERNS],
+      customCheck: scaffoldRefusal,
     },
   });
 

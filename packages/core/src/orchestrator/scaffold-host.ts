@@ -3,7 +3,7 @@
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import { runChat, type ChatOptions } from '../chat';
 import { ExtensionHost, type KinuExtension } from '../extension';
-import { evidenceWindow } from '../prompts/evidence-window';
+import { evidenceWindow } from '../utils/evidence-window';
 import { beginModelOperation, type ModelCallSpend } from '../events/model-call';
 import { addUsage, type Usage } from '../usage';
 import type { CallAccount } from '../providers/quota';

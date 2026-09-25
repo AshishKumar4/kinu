@@ -7,7 +7,7 @@ import { fnv1a64 } from '../utils/fnv1a';
 import { lineCount } from '../utils/text';
 import type { VfsRevision } from '../types/primitives';
 import type { FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edits';
-import { countSharedWrite, newWriteAuthor } from './msg-counters';
+import { countSharedWrite, newWriteAuthor } from '../obs/msg-counters';
 
 export type { FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edits';
 

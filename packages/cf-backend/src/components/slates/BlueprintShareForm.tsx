@@ -13,6 +13,7 @@ import { inputCls } from "@/components/ui/form";
 import { SecretWarning } from "@/pages/BlueprintPage";
 import { publishBlueprint, revokeShare, type Published } from "@/lib/shared-api";
 import { EmailsField, emailsOf, Failure, Lead, StopButton } from "./ShareParts";
+import { showRejection } from "@/hooks/use-async-resource";
 
 const HistorySchema = v.object({ versions: v.array(v.object({ id: v.string() })) });
 
@@ -61,15 +62,13 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
   useEffect(() => {
     if (fixture !== undefined) return;
     let live = true;
-    const failed = (...rejection: [unknown]): void => { if (live) setErr(renderThrownChain({ cause: rejection[0] })); };
-
     Promise.all([rpc<SlateAnswer<unknown>>("slate", [{ op: "history", id: slate }]), rpc<SlateAnswer<unknown>>("slate", [{ op: "shares" }])]).then(([history, rows]) => {
       if (!live) return;
       const ids = answered(history, HistorySchema).versions.map((entry) => entry.id);
       setVersions(ids);
       setVersion(ids.at(-1) ?? null);
       setShares(answered(rows, v.array(SlateShareRecordSchema)).filter((share) => share.slate === slate && share.revokedAt === null));
-    }).catch(failed);
+    }).catch(showRejection(setErr, () => live));
 
     return () => { live = false; };
   }, [fixture, rpc, slate]);
@@ -78,11 +77,9 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
   useEffect(() => {
     if (fixture !== undefined || version === null) return;
     let live = true;
-    const failed = (...rejection: [unknown]): void => { if (live) setErr(renderThrownChain({ cause: rejection[0] })); };
-
     rpc<SlateAnswer<unknown>>("slate", [{ op: "inspect", id: slate, version, include: include === null ? undefined : [...include] }])
       .then((result) => { if (live) setInspection(answered(result, BlueprintInspectionSchema)); })
-      .catch(failed);
+      .catch(showRejection(setErr, () => live));
 
     return () => { live = false; };
   }, [fixture, rpc, slate, version, include]);

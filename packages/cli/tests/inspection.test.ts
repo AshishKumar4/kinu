@@ -10,7 +10,7 @@ import {
   initWorkspaceSchema, openWorkspaceMainActor,
   type LLMProviderConfig, type SpendSource, type Usage,
 } from "@kinu.run/core";
-import { createWorkspace } from "@kinu.run/core/identity";
+import { createWorkspace } from "@kinu.run/core/workspace-birth";
 import { makeSql, makeWorkspaceSchemaSql } from "@kinu.run/cli-backend";
 
 /** The CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */

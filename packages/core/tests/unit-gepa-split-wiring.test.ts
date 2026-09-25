@@ -24,7 +24,7 @@ import { unpricedLedgerSink } from '../src/events/model-call-event';
 /** Above `clampGepaEvalBudget`'s floor of 4, so the requested budget is used. */
 const EVAL_SIZE = 8;
 
-/** Satisfies SCAFFOLD_REQUIRED_SIGNATURE. */
+/** A shape `scaffoldRefusal` accepts. */
 const SEED_SCAFFOLD = `async function* run(rt, task) {
   await host.defaultInference();
 }`;

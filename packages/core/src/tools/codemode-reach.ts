@@ -4,7 +4,7 @@
  */
 
 import * as v from 'valibot';
-import { stripNonCode } from '../craft/in-episode';
+import { namespacedCalls, parseCodemodeProgram } from '../safety/evolved-code';
 import type { JsonObject } from '../utils/json';
 import { TOOL_REACH, isBuiltinToolName } from './registry';
 
@@ -32,6 +32,7 @@ export function codemodeReaches(program: string, capability: string): boolean {
   // `eval` is the sandbox and owns no namespace inside it.
   if (namespace === null) return false;
 
-  return new RegExp(`(?:^|[^\\w$.])${namespace}\\.[A-Za-z_$][A-Za-z0-9_$]*\\s*\\(`)
-    .test(stripNonCode(program));
+  const parsed = parseCodemodeProgram(program);
+
+  return parsed !== null && namespacedCalls(parsed, [namespace]).size > 0;
 }

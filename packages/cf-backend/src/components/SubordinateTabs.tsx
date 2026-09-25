@@ -8,7 +8,7 @@ import { CaretDownIcon, CaretRightIcon, HouseIcon, PlusIcon, TrashIcon } from "@
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { codenameFor } from "@kinu.run/core";
 import { Modal } from "./ui/Modal";
-import { diagnostics, toKinuError, renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, settleLogged } from "@kinu.run/core/obs";
 import { useWheelScrollsSideways } from "@/hooks/use-wheel-scrolls-sideways";
 
 
@@ -146,16 +146,10 @@ export function SubordinateTabs({
           })}
           <button
             type="button"
-            onClick={async () => {
-              try {
-                await onCreate();
-              } catch (cause) {
-                // WorkspacePage shows the banner; this keeps the rejection handled.
-                diagnostics.failure("subordinates.create_failed", toKinuError({
-                  doing: "create a subordinate agent", cause, otherwise: "io",
-                }));
-              }
-            }}
+            // WorkspacePage shows the banner; this keeps the rejection handled.
+            onClick={() => settleLogged("subordinates.create_failed", {
+              doing: "create a subordinate agent", otherwise: "io",
+            }, onCreate)}
             disabled={creating}
             className="p-btn-ghost mb-0.5 ml-2 flex size-7 shrink-0 self-center items-center justify-center disabled:opacity-50"
             title={ADD_AGENT_LABEL}

@@ -16,7 +16,7 @@ const CONSENT_POLL_MS = 750;
 
 export type ConsentNoteKind = 'resolved' | 'stale' | 'error';
 
-export interface ConsentWatchOptions {
+interface ConsentWatchOptions {
   /** Resolves `null` when the surface can only print instructions, `'cancelled'` on abort; must settle promptly on abort. */
   present(
     consent: PendingDeviceConsent,
@@ -112,7 +112,7 @@ function decisionFeedback(decision: DeviceConsentDecision): string {
 }
 
 /** Resolves null on EOF or abort. */
-export type ConsentAskLine = (question: string, signal: AbortSignal) => Promise<string | null>;
+type ConsentAskLine = (question: string, signal: AbortSignal) => Promise<string | null>;
 
 /** Interactive stdin gets a y/a/n prompt; non-interactive runs print instructions once per request so the turn never stalls silently. */
 export function watchTerminalConsents(

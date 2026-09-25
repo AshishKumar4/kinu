@@ -1,7 +1,7 @@
 // The codemode type text must interpolate the native tool's shared status constant, not restate it.
 import { describe, test, expect } from 'bun:test';
 import { SUBORDINATE_REPORT_STATUSES } from '../src/events/hub/types';
-import { TASK_STATUSES, TaskListStore } from '../src/tasks/store';
+import { TASK_STATUSES, TaskListStore } from '../src/tools/task-store';
 import { createReportCodemodeProvider } from '../src/delegation/report-codemode';
 import { createTasksCodemodeProvider } from '../src/tools/tasks-codemode';
 import { createTestWorkspace, createTestActor } from './helpers';

@@ -24,7 +24,7 @@ import { initReplayTables } from '../src/evolution/replay';
 import { initRefinementTables } from '../src/evolution/refinement';
 import { initFactsTable, createFactsStore, type FactsStore } from '../src/memory/facts';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
-import { initAllTables } from '../src/identity/schema';
+import { initAllTables } from '../src/state/workspace-schema';
 import { initRunEventTables } from '../src/events/recorder';
 import { scoreInterval } from '../src/utils/stats';
 import type { AgentRuntime } from '../src/types/agent-runtime';

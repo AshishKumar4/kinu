@@ -14,7 +14,7 @@ import {
 import type { SkillsVfs } from '../skills/discover';
 import type { Page, PageRequest } from '../session/page';
 import type { AgentsMdSources } from '../prompting/agents-md';
-import { stepContextLimit, type ModelWindow } from '../prompting/step-prune';
+import { stepContextLimit, type ModelWindow } from '../context-window';
 import {
   gatherApprovableInstructions, listInstructionApprovals, openInstructionSource,
   type InstructionSourceRow, type InstructionSourceView,

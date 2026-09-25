@@ -422,7 +422,7 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Facts | `agent_facts` | `core/src/memory/facts.ts` |
 | Conversation search | `conversation_fts` (derived FTS5 index) | `core/src/memory/conversation-search.ts`, created by the store on first use |
 | Background jobs | `background_jobs` | `core/src/jobs/store.ts` |
-| Task list | `agent_tasks` (one plan per actor), `agent_task_notes`, `plan_task_links` | `core/src/tasks/store.ts` |
+| Task list | `agent_tasks` (one plan per actor), `agent_task_notes`, `plan_task_links` | `core/src/tools/task-store.ts` |
 | Approvals | `deferred_approvals`, `device_consent_requests`, `instruction_approvals` | `core/src/safety/deferred-approval.ts`, `device-consent.ts`, `instruction-trust.ts` |
 | Plan review | `plan_reviews` | `core/src/plans/review.ts` |
 | Curriculum | `proposed_tasks` | `core/src/curriculum/proposer.ts` |

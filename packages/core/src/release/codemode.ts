@@ -1,13 +1,13 @@
 /**
- * `release.*` codemode namespace for the governed release lane, funnelled into `runReleaseAction` (tools/release-tool.ts).
+ * `release.*` codemode namespace for the governed release lane, funnelled into `runReleaseAction` (release/tool.ts).
  * Engine actors get apply/runChecks/preview/deploy/rollback; engine-less actors get recordCheck/recordDeployment; never both.
  */
 
 import * as v from 'valibot';
-import type { CodemodeProvider } from './sandbox-contract';
+import type { CodemodeProvider } from '../tools/sandbox-contract';
 import { RELEASE_STATUSES } from '../types/release';
-import { releaseToolActions, TOOL_REACH, type ReleaseToolAction } from './registry';
-import { runReleaseAction, type ReleaseActionInput, type ReleaseToolDeps } from './release-tool';
+import { releaseToolActions, TOOL_REACH, type ReleaseToolAction } from '../tools/registry';
+import { runReleaseAction, type ReleaseActionInput, type ReleaseToolDeps } from './tool';
 
 /** Per-action declaration + description; `runReleaseAction` reassembles member args into ReleaseActionInput. */
 const MEMBER_TYPES = {
@@ -245,4 +245,4 @@ export function createReleaseCodemodeProvider(deps: () => ReleaseToolDeps): Code
   };
 }
 
-export { runReleaseAction, type ReleaseActionInput, type ReleaseToolDeps } from './release-tool';
+export { runReleaseAction, type ReleaseActionInput, type ReleaseToolDeps } from './tool';

@@ -1,12 +1,12 @@
 /**
  * A failed tool result is a message the model reads: stdout carries a test runner's diagnosis, so it must survive
- * a nonzero exit in `shell` (core/tools/builtins.ts) and inline `exec` (core/execution/inline.ts).
+ * a nonzero exit in `shell` (core/tools/builtins.ts) and inline `exec` (core/tools/inline-executor.ts).
  */
 
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
-import { createInlineExecutor } from '../src/execution/inline';
+import { createInlineExecutor } from '../src/tools/inline-executor';
 import { createTestRuntime, storesFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type {  } from '../src/types/agent-runtime';

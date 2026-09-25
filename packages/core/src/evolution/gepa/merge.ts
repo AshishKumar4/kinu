@@ -8,7 +8,7 @@ import type {
   GepaCandidate, EvalInstance, ReflectionLM,
 } from './types';
 import { renderInput, truncate } from './text';
-import { stripMarkdownFences } from '../../prompts/structured';
+import { stripMarkdownFences } from '../../providers/structured';
 
 export interface MergePair {
   a: GepaCandidate;

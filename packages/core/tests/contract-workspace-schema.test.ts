@@ -5,10 +5,11 @@ import { Database } from 'bun:sqlite';
 import {
   initActorStateSchema, initWorkspaceSchema, type WorkspaceSchemaSql,
 } from '../src/state/workspace-schema';
-import { wrapDatabase } from '../src/identity/create';
+import { wrapDatabase } from '../src/identity/inline-primitives';
 import { normalizeObservedTables } from '../src/conformance';
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
-import { initActorTables, initWorkspaceOwnershipTables } from '../src/identity/schema';
+import { initWorkspaceOwnershipTables } from '../src/identity/schema';
+import { initActorTables } from '../src/state/workspace-schema';
 import { initWorkspaceActorTable } from '../src/identity/workspace-actors';
 import { initEffectTombstoneTable } from '../src/identity/effect-tombstones';
 import { initAgentConfigTable } from '../src/config/store';
@@ -33,7 +34,7 @@ import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
 import { initFactsTable } from '../src/memory/facts';
 import { initShadowTables } from '../src/scaffold/shadow';
-import { initTaskListTable } from '../src/tasks/store';
+import { initTaskListTable } from '../src/tools/task-store';
 import { initPromptSectionTables } from '../src/prompting/section-store';
 import { initExplorationRecordsTable } from '../src/strategy/records';
 import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';

@@ -32,6 +32,17 @@ describe('capability contract attribution', () => {
       'asymmetry ForkDestination.writeSoulFile#absent-in-cli',
     ]);
   });
+
+  test('a field core supplies is supplied for both backends', () => {
+    const omitting = `const target = { workspaceId: 'workspace', ownerUserId: 'owner', destination: 'fork' };`;
+    const coreSupplies = `const destination = { workspaceId: w, ownerUserId: o, destination: d, transaction: (write) => write(), writeSoulFile: persist };`;
+
+    expect(findAsymmetries(new Map([
+      ['packages/core/src/contracts.ts', `${contracts}\n${coreSupplies}`],
+      ['packages/cf-backend/src/adapter.ts', `const target = { workspaceId: 'workspace', ownerUserId: 'owner', destination: 'fork', transaction: (write) => write(), writeSoulFile: (text) => persist(text) };`],
+      ['packages/cli-backend/src/adapter.ts', omitting],
+    ])).asymmetries.map(keyOf)).toEqual([]);
+  });
 });
 
 /** Core's real turn contract in miniature: four members a literal cannot omit,

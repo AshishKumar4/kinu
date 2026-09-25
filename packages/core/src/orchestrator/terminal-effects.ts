@@ -138,19 +138,23 @@ function owedTurnTerminalEffect<I>(queue: () => OwedTurnQueue, spec: {
   });
 }
 
-export function overflowRetryTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
+function fixedOwedTurnEffect(
+  queue: () => OwedTurnQueue,
+  owed: { readonly event: string; readonly text: string; readonly prefix: string },
+): TerminalEffect {
   return owedTurnTerminalEffect(queue, {
-    input: v.object({}), event: OVERFLOW_RETRY_EVENT, text: () => OVERFLOW_RETRY_TEXT,
-    key: (scope) => `overflow-retry:${scope}`,
+    input: v.object({}), event: owed.event, text: () => owed.text,
+    key: (scope) => `${owed.prefix}:${scope}`,
   });
+}
+
+export function overflowRetryTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
+  return fixedOwedTurnEffect(queue, { event: OVERFLOW_RETRY_EVENT, text: OVERFLOW_RETRY_TEXT, prefix: 'overflow-retry' });
 }
 
 /** Think's loop cannot extend past a `length` finish, so the continuation is the next turn, owed durably. */
 export function outputLimitContinuationTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
-  return owedTurnTerminalEffect(queue, {
-    input: v.object({}), event: OUTPUT_CONTINUATION_EVENT, text: () => OUTPUT_CONTINUATION_TEXT,
-    key: (scope) => `output-continuation:${scope}`,
-  });
+  return fixedOwedTurnEffect(queue, { event: OUTPUT_CONTINUATION_EVENT, text: OUTPUT_CONTINUATION_TEXT, prefix: 'output-continuation' });
 }
 
 /** The text is a recorded input: a replay announces what the turn was owed. */

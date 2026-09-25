@@ -4,10 +4,8 @@
  * the operator. A signal card and its durable message are joined by `metadata.signalId`.
  */
 
-import {
-  ADVISOR_SIGNAL_KIND, DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity,
-  type AdvisorSeverity,
-} from '../advisor/review';
+import { ADVISOR_SIGNAL_KIND } from '../advisor/review';
+import { DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity, type AdvisorSeverity } from '../types/advisor';
 import type { BroadcastEvent } from '../types/backend-host';
 import { SIGNAL_ID_METADATA_KEY } from '../types/signals';
 import type { SignalCardEvent, SignalCardState } from '../types/signals';
@@ -87,21 +85,25 @@ export function classifyProgrammaticTurn(
   }
 }
 
+function metadataField<T>(row: { metadata: unknown }, key: string, schema: v.GenericSchema<T>): T | undefined {
+  const metadata = v.safeParse(v.looseObject({}), row.metadata);
+
+  if (!metadata.success) return undefined;
+  const field = v.safeParse(schema, metadata.output[key]);
+
+  return field.success ? field.output : undefined;
+}
+
 /** The signal id a programmatic message carries, joining it to its card. */
 export function messageSignalId(row: { metadata: unknown }): string | null {
-  const parsed = v.safeParse(v.looseObject({ [SIGNAL_ID_METADATA_KEY]: v.optional(v.string()) }), row.metadata);
-
-  if (!parsed.success) return null;
-  const id = parsed.output[SIGNAL_ID_METADATA_KEY];
+  const id = metadataField(row, SIGNAL_ID_METADATA_KEY, v.string());
 
   return id === undefined || id === '' ? null : id;
 }
 
 /** Whether a durable user row was a mid-turn steer (actor stamps `kinuSteer`). */
 export function isSteeredMessage(row: { metadata: unknown }): boolean {
-  const parsed = v.safeParse(v.looseObject({ kinuSteer: v.optional(v.boolean()) }), row.metadata);
-
-  return parsed.success && parsed.output.kinuSteer === true;
+  return metadataField(row, 'kinuSteer', v.boolean()) === true;
 }
 
 /** Metadata key on a settled answer whose turn ended `incomplete`; other end reasons have their
@@ -110,9 +112,7 @@ export const TURN_END_METADATA_KEY = 'kinuTurnEnd';
 
 /** Whether the turn ended while the model was still calling tools. */
 export function endedMidWork(row: { metadata: unknown }): boolean {
-  const parsed = v.safeParse(v.looseObject({ [TURN_END_METADATA_KEY]: v.optional(v.string()) }), row.metadata);
-
-  return parsed.success && parsed.output[TURN_END_METADATA_KEY] === 'incomplete';
+  return metadataField(row, TURN_END_METADATA_KEY, v.string()) === 'incomplete';
 }
 
 export interface SignalCard {

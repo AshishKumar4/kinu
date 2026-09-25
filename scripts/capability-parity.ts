@@ -785,15 +785,25 @@ export function findAsymmetries(sources: ReadonlyMap<string, string>): Parity {
   const opaque = new Set<string>();
   const sitesPerClosure = new Map<Closure, number>(CLOSURE_NAMES.map((name) => [name, 0]));
 
+  const suppliedInShared = new Map<string, Set<string>>();
+
   for (const [file, text] of sources) {
     const closure = closureOf(file);
 
-    if (closure === undefined) continue;
+    if (closure === undefined && !isShared(file)) continue;
 
     for (const site of objectLiterals(file, text)) {
       const contract = attribute(site, allContracts);
 
       if (contract === undefined) continue;
+
+      if (closure === undefined) {
+        const shared = suppliedInShared.get(contract.name) ?? new Set<string>();
+
+        for (const field of site.supplied) shared.add(field);
+        suppliedInShared.set(contract.name, shared);
+        continue;
+      }
 
       if (site.opaque) opaque.add(contract.name);
       const byClosure = sites.get(contract.name) ?? new Map<Closure, Site[]>();
@@ -822,6 +832,8 @@ export function findAsymmetries(sources: ReadonlyMap<string, string>): Parity {
     ]));
 
     for (const field of contract.optional) {
+      if (suppliedInShared.get(contract.name)?.has(field) === true) continue;
+
       const wiring = CLOSURE_NAMES.filter((name) => suppliedIn.get(name)?.has(field) === true);
 
       if (wiring.length !== 1) continue;

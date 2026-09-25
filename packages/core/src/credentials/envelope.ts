@@ -1,7 +1,7 @@
 /** Sealed envelope `pce1.<keyId>.<iv>.<ciphertext>` (AES-GCM, AAD binds DO id + record key) around `user_credentials.value`.
  *  No default key or plaintext fallback. Rotation: move current to `_PREVIOUS`, set new, drop old once every UserDO rewraps. */
 import { KinuError } from '../obs/error';
-import { hmacSha256Hex } from '../utils/crypto';
+import { base64Url, hmacSha256Hex } from '../utils/crypto';
 
 const ENVELOPE_PREFIX = 'pce1.';
 
@@ -67,7 +67,7 @@ export async function createCredentialCipher(env: CredentialEncryptionEnv): Prom
         utf8(plaintext),
       );
 
-      return `${ENVELOPE_PREFIX}${keyId}.${base64url(iv)}.${base64url(new Uint8Array(ciphertext))}`;
+      return `${ENVELOPE_PREFIX}${keyId}.${base64Url(iv)}.${base64Url(new Uint8Array(ciphertext))}`;
     },
 
     async open(aad, stored) {
@@ -139,14 +139,6 @@ function deriveKey(secret: string): Promise<{ keyId: string; key: CryptoKey }> {
 
 function utf8(value: string): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(value);
-}
-
-function base64url(bytes: Uint8Array): string {
-  let binary = '';
-
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 function unbase64url(value: string): Uint8Array<ArrayBuffer> {
