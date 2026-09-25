@@ -266,6 +266,45 @@ describe('workspace diff lifecycle', () => {
     ]);
   });
 
+  test('hidden files and folders are never reviewed: not in the working directory, a hire\'s home or a slate', async () => {
+    const { rt, workspace } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    const identity = { uid: 2001, gid: 2001 };
+    const home = provisionAgentHome((await workspace.privileged()).root, subordinateAgentName('builder'), identity);
+    const builder = (await workspace.session()).vfs.as(agentCred(identity));
+    await resetWorkspaceBaseline(rt);
+
+    await rt.storage.vfs.writeFile('.env', 'TOKEN=1\n');
+    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+    builder.writeFile(`${home}/.bashrc`, 'alias ll=ls\n');
+    builder.mkdir(`${home}/.config/tool`, { recursive: true });
+    builder.writeFile(`${home}/.config/tool/settings.json`, '{}');
+    builder.writeFile(`${home}/draft.md`, 'draft\n');
+    builder.mkdir('/slates/board/.build', { recursive: true });
+    builder.writeFile('/slates/board/.build/out.js', 'built');
+    builder.writeFile('/slates/board/index.html', '<p>board</p>\n');
+
+    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual([
+      `added ${home}/draft.md`, 'added /slates/board/index.html', 'added notes.md',
+    ]);
+  });
+
+  test('hidden files a baseline recorded before they were left out are not listed as removed', async () => {
+    const { rt, db } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await rt.storage.vfs.mkdir('.config', { recursive: true });
+    await rt.storage.vfs.writeFile('.config/settings.json', '{}');
+    await rt.storage.vfs.writeFile('.env', 'TOKEN=1\n');
+    await resetWorkspaceBaseline(rt);
+
+    for (const path of ['.env', '.config/settings.json']) {
+      db.prepare(`INSERT OR IGNORE INTO vfs_baseline_manifest (actor_id, generation, path, size, mtime_ms, hash, active)
+        SELECT actor_id, generation, ?, 2, 0, NULL, 1 FROM vfs_baseline_manifest WHERE path = '' AND active = 1`).run(path);
+    }
+
+    expect((await getWorkspaceDiff(rt)).files).toEqual([]);
+  });
+
   test('a baseline taken while slates lived in the home finds them at /slates, so their move is no change', async () => {
     const { rt, db } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);

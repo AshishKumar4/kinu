@@ -13,7 +13,7 @@ import { CommandResultSchema } from '../execution/exec-result';
 import { KinuError, renderThrownChain, tolerateAsync } from '../obs/index';
 import { sha256Hex } from '../safety/argument-digest';
 import type { VfsMountRouting } from '../vfs/mounts';
-import { isSystemManaged, LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { unmovedSince } from '../vfs/unmoved';
 
 /** `do.sqlite.row_bytes` caps a body's row, which also holds its 64-hex key. */
@@ -23,9 +23,13 @@ const BODY_MAX_BYTES = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value - 64;
  *  Files past it are listed with +/- counts and no body. */
 const MAX_CHANGESET_BODY_CHARS = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
 
-const SNAPSHOT_IGNORED_DIRECTORIES = new Set([
-  '.git', '.cache', '.mypy_cache', '.pnpm-store', '.pytest_cache', '.venv', '__pycache__', 'node_modules', 'venv',
-]);
+/** Installed dependency trees: installs, not work, and costly to walk. Hidden ones fall under {@link reviewed}. */
+const DEPENDENCY_TREES: ReadonlySet<string> = new Set(['__pycache__', 'node_modules', 'venv']);
+
+/** Hidden files and folders, and dependency trees, are never reviewed (owner, 2026-09-25). */
+function reviewed(name: string): boolean {
+  return !name.startsWith('.') && !DEPENDENCY_TREES.has(name);
+}
 
 const WORKING_DIRECTORY_NAMES = [WORKSPACE_ROOT, LEGACY_WORKSPACE_ROOT];
 
@@ -109,7 +113,7 @@ async function walkWorkspaceFiles(
     const children: string[] = [];
 
     for (const name of names ?? []) {
-      if (isSystemManaged(name) || SNAPSHOT_IGNORED_DIRECTORIES.has(name)) continue;
+      if (!reviewed(name)) continue;
 
       if (dir === PLANE_ROOT && !REVIEWED_UNDER_ROOT.includes(name)) continue;
       const full = dir === '' ? name : `${dir === PLANE_ROOT ? '' : dir}/${name}`;
@@ -192,7 +196,8 @@ function activeManifest(rt: WorkspaceBaselineRuntime): BaselineManifest | null {
   for (const row of rows) {
     if (row.path === '') marker = { capturedAt: row.mtime_ms, generation: row.generation };
     else if (row.path === PLANE_ROOT) planeWalked = true;
-    else entries.set(row.path, { size: row.size, mtimeMs: row.mtime_ms, hash: row.hash });
+    // A generation captured before hidden files were left out still lists them.
+    else if (row.path.split('/').every((name) => name === '' || reviewed(name))) entries.set(row.path, { size: row.size, mtimeMs: row.mtime_ms, hash: row.hash });
   }
 
   if (marker === null) return null;
