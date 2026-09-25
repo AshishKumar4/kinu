@@ -14,13 +14,15 @@ import { serveFamily } from './helpers/api';
 import {
   CLIENT_ERROR_ENDPOINT,
   CLIENT_ERROR_MAX_REQUEST_BYTES,
+  CLIENT_CHAT_STREAM_FAILED,
   CLIENT_RENDER_FAILED,
-  ClientErrorReportSchema,
+  ClientReportSchema,
   fitClientErrorReport,
   type ClientErrorReport,
   type ReleaseMatch,
 } from '@kinu.run/core';
-import { pageDeployedBuildSha, reportRenderFailure } from '@kinu.run/core';
+import { pageDeployedBuildSha, reportChatStreamFailure, reportRenderFailure } from '@kinu.run/core';
+import { readUIMessageStream, type UIMessageChunk } from 'ai';
 import { APP_ROUTES, routeTemplateOf } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
 
@@ -365,7 +367,11 @@ describe('the payload the browser builds', () => {
     expect(posts).toHaveLength(1);
     expect(posts[0].url).toBe(CLIENT_ERROR_ENDPOINT);
 
-    return v.parse(ClientErrorReportSchema, JSON.parse(posts[0].body));
+    const sent = v.parse(ClientReportSchema, JSON.parse(posts[0].body));
+
+    if (sent.event !== CLIENT_RENDER_FAILED) throw new Error(`a render failure was sent as ${sent.event}`);
+
+    return sent;
   }
 
   function failedRender(): Error {
@@ -488,5 +494,58 @@ describe('fitting a report to the one bound', () => {
 
     expect(new TextEncoder().encode(JSON.stringify(fitted)).byteLength)
       .toBeLessThanOrEqual(CLIENT_ERROR_MAX_REQUEST_BYTES);
+  });
+});
+
+describe('a chat stream the tab could not read', () => {
+  const posts: string[] = [];
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    posts.length = 0;
+    globalThis.fetch = asFetchFunction(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      posts.push(v.parse(v.string(), init?.body ?? ''));
+
+      return new Response('{}', { status: 202 });
+    });
+  });
+
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  /** What `useChat` hands the page when the parts break the UI-message protocol, read by `ai`'s own reader. */
+  async function protocolFailure(): Promise<Error> {
+    const parts: UIMessageChunk[] = [
+      { type: 'start' }, { type: 'start-step' },
+      { type: 'reasoning-delta', id: 'reasoning-0', delta: 'the owner wrote SAVE20 here' },
+    ];
+
+    const stream = new ReadableStream<UIMessageChunk>({ start(c) { for (const part of parts) c.enqueue(part); c.close(); } });
+
+    let failure: Error | null = null;
+
+    for await (const _message of readUIMessageStream({ stream, onError: (error) => { failure = error instanceof Error ? error : null; } })) {
+      void _message;
+    }
+
+    if (failure !== null) return failure;
+
+    throw new Error('the reader accepted a delta for a part it never saw open');
+  }
+
+  // warm-forge-4d6acc02, 2026-09-25: an actor pane showed "Received reasoning-delta for missing reasoning part" and
+  // the server logged nothing, so the part sequence that broke it could not be found.
+  test('a protocol failure in an actor pane becomes one log line naming the pane and the part, never its text', async () => {
+    await reportChatStreamFailure(await protocolFailure(), 'actor', { release: STAMP.sha, route: APP_ROUTES.workspace });
+
+    expect(posts).toHaveLength(1);
+    const { response, lines } = await recorded(posts[0] ?? '');
+
+    expect(response.status).toBe(202);
+    expect(lines.map((line) => line.event)).toEqual([CLIENT_CHAT_STREAM_FAILED]);
+    expect(lines[0]?.fields).toMatchObject({
+      pane: 'actor', errorName: 'AI_UIMessageStreamError', partType: 'reasoning-delta', partId: 'reasoning-0',
+    });
+    expect(JSON.stringify(lines)).not.toContain('SAVE20');
+    expect(JSON.stringify(lines)).not.toContain('missing reasoning part');
   });
 });
