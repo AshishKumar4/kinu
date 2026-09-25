@@ -2233,6 +2233,8 @@ export {
 
 export { drawnText, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
 
+export { messagesUpTo, turnRows } from './read-models/fork-count';
+
 export {
   turnLiveness, TURN_CLAIM_FRAME, TurnClaimFrameSchema, type TurnClaimState, type TurnLiveness,
 } from './read-models/turn-liveness';
