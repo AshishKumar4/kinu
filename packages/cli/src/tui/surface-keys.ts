@@ -67,7 +67,7 @@ function cycledTier(tiers: readonly TierId[], current: TierId | undefined, delta
   return tiers[index] ?? 'default';
 }
 
-export type SceneKeyHandler = (key: KeyEvent) => void | Promise<void>;
+type SceneKeyHandler = (key: KeyEvent) => void | Promise<void>;
 
 const tierCatalog = (deps: SurfaceKeyDeps): readonly TierId[] =>
   deps.hub ? tierIdsOf(deps.hub.data.profile.envelope.catalog) : TIER_IDS;

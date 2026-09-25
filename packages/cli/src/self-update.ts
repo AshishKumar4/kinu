@@ -27,7 +27,7 @@ const CLI_LOCK = join(CLI_ROOT, '.lock');
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-export interface RefreshSeams {
+interface RefreshSeams {
   fetchImpl?: FetchLike;
 }
 

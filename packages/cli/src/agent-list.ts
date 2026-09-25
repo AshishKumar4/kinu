@@ -27,13 +27,13 @@ export interface ListedAgent {
   workspaceId?: string;
 }
 
-export interface AgentWorkspaceGroup<T extends ListedAgent = ListedAgent> {
+interface AgentWorkspaceGroup<T extends ListedAgent = ListedAgent> {
   readonly cwd: string;
   readonly workspaceId: string;
   readonly agents: readonly T[];
 }
 
-export interface GroupedAgentWorkspaces<T extends ListedAgent = ListedAgent> {
+interface GroupedAgentWorkspaces<T extends ListedAgent = ListedAgent> {
   readonly projectRoot: string;
   readonly workspaces: readonly AgentWorkspaceGroup<T>[];
   /** Local agents no ref places in any project (a `~/.kinu/<name>` directory). */
@@ -213,7 +213,7 @@ export interface CloudRefCollision {
   cloudDisplayName: string;
 }
 
-export interface CloudRefSync {
+interface CloudRefSync {
   agents: ListedAgent[];
   /** A name here reached neither roster as cloud, so a caller showing the roster must show these too. */
   collisions: CloudRefCollision[];

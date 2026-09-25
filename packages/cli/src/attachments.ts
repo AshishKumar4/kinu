@@ -20,7 +20,7 @@ const INLINE_MEDIA_TYPES = new Map([
   ['.pdf', 'application/pdf'],
 ]);
 
-export interface PathToken {
+interface PathToken {
   raw: string;
   index: number;
   path: string;
@@ -52,7 +52,7 @@ function extractPathTokens(text: string): PathToken[] {
   return tokens;
 }
 
-export interface ResolvedAttachment {
+interface ResolvedAttachment {
   path: string;
   filename: string;
   /** Null when the file stays a path reference for the agent's read tools. */
@@ -60,7 +60,7 @@ export interface ResolvedAttachment {
   size: number;
 }
 
-export interface PromptAttachments {
+interface PromptAttachments {
   text: string;
   files: PromptFile[];
   attached: ResolvedAttachment[];
@@ -98,7 +98,7 @@ async function statCandidate(token: string, cwd: string): Promise<{ path: string
   return null;
 }
 
-export interface PromptAttachmentOptions {
+interface PromptAttachmentOptions {
   /** The cap belongs to the backend that stores the message and the two differ by 8x, so no default. */
   limitBytes: number;
   cwd?: string;

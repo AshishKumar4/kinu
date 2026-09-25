@@ -17,7 +17,7 @@ export interface SlashCommandInfo {
   requires?: 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans';
 }
 
-export interface SlashContext {
+interface SlashContext {
   readonly client: AgentClient;
   /** Lowercased; what an unknown outcome names. */
   readonly command: string;
@@ -786,7 +786,7 @@ async function effortCommand({ client, arg }: SlashContext): Promise<SlashOutcom
   return { kind: 'effort-set', effort: result.effort };
 }
 
-export interface UndoResult {
+interface UndoResult {
   text: string;
   /** The surface then offers the conversation walk-back. */
   restored: boolean;

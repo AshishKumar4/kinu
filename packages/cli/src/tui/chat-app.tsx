@@ -105,7 +105,7 @@ import {
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 /** `local-peer` opens in place; `cloud-additional` runs server-side and is announced. */
-export interface TuiCreatedAgent {
+interface TuiCreatedAgent {
   name: string;
   displayName: string;
   kind: 'local-peer' | 'cloud-additional';

@@ -1,6 +1,7 @@
 /** Tri-state fetch: a failed fetch must never render as an empty answer or an endless spinner. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as v from "valibot";
+import { renderThrownChain } from "@kinu.run/core/obs";
 
 export type AsyncResource<T> =
   | { status: "loading" }
@@ -52,6 +53,11 @@ export function describeError({ cause }: { cause: unknown }): string {
   if (v.is(v.string(), cause) && cause.trim()) return cause;
 
   return "request failed";
+}
+
+/** Shows the thrown chain while `live()` holds. */
+export function showRejection(show: (message: string) => void, live: () => boolean = () => true): (...rejection: [unknown]) => void {
+  return (...rejection) => { if (live()) show(renderThrownChain({ cause: rejection[0] })); };
 }
 
 /** Reload delay after a load, or null once nothing is left to watch. */
