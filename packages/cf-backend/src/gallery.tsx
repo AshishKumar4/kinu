@@ -1291,7 +1291,6 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
 /* `?createFails=1`: the first create rejects with a two-frame cause chain; the second succeeds. */
 const CREATE_FAILS = new URLSearchParams(location.search).get("createFails") === "1";
 
-/* `?renameFails=1`: every rename rejects as a call whose socket closed under it does. */
 const RENAME_FAILS = new URLSearchParams(location.search).get("renameFails") === "1";
 
 let createRefused = false;
