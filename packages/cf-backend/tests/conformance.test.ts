@@ -77,7 +77,7 @@ async function observeSubordinate(): Promise<ObservedSurface> {
     mission: 'prove the subordinate surface',
   });
 
-  await runDelegatedTask(workspace, child.actor, 'prove the subordinate surface');
+  await runDelegatedTask(workspace, child.actor.handle.actorId, 'prove the subordinate surface');
   const tools = offeredTools(runs);
 
   return {

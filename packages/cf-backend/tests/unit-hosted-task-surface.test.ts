@@ -42,7 +42,7 @@ test('a hired subordinate saves and searches memory and lists its roster in its 
     mission: 'prove the delegated surface runs',
   });
 
-  await runDelegatedTask(workspace, child.actor, 'Save what you know, read it back, and list your roster.');
+  await runDelegatedTask(workspace, child.actor.handle.actorId, 'Save what you know, read it back, and list your roster.');
 
   const results = toolResults(gateway.runs);
   expect(results).toHaveLength(3);
@@ -62,7 +62,7 @@ test('a hired subordinate is framed as a hire, not as a head', async () => {
     mission: 'prove the delegated framing',
   });
 
-  await runDelegatedTask(workspace, child.actor, 'Say what you are.');
+  await runDelegatedTask(workspace, child.actor.handle.actorId, 'Say what you are.');
 
   const system = systemPrompt(gateway.runs);
   // The head prompt carries neither the hire's name nor the `report` lane.
@@ -82,7 +82,7 @@ test('a hosted child advertises only its callable crafted surface and loses it w
     name: 'workspace_echo', description: 'Return the argument', code: '(input) => input', params: null, scope: 'local',
   });
 
-  await runDelegatedTask(workspace, child.actor, 'Inspect your available capabilities.');
+  await runDelegatedTask(workspace, child.actor.handle.actorId, 'Inspect your available capabilities.');
   const [first] = gateway.runs;
 
   if (first === undefined) throw new Error('the delegated turn reached no model');
@@ -93,7 +93,7 @@ test('a hosted child advertises only its callable crafted surface and loses it w
     reader: { description: 'Files only', instructions: 'Inspect files.', tier: 'default', preset: 'ideate', allowedTools: ['file'] },
   } });
   child.actor.stores.config.setRoleSelection('reader');
-  await runDelegatedTask(workspace, child.actor, 'Inspect the remaining capabilities.');
+  await runDelegatedTask(workspace, child.actor.handle.actorId, 'Inspect the remaining capabilities.');
   const last = gateway.runs.at(-1);
 
   if (last === undefined) throw new Error('the second delegated turn reached no model');
