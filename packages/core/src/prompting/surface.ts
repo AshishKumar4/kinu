@@ -167,7 +167,7 @@ export function executorIsSelectable(exec: PromptExecutorInfo): boolean {
   return exec.available === true || exec.configured === true || exec.active === true;
 }
 
-export function uniqueBuiltinTools(tools: readonly BuiltinToolName[] | undefined): BuiltinToolName[] {
+function uniqueBuiltinTools(tools: readonly BuiltinToolName[] | undefined): BuiltinToolName[] {
   const source = tools ?? BUILTIN_TOOLS;
   const out: BuiltinToolName[] = [];
   const seen = new Set<string>();
@@ -210,7 +210,7 @@ function normalizeExternalTool(tool: PromptExternalToolInfo | string): PromptExt
   return normalized;
 }
 
-export function uniqueExternalTools(tools: readonly (PromptExternalToolInfo | string)[] | undefined): PromptExternalToolInfo[] {
+function uniqueExternalTools(tools: readonly (PromptExternalToolInfo | string)[] | undefined): PromptExternalToolInfo[] {
   const out = new Map<string, PromptExternalToolInfo>();
 
   for (const raw of tools ?? []) {

@@ -14,6 +14,7 @@ import { isVfsError, type VfsErrorCode } from '../vfs/errno';
 import type { MossaicVfs } from '../vfs/mossaic-vfs';
 import type { VfsListedEntry } from '../vfs/mounts';
 import { looksLikeZip, packZip, unpackZip, type ZipEntry } from '../utils/zip';
+import { vfsBasename } from '../utils/vfs-helpers';
 import { SKILL_FOLDER_FILE } from './types';
 import { parseSkillFile, skillNameProblem } from './parse';
 import { refusedSkillFiles, type SkillFileRefusal } from './discover';
@@ -129,10 +130,6 @@ function isReservedDrivePath(path: string): boolean {
   return path === '/' || DRIVE_RESERVED_DIRS.includes(path);
 }
 
-function leafOf(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1);
-}
-
 function parentOf(path: string): string {
   const cut = path.lastIndexOf('/');
 
@@ -140,7 +137,7 @@ function parentOf(path: string): string {
 }
 
 /** A folder is a skill when its `SKILL.md` parses and names the folder or nothing. */
-async function skillFolderProblem(drive: MossaicVfs, folder: string, name = leafOf(folder)): Promise<string | null> {
+async function skillFolderProblem(drive: MossaicVfs, folder: string, name = vfsBasename(folder)): Promise<string | null> {
   const problem = skillNameProblem(name);
 
   if (problem !== null) return `folder name ${problem}`;
@@ -312,7 +309,7 @@ export async function markAsSkill(drive: MossaicVfs, rawPath: string): Promise<M
   const problem = await skillFolderProblem(drive, folder);
 
   if (problem !== null) throw new KinuError('bad_input', `${folder} is not a skill: ${problem}`);
-  const name = leafOf(folder);
+  const name = vfsBasename(folder);
 
   if (folder.startsWith(`${DRIVE_SKILLS_DIR}/`)) return { name, linked: folder };
   const linked = `${DRIVE_SKILLS_DIR}/${name}`;

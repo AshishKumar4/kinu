@@ -6,7 +6,7 @@ export interface PromptSection {
 }
 
 /** The soul opens the prompt with no heading of its own. */
-export const SOUL_SECTION_TITLE = 'Soul';
+const SOUL_SECTION_TITLE = 'Soul';
 
 export const DYNAMIC_CONTEXT_OPEN_TAG = '<dynamic_context';
 

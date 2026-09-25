@@ -3,7 +3,7 @@
 import { type ExecutorCapability } from './types';
 
 /** A capability and the PATH entries that make it true; any one suffices. */
-export const TOOLCHAIN_PROBE: readonly (readonly [ExecutorCapability, readonly string[]])[] = [
+const TOOLCHAIN_PROBE: readonly (readonly [ExecutorCapability, readonly string[]])[] = [
   ['javascript', ['node', 'bun', 'deno']],
   // No `tsc`: it type-checks, it does not run.
   ['typescript', ['bun', 'deno', 'tsx']],

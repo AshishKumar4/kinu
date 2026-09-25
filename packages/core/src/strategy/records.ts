@@ -92,7 +92,7 @@ export function verifierDigestOf(spec: VerifierSpec, implementation: string): st
 }
 
 /** The whole bound as a digest, or null when none was declared (not a floor of zero). */
-export function floorDigestOf(floor: Floor | null): string | null {
+function floorDigestOf(floor: Floor | null): string | null {
   if (floor === null) return null;
 
   return argumentDigest({

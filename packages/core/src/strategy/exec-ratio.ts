@@ -15,9 +15,6 @@ import { diagnostics, renderThrownChain, toKinuError, tolerateAsync } from '../o
 
 export const SOLUTION_FILE = 'solution.mjs';
 
-/** The reference implementation, seeded for the agent to read and beat. */
-export const REFERENCE_FILE = 'reference.mjs';
-
 /**
  * Prefixes for the two files each verification writes, suffixed with a unique stamp.
  * Unique names, not a `?v=` query: the embedded runtime resolves the specifier as a literal path.
