@@ -347,7 +347,7 @@ async function setDefaultFallbacks(machine: Machine, fallbacks: readonly string[
     const { loadActiveProfile } = await import('./packages/cli/src/default-model.ts');
     const { writeLocalProfile } = await import('./packages/cli/src/profiles.ts');
     const { catalog } = await loadActiveProfile();
-    writeLocalProfile({ ...catalog, tiers: { ...catalog.tiers, default: { ...catalog.tiers.default, fallbacks: ${JSON.stringify(fallbacks)} } } });
+    await writeLocalProfile({ ...catalog, tiers: { ...catalog.tiers, default: { ...catalog.tiers.default, fallbacks: ${JSON.stringify(fallbacks)} } } });
   `;
 
   const run = await runToExit([process.execPath, '-e', script], {
