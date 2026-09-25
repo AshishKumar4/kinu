@@ -35,6 +35,7 @@ export {
   ERROR_CODES,
   KinuError,
   refusalOf,
+  refusedInput,
   renderCauseChain,
   renderThrownChain,
   toKinuError,

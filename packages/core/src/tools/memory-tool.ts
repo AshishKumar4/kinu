@@ -1,6 +1,8 @@
 /** Durable memory surface: prose notes, keyed facts, and past transcript recall. Also backs `memory.*` in eval. */
 import type { Memory, MemorySearchResult, SqlExecutor } from '../types/primitives';
 import * as v from 'valibot';
+import { z } from 'zod';
+import { oneOf } from './tool-schema';
 import type { VectorStore } from '../memory/vector-store';
 import { reciprocalRankFusion } from '../memory/vector-store';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -10,10 +12,7 @@ import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memor
 import { ConversationSearchStore } from '../memory/conversation-search';
 import type { SessionTranscriptReader } from '../session/transcript';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
-import {
-  memoryActionsFor, unknownActionError,
-  type MemoryToolAction, type MEMORY_FACT_ACTIONS,
-} from './registry';
+import { memoryActionsFor, type MEMORY_FACT_ACTIONS } from './registry';
 import { KinuError, toKinuError, renderThrownChain } from '../obs/index';
 
 const FactKeySchema = v.pipe(v.string(), v.nonEmpty());
@@ -32,17 +31,34 @@ export interface MemoryToolDeps {
   readonly transcriptFor: (sessionId: string) => SessionTranscriptReader;
 }
 
-export interface MemoryToolInput {
-  action: MemoryToolAction;
-  key?: string;
-  value?: unknown;
-  confidence?: number;
-  content?: string;
-  query?: string;
-  around_message_id?: string;
-  window?: number;
-  limit?: number;
-  max_chars?: number;
+/** A remembered fact's confidence; `memory.remember` in eval takes it positionally. */
+export const ConfidenceSchema = z.number().min(0).max(1).describe('For remember; default 1.').optional();
+
+/** Input of the native tool and of `memory.*` in eval. */
+export const MemoryToolInputSchema = z.object({
+  action: oneOf(memoryActionsFor(true)).describe(
+    'remember, recall, forget: a keyed fact. save: a note. search: notes and facts. conversations: your past conversations.',
+  ),
+  key: z.string().describe('For remember, recall, forget: a stable name such as "deploy.target".').optional(),
+  value: z.unknown().describe('For remember: any JSON value.').optional(),
+  confidence: ConfidenceSchema,
+  content: z.string().describe('For save.').optional(),
+  query: z.string()
+    .describe('For search. For conversations: every term must match; omit it to browse archived conversations.').optional(),
+  around_message_id: z.string().describe('For conversations: read around this message instead of searching.').optional(),
+  window: z.number().describe('For conversations around a message: messages each side (default 5, max 20).').optional(),
+  max_chars: z.number().describe('For conversations around a message: characters per message (default 700).').optional(),
+  limit: z.number()
+    .describe('For conversations: max hits (default 5, max 10), or archived conversations (default 10, max 20).').optional(),
+});
+
+export type MemoryToolInput = z.infer<typeof MemoryToolInputSchema>;
+
+/** Without a FactsStore the fact actions are neither offered nor accepted. */
+export function memoryToolInputSchema(hasFacts: boolean): typeof MemoryToolInputSchema {
+  return hasFacts ? MemoryToolInputSchema : MemoryToolInputSchema.extend({
+    action: oneOf(memoryActionsFor(false)).describe('save: a note. search: notes. conversations: your past conversations.'),
+  });
 }
 
 export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryToolInput) => Promise<JsonValue> {
@@ -181,18 +197,8 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
     return { ok: true, key: storedKey, existed };
   };
 
-  const actions = memoryActionsFor(facts !== undefined);
-  const ActionSchema = v.picklist(actions);
-
   return async (args: MemoryToolInput): Promise<JsonValue> => {
-    // AI SDK does not validate jsonSchema tool input; refuse with the vocabulary this runtime supports.
-    const action = v.safeParse(ActionSchema, args.action);
-
-    if (!action.success) {
-      throw new KinuError('bad_input', unknownActionError('memory', 'action', args.action, actions));
-    }
-
-    switch (action.output) {
+    switch (args.action) {
       case 'save':
         if (!args.content) throw new KinuError('bad_input', 'memory.save requires `content`.');
 
@@ -206,7 +212,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
       case 'remember':
       case 'recall':
       case 'forget':
-        return runFactAction(action.output, args);
+        return runFactAction(args.action, args);
     }
   };
 }

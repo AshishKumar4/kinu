@@ -1,21 +1,21 @@
 /** `memory.*` in codemode: projects the native `memory` dispatcher, so both read and write one store. */
 import { codemodeText, type CodemodeProvider } from './sandbox-contract';
-import * as v from 'valibot';
+import type { z } from 'zod';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
-import { createMemoryDispatcher, type MemoryToolDeps } from './memory-tool';
+import { ConfidenceSchema, createMemoryDispatcher, MemoryToolInputSchema, type MemoryToolDeps } from './memory-tool';
+import { refusedInput } from '../obs/index';
 import { TOOL_REACH } from './registry';
 import { branchableToolCall } from './outcome';
 import { KinuError } from '../obs';
 
-const SessionOptionsSchema = v.object({
-  query: v.optional(v.string()),
-  around_message_id: v.optional(v.string()),
-  window: v.optional(v.number()),
-  limit: v.optional(v.number()),
-  max_chars: v.optional(v.number()),
-});
+/** The native tool's own fields: one schema, whether the call came as a tool or a program. */
+const SessionOptionsSchema = MemoryToolInputSchema.pick({ query: true, around_message_id: true, window: true, limit: true, max_chars: true });
 
-const ConfidenceSchema = v.optional(v.number());
+function parsed<T>(method: string, result: z.ZodSafeParseResult<T>): T {
+  if (!result.success) throw refusedInput(`memory.${method}`, result.error);
+
+  return result.data;
+}
 
 async function decodeMemoryResult(input: { pending: Promise<unknown> }): Promise<JsonValue> {
   return decodeJsonValue({ value: await input.pending });
@@ -54,28 +54,17 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
         return decodeMemoryResult({ pending: run({ action: 'save', content: codemodeText({ value: args[0], parameter: 'memory.save(content)' }) }) });
       case 'search':
         return decodeMemoryResult({ pending: run({ action: 'search', query: codemodeText({ value: args[0], parameter: 'memory.search(query)' }) }) });
-      case 'conversations': {
-        const options = v.safeParse(SessionOptionsSchema, args[0] ?? {});
-
-        if (!options.success) throw new KinuError('bad_input', 'memory.conversations: invalid options');
-
-        return decodeMemoryResult({ pending: run({ action: 'conversations', ...options.output }) });
-      }
-
-      case 'remember': {
-        const confidence = v.safeParse(ConfidenceSchema, args[2]);
-
-        if (!confidence.success) throw new KinuError('bad_input', 'memory.remember: confidence must be a number');
-
+      case 'conversations':
+        return decodeMemoryResult({ pending: run({ action: 'conversations', ...parsed('conversations', SessionOptionsSchema.safeParse(args[0] ?? {})) }) });
+      case 'remember':
         return decodeMemoryResult({
           pending: run({
             action: 'remember',
             key: codemodeText({ value: args[0], parameter: 'memory.remember(key)' }),
             value: args[1],
-            confidence: confidence.output,
+            confidence: parsed('remember', ConfidenceSchema.safeParse(args[2])),
           }),
         });
-      }
 
       case 'recall':
         return decodeMemoryResult({ pending: run({ action: 'recall', key: codemodeText({ value: args[0], parameter: 'memory.recall(key)' }) }) });

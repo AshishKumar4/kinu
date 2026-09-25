@@ -213,7 +213,7 @@ describe('buildHeadAccumulatorTools', () => {
     expect(report.toolCalls).toHaveLength(2);
 
     expect(report.toolCalls).toEqual(expect.arrayContaining([
-      { name: 'record_evidence', toolCallId: 'no-body', args: { kind: 'fact' }, result: expect.stringContaining('`body`'), outcome: expect.objectContaining({ success: false, reason: 'bad_input' }) },
+      { name: 'record_evidence', toolCallId: 'no-body', args: { kind: 'fact' }, result: expect.stringContaining('body'), outcome: expect.objectContaining({ success: false, reason: 'bad_input' }) },
       { name: 'record_evidence', toolCallId: 'with-body', args: { kind: 'fact', body: 'X holds' }, result: expect.stringContaining('evidence recorded'), outcome: { success: true } },
     ]));
 

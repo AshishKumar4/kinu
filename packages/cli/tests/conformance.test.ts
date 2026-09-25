@@ -155,8 +155,8 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
       root: 'cli',
       planes: {
         tool: new Set(byName.keys()),
-        'agents-action': observedActionEnum(byName.get('agents')),
-        'memory-action': observedActionEnum(byName.get('memory')),
+        'agents-action': observedActionEnum(byName.get('agents')?.inputSchema),
+        'memory-action': observedActionEnum(byName.get('memory')?.inputSchema),
         table: normalizeObservedTables(tables),
         producer: wiredProducers(runtime),
       },

@@ -4,17 +4,17 @@
  */
 
 import { formatReference, type ReferenceRoot } from '../vfs/references';
-import { tool, jsonSchema } from 'ai';
+import { tool } from 'ai';
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
+import { z } from 'zod';
+import { oneOf } from './tool-schema';
 import type { Memory, VFS, VfsRevision } from '../types/primitives';
 import type { TurnContextBudget } from '../context-budget';
 import { isVfsError, vfsAddressingHint, type VfsErrorCode } from '../vfs/errno';
 import { ensureDir, vfsDirname } from '../utils/vfs-helpers';
 import { memoryIndexPath } from '../memory/note';
-import {
-  BUILTIN_TOOL_DESCRIPTIONS, FILE_TOOL_ACTIONS, unknownActionError, type FileToolAction,
-} from './registry';
+import { BUILTIN_TOOL_DESCRIPTIONS, FILE_TOOL_ACTIONS } from './registry';
 import { applyFileEdits, formatFileSlice, FILE_REFUSAL_REASONS, FileRefusalError, type FileEdit } from './file-edit';
 import { readFileHead, readFileText, scanFileWindow, type ScannedFile } from './file-scan';
 import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from './file-ledger';
@@ -61,16 +61,27 @@ export interface FileToolDeps {
   roots?: () => readonly ReferenceRoot[];
 }
 
-export interface FileToolInput {
-  action: FileToolAction;
-  path: string;
-  offset?: number;
-  limit?: number;
-  content?: string;
-  /** Literal content to find in a single file; no shell command is evaluated. */
-  query?: string;
-  edits?: Array<{ old_text?: string; new_text?: string }>;
-}
+/** One replacement; a missing new_text must not default to deleting the match. */
+export const FileEditInputSchema = z.object({
+  old_text: z.string({ error: 'old_text is the text to find, copied exactly from the file' })
+    .describe('Text copied exactly from the file, with enough context to occur once.'),
+  new_text: z.string({ error: 'new_text replaces old_text, and "" deletes it' }).describe('The replacement; empty deletes.'),
+});
+
+/** Input of the native tool and of `workspace.*` in eval. */
+const FileToolInputSchema = z.object({
+  action: oneOf(FILE_TOOL_ACTIONS),
+  path: z.string().trim().min(1)
+    .describe('Relative paths resolve at the workspace root. A bound container\'s files are under /sandbox, a connected machine\'s under /pc.'),
+  offset: z.number().describe('For read: the first line, 1-indexed (default 1).').optional(),
+  limit: z.number().describe('For read: lines to return (default: as many as fit).').optional(),
+  content: z.string().describe('For write: the whole new content.').optional(),
+  query: z.string().describe('For search: literal text; returns the matching lines with their numbers.').optional(),
+  edits: z.array(FileEditInputSchema)
+    .describe('For edit: replacements matched against the file as last read, applied together or not at all.').optional(),
+});
+
+export type FileToolInput = z.infer<typeof FileToolInputSchema>;
 
 /** The read-before-write gate's refusal and reason, or both null when the operation may proceed. */
 interface GateVerdict {
@@ -78,7 +89,7 @@ interface GateVerdict {
   readonly reason: FileEditOutcomeReason | null;
 }
 
-const QuerySchema = v.pipe(v.string(), v.minLength(1));
+const QuerySchema = z.string().min(1);
 
 /** Why a `file` call failed: the ledger's reasons plus malformed arguments, which never
  *  became an edit attempt and must not inflate `attempts`. */
@@ -204,27 +215,15 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
     }
   };
 
-  const ActionSchema = v.picklist(FILE_TOOL_ACTIONS);
-  const PathSchema = v.pipe(v.string(), v.trim(), v.minLength(1));
   /** How a result names its file: the reference the live table gives it. */
   const referenceOf = (path: string): string => formatReference(path, deps.roots?.() ?? []);
 
   return async (args: FileToolInput): Promise<JsonValue> => {
-    // The AI SDK does not validate jsonSchema tool input; these are whatever the model emitted.
-    const parsed = v.safeParse(ActionSchema, args.action);
+    const { path } = args;
 
-    if (!parsed.success) {
-      return failure('bad_input', unknownActionError('file', 'action', args.action, FILE_TOOL_ACTIONS));
-    }
+    if (args.action === 'write' || args.action === 'edit') requireBuild('file.' + args.action);
 
-    const parsedPath = v.safeParse(PathSchema, args.path);
-
-    if (!parsedPath.success) return failure('bad_input', 'file requires `path`.');
-    const path = parsedPath.output;
-
-    if (parsed.output === 'write' || parsed.output === 'edit') requireBuild('file.' + parsed.output);
-
-    switch (parsed.output) {
+    switch (args.action) {
       case 'list':
         return inspect('list', path, async () => boundListing(path, await vfs.readdir(path)));
       case 'stat':
@@ -234,13 +233,13 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
           return stat === null ? null : { path, size: stat.size, mtimeMs: stat.mtimeMs, isDir: stat.isDir };
         });
       case 'search': {
-        const query = v.safeParse(QuerySchema, args.query);
+        const query = QuerySchema.safeParse(args.query);
 
         if (!query.success) return failure('bad_input', 'file search requires a non-empty literal query');
 
         return inspect('search', path, async (): Promise<JsonValue> => {
           const head = await readFileHead(vfs, path, FILE_SEARCH_MAX_BYTES);
-          const matches = searchLines(head.text, query.output);
+          const matches = searchLines(head.text, query.data);
 
           return head.total !== null && head.total > head.bytes
             ? { path, matches, truncated: { shown: head.bytes, total: head.total } }
@@ -311,24 +310,13 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
       }
 
       case 'edit': {
-        const raw = Array.isArray(args.edits) ? args.edits : [];
+        const raw = args.edits ?? [];
 
         if (raw.length === 0) {
           return failure('bad_input', 'file action=edit requires `edits`: [{ old_text, new_text }].');
         }
 
-        // A missing new_text must not default to deleting the match.
-        const EditInputSchema = v.object({ old_text: v.string(), new_text: v.string() });
-        const malformed = raw.findIndex((edit) => !v.safeParse(EditInputSchema, edit).success);
-
-        if (malformed !== -1) {
-          return failure('bad_input',
-            `edits[${malformed}] needs both old_text and new_text. ` +
-            'old_text is the text to find; new_text replaces it, and "" deletes it.');
-        }
-
-        const edits: FileEdit[] = v.parse(v.array(EditInputSchema), raw)
-          .map((edit) => ({ oldText: edit.old_text, newText: edit.new_text }));
+        const edits: FileEdit[] = raw.map((edit) => ({ oldText: edit.old_text, newText: edit.new_text }));
 
         let current: string;
         let revision = ledger.readRevision(path);
@@ -393,30 +381,7 @@ export function createFileTool(deps: FileToolDeps): ToolSet[string] {
 
   return permitInPlan(tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.file,
-    inputSchema: jsonSchema<FileToolInput>({
-      type: 'object',
-      properties: {
-        action: { type: 'string', enum: [...FILE_TOOL_ACTIONS] },
-        path: { type: 'string', description: 'Relative paths resolve at the workspace root. A bound container\'s files are under /sandbox, a connected machine\'s under /pc.' },
-        offset: { type: 'number', description: 'For read: the first line, 1-indexed (default 1).' },
-        limit: { type: 'number', description: 'For read: lines to return (default: as many as fit).' },
-        content: { type: 'string', description: 'For write: the whole new content.' },
-        query: { type: 'string', description: 'For search: literal text; returns the matching lines with their numbers.' },
-        edits: {
-          type: 'array',
-          description: 'For edit: replacements matched against the file as last read, applied together or not at all.',
-          items: {
-            type: 'object',
-            properties: {
-              old_text: { type: 'string', description: 'Text copied exactly from the file, with enough context to occur once.' },
-              new_text: { type: 'string', description: 'The replacement; empty deletes.' },
-            },
-            required: ['old_text', 'new_text'],
-          },
-        },
-      },
-      required: ['action', 'path'],
-    }),
-    execute: async (args: FileToolInput) => run(args),
+    inputSchema: FileToolInputSchema,
+    execute: async (args) => run(args),
   }));
 }

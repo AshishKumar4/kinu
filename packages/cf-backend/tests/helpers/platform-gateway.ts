@@ -180,7 +180,7 @@ export function modelGateway(model: Pick<LanguageModelV3, 'doGenerate'>): Stubbe
 const ChatMessageSchema = v.looseObject({ role: v.string(), content: v.optional(v.unknown()) });
 
 const OfferedToolSchema = v.looseObject({
-  function: v.looseObject({ name: v.string(), description: v.optional(v.string()), parameters: v.optional(v.unknown()) }),
+  function: v.looseObject({ name: v.string(), description: v.optional(v.string()), parameters: v.optional(JsonObjectSchema) }),
 });
 
 const ChatRequestSchema = v.looseObject({
@@ -191,7 +191,7 @@ const ChatRequestSchema = v.looseObject({
 /** A tool as a request offered it to the model: its description and its input schema. */
 export interface OfferedTool {
   readonly description: string | undefined;
-  readonly inputSchema: unknown;
+  readonly inputSchema: JsonObject | undefined;
 }
 
 /** Every tool the recorded requests offered the model, by name. */

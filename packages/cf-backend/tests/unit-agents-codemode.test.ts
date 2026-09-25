@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { jsonSchema, tool } from 'ai';
+import { asSchema, jsonSchema, tool } from 'ai';
 import {
   decodeJsonValue,
   BUILTIN_TOOL_DESCRIPTIONS, CODEMODE_CODE_DESCRIPTION,
@@ -209,7 +209,7 @@ describe('the eval docstring the model receives', () => {
     expect(built.description).toContain(types);
   });
 
-  test('the code field is labelled as the script body it actually is', () => {
+  test('the code field is labelled as the script body it actually is', async () => {
     // The inputSchema is core's (codemodeInputSchema), so the field and the docstring cannot disagree.
     const built = buildCodemode();
 
@@ -218,7 +218,7 @@ describe('the eval docstring the model receives', () => {
         properties: v.object({ code: v.object({ description: v.string() }) }),
         required: v.array(v.string()),
       }),
-    }), built.inputSchema).jsonSchema;
+    }), { jsonSchema: await asSchema(built.inputSchema).jsonSchema }).jsonSchema;
 
     expect(schema.properties.code.description).toBe(CODEMODE_CODE_DESCRIPTION);
     expect(schema.required).toEqual(['code']);

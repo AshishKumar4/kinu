@@ -15,10 +15,11 @@ import type { MessageReference, MessagePartReference } from '../session/messages
 
 export type { HeadFileChange, HeadFileChangeSet, HeadId, SerializedMessage };
 
-export type MergeStrategy =
-  | 'synthesize'   // unify into one coherent narrative (default)
-  | 'best_of'      // pick the strongest single head; cite weaker ones briefly
-  | 'consensus';   // emphasize areas of agreement; surface disagreements
+/** synthesize: unify into one coherent narrative (default). best_of: pick the strongest single head, citing
+ *  weaker ones briefly. consensus: emphasize areas of agreement, surface disagreements. */
+export const MERGE_STRATEGIES = ['synthesize', 'best_of', 'consensus'] as const;
+
+export type MergeStrategy = (typeof MERGE_STRATEGIES)[number];
 
 /**
  * A head gets its parent's envelope: no token pool, no wall clock. Cost is governed by the
@@ -51,9 +52,11 @@ export interface HeadInput {
   readonly mergeStrategy: MergeStrategy;
 }
 
+export const EVIDENCE_KINDS = ['tool_output', 'fact', 'citation', 'artifact'] as const;
+
 export interface Evidence {
   readonly id: string;
-  readonly kind: 'tool_output' | 'fact' | 'citation' | 'artifact';
+  readonly kind: (typeof EVIDENCE_KINDS)[number];
   readonly body: string;
   readonly ref?: string;
   /** 0..1, self-reported; the merge weights contributions by it. */

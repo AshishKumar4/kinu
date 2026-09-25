@@ -1,9 +1,9 @@
 {
   "measuredAt": "2026-09-25",
-  "files": 2680,
-  "functions": 65974,
+  "files": 2722,
+  "functions": 67557,
   "ceiling": 87,
-  "line": 32,
+  "line": 31,
   "inventory": [
     {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
@@ -182,10 +182,6 @@
       "complexity": 34
     },
     {
-      "key": "packages/core/src/tools/file-tool.ts#createFileDispatcher>fn",
-      "complexity": 34
-    },
-    {
       "key": "packages/core/src/vfs/context-plane.ts#contextFiles>document",
       "complexity": 34
     },
@@ -242,10 +238,6 @@
       "complexity": 32
     },
     {
-      "key": "packages/core/src/prompting/tool-error-feedback.ts#projectToolErrorFeedback",
-      "complexity": 32
-    },
-    {
       "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>attachChainOnce",
       "complexity": 32
     },
@@ -268,6 +260,82 @@
     {
       "key": "tests/first-run/deploy-door.first-run.ts#authorizeHandoff",
       "complexity": 32
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/FilesSurface.tsx#FilesSurface",
+      "complexity": 31
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#WorkSurface",
+      "complexity": 31
+    },
+    {
+      "key": "packages/cf-backend/src/drive-design/DriveDesignPage.tsx#DriveDesignPage",
+      "complexity": 31
+    },
+    {
+      "key": "packages/cf-backend/src/gallery.tsx#mcpServersFixture",
+      "complexity": 31
+    },
+    {
+      "key": "packages/cf-backend/src/gallery.tsx#workspacePageRpc",
+      "complexity": 31
+    },
+    {
+      "key": "packages/cf-backend/src/slates/host.ts#SlateHost.operation",
+      "complexity": 31
+    },
+    {
+      "key": "packages/cf-backend/tests/workerd/http-model-fake.ts#probeControl",
+      "complexity": 31
+    },
+    {
+      "key": "packages/cli/src/chat-loop.ts#applySlashOutcome",
+      "complexity": 31
+    },
+    {
+      "key": "packages/cli/src/commands/debug.ts#debugCommand",
+      "complexity": 31
+    },
+    {
+      "key": "packages/core/src/chat.ts#runChat",
+      "complexity": 31
+    },
+    {
+      "key": "packages/core/src/evolution/refinement-lane.ts#settleRoutes",
+      "complexity": 31
+    },
+    {
+      "key": "packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.recordStep",
+      "complexity": 31
+    },
+    {
+      "key": "packages/core/src/scaffold/chat-transform.ts#scaffoldTurn",
+      "complexity": 31
+    },
+    {
+      "key": "packages/core/src/tools/file-tool.ts#createFileDispatcher>fn",
+      "complexity": 31
+    },
+    {
+      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>checkpoint",
+      "complexity": 31
+    },
+    {
+      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>commitChain",
+      "complexity": 31
+    },
+    {
+      "key": "packages/devbox/tests/snapshot-chain.test.ts#shellLabel",
+      "complexity": 31
+    },
+    {
+      "key": "scripts/axis-ergonomics/report.ts#main",
+      "complexity": 31
+    },
+    {
+      "key": "tests/first-run/exploration.first-run.ts#describe>liveTest>run",
+      "complexity": 31
     }
   ]
 }

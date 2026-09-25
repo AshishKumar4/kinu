@@ -1,6 +1,7 @@
 // Local context breakdown: exact character counts, a stated divisor, no scaling toward the provider total.
 import { describe, test, expect } from 'bun:test';
-import type { ModelMessage } from 'ai';
+import { asSchema, jsonSchema, type ModelMessage } from 'ai';
+import { z } from 'zod';
 import { measureContext, TurnContextMeter, DYNAMIC_CONTEXT_OPEN_TAG } from '../src/index';
 import { present } from '@kinu.run/test-utils';
 
@@ -23,8 +24,8 @@ describe('measureContext', () => {
 
   test('measures each tool definition including its schema', () => {
     const tools = {
-      file: { description: 'edit files', inputSchema: { type: 'object' } },
-      shell: { description: 'shell', inputSchema: { type: 'object' } },
+      file: { description: 'edit files', inputSchema: jsonSchema({ type: 'object' }) },
+      shell: { description: 'shell', inputSchema: jsonSchema({ type: 'object' }) },
     };
 
     const { segments } = measureContext({ tools, messages: [] });
@@ -75,11 +76,19 @@ describe('measureContext', () => {
   test('measuredChars is exactly the sum of the segments', () => {
     const m = measureContext({
       system: 'soul\n## Delegation\nrungs',
-      tools: { run: { description: 'shell', inputSchema: {} } },
+      tools: { run: { description: 'shell', inputSchema: jsonSchema({ type: 'object' }) } },
       messages: [user('hi'), assistant('yo')],
     });
 
     expect(m.measuredChars).toBe(m.segments.reduce((sum, s) => sum + s.chars, 0));
+  });
+
+  test('a tool is measured as the JSON Schema the provider is sent, however it was declared', () => {
+    const declared = z.object({ path: z.string().describe('The file.'), edits: z.array(z.object({ old_text: z.string() })).optional() });
+    const sent = JSON.stringify(asSchema(declared).jsonSchema).length;
+    const m = measureContext({ tools: { file: { description: 'files', inputSchema: declared } }, messages: [] });
+
+    expect(m.measuredChars).toBe('file'.length + 'files'.length + sent);
   });
 
   test('an empty request measures as empty, not as missing', () => {

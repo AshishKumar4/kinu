@@ -44,6 +44,7 @@ import { callAccountOf, type CallAccount } from './providers/quota';
 import { classifyErrorCode, diagnostics, toKinuError } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
+import { invalidToolCallRefusal } from './tools/tool-schema';
 import { ToolOutcomeSchema } from './types/tool-outcome';
 
 export type ChatEvent =
@@ -298,6 +299,9 @@ class ProviderCall {
   private stepHadOutput = false;
   /** The in-flight step's content: the SDK records only finished steps, so a cut would otherwise lose it. */
   private stepContent: Array<TextPart | ToolCallPart> = [];
+
+  /** Schema-refused calls, until their tool-error arrives. */
+  private readonly refusedCalls = new Map<string, Error>();
   /** A call can run before `fullStream` publishes it; kept until its step completes so a cut keeps admitted work. */
   private readonly dispatchedCalls = new Map<string, { readonly call: ToolCallPart; readonly startedAt: number }>();
   private responseSoFar: readonly ModelMessage[] = [];
@@ -372,6 +376,9 @@ class ProviderCall {
       case 'tool-call': {
         this.stepHadOutput = true;
         this.stepContent.push({ type: 'tool-call', toolCallId: chunk.toolCallId, toolName: chunk.toolName, input: chunk.input });
+        const refusal = invalidToolCallRefusal(chunk);
+
+        if (refusal !== undefined) this.refusedCalls.set(chunk.toolCallId, refusal);
 
         return { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args: parseToolArgs(chunk.input) };
       }
@@ -387,12 +394,14 @@ class ProviderCall {
       }
 
       case 'tool-error': {
-        // A tool threw: the error text is the durable outcome and the extension seam's result.
-        const error = describeProviderError({ cause: chunk.error });
+        // A tool threw or its schema refused: the error text is the durable outcome and the seam's result.
+        const cause = this.refusedCalls.get(chunk.toolCallId) ?? chunk.error;
+        this.refusedCalls.delete(chunk.toolCallId);
+        const error = describeProviderError({ cause });
 
         return {
           type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: error, error,
-          ...this.toolDuration(chunk.toolCallId), ...failedToolOutcome({ cause: chunk.error }),
+          ...this.toolDuration(chunk.toolCallId), ...failedToolOutcome({ cause }),
         };
       }
 

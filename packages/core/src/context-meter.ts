@@ -3,9 +3,10 @@
  * Chars are exact; token counts are chars/divisor, never fitted to the provider's total.
  */
 
-import type { ModelMessage, SystemModelMessage } from 'ai';
+import { asSchema, type ModelMessage, type SystemModelMessage, type ToolSet } from 'ai';
 import * as v from 'valibot';
 import { CHARS_PER_TOKEN } from './llm';
+import { JsonObjectSchema } from './utils/json';
 import { diagnostics, renderThrownChain } from './obs/index';
 import { DYNAMIC_CONTEXT_OPEN_TAG, splitPromptSections } from './prompting/sections';
 
@@ -28,7 +29,7 @@ export interface ContextComposition {
 }
 
 /** Structural rather than the AI SDK's `ToolSet` so the meter stays a leaf. */
-export type ToolDefsLike = Readonly<Record<string, { description?: string; inputSchema?: unknown } | undefined>>;
+export type ToolDefsLike = Readonly<Record<string, Partial<Pick<ToolSet[string], 'description' | 'inputSchema'>> | undefined>>;
 
 export type SystemText = string | SystemModelMessage | undefined;
 
@@ -58,12 +59,16 @@ function isEphemeral(message: ModelMessage): boolean {
     && content.output.startsWith(DYNAMIC_CONTEXT_OPEN_TAG);
 }
 
-function toolChars(name: string, def: { description?: string; inputSchema?: unknown } | undefined): number {
+/** Counted as the JSON Schema the provider is sent. */
+function toolChars(name: string, def: ToolDefsLike[string]): number {
   if (!def) return 0;
   let schema = 0;
 
   try {
-    schema = def.inputSchema === undefined ? 0 : (JSON.stringify(def.inputSchema)?.length ?? 0);
+    const sent = def.inputSchema === undefined ? undefined : v.safeParse(JsonObjectSchema, asSchema(def.inputSchema).jsonSchema);
+
+    if (sent?.success === false) diagnostics.event('context_meter.schema_unmeasurable', { error: 'its JSON Schema is not ready synchronously' });
+    schema = sent?.success === true ? JSON.stringify(sent.output).length : 0;
   } catch (error) {
     diagnostics.event('context_meter.schema_unmeasurable', { error: renderThrownChain({ cause: error }) });
   }

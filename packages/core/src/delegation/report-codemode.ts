@@ -1,24 +1,22 @@
 /** `report.*` in the codemode sandbox; calls the same `ReportToolDeps.report` as the native tool. */
-import * as v from 'valibot';
+import { z } from 'zod';
 import type { CodemodeProvider } from '../tools/sandbox-contract';
 import type { ReportToolDeps } from '../tools/builtins';
-import { dispatchReport } from './report-tool';
+import { dispatchReport, ReportHandoffFields, ReportToolInputSchema } from './report-tool';
+import { refusedInput } from '../obs/index';
 import {
   SUBORDINATE_REPORT_HANDOFF_FIELDS, SUBORDINATE_REPORT_STATUSES,
 } from '../events/hub/types';
 import { TOOL_REACH } from '../tools/registry';
 import { branchableToolCall } from '../tools/outcome';
-import { KinuError } from '../obs';
 
-/** Positional sandbox args are untyped; this surface only narrows them. Validation
- *  belongs to the shared dispatcher. */
-const PositionalSchema = v.tuple([v.string(), v.string()]);
-
-/** Third argument: handoff fields keyed by the native vocabulary. Shape only; budget
- *  checks stay in the dispatcher. */
-const HandoffSchema = v.optional(
-  v.record(v.picklist(SUBORDINATE_REPORT_HANDOFF_FIELDS), v.array(v.string())),
-);
+/** Third argument; an unknown field is refused with the known ones. */
+const HandoffSchema = z.strictObject(
+  ReportHandoffFields,
+  { error: (issue) => (issue.code === 'unrecognized_keys'
+    ? `the handoff takes only ${SUBORDINATE_REPORT_HANDOFF_FIELDS.join(', ')}; got ${issue.keys.join(', ')}`
+    : undefined) },
+).optional();
 
 const STATUS_UNION = SUBORDINATE_REPORT_STATUSES.map((s) => `"${s}"`).join(' | ');
 
@@ -47,20 +45,19 @@ export function createReportCodemodeProvider(deps: () => ReportToolDeps): Codemo
         planAllowed: true,
         description: 'Report progress, completion, or a blocker to the workspace orchestrator.',
         execute: (...args: unknown[]) => branchableToolCall(async () => {
-          const positional = v.safeParse(PositionalSchema, [args[0], args[1]]);
-
-          if (!positional.success) {
-            throw new KinuError('bad_input', 'report.send requires a status and content, both strings');
-          }
-
-          const [status, content] = positional.output;
-          const handoff = v.safeParse(HandoffSchema, args[2]);
+          const handoff = HandoffSchema.safeParse(args[2]);
 
           if (!handoff.success) {
-            throw new KinuError('bad_input', `report.send's third argument is an optional object of string arrays, with any of: ${SUBORDINATE_REPORT_HANDOFF_FIELDS.join(', ')}`);
+            throw refusedInput('report.send(status, content, handoff)', handoff.error);
           }
 
-          return await dispatchReport(deps(), { status, content, ...handoff.output });
+          const input = ReportToolInputSchema.safeParse({ ...handoff.data, status: args[0], content: args[1] });
+
+          if (!input.success) {
+            throw refusedInput('report.send(status, content)', input.error);
+          }
+
+          return await dispatchReport(deps(), input.data);
         }),
       },
     },

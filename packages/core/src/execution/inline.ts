@@ -18,7 +18,8 @@ import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold
 import { SlateOperationSchema, requireSlateWorkMode, type SlateOperation, type SlateCallResult } from '../slates/rpc';
 import { currentWorkMode } from './work-mode';
 import { TOOL_REACH } from '../tools/registry';
-import { createFileDispatcher } from '../tools/file-tool';
+import { createFileDispatcher, FileEditInputSchema } from '../tools/file-tool';
+import { refusedInput } from '../obs/index';
 import { TurnFileLedger } from '../tools/file-ledger';
 import { branchableToolCall } from '../tools/outcome';
 import { TurnContextBudget } from '../context-budget';
@@ -28,10 +29,8 @@ const StringSchema = v.string();
 
 const OptionalPathSchema = v.optional(v.string());
 
-const FileEditsSchema = v.array(v.object({
-  old_text: v.optional(v.string()),
-  new_text: v.optional(v.string()),
-}));
+/** The native `file` tool's edit item: one schema, whether the edit came as a tool call or a program. */
+const FileEditsSchema = FileEditInputSchema.array();
 
 const FileWriteSuccessSchema = v.object({
   ok: v.literal(true),
@@ -161,10 +160,14 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         const path = parseInput(StringSchema, { value: args[0] });
 
         if (path === undefined) return refusalOf(new KinuError('bad_input', 'workspace.editFile: path must be a string'));
-        const list = parseInput(FileEditsSchema, { value: args[1] }) ?? [];
+        const list = FileEditsSchema.safeParse(args[1] ?? []);
+
+        if (!list.success) {
+          return refusalOf(refusedInput('workspace.editFile(path, edits)', list.error));
+        }
 
         // Same dispatcher and ledger as the native `file` edit, read live per call.
-        return branchableToolCall(() => currentFileDispatch()({ action: 'edit', path, edits: list }));
+        return branchableToolCall(() => currentFileDispatch()({ action: 'edit', path, edits: list.data }));
       },
     },
 

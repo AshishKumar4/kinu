@@ -55,7 +55,8 @@ import { createMemoryVfs, createTestActors, type MemoryVfs } from '@kinu.run/tes
 import {
   makeSql as makeTagged, makeSqlExec, makeExecRaw, createTestActor, createTestWorkspace,
 } from './helpers';
-import { dispatchReport } from '../src/delegation/report-tool';
+import type { z } from 'zod';
+import { dispatchReport, ReportToolInputSchema, type ReportToolResult } from '../src/delegation/report-tool';
 
 const NOW = 1_700_000_000_000;
 
@@ -1305,7 +1306,7 @@ describe('the parent ingress, in the order it runs', () => {
   });
 });
 
-/** The full report spine in production order: valibot `v.object` strips unnamed fields, so a dropped handoff only shows end to end. */
+/** The full report spine in production order: the tool's schema strips unnamed fields, so a dropped handoff only shows end to end. */
 describe('the structured handoff a report carries', () => {
   function childReportingTo(scene: ParentScene): ReportToolDeps {
     return {
@@ -1320,6 +1321,11 @@ describe('the structured handoff a report carries', () => {
     };
   }
 
+  /** Parsed as the SDK parses the native tool's input. */
+  async function send(deps: ReportToolDeps, input: z.input<typeof ReportToolInputSchema>): Promise<ReportToolResult> {
+    return await dispatchReport(deps, ReportToolInputSchema.parse(input));
+  }
+
   function reportOn(scene: ParentScene): SubordinateReportPayload {
     return reportPayload(scene.log.pending({ variant: 'subordinate_report' })[0]);
   }
@@ -1327,7 +1333,7 @@ describe('the structured handoff a report carries', () => {
   test('what the child stated is on the parent’s event AND in the brief the parent reads', async () => {
     const scene = parentScene();
 
-    await dispatchReport(childReportingTo(scene), {
+    await send(childReportingTo(scene), {
       status: 'completed',
       content: 'Rate limiter landed behind the existing flag.',
       concerns: ['  the 429 budget is a guess — no production trace to size it from ', '  '],
@@ -1348,7 +1354,7 @@ describe('the structured handoff a report carries', () => {
   test('a report that states only status and content delivers exactly what it always did', async () => {
     const scene = parentScene();
 
-    await dispatchReport(childReportingTo(scene), {
+    await send(childReportingTo(scene), {
       status: 'progress', content: 'Mapped 8 of the 14 so far.',
     });
 
@@ -1364,7 +1370,7 @@ describe('the structured handoff a report carries', () => {
     const scene = parentScene();
 
     // Refused rather than truncated: the handoff has no spill file.
-    const oversize = dispatchReport(childReportingTo(scene), {
+    const oversize = send(childReportingTo(scene), {
       status: 'completed',
       content: 'Done.',
       open_work: [`x`.repeat(SUBORDINATE_REPORT_HANDOFF_MAX_CHARS + 1)],
@@ -1379,7 +1385,7 @@ describe('the structured handoff a report carries', () => {
     const scene = parentScene();
     const bodyOnlyDestination = { ...childReportingTo(scene), bodyOnly: true } satisfies ReportToolDeps;
 
-    await dispatchReport(bodyOnlyDestination, {
+    await send(bodyOnlyDestination, {
       status: 'completed', content: 'Candidate submitted.',
       concerns: ['this should not travel to a destination that never declared it'],
     });
