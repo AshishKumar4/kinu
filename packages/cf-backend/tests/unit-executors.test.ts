@@ -1,8 +1,7 @@
 // Sticky last-active executor only when already active, else workspace: status/diff reads must not wake idle remotes.
 import { describe, test, expect } from "bun:test";
 import {
-  executorLabel, executorSortKey, pickDefaultExecutor, releaseSubstrate,
-  type ExecutorInfo,
+  executorLabel, executorSortKey, pickDefaultExecutor,
 } from "@kinu.run/core";
 
 const avail = (...names: string[]) => names.map((name) => ({ name, available: true }));
@@ -34,39 +33,6 @@ describe("pickDefaultExecutor", () => {
     expect(pickDefaultExecutor([{ name: "sandbox", available: false }])).toBe("workspace");
     expect(pickDefaultExecutor([])).toBe("workspace");
     expect(pickDefaultExecutor([], "sandbox")).toBe("workspace");
-  });
-});
-
-/** The release engine runs in the sandbox container, so that row is the verdict; say nothing until executors load. */
-describe("releaseSubstrate", () => {
-  const exec = (over: Partial<ExecutorInfo>): ExecutorInfo => ({
-    name: "sandbox", kind: "sandbox", capabilities: [], available: true,
-    configured: true, active: false, status: "idle", ...over,
-  });
-
-  test("says nothing before the executor list has loaded", () => {
-    expect(releaseSubstrate([])).toEqual({ state: "unknown" });
-  });
-
-  test("an unavailable sandbox is unavailable, carrying the executor's own reason", () => {
-    const verdict = releaseSubstrate([
-      exec({ available: false, status: "not_configured", reason: "Sandbox executor not configured." }),
-    ]);
-
-    expect(verdict).toEqual({ state: "unavailable", reason: "Sandbox executor not configured." });
-  });
-
-  test("a loaded list with no sandbox row at all is unavailable with a stated reason", () => {
-    const verdict = releaseSubstrate([exec({ name: "workspace", kind: "workspace" })]);
-    expect(verdict.state).toBe("unavailable");
-
-    if (verdict.state === "unavailable") expect(verdict.reason.length).toBeGreaterThan(0);
-  });
-
-  test("an available sandbox is ready; a previews-off reason rides along as the note", () => {
-    expect(releaseSubstrate([exec({ status: "idle" })])).toEqual({ state: "ready", note: null });
-    const withNote = releaseSubstrate([exec({ status: "idle", reason: "Sandbox previews are off: PREVIEW_HOST_SUFFIX is unset." })]);
-    expect(withNote).toEqual({ state: "ready", note: "Sandbox previews are off: PREVIEW_HOST_SUFFIX is unset." });
   });
 });
 

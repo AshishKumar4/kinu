@@ -45,7 +45,7 @@ import {
   type WorkMode, type JsonObject,
   type HeadInput, type HeadReport, type HeadRuntime,
   type SleepTimeUpdate,
-  type ReleaseBoard, type EgressSecretBinding,
+  type EgressSecretBinding,
 } from '@kinu.run/core';
 import { joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
@@ -1325,8 +1325,8 @@ export function makeEnv(
     UserDO: {
       idFromName: (n: string) => ({ toString: () => n }),
       // Recording when asked, refusing otherwise, so an unannounced user-plane path fails
-      // loudly. A claimed root's settle/open members (title registry, profile, MCP warm,
-      // release board) answer; a suite-supplied real UserDO replaces this whole.
+      // loudly. A claimed root's settle/open members (title registry, profile, MCP warm)
+      // answer; a suite-supplied real UserDO replaces this whole.
       get: () => {
         if (world?.userDO !== undefined) return world.userDO;
 
@@ -1352,10 +1352,6 @@ export function makeEnv(
               ?? new Error('harness UserDO: userMcp_toolDescriptors is not reachable under bun');
           },
           getProfile: async (): Promise<{ email: string } | null> => userPlane?.profile ?? null,
-          // Empty: `getWorkspaceTabPresence` gates the Releases tab on `changes.length`.
-          getReleaseBoard: async (): Promise<ReleaseBoard> => ({
-            bindings: [], changes: [], checks: [], approvals: [], deployments: [],
-          }),
           // No stored egress secrets; `failVault` drives an unreadable vault.
           listEgressSecrets: async (): Promise<readonly EgressSecretBinding[]> => {
             if (userPlane?.failVault) throw userPlane.failVault;

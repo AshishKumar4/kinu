@@ -90,8 +90,8 @@ ledger, and the prompt, model and tool caches.
 Three hooks are optional. `workspaceName()` returns `this.name`,
 `extraCodemodeProviders()` returns `[]`, and
 `isClientRpcMethodDenied(method)` returns `false`. Override the provider hook
-for extra sandbox namespaces: the orchestrator adds `agent.*` and `release.*`
-there, and a subordinate gets neither. Override the RPC hook for methods a
+for extra sandbox namespaces: the orchestrator adds `agent.*` there, and a
+subordinate does not get it. Override the RPC hook for methods a
 browser socket must not reach.
 
 The tool surface follows from `actorToolDeps()` alone. `DEPS_GATED_TOOLS` lives
@@ -99,13 +99,10 @@ in core (`packages/core/src/tools/registry.ts`) and holds `report`, so renaming
 a builtin moves its gate with it, where a cf-local `['report']` would match
 nothing. `actorActiveTools()` drops `report` when it is unwired. `team` and
 `peers` gate `agents` actions through `actorAgentsActions()`, which always
-passes a `swarm` marker, so every CF actor advertises `swarm`. `release` is not
-a native tool: `deps.releases` feeds only the `release.*` codemode namespace
-and gates nothing in `actorActiveTools()`. No flag or allowlist decides any of
-this.
+passes a `swarm` marker, so every CF actor advertises `swarm`. No flag or
+allowlist decides any of this.
 
-`ActorToolDeps` has `team`, `peers`, `report`, `releases` and
-`submitPlan`. `teamProfile()` returns `{ team }` while an actor has tree below
+`ActorToolDeps` has `team`, `peers`, `report` and `submitPlan`. `teamProfile()` returns `{ team }` while an actor has tree below
 it and `{}` at the depth cap, so the delegation budget stops recursion, not
 the class. The root builds a hosted subordinate's delegated-turn surface through
 `SubordinateHostSeams.taskProfile`
@@ -287,7 +284,7 @@ Inside `eval`, the LLM also sees:
 - `agents.*`, `memory.*`, `tasks.*`, `web.*`, `report.*`: codemode projections
   sharing one dispatcher with their native tool. Scripts and direct calls
   see identical state.
-- `release.*`, `agent.*`: no native tool. The orchestrator adds both in
+- `agent.*`: no native tool. The orchestrator adds it in
   `extraCodemodeProviders()` (`packages/cf-backend/src/orchestrator.ts`). A
   hosted subordinate's delegated turn gets only a `report` provider.
 - Crafted tools: `tools.<name>(args)`, defined in the sandbox by the `tools`

@@ -113,8 +113,8 @@ describe('Now owes the work in hand whatever the plan read is doing', () => {
 
   test('one decision and no work in flight renders Needs you and no journal frame', () => {
     const decision: PendingAction = {
-      id: 'apr_1', kind: 'release_approval', title: 'Approve: deploy to production',
-      detail: null, at: 0,
+      id: 'defer-1', kind: 'deferred_action', title: 'Approve: a command the agent wants to run on device',
+      detail: 'bun run db:migrate', at: 0,
     };
 
     expect(sectionTitles(workTabMarkup([], [decision]))).toEqual(['Needs you', 'Now']);

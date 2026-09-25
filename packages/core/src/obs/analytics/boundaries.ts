@@ -5,7 +5,7 @@
 import type { LogEventName } from '../log';
 
 /** Closed set: a family is the question a query asks; a sixth must be argued for. */
-const BOUNDARY_FAMILIES = ['error', 'turn', 'provider', 'job', 'release'] as const;
+const BOUNDARY_FAMILIES = ['error', 'turn', 'provider', 'job'] as const;
 
 type BoundaryFamily = (typeof BOUNDARY_FAMILIES)[number];
 
@@ -158,16 +158,6 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     emitter: 'recordJobSettled',
     means: 'A background job was cancelled, retried, dismissed or cleared, and '
       + 'whether the operation took effect.',
-  },
-  {
-    id: 'release.transitioned',
-    family: 'release',
-    event: 'release.transitioned',
-    site: 'packages/cf-backend/src/user/user-do.ts',
-    mechanism: 'writer',
-    emitter: 'recordReleaseTransition',
-    means: 'A release change moved status, or a deployment was recorded against '
-      + 'one. The status and the environment; the change id only as a digest.',
   },
 ];
 

@@ -62,7 +62,7 @@ import { withGallery } from './gallery-harness';
  *  show. */
 const FRAMES = [
   'shell', 'chat', 'chatempty', 'chatloading', 'composer', 'toolcalls', 'streaming', 'modal', 'home', 'tabs', 'markdown',
-  'views', 'viewfail', 'releases', 'work', 'workempty', 'approvals', 'environment', 'supervise',
+  'views', 'viewfail', 'work', 'workempty', 'approvals', 'environment', 'supervise',
   'settings', 'forks', 'forkmerge', 'forkfull',
   // The signed-out pages. They are whole documents with their own stylesheet
   // rather than components, and that stylesheet is exactly the one no other

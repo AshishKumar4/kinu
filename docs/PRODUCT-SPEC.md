@@ -554,8 +554,7 @@ Code blocks use the shared renderer: syntax colors, correct escaping, complete c
 - Work shows plans, jobs, waiting decisions and terminal results with usable actions.
 - Exploration shows actual search history and live node behavior.
 - Agent shows identity, memory, tools, learning and loop changes without presenting every stored path as active execution.
-- Releases and Exploration stay hidden when empty.
-- A slate preview is not a release. The release workflow keeps its own deliverable, approval and publication state, and no agent-core deployment record replaces it.
+- Exploration stays hidden when empty.
 - Errors stay visible and recoverable. A success-looking placeholder never hides a failed loader, missing file or disconnected executor.
 
 ### 13.2.1 Workspace presentation requirements (2026-09-12)

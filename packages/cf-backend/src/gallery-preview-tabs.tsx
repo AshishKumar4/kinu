@@ -191,7 +191,7 @@ export function PreviewTabsGallery() {
         previewError={null} previewStarting={starting ? ['sandbox'] : []} onRefreshPorts={NOTHING} plan={owner === "main" ? plan : workerPlan} snapshot={{ status: 'loading' }} onRetryLoad={NOTHING}
         tools={[]} memory={[]} memoryContent="" onSearchMemory={NOTHING} mctsTrees={new Map()} headActivity={new Map()} isStreaming={false}
         executors={machine ? [MACHINE] : []} executorOutputs={new Map()} onExecute={async () => ({})} backgroundJobs={[]} onRefreshJobs={NOTHING} pendingActions={[]}
-        tabPresence={{ releases: false, explorations: false, work: true }} rpc={rpc} />
+        tabPresence={{ explorations: false, work: true }} rpc={rpc} />
     </div>
   </div>;
 }

@@ -55,7 +55,7 @@ import {
   EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, createDbCodemodeProvider,
   type EvolutionConfig, type ActorHandle, type ActorHost, type ActorReference, type ChildActorOperation,
   type ActorDirectoryResult, type HostedActor, type WorkspaceActorDirectory,
-  type ActorTurnProgram, type ScaffoldRunOptions,
+  type ScaffoldRunOptions,
   initActorClaimTables, ActorClaimStore, initPendingSendTables, PendingSendStore,
   createScaffoldCandidateSurface, createScaffoldCallTool, createScaffoldHistory, type ScaffoldCandidateBinding,
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
@@ -127,7 +127,6 @@ import {
   resolveTurnSkills, filterToolNamesBySkills,
   type ActiveSkillSet,
   inheritedContextFromTranscript,
-  type ReleaseToolDeps,
   PlanReviewActions, type PlanDecisionOutcome,
   type PlanEdit, type PlanReview, type ReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
@@ -414,7 +413,6 @@ export interface ActorToolDeps {
   peers?: PeersToolDeps;
   /** Subordinate-only. */
   report?: ReportToolDeps;
-  releases?: ReleaseToolDeps | undefined;
   /** Present on actors whose current turn belongs to the owner; surfaced only in Plan mode. */
   submitPlan?: SubmitPlanToolDeps;
 }
@@ -609,7 +607,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Declared here because `installWorkspaceCapability`, reachable before `onStart`, must demand it. */
   protected abstract ensureSchema(): void;
 
-  /** Structural absence is the gating: an actor returning {} has no roster/peer actions or release tool. */
+  /** Structural absence is the gating: an actor returning {} has no roster/peer actions. */
   protected abstract actorToolDeps(): ActorToolDeps;
 
   /** Spliced between `agents` and `web` so provider order (and the LLM-visible type description)
@@ -2159,7 +2157,7 @@ export abstract class ActorAgent extends Agent<Env> {
       profile: async () => {
         const mode = await this.preparedWorkMode();
 
-        return this.routingProfile([...Object.keys(this.getRawToolsForWorkMode(mode)), ...codemodeCapabilitiesFor(this.turnCodemodeProviders('build'))], mode);
+        return this.routingProfile([...Object.keys(this.getRawToolsForWorkMode(mode)), ...codemodeCapabilitiesFor(this.turnCodemodeProviders())], mode);
       },
       bindModel: spec => this.ownedModelServices.resolveModel(spec),
       modelContext: spec => this.modelCatalog.contextFor(spec),
@@ -2875,14 +2873,6 @@ export abstract class ActorAgent extends Agent<Env> {
    * turn end to decide if it may be parked awaiting a follow-up verdict. */
   protected _turnContinuity: TurnContinuity = 'conversation';
 
-  // Captured for shadow evaluation; ChatSession serializes turns, a cold activation reconstructs it.
-  private _turnProgram: { readonly program: ActorTurnProgram; readonly signal: AbortSignal | undefined } | null = null;
-  /** Read per call, never captured: long-lived collaborators (the release engine) must see the
-   * current turn's cancellation. */
-  protected currentTurnSignal(): AbortSignal | undefined {
-    return this._turnProgram?.signal;
-  }
-
   getCliCwdForDevice(): string | null {
     return this._cliCwd;
   }
@@ -3277,15 +3267,11 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /**
    * Single list read by `beforeTurn` (nameable capabilities) and `getCodemodeToolFactory` (narrowing).
-   * Plan mode omits `release`.
-   */
-  /**
    * Providers outside this list cannot be named by a role nor narrowed, so `db` belongs here.
-   * The db provider decides Plan per table scope at invocation, so it is not in the Plan filter.
+   * The db provider decides Plan per table scope at invocation.
    */
-  protected turnCodemodeProviders(mode: WorkMode): CodemodeProvider[] {
-    return [...this.baseCodemodeProviders(), createDbCodemodeProvider(this.stores.appData), ...this.extraCodemodeProviders()]
-      .filter((provider) => mode !== 'plan' || provider.name !== 'release');
+  protected turnCodemodeProviders(): CodemodeProvider[] {
+    return [...this.baseCodemodeProviders(), createDbCodemodeProvider(this.stores.appData), ...this.extraCodemodeProviders()];
   }
 
   /**
@@ -3297,7 +3283,7 @@ export abstract class ActorAgent extends Agent<Env> {
       ...(this.rt.executionRouter?.getProviders() ?? []),
       createWebCodemodeProvider(this.ownedModelServices.getWebSearchProvider()),
       createAgentsCodemodeProvider(() => this.getAgentsToolDeps('build')),
-      ...this.turnCodemodeProviders('build'),
+      ...this.turnCodemodeProviders(),
     ];
   }
 
@@ -3322,7 +3308,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // Read per provider call: a detach can change the owning channel mid-call.
         deviceRequests: () => this._activeDeviceRequests ?? undefined,
         // Narrowed by the same set as the native surface, so the sandbox cannot bypass a role.
-        extraProviders: () => narrowing.narrowProviders(this.turnCodemodeProviders(mode)),
+        extraProviders: () => narrowing.narrowProviders(this.turnCodemodeProviders()),
         // Drives the UI's default executor; one upsert per executor per turn (reset in beforeTurn).
         onExecutorUsed: (name) => {
           if (this._executorsUsedThisTurn.has(name)) return;
@@ -3774,7 +3760,6 @@ export abstract class ActorAgent extends Agent<Env> {
         // memory.search uses hybrid retrieval when available; otherwise FTS5-only.
         vectorStore: this.rt.vectorStore,
         facts: this.facts,
-        // The release lane is codemode-only (release.*), not a BuiltinToolDeps field.
         webSearch: this.ownedModelServices.getWebSearchProvider(),
       };
 
@@ -3967,7 +3952,6 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The ChatSession's `prepareTurn` port; the loop has already opened the run row and lease. */
   protected async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
     this._turnItem = item;
-    this._turnProgram = null;
 
     // Clear the previous turn's profile before anything reads a mode: `turnWorkMode()` prefers the
     // bound profile, and the tool build below is the first reader.
@@ -4158,9 +4142,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const extensionToolNames = Object.keys(extensionTools);
     const availableAgentActions = actorAgentsActions(turnActorDeps);
-    // `release` / `agent` / `llm` are reachable only inside `eval`, so they must be listed here or
+    // `agent` / `llm` are reachable only inside `eval`, so they must be listed here or
     // the role intersection drops them; derived from providers wired for this mode.
-    const turnCodemodeProviders = this.turnCodemodeProviders(requestedWorkMode);
+    const turnCodemodeProviders = this.turnCodemodeProviders();
 
     const availableTools = [
       ...activeTools,

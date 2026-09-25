@@ -38,22 +38,15 @@ async function workspace(harness: TestUserDO, name: string): Promise<UserCaller>
 }
 
 describe('the pushed tile', () => {
-  test("rides its roster entry, with the owner's pending release approvals among its decisions", async () => {
+  test('rides its roster entry, and a waiting decision files it under needs', async () => {
     const harness = createTestUserDO({ durableObjectId: USER_ID });
     const owner = await testOwner();
     const ledger = await workspace(harness, 'ledger');
     await harness.userDO.putWorkspaceOverview(ledger, 'ledger', { ...QUIET, decisionsWaiting: 1 });
 
-    const source = await harness.userDO.upsertReleaseSource(owner, { kind: 'github', label: 'o/r', repoUrl: 'https://github.com/o/r' });
-    const change = await harness.userDO.createReleaseChange(owner, 'ledger', { bindingId: source.id, userPrompt: 'ship it' });
-    const approval = await harness.userDO.requestReleaseApproval(owner, change.id, 'rollback');
-
     const [entry] = (await harness.userDO.listWorkspaces(owner)).entries;
-    expect(entry?.overview).toMatchObject({ activity: 'idle', decisionsWaiting: 2 });
+    expect(entry?.overview).toMatchObject({ activity: 'idle', decisionsWaiting: 1 });
     expect((await harness.userDO.listWorkspaces(owner, { bucket: 'needs' })).entries.map((each) => each.name)).toEqual(['ledger']);
-
-    await harness.userDO.decideReleaseApproval(owner, { approvalId: approval.id, decision: 'approved', approvedBy: USER_ID });
-    expect((await harness.userDO.listWorkspaces(owner)).entries[0]?.overview?.decisionsWaiting).toBe(1);
     harness.close();
   });
 

@@ -1,16 +1,16 @@
 /**
- * FIRST RUN: the Changes, Supervise and Releases panes read a workspace that
+ * FIRST RUN: the Changes and Supervise panes read a workspace that
  * just did one piece of work.
  *
  * THE ASK. Every user-facing surface has a deployed row. After one turn that
  * writes one file, the Changes pane shows the file against the review baseline
  * and forgets it once the baseline is reset; the Supervise page lists the turn
- * among the workspace's runs and reads its triggers; the Releases pane reads
- * the workspace's release board. Each through the RPC its pane calls.
+ * among the workspace's runs and reads its triggers. Each through the RPC its
+ * pane calls.
  *
  * WHY NO OTHER ROW GUARDS THIS. The rows that write files read them back
  * through the Files pane and the ledger; none asked the review baseline what
- * changed, the run list what ran, or the release board anything.
+ * changed or the run list what ran.
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
@@ -47,10 +47,6 @@ const DiffSchema = v.looseObject({ files: v.array(v.looseObject({ path: v.string
 const RunsSchema = v.looseObject({ items: v.array(v.looseObject({ runId: v.string(), status: v.nullable(v.string()) })) });
 
 const TriggersSchema = v.object({ triggers: v.array(v.unknown()) });
-
-const BoardSchema = v.looseObject({
-  bindings: v.array(v.unknown()), changes: v.array(v.unknown()), checks: v.array(v.unknown()), approvals: v.array(v.unknown()),
-});
 
 /** One RPC as its pane calls it, parsed as the pane parses it. */
 async function read<S extends v.GenericSchema>(
@@ -117,10 +113,6 @@ describe(SUITE, () => {
           const triggers = await read(socket, TriggersSchema, 'listTriggers', []);
 
           subgoals.push({ what: 'triggers-read', reached: triggers.value !== null, detail: triggers.detail });
-
-          const board = await read(socket, BoardSchema, 'getReleaseBoard', []);
-
-          subgoals.push({ what: 'release-board-read', reached: board.value !== null, detail: board.detail });
 
           return subgoals;
         } finally {

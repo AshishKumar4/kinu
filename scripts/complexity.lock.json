@@ -11,7 +11,7 @@
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#mount",
-      "complexity": 60
+      "complexity": 58
     },
     {
       "key": "packages/core/src/mcts/engine.ts#runMCTS>fiber",
@@ -75,7 +75,7 @@
     },
     {
       "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
-      "complexity": 40
+      "complexity": 38
     },
     {
       "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
@@ -83,10 +83,6 @@
     },
     {
       "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
-      "complexity": 39
-    },
-    {
-      "key": "packages/core/src/release/tool.ts#runReleaseAction",
       "complexity": 39
     },
     {
@@ -135,10 +131,6 @@
     },
     {
       "key": "packages/cli/src/cc-transcript.ts#mineSession",
-      "complexity": 35
-    },
-    {
-      "key": "packages/core/src/release/engine.ts#ReleaseEngine.rollback",
       "complexity": 35
     },
     {
@@ -195,7 +187,7 @@
     },
     {
       "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
-      "complexity": 32
+      "complexity": 30
     },
     {
       "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
@@ -235,7 +227,7 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#WorkSurface",
-      "complexity": 31
+      "complexity": 30
     },
     {
       "key": "packages/cf-backend/src/drive-design/DriveDesignPage.tsx#DriveDesignPage",
@@ -263,7 +255,7 @@
     },
     {
       "key": "packages/cli/src/commands/debug.ts#debugCommand",
-      "complexity": 31
+      "complexity": 30
     },
     {
       "key": "packages/core/src/chat.ts#runChat",

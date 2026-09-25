@@ -1,5 +1,4 @@
-/** Unit tests for the canonical tool surface. `skills` and `release` are not BuiltinToolDeps:
- *  release is reached only through the release.* codemode namespace. */
+/** Unit tests for the canonical tool surface. `skills` is not a BuiltinToolDeps field. */
 
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
@@ -12,8 +11,6 @@ import {
   buildBuiltinTools,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_DESCRIPTIONS,
-  createReleaseCodemodeProvider,
-  runReleaseAction,
   createMemoryCodemodeProvider,
   createReportCodemodeProvider,
   withApprovalGatedShell,
@@ -23,24 +20,14 @@ import {
   type CodemodeBuilder,
   type JsonValue,
   type MemoryToolInput,
-  type ReleaseApproval,
   type ReportToolDeps,
   type SubordinateReportHandoff,
-  type ReleaseCheck,
-  type ReleaseDeployment,
-  type ReleaseSource,
-  type ReleaseToolDeps,
   type TeamToolDeps,
   type AgentRuntime,
   TurnEscalationLedger,
 } from '../src/index';
 import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
-
-interface RecordedReleaseCheck {
-  changeId: string;
-  input: Parameters<ReleaseToolDeps['recordCheck']>[1];
-}
 
 interface CircularValue {
   self?: CircularValue;
@@ -327,137 +314,6 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
     expect(schema.jsonSchema.properties.action.enum).toEqual(['save', 'search', 'conversations']);
     expect(t.memory.description).not.toContain('remember');
-  });
-
-  // An engine earns apply/run_checks/preview/deploy/rollback and refuses the record_* twins;
-  // without one, record_* is the only way the ledger learns what the agent ran.
-  const releaseChange = {
-    id: 'chg-1', agentName: 'jarvis', bindingId: 'src-1', status: 'draft' as const,
-    userPrompt: 'ship it', plan: null, summary: null, patch: null, previewUrl: null,
-    createdAt: 1, updatedAt: 1,
-  };
-
-  const releaseSource: ReleaseSource = {
-    id: 'src-1', kind: 'local', label: 'workspace', repoUrl: null,
-    defaultBranch: null, localDeviceId: null, localRoot: '/workspace',
-    deployTarget: null, createdAt: 1, updatedAt: 1,
-  };
-
-  const releaseCheck: ReleaseCheck = {
-    id: 'chk-1', changeId: 'chg-1', name: 'tests', status: 'passed',
-    stdout: null, stderr: null, durationMs: null, createdAt: 1, updatedAt: 1,
-  };
-
-  const releaseApproval: ReleaseApproval = {
-    id: 'approval-1', changeId: 'chg-1', approvalType: 'apply', decision: 'pending',
-    approvedBy: null, note: null, argumentDigest: 'digest', createdAt: 1, decidedAt: null,
-  };
-
-  const releaseDeployment: ReleaseDeployment = {
-    id: 'deployment-1', changeId: 'chg-1', environment: 'local',
-    workerVersionId: null, deploymentId: null, rollbackTarget: null, deployedAt: 1,
-  };
-
-  const releaseLedgerDeps: ReleaseToolDeps = {
-    board: async () => ({ bindings: [], changes: [], checks: [], approvals: [], deployments: [] }),
-    bindSource: async () => releaseSource, create: async () => releaseChange,
-    update: async () => releaseChange, transition: async () => releaseChange,
-    recordCheck: async () => releaseCheck,
-    requestApproval: async () => releaseApproval,
-    recordDeployment: async () => releaseDeployment,
-  };
-
-  test('with an execution engine, release.* offers only what execution earns', () => {
-    const deps: ReleaseToolDeps = {
-      ...releaseLedgerDeps,
-      engine: {
-        apply: async () => ({ ok: true, workdir: '/workspace', commit: 'abc1234', status: 'patching' }),
-        runChecks: async () => ({ ok: true, allPassed: true, results: [], status: 'preview_ready' }),
-        preview: async () => ({ ok: true, url: 'https://preview.example.com' }),
-        deploy: async () => ({
-          ok: true, environment: 'local', workerVersionId: null, deploymentId: null,
-          rollbackTarget: null, status: 'deployed',
-        }),
-        rollback: async () => ({ ok: true, restored: 'abc1234', verified: true, status: 'rolled_back' }),
-      },
-    };
-
-    const provider = createReleaseCodemodeProvider(() => deps);
-    expect(Object.keys(provider.tools).sort()).toEqual([
-      'apply', 'bindSource', 'board', 'create', 'deploy', 'preview',
-      'requestApproval', 'rollback', 'runChecks', 'transition', 'update',
-    ]);
-    // The record_* twins belong to the no-engine half only.
-    expect(provider.tools.recordCheck).toBeUndefined();
-    expect(provider.tools.recordDeployment).toBeUndefined();
-    expect(provider.types).toContain('apply(changeId: string)');
-    expect(provider.types).not.toContain('recordCheck(');
-  });
-
-  test('without an execution engine, release.* is the ledger, and the record_* twins are how it learns what ran', () => {
-    const provider = createReleaseCodemodeProvider(() => releaseLedgerDeps);
-    expect(Object.keys(provider.tools).sort()).toEqual([
-      'bindSource', 'board', 'create', 'recordCheck', 'recordDeployment',
-      'requestApproval', 'transition', 'update',
-    ]);
-    expect(provider.tools.apply).toBeUndefined();
-    expect(provider.tools.runChecks).toBeUndefined();
-    expect(provider.types).toContain('recordCheck(');
-    expect(provider.types).not.toContain('apply(');
-  });
-
-  test('release.* members dispatch through the SAME runReleaseAction the provider is built on', async () => {
-    const recorded: RecordedReleaseCheck[] = [];
-
-    const deps: ReleaseToolDeps = {
-      ...releaseLedgerDeps,
-      recordCheck: async (changeId, input) => {
-        recorded.push({ changeId, input });
-
-        return releaseCheck;
-      },
-    };
-
-    const provider = createReleaseCodemodeProvider(() => deps);
-
-    const result = await codemodeExecute(provider, 'recordCheck')(
-      'chg-1',
-      { name: 'tests', status: 'passed' },
-    );
-
-    expect(result).toEqual(releaseCheck);
-    expect(recorded).toEqual([{ changeId: 'chg-1', input: { name: 'tests', status: 'passed' } }]);
-    await expect(runReleaseAction(deps, { action: 'apply' }))
-      .rejects.toMatchObject({ code: 'unsupported', message: expect.stringContaining('execution engine') });
-  });
-
-  test('with an engine, record_check is refused as an assertion — run_checks earns it', async () => {
-    let called = 0;
-
-    const deps: ReleaseToolDeps = {
-      ...releaseLedgerDeps,
-      recordCheck: async () => {
-        called += 1;
-
-        return releaseCheck;
-      },
-      engine: {
-        apply: async () => ({ ok: true, workdir: '/workspace', commit: 'abc1234', status: 'patching' }),
-        runChecks: async () => ({ ok: true, allPassed: true, results: [], status: 'preview_ready' }),
-        preview: async () => ({ ok: true, url: 'https://preview.example.com' }),
-        deploy: async () => ({
-          ok: true, environment: 'local', workerVersionId: null, deploymentId: null,
-          rollbackTarget: null, status: 'deployed',
-        }),
-        rollback: async () => ({ ok: true, restored: 'abc1234', verified: true, status: 'rolled_back' }),
-      },
-    };
-
-    await expect(runReleaseAction(deps, {
-      action: 'record_check', changeId: 'chg-1', check: { name: 'tests', status: 'passed' },
-    })).rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('action=run_checks') });
-
-    expect(called).toBe(0);
   });
 
   // memory.* / tasks.* / report.* codemode share the native tool's dispatcher.
@@ -756,10 +612,9 @@ describe('a role narrows the sandbox as well as the tool list', () => {
 
   test('the codemode-only capabilities a role may name are the ones actually wired', () => {
     // A role's list is intersected with the surface the backend declares.
-    expect(codemodeCapabilitiesFor([{ name: 'release' }, { name: 'agent' }])).toEqual(['release', 'agent']);
+    expect(codemodeCapabilitiesFor([{ name: 'db' }, { name: 'agent' }])).toEqual(['agent', 'db']);
     expect(codemodeCapabilitiesFor([{ name: 'agents' }, { name: 'workspace' }])).toEqual(['slate']);
     expect(codemodeCapabilitiesFor([])).toEqual([]);
-    // Plan mode filters `release` out of its provider list.
     expect(codemodeCapabilitiesFor([{ name: 'agent' }, { name: 'web' }])).toEqual(['agent']);
   });
 
@@ -775,8 +630,8 @@ describe('a role narrows the sandbox as well as the tool list', () => {
   });
 
   test('a named codemode-only capability keeps its namespace', () => {
-    expect(narrowToolSurface(['eval', 'release']).allowsNamespace('release')).toBe(true);
-    expect(narrowToolSurface(['eval']).allowsNamespace('release')).toBe(false);
+    expect(narrowToolSurface(['eval', 'db']).allowsNamespace('db')).toBe(true);
+    expect(narrowToolSurface(['eval']).allowsNamespace('db')).toBe(false);
   });
 
   const provider = (name: string, member: string, answer: string): CodemodeProvider => ({

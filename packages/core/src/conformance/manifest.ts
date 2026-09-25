@@ -72,12 +72,6 @@ const LAZY_ON_FIRST_USE = (what: string): CapabilityStatus => ({ lazy: `created 
 
 const NO_LOCAL_INGRESS = 'a local workspace has no inbound HTTP transport, and `kinu triggers <name> webhook` refuses a local target';
 
-const RELEASE_TABLE = {
-  'cf-orchestrator': { absent: "the release board lives in the owner's UserDO on cf, not on the workspace DO" },
-  'cf-subordinate': { absent: "the release board lives in the owner's UserDO on cf, not on the workspace DO" },
-  cli: WIRED,
-} satisfies RootStatuses;
-
 export const BACKEND_CONFORMANCE: ConformanceManifest = {
   tool: {
     eval: EVERYWHERE,
@@ -274,13 +268,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // The `db` catalogue only; `app_<name>` tables stay undeclared so the
     // undeclared-table signal still covers them.
     agent_data_tables: EVERYWHERE,
-
-    // On cf these live in the owner's UserDO (user-do.ts initReleaseTables).
-    release_sources: RELEASE_TABLE,
-    release_changes: RELEASE_TABLE,
-    release_checks: RELEASE_TABLE,
-    release_approvals: RELEASE_TABLE,
-    release_deployments: RELEASE_TABLE,
 
     kinu_workspace_generation: NIMBUS_BASE,
     // The set NimbusWorkspace.destroy() drops; additions signal a storage contract change.

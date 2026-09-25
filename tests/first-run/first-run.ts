@@ -487,11 +487,11 @@ export const FIRST_RUN_DEFECTS = {
   },
   'workspace-panes': {
     id: 'workspace-panes',
-    found: 'The Diffs, Supervise and Releases panes read a workspace\'s review baseline, run list, '
-      + 'triggers and release board, and no deployed row asked any of them anything.',
+    found: 'The Diffs and Supervise panes read a workspace\'s review baseline, run list and '
+      + 'triggers, and no deployed row asked any of them anything.',
     missedBecause: 'the rows that write files read them back through the Files pane and the ledger, so a '
-      + 'baseline that stopped seeing a write, a run list that lost a settled turn or a board '
-      + 'that stopped answering passed them all.',
+      + 'baseline that stopped seeing a write or a run list that lost a settled turn '
+      + 'passed them all.',
     provedRedAt: null,
     redDirection: 'Planted on a loopback `vite dev` build of this tree: a review diff that reports no files '
       + 'leaves `diff-shows-the-write` missed.',

@@ -38,8 +38,6 @@ export interface ForkNode {
 export interface TabPresence {
 	/** Plans, tasks (retained history counts), pending actions, jobs, changes, or notes. */
 	work: boolean;
-	/** At least one change. */
-	releases: boolean;
 	explorations: boolean;
 }
 
@@ -120,78 +118,6 @@ export interface BackgroundJob {
 	resumeAttempts?: number;
 	/** When the next attempt may start; null while nothing is owed, including during a running attempt. */
 	resumeAfter?: number | null;
-}
-
-export type ReleaseStatus =
-	| "draft" | "planning" | "patching" | "validating" | "preview_ready" | "awaiting_approval"
-	| "applying" | "deployed" | "rejected" | "rolled_back" | "failed";
-
-export interface ReleaseSource {
-	id: string;
-	kind: "local" | "github";
-	label: string;
-	repoUrl: string | null;
-	defaultBranch: string | null;
-	localDeviceId: string | null;
-	localRoot: string | null;
-	deployTarget: string | null;
-	createdAt: number;
-	updatedAt: number;
-}
-
-export interface ReleaseChange {
-	id: string;
-	agentName: string;
-	bindingId: string;
-	status: ReleaseStatus;
-	userPrompt: string;
-	plan: string | null;
-	summary: string | null;
-	patch: string | null;
-	previewUrl: string | null;
-	createdAt: number;
-	updatedAt: number;
-}
-
-export interface ReleaseCheck {
-	id: string;
-	changeId: string;
-	name: string;
-	status: "pending" | "running" | "passed" | "failed" | "skipped";
-	stdout: string | null;
-	stderr: string | null;
-	durationMs: number | null;
-	createdAt: number;
-	updatedAt: number;
-}
-
-export interface ReleaseApproval {
-	id: string;
-	changeId: string;
-	approvalType: "apply" | "deploy_staging" | "deploy_production" | "rollback";
-	decision: "pending" | "approved" | "rejected";
-	approvedBy: string | null;
-	note: string | null;
-	createdAt: number;
-	decidedAt: number | null;
-}
-
-export interface ReleaseDeployment {
-	id: string;
-	changeId: string;
-	environment: "local" | "staging" | "production";
-	workerVersionId: string | null;
-	deploymentId: string | null;
-	rollbackTarget: string | null;
-	deployedAt: number;
-}
-
-export interface ReleaseBoard {
-	bindings: ReleaseSource[];
-	changes: ReleaseChange[];
-	checks: ReleaseCheck[];
-	approvals: ReleaseApproval[];
-	deployments: ReleaseDeployment[];
 }
 
 /** A pending device request (method `connect` asks for a device to exist); `always` is the per-workspace binding. */

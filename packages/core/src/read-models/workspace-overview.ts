@@ -72,7 +72,6 @@ type QueueEffect = 'decision' | 'update' | 'ignore';
 
 function pendingActionEffect(kind: PendingActionKind, scaffoldAutoApply: boolean): QueueEffect {
   switch (kind) {
-    case 'release_approval':
     case 'deferred_action':
       return 'decision';
     case 'unseen_changes':

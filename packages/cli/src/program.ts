@@ -27,7 +27,6 @@ import {
   headsCommand,
   mctsCommand,
   memoryCommand,
-  releaseCommand,
   actorsCommand,
   stateCommand,
   spendCommand,
@@ -431,14 +430,6 @@ export function buildProgram(): Command {
     .action(wrapAction(labelCommand));
 
   program
-    .command('release <name>')
-    .helpGroup(INSPECT)
-    .description('Show a workspace\'s release board: sources, changes, checks, approvals and deployments')
-    .option('--limit <n>', 'Change limit')
-    .option('--json', 'Print raw JSON')
-    .action(wrapAction(releaseCommand));
-
-  program
     .command('connect')
     .helpGroup(THIS_COMPUTER)
     .description('Connect this computer so your agents can run commands on it')
@@ -539,7 +530,6 @@ const COMMAND_EXAMPLES: ReadonlyArray<readonly [string, string]> = [
   ['gepa', 'kinu gepa jarvis --run --iterations 3'],
   ['alignment', 'kinu alignment jarvis'],
   ['label', 'kinu label export jarvis --size 20'],
-  ['release', 'kinu release jarvis'],
   ['connect', 'kinu connect --label studio'],
   ['desktop', 'kinu desktop status'],
   ['daemon', 'kinu daemon tick jarvis'],

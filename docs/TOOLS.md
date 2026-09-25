@@ -12,7 +12,7 @@ their surface. Crafted tools are called as `tools.<name>(args)` inside `eval`.
 
 | Tool | Purpose |
 |------|---------|
-| `eval` | The codemode sandbox. The model writes JavaScript against `workspace.*`, `agents.*`, `memory.*`, `tasks.*`, `report.*`, `release.*`, `web.*`, `agent.*`, `db.*`, `state.*`, and `tools.<name>` |
+| `eval` | The codemode sandbox. The model writes JavaScript against `workspace.*`, `agents.*`, `memory.*`, `tasks.*`, `report.*`, `web.*`, `agent.*`, `db.*`, `state.*`, and `tools.<name>` |
 | `shell` | One shell command in one selected runtime |
 | `file` | The file plane, over the same workspace filesystem every other surface addresses: `read`, `write`, `edit`, `list`, `stat`, `search` |
 | `agents` | Delegation: `swarm \| hire \| msg \| list \| dismiss` |
@@ -34,10 +34,10 @@ eval:    { native: true,  codemode: null,        replay: 'claimed' } // native o
 shell:   { native: true,  codemode: 'workspace', replay: 'claimed' } // native, plus a namespace it does not own
 web:     { native: true,  codemode: 'web',       replay: 'safe' }    // both surfaces
 report:  { native: true,  codemode: 'report',    replay: 'claimed' } // both surfaces
-release: { native: false, codemode: 'release',   replay: 'claimed' } // codemode only
+db:      { native: false, codemode: 'db',        replay: 'claimed' } // codemode only
 ```
 
-The codemode-only rows are `release`, `agent`, `db`, and `slate` (which reaches
+The codemode-only rows are `agent`, `db`, and `slate` (which reaches
 `workspace`). `codemode` is a namespace name, not a boolean. `shell`, `file`,
 and `slate` use the shared `workspace` namespace, so they own none. A
 capability owns a namespace when `codemode` equals its key. `replay` is `safe`
@@ -60,14 +60,12 @@ guess would have shown it as codemode-only.
 `packages/core/tests/unit-tool-reach.test.ts` pins the eight names and checks
 that every declared namespace has a real factory.
 
-`skills` and `release` are not on the standing list. Every skill loads from the
+`skills` is not on the standing list. Every skill loads from the
 read-only `/skills` view as `/skills/<name>/SKILL.md` (`skills/view.ts`): a
 built-in from its source, any other name from the workspace's
 `/home/user/skills/` or the owner's `/shared/skills/`, by the one precedence in
 `skills/discover.ts`. The prompt lists them through `renderSkillsIndexSection`;
 only a user's `/name` or an operator pin loads a body at turn start.
-`release.*` keeps its `runReleaseAction` dispatcher, engine-presence gate, and
-ledger.
 
 | Call | What it makes |
 | --- | --- |
@@ -84,7 +82,7 @@ and dispatchers with mixed actions check each parsed action. An unclassified
 operation is unavailable in Plan. Build keeps every capability.
 
 In Plan, native `file` read/list/stat/search and declared provider reads stay
-usable. Write and edit, process/package/port operations, releases, and authored
+usable. Write and edit, process/package/port operations and authored
 slate execution need Build. Slate `list` and `history` are inspection;
 `commit`, `fork`, `restore`, `preview`, and `call` are not. A Build preview that
 already runs keeps the authority it was started with. Research memory, task and
@@ -358,7 +356,6 @@ and is the UI's fork-chat.
 | `memory.*` | `save`, `search`, `conversations`, and (when a FactsStore is wired) `remember`/`recall`/`forget` | `createMemoryDispatcher` (`tools/memory-tool.ts`) |
 | `tasks.*` | `add`, `update`, `list`, `mode` | `createTasksDispatcher` over the same `TaskListStore` instance (`tools/tasks-tool.ts`) |
 | `report.*` | `send(status, content, handoff?)` | the native `report` tool's `ReportToolDeps.report` |
-| `release.*` | `board`/`bindSource`/`create`/`update`/`transition`/`requestApproval`, plus `apply`/`runChecks`/`preview`/`deploy`/`rollback` (engine backends) or `recordCheck`/`recordDeployment` (ledger-only backends) | `runReleaseAction` (`release/tool.ts`); release has no native tool, so this is its only reach |
 
 These project onto their native dispatchers. `memory.*` and `tasks.*` are always
 present. `report.*` is subordinate-only.
@@ -520,8 +517,8 @@ if it would retire every tool. Surviving tools are called as
 
 ## Why eight tools
 
-Eight standing choices matter more than a short description. `skills` and
-`release` stay reachable through `workspace.*` and `release.*`. Filesystem work
+Eight standing choices matter more than a short description. `skills` stays
+reachable through `workspace.*`. Filesystem work
 uses `file` or `eval`. Delegation uses `agents`. No shell command replaces
 `agents` or the exact-match checks in `file`.
 
@@ -536,16 +533,12 @@ Declared codemode `types`, measured 2026-08-19:
 
 | namespace | members | chars | tokens at chars/4 |
 |---|---:|---:|---:|
-| `release.*` (engine backend) | 11 | 2,000 | 500 |
-| `release.*` (ledger-only backend) | 8 | 1,728 | 432 |
 | `memory.*` (with a FactsStore) | 6 | 1,118 | 280 |
 | `memory.*` (notes only) | 3 | 628 | 157 |
 | `tasks.*` | 4 | 988 | 247 |
 | `report.*` | 1 | 382 | 96 |
 
-`release.*` exceeds the retired native `release` tool's 704-character flat
-schema because member JSDoc costs more than an action enum. That 704 is
-history and cannot be measured again. `memory.*`, `tasks.*`, and `report.*` add
+`memory.*`, `tasks.*`, and `report.*` add
 to the native text. Crafted tools keep the top-level total flat.
 
 `tasks` stays separate from `memory`: memory is for later retrieval, tasks hold
