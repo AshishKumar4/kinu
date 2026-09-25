@@ -2,17 +2,20 @@
 // durable outcome as `bad_input`. Before, the SDK was handed an unvalidated JSON literal and every tool re-parsed alone.
 import { describe, expect, test } from 'bun:test';
 import { scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
-import { createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestRuntime, toolExecute } from '@kinu.run/test-utils';
 import { runChat, UNBOUNDED_STEPS, type ChatEvent } from '../src/index';
 import { createFileTool } from '../src/tools/file-tool';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 import { createTasksCodemodeProvider } from '../src/tools/tasks-codemode';
 import { createReportCodemodeProvider } from '../src/delegation/report-codemode';
-import type { ReportToolDeps } from '../src/tools/builtins';
+import { buildBuiltinTools, type ReportToolDeps } from '../src/tools/builtins';
 import { initAllTables, initTaskListTable, TaskListStore } from '../src/index';
 import type { VFS } from '../src/types/primitives';
-import type { JsonObject } from '../src/utils/json';
+import type { JsonObject, JsonValue } from '../src/utils/json';
+import type { FactsStore } from '../src/memory/facts';
+import type { PlanEdit, SubmitPlanToolDeps } from '../src/types/plans';
+import { storesFor } from './helpers';
 
 const USAGE = {
   inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
@@ -105,10 +108,7 @@ describe('a tool call the schema refuses', () => {
 
 describe('a program calling a namespace with a value the tool\'s schema refuses', () => {
   test('is refused as bad input by the same schema, and the store is untouched', async () => {
-    const { rt, testSql } = createTestRuntime();
-    initAllTables(testSql.execRaw, testSql.sql);
-    initTaskListTable(testSql.execRaw);
-    const tasks = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync);
+    const { rt, tasks } = taskWorld();
     const [task] = tasks.add(['ship it'], null, 1).added;
 
     if (task === undefined) throw new Error('the store added no task');
@@ -123,7 +123,16 @@ describe('a program calling a namespace with a value the tool\'s schema refuses'
   });
 });
 
-describe('a bound the schema only advertises', () => {
+/** A task list on a fresh runtime, and its store. */
+function taskWorld() {
+  const { rt, testSql } = createTestRuntime();
+  initAllTables(testSql.execRaw, testSql.sql);
+  initTaskListTable(testSql.execRaw);
+
+  return { rt, tasks: new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync) };
+}
+
+describe('a call base ran is still run', () => {
   test('does not refuse a call that ran before: a report longer than the advertised 20,000 characters is delivered', async () => {
     const delivered: string[] = [];
 
@@ -139,5 +148,53 @@ describe('a bound the schema only advertises', () => {
 
     expect(outcome).toEqual({ ok: true });
     expect(delivered.map((content) => content.length)).toEqual([20_001]);
+  });
+
+  test('a confidence given as a percentage is clamped and saved, as the facts store clamps it', async () => {
+    const saved: Array<number | undefined> = [];
+    const { rt } = createTestRuntime();
+
+    const facts: FactsStore = {
+      upsert: (_key, _value, opts) => {
+        saved.push(opts?.confidence);
+
+        return 'created';
+      },
+      recall: () => null, forget: () => {}, recentTopK: () => [], all: () => [],
+    };
+
+    const memory = toolExecute<{ action: string; key: string; value: string; confidence: number }, JsonValue>(
+      buildBuiltinTools({ rt, facts, history: storesFor(rt).history }).memory,
+    );
+
+    expect(await memory({ action: 'remember', key: 'deploy.target', value: 'production', confidence: 95 })).toMatchObject({ ok: true });
+    expect(saved).toEqual([1]);
+  });
+
+  test('a plan edit with a key it does not read, in a batch over 100, is submitted without it', async () => {
+    const received: Array<readonly PlanEdit[]> = [];
+    const { rt } = createTestRuntime();
+
+    const submit: SubmitPlanToolDeps['submit'] = (edits) => {
+      received.push(edits);
+
+      return { ok: false, error: 'recorded', plan: null };
+    };
+
+    const submitPlan = toolExecute<{ edits: Array<PlanEdit & { reason: string }> }, JsonValue>(
+      buildBuiltinTools({ rt, history: storesFor(rt).history, submitPlan: { submit } }).submit_plan,
+    );
+
+    await submitPlan({ edits: Array.from({ length: 101 }, (_, index) => ({ start: index + 1, content: 'x', reason: 'first' })) });
+
+    expect(received.map((edits) => [edits.length, edits[0]])).toEqual([[101, { start: 1, content: 'x' }]]);
+  });
+
+  test('tasks.mode(null) reads the active role, as no argument does', async () => {
+    const { rt, tasks } = taskWorld();
+    const provider = createTasksCodemodeProvider(tasks, rt.actor.config);
+
+    expect(await provider.tools.mode?.execute(null)).toEqual(await provider.tools.mode?.execute());
+    expect(await provider.tools.mode?.execute(null)).toMatchObject({ role: expect.any(String) });
   });
 });

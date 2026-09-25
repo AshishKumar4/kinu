@@ -72,7 +72,8 @@ export function createTasksCodemodeProvider(
         planAllowed: true,
         description: 'Switch your durable active role by id (applies from your next turn), or read the current role id with no argument.',
         execute: (...args: unknown[]) => branchableToolCall(async () => {
-          const role = parsed('tasks.mode(role)', TaskRoleSchema.safeParse(args[0]));
+          // `null` reads the role, as no argument does.
+          const role = parsed('tasks.mode(role)', TaskRoleSchema.safeParse(args[0] ?? undefined));
 
           return decodeJsonValue({ value: run({ action: 'mode', role }) });
         }),

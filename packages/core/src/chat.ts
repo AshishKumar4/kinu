@@ -43,7 +43,7 @@ import { callAccountOf, type CallAccount } from './providers/quota';
 import { classifyErrorCode, diagnostics, toKinuError } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
-import { invalidToolCallRefusal } from './tools/tool-schema';
+import { invalidToolCallRefusal, toolSchemaDialect, withToolSchemaDialect } from './tools/tool-schema';
 import { ToolOutcomeSchema } from './types/tool-outcome';
 
 export type ChatEvent =
@@ -543,6 +543,11 @@ function turnText(streamed: string, steps: readonly StepResult<ToolSet>[], answe
   return allText;
 }
 
+/** The serving model as `provider/model`, which the tool-schema dialect reads. */
+function dialectSpec(current: { readonly spec: string; readonly provider: string | undefined }): string {
+  return current.spec.includes('/') || current.provider === undefined ? current.spec : `${current.provider}/${current.spec}`;
+}
+
 /** One chat turn; callers append its response messages to history. A cut turn yields `done`, then throws
  *  {@link INTERRUPTED_TURN}; a dead provider stream throws without `done`. */
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
@@ -677,7 +682,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // Ours, not the vendor's default: see PROVIDER_SDK_RETRIES.
       maxRetries: PROVIDER_SDK_RETRIES,
       messages: [...request],
-      tools,
+      tools: withToolSchemaDialect(tools, toolSchemaDialect(dialectSpec(current))),
       ...offeredTools,
       stopWhen: [opts.stopWhen ?? UNBOUNDED_STEPS, () => call.stepFailure !== null],
       // Settled rewrites only (name case, fenced or double-encoded args); otherwise the model retries.
