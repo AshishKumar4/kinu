@@ -123,7 +123,8 @@ import { TierIdSchema,
   reasoningEffortOptions,
   BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
   changeRoleAsOwner, agentsProfileContext, canonicalConversationId,
-  resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile, currentOperationProfile,
+  resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile, currentOperationProfile, parentReasoningEffort,
+  type PinnedProfile,
   buildModelCallEvent,
   applyWorkspaceTitle, persistAutoTitle, planWorkspaceTitle, suggestWorkspaceTitle,
   type WorkspaceTitleState,
@@ -330,6 +331,8 @@ export interface LocalAgentSessionOpts {
   cwd?: string;
   /** The workspace title, on a subagent session; a child's config holds only its own title. */
   workspaceTitle?: () => string | null;
+  /** A subagent session's ancestors, nearest first and ending at the root: its turns take their effort. */
+  ancestors?: () => readonly PinnedProfile[];
   /** Background cutoff and teardown wait (BACKGROUND_POLICY). Default: interactive. */
   backgroundPolicy?: BackgroundPolicy;
   /** Times the teardown grace. Default: the wall clock. */
@@ -470,6 +473,7 @@ export class LocalAgentSession {
   /** The raw handle, for the transactions the SqlExecutor port cannot express. */
   private readonly db: LocalSessionDb;
   private readonly workspaceTitleSource: (() => string | null) | null;
+  private readonly ancestors: (() => readonly PinnedProfile[]) | undefined;
 
   constructor(opts: LocalAgentSessionOpts) {
     this.db = opts.db;
@@ -478,6 +482,7 @@ export class LocalAgentSession {
     this.oneShot = opts.oneShot === true;
     this.cwd = opts.cwd ?? this.rt.cwd ?? process.cwd();
     this.workspaceTitleSource = opts.workspaceTitle ?? null;
+    this.ancestors = opts.ancestors;
     this.fallbackModel = opts.model ?? null;
     this.modelResolver = opts.modelResolver?.withAccountChoice?.((provider) => this.accountChoice(provider))
       ?? opts.modelResolver ?? null;
@@ -1636,6 +1641,7 @@ export class LocalAgentSession {
       // Without this a setModel pin is accepted but never used.
       workspaceModel: this.config.getModel(),
       explicitEffort: this.config.getReasoningEffort(),
+      inheritedEffort: this.ancestors === undefined ? null : parentReasoningEffort(profileInputs, this.ancestors()),
     });
 
     this.actorSession.bindProfile(lease, profile, profileInputs);

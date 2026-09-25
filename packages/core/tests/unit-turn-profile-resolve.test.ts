@@ -5,8 +5,8 @@
 import { describe, expect, test } from 'bun:test';
 import {
   BUILTIN_ROLE_DEFINITIONS,
-  profileCatalogDigest, providerListingOf, providerSnapshotOf, resolveTurnProfile,
-  type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
+  parentReasoningEffort, profileCatalogDigest, providerListingOf, providerSnapshotOf, resolveTurnProfile,
+  type PinnedProfile, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
   type ResolveTurnProfileInput, type RoleDefinition, type TierAssignments,
 } from '../src/profiles';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../src/providers/workers-ai';
@@ -222,6 +222,45 @@ describe('declared reasoning efforts', () => {
     expect(profile.tier.reasoningEffort).toBe('xhigh');
     expect(profile.tier.fallbacks).toEqual([{ model: 'm-backup', reasoningEffort: 'high' }, { model: 'm-last', reasoningEffort: null }]);
     expect(profile.tiers.default.fallbacks).toEqual(profile.tier.fallbacks);
+  });
+});
+
+describe("a hire's effort", () => {
+  const tiers: TierAssignments = { ...TIERS, steady: { model: 'm-default', reasoningEffort: 'medium' } };
+  const roles = { steady: { ...SCOUT, tier: 'steady' } };
+
+  const authority = {
+    envelope: envelope(catalog({ roles, tiers })),
+    provider: { ...provider(['m-default', 'm-fast', 'm-small']), reasoningEfforts: {
+      'm-default': ['low', 'medium', 'high', 'xhigh'], 'm-small': ['low', 'medium', 'high'],
+    } } satisfies ProviderCatalogSnapshot,
+  };
+
+  const pinned = (role: string, pins: { readonly model?: string; readonly effort?: 'xhigh' } = {}): PinnedProfile => ({
+    getRoleSelection: () => role,
+    getAssignedTier: () => null,
+    getModel: () => pins.model ?? null,
+    getReasoningEffort: () => pins.effort ?? null,
+  });
+
+  const hire = (role: string, ancestors: readonly PinnedProfile[], model: string | null = null) => resolveTurnProfile({
+    ...authority, roleId: role, actorModel: model, inheritedEffort: parentReasoningEffort(authority, ancestors),
+    workMode: 'build', availableTools: [], activeSkills: [],
+  }).tier.reasoningEffort;
+
+  test('under an xhigh parent a tier with no effort runs at xhigh as its model takes it; a tier at medium keeps medium', () => {
+    const root = [pinned('task', { effort: 'xhigh' })];
+
+    expect(hire('task', root)).toBe('xhigh');
+    expect(hire('task', root, 'm-small')).toBe('high');
+    expect(hire('steady', root)).toBe('medium');
+  });
+
+  test("a hire's hire takes the effort its parent runs at, which that parent took from the root", () => {
+    const chain = [pinned('task'), pinned('task', { effort: 'xhigh' })];
+
+    expect(hire('task', chain)).toBe('xhigh');
+    expect(hire('task', [pinned('steady'), pinned('task', { effort: 'xhigh' })])).toBe('medium');
   });
 });
 

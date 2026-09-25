@@ -159,7 +159,7 @@ import {
   reasoningEffortOptions,
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
-  resolveAgentTurnProfile, resolveRoutingProfile,
+  resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, createAgentConfigStore, type PinnedProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
@@ -4490,12 +4490,27 @@ export abstract class ActorAgent extends Agent<Env> {
         activeSkills: [],
         explicitTier: input.explicitTier ?? config.getAssignedTier() ?? undefined,
         workspaceModel: this.config.getModel(),
-        // The actor's own pin and effort, written by its pane; else the workspace's.
+        // Set by its own pane.
         actorModel: config.getModel(),
-        explicitEffort: config.getReasoningEffort() ?? this.config.getReasoningEffort(),
+        explicitEffort: config.getReasoningEffort(),
+        inheritedEffort: parentReasoningEffort(inputs, this.ancestorProfiles(input.actor)),
       }),
       inputs,
     };
+  }
+
+  /** Ancestors' own pins, nearest first, up to the root. */
+  private ancestorProfiles(actor: ActorHandle): PinnedProfile[] {
+    const root = this.actorHandle().actorId;
+    const ancestors: PinnedProfile[] = [];
+
+    for (let id = actor.parentActorId; id !== null && id !== root; id = this.actorHost().describe(id)?.parentActorId ?? null) {
+      ancestors.push(createAgentConfigStore(this.boundSql, id, actor.assertCurrent));
+    }
+
+    ancestors.push(this.config);
+
+    return ancestors;
   }
 
   /**

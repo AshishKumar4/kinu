@@ -44,6 +44,7 @@ import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRunt
 import { createMemoryVfs, present, readTranscriptRows } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+import type { LocalModelResolver } from '../src/model-resolver';
 import { TestLanguageModelV2 } from './test-language-model';
 import { leaseHolder } from './driver-lease-probe';
 
@@ -349,6 +350,7 @@ interface TestHostExtras {
   wakeAt?: (at: number) => void;
   driverKind?: DriverKind;
   advisor?: boolean;
+  modelResolver?: LocalModelResolver;
 }
 
 function makeHost(
@@ -369,6 +371,8 @@ function makeHost(
       if (extras.advisor === true) rt.actor.config.setAdvisorEnabled(true);
       runtimes.set(ref.name, rt);
       const hosted: LocalHostedAgent = { rt, openConfig, staticModel: model };
+
+      if (extras.modelResolver) hosted.modelResolver = extras.modelResolver;
 
       return hosted;
     },
@@ -857,6 +861,54 @@ describe('LocalAgentHost', () => {
       view.close();
       expect(assignments.map((row) => row.body)).toEqual([brief]);
       expect(reports).toBe(1);
+    } finally {
+      await host.close();
+    }
+  });
+
+  test('a hire runs at the effort its parent runs at', async () => {
+    // Before, a local hire resolved only its own setting and ran at the default whatever `/effort` the owner set.
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const efforts: unknown[] = [];
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async (options) => {
+        efforts.push(options.providerOptions?.['openai']?.['reasoningEffort']);
+
+        return { stream: textStream('done', { inputTokens: 1, outputTokens: 1, totalTokens: 2 }), response: { headers: {} } };
+      },
+    });
+
+    // Every spec is an OpenAI model that takes any level, so a request carries the effort its turn resolved.
+    const modelResolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => spec?.trim() ?? 'openai/gpt-x',
+      resolveModel: () => model,
+      listProviders: async () => [],
+      listModels: async () => ({
+        models: [{ provider: 'openai', id: 'gpt-x', reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] }],
+        failures: [],
+      }),
+      modelInfo: async () => null,
+      judgeCandidates: async () => [],
+      getAuth: async () => null,
+      credentialFor: async () => null,
+      countInputTokens: async () => ({ kind: 'unsupported', provider: 'fake', reason: 'no endpoint behind the fake' }),
+    };
+
+    const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }], { modelResolver });
+
+    try {
+      (await host.acquire('root')).setReasoningEffort('xhigh');
+      const team = await host.team('root');
+      await team.create({ name: 'helper', role: 'task', mission: 'Help.' });
+      const answered = awaitTurns(host, 'root/helper', 1);
+      await team.assign({ name: 'helper', task: 'Say done.', mode: 'build' });
+      await answered;
+
+      expect(efforts).toEqual(['xhigh']);
     } finally {
       await host.close();
     }

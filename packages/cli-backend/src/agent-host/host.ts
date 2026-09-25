@@ -620,6 +620,7 @@ export class LocalAgentHost {
     // Read at prompt time: a rename or auto-title lands on the root.
     if (input.parentKey !== null) {
       sessionOpts.workspaceTitle = () => this.rootEntry(input.key).config.getDisplayName();
+      sessionOpts.ancestors = () => this.ancestorConfigs(input.key);
     }
 
     if (input.ws.modelResolver) sessionOpts.modelResolver = input.ws.modelResolver;
@@ -1183,6 +1184,18 @@ export class LocalAgentHost {
     while (entry.parentKey !== null) entry = this.requireEntry(entry.parentKey);
 
     return entry;
+  }
+
+  /** An entry's ancestors' configuration, nearest first, ending at its root. */
+  private ancestorConfigs(key: string): AgentConfigStore[] {
+    const ancestors: AgentConfigStore[] = [];
+
+    for (let entry = this.requireEntry(key); entry.parentKey !== null;) {
+      entry = this.requireEntry(entry.parentKey);
+      ancestors.push(entry.config);
+    }
+
+    return ancestors;
   }
 
   private async birthChild(

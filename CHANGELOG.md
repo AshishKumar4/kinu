@@ -817,6 +817,13 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   below it, or the lowest the model takes when none is below, and a model that takes no level (Claude Haiku 4.5) is
   sent none. Each fallback in a tier's chain gets the level as that fallback declares it, not the first model's.
 
+- **A hire runs at the effort its parent runs at.** In the CLI a hire ignored the `/effort` you set on its parent and
+  ran at its tier's effort or the default; on kinu.run a hire took the workspace's own setting, never a parent hire's,
+  and that setting overrode the effort its role's tier sets. A hire's effort is now its own setting, else its tier's,
+  else the effort its parent runs at, sent as a level its model takes. One order changes on kinu.run: for a hire, a
+  tier that sets an effort now beats the workspace's own setting, since the tier's effort is the choice made for
+  that role.
+
 - **An hour-long prompt-cache write is charged what Anthropic bills.** Anthropic bills a cache write kept an hour at
   twice the input rate. Spend, mission budgets and the Activity totals charged it at the five-minute rate and called
   the total a floor; they now charge the hour rate, and the floor note names only calls no rate priced.
