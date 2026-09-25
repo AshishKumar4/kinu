@@ -382,18 +382,12 @@ research record named above.
 
 ## Other instruments in the same family
 
-`bun run bench:r2-workspace` (`scripts/bench-r2-workspace.ts`) measures a
-workspace on R2 through FUSE against the container's own disk. It runs four
-layouts (`native`, `r2-uncached`, `r2-tuned`, `overlay`) over one deterministic
-workload, counts every operation at the R2 binding, and tears down in a
-`finally` on every exit path.
-
 `bun scripts/bench-devbox-strategies.ts` drives the real devbox lifecycle
 (attach, checkpoint, stop, wake) through `packages/devbox/bench`. It now
 measures one strategy, `snapshot-chain`, the only `DevboxStrategyName` left;
 the other arms in the verdicts below were removed on 2026-09-09 (`46c320bc1`).
-It inherits five rules from the layout benchmark, each learned from a failed
-run: prove the lifecycle first per arm, and refuse to rank an arm whose proof
+It keeps five rules from the retired R2 layout benchmark, each learned from a
+failed run: prove the lifecycle first per arm, and refuse to rank an arm whose proof
 fails; one box per arm; `/ops/flush` at every phase boundary; wake numbers
 come only from deployed runs; minute-scale work runs as a polled process, not a
 blocking exec.

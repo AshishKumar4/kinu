@@ -306,7 +306,7 @@ export function parseDeltaBlockHashes(
   return out;
 }
 
-export type DeltaBaseKind = 'file' | 'dir' | 'link' | 'other';
+type DeltaBaseKind = 'file' | 'dir' | 'link' | 'other';
 
 export interface DeltaBaseFact {
   readonly kind: DeltaBaseKind;
@@ -358,7 +358,7 @@ export function parseDeltaBaseStat(stdout: string, paths: readonly string[]): Ma
   return out;
 }
 
-export interface DeltaPlanInput {
+interface DeltaPlanInput {
   readonly probe: readonly DeltaProbeEntry[];
   /** Carried paths only, null when the base holds nothing there. */
   readonly baseFacts: ReadonlyMap<string, DeltaBaseFact | null>;
@@ -604,7 +604,7 @@ export function mergeDeltaPublication(plan: DeltaPlan, retained: DeltaManifest,
     links: [...links, ...next.links] }, chunks, indexes: mergedIndexes, retainedFiles };
 }
 
-export interface DeltaStageLayout {
+interface DeltaStageLayout {
   readonly upperDir: string;
   readonly pkgDir: string;
 }

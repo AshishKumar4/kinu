@@ -1023,13 +1023,6 @@
       "decision": "cli"
     },
     {
-      "file": "scripts/fixtures/fuse-probe/core.ts",
-      "kind": "hand-parser",
-      "owner": "decodeCapabilitiesV3",
-      "sourceSha256": "a14a9a99d4e404f657bb8820c51dd6ba5c11d2c024f287977f37b64bf89e5527",
-      "decision": "traversal"
-    },
-    {
       "file": "scripts/patch-parity.ts",
       "kind": "hand-parser",
       "owner": "parsePatch",
