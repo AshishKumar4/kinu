@@ -790,7 +790,6 @@ export {
   currentDateForPrompt,
   FALLBACK_PURPOSE,
   renderUnverifiedInstructions,
-  unverifiedInstructionsMessage,
   WORKSPACE_INSTRUCTIONS_HEADER,
   type UnverifiedInstructions,
   type AssignedTurnFraming,
@@ -800,6 +799,7 @@ export {
 export {
   splitPromptSections,
   DYNAMIC_CONTEXT_OPEN_TAG,
+  WORKSPACE_INSTRUCTIONS_TAG,
   SOUL_SECTION_TITLE,
   type PromptSection,
 } from './prompting/sections';
@@ -814,12 +814,12 @@ export {
   type ToolDefsLike,
 } from './context-meter';
 
-export { isWorkMode, WorkModeSchema, type TurnProvenance, type WorkMode } from './types/turn';
+export { isWorkMode, WorkModeSchema, type TurnReason, type WorkMode } from './types/turn';
 
 export {
   compilePromptSurface,
   executorIsSelectable,
-  turnProvenanceForMetadata,
+  turnReasonForMetadata,
   workModeForTurnMetadata,
   uniqueBuiltinTools,
   uniqueExternalTools,
@@ -870,10 +870,7 @@ export {
   searchDelegates,
   observeSystemPromptHash,
   renderDynamicContextBlock,
-  renderTurnLocalContext,
-  turnLocalContextMessage,
   DYNAMIC_CONTEXT_HEADER,
-  TURN_CONTEXT_HEADER,
   type DynamicApproval,
   type ActiveRoster,
   type DynamicContext,
@@ -881,7 +878,6 @@ export {
   type DynamicJob,
   type DynamicTask,
   type MissingCapability,
-  type TurnLocalContext,
 } from './prompting/volatile-context';
 
 export {
@@ -1124,14 +1120,13 @@ export {
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
   explainNativeToolReferenceError,
-  devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
   deviceToolchainAnswer, freshDeviceToolchain,
   connectedDevices, deviceByName, deviceFleetAsk,
   effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason,
   sandboxReasonFix, sandboxCause, describeGpuNodes,
-  DEVICE_PRESENCE_CONFIG_KEY, DEVICE_TOOLCHAIN_TTL_MS,
+  DEVICE_TOOLCHAIN_TTL_MS,
   DEVICE_TIERS, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS,
-  type DeviceStatus, type DevicePresence, type DevicePresenceStore,
+  type DeviceStatus,
   type DeviceToolchain, type DeviceFleet, type DeviceFleetEntry,
   type DeviceTier, type DeviceMode, type DeviceSandboxStatus,
   type DeviceSandboxCapability, type DeviceSandboxReason,

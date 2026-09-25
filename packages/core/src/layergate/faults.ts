@@ -94,12 +94,11 @@ export const FAULTS: readonly Fault[] = Object.freeze([
   {
     id: 'volatile-context/plane-regresses',
     layer: 'volatile-context',
-    patches: ['renderDynamicContextBlock', 'turnLocalContextMessage', 'DynamicContextLedger'],
-    models: 'the memory tail falls out of the dynamic-context block, the device notice falls out of the turn tail, and the ledger stops deduplicating',
+    patches: ['renderDynamicContextBlock', 'DynamicContextLedger'],
+    models: 'the memory tail falls out of the dynamic-context block and the ledger stops deduplicating',
     inject: (s) => ({
       ...s,
       renderDynamicContextBlock: (ctx) => s.renderDynamicContextBlock({ ...ctx, memoryTail: undefined }),
-      turnLocalContextMessage: (ctx) => s.turnLocalContextMessage({ ...ctx, deviceNotice: null }),
       DynamicContextLedger: UndedupedLedger,
     }),
   },
@@ -294,17 +293,6 @@ export const FAULTS: readonly Fault[] = Object.freeze([
       craftInvocationSites: (code, known) => known.filter((name) => code.includes(name)),
       craftInvocationError: (_name, cause) =>
         new Error(renderThrownChain({ cause: cause })),
-    }),
-  },
-  {
-    id: 'execution-signal/presence-overreports',
-    layer: 'execution-signal',
-    patches: ['devicePresence', 'deviceChangeNotice'],
-    models: 'a registered-but-offline device reports as connected and the reconnect notice stops firing',
-    inject: (s) => ({
-      ...s,
-      devicePresence: (status) => (status.registered ? 'connected' : s.devicePresence(status)),
-      deviceChangeNotice: (previous, current) => (current === 'connected' ? null : s.deviceChangeNotice(previous, current)),
     }),
   },
 ]);

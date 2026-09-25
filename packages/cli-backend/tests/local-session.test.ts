@@ -34,7 +34,7 @@ import {
   type EventVariant,
   createAgentSelfProvider, openWorkspaceMainActor, defaultLoopOrigin,
   InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER,
-  workspaceSkillPath, WORKSPACE_SKILLS_DIR, TURN_CONTEXT_HEADER, MergeOutputSchema, SWARM_PRESET_DOCTRINE,
+  workspaceSkillPath, WORKSPACE_SKILLS_DIR, MergeOutputSchema, SWARM_PRESET_DOCTRINE,
   createProviderRegistry, createModelsDevCatalogSource,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeExecRaw, makeSql, makeSqlExec, type CLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
@@ -702,7 +702,8 @@ describe('LocalAgentSession.send — a user turn', () => {
       },
     });
 
-    const { session, events } = setup('unused', model, { rt, db });
+    // No AGENTS.md over its directory: the turn's first step bears the block alone.
+    const { session, events } = setup('unused', model, { rt, db, cwd: scratchDir('local-session-stream-rows') });
     await session.send('say a lot', { id: crypto.randomUUID() });
     expect(openRows).toBe(1);
     const turnId = turnStarts(events)[0]?.turnId;
@@ -2292,7 +2293,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await session.send('/focused remember this', { id: crypto.randomUUID() });
 
     const users = prompt.filter((message) => message.role === 'user').map(messageText);
-    const activation = users.findIndex((text) => text.includes('## Skills activated this turn'));
+    const activation = users.findIndex((text) => text.includes('- focused: explicit /focused'));
 
     expect(activation).toBeGreaterThanOrEqual(0);
     expect(users.at(-1)).toContain('remember this');
@@ -3138,7 +3139,7 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
     await session.end();
   });
 
-  test('the sealed instruction block precedes the turn-local context block', async () => {
+  test('the sealed instructions go out once, before the block naming why each skill is on, and stay put', async () => {
     const root = scratchDir('local-session-agentsmd-order');
     const agentsPath = join(root, 'AGENTS.md');
     writeFileSync(agentsPath, 'Root: unapproved doctrine.');
@@ -3157,13 +3158,17 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
       .revoke(agentsPath);
     await writeFocusedSkill(rt);
     await session.send('/focused remember this', { id: crypto.randomUUID() });
+    const first = observed.map(messageText);
+    await session.send('/focused and this too', { id: crypto.randomUUID() });
+    const second = observed.map(messageText);
 
-    const texts = observed.map(messageText);
-    const sealed = texts.findIndex(isWorkspaceInstructions);
-    const turnLocal = texts.findIndex((t) => t.startsWith(TURN_CONTEXT_HEADER));
+    const sealed = first.findIndex(isWorkspaceInstructions);
     expect(sealed).toBeGreaterThan(-1);
-    expect(turnLocal).toBeGreaterThan(-1);
-    expect(sealed).toBeLessThan(turnLocal);
+    expect(first[sealed + 1]).toContain('- focused: explicit /focused');
+    expect(first.at(-1)).toContain('remember this');
+    // The next request opens with the whole first one, its copy of the instructions included.
+    expect(second.slice(0, first.length)).toEqual(first);
+    expect(second.filter(isWorkspaceInstructions)).toHaveLength(1);
     await session.end();
   });
 
@@ -3348,7 +3353,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     const third = present(prompts[2], 'the step after the steer landed');
     const roles = third.map((message) => message.role);
-    const activation = third.findIndex((message) => messageText(message).includes('## Skills activated this turn'));
+    const activation = third.findIndex((message) => messageText(message).includes('- focused: explicit /focused'));
     const landed = third.map((message) => message.role === 'user' ? messageText(message) : null).lastIndexOf('/focused remember this');
 
     expect(landed).toBeGreaterThan(roles.indexOf('tool'));
@@ -5448,14 +5453,14 @@ describe('LocalAgentSession — the one-shot completion gate', () => {
 
 // Asserted on the system prompt the model is actually handed (`systemCapturingModel`).
 describe('LocalAgentSession — provenance and durable roles reach the model', () => {
-  test('a background-job wake carries the resume guidance in its own turn, not in the prefix', async () => {
-    // jobs/runner.ts stamps both kinuEvent and kinuMode on the wake; the guidance must still reach the model, from the
-    // turn-local tier so a wake between chat turns leaves the cacheable prefix intact.
+  test('a background-job wake carries the resume guidance, naming its job, in the dynamic context, not in the prefix', async () => {
+    // jobs/runner.ts stamps kinuMode and the job beside the wake's kinuEvent; the guidance must still reach the model,
+    // from the dynamic context so a wake between chat turns leaves the cacheable prefix intact.
     let observed: PromptMessage[] = [];
     const { session } = setup('ok', historyCapturingModel('ok', (messages) => { observed = messages; }));
     await session.enqueueTurn({
       text: 'job bgjob-1 finished',
-      metadata: { kinuEvent: 'background_job', kinuMode: 'build' },
+      metadata: { kinuEvent: 'background_job', kinuMode: 'build', jobId: 'bgjob-1', kind: 'agents', status: 'completed' },
     });
 
     const system = observed
@@ -5463,10 +5468,11 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
       .map((message) => message.content)
       .join('\n');
 
-    const turnMessages = observed.filter((message) => message.role !== 'system').map(messageText).join('\n');
-    expect(system).not.toContain('the referenced job result first');
-    expect(system).not.toContain('Background-resume');
-    expect(turnMessages).toContain('the referenced job result first');
+    const turnMessages = observed.filter((message) => message.role !== 'system').map(messageText);
+    expect(system).not.toContain('Fetch its result first');
+    expect(system).not.toContain('## Why this turn runs');
+    expect(present(turnMessages.at(-2), 'the block before the wake')).toContain('a background job finished (job bgjob-1, agents, completed)');
+    expect(turnMessages.at(-1)).toBe('job bgjob-1 finished');
     await session.end();
   });
 

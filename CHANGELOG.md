@@ -20,6 +20,15 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- **A turn's own notes join the agent's live state.** Why a turn runs (a message, or a background job that
+  finished, now named) and why each active skill is on are sections of the dynamic context, and a machine that
+  connects shows as its devices row changing; the message that restated them before every turn's input and the
+  "your user's PC just connected" notice are gone. The unapproved workspace files (an AGENTS.md the owner has not
+  approved) keep their own message, apart from the state Kinu vouches for, but it goes out once, before the input
+  of the turn that first needs it, and again only when the files or their approval change. Each turn used to drop
+  the previous turn's copies and re-send them before its own input, so the provider re-read the whole previous turn:
+  in a scripted eight-turn conversation over an unapproved AGENTS.md, the eighth turn's first request now opens with
+  all 16 messages of the seventh's, up from 14.
 - **The agent's live state changes by row.** A change to one task, job, delegate, approval, fact or recovery
   re-sent that whole list in the step's state update, so on a 40-step turn with task churn each update (901 bytes)
   outweighed the full state it changed (729). An update now names only the rows that changed (`- t12 [active] …`,

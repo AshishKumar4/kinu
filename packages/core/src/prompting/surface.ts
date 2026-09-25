@@ -13,7 +13,7 @@ import {
   type PromptModelProfile,
 } from './model-profile';
 import * as v from 'valibot';
-import type { TurnProvenance, WorkMode } from '../types/turn';
+import type { TurnReason, WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 
 export type PromptBackend = 'cf' | 'cli-local' | 'cli-cloud';
@@ -23,6 +23,9 @@ const TurnMetadataSchema = v.object({
   kinuEvent: v.optional(v.unknown()),
 });
 
+/** A background job's wake (jobs/runner.ts). */
+const JobWakeSchema = v.object({ jobId: v.string(), kind: v.string(), status: v.string() });
+
 const ExternalToolSchema = v.object({
   name: v.string(),
   source: v.optional(v.picklist(['mcp', 'crafted', 'external'])),
@@ -30,17 +33,14 @@ const ExternalToolSchema = v.object({
 });
 
 
-/**
- * Why the turn is running, from `kinuEvent` metadata alone. The `kinuMode`
- * stamped beside it (never null for jobs) must not win, or the resume overlay
- * never renders. Shared by both backends.
- */
-export function turnProvenanceForMetadata(metadata: JsonObject | null | undefined): TurnProvenance {
+/** From `kinuEvent` metadata alone: the `kinuMode` stamped beside it (never null for jobs) must not win. */
+export function turnReasonForMetadata(metadata: JsonObject | null | undefined): TurnReason {
   const parsed = v.safeParse(TurnMetadataSchema, metadata);
 
-  if (!parsed.success) return 'chat';
+  if (!parsed.success || parsed.output.kinuEvent !== 'background_job') return { provenance: 'chat' };
+  const job = v.safeParse(JobWakeSchema, metadata);
 
-  return parsed.output.kinuEvent === 'background_job' ? 'background_resume' : 'chat';
+  return { provenance: 'background_resume', job: job.success ? `job ${job.output.jobId}, ${job.output.kind}, ${job.output.status}` : null };
 }
 
 /** Only an explicit, recognized `kinuMode` raises the Plan bar. Delegated children

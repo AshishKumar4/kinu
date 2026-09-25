@@ -9,19 +9,18 @@
  * measured pressure, removes any. Stored in the working context, they are re-woven while the provider's cache holds
  * them and collapse into one block once it does not. Nothing clock-derived may render.
  *
- * Turn-local state (skill activation reasons, device notice, provenance) is one user message right before the
- * turn's input, this turn only, never fingerprinted, so the request stays the last user-role content: news after
- * it reads as the turn itself.
+ * The unapproved workspace files ride the same ledger as their own message, apart from the block, which asserts
+ * runtime provenance: sent where first needed, again only when they change, collapsed with the blocks.
  */
 
 import type { ModelMessage } from 'ai';
 import { fnv1a64 } from '../utils/fnv1a';
 import { isDeepStrictEqual } from 'node:util';
 import {
-  DYNAMIC_CONTEXT_DELIMITER, DYNAMIC_CONTEXT_OPEN_TAG, sealDelimiters,
+  DYNAMIC_CONTEXT_DELIMITER, DYNAMIC_CONTEXT_OPEN_TAG, WORKSPACE_INSTRUCTIONS_TAG, sealDelimiters,
 } from './sections';
 import { executorIsSelectable, type PromptExecutorInfo } from './surface';
-import { type TurnProvenance, type WorkMode } from '../types/turn';
+import { type TurnReason, type WorkMode } from '../types/turn';
 import { EXECUTOR_CAPABILITIES } from '../execution/types';
 import {
   connectedDevices, describeGpuNodes, effectiveDeviceMode, sandboxCause,
@@ -31,6 +30,7 @@ import { deviceMountSegment } from '../execution/device-tunnel-executor';
 import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import type { ActiveSkillSet } from '../skills/types';
 import { describeActivationReason } from '../skills/render';
+import { compareSkillNames } from '../skills/discover';
 import type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
 import { renderCraftedToolsDeclaration, type CraftedDeclaration } from '../tools/sandbox-contract';
 
@@ -67,7 +67,11 @@ export interface ActiveRoster<T> {
 
 /** Callers order lists; the renderer caps them. */
 export interface DynamicContext {
+  /** Absent where a caller has no turn to name. */
+  turn?: TurnReason;
   mode?: { readonly workMode: WorkMode; readonly planSubmission: boolean };
+  /** Active skills and why each is on; their bodies render in the stable prefix. */
+  skills?: readonly { readonly name: string; readonly reason: string }[];
   /** Empty renders a "none yet" line: the model checks `workspace.listTools()` before building. */
   craftedTools?: readonly CraftedDeclaration[];
   factsBlock?: string;
@@ -117,7 +121,9 @@ function flattenTaskList(
 }
 
 export interface DynamicContextSources {
+  readonly turn?: TurnReason;
   readonly mode?: DynamicContext['mode'];
+  readonly activeSkills?: ActiveSkillSet;
   readonly craftedTools?: readonly CraftedDeclaration[];
   readonly factsBlock: string | undefined;
   /** Read once per turn (the plane's only await); callers close over it. */
@@ -145,6 +151,7 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   const headDelegates = searchDelegates(sources.liveHeadRuns.items);
 
   const context: DynamicContext = {
+    turn: sources.turn,
     mode: sources.mode,
     craftedTools: sources.craftedTools,
     // Re-listed per step: availability flips mid-turn.
@@ -166,6 +173,13 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
 
   if (sources.devices !== undefined && sources.devices.length > 0) context.devices = sources.devices;
 
+  if (sources.activeSkills !== undefined && sources.activeSkills.active.length > 0) {
+    const reasons = new Map(sources.activeSkills.reasons.map((r) => [r.name, r.reason]));
+
+    context.skills = sources.activeSkills.active.map((skill) => skill.name).sort(compareSkillNames)
+      .map((name) => ({ name, reason: describeActivationReason(reasons.get(name)) }));
+  }
+
   if (sources.approvals && sources.approvals.total > 0) context.approvals = sources.approvals;
 
   if (sources.factsBlock) context.factsBlock = sources.factsBlock;
@@ -179,14 +193,6 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   }
 
   return context;
-}
-
-export interface TurnLocalContext {
-  deviceNotice?: string | null;
-  /** Bodies render in the stable prefix; the per-turn activation reasons render here. */
-  activeSkills?: ActiveSkillSet;
-  /** An overlay out of the system prompt, as it flips when a background job lands; `chat` renders nothing. */
-  provenance?: TurnProvenance;
 }
 
 const CHANGED_ROWS = '(changed rows)';
@@ -203,15 +209,12 @@ export const DYNAMIC_CONTEXT_HEADER =
 
 const DYNAMIC_DELTA_HEADER = 'Kinu runtime state update, not conversation or user text.';
 
-export const TURN_CONTEXT_HEADER =
-  '[Turn context: live state maintained by the Kinu runtime, not written by the user.]';
+function renderTurnReason(turn: TurnReason): string {
+  if (turn.provenance === 'chat') return 'Chat: this turn answers the conversation\'s newest message.';
 
-/** Turn-local, not in OPERATING_GUIDANCE: a conditional bullet in the prefix rewrote
- * the whole cached prefix on every wake/chat transition. */
-const BACKGROUND_RESUME_NOTICE =
-  '## Why this turn is running\n'
-  + 'A background job finished; the user did not type anything. Fetch the referenced job result '
-  + 'first, synthesize it, then continue or close the original work.';
+  return `Background resume: a background job finished${turn.job === null ? '' : ` (${turn.job})`} and nobody typed `
+    + 'anything. Fetch its result first, synthesize it, then continue or close the work you backgrounded.';
+}
 
 /** Volatile, so rendered in the dynamic-context block, never the cacheable prefix. */
 export function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
@@ -408,7 +411,9 @@ function textSection(title: string, body: string): RenderedSection {
 const EMPTY_ROSTER: ActiveRoster<never> = { items: [], total: 0 };
 
 const DYNAMIC_SECTION_TITLES = {
+  turn: '## Why this turn runs',
   mode: '## Work mode',
+  skills: '## Active skills (why each is on)',
   craftedTools: '## Crafted tools available through eval',
   factsBlock: '## World model (facts you remembered)',
   memoryTail: '## Memory (newest MEMORY.md lessons and reflections)',
@@ -433,7 +438,15 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
     if (section !== null) sections.set(key, section);
   };
 
+  if (ctx.turn) add('turn', { text: `${DYNAMIC_SECTION_TITLES.turn}\n${renderTurnReason(ctx.turn)}` });
+
   if (ctx.mode) add('mode', { text: renderWorkMode(ctx.mode) });
+
+  add('skills', rosterSection(
+    DYNAMIC_SECTION_TITLES.skills, { items: ctx.skills ?? [], total: (ctx.skills ?? []).length },
+    { cap: Infinity, keyed: false },
+    (skill) => `- ${skill.name}: ${skill.reason}`,
+  ));
 
   if (ctx.craftedTools !== undefined) {
     add('craftedTools', { text: `${DYNAMIC_SECTION_TITLES.craftedTools}\n${ctx.craftedTools.length > 0
@@ -479,6 +492,7 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
     add('devices', { text: [
       DYNAMIC_SECTION_TITLES.devices,
       doctrine,
+      'A machine\'s first use in this workspace asks the user for consent: that prompt is expected, not an error.',
       ...fleet.map((device) => renderDeviceLine(device, fleet)),
     ].join('\n') });
   }
@@ -638,61 +652,23 @@ function renderWorkMode(mode: NonNullable<DynamicContext['mode']>): string {
   return `${DYNAMIC_SECTION_TITLES.mode}\nMode: ${mode.workMode}; submit_plan: ${mode.planSubmission ? 'available' : 'unavailable'}.`;
 }
 
-export function renderTurnLocalContext(ctx: TurnLocalContext): string | null {
-  const sections: string[] = [];
-
-  // First: it frames why the turn exists.
-  if (ctx.provenance === 'background_resume') sections.push(BACKGROUND_RESUME_NOTICE);
-
-  const reasons = ctx.activeSkills?.reasons ?? [];
-
-  if (reasons.length > 0) {
-    sections.push([
-      '## Skills activated this turn',
-      ...reasons.map((r) => `- ${r.name} (${describeActivationReason(r.reason)})`),
-    ].join('\n'));
-  }
-
-  const notice = ctx.deviceNotice?.trim();
-
-  if (notice) sections.push(notice);
-
-  if (sections.length === 0) return null;
-
-  return [TURN_CONTEXT_HEADER, ...sections].join('\n\n');
-}
-
-/** This turn's only, never persisted: placed past the transformContext seam, right before the turn's input. */
-export function turnLocalContextMessage(ctx: TurnLocalContext): ModelMessage | null {
-  const text = renderTurnLocalContext(ctx);
-
-  return text ? { role: 'user', content: text } : null;
-}
-
 /** The turn's input: its last message when a person or a parent wrote it, else the end. Only the last, as an
  *  earlier user message can be a parent's conversation a hire inherited, whose prefix stays intact. */
 export function turnInputStart(messages: ReadonlyArray<ModelMessage>): number {
   return messages.at(-1)?.role === 'user' ? messages.length - 1 : messages.length;
 }
 
-/** Turn-local messages and the un-woven index of the input they ride before. */
-export interface TurnLocalPlacement {
+/** The un-woven index of the turn's input; blocks born at its first step ride before it. */
+export interface TurnInput {
   readonly at: number;
-  readonly messages: readonly ModelMessage[];
-  readonly firstStep?: boolean | undefined;
-}
-
-export function placeTurnLocal(messages: ReadonlyArray<ModelMessage>, placement: TurnLocalPlacement): ModelMessage[] {
-  const at = Math.min(placement.at, messages.length);
-
-  return [...messages.slice(0, at), ...placement.messages, ...messages.slice(at)];
+  readonly firstStep: boolean;
 }
 
 interface LedgerBlock {
   /** Un-woven position at birth, kept forever; a slot since taken by a tool result renders after it. */
   readonly index: number;
   readonly text: string;
-  readonly kind: 'full' | 'delta';
+  readonly kind: 'full' | 'delta' | 'instructions';
   /** Chars/4 cost, priced once at birth for the step pruner and `dropSuperseded`. */
   readonly tokens: number;
   readonly message: ModelMessage;
@@ -737,12 +713,21 @@ function blockTag(text: string): { readonly kind: 'full' | 'delta'; readonly sta
   return kind === 'full' ? { kind, state: fingerprint } : { kind: 'delta', state };
 }
 
-/** `history` excludes the blocks and turn-local messages, so positions are durable history's. `reset()` when the
- *  durable stream is rewritten (compaction) or the provider's cache expired. */
+/** The copy that goes out once no unapproved file is left, so the earlier ones read as withdrawn. */
+const INSTRUCTIONS_WITHDRAWN = `<${WORKSPACE_INSTRUCTIONS_TAG}>\nNo unapproved workspace files remain: the copies above no longer apply.\n</${WORKSPACE_INSTRUCTIONS_TAG}>`;
+
+function blockKind(text: string): LedgerBlock['kind'] {
+  return text.startsWith(`<${WORKSPACE_INSTRUCTIONS_TAG}>`) ? 'instructions' : blockTag(text)?.kind ?? 'full';
+}
+
+/** `history` excludes the blocks and the instruction copies, so positions are durable history's. `reset()` when
+ *  the durable stream is rewritten (compaction) or the provider's cache expired. */
 export class DynamicContextLedger {
   private blocks: LedgerBlock[] = [];
   /** The state the model holds (a delta's `state`); sections once rendered here. */
   private told: { readonly state: string; readonly sections: ToldSections | null } | null = null;
+  /** The unapproved instructions the newest copy carries. */
+  private toldInstructions: string | null = null;
   private stored: readonly StoredDynamicBlock[] | null = null;
   private loaded: boolean;
   private unresolved: { readonly block: LedgerBlock; readonly replaces: boolean }[] = [];
@@ -785,29 +770,29 @@ export class DynamicContextLedger {
     return births;
   }
 
-  /** One full block at the newest position replaces the rest, breaking the prefix cache: only for a caller over the
-   *  ladder's trigger. Returns tokens freed (chars/4). */
+  /** One full block and the instructions copy at the newest position replace the rest, breaking the prefix cache:
+   *  only for a caller over the ladder's trigger. Returns tokens freed (chars/4). */
   dropSuperseded(): number {
-    if (this.blocks.length <= 1) return 0;
     const newest = this.blocks.at(-1);
     const sections = this.told?.sections ?? null;
 
     if (newest === undefined || sections === null) return 0;
-    const before = this.overheadTokens;
     const body = fullBody(sections.sections);
-    this.blocks = body === null ? [] : [this.born(newest.index, dynamicBlock(body, { kind: 'full' }), true)];
+    const survivors = [this.toldInstructions, body === null ? null : dynamicBlock(body, { kind: 'full' })].filter((text) => text !== null);
+
+    if (this.blocks.length <= survivors.length) return 0;
+    const before = this.overheadTokens;
+    this.blocks = [];
+
+    for (const text of survivors) this.blocks.push(this.born(newest.index, text, this.blocks.length === 0));
 
     return before - this.overheadTokens;
   }
 
-  /** `turnLocal` rides right before the turn's input, after any block born there. */
-  weave(history: ReadonlyArray<ModelMessage>, state: DynamicContext, turnLocal?: TurnLocalPlacement): ModelMessage[] {
-    if (this.stored !== null) {
-      this.blocks = this.place(this.stored, history);
-      const newest = this.blocks.at(-1);
-      this.told = newest === undefined ? null : { state: blockTag(newest.text)?.state ?? '', sections: null };
-      this.stored = null;
-    }
+  /** `instructions`: the turn's unapproved instruction files as one message, null for none, undefined when the caller
+   *  keeps none. A copy is born where it is first needed and again only when it changes. */
+  weave(history: ReadonlyArray<ModelMessage>, state: DynamicContext, input?: TurnInput, instructions?: string | null): ModelMessage[] {
+    if (this.stored !== null) this.restore(this.stored, history);
 
     let previousIndex = -1;
 
@@ -825,10 +810,17 @@ export class DynamicContextLedger {
     const rendered: ToldSections = { sections: renderDynamicSections(current), executors: current.executors ?? [] };
     const body = fullBody(rendered.sections);
     const established = fnv1a64(body ?? '');
+    const birth = input?.firstStep === true ? Math.min(input.at, history.length) : turnInputStart(history);
+
+    // Before the state block born with it, which keeps the turn's reasons nearest its input.
+    if (instructions !== undefined && instructions !== this.toldInstructions) {
+      const copy = instructions ?? INSTRUCTIONS_WITHDRAWN;
+      this.blocks.push(this.born(birth, copy, this.blocks.length === 0));
+      this.toldInstructions = instructions;
+    }
 
     if (established !== (this.told?.state ?? fnv1a64(''))) {
       const text = this.statement(rendered, body, established);
-      const birth = turnLocal?.firstStep === true ? Math.min(turnLocal.at, history.length) : turnInputStart(history);
 
       if (text !== null) this.blocks.push(this.born(birth, text, this.blocks.length === 0));
     }
@@ -839,21 +831,15 @@ export class DynamicContextLedger {
     this.unresolved = [];
 
     const woven: ModelMessage[] = [];
-    const placeAt = turnLocal === undefined ? -1 : Math.min(turnLocal.at, history.length);
     let cursor = 0;
-    let lead = 0;
 
     for (const block of this.blocks) {
       const at = insertionPoint(history, Math.max(block.index, cursor));
       woven.push(...history.slice(cursor, at), block.message);
       cursor = at;
-
-      if (at <= placeAt) lead += 1;
     }
 
     woven.push(...history.slice(cursor));
-
-    if (turnLocal !== undefined) woven.splice(placeAt + lead, 0, ...turnLocal.messages);
 
     return woven;
   }
@@ -861,15 +847,26 @@ export class DynamicContextLedger {
   reset(): void {
     this.blocks = [];
     this.told = null;
+    this.toldInstructions = null;
     this.stored = null;
     this.unresolved = [];
     this.births = [];
     this.loaded = true;
   }
 
+  private restore(stored: readonly StoredDynamicBlock[], history: ReadonlyArray<ModelMessage>): void {
+    this.blocks = this.place(stored, history);
+    const state = this.blocks.filter((block) => block.kind !== 'instructions').at(-1);
+    const copy = this.blocks.filter((block) => block.kind === 'instructions').at(-1);
+    this.told = state === undefined ? null : { state: blockTag(state.text)?.state ?? '', sections: null };
+    this.toldInstructions = copy === undefined || copy.text === INSTRUCTIONS_WITHDRAWN ? null : copy.text;
+    this.stored = null;
+  }
+
   private statement(rendered: ToldSections, body: string | null, established: string): string | null {
     const full = body === null ? null : dynamicBlock(body, { kind: 'full' });
-    const known = this.blocks.length === 0 ? null : this.told?.sections ?? null;
+    const states = this.blocks.filter((block) => block.kind !== 'instructions');
+    const known = states.length === 0 ? null : this.told?.sections ?? null;
     const changes = known === null ? null : dynamicBody(deltaSections(known, rendered), DYNAMIC_DELTA_HEADER);
 
     if (changes === null) return full;
@@ -878,8 +875,8 @@ export class DynamicContextLedger {
     if (full === null) return delta;
 
     // Appended: a warm cache keeps every byte before it.
-    const since = this.blocks.map((block) => block.kind).lastIndexOf('full');
-    const pending = this.blocks.slice(since + 1).reduce((chars, block) => chars + block.text.length, 0);
+    const since = states.map((block) => block.kind).lastIndexOf('full');
+    const pending = states.slice(since + 1).reduce((chars, block) => chars + block.text.length, 0);
 
     return full.length <= delta.length || pending + delta.length > KEYFRAME_SHARE * full.length ? full : delta;
   }
@@ -909,7 +906,7 @@ export class DynamicContextLedger {
 
   private block(index: number, text: string): LedgerBlock {
     return Object.freeze({
-      index, text, kind: blockTag(text)?.kind ?? 'full', tokens: Math.round(text.length / 4),
+      index, text, kind: blockKind(text), tokens: Math.round(text.length / 4),
       message: Object.freeze({ role: 'user', content: text }),
     });
   }

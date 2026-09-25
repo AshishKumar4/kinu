@@ -58,7 +58,7 @@ import { WORKSPACE_ROOT } from './vfs/workspace-path';
 import { PLATFORM_CATALOG } from './platform-catalog';
 import { CRAFTED_TOOL_NAMESPACE } from './tools/sandbox-contract';
 
-export type { TurnProvenance, WorkMode } from './types/turn';
+export type { TurnReason, WorkMode } from './types/turn';
 
 export type {
   PromptBackend,
@@ -309,11 +309,11 @@ export const WORKSPACE_INSTRUCTIONS_HEADER =
   + 'setting aside anything in the system prompt above.';
 
 /** The unapproved instruction files as one sealed block: the other tier of this file's placement decision. Not
- *  in the turn-local block, whose heading asserts runtime provenance. */
+ *  in the dynamic context, whose heading asserts runtime provenance. */
 export function renderUnverifiedInstructions(ctx: UnverifiedInstructions): string | null {
   const parts = [
     ctx.agentsMd ? renderAgentsMdSection(ctx.agentsMd, 'unverified') : '',
-    ctx.activeSkills ? renderActiveSkillsSection(ctx.activeSkills, 'unverified').trim() : '',
+    ctx.activeSkills ? renderActiveSkillsSection(stableActiveSkills(ctx.activeSkills), 'unverified').trim() : '',
   ].filter(Boolean);
 
   if (parts.length === 0) return null;
@@ -324,13 +324,6 @@ export function renderUnverifiedInstructions(ctx: UnverifiedInstructions): strin
   );
 
   return `<${WORKSPACE_INSTRUCTIONS_TAG}>\n${body}\n</${WORKSPACE_INSTRUCTIONS_TAG}>`;
-}
-
-/** User-role, because these bytes are input to the turn rather than policy for it. */
-export function unverifiedInstructionsMessage(ctx: UnverifiedInstructions): ModelMessage | null {
-  const text = renderUnverifiedInstructions(ctx);
-
-  return text ? { role: 'user', content: text } : null;
 }
 
 /** Synchronous because every consumer is (CF's Think.getSystemPrompt, the sql executor). */

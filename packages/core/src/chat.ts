@@ -114,8 +114,6 @@ export interface ChatOptions {
   stepContext?: StepContextPlane;
   persistStreamPart?: (part: TextStreamPart<ToolSet>) => Promise<void>;
   persistStep?: (messages: readonly ModelMessage[]) => Promise<void>;
-  /** Placed right before the turn's input on every step; never seen by a transform or stored. */
-  turnLocal?: readonly ModelMessage[];
   tools: ToolSet;
   /** Unsupported history file/media parts are replaced in place before the transform seam; message count never
    *  changes, so downstream indices hold. */
@@ -546,15 +544,15 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   assembly.admission = {
     count: opts.countInputTokens,
     tools,
-    turnLocal: opts.turnLocal,
+    instructions: opts.dynamicContext?.instructions,
     limits: window,
   };
 
   const stepContext = opts.stepContext;
   const initialContext = stepContext === undefined ? null : await stepContext.base();
 
-  // The turn-local messages ride right before the turn's input on every step, so the request stays the last
-  // user-role content and each step's prefix is the last one's.
+  // Blocks born at the turn's first step ride right before its input, so the request stays the last user-role
+  // content.
   const { messages: turnMessages, turnStart } = await assembleTurnMessages({
     ...assembly, history: initialContext?.messages ?? assembly.history, turnStart: initialContext?.turnStart,
   });
@@ -585,8 +583,6 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       ...(current.provider !== undefined && { providerId: current.provider }), retention: turnRoute.retention,
     } }),
   };
-
-  const turnLocal = opts.turnLocal !== undefined && opts.turnLocal.length > 0 ? opts.turnLocal : undefined;
 
   const cache = turnCachePlan(opts, turnMessages);
   const rollTail = hasCacheMarkers(cache.strategy);
@@ -680,7 +676,6 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           destinationProviderId: opts.cache?.providerId,
           meter,
           context: stepContextPlane,
-          turnLocal,
           turnStart,
         }, { stepNumber: stepOffset + stepNumber, messages, steps });
       },

@@ -9,7 +9,7 @@ import type { ActorHandle } from '@kinu.run/core';
 import { resolve } from 'node:path';
 import {
   generateText, stepCountIs,
-  type LanguageModel, type ModelMessage, type ToolSet,
+  type LanguageModel, type ToolSet,
 } from 'ai';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -77,7 +77,7 @@ import { TierIdSchema,
   buildActorTools, buildMcpToolSet, buildSystemPromptSync, currentDateForPrompt,
   type ActorToolsetDeps,
   activePromptSectionOverrides,
-  turnProvenanceForMetadata,
+  turnReasonForMetadata, type TurnReason,
   runChat, type CountableRequest,
   parseModelSpec, agentAffinityKey,
   normalizeUsage,
@@ -92,7 +92,7 @@ import { TierIdSchema,
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
   createReportCodemodeProvider, REPORT_TOOL, type ReportToolDeps,
   MissionGovernor,
-  DynamicContextLedger, turnLocalContextMessage, unverifiedInstructionsMessage,
+  DynamicContextLedger, renderUnverifiedInstructions,
   observeSystemPromptHash,
   type DynamicContext,
   createReleaseStore, initReleaseTables, releaseSqlFromExec,
@@ -1706,26 +1706,10 @@ export class LocalAgentSession implements BackendHost {
     const systemPrompt = buildSystemPromptSync(this.rt, systemPromptOptions);
     this.recordSystemPromptHash(systemPrompt);
 
-    // Live state rides the dynamic-context ledger, re-read every step; turn-local state rides right before the
-    // turn's input. Neither enters durable history, so the prefix stays cacheable.
-
-    // Provenance flips when a background job lands; in the system prompt it would rewrite the cached
-    // prefix (prompting/volatile-context.ts).
-    const turnLocal: Parameters<typeof turnLocalContextMessage>[0] = {
-      provenance: turnProvenanceForMetadata(item.metadata),
-    };
-
-    if (activeSkills) turnLocal.activeSkills = activeSkills;
-    const turnLocalMsg = turnLocalContextMessage(turnLocal);
-
-    // Unapproved instruction bytes ride as sealed reference material, before the turn-local message so
-    // activation reasons stay nearest the request.
-    const unverifiedMsg = unverifiedInstructionsMessage(
-      activeSkills ? { agentsMd, activeSkills } : { agentsMd },
-    );
-
-    const turnLocalMsgs = [unverifiedMsg, turnLocalMsg]
-      .filter((msg): msg is ModelMessage => msg !== null);
+    // Why the turn runs and the unapproved instruction files ride the dynamic-context ledger, out of the cached
+    // prefix: provenance flips when a background job lands.
+    const turn = turnReasonForMetadata(item.metadata);
+    const instructions = renderUnverifiedInstructions(activeSkills ? { agentsMd, activeSkills } : { agentsMd });
 
     const cache = this.cacheIdentity();
 
@@ -1757,7 +1741,6 @@ export class LocalAgentSession implements BackendHost {
       attachments: {
         accepts: this.modelCatalog.acceptedMedia(), vfs: this.rt.storage.vfs, budget: this.actorSession.orchestrator.acc.context,
       },
-      turnLocal: turnLocalMsgs.length > 0 ? turnLocalMsgs : undefined,
       tools: turnTools,
       transformTrigger: measured.trigger,
       cache,
@@ -1792,7 +1775,8 @@ export class LocalAgentSession implements BackendHost {
         loopVersion: await this.rt.identity.scaffold.version(),
         chat: liveTurn,
         extensions: [this.compactionExtension],
-        dynamic: (requestProfile, tools) => this.dynamicContextSnapshot(memoryTail, requestProfile, tools),
+        dynamic: (requestProfile, tools) => this.dynamicContextSnapshot(memoryTail, requestProfile, tools, { turn, activeSkills }),
+        instructions,
         scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
       },
       sessionKey: cache.sessionKey,
@@ -2407,12 +2391,17 @@ export class LocalAgentSession implements BackendHost {
 
   /** Live state for one model step (DO dynamicContextSnapshot peer). Nothing clock-derived: a
    *  wall-clock field would re-fingerprint the block every request. */
-  private dynamicContextSnapshot(memoryTail: string | undefined, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext {
+  private dynamicContextSnapshot(
+    memoryTail: string | undefined, profile: ResolvedTurnProfile, tools: ToolSet,
+    turnOf: { readonly turn: TurnReason; readonly activeSkills: ActiveSkillSet | undefined },
+  ): DynamicContext {
     return collectDynamicContext({
       rt: this.rt,
       stores: this.stores,
       profile,
       tools,
+      turn: turnOf.turn,
+      ...(turnOf.activeSkills !== undefined && { activeSkills: turnOf.activeSkills }),
       memoryTail,
       missingCapabilities: this.mcpUnavailable,
       subordinateDelegates: () => subordinateDelegatesOf(this.teamDeps?.snapshot() ?? []),

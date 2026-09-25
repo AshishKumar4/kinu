@@ -10,7 +10,7 @@ const WORKSPACE = 'jarvis';
 
 const READ_BACK = 'Read public-artifact.txt back with your file tool and reply with only its exact contents.';
 
-test('a turn whose device just connected sends the person\u2019s request last, the notice before it', async () => {
+test('a turn whose device just connected sends the person\u2019s request last, the machine\u2019s new row before it', async () => {
   const user = createTestUserDO({ durableObjectId: OWNER_USER_ID, deviceResponder: daemon });
   const { deviceId } = await user.userDO.registerDevice(await testOwner(), 'ashish@studio');
   const token = await provisionTestWorkspace(user, WORKSPACE, 'Jarvis');
@@ -25,11 +25,11 @@ test('a turn whose device just connected sends the person\u2019s request last, t
 
   const request = await turns.prepare({ messages: [{ role: 'user', content: READ_BACK }] });
   const users = request.prompt.flatMap((message) => (message.role === 'user' ? [v.parse(v.string(), message.content)] : []));
-  const notice = users.findIndex((text) => text.includes('Your user\u2019s PC just connected') || text.includes("Your user's PC just connected"));
+  const connected = users.findIndex((text) => /^- ashish@studio( \(\w+\))?: connected, files at \/pc\//m.test(text));
 
-  expect(notice).toBeGreaterThanOrEqual(0);
+  expect(connected).toBeGreaterThanOrEqual(0);
   expect(users.at(-1)).toBe(READ_BACK);
-  expect(users.slice(notice + 1)).toEqual([READ_BACK]);
+  expect(users.slice(connected + 1)).toEqual([READ_BACK]);
 
   await turns.settle({ messageId: request.identity.messageId, text: 'KINU_PUBLIC_ARTIFACT_OK' });
   await user.joinFibers();

@@ -1,7 +1,7 @@
 /**
  * Both backends' per-step pipeline: mission budget guard (before the spend), tool-error feedback, extension
- * prepareStep chain, tool-output pruning, the dynamic-context weave with turn-local messages before the turn's
- * input, then cache tail markers, last, as markers placed before a rewrite would bust one backend's prefix.
+ * prepareStep chain, tool-output pruning, the dynamic-context weave, then cache tail markers, last, as markers
+ * placed before a rewrite would bust one backend's prefix.
  */
 
 import type { ModelMessage, SystemModelMessage } from 'ai';
@@ -11,8 +11,7 @@ import { MissionBudgetExhausted, type MissionGovernor } from '../mission-budget'
 import { markCacheTail, type PromptCacheRoute, type PromptCacheStrategy } from './cache-breakpoints';
 import { pruneStepToolOutputs, type StepPruneBudget } from './step-prune';
 import { normalizeReplayForDestination } from './replay-normalization';
-import { placeTurnLocal, type DynamicContext, type DynamicContextLedger, type TurnLocalPlacement } from './volatile-context';
-import { estimateTokens } from '../llm';
+import type { DynamicContext, DynamicContextLedger, TurnInput } from './volatile-context';
 import { projectToolErrorFeedback, type ToolErrorStep } from './tool-error-feedback';
 
 /** `system`: cache-eligible system override for backends whose turn-level system
@@ -27,11 +26,13 @@ export interface StepDynamicContext {
   /** Read every live source once for this step. Synchronous by contract: sources
      *  answer without I/O; await-only state belongs to turn assembly. */
   readonly snapshot: () => DynamicContext;
+  /** The turn's unapproved workspace files as one message, null for none; the ledger keeps where it went out. */
+  readonly instructions?: string | null | undefined;
 }
 
 /** Raw context ownership is settled before ephemeral render transforms run. */
 export interface StepContextPlane {
-  /** `turnStart`: the index of the turn's input, which turn-local messages ride before. */
+  /** `turnStart`: the index of the turn's input, which blocks born at its first step ride before. */
   base(): Promise<{ readonly messages: ModelMessage[]; readonly changed: boolean; readonly turnStart?: number }>;
   consume(step: { readonly stepNumber: number; readonly messages: readonly ModelMessage[]; readonly cache?: PromptCacheRoute }): Promise<void>;
 }
@@ -50,8 +51,6 @@ export interface StepPipeline {
   readonly meter?: TurnContextMeter | undefined;
   /** Where a staged mid-turn edit lands and the consumed revision is recorded. Absent = unclaimed work. */
   readonly context?: StepContextPlane | undefined;
-  /** Placed right before the turn's input on every step. */
-  readonly turnLocal?: readonly ModelMessage[] | undefined;
   /** The input's index in the step's messages when no context plane re-reads them. */
   readonly turnStart?: number | undefined;
   readonly abortSignal?: AbortSignal | undefined;
@@ -91,28 +90,24 @@ function prepareFromContext(
   const prepared = { ...ctx, messages: projected ?? ctx.messages, abortSignal: pipeline.abortSignal };
   const steered = pipeline.extensions?.runPrepareStep(prepared);
 
-  const turnLocal = turnStart === undefined
-    ? undefined
-    : { at: turnStart, messages: pipeline.turnLocal ?? [], firstStep: ctx.stepNumber === 0 } satisfies TurnLocalPlacement;
+  const input = turnStart === undefined ? undefined : { at: turnStart, firstStep: ctx.stepNumber === 0 } satisfies TurnInput;
 
   return steered instanceof Promise
-    ? steered.then(messages => finishPrepareStep(pipeline, ctx, messages ?? projected, turnLocal))
-    : finishPrepareStep(pipeline, ctx, steered ?? projected, turnLocal);
+    ? steered.then(messages => finishPrepareStep(pipeline, ctx, messages ?? projected, input))
+    : finishPrepareStep(pipeline, ctx, steered ?? projected, input);
 }
 
 function finishPrepareStep(
   pipeline: StepPipeline,
   ctx: StepPrepareContext,
   steered: ModelMessage[] | undefined,
-  turnLocal: TurnLocalPlacement | undefined,
+  input: TurnInput | undefined,
 ): StepPrepareResult | Promise<StepPrepareResult> {
   const base = steered ?? ctx.messages;
-  const local = turnLocal === undefined || turnLocal.messages.length === 0 ? undefined : turnLocal;
 
-  // The weave runs after pruning (frozen positions refer to the final array); reserve what it adds, and the
-  // turn-local messages, before pruning or the request is priced too small.
-  const reserved = (pipeline.dynamic?.ledger.overheadTokens ?? 0)
-    + (local === undefined ? 0 : estimateTokens(JSON.stringify(local.messages).length));
+  // The weave runs after pruning (frozen positions refer to the final array); reserve what it adds before pruning,
+  // or the request is priced too small.
+  const reserved = pipeline.dynamic?.ledger.overheadTokens ?? 0;
 
   const pruned = pipeline.prune
     ? pruneStepToolOutputs(base, { ...pipeline.prune, reservedTokens: (pipeline.prune.reservedTokens ?? 0) + reserved })
@@ -120,10 +115,8 @@ function finishPrepareStep(
 
   const shrunk = pruned ?? base;
 
-  // Always rewrites: a prepareStep override never feeds the next step's input. Turn-local messages stay out of the
-  // ledger's positions.
-  const woven = pipeline.dynamic?.ledger.weave(shrunk, pipeline.dynamic.snapshot(), turnLocal)
-    ?? (local === undefined ? undefined : placeTurnLocal(shrunk, local));
+  // Always rewrites: a prepareStep override never feeds the next step's input.
+  const woven = pipeline.dynamic?.ledger.weave(shrunk, pipeline.dynamic.snapshot(), input, pipeline.dynamic.instructions);
 
   const working = woven ?? shrunk;
   const replayed = normalizeReplayForDestination(working, pipeline.destinationProviderId);

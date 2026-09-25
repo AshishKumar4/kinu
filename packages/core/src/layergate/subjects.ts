@@ -10,7 +10,6 @@ import { resolveActiveSkills } from '../skills/loader';
 import {
   DynamicContextLedger,
   renderDynamicContextBlock,
-  turnLocalContextMessage,
 } from '../prompting/volatile-context';
 import { renderFactsBlock } from '../memory/facts';
 import { composePrepareStep } from '../prompting/prepare-step';
@@ -51,11 +50,6 @@ import {
 } from '../craft/in-episode';
 import { renderToolSchemaDescription } from '../tools/registry';
 import {
-  deviceChangeNotice,
-  devicePresence,
-  parseDevicePresence,
-} from '../execution/device-status';
-import {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery,
 } from '../orchestrator/turn-lifecycle';
@@ -73,7 +67,6 @@ export interface PipelineSubjects {
   readonly resolveActiveSkills: typeof resolveActiveSkills;
 
   readonly renderDynamicContextBlock: typeof renderDynamicContextBlock;
-  readonly turnLocalContextMessage: typeof turnLocalContextMessage;
   readonly DynamicContextLedger: typeof DynamicContextLedger;
   readonly renderFactsBlock: typeof renderFactsBlock;
 
@@ -137,9 +130,6 @@ export interface PipelineSubjects {
   readonly formatFileSlice: typeof formatFileSlice;
   readonly withMountTable: typeof withMountTable;
 
-  readonly devicePresence: typeof devicePresence;
-  readonly deviceChangeNotice: typeof deviceChangeNotice;
-  readonly parseDevicePresence: typeof parseDevicePresence;
 }
 
 export type SubjectName = keyof PipelineSubjects;
@@ -154,7 +144,6 @@ export const SUBJECT_SOURCE = {
   resolveActiveSkills: 'skills/loader.ts',
 
   renderDynamicContextBlock: 'prompting/volatile-context.ts',
-  turnLocalContextMessage: 'prompting/volatile-context.ts',
   DynamicContextLedger: 'prompting/volatile-context.ts',
   renderFactsBlock: 'memory/facts.ts',
 
@@ -218,9 +207,6 @@ export const SUBJECT_SOURCE = {
   formatFileSlice: 'tools/file-edit.ts',
   withMountTable: 'vfs/mounts.ts',
 
-  devicePresence: 'execution/device-status.ts',
-  deviceChangeNotice: 'execution/device-status.ts',
-  parseDevicePresence: 'execution/device-status.ts',
 } satisfies Record<SubjectName, string>;
 
 /** `rt` only satisfies the signature: probes pass `soulOverride`, so the gate stays free of I/O, clocks and RNG. */
@@ -234,7 +220,6 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
     resolveActiveSkills,
 
     renderDynamicContextBlock,
-    turnLocalContextMessage,
     DynamicContextLedger,
     renderFactsBlock,
 
@@ -298,8 +283,5 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
     formatFileSlice,
     withMountTable,
 
-    devicePresence,
-    deviceChangeNotice,
-    parseDevicePresence,
   };
 }

@@ -1733,7 +1733,7 @@ export const LADDER: readonly Gate[] = [
     label: 'Layergate conformance',
     tier: 'ci',
     seconds: 25,
-    catches: 'per-layer behavioural drift against a locked baseline, 18 measured layers.',
+    catches: 'per-layer behavioural drift against a locked baseline, 17 measured layers.',
     blind: '`tool-construction`, declared and measured at 0/0 — and all three tool-surface '
       + 'defects live exactly there.',
     inputs: { kind: 'derived', reads: [] },

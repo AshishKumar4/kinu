@@ -47,6 +47,8 @@ export interface Layer<S = PipelineSubjects> {
 
 const EMPTY = { items: [], total: 0 } as const;
 
+const INSTRUCTIONS = '<workspace_instructions>\nFiles read from the workspace.\n</workspace_instructions>';
+
 const EXECUTORS = Object.freeze([
   { name: 'workspace', available: true, configured: true, active: true, status: 'active' },
   { name: 'sandbox', available: true, configured: true, active: false, status: 'idle' },
@@ -408,10 +410,9 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'volatile-context',
-    owns: 'the non-cacheable state plane: dynamic-context block, per-step ledger, turn-local messages before the input, facts rendering',
+    owns: 'the non-cacheable state plane: dynamic-context block, per-step ledger and its instruction copies, facts rendering',
     subjects: [
       'renderDynamicContextBlock',
-      'turnLocalContextMessage',
       'DynamicContextLedger',
       'renderFactsBlock',
     ],
@@ -452,30 +453,39 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         }),
       },
       {
-        id: 'volatile-context/turn-local-tail',
-        asserts: 'activation reasons and the one-turn device notice ride the turn-local message',
-        observe: (s) => s.turnLocalContextMessage({
-          deviceNotice: 'Your PC just connected.',
-          activeSkills: { active: [SKILL], reasons: [{ name: SKILL.name, reason: { kind: 'explicit', matched_token: 'deploy-runbook' } }] },
+        id: 'volatile-context/turn-reasons',
+        asserts: 'why the turn runs and why each active skill is on ride the dynamic_context block',
+        observe: (s) => s.renderDynamicContextBlock({
+          turn: { provenance: 'background_resume', job: 'job j-1, agents, completed' },
+          skills: [{ name: SKILL.name, reason: 'explicit /deploy-runbook' }],
         }),
       },
       {
-        id: 'volatile-context/turn-local-empty-is-null',
-        asserts: 'no notice and no activation reasons ⇒ no turn-local message at all',
-        observe: (s) => s.turnLocalContextMessage({ deviceNotice: null, activeSkills: { active: [SKILL], reasons: [] } }),
-      },
-      {
         id: 'volatile-context/request-ends-the-turn',
-        asserts: 'at a turn\'s first step the block and the turn-local notice ride before the request, which ends it; a later step\'s block rides at the tail',
+        asserts: 'at a turn\'s first step its block and the unapproved instructions ride before the request, which ends it; a later step\'s block rides at the tail',
         observe: (s) => {
           const ledger = new s.DynamicContextLedger();
-          const notice = s.turnLocalContextMessage({ deviceNotice: 'Your PC just connected.' });
-          const turnLocal = notice === null ? undefined : { at: 2, messages: [notice] };
           const texts = (messages: ModelMessage[]) => messages.map((m) => v.parse(v.string(), m.content).slice(0, 16));
-          const first = ledger.weave(shortHistory(), { factsBlock: 'a: 1' }, turnLocal);
-          const later = ledger.weave([...shortHistory(), { role: 'assistant', content: 'working' }], { factsBlock: 'a: 2' }, turnLocal);
+          const first = ledger.weave(shortHistory(), { factsBlock: 'a: 1' }, { at: 2, firstStep: true }, INSTRUCTIONS);
+          const later = ledger.weave([...shortHistory(), { role: 'assistant', content: 'working' }], { factsBlock: 'a: 2' }, { at: 2, firstStep: false }, INSTRUCTIONS);
 
           return { first: texts(first), later: texts(later) };
+        },
+      },
+      {
+        id: 'volatile-context/instructions-go-out-once',
+        asserts: 'unapproved instructions go out where first needed and again only when they change; withdrawn, one short copy says so',
+        observe: (s) => {
+          const ledger = new s.DynamicContextLedger();
+          const history: ModelMessage[] = [];
+
+          return [INSTRUCTIONS, INSTRUCTIONS, `${INSTRUCTIONS}\nchanged`, null].map((instructions, turn) => {
+            history.push({ role: 'user', content: `turn ${String(turn)}` });
+            const woven = ledger.weave(history, { factsBlock: 'a: 1' }, { at: history.length - 1, firstStep: true }, instructions);
+            history.push({ role: 'assistant', content: `answer ${String(turn)}` });
+
+            return woven.map((m) => v.parse(v.string(), m.content)).filter((text) => text.startsWith('<workspace_instructions>'));
+          });
         },
       },
       {
@@ -1583,45 +1593,6 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             ['TypeError: x is not a function', s.craftFailureBlame('TypeError: x is not a function', ['summarize'])],
             [stamped, s.craftFailureBlame(stamped, ['other'])],
           ];
-        },
-      },
-    ],
-  },
-
-  {
-    id: 'execution-signal',
-    owns: 'device presence: the three-state view of the user\'s PC and the one-turn transition notice',
-    subjects: ['devicePresence', 'deviceChangeNotice', 'parseDevicePresence'],
-    probes: [
-      {
-        id: 'execution-signal/presence-three-state',
-        asserts: 'connected beats registered; unregistered is "none", never "offline"',
-        observe: (s) => [
-          { connected: true, registered: true, toolchain: null },
-          { connected: true, registered: false, toolchain: null },
-          { connected: false, registered: true, toolchain: null },
-          { connected: false, registered: false, toolchain: null },
-        ].map((status) => [status.connected, status.registered, s.devicePresence(status)]),
-      },
-      {
-        id: 'execution-signal/transition-notices',
-        asserts: 'only real transitions announce; first observation and offline↔none stay silent',
-        observe: (s) => {
-          const states = ['connected', 'offline', 'none'] as const;
-
-          return [
-            ...states.map((to) => [null, to, s.deviceChangeNotice(null, to)]),
-            ...states.flatMap((from) => states.map((to) => [from, to, s.deviceChangeNotice(from, to)])),
-          ];
-        },
-      },
-      {
-        id: 'execution-signal/watermark-parsing',
-        asserts: 'an unknown or missing watermark means "never observed", not a fabricated state',
-        observe: (s) => {
-          const raws: Array<string | null | undefined> = ['connected', 'offline', 'none', 'bogus', '', null, undefined];
-
-          return raws.map((raw) => [raw ?? null, s.parseDevicePresence(raw)]);
         },
       },
     ],

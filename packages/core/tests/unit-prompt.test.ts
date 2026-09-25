@@ -11,9 +11,8 @@ import {
   modelSupportsTools,
   BUILTIN_ROLE_DEFINITIONS,
   deriveRoleLabel,
-  turnProvenanceForMetadata,
+  turnReasonForMetadata,
   workModeForTurnMetadata,
-  turnLocalContextMessage,
   renderDynamicContextBlock,
   DynamicContextLedger, collectDynamicContext, createAgentStores, initWorkspaceSchema,
   buildBuiltinTools, runChat, permitInPlan, toolsInWorkMode, resolveTurnProfile, profileCatalogDigest,
@@ -32,7 +31,7 @@ import {
   NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_POINTS, resolveSwarm,
   type SwarmInput,
 } from '../src/strategy/swarm';
-import { createTestRuntime, createTestActors, present, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import { createTestRuntime, createTestActors, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { makeSqlExec, storesFor } from './helpers';
 import { createAgentSelfProvider, type AgentSelfHost } from '../src/tools/agent-self';
 
@@ -732,10 +731,9 @@ describe('buildSystemPromptSync', () => {
     expect(delegatedPlan).not.toContain('investigate and report');
   });
 
-  test('a background-job wake reaches the resume guidance even though it also carries a work mode', () => {
-    // jobs/runner.ts stamps both kinuEvent and kinuMode on a wake; the mode must not mask the resume guidance.
-    const wake = { kinuEvent: 'background_job', kinuMode: 'build' };
-    expect(turnProvenanceForMetadata(wake)).toBe('background_resume');
+  test('a background-job wake reaches the resume guidance, naming its job, even though it also carries a work mode', () => {
+    // jobs/runner.ts stamps kinuMode and the job beside the inbox's kinuEvent; the mode must not mask the resume.
+    const wake = { kinuEvent: 'background_job', kinuMode: 'build', jobId: 'j-7', kind: 'agents', status: 'completed' };
     expect(workModeForTurnMetadata(wake)).toBe('build');
 
     const { rt } = createTestRuntime();
@@ -744,23 +742,22 @@ describe('buildSystemPromptSync', () => {
       backend: 'cf',
     });
 
-    expect(prompt).not.toContain('the referenced job result first');
-    expect(present(turnLocalContextMessage({ provenance: turnProvenanceForMetadata(wake) }), 'the wake turn-local message').content)
-      .toContain('the referenced job result first');
+    expect(prompt).not.toContain('Fetch its result first');
+    expect(renderDynamicContextBlock({ turn: turnReasonForMetadata(wake) }))
+      .toContain('Background resume: a background job finished (job j-7, agents, completed)');
 
     const planWake = { kinuEvent: 'background_job', kinuMode: 'plan' };
-    const planPrompt = renderDynamicContextBlock({ mode: { workMode: workModeForTurnMetadata(planWake), planSubmission: false } });
+    const planPrompt = renderDynamicContextBlock({ mode: { workMode: workModeForTurnMetadata(planWake), planSubmission: false }, turn: turnReasonForMetadata(planWake) });
     expect(planPrompt).toContain('Mode: plan;');
     expect(prompt).toContain('In Plan, inspect and research only.');
-    expect(present(turnLocalContextMessage({ provenance: turnProvenanceForMetadata(planWake) }), 'the Plan wake turn-local message').content)
-      .toContain('the referenced job result first');
+    expect(planPrompt).toContain('Fetch its result first');
   });
 
   test('the two axes are read from different metadata keys and neither can suppress the other', () => {
-    expect(turnProvenanceForMetadata({ kinuEvent: 'event_drain' })).toBe('chat');
-    expect(turnProvenanceForMetadata(null)).toBe('chat');
-    expect(turnProvenanceForMetadata({})).toBe('chat');
-    expect(turnProvenanceForMetadata({ kinuEvent: 'timer_cron' })).toBe('chat');
+    expect(turnReasonForMetadata({ kinuEvent: 'event_drain' })).toEqual({ provenance: 'chat' });
+    expect(turnReasonForMetadata(null)).toEqual({ provenance: 'chat' });
+    expect(turnReasonForMetadata({})).toEqual({ provenance: 'chat' });
+    expect(turnReasonForMetadata({ kinuEvent: 'timer_cron', kinuMode: 'plan' })).toEqual({ provenance: 'chat' });
 
     expect(workModeForTurnMetadata({ kinuMode: 'plan' })).toBe('plan');
     expect(workModeForTurnMetadata({ kinuMode: 'build' })).toBe('build');
