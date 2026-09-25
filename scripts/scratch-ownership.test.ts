@@ -15,8 +15,7 @@ import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { auditScratchOwnership, readScannableSources } from './scratch-ownership';
 import { SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX, scratchDir } from '@kinu.run/test-utils';
-import { currentOwner, type ProcessOwner } from './process-owner';
-import { reapAbandonedRoots } from './test-scratch-home';
+import { currentOwner, reapAbandonedRoots, type ProcessOwner } from './process-owner';
 
 /** One file, as the gate reads its corpus. */
 function audit(path: string, source: string) {

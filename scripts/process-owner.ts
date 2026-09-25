@@ -5,8 +5,10 @@
  * (`fixtures/storage-matrix/cleanup.ts`) and the test scratch homes judge their owners with it.
  */
 import { tolerate } from '@kinu.run/core/obs';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import * as v from 'valibot';
+import { SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
 
 export interface ProcessOwner {
   readonly bootId: string;
@@ -44,4 +46,43 @@ export function processStartTicks(pid: number): number | undefined {
   const stat = procFile(pid, 'stat');
 
   return stat === undefined ? undefined : Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
+}
+
+/** Who minted a scratch root, so a later run judges it by whether that process still runs. */
+export const OWNER_RECORD = 'owner.json';
+
+/** Record this process as `root`'s owner; where `/proc` cannot say, nothing is recorded. */
+export function recordOwner(root: string): void {
+  const owner = currentOwner();
+
+  if (owner !== null) writeFileSync(join(root, OWNER_RECORD), JSON.stringify(owner));
+}
+
+/**
+ * Remove every scratch root under `parent` whose recorded owner has ended; `keep` is the caller's own. Age says
+ * nothing: an eval episode runs 30 minutes by design and an eval tier for hours, and the 30-minute bound this
+ * replaced reaped live roots out from under them. A root with no readable record (minted before records existed,
+ * or killed mid-write) is left to `scripts/preflight.ts --reclaim` rather than guessed at.
+ */
+export function reapAbandonedRoots(parent: string, keep: string): string[] {
+  const reaped: string[] = [];
+
+  for (const name of readdirSync(parent)) {
+    const path = join(parent, name);
+
+    if (!name.startsWith(SCRATCH_ROOT_PREFIX) || path === keep) continue;
+
+    // A root is a directory; `kinu-scratch-held.json`, the release report, shares the prefix.
+    if (statSync(path, { throwIfNoEntry: false })?.isDirectory() !== true) continue;
+    // Absent, or taken by a racing peer: nothing to judge.
+    const text = tolerate(() => readFileSync(join(path, OWNER_RECORD), 'utf8'), 'enoent');
+    const recorded = text === undefined ? undefined : v.safeParse(v.pipe(v.string(), v.parseJson(), ProcessOwnerSchema), text);
+
+    if (!recorded?.success || ownerAlive(recorded.output)) continue;
+    // A racing peer may remove it between the read and the rm; `force` covers that.
+    rmSync(path, { recursive: true, force: true });
+    reaped.push(path);
+  }
+
+  return reaped;
 }

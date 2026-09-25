@@ -23,13 +23,13 @@ import { createReadStream, existsSync, readdirSync, rmSync, statSync } from 'nod
 import { createServer as createHttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
-import puppeteer, { type LaunchOptions, type Page } from 'puppeteer';
+import type { Page } from 'puppeteer';
 import { build } from 'vite';
 import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
-import { holdForRelease, releaseScratch, scratchDir, SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
+import { releaseScratch, scratchDir, SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
 import { declaredSettings } from './browser-declarations';
-import { signalGroup } from './process-group';
+import { launchTestChrome } from './test-chrome';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -212,14 +212,6 @@ async function recorded<T>(condition: string, wait: () => Promise<T>): Promise<T
   }
 }
 
-function chromePath(): string | undefined {
-  for (const candidate of ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium']) {
-    if (existsSync(candidate)) return candidate;
-  }
-
-  return undefined;
-}
-
 /** The one built artifact this process serves. Built lazily on the first
  *  `withGallery` and shared by every later call: the whole point is that a
  *  gate photographs an immutable snapshot of the sources as they were when
@@ -394,60 +386,23 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
     }
 
     const origin = `http://127.0.0.1:${String(address.output.port)}`;
-    const executablePath = chromePath();
 
-    const launchOptions: LaunchOptions = {
-      args: [
-        '--no-sandbox',
-        '--disable-dev-shm-usage',
-        declaredSettings({ mouse: options.mouse !== false }),
-        ...(options.browserArgs ?? []),
-      ],
-      // No clock on the launch or a CDP round trip: puppeteer's 30 s launch and
-      // 180 s protocol defaults are walls under load (a launch ran past 30 s at
-      // load 109 on 2026-09-22), and `0` disables both (puppeteer 25.10 guards
-      // every timer with `if (timeout)`). A browser that dies fails the launch on
-      // its exit; a protocol call that never answers ends when it is closed below.
-      timeout: 0,
-      protocolTimeout: 0,
-    };
+    const chrome = await launchTestChrome({
+      args: [declaredSettings({ mouse: options.mouse !== false }), ...(options.browserArgs ?? [])],
+      onAbandon: () => {
+        if (pendingWaits.size > 0) {
+          process.stderr.write(`gallery-harness: ended while waiting for ${[...pendingWaits].map((open) => open.condition).join('; ')}\n`);
+        }
+      },
+    });
 
-    if (executablePath) launchOptions.executablePath = executablePath;
-    const browser = await puppeteer.launch(launchOptions);
-    const group = browser.process()?.pid;
+    const { browser } = chrome;
 
-    /**
-     * The browser's group, abandoned. Nothing awaits: this runs while the
-     * process is being ended, and a group already holding the pair cannot
-     * outlive it — which is exactly what puppeteer's own SIGTERM handler gets
-     * wrong, awaiting its exit hooks and never reaching its kill.
-     */
-    const abandonBrowser = (): void => {
-      if (pendingWaits.size > 0) {
-        process.stderr.write(`gallery-harness: ended while waiting for ${[...pendingWaits].map((open) => open.condition).join('; ')}\n`);
-      }
-
-      signalGroup(group, 'SIGTERM');
-      signalGroup(group, 'SIGKILL');
-    };
-
-    /**
-     * Two ways in, because two runners end this process.
-     *
-     * A deadline kills the RUNNER (`scripts/deadline.ts`: SIGTERM, then
-     * SIGKILL five seconds on) and the browser is not in the runner's group,
-     * so a killed row left eleven chrome processes reparented and running on
-     * 2026-09-17. Under `bun test` the listener below is never reached — the
-     * preload's own listener releases and then ends the process inside its
-     * re-raise (`scripts/test-scratch-home.ts`) — so the browser is handed to
-     * that release, which is the one path a killed row runs. Under a bare
-     * `bun scripts/…` run (computed-style, plan-demo-film, review-package)
-     * there is no preload and the listener is the whole answer.
-     */
-    const dropHold = holdForRelease('the gallery browser', abandonBrowser);
-
+    // Under `bun test` the preload's own listener ends the process first and the browser goes with its release
+    // (test-chrome.ts). Under a bare `bun scripts/…` run (computed-style, plan-demo-film, review-package) there is no
+    // preload, and this listener is the whole answer.
     const endOnSignal = (): void => {
-      abandonBrowser();
+      chrome.abandon();
       process.exit(SIGTERM_EXIT_CODE);
     };
 
@@ -473,13 +428,7 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
       return await body({ newPage, origin });
     } finally {
       process.off('SIGTERM', endOnSignal);
-      dropHold();
-      // The group, not the browser alone: puppeteer's own close reaches the
-      // process it spawned, and the SIGKILL collects whatever of the group
-      // that close left — a wedged renderer, a zygote holding a pipe.
-      signalGroup(group, 'SIGTERM');
-      await browser.close();
-      signalGroup(group, 'SIGKILL');
+      await chrome.close();
     }
   } finally {
     const closed = Promise.withResolvers<void>();

@@ -333,6 +333,7 @@ describe('the ladder measures something', () => {
       'Public pages render',
       'React runtime identity',
       'Swarm-tree geometry',
+      'Test browsers end with their launcher',
       'UI gate self-tests',
       'UI gate self-tests: chat and files',
     ]);

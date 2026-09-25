@@ -1132,6 +1132,24 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
+    run: 'bun test --timeout=0 scripts/test-chrome.test.ts',
+    label: 'Test browsers end with their launcher',
+    tier: 'push',
+    // Measured 2026-09-25 on the 24-thread box (load 1.6): 0.9-1.0 s wall, three runs and the cost table.
+    seconds: 1,
+    catches: 'a test browser that outlives the process that launched it. The launcher is killed with '
+      + 'SIGKILL mid-use, which runs no teardown, and every Chrome process on its profile must still '
+      + 'end, and the abandoned-root reap that `preflight --reclaim` runs must remove the profile left '
+      + 'in RAM; a closed browser leaves no process and no profile. With the port-driven launch it '
+      + 'replaced, the killed launcher\'s Chrome ran on under PID 1 and the case waited on it until the '
+      + 'deadline.',
+    blind: 'a browser started outside `scripts/test-chrome.ts`: the first-run tier, liveness-capture, '
+      + 'review-round2 and ws-reconnect-drill still launch their own. `preflight --reclaim` ends one '
+      + 'orphaned under a test\'s scratch home, and none a bare script left. An orphan a subreaper '
+      + 'adopts instead of PID 1 is not seen.',
+    inputs: { ...AMBIENT_BY_NAME, reads: ['scripts/fixtures/test-chrome/'] },
+  },
+  {
     run: 'bun test --timeout=0 scripts/gate-set-equality.test.ts',
     label: 'Set-equality gate self-tests',
     tier: 'push',

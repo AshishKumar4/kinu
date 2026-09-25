@@ -17,7 +17,9 @@ import { join } from 'node:path';
 
 import { assertMeasured } from './gate-ratchet';
 import { declaredName, literalString, parse, walk } from './syntax';
-import { PROJECT_MARKERS, engineBoundsTempWalk, judge, measuredCounts, type Environment } from './preflight';
+import {
+  PROJECT_MARKERS, engineBoundsTempWalk, judge, measuredCounts, orphanTestBrowsers, type Environment, type ProcessRow,
+} from './preflight';
 
 const REPO_ROOT = new URL('..', import.meta.url).pathname;
 
@@ -48,9 +50,31 @@ const HEALTHY: Environment = {
   workdirWalkBounded: true,
   scratchOrphans: 3,
   tempEntries: 151,
+  orphanBrowsers: 0,
   mergeInProgress: null,
   conflictedPaths: 0,
 };
+
+describe('the test browsers --reclaim ends', () => {
+  const chrome = (pid: number, ppid: number, ...flags: string[]): ProcessRow => ({
+    pid, ppid, group: pid, args: ['/opt/google/chrome/chrome', ...flags],
+  });
+
+  test('a Chrome on a scratch profile whose launcher has ended, and nothing a launcher or a person still owns', () => {
+    const ours = '--user-data-dir=/tmp/kinu-scratch-chrome-a1/profile';
+    const puppeteerTemp = '--user-data-dir=/mnt/scratch/kinu/tmp/kinu-scratch-test-home-b2/puppeteer_dev_chrome_profile-c3';
+
+    const table = [
+      chrome(101, 1, ours),
+      chrome(102, 101, '--type=renderer', ours),
+      chrome(201, 1, puppeteerTemp),
+      chrome(301, 4242, '--user-data-dir=/tmp/kinu-scratch-chrome-live/profile'),
+      chrome(401, 1, '--user-data-dir=/home/owner/.config/chrome-profile'),
+    ];
+
+    expect(orphanTestBrowsers(table).map((row) => row.pid)).toEqual([101, 201]);
+  });
+});
 
 describe('the markers this gate probes', () => {
   test('are exactly the markers the engine treats as a project root', () => {
