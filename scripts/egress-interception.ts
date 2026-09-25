@@ -442,8 +442,9 @@ function accessorReasons(owner: SyntaxNode): string[] {
 
 /** A function or arrow that captures `this` or a box alias can carry the box out unless it is called where it is made
  *  or handed to `#calls.run`, which only calls it. */
-function closureReasons(owner: SyntaxNode): string[] {
+function closureReasons(owner: SyntaxNode, tree: SyntaxNode): string[] {
   const reasons: string[] = [];
+  const trustedRun = callsIsEgressCalls(owner, tree);
 
   walk(owner, (inner) => {
     const { raw } = inner;
@@ -461,13 +462,23 @@ function closureReasons(owner: SyntaxNode): string[] {
     const up = inner.parent?.raw;
     const calledHere = up?.type === 'CallExpression' && up.callee === raw;
 
-    const runArgument = up?.type === 'Property' && inner.parent?.parent?.parent?.raw.type === 'CallExpression'
+    const runArgument = trustedRun && up?.type === 'Property' && inner.parent?.parent?.parent?.raw.type === 'CallExpression'
       && isCallsRun(inner.parent.parent.parent.raw);
 
     if (!calledHere && !runArgument) reasons.push('makes a function that captures `this` or the box and is not called where it is made');
   });
 
   return reasons;
+}
+
+/** `#calls` is `new EgressCalls()` with EgressCalls imported from '@kinu.run/core': only then does `run` merely call
+ *  the functions it is given. */
+function callsIsEgressCalls(owner: SyntaxNode, tree: SyntaxNode): boolean {
+  const imported = tree.children.some((statement) => statement.raw.type === 'ImportDeclaration' && statement.raw.source.value === '@kinu.run/core'
+    && statement.raw.specifiers.some((spec) => spec.type === 'ImportSpecifier' && nameOf(spec.local) === 'EgressCalls' && nameOf(spec.imported) === 'EgressCalls'));
+
+  return imported && classMembers(owner).some((member) => member.raw.type === 'PropertyDefinition' && nameOf(member.raw.key) === '#calls'
+    && member.raw.value?.type === 'NewExpression' && nameOf(member.raw.value.callee) === 'EgressCalls' && member.raw.value.arguments.length === 0);
 }
 
 /** `this.#calls.run(…)`: EgressCalls only calls the functions it is given. */
@@ -501,7 +512,7 @@ function classReasons(input: ForwarderInputs): string[] {
   }
 
   walk(owner, (inner) => { if (inner.type === 'Decorator') reasons.push('carries a decorator, which can add or rewrite members'); });
-  reasons.push(...accessorReasons(owner), ...closureReasons(owner));
+  reasons.push(...accessorReasons(owner), ...closureReasons(owner, tree));
   reasons.push(...boxReasons(box));
 
   const field = classMembers(owner)

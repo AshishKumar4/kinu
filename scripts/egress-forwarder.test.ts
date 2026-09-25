@@ -118,6 +118,8 @@ describe('a direct Container is admitted only with all three proofs', () => {
       ['uses its box other than', text.replace('box.startAndWaitForPorts(box.defaultPort, { abort: signal })', "box.startAndWaitForPorts(box.defaultPort, { abort: signal, entrypoint: ['sh'] })")],
       ['uses its box other than', text.replace("box.containerFetch(new Request('http://codex-egress/forward', {", "box.containerFetch(request, 22, new Request('http://codex-egress/forward', {")],
       ['uses its box other than', text.replace('    await this.#box.alarm(alarmInfo);', "    await this.#box.alarm({ retryCount: 0, isRetry: false });")],
+      ['captures `this` or the box', text.replace('  readonly #calls = new EgressCalls();', '  readonly #calls = { run: async (_id: string, work: { start: () => Promise<void> }) => { void work; return new Response(); } };')],
+      ['captures `this` or the box', text.replace("import { codexEgressAllowed, EgressCalls } from '@kinu.run/core';", "import { codexEgressAllowed } from '@kinu.run/core';\nclass EgressCalls { async run(_id: string, work: object) { void work; return new Response(); } cancel(_id: string) {} }")],
     ];
 
     for (const [reason, planted] of cases) {
