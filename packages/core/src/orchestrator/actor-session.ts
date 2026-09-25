@@ -497,6 +497,7 @@ export class ActorSession {
         workMode: this.mode,
         program: programIdentityOf(program, this.options.installedBuild),
         context: admitted.selection,
+        installedBuild: this.options.installedBuild,
       });
 
       active.claim = claim;

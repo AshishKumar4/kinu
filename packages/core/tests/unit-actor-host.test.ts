@@ -419,9 +419,9 @@ describe('one workspace database, many logical actors', () => {
     fx.db.close();
   });
 
-  /** A turn whose program verifies, and one run of it: admitted again, its model called at each of `steps`, and
-   *  left open there, as a run a memory or wall reset of its activation ended. */
-  async function interruptedRuns(): Promise<{ actor: BoundActor; run: (steps: readonly number[]) => Promise<void>; fx: Fixture }> {
+  /** A turn whose program verifies, and one run of it: admitted again on `installedBuild`, its model called at each
+   *  of `steps`, and left open there, as a run a memory or wall reset of its activation ended. */
+  async function interruptedRuns(): Promise<{ actor: BoundActor; run: (steps: readonly number[], installedBuild?: string | null) => Promise<void>; fx: Fixture }> {
     const fx = build();
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'subordinate'));
     const source = 'export default async function main() { return "retained"; }';
@@ -430,8 +430,10 @@ describe('one workspace database, many logical actors', () => {
 
     return {
       actor, fx,
-      run: async (steps) => {
-        const claim = await actor.stores.claims.admit({ runId: crypto.randomUUID(), turnId: 'turn-a', workMode: 'build', context: contextOf(actor), program });
+      run: async (steps, installedBuild = fx.host.installedBuild) => {
+        const claim = await actor.stores.claims.admit({
+          runId: crypto.randomUUID(), turnId: 'turn-a', workMode: 'build', context: contextOf(actor), program, installedBuild,
+        });
 
         for (const index of steps) await actor.stores.claims.consume(claim, { index, messages: [{ role: 'user', content: 'the brief' }] });
       },
@@ -448,6 +450,26 @@ describe('one workspace database, many logical actors', () => {
     expect({ verified: recovered.verified, stalled: recovered.stalled.map((turn) => turn.claim.turnId) }).toEqual({ verified: [], stalled: ['turn-a'] });
     expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'error', epoch: 2 });
     expect(await recoverActorTurns(fx.host)).toMatchObject({ verified: [], stalled: [] });
+    fx.host.releaseAll();
+    fx.db.close();
+  });
+
+  test('a run our own deploy ended is no stall: both runs judged ran on this host\'s build', async () => {
+    const { actor, run, fx } = await interruptedRuns();
+    const owed = { verified: ['turn-a'], stalled: [] };
+
+    await run([0, 1], 'build-before');
+    expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
+    // A deploy ended this run: this host runs another build.
+    await run([0, 1], 'build-before');
+    expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
+    // This run is this host's own, but the deploy ended the one it follows.
+    await run([0, 1]);
+    expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
+    await run([0, 1]);
+    const recovered = await recoverActorTurns(fx.host);
+    expect(recovered.stalled.map((turn) => turn.claim.turnId)).toEqual(['turn-a']);
+    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'error', epoch: 4 });
     fx.host.releaseAll();
     fx.db.close();
   });

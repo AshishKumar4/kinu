@@ -4,6 +4,7 @@
 // Release invalidates the handle's fence; rows survive until `retire` with `destroy: true`.
 // Recovery reads unsettled claims from durable rows: no timer, no in-memory registry.
 
+import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import type { SqlExec, SqlExecutor, Storage } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -11,6 +12,7 @@ import { ActorSession } from '../orchestrator/actor-session';
 import type { AgentOrchestratorDeps } from '../orchestrator/agent-orchestrator';
 import type { ContextRevision, StoredActorClaim } from '../orchestrator/actor-claims';
 import type { SessionFilePlane } from '../session/payload';
+import type { PreparedRequest } from '../session/requests';
 import { actorReferenceOf, sameActorReference, type ActorHandle, type ActorReference } from '../identity/actor-handle';
 import { createAgentStores, type AgentStores } from './agent-stores';
 import type { WorkspaceActor, WorkspaceActorDirectory } from '../identity/workspace-actors';
@@ -91,6 +93,8 @@ export interface ActorHost {
   releaseAll(): void;
   retire(parent: ActorReference, retirement: ActorRetirement): Promise<void>;
   resumable(limit?: number): readonly ResumableActorTurn[];
+  /** The build this host runs on, which each run's admission records. */
+  readonly installedBuild: string | null;
 }
 
 /** The parent reference the directory row records; the row is the only authority on it. */
@@ -367,6 +371,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
         action: 'release', name: retirement.name, reference: retirement.reference,
       });
     },
+    installedBuild: deps.installedBuild,
     resumable: (limit = 50) => {
       const resumable: ResumableActorTurn[] = [];
 
@@ -469,14 +474,30 @@ function furthestStep(requests: readonly { readonly epoch: number; readonly step
   return requests.reduce((far, request) => (request.epoch === epoch && request.step !== null ? Math.max(far, request.step) : far), -1);
 }
 
+const AdmittedBuildSchema = v.looseObject({ installedBuild: v.nullable(v.string()) });
+
+/** The build a run was admitted on, as its admission recorded it; undefined for an admission that recorded none. */
+async function admittedBuild(stores: Pick<AgentStores, 'history'>, admission: PreparedRequest | undefined): Promise<string | null | undefined> {
+  if (admission === undefined) return undefined;
+  const recorded = v.safeParse(AdmittedBuildSchema, await stores.history.messages.payloads.read(admission.metadata));
+
+  return recorded.success ? recorded.output.installedBuild : undefined;
+}
+
 /**
  * Whether an interrupted run got no further than the run before it. Each run of a turn starts again from its input, so a
  * run that died no further than the last one did repeats the reset that ended both (a memory or wall limit its
- * activation hit), and running it again repeats it again.
+ * activation hit), and running it again repeats it again. A deploy restarts every object on the build it ships, so a
+ * run whose next one ran on another build ended for a reason of ours, not its own: the two runs judged must share
+ * this host's build.
  */
-function stalledRun(stores: Pick<AgentStores, 'history'>, claim: StoredActorClaim): boolean {
+async function stalledRun(stores: Pick<AgentStores, 'history'>, claim: StoredActorClaim, installedBuild: string | null): Promise<boolean> {
   if (claim.epoch < 2) return false;
   const requests = stores.history.requests.forTurn(claim.turnId);
+  const admission = (epoch: number) => requests.find((request) => request.epoch === epoch && request.step === null);
+  const builds = await Promise.all([admittedBuild(stores, admission(claim.epoch - 1)), admittedBuild(stores, admission(claim.epoch))]);
+
+  if (builds.some((build) => build === undefined || build !== installedBuild)) return false;
 
   return furthestStep(requests, claim.epoch) <= furthestStep(requests, claim.epoch - 1);
 }
@@ -487,7 +508,7 @@ function stalledRun(stores: Pick<AgentStores, 'history'>, claim: StoredActorClai
  * the run before it settles `error` as stalled, and its caller tells whoever is owed the turn why it ended.
  */
 export async function recoverActorTurns(
-  host: Pick<ActorHost, 'resumable'> & {
+  host: Pick<ActorHost, 'resumable' | 'installedBuild'> & {
     acquire(reference: ActorReference): Promise<Pick<HostedActor, 'runtime' | 'stores'> & {
       readonly session: Pick<ActorSession, 'turnOpen'>;
     }>;
@@ -538,12 +559,14 @@ export async function recoverActorTurns(
         evidence.context,
       );
 
+      const stalledTurn = verdict.kind === 'verified' && await stalledRun(actor.stores, turn.claim, host.installedBuild);
+
       if (actor.session.turnOpen) {
         active.push(turn.claim.turnId);
         continue;
       }
 
-      if (verdict.kind === 'verified' && stalledRun(actor.stores, turn.claim)) {
+      if (stalledTurn) {
         actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'error');
         stalled.push(turn);
         diagnostics.event('actor.turn_stalled', { actor: turn.record.name, turn: turn.claim.turnId, runs: turn.claim.epoch });

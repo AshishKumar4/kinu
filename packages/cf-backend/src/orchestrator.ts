@@ -2785,6 +2785,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const rootIsLive = () => this._inFlight || this.actorSession.turnOpen;
 
       const recovered = await recoverActorTurns({
+        installedBuild: host.installedBuild,
         resumable: (limit) => host.resumable(limit),
         acquire: async (reference) => {
           const actor = await host.acquire(reference);

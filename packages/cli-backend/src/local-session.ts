@@ -1348,6 +1348,7 @@ export class LocalAgentSession {
     }
 
     const recovered = await recoverActorTurns({
+      installedBuild: this.actorHost.installedBuild,
       resumable: (limit) => this.actorHost.resumable(limit),
       acquire: async (reference) => reference.actorId === this.rt.actor.actorId
         ? { runtime: this.rt, stores: this.stores, session: this.actorSession }

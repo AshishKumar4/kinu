@@ -53,6 +53,7 @@ const neverHost: ExplorationHostSeams = {
     releaseAll() { throw new Error('mergeLLM released every hosted actor'); },
     retire() { throw new Error('mergeLLM retired a hosted actor'); },
     resumable() { throw new Error('mergeLLM read the resumable claims'); },
+    get installedBuild(): never { throw new Error("mergeLLM read the host's build"); },
   },
   register() { throw new Error('mergeLLM reached actor registration'); },
   watchWrites() { throw new Error("mergeLLM watched an actor's writes"); },
