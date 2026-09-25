@@ -60,8 +60,8 @@ function runSandboxed(command, options = {}) {
 }
 
 describe('the device sandbox, as the kernel enforces it', () => {
-  test('this machine can sandbox, and says why in one line when it cannot', () => {
-    const result = sandbox.probe();
+  test('this machine can sandbox, and says why in one line when it cannot', async () => {
+    const result = await sandbox.probe();
     // Not `expect(ok)`: a box without bubblewrap is a legitimate state, and the
     // contract is that the status is a known word carrying an actionable line.
     expect(Object.values(sandbox.SANDBOX_STATUS)).toContain(result.status);
@@ -78,8 +78,8 @@ describe('the device sandbox, as the kernel enforces it', () => {
     }
   });
 
-  test('the owner\'s own home is invisible, including a file planted in it', () => {
-    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+  test('the owner\'s own home is invisible, including a file planted in it', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     // Planted rather than assumed: asserting that ~/.ssh cannot be read proves
     // nothing on a box that has no ~/.ssh.
     const planted = path.join(os.homedir(), '.kinu-sandbox-planted-secret');
@@ -100,8 +100,8 @@ describe('the device sandbox, as the kernel enforces it', () => {
     }
   });
 
-  test('the same command with the Sandbox switch OFF reads the planted secret', () => {
-    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+  test('the same command with the Sandbox switch OFF reads the planted secret', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     // This is the difference the switch makes, and the reason it defaults on.
     // Reverting the home swap instead proves nothing: bwrap cannot create a
     // mountpoint under the read-only root, so the command simply fails.
@@ -117,8 +117,8 @@ describe('the device sandbox, as the kernel enforces it', () => {
     }
   });
 
-  test('Kinu\'s own directory is not in the sandbox at all', () => {
-    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+  test('Kinu\'s own directory is not in the sandbox at all', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     const deviceHome = path.join(os.homedir(), '.kinu');
     const run = runSandboxed(`cat ${JSON.stringify(path.join(deviceHome, 'device.json'))} 2>&1 | head -1`);
 
@@ -128,8 +128,8 @@ describe('the device sandbox, as the kernel enforces it', () => {
     expect(run.stdout).not.toContain('"token"');
   });
 
-  test('writes land in the agent home and the consented directory, and nowhere else', () => {
-    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+  test('writes land in the agent home and the consented directory, and nowhere else', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
 
     const run = runSandboxed([
       'touch "$HOME/in-agent-home" && echo home-ok',
@@ -147,8 +147,8 @@ describe('the device sandbox, as the kernel enforces it', () => {
 
   });
 
-  test('a consented directory is writable and the bytes are the machine\'s own', () => {
-    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+  test('a consented directory is writable and the bytes are the machine\'s own', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     const base = scratchDir('sandbox-root');
     const agentHome = path.join(base, 'home');
     const agentTmp = path.join(base, 'tmp');
@@ -171,8 +171,8 @@ describe('the device sandbox, as the kernel enforces it', () => {
     expect(fs.readFileSync(path.join(consented, 'report.txt'), 'utf8')).toBe('agent-wrote-this');
   });
 
-  test('the GPU nodes this machine has are inside, and bash-only syntax runs', () => {
-    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+  test('the GPU nodes this machine has are inside, and bash-only syntax runs', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     const nodes = sandbox.gpuNodes();
     const run = runSandboxed('set -o pipefail; [[ 1 == 1 ]] && ls -d /dev/nvidia* /dev/dri 2>/dev/null | tr "\\n" " "');
 
@@ -187,8 +187,8 @@ describe('the device sandbox, as the kernel enforces it', () => {
     }
   });
 
-  test('the command environment is the allow-list, with the sandbox\'s own values', () => {
-    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+  test('the command environment is the allow-list, with the sandbox\'s own values', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
 
     const run = runSandboxed('env | sort | tr "\\n" " "', {
       source: {
@@ -255,8 +255,8 @@ describe('the device sandbox, as the kernel enforces it', () => {
       .toThrow('inside Kinu\'s own directory');
   });
 
-  test('a home under /tmp is the agent home inside, exactly as a home under /home is', () => {
-    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+  test('a home under /tmp is the agent home inside, exactly as a home under /home is', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     // The first-run tier gives each daemon a HOME of its own under the
     // runner's tmpdir, and the daemon's probe answered it with `probe_failed:
     // sandbox probe failed: bwrap: Can't chdir to /tmp/kinu-first-run-…: No
@@ -276,8 +276,8 @@ describe('the device sandbox, as the kernel enforces it', () => {
     expect(fs.existsSync(path.join(home, 'marker'))).toBe(false);
   });
 
-  test('a shim in ~/.local/bin answers sandboxed, because that is the PATH the plan builds', () => {
-    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+  test('a shim in ~/.local/bin answers sandboxed, because that is the PATH the plan builds', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     // The first-run tier tells its machines apart with a `hostname` shim, and
     // the shim has to sit where a sandboxed command looks: the plan rebuilds
     // PATH from `LINUX_PATH_HEAD` (`~/.local/bin` first) and drops the
@@ -316,8 +316,8 @@ describe('the device sandbox, as the kernel enforces it', () => {
     expect(String(run.stdout).trim()).toBe('kinu-first-run-alpha');
   });
 
-  test('the daemon\'s own probe passes with HOME under /tmp, as the first-run tier runs it', () => {
-    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+  test('the daemon\'s own probe passes with HOME under /tmp, as the first-run tier runs it', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     // A CHILD process, not an in-process `process.env.HOME` swap: Bun's
     // `os.homedir()` reads HOME once at start, so a swap here would probe the
     // real home and pass on any tree. The tier spawns the daemon with a
@@ -325,7 +325,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
     const home = scratchDir('sandbox-tmp-home');
 
     const script = 'const s = require(process.argv[1]); '
-      + 'process.stdout.write(JSON.stringify(s.probe({ deviceHome: process.env.KINU_HOME })))';
+      + 's.probe({ deviceHome: process.env.KINU_HOME }).then((r) => process.stdout.write(JSON.stringify(r)))';
 
     const run = spawnSync(process.execPath, ['-e', script, require.resolve('../src/sandbox.js')], {
       env: { ...process.env, HOME: home, KINU_HOME: home }, encoding: 'utf8',
@@ -351,8 +351,8 @@ describe('a sandboxed command reads only the system and what the owner shared', 
     return planted;
   }
 
-  test('a file outside the homes and the consented directory is invisible, however it is spelled', () => {
-    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+  test('a file outside the homes and the consented directory is invisible, however it is spelled', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     const planted = plantOutsideEveryHome('outside');
     const base = scratchDir('sandbox-outside');
     const consented = path.join(base, 'consented');
@@ -372,8 +372,8 @@ describe('a sandboxed command reads only the system and what the owner shared', 
     }
   });
 
-  test('Kinu\'s own directory stays hidden inside a consented directory that holds it', () => {
-    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+  test('Kinu\'s own directory stays hidden inside a consented directory that holds it', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     // `kinu connect` run in the home makes the home the consented directory,
     // and ~/.kinu holds this machine's token and the owner's CLI bearer.
     const home = scratchDir('sandbox-root-home');
@@ -396,16 +396,16 @@ describe('a sandboxed command reads only the system and what the owner shared', 
     expect(run.stdout).toContain('shared-with-the-agent');
   });
 
-  test('/var/tmp is the agent\'s own temp, as /tmp is', () => {
-    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+  test('/var/tmp is the agent\'s own temp, as /tmp is', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     const run = runSandboxed('printf agent-temp > /var/tmp/kinu-agent-temp && cat /tmp/kinu-agent-temp');
 
     expect(run.stdout).toBe('agent-temp');
     expect(fs.readFileSync(path.join(run.agentTmp, 'kinu-agent-temp'), 'utf8')).toBe('agent-temp');
   });
 
-  test('a GPU job sees the same GPUs inside the sandbox as outside', () => {
-    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+  test('a GPU job sees the same GPUs inside the sandbox as outside', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     const outside = spawnSync('nvidia-smi', ['-L'], { encoding: 'utf8' });
 
     // A machine with no NVIDIA driver has no GPU job to keep.
@@ -419,8 +419,8 @@ describe('a sandboxed command reads only the system and what the owner shared', 
     expect(inside.stdout).toBe(outside.stdout);
   });
 
-  test('a toolchain under /opt is there inside the sandbox, byte for byte and executable', () => {
-    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+  test('a toolchain under /opt is there inside the sandbox, byte for byte and executable', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     // ROCm, Arch's CUDA and conda install a GPU job's runtime under /opt.
     const found = spawnSync('find', ['/opt', '-maxdepth', '4', '-type', 'f', '-perm', '-u+x', '-print', '-quit'], { encoding: 'utf8' });
     const tool = found.stdout.trim();

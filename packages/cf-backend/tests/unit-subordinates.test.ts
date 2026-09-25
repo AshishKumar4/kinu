@@ -8,7 +8,7 @@ import { MemoryRouter } from 'react-router-dom';
 import * as v from 'valibot';
 import {
   actorConnectionTag, BUILTIN_TOOLS, DEPS_GATED_TOOLS, hostedActorSocketPath,
-  observedActionEnum, ORCHESTRATOR_AGENT_SLUG, REPORT_TOOL, reviewCommand, TASK_TURN_ENDINGS, terminalTaskReport,
+  observedActionEnum, ORCHESTRATOR_AGENT_SLUG, REPORT_TOOL, TASK_TURN_ENDINGS, terminalTaskReport,
 } from '@kinu.run/core';
 import type { SubordinateRosterEntry } from '@kinu.run/core/protocol';
 import { present } from '@kinu.run/test-utils';
@@ -90,7 +90,7 @@ describe('subordinate wiring', () => {
       mission: 'prove confinement',
     });
 
-    await runDelegatedTask(workspace, child.actor, 'prove confinement');
+    await runDelegatedTask(workspace, child.actor.handle.actorId, 'prove confinement');
     const subTools = offeredTools(gateway.runs);
     const subKeys = [...subTools.keys()];
     expect(BUILTIN_TOOLS.filter((name) => !subKeys.includes(name))).toEqual([]);
@@ -222,7 +222,8 @@ describe('an agent\'s window hears only what it may act on', () => {
       await rosterSent.promise;
       await agent.announceSubordinatePlan({ path: [name], id: 'plan-1', revision: 1 });
       await agent.cancelCurrentWork();
-      agent.observeDeferrals().park({ command: 'git push --force origin main', executor: 'workspace', review: reviewCommand('git push --force origin main', 'agent') });
+      await agent.setShellApprovalMode('strict');
+      await agent.executeInExecutor('workspace', 'git push --force origin main');
       await agent.listSlates();
       await workspaceFiles(agent).mkdir('/home/main/slates/tally', { recursive: true });
       await workspaceFiles(agent).writeFile('/home/main/slates/tally/server.ts', 'export default { fetch() { return new Response("ok"); } };');

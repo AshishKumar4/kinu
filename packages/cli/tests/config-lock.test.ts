@@ -50,7 +50,7 @@ describe('cross-process config read-modify-write', () => {
     const worker = `
       const { updateConfigFile } = await import(${CONFIG_TS});
       for (let i = 0; i < 25; i++) {
-        updateConfigFile((config) => {
+        await updateConfigFile((config) => {
           const aliases = config.aliases ?? {};
           aliases.count = String(Number(aliases.count ?? '0') + 1);
           config.aliases = aliases;
@@ -81,9 +81,9 @@ describe('cross-process config read-modify-write', () => {
     const result = await runIn(home, `
       const { lstatSync } = await import('node:fs');
       const { updateConfigFile, loadConfigFile, CONFIG_PATH } = await import(${CONFIG_TS});
-      updateConfigFile(() => ({ origin: 'https://before.test' }));
+      await updateConfigFile(() => ({ origin: 'https://before.test' }));
       try {
-        updateConfigFile(() => { throw new Error('mutator blew up'); });
+        await updateConfigFile(() => { throw new Error('mutator blew up'); });
       } catch (error) {
         console.log(JSON.stringify({
           message: error.message,
@@ -105,7 +105,7 @@ describe('cross-process config read-modify-write', () => {
 
     const again = await runIn(home, `
       const { updateConfigFile } = await import(${CONFIG_TS});
-      updateConfigFile((config) => { config.updateCheck = false; });
+      await updateConfigFile((config) => { config.updateCheck = false; });
       console.log('ok');
     `);
 
@@ -130,7 +130,7 @@ describe('cross-process config read-modify-write', () => {
       await exited.exited;
       const dead = exited.pid;
       symlinkSync('v1 linux 00000000-0000-4000-8000-000000000004 ' + dead + ' 12345', lock);
-      updateConfigFile((config) => { config.origin = 'https://after.test'; });
+      await updateConfigFile((config) => { config.origin = 'https://after.test'; });
       console.log(JSON.stringify({
         origin: loadConfigFile().origin,
         lockGone: !lstatSync(lock, { throwIfNoEntry: false }),

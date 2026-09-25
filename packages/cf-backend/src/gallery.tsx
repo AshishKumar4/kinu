@@ -53,7 +53,7 @@ import { FeedbackButton } from "@/components/FeedbackButton";
 import { FEEDBACK_ENDPOINT } from "@kinu.run/core";
 import { CLIENT_ERROR_ENDPOINT } from "@kinu.run/core";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { APP_ROUTES } from "@kinu.run/core";
+import { APP_ROUTES, rosterBucket, rosterMatches, WorkspaceOverviewSchema, type WorkspaceOverview } from "@kinu.run/core";
 import { CHUNK_FIXED_KEY, lazyRoute } from "@/lazy-route";
 import type { SubordinateSnapshot } from "@/hooks/use-kinu";
 import { primePageDeployedBuildSha } from "@kinu.run/core";
@@ -65,7 +65,6 @@ import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useConversationUiState } from "@/hooks/use-conversation-ui-state";
 import { useTheme } from "@/hooks/use-theme";
 import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
-import { WorkspaceOverviewsProvider } from "@/hooks/use-workspace-overviews";
 import { CreateWebhookModal, NewWebhookCard, SupervisePage } from "@/pages/SupervisePage";
 import type { EvolutionEntry } from "@/components/surfaces/supervise-evolution";
 import { AddServerCard } from "@/components/account/McpServersPanel";
@@ -86,7 +85,7 @@ import {
   CHARS_PER_TOKEN, DEVICE_TIERS, TOOL_REACH, JsonObjectSchema, JsonValueSchema, mergeTranscript,
   missingSubordinateHistory,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
-  type AdvisorSeverity, type JsonValue, type PlanReview, type PlanReviewAnnotation,
+  type AdvisorSeverity, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc, ToolInfo } from "@kinu.run/core";
@@ -102,8 +101,8 @@ import type {
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
   AccountSpend, PendingAction, ProducerSpend, RunSummary, SearchTreeRow, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
-import type { McpServerSummary, ModelMenuEntry, UserDevice, WorkspaceEntry } from "@/lib/user-api";
-import { McpServerSummarySchema } from "@/lib/user-api";
+import type { McpServerSummary, ModelMenuEntry, RosterCounts, RosterEntry, RosterFrame, RosterPage, UserDevice, WorkspaceEntry } from "@/lib/user-api";
+import { McpServerSummarySchema, ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
 import * as v from "valibot";
 import { galleryServerPush, seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
 
@@ -151,8 +150,6 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
     createdAt: NOW - 90 * 864e5, lastSeenAt: NOW, onboardedAt: NOW - 90 * 864e5,
     workspaceCount: GALLERY_ROSTER.total,
   },
-  // The `{ entries, total }` envelope `listWorkspaces` validates; a bare array parses as nothing.
-  "/api/user/workspaces": GALLERY_ROSTER,
   // A ModelMenu, not a bare array.
   "/api/user/models": { models: MODEL_STUBS(), failures: [] },
   // Account settings' Devices card reads both; a 404 photographs its failure state.
@@ -258,7 +255,6 @@ const mcpSecrets = (() => {
   return new Set(listed.filter((entry) => entry.length > 0));
 })();
 
-/** The grants rows, one per state; null for every other path. */
 function pluginsFixture(path: string): Response | null {
   if (path === "/api/user/devices/consents") {
     return fixtureJson(frame === "devices"
@@ -383,21 +379,9 @@ async function settingsSectionsFixture(path: string): Promise<Response | null> {
 
 /* The setupmodal frame mounts the real HomePage behind the modal, so the roster and server list must answer here too. */
 function workspaceRosterFixture(path: string): Response | null {
-  if (path !== "/api/user/workspaces") return null;
+  const url = new URL(path, location.origin);
 
-  if (EXTRA_WORKSPACE) {
-    const roster = v.parse(v.object({ entries: v.array(JsonValueSchema), total: v.number() }), STUB_DATA["/api/user/workspaces"]);
-
-    return fixtureJson({
-      entries: [...roster.entries, {
-        name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5,
-        lastVisited: NOW - 36e5, archivedAt: null,
-      }],
-      total: roster.entries.length + 1,
-    });
-  }
-
-  return fixtureJson(STUB_DATA["/api/user/workspaces"]);
+  return url.pathname === "/api/user/workspaces" ? fixtureJson(rosterAnswer(url.searchParams)) : null;
 }
 
 function mcpServersFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
@@ -606,99 +590,126 @@ function deviceConnectFixture(path: string, method: string): Response | null {
   return null;
 }
 
-/* Home-card overview fixture: five rows, one per card state. `gallery:overview` ({name, outcome}) rewrites a row's
-   answer; `?overflowRoster=1` adds a sixth the cards must never fetch. */
-const STOCK_OVERVIEWS = {
+/* One tile per card state; `gallery:overview` ({name, overview}) changes one and the roster socket carries it. */
+const STOCK_OVERVIEWS = new Map(Object.entries({
   "checkout-fixes": {
-    observedAt: NOW - 30e3, activity: "working", decisionsWaiting: 2, hasUpdates: true,
+    activity: "working", decisionsWaiting: 2, hasUpdates: true,
     latestRun: { status: "error", task: "Investigate intermittent checkout failures in the coupon migration" },
-    // The tile loads this URL live, so it must be a real fixture page.
-    primarySlate: { id: "coupon-board", title: "Coupon board", url: "/gallery.html?frame=couponboard" },
+    slates: [{ id: "coupon-board", title: "Coupon board", picture: null }],
   },
   "perf-audit": {
-    observedAt: NOW - 30e3, activity: "working", decisionsWaiting: 0, hasUpdates: false,
-    latestRun: { status: null, task: "Profile the landing bundle and split the vendor chunk" },
-    primarySlate: null,
+    activity: "working", decisionsWaiting: 0, hasUpdates: false,
+    latestRun: { status: null, task: "Profile the landing bundle and split the vendor chunk" }, slates: [],
   },
   "email-triage": {
-    observedAt: NOW - 60e3, activity: "idle", decisionsWaiting: 0, hasUpdates: true,
-    latestRun: { status: "completed", task: "Sort this week's receipts into the ledger" },
-    primarySlate: null,
+    activity: "idle", decisionsWaiting: 0, hasUpdates: true,
+    latestRun: { status: "completed", task: "Sort this week's receipts into the ledger" }, slates: [],
   },
   "design-sys": {
-    observedAt: NOW - 60e3, activity: "unfinished", decisionsWaiting: 0, hasUpdates: false,
-    latestRun: { status: "error", task: "Design system v2" },
-    primarySlate: null,
+    activity: "unfinished", decisionsWaiting: 0, hasUpdates: false,
+    latestRun: { status: "error", task: "Design system v2" }, slates: [],
   },
   "handwrought-walnut-4166c321": {
-    observedAt: NOW - 60e3, activity: "idle", decisionsWaiting: 0, hasUpdates: false,
-    latestRun: null,
-    primarySlate: null,
+    activity: "idle", decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [],
   },
-};
+  "audit-sweep": {
+    activity: "unfinished", decisionsWaiting: 0, hasUpdates: false,
+    latestRun: { status: "completed", task: "Recount the quarter's shares against the register" }, slates: [],
+  },
+} satisfies Record<string, WorkspaceOverview>));
 
 /** A sixth entry whose last run is quiet, so 'Unfinished' can headline; the home roster's pins keep it off the stock five. */
 const EXTRA_WORKSPACE = new URLSearchParams(location.search).get("extraWorkspace") === "1";
 
-const OVERVIEW_BODIES = v.parse(JsonObjectSchema, STOCK_OVERVIEWS);
+const galleryRoster: RosterEntry[] = [
+  ...GALLERY_ROSTER.entries,
+  ...(EXTRA_WORKSPACE ? [{
+    name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5, lastVisited: NOW - 36e5, archivedAt: null,
+  }] : []),
+].map((entry) => {
+  const overview = STOCK_OVERVIEWS.get(entry.name) ?? null;
 
-type OverviewOutcome =
-  | { readonly kind: "body"; readonly body: JsonValue }
-  | { readonly kind: "status"; readonly status: number };
+  return { ...entry, overview, decisions: overview?.decisionsWaiting ?? 0 };
+});
 
-const OverviewOutcomeSchema = v.union([
-  v.object({ kind: v.literal("status"), status: v.number() }),
-  v.object({ kind: v.literal("body"), body: JsonValueSchema }),
-]);
+function galleryRosterCounts(): RosterCounts {
+  const counts: RosterCounts = { all: galleryRoster.length, needs: 0, working: 0, idle: 0, unreported: 0, decisions: 0 };
 
-const OverviewCommandSchema = v.object({ name: v.string(), outcome: OverviewOutcomeSchema });
+  for (const entry of galleryRoster) {
+    counts[rosterBucket(entry.overview?.activity ?? null, entry.decisions)] += 1;
+    counts.decisions += entry.decisions;
+  }
 
-const overviewOutcomes = new Map<string, OverviewOutcome>(
-  Object.entries(OVERVIEW_BODIES).map(([name, body]) => [name, { kind: "body", body }]),
-);
-
-// `?overviewErrors=a,b` seeds failures before the mount reads, so the gate need not race them.
-for (const name of (new URLSearchParams(location.search).get("overviewErrors") ?? "").split(",")) {
-  if (name.trim() !== "") overviewOutcomes.set(name.trim(), { kind: "status", status: 503 });
+  return counts;
 }
 
-if (EXTRA_WORKSPACE) {
-  overviewOutcomes.set("audit-sweep", { kind: "body", body: {
-    observedAt: NOW - 60e3, activity: "unfinished", decisionsWaiting: 0, hasUpdates: false,
-    latestRun: { status: "completed", task: "Recount the quarter's shares against the register" },
-    primarySlate: null,
-  } });
+function rosterAnswer(search: URLSearchParams): RosterPage {
+  const bucket = search.get("bucket");
+  const q = search.get("q") ?? "";
+
+  const entries = galleryRoster.filter((entry) => rosterMatches(entry, q)
+    && (bucket === null || rosterBucket(entry.overview?.activity ?? null, entry.decisions) === bucket));
+
+  return { entries, total: entries.length, nextCursor: null, counts: galleryRosterCounts() };
 }
 
-const OVERFLOW_ROSTER = new URLSearchParams(location.search).get("overflowRoster") === "1";
+const rosterSockets = new Set<EventTarget>();
+
+/** `&rosterSocket=refused` closes each socket unopened; `&session=expired` makes each roster read a 401. */
+const galleryQuery = new URLSearchParams(location.search);
+
+const ROSTER_SOCKET_REFUSED = galleryQuery.get("rosterSocket") === "refused";
+
+const SESSION_EXPIRED = galleryQuery.get("session") === "expired";
+
+const galleryRosterSockets: GalleryRosterSocket[] = [];
+
+Object.assign(window, { galleryRosterSockets });
+
+class GalleryRosterSocket extends EventTarget {
+  readyState: number = WebSocket.CONNECTING;
+
+  constructor() {
+    super();
+    galleryRosterSockets.push(this);
+    rosterSockets.add(this);
+    queueMicrotask(() => {
+      if (ROSTER_SOCKET_REFUSED) {
+        this.close();
+
+        return;
+      }
+
+      this.readyState = WebSocket.OPEN;
+      this.dispatchEvent(new Event("open"));
+    });
+  }
+
+  send(): void {}
+
+  close(): void {
+    this.readyState = WebSocket.CLOSED;
+    rosterSockets.delete(this);
+    this.dispatchEvent(new CloseEvent("close"));
+  }
+}
+
+const OverviewCommandSchema = v.object({ name: v.string(), overview: v.nullable(WorkspaceOverviewSchema) });
 
 window.addEventListener("gallery:overview", (event: Event) => {
   // Parsed at the boundary: nothing typechecks across a dispatch.
   const detail = event instanceof CustomEvent ? v.safeParse(OverviewCommandSchema, event.detail) : null;
 
   if (detail?.success !== true) return;
+  const entry = galleryRoster.find((each) => each.name === detail.output.name);
 
-  overviewOutcomes.set(detail.output.name, detail.output.outcome);
+  if (entry === undefined) return;
+  entry.overview = detail.output.overview;
+  entry.decisions = detail.output.overview?.decisionsWaiting ?? 0;
+  const change: RosterFrame = { type: "workspace", name: entry.name, entry: { ...entry }, counts: galleryRosterCounts() };
+
+  for (const socket of rosterSockets) socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(change) }));
 });
-
-function workspaceOverviewFixture(path: string): Response | null {
-  const match = path.match(/^\/api\/workspaces\/([^/]+)\/overview$/);
-
-  if (match === null) return null;
-
-  const name = decodeURIComponent(match[1]);
-  // Names the page asked for, in order: proof only displayed cards are fetched.
-  const asked = document.documentElement.dataset.galleryOverviewRequests;
-  document.documentElement.dataset.galleryOverviewRequests = asked === undefined ? name : `${asked} ${name}`;
-
-  const outcome = overviewOutcomes.get(name);
-
-  if (outcome === undefined) return fixtureJson({ error: "gallery has no overview fixture for this name" }, 404);
-
-  if (outcome.kind === "status") return fixtureJson({ error: `overview fixture answers ${outcome.status}` }, outcome.status);
-
-  return fixtureJson(outcome.body);
-}
 
 const STUB = new Map(Object.entries(STUB_DATA));
 
@@ -721,9 +732,16 @@ const ANONYMOUS_WORKSPACE = frame === 'workspacepage'
 
 if (ANONYMOUS_WORKSPACE) STUB.set('/api/user/profile', null);
 
+/** Every path fetched, so a gate can prove what the page did not read. */
+const galleryRequests: string[] = [];
+
+Object.assign(window, { galleryRequests });
+
 const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<typeof window.fetch>[1]) => {
   const parsedRequest = v.safeParse(v.instance(Request), input);
   const url = requestUrl(input);
+
+  galleryRequests.push(new URL(url, location.origin).pathname);
 
   const path = url.startsWith("/") ? url : new URL(url, location.origin).pathname;
   const method = (init?.method ?? (parsedRequest.success ? parsedRequest.output.method : "GET")).toUpperCase();
@@ -738,34 +756,21 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     if (answer !== null) return Promise.resolve(answer);
   }
 
-  if (frame === "rosterauthority" && path === "/api/user/workspaces" && method === "GET") {
+  const roster = new URL(url, location.origin);
+
+  if (roster.pathname === "/api/user/workspaces" && method === "GET") {
     // Cloned per call: a `Response` body reads once and the provider has several reads in flight here.
-    return rosterAuthorityHold.promise.then((held) => held.clone());
+    if (frame === "rosterauthority") return rosterAuthorityHold.promise.then((held) => held.clone());
+
+    if (SESSION_EXPIRED) return Promise.resolve(fixtureJson({ error: "Sign in again." }, 401));
+
+    return Promise.resolve(fixtureJson(rosterAnswer(roster.searchParams)));
   }
-
-  if (OVERFLOW_ROSTER && path === "/api/user/workspaces" && method === "GET") {
-    const roster = v.parse(v.object({ entries: v.array(JsonValueSchema), total: v.number() }), STUB_DATA["/api/user/workspaces"]);
-
-    return Promise.resolve(fixtureJson({
-      entries: [...roster.entries, {
-        name: "sixth-unseen", displayName: "A sixth workspace", createdAt: NOW - 864e5,
-        lastVisited: NOW - 864e5, archivedAt: null,
-      }],
-      total: roster.entries.length + 1,
-    }));
-  }
-
 
   const response = STUB.get(path);
 
   if (response !== undefined && (!init?.method || init.method === "GET")) {
     return Promise.resolve(new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } }));
-  }
-
-  if (path.startsWith("/api/workspaces/") && method === "GET") {
-    const overview = workspaceOverviewFixture(path);
-
-    if (overview !== null) return Promise.resolve(overview);
   }
 
   // WorkspacePage records the visit on mount; a 404 renders a notice no real page shows.
@@ -867,21 +872,19 @@ class GalleryShellSocket extends EventTarget {
   }
 }
 
-function installWorkspaceTerminalFixture(): void {
-  const RealWebSocket = window.WebSocket;
+/** Every frame's roster socket is the fixture's; the environment frame's terminal socket is too. */
+window.WebSocket = new Proxy(window.WebSocket, {
+  construct(target, args: [string | URL, (string | string[])?]) {
+    const [url, protocols] = args;
+    const path = new URL(String(url), location.href).pathname;
 
-  window.WebSocket = new Proxy(RealWebSocket, {
-    construct(target, args: [string | URL, (string | string[])?]) {
-      const [url, protocols] = args;
+    if (path === ROSTER_SOCKET_ROUTE) return new GalleryRosterSocket();
 
-      if (TERMINAL_PATH.test(new URL(String(url), location.href).pathname)) return new GalleryShellSocket(url);
+    if (frame === "environment" && TERMINAL_PATH.test(path)) return new GalleryShellSocket(url);
 
-      return protocols === undefined ? new target(url) : new target(url, protocols);
-    },
-  });
-}
-
-if (frame === "environment") installWorkspaceTerminalFixture();
+    return protocols === undefined ? new target(url) : new target(url, protocols);
+  },
+});
 
 
 /** A real MCTS tree at the size the view must survive; rows, not a tree, so it enters through `buildTree` like the socket payload. */
@@ -1307,6 +1310,8 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
 /* `?createFails=1`: the first create rejects with a two-frame cause chain; the second succeeds. */
 const CREATE_FAILS = new URLSearchParams(location.search).get("createFails") === "1";
 
+const RENAME_FAILS = new URLSearchParams(location.search).get("renameFails") === "1";
+
 let createRefused = false;
 
 function maybeRefuseCreate(): void {
@@ -1381,7 +1386,7 @@ Mapping it in the route hides the defect and leaves the cart already mutated.
 
 - Read the coupon and campaign in one transaction.`;
 
-const GALLERY_PLAN_TITLE_NOTE: PlanReviewAnnotation = {
+const GALLERY_PLAN_TITLE_NOTE: ReviewAnnotation = {
   id: "gallery-plan-title-note",
   blockId: "block-0",
   startOffset: 0,
@@ -1397,7 +1402,7 @@ const GALLERY_PLAN_CONTENT = GALLERY_PLAN_VARIANT === "late-heading"
   ? GALLERY_PLAN_LATE_HEADING
   : GALLERY_PLAN_MARKDOWN;
 
-const GALLERY_PLAN_ANNOTATIONS: readonly PlanReviewAnnotation[] =
+const GALLERY_PLAN_ANNOTATIONS: readonly ReviewAnnotation[] =
   GALLERY_PLAN_VARIANT === "annotated-heading" ? [GALLERY_PLAN_TITLE_NOTE] : [];
 
 const GALLERY_PLAN_STATUS: PlanReview["status"] =
@@ -1474,7 +1479,12 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
 
     return { ...snapshot, activePlan: galleryAgentPlan };
   },
-  listSlates: () => ({ slates: [], problems: [] }),
+  // `&slates=3`: three slates, whose tabs overflow the strip.
+  listSlates: () => ({
+    slates: ["Board", "Notes", "Tally"].slice(0, Number(new URLSearchParams(location.search).get("slates") ?? 0))
+      .map((title) => ({ id: title.toLowerCase(), title, bindings: [] })),
+    problems: [],
+  }),
   getActivePlanReview: () => galleryAgentPlan,
   // The Work tab draws this read, not `getActivePlanReview`. The owner is the workspace's name: `createMain({ name: this.name })` registers it, never "main".
   listWorkspaceWork: () => ({
@@ -1568,6 +1578,8 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
     const [name, displayName] = v.parse(v.tuple([v.string(), v.string()]), args);
     const entry = GALLERY_SUBS.find((sub) => sub.name === name);
 
+    if (RENAME_FAILS) throw new Error("Connection closed");
+
     if (!entry) throw new Error(`gallery: no subordinate "${name}"`);
     entry.displayName = displayName;
 
@@ -1644,6 +1656,12 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     galleryRevertConversation(v.parse(v.string(), args?.[0]));
 
     return rpcResult(null).json<T>();
+  }
+
+  if (method === "getExposedPorts" && document.documentElement.dataset.listingHeld === "1") return new Promise<T>(() => {});
+
+  if (method === "getExposedPorts" && document.documentElement.dataset.sandboxStarting === "1" && args?.[0] === "sandbox") {
+    return rpcResult({ ports: [], pending: "the sandbox's container is still restoring" }).json<T>();
   }
 
   // Arrives after first paint: once the gate sets the dataset flag, the next live refresh lists a new port.
@@ -3245,7 +3263,7 @@ function RosterAuthorityFrame() {
         roster.rename(entry.name, "Renamed locally");
       }}>Apply local rename</button>
       <button data-roster-release type="button" onClick={() => {
-        rosterAuthorityHold.resolve(new Response(JSON.stringify(STUB_DATA["/api/user/workspaces"]), {
+        rosterAuthorityHold.resolve(new Response(JSON.stringify(rosterAnswer(new URLSearchParams())), {
           headers: { "content-type": "application/json" },
         }));
       }}>Release stale roster</button>
@@ -3901,48 +3919,6 @@ function SlatePreviewFrame() {
   );
 }
 
-/** Rendered at the tile's 4x viewport so the scaled-down photograph shows the real app. */
-function CouponBoardSlate() {
-  const coupons = [
-    { code: "SAVE20", kind: "percent", state: "active", used: 41 },
-    { code: "FREESHIP", kind: "shipping", state: "active", used: 12 },
-    { code: "LEGACY5", kind: null, state: "500s on apply", used: 3 },
-    { code: "WELCOME", kind: "fixed", state: "paused", used: 88 },
-  ] as const;
-
-  const tone: Record<(typeof coupons)[number]["state"], string> = {
-    "active": "p-success",
-    "paused": "p-text-3",
-    "500s on apply": "p-danger",
-  };
-
-  return (
-    <div className="p-bg min-h-screen p-8 font-sans">
-      <div className="mx-auto max-w-2xl">
-        <div className="flex items-baseline justify-between">
-          <h1 className="p-display text-3xl p-text">Coupon board</h1>
-          <span className="p-meta p-text-3">4 rules · checkout-fixes</span>
-        </div>
-        <div className="mt-6 space-y-2">
-          {coupons.map((coupon) => (
-            <div key={coupon.code} className="flex items-center justify-between rounded-lg border p-border p-recessed px-4 py-3">
-              <div>
-                <span className="font-mono text-sm font-medium p-text">{coupon.code}</span>
-                <span className="ml-3 p-meta p-text-3">{coupon.kind ?? "no kind"}</span>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="p-meta p-text-3">{coupon.used} uses</span>
-                <span className={`p-meta ${tone[coupon.state]}`}>{coupon.state}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-        <p className="mt-6 p-meta p-text-3">LEGACY5 fails in applyCoupon — kind:null rows from the 0412 migration.</p>
-      </div>
-    </div>
-  );
-}
-
 /* The thread ends on a bare `slate://` address: the markdown pass must turn it into the card, not a link. */
 const SLATE_THREAD: UIMessage[] = [
   msg({
@@ -4409,7 +4385,6 @@ function ApprovalsFrame() {
 
 const PARKED_ONLY: PendingAction[] = PENDING_ACTIONS.filter((a) => a.kind === "deferred_action");
 
-/** Shared by both absence frames. */
 const settledEmptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
 
@@ -4418,7 +4393,6 @@ const settledEmptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promi
   return stubRpc<T>(method, args);
 };
 
-/** A fresh workspace's column. */
 function WorkEmptyFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
@@ -6079,6 +6053,16 @@ function previewTabsFrame(): MountedFrame {
   return { entries: ["/"], node: <PreviewTabsGallery /> };
 }
 
+function GalleryNavigator() {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    Object.assign(window, { galleryNavigate: async (path: string) => { await navigate(path); } });
+  }, [navigate]);
+
+  return null;
+}
+
 /** Both app routes as App.tsx keys them, so creating an agent can navigate. */
 function workspacePageFrame(): MountedFrame {
   serveGalleryRpc(workspacePageRpc);
@@ -6089,10 +6073,13 @@ function workspacePageFrame(): MountedFrame {
   return {
     entries: [`/workspace/${WORKSPACE_PAGE_NAME}`],
     node: (
-      <Routes>
-        <Route path="/workspace/:agentId" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
-        <Route path="/workspace/:agentId/agents/:subName" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
-      </Routes>
+      <>
+        <GalleryNavigator />
+        <Routes>
+          <Route path="/workspace/:agentId" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
+          <Route path="/workspace/:agentId/agents/:subName" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
+        </Routes>
+      </>
     ),
   };
 }
@@ -6154,7 +6141,6 @@ async function mount() {
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
     ["devices", { node: <DevicesFrame />, entries: ["/devices"] }],
     ["devices-empty", { node: <DevicesFrame />, entries: ["/devices"] }],
-    ["couponboard", { node: <CouponBoardSlate />, entries: ["/"] }],
   ]);
 
   const fixture = fixtureFrames.get(frame);
@@ -6257,7 +6243,7 @@ async function mount() {
     // Every frame mounts under the shell's three stores; a frame mounting `Layout` gets its nearer store, as the app does.
     <StrictMode>
       <MemoryRouter initialEntries={entries}>
-        <AccountProvider><WorkspaceRosterProvider><WorkspaceOverviewsProvider>{node}</WorkspaceOverviewsProvider></WorkspaceRosterProvider></AccountProvider>
+        <AccountProvider><WorkspaceRosterProvider>{node}</WorkspaceRosterProvider></AccountProvider>
       </MemoryRouter>
     </StrictMode>,
   );

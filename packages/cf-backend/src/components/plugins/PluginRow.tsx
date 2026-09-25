@@ -15,20 +15,10 @@ const DOT_BY_TONE = {
   danger: 'bg-[var(--c-danger)]',
 } satisfies Record<PluginTone, string>;
 
-export type PluginKind = 'server' | 'skill';
-
-const WELL_BY_KIND = {
-  server: 'bg-[#3b82f6]/15 text-[#60a5fa]',
-  skill: 'bg-[#22c55e]/15 text-[#4ade80]',
-} satisfies Record<PluginKind, string>;
-
 /** 40px matches `BrandMark`'s tile so a mixed list keeps one left edge. */
-export function PluginTile({ icon: Icon, kind }: {
-  icon: ComponentType<{ size?: number; className?: string }>;
-  kind: PluginKind;
-}) {
+export function PluginTile({ icon: Icon }: { icon: ComponentType<{ size?: number; className?: string }> }) {
   return (
-    <span className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${WELL_BY_KIND[kind]}`}>
+    <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[#3b82f6]/15 text-[#60a5fa]">
       <Icon size={20} />
     </span>
   );

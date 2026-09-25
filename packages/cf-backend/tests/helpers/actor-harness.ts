@@ -13,7 +13,7 @@ import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from '
 import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, SpendSource, BackendHost, ModelInfo, ModelPricing } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { Refusal } from '@kinu.run/core/obs';
-import type { DeferredApprovalQueue, SessionTranscript } from '@kinu.run/core';
+import type { SessionTranscript, WorkspaceOverview } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
 import type { ChatTurnInput, ActorTurnLease, PreparedTurn } from '@kinu.run/core';
 import type { ChatWireTransport } from '../../src/chat-transport';
@@ -21,7 +21,7 @@ import { isWorkMode, workModeForTurnMetadata, ChatSession, ExtensionHost, type K
 import {
   ActorClaimStore, admitSubordinateTask, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog,
   MAIN_AGENT, openWorkspaceMainActor,
-  SessionHistory, TerminalTransitions, type VFS,
+  SessionHistory, TerminalTransitions, type VFS, WorkspaceActorDirectory,
 } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
 import {
@@ -450,7 +450,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
 
   observeActorHost(): ActorHost { return this.actorHost(); }
-  observeDeferrals(): DeferredApprovalQueue { return this.deferrals; }
 
   /** Every programmatic turn the loop was asked to admit through the host. */
   readonly harnessEnqueued: ProgrammaticTurn[] = [];
@@ -582,13 +581,20 @@ export function gatewayWorkspace(gateway: StubbedAiBinding, world: HarnessActorW
 
 /**
  * A delegated task, run as production runs one: admitted to the hired actor's queue as its parent's
- * `agents` tool admits it, then run by the wake that drains admitted delegations.
+ * `agents` tool admits it, then run by the wake that drains admitted delegations. The actor is opened
+ * from the object's stored rows, so a suite names it by id and never holds its host.
  */
 export async function runDelegatedTask(
-  workspace: ActorHarness<HarnessOrchestratorAgent>, child: HostedActor, task: string,
+  workspace: ActorHarness<HarnessOrchestratorAgent>, actorId: string, task: string,
 ): Promise<void> {
-  admitSubordinateTask(new EventLog(makeSqlExec(workspace.db), child.handle), {
-    fromWorkspace: child.record.workspaceId, kind: 'task', body: task, mode: 'build', now: Date.now(),
+  const sql = sqlOver(workspace.db);
+  const [identity] = sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`;
+
+  if (identity === undefined) throw new Error('the workspace has no identity row');
+  const child = new WorkspaceActorDirectory(sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id }).open(actorId);
+
+  admitSubordinateTask(new EventLog(makeSqlExec(workspace.db), child), {
+    fromWorkspace: child.workspaceId, kind: 'task', body: task, mode: 'build', now: Date.now(),
   });
   await workspace.agent.terminalRetryPass();
 }
@@ -1243,6 +1249,12 @@ export interface RecordedUserPlaneCalls {
   titles: string[];
   /** Set to record the turns the object asks the hub to stop device work for; unset, that ask is unreachable. */
   turnCancels?: string[];
+  /** Set to record the roster tiles the object pushes, in order; unset, a push lands nowhere. */
+  overviews?: WorkspaceOverview[];
+  /** What the owner's object throws at each push, in order, before it takes one. */
+  refuseOverviews?: Error[];
+  /** Set to hold every push until it settles. */
+  holdOverviews?: Promise<void>;
 }
 
 /** A real user plane: `userDO` is bound at `env.UserDO`; `workspace` is the DO name
@@ -1343,6 +1355,13 @@ export function makeEnv(
           },
           // A job holding no device commands: what the hub answers when nothing needs stopping.
           cancelDeviceRequestsForBackgroundJob: async (): Promise<[]> => [],
+          putWorkspaceOverview: async (_caller: UserCaller, _workspace: string, overview: WorkspaceOverview): Promise<void> => {
+            await userPlane?.holdOverviews;
+            const refusal = userPlane?.refuseOverviews?.shift();
+
+            if (refusal !== undefined) throw refusal;
+            userPlane?.overviews?.push(overview);
+          },
           ...(userPlane?.turnCancels !== undefined && {
             cancelDeviceRequestsForTurn: async (_caller: UserCaller, turnId: string): Promise<[]> => {
               userPlane.turnCancels?.push(turnId);

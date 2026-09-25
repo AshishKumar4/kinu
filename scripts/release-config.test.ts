@@ -51,6 +51,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
@@ -77,28 +78,36 @@ const SETUP_LEAN = '.github/actions/setup-lean/action.yml';
 
 const LEAN_VERIFY = '.github/workflows/lean-verify.yml';
 
+const BLOCK_LOWER = 'packages/devbox/block-lower';
+
+/** The container hosts: every Worker config that runs the block-lower image. */
+const CONTAINER_HOSTS = [WRANGLER, 'packages/devbox/bench/wrangler.jsonc', 'packages/devbox/example/wrangler.jsonc'];
+
 /**
- * The sandbox container image every environment runs, declared ONCE.
+ * The sandbox container image every environment runs, declared ONCE: the block-lower artifact record.
  *
- * `version` is the `@cloudflare/sandbox` release whose container the SDK expects,
- * held below against the dependency that actually ships. The image itself is the
- * block layer built on that upstream base: `packages/devbox/block-lower/Dockerfile`
- * compiles `devbox-block-lower` and `devbox-squashfuse` into the upstream
- * `docker.io/cloudflare/sandbox@sha256:4a56a37a…` base and the result is pushed
- * to this account's registry, so `digest` is the pushed manifest's digest — the
- * same sha256 both wrangler blocks carry — rather than a tag resolution.
- *
- * wrangler.jsonc repeats the reference once per environment because a JSONC file
- * cannot import a constant. This is the declaration those two are held to, so a
- * version bump edits this record and both config blocks and nothing else.
+ * `packages/devbox/block-lower/Dockerfile` compiles `devbox-block-lower` and `devbox-squashfuse` into the
+ * upstream `@cloudflare/sandbox` base, and the result is pushed to this account's registry; the push writes
+ * `upstream.json` with the pushed manifest's digest, the sandbox release whose container the SDK expects,
+ * and the hash of every source the image was built from. Each wrangler.jsonc repeats the reference because a
+ * JSONC file cannot import a constant; this record is what they are held to.
  */
+const BlockLowerArtifactSchema = v.object({
+  image: v.string(),
+  digest: v.string(),
+  sandboxVersion: v.string(),
+  files: v.record(v.string(), v.string()),
+});
+
+const ARTIFACT = v.parse(BlockLowerArtifactSchema, JSON.parse(readRepositoryFile(REPO_ROOT, `${BLOCK_LOWER}/upstream.json`)));
+
 const SANDBOX_IMAGE = {
-  repository: 'registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer',
-  version: '0.12.9',
-  digest: 'sha256:c2c03bdf3b46d22633ffdeab545953d7c0caa0fb562d36e70ebdd4618898c718',
+  repository: ARTIFACT.image.slice(0, ARTIFACT.image.lastIndexOf('@')),
+  version: ARTIFACT.sandboxVersion,
+  digest: ARTIFACT.digest,
 } as const;
 
-const PINNED_IMAGE = `${SANDBOX_IMAGE.repository}@${SANDBOX_IMAGE.digest}`;
+const PINNED_IMAGE = ARTIFACT.image;
 
 /** A vite plugin that decides something per environment — the one shape this
  *  file calls. `PluginOption` also admits arrays, promises and `false`, so the
@@ -130,6 +139,11 @@ function isImmutableImageReference(reference: string): boolean {
   // Only the last segment can carry a tag; an earlier colon is a registry port.
   return !name.slice(name.lastIndexOf('/') + 1).includes(':');
 }
+
+/** A container host's config, narrowed to the images it runs. */
+const ContainerHostSchema = v.object({
+  containers: v.array(v.object({ class_name: v.string(), image: v.string() })),
+});
 
 /** Only the keys this file reads. A narrow schema rather than the manifest's
  *  full one: a shape that admitted more would start answering other questions,
@@ -499,5 +513,35 @@ describe('sign-in has no single chokepoint', () => {
 describe('the sandbox has one transport', () => {
   test('the deployed default is the transport every client names', () => {
     expect(CONFIG.vars.SANDBOX_TRANSPORT).toBe(SANDBOX_TRANSPORT);
+  });
+});
+
+/**
+ * A8 THE BLOCK-LOWER IMAGE IS BUILT FROM THIS TREE. The pushed image is the only thing any host runs, so a
+ * source edited without a rebuild and a new record ships a container that is not the code reviewed here, and
+ * a host left on an older digest runs a filesystem the others do not.
+ */
+describe('the block-lower image is built from this tree', () => {
+  test('the record hashes exactly the sources the image builds from, and each hash holds', () => {
+    const sources = trackedFiles()
+      .filter((file) => file.startsWith(`${BLOCK_LOWER}/`))
+      .map((file) => file.slice(BLOCK_LOWER.length + 1))
+      .filter((file) => ['Cargo.toml', 'Cargo.lock', 'Dockerfile'].includes(file) || /^src\/[^/]+\.rs$/u.test(file));
+
+    expect(Object.keys(ARTIFACT.files).sort()).toEqual(sources.sort());
+
+    for (const [file, recorded] of Object.entries(ARTIFACT.files)) {
+      const built = createHash('sha256').update(readFileSync(join(REPO_ROOT, BLOCK_LOWER, file))).digest('hex');
+      expect(built, `${file} changed since the image was built`).toBe(recorded);
+    }
+  });
+
+  test('every container host runs the recorded image, by digest', () => {
+    expect(ARTIFACT.image.endsWith(`@${ARTIFACT.digest}`)).toBe(true);
+
+    for (const host of CONTAINER_HOSTS) {
+      const config = parseJsonc(readRepositoryFile(REPO_ROOT, host), ContainerHostSchema, host);
+      expect(config.containers.map((container) => container.image), host).toEqual(config.containers.map(() => PINNED_IMAGE));
+    }
   });
 });

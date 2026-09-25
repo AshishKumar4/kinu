@@ -12,6 +12,7 @@ import {
 import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, actorReadHandle, readSessionTranscript,
+  resetGuardedExec, StoragePredatesResetError, ERROR_STATUS,
   type SubordinateInspectionAuthority, type SessionTranscriptReader,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
@@ -35,7 +36,7 @@ import {
   type CliSocketBearer,
   type RpcFrame,
 } from "./cli/rpc-gate";
-import { hostedWindowMay, requiredRpcAccess } from "@kinu.run/core";
+import { hostedWindowMay, requiredRpcAccess, rpcMovesOverview } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
@@ -128,7 +129,7 @@ import {
   inheritedContextFromTranscript,
   type ReleaseToolDeps,
   PlanReviewActions, type PlanDecisionOutcome,
-  type PlanEdit, type PlanReview, type PlanReviewAnnotation,
+  type PlanEdit, type PlanReview, type ReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
   isVfsError,
   type ParentRpcResult, type ParentExecResult,
@@ -484,12 +485,13 @@ function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider) {
 export abstract class ActorAgent extends Agent<Env> {
   // Actor profile: these members are the whole difference between actor kinds.
 
-  /** Owner userId, or null while unclaimed. */
   protected abstract getOwnerUserId(): string | null;
   protected abstract actorHandle(): ActorHandle;
   abstract actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult>;
 
   private actorRuntimeRefusal(): Refusal | null {
+    if (this.storageRefusal !== null) return refusalOf(this.storageRefusal);
+
     try {
       this.actorHandle();
 
@@ -501,6 +503,8 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   override async alarm(): Promise<void> {
+    // Returned, not thrown: the platform retries a thrown alarm.
+    if (this.storageRefusal !== null) return;
     const refusal = this.actorRuntimeRefusal();
 
     if (refusal) throw new KinuError(refusal.reason, refusal.error);
@@ -547,6 +551,8 @@ export abstract class ActorAgent extends Agent<Env> {
     void this.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${token})
              ON CONFLICT(id) DO UPDATE SET token = excluded.token`;
     this.invalidateModelCaches();
+    // The first tile, so a workspace nobody opens still shows.
+    this.overviewChanged();
 
     // Hosted actors read the single capability row through their runtime, so a reissue applies on
     // their next call; no per-actor copies exist, so `missed` is always zero (callers report it).
@@ -578,9 +584,19 @@ export abstract class ActorAgent extends Agent<Env> {
     // backend shares the table names with a nullable `turn_id`; one writer keeps creation order
     // from picking the shape.
     initPendingSendTables((ddl: string) => this.ctx.storage.sql.exec(ddl));
+
     // Per-actor admission ledger (one workspace-wide pointer cannot distinguish concurrent actors).
     // Initialized here because onStart recovery can read it before a root's ensureSchema runs.
-    initActorClaimTables((ddl: string) => this.ctx.storage.sql.exec(ddl));
+    try {
+      initActorClaimTables(resetGuardedExec((ddl: string) => this.ctx.storage.sql.exec(ddl), this.ctx.storage.sql));
+    } catch (cause) {
+      if (!(cause instanceof StoragePredatesResetError)) throw cause;
+      this.storageRefusal = cause;
+      diagnostics.failure('workspace.storage_predates_reset', cause, { table: cause.table });
+
+      return;
+    }
+
     // Same reason: the onStart recovery sweep can read it before a root's `ensureSchema`.
     initTerminalEffectTable((ddl: string) => this.ctx.storage.sql.exec(ddl));
   }
@@ -678,7 +694,7 @@ export abstract class ActorAgent extends Agent<Env> {
   async savePlanReviewAnnotations(
     id: string,
     revision: number,
-    annotations: PlanReviewAnnotation[],
+    annotations: ReviewAnnotation[],
   ): Promise<PlanReviewResult> {
     return this.planActions.saveAnnotations(id, revision, { value: annotations });
   }
@@ -971,6 +987,8 @@ export abstract class ActorAgent extends Agent<Env> {
       ?? this.actorSession.profileInputs?.envelope.catalog.accounts?.[provider],
   });
 
+  protected storageRefusal: StoragePredatesResetError | null = null;
+
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     // Must precede any read or write of it; see initCapabilitySchema.
@@ -1046,7 +1064,9 @@ export abstract class ActorAgent extends Agent<Env> {
         if (await room.onMessage(connection, message)) return;
       }
 
-      return await dispatchMessage(connection, message);
+      await dispatchMessage(connection, message);
+
+      if (rpc !== null && rpcMovesOverview(rpc.method)) this.overviewChanged();
     };
 
     const baseOnConnect = this.onConnect.bind(this);
@@ -1054,9 +1074,21 @@ export abstract class ActorAgent extends Agent<Env> {
 
     this.onConnect = async (connection, ctx) => {
       if (await this.refuseRevokedSocketAuthority(connection, '')) return;
+
+      // Before anything reads the store. The page shows it where a failed turn shows.
+      if (this.storageRefusal !== null) {
+        connection.send(JSON.stringify({
+          type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: 'storage-refused', reason: this.storageRefusal.code,
+          body: this.storageRefusal.message, done: true, error: true,
+        }));
+
+        return;
+      }
+
       this.connectionOpened();
 
       await baseOnConnect(connection, ctx);
+
       const terminal = await this.terminalFor(connection);
 
       if (terminal) await terminal.attachTerminal(connection);
@@ -1064,6 +1096,7 @@ export abstract class ActorAgent extends Agent<Env> {
     };
 
     this.onClose = async (connection, code, reason, wasClean) => {
+      if (this.storageRefusal !== null) return await baseOnClose(connection, code, reason, wasClean);
       const terminal = await this.terminalFor(connection);
 
       if (terminal) terminal.terminalClose(connection);
@@ -1080,6 +1113,10 @@ export abstract class ActorAgent extends Agent<Env> {
 
     this.onRequest = async (request) => {
       const url = new URL(request.url);
+
+      if (this.storageRefusal !== null) {
+        return Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] });
+      }
 
       if (url.pathname === '/get-messages' || url.pathname.endsWith('/get-messages')) {
         // The seed is fetched on the same path the pane's socket opens, so each pane gets its own
@@ -1328,6 +1365,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
       if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);
     }
+
+    // A turn a deploy cut short reads right by the next tick of the wake it armed.
+    this.overviewChanged();
   }
 
   /**
@@ -1388,6 +1428,11 @@ export abstract class ActorAgent extends Agent<Env> {
   protected _terminalReported: Promise<void> = Promise.resolve();
   private _terminalReportedOwner: AsyncTaskOwner | null = null;
 
+  /** A settled turn's detached leftovers are still closing in this isolate. */
+  protected get terminalClosing(): boolean {
+    return this._terminalReportedOwner !== null;
+  }
+
   /**
    * Keep this isolate alive for a terminal close via a durable fiber, since a bare promise is not a
    * wake; the fiber's run row hands leftovers to {@link classifyRecoveredFiber}. Order: hold, join, dispose.
@@ -1413,6 +1458,8 @@ export abstract class ActorAgent extends Agent<Env> {
           this._terminalReportedOwner = null;
           this._terminalReported = Promise.resolve();
         }
+
+        this.overviewChanged();
       }
     })();
 
@@ -1722,6 +1769,7 @@ export abstract class ActorAgent extends Agent<Env> {
           // Arm the turn's own wake at its open, so a kill mid-turn leaves both the run row and the wake
           // that re-drives what it owed.
           armTurnWake: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
+          quiet: () => { this.overviewChanged(); },
           steerSkills: (text) => steerSkillsBlock({
             vfs: this.rt.storage.vfs,
             config: this.config,
@@ -1824,6 +1872,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Fires after each committed change to the root actor's turn claims. */
   protected abstract turnClaimChanged(): void;
+
+  protected abstract overviewChanged(): void;
 
   protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
 
@@ -2160,6 +2210,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // Synchronous read plus same-tick buffer push means the observed turn's prepareStep drains
         // the signal; a turn that settles first re-delivers it from settle().
         turnInFlight: () => this.chatLoop.turnInFlight(),
+        closed: () => this.chatLoop.closed,
         // keepAliveWhile holds the DO through the debounce window and drain; if it dies anyway,
         // events stay durable in the EventLog and a later drain picks them up.
         setTimer: (fn, ms) => {

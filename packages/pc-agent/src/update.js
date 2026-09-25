@@ -21,7 +21,26 @@ const path = require('node:path');
 
 const crypto = require('node:crypto');
 
-const { spawn, spawnSync } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
+
+/**
+ * Runs a child to its exit and settles with `execFile`'s own answer:
+ * `{ error, stdout, stderr }`, where a numeric `error.code` is the exit status.
+ * Stdin is closed at once, as a synchronous spawn's `'ignore'` had it. The
+ * daemon's one way to wait for a child: sandbox.js and index.js import it.
+ *
+ * Never a synchronous spawn: while Bun's `spawnSync` waits it points the VM at
+ * a private event loop, and a collection that frees a main-loop poll there (a
+ * socket, a sink, a finished subprocess) makes a later `spawnSync` spin at 100%
+ * CPU over a zombie child, forever (oven-sh/bun#34069). A daemon runs for days.
+ */
+function runToExit(file, args, options) {
+  const { promise, resolve } = Promise.withResolvers();
+  const child = execFile(file, args, options, (error, stdout, stderr) => resolve({ error, stdout, stderr }));
+  child.stdin.end();
+
+  return promise;
+}
 
 /** The version stamp beside the daemon file, written by the CLI at connect
  *  and by this module at update. The daemon ships no embedded version. */
@@ -282,19 +301,19 @@ function landDaemonFiles(layout, extracted, version) {
 }
 
 /** The landed daemon, run once: it loads its siblings and prints its stamp. */
-function selftest(layout) {
-  const run = spawnSync(layout.runtime, [layout.daemonPath, '--selftest'], {
+async function selftest(layout) {
+  const { error, stdout, stderr } = await runToExit(layout.runtime, [layout.daemonPath, '--selftest'], {
     cwd: layout.deviceHome,
     env: { ...process.env, KINU_HOME: layout.deviceHome },
     encoding: 'utf8',
     timeout: 60_000,
   });
 
-  if (run.error) throw new Error('the landed daemon could not be run', { cause: run.error });
+  if (error !== null && !Number.isInteger(error.code)) throw new Error('the landed daemon could not be run', { cause: error });
 
-  if (run.status !== 0) throw new Error(`the landed daemon failed its selftest (exit ${run.status}): ${String(run.stderr).trim()}`);
+  if (error !== null) throw new Error(`the landed daemon failed its selftest (exit ${error.code}): ${String(stderr).trim()}`);
 
-  return String(run.stdout).trim();
+  return String(stdout).trim();
 }
 
 /** Undo a landing whose daemon failed its selftest: daemon first, so no
@@ -307,14 +326,14 @@ function rollBack(layout) {
   syncDirectory(layout.deviceHome);
 }
 
-function extractArchive(bytes, into) {
+async function extractArchive(bytes, into) {
   const archive = path.join(into, 'cli.tar.gz');
   fs.writeFileSync(archive, bytes);
-  const unpack = spawnSync('tar', ['-xzf', archive, '-C', into], { encoding: 'utf8' });
+  const { error, stderr } = await runToExit('tar', ['-xzf', archive, '-C', into], { encoding: 'utf8' });
 
-  if (unpack.error) throw new Error('tar could not run', { cause: unpack.error });
+  if (error !== null && !Number.isInteger(error.code)) throw new Error('tar could not run', { cause: error });
 
-  if (unpack.status !== 0) throw new Error(`unpacking the archive failed: ${String(unpack.stderr).trim()}`);
+  if (error !== null) throw new Error(`unpacking the archive failed: ${String(stderr).trim()}`);
 }
 
 /** A failure and its cause, one line, for the daemon log. */
@@ -362,16 +381,17 @@ function createUpdater(opts) {
       // UPDATE for the same version lands and tries again.
       log(`device.update_successor_exited pid=${child.pid} code=${code}`);
 
-      try {
-        rollBack(layout);
-        clearPendingMarker(layout.deviceHome);
-        reclaim?.();
-        log(`device.update_rolled_back version=${version}`);
-      } catch (err) {
-        log('device.update_rollback_failed', describeFailure(err));
+      /** @param {unknown} error */
+      function reportRollbackFailure(error) {
+        log('device.update_rollback_failed', describeFailure(error));
       }
 
-      pending = false;
+      (async () => {
+        rollBack(layout);
+        clearPendingMarker(layout.deviceHome);
+        await reclaim?.();
+        log(`device.update_rolled_back version=${version}`);
+      })().catch(reportRollbackFailure).finally(() => { pending = false; });
     });
     child.unref();
     log(`device.update_successor_started pid=${child.pid} version=${version}`);
@@ -385,7 +405,7 @@ function createUpdater(opts) {
       const work = fs.mkdtempSync(path.join(layout.deviceHome, 'pc-agent.update-'));
 
       try {
-        extractArchive(await downloadVerified(fetchFn, origin, frame), work);
+        await extractArchive(await downloadVerified(fetchFn, origin, frame), work);
         landDaemonFiles(layout, work, frame.version);
       } finally {
         fs.rmSync(work, { recursive: true, force: true });
@@ -395,7 +415,7 @@ function createUpdater(opts) {
     let reported;
 
     try {
-      reported = selftest(layout);
+      reported = await selftest(layout);
     } catch (err) {
       rollBack(layout);
       throw new Error('the landed daemon failed its selftest; the previous build was restored', { cause: err });
@@ -478,4 +498,5 @@ module.exports = {
   updateOptedOut,
   clearPendingMarker,
   createUpdater,
+  runToExit,
 };

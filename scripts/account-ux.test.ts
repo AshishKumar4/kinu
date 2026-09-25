@@ -24,11 +24,6 @@ mkdirSync(SHOTS, { recursive: true });
 
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 844 } } as const;
 
-/** The app the workspaces tile photographs — the coupon-board slate is a
- *  gallery frame of its own (`?frame=couponboard` in `gallery.tsx`), served
- *  same-origin so the tile's iframe draws a real page, not a white hold. */
-const SLATE_FIXTURE_URL = '/gallery.html?frame=couponboard';
-
 async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light', viewport: keyof typeof VIEWPORTS): Promise<Page> {
   const page = await gallery.newPage();
   await page.setViewport(VIEWPORTS[viewport]);
@@ -140,24 +135,8 @@ async function checkWorkspacesView(
   expect(body2).toContain('Needs you · 2');
   expect(body2).toContain('Last run failed');
 
-  // The tile of the one workspace with a primary slate holds the slate itself
-  // — live, and inert in every direction a reader could touch it. The other
-  // four tiles, and every row of the list, hold no frame at all.
-  const frames = await page.$$eval('[data-workspaces-view] iframe', (nodes) => nodes.map((node) => ({
-    src: node.getAttribute('src'),
-    tabIndex: node.tabIndex,
-    pointerEvents: getComputedStyle(node).pointerEvents,
-    card: node.closest('[data-slate-frame]')?.parentElement?.textContent ?? '',
-  })));
-
-  expect(frames.length).toBe(view === 'tiled' ? 1 : 0);
-
-  if (view === 'tiled') {
-    expect(frames[0]?.src).toBe(SLATE_FIXTURE_URL);
-    expect(frames[0]?.tabIndex).toBe(-1);
-    expect(frames[0]?.pointerEvents).toBe('none');
-    expect(frames[0]?.card).toContain('Checkout coupon bug');
-  }
+  // No tile runs a slate: a live frame on every visit would wake each workspace's sandbox.
+  expect(await page.$$('[data-workspaces-view] iframe')).toHaveLength(0);
 
   // The filter tabs and the page's own create action sit in the control row;
   // the count is a tabular "N of M", not a sentence.
@@ -476,8 +455,7 @@ describe('account panels', () => {
 
             // Section eyebrows are uppercased by the CSS role, and innerText
             // reads them as drawn.
-            for (const text of ['MCP SERVERS', 'github', 'auth needed',
-              'SKILLS', 'audit-implementation', 'built in']) {
+            for (const text of ['MCP SERVERS', 'github', 'auth needed']) {
               expect(body).toContain(text);
             }
 

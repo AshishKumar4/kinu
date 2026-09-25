@@ -114,7 +114,7 @@ export async function runStartupUpdateCheck(opts: {
 
     const served = await fetchServedVersion(origin, opts.fetchImpl ?? fetch, STARTUP_PROBE_TIMEOUT_MS);
     // Record the attempt either way so an unreachable origin does not retry every invocation.
-    updateConfigFile((c) => {
+    await updateConfigFile((c) => {
       c.updateCheckedAt = ctx.now;
 
       if (served) c.updateLatestSeen = served.version;

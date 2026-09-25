@@ -8,9 +8,11 @@
  * lands as a tile without a reload; that New folder creates the folder the
  * dialog named; that "Mark as skill" in a folder's menu is refused on a folder
  * that is not a skill, with the reason, and allowed on one that is, after which
- * the folder is linked under /skills; that a pasted SKILL.md with no front
- * matter is refused inside the dialog with the parser's reason; that a file
- * opens in the viewer; that the Shared tab exists only once something is
+ * the folder is linked under /skills; that the Skills folder is always there,
+ * showing the built-in skills read only beside the owner's, in the order and
+ * precedence of the /skills view agents read; that a pasted SKILL.md with no
+ * front matter is refused inside the dialog with the parser's reason; that a
+ * file opens in the viewer; that the Shared tab exists only once something is
  * shared, and a new account someone shared with lands on it.
  *
  * The fixture is the gallery's own: `?frame=drive` mounts the real DrivePage
@@ -68,6 +70,15 @@ async function waitForEntry(page: Page, name: string): Promise<void> {
 }
 
 const crumbs = (page: Page) => page.$$eval('nav[aria-label="Folder"] a', (anchors) => anchors.map((a) => a.textContent?.trim() ?? ''));
+
+/** The Skills folder's tiles as drawn: name, whether built in, and the meta line. */
+function skillTiles(page: Page): Promise<{ name: string; builtin: boolean; meta: string }[]> {
+  return page.$$eval('[data-drive-section="Skills"] li', (tiles) => tiles.map((tile) => ({
+    name: tile.querySelector('[data-drive-tile-name]')?.textContent?.trim() ?? '',
+    builtin: tile.hasAttribute('data-drive-builtin'),
+    meta: tile.querySelector('[data-drive-tile-meta]')?.textContent?.trim() ?? '',
+  })));
+}
 
 /** Open a tile's menu; each item by its accessible name, with the reason a refused one gives. */
 async function menuOf(page: Page, tile: string): Promise<{ label: string; refused: string | null }[]> {
@@ -164,7 +175,7 @@ describe('the Drive', () => {
     });
   });
 
-  test('marks a skill folder from its menu, and refuses a pasted file with no front matter', async () => {
+  test('marks a skill folder from its menu, shows the built-in skills beside it, and refuses a pasted file with no front matter', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'drive&path=/projects/ops', 'light', 'desktop');
 
@@ -178,10 +189,59 @@ describe('the Drive', () => {
         await waitForEntry(page, 'skills');
         await page.click('[data-drive-entry="skills"] a');
         await waitForEntry(page, 'deploy');
-        expect(await entries(page)).toEqual([['deploy', 'symlink'], ['review', 'folder']]);
+        expect(await entries(page)).toEqual([
+          ['deploy', 'symlink'], ['review', 'folder'], ['slates', 'folder'], ['review.md', 'file'], ['slates.md', 'file'], ['standup.md', 'file'],
+        ]);
+        // The built-in skills sit among the owner's in the /skills view's order: by name, a built-in ahead of the
+        // owner's skill of its name, which agents never see and whose tile says so.
+        expect(await skillTiles(page)).toEqual([
+          { name: 'audit-implementation', builtin: true, meta: 'Built in' },
+          { name: 'deploy', builtin: false, meta: 'From projects/ops/deploy' },
+          { name: 'review', builtin: false, meta: expect.any(String) },
+          { name: 'slates', builtin: true, meta: 'Built in' },
+          { name: 'slates', builtin: false, meta: 'Not used' },
+        ]);
+
+        // A flat skill file is read as discovery reads it: the folder beside review.md takes its name, slates.md
+        // has a built-in's, and standup.md is a skill agents use.
+        const flat = await page.$$eval('[data-drive-kind="file"]', (tiles) => tiles.map((tile) => [
+          tile.getAttribute('data-drive-entry'),
+          tile.querySelector('[data-drive-tile-meta]')?.textContent?.trim() ?? '',
+          tile.querySelector('[data-drive-tile-meta] [title]')?.getAttribute('title') ?? null,
+        ]));
+
+        expect(flat).toEqual([
+          ['review.md', 'Not used', 'Agents read skills/review/SKILL.md instead'],
+          ['slates.md', 'Not used', 'A built-in skill has this name, so agents use the built-in'],
+          ['standup.md', expect.stringMatching(/^\d+ B · /u), null],
+        ]);
         // The reserved folder is not renamed or deleted, and its skills say who uses them.
         expect(await page.evaluate(() => document.body.innerText)).toContain('Every workspace you own uses these skills.');
         await shoot(page, 'drive-skills-light');
+
+        // A built-in is read only: no menu, and it opens as the SKILL.md agents read, with no edit and a download
+        // of the same text.
+        expect(await page.$('[data-drive-builtin="audit-implementation"] [data-drive-menu]')).toBeNull();
+        await page.click('[data-drive-builtin="audit-implementation"] button');
+        await page.waitForFunction(() => (document.querySelector('[data-drive-viewer] [data-files-preview-body]')?.textContent ?? '').includes('Audit your implementation'));
+        expect(await page.$('[data-drive-viewer] [data-files-edit]')).toBeNull();
+        expect(await page.$eval('[data-drive-viewer]', (element) => element.textContent ?? '')).toContain('Built in');
+
+        // Its front matter reads as the YAML it is, the first block, rather than as a paragraph under a rule.
+        const firstBlock = await page.$eval('[data-drive-viewer] [data-files-preview-body] .p-code', (block) => block.textContent ?? '');
+
+        expect(firstBlock).toStartWith('yaml');
+        expect(firstBlock).toContain('name: audit-implementation');
+
+        const download = await page.$eval('[data-drive-viewer] [data-files-download]', async (anchor) => ({
+          name: anchor.getAttribute('download'),
+          text: await (await fetch(anchor.getAttribute('href') ?? '')).text(),
+        }));
+
+        expect(download.name).toBe('SKILL.md');
+        expect(download.text).toStartWith('---\nname: audit-implementation\n');
+        await page.click('[data-drive-viewer] [aria-label="Close preview"]');
+        await page.waitForFunction(() => document.querySelector('[data-drive-viewer]') === null);
 
         // In Skills the one action is New skill; a SKILL.md without front matter is refused in the dialog.
         await page.click('[data-drive-add-skill]');
@@ -266,16 +326,21 @@ describe('the Drive', () => {
     });
   });
 
-  test('nothing empty is drawn, and a new account someone shared with lands on Shared', async () => {
+  test('a new account holds only Skills, with the built-in skills in it, and one someone shared with lands on Shared', async () => {
     await withGallery(async (gallery) => {
       const empty = await freshPage(gallery, 'drive-empty', 'dark', 'mobile');
 
       try {
-        // No sections, no tabs, not even the reserved Skills folder: one quiet empty state.
-        expect(await sections(empty)).toEqual([]);
+        // No tabs and no empty state: the Skills folder alone, since the built-in skills are always in it.
+        expect(await sections(empty)).toEqual([{ title: 'Folders', tiles: ['Skills'] }]);
         expect(await empty.$$('[data-drive-tab]')).toHaveLength(0);
-        expect(await empty.$eval('[data-drive-empty]', (element) => element.textContent ?? '')).toContain('Your Drive is empty');
         await shoot(empty, 'drive-empty-mobile-dark');
+        await empty.click('[data-drive-entry="skills"] a');
+        await empty.waitForSelector('[data-drive-builtin]');
+        expect(await skillTiles(empty)).toEqual([
+          { name: 'audit-implementation', builtin: true, meta: 'Built in' },
+          { name: 'slates', builtin: true, meta: 'Built in' },
+        ]);
       } finally {
         await empty.close();
       }
@@ -287,10 +352,11 @@ describe('the Drive', () => {
         expect(await sections(recipient)).toEqual([{ title: 'Shared with you', tiles: ['Inbox digest', 'Deploy status board'] }]);
         await shoot(recipient, 'drive-recipient-mobile-light');
 
-        // Pressing My stuff shows it, empty, rather than bouncing back.
+        // Pressing My stuff shows it, holding only Skills, rather than bouncing back.
         await recipient.click('[data-drive-tab="mine"]');
-        await recipient.waitForSelector('[data-drive-empty]');
-        expect(await recipient.$eval('[data-drive-empty]', (element) => element.textContent ?? '')).toContain('Nothing here yet');
+        await recipient.waitForSelector('[data-drive-tab="mine"][aria-current="page"]');
+        await recipient.waitForSelector('[data-drive-section]');
+        expect(await sections(recipient)).toEqual([{ title: 'Folders', tiles: ['Skills'] }]);
       } finally {
         await recipient.close();
       }

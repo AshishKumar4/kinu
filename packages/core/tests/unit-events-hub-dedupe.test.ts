@@ -32,7 +32,7 @@ describe('dedupeKeyFor — webhook', () => {
     const e2 = { ...base(), received_at: 1700000000000 + 60_000 };
     // Key: webhook:<id>:<sha256 of canonical body, 24 hex>:<5-min bucket>; both land in 5666666.
     expect(dedupeKeyFor(e1)).toBe('webhook:github-pr:ac46861d15eacef1faadbdba:5666666');
-    expect(dedupeKeyFor(e2)).toBe(dedupeKeyFor(e1));
+    expect(dedupeKeyFor(e2)).toBe('webhook:github-pr:ac46861d15eacef1faadbdba:5666666');
   });
   test('different bodies → different keys', () => {
     const e1 = base();
@@ -91,7 +91,7 @@ describe('dedupeKeyFor — peer_agent', () => {
     expect(dedupeKeyFor(peer('ox1', 'status'))).toBe('peer:scout:ox1');
   });
   test('repeated topics from the same sender still admit (distinct outbox ids)', () => {
-    expect(dedupeKeyFor(peer('ox1', 'status'))).not.toBe(dedupeKeyFor(peer('ox2', 'status')));
+    expect(dedupeKeyFor(peer('ox2', 'status'))).toBe('peer:scout:ox2');
   });
 });
 

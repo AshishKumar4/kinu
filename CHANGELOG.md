@@ -38,12 +38,25 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   them (the longest chain measured: 20 updates, which glm-5.3 read back right 10 times in 10), the next change
   restates the whole state after them; nothing before it is rewritten, so the prompt cache keeps it. On that turn
   the final request carries 14.1 KB of state instead of 35.9 KB, and the turn re-sends 311 KB of it instead of 834 KB.
+- **Home and the Workspaces page no longer ask every workspace for its state.** Each workspace tells its owner's
+  account when its tile changes (working, needs you, its last run, its slates), and an open page hears the change over
+  one socket, so a page left open wakes no workspace. The Workspaces page reads 50 workspaces at a time as you scroll,
+  and its filters and search are answered by the account, so they cover every workspace. A tile no longer runs its
+  slate live. A workspace that has not reported yet says so, and the first visit asks each such workspace once.
+- While a sandbox starts, the workspace says "Sandbox starting…" in a quiet line under the tab, where a failed preview listing reports, and keeps the previews it already had.
 - The Worker's `/api` routes are served by one Hono app whose route order is the old dispatch order, gate for gate. An error no route catches is now answered as JSON with its class's status and a message naming only that class (the cause goes to the log), never cached, instead of the platform's error page; the run-event routes read the workspace whose ownership was just proven, even when the request spells its name with escapes.
 - **The Diffs tab is now Changes.** It lists the changed files as a tree with their counts; a file opens to a diff
   that keeps three lines around each change, folds the rest, marks the changed words and keeps the code's colours.
   Expand shows every file split beside the tree (one column on a phone). A binary file or one over 2 MB says so
   instead of "File exceeds 1000 lines", and a new binary file is listed. Mark reviewed can be undone for 10 seconds.
+- **Notes to the agent on its changes.** In the Changes tab, select words or press a line number (Shift-press
+  another to extend), then Comment or Remove, with plan review's toolbar, popover, marks and list; a file and the
+  whole set take a note too. Unsent notes are kept in the workspace, so a reload or another device finds them, and
+  while there are any, Send feedback stands where Mark reviewed was. Sending posts one message the thread draws as a
+  card; each row opens the diff at its place. A note whose code the agent changes since leaves the diff and says
+  "changed since", and is still sent with its quote.
 - **The Drive is one tiled place for your stuff.** Two tabs: My stuff (slates, blueprints, folders and files, with the Skills folder first) and Shared (what others shared with you, then what you shared), each a grid of one tile. Nothing empty is drawn: a section with no tiles is absent, the Shared tab appears once something is shared, and a first visit lands on the tab that holds something. A file opens in the viewer beside the grid; a slate opens in its workspace. The share dialog (#25) says one sentence per mode, then people, who else can open it, the fork choice, the members it reaches folded behind one row, its limits, and the shares already made with Stop sharing. The Drive's `/blueprints` folder and its Public and People I know lists are gone, and one `/api/shared/revoke` route ends a live share or a blueprint link.
+- **Skills live in the Drive; Plugins lists services.** The Plugins page shows MCP servers only. The Drive's Skills folder is always there, and holds the built-in skills as read-only tiles marked Built in beside your own, in the order agents read them at `/skills`. A built-in opens as the SKILL.md agents read, with Download. A skill of yours that shares a built-in's name says Not used, since the built-in wins.
 - **A new workspace syncs the disk far less while it is created.** Its tables, the row naming it and its main agent are written in one transaction instead of one per statement: `kinu create` went from 269 fsyncs to 88, and creating the tables alone from 708 to 4. A hosted workspace creates its tables in one Durable Object transaction too, so a failure partway leaves none.
 - Hosted actors now use the Agents platform directly, without Think's duplicate session, workspace, inference queue or recovery boot. The shared Kinu chat loop retains the existing browser/CLI protocol and initializes the root transcript through the public session provider. Accepted sends and unfinished workspace work keep the sandbox protected across eviction.
 - **Tool descriptions carry only what a call needs.** Each built-in tool's

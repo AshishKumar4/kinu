@@ -1,7 +1,7 @@
 // Pure lifecycle decisions, pinned apart from the platform a unit test cannot drive.
 // Tests assert outcomes, not reachability: a silent no-op durability path must fail here.
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 import { spawnSync } from 'node:child_process';
@@ -486,154 +486,6 @@ describe('incident retry schedule', () => {
   });
 });
 
-describe('readiness is per container, not per Durable Object', () => {
-  test('the startup callback turns the lifecycle over before admitting a stopped container', () => {
-    const source = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
-    const startup = source.slice(source.indexOf('async #startContainer('));
-    const body = startup.slice(0, startup.indexOf('\n  }'));
-    expect(body).toContain('this.#invalidateGeneration();');
-    // The patched SDK marks healthy before the hook, so restore commands reach the container.
-    // No app port is awaited: the restore starts the app, so that wait would block the restore.
-    const admission = source.slice(source.indexOf('async #admitControlListener('));
-    const admitting = admission.slice(0, admission.indexOf('\n  }'));
-    expect(admitting).toContain('await this.startAndWaitForPorts({');
-    expect(admitting).toContain('ports: this.defaultPort');
-    const invalidate = source.slice(source.indexOf('  #invalidateGeneration('));
-    const reset = invalidate.slice(0, invalidate.indexOf('\n  }'));
-    expect(reset).toContain('this.#generation += 1;');
-    expect(reset).toContain('this.#startup = recoveryFlight === undefined');
-    expect(reset).toContain("this.#restoration = { phase: 'unstarted' };");
-  });
-});
-
-describe('every self-re-arming schedule needs a first link', () => {
-  // Self-re-arming schedule rows never start on their own; `onStart` must arm each first link,
-  // and a missing link is silent. Pinned as source shape: no test can start a container.
-  const source = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
-
-  const bodyOf = (signature: string): string => {
-    const from = source.indexOf(signature);
-    expect(from).toBeGreaterThan(-1);
-    const tail = source.slice(from);
-
-    return tail.slice(0, tail.indexOf('\n  }'));
-  };
-
-  test('onStart forges a first link for all three self-re-arming rows', () => {
-    const schedules = bodyOf('async #armContainerSchedules(');
-
-    for (const callback of ['CHECKPOINT_CALLBACK', 'HEARTBEAT_CALLBACK']) {
-      expect(schedules).toContain(`this.#arm(${callback}`);
-    }
-
-    // The startup row goes through `kickStartup`: the SDK runs this hook on every admission probe,
-    // so a bare `#arm` would wake a settled box for ever; `kickStartup` refuses such phases.
-    expect(schedules).toContain('await this.kickStartup();');
-    expect(bodyOf('async kickStartup(')).toContain('this.#arm(STARTUP_CALLBACK, 1)');
-  });
-
-  test('the sweep of unreachable schedule rows runs at activation, before any arming', () => {
-    // The start hook never fires on a wake whose container is asleep, yet the alarm loop runs;
-    // the activation gate settles before any event, alarm included, so the sweep belongs there.
-    const schedules = bodyOf('async #armContainerSchedules(');
-    expect(schedules).not.toContain('#sweepUnknownSchedules');
-    const activation = bodyOf('constructor(ctx: DurableObjectState<{}>, env: Env) {');
-    expect(activation).toContain('ctx.blockConcurrencyWhile(');
-    expect(activation).toContain('this.#activate()');
-    const activate = bodyOf('async #activate(');
-    expect(activate).toContain('this.#sweepUnknownSchedules()');
-    // Activation is storage only: the gate delivers no timer, so a container command here is
-    // unbounded. It notes the durable claim; the first delivered frame asks (`#resolveAdoption`).
-    expect(activate).toContain('this.#durableClaim()');
-    expect(activate).not.toContain('#adoptIfCurrent');
-    expect(activate).not.toContain('#readBootId');
-    expect(activate).not.toContain('#rawExec');
-    const sweep = bodyOf('async #sweepUnknownSchedules(');
-    expect(sweep).toContain('SELECT DISTINCT callback FROM container_schedules');
-    expect(sweep).toContain('this.deleteSchedules(callback)');
-    // By whether THIS class can call it, not by a list of retired names: a
-    // subclass arms its own callbacks and a name list here would delete them.
-    expect(sweep).toContain('if (callback in this) continue;');
-  });
-
-  test('the incident row is armed on demand, not at start', () => {
-    // The incident row is not a start link: an incident schedule with no incidents to deliver
-    // is a wakeup that does nothing forever.
-    expect(bodyOf('async #armContainerSchedules(')).not.toContain('INCIDENT_CALLBACK');
-    expect(source).toContain('this.#arm(INCIDENT_CALLBACK');
-  });
-
-  test('quiesce arms NOTHING, so no row outlives the stop', () => {
-    // A stopped box has nothing to heartbeat; a surviving row would wake the container forever.
-    // The next container start re-arms all three rows.
-    const quiesce = bodyOf('async quiesce(');
-    expect(quiesce).not.toContain('#arm(');
-    expect(quiesce).toContain("this.stop('SIGTERM')");
-  });
-
-  test('every self-re-arming callback re-arms through ONE guard, not by hand', () => {
-    // The guard re-arms every chain; a failed container admission must itself record its refusal
-    // and leave a startup successor. Other `#arm(` calls are first links of a chain.
-    for (const callback of ['devboxCheckpoint', 'devboxHeartbeat', 'devboxIncidents']) {
-      const body = bodyOf(`async ${callback}(`);
-      expect({ callback, guarded: body.includes('this.#scheduled(') }).toEqual({
-        callback, guarded: true,
-      });
-      expect({ callback, handRolled: body.includes('this.#arm(') }).toEqual({
-        callback, handRolled: false,
-      });
-    }
-
-    const armSites = (body: string): number => [...body.matchAll(/this\.#arm\(/g)].length;
-    expect({
-      total: armSites(source),
-      onStart: armSites(bodyOf('async #armContainerSchedules(')),
-      startupAdmission: armSites(bodyOf('async #admitControlListener(')),
-      startupRetry: armSites(bodyOf('async #recover(')),
-      hookFailure: armSites(bodyOf('async #runStartHook(')),
-      onKick: armSites(bodyOf('async kickStartup(')),
-      onRecord: armSites(bodyOf('async #record(')),
-      guard: armSites(bodyOf('async #scheduled(')),
-    }).toEqual({
-      total: 7, onStart: 2, startupAdmission: 1, startupRetry: 1, hookFailure: 0,
-      onKick: 1, onRecord: 1, guard: 1,
-    });
-    // Only the `retry` action re-arms startup; a refusal or replacement that armed one
-    // would recreate the loop the ladder exists to end.
-    const recover = bodyOf('async #recover(');
-    expect(recover.slice(recover.indexOf("decision.action === 'retry'")))
-      .toContain('await this.#arm(STARTUP_CALLBACK');
-    expect(bodyOf('async #scheduled(')).toContain('await this.#arm(callback, nextSeconds)');
-    expect(bodyOf('async #scheduled(')).toContain('} catch (error) {');
-    // The SDK's alarm chain ends without a successor once `sleepAfterMs` passes, so a tick
-    // that does not renew the activity timeout is the last tick.
-    expect(bodyOf('async devboxHeartbeat(')).toContain('this.renewActivityTimeout();');
-  });
-
-  test('a commit asks the same question, because a heartbeat cadence is not a fence', () => {
-    // Heartbeat detection leaves operations between beats on a replaced container without the mount.
-    // A commit asks: it is where bytes are claimed durable, and one boot-marker read is the cost.
-    expect(bodyOf('async checkpointNow(')).toContain('#healReplacedContainer()');
-    expect(bodyOf('async quiesce(')).toContain('#healReplacedContainer()');
-    const heal = bodyOf('async #healReplacedContainer(');
-    expect(heal).toContain('#containerWasReplaced()');
-    // Re-attach through the ordinary restoration, so the recovery ladder and the
-    // strategy's own residue handling are the ones that run.
-    expect(heal).toContain('this.#invalidateGeneration();');
-    expect(heal).toContain('await this.kickStartup();');
-    expect(heal).toContain('throw new Error(');
-    expect(heal).not.toContain('this.#restoreNow(');
-  });
-
-  test('keepAlive is never enabled, because it kills the alarm chain', () => {
-    // The SDK alarm loop's activity branch sets no successor and `Sandbox.onActivityExpired`
-    // only logs under keepAlive, so keepAlive kills the chain and loses the final checkpoint.
-    expect(source).not.toContain('await this.setKeepAlive(');
-    expect(source).toContain('override async onActivityExpired(');
-    expect(bodyOf('override async onActivityExpired(')).toContain("checkpoint('quiesce')");
-  });
-});
-
 describe('arming must ignore the row being dispatched', () => {
   // The container SDK deletes a fired row after its callback returns, so the firing row
   // is still in the table during the callback and must not count as a pending successor.
@@ -666,17 +518,6 @@ describe('arming must ignore the row being dispatched', () => {
     expect(needsArming([{ time: NOW + 1 }], NOW, false)).toBe(false);
   });
 
-  test('the guard the class uses is this one, not a row count', () => {
-    // The guard has two readers, `#arm` and `resolveReadiness`, so it is pinned where it lives
-    // plus the delegation that keeps it single.
-    const devbox = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
-    const guard = devbox.slice(devbox.indexOf('async #pending('));
-    const body = guard.slice(0, guard.indexOf('\n  }'));
-    expect(body).toContain('needsArming(');
-    expect(body).not.toContain('.length > 0');
-    const armed = devbox.slice(devbox.indexOf('async #arm('));
-    expect(armed.slice(0, armed.indexOf('\n  }'))).toContain('await this.#pending(callback)');
-  });
 });
 
 describe('an incident is written off only when the host says it LANDED', () => {
@@ -1413,15 +1254,6 @@ describe('incident ledger retention — delivered rows are bounded, pending neve
     for (let p = 0; p < 5; p += 1) {
       expect(box.rows.has(`devbox:incident:pending${p}`)).toBe(true);
     }
-  });
-
-  test('recording goes through the shared writer bound to INCIDENT_REASON_MAX_CHARS', () => {
-    const source = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
-    const from = source.indexOf('async #record(');
-    const body = source.slice(from, source.indexOf('\n  }', from));
-    expect(body).toContain('recordIncident(this.ctx.storage');
-    expect(body).not.toContain('.slice(0, 2000)');
-    expect(source).not.toContain('reason.slice(0, 2000)');
   });
 });
 

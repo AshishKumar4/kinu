@@ -86,7 +86,8 @@ describe('the preview listing of a sandbox that is starting', () => {
     const listed = await agent.getExposedPorts('sandbox');
 
     expect(listed).toEqual({ ports: [], pending: STARTING.reason });
-    expect(afterPoll(pinned.ports, listed)).toEqual({ ports: pinned.ports, error: null });
+    // The page says the sandbox is starting, and keeps what it pinned.
+    expect(afterPoll(pinned.ports, listed)).toEqual({ ports: pinned.ports, error: null, starting: ['sandbox'] });
   });
 
   test('that cannot come back is still a failure', async () => {
@@ -98,6 +99,6 @@ describe('the preview listing of a sandbox that is starting', () => {
     const listed = await agent.getExposedPorts('sandbox');
 
     expect(listed).toEqual({ ports: [], error: TERMINAL });
-    expect(afterPoll(pinned.ports, listed)).toEqual({ ports: pinned.ports, error: `sandbox: ${TERMINAL}` });
+    expect(afterPoll(pinned.ports, listed)).toEqual({ ports: pinned.ports, error: `sandbox: ${TERMINAL}`, starting: [] });
   });
 });

@@ -179,23 +179,23 @@ describe('envelope validation', () => {
 });
 
 describe('the digest', () => {
+  // Known answer: SHA-256 over the canonical serialization, reproduced with sha256sum.
+  const VALID_DIGEST = '73ac62fb255df8fa1a2f667d5a8cdf76e3b9a90447bb9f9248b79a4495cc1f5e';
+
   test('is insertion-order independent', () => {
     const reordered: ProfileCatalog = {
       tiers: { default: { model: 'm-default' } },
       roles: { scout: { preset: 'research', tier: 'fast', instructions: 'Go look.', description: 'Explores.' } },
     };
 
-    expect(profileCatalogDigest(reordered)).toBe(profileCatalogDigest(VALID_CATALOG));
-    // Known answer: SHA-256 over the canonical serialization, reproduced with sha256sum.
-    expect(profileCatalogDigest(VALID_CATALOG)).toBe(
-      '73ac62fb255df8fa1a2f667d5a8cdf76e3b9a90447bb9f9248b79a4495cc1f5e',
-    );
+    expect(profileCatalogDigest(VALID_CATALOG)).toBe(VALID_DIGEST);
+    expect(profileCatalogDigest(reordered)).toBe(VALID_DIGEST);
   });
 
   test('moves when content moves', () => {
     const changed = structuredClone(VALID_CATALOG);
     changed.tiers.default.model = 'm-other';
-    expect(profileCatalogDigest(changed)).not.toBe(profileCatalogDigest(VALID_CATALOG));
+    expect(profileCatalogDigest(changed)).not.toBe(VALID_DIGEST);
   });
 
   test('is full-length hexadecimal', () => {
@@ -237,12 +237,10 @@ describe('built-in defaults', () => {
     }
   });
 
-  test('the builtin catalog validates, pins the platform default model, and digests stably', () => {
+  test('the builtin catalog validates and pins the platform default model', () => {
     expect(() => validateProfileCatalog({ value: BUILTIN_PROFILE_CATALOG })).not.toThrow();
     expect(Object.keys(BUILTIN_PROFILE_CATALOG.tiers)).toEqual(['default']);
     expect(BUILTIN_PROFILE_CATALOG.tiers.default.model).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
-    expect(profileCatalogDigest(BUILTIN_PROFILE_CATALOG))
-      .toBe(profileCatalogDigest(structuredClone(BUILTIN_PROFILE_CATALOG)));
   });
 
   test('every tier id the resolver knows is declared', () => {

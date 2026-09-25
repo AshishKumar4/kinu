@@ -1,6 +1,7 @@
 /** `/api/user/*`, behind the session gate. `GET /credentials` never returns a secret. */
 import { Hono, type Context } from 'hono';
 import type { UserDO } from './user-do';
+import { ROSTER_SOCKET_PATH } from './roster';
 import { PROFILE_CATALOG_CONFIG_KEY } from '@kinu.run/core';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
@@ -25,7 +26,7 @@ const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
 export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   UserDO,
   'ensureProfile' | 'userMcp_warmConnections' | 'getProfile' | 'getProfileCatalog' | 'putProfileCatalog'
-  | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace'
+  | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace'
   | 'listDevices' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'revokeDeviceConsent'
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'listActiveWorkspaces' | 'getAuthHeaders'
@@ -53,21 +54,27 @@ type UserContext = Context<FamilyEnv<UserRoutesEnv<unknown>, UserVariables>>;
  *  UserDO reconnects in parallel with the first orchestrator turn, not on its critical path. */
 const warmedMcpUsers = new Set<string>();
 
+const RosterBucketSchema = v.optional(v.picklist(['needs', 'working', 'idle']));
+
 /** GET /api/user/workspaces: one roster page; a garbage cursor maps to 400. */
 async function listWorkspaceRoster(c: UserContext): Promise<Response> {
   const url = new URL(c.req.url);
   const cursor = url.searchParams.get('cursor');
   const limitRaw = url.searchParams.get('limit');
   const limit = limitRaw === null || limitRaw.trim() === '' ? undefined : Number(limitRaw);
+  const bucket = v.safeParse(RosterBucketSchema, url.searchParams.get('bucket') ?? undefined);
+  const query = url.searchParams.get('q') ?? undefined;
 
-  // Roster bounds live in user-do's clampRosterLimit; this only keeps NaN from reaching the
+  // Roster bounds live in roster.ts's clampRosterLimit; this only keeps NaN from reaching the
   // registry as a throw instead of a 400.
   if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
     return err(400, 'Workspace roster limit must be a positive integer.');
   }
 
+  if (!bucket.success) return err(400, 'Workspace roster bucket must be needs, working or idle.');
+
   try {
-    return json({ body: await c.get('stub').listWorkspaces(c.get('owner'), { cursor, limit }) });
+    return json({ body: await c.get('stub').listWorkspaces(c.get('owner'), { cursor, limit, bucket: bucket.output, query }) });
   } catch (e) {
     const message = renderThrownChain({ cause: e });
 
@@ -193,6 +200,9 @@ userRoutes.get('/api/user/cli', async (c) => {
 });
 
 userRoutes.get('/api/user/workspaces', listWorkspaceRoster);
+
+// A socket cannot cross RPC; its upgrade request can.
+userRoutes.get('/api/user/workspaces/live', async (c) => c.get('stub').fetch(new Request(new URL(ROSTER_SOCKET_PATH, c.req.url), c.req.raw)));
 
 userRoutes.post('/api/user/workspaces', async (c) => handleCreateWorkspaceRequest({
   request: c.req.raw, env: c.env, userId: c.get('identity').userId, userDO: c.get('stub'),

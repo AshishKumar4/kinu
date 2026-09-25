@@ -394,7 +394,7 @@ describe('the novelty distance, in the direction the threshold reads it', () => 
     expect(noveltyDistance(OCCUPANT, OCCUPANT)).toBe(0);
     expect(noveltyDistance(OCCUPANT, FAR)).toBe(1);
     expect(noveltyDistance(OCCUPANT, NEAR)).toBeCloseTo(1 / 9, 10);
-    expect(noveltyDistance(NEAR, OCCUPANT)).toBe(noveltyDistance(OCCUPANT, NEAR));
+    expect(noveltyDistance(NEAR, OCCUPANT)).toBeCloseTo(1 / 9, 10);
   });
 
   test('two empty artifacts are the same artifact, not two novel ones', () => {

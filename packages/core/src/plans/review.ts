@@ -11,14 +11,14 @@ import { seekPage, StaleCursorError, type Page, type PageRequest } from '../sess
 import { boundedInt } from '../utils/bounds';
 import type {
   PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanDecisionOutcome, PlanEdit,
-  PlanReview, PlanReviewAnnotation, PlanReviewDecision, PlanReviewResult,
+  DiffAnchor, PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult,
   PlanReviewStatus,
 } from '../types/plans';
 import type { EnqueueTurnResult, ProgrammaticTurn } from '../types/backend-host';
 
 export type {
   PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanDecisionOutcome, PlanEdit,
-  PlanReview, PlanReviewAnnotation, PlanReviewDecision, PlanReviewResult,
+  DiffAnchor, DiffSide, PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult,
   PlanReviewStatus, SubmitPlanToolDeps,
 } from '../types/plans';
 
@@ -36,8 +36,8 @@ const PlanReviewStatusSchema = v.picklist([
 export const PlanReviewSchema = v.object({
   id: v.string(), sessionId: v.string(), revision: v.pipe(v.number(), v.integer(), v.minValue(1)),
   content: v.string(), status: PlanReviewStatusSchema,
-  annotations: v.pipe(JsonArraySchema, v.rawTransform(({ dataset, addIssue, NEVER }): readonly PlanReviewAnnotation[] => {
-    const admitted = admitPlanReviewAnnotations({ value: dataset.value });
+  annotations: v.pipe(JsonArraySchema, v.rawTransform(({ dataset, addIssue, NEVER }): readonly ReviewAnnotation[] => {
+    const admitted = admitReviewAnnotations({ value: dataset.value });
 
     if (!admitted.ok) {
       addIssue({ message: admitted.error });
@@ -104,7 +104,7 @@ interface PlanReviewRow {
 
 const PLAN_ANNOTATION_FIELDS = new Set([
   'id', 'blockId', 'startOffset', 'endOffset', 'type', 'text', 'originalText',
-  'createdA', 'author', 'startMeta', 'endMeta', 'mathTargets',
+  'createdA', 'author', 'startMeta', 'endMeta', 'mathTargets', 'anchor',
 ]);
 
 const PLAN_ANNOTATION_POSITION_FIELDS = new Set(['parentTagName', 'parentIndex', 'textOffset']);
@@ -123,8 +123,29 @@ const NonNegativeNumberSchema = v.pipe(v.number(), v.finite(), v.minValue(0));
 
 const byteLength = (text: string): number => new TextEncoder().encode(text).byteLength;
 
+const LineSchema = v.pipe(v.number(), v.integer(), v.minValue(1));
+
+const DiffSideSchema = v.picklist(['old', 'new']);
+
+export const DiffAnchorSchema: v.GenericSchema<unknown, DiffAnchor> = v.pipe(
+  v.variant('scope', [
+    v.strictObject({ scope: v.literal('file'), path: NonEmptyStringSchema, baseline: StringSchema }),
+    v.strictObject({
+      scope: v.literal('lines'), path: NonEmptyStringSchema, side: DiffSideSchema, lineStart: LineSchema, lineEnd: LineSchema,
+      baseline: StringSchema,
+    }),
+    v.strictObject({
+      scope: v.literal('text'), path: NonEmptyStringSchema, side: DiffSideSchema, lineStart: LineSchema, lineEnd: LineSchema,
+      charStart: NonNegativeIntegerSchema, charEnd: NonNegativeIntegerSchema, baseline: StringSchema,
+    }),
+  ]),
+  v.check((anchor) => anchor.scope === 'file' || anchor.lineEnd >= anchor.lineStart, 'an anchor ends on or after its first line'),
+  v.check((anchor) => anchor.scope !== 'text' || anchor.lineEnd > anchor.lineStart || anchor.charEnd > anchor.charStart,
+    'an anchor on words covers at least one character'),
+);
+
 type AnnotationAdmission =
-  | { readonly ok: true; readonly annotations: PlanReviewAnnotation[] }
+  | { readonly ok: true; readonly annotations: ReviewAnnotation[] }
   | { readonly ok: false; readonly error: string };
 
 function unsupportedField(value: JsonObject, allowed: ReadonlySet<string>): string | null {
@@ -180,11 +201,45 @@ function admitMathTargets(value: JsonValue | undefined): OptionalAdmission<reado
   return { ok: true, value: targets };
 }
 
-export function admitPlanReviewAnnotations(input: { value: unknown }): AnnotationAdmission {
+type Places = Pick<ReviewAnnotation, 'startMeta' | 'endMeta' | 'mathTargets' | 'anchor'>;
+
+function admitPlaces(annotation: JsonObject): { readonly ok: true; readonly value: Places } | { readonly ok: false; readonly error: string } {
+  const startMeta = admitTextPosition(annotation.startMeta, 'startMeta');
+
+  if (!startMeta.ok) return startMeta;
+  const endMeta = admitTextPosition(annotation.endMeta, 'endMeta');
+
+  if (!endMeta.ok) return endMeta;
+  const mathTargets = admitMathTargets(annotation.mathTargets);
+
+  if (!mathTargets.ok) return mathTargets;
+  const anchor = annotation.anchor === undefined ? undefined : v.safeParse(DiffAnchorSchema, annotation.anchor);
+
+  if (anchor?.success === false) return { ok: false, error: anchor.issues[0].message };
+  const places: { -readonly [K in keyof Places]: Places[K] } = {};
+
+  if (startMeta.value) places.startMeta = startMeta.value;
+
+  if (endMeta.value) places.endMeta = endMeta.value;
+
+  if (mathTargets.value) places.mathTargets = mathTargets.value;
+
+  if (anchor?.success === true) places.anchor = anchor.output;
+
+  return { ok: true, value: places };
+}
+
+export function admitReviewAnnotations(input: { value: unknown }): AnnotationAdmission {
+  let encoded: string;
+
+  try { encoded = JSON.stringify(input.value); }
+  catch (error) { return { ok: false, error: `annotations must be JSON-serializable: ${renderThrownChain({ cause: error })}` }; }
+
+  if (byteLength(encoded) > MAX_PLAN_ANNOTATIONS_BYTES) return { ok: false, error: 'annotations exceed the maximum size of 256 KiB' };
   const parsed = v.safeParse(JsonArraySchema, input.value);
 
   if (!parsed.success) return { ok: false, error: 'annotations must be an array' };
-  const annotations: PlanReviewAnnotation[] = [];
+  const annotations: ReviewAnnotation[] = [];
 
   for (const [index, annotation] of parsed.output.entries()) {
     if (!isJsonObject(annotation)) return { ok: false, error: `annotation ${index} must be an object` };
@@ -216,17 +271,11 @@ export function admitPlanReviewAnnotations(input: { value: unknown }): Annotatio
       return { ok: false, error: `annotation ${index} has invalid text or author fields` };
     }
 
-    const startMeta = admitTextPosition(annotation.startMeta, 'startMeta');
+    const places = admitPlaces(annotation);
 
-    if (!startMeta.ok) return { ok: false, error: `annotation ${index}: ${startMeta.error}` };
-    const endMeta = admitTextPosition(annotation.endMeta, 'endMeta');
+    if (!places.ok) return { ok: false, error: `annotation ${index}: ${places.error}` };
 
-    if (!endMeta.ok) return { ok: false, error: `annotation ${index}: ${endMeta.error}` };
-    const mathTargets = admitMathTargets(annotation.mathTargets);
-
-    if (!mathTargets.ok) return { ok: false, error: `annotation ${index}: ${mathTargets.error}` };
-
-    const admitted: PlanReviewAnnotation = {
+    const admitted: ReviewAnnotation = {
       id: annotation.id,
       blockId: annotation.blockId,
       startOffset: annotation.startOffset,
@@ -234,17 +283,12 @@ export function admitPlanReviewAnnotations(input: { value: unknown }): Annotatio
       type,
       originalText: annotation.originalText,
       createdA: annotation.createdA,
+      ...places.value,
     };
 
     if (v.is(StringSchema, annotation.text)) Object.assign(admitted, { text: annotation.text });
 
     if (v.is(StringSchema, annotation.author)) Object.assign(admitted, { author: annotation.author });
-
-    if (startMeta.value) Object.assign(admitted, { startMeta: startMeta.value });
-
-    if (endMeta.value) Object.assign(admitted, { endMeta: endMeta.value });
-
-    if (mathTargets.value) Object.assign(admitted, { mathTargets: mathTargets.value });
     annotations.push(admitted);
   }
 
@@ -253,7 +297,7 @@ export function admitPlanReviewAnnotations(input: { value: unknown }): Annotatio
 
 function toPlanReview(row: PlanReviewRow): PlanReview {
   const parsed: unknown = JSON.parse(row.annotations_json);
-  const admission = admitPlanReviewAnnotations({ value: parsed });
+  const admission = admitReviewAnnotations({ value: parsed });
 
   if (!admission.ok) throw new Error(`invalid stored plan annotations: ${admission.error}`);
 
@@ -540,21 +584,15 @@ export class PlanReviewStore {
       return { ok: false, error: `plan revision is already ${current.status}`, plan: current };
     }
 
-    let encoded: string;
-
-    try { encoded = JSON.stringify(annotations.value); }
-    catch (error) {
-      return { ok: false, error: `annotations must be JSON-serializable: ${renderThrownChain({ cause: error })}`, plan: current };
-    }
-
-    if (byteLength(encoded) > MAX_PLAN_ANNOTATIONS_BYTES) {
-      return { ok: false, error: 'annotations exceed the maximum size of 256 KiB', plan: current };
-    }
-
-    const admission = admitPlanReviewAnnotations(annotations);
+    const admission = admitReviewAnnotations(annotations);
 
     if (!admission.ok) return { ok: false, error: admission.error, plan: current };
-    encoded = JSON.stringify(admission.annotations);
+
+    if (admission.annotations.some((annotation) => annotation.anchor !== undefined)) {
+      return { ok: false, error: 'a plan note has no place in a diff', plan: current };
+    }
+
+    const encoded = JSON.stringify(admission.annotations);
 
     if (byteLength(current.content) + byteLength(encoded) > MAX_PLAN_REVIEW_ROW_BYTES) {
       return { ok: false, error: `plan content and annotations exceed the stored row size of ${MAX_PLAN_REVIEW_ROW_BYTES} bytes`, plan: current };

@@ -11,7 +11,7 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   isPlaceholderMission, summarizeRestorePlan,
 } from "@kinu.run/core";
-import type { AlternateTakeSet, FileRestoreChange, TakePickOutcome } from "@kinu.run/core";
+import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, TakePickOutcome } from "@kinu.run/core";
 import { useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useAutogrow } from "@/hooks/use-autogrow";
@@ -31,6 +31,7 @@ import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@kinu.run/core";
 import { classifyProgrammaticTurn, messageSignalId, threadLiveTail } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
+import type { ChangesFocus } from "@/components/surfaces/ChangesSurface";
 import { SlateInlineContext } from "@/components/slates/context";
 import { SLATE_PREFIX, type SurfaceKind } from "@kinu.run/core";
 import { ConversationStartBoundary, HistoryBoundary } from "@/components/surfaces/shared";
@@ -541,6 +542,13 @@ export default function WorkspacePage() {
 
   const visiblePlan = state.activePlan;
   const [surface, setSurface] = useState<SurfaceKind>("Work");
+  const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null);
+
+  const openChangeNote = useCallback((source: string, anchor: DiffAnchor | undefined): void => {
+    setSurface("Changes");
+    setChangesFocus((prior) => ({ source, path: anchor?.path ?? null, nonce: (prior?.nonce ?? 0) + 1 }));
+  }, []);
+
   // `?slate=<id>&unmapped=1` is a blueprint fork's landing; the jump waits until the listing names the slate.
   const [landingSlate, setLandingSlate] = useState<string | null>(() => new URLSearchParams(location.search).get("slate"));
   const [unmappedSlate, setUnmappedSlate] = useState<string | null>(() => new URLSearchParams(location.search).get("unmapped") === "1" ? new URLSearchParams(location.search).get("slate") : null);
@@ -831,7 +839,6 @@ export default function WorkspacePage() {
         working={live}
         providerWait={state.providerWait}
         waitingOnYou={state.pendingActions.length > 0 || state.pendingConsents.length > 0}
-        model={as?.model}
         {...(as?.forkLineage ? { forkParent: { workspace: as.forkLineage.sourceWorkspaceName, forkedAt: as.forkLineage.forkedAt } } : {})}
         altitude={altitude}
         onAltitude={setAltitude}
@@ -937,6 +944,7 @@ export default function WorkspacePage() {
                       ? <TakesChip set={takes} onPick={onPickTake} />
                       : undefined}
                     signalState={signalId === null ? undefined : cardStates.get(signalId)}
+                    onOpenChangeNote={openChangeNote}
                   />
                 );
               })}
@@ -1036,12 +1044,14 @@ export default function WorkspacePage() {
             surface={surface}
             previewFocus={state.previewFocus}
             planFocus={state.planFocus}
+            changesFocus={changesFocus}
             planOwner={subName ?? agentId ?? "main"}
             workspacePlanArrival={state.workspacePlanArrival}
             onReviewActor={async name => { await navigate(`/workspace/${agentId}/agents/${encodeURIComponent(name)}`); }}
             onSurface={setSurface}
             pinnedPorts={state.pinnedPorts}
             previewError={state.previewError}
+            previewStarting={state.previewStarting}
             onRefreshPorts={state.refreshExposedPorts}
             plan={visiblePlan}
             snapshot={state.snapshot}

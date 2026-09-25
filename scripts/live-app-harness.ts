@@ -388,9 +388,8 @@ export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, 
       env: {
         ...process.env, ...liveAppEnv(), ...options.env,
         KINU_DEV_STATE_DIR: statePath,
-        // Its own dependency-optimizer cache too: the default is one directory
-        // every worktree shares (packages/cf-backend/vite.config.ts).
-        KINU_DEV_CACHE_DIR: scratchDir('live-app-vite-cache'),
+        // Its own optimizer cache, kept across the harness's boots of this checkout and never `bun run dev`'s.
+        KINU_DEV_CACHE_DIR: join(CF, '.vite-harness'),
         // The preview zone's own https port, so boots side by side never share one.
         KINU_DEV_PREVIEW_PORT: String(previewPort),
         // And no Workers inspector, whose default port every boot would race for (vite.config.ts).

@@ -17,7 +17,7 @@ import { manifestHash } from '../packages/core/src/bench/split';
 import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, inPool, panelArm, panelProviders, parseArgv, parseCommon, parseShard, shardTaskIds } from './bench';
 import { BENCH_SUITES, benchPatchFiles, corpusMembership, loadBenchCorpus, stalePatches } from './bench-corpus';
 import { loadLongHorizonCorpus, materializeLongHorizon } from './bench-longhorizon';
-import { applyPatch, assertScratchRoot, budgetSignal, createAttemptSandbox, restoreGuarded, sandboxEnv } from './bench-sandbox';
+import { applyPatch, assertScratchRoot, budgetSignal, createAttemptSandbox, ensureRunRoot, restoreGuarded, sandboxEnv } from './bench-sandbox';
 import { workspacePackages } from '../packages/test-utils/src/workspace-resolution';
 import {
   VALIDATION_DIAGNOSTICS_FILE, loadValidationDiagnostics, runValidation,
@@ -609,8 +609,10 @@ describe('assertScratchRoot — the isolation promise, in code', () => {
     expect(() => assertScratchRoot(repo, repo)).toThrow(/inside the repo/);
   });
 
-  test('accepts a throwaway root elsewhere', () => {
-    expect(() => assertScratchRoot(tempDir('bench-ok-'), REPO_ROOT)).not.toThrow();
+  test('accepts a throwaway root elsewhere, and a run gets it made', () => {
+    const root = join(tempDir('bench-ok-'), 'runs');
+    expect(ensureRunRoot(root, REPO_ROOT)).toBe(root);
+    expect(existsSync(root)).toBe(true);
   });
 });
 

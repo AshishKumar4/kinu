@@ -240,6 +240,8 @@ export interface ChatSessionPorts {
   driverGate(): Refusal | null;
   /** Called at the turn's synchronous open; soonest-wins. A backend whose process is the wake arms nothing. */
   armTurnWake(atMs: number): Promise<void>;
+  /** The queue drained and no turn runs. */
+  quiet?(): void;
   /** Read at commit, never captured earlier. */
   taskList(): TaskListStore;
   /** A reminder fired behind such work would race its wake. */
@@ -275,6 +277,12 @@ export interface SendOptions {
   readonly id: string;
   /** A turn it starts, and its leftovers' rerun, run under it. Build by default. */
   readonly mode?: WorkMode;
+}
+
+/** Its own turn; `consume` runs in reserve's transaction. */
+export interface CardSend extends SendOptions {
+  readonly metadata: JsonObject;
+  readonly consume: () => void;
 }
 
 export type SendLandingWaiter = Pick<ReturnType<typeof Promise.withResolvers<SendLanding>>, 'resolve' | 'reject'>;
@@ -484,10 +492,11 @@ export class ChatSession {
   /** Resolves once the words are reserved and owed a landing; a `landing` is registered before the message can move. */
   async admit(
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
-    opts: SendOptions,
+    opts: SendOptions | CardSend,
     landing: SendLandingWaiter | null = null,
   ): Promise<void> {
     this.refuseUnusableId(opts.id);
+    const card = 'metadata' in opts ? opts : undefined;
     const { text, files } = normalizePromptInput(input);
 
     // The operator spoke: the reminder count starts over.
@@ -498,7 +507,7 @@ export class ChatSession {
       throw new KinuError('bad_input', 'send requires the message text');
     }
 
-    if (this.turnInFlight()) {
+    if (card === undefined && this.turnInFlight()) {
       const { id } = opts;
       const steer: UserSteer & { readonly id: string; readonly mode?: WorkMode } = { text, id, ...(opts.mode !== undefined && { mode: opts.mode }) };
 
@@ -515,6 +524,7 @@ export class ChatSession {
     const mode = opts.mode ?? 'build';
 
     const metadata: JsonObject = {
+      ...card?.metadata,
       ...(opts.tier !== undefined && { profile_tier: opts.tier }),
       kinuMode: mode,
     };
@@ -524,7 +534,10 @@ export class ChatSession {
     const turnId = opts.id;
 
     if (landing !== null) this.landings.set(turnId, landing);
-    this.pendingSends.reserve({ id: pendingSendId, turnId: null, mode, text, files });
+    this.transaction(() => {
+      card?.consume();
+      this.pendingSends.reserve({ id: pendingSendId, turnId: null, mode, text, files, ...(card !== undefined && { metadata: card.metadata }) });
+    });
     this.queue.push({
       text, files, metadata, kind: 'user',
       turnId, pendingSendId,
@@ -692,6 +705,7 @@ export class ChatSession {
       // Cleared synchronously, not in .finally(): the microtask would leave `pumping` stale and orphan a queued turn.
       this.pumpActive = false;
       this.activePump = null;
+      this.ports.quiet?.();
     }
   }
 
@@ -1282,7 +1296,7 @@ export class ChatSession {
           // Kept ahead of anything the new session admits.
           rerun: true,
           pendingSendId: row.id,
-          metadata: { kinuMode: row.mode },
+          metadata: { ...this.pendingSends.metadata(row.id), kinuMode: row.mode },
           files: this.pendingSends.files(row.id),
           settle: () => {},
         });

@@ -23,6 +23,8 @@ interface SearchTreeHandle {
 
 declare global {
   interface Window {
+    /** The URL of every WebSocket the landing opened, recorded before its first script ran. */
+    __kinuSocketsOpened?: string[];
     /** Constructed by SearchTreeHero's mount when the mount lands, which the
      *  suite's `data-settled` waits observe before reading it. */
     __kinuSearchTree?: SearchTreeHandle;
@@ -222,6 +224,8 @@ interface MovieReducedFact {
 }
 
 interface Facts {
+  /** Sockets the landing opened: a signed-out visitor has none to open. */
+  landingSockets?: readonly string[];
   reduced?: { before: string; after: string; pixels: number; animations: number };
   treeFlows?: boolean;
   prunedNodes?: number;
@@ -380,7 +384,21 @@ beforeAll(async () => {
     origin = gallery.origin;
 
     {
-      const page = await openLanding(DESKTOP);
+      const page = await openLanding(DESKTOP, false, async (landing) => {
+        await landing.evaluateOnNewDocument(() => {
+          const opened: string[] = [];
+          window.__kinuSocketsOpened = opened;
+
+          window.WebSocket = new Proxy(window.WebSocket, {
+            construct: (target, args: ConstructorParameters<typeof WebSocket>) => {
+              opened.push(String(args[0]));
+
+              return Reflect.construct(target, args);
+            },
+          });
+        });
+      });
+
       await page.waitForSelector('canvas[data-settled="true"]');
       facts.prunedNodes = await page.$eval('canvas', (canvas) => Number(canvas.dataset.pruned ?? 0));
       facts.hiddenNodes = await page.$eval('canvas', (canvas) => Number(canvas.dataset.hidden ?? 0));
@@ -491,6 +509,8 @@ beforeAll(async () => {
       // roster transport, marked on the frame's own workspace. `SidebarRail`
       // is the app's own lane, so the measurement is the lane, not a class
       // string that says nothing about what the reader sees.
+      facts.landingSockets = await page.evaluate(() => window.__kinuSocketsOpened ?? []);
+
       facts.rail = await page.evaluate(() => {
         const frames = [...document.querySelectorAll('[data-landing-frame]')];
         const asides = frames.map((frame) => frame.querySelector(':scope > aside[data-rail]'));
@@ -1261,6 +1281,10 @@ describe('the landing frames reuse the app rail', () => {
     expect(rail.visible).toBeTrue();
     expect(rail.roster).toContain('Checkout coupon bug');
     expect(rail.roster).toContain('ashish@example.com');
+  });
+
+  test('the frames read their roster from the page and open no socket', () => {
+    expect(required(facts.landingSockets, 'landing sockets')).toEqual([]);
   });
 
   test('the rail hides below md the way the app hides it', () => {

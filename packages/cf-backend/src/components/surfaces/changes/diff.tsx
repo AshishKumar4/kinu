@@ -1,12 +1,12 @@
 /** Draws a file's diff: rows, folds, word marks, syntax colours and notes. */
-import { sideBySide, type ChangeBlock, type ChangeRow, type FileStatus } from "@kinu.run/core";
+import { sideBySide, type ChangeBlock, type ChangeRow, type DiffSide, type FileStatus } from "@kinu.run/core";
 import { Fragment, useCallback, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { CaretDownIcon, CaretUpDownIcon } from "@phosphor-icons/react";
 import { useTheme } from "@/hooks/use-theme";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { AnnotationType } from "@plannotator/ui/types";
 import { colorOf, piecesOf, tintsOf, type Piece, type Tints } from "./highlight";
-import { pickSelection, selectLines, spansOn, useNotes, type NoteSide, type NoteSpan } from "./notes";
+import { pickSelection, selectLines, spansOn, useNotes, type NoteSpan } from "./notes";
 
 const COUNT = new Intl.NumberFormat("en-US");
 
@@ -168,7 +168,7 @@ interface Draw {
   readonly onPick: ((event: MouseEvent<HTMLSpanElement>) => void) | undefined;
 }
 
-function useRowNotes(row: ChangeRow, path: string, only?: NoteSide): NoteSpan[] {
+function useRowNotes(row: ChangeRow, path: string, only?: DiffSide): NoteSpan[] {
   const notes = useNotes();
   const length = row.text.length;
   const old = only === "new" || row.kind === "add" ? [] : spansOn(notes, { path, side: "old", line: row.oldNo, length });
@@ -188,7 +188,7 @@ function UnifiedRow({ row, draw }: { row: ChangeRow; draw: Draw }) {
   );
 }
 
-function SplitCell({ row, side, draw }: { row: ChangeRow | null; side: NoteSide; draw: Draw }) {
+function SplitCell({ row, side, draw }: { row: ChangeRow | null; side: DiffSide; draw: Draw }) {
   const notes = useRowNotes(row ?? { kind: "ctx", text: "", oldNo: null, newNo: null }, draw.path, side);
   const edge = side === "new" ? "border-l p-border" : "";
   const confine = side === "new" ? "in-data-[picking=old]:select-none" : "in-data-[picking=new]:select-none";

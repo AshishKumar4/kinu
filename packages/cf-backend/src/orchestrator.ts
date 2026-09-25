@@ -170,6 +170,8 @@ import {
   getRunEvents, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
   getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceDiffResult,
+  initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes,
+  type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, listEnvironments,
   renameExecutorPathOp, deleteExecutorPathOp,
@@ -192,7 +194,7 @@ import {
   type WorkMode,
   resolveModelRoute,
   WORKSPACE_RUN_ID,
-  buildWorkspaceOverview, type WorkspaceOverview,
+  buildWorkspaceOverview, recoveryBackoffMs, type WorkspaceOverview, type ReleaseBoard,
   projectJsonValue,
   type AgentSignal,
 } from "@kinu.run/core";
@@ -379,7 +381,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       onFilesChanged: (paths) => {
         const ids = this.slates.filesChanged(paths);
 
-        if (ids.length !== 0) this.broadcastToActor(null, JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
+        if (ids.length === 0) return;
+        this.broadcastToActor(null, JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
+        this.overviewChanged();
       },
       ensureSlate: (owner) => this.slates.ensureDurable(owner),
       slateInvocation: (port, socket) => this.slates.slateInvocation(port, socket),
@@ -505,6 +509,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (name === undefined) return;
         this.broadcastToActor(name, JSON.stringify({ ...event, actorId }));
       },
+      turnClaimChanged: () => { this.overviewChanged(); },
       enqueueTurn: (actor, input) => this.enqueueHostedTurn(actor, input),
       // Use the reference the host issued, never one rebuilt from an id: the root's parent is
       // null, and a synthesized reference makes `hosted()` refuse the root's liveness read.
@@ -963,6 +968,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Soonest instant a timed ledger (terminal retry, deferred job resume) owes a wake, or null.
    * Untimed owed work is excluded; it is {@link owedUntimedWork}. */
   protected override nextOwedAt(): number | null {
+    const at = Math.min(this.workOwedAt() ?? Infinity, this.overviewRetry?.at ?? Infinity);
+
+    return Number.isFinite(at) ? at : null;
+  }
+
+  /** A tile push owed would read Unfinished. */
+  private workOwedAt(): number | null {
     const at = Math.min(this.terminal.nextRetryAt() ?? Infinity, this.jobRunner.nextResumeAt() ?? Infinity);
 
     return Number.isFinite(at) ? at : null;
@@ -1557,6 +1569,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected actorHandle(): ActorHandle {
+    if (this.storageRefusal !== null) throw this.storageRefusal;
+
     return this._rootActor ??= this.workspaceActors().main();
   }
 
@@ -2227,6 +2241,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   protected override connectionOpened(): void {
     this.config.delete(SLEEP_TIME_CLOSED_AT);
+    this.overviewChanged();
   }
 
   private async runSleepTimeCompute(window: SleepTimeWindow): Promise<void> {
@@ -2415,7 +2430,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   // Background jobs (#173): lifecycle lives in core BackgroundJobRunner; below is the @callable transport.
 
-  /** Called by the synthesis turn. */
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
     return jobResult(this.jobs, jobId);
   }
@@ -2491,6 +2505,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         newId: () => `cons-${nanoid(10)}`,
         // Wire shapes stay inline: the broadcast-wiring gate reads `broadcast({ type: … })` off source.
         announce: (notice) => {
+          this.overviewChanged();
+
           if (notice.kind === 'raised') {
             const { consent } = notice;
             this.logActivity('device_consent_requested', `${consent.deviceLabel}: ${consent.command.slice(0, 80)}`);
@@ -2521,7 +2537,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.consents.request(req);
   }
 
-  /** Not {@link callable}. */
   async announceDeviceUnavailable(
     devices: Array<{ id: string; label: string; lastSeenAt: number | null }>,
   ): Promise<{ ok: boolean }> {
@@ -2530,7 +2545,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { ok: true };
   }
 
-  /** Not {@link callable}. */
   async announceDeviceAvailable(device: { id: string; label: string }): Promise<{ ok: boolean }> {
     this.broadcast(JSON.stringify({ type: 'device_available', deviceId: device.id, label: device.label }));
 
@@ -2571,7 +2585,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._deferrals;
   }
 
-  /** Overrides the base actor's "no queue here". */
   protected override deferralChannel(): DeferredApprovalChannel {
     return this.deferrals.channel;
   }
@@ -2586,6 +2599,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // The needs-you queue is polled, not pushed; this frame tells clients to re-read it.
     this.broadcastToActor(null, JSON.stringify({ type: 'pending_actions_changed' }));
+    this.overviewChanged();
   }
 
   /** Read by the needs-you queue; also callable alone so a surface can render just this. */
@@ -2611,6 +2625,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Order is the contract: DDL, then identity/main-actor rows, then anything resolving a handle.
    */
   protected ensureSchema(): void {
+    if (this.storageRefusal !== null) throw this.storageRefusal;
+
     if (this._schemaReady) return;
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
 
@@ -2618,6 +2634,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       execRaw, sql: this.boundSql, exec: this.ctx.storage.sql, transactionSync: (write) => this.ctx.storage.transactionSync(write),
     });
     initWorkspaceBaselineTable(execRaw);
+    initChangeNotesTable(execRaw);
     initWorkspaceActorTable(execRaw);
 
     // Planes only this root carries (declared in core/conformance/manifest.ts).
@@ -2663,6 +2680,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    *  resets the object at 30s (`do.block_concurrency.cancel_ms`); `scripts/do-init-gate.ts` enforces. */
   async onStart(): Promise<void> {
     this.installClientMessageGate();
+
+    if (this.storageRefusal !== null) return;
     this.ensureSchema();
     // Every budgeted sweep via the alarm-frame seam; row-budgeted because this is the init gate,
     // and a truncated pass is drained by the wake below in alarm frames.
@@ -3131,7 +3150,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Only an unclaimed workspace yields no approvals; other read failures must throw, never look empty.
    */
   @callable() async listPendingActions(): Promise<PendingAction[]> {
-    const board = this.getOwnerUserId() ? await this.getReleaseBoard(20) : null;
+    return this.pendingActions(this.getOwnerUserId() ? await this.getReleaseBoard(20) : null);
+  }
+
+  private pendingActions(board: ReleaseBoard | null): PendingAction[] {
     // The queue row needs the unseen count, newest time, and how many entries offer keep/revert.
     const unseen = getUnseenChangelog(this.boundSql, this.rt.actor);
 
@@ -3629,6 +3651,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return restoreWorkspaceBaseline(this.rt);
   }
 
+  @callable()
+  async getChangeNotes(source: string): Promise<ReviewAnnotation[]> {
+    return readChangeNotes(this.rt, source);
+  }
+
+  @callable()
+  async saveChangeNotes(source: string, notes: ReviewAnnotation[]): Promise<ChangeNotesResult> {
+    return saveChangeNotes(this.rt, source, { value: notes });
+  }
+
+  @callable()
+  async sendChangeNotes(set: NotedChanges): Promise<ChangeNotesResult> {
+    return sendChangeNotes(this.rt, { value: set }, (message, consume) => this.chatLoop.admit(message.text, { id: message.id, metadata: message.metadata, consume }));
+  }
+
   /** Recent branching-head runs, grouped by root_id with heads, step traces and merged synthesis. */
   @callable()
   async getHeadRuns(limit = 20): Promise<HeadRunView[]> {
@@ -4015,7 +4052,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       dispatch: (caller, route) => this.slateBindingDispatch(caller.path, route, caller.workMode),
       apps: {
         ensure: (input) => this.hostedWorkspace().apps.ensure(input),
-        reserved: (owner) => this.hostedWorkspace().apps.reserved(owner),
         remove: (owner) => this.hostedWorkspace().apps.remove(owner),
         url: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
       },
@@ -4363,6 +4399,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** The root's tabs read the claim when they load, and hear every change to it here. */
   protected override turnClaimChanged(): void {
     this.broadcastToActor(null, JSON.stringify({ type: TURN_CLAIM_FRAME, claim: this.turnClaimState() }));
+    this.overviewChanged();
   }
 
   /**
@@ -4385,16 +4422,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { recovered: 'requeued' };
   }
 
-  /**
-   * Home card read, folded from the workspace's own read models. Reads `hosted`, never `acquire`,
-   * so it boots nothing; a failed read propagates rather than zeroing the needs-you count.
-   */
-  @callable() async getWorkspaceOverview(): Promise<WorkspaceOverview> {
-    const [pendingActions, pendingConsents, activePlan, slates] = await Promise.all([
-      this.listPendingActions(),
+  /** The owner's object adds its release approvals. Reads `hosted`, never `acquire`. */
+  async foldOverview(): Promise<WorkspaceOverview> {
+    const [pendingConsents, activePlan, listing] = await Promise.all([
       this.listPendingConsents(),
       this.getActivePlanReview(),
-      this.slates.addressed(ROOT_SLATE_CALLER),
+      this.slates.list(ROOT_SLATE_CALLER),
     ]);
 
     const hostedBusy = this.actorHost().list()
@@ -4403,15 +4436,75 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const header = this.eventRecorder.latestRunHeader();
 
     return buildWorkspaceOverview({
-      observedAt: Date.now(),
-      working: this._inFlight || hostedBusy,
-      unfinished: this.owedWorkExists(),
-      pendingActions,
+      // A settled turn's leftovers still closing are its work, not a durable leftover.
+      working: this._inFlight || hostedBusy || this.terminalClosing,
+      unfinished: this.owedUntimedWork() || this.workOwedAt() !== null,
+      pendingActions: this.pendingActions(null),
       pendingConsents,
       activePlan,
       scaffoldAutoApply: this.config.getAutoPromoteScaffold(),
       latestRun: header === null ? null : { status: header.status, task: header.userMessage },
-      slates,
+      slates: listing.slates.map((slate) => ({ id: slate.id, title: slate.title, picture: null })),
+    });
+  }
+
+  /** The owner's object ignores a repeat. */
+  private pushedOverview: string | null = null;
+  private overviewDirty = false;
+  private overviewPushing = false;
+  /** Changes meanwhile ride its push. */
+  private overviewRetry: { readonly at: number; readonly attempts: number } | null = null;
+
+  async requestOverviewPush(): Promise<void> {
+    this.overviewChanged();
+  }
+
+  protected override overviewChanged(): void {
+    this.overviewDirty = true;
+
+    if (this.overviewPushing || this.getOwnerUserId() === null) return;
+
+    const retry = this.overviewRetry;
+
+    if (retry !== null && Date.now() < retry.at) return;
+    this.overviewPushing = true;
+
+    // In flight, it owes the wake a failure would arm.
+    if (retry !== null) this.overviewRetry = { at: Date.now() + recoveryBackoffMs(retry.attempts + 1), attempts: retry.attempts };
+    this.detachOwned(async () => {
+      try {
+        while (this.overviewDirty) {
+          this.overviewDirty = false;
+          const overview = await this.foldOverview();
+          const pushed = JSON.stringify(overview);
+
+          if (pushed === this.pushedOverview) continue;
+
+          // Installing a token pushes.
+          if (this.workspaceCapabilityToken() === null) {
+            this.overviewDirty = true;
+            break;
+          }
+
+          const { stub, caller } = await this.userHub();
+          await stub.putWorkspaceOverview(caller, this.name, overview);
+          this.pushedOverview = pushed;
+        }
+
+        this.overviewRetry = null;
+      } catch (cause) {
+        this.overviewDirty = true;
+        const failure = toKinuError({ doing: "pushing this workspace's tile to its owner's roster", cause, otherwise: 'unavailable' });
+        const attempts = (this.overviewRetry?.attempts ?? 0) + 1;
+        // A refusal meets the next push.
+        const retrying = failure.code === 'unavailable' || failure.code === 'timeout';
+        this.overviewRetry = retrying ? { at: Date.now() + recoveryBackoffMs(attempts), attempts } : null;
+        diagnostics.failure('workspace.overview_push_failed', failure, { workspace: this.name, attempts, retrying });
+
+        if (this.overviewRetry !== null) await this.scheduleTerminalRetry(this.overviewRetry.at);
+      } finally {
+        this.overviewPushing = false;
+      }
     });
   }
 
@@ -4967,8 +5060,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** Create a durable webhook trigger; returns the signed public URL.
-   * Not @callable: creation is step-up gated in the web and CLI trigger routes only. */
+  /** Not @callable: creation is step-up gated in the web and CLI trigger routes only. */
   async createDurableWebhook(opts: {
     label: string;
     auth_mode: 'hmac' | 'bearer' | 'mtls';

@@ -335,15 +335,20 @@ describe('workspace diff lifecycle', () => {
     initWorkspaceBaselineTable(rt.storage.execRaw);
     const earlier = await resetWorkspaceBaseline(rt);
     await rt.storage.vfs.writeFile('notes.md', 'one\n');
+    // The baseline a note names: a review moves it, and Undo brings it back.
+    const noted = (await getWorkspaceDiff(rt)).baseline;
     await resetWorkspaceBaseline(rt);
+    const reviewed = await getWorkspaceDiff(rt);
 
-    expect((await getWorkspaceDiff(rt)).files).toEqual([]);
+    expect(reviewed.files).toEqual([]);
+    expect(reviewed.baseline).not.toBe(noted);
     expect(restoreWorkspaceBaseline(rt)).toEqual({ ok: true, capturedAt: earlier.capturedAt });
 
     const restored = await getWorkspaceDiff(rt);
 
     expect(restored.files.map((file) => `${file.status} ${file.path}`)).toEqual(['added notes.md']);
     expect(restored.trackedSince).toBe(earlier.capturedAt);
+    expect(restored.baseline).toBe(noted);
     expect(restoreWorkspaceBaseline(rt)).toMatchObject({ ok: false });
   });
 
@@ -406,7 +411,7 @@ describe('workspace diff lifecycle', () => {
   });
 
   test('a failed git subcommand is an Output error, never an empty successful diff', async () => {
-    const responses: CommandResult[] = ['/repo', 'yes', { reason: 'io', error: 'Error (exit 128)\nfatal: index corrupt' }];
+    const responses: CommandResult[] = ['/repo', '3f2a1c0b9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b', { reason: 'io', error: 'Error (exit 128)\nfatal: index corrupt' }];
 
     const provider: ExecutorProvider = {
       name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']), filesOwner: 'agent',
@@ -435,7 +440,7 @@ describe('workspace diff lifecycle', () => {
     expect(result.error).toContain('index corrupt');
   });
 
-  test('repeated git diff reads include untracked work without changing the real index', async () => {
+  test('repeated git diff reads include untracked work without changing the real index, measured from HEAD', async () => {
     const repo = scratchDir('workspace-diff');
     initRepo(repo);
     writeFileSync(join(repo, 'tracked.txt'), 'before\n');
@@ -484,6 +489,7 @@ describe('workspace diff lifecycle', () => {
     const after = readFileSync(join(repo, '.git/index'));
 
     expect(first.files.map((file) => file.path)).toEqual(['tracked.txt', 'untracked file.txt']);
+    expect(first.baseline).toBe(git(repo, 'rev-parse', 'HEAD').trim());
     expect(second.files).toEqual(first.files);
     expect(after.equals(before)).toBe(true);
   });

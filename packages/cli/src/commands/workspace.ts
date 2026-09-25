@@ -27,7 +27,7 @@ export async function workspaceDeleteCommand(name: string, opts: { yes?: boolean
 
   const auth = requireStoredAuthConfig();
   await deleteCloudAgent(auth.origin, auth.token, target.cloudName);
-  const pruned = removeCloudAgentConfig(target.cloudName);
+  const pruned = await removeCloudAgentConfig(target.cloudName);
   console.log(`${OK('✓')} Deleted cloud workspace ${ACCENT(target.cloudName)}`);
 
   if (pruned) console.log(DIM('Removed its local config reference.'));

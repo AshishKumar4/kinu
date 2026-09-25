@@ -148,6 +148,7 @@ const USER_DO_METHODS = [
   'publishWorkspaceReservation',
   'putEgressSecret',
   'putProfileCatalog',
+  'putWorkspaceOverview',
   'recordReleaseCheck',
   'recordReleaseDeployment',
   'registerBrowserSession',
@@ -315,6 +316,7 @@ const ORCHESTRATOR_METHODS = [
   'liveShareUrl',
   'viewerEntryUrl',
   // Never `@callable`: reachable only by a Durable Object stub in this Worker.
+  'requestOverviewPush',
   'supervisorOp',
   'workspaceTitle',
   // Eval-only. Never `@callable`; the route admits only the eval-service identity.

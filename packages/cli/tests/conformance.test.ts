@@ -42,9 +42,9 @@ if (resolve(AGENT_HOME) === resolve(join(homedir(), '.kinu'))
 
 const AGENT_NAME = `conformance-${Date.now()}`;
 
-afterAll(() => {
+afterAll(async () => {
   // `kinu create` also writes an `agents` entry, and no product path removes a local one.
-  updateConfigFile((config) => {
+  await updateConfigFile((config) => {
     if (config.agents) delete config.agents[AGENT_NAME];
   });
 });

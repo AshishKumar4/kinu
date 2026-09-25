@@ -52,9 +52,9 @@ describe('benchConfigHash', () => {
   });
 
   test('is stable for identical config', () => {
-    expect(benchConfigHash({ ...CONFIG })).toBe(benchConfigHash(CONFIG));
     // Pinned so a dropped field fails here instead of passing on both sides.
     expect(benchConfigHash(CONFIG)).toBe('bddddfc730b4706f');
+    expect(benchConfigHash({ ...CONFIG })).toBe('bddddfc730b4706f');
   });
 });
 
@@ -451,7 +451,6 @@ describe('gain report', () => {
 
 describe('run mechanics', () => {
   test('runOrder is deterministic per seed and varies across tasks', () => {
-    expect(runOrder('t1', 7)).toBe(runOrder('t1', 7));
     // Pinned unitHash outcome, so a hash change fails here.
     expect(runOrder('t1', 7)).toBe('ab');
     const orders = new Set(Array.from({ length: 40 }, (_, i) => runOrder(`task-${i}`, 3)));

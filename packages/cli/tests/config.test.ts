@@ -329,21 +329,21 @@ async function runNameChecks(): Promise<NameCheck[]> {
   const script = `
     import { agentDir, upsertAgentConfig } from './packages/cli/src/config.ts';
     const results = [];
-    const check = (fn) => {
-      try { fn(); results.push({ ok: true, error: null }); }
+    const check = async (fn) => {
+      try { await fn(); results.push({ ok: true, error: null }); }
       catch (error) { results.push({ ok: false, error: error instanceof Error ? error.message : String(error) }); }
     };
-    check(() => agentDir("jarvis"));
-    check(() => agentDir("build-agent_2"));
-    check(() => agentDir("../outside"));
-    check(() => agentDir("bad/name"));
-    check(() => agentDir(".hidden"));
+    await check(() => agentDir("jarvis"));
+    await check(() => agentDir("build-agent_2"));
+    await check(() => agentDir("../outside"));
+    await check(() => agentDir("bad/name"));
+    await check(() => agentDir(".hidden"));
     const withAlias = (alias) => () => upsertAgentConfig({ name: "jarvis", mode: "local", alias });
-    check(withAlias("jarvis"));
-    check(withAlias("jarvis-2"));
-    check(withAlias("../outside"));
-    check(withAlias("bad/name"));
-    check(withAlias("kinu"));
+    await check(withAlias("jarvis"));
+    await check(withAlias("jarvis-2"));
+    await check(withAlias("../outside"));
+    await check(withAlias("bad/name"));
+    await check(withAlias("kinu"));
     console.log(JSON.stringify(results));
   `;
 

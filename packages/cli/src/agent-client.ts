@@ -12,7 +12,7 @@ import type {
   AdmittedInstructionDecision,
   InstructionSourceRow, InstructionSourceView, Page, PageRequest,
   DeferredApproval, DeferredApprovalAnswer,
-  PlanReview, PlanReviewAnnotation, PlanReviewDecision, PlanReviewResult, WorkMode,
+  PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult, WorkMode,
   SubordinateInspectionRequest, SubordinateInspectionResult, ChatHistoryEntry, WorkspaceSpend,
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
@@ -269,7 +269,7 @@ export interface LocalSessionControls {
 /** The owner's half of Plan mode; both backends serve core's `PlanReviewStore`. */
 export interface PlanReviewSurface {
   active(): Promise<PlanReview | null>;
-  saveAnnotations(id: string, revision: number, annotations: PlanReviewAnnotation[]): Promise<PlanReviewResult>;
+  saveAnnotations(id: string, revision: number, annotations: ReviewAnnotation[]): Promise<PlanReviewResult>;
   /** Approving queues the implementation turn, which streams through `subscribe`. */
   decide(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): Promise<PlanReviewResult>;
 }

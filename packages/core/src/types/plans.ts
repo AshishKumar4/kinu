@@ -22,7 +22,21 @@ export interface PlanAnnotationMathTarget {
   readonly displayMode: boolean;
 }
 
-export interface PlanReviewAnnotation {
+export type DiffSide = 'old' | 'new';
+
+export type DiffAnchor =
+  | { readonly scope: 'file'; readonly path: string; readonly baseline: string }
+  | {
+    readonly scope: 'lines'; readonly path: string; readonly side: DiffSide;
+    readonly lineStart: number; readonly lineEnd: number; readonly baseline: string;
+  }
+  | {
+    readonly scope: 'text'; readonly path: string; readonly side: DiffSide;
+    readonly lineStart: number; readonly lineEnd: number; readonly charStart: number; readonly charEnd: number;
+    readonly baseline: string;
+  };
+
+export interface ReviewAnnotation {
   readonly id: string;
   readonly blockId: string;
   readonly startOffset: number;
@@ -35,6 +49,7 @@ export interface PlanReviewAnnotation {
   readonly startMeta?: PlanAnnotationTextPosition;
   readonly endMeta?: PlanAnnotationTextPosition;
   readonly mathTargets?: readonly PlanAnnotationMathTarget[];
+  readonly anchor?: DiffAnchor;
 }
 
 export interface PlanReview {
@@ -43,7 +58,7 @@ export interface PlanReview {
   readonly revision: number;
   readonly content: string;
   readonly status: PlanReviewStatus;
-  readonly annotations: readonly PlanReviewAnnotation[];
+  readonly annotations: readonly ReviewAnnotation[];
   readonly feedback: string | null;
   readonly handoffAccepted: boolean;
   readonly createdAt: number;

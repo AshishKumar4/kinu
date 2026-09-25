@@ -64,9 +64,9 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
     expect(deferredRows[0].outcome).toBe('corrected');
     expect(deferredRows[0].source).toBe('classifier');
     expect(deferredRows[0].followup).toBe(followup);
-    // The downstream evolution ran too.
-    expect(listLessons(deferred.rt.storage.sql, deferred.rt.actor, { status: 'corroborated' }))
-      .toHaveLength(listLessons(inline.rt.storage.sql, inline.rt.actor, { status: 'corroborated' }).length);
+    // The downstream evolution ran too: the correction corroborates the one lesson it teaches.
+    expect(listLessons(inline.rt.storage.sql, inline.rt.actor, { status: 'corroborated' })).toHaveLength(1);
+    expect(listLessons(deferred.rt.storage.sql, deferred.rt.actor, { status: 'corroborated' })).toHaveLength(1);
     // The row is retired only once its review has run.
     expect(deferred.engine.sessionWindow.countQueuedReviews()).toBe(0);
   });

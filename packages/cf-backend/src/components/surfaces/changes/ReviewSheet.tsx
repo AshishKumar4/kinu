@@ -3,11 +3,11 @@ import { CaretDownIcon, CaretUpIcon, ChatCircleDotsIcon, ChatCircleTextIcon, XIc
 import * as v from "valibot";
 import { Segmented } from "@/components/ui/Segmented";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { inReadingOrder, vfsBasename, vfsDirname, type ChangeSet, type FileDiff } from "@kinu.run/core";
+import { inReadingOrder, vfsBasename, vfsDirname, type ChangeSet, type FileDiff, type ReviewAnnotation } from "@kinu.run/core";
 import { ChangeMark, Counts, count } from "./diff";
 import { FileBody } from "./ChangesPanel";
 import { FileTree, IconButton, MarkReviewed, Since, Summary, typing } from "./parts";
-import { SendFeedback, useNotes, type ChangeNote } from "./notes";
+import { NotesFailure, SendFeedback, useNotes } from "./notes";
 
 // Lazy: plannotator's panel loads only with the first note.
 const NotesPanel = lazy(() => import("./notes-panel"));
@@ -33,7 +33,7 @@ function FileNotes({ path }: { path: string }) {
 
   const write = (): void => {
     if (button.current === null) return;
-    notes.write({ path, scope: "file", side: "new", lineStart: 0, lineEnd: 0, baseline: notes.baseline }, path, button.current);
+    notes.write({ scope: "file", path, baseline: notes.baseline }, path, button.current);
   };
 
   return (
@@ -117,7 +117,6 @@ interface SheetProps {
   readonly onClose: () => void;
   readonly onReviewed: () => void;
   readonly onOpenInFiles: ((path: string) => void) | null;
-  readonly onSend?: (notes: readonly ChangeNote[]) => void;
 }
 
 function Picker({ files, current, onPick, onClose }: { files: readonly FileDiff[]; current: string | null; onPick: (path: string) => void; onClose: () => void }) {
@@ -191,7 +190,7 @@ function Stack({ files, split, register, stack, onScroll, onOpenInFiles }: {
   );
 }
 
-export function ReviewSheet({ set, now, file, layout: pinned, annotationsOpen = false, pickerOpen = false, onClose, onReviewed, onOpenInFiles, onSend }: SheetProps) {
+export function ReviewSheet({ set, now, file, layout: pinned, annotationsOpen = false, pickerOpen = false, onClose, onReviewed, onOpenInFiles }: SheetProps) {
   const phone = !useMediaQuery("(min-width: 768px)");
   const [layout, setLayoutState] = useState<Layout>(() => pinned ?? storedLayout());
   const [panelOpen, setPanelOpen] = useState(annotationsOpen);
@@ -219,7 +218,7 @@ export function ReviewSheet({ set, now, file, layout: pinned, annotationsOpen = 
     cards.current.get(path)?.scrollIntoView({ block: "start", behavior: "smooth" });
   };
 
-  const reveal = (note: ChangeNote): void => {
+  const reveal = (note: ReviewAnnotation): void => {
     const mark = document.querySelector<HTMLElement>(`[data-note-mark="${CSS.escape(note.id)}"]`);
 
     if (mark !== null) mark.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -273,14 +272,15 @@ export function ReviewSheet({ set, now, file, layout: pinned, annotationsOpen = 
           </div>
         </header>
         <Stack files={files} split={false} register={register} stack={stack} onScroll={follow} onOpenInFiles={onOpenInFiles} />
-        {noted && onSend !== undefined && (
+        {noted && (
           <footer className="flex shrink-0 items-center gap-2 border-t p-border p-sidebar px-3 pb-[max(env(safe-area-inset-bottom),10px)] pt-2.5">
             <span className="min-w-0 flex-1 p-meta p-text-3">{notes?.notes.length} {notes?.notes.length === 1 ? "note" : "notes"} for the agent</span>
-            <SendFeedback onSend={onSend} />
+            <NotesFailure />
+            <SendFeedback />
           </footer>
         )}
         {picking && <Picker files={files} current={current} onClose={() => setPicking(false)} onPick={(path) => { setPicking(false); show(path); }} />}
-        {notes !== null && <Suspense><NotesPanel open={panelOpen} onClose={() => setPanelOpen(false)} files={files} onReveal={(note) => { setPanelOpen(false); reveal(note); }} /></Suspense>}
+        {notes !== null && <Suspense><NotesPanel open={panelOpen} onClose={() => setPanelOpen(false)} onReveal={(note) => { setPanelOpen(false); reveal(note); }} /></Suspense>}
       </div>
     );
   }
@@ -299,7 +299,8 @@ export function ReviewSheet({ set, now, file, layout: pinned, annotationsOpen = 
             <Segmented label="Layout" value={layout} onChange={setLayout}
               segments={[{ id: "unified", label: "Unified" }, { id: "split", label: "Split" }]} />
             <AnnotationsToggle open={panelOpen} onToggle={() => setPanelOpen((value) => !value)} />
-            {noted && onSend !== undefined ? <SendFeedback onSend={onSend} /> : set.mode === "vfs-baseline" && <MarkReviewed onClick={onReviewed} />}
+            <NotesFailure />
+            {noted ? <SendFeedback /> : set.mode === "vfs-baseline" && <MarkReviewed onClick={onReviewed} />}
             <IconButton label="Close (Esc)" onClick={onClose}><XIcon size={15} /></IconButton>
           </div>
         </header>
@@ -314,7 +315,7 @@ export function ReviewSheet({ set, now, file, layout: pinned, annotationsOpen = 
             </div>
           </nav>
           <Stack files={files} split={layout === "split"} register={register} stack={stack} onScroll={follow} onOpenInFiles={onOpenInFiles} />
-          {notes !== null && <Suspense><NotesPanel open={panelOpen} onClose={() => setPanelOpen(false)} files={files} onReveal={reveal} /></Suspense>}
+          {notes !== null && <Suspense><NotesPanel open={panelOpen} onClose={() => setPanelOpen(false)} onReveal={reveal} /></Suspense>}
         </div>
       </div>
     </div>

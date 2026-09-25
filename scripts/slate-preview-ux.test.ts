@@ -434,3 +434,130 @@ test('after Mark reviewed, the source menu still reaches a machine\'s changes', 
     } finally { await page.close(); }
   });
 });
+
+declare global {
+  interface Window {
+    /** The workspace frame's router (`GalleryNavigator` in gallery.tsx). */
+    galleryNavigate?: (path: string) => Promise<void>;
+  }
+}
+
+test('a workspace switch clears the sandbox-starting line of the workspace left behind', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+
+    try {
+      await page.setViewport({ width: 1280, height: 860 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-composer-root]');
+      // The sandbox lists a port the page pins, then its next listing answers as starting: the pin stays, the line shows.
+      await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
+      await page.waitForSelector('[aria-label="Arrived app"]');
+      await page.evaluate(() => { document.documentElement.dataset.sandboxStarting = '1'; });
+      await page.waitForSelector('[data-preview-starting]');
+      // The next workspace's listing never lands, so only the switch itself can clear the line.
+      await page.evaluate(async () => {
+        document.documentElement.dataset.listingHeld = '1';
+        await window.galleryNavigate?.('/workspace/billing-cleanup');
+      });
+      // The switch's reset drops the pin and the line in one render, so once the pin has gone the line must be gone.
+      await page.waitForFunction(() => document.querySelector('[aria-label="Arrived app"]') === null);
+      expect(await page.$('[data-preview-starting]')).toBeNull();
+    } finally { await page.close(); }
+  });
+});
+
+test('a note on a changed line stands in for Mark reviewed, leaves the diff when its code moves, and clears once sent', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await openChanges(newPage, origin, false);
+    const text = (selector: string): Promise<string> => page.$eval(selector, (element) => element.textContent ?? '');
+
+    try {
+      await page.click('[data-file-row="src/app.ts"]');
+      await page.click('[data-changes="file"] [data-note-row][data-new="1"] > span:first-child');
+      await page.waitForSelector('button[title="Comment"]');
+      await page.click('button[title="Comment"]');
+      await page.waitForSelector('textarea[placeholder="Add a comment..."]');
+      await page.type('textarea[placeholder="Add a comment..."]', 'Read it from the config instead.');
+      await page.keyboard.down('Control');
+      await page.keyboard.press('Enter');
+      await page.keyboard.up('Control');
+      await page.waitForSelector('[data-notes-bar]');
+
+      // While a note is unsent, Send feedback is the one action: marking reviewed would move the side it quotes.
+      expect(await text('[data-notes-bar]')).toContain('1 note for the agent');
+      expect(await page.$('[data-mark-reviewed]')).toBeNull();
+      expect(await page.$$eval('[data-note-mark]', (marks) => marks.length)).toBeGreaterThan(0);
+
+      // Two lines, pressed then Shift-pressed, quote as the diff reads them, so the note keeps its mark.
+      await page.click('[data-changes] [aria-label="Next file (j)"]');
+      await page.waitForFunction(() => (document.querySelector('[data-changes="file"]')?.textContent ?? '').includes('hidden = false'));
+      await page.click('[data-changes="file"] [data-note-row][data-new="1"] > span:first-child');
+      await page.keyboard.down('Shift');
+      await page.click('[data-changes="file"] [data-note-row][data-new="2"] > span:first-child');
+      await page.keyboard.up('Shift');
+      await page.waitForSelector('button[title="Comment"]');
+      await page.click('button[title="Comment"]');
+      await page.waitForSelector('textarea[placeholder="Add a comment..."]');
+      await page.type('textarea[placeholder="Add a comment..."]', 'Both flags belong in one place.');
+      await page.keyboard.down('Control');
+      await page.keyboard.press('Enter');
+      await page.keyboard.up('Control');
+      await page.waitForFunction(() => (document.querySelector('[data-notes-bar]')?.textContent ?? '').includes('2 notes'));
+      expect(await page.$$eval('[data-changes="file"] [data-note-mark]', (marks) => marks.length)).toBeGreaterThan(0);
+      await page.click('[data-changes] [aria-label="Previous file (k)"]');
+      await page.waitForSelector('[data-changes="file"] [data-note-row][data-new="1"]');
+
+      await page.click('[data-changes="file"] [aria-label="Expand: every file side by side"]');
+      await page.click('[data-annotations-toggle]');
+      await page.waitForFunction(() => (document.querySelector('[data-review-sheet]')?.textContent ?? '').includes('Read it from the config instead.'));
+      expect(await text('[data-review-sheet]')).toContain('app.ts · line 1, newexport const ready = true;');
+      expect(await text('[data-review-sheet]')).toContain('ready.ts · lines 1–2, newexport const shown = true;');
+      expect(await text('[data-review-sheet]')).not.toContain('changed since');
+
+      // The agent rewrites the line: the note's mark leaves the diff, and the list says its code moved.
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => document.querySelector('[data-review-sheet]') === null);
+      await page.click('[data-edit-again]');
+      await page.waitForFunction(() => (document.querySelector('[data-changes="file"]')?.textContent ?? '').includes('isReady()'));
+      expect(await page.$$('[data-note-mark]')).toHaveLength(0);
+      await page.click('[data-notes-bar] button');
+      await page.waitForFunction(() => (document.querySelector('[data-review-sheet]')?.textContent ?? '').includes('changed since'));
+
+      // Sent, the notes clear and Mark reviewed is back.
+      await page.click('[data-review-sheet] [data-send-feedback]');
+      await page.waitForFunction(() => document.querySelectorAll('[data-send-feedback]').length === 0);
+      await page.waitForSelector('[data-review-sheet] [data-mark-reviewed]');
+    } finally { await page.close(); }
+  });
+});
+
+test('a mouse wheel over the inspector strip scrolls it sideways, so a tab past its edge is reachable', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+
+    try {
+      // The default inspector width, with three slates' tabs ahead of the workspace's own.
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('.p-tabstrip button[aria-label="Tally"]');
+      const strip = await page.$('.p-tabstrip:has(button[aria-label="Tally"])');
+      const box = await strip?.boundingBox();
+
+      if (strip === null || strip === undefined || box === null || box === undefined) throw new Error('the inspector strip is not drawn');
+
+      // Whether the strip's last tab ends inside the strip's visible edge.
+      const lastTabShown = (): Promise<boolean> => strip.evaluate((element) => {
+        const last = [...element.querySelectorAll('button[aria-label]')].at(-1)?.getBoundingClientRect();
+
+        return last !== undefined && last.right <= element.getBoundingClientRect().right + 1;
+      });
+
+      expect(await lastTabShown()).toBe(false);
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.wheel({ deltaY: 2000 });
+
+      expect(await lastTabShown()).toBe(true);
+    } finally { await page.close(); }
+  });
+});

@@ -8,7 +8,7 @@ import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, r
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { classify, classifyErrorCode, diagnostics, KinuError, renderThrownChain, tolerate, toKinuError } from '@kinu.run/core/obs';
 import { describeGpuNodes, effectiveDeviceMode, sandboxReasonFix } from '@kinu.run/core';
 import { enforceOwnerOnly, ensureSecretDir } from '@kinu.run/cli-backend';
@@ -99,7 +99,7 @@ export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions
   const runtime = daemonRuntime();
   const device = await registerDeviceForConnect(auth, opts.label, previousDeviceToken(auth.origin));
   installDaemonFiles(device);
-  const launch = startInstalledDaemon(opts.session === true, runtime);
+  const launch = await startInstalledDaemon(opts.session === true, runtime);
   // The daemon must show as connected on the server before success is claimed.
   const connected = await waitForDeviceConnected(auth, device.deviceId, launch, opts);
 
@@ -168,8 +168,8 @@ export async function shouldOfferDeviceConnect(): Promise<boolean> {
   return true;
 }
 
-export function dismissDeviceConnectPrompt(): void {
-  updateConfigFile((config) => {
+export async function dismissDeviceConnectPrompt(): Promise<void> {
+  await updateConfigFile((config) => {
     config.deviceConnectPromptDismissed = true;
   });
 }
@@ -562,7 +562,7 @@ function daemonTailForFailure(): string {
   return readDaemonLogTail(DAEMON_LOG_PATH, 15) ?? `no daemon log yet at ${DAEMON_LOG_PATH}`;
 }
 
-function startInstalledDaemon(session: boolean, runtime?: string): DaemonLaunch {
+async function startInstalledDaemon(session: boolean, runtime?: string): Promise<DaemonLaunch> {
   assertDaemonPlatformSupported();
 
   try {
@@ -578,7 +578,7 @@ function startInstalledDaemon(session: boolean, runtime?: string): DaemonLaunch 
   const executable = runtime ?? daemonRuntime();
   killSessionDaemon();
 
-  if (!session) stopRunningDaemon();
+  if (!session) await stopRunningDaemon();
 
   const launch = spawnDaemonChild(executable, session);
 
@@ -719,10 +719,10 @@ function writePidfile(pid: number): boolean {
   }
 }
 
-function stopRunningDaemon(): void {
+async function stopRunningDaemon(): Promise<void> {
   const pid = runningDaemonPid();
 
-  if (pid && processIsInstalledDaemon(pid)) {
+  if (pid && await processIsInstalledDaemon(pid)) {
     try {
       tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
     } catch (cause) {
@@ -737,15 +737,26 @@ function stopRunningDaemon(): void {
   }
 }
 
-function processIsInstalledDaemon(pid: number): boolean {
+const PS_NO_SUCH_PROCESS = 1;
+
+function psCommand(pid: number): Promise<string> {
+  const { promise, resolve, reject } = Promise.withResolvers<string>();
+
+  execFile('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf-8' }, (cause, stdout) => {
+    if (cause) reject(cause);
+    else resolve(stdout);
+  });
+
+  return promise;
+}
+
+async function processIsInstalledDaemon(pid: number): Promise<boolean> {
   try {
     if (process.platform === 'linux') {
       return readFileSync(`/proc/${pid}/cmdline`, 'utf-8').split('\0').includes(SCRIPT_PATH);
     }
 
-    if (process.platform === 'darwin') {
-      return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf-8' }).includes(SCRIPT_PATH);
-    }
+    if (process.platform === 'darwin') return (await psCommand(pid)).includes(SCRIPT_PATH);
 
     return false;
   } catch (cause) {
@@ -755,7 +766,7 @@ function processIsInstalledDaemon(pid: number): boolean {
       return false;
     }
 
-    if (process.platform === 'darwin' && cause instanceof Error && 'status' in cause && cause.status === 1) {
+    if (process.platform === 'darwin' && cause instanceof Error && 'code' in cause && cause.code === PS_NO_SUCH_PROCESS) {
       return false;
     }
 

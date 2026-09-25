@@ -42,6 +42,8 @@ export { ChatHistoryEntrySchema } from './types/chat';
 // Every composition root calls this and nothing else (tests/contract-workspace-schema.test.ts).
 export { initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
+export { resetGuardedExec, StoragePredatesResetError } from './state/store-reset';
+
 export { initUserTables, PROFILE_CATALOG_CONFIG_KEY } from './state/user-schema';
 
 export {
@@ -1143,7 +1145,7 @@ export {
   DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE, DEVICE_PTY_CLOSE,
   DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_MAX_AXIS,
   type DeviceCancelResult,
-  DeviceSocketHub, deviceIdFromSocket,
+  DeviceSocketHub, deviceIdFromSocket, WS_OPEN,
   DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG,
   type DeviceSocket, type DeviceSocketCtx,
   DeviceRequestLedger, initDeviceInflightTable,
@@ -1293,6 +1295,8 @@ export {
   type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
 
+export { MarkdownFrontmatterError, parseMarkdownFrontmatter } from './utils/markdown-frontmatter';
+
 export { compareCodeUnits } from './utils/text';
 
 // Sleep-time compute
@@ -1421,7 +1425,8 @@ export {
   PlanReviewActions,
   PlanReviewStore,
   PlanReviewSchema,
-  admitPlanReviewAnnotations,
+  admitReviewAnnotations,
+  DiffAnchorSchema,
   applyPlanEdits,
   formatPlanWithLineNumbers,
   initPlanReviewTable,
@@ -1435,7 +1440,9 @@ export {
   type PlanAnnotationMathTarget,
   type PlanAnnotationTextPosition,
   type PlanReview,
-  type PlanReviewAnnotation,
+  type ReviewAnnotation,
+  type DiffAnchor,
+  type DiffSide,
   type PlanReviewDecision,
   type PlanReviewResult,
   type PlanReviewStatus,
@@ -1816,7 +1823,7 @@ export type {
   SkillHeader, ParsedSkill, DiscoveredSkill, ActiveSkill, SkillBodyRef,
   SkillsIndex, SkillSource, ActiveSkillSet, ActivationReason,
   SkillParseResult,
-  SkillsVfs, DiscoverOpts, SkillsDiscovery, UnreadSkillFile,
+  SkillsVfs, DiscoverOpts, SkillsDiscovery, UnreadSkillFile, SkillFileRefusal,
   LoadActiveSkillsOpts, ActivatedSkill,
 } from './skills/index';
 
@@ -1952,8 +1959,14 @@ export {
 export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff';
 
 export {
-  changeBlocks, changeBody, changeTotals, changeTree, inReadingOrder, keepUnchanged, sideBySide,
+  anchoredText, changeBlocks, changeBody, changeTotals, changeTree, comparePaths, inReadingOrder, keepUnchanged, sideBySide,
 } from './read-models/change-view';
+
+export {
+  ALL_CHANGES_BLOCK, changeNotesCard, initChangeNotesTable, inNoteOrder, readChangeNotes, saveChangeNotes, sendChangeNotes,
+} from './read-models/change-notes';
+
+export type { ChangeNotesCard, ChangeNotesResult, NotedChanges } from './read-models/change-notes';
 
 export type {
   ChangeBlock, ChangeBody, ChangePair, ChangeRow, ChangeSet, ChangeSpan, ChangeTreeRow,
@@ -2053,9 +2066,9 @@ export type { TurnAuthor } from './utils/ui-message';
 
 export type { PendingAction, PendingActionKind, PendingActionInputs, PersonAsks } from './read-models/pending-actions';
 
-export { buildWorkspaceOverview, overviewHeadline, rosterActivity, WorkspaceOverviewSchema } from './read-models/workspace-overview';
+export { buildWorkspaceOverview, rosterBucket, rosterHeadline, rosterMatches, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
-export type { RosterActivity, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewSlate, WorkspaceStatus } from './read-models/workspace-overview';
+export type { RosterBucket, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewSlate, WorkspaceStatus } from './read-models/workspace-overview';
 
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
@@ -2394,6 +2407,7 @@ export {
   isAgentRpcMethod,
   requiredRpcAccess,
   rpcAccessScope,
+  rpcMovesOverview,
   type AgentRpcAccess,
   type AgentRpcMethod,
   type HostedWindowActor,

@@ -13,6 +13,7 @@ import { initCurriculumTable } from '../curriculum/proposer';
 import { initEventsHubTables } from '../events/hub/schema';
 import { initRunEventTables } from '../events/recorder';
 import { initActorClaimTables } from '../orchestrator/actor-claims';
+import { resetGuardedExec } from './store-reset';
 import { initGepaTables } from '../evolution/gepa/persistence';
 import { initTurnOutcomeTables } from '../evolution/outcomes';
 import { initReplayTables } from '../evolution/replay';
@@ -148,7 +149,7 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initHeadsTables(execRaw);
   initShadowTables(execRaw);
   initRunEventTables(execRaw);
-  initActorClaimTables(execRaw);
+  initActorClaimTables(resetGuardedExec(execRaw, exec));
   initFactsTable(execRaw);
   initCurriculumTable(execRaw);
   initGepaTables(execRaw);

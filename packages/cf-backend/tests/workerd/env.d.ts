@@ -12,6 +12,7 @@ import type { DbCapabilityProbeDO } from './db-capability-probe';
 import type { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
 import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
+import type { ChatAnswers, SeedAnswer } from './store-reset-shapes';
 import type {
   DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState, DeployFakeWeight,
 } from './deploy-fake';
@@ -24,7 +25,7 @@ import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 import type { SlateBinding } from '../../src/slates/bindings';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
-  PendingSteer, PendingSteerFile, PreparedConversation, QueueProbeMode, ReactorWake,
+  PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
   ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, WakeHoldPlacement,
 } from './two-turn-shapes';
 import type {
@@ -73,7 +74,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   httpCalls(): Promise<HttpCall[]>;
   httpReset(): Promise<void>;
   driveOnce(input: DriveOnceInput): Promise<DriveOnceResult>;
-  queuedConversation(mode: QueueProbeMode): Promise<HttpCall[]>;
+  queuedConversation(mode: QueueProbeMode): Promise<QueuedConversation>;
   prepareQueuedConversation(mode: QueueProbeMode): Promise<PreparedConversation>;
   replayQueuedConversation(prepared: PreparedConversation): Promise<{ steers: PendingSteer[]; steerFiles: PendingSteerFile[] }>;
   completeQueuedConversation(prepared: PreparedConversation): Promise<{ http: HttpCall[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[]; transcript: Array<{ id: string; role: string }>; runEnds: Array<{ runId: string; reason: string }> }>;
@@ -131,6 +132,14 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
   hashes(): Promise<Record<'ws-alpha' | 'ws-beta', string | null>>;
   reset(): Promise<{ ok: true; workspaces: number }>;
   freshProfile(): Promise<{ email: string; displayName: string | null; onboardedAt: number | null; workspaceCount: number } | null>;
+}
+
+interface StoreResetProbeRpc extends Rpc.DurableObjectBranded {
+  plantRefusedWorkspace(workspace: string): Promise<string>;
+  seed(workspace: string): Promise<SeedAnswer>;
+  chat(workspace: string): Promise<ChatAnswers>;
+  wake(workspace: string): Promise<string>;
+  exportedLines(workspace: string): Promise<number>;
 }
 
 interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
@@ -268,6 +277,7 @@ declare global {
       USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;
       SLATE_DURABILITY_PROBE: DurableObjectNamespace<SlateDurabilityProbeRpc>;
       ACCOUNT_RESET_PROBE: DurableObjectNamespace<AccountResetProbeRpc>;
+      STORE_RESET_PROBE: DurableObjectNamespace<StoreResetProbeRpc>;
   // Readiness refusal must serialise over Workers RPC as data, not a thrown class name; not a sandbox stub.
   DEVBOX_NOT_READY_PROBE: DurableObjectNamespace<DevboxNotReadyProbeDO>;
       LOADER: WorkerLoader;

@@ -18,7 +18,7 @@ import { StepInjections } from '../prompting/step-injections';
 import { nanoid } from '../utils/nanoid';
 import { metadataBroadcastEvent } from '../read-models/background-event';
 import type { WorkMode } from '../types/turn';
-import type { JsonObject } from '../utils/json';
+import { parseJsonObject, type JsonObject } from '../utils/json';
 import { stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { diagnostics, KinuError, toKinuError } from '../obs/index';
@@ -119,6 +119,12 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     media_type TEXT NOT NULL,
     url        TEXT NOT NULL
   )`);
+  execRaw(`CREATE TABLE IF NOT EXISTS pending_steer_metadata (
+    actor_id      TEXT NOT NULL,
+    steer_id      TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    PRIMARY KEY (actor_id, steer_id)
+  )`);
 }
 
 /**
@@ -132,13 +138,18 @@ export class PendingSendStore {
   ) {}
 
   /** Reserve before the client hears the send was taken. `turnId` is null only on the CLI's idle lane. */
-  reserve(steer: AcceptedSteer & { readonly turnId: string | null }): void {
+  reserve(steer: AcceptedSteer & { readonly turnId: string | null; readonly metadata?: JsonObject }): void {
     void this.sql`INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
       VALUES (${this.actorId}, ${steer.id}, ${steer.turnId}, ${steer.mode}, ${steer.text})`;
 
     for (const file of steer.files ?? []) {
       void this.sql`INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
         VALUES (${this.actorId}, ${steer.id}, ${file.filename}, ${file.mediaType}, ${file.url})`;
+    }
+
+    if (steer.metadata !== undefined) {
+      void this.sql`INSERT INTO pending_steer_metadata (actor_id, steer_id, metadata_json)
+        VALUES (${this.actorId}, ${steer.id}, ${JSON.stringify(steer.metadata)})`;
     }
   }
 
@@ -161,6 +172,8 @@ export class PendingSendStore {
     for (const id of ids) {
       void this.sql`DELETE FROM pending_steer_files
         WHERE actor_id = ${this.actorId} AND steer_id = ${id}`;
+      void this.sql`DELETE FROM pending_steer_metadata
+        WHERE actor_id = ${this.actorId} AND steer_id = ${id}`;
       void this.sql`DELETE FROM pending_steers
         WHERE actor_id = ${this.actorId} AND id = ${id}`;
     }
@@ -179,6 +192,13 @@ export class PendingSendStore {
       WHERE actor_id = ${this.actorId} AND steer_id = ${steerId}
       ORDER BY seq ASC`
       .map((row) => ({ filename: row.filename, mediaType: row.media_type, url: row.url }));
+  }
+
+  metadata(steerId: string): JsonObject | undefined {
+    const row = this.sql<{ metadata_json: string }>`
+      SELECT metadata_json FROM pending_steer_metadata WHERE actor_id = ${this.actorId} AND steer_id = ${steerId}`[0];
+
+    return row === undefined ? undefined : parseJsonObject(row.metadata_json);
   }
 
   /** Every owed send in acceptance order; attachments via {@link files}. */
@@ -408,9 +428,9 @@ export class Inbox implements AgentInbox {
   }
 
   /**
-   * Turn over: everything that did not reach the model re-delivers (users first, as one user-origin turn);
-   * an aborted turn also requeues its absorbed events. Call exactly once per turn, before anything that can
-   * throw. Re-delivery is detached so a turn never blocks on the next one's queue slot.
+   * Turn over: everything that did not reach the model re-delivers; an aborted turn also requeues its absorbed events.
+   * Call exactly once per turn, before anything that can throw.
+   * Re-delivery is detached so a turn never blocks on the next one's queue slot.
    */
   settle(opts: { completed: boolean }): SettledSignals {
     const absorbed = this.absorbed;
@@ -510,16 +530,25 @@ export class Inbox implements AgentInbox {
     return attempt;
   }
 
-  /** Users as one user-origin turn, then each event as its own; detached. */
+  /** Users as one user-origin turn, its first step carrying the events that do not yield to them; with no users,
+   *  or on a closed host, each event is its own turn. */
   private redeliver(users: readonly DeliveredUserSignal[], events: readonly DeliveredSignal[]): void {
     const [first, ...rest] = users;
+    const ride = first !== undefined && this.host.closed?.() !== true;
+
+    for (const signal of events) {
+      if (!ride) {
+        void this.queue(signal).catch(reportRedeliveryFailure(signal.kind));
+      } else if (signal.yieldsToUserMessage === true) {
+        this.moveCard(signal.cardId, 'undelivered');
+      } else {
+        this.pending.push(signal);
+        this.openCard(signal, stepBody(signal));
+      }
+    }
 
     if (first !== undefined) {
       void this.queueUsers([first, ...rest], { idempotent: true }).catch(reportRedeliveryFailure(USER_MESSAGE_SIGNAL_KIND));
-    }
-
-    for (const signal of events) {
-      void this.queue(signal).catch(reportRedeliveryFailure(signal.kind));
     }
   }
 
@@ -544,7 +573,7 @@ export class Inbox implements AgentInbox {
 
       const result = await this.startTurn(() => this.host.enqueueTurn(turn));
 
-      // Operator already speaking: a consumed offer, not a failure. No compensate; card withdrawn.
+      // The operator spoke first: a consumed offer, not a failure.
       if (result.status === 'yielded') {
         this.moveCard(signal.cardId, 'undelivered');
 

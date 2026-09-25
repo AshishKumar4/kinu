@@ -81,6 +81,44 @@ export const BUILTIN_SKILL_NAMES: Readonly<Record<string, true>> = Object.freeze
   Object.fromEntries(BUILTIN_SKILLS.map((skill) => [skill.name, true] as const)),
 );
 
+export type SkillFileRefusal =
+  | { readonly reason: 'name'; readonly problem: string }
+  | { readonly reason: 'builtin' }
+  | { readonly reason: 'shadowed'; readonly by: string };
+
+function skillFileRefusal(name: string, held: Pick<SkillFile, 'path'> | undefined): SkillFileRefusal | null {
+  // The stem is the skill's name, so an illegal stem is rejected without a read.
+  const problem = skillNameProblem(name);
+
+  if (problem !== null) return { reason: 'name', problem };
+
+  if (Object.hasOwn(BUILTIN_SKILL_NAMES, name)) return { reason: 'builtin' };
+
+  return held === undefined ? null : { reason: 'shadowed', by: held.path };
+}
+
+function refusalText(name: string, refusal: SkillFileRefusal): string {
+  if (refusal.reason === 'name') return `filename stem ${refusal.problem}`;
+
+  if (refusal.reason === 'builtin') return `"${name}" is a built-in skill name and cannot be overridden by a file`;
+
+  return `"${name}" is shadowed by ${refusal.by}`;
+}
+
+async function takeSkillFiles(
+  vfs: SkillsVfs,
+  root: { readonly dir: string; readonly source: SkillFile['source'] },
+  taken: Map<string, SkillFile>,
+  refuse: (file: { readonly name: string; readonly path: string }, refusal: SkillFileRefusal) => void,
+): Promise<void> {
+  for (const { name, path, folder } of await listSkillCandidates(vfs, root.dir)) {
+    const refusal = skillFileRefusal(name, taken.get(name));
+
+    if (refusal === null) taken.set(name, { name, source: root.source, path, folder });
+    else refuse({ name, path }, refusal);
+  }
+}
+
 /** Every file-backed skill in precedence order; each refused candidate goes to `refuse`. */
 export async function listSkillFiles(
   vfs: SkillsVfs,
@@ -88,32 +126,24 @@ export async function listSkillFiles(
 ): Promise<SkillFile[]> {
   const winners = new Map<string, SkillFile>();
 
-  for (const { dir, source } of SKILL_ROOTS) {
-    for (const { name, path, folder } of await listSkillCandidates(vfs, dir)) {
-      // The stem is the skill's name, so an illegal stem is rejected without a read.
-      const stemProblem = skillNameProblem(name);
-
-      if (stemProblem) { refuse?.(path, `filename stem ${stemProblem}`); continue; }
-
-      if (Object.hasOwn(BUILTIN_SKILL_NAMES, name)) {
-        refuse?.(path, `"${name}" is a built-in skill name and cannot be overridden by a file`);
-        continue;
-      }
-
-      const held = winners.get(name);
-
-      if (held !== undefined) { refuse?.(path, `"${name}" is shadowed by ${held.path}`); continue; }
-
-      winners.set(name, { name, source, path, folder });
-    }
+  for (const root of SKILL_ROOTS) {
+    await takeSkillFiles(vfs, root, winners, (file, refusal) => refuse?.(file.path, refusalText(file.name, refusal)));
   }
 
   return [...winners.values()];
 }
 
+export async function refusedSkillFiles(vfs: SkillsVfs, dir: string): Promise<ReadonlyMap<string, SkillFileRefusal>> {
+  const refused = new Map<string, SkillFileRefusal>();
+
+  await takeSkillFiles(vfs, { dir, source: 'shared' }, new Map(), (file, refusal) => refused.set(file.path, refusal));
+
+  return refused;
+}
+
 /** One name's file by the same precedence; null for a built-in. */
 export async function resolveSkillFile(vfs: SkillsVfs, name: string): Promise<SkillFile | null> {
-  if (skillNameProblem(name) !== null || Object.hasOwn(BUILTIN_SKILL_NAMES, name)) return null;
+  if (skillFileRefusal(name, undefined) !== null) return null;
 
   for (const { dir, source } of SKILL_ROOTS) {
     const folder = `${dir}/${name}`;

@@ -178,6 +178,13 @@
     "retention TEXT",
     "body TEXT"
   ],
+  "change_notes@packages/core/src/read-models/change-notes.ts": [
+    "actor_id TEXT NOT NULL",
+    "source TEXT NOT NULL",
+    "notes_json TEXT NOT NULL",
+    "updated_at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, source)"
+  ],
   "cli_agent_connect_tickets@packages/core/src/state/user-schema.ts": [
     "ticket_hash TEXT PRIMARY KEY",
     "user_id TEXT NOT NULL",
@@ -837,6 +844,12 @@
     "filename TEXT NOT NULL",
     "media_type TEXT NOT NULL",
     "url TEXT NOT NULL"
+  ],
+  "pending_steer_metadata@packages/core/src/orchestrator/inbox.ts": [
+    "actor_id TEXT NOT NULL",
+    "steer_id TEXT NOT NULL",
+    "metadata_json TEXT NOT NULL",
+    "PRIMARY KEY (actor_id, steer_id)"
   ],
   "pending_steers@packages/core/src/orchestrator/inbox.ts": [
     "seq INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -1647,5 +1660,17 @@
     "owner_user_id TEXT NOT NULL DEFAULT ''",
     "mission TEXT NOT NULL DEFAULT ''",
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
+  ],
+  "workspace_overview_nudges@packages/core/src/state/user-schema.ts": [
+    "name TEXT PRIMARY KEY",
+    "attempts INTEGER NOT NULL",
+    "next_at INTEGER NOT NULL"
+  ],
+  "workspace_overviews@packages/core/src/state/user-schema.ts": [
+    "name TEXT PRIMARY KEY",
+    "overview TEXT NOT NULL",
+    "activity TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle'))",
+    "decisions INTEGER NOT NULL",
+    "changed_at INTEGER NOT NULL"
   ]
 }

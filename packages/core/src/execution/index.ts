@@ -78,7 +78,7 @@ export {
 } from './device-tunnel';
 
 export {
-  DeviceSocketHub, deviceIdFromSocket,
+  DeviceSocketHub, deviceIdFromSocket, WS_OPEN,
   DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG,
   type DeviceSocket, type DeviceSocketCtx,
 } from './device-hub';

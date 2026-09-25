@@ -2,7 +2,8 @@
  * Prompt input via blocking canonical-mode reads on the terminal fd; never readline or raw mode: macOS kqueue cannot
  * poll /dev/tty, so under `kinu setup </dev/tty` keys never arrive. No terminal raises NonInteractiveError.
  */
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { closeSync, openSync, readSync } from 'node:fs';
 import { ACCENT, DIM } from './display';
 
@@ -108,12 +109,15 @@ export async function askSecret(label: string, fallback = ''): Promise<string> {
 
   try {
     process.stdout.write(`${DIM(label)}${fallback ? DIM(' [saved/default]') : ''} ${ACCENT('›')} `);
-    const read = spawnSync('/bin/sh', ['-c', SECRET_READ], { stdio: [tty.fd, 'pipe', 'ignore'] });
+    const read = spawn('/bin/sh', ['-c', SECRET_READ], { stdio: [tty.fd, 'pipe', 'ignore'] });
+    const chunks: Buffer[] = [];
+
+    if (read.stdout === null) throw new Error('the secret reader has no stdout pipe');
+    read.stdout.on('data', (chunk: Buffer) => { chunks.push(chunk); });
+    await once(read, 'close');
     process.stdout.write('\n');
 
-    if (read.error) throw read.error;
-
-    return (read.stdout?.toString('utf8') ?? '').trim() || fallback;
+    return Buffer.concat(chunks).toString('utf8').trim() || fallback;
   } finally {
     tty.close();
   }

@@ -24,17 +24,19 @@ const BUILD_STAMP = process.env.KINU_BUILD_STAMP;
 
 const VERSION = BUILD_STAMP === undefined ? cliPackage.version : `${cliPackage.version}+${BUILD_STAMP}`;
 
-const DIM = chalk.dim;
+type Paint = (text: string) => string;
 
-const ACCENT = chalk.hex(INK.thread);
+const DIM: Paint = chalk.dim;
 
-const OK = chalk.hex(INK.success);
+const ACCENT: Paint = chalk.hex(INK.thread);
 
-const WARN = chalk.hex(INK.warning);
+const OK: Paint = chalk.hex(INK.success);
 
-const ERR = chalk.hex(INK.danger);
+const WARN: Paint = chalk.hex(INK.warning);
 
-const MUTED = chalk.hex(INK.dim);
+const ERR: Paint = chalk.hex(INK.danger);
+
+const MUTED: Paint = chalk.hex(INK.dim);
 
 export { BRAND, VERSION, DIM, ACCENT, OK, WARN, ERR, MUTED };
 

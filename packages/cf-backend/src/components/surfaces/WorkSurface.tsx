@@ -10,13 +10,14 @@ import type { HeadDeltas } from "@kinu.run/core";
 import { tabCls, tabStripH } from "@/components/ui/form";
 import type { AgentStatus, ExecutorOutput } from "@/hooks/use-kinu";
 import type { AsyncResource } from "@/hooks/use-async-resource";
-import type { ExecutorInfo } from "@kinu.run/core";
+import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import type { ToolInfo, MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
-import { ChangesSurface } from "./ChangesSurface";
+import { ChangesSurface, type ChangesFocus } from "./ChangesSurface";
 import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { Loader } from "@cloudflare/kumo";
 import { AgentSurface } from "./AgentSurface";
 import { ExplorationSurface } from "./ExplorationSurface";
 import { WorkTab } from "./WorkTab";
@@ -32,6 +33,7 @@ import {
   type SlateSurfaceKind, type SurfaceKind,
 } from "@kinu.run/core";
 import { useSurfaceFocus } from "./use-surface-focus";
+import { useWheelScrollsSideways } from "@/hooks/use-wheel-scrolls-sideways";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
 const slateSurface = (id: string): SlateSurfaceKind => `${SLATE_PREFIX}${id}`;
@@ -53,12 +55,14 @@ export interface WorkSurfaceProps {
   surface: SurfaceKind;
   previewFocus?: string | null;
   planFocus?: string | null;
+  changesFocus?: ChangesFocus | null;
   planOwner?: string;
   workspacePlanArrival?: WorkspacePlanArrival | null;
   onReviewActor?: (name: string) => void | Promise<void>;
   onSurface: (s: SurfaceKind) => void;
   pinnedPorts: PinnedPort[];
   previewError: string | null;
+  previewStarting?: readonly string[];
   onRefreshPorts: () => void;
   plan: PlanReview | null;
   planRpc?: Rpc;
@@ -130,6 +134,22 @@ function OpenSlatePanel(props: WorkSurfaceProps & { readonly slate: string; read
   return props.slateBody?.(props.summary) ?? <SlateFrame id={props.summary.id} rpc={props.rpc} reloadKey={reloadKey} onReady={props.onRefreshPorts} />;
 }
 
+const LISTING_STRIP = "shrink-0 border-t p-border px-3 py-2";
+
+/** A failed listing wins over a starting one. */
+function ListingStatus({ error, starting, onRetry }: { error: string | null; starting: readonly string[]; onRetry: () => void }) {
+  if (error) return <LoadFailure what="preview listings" message={error} onRetry={onRetry} className={LISTING_STRIP} />;
+
+  if (starting.length === 0) return null;
+
+  return (
+    <div role="status" className={`flex items-center gap-2 text-xs p-text-3 ${LISTING_STRIP}`} data-preview-starting>
+      <Loader size="sm" />
+      <span className="min-w-0 truncate">{starting.map(executorLabel).join(" and ")} starting…</span>
+    </div>
+  );
+}
+
 export function WorkSurface(props: WorkSurfaceProps) {
   const requested = props.surface;
   const strip = useRef<HTMLDivElement>(null);
@@ -190,21 +210,19 @@ export function WorkSurface(props: WorkSurfaceProps) {
     ? undefined
     : props.slates?.find((slate) => slate.id === openSlate);
 
-  // One connect dialog owned here: three surfaces in this column request it, and only
-  // one is mounted at a time.
+  // One connect dialog for the three surfaces in this column that ask for it: only one is mounted at a time.
   const [connecting, setConnecting] = useState(false);
   const openConnect = useCallback(() => setConnecting(true), []);
   const closeConnect = useCallback(() => setConnecting(false), []);
 
   useSelectedTabInView(strip, surface);
+  useWheelScrollsSideways(strip);
   const bodyFit = previewSelected ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6";
 
   return (
     <div className="@container flex flex-col h-full p-sidebar">
-      {/* Activity sits outside the scrolling strip: appended tabs overflow it, and an
-          `ml-auto` button inside would scroll away. */}
+      {/* Activity sits outside the strip so it does not scroll away. */}
       <div className={`border-b p-border shrink-0 flex items-stretch ${tabStripH}`}>
-        {/* Scroll covers use this column's `p-sidebar` ground, not the canvas's. */}
         <div ref={strip} className={`p-tabstrip [--scroll-ground:var(--c-sidebar)] flex items-center min-w-0 flex-1 px-3 gap-0.5 -mb-px ${tabStripH}`}>
           {props.slates?.map(slate => {
             const kind = slateSurface(slate.id);
@@ -321,9 +339,10 @@ export function WorkSurface(props: WorkSurfaceProps) {
         </ErrorBoundary>
       </div>
       <div className={surface === "Changes" ? "flex-1 min-h-0" : "hidden"}>
-        <ChangesSurface executors={props.executors} lastActiveExecutor={props.lastActiveExecutor} rpc={props.rpc} onOpenFile={openChangedFile} onCount={setChangeCount} />
+        <ChangesSurface executors={props.executors} lastActiveExecutor={props.lastActiveExecutor} rpc={props.rpc} focus={props.changesFocus ?? null}
+          onOpenFile={openChangedFile} onCount={setChangeCount} />
       </div>
-      {props.previewError && <LoadFailure what="preview listings" message={props.previewError} onRetry={props.onRefreshPorts} />}
+      <ListingStatus error={props.previewError} starting={props.previewStarting ?? []} onRetry={props.onRefreshPorts} />
       {connecting && <ConnectDeviceDialog onClose={closeConnect} />}
     </div>
   );

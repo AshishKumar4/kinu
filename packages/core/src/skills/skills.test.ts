@@ -10,7 +10,7 @@ import { stepContextLimit } from '../prompting/step-prune';
 import { estimateTokens } from '../llm';
 import {
   parseSkillFile, stringifySkillFile,
-  discoverSkills, BUILTIN_SKILLS, BUILTIN_SKILL_FILES, BUILTIN_SKILL_HEADERS,
+  discoverSkills, BUILTIN_SKILLS, BUILTIN_SKILL_FILES, BUILTIN_SKILL_HEADERS, refusedSkillFiles,
   resolveActiveSkills, extractExplicitInvocations,
   admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, unionAllowedTools, toolAllowedBySkills,
@@ -669,6 +669,23 @@ describe('discoverSkills', () => {
     expect(v.calls.readFile).not.toContain(`${SHARED_SKILLS_DIR}/deploy/SKILL.md`);
     expect(v.calls.readFile).not.toContain(`${WORKSPACE_SKILLS_DIR}/lint.md`);
     expect(renderSkillsIndexSection(admitSkillsIndex(found, ROOMY_TOKENS))).toContain(workspaceSkillIndexLine('review', 'shared'));
+  });
+
+  test('a folder of skills says which files agents pass over, and why, by the rule discovery reads it by', async () => {
+    // `<name>/` takes the name before `<name>.md`; a built-in's name and an illegal stem are never a file's.
+    const v = memoryVfs({
+      '/skills/review/SKILL.md': skillFile('review', 'folder review'),
+      '/skills/review.md': skillFile('review', 'flat review'),
+      '/skills/slates.md': skillFile('slates', 'a shadow of the built-in'),
+      '/skills/Team Notes.md': skillFile('team-notes', 'a stem that is no name'),
+      '/skills/standup.md': skillFile('standup', 'flat standup'),
+    });
+
+    expect(Object.fromEntries(await refusedSkillFiles(v, '/skills'))).toEqual({
+      '/skills/review.md': { reason: 'shadowed', by: '/skills/review/SKILL.md' },
+      '/skills/slates.md': { reason: 'builtin' },
+      '/skills/Team Notes.md': { reason: 'name', problem: expect.stringContaining('kebab-case') },
+    });
   });
 
   test('an absent /shared mount is no shared skills, not a failed discovery', async () => {

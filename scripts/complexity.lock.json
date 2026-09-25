@@ -42,10 +42,6 @@
       "complexity": 46
     },
     {
-      "key": "packages/pc-agent/src/index.js#handle",
-      "complexity": 44
-    },
-    {
       "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
       "complexity": 43
     },
@@ -75,6 +71,10 @@
     },
     {
       "key": "packages/cli/src/tui/home-app.tsx#HomeScene",
+      "complexity": 41
+    },
+    {
+      "key": "packages/pc-agent/src/index.js#handle",
       "complexity": 41
     },
     {
