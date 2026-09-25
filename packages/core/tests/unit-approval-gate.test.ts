@@ -232,6 +232,18 @@ describe('reviewCommand — the decision is a function of (rule, whose files)', 
     }
   });
 
+  test('git takes its global options in any number and spelling, read in one pass', () => {
+    const longRun = '--no-pager '.repeat(60);
+
+    expect(reviewCommand(`git ${longRun}reset --hard`, THEIRS).decision).toBe('gate');
+    expect(reviewCommand(`git ${'--a '.repeat(60)}status`, THEIRS).decision).toBe('allow');
+    expect(reviewCommand(`git ${'-c a=b --x '.repeat(30)}status`, THEIRS).decision).toBe('allow');
+
+    for (const cmd of ['git --work-tree /pc/proj reset --hard', 'git --git-dir=/pc/proj/.git -P reset --hard', 'git -c core.x=1 -C /pc/proj clean -fd']) {
+      expect(reviewCommand(cmd, THEIRS).decision).toBe('gate');
+    }
+  });
+
   test('harm that reaches past the executor is gated wherever it was typed', () => {
     for (const cmd of ['git push --force origin main', 'npm publish']) {
       for (const owner of [OURS, THEIRS]) {

@@ -93,8 +93,11 @@ interface Rule {
   binaries?: readonly string[];
 }
 
-/** `git` and its global options (`-C`, `-c`, `--work-tree=`) before a subcommand. */
-const GIT = String.raw`\bgit(?:\s+(?:-[Cc]\s+\S+|--[\w-]+(?:[=\s]\S+)?))*\s+`;
+/** Long options taking the next word as a value (git.c). */
+const GIT_VALUE_OPTION = '(?:git-dir|work-tree|namespace|config-env|super-prefix)';
+
+/** `git` and its global options; each word parses one way, so a failed match backtracks linearly. */
+const GIT = String.raw`\bgit(?:\s+(?:(?:-[Cc]|--${GIT_VALUE_OPTION})\s+\S+|-[pP]|--(?!${GIT_VALUE_OPTION}(?:\s|$))[\w-]+(?:=\S+)?))*\s+`;
 
 /** Every ecosystem's publish command. `binaries` gates whether the rule fires, so extend both together. */
 const PACKAGE_PUBLISH = new RegExp(
@@ -330,7 +333,7 @@ function dominant(hits: readonly ApprovalRuleHit[]): ApprovalDecision {
 /** Prefix words that keep the next word in command position. */
 const COMMAND_PREFIXES: ReadonlySet<string> = new Set(['sudo', 'command', 'exec', 'time', 'nice']);
 
-/** Programs that run another program from an argument; binary-scoped rules fall back to whole-line matching under them. */
+/** Programs that run an argument as a program; under them, binary-scoped rules match the whole line. */
 const INLINE_INTERPRETERS: ReadonlySet<string> = new Set([
   'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish',
   'python', 'python3', 'perl', 'ruby', 'node', 'bun', 'deno',
@@ -647,7 +650,7 @@ export function reviewProgram(code: string, filesOwner: FilesOwner): ApprovalRes
   return { decision: dominant(hits), hits };
 }
 
-/** Review a command for an executor holding `filesOwner`'s files. No default: no caller silently picks a trust tier. */
+/** No default owner: no caller silently picks a trust tier. */
 export function reviewCommand(command: string, filesOwner: FilesOwner): ApprovalResult {
   const { invoked, unquoted } = scanCommand(command);
   let opaque = false;
