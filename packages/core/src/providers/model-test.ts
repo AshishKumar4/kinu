@@ -52,9 +52,11 @@ export async function testModel(input: {
       maxRetries: 0,
       ...(input.signal !== undefined && { abortSignal: input.signal }),
       onError: (event) => { streamed.push(event); },
-    }, { spend, spec: input.spec });
+    }, { spend, spec: input.spec }, (part) => {
+      if (firstTokenMs === null && (part.type === 'text-delta' || part.type === 'reasoning-delta')) firstTokenMs = now() - started;
+    });
 
-    for await (const chunk of stream) if (firstTokenMs === null && chunk.length > 0) firstTokenMs = now() - started;
+    for await (const chunk of stream) void chunk;
   } catch (cause) {
     if (input.signal?.aborted) throw abortCause(input.signal);
 

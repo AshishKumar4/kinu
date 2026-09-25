@@ -23,6 +23,10 @@ export interface ReportedCall {
   readonly spec?: string;
 }
 
+export type StreamPart = StreamResult['fullStream'] extends AsyncIterable<infer Part> ? Part : never;
+
+type StreamResult = ReturnType<typeof streamText>;
+
 function reportOf(
   call: ReportedCall, usage: Usage, response: { readonly modelId?: string; readonly headers?: Readonly<Record<string, string>> },
 ): ModelCallReport {
@@ -60,14 +64,28 @@ export async function generateReported(
 }
 
 /** Files the row once the stream drains; an abandoned stream leaves only the start row. */
-export async function* streamTextReported(request: StreamRequest, call: ReportedCall): AsyncGenerator<string> {
+export async function* streamTextReported(
+  request: StreamRequest,
+  call: ReportedCall,
+  onPart?: (part: StreamPart) => void,
+): AsyncGenerator<string> {
   const operation = beginModelOperation(call.spend, 'stream', { spec: call.spec });
   let result;
 
   try {
     result = streamText(request);
 
-    for await (const chunk of result.textStream) yield chunk;
+    if (onPart === undefined) {
+      for await (const chunk of result.textStream) yield chunk;
+    } else {
+      for await (const part of result.fullStream) {
+        // Like textStream
+        if (part.type === 'error') throw part.error;
+        onPart(part);
+
+        if (part.type === 'text-delta') yield part.text;
+      }
+    }
   } catch (cause) {
     operation.failed({ cause });
     throw cause;
