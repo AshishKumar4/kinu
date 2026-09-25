@@ -385,6 +385,8 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     const input = await history.admitInput({ id: turnId, message: { role: 'user', content: `question ${String(turn)}` }, turnId, assertOwner });
 
     history.activateInput(input, turnId, assertOwner);
+    // ChatSession's lastRequestAt, before execute.
+    history.requests.lastStep();
     await history.materialize();
 
     const admitted = await history.materialize();
@@ -408,6 +410,8 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     const result = toolResult(turn);
     const answer: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: `answer ${String(turn)}` }] };
 
+    // ActorSession's lastStep at turn open.
+    history.requests.lastStep();
     const first = await composePrepareStep(pipeline, { stepNumber: 0, messages: [...admitted.messages], steps: [] });
 
     await stream.nativeStep([call, result]);

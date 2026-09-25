@@ -41,7 +41,7 @@ export class ForkConversation {
     this.actor = openWorkspaceMainActor(workspace.sql);
     this.payloads = new SessionPayloads(async () => ({ vfs: workspace.vfs, artifactDirectory }));
     this.messages = new SessionMessages(workspace.sql, this.actor, this.payloads);
-    this.context = new SessionContext(workspace.sql, this.actor, (write) => this.atomic(write));
+    this.context = new SessionContext(workspace.sql, this.actor, (write) => this.atomic(write), this.messages);
 
     this.transcript = new SessionTranscript({
       sql: workspace.sql, actor: this.actor, sessionId: CHAT_SESSION_ID, messages: this.messages, payloads: this.payloads,
@@ -220,7 +220,7 @@ export async function readWorkingContext(workspace: TestWorkspace, artifactDirec
   const actor = openWorkspaceMainActor(workspace.sql);
   const payloads = new SessionPayloads(async () => ({ vfs: workspace.vfs, artifactDirectory }));
   const messages = new SessionMessages(workspace.sql, actor, payloads);
-  const context = new SessionContext(workspace.sql, actor, (write) => workspace.db.transaction(write)());
+  const context = new SessionContext(workspace.sql, actor, (write) => workspace.db.transaction(write)(), messages);
   const selected = context.selected();
 
   if (selected === null) return { entryIds: [], messages: [] };

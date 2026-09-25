@@ -126,7 +126,7 @@ export class SessionRequests {
 
   /** A step's list is what it sent; an admission's, the conversation. */
   messagesOf(request: PreparedRequest): readonly MessageReference[] {
-    if (request.step === null) return this.context.conversationOf(request.source.contextId, this.context.entries(request.source));
+    if (request.step === null) return this.context.conversationOf(this.context.entries(request.source));
 
     const list = this.sql<{ context_id: string; revision: number }>`SELECT context_id,revision FROM request_renders
       WHERE actor_id=${this.actor.actorId} AND request_id=${request.id}`[0];

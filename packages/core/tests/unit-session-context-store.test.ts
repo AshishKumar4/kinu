@@ -22,7 +22,7 @@ function setup() {
   initSessionContextTables(rt.storage.execRaw);
   const payloads = new SessionPayloads(async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor' }));
   const messages = new SessionMessages(rt.storage.sql, rt.actor, payloads);
-  const context = new SessionContext(rt.storage.sql, rt.actor, write => rt.storage.transactionSync(write));
+  const context = new SessionContext(rt.storage.sql, rt.actor, write => rt.storage.transactionSync(write), messages);
 
   return { rt, testSql, payloads, messages, context };
 }
@@ -128,7 +128,7 @@ test('reverting a context selects an isolated branch that survives reader recons
     const before = s.rt.storage.sql<{ total: number }>`SELECT COUNT(*) AS total FROM session_messages`[0]?.total;
     const restored = s.context.fork(original);
     s.context.select(compacted, restored, assertOwner);
-    const reopened = new SessionContext(s.rt.storage.sql, s.rt.actor, write => s.rt.storage.transactionSync(write));
+    const reopened = new SessionContext(s.rt.storage.sql, s.rt.actor, write => s.rt.storage.transactionSync(write), s.messages);
     expect(reopened.selected()).toEqual(restored);
     expect(reopened.entries(restored)).toEqual(s.context.entries(original));
     expect(s.rt.storage.sql<{ total: number }>`SELECT COUNT(*) AS total FROM session_messages`[0]?.total).toBe(before);
