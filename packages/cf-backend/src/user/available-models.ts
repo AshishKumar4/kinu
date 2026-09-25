@@ -141,5 +141,5 @@ export async function testAvailableModel<Id>(input: {
   const stub = env.UserDO.get(env.UserDO.idFromName(userId));
   const registry = createAgentProviderRegistry({ env, ownerUserId: userId, userDO: { stub, caller }, fetch });
 
-  return testModel({ model: registry.resolveModel(input.spec), signal: input.signal });
+  return testModel({ spec: input.spec, resolve: (spec) => registry.resolveModel(spec), signal: input.signal });
 }

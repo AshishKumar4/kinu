@@ -282,6 +282,11 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
     return fixtureJson({ deleted: true });
   }
 
+  // A settings Test: the gallery has no provider, so every model answers at once.
+  if (path === "/api/user/models/test" && method === "POST") {
+    return fixtureJson({ ok: true, firstTokenMs: 410, totalMs: 620 });
+  }
+
   if (path === "/api/user/profile" && method === "PATCH") {
     const patch = v.safeParse(v.object({ displayName: v.string() }), JSON.parse(v.parse(v.string(), body)));
     const displayName = patch.success ? patch.output.displayName : "Owner";

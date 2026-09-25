@@ -140,6 +140,30 @@ async function composerPage(gallery: Gallery, theme: 'dark' | 'light', width: nu
 }
 
 describe('the models section keeps every control reachable by name', () => {
+  test('a tier\'s model is tested from the keyboard, and the result is announced on its row', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1100 });
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=models`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-model-picker="deep model"]');
+
+      await page.click('[data-model-picker="deep model"]');
+      await page.waitForSelector('input[aria-label="Search deep model"]');
+      await page.keyboard.press('ArrowDown');
+      const highlighted = await page.$eval('[role="option"][data-highlighted]', (row) => row.textContent ?? '');
+      await page.keyboard.down('Alt');
+      await page.keyboard.press('KeyT');
+      await page.keyboard.up('Alt');
+      await page.waitForSelector('[role="option"][data-highlighted] [role="status"]');
+
+      expect(await page.$eval('[role="option"][data-highlighted] [role="status"]', (status) => status.textContent)).toContain('Works');
+      expect(await page.$eval('[role="option"][data-highlighted]', (row) => row.textContent ?? '')).toContain(highlighted.slice(0, 8));
+      // Testing never picks: the search is still open.
+      expect(await page.$('input[aria-label="Search deep model"]')).not.toBeNull();
+      await page.close();
+    });
+  });
+
   test('tier rows and the role editor expose their controls by accessible name', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();

@@ -137,9 +137,13 @@ export function ModelPicker({
   const account = value === '' ? '' : parseModelSpec(value).account ?? '';
   const unavailable = useMemo(() => new Map((failures ?? []).map((f) => [f.provider, f.reason])), [failures]);
 
+  const tests = useModelTests(test);
+  const [highlighted, setHighlighted] = useState<ModelMenuEntry | null>(null);
+
   const combobox = (
     <Combobox
       items={items}
+      onItemHighlighted={(item: PickerValue | undefined) => { setHighlighted(item === undefined ? null : modelMenuEntry(item)); }}
       value={selected}
       onValueChange={(next: PickerValue | null) => {
         const entry = next === null ? null : modelMenuEntry(next);
@@ -165,7 +169,12 @@ export function ModelPicker({
         </span>
       </Combobox.TriggerValue>
       <Combobox.Content className="w-[min(28rem,calc(100vw-1rem))]">
-        <Combobox.Input placeholder="Search models" aria-label={`Search ${label.toLowerCase()}`} />
+        <Combobox.Input placeholder={tests.enabled ? "Search models · Alt+T tests" : "Search models"} aria-label={`Search ${label.toLowerCase()}`}
+          onKeyDown={(event) => {
+            if (!event.altKey || event.code !== "KeyT" || highlighted === null) return;
+            event.preventDefault();
+            tests.toggle(highlighted.spec);
+          }} />
         <Combobox.Empty>No models match</Combobox.Empty>
         <Combobox.List className="max-h-[min(24rem,60vh)]">
           {(group: { value: string; items: ModelMenuEntry[] }) => (
@@ -175,7 +184,7 @@ export function ModelPicker({
               </Combobox.GroupLabel>
               <Combobox.Collection>
                 {(model: ModelMenuEntry) => (
-                  <ModelPickerItem key={model.spec} model={model} unavailable={unavailable.get(model.provider)} test={test} />
+                  <ModelPickerItem key={model.spec} model={model} unavailable={unavailable.get(model.provider)} tests={tests} />
                 )}
               </Combobox.Collection>
             </Combobox.Group>
@@ -348,63 +357,61 @@ function ProviderLabel({ provider, label }: { provider: string; label: string | 
   );
 }
 
-type TestState = { running: AbortController } | { result: ModelTestResult } | { error: string } | null;
+type TestState = { running: AbortController } | { result: ModelTestResult } | { error: string };
 
-/** The pointer and click stop at the button, so testing never picks the model. */
-function useModelTest(spec: string, provider: string, test: ModelPickerProps["test"]) {
-  const [state, setState] = useState<TestState>(null);
+function useModelTests(test: ModelPickerProps["test"]) {
+  const [states, setStates] = useState<ReadonlyMap<string, TestState>>(new Map());
 
-  if (test === undefined) return { button: null, status: null };
-  const running = state !== null && "running" in state;
+  const settle = (spec: string, state: TestState | null) => setStates((prev) => {
+    const next = new Map(prev);
 
-  const run = () => {
-    if (running) {
-      state.running.abort();
-      setState(null);
+    if (state === null) next.delete(spec); else next.set(spec, state);
+
+    return next;
+  });
+
+  const toggle = (spec: string): void => {
+    if (test === undefined) return;
+    const current = states.get(spec);
+
+    if (current !== undefined && "running" in current) {
+      current.running.abort();
+      settle(spec, null);
 
       return;
     }
 
     const controller = new AbortController();
-    setState({ running: controller });
+    settle(spec, { running: controller });
     test(spec, controller.signal).then(
-      (result) => { if (!controller.signal.aborted) setState({ result }); },
-      (...rejection: [unknown]) => { if (!controller.signal.aborted) setState({ error: renderThrownChain({ cause: rejection[0] }) }); },
+      (result) => { if (!controller.signal.aborted) settle(spec, { result }); },
+      (...rejection: [unknown]) => { if (!controller.signal.aborted) settle(spec, { error: renderThrownChain({ cause: rejection[0] }) }); },
     );
   };
 
-  let shown: { readonly ok: boolean; readonly text: string; readonly detail: string | undefined } | null = null;
-
-  if (state !== null && "result" in state) {
-    shown = { ok: state.result.ok, text: modelTestText(state.result, { provider, from: "this server" }), detail: state.result.ok ? undefined : state.result.message };
-  } else if (state !== null && "error" in state) {
-    shown = { ok: false, text: "The test couldn't run.", detail: state.error };
-  }
-
-  const button = (
-    <button type="button"
-      className="shrink-0 rounded border p-border px-1.5 py-0.5 p-t-status p-text-2 hover:p-text"
-      aria-label={running ? `Cancel the test of ${spec}` : `Test ${spec}`}
-      onPointerDown={(event) => { event.stopPropagation(); }}
-      onMouseDown={(event) => { event.stopPropagation(); }}
-      onClick={(event) => { event.stopPropagation(); event.preventDefault(); run(); }}>
-      {running ? "Testing… Cancel" : "Test"}
-    </button>
-  );
-
-  const status = shown === null ? null
-    : <span role="status" title={shown.detail} className={`block p-t-status ${shown.ok ? "p-success" : "p-warning"}`}>{shown.text}</span>;
-
-  return { button, status };
+  return { enabled: test !== undefined, stateOf: (spec: string) => states.get(spec), toggle };
 }
 
-function ModelPickerItem({ model, unavailable, test }: {
+function TestStatus({ state, provider }: { state: TestState | undefined; provider: string }) {
+  if (state === undefined || "running" in state) return null;
+  const failed = "error" in state || !state.result.ok;
+  const text = "error" in state ? "The test couldn't run." : modelTestText(state.result, { provider, from: "this server" });
+  let detail: string | undefined;
+
+  if ("error" in state) detail = state.error;
+  else if (!state.result.ok) detail = state.result.message;
+
+  return <span role="status" title={detail} className={`block p-t-status ${failed ? "p-warning" : "p-success"}`}>{text}</span>;
+}
+
+function ModelPickerItem({ model, unavailable, tests }: {
   model: ModelMenuEntry;
   unavailable: string | undefined;
-  test: ModelPickerProps["test"];
+  tests: ReturnType<typeof useModelTests>;
 }) {
   const context = formatContextWindow(model.contextWindow);
-  const { button, status } = useModelTest(model.spec, model.provider, test);
+  const state = tests.stateOf(model.spec);
+  const running = state !== undefined && "running" in state;
 
   return (
     <Combobox.Item value={model}>
@@ -421,10 +428,20 @@ function ModelPickerItem({ model, unavailable, test }: {
             return <Icon key={cap} size={13} className="p-text-3" aria-label={words}><title>{words}</title></Icon>;
           })}
           {context && <Badge variant="secondary">{context}</Badge>}
-          {button}
+          {tests.enabled && (
+            <button type="button"
+              className="shrink-0 rounded border p-border px-1.5 py-0.5 p-t-status p-text-2 hover:p-text"
+              aria-label={running ? `Cancel the test of ${model.spec}` : `Test ${model.spec}`}
+              title="Test (Alt+T)"
+              onPointerDown={(event) => { event.stopPropagation(); }}
+              onMouseDown={(event) => { event.stopPropagation(); }}
+              onClick={(event) => { event.stopPropagation(); event.preventDefault(); tests.toggle(model.spec); }}>
+              {running ? "Testing… Cancel" : "Test"}
+            </button>
+          )}
         </span>
       </span>
-      {status}
+      <TestStatus state={state} provider={model.provider} />
     </Combobox.Item>
   );
 }

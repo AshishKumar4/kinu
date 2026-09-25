@@ -1,8 +1,11 @@
 import { streamText, type LanguageModel } from 'ai';
 import * as v from 'valibot';
-import { PROVIDER_SDK_RETRIES } from './rate-limit-retry';
 import { describeProviderError, providerFailureFacts, toProviderError } from './util';
 import { abortCause } from '../utils/abort';
+import { renderThrownChain } from '../obs/index';
+import { normalizeUsage } from '../usage';
+import { callAccountOf } from './quota';
+import type { ModelCallSink } from '../events/model-call';
 
 export type ModelTestFailure = 'signed-out' | 'spent' | 'unknown-model' | 'unreachable' | 'refused';
 
@@ -20,23 +23,31 @@ export const ModelTestResultSchema: v.GenericSchema<ModelTestResult> = v.union([
   }),
 ]);
 
-/** Output is uncapped by rule; the prompt keeps it to a word. */
+/** One unretried call; output is uncapped by rule, so the prompt asks for a word. */
 export async function testModel(input: {
-  readonly model: LanguageModel;
-  readonly providerOptions?: NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
+  readonly spec: string;
+  readonly resolve: (spec: string) => LanguageModel;
+  readonly report?: ModelCallSink;
   readonly signal?: AbortSignal;
   readonly now?: () => number;
 }): Promise<ModelTestResult> {
   const now = input.now ?? performance.now.bind(performance);
+  let model: LanguageModel;
+
+  try {
+    model = input.resolve(input.spec);
+  } catch (cause) {
+    return { ok: false, failure: 'unknown-model', message: renderThrownChain({ cause }) };
+  }
+
   const started = now();
   let firstTokenMs: number | null = null;
   const failures: Array<{ readonly error: unknown }> = [];
 
   const result = streamText({
-    model: input.model,
+    model,
     prompt: 'Reply with the word OK.',
-    maxRetries: PROVIDER_SDK_RETRIES,
-    ...(input.providerOptions !== undefined && { providerOptions: input.providerOptions }),
+    maxRetries: 0,
     ...(input.signal !== undefined && { abortSignal: input.signal }),
     onError: (event) => { failures.push(event); },
   });
@@ -52,16 +63,25 @@ export async function testModel(input: {
   if (failure !== undefined) return failed({ cause: failure.error });
 
   const totalMs = now() - started;
+  const [usage, response] = await Promise.all([result.usage, result.response]);
+
+  input.report?.({
+    source: 'test', spec: input.spec, usage: normalizeUsage(usage), account: callAccountOf(response),
+    ...(response.modelId.length > 0 && { modelId: response.modelId }),
+  });
 
   return { ok: true, firstTokenMs: firstTokenMs ?? totalMs, totalMs };
 }
 
 function failed({ cause }: { readonly cause: unknown }): ModelTestResult {
   const classified = toProviderError({ doing: 'testing the model', cause });
-  const { status } = providerFailureFacts({ cause });
+  const facts = providerFailureFacts({ cause });
+  const { status } = facts;
   const message = describeProviderError({ cause });
 
-  if (classified.code === 'budget') {
+  const credits = status === 402 || /insufficient_(?:quota|credits)|credit_balance/u.test(facts.providerCode ?? '');
+
+  if (classified.code === 'budget' || credits) {
     const until = /until (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC/u.exec(message)?.[1];
 
     return { ok: false, failure: 'spent', message, ...(until !== undefined && { until: Date.parse(`${until.replace(' ', 'T')}Z`) }) };

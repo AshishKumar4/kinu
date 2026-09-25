@@ -33,3 +33,15 @@ attestation, tool-name prefix and version adoption in
 Zechner, 2025-2026 Can Bölük and 2026 Stencil Labs, Inc., under the MIT
 License. The required copyright notice and license text sit in
 [`third_party/oh-my-pi-LICENSE-MIT`](third_party/oh-my-pi-LICENSE-MIT).
+
+## models.dev
+
+The OpenAI and OpenCode marks in the model picker
+(`packages/cf-backend/src/components/ui/BrandMark.tsx`) are the paths of
+`logos/openai.svg` and `logos/opencode.svg` from
+[models.dev](https://github.com/anomalyco/models.dev) at commit `0055574e85`
+(2026-09-25). models.dev is copyright 2025 models.dev, under the MIT License.
+The required copyright notice and license text sit in
+[`third_party/models-dev-LICENSE-MIT`](third_party/models-dev-LICENSE-MIT).
+The marks themselves remain their owners' trademarks, used to name the
+provider a model belongs to.

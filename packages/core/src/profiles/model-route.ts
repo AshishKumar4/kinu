@@ -26,6 +26,7 @@ const MODEL_ROUTE_POLICY = {
   platform: { kind: 'platform' },
   // Replays the frozen spec that wrote the entry (providers/cache-warming.ts); no turn exists.
   warming: { kind: 'platform' },
+  test: { kind: 'platform' },
 } as const satisfies Record<SpendSource, ModelRoutePolicy>;
 
 /** Producers whose model the turn profile decides — everything but `platform`. */

@@ -924,7 +924,9 @@ export class LocalAgentSession implements BackendHost {
   async testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
     if (this.modelResolver === null) throw new KinuError('missing', 'this session has no model resolver to test through');
 
-    return testModel({ model: this.modelResolver.resolveModel(spec), signal });
+    const resolver = this.modelResolver;
+
+    return testModel({ spec, resolve: (named) => resolver.resolveModel(named), report: this.modelCallSink, signal });
   }
 
   /** `caller` has no default: the model passes `'self'`, and core refuses a self cancel of an

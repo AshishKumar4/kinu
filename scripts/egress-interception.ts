@@ -391,6 +391,107 @@ function thisUseReasons(use: SyntaxNode, guarded: (callStart: number) => Readonl
   return [];
 }
 
+/** Names a method assigns or declares anywhere in its body. */
+function reboundNames(member: SyntaxNode): Set<string> {
+  const names = new Set<string>();
+
+  walk(member, (inner) => {
+    const { raw } = inner;
+    let target: Node | null = null;
+
+    if (raw.type === 'AssignmentExpression') target = raw.left;
+    else if (raw.type === 'UpdateExpression') target = raw.argument;
+    else if (raw.type === 'VariableDeclarator') target = raw.id;
+
+    const name = nameOf(target);
+
+    if (name !== undefined) names.add(name);
+  });
+
+  return names;
+}
+
+/** Every use of the class's name as a value, other than its declaration and import or export lists: `X.prototype`,
+ *  `Object.assign(X…)` or X passed anywhere can add a method that drives the container. */
+export function ownerValueReasons(owner: string, sources: ReadonlyMap<string, string>): string[] {
+  const reasons: string[] = [];
+
+  for (const [file, text] of sources) {
+    if (!text.includes(owner)) continue;
+    const parsed = parse(file, text);
+
+    walk(parsed.root, (node) => {
+      if (node.raw.type !== 'Identifier' || node.raw.name !== owner) return;
+      const parent = node.parent?.type ?? '';
+
+      const up1 = node.parent?.raw;
+
+      const member = (up1?.type === 'MemberExpression' && !up1.computed && up1.property === node.raw)
+        || (up1?.type === 'Property' && !up1.computed && up1.key === node.raw && !up1.shorthand);
+
+      if (member || parent === 'ImportSpecifier' || parent === 'ExportSpecifier' || (parent === 'ClassDeclaration' && node.parent?.raw.type === 'ClassDeclaration' && node.parent.raw.id === node.raw)) return;
+
+      for (let up = node.parent; up !== undefined; up = up.parent) if (up.type.startsWith('TS')) return;
+      reasons.push(`is used as a value at ${file}:${String(parsed.lineAt(node.start))}, where code outside the class can change it`);
+    });
+  }
+
+  return reasons;
+}
+
+/**
+ * Every reach for the forwarder's binding in the Worker: `<env>.<binding>` only as `this.env.<binding>.idFromName(…)`
+ * inside the class, as an argument to an `…EgressFetch` route, or compared with undefined; never destructured. In the
+ * route, the stub a namespace's `get` returns is only called for the class's own public methods, so a caller cannot
+ * reach the base class's `start({ entrypoint })` over RPC.
+ */
+export function forwarderCallerReasons(owner: string, methods: ReadonlySet<string>, sources: ReadonlyMap<string, string>): string[] {
+  const reasons: string[] = [];
+
+  for (const [file, text] of sources) {
+    if (!file.startsWith('packages/cf-backend/src/') || !text.includes(owner)) continue;
+    const parsed = parse(file, text);
+    const at = (node: SyntaxNode): string => `${file}:${String(parsed.lineAt(node.start))}`;
+    const stubs = new Set<string>();
+
+    walk(parsed.root, (node) => {
+      const { raw } = node;
+
+      if (raw.type === 'Property' && node.parent?.type === 'ObjectPattern' && nameOf(raw.key) === owner) reasons.push(`destructures the ${owner} binding at ${at(node)}`);
+
+      if (raw.type === 'VariableDeclarator' && raw.init?.type === 'CallExpression' && raw.init.callee.type === 'MemberExpression'
+        && nameOf(raw.init.callee.property) === 'get' && /EgressFetch\b/u.test(text)) {
+        const stub = nameOf(raw.id);
+
+        if (stub !== undefined) stubs.add(stub);
+      }
+
+      if (raw.type !== 'MemberExpression' || raw.computed || nameOf(raw.property) !== owner) return;
+      const outer = node.parent;
+
+      const call = outer?.raw.type === 'CallExpression' ? outer.raw : undefined;
+      const passed = call !== undefined && call.arguments.some((arg) => arg === raw) && (nameOf(call.callee) ?? '').endsWith('EgressFetch');
+      const compared = outer?.raw.type === 'BinaryExpression' && ['!==', '==='].includes(outer.raw.operator);
+
+      const named = outer?.raw.type === 'MemberExpression' && outer.raw.object === raw && nameOf(outer.raw.property) === 'idFromName'
+        && raw.object.type === 'MemberExpression' && raw.object.object.type === 'ThisExpression';
+
+      if (!passed && !compared && !named) reasons.push(`reaches the ${owner} binding at ${at(node)} other than through its route`);
+    });
+
+    walk(parsed.root, (node) => {
+      const { raw } = node;
+
+      if (raw.type !== 'MemberExpression' || raw.object.type !== 'Identifier' || !stubs.has(raw.object.name)) return;
+      const method = nameOf(raw.property);
+
+      if (raw.computed || method === undefined || !methods.has(method)) reasons.push(`calls \`${String(method)}\` on a ${owner} stub at ${at(node)}, not one of its own methods`);
+    });
+  }
+
+  return reasons;
+}
+
 function classReasons(input: ForwarderInputs): string[] {
   const parsed = parse(input.file, input.fileText);
   const predicates = new Set<string>();
@@ -408,6 +509,7 @@ function classReasons(input: ForwarderInputs): string[] {
   walk(parsed.root, (node) => {
     if (node.type !== 'ClassDeclaration' || declaredName(node) !== input.owner) return;
     found = true;
+    walk(node, (inner) => { if (inner.type === 'Decorator') reasons.push('carries a decorator, which can add or rewrite members'); });
 
     for (const member of classMembers(node)) {
       const name = member.raw.type === 'PropertyDefinition' || member.raw.type === 'MethodDefinition' ? nameOf(member.raw.key) ?? '' : '';
@@ -423,11 +525,15 @@ function classReasons(input: ForwarderInputs): string[] {
       if (member.raw.type !== 'MethodDefinition' && member.raw.type !== 'PropertyDefinition') reasons.push(`has a ${member.raw.type} member`);
 
       const body = member.raw.type === 'MethodDefinition' ? member.raw.value.body?.body ?? [] : [];
+      const params = new Set(member.raw.type === 'MethodDefinition' ? member.raw.value.params.flatMap((param) => nameOf(param) ?? []) : []);
+      const rebound = reboundNames(member);
 
-      // Guards are the method's own top-level statements; one inside a closure or after the call does not count.
+      // Guards are the method's own top-level statements, on a parameter never rebound in it; one inside a closure,
+      // after the call, or on anything else does not count.
       const guarded = (callStart: number): ReadonlySet<string> => new Set(body
         .filter((statement) => statement.end < callStart)
-        .flatMap((statement) => guardedIdentifier(statement, predicates) ?? []));
+        .flatMap((statement) => guardedIdentifier(statement, predicates) ?? [])
+        .filter((guard) => params.has(guard) && !rebound.has(guard)));
 
       walk(member, (inner) => {
         if (inner.type === 'Super') reasons.push('reaches the base class through `super`');
@@ -442,10 +548,29 @@ function classReasons(input: ForwarderInputs): string[] {
     }
   });
 
+  reasons.push(...ownerValueReasons(input.owner, new Map([[input.file, input.fileText]])));
+
   if (!found) reasons.push(`is not declared in ${input.file}`);
   else if (fetches === 0) reasons.push('never calls containerFetch, so the container is reached some other way or not at all');
 
   return reasons;
+}
+
+/** The class's own public method names: all a stub of it may be asked for. */
+export function publicMethods(owner: string, file: string, text: string): string[] {
+  const names: string[] = [];
+
+  walk(parse(file, text).root, (node) => {
+    if (node.type !== 'ClassDeclaration' || declaredName(node) !== owner) return;
+
+    for (const member of classMembers(node)) {
+      const name = member.raw.type === 'MethodDefinition' ? nameOf(member.raw.key) : undefined;
+
+      if (name !== undefined && !name.startsWith('#')) names.push(name);
+    }
+  });
+
+  return names;
 }
 
 export function declaredSandboxClasses(sources: ReadonlyMap<string, string>): string[] {
@@ -665,11 +790,18 @@ if (import.meta.main) {
     const file = [...sources.keys()].find((path) => path.startsWith('packages/cf-backend/') && sources.get(path)?.includes(`class ${owner} `) === true);
     const image = records.get(owner);
 
-    forwarderReasons.set(owner, file === undefined ? ['has no source file'] : auditForwarder({
-      owner, file, fileText: sources.get(file) ?? '', image,
-      boundImage: declaredContainers.find((entry) => entry.class_name === owner)?.image,
-      sourceFiles: image === undefined ? new Map() : readSource(root, image.source),
-    }));
+    const workerSources = new Map([...sources].filter(([path]) => path.startsWith('packages/cf-backend/src/')));
+    const methods = new Set(file === undefined ? [] : publicMethods(owner, file, sources.get(file) ?? ''));
+
+    forwarderReasons.set(owner, file === undefined ? ['has no source file'] : [
+      ...auditForwarder({
+        owner, file, fileText: sources.get(file) ?? '', image,
+        boundImage: declaredContainers.find((entry) => entry.class_name === owner)?.image,
+        sourceFiles: image === undefined ? new Map() : readSource(root, image.source),
+      }),
+      ...ownerValueReasons(owner, new Map([...workerSources].filter(([path]) => path !== file))),
+      ...forwarderCallerReasons(owner, methods, workerSources),
+    ]);
   }
 
   const forwarders = [...forwarderReasons].filter(([, reasons]) => reasons.length === 0).map(([owner]) => owner);
@@ -763,8 +895,9 @@ if (import.meta.main) {
   console.log(`egress-interception: ok — ${measured}`);
   console.log(`egress-interception: ADMITTED FORWARDERS — ${forwarders.join(', ') || 'none'}: each proved its image is the `
     + 'pinned build of a hashed tracked directory running one tracked script, and its class reaches the container only '
-    + 'through containerFetch behind a core …EgressAllowed check. Blind spot: the check is read from source order, not '
-    + 'from control flow, and the tracked script itself is not read');
+    + 'through containerFetch behind a core …EgressAllowed check, and every reach for its binding goes through its route '
+    + 'to its own methods. Blind spots: the check is read from source order, not control flow; the tracked script itself '
+    + 'is not read; a binding reached under another name (an alias of env, a spread) or from another Worker is not seen');
   console.log(`egress-interception: read the SDK default from ${CONTAINERS} ${containers.version} `
     + `at ${relative(root, containers.module)}, the copy ${CONTAINERS_HOST} resolves for itself and `
     + 'the only copy the artifact binds');

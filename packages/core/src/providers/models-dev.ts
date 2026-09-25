@@ -132,9 +132,7 @@ export async function listModelsDevProviderModels(
   opts: ModelsDevListOptions = {},
 ): Promise<ModelInfo[]> {
   const stale = (failure: { readonly reason: string; readonly cause?: unknown }): StaleModelList => {
-    diagnostics.event('models_dev.catalog_fallback', {
-      error: failure.cause === undefined ? failure.reason : renderThrownChain({ cause: failure.cause }),
-    });
+    if (failure.cause !== undefined) diagnostics.event('models_dev.catalog_fallback', { error: renderThrownChain({ cause: failure.cause }) });
 
     return new StaleModelList(cloneModelInfos(opts.fallback), failure);
   };

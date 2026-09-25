@@ -26,7 +26,7 @@ import {
   type TierId,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { getProfileCatalog, listAvailableModels, updateProfileCatalog, type ModelMenu } from '../lib/user-api';
+import { getProfileCatalog, listAvailableModels, testModel, updateProfileCatalog, type ModelMenu } from '../lib/user-api';
 import { AccountPicker, ModelPicker, reasoningEffortLabel, specOnAccount } from './ModelPicker';
 import { BrandMark, providerBrand } from './ui/BrandMark';
 import { Card, Choice, Field, inputCls, tabCls } from './ui/form';
@@ -294,6 +294,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                       clearable={tierId !== 'default'}
                       placeholder={tierId === 'default' ? resolved.model : `Use default: ${defaultLabel}`}
                       label={`${tierId} model`}
+                      test={testModel}
                       size="sm"
                     />
                     <Choice<ReasoningEffort | ''>
@@ -489,6 +490,7 @@ function TierFallbacks(props: {
         }}
         placeholder={props.chain.length === 0 ? 'Add a fallback model…' : 'Add another…'}
         label={`${props.tierId} add fallback`}
+        test={testModel}
         size="sm"
         className="w-56"
       />
