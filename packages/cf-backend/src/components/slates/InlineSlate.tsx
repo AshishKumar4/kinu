@@ -81,20 +81,21 @@ function SlateCard({ id, measure, children }: { id: string; measure: Ref<HTMLSpa
   const superseded = useSyncExternalStore(previews?.subscribe ?? UNLISTED, () => previews?.superseded(id, card) ?? false, () => false);
   const inPanel = inline?.chat?.shownInPanel === id;
   const auto = superseded || inPanel;
-  // A fold set by hand holds until the reason for the automatic one changes.
+  // A fold set by hand holds until the reason for the automatic one clears.
   const [hand, setHand] = useState<boolean | null>(null);
   const [reason, setReason] = useState(auto);
 
   if (reason !== auto) {
     setReason(auto);
-    setHand(null);
+
+    if (!auto) setHand(null);
   }
 
   const folded = hand ?? auto;
   const openSlate = inline?.openSlate;
   let why: string | null = null;
 
-  if (folded && hand === null) why = superseded ? "Updated below" : "Shown in the work surface";
+  if (folded && auto) why = superseded ? "Updated below" : "Shown in the work surface";
 
   // Spans only: the card renders inside a markdown <p>, where a <div> trips React's dev validator.
   return (

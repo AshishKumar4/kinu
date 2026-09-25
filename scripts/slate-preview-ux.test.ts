@@ -693,6 +693,38 @@ describe('inline slate previews in the chat', () => {
     });
   });
 
+  test('a preview the reader opened by hand stays open while its slate is shown beside the chat, until that ends', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      const toggleLater = async (): Promise<void> => {
+        const bars = await page.$$('[data-slate-inline="board"] button[aria-expanded]');
+
+        await bars.at(-1)?.click();
+        await drawn(page);
+      };
+
+      try {
+        await openSlateThread(page, origin, { width: 1280, height: 860 });
+
+        // The reader folds the later board and opens it again: a choice of their own.
+        await toggleLater();
+        await toggleLater();
+        expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', true]]);
+
+        // Shown beside the chat, a preview folds by itself, but not one the reader opened.
+        await openFromChat(page, 'board');
+        expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', true]]);
+
+        // Moved off it, that reason ends and takes the reader's choice with it: shown again, the preview folds.
+        await page.click('.p-tabstrip button[aria-label="Work"]');
+        await drawn(page);
+        await openFromChat(page, 'board');
+        expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', false]]);
+      } finally { await page.close(); }
+    });
+  });
+
   test('on a phone, opening a slate from the chat shows the Workspace pane on it, and the chat keeps its previews', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
