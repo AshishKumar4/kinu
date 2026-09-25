@@ -89,6 +89,8 @@ export interface TestUserDO {
   revokedSessionPushes: string[];
   /** Capability re-pushes requested per workspace; only the root holds the token plaintext. */
   capabilityRepushes: string[];
+  /** Workspaces the owner's object asked for their first tile, in order. */
+  overviewNudges: string[];
   consentPrompts: Array<{
     workspace: string;
     method: string;
@@ -153,6 +155,8 @@ export interface TestUserDOOptions {
   capabilityPushMissed?: () => number;
   /** `oauth-app` preset ids the deployment carries a registered app for (fixed values under `MCP_APP_ENV` keys). */
   mcpAppCredentials?: readonly string[];
+  /** How a workspace answers the owner's ask for its first tile; absent, the ask is only recorded. */
+  overviewNudge?: (name: string) => Promise<void>;
 }
 
 export interface FakeDaemon {
@@ -230,6 +234,7 @@ interface TestUserEnvironment {
       announceDeviceAvailable(device: { id: string; label: string }): Promise<{ ok: boolean }>;
       closeRevokedCliSockets(generation: number): Promise<{ closed: number }>;
       closeRevokedSessionSockets(tokenHash: string): Promise<{ closed: number }>;
+      requestOverviewPush(): Promise<void>;
     };
   };
 }
@@ -283,6 +288,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const aborted = aborts.items;
   const revokedSocketPushes: string[] = [];
   const revokedSessionPushes: string[] = [];
+  const overviewNudges: string[] = [];
   const capabilityRepushes: string[] = [];
   const consentPrompts: TestUserDO['consentPrompts'] = [];
   const raisedConsentIds: TestUserDO['raisedConsentIds'] = [];
@@ -504,6 +510,10 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
 
           return { closed: 0 };
         },
+        async requestOverviewPush() {
+          overviewNudges.push(name);
+          await options.overviewNudge?.(name);
+        },
       }),
     },
   };
@@ -539,7 +549,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   return {
     userDO, db, sql, installed, destroyedWorkspaces, aborted, revokedSocketPushes,
     abortRaised: () => aborts.until((reasons) => reasons.length > 0),
-    revokedSessionPushes, capabilityRepushes,
+    revokedSessionPushes, capabilityRepushes, overviewNudges,
     pendingConsents: (workspace) => registryFor(workspace).list(),
     resolveConsent: (workspace, consentId, answer) => ({ ok: registryFor(workspace).resolve(consentId, answer) }),
     consentPrompts, raisedConsentIds, unavailableNotices, availableNotices, deviceFrames, devicePushes,

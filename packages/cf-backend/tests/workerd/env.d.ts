@@ -137,7 +137,6 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
 interface StoreResetProbeRpc extends Rpc.DurableObjectBranded {
   plantRefusedWorkspace(workspace: string): Promise<string>;
   seed(workspace: string): Promise<SeedAnswer>;
-  overview(workspace: string): Promise<string>;
   chat(workspace: string): Promise<ChatAnswers>;
   wake(workspace: string): Promise<string>;
   exportedLines(workspace: string): Promise<number>;

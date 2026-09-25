@@ -136,7 +136,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     const owner = JSON.stringify([this.ctx.id.toString(), root, cred]);
 
     // A durable spawn starts only under a reservation its owner holds.
-    if (app !== null) await probeDurableApps(this.facets, this.ctx).ensure({ owner, preferredPort: app.port });
+    if (app !== null) await probeDurableApps(this.facets).ensure({ owner, preferredPort: app.port });
 
     const boot = {
       key: crypto.randomUUID(), owner, root, app, cred,

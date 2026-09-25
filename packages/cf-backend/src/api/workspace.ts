@@ -1,13 +1,12 @@
 /** Ownership of `:name` is proven before any workspace route runs, and only then indexed. */
 import type { MiddlewareHandler } from 'hono';
-import { err, type WorkspaceOverview } from '@kinu.run/core';
+import { err } from '@kinu.run/core';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { observeWorkspaceUse } from '../control-plane/index-feed';
 import { appendIdentityHeaders } from '../cli/rpc-gate';
 import { rawParam, type ApiVariables, type FamilyEnv } from './context';
 
 export interface WorkspaceAgent {
-  getWorkspaceOverview(): Promise<WorkspaceOverview>;
   evalAbortActivation(): Promise<void>;
 }
 

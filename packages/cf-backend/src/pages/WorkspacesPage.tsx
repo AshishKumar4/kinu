@@ -1,13 +1,12 @@
-/** Every workspace, filtered by `overviewHeadline` state; list or tiles, persisted in localStorage. */
-import { useMemo, useState } from "react";
+/** Every workspace, a page at a time; filter and search are the owner's object's queries. List or tiles, in localStorage. */
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
 import { ListIcon, PlusIcon, SquaresFourIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
-import { APP_ROUTES, workspaceDisplayTitle, type WorkspaceOverview } from "@kinu.run/core";
-import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
-import { useOverviewReads } from "@/hooks/use-workspace-overviews";
-import { lastValue } from "@/hooks/use-async-resource";
+import { APP_ROUTES } from "@kinu.run/core";
+import { useFilteredRoster, useWorkspaceRoster, type RosterFilter } from "@/hooks/use-workspace-roster";
+import type { RosterFilterBucket } from "@/lib/user-api";
 import { inputCls } from "@/components/ui/form";
 import { Segmented } from "@/components/ui/Segmented";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -26,12 +25,11 @@ function storedView(): View {
   return parsed.success ? parsed.output : "tiled";
 }
 
-/** A workspace whose overview has not landed reads as idle rather than disappearing. */
-type Bucket = "needs" | "working" | "idle";
-
 const BUCKET_IDS = ["all", "needs", "working", "idle"] as const;
 
-const BUCKETS: Record<"all" | Bucket, { label: string; empty: string }> = {
+const SEARCH_PAUSE_MS = 250;
+
+const BUCKETS: Record<"all" | RosterFilterBucket, { label: string; empty: string }> = {
   all: { label: "All", empty: "No workspaces" },
   needs: { label: "Needs you", empty: "Nothing is waiting on you" },
   working: { label: "Working", empty: "No workspace is working right now" },
@@ -40,43 +38,53 @@ const BUCKETS: Record<"all" | Bucket, { label: string; empty: string }> = {
 
 const SEGMENTS = BUCKET_IDS.map((id) => ({ id, label: BUCKETS[id].label }));
 
-function bucket(overview: WorkspaceOverview | null): Bucket {
-  if (overview === null) return "idle";
+function usePaused(text: string): string {
+  const [paused, setPaused] = useState(text);
 
-  if (overview.decisionsWaiting > 0) return "needs";
+  useEffect(() => {
+    const timer = window.setTimeout(() => setPaused(text), SEARCH_PAUSE_MS);
 
-  if (overview.activity === "working") return "working";
+    return () => window.clearTimeout(timer);
+  }, [text]);
 
-  return "idle";
+  return paused;
+}
+
+function NextPage({ onReached }: { readonly onReached: () => void }) {
+  const marker = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const element = marker.current;
+
+    if (element === null) return;
+    const observer = new IntersectionObserver((seen) => { if (seen.some((entry) => entry.isIntersecting)) onReached(); });
+    observer.observe(element);
+
+    return () => observer.disconnect();
+  }, [onReached]);
+
+  return <div ref={marker} data-next-page aria-hidden="true" className="h-px" />;
 }
 
 export default function WorkspacesPage() {
-  const { entries, total, error, refresh } = useWorkspaceRoster();
+  const roster = useWorkspaceRoster();
   const [query, setQuery] = useState("");
   const [view, setViewState] = useState<View>(storedView);
-  const [filter, setFilter] = useState<"all" | Bucket>("all");
+  const [filter, setFilter] = useState<"all" | RosterFilterBucket>("all");
   const navigate = useNavigate();
-
-  const names = useMemo(() => entries.map((workspace) => workspace.name), [entries]);
-  const reads = useOverviewReads(names);
+  const q = usePaused(query.trim());
+  const narrowed = filter !== "all" || q !== "";
+  const narrowing: RosterFilter = { bucket: filter === "all" ? undefined : filter, q };
+  const own = useFilteredRoster(narrowed ? narrowing : null);
+  const { entries: shown, total: matching, hasMore, loadMore, loading } = own ?? roster;
+  const { error, refresh } = roster;
+  const entries = roster.entries;
+  const total = roster.counts.all;
 
   const setView = (next: View): void => {
     localStorage.setItem(VIEW_KEY, next);
     setViewState(next);
   };
-
-  const needle = query.trim().toLowerCase();
-
-  const shown = entries.filter((workspace) => {
-    if (needle !== "" && !workspaceDisplayTitle(workspace).toLowerCase().includes(needle)
-        && !workspace.name.toLowerCase().includes(needle)) return false;
-
-    if (filter === "all") return true;
-
-    const read = reads.get(workspace.name);
-
-    return bucket(read === undefined ? null : lastValue(read.resource)) === filter;
-  });
 
   return (
     <div className="h-full overflow-y-auto">
@@ -96,7 +104,12 @@ export default function WorkspacesPage() {
           />
           <Segmented label="Workspace state" value={filter} onChange={setFilter} segments={SEGMENTS} />
           <div className="ml-auto flex items-center gap-3">
-            {total > 0 && <span className="p-meta p-text-4 tabular-nums">{shown.length} of {total}</span>}
+            {total > 0 && (
+              <span className="p-meta p-text-4 tabular-nums">
+                {matching} of {total}
+                {roster.counts.unreported > 0 && ` · ${String(roster.counts.unreported)} not yet reported`}
+              </span>
+            )}
             <div className="flex items-center gap-1">
               <Button variant="ghost" size="sm" aria-label="List view" aria-pressed={view === "list"}
                 icon={<ListIcon size={14} />} onClick={() => setView("list")} />
@@ -116,16 +129,16 @@ export default function WorkspacesPage() {
           </div>
         )}
 
-        {entries.length === 0 && error === null && (
+        {!roster.loading && entries.length === 0 && error === null && (
           <div className="p-card px-5 py-8 text-center">
             <p className="p-row-text p-text-3">No workspaces yet.</p>
             <Link to={APP_ROUTES.home} className="mt-2 inline-block p-t-control p-accent">Create one on Home →</Link>
           </div>
         )}
 
-        {entries.length > 0 && shown.length === 0 && (
+        {!loading && entries.length > 0 && shown.length === 0 && (
           <p className="py-12 text-center p-text-3">
-            {needle === "" ? BUCKETS[filter].empty : `Nothing matches “${query.trim()}”`}
+            {q === "" ? BUCKETS[filter].empty : `Nothing matches “${q}”`}
           </p>
         )}
 
@@ -144,6 +157,7 @@ export default function WorkspacesPage() {
                 ))}
               </div>
             )}
+            {hasMore && <NextPage onReached={loadMore} />}
           </section>
         )}
       </div>

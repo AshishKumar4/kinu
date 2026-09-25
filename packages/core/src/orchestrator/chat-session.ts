@@ -240,6 +240,8 @@ export interface ChatSessionPorts {
   driverGate(): Refusal | null;
   /** Called at the turn's synchronous open; soonest-wins. A backend whose process is the wake arms nothing. */
   armTurnWake(atMs: number): Promise<void>;
+  /** The queue drained and no turn runs. */
+  quiet?(): void;
   /** Read at commit, never captured earlier. */
   taskList(): TaskListStore;
   /** A reminder fired behind such work would race its wake. */
@@ -703,6 +705,7 @@ export class ChatSession {
       // Cleared synchronously, not in .finally(): the microtask would leave `pumping` stale and orphan a queued turn.
       this.pumpActive = false;
       this.activePump = null;
+      this.ports.quiet?.();
     }
   }
 

@@ -7,7 +7,6 @@ import { SqliteFilesystemAuthority } from '@nimbus-sh/core/runtime/filesystem-au
 import type { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { composeFacetManager, type ComposedFacetManager } from '@nimbus-sh/worker/workspace-host';
-import { readPortReservationByOwner } from '@nimbus-sh/worker/port-capability';
 
 export interface ProbeFacetManagerDeps {
   readonly ctx: DurableObjectState;
@@ -35,16 +34,9 @@ export function probeFacetManager(deps: ProbeFacetManagerDeps): ComposedFacetMan
   return composed;
 }
 
-/** The reservation a durable spawn is pre-flighted against, and its read. */
-export function probeDurableApps(composed: ComposedFacetManager, ctx: DurableObjectState) {
+/** The reservation a durable spawn is pre-flighted against. */
+export function probeDurableApps(composed: ComposedFacetManager) {
   return {
-    reserved: async (owner: string) => {
-      const held = await readPortReservationByOwner(ctx, owner);
-
-      return held === null || held.reservation.capability === null
-        ? null
-        : { port: held.port, capability: held.reservation.capability };
-    },
     ensure: async (input: { readonly owner: string; readonly preferredPort?: number }) => {
       const reserved = await composed.apps.ensureDurableApp({ owner: input.owner, preferredPort: input.preferredPort, visibility: 'scoped' });
 

@@ -129,6 +129,7 @@ export function initReleaseTables(sql: SqlExec): void {
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_release_approvals_change ON release_approvals (change_id, created_at DESC)`);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_release_approvals_pending ON release_approvals (decision, change_id)`);
   // An empty digest never matches a recomputed one, so a stale approval fails closed (SPEC §7.3).
 
   sql.exec(`

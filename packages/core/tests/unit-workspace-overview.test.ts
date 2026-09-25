@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  buildWorkspaceOverview, overviewHeadline, WorkspaceOverviewSchema,
+  buildWorkspaceOverview, rosterHeadline, WorkspaceOverviewSchema, type WorkspaceOverview,
   type WorkspaceOverviewInputs,
 } from '../src/read-models/workspace-overview';
 import type { PendingAction } from '../src/read-models/pending-actions';
@@ -14,7 +14,6 @@ function action(kind: PendingAction['kind'], id = kind): PendingAction {
 }
 
 const EMPTY: WorkspaceOverviewInputs = {
-  observedAt: NOW,
   working: false,
   unfinished: false,
   pendingActions: [],
@@ -90,56 +89,45 @@ describe('buildWorkspaceOverview', () => {
     expect(overview.latestRun?.task?.length).toBe(240);
     expect(overview.latestRun?.status).toBe('aborted');
   });
-
-  test('the tile draws the first slate already addressed; an unaddressed one is not a picture', () => {
-    expect(buildWorkspaceOverview(EMPTY).primarySlate).toBeNull();
-
-    // An unreserved slate URL is skipped, not waited for: the card read starts no process.
-    const overview = buildWorkspaceOverview({
-      ...EMPTY,
-      slates: [
-        { id: 'sketch', title: 'Sketch', url: null },
-        { id: 'board', title: 'Coupon board', url: 'https://board.preview.test/' },
-        { id: 'ledger', title: 'Ledger', url: 'https://ledger.preview.test/' },
-      ],
-    });
-
-    expect(overview.primarySlate).toEqual({ id: 'board', title: 'Coupon board', url: 'https://board.preview.test/' });
-    expect(v.is(WorkspaceOverviewSchema, overview)).toBe(true);
-    expect(buildWorkspaceOverview({ ...EMPTY, slates: [{ id: 'sketch', title: 'Sketch', url: null }] }).primarySlate).toBeNull();
-  });
 });
 
 
-describe('overviewHeadline', () => {
+describe('rosterHeadline', () => {
+  const headline = (tile: WorkspaceOverview) => rosterHeadline(tile, tile.decisionsWaiting);
+
   test('a waiting decision outranks live work, and its count rides the label', () => {
-    expect(overviewHeadline(buildWorkspaceOverview({ ...EMPTY, working: true, pendingActions: [action('release_approval')] })))
+    expect(headline(buildWorkspaceOverview({ ...EMPTY, working: true, pendingActions: [action('release_approval')] })))
       .toEqual({ label: 'Needs you · 1', status: 'needs' });
   });
 
   test('live work outranks a failed run', () => {
-    expect(overviewHeadline(buildWorkspaceOverview({ ...EMPTY, working: true, latestRun: { status: 'error', task: null } })))
+    expect(headline(buildWorkspaceOverview({ ...EMPTY, working: true, latestRun: { status: 'error', task: null } })))
       .toEqual({ label: 'Working', status: 'working' });
   });
 
   test('a sealed error outranks durable leftovers', () => {
-    expect(overviewHeadline(buildWorkspaceOverview({ ...EMPTY, unfinished: true, latestRun: { status: 'error', task: null } })))
+    expect(headline(buildWorkspaceOverview({ ...EMPTY, unfinished: true, latestRun: { status: 'error', task: null } })))
       .toEqual({ label: 'Last run failed', status: 'failed' });
   });
 
   test('durable leftovers outrank unread updates', () => {
-    expect(overviewHeadline(buildWorkspaceOverview({ ...EMPTY, unfinished: true, pendingActions: [action('unseen_changes')] })))
+    expect(headline(buildWorkspaceOverview({ ...EMPTY, unfinished: true, pendingActions: [action('unseen_changes')] })))
       .toEqual({ label: 'Unfinished', status: 'unfinished' });
   });
 
   test('unread updates outrank a plain idle line', () => {
-    expect(overviewHeadline(buildWorkspaceOverview({ ...EMPTY, pendingActions: [action('unseen_changes')] })))
+    expect(headline(buildWorkspaceOverview({ ...EMPTY, pendingActions: [action('unseen_changes')] })))
       .toEqual({ label: 'Updated', status: 'updated' });
   });
 
+  test('a workspace with no tile is not yet reported, unless the owner holds its approvals', () => {
+    expect(rosterHeadline(null, 0)).toEqual({ label: 'Not yet reported', status: 'unreported' });
+    expect(rosterHeadline(null, 2)).toEqual({ label: 'Needs you · 2', status: 'needs' });
+  });
+
   test('nothing to say is "Idle", never a run word', () => {
-    expect(overviewHeadline(buildWorkspaceOverview(EMPTY))).toEqual({ label: 'Idle', status: 'idle' });
-    expect(overviewHeadline(buildWorkspaceOverview({ ...EMPTY, latestRun: { status: 'completed', task: null } })))
+    expect(headline(buildWorkspaceOverview(EMPTY))).toEqual({ label: 'Idle', status: 'idle' });
+    expect(headline(buildWorkspaceOverview({ ...EMPTY, latestRun: { status: 'completed', task: null } })))
       .toEqual({ label: 'Idle', status: 'idle' });
   });
 });

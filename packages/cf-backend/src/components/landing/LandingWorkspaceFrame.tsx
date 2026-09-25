@@ -461,7 +461,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   return (
     <MemoryRouter initialEntries={[`/workspace/${LANDING_WORKSPACE}`]}>
       <AccountProvider>
-      <WorkspaceRosterProvider>
+      <WorkspaceRosterProvider live={null}>
       <div
         ref={stageRef}
         data-landing-frame={kind}

@@ -13,7 +13,7 @@ import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from '
 import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, SpendSource, BackendHost } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { Refusal } from '@kinu.run/core/obs';
-import type { SessionTranscript } from '@kinu.run/core';
+import type { SessionTranscript, WorkspaceOverview } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
 import type { ChatTurnInput, ActorTurnLease, PreparedTurn } from '@kinu.run/core';
 import type { ChatWireTransport } from '../../src/chat-transport';
@@ -1239,6 +1239,10 @@ export interface RecordedUserPlaneCalls {
   titles: string[];
   /** Set to record the turns the object asks the hub to stop device work for; unset, that ask is unreachable. */
   turnCancels?: string[];
+  /** Set to record the roster tiles the object pushes, in order; unset, a push lands nowhere. */
+  overviews?: WorkspaceOverview[];
+  /** How many pushes the owner's object refuses before it takes one. */
+  refuseOverviews?: number;
 }
 
 /** A real user plane: `userDO` is bound at `env.UserDO`; `workspace` is the DO name
@@ -1339,6 +1343,14 @@ export function makeEnv(
           },
           // A job holding no device commands: what the hub answers when nothing needs stopping.
           cancelDeviceRequestsForBackgroundJob: async (): Promise<[]> => [],
+          putWorkspaceOverview: async (_caller: UserCaller, _workspace: string, overview: WorkspaceOverview): Promise<void> => {
+            if (userPlane !== undefined && (userPlane.refuseOverviews ?? 0) > 0) {
+              userPlane.refuseOverviews = (userPlane.refuseOverviews ?? 0) - 1;
+              throw new Error('the owner object is unavailable');
+            }
+
+            userPlane?.overviews?.push(overview);
+          },
           ...(userPlane?.turnCancels !== undefined && {
             cancelDeviceRequestsForTurn: async (_caller: UserCaller, turnId: string): Promise<[]> => {
               userPlane.turnCancels?.push(turnId);

@@ -9,8 +9,7 @@ import {
   MISSION_PLACEHOLDER,
   useCreateWorkspace,
 } from "@/hooks/use-create-workspace";
-import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
-import { RECENT_WORKSPACES } from "@/hooks/use-workspace-overviews";
+import { RECENT_WORKSPACES, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverviewCard";
 
 export default function HomePage() {

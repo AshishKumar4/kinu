@@ -6,7 +6,6 @@ import { SidebarRail } from "./SidebarRail";
 import { FeedbackButton } from "./FeedbackButton";
 import { KinuLogo } from "./ui/KinuLogo";
 import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
-import { WorkspaceOverviewsProvider } from "@/hooks/use-workspace-overviews";
 import { AppBackground } from "./AppBackground";
 
 /** The root isolates its stacking so the negative-z canvas paints above its ground and under in-flow children. */
@@ -20,7 +19,6 @@ export default function Layout() {
 
   return (
     <WorkspaceRosterProvider>
-    <WorkspaceOverviewsProvider>
     <div className="isolate flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
       <AppBackground />
       <header className="flex h-14 shrink-0 items-center justify-between border-b p-border p-sidebar px-3 md:hidden">
@@ -64,7 +62,6 @@ export default function Layout() {
       </main>
 
     </div>
-    </WorkspaceOverviewsProvider>
     </WorkspaceRosterProvider>
   );
 }
