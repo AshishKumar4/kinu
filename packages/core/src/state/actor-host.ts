@@ -471,7 +471,7 @@ async function consumedEvidence(stores: AgentStores, claim: StoredActorClaim): P
 export async function recoverActorTurns(
   host: Pick<ActorHost, 'resumable'> & {
     acquire(reference: ActorReference): Promise<Pick<HostedActor, 'runtime' | 'stores'> & {
-      readonly session: Pick<ActorSession, 'inFlight'>;
+      readonly session: Pick<ActorSession, 'turnOpen'>;
     }>;
   },
   limit?: number,
@@ -492,14 +492,14 @@ export async function recoverActorTurns(
     try {
       const actor = await host.acquire(turn.reference);
 
-      if (actor.session.inFlight) {
+      if (actor.session.turnOpen) {
         active.push(turn.claim.turnId);
         continue;
       }
 
       const evidence = await consumedEvidence(actor.stores, turn.claim);
 
-      if (actor.session.inFlight) {
+      if (actor.session.turnOpen) {
         active.push(turn.claim.turnId);
         continue;
       }
@@ -518,7 +518,7 @@ export async function recoverActorTurns(
         evidence.context,
       );
 
-      if (actor.session.inFlight) {
+      if (actor.session.turnOpen) {
         active.push(turn.claim.turnId);
         continue;
       }

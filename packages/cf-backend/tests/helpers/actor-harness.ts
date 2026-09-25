@@ -587,6 +587,14 @@ export function gatewayWorkspace(gateway: StubbedAiBinding, world: HarnessActorW
 export async function runDelegatedTask(
   workspace: ActorHarness<HarnessOrchestratorAgent>, actorId: string, task: string,
 ): Promise<void> {
+  await wakeForDelegatedTask(workspace, actorId, task);
+  await joinHarnessFibers();
+}
+
+/** {@link runDelegatedTask} up to the wake's return: the turn it starts may still be running. */
+export async function wakeForDelegatedTask(
+  workspace: ActorHarness<HarnessOrchestratorAgent>, actorId: string, task: string,
+): Promise<void> {
   const sql = sqlOver(workspace.db);
   const [identity] = sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`;
 
@@ -597,7 +605,6 @@ export async function runDelegatedTask(
     fromWorkspace: child.workspaceId, kind: 'task', body: task, mode: 'build', now: Date.now(),
   });
   await workspace.agent.terminalRetryPass();
-  await joinHarnessFibers();
 }
 
 /** Core's background-job journal over the object's stored rows. */

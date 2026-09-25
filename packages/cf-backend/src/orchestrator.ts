@@ -1053,20 +1053,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** One drain per isolate: a second would open two turns on one actor's chat room. */
   private _delegationDrain: Promise<void> | null = null;
 
+  private _delegationDrainAgain = false;
+
   /**
    * Admitted delegated turns run on a fiber, off the wake: inside it a turn held the alarm to its
    * 15-minute wall, whose reset closed every socket (warm-forge-4d6acc02, 2026-09-25).
    */
   private startDelegationDrain(): void {
-    if (this._delegationDrain !== null) return;
+    if (this._delegationDrain !== null) {
+      this._delegationDrainAgain = true;
+
+      return;
+    }
 
     const drain = (async () => {
       try {
         await this.runFiber(DELEGATION_LANE_FIBER, async (ctx) => {
           ctx.stash({ lane: DELEGATION_LANE_FIBER });
-          let truncated = true;
+          let again = true;
 
-          while (truncated) truncated = await this.drainAdmittedDelegations();
+          while (again) {
+            this._delegationDrainAgain = false;
+            again = await this.drainAdmittedDelegations() || this._delegationDrainAgain;
+          }
         });
       } catch (cause) {
         diagnostics.failure('subordinate.delegation_drain_failed', toKinuError({
@@ -2755,7 +2764,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     try {
       const host = this.actorHost();
       const rootActorId = this.actorHandle().actorId;
-      const rootIsLive = () => this._inFlight;
+      const rootIsLive = () => this._inFlight || this.actorSession.turnOpen;
 
       const recovered = await recoverActorTurns({
         resumable: (limit) => host.resumable(limit),
@@ -2769,8 +2778,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
             // its tabs are told about every claim written there.
             stores: root ? this.stores : actor.stores,
             session: {
-              get inFlight() {
-                return root ? rootIsLive() : actor.session.inFlight;
+              get turnOpen() {
+                return root ? rootIsLive() : actor.session.turnOpen;
               },
             },
           };

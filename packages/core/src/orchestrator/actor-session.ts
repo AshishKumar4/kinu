@@ -204,6 +204,8 @@ export class ActorSession {
   }
   get landedSteers(): readonly LandedSteerRow[] { return this.landed; }
   get inFlight(): boolean { return this.active !== null && this.active.phase !== 'settling'; }
+  /** Until `finishTurn`: a settling turn still owns its claim. */
+  get turnOpen(): boolean { return this.active !== null; }
 
   lastRequestAt(): number | null {
     return this.canonical.requests.lastStep()?.recordedAt ?? null;
