@@ -152,9 +152,21 @@ function TextCover({ path, name }: { path: string; name: string }) {
 
 interface Transfer {
   readonly id: number;
+  readonly folder: string;
   readonly name: string;
-  readonly status: "uploading" | "failed";
+  readonly size: number;
+  readonly status: "uploading" | "landed" | "failed";
   readonly error?: string;
+  readonly stop: () => void;
+}
+
+/** No upload reports progress, so the bar only moves. */
+function TransferPicture({ status }: { status: Transfer["status"] }) {
+  return (
+    <span className="absolute inset-0 flex items-center justify-center p-recessed">
+      {status === "failed" ? <WarningIcon size={24} className="p-danger" /> : <span className="h-1 w-1/2 rounded-full p-skeleton-bar" />}
+    </span>
+  );
 }
 
 function VisibilityGlyph({ visibility }: { visibility: LiveShareVisibility | undefined }) {
@@ -330,33 +342,13 @@ function DropZone({ label, onFiles, children }: { label: string; onFiles: (files
   );
 }
 
-function TransferRow({ row, onDismiss }: { row: Transfer; onDismiss: () => void }) {
-  if (row.status === "uploading") {
-    return (
-      <li data-drive-transfer={row.status} className="flex items-center gap-2 text-xs">
-        <Loader size="sm" /><span className="truncate p-text-2">{row.name}</span><span className="p-text-3">uploading…</span>
-      </li>
-    );
-  }
-
-  return (
-    <li data-drive-transfer={row.status} className="flex items-center gap-2 text-xs">
-      <WarningIcon size={13} className="shrink-0 p-danger" /><span className="truncate p-text-2">{row.name}</span>
-      <span className="min-w-0 truncate p-danger" title={row.error}>{row.error}</span>
-      <button type="button" onClick={onDismiss} className="ml-auto shrink-0 p-text-3 hover:p-text" aria-label={`Dismiss ${row.name}`}><XIcon size={12} /></button>
-    </li>
-  );
-}
-
-function DriveNotices({ notice, onDismissNotice, listingPending, libraryResource, onRetryLibrary, copyStatus, transfers, onDismissTransfer }: {
+function DriveNotices({ notice, onDismissNotice, listingPending, libraryResource, onRetryLibrary, copyStatus }: {
   notice: string | null;
   listingPending: boolean;
   onDismissNotice: () => void;
   libraryResource: AsyncResource<SharedLibrary>;
   onRetryLibrary: () => void;
   copyStatus: ReturnType<typeof useCopy>["status"];
-  transfers: readonly Transfer[];
-  onDismissTransfer: (id: number) => void;
 }) {
   return (
     <>
@@ -372,11 +364,6 @@ function DriveNotices({ notice, onDismissNotice, listingPending, libraryResource
         <LoadFailure what="your slates and shares" message={libraryResource.message} onRetry={onRetryLibrary} className="mt-4" />
       )}
       {copyStatus !== "idle" && <p role="status" className="mt-4 p-meta p-text-3">{copyStatus === "copied" ? "Link copied." : "Could not copy the link."}</p>}
-      {transfers.length > 0 && (
-        <ul className="mt-4 space-y-1">
-          {transfers.map((row) => <TransferRow key={row.id} row={row} onDismiss={() => onDismissTransfer(row.id)} />)}
-        </ul>
-      )}
     </>
   );
 }
@@ -442,22 +429,26 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     return entry === undefined ? workspace : workspaceDisplayTitle(entry);
   };
 
-  const transfer = useCallback((name: string, work: () => Promise<void>): void => {
+  const transfer = useCallback((folder: string, name: string, size: number, work: (signal: AbortSignal) => Promise<void>): void => {
     const id = ++nextTransfer.current;
-    setTransfers((rows) => [...rows, { id, name, status: "uploading" }]);
+    const abort = new AbortController();
+    const drop = (): void => setTransfers((rows) => rows.filter((row) => row.id !== id));
+
+    setTransfers((rows) => [...rows, { id, folder, name, size, status: "uploading", stop: () => abort.abort() }]);
     startTransition(async () => {
       try {
-        await work();
-        setTransfers((rows) => rows.filter((row) => row.id !== id));
+        await work(abort.signal);
+        setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, status: "landed" } : row));
         listing.reload();
       } catch (cause) {
-        setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, status: "failed", error: renderThrownChain({ cause }) } : row));
+        if (abort.signal.aborted) drop();
+        else setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, status: "failed", error: renderThrownChain({ cause }), stop: drop } : row));
       }
     });
   }, [listing]);
 
   const uploadFiles = (files: File[]): void => {
-    for (const file of files) transfer(file.name, () => uploadFile(joinDir(path, file.name), file));
+    for (const file of files) transfer(path, file.name, file.size, (signal) => uploadFile(joinDir(path, file.name), file, signal));
   };
 
   const background = (work: () => Promise<void>): void => {
@@ -629,6 +620,25 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     );
   };
 
+  // Kept until listed, so the Files never blink.
+  const listed = new Set(contents.files.map((entry) => entry.name));
+  const shown = transfers.filter((row) => row.status === "landed" && row.folder === path && listed.has(row.name));
+
+  if (shown.length > 0) setTransfers((rows) => rows.filter((row) => !shown.includes(row)));
+
+  const uploads = transfers.filter((row) => row.folder === path && !shown.includes(row));
+
+  const uploadTile = (row: Transfer): ReactNode => (
+    <Tile key={`upload:${String(row.id)}`} title={row.name} icon={fileIcon(row.name)} picture={<TransferPicture status={row.status} />}
+      meta={row.status === "failed"
+        ? <span className="truncate p-danger" title={row.error}>{row.error}</span>
+        : <span className="truncate">{row.size > 0 ? `Uploading · ${formatBytes(row.size)}` : "Uploading"}</span>}
+      menu={[row.status === "failed"
+        ? { label: "Dismiss", icon: <XIcon size={15} />, marker: "data-drive-dismiss-upload", onSelect: row.stop }
+        : { label: "Cancel upload", icon: <XIcon size={15} />, marker: "data-drive-cancel-upload", danger: true, onSelect: row.stop }]}
+      attributes={{ "data-drive-transfer": row.status }} />
+  );
+
   const opened = contents.files.find((entry) => entry.name === search.get("file"));
   const builtin = contents.builtins.find((name) => name === search.get("skill"));
   const subtitle = subtitleOf(tab, path);
@@ -642,8 +652,8 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
           {tab === "mine" && (
             <div className="ml-auto">
               <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
-                onFolder={(picks) => { if (picks.length > 0) transfer(pickedFolderName(picks) ?? "folder", () => uploadFolder(path, picks)); }}
-                onZip={(file) => transfer(file.name, () => uploadZip(joinDir(path, file.name.replace(/\.zip$/iu, "")), file))}
+                onFolder={(picks) => { if (picks.length > 0) transfer(path, pickedFolderName(picks) ?? "folder", picks.reduce((sum, pick) => sum + pick.file.size, 0), (signal) => uploadFolder(path, picks, signal)); }}
+                onZip={(file) => transfer(path, file.name, file.size, (signal) => uploadZip(joinDir(path, file.name.replace(/\.zip$/iu, "")), file, signal))}
                 onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
             </div>
           )}
@@ -662,16 +672,16 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
         {subtitle !== null && <p className={`p-meta p-text-3 ${isRoot ? "mt-4" : "mt-1"}`}>{subtitle}</p>}
 
         <DriveNotices notice={notice} onDismissNotice={() => setNotice(null)} listingPending={listingPending} libraryResource={library.resource} onRetryLibrary={library.reload}
-          copyStatus={copier.status} transfers={transfers} onDismissTransfer={(id) => setTransfers((rows) => rows.filter((row) => row.id !== id))} />
+          copyStatus={copier.status} />
 
         {tab === "mine" ? (
           <DropZone label={isRoot ? "My stuff" : path.slice(path.lastIndexOf("/") + 1)} onFiles={uploadFiles}>
-            <MineBody resource={listing.resource} onRetry={listing.reload} empty={isEmptyMine(contents)}>
+            <MineBody resource={listing.resource} onRetry={listing.reload} empty={isEmptyMine(contents) && uploads.length === 0}>
               <SectionList groups={[
                 { label: "Slates", tiles: contents.slates.map(slateTile) },
                 { label: "Blueprints", tiles: contents.blueprints.map((row) => shareTile(row, true)) },
                 { label: inSkills ? "Skills" : "Folders", tiles: inSkills ? skillTiles() : contents.folders.map(folderTile) },
-                { label: "Files", tiles: contents.files.map(fileTile) },
+                { label: "Files", tiles: [...contents.files.map(fileTile), ...uploads.map(uploadTile)] },
               ]} />
             </MineBody>
           </DropZone>

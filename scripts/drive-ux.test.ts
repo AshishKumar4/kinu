@@ -118,6 +118,11 @@ async function tabTo(page: Page, label: string): Promise<{ disabled: string | nu
   return null;
 }
 
+/** Resolves once a frame has been drawn after everything before it. */
+async function drawn(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); }));
+}
+
 async function pressNew(page: Page, item: string): Promise<void> {
   await page.click('[data-drive-new]');
   await page.waitForSelector(`[${item}]`);
@@ -196,15 +201,15 @@ describe('the Drive', () => {
       await page.goto(`${gallery.origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
       await page.waitForSelector(selector);
       await page.waitForFunction((tiles: string) => [...document.querySelectorAll(`${tiles} img`)].every((img) => img instanceof HTMLImageElement && img.complete), {}, selector);
-      await page.evaluate(() => new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); }));
+      await drawn(page);
 
       return await page.$$eval(selector, (tiles, attribute) => tiles.map((tile): [string | null, string] => {
         const img = tile.querySelector('img');
-        let drawn = 'cover';
+        let shows = 'cover';
 
-        if (img !== null) drawn = img.naturalWidth > 0 ? 'picture' : 'broken';
+        if (img !== null) shows = img.naturalWidth > 0 ? 'picture' : 'broken';
 
-        return [tile.getAttribute(attribute), drawn];
+        return [tile.getAttribute(attribute), shows];
       }), key);
     } finally {
       await page.close();
@@ -221,12 +226,75 @@ describe('the Drive', () => {
 
   test('a live share of yours shows its slate\'s picture; a blueprint and a share you received keep their covers', async () => {
     await withGallery(async (gallery) => {
-      const drawn = await drawnPictures(gallery, 'shared', '[data-drive-share]', 'data-drive-share');
+      const tiles = await drawnPictures(gallery, 'shared', '[data-drive-share]', 'data-drive-share');
 
       // Only a live share of yours has a slate of yours to show; the others, two blueprints and a live share someone
       // gave you, keep their covers.
-      expect(drawn.filter(([, how]) => how === 'picture').map(([id]) => id)).toEqual(['live-board-1']);
-      expect(drawn.length).toBe(4);
+      expect(tiles.filter(([, how]) => how === 'picture').map(([id]) => id)).toEqual(['live-board-1']);
+      expect(tiles.length).toBe(4);
+    });
+  });
+
+  test('an upload is a tile in its folder until its file is listed; Cancel stops it, and a refusal stays with its reason', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'drive', 'dark', 'desktop');
+
+      try {
+        // An empty folder to upload into.
+        await pressNew(page, 'data-drive-new-folder');
+        await page.waitForSelector('[role="dialog"] input');
+        await page.type('[role="dialog"] input', 'archive');
+        await page.click('[data-drive-dialog-commit]');
+        await waitForEntry(page, 'archive');
+        await page.click('[data-drive-entry="archive"] a');
+        await page.waitForSelector('[data-drive-empty]');
+
+        // The gallery's network is the page's own fetch: an upload is held until aborted, or refused when asked.
+        await page.evaluate(() => {
+          const real = window.fetch;
+
+          window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
+            if (init?.method !== 'PUT') return real(input, init);
+
+            if (document.documentElement.dataset.put === 'refuse') {
+              return Promise.resolve(new Response(JSON.stringify({ error: 'File too large for the Drive' }), { status: 413, headers: { 'content-type': 'application/json' } }));
+            }
+
+            return new Promise<Response>((_, reject) => { init.signal?.addEventListener('abort', () => reject(init.signal?.reason)); });
+          }, { preconnect: real.preconnect });
+        });
+
+        const input = await page.$('input[data-drive-files-input]');
+        const file = join(import.meta.dir, 'drive-ux.test.ts');
+
+        if (input === null) throw new Error('no files input');
+
+        // In flight, the folder is no longer empty: the file is a tile in Files.
+        await input.uploadFile(file);
+        await drawn(page);
+        expect(await page.$('[data-drive-empty]')).toBeNull();
+        expect(await sections(page)).toEqual([{ title: 'Files', tiles: ['drive-ux.test.ts'] }]);
+
+        // Cancelled, the tile goes and the folder is empty again.
+        await menuOf(page, '[data-drive-transfer="uploading"]');
+        await page.click('[data-drive-transfer="uploading"] [data-drive-cancel-upload]');
+        await drawn(page);
+        expect(await page.$('[data-drive-transfer]')).toBeNull();
+        expect(await page.$('[data-drive-empty]')).not.toBeNull();
+
+        // Refused, the tile stays with the Drive's reason until it is dismissed.
+        await page.evaluate(() => { document.documentElement.dataset.put = 'refuse'; });
+        await input.uploadFile(file);
+        await drawn(page);
+        expect(await page.$eval('[data-drive-transfer]', (tile) => [tile.getAttribute('data-drive-transfer'), tile.textContent?.includes('File too large for the Drive')]))
+          .toEqual(['failed', true]);
+        await menuOf(page, '[data-drive-transfer="failed"]');
+        await page.click('[data-drive-transfer="failed"] [data-drive-dismiss-upload]');
+        await drawn(page);
+        expect(await page.$('[data-drive-transfer]')).toBeNull();
+      } finally {
+        await page.close();
+      }
     });
   });
 
