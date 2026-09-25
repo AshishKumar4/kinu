@@ -111,7 +111,8 @@ function skillsVfsOf(bodies: Readonly<Record<string, string>>): SkillsVfs & { re
   };
 }
 
-const BLOCK_OPEN = /^<dynamic_context fingerprint="[0-9a-f]{16}" kind="(?:full|delta)">\n/;
+// A delta names the full state it establishes.
+const BLOCK_OPEN = /^<dynamic_context fingerprint="[0-9a-f]{16}" (?:kind="full"|kind="delta" state="[0-9a-f]{16}")>\n/;
 
 function isDynamicBlock(text: string): boolean {
   return BLOCK_OPEN.test(text) && text.endsWith('\n</dynamic_context>');
@@ -797,6 +798,24 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     expect(delta).not.toContain('- workspace:');
     expect(ledger.dropSuperseded()).toBeGreaterThan(0);
     expect(ledger.weave(history, current).at(-1)?.content).toBe(renderDynamicContextBlock(current) ?? '');
+  });
+
+  test('a stored ledger restarts with its first block and its collapses, and grows by its deltas', () => {
+    const ledger = new DynamicContextLedger(true);
+    const history: ModelMessage[] = [{ role: 'user', content: 'Read the file.' }];
+
+    const stored = (current: typeof state) => {
+      ledger.weave(history, current);
+
+      return ledger.takeBirths().map((birth) => ({ kind: birth.text.includes('kind="delta"') ? 'delta' : 'full', replaces: birth.replaces }));
+    };
+
+    ledger.adopt([]);
+    expect(stored(state)).toEqual([{ kind: 'full', replaces: true }]);
+    history.push({ role: 'assistant', content: 'Read.' });
+    expect(stored({ ...state, factsBlock: '- k = w' })).toEqual([{ kind: 'delta', replaces: false }]);
+    expect(ledger.dropSuperseded()).toBeGreaterThan(0);
+    expect(stored({ ...state, factsBlock: '- k = w' })).toEqual([{ kind: 'full', replaces: true }]);
   });
 
   test('shared step preparation keeps the ledger append-only across a turn boundary', async () => {

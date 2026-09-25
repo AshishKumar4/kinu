@@ -12,6 +12,7 @@ import { sqlCheckList } from '../identity/schema';
 import type { ActorTurnProgram } from './actor-program';
 import type { SessionHistory } from '../session/history';
 import type { ContextSelection } from '../session/context';
+import type { PromptCacheRoute } from '../prompting/cache-breakpoints';
 
 const CLAIM_OUTCOMES = [...RUN_END_REASONS, 'indeterminate'] as const;
 
@@ -118,7 +119,7 @@ export class ActorClaimStore {
     return claim;
   }
 
-  async consume(claim: ActorTurnClaim, input: { readonly index: number; readonly messages: readonly ModelMessage[] }): Promise<ConsumedContext> {
+  async consume(claim: ActorTurnClaim, input: { readonly index: number; readonly messages: readonly ModelMessage[]; readonly cache?: PromptCacheRoute | undefined }): Promise<ConsumedContext> {
     this.assertLive(claim);
     const source = this.history.context.selected();
 
@@ -126,7 +127,8 @@ export class ActorClaimStore {
     const latest = this.sql<{ revision: number | null }>`SELECT MAX(revision) AS revision FROM actor_requests WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`[0]?.revision ?? 0;
 
     const prepared = await this.history.requests.prepareRendered({ id: crypto.randomUUID(), turnId: claim.turnId, runId: claim.runId,
-      epoch: claim.epoch, revision: latest + 1, step: input.index, source, messages: input.messages, metadata: { program: { ...claim.program }, workMode: claim.workMode } });
+      epoch: claim.epoch, revision: latest + 1, step: input.index, source, messages: input.messages,
+      metadata: { program: { ...claim.program }, workMode: claim.workMode, ...(input.cache !== undefined && { cache: { ...input.cache } }) } });
 
     const consumed = this.transactionSync(() => {
       this.assertLive(claim);

@@ -679,6 +679,14 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   right before the request, in one place for every step of the turn, so the steps of a turn also read the cache. This
   also holds for a turn picked up after a restart, and when a later message repeats the request word for word.
 
+- **A pause or a restart no longer costs the prompt cache.** The live state the agent reads was kept in memory
+  only. A hosted workspace leaves memory after ten idle seconds, so most turns after a pause, and every turn after a
+  restart or redeploy, put that state somewhere new and the provider re-read the whole conversation. It is now stored
+  with the conversation. While the provider still holds the conversation in its cache (five minutes to a day,
+  depending on the provider and setting), the state is read back exactly where it was: a turn picked up after its
+  process died re-sends 8 of the 9 messages it sent before, up from 1 in a test turn. Once the cache has expired and
+  re-reading is free anyway, the stale state collapses into one fresh block.
+
 - **Responses models see their own earlier steps.** On the models.dev catalog
   (Muse on opencode's gateway), the CLI's opencode bridge and Codex, every step
   after the first sent the earlier ones as references to items the endpoint

@@ -105,6 +105,16 @@ export class SessionRequests {
       VALUES(${this.actor.actorId},${request.id},${request.turnId},${request.runId},${request.epoch},${request.step},${request.revision},${request.source.contextId},${request.source.revision},${request.metadata.json},${request.metadata.path},${request.metadata.digest},${Date.now()})`;
   }
 
+  /** Inline metadata only. */
+  lastStep(): { readonly recordedAt: number; readonly metadata: string | null } | null {
+    this.actor.assertCurrent();
+
+    const row = this.sql<{ recorded_at: number; metadata_json: string | null }>`SELECT recorded_at,metadata_json FROM actor_requests
+      WHERE actor_id=${this.actor.actorId} AND step_index IS NOT NULL ORDER BY recorded_at DESC LIMIT 1`[0];
+
+    return row === undefined ? null : { recordedAt: row.recorded_at, metadata: row.metadata_json };
+  }
+
   read(id: string): PreparedRequest | null {
     this.actor.assertCurrent();
 
@@ -114,8 +124,9 @@ export class SessionRequests {
     return row === undefined ? null : requestOf(row);
   }
 
+  /** A step's list is what it sent; an admission's, the conversation. */
   messagesOf(request: PreparedRequest): readonly MessageReference[] {
-    if (request.step === null) return this.context.entries(request.source);
+    if (request.step === null) return this.context.conversationOf(request.source.contextId, this.context.entries(request.source));
 
     const list = this.sql<{ context_id: string; revision: number }>`SELECT context_id,revision FROM request_renders
       WHERE actor_id=${this.actor.actorId} AND request_id=${request.id}`[0];

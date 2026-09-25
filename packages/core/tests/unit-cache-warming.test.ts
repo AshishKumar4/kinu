@@ -225,6 +225,26 @@ describe('when the chain stops', () => {
     expect(probe.sent).toHaveLength(REFRESH_LIMIT);
   });
 
+  test('the warms keep the entry alive until a TTL past the last one, and no longer once a real request voids them', async () => {
+    const probe = laneProbe();
+    expect(probe.lane.keptAliveUntil(SENT_AT)).toBeNull();
+
+    let at = probe.lane.armAfterTurn({ modelSpec: ANTHROPIC, retention: 'short', lastRequest: lastRequest() }) ?? 0;
+    // Owed a warm: alive until that warm's due time plus the lead, which is the request's own five minutes.
+    expect(probe.lane.keptAliveUntil(SENT_AT)).toBe(SENT_AT + 5 * 60_000);
+
+    for (let fired = 0; fired < REFRESH_LIMIT; fired++) {
+      probe.clock = at;
+      await probe.lane.runDue(at);
+      at = probe.lane.nextWarmAt() ?? 0;
+    }
+
+    // The chain has stopped: its third warm went out at SENT_AT + 3 x 4:45, and that entry lives five minutes more.
+    expect(probe.lane.keptAliveUntil(SENT_AT)).toBe(SENT_AT + 3 * (5 * 60_000 - 15_000) + 5 * 60_000);
+    probe.lane.noteRequest();
+    expect(probe.lane.keptAliveUntil(SENT_AT)).toBeNull();
+  });
+
   test('a refresh that had to write the prefix ends the chain', async () => {
     const probe = laneProbe();
     const at = probe.lane.armAfterTurn({ modelSpec: ANTHROPIC, retention: 'short', lastRequest: lastRequest() }) ?? 0;

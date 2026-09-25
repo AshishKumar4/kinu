@@ -5,6 +5,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { ResolvedTurnProfile, ProfileAuthorityInputs } from '../profiles';
 import type { WorkMode } from '../types/turn';
 import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
+import { promptCacheWarm, PromptCacheRouteSchema, type CachedRequest } from '../prompting/cache-breakpoints';
 import type { KinuExtension } from '../extension';
 import { ExtensionHost } from '../extension';
 import { KinuError, renderThrownChain } from '../obs/index';
@@ -18,7 +19,7 @@ import {
   programIdentityOf, type ActorClaimStore, type ActorTurnClaim, type ClaimOutcome,
 } from './actor-claims';
 import type { ContextEventRecorder } from '../types/context-plane';
-import type { ContextSelection } from '../session/context';
+import type { ContextEntry, ContextSelection } from '../session/context';
 import type { JsonObject } from '../utils/json';
 import type { ScaffoldBridgeOpts } from './scaffold-host';
 import type { ModelCallSpend } from '../events/model-call';
@@ -77,6 +78,17 @@ export interface ActorExecutionInput {
   /** Re-checked before each model call, for kinds whose liveness is owned elsewhere (heads, swarm nodes). */
   readonly assertActive?: () => void;
   readonly scaffoldStreamOptions?: ScaffoldBridgeOpts['streamOptions'];
+  /** A warming lane's cover. */
+  readonly cacheKeptAliveUntil?: number | null;
+}
+
+const RequestCacheSchema = v.looseObject({ cache: v.optional(PromptCacheRouteSchema) });
+
+/** Without a route: an unknown provider's. */
+function cachedRequestOf(last: { readonly recordedAt: number; readonly metadata: string | null }): CachedRequest {
+  const parsed = last.metadata === null ? null : v.safeParse(RequestCacheSchema, JSON.parse(last.metadata));
+
+  return { at: last.recordedAt, ...(parsed?.success === true ? parsed.output.cache : undefined) ?? { retention: 'short' } };
 }
 
 export interface ActorExecutionResult {
@@ -111,16 +123,15 @@ interface ActiveTurn {
 
 export const REVERT_NEEDS_IDLE = 'Stop the turn that is running before you revert the conversation.';
 
-/** A logical actor's mutable execution state, independent of its physical host.
- * The host retains admission, queueing and durable/effect settlement. It may
- * share immutable catalogs, never this actor's context, orchestrator or abort. */
+/** An actor's mutable execution state, apart from its host, which keeps admission, queueing and settlement and
+ *  may share immutable catalogs, never this context, orchestrator or abort. */
 export class ActorSession {
   readonly actorId: string;
   readonly runtime: AgentRuntime;
   readonly orchestrator: AgentOrchestrator;
   readonly canonical: SessionHistory;
-  /** Every rewrite of the model-visible stream resets it: frozen block positions mean nothing on another stream. In-memory only. */
-  readonly dynamic = new DynamicContextLedger();
+  /** Every rewrite of the model-visible stream resets it; its blocks are stored. */
+  readonly dynamic = new DynamicContextLedger(true);
   private readonly messages: ModelMessage[] = [];
   private readonly landed: LandedSteerRow[] = [];
   private active: ActiveTurn | null = null;
@@ -191,6 +202,10 @@ export class ActorSession {
   }
   get landedSteers(): readonly LandedSteerRow[] { return this.landed; }
   get inFlight(): boolean { return this.active !== null && this.active.phase !== 'settling'; }
+
+  lastRequestAt(): number | null {
+    return this.canonical.requests.lastStep()?.recordedAt ?? null;
+  }
   /** A host settles the claim under the outcome it named. */
   get turnClaim(): ActorTurnClaim | null { return this.active?.claim ?? null; }
 
@@ -270,7 +285,7 @@ export class ActorSession {
       if (this.inFlight) throw new KinuError('denied', REVERT_NEEDS_IDLE);
       assertIdle();
     });
-    this.dynamic.reset();
+    this.dynamic.unload();
     await this.restoreWorkingHistory();
   }
 
@@ -439,10 +454,8 @@ export class ActorSession {
     active.claimSettled = true;
   }
 
-  /**
-   * Prepare, claim durably, then consume events: the order is the contract. `startActorTurn` runs nothing
-   * until the first `next()`, so a crash before the claim leaves a turn that provably did nothing.
-   */
+  /** Prepare, claim durably, then consume: `startActorTurn` runs nothing until the first `next()`, so a crash
+   *  before the claim leaves a turn that provably did nothing. */
   async execute(lease: ActorTurnLease, input: ActorExecutionInput, emit: (event: ChatEvent) => void | Promise<void>): Promise<ActorExecutionResult> {
     const active = this.requireTurn(lease);
 
@@ -488,6 +501,9 @@ export class ActorSession {
       const stream = durableOutput;
       // Activation names the input's entry after its message; an edit keeps the entry.
       const turnInput = this.canonical.admittedInput(claim.turnId);
+      const assertClaim = () => this.canonical.assertEpoch(claim.turnId, claim.epoch);
+      let stepEntries: readonly ContextEntry[] = [];
+      let turnOpened = false;
 
       const events = operationProfileStream(startActorTurn({
         runtime: this.runtime, mode: this.mode, task: input.task, loopVersion: input.loopVersion,
@@ -501,14 +517,30 @@ export class ActorSession {
           dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools) },
           stepContext: {
             base: async () => {
-              const base = await this.canonical.stepBase(() => this.canonical.assertEpoch(claim.turnId, claim.epoch), claim.turnId, this.options.events ?? null);
+              const base = await this.canonical.stepBase(assertClaim, claim.turnId, this.options.events ?? null);
               this.messages.splice(0, this.messages.length, ...base.messages);
+              stepEntries = base.entries;
+
+              // A cold cache makes rewriting free: the stored blocks collapse into one.
+              if (!turnOpened) {
+                turnOpened = true;
+                const last = this.canonical.requests.lastStep();
+
+                if (!promptCacheWarm(last === null ? null : cachedRequestOf(last), Date.now(), input.cacheKeptAliveUntil ?? null)) this.dynamic.reset();
+              }
+
+              this.dynamic.adopt(base.rendered.map(render => ({ text: v.parse(v.string(), render.message.content), before: render.before, after: render.after })));
               const turnStart = turnInput === null ? -1 : base.entries.findIndex(entry => entry.entryId === turnInput.messageId);
 
               return { messages: base.messages, changed: base.changed, ...(turnStart >= 0 && { turnStart }) };
             },
-            consume: async ({ stepNumber, messages }) => {
-              const consumed = await this.options.claims.consume(claim, { index: stepNumber, messages });
+            consume: async ({ stepNumber, messages, cache }) => {
+              for (const birth of this.dynamic.takeBirths()) {
+                const entry = birth.before === null ? undefined : stepEntries[this.messages.indexOf(birth.before)];
+                await this.canonical.recordRender({ role: 'user', content: birth.text }, { before: entry?.entryId ?? null, replaces: birth.replaces }, claim.turnId, assertClaim);
+              }
+
+              const consumed = await this.options.claims.consume(claim, { index: stepNumber, messages, cache });
 
               if (stepNumber === 0) admittedMessages = [...messages];
               stream.beginRequest(consumed.requestId, stepNumber);

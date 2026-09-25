@@ -706,8 +706,9 @@ describe('LocalAgentSession.send — a user turn', () => {
     await session.send('say a lot', { id: crypto.randomUUID() });
     expect(openRows).toBe(1);
     const turnId = turnStarts(events)[0]?.turnId;
+    // The input, the block the turn's first step bore, then the answer: one output revision, not one per part.
     expect(db.query<{ cause: string }, [string]>('SELECT cause FROM context_revisions WHERE turn_id = ? ORDER BY revision').all(turnId ?? '').map((row) => row.cause))
-      .toEqual(['input', 'output']);
+      .toEqual(['input', 'render', 'output']);
 
     expect(streamRows()).toBe(0);
 
@@ -1147,7 +1148,7 @@ describe('LocalAgentSession — tool success/error + cache telemetry fidelity', 
 });
 
 function isDynamicBlock(text: string): boolean {
-  return /^<dynamic_context fingerprint="[0-9a-f]{16}" kind="(?:full|delta)">\n/.test(text)
+  return /^<dynamic_context fingerprint="[0-9a-f]{16}" (?:kind="full"|kind="delta" state="[0-9a-f]{16}")>\n/.test(text)
     && text.endsWith('\n</dynamic_context>');
 }
 

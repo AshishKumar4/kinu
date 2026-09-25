@@ -235,7 +235,7 @@
       "file": "packages/cli-backend/tests/local-session.test.ts",
       "kind": "regex-literal",
       "owner": "isDynamicBlock",
-      "sourceSha256": "bb27f6801ea8e2f550822598f178bdafdaf5fc7cf45061c83eeffd12e148957f",
+      "sourceSha256": "62f212fe9fc82313e58907b96bb77282866a1583827865279400c256ade6646f",
       "decision": "lexical"
     },
     {
@@ -655,7 +655,7 @@
       "file": "packages/core/tests/unit-volatile-context.test.ts",
       "kind": "regex-literal",
       "owner": "BLOCK_OPEN",
-      "sourceSha256": "bb27f6801ea8e2f550822598f178bdafdaf5fc7cf45061c83eeffd12e148957f",
+      "sourceSha256": "62f212fe9fc82313e58907b96bb77282866a1583827865279400c256ade6646f",
       "decision": "lexical"
     },
     {

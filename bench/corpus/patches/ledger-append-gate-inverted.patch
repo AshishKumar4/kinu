@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/prompting/volatile-context.ts b/packages/core/src/prompting/volatile-context.ts
-index 59ccba09b..5091c97d0 100644
+index dff16a6ee..c8cb313a8 100644
 --- a/packages/core/src/prompting/volatile-context.ts
 +++ b/packages/core/src/prompting/volatile-context.ts
-@@ -709,7 +709,7 @@ export class DynamicContextLedger {
-     const full = renderDynamicContextBlock(current);
-     const previousFull = previous === null ? null : renderDynamicContextBlock(previous);
+@@ -762,7 +762,7 @@ export class DynamicContextLedger {
+     const body = dynamicBody([...rendered.sections.values()]);
+     const established = fnv1a64(body ?? '');
  
--    if (full !== previousFull) {
-+    if (full === previousFull) {
-       const text = this.blocks.length === 0 ? full : dynamicDelta(previous ?? {}, current);
+-    if (established !== (this.told?.state ?? fnv1a64(''))) {
++    if (established === (this.told?.state ?? fnv1a64(''))) {
+       const text = this.statement(rendered, body, established);
        const birth = turnLocal?.firstStep === true ? Math.min(turnLocal.at, history.length) : turnInputStart(history);
  

@@ -232,6 +232,17 @@ export class CacheWarmStore {
       WHERE actor_id = ${this.actor.actorId}`;
   }
 
+  /** When warms stop covering `lastRequestAt`'s entry: an owed warm's due plus the lead, else a TTL past the last. */
+  keptAliveUntil(lastRequestAt: number): number | null {
+    const row = this.row();
+
+    if (!row || row.armed_requests !== row.requests) return null;
+
+    if (row.due_at !== null) return row.due_at + CACHE_WARM_LEAD_MS;
+
+    return row.refreshes === 0 ? null : lastRequestAt + row.refreshes * (CACHE_WARM_TTL_MS - CACHE_WARM_LEAD_MS) + CACHE_WARM_TTL_MS;
+  }
+
   /** Stop warming this prefix, keeping the counter. */
   retire(): void {
     this.actor.assertCurrent();
@@ -267,6 +278,10 @@ export class CacheWarmingLane {
   /** A real provider request is starting. */
   noteRequest(): void {
     this.seams.store.noteRequest();
+  }
+
+  keptAliveUntil(lastRequestAt: number): number | null {
+    return this.seams.store.keptAliveUntil(lastRequestAt);
   }
 
   /** When this actor's next warm is owed, for the backend's wake fold. */

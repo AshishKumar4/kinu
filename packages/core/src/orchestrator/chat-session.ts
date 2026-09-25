@@ -911,12 +911,17 @@ export class ChatSession {
     /** A Stop before any output leaves the operator's row alone. */
     let streamed = item.continuation?.partial !== null && item.continuation?.partial !== undefined;
 
+    // Before this turn's request voids the lane.
+    const lastRequestAt = this.actorSession.lastRequestAt();
+    const cacheKeptAliveUntil = lastRequestAt === null ? null : this.ports.cacheWarming?.keptAliveUntil(lastRequestAt) ?? null;
+
     // A real request voids any armed warm; the durable counter stops a mid-turn wake from adding a refresh.
     this.ports.cacheWarming?.noteRequest();
 
     const execution = await this.actorSession.execute(lease, {
       task: item.text,
       ...prepared.execution,
+      cacheKeptAliveUntil,
     }, (event) => {
       partial.observe(event);
 

@@ -19,9 +19,9 @@ import {
   assertToolsSupportedByModel,
   type PromptModelContext,
 } from './prompting/model-profile';
-import { applyCacheBreakpoints, hasCacheMarkers, type CacheBreakpointPlan } from './prompting/cache-breakpoints';
+import { applyCacheBreakpoints, hasCacheMarkers, type CacheBreakpointPlan, type PromptCacheRoute } from './prompting/cache-breakpoints';
 import type { ResolvedModelWindow } from './prompting/step-prune';
-import type { CacheRetention } from './providers/types';
+import { DEFAULT_CACHE_RETENTION, type CacheRetention } from './providers/types';
 import { TurnContextMeter, type ContextComposition } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
 import type { MissionGovernor } from './mission-budget';
@@ -561,6 +561,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   let initialContextAvailable = initialContext !== null;
 
+  const turnRoute: PromptCacheRoute = {
+    ...(opts.cache?.providerId !== undefined && { providerId: opts.cache.providerId }),
+    ...(opts.cache?.modelId !== undefined && { modelId: opts.cache.modelId }),
+    retention: opts.cache?.retention ?? DEFAULT_CACHE_RETENTION,
+  };
+
   const stepContextPlane: StepContextPlane | undefined = stepContext === undefined ? undefined : {
     base: async () => {
       if (initialContextAvailable) {
@@ -574,7 +580,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
       return { ...assembled, changed: base.changed };
     },
-    consume: step => stepContext.consume(step),
+    // A fallback's cache is its own provider's.
+    consume: step => stepContext.consume({ ...step, cache: servingFallback === undefined ? turnRoute : {
+      ...(current.provider !== undefined && { providerId: current.provider }), retention: turnRoute.retention,
+    } }),
   };
 
   const turnLocal = opts.turnLocal !== undefined && opts.turnLocal.length > 0 ? opts.turnLocal : undefined;

@@ -1,17 +1,14 @@
 /**
- * The one per-step message pipeline shared by both backends' step hooks.
- * Order: mission budget guard (before the spend), SDK tool-error feedback,
- * extension prepareStep chain, tool-output pruning, dynamic-context weave with
- * the turn-local messages right before the turn's input, then prompt-cache tail
- * markers last. Cache markers placed before any rewrite
- * would bust the rolling prefix on one backend and not the other.
+ * Both backends' per-step pipeline: mission budget guard (before the spend), tool-error feedback, extension
+ * prepareStep chain, tool-output pruning, the dynamic-context weave with turn-local messages before the turn's
+ * input, then cache tail markers, last, as markers placed before a rewrite would bust one backend's prefix.
  */
 
 import type { ModelMessage, SystemModelMessage } from 'ai';
 import type { TurnContextMeter } from '../context-meter';
 import type { ExtensionHost } from '../extension';
 import { MissionBudgetExhausted, type MissionGovernor } from '../mission-budget';
-import { markCacheTail, type PromptCacheStrategy } from './cache-breakpoints';
+import { markCacheTail, type PromptCacheRoute, type PromptCacheStrategy } from './cache-breakpoints';
 import { pruneStepToolOutputs, type StepPruneBudget } from './step-prune';
 import { normalizeReplayForDestination } from './replay-normalization';
 import { placeTurnLocal, type DynamicContext, type DynamicContextLedger, type TurnLocalPlacement } from './volatile-context';
@@ -36,7 +33,7 @@ export interface StepDynamicContext {
 export interface StepContextPlane {
   /** `turnStart`: the index of the turn's input, which turn-local messages ride before. */
   base(): Promise<{ readonly messages: ModelMessage[]; readonly changed: boolean; readonly turnStart?: number }>;
-  consume(step: { readonly stepNumber: number; readonly messages: readonly ModelMessage[] }): Promise<void>;
+  consume(step: { readonly stepNumber: number; readonly messages: readonly ModelMessage[]; readonly cache?: PromptCacheRoute }): Promise<void>;
 }
 
 export interface StepPipeline {
@@ -71,10 +68,8 @@ export interface StepPrepareContext {
   readonly steps: readonly ToolErrorStep[];
 }
 
-/** Returns step overrides (`PrepareStepResult`) or `undefined` when unchanged.
- *  Stays synchronous unless an extension must finish I/O first.
- *  Throws {@link MissionBudgetExhausted} when the mission label's cap is spent;
- *  the governor has already written `budget_exhausted`. */
+/** Step overrides, or `undefined` when unchanged; synchronous unless an extension must finish I/O. Throws
+ *  {@link MissionBudgetExhausted} on a spent cap, after the governor wrote `budget_exhausted`. */
 export function composePrepareStep(pipeline: StepPipeline, ctx: StepPrepareContext): StepPrepareResult | Promise<StepPrepareResult> {
   const refusal = pipeline.budget?.guard('model_call');
 

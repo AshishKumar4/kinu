@@ -1,20 +1,16 @@
 /**
- * The volatile half of the context split. `buildSystemPromptSync` is a
- * byte-stable prefix that changes only on real agent events; everything else
- * rides in messages.
+ * The volatile half of the context split: `buildSystemPromptSync` is a byte-stable prefix that changes only on
+ * agent events; the rest rides in messages.
  *
- * Dynamic context (DynamicContextLedger): each model step renders live state
- * into one `<dynamic_context fingerprint="…">` block, added only when it differs
- * from the newest block: before the turn's input at a turn's first step, at the
- * tail after that. Blocks freeze where born (moving a mid-array message
- * invalidates every later cache breakpoint); only `dropSuperseded`, under
- * measured pressure, removes any. In-memory only. Nothing clock-derived may
- * render: it would append a block per request.
+ * Dynamic context (DynamicContextLedger): each step renders live state into a `<dynamic_context>` block, added only
+ * when it differs from the newest: before the turn's input at its first step, at the tail after. Blocks freeze
+ * where born (moving one invalidates every later cache breakpoint); only `dropSuperseded`, under measured pressure,
+ * removes any. They are stored in the working context: a turn the provider's cache still holds re-weaves them where
+ * they were, one it no longer holds starts over with one block. Nothing clock-derived may render.
  *
- * Turn-local state (skill activation reasons, device notice, provenance) is one
- * user message right before the turn's input, for this turn only, never
- * fingerprinted. The request stays the last user-role content the model reads:
- * news after it reads as the turn itself.
+ * Turn-local state (skill activation reasons, device notice, provenance) is one user message right before the
+ * turn's input, this turn only, never fingerprinted, so the request stays the last user-role content: news after
+ * it reads as the turn itself.
  */
 
 import type { ModelMessage } from 'ai';
@@ -68,22 +64,18 @@ export interface ActiveRoster<T> {
   readonly total: number;
 }
 
-/** Live state at one model step, read from existing sources; owns no state.
- *  Lists arrive ordered by the caller and are capped by the renderer. */
+/** Live state at one model step, read from existing sources. Callers order lists; the renderer caps them. */
 export interface DynamicContext {
   mode?: { readonly workMode: WorkMode; readonly planSubmission: boolean };
-  /** An empty list still renders one "none yet" line: the doctrine has the model check
-     *  `workspace.listTools()` before building, and silence left that unanswered. */
+  /** Empty renders a "none yet" line: the model checks `workspace.listTools()` before building. */
   craftedTools?: readonly CraftedDeclaration[];
   factsBlock?: string;
   memoryTail?: string;
-  /** Re-read per step, so a finding recorded mid-turn rides every later step
-     *  (facts and the memory tail are frozen at turn assembly). */
+  /** Re-read per step; facts and the memory tail freeze at turn assembly. */
   recoveries?: readonly string[];
   /** Status labels only; executor doctrine lives in the stable prefix. */
   executors?: readonly PromptExecutorInfo[];
-  /** Every registered machine by name, so the model never reads a single "the device".
-     *  Absent where a backend has no fleet. */
+  /** Every machine by name, never "the device"; absent where a backend has no fleet. */
   devices?: readonly DeviceFleetEntry[];
   jobs?: ActiveRoster<DynamicJob>;
   /** Open items only; settled ones are read back via `tasks({action:'list'})`. */
@@ -95,8 +87,8 @@ export interface DynamicContext {
   missingCapabilities?: readonly MissingCapability[];
 }
 
-/** The live search roster as delegates, shared by both backends. Uses the surface's words
- *  (`agents({action:'swarm'})`, nodes); never `fork` or "head", which the model cannot invoke. */
+/** The search roster as delegates, in the surface's words (`agents({action:'swarm'})`, nodes), never `fork` or
+ *  "head", which the model cannot invoke. */
 export function searchDelegates(
   runs: ReadonlyArray<{ rootId: string; rationale: string; running: number; total: number }>,
 ): DynamicDelegate[] {
@@ -197,8 +189,7 @@ export interface TurnLocalContext {
   deviceNotice?: string | null;
   /** Bodies render in the stable prefix; the per-turn activation reasons render here. */
   activeSkills?: ActiveSkillSet;
-  /** An overlay, not a bar, so it stays out of the system prompt: it flips whenever a
-     *  background job lands. `chat` renders nothing. */
+  /** An overlay out of the system prompt, as it flips when a background job lands; `chat` renders nothing. */
   provenance?: TurnProvenance;
 }
 
@@ -227,8 +218,7 @@ export function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
   return 'available';
 }
 
-/** Declared resource ceiling as `(cpus=1 mem=2G)`. Inside a cgroup `nproc` reports host
- * cores, so the model needs this to size `-j`. Rendered only from declared limits. */
+/** Declared limits as `(cpus=1 mem=2G)`: in a cgroup `nproc` reports host cores, and `-j` is sized by this. */
 function executorLimitsSuffix(exec: PromptExecutorInfo): string {
   const parts: string[] = [];
   const cpus = exec.resourceLimits?.cpus;
@@ -241,8 +231,8 @@ function executorLimitsSuffix(exec: PromptExecutorInfo): string {
   return parts.length > 0 ? ` (${parts.join(' ')})` : '';
 }
 
-/** Declared capabilities, which the `shell` description points the model at. Rendered in
- * canonical union order so a meaningless Set-order flip cannot re-fingerprint the block. */
+/** Declared capabilities, which `shell`'s description points at, in canonical order: a Set-order flip cannot
+ *  re-fingerprint the block. */
 function executorCapabilitySuffix(exec: PromptExecutorInfo): string {
   const declared = new Set(exec.capabilities ?? []);
   const ordered = EXECUTOR_CAPABILITIES.filter((capability) => declared.has(capability));
@@ -276,8 +266,7 @@ function renderExecutionLegend(executors: readonly PromptExecutorInfo[]): string
     : [];
 }
 
-/** Unknowns must not read like measured absences (a machine may be attached for its GPU,
- * which PATH cannot establish). Canonical union order. */
+/** Unknowns never read as measured absences (a GPU is beyond what PATH shows). Canonical union order. */
 function executorUnmeasuredSuffix(exec: PromptExecutorInfo): string {
   const unmeasured = new Set(exec.unmeasuredCapabilities ?? []);
   const ordered = EXECUTOR_CAPABILITIES.filter((capability) => unmeasured.has(capability));
@@ -322,8 +311,8 @@ function executorSandboxSuffix(exec: PromptExecutorInfo): string {
   }
 }
 
-/** Live devices add mount, grant, run mode and toolchain. Nothing clock- or
- * order-derived (`probedAt` never renders); the mount segment is the file plane's own routing. */
+/** Live devices add mount, grant, run mode and toolchain; nothing clock- or order-derived (`probedAt`). The
+ *  mount segment is the file plane's own routing. */
 function renderDeviceLine(device: DeviceFleetEntry, fleet: readonly DeviceFleetEntry[]): string {
   const platform = device.os ? ` (${device.os})` : '';
 
@@ -501,19 +490,25 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, s
   return sections;
 }
 
-function dynamicBlock(sections: readonly string[], kind: 'full' | 'delta' = 'full'): string | null {
+function dynamicBody(sections: readonly string[]): string | null {
   if (sections.length === 0) return null;
 
-  const body = sealDelimiters(
+  return sealDelimiters(
     [DYNAMIC_CONTEXT_HEADER, ...sections].join('\n\n'),
     DYNAMIC_CONTEXT_DELIMITER, 'dynamic_context',
   );
+}
 
-  return `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="${fnv1a64(body)}" kind="${kind}">\n${body}\n</dynamic_context>`;
+function dynamicBlock(body: string, established: { readonly kind: 'full' } | { readonly kind: 'delta'; readonly state: string }): string {
+  const state = established.kind === 'delta' ? ` state="${established.state}"` : '';
+
+  return `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="${fnv1a64(body)}" kind="${established.kind}"${state}>\n${body}\n</dynamic_context>`;
 }
 
 export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
-  return dynamicBlock([...renderDynamicSections(ctx).values()]);
+  const body = dynamicBody([...renderDynamicSections(ctx).values()]);
+
+  return body === null ? null : dynamicBlock(body, { kind: 'full' });
 }
 
 function executorDetails(exec: PromptExecutorInfo) {
@@ -547,24 +542,26 @@ function executionDelta(before: readonly PromptExecutorInfo[], after: readonly P
   return [...changes, ...renderExecutionLegend(changedExecutors)].join('\n');
 }
 
-function dynamicDelta(previousState: Readonly<DynamicContext>, currentState: Readonly<DynamicContext>): string | null {
-  const previous = renderDynamicSections(previousState);
-  const current = renderDynamicSections(currentState);
+interface ToldSections {
+  readonly sections: ReadonlyMap<keyof DynamicContext, string>;
+  readonly executors: readonly PromptExecutorInfo[];
+}
+
+function deltaSections(previous: ToldSections, current: ToldSections): string[] {
   const changed: string[] = [];
 
-  for (const [key, section] of current) {
-    const before = previous.get(key);
+  for (const [key, section] of current.sections) {
+    const before = previous.sections.get(key);
 
     if (before === section) continue;
-    changed.push(key === 'executors' && before !== undefined
-      ? executionDelta(previousState.executors ?? [], currentState.executors ?? []) : section);
+    changed.push(key === 'executors' && before !== undefined ? executionDelta(previous.executors, current.executors) : section);
   }
 
-  for (const key of previous.keys()) {
-    if (!current.has(key)) changed.push(`${DYNAMIC_SECTION_TITLES[key]}\nCleared: no current entries.`);
+  for (const key of previous.sections.keys()) {
+    if (!current.sections.has(key)) changed.push(`${DYNAMIC_SECTION_TITLES[key]}\nCleared: no current entries.`);
   }
 
-  return dynamicBlock(changed, 'delta');
+  return changed;
 }
 
 function renderWorkMode(mode: NonNullable<DynamicContext['mode']>): string {
@@ -595,16 +592,16 @@ export function renderTurnLocalContext(ctx: TurnLocalContext): string | null {
   return [TURN_CONTEXT_HEADER, ...sections].join('\n\n');
 }
 
-/** For this turn only: never persisted, and placed after the transformContext seam so compaction plugins never
- *  see it, right before the turn's input ({@link turnInputStart}). */
+/** This turn's only, never persisted: placed after the transformContext seam, out of compaction's sight, right
+ *  before the turn's input ({@link turnInputStart}). */
 export function turnLocalContextMessage(ctx: TurnLocalContext): ModelMessage | null {
   const text = renderTurnLocalContext(ctx);
 
   return text ? { role: 'user', content: text } : null;
 }
 
-/** Where the turn's input sits: its last message when a person or a parent wrote it, else the end. Only the last:
- *  a user message before it can be a parent's conversation a hired child inherited, whose prefix stays intact. */
+/** The turn's input: its last message when a person or a parent wrote it, else the end. Only the last, as an
+ *  earlier user message can be a parent's conversation a hire inherited, whose prefix stays intact. */
 export function turnInputStart(messages: ReadonlyArray<ModelMessage>): number {
   return messages.at(-1)?.role === 'user' ? messages.length - 1 : messages.length;
 }
@@ -623,8 +620,7 @@ export function placeTurnLocal(messages: ReadonlyArray<ModelMessage>, placement:
 }
 
 interface LedgerBlock {
-  /** Un-woven position at birth: before the turn's input at a turn's first step, the tail after that. The block
-     *  renders there forever, except where that slot has since become a tool result ({@link insertionPoint}). */
+  /** Un-woven position at birth, kept forever; a slot since taken by a tool result renders after it. */
   readonly index: number;
   readonly text: string;
   /** Chars/4 cost, priced once at birth for the step pruner and `dropSuperseded`. */
@@ -632,12 +628,8 @@ interface LedgerBlock {
   readonly message: ModelMessage;
 }
 
-/**
- * First legal insertion position at or after `index`: steps over consecutive
- * `tool` messages, since nothing may sit between a call and its results
- * (`AI_MissingToolResultsError`). A frozen index can land inside such a pair on
- * a later turn. `settleUnpairedToolCalls` cannot cover this: it runs at assembly.
- */
+/** Past consecutive `tool` messages, where a frozen index can land on a later turn: nothing may sit between a
+ *  call and its results (`AI_MissingToolResultsError`), and `settleUnpairedToolCalls` runs only at assembly. */
 function insertionPoint(history: ReadonlyArray<ModelMessage>, index: number): number {
   let at = index;
 
@@ -646,16 +638,48 @@ function insertionPoint(history: ReadonlyArray<ModelMessage>, index: number): nu
   return at;
 }
 
+/** Rides right before `before`, else right after `after`. */
+export interface StoredDynamicBlock {
+  readonly text: string;
+  readonly before: ModelMessage | null;
+  readonly after: ModelMessage | null;
+}
+
+/** Stored before its request leaves, before `before` (null: at the end); `replaces` every stored block. */
+export interface DynamicBlockBirth {
+  readonly text: string;
+  readonly before: ModelMessage | null;
+  readonly replaces: boolean;
+}
+
+const BLOCK_TAG = new RegExp(`^${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="([^"]*)" kind="(full|delta)"(?: state="([^"]*)")?>`, 'u');
+
+function blockTag(text: string): { readonly kind: 'full' | 'delta'; readonly state: string } | null {
+  const match = BLOCK_TAG.exec(text);
+
+  if (match === null) return null;
+  const [, fingerprint = '', kind, state = ''] = match;
+
+  return kind === 'full' ? { kind, state: fingerprint } : { kind: 'delta', state };
+}
+
 /**
- * Per-activation ledger of dynamic-context blocks. `weave` adds a block only
- * when the render changed and re-inserts every frozen block at its position.
- * `history` must never include this ledger's blocks or the turn-local messages,
- * so positions stay those of durable history. Call `reset()` whenever the
- * durable stream is rewritten (compaction).
+ * `weave` adds a block only when the render changed and re-inserts every frozen block at its position. `history`
+ * never includes the blocks or turn-local messages, so positions are durable history's. `reset()` when the durable
+ * stream is rewritten (compaction) or the provider's cache expired: the next block starts the ledger over.
  */
 export class DynamicContextLedger {
   private blocks: LedgerBlock[] = [];
-  private currentState: Readonly<DynamicContext> | null = null;
+  /** The state the model holds (a delta's `state`); sections once rendered here. */
+  private told: { readonly state: string; readonly sections: ToldSections | null } | null = null;
+  private stored: readonly StoredDynamicBlock[] | null = null;
+  private loaded: boolean;
+  private unresolved: { readonly block: LedgerBlock; readonly replaces: boolean }[] = [];
+  private births: DynamicBlockBirth[] = [];
+
+  constructor(private readonly durable = false) {
+    this.loaded = !durable;
+  }
 
   get size(): number {
     return this.blocks.length;
@@ -667,29 +691,53 @@ export class DynamicContextLedger {
 
     for (const block of this.blocks) tokens += block.tokens;
 
+    for (const block of this.stored ?? []) tokens += Math.round(block.text.length / 4);
+
     return tokens;
   }
 
-  /**
-   * Collapse the base and its deltas into one fresh full block at the newest
-   * position; the only removal of frozen blocks. Breaks the prefix cache, so only
-   * a caller already over the ladder's trigger may call it. Returns tokens freed
-   * (chars/4).
-   */
+  adopt(blocks: readonly StoredDynamicBlock[]): void {
+    if (this.loaded) return;
+    this.loaded = true;
+    this.stored = blocks;
+  }
+
+  unload(): void {
+    this.reset();
+    this.loaded = !this.durable;
+  }
+
+  takeBirths(): readonly DynamicBlockBirth[] {
+    const births = this.births;
+    this.births = [];
+
+    return births;
+  }
+
+  /** One full block at the newest position replaces the rest, breaking the prefix cache: only for a caller over the
+   *  ladder's trigger. Returns tokens freed (chars/4). */
   dropSuperseded(): number {
     if (this.blocks.length <= 1) return 0;
     const newest = this.blocks.at(-1);
+    const sections = this.told?.sections ?? null;
 
-    if (newest === undefined || this.currentState === null) return 0;
+    if (newest === undefined || sections === null) return 0;
     const before = this.overheadTokens;
-    const full = renderDynamicContextBlock(this.currentState);
-    this.blocks = full === null ? [] : [this.block(newest.index, full)];
+    const body = dynamicBody([...sections.sections.values()]);
+    this.blocks = body === null ? [] : [this.born(newest.index, dynamicBlock(body, { kind: 'full' }), true)];
 
     return before - this.overheadTokens;
   }
 
   /** `turnLocal` rides right before the turn's input, after any block born there. */
   weave(history: ReadonlyArray<ModelMessage>, state: DynamicContext, turnLocal?: TurnLocalPlacement): ModelMessage[] {
+    if (this.stored !== null) {
+      this.blocks = this.place(this.stored, history);
+      const newest = this.blocks.at(-1);
+      this.told = newest === undefined ? null : { state: blockTag(newest.text)?.state ?? '', sections: null };
+      this.stored = null;
+    }
+
     let previousIndex = -1;
 
     for (const block of this.blocks) {
@@ -703,18 +751,21 @@ export class DynamicContextLedger {
     }
 
     const current = Object.freeze(structuredClone(state));
-    const previous = this.currentState;
-    const full = renderDynamicContextBlock(current);
-    const previousFull = previous === null ? null : renderDynamicContextBlock(previous);
+    const rendered: ToldSections = { sections: renderDynamicSections(current), executors: current.executors ?? [] };
+    const body = dynamicBody([...rendered.sections.values()]);
+    const established = fnv1a64(body ?? '');
 
-    if (full !== previousFull) {
-      const text = this.blocks.length === 0 ? full : dynamicDelta(previous ?? {}, current);
+    if (established !== (this.told?.state ?? fnv1a64(''))) {
+      const text = this.statement(rendered, body, established);
       const birth = turnLocal?.firstStep === true ? Math.min(turnLocal.at, history.length) : turnInputStart(history);
 
-      if (text !== null) this.blocks.push(this.block(birth, text));
+      if (text !== null) this.blocks.push(this.born(birth, text, this.blocks.length === 0));
     }
 
-    this.currentState = current;
+    this.told = { state: established, sections: rendered };
+
+    for (const { block, replaces } of this.unresolved) this.births.push({ text: block.text, before: history[block.index] ?? null, replaces });
+    this.unresolved = [];
 
     const woven: ModelMessage[] = [];
     const placeAt = turnLocal === undefined ? -1 : Math.min(turnLocal.at, history.length);
@@ -738,7 +789,43 @@ export class DynamicContextLedger {
 
   reset(): void {
     this.blocks = [];
-    this.currentState = null;
+    this.told = null;
+    this.stored = null;
+    this.unresolved = [];
+    this.births = [];
+    this.loaded = true;
+  }
+
+  private statement(rendered: ToldSections, body: string | null, established: string): string | null {
+    const known = this.blocks.length === 0 ? null : this.told?.sections ?? null;
+    const delta = known === null ? null : dynamicBody(deltaSections(known, rendered));
+
+    if (delta !== null) return dynamicBlock(delta, { kind: 'delta', state: established });
+
+    return body === null ? null : dynamicBlock(body, { kind: 'full' });
+  }
+
+  /** A neighbour a fold took places none. */
+  private place(stored: readonly StoredDynamicBlock[], history: ReadonlyArray<ModelMessage>): LedgerBlock[] {
+    const blocks: LedgerBlock[] = [];
+
+    for (const block of stored) {
+      const neighbour = block.before ?? block.after;
+      const found = neighbour === null ? 0 : history.indexOf(neighbour);
+
+      if (found < 0) return [];
+      blocks.push(this.block(block.before === null && neighbour !== null ? found + 1 : found, block.text));
+    }
+
+    return blocks;
+  }
+
+  private born(index: number, text: string, replaces: boolean): LedgerBlock {
+    const block = this.block(index, text);
+
+    if (this.durable) this.unresolved.push({ block, replaces });
+
+    return block;
   }
 
   private block(index: number, text: string): LedgerBlock {

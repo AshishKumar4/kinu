@@ -892,6 +892,7 @@ export {
   markLastToolForAnthropicCache,
   promptCacheOptions,
   promptCachePlan,
+  promptCacheWarm,
   resolvePromptCacheStrategy,
   type CacheBreakpointInput,
   type CacheBreakpointPlan,
