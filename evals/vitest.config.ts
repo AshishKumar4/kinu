@@ -15,6 +15,11 @@ export default defineConfig({
     root: fileURLToPath(new URL('..', import.meta.url)),
     include: ['evals/tasks/**/*.eval.ts'],
     environment: 'node',
+    // Bun already gives an external module its own exports, a CommonJS one included, and vitest's default-export
+    // interop misreads them there: a Bun module namespace answers `'__esModule' in ns`, so a package whose default
+    // export is a namespace is swapped for that namespace. zod's `export default z` made `import { z } from 'zod'`
+    // undefined in every suite that reached core (2026-09-25; vitest 4.1.11, bun 1.4.0).
+    deps: { interopDefault: false },
     setupFiles: ['./scripts/test-preload-vitest.ts'],
     // A trial ends when the deployment says its turns ended; nothing here races the agent's work.
     testTimeout: 0,
