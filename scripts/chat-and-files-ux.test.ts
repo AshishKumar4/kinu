@@ -30,6 +30,7 @@ import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
 import { diagnosticsSettled, recordDiagnostics, withGallery, type Gallery } from './gallery-harness';
+import { until } from './product-flows';
 import { codenameFor, parseJsonArray, parseJsonValue, redactPayload, type JsonValue } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 import { PRIMARY_NAV } from '../packages/cf-backend/src/components/nav';
@@ -1355,6 +1356,35 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.waitForFunction(() => (
         (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Payments triage')
       ));
+      await page.close();
+    });
+  });
+
+  test('a rename the workspace refused says why, and a flows wait for the field to close ends on it', async () => {
+    // Deployed, agent-return waited 15 minutes for the field to close beside a refusal it could not read (2026-09-24).
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&renameFails=1`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('nav[aria-label="Workspace agents"]');
+      await page.click('[aria-label="New agent"]');
+      await waitForNewAgentOpen(page);
+      await page.click('[title="Rename agent"]');
+      await page.waitForSelector('[aria-label="Agent name"]');
+      await page.type('[aria-label="Agent name"]', 'Payments triage');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => (document.querySelector('form')?.textContent ?? '').includes('Connection closed'));
+
+      // agent-return's wait, counting its polls: two polls that read the refusal and did not end mean it never will.
+      const closed = until(page, 'the name field to close',
+        '(window.__polls = (window.__polls ?? 0) + 1, document.querySelector(\'input[aria-label="Agent name"]\') === null)');
+
+      const from = Number(await page.evaluate('window.__polls ?? 0'));
+
+      await Promise.race([page.waitForFunction(`window.__polls >= ${String(from + 2)}`), Promise.allSettled([closed])]);
+      await page.click('[aria-label="Cancel rename"]');
+      await expect(closed).rejects.toThrow('waiting for the name field to close, the page showed a notice: Connection closed');
       await page.close();
     });
   });

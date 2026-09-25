@@ -218,7 +218,7 @@ export function InlineRenameTitle({ title, editValue, onRename, subject, textCla
           className="rounded-sm p-1 p-text-3 hover:p-text"
           aria-label="Cancel rename"
         ><PencilSimpleIcon size={13} style={{ transform: "scaleX(-1)" }} /></button>
-        {error && <span className="text-[10px] p-danger">{error}</span>}
+        {error && <span data-failure className="text-[10px] p-danger">{error}</span>}
       </form>
     );
   }

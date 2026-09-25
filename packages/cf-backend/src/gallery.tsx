@@ -1291,6 +1291,9 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
 /* `?createFails=1`: the first create rejects with a two-frame cause chain; the second succeeds. */
 const CREATE_FAILS = new URLSearchParams(location.search).get("createFails") === "1";
 
+/* `?renameFails=1`: every rename rejects as a call whose socket closed under it does. */
+const RENAME_FAILS = new URLSearchParams(location.search).get("renameFails") === "1";
+
 let createRefused = false;
 
 function maybeRefuseCreate(): void {
@@ -1551,6 +1554,8 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
   if (method === "renameSubordinateAgent") {
     const [name, displayName] = v.parse(v.tuple([v.string(), v.string()]), args);
     const entry = GALLERY_SUBS.find((sub) => sub.name === name);
+
+    if (RENAME_FAILS) throw new Error("Connection closed");
 
     if (!entry) throw new Error(`gallery: no subordinate "${name}"`);
     entry.displayName = displayName;
