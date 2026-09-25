@@ -223,6 +223,20 @@ function ToolActivityCard({ rows, callPreviewWidth, resultPreviewWidth, expanded
   );
 }
 
+/** Kept until the content changes: 10 MB of bare ESC took 1 s to sanitize per render (2026-09-25). */
+const drawn = new WeakMap<DisplayMessage, { readonly source: string; readonly text: string }>();
+
+/** Text a model or a tool wrote reaches the terminal as text, never as its commands. */
+function terminalContent(message: DisplayMessage): string {
+  const held = drawn.get(message);
+
+  if (held?.source === message.content) return held.text;
+  const text = terminalText(message.content);
+  drawn.set(message, { source: message.content, text });
+
+  return text;
+}
+
 function ToolCallRow({ toolName, args, previewWidth }: { toolName: string; args?: string; previewWidth: number }) {
   const { well } = useTuiTheme().colors;
   const preview = args ? clipText(terminalText(args).replace(/\s+/g, ' '), previewWidth) : '';
@@ -251,7 +265,7 @@ function ToolResultRow({ message, call, previewWidth, expanded }: {
   }
 
   const { success } = message;
-  const content = terminalText(message.content);
+  const content = terminalContent(message);
   const lines = expanded ? content.split('\n').slice(0, EXPANDED_RESULT_LINES) : [clipText(content.replace(/\s+/g, ' '), previewWidth)];
 
   return (
@@ -397,8 +411,7 @@ export function MessageList({ messages, toolDetailsExpanded = false }: {
 
         if (message.status) return <StatusView key={message.id} status={message.status} />;
 
-        // Text a model, a tool or a pasted terminal wrote reaches the terminal only as text, never as its commands.
-        const content = terminalText(message.content);
+        const content = terminalContent(message);
 
         switch (message.role) {
           case 'user':

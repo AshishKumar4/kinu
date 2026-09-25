@@ -153,6 +153,11 @@ function controlPicture(control: string): string {
   return code < 0x20 ? String.fromCharCode(0x2400 + code) : '\ufffd';
 }
 
+/** A newline and a tab lay text out; any other control is drawn as its picture. */
+function visible(control: string): string {
+  return control === '\n' || control === '\t' ? control : controlPicture(control);
+}
+
 /**
  * Text another program wrote, as a terminal can show it without obeying it: escapes dropped, a carriage return
  * leaving the line's last overwrite, and any other control character drawn as its picture.
@@ -162,7 +167,15 @@ export function terminalText(value: string): string {
     .split('\n')
     .map((line) => (line.includes('\r') ? line.split('\r').filter((overwrite) => overwrite !== '').at(-1) ?? '' : line))
     .join('\n')
-    .replace(CONTROL_CHARACTER, (control) => (control === '\n' || control === '\t' ? control : controlPicture(control)));
+    .replace(CONTROL_CHARACTER, visible);
+}
+
+/**
+ * Text shown so it can be approved: every control character but newline and tab drawn as its picture, an escape's
+ * bytes kept after its ␛. Nothing is dropped, so what is shown is what will run.
+ */
+export function literalText(value: string): string {
+  return value.replace(CONTROL_CHARACTER, visible);
 }
 
 /** Blank label means a pre-codename row: show the codename its slug would get (same rule as web `agentTitle`). */
