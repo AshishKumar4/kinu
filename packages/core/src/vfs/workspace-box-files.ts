@@ -58,6 +58,11 @@ export function workspaceBoxFiles(open: () => Promise<SqliteVFS>, cred: VfsCred 
         return { type: stat.type, size: stat.size, mtime: stat.mtime, mode: stat.mode };
       });
     },
+    async readlink(path) {
+      const vfs = await view();
+
+      return absentAsNull(() => vfs.readlink(path));
+    },
     async rename(from, to) { (await view()).rename(from, to); },
     async chmod(path, mode) { (await view()).chmod(path, mode); },
     async list(path) {

@@ -622,6 +622,13 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 
 			return stat && { ...stat, isSymlink: false };
 		};
+
+		// A mount with no readlink reports no link, so none is asked of it.
+		table.readlink = (path) => delegate(path, async (files, native) => {
+			if (!files.readlink) throw makeVfsError('ENOTSUP', 'this plane serves no readlink', path);
+
+			return files.readlink(native);
+		});
 	}
 
 	return table;

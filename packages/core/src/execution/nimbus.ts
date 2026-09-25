@@ -129,6 +129,8 @@ export interface NimbusSandboxFiles {
     /** Native stat (SDK ≥0.2.0). `mtime` is in milliseconds; null when absent. No revision field. */
     stat?(path: string): Promise<{ type: string; size: number; mtime: number } | null>;
     lstat?(path: string): Promise<{ type: string; size: number; mtime: number; mode?: number } | null>;
+    /** A link's target text; null when the path is absent. */
+    readlink?(path: string): Promise<string | null>;
     rename?(from: string, to: string): Promise<void>;
     chmod?(path: string, mode: number): Promise<void>;
     exists(path: string): Promise<boolean>;
@@ -663,6 +665,7 @@ function asCred(cred: VfsCred | undefined): { cred: VfsCred } | Record<string, n
 
 export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VFS & {
   lstat(path: string): Promise<VfsLinkStat | null>;
+  readlink(path: string): Promise<string>;
   removeRecursive(path: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
 } & Pick<VfsNativeReads, 'readRange'> {
@@ -727,6 +730,24 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
       const type = kind.join(' ');
 
       return { size: Number(size), mtimeMs: Number(seconds) * 1_000, isDir: type === 'directory', isSymlink: type === 'symbolic link' };
+    },
+    async readlink(path) {
+      const absolute = workspacePath(path);
+
+      if (files.readlink) {
+        const target = await atVfsPath(absolute, 'readlink', () => files.readlink?.(absolute) ?? null);
+
+        if (target === null) throw makeVfsError('ENOENT', `no such file or directory, readlink '${absolute}'`, absolute);
+
+        return target;
+      }
+
+      // Like the `stat` fallback, a failed readlink reads as an absent link; its stderr says why.
+      const r = await box.exec(`readlink -- ${shellQuote(absolute)}`, asCred(cred));
+
+      if (!r.success || r.exitCode !== 0) throw makeVfsError('ENOENT', `readlink '${absolute}': ${r.stderr.trim()}`, absolute);
+
+      return r.stdout.replace(/\n$/, '');
     },
     async stat(path) {
       if (files.stat) {

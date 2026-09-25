@@ -715,12 +715,15 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   slates, and nothing else: `/usr`, `/tmp`, mounted drives (`/pc`, `/shared`, `/sandbox`, `/context`) and the
   platform's own state stay out. So do hidden files and folders, any name starting with `.` (`.env`, `.bashrc`,
   `.config/`, `.git/`), and installed dependencies (`node_modules`, `venv`, `__pycache__`). A symbolic link is
-  not followed: its target's files are listed where they live, or not at all.
+  listed as itself, its target as its text, and never followed: its target's files are listed where they live, or
+  not at all.
 
 - **Changes for a PC or the sandbox shows every repository in its folder.** It showed only the git repository that
-  held the working folder, so a folder of projects read "not a git repository". Now every repository up to three
-  folders below it is listed, nested ones included, each as a folder of the list with its uncommitted changes,
-  untracked files included and `.gitignore` honoured. Hidden folders and `node_modules` are not searched.
+  held the working folder, so a folder of projects read "not a git repository". Now the repository holding the
+  folder and every repository up to three folders below it are listed, nested ones included, each as a folder of
+  the list with its uncommitted changes, untracked files included and `.gitignore` honoured. Hidden folders and
+  `node_modules` are not searched. A file or folder name with a space, a quote, a newline or a non-ASCII letter is
+  shown as it is on disk.
 
 - **Long conversations no longer slow down turn by turn.** Each turn re-read the conversation's whole membership
   list several times, so a turn's database reads grew with the conversation (14,432 rows at 300 turns). A turn now
