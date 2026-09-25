@@ -154,6 +154,7 @@ import {
   acceptRosterSocket, isRosterSocket, rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame, unreportedWorkspaces,
   ROSTER_SOCKET_PATH, type RosterPage, type RosterQuery,
 } from './roster';
+import { deletePictures, picturePrefix } from '../slates/pictures';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
@@ -1250,6 +1251,7 @@ export class UserDO extends Agent<Env> {
       if (!(err instanceof Error) || err.message !== 'destroyed') throw err;
     }
 
+    if (this.env.SLATE_PICTURES !== undefined) await deletePictures(this.env.SLATE_PICTURES, picturePrefix(name));
     this.sqlx(`DELETE FROM user_workspaces WHERE name = ?`, name);
     this.sqlx(`DELETE FROM workspace_overviews WHERE name = ?`, name);
     this.sqlx(`DELETE FROM workspace_overview_nudges WHERE name = ?`, name);

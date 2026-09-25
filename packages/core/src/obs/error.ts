@@ -144,6 +144,7 @@ const CODE_BY_ERROR_NAME = new Map<string, ErrorCode>([
 const CODE_BY_REMOTE_NAME = new Map<string, ErrorCode>([...CODE_BY_ERROR_NAME, ['ValiError', 'bad_input']]);
 
 /** A DO's RPC rethrows a custom error as a `remote` Error named in its message. */
+// As trustworthy as the thrower: a slate facet or codemode guest can forge the name. A label, never an authorization.
 function codeByName(caught: Error): ErrorCode | undefined {
   const remote = 'remote' in caught && caught.remote === true && caught.name === 'Error';
   const named = remote ? /^([A-Z][A-Za-z]*Error): /u.exec(caught.message)?.[1] : undefined;

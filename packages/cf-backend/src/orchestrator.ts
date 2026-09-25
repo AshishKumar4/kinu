@@ -34,6 +34,7 @@ import type { ChatWire } from './chat-transport';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
+import { browserCamera, deletePictures, initSlatePictureTable, picturePrefix, SlatePictures, type PictureCapture } from "./slates/pictures";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
 import {
@@ -387,9 +388,44 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       ensureSlate: (owner) => this.slates.ensureDurable(owner),
       slateInvocation: (port, socket) => this.slates.slateInvocation(port, socket),
+      ...(this.pictureCapture() !== null && {
+        pictures: {
+          captures: (port, handle) => this.pictures.captures(port, handle, Date.now()),
+          rendered: (slate, port) => {
+            this.pictures.rendered(slate, port, Date.now());
+            this.armDurableWake();
+          },
+        },
+      }),
     });
 
     return this._workspace;
+  }
+
+  private _pictures: SlatePictures | undefined;
+
+  private get pictures(): SlatePictures {
+    this._pictures ??= new SlatePictures(this.ctx.storage.sql);
+
+    return this._pictures;
+  }
+
+  private pictureCapture(): PictureCapture | null {
+    const { BROWSER: browser, SLATE_PICTURES: bucket } = this.env;
+
+    if (browser === undefined || bucket === undefined) return null;
+
+    return {
+      workspace: this.name, bucket,
+      url: async (port, token) => (await nimbusPreviewUrl(this.env, this.name, port, token)).url ?? null,
+      camera: () => browserCamera(browser),
+    };
+  }
+
+  private async forgetPicture(slate: string): Promise<void> {
+    this.pictures.forget(slate);
+
+    if (this.env.SLATE_PICTURES !== undefined) await deletePictures(this.env.SLATE_PICTURES, picturePrefix(this.name, slate));
   }
 
   protected workspaceBox(shellId: string): NimbusSandboxHandle {
@@ -1360,6 +1396,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Sleep-time triggers (phase `alarm.sleep_time`); answers only while an unprocessed turn is recorded,
       // and the phase releases that record whenever it refuses.
       this.nextSleepTimeWakeAt(),
+      this.pictureCapture() === null ? null : this.pictures.nextDueAt(),
     );
   }
 
@@ -2630,6 +2667,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
     initWorkspaceBaselineTable(execRaw);
     initChangeNotesTable(execRaw);
+    initSlatePictureTable(execRaw);
     initWorkspaceActorTable(execRaw);
 
     // Planes only this root carries (declared in core/conformance/manifest.ts).
@@ -2999,6 +3037,24 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
           span.fail(failure);
           diagnostics.failure('memory.sleep_time_wake_failed', failure);
+        }
+      });
+
+      await tick.span('alarm.slate_pictures', async (span) => {
+        const capture = this.pictureCapture();
+
+        if (capture === null) return;
+
+        try {
+          const changed = await this.pictures.captureDue(capture, now);
+          span.setAttribute('kinu.pictures_changed', changed);
+
+          if (changed) this.overviewChanged();
+        } catch (err) {
+          const failure = toKinuError({ doing: 'photographing the slates due a picture', cause: err, otherwise: 'unavailable' });
+
+          span.fail(failure);
+          diagnostics.failure('slate.pictures_failed', failure);
         }
       });
 
@@ -4051,6 +4107,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       kv: this.env.AUTH_KV,
       budget: () => this.budget,
       ownerTitle: async () => this.safeDisplayName(),
+      forgetPicture: (slate) => this.forgetPicture(slate),
     });
 
     return this._slates;
@@ -4425,6 +4482,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       .some((reference) => this.actorHost().hosted(reference)?.session.inFlight === true);
 
     const header = this.eventRecorder.latestRunHeader();
+    const pictures = this.pictures.digests();
 
     return buildWorkspaceOverview({
       // A settled turn's leftovers still closing are its work, not a durable leftover.
@@ -4435,7 +4493,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       activePlan,
       scaffoldAutoApply: this.config.getAutoPromoteScaffold(),
       latestRun: header === null ? null : { status: header.status, task: header.userMessage },
-      slates: listing.slates.map((slate) => ({ id: slate.id, title: slate.title, picture: null })),
+      slates: listing.slates.map((slate) => ({ id: slate.id, title: slate.title, picture: pictures.get(slate.id) ?? null })),
     });
   }
 

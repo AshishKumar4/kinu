@@ -1,7 +1,8 @@
 /** One workspace on the roster, drawn from the tile its entry carries: the card reads nothing of its own. */
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { rosterHeadline, shortAge, workspaceDisplayTitle, type WorkspaceOverview, type WorkspaceStatus } from "@kinu.run/core";
-import type { RosterEntry } from "@/lib/user-api";
+import { pictureUrl, type RosterEntry } from "@/lib/user-api";
 import { coverBadge, coverLetter, coverWash, hueOf } from "@/components/ui/cover";
 
 interface StatusTone {
@@ -55,6 +56,8 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
   const title = workspaceDisplayTitle(workspace);
   const mission = missionOf(overview, title);
   const age = shortAge(workspace.lastVisited);
+  const pictured = overview?.slates.find((slate) => slate.picture !== null);
+  const [pictureFailed, setPictureFailed] = useState(false);
 
   if (variant === 'line') {
     return (
@@ -78,15 +81,28 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
       to={`/workspace/${workspace.name}`}
       className="p-card flex min-h-[150px] flex-col overflow-hidden transition-colors hover:p-elevated"
     >
-      <span className="flex h-14 items-end px-4 pb-2" style={coverWash(hue)}>
-        <span
-          className="flex size-8 items-center justify-center rounded-lg text-sm font-semibold"
-          style={coverBadge(hue)}
-          aria-hidden="true"
-        >
-          {coverLetter(title)}
+      {pictured?.picture != null && !pictureFailed ? (
+        <span data-slate-picture className="block aspect-[16/10] w-full overflow-hidden border-b p-border">
+          <img
+            src={pictureUrl(workspace.name, pictured.id, pictured.picture)}
+            alt={pictured.title}
+            loading="lazy"
+            decoding="async"
+            onError={() => setPictureFailed(true)}
+            className="size-full object-cover object-top"
+          />
         </span>
-      </span>
+      ) : (
+        <span className="flex h-14 items-end px-4 pb-2" style={coverWash(hue)}>
+          <span
+            className="flex size-8 items-center justify-center rounded-lg text-sm font-semibold"
+            style={coverBadge(hue)}
+            aria-hidden="true"
+          >
+            {coverLetter(title)}
+          </span>
+        </span>
+      )}
       <span className="flex min-h-0 flex-1 flex-col px-4 pb-3 pt-2.5">
         <span className="truncate p-row-text font-medium p-text">{title}</span>
         <span className="mt-1"><StatusChip workspace={workspace} /></span>

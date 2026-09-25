@@ -4,7 +4,7 @@
 import * as v from 'valibot';
 
 const BINDING_KINDS = [
-  'kv', 'r2', 'vectorize', 'durable-object', 'analytics-engine', 'ai', 'assets',
+  'kv', 'r2', 'vectorize', 'durable-object', 'analytics-engine', 'ai', 'browser', 'assets',
   'version-metadata', 'send-email', 'worker-loader', 'container',
 ] as const;
 

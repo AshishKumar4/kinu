@@ -52,7 +52,6 @@ function boundListing(path: string, entries: readonly string[]): JsonValue {
 export interface FileToolDeps {
   /** The agent's canonical workspace filesystem (rt.storage.vfs). */
   vfs: VFS;
-  /** The turn's read/edit ledger. */
   ledger: TurnFileLedger;
   /** The turn-cumulative bulk budget; a file read counts as bulk. */
   budget: TurnContextBudget;

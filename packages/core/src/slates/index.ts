@@ -5,7 +5,7 @@ export { WorkspaceSlateContentStore, type SlateContentFiles } from './content';
 
 export { SqliteSlateInvocations, type SlateInvocationAuthority } from './invocations';
 
-export { forgetSlateFiles, SlateFiles, slateDirectory } from './files';
+export { forgetSlateFiles, SlateDirectoryName, SlateFiles, slateDirectory } from './files';
 
 export { WorkspaceSlates, type WorkspaceSlatesDeps } from './runtime';
 

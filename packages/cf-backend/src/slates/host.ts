@@ -47,6 +47,7 @@ export interface SlateHostDeps extends ResidentSlateDeps {
   /** Debits the per-share per-day spend label; absent means no spend bound. */
   budget?(): MissionGovernor;
   ownerTitle?(): Promise<string>;
+  forgetPicture?(slate: string): Promise<void>;
 }
 
 interface ViewerAdmission {
@@ -603,6 +604,7 @@ export class SlateHost {
         if (vfs.exists(root)) vfs.removeRecursive(root);
         forgetSlateFiles(this.deps.ctx.storage.sql, new SlateId(id));
       });
+      await this.deps.forgetPicture?.(id);
 
       return { ok: true, value: { id, removed: removed.removed, port: removed.port } };
     } catch (cause) {

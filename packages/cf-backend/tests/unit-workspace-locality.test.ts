@@ -410,6 +410,63 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     (await workspace.facetManager()).manager.kill(pid);
   });
 
+  test('a page a person loads counts as a render of its slate; a capture\'s own load never does', async () => {
+    const actor = actorObject();
+    const capability = 'abcdef0123456789abcdef01';
+    const kv = new Map<string, JsonValue>();
+    Object.assign(actor.ctx.storage, durableStorage(kv));
+    const renders: string[] = [];
+
+    const workspace = createHostedWorkspace({
+      ctx: actor.ctx, env: workspaceBindings(),
+      previewUrl: async () => ({ url: 'https://preview.test/' }),
+      ensureSlate: async () => null,
+      pictures: {
+        captures: (_port, handle) => handle === 'cafe012345',
+        rendered: (slate, port) => { renders.push(`${slate}:${String(port)}`); },
+      },
+    });
+
+    const owner = await derivedOwner(workspace, ['a']);
+    kv.set('nimbus_preview_capability:3000', { capability, owner });
+
+    const pid = await listen(workspace, 3000, ['a'], {
+      handleHttpRequest: async (request) => new URL(request.url).pathname === '/'
+        ? new Response('<p>board</p>', { headers: { 'content-type': 'text/html; charset=utf-8' } })
+        : Response.json({ ok: true }),
+    });
+
+    const load = (handle: string, destination: string, path = '/', port = 3000) => workspace.routePreview(
+      port, handle, new Request(`https://preview.test${path}`, { headers: { 'sec-fetch-dest': destination } }), path,
+    );
+
+    expect((await load(capability.slice(0, 10), 'document')).status).toBe(200);
+    expect((await load(capability.slice(0, 10), 'iframe')).status).toBe(200);
+    // A script's fetch is not a page, and an image or a JSON answer is not a render.
+    expect((await load(capability.slice(0, 10), 'empty', '/api')).status).toBe(200);
+    expect((await load(capability.slice(0, 10), 'document', '/api')).status).toBe(200);
+    expect(renders).toEqual([`${owner}:3000`, `${owner}:3000`]);
+
+    // The capture's handle opens the page, and its load is not counted, or each picture would ask for the next.
+    expect((await load('cafe012345', 'document')).status).toBe(200);
+    expect(renders).toHaveLength(2);
+    expect((await load('0000000000', 'document')).status).toBe(404);
+
+    // A port no slate owns: a capture handle never opens it, and its pages make no picture.
+    const shell = 'fedcba9876543210fedcba98';
+    kv.set('nimbus_preview_capability:3001', { capability: shell, owner: await derivedOwner(workspace, ['b']), kind: 'derived' });
+
+    const shellPid = await listen(workspace, 3001, ['b'], {
+      handleHttpRequest: async () => new Response('<p>shell</p>', { headers: { 'content-type': 'text/html' } }),
+    });
+
+    expect((await load('cafe012345', 'document', '/', 3001)).status).toBe(404);
+    expect((await load(shell.slice(0, 10), 'document', '/', 3001)).status).toBe(200);
+    expect(renders).toHaveLength(2);
+
+    for (const listener of [pid, shellPid]) (await workspace.facetManager()).manager.kill(listener);
+  });
+
   test('a durable URL follows its owner across activations and never a different one', async () => {
     const actor = actorObject();
     const kv = new Map<string, JsonValue>();

@@ -22,6 +22,7 @@ import {
 } from '@kinu.run/core';
 import { makeExecRaw, makeSql } from '../../../core/tests/helpers';
 import * as v from 'valibot';
+import type { PictureBucket } from '../../src/slates/pictures';
 
 mockAgentsSdk();
 
@@ -157,6 +158,8 @@ export interface TestUserDOOptions {
   mcpAppCredentials?: readonly string[];
   /** How a workspace answers the owner's ask for its first tile; absent, the ask is only recorded. */
   overviewNudge?: (name: string) => Promise<void>;
+  /** The slate-picture bucket; absent, a teardown has no pictures to delete. */
+  slatePictures?: PictureBucket;
 }
 
 export interface FakeDaemon {
@@ -215,6 +218,7 @@ function servedAsset(pathname: string, build: TestUserDOOptions['servedBuild']):
 
 interface TestUserEnvironment {
   CREDENTIAL_ENCRYPTION_KEY: string;
+  SLATE_PICTURES?: PictureBucket;
   CLI_PUBLIC_ORIGIN?: string;
   ASSETS?: { fetch(input: Request): Promise<Response> };
   CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
@@ -462,6 +466,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     CREDENTIAL_ENCRYPTION_KEY: options.credentialEncryptionKey ?? TEST_CREDENTIAL_ENCRYPTION_KEY,
     CLI_PUBLIC_ORIGIN: 'https://kinu.example.com',
     ASSETS: { fetch: async (input: Request) => servedAsset(new URL(input.url).pathname, options.servedBuild) },
+    SLATE_PICTURES: options.slatePictures,
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (name: string) => ({

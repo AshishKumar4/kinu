@@ -24,7 +24,6 @@ export function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-/** Lowercase-hex HMAC-SHA256 of `message` under `secret`. */
 export async function hmacSha256Hex(secret: string, message: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
