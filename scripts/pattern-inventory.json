@@ -1131,7 +1131,7 @@
       "file": "scripts/syntax.ts",
       "kind": "hand-parser",
       "owner": "parse",
-      "sourceSha256": "2d672ba9b500d507ec45ca4bcee0f9ec0f927288855e757cda4ca4b51ab19a41",
+      "sourceSha256": "1b3d473d320f0f0d72a97d6eb491e90e4b101d791c404ad5089b2aa646a17ac3",
       "decision": "traversal"
     },
     {
