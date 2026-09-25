@@ -408,9 +408,9 @@ export class Inbox implements AgentInbox {
   }
 
   /**
-   * Turn over: everything that did not reach the model re-delivers (users first, as one user-origin turn);
-   * an aborted turn also requeues its absorbed events. Call exactly once per turn, before anything that can
-   * throw. Re-delivery is detached so a turn never blocks on the next one's queue slot.
+   * Turn over: everything that did not reach the model re-delivers (users as one turn the events ride); an aborted
+   * turn also requeues its absorbed events. Call exactly once per turn, before anything that can throw.
+   * Re-delivery is detached so a turn never blocks on the next one's queue slot.
    */
   settle(opts: { completed: boolean }): SettledSignals {
     const absorbed = this.absorbed;
@@ -510,16 +510,25 @@ export class Inbox implements AgentInbox {
     return attempt;
   }
 
-  /** Users as one user-origin turn, then each event as its own; detached. */
+  /** Users as one user-origin turn, its first step carrying the events that do not yield to them; with no users,
+   *  or on a closed host, each event is its own turn. */
   private redeliver(users: readonly DeliveredUserSignal[], events: readonly DeliveredSignal[]): void {
     const [first, ...rest] = users;
+    const ride = first !== undefined && this.host.closed?.() !== true;
+
+    for (const signal of events) {
+      if (!ride) {
+        void this.queue(signal).catch(reportRedeliveryFailure(signal.kind));
+      } else if (signal.yieldsToUserMessage === true) {
+        this.moveCard(signal.cardId, 'undelivered');
+      } else {
+        this.pending.push(signal);
+        this.openCard(signal, stepBody(signal));
+      }
+    }
 
     if (first !== undefined) {
       void this.queueUsers([first, ...rest], { idempotent: true }).catch(reportRedeliveryFailure(USER_MESSAGE_SIGNAL_KIND));
-    }
-
-    for (const signal of events) {
-      void this.queue(signal).catch(reportRedeliveryFailure(signal.kind));
     }
   }
 
@@ -544,7 +553,7 @@ export class Inbox implements AgentInbox {
 
       const result = await this.startTurn(() => this.host.enqueueTurn(turn));
 
-      // Operator already speaking: a consumed offer, not a failure. No compensate; card withdrawn.
+      // The operator spoke first: a consumed offer, not a failure.
       if (result.status === 'yielded') {
         this.moveCard(signal.cardId, 'undelivered');
 

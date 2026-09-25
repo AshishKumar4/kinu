@@ -1,5 +1,5 @@
-// Loop-level contract a backend fulfils beside AgentRuntime: client fan-out, programmatic turns,
-// head spawning. Only capabilities that differ per backend and have no AgentRuntime home belong here.
+// Loop-level contract a backend fulfils beside AgentRuntime. Only capabilities that differ per backend and
+// have no AgentRuntime home belong here.
 
 import type { JsonObject } from '../utils/json';
 import type { PlanReview } from './plans';
@@ -64,12 +64,15 @@ export interface BackendHost {
   /** Never throws. */
   broadcast(event: BroadcastEvent): void;
 
-  /** Only caller is the core Inbox (orchestrator/inbox.ts). */
+  /** Called by the Inbox alone. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
 
   /** Whether a turn is running, i.e. a next step exists for a signal to land on. Synchronous: the
      *  answer and buffer push must share one tick with the producer's durable bookkeeping. */
   turnInFlight(): boolean;
+
+  /** Ended: it opens no more turns. Absent on a host that never ends. */
+  closed?(): boolean;
 
   /** One-shot timer for drain debounce. Must keep the platform alive until `fn` settles and must
      *  swallow (log) its rejection. */

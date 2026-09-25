@@ -99,6 +99,14 @@ export const HttpCallSchema = v.object({
 
 export type HttpCall = v.InferOutput<typeof HttpCallSchema>;
 
+/** A queue probe's model log, and in signal mode the `run_task` answer its MCP caller got. */
+export const QueuedConversationSchema = v.object({
+  http: v.array(HttpCallSchema),
+  task: v.nullable(TurnSchema),
+});
+
+export type QueuedConversation = v.InferOutput<typeof QueuedConversationSchema>;
+
 export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin';
 
 /** A durable `pending_steers` row; `turn_id` is null when reserved before a turn opens. */

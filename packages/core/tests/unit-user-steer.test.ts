@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
+import { workspaceGenesisSignal } from '../src/identity/soul';
 import { Inbox } from '../src/orchestrator/inbox';
 import type { UserSteer } from '../src/orchestrator/inbox';
 import type {
@@ -88,6 +89,8 @@ function setup(opts: {
   onDrain?: (steers: readonly UserSteer[], atStep: number) => void | Promise<void>;
   turnId?: string | null;
   enqueue?: 'queued' | 'skipped' | 'throw';
+  /** Ended as the CLI's `ChatSession` ends: a programmatic turn is answered 'skipped', a user rerun is still queued. */
+  closed?: boolean;
 } = {}) {
   const queued: ProgrammaticTurn[] = [];
   const broadcasts: Broadcast[] = [];
@@ -104,11 +107,12 @@ function setup(opts: {
 
       if (opts.enqueue === 'throw') throw new Error('queue unavailable');
 
-      if (opts.enqueue === 'skipped') return { status: 'skipped' };
+      if (opts.enqueue === 'skipped' || (opts.closed === true && turn.origin !== 'user')) return { status: 'skipped' };
 
       return { status: 'queued' };
     },
     turnInFlight: () => opts.turnInFlight === true,
+    closed: () => opts.closed === true,
     setTimer: () => {},
   };
 
@@ -505,15 +509,107 @@ describe('Inbox — the user kind beside the event kind', () => {
     inbox.settle({ completed: false });
     await Promise.resolve();
 
-    // Users first (the absorbed user is never requeued: its row exists), then the absorbed event, then the
-    // leftover.
-    expect(queued.map((turn) => turn.text)).toEqual([
-      'typed too late', 'absorbed event', 'leftover event',
-    ]);
+    // One turn: the users' rerun (the absorbed user is never requeued, its row exists), which both events ride.
+    expect(queued.map((turn) => turn.text)).toEqual(['typed too late']);
     expect(queued[0]).toMatchObject({
       origin: 'user', steerIds: ['s2'], metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
     });
     expect(queued[0].idempotencyKey).toMatch(/^steer-rerun:.*:build:/);
+
+    inbox.beginTurn(false);
+    expect(await inbox.prepareStep(step(0, [{ role: 'user', content: 'typed too late' }]))).toEqual([
+      { role: 'user', content: 'typed too late' },
+      { role: 'user', content: 'absorbed event\n\nleftover event' },
+    ]);
+  });
+
+  test('an event left over beside users rides their rerun, however late it was bound', async () => {
+    // A drain bound while the turn ran (the alarm's tick) and one bound as the rerun opened (a send) are one
+    // turn either way: the rerun's first step carries the event.
+    const { inbox, queued } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'queued behind the turn'));
+    await inbox.send(event('bound by the tick', { stepText: 'mid-turn: bound by the tick' }));
+
+    inbox.settle({ completed: true });
+    await Promise.resolve();
+
+    expect(queued.map((turn) => ({ text: turn.text, origin: turn.origin }))).toEqual([
+      { text: 'queued behind the turn', origin: 'user' },
+    ]);
+
+    inbox.beginTurn(false);
+    expect(await inbox.prepareStep(step(0, [{ role: 'user', content: 'queued behind the turn' }]))).toEqual([
+      { role: 'user', content: 'queued behind the turn' },
+      { role: 'user', content: 'mid-turn: bound by the tick' },
+    ]);
+    expect(inbox.settle({ completed: true }).absorbed.map((signal) => signal.text)).toEqual(['bound by the tick']);
+  });
+
+  test('an offer left over beside users yields to them instead of riding their rerun', async () => {
+    // The genesis offer yields to an operator message, and the users this rerun carries spoke first: carried, its
+    // first step would tell their turn that nobody has typed anything.
+    const offer = workspaceGenesisSignal('Fix the checkout coupon bug');
+
+    if (offer === null) throw new Error('a real mission makes a genesis offer');
+    const { inbox, queued, broadcasts } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'operator words'));
+    await inbox.send(offer);
+
+    inbox.settle({ completed: true });
+    await Promise.resolve();
+
+    expect(queued.map((turn) => ({ text: turn.text, origin: turn.origin }))).toEqual([
+      { text: 'operator words', origin: 'user' },
+    ]);
+
+    // Nothing rides the rerun's first step, and its turn absorbs nothing.
+    inbox.beginTurn(false);
+    expect(await inbox.prepareStep(step(0, [{ role: 'user', content: 'operator words' }]))).toBeUndefined();
+    expect(inbox.settle({ completed: true }).absorbed).toEqual([]);
+
+    const cards = broadcasts.filter((broadcast) => broadcast.type === 'signal_card');
+    const offered = cards.find((card) => card.state === 'pending' && card.text === offer.text);
+    expect(cards.filter((card) => card.id === offered?.id).at(-1)?.state).toBe('undelivered');
+  });
+
+  test('a closed host opens no rerun, so a wake left over beside users takes its own compensation', async () => {
+    // The CLI's end() closes the chat, then aborts the turn it cut, which settles still in flight.
+    const host = { turnInFlight: true, closed: false };
+    const { inbox, queued } = setup(host);
+    const compensated: string[] = [];
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'unsent when the session ended'));
+    await inbox.send(event('job 7 finished', { kind: 'background_job', compensate: (reason) => { compensated.push(reason); } }));
+
+    host.closed = true;
+    inbox.settle({ completed: false });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(compensated).toEqual(['preempted']);
+    // The words still reach the host, whose ledger keeps them for the next start.
+    expect(queued.filter((turn) => turn.origin === 'user').map((turn) => turn.text)).toEqual(['unsent when the session ended']);
+  });
+
+  test('a rerun the host never opens strands the events that waited for it to turns of their own', async () => {
+    const host = { turnInFlight: true, enqueue: 'skipped' as const };
+    const { inbox, queued } = setup(host);
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'refused rerun'));
+    await inbox.send(event('still owed'));
+
+    // The turn is over and the host refuses the rerun: no step is coming for the event to ride.
+    host.turnInFlight = false;
+    inbox.settle({ completed: true });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(queued.map((turn) => ({ text: turn.text, origin: turn.origin }))).toEqual([
+      { text: 'refused rerun', origin: 'user' },
+      { text: 'still owed', origin: undefined },
+    ]);
   });
 
   test('an interrupt returns users only and leaves a pending event to requeue at settle', async () => {
