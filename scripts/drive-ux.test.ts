@@ -481,6 +481,29 @@ describe('the Drive', () => {
     });
   });
 
+  test('a Markdown file opens as a document: its headings stand above its text, and its lists keep their markers', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'drive&path=/projects/ops%3Ffile%3Drunbook.md', 'dark', 'desktop');
+
+      try {
+        await page.waitForSelector('[data-drive-viewer] [data-files-preview-body] li');
+
+        const read = await page.$eval('[data-drive-viewer] [data-files-preview-body]', (body) => {
+          const size = (selector: string): number => Number.parseFloat(getComputedStyle(body.querySelector(selector) ?? body).fontSize);
+
+          return {
+            headings: [size('h1'), size('h2')].every((heading) => heading > size('p')),
+            markers: [...body.querySelectorAll('ol, ul')].map((list) => getComputedStyle(list).listStyleType),
+          };
+        });
+
+        expect(read).toEqual({ headings: true, markers: ['decimal', 'disc'] });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test('a file opens in the viewer, and the Shared tab holds both directions', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'drive', 'dark', 'desktop');

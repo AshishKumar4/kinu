@@ -737,6 +737,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - **A Markdown file's tile reads as its page.** Its first heading titles the page, headings stay bold, lists keep
   a bullet, and Markdown's own marks (`#`, `-`, `**`, backticks, link targets) no longer show. A skill's tile no
   longer repeats its name as its first step.
+- **A Markdown file opens as a document.** In the file viewer, in the Drive and in a workspace's Files, a heading
+  was body-sized text and a list lost its bullets or numbers. Rendered Markdown now reads as the chat's prose
+  does: headings above the text, lists with their markers.
 - **Hired agents make slates.** Slates lived in the main agent's home, so an agent you hired could not create one
   ("can't promote to /home/main/slates/widgets (EACCES)"). They now live at `/slates`, the workspace's own
   directory. Every chat in the workspace makes, edits, previews and removes slates there as the main chat does, and
