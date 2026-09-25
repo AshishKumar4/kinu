@@ -12,6 +12,7 @@
     "no-cli-credential-flag",
     "no-copy-rpc-stub",
     "no-ddl-in-catch",
+    "no-dynamic-model-import",
     "no-elapsed-work-deadline",
     "no-empty-catch",
     "no-manufactured-sql-column",
@@ -69,6 +70,7 @@
       "require-rpc-seal",
       "require-super-alarm",
       "no-tui-colour-literal",
+      "no-dynamic-model-import",
       "require-variant-utility",
       "no-cli-credential-flag"
     ]
@@ -85,7 +87,7 @@
     },
     "index.ts": {
       "upstream": "9deed4cb455b9a6251001dc3a525d5b5e2c6ef989dd1c01e804c2edf0a697415",
-      "local": "a29e501c06b3f2ce6002c513ad9f6e95bc0fe9d7d44e300b462c10360e0f0a16",
+      "local": "b22a672eb1a856b8f5a75e092f6224a766ad6ed312b5a31098fbb42659a5af4e",
       "reason": "Registers the Kinu-local rules declared in kinuRules beside the pinned upstream rules. Upstream has no counterpart for these policy rules."
     },
     "live-tree.gate.test.ts": {
@@ -167,6 +169,12 @@
       "kinuOnly": true
     },
     "rules/no-ddl-in-catch.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-dynamic-model-import.test.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-dynamic-model-import.ts": {
       "kinuOnly": true
     },
     "rules/no-elapsed-work-deadline.test.ts": {
