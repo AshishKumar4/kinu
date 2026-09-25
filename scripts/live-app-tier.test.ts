@@ -30,7 +30,7 @@ import { SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
 
 import { DESKTOP, withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
 import {
-  CHAT_COMPOSER_LIVE, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, NEW_AGENT, OPEN_NAMES, RECORD_DEAD_ENDS,
+  CHAT_COMPOSER_LIVE, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, NEW_AGENT, OPEN_NAMES, recordDeadEnds,
   openInspector, painted, pressUntil, settled, typeIntoComposer, until, waitOn,
   type ControlAttempt,
 } from './product-flows';
@@ -68,7 +68,7 @@ async function openWorkspace(newPage: LiveApp['newPage'], origin: string, worksp
   const page = await newPage();
 
   await page.setViewport(DESKTOP);
-  await page.evaluateOnNewDocument(RECORD_DEAD_ENDS);
+  await recordDeadEnds(page);
 
   // 'load', not 'networkidle0': the app holds its event socket open from
   // first paint, so there is never a zero-connection window to wait for.
@@ -966,7 +966,7 @@ interface TurnWatch {
    *  taken, else the next it admits. It follows that turn's own id through the claim every snapshot and
    *  `turn_claim` frame the page receives carries, closes once a claim no longer names it, and settles as
    *  `afterTurn` does. A claim does not say how its turn ended; the page's own record of the error frames its
-   *  turns sent ({@link RECORD_DEAD_ENDS}) does, so a turn error recorded while this waits rejects it. */
+   *  turns sent ({@link recordDeadEnds}) does, so a turn error recorded while this waits rejects it. */
   afterClaimedTurn(): Promise<boolean>;
   stop(): Promise<void>;
 }
@@ -992,7 +992,7 @@ interface ClaimRead {
 /** The claim a workspace snapshot answer carries (`getWorkspaceSnapshot`'s `turnClaim`). */
 const SnapshotClaimSchema = v.looseObject({ turnClaim: ClaimStateSchema });
 
-/** The turn errors {@link RECORD_DEAD_ENDS} recorded on this page, oldest first. */
+/** The turn errors {@link recordDeadEnds} recorded on this page, oldest first. */
 async function turnErrors(page: Page): Promise<string[]> {
   return v.parse(v.array(v.string()), await page.evaluate('window.__turnErrors ?? []'));
 }
@@ -1144,7 +1144,7 @@ async function measureOpenedMidTurn(
 
   try {
     await page.setViewport(DESKTOP);
-    await page.evaluateOnNewDocument(RECORD_DEAD_ENDS);
+    await recordDeadEnds(page);
     await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
     await until(page, 'the workspace page', `document.querySelector('textarea') !== null`);
 
@@ -1238,7 +1238,7 @@ async function openRecorded(newPage: LiveApp['newPage'], origin: string, workspa
   const page = await newPage();
 
   await page.setViewport(DESKTOP);
-  await page.evaluateOnNewDocument(RECORD_DEAD_ENDS);
+  await recordDeadEnds(page);
   await page.evaluateOnNewDocument(RECORD_SOCKETS);
   await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
   await until(page, 'the workspace page', `document.querySelector('textarea') !== null`);

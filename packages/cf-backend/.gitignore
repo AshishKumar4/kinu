@@ -1,3 +1,4 @@
 .wrangler/
+.vite/
 .dev.vars
 dist/

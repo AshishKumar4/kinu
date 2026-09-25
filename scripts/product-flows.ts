@@ -48,7 +48,7 @@ export async function signedInPage(browser: Browser, identity: PublicWebIdentity
 
   if (Object.keys(headers).length > 0) await page.setExtraHTTPHeaders(headers);
 
-  await page.evaluateOnNewDocument(RECORD_DEAD_ENDS);
+  await recordDeadEnds(page);
 
   return page;
 }
@@ -60,7 +60,7 @@ export async function signedInPage(browser: Browser, identity: PublicWebIdentity
  *  module graph with net::ERR_NETWORK_CHANGED, and a row waited on a page that
  *  would never draw). Installed before each document's scripts run, so the
  *  socket and the scripts the app loads are the recorded ones. */
-export const RECORD_DEAD_ENDS = `(() => {
+const RECORD_DEAD_ENDS = `(() => {
   window.__turnErrors = [];
   window.__scriptFailures = [];
   // A module the entry imports that fails to fetch fails the entry script itself.
@@ -81,6 +81,92 @@ export const RECORD_DEAD_ENDS = `(() => {
     }
   };
 })()`;
+
+/** A script request of a page that failed: its URL, why (the browser's error text, or the status a server
+ *  answered), and when this process saw it. */
+interface ScriptFailure {
+  readonly at: number;
+  readonly url: string;
+  readonly reason: string;
+}
+
+const scriptFailures = new WeakMap<Page, ScriptFailure[]>();
+
+/** Installs {@link RECORD_DEAD_ENDS} on every document `page` loads, and records why each of its script requests
+ *  failed: the page sees only that a module graph failed, the browser's network events say why. */
+export async function recordDeadEnds(page: Page): Promise<void> {
+  const failures: ScriptFailure[] = [];
+
+  scriptFailures.set(page, failures);
+  page.on('requestfailed', (request) => {
+    if (request.resourceType() !== 'script') return;
+    failures.push({ at: Date.now(), url: request.url(), reason: request.failure()?.errorText ?? 'no error text' });
+  });
+  page.on('response', (response) => {
+    if (response.request().resourceType() !== 'script' || response.status() < 400) return;
+    failures.push({ at: Date.now(), url: response.url(), reason: `HTTP ${String(response.status())}` });
+  });
+  await page.evaluateOnNewDocument(RECORD_DEAD_ENDS);
+}
+
+/** The error text Chrome fails the requests in flight with when a host network interface comes or goes: not the
+ *  product. Seen twice on 2026-09-24, each time as a container started on this host and NetworkManager added its
+ *  veth: in a sweep, and in a deploy's slate-opens row, whose module graph failed while the next row loaded the
+ *  same page a second later. The one error a wait retries, once per page ({@link until}); every other failure of
+ *  a page's scripts stays a dead end. */
+export const HOST_NETWORK_CHANGED = 'net::ERR_NETWORK_CHANGED';
+
+/** A request the page or the browser cancelled, such as a navigation leaving: the effect of a failure, never its
+ *  cause, so it neither makes nor breaks a host network change. */
+const CANCELLED = 'net::ERR_ABORTED';
+
+/** The failure that makes a failed module graph the host's network changing, or null when anything else failed
+ *  too, or nothing did. */
+export function hostNetworkChange(failures: readonly ScriptFailure[]): ScriptFailure | null {
+  const causes = failures.filter((failure) => failure.reason !== CANCELLED);
+
+  return causes.length > 0 && causes.every((failure) => failure.reason === HOST_NETWORK_CHANGED) ? causes[0] : null;
+}
+
+/** Why the current document's script requests failed, as this process saw them: those since its navigation
+ *  started. */
+async function documentScriptFailures(page: Page): Promise<ScriptFailure[]> {
+  const started = v.parse(v.number(), await page.evaluate('performance.timeOrigin'));
+
+  return (scriptFailures.get(page) ?? []).filter((failure) => failure.at >= started);
+}
+
+/** The prefix {@link DEAD_END} names a failed app script with. */
+const SCRIPT_FAILED = 'the app script ';
+
+/** `deadEnd`, and when an app script never loaded, why the document's script requests failed. */
+async function explained(page: Page, deadEnd: string): Promise<string> {
+  if (!deadEnd.startsWith(SCRIPT_FAILED)) return deadEnd;
+  const failures = await documentScriptFailures(page);
+
+  if (failures.length === 0) return `${deadEnd}; no script request of this document failed on the wire`;
+
+  const shown = failures.slice(0, 5).map((failure) => `${failure.url} (${failure.reason})`);
+  const more = failures.length > shown.length ? ` and ${String(failures.length - shown.length)} more` : '';
+
+  return `${deadEnd}; its script requests failed: ${shown.join(', ')}${more}`;
+}
+
+const reloaded = new WeakSet<Page>();
+
+/** Reloads `page` once when its dead end is a module graph the host's network change failed, and says so. */
+async function reloadedAfterNetworkChange(page: Page, what: string, deadEnd: string): Promise<boolean> {
+  if (!deadEnd.startsWith(SCRIPT_FAILED) || reloaded.has(page)) return false;
+  const change = hostNetworkChange(await documentScriptFailures(page));
+
+  if (change === null) return false;
+  reloaded.add(page);
+  process.stderr.write(`  the host's network changed while the page loaded (${HOST_NETWORK_CHANGED} on ${change.url}): `
+    + `reloading it once, still waiting for ${what}\n`);
+  await page.reload({ waitUntil: 'load' });
+
+  return true;
+}
 
 const CreatedSchema = v.object({ name: v.string() });
 
@@ -146,7 +232,7 @@ const CHAT_IDLE = `[...document.querySelectorAll('#chat button')].some((el) => e
  *  for either outlived the failure it showed (2026-09-24, 36 minutes). */
 const DEAD_END = `(() => {
   const script = (window.__scriptFailures ?? []).at(-1);
-  if (script !== undefined) return 'the app script ' + script + ' failed to load, which leaves the page blank';
+  if (script !== undefined) return ${JSON.stringify(SCRIPT_FAILED)} + script + ' failed to load, which leaves the page blank';
   const failed = (window.__turnErrors ?? []).at(-1);
   if (failed !== undefined) return 'a turn that ended in error: ' + failed;
   const welcomeOffers = [...document.querySelectorAll('button')].some((b) => !b.disabled && b.getClientRects().length > 0
@@ -196,24 +282,33 @@ async function named<Value>(what: string, wait: () => Promise<Value>): Promise<V
 }
 
 /** Wait until `condition` holds in the page, or fail at once naming the dead end
- *  the page shows instead (a page opened without {@link RECORD_DEAD_ENDS}
- *  cannot show a failed turn or a script that never loaded). */
+ *  the page shows instead (a page opened without {@link recordDeadEnds}
+ *  cannot show a failed turn or a script that never loaded). A module graph the
+ *  host's network change failed is the one exception: the page is reloaded once
+ *  and the condition waited for again ({@link HOST_NETWORK_CHANGED}). */
 export async function until(page: Page, what: string, condition: string): Promise<void> {
   await named(what, async () => {
-    const outcome = await (await page.waitForFunction(`(${condition}) ? 'reached' : ${DEAD_END}`, { polling: 100 })).jsonValue();
+    for (;;) {
+      const outcome = String(await (await page.waitForFunction(`(${condition}) ? 'reached' : ${DEAD_END}`, { polling: 100 })).jsonValue());
 
-    if (outcome !== 'reached') throw new Error(`waiting for ${what}, the page showed ${String(outcome)}`);
+      if (outcome === 'reached') return;
+
+      if (!(await reloadedAfterNetworkChange(page, what, outcome))) {
+        throw new Error(`waiting for ${what}, the page showed ${await explained(page, outcome)}`);
+      }
+    }
   });
 }
 
 /** Wait on a promise the page cannot be polled for, such as a turn closing on its socket, named as {@link until}
- *  names its waits and ended as it ends them: by the first dead end `page` shows. */
+ *  names its waits and ended as it ends them: by the first dead end `page` shows. Never by a reload: the promise
+ *  belongs to the document it waits on. */
 export async function waitOn<Value>(page: Page, what: string, promise: Promise<Value>): Promise<Value> {
   return named(what, async () => {
     const reached = new AbortController();
 
     const deadEnd = page.waitForFunction(DEAD_END, { polling: 100, signal: reached.signal }).then(async (handle) => {
-      throw new Error(`waiting for ${what}, the page showed ${String(await handle.jsonValue())}`);
+      throw new Error(`waiting for ${what}, the page showed ${await explained(page, String(await handle.jsonValue()))}`);
     });
 
     try {

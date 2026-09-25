@@ -16,8 +16,8 @@ import { releaseOnSignals, releaseScratch } from '@kinu.run/test-utils';
 import { withDevServer } from './live-app-harness';
 
 // Outside `bun test` no preload releases what the boot minted: its dev server's
-// process group and its state and cache directories. A killed wrapper would
-// otherwise leave vite serving, detached, on a port no run owns.
+// process group and its state directory. A killed wrapper would otherwise leave
+// vite serving, detached, on a port no run owns.
 releaseOnSignals();
 
 const command = process.argv.slice(2);

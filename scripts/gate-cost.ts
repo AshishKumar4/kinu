@@ -55,7 +55,7 @@ const LANGUAGE_SERVER = /\0--lsp(?:\0|$)/u;
  * Whether a process is Kinu work holding a resource the row being measured needs: work of THIS
  * checkout (`checkout` ends in `/`), named by a path in its command or by its working directory.
  * What two suites or dev servers of one checkout share is real: its `.wrangler/state`, its
- * `node_modules/.vite` and its preview zone's port. Another checkout's pool, dev server and Chrome
+ * `packages/cf-backend/.vite` and its preview zone's port. Another checkout's pool, dev server and Chrome
  * are processes of their own on ports of their own, so they are only load, which is recorded
  * (2026-09-24: the complexity row ran green in 29-32 s beside an evals vitest in the primary
  * checkout and a gallery vite in another worktree).
