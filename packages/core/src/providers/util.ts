@@ -94,6 +94,37 @@ export function authCacheKey(auth: AuthResolution): string {
   return JSON.stringify([auth.headers, auth.baseURL ?? null]);
 }
 
+/** An unreadable live model list: the built-in list stands in, and the registry reports why. */
+export class StaleModelList extends KinuError {
+  readonly reason: string;
+
+  constructor(readonly models: readonly ModelInfo[], options: { readonly reason: string; readonly cause?: unknown }) {
+    super('unavailable', `${options.reason}; showing the built-in list`, { cause: options.cause });
+    this.reason = options.reason;
+  }
+}
+
+/** A list read live, or the stand-in a `StaleModelList` carries; any other failure propagates. */
+export async function settleModelList(
+  list: Promise<ModelInfo[]> | ModelInfo[],
+): Promise<{ readonly models: readonly ModelInfo[]; readonly stale: StaleModelList | null }> {
+  try {
+    return { models: await list, stale: null };
+  } catch (error) {
+    if (!(error instanceof StaleModelList)) throw error;
+
+    return { models: error.models, stale: error };
+  }
+}
+
+export async function mapModelList(list: Promise<ModelInfo[]>, map: (models: readonly ModelInfo[]) => ModelInfo[]): Promise<ModelInfo[]> {
+  const { models, stale } = await settleModelList(list);
+
+  if (stale !== null) throw new StaleModelList(map(models), { reason: stale.reason, cause: stale.cause });
+
+  return map(models);
+}
+
 export function cloneModelInfos(models: readonly ModelInfo[] | undefined): ModelInfo[] {
   return (models ?? []).map((model) => ({
     ...model,
@@ -111,7 +142,8 @@ export async function catalogModelInfo(
   modelId: string,
 ): Promise<ModelInfo | null> {
   if (!provider) return null;
-  const models = await provider.listModels(deps);
+
+  const { models } = await settleModelList(provider.listModels(deps));
 
   return models.find((m) => m.id === modelId) ?? null;
 }

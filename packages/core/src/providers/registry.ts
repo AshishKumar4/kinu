@@ -4,6 +4,7 @@ import type {
   AuthResolution, ModelProvider, ProviderDeps, ProviderInfo, ModelInfo,
 } from './types';
 import { parseModelSpec } from './types';
+import { StaleModelList } from './util';
 import { diagnostics, KinuError, renderThrownChain } from '../obs/index';
 import { accountCredentialKey, MAIN_ACCOUNT, storedAccounts } from '../credentials/accounts';
 
@@ -230,6 +231,10 @@ export function createProviderRegistry(): ProviderRegistry {
         return await p.isAvailable(own) ? await p.listModels(own) : null;
       })) {
         if (!probed.ok) {
+          if (probed.error instanceof StaleModelList) {
+            for (const m of probed.error.models) models.push({ ...m, provider: probed.provider.id });
+          }
+
           failures.push({
             provider: probed.provider.id,
             label: probed.provider.label,

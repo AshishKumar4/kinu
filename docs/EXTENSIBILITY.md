@@ -162,7 +162,9 @@ Keep `createModel` synchronous and keep auth and refresh in the AI SDK
 Do not hardcode `listModels`. Hydrate from models.dev:
 `listModelsDevProviderModels` in `packages/core/src/providers/models-dev.ts`
 caches for 5 minutes. Provide a static `FALLBACK_MODELS` array for a failed,
-non-200, or empty filtered fetch, as Anthropic, OpenAI and Codex do. If
+non-200, or empty filtered fetch, as Anthropic, OpenAI and Codex do; throw it
+as `new StaleModelList(FALLBACK_MODELS, { reason })` so the menu names the
+failure, and map a derived list with `mapModelList`. If
 models.dev already carries your provider, skip the handwritten provider:
 `registry.registerDynamic` in `packages/cf-backend/src/providers/agent-registry.ts`
 makes every catalog id usable once the user stores a `<id>.bearer` credential.

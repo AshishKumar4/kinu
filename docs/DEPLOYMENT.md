@@ -292,7 +292,7 @@ CLI (`packages/cli-backend/src/model-resolver.ts`): `workers-ai` and `my-gateway
 
 ### Model catalogs are live
 
-Model lists come from `https://models.dev/api.json` with a 5-minute cache (`packages/core/src/providers/models-dev.ts:12-14`). They supply context windows and capability flags. Static lists (`WORKERS_AI_FALLBACK_MODEL_CATALOG` in `packages/core/src/providers/workers-ai-catalog.ts`, per-provider `FALLBACK_MODELS`) apply only when that fetch fails, returns non-200, or filters empty. OpenRouter queries its own `/api/v1/models`.
+Model lists come from `https://models.dev/api.json` with a 5-minute cache (`packages/core/src/providers/models-dev.ts:12-14`). They supply context windows and capability flags. Static lists (`WORKERS_AI_FALLBACK_MODEL_CATALOG` in `packages/core/src/providers/workers-ai-catalog.ts`, per-provider `FALLBACK_MODELS`) apply only when that fetch fails, returns non-200, or filters empty, and the model menu then names the failure beside them (`StaleModelList`). Codex's `/models` is read the same way; chatgpt.com answers Workers egress with an HTTP 403 HTML block page before sign-in (probe Worker, 2026-09-24), which Kinu reports as a refused network, not a login problem. OpenRouter queries its own `/api/v1/models`.
 
 Default model lives once in core: `DEFAULT_WORKERS_AI_MODEL_ID` / `DEFAULT_WORKERS_AI_MODEL_SPEC` (`@cf/zai-org/glm-5.3`, `packages/core/src/providers/workers-ai.ts:3-5`). It is the built-in profile catalog's `default` tier. Seven-entry fallback catalog:
 

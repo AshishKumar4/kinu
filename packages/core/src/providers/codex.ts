@@ -1,11 +1,10 @@
 // Codex via ChatGPT subscription (chatgpt.com/backend-api/codex/responses).
-// `originator: codex_cli_rs` is the WAF bypass; Cloudflare may still 403 Workers' data-center IPs.
 import { createOpenAI } from '@ai-sdk/openai';
 import { wrapLanguageModel, type LanguageModel } from 'ai';
 import type { AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
 import { MODEL_INPUT_MODALITIES } from './types';
 import { withRateLimitRetry } from './rate-limit-retry';
-import { authCacheKey, cloneModelInfos, positiveInteger, statelessResponses } from './util';
+import { authCacheKey, cloneModelInfos, positiveInteger, StaleModelList, statelessResponses } from './util';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withCallAccount } from './quota';
 import { nonEmptyString } from '../utils/json';
@@ -13,8 +12,7 @@ import * as v from 'valibot';
 import { OAuthTokenError } from './oauth-token-error';
 import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
 import { classify, diagnostics, KinuError, renderThrownChain } from '../obs/index';
-import { GPT54_EFFORTS } from './openai';
-import { knownReasoningEfforts } from './reasoning-effort';
+import { knownReasoningEfforts, type ReasoningEffort } from './reasoning-effort';
 
 export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 
@@ -29,14 +27,27 @@ const CODEX_FAST_MODEL = 'gpt-5.4-mini';
 const CODEX_DEAD_LOGIN =
   'Your ChatGPT login is no longer valid. Reconnect ChatGPT in User settings, or run `kinu setup` on this machine.';
 
-/** Offline list (levels from `GPT54_EFFORTS`); the live `/models` listing carries each model's own levels. */
+const CODEX_MAX_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+const CODEX_CAPABILITIES: NonNullable<ModelInfo['capabilities']> = ['tools', 'streaming', 'reasoning', 'vision'];
+
+/** From OMP's Codex census (catalog/src/models.json `openai-codex`, 2026-09-24). */
 const FALLBACK_MODELS: ModelInfo[] = [
-  { id: CODEX_DEFAULT_MODEL, label: 'GPT-5.5 (Codex)',    capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000, reasoningEfforts: GPT54_EFFORTS },
-  { id: 'gpt-5.4',       label: 'GPT-5.4 (Codex)',       capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000, reasoningEfforts: GPT54_EFFORTS },
-  { id: 'gpt-5.4-mini',  label: 'GPT-5.4 mini (Codex)',  capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000, reasoningEfforts: GPT54_EFFORTS },
-  { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex',         capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 272_000, reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] },
-  { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark', capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 128_000 },
+  { id: CODEX_DEFAULT_MODEL, label: 'GPT-5.5 (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 272_000, reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] },
+  { id: 'gpt-6-sol', label: 'GPT-6 Sol (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 272_000, reasoningEfforts: CODEX_MAX_EFFORTS },
+  { id: 'gpt-6-luna', label: 'GPT-6 Luna (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 272_000, reasoningEfforts: CODEX_MAX_EFFORTS },
+  { id: 'gpt-6-astra', label: 'GPT-6 Astra (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 272_000, reasoningEfforts: CODEX_MAX_EFFORTS },
+  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 872_000, reasoningEfforts: CODEX_MAX_EFFORTS },
+  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 872_000, reasoningEfforts: CODEX_MAX_EFFORTS },
+  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 872_000, reasoningEfforts: CODEX_MAX_EFFORTS },
 ];
+
+/** A refused network gets a 403 HTML page before sign-in (Workers egress, probe 2026-09-24); a login refusal is JSON. */
+function networkRefused(res: Response): boolean {
+  return res.status === 403 && (res.headers.get('content-type') ?? '').includes('text/html');
+}
+
+const NETWORK_REFUSED = 'chatgpt.com refused this server\'s network (HTTP 403 block page, before sign-in)';
 
 const CODEX_MODELS_TTL_MS = 5 * 60_000;
 
@@ -75,26 +86,32 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         return cloneModelInfos(modelCache.models);
       }
 
-      try {
-        const fetchFn = deps.fetch ?? fetch;
-
-        const res = await fetchFn(`${baseURL.replace(/\/+$/, '')}/models?client_version=1.0.0`, {
-          headers: auth.headers,
+      const stale = (failure: { readonly reason: string; readonly cause?: unknown }): StaleModelList => {
+        diagnostics.event('codex.models_fallback', {
+          error: failure.cause === undefined ? failure.reason : renderThrownChain({ cause: failure.cause }),
         });
 
-        if (!res.ok) return cloneModelInfos(FALLBACK_MODELS);
-        const body: unknown = await res.json();
-        const models = parseCodexModels({ body });
+        return new StaleModelList(cloneModelInfos(FALLBACK_MODELS), { ...failure, reason: `Codex models could not be read: ${failure.reason}` });
+      };
 
-        if (models.length === 0) return cloneModelInfos(FALLBACK_MODELS);
-        modelCache = { at: Date.now(), authKey, models };
+      let res: Response;
 
-        return cloneModelInfos(models);
-      } catch (error) {
-        diagnostics.event('codex.models_fallback', { error: renderThrownChain({ cause: error }) });
-
-        return cloneModelInfos(FALLBACK_MODELS);
+      try {
+        res = await (deps.fetch ?? fetch)(`${baseURL.replace(/\/+$/, '')}/models?client_version=1.0.0`, { headers: auth.headers });
+      } catch (cause) {
+        throw stale({ reason: 'chatgpt.com could not be reached', cause });
       }
+
+      if (networkRefused(res)) throw stale({ reason: NETWORK_REFUSED });
+
+      if (!res.ok) throw stale({ reason: `chatgpt.com answered HTTP ${String(res.status)}` });
+      const body: unknown = await res.json();
+      const models = parseCodexModels({ body });
+
+      if (models.length === 0) throw stale({ reason: 'chatgpt.com listed no models' });
+      modelCache = { at: Date.now(), authKey, models };
+
+      return cloneModelInfos(models);
     },
 
     createModel(modelId, deps): LanguageModel {
@@ -170,32 +187,17 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
           }
         }
 
-        if (!res.ok) {
-          // Read from a clone so `res` stays intact for the SDK; no catch, or the WAF branch silently disables.
-          const body = await res.clone().text();
+        if (networkRefused(res)) {
+          diagnostics.failure('provider.codex_network_refused', new KinuError('unavailable', NETWORK_REFUSED), { model: modelId });
 
-          // Cloudflare WAF challenge HTML would crash the SDK stream with a parse error; replace it with a JSON error.
-          if (res.status === 403 && /Cloudflare|Attention Required/i.test(body)) {
-            const userMsg =
-              'Codex is blocked by Cloudflare\'s WAF when called from Cloudflare Workers\' ' +
-              'egress (the request from this Worker hits chatgpt.com/backend-api/codex and is ' +
-              'refused as bot traffic). Until we add a non-CF egress route (AI Gateway with custom ' +
-              'egress IP), Codex chat won\'t work from this deployment. ' +
-              'Workaround: in /user/settings → API keys, paste an OpenAI API key, then pick an ' +
-              '`openai/*` model — that path goes to api.openai.com directly and isn\'t affected by ' +
-              'the WAF.';
-
-            diagnostics.failure(
-              'provider.codex_waf_blocked',
-              new KinuError('unavailable', 'Codex refused this Worker\'s egress as bot traffic'),
-              { model: modelId },
-            );
-
-            return new Response(
-              JSON.stringify({ error: { message: userMsg, type: 'cf_waf_blocked', code: 'codex_unavailable' } }),
-              { status: 503, headers: { 'Content-Type': 'application/json' } },
-            );
-          }
+          return new Response(
+            JSON.stringify({ error: {
+              message: `Codex is unreachable from here: ${NETWORK_REFUSED}. Run Codex from the Kinu CLI on your machine, or pick another model.`,
+              type: 'network_refused',
+              code: 'codex_unavailable',
+            } }),
+            { status: 503, headers: { 'Content-Type': 'application/json' } },
+          );
         }
 
         if (res.status === 401) {

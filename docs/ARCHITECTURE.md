@@ -548,7 +548,10 @@ Two policies apply to every provider:
 - The catalog is live. `models-dev.ts` fetches `https://models.dev/api.json`
   behind a 5-minute cache and derives each model's window and capabilities from
   it. The static lists (`WORKERS_AI_FALLBACK_MODEL_CATALOG`, per-provider
-  `FALLBACK_MODELS`) cover a failed fetch or an empty filter.
+  `FALLBACK_MODELS`) cover a failed fetch or an empty filter, and never
+  silently: `listModels` throws `StaleModelList` carrying the static list, and
+  the menu shows those models beside a failure naming why the live list is
+  missing.
 - Every model fetch waits out rate limits of a minute or less.
   `withRateLimitRetry` (`rate-limit-retry.ts`) wraps all four fetch paths: the
   shared `createAuthedFetch`, Workers AI, AI Gateway, and codex. A rate-limited

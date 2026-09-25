@@ -1,9 +1,13 @@
 import { describe, expect, test } from 'bun:test';
+import { generateText } from 'ai';
 import {
   CODEX_CRED_KEY,
   OPENAI_CRED_KEY,
+  catalogModelInfo,
   createCodexProvider,
   createOpenAIProvider,
+  createProviderRegistry,
+  toProviderError,
   type AuthResolution,
   type ProviderDeps,
 } from '../src/index';
@@ -172,5 +176,59 @@ describe('provider model catalogs', () => {
       inputModalities: ['text', 'image'],
       reasoningEfforts: ['low', 'high'],
     }]);
+  });
+
+  // chatgpt.com's answer to Workers egress (probe Worker, 2026-09-24).
+  const blockPage = (): Response => new Response(
+    '<html><body><p>Unable to load site</p><p>If you are using a VPN, try turning it off.</p></body></html>',
+    { status: 403, headers: { 'content-type': 'text/html; charset=UTF-8', server: 'cloudflare' } },
+  );
+
+  const codexDeps = (fetchFn: typeof fetch) => deps({ [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-token' } } }, fetchFn);
+
+  test('a refused Codex model list is a named failure beside the built-in list, never a silent stale list', async () => {
+    const registry = createProviderRegistry();
+    registry.register(createCodexProvider({ baseURL: 'https://chatgpt.test/backend-api/codex' }));
+
+    const menu = await registry.listAllModels(codexDeps(fetchStub(async () => blockPage())));
+
+    expect(menu.failures.map((failure) => failure.provider)).toEqual(['codex']);
+    expect(menu.failures[0]?.reason).toContain('HTTP 403');
+    expect(menu.models.some((model) => model.provider === 'codex' && model.id === 'gpt-5.5')).toBe(true);
+  });
+
+  test('an unreadable models.dev list is a named failure beside the built-in list', async () => {
+    const registry = createProviderRegistry();
+    registry.register(createOpenAIProvider());
+
+    const menu = await registry.listAllModels(deps(
+      { [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } },
+      fetchStub(async () => new Response('upstream down', { status: 503 })),
+    ));
+
+    expect(menu.failures.map((failure) => failure.provider)).toEqual(['openai']);
+    expect(menu.models.some((model) => model.provider === 'openai')).toBe(true);
+  });
+
+  test('a turn keeps the built-in entry for its model when the live list is refused', async () => {
+    const info = await catalogModelInfo(createCodexProvider(), codexDeps(fetchStub(async () => blockPage())), 'gpt-5.5');
+
+    expect(info?.contextWindow).toBe(272_000);
+  });
+
+  test('a Codex call refused by the block page fails as an unreachable network, not a login problem', async () => {
+    const model = createCodexProvider({ baseURL: 'https://chatgpt.test/backend-api/codex' })
+      .createModel('gpt-5.5', codexDeps(fetchStub(async () => blockPage())));
+
+    let classified = toProviderError({ doing: 'calling the model', cause: new Error('a blocked call succeeded') });
+
+    try {
+      await generateText({ model, prompt: 'hi', maxRetries: 0 });
+    } catch (error) {
+      classified = toProviderError({ doing: 'calling the model', cause: error });
+    }
+
+    expect(classified.code).toBe('unavailable');
+    expect(classified.message + String(classified.cause)).toMatch(/refused this server's network/);
   });
 });

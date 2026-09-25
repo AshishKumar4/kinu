@@ -7,6 +7,7 @@ import type { ModelProvider, ModelInfo, ProviderEnv, WorkersAIBinding } from './
 import { createGatewayBindingFetch, parseGatewayTarget, type GatewayTarget } from './gateway-binding-fetch';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from './workers-ai';
 import { listModelsDevProviderModels } from './models-dev';
+import { mapModelList } from './util';
 import { withRateLimitRetry } from './rate-limit-retry';
 import {
   WORKERS_AI_FALLBACK_MODEL_CATALOG,
@@ -45,17 +46,15 @@ export function createAIGatewayProvider(): ModelProvider {
       return 'reason' in resolved ? resolved.reason : undefined;
     },
     async listModels(deps): Promise<ModelInfo[]> {
-      const models = await listModelsDevProviderModels('cloudflare-workers-ai', deps, {
+      return mapModelList(listModelsDevProviderModels('cloudflare-workers-ai', deps, {
         fallback: WORKERS_AI_FALLBACK_MODEL_CATALOG,
         preferredIds: WORKERS_AI_PREFERRED_MODEL_IDS,
-      });
-
-      return models.map((model) => ({
+      }), (models) => models.map((model) => ({
         ...model,
         id: `workers-ai/${model.id}`,
         label: `${model.label ?? model.id} (gateway)`,
         capabilities: model.capabilities ? [...model.capabilities] : undefined,
-      }));
+      })));
     },
     createModel(modelId, deps): LanguageModel {
       const resolved = resolvePlatformGateway(deps.env);
