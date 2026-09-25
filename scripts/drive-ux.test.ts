@@ -189,7 +189,9 @@ describe('the Drive', () => {
         await waitForEntry(page, 'skills');
         await page.click('[data-drive-entry="skills"] a');
         await waitForEntry(page, 'deploy');
-        expect(await entries(page)).toEqual([['deploy', 'symlink'], ['review', 'folder'], ['slates', 'folder']]);
+        expect(await entries(page)).toEqual([
+          ['deploy', 'symlink'], ['review', 'folder'], ['slates', 'folder'], ['review.md', 'file'], ['slates.md', 'file'], ['standup.md', 'file'],
+        ]);
         // The built-in skills sit among the owner's in the /skills view's order: by name, a built-in ahead of the
         // owner's skill of its name, which agents never see and whose tile says so.
         expect(await skillTiles(page)).toEqual([
@@ -198,6 +200,20 @@ describe('the Drive', () => {
           { name: 'review', builtin: false, meta: expect.any(String) },
           { name: 'slates', builtin: true, meta: 'Built in' },
           { name: 'slates', builtin: false, meta: 'Not used' },
+        ]);
+
+        // A flat skill file is read as discovery reads it: the folder beside review.md takes its name, slates.md
+        // has a built-in's, and standup.md is a skill agents use.
+        const flat = await page.$$eval('[data-drive-kind="file"]', (tiles) => tiles.map((tile) => [
+          tile.getAttribute('data-drive-entry'),
+          tile.querySelector('[data-drive-tile-meta]')?.textContent?.trim() ?? '',
+          tile.querySelector('[data-drive-tile-meta] [title]')?.getAttribute('title') ?? null,
+        ]));
+
+        expect(flat).toEqual([
+          ['review.md', 'Not used', 'Agents read skills/review/SKILL.md instead'],
+          ['slates.md', 'Not used', 'A built-in skill has this name, so agents use the built-in'],
+          ['standup.md', expect.stringMatching(/^\d+ B · /u), null],
         ]);
         // The reserved folder is not renamed or deleted, and its skills say who uses them.
         expect(await page.evaluate(() => document.body.innerText)).toContain('Every workspace you own uses these skills.');

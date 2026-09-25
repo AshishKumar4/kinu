@@ -1808,7 +1808,7 @@ export type {
   SkillHeader, ParsedSkill, DiscoveredSkill, ActiveSkill, SkillBodyRef,
   SkillsIndex, SkillSource, ActiveSkillSet, ActivationReason,
   SkillParseResult,
-  SkillsVfs, DiscoverOpts, SkillsDiscovery, UnreadSkillFile,
+  SkillsVfs, DiscoverOpts, SkillsDiscovery, UnreadSkillFile, SkillFileRefusal,
   LoadActiveSkillsOpts, ActivatedSkill,
 } from './skills/index';
 

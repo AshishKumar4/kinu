@@ -11,6 +11,7 @@ import {
   APP_ROUTES, BUILTIN_SKILL_FILES, DRIVE_SKILLS_DIR, blueprintPagePath, compareSkillNames, entryRevision, formatBytes, parseSkillFile, shortAge,
   skillViewPath, workspaceDisplayTitle,
   type DriveEntry, type DriveListing, type FileText, type LiveShareVisibility, type OwnedSlate, type SharedLibrary, type SharedRow,
+  type SkillFileRefusal,
 } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import {
@@ -163,10 +164,20 @@ function VisibilityGlyph({ visibility }: { visibility: LiveShareVisibility | und
     : <UsersIcon size={13} className="shrink-0 p-text-4" aria-label="Shared with people" />;
 }
 
+function whyUnused(refusal: SkillFileRefusal): string {
+  if (refusal.reason === "builtin") return "A built-in skill has this name, so agents use the built-in";
+
+  if (refusal.reason === "shadowed") return `Agents read ${refusal.by.slice(1)} instead`;
+
+  return `Not a skill name: it ${refusal.problem}`;
+}
+
+function NotUsed({ refusal }: { refusal: SkillFileRefusal }) {
+  return <span className="truncate p-warning" title={whyUnused(refusal)}>Not used</span>;
+}
+
 function SkillMeta({ entry, from }: { entry: DriveEntry; from: string | null }) {
-  if (Object.hasOwn(BUILTIN_SKILL_FILES, entry.name)) {
-    return <span className="truncate p-warning" title="A built-in skill has this name, so every workspace uses the built-in">Not used</span>;
-  }
+  if (entry.unused !== undefined) return <NotUsed refusal={entry.unused} />;
 
   if (from !== null) return <span className="truncate">{`From ${from.slice(1)}`}</span>;
 
@@ -603,7 +614,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
       <Tile key={entry.name} title={entry.name} icon={fileIcon(entry.name)} onOpen={() => show("file", entry.name)}
         picture={TEXT.test(entry.name) && entry.size > 0 ? <TextCover path={full} name={entry.name} />
           : <FileCover name={entry.name} image={IMAGE.test(entry.name) ? inlineUrl(full) : undefined} />}
-        meta={<span className="truncate">{[formatBytes(entry.size), age].filter(Boolean).join(" · ")}</span>}
+        meta={entry.unused === undefined ? <span className="truncate">{[formatBytes(entry.size), age].filter(Boolean).join(" · ")}</span> : <NotUsed refusal={entry.unused} />}
         menu={fileMenu(entry)}
         attributes={{ "data-drive-entry": entry.name, "data-drive-kind": entry.kind, "data-drive-skill": "false" }} />
     );

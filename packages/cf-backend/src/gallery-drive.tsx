@@ -29,6 +29,9 @@ async function seededDrive(): Promise<MossaicVfs> {
   await write("/notes/todo.md", "- write the skill\n");
   await write("/skills/review/SKILL.md", SKILL("review", "Review a pull request the way this team does"));
   await write("/skills/slates/SKILL.md", SKILL("slates", "The team's own notes on building slates"));
+  await write("/skills/review.md", SKILL("review", "An older review, beside the folder that replaced it"));
+  await write("/skills/slates.md", SKILL("slates", "A flat copy of the team's slate notes"));
+  await write("/skills/standup.md", SKILL("standup", "Write the morning standup from yesterday's commits"));
 
   return drive;
 }
