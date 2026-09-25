@@ -14,7 +14,7 @@ import { commandResult } from './exec-result';
 import { diagnostics, KinuError, refusalOf, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
-import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
+import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/misevolution';
 import { SlateOperationSchema, requireSlateWorkMode, type SlateOperation, type SlateCallResult } from '../slates/rpc';
 import { currentWorkMode } from './work-mode';
 import { TOOL_REACH } from '../tools/registry';
@@ -316,7 +316,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           const desc = description;
           const codeStr = admitted.code;
           // Misevolution gate on the `craft_tool` surface, without `network-egress` (see SURFACE_CRITERIA).
-          const misevolution = checkMisevolutionForSurface(codeStr, 'craft_tool');
+          const misevolution = checkMisevolutionForSurface({ code: codeStr }, 'craft_tool');
 
           if (!misevolution.ok) {
             if (sql && actor) {

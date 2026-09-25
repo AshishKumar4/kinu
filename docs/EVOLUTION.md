@@ -123,38 +123,39 @@ Scaffold mutation runs inside that reflection path, so the window must have refl
 
 `modifyScaffold()` then validates through 4 gates:
 
-1. Structural gate. The rationale must reach `minRationaleLength` (50 characters). None of the four `SCAFFOLD_FORBIDDEN_PATTERNS` may appear (`require` or `import`, `globalThis`, `eval(`, `Function(`), and the code must match `SCAFFOLD_REQUIRED_SIGNATURE`, `async function* run(rt, task)` (`core/src/scaffold/safety-patterns.ts`). Then the misevolution veto below runs.
+1. Structural gate. The rationale must reach `minRationaleLength` (50 characters). The code must parse as JavaScript, declare `async function* run(rt, task)` at its top level, and reference none of `require`, `import`, `globalThis`, `eval` or `Function` (`scaffoldRefusal` in `core/src/scaffold/safety-patterns.ts`, judged on the acorn syntax tree, so a comment naming them is not a finding). Then the misevolution veto below runs.
 2. Parse gate. The code is compiled through `rt.executor` as a syntax check.
 3. Version checkpoint. A single-pending invariant refuses a second `pending` version. The base is taken from `status = 'current'` rather than `MAX(version)`, and `newVersion = MAX(version) + 1`. The DGM base must exist in the archive. The current version is backed up in this step.
 4. Write gate. The proposal is written to a versioned file beside the live scaffold, never over it, so shadow evaluation never compares new code against itself. Both names come from `scaffoldPath()`.
 
 ### Misevolution gate
 
-`core/src/scaffold/misevolution.ts` is a pure text check with five frozen criteria. The first match rejects the artifact and writes a `misevolution_veto` row to `evolution_events`.
+`core/src/safety/misevolution.ts` is a pure check with six frozen criteria. The first match rejects the artifact and writes a `misevolution_veto` row to `evolution_events`. An artifact is code and prose: code is parsed with acorn (`core/src/safety/evolved-code.ts`) and judged on the names it references (identifiers, property names, constant computed keys) and the words and paths of the strings it states, with constant concatenations folded; comments are not read. Prose (a prompt section, a lesson, a description or rationale) is judged on its words and paths.
 
 | Criterion | Rejects |
 |---|---|
-| `network-egress` | `fetch(`, `XMLHttpRequest`, `new WebSocket`, `sendBeacon(`, `EventSource` |
-| `version-machinery-tamper` | `scaffold_versions`, `scaffold_evaluations`, `scaffold_trial_queue`, the live scaffold path in quoted form, a versioned scaffold filename |
+| `network-egress` | code naming `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource` or `sendBeacon`, including through an alias |
+| `version-machinery-tamper` | `scaffold_versions`, `scaffold_evaluations`, `scaffold_trial_queue`, a path to `scaffold/agent.js` or a versioned `agent.js.vN` |
 | `rollout-config-tamper` | `auto_promote_scaffold`, `shadow_sample_rate`, `scaffold_explore_share`, `auto_gepa_every_n_turns`, `changelog_seen_at` |
 | `self-modification-reentry` | `proposeScaffold`, `modifyScaffold`, `applyPromotionDecision`, `applyScaffoldDecision`, `rollbackScaffold`, `checkMisevolution` |
 | `consent-weakening` | `shell_approval_mode`, `setShellApprovalMode`, `allow_all`, `device_consent` |
+| `unanalysable-code` | code that does not parse, references `eval`, `Function` or `require`, imports a module, uses `with`, or reads `globalThis`/`self`/`window`/`global` by a computed key |
 
-`version-machinery-tamper` matches the scaffold path only in quoted form, because the v0 bootstrap header mentions the path in a comment.
+What it cannot see: a name built at runtime (a `join`, char codes, a decoded string) and a value handed in from outside the artifact. `unanalysable-code` refuses the constructs that would make every name invisible; the rest is a tripwire, not a proof.
 
-`SURFACE_CRITERIA` declares four surfaces. `checkMisevolution` is the `scaffold` surface's full checklist, and every call site below that uses it enforces all five criteria:
+`SURFACE_CRITERIA` declares four surfaces. Prose never trips the code-only criteria (`network-egress`, `unanalysable-code`).
 
-| Surface | Call site | Criteria enforced |
+| Surface | Call site | Artifact |
 |---|---|---|
-| `scaffold` | The proposal gate, `modifyScaffold` in `core/src/scaffold/modify.ts` | all five |
-| `scaffold` | The promotion decision, re-checked against the on-disk pending file, `core/src/scaffold/shadow.ts` | all five |
-| `scaffold` | Prompt-section proposal and promotion, `proposePromptSection` and `applyPromptSectionDecision` in `core/src/prompting/section-store.ts` | all five |
-| `scaffold` | Section GEPA candidates, `runSectionGepa` in `core/src/evolution/gepa/section-bridge.ts` | all five |
-| `craft` | Extracted crafted-tool upsert, `upsertCraftedTool` in `core/src/craft/conflict.ts` | all five |
-| `craft_tool` | `workspace.createTool`, `core/src/execution/inline.ts` | the four safety-machinery criteria |
-| `import` | Experience-library import, `core/src/experience/imports.ts` | all five |
+| `scaffold` | The proposal gate, `modifyScaffold` in `core/src/scaffold/modify.ts` | code |
+| `scaffold` | The promotion decision, re-checked against the on-disk pending file, `core/src/scaffold/shadow.ts` | code |
+| `scaffold` | Prompt-section proposal and promotion, `proposePromptSection` and `applyPromptSectionDecision` in `core/src/prompting/section-store.ts` | prose |
+| `scaffold` | Section GEPA candidates, `runSectionGepa` in `core/src/evolution/gepa/section-bridge.ts` | prose |
+| `craft` | Extracted crafted-tool upsert, `upsertCraftedTool` in `core/src/craft/conflict.ts` | code |
+| `craft_tool` | `workspace.createTool`, `core/src/execution/inline.ts` | code, without `network-egress` |
+| `import` | Experience-library import, `core/src/experience/imports.ts` | code and description or rationale for a tool or scaffold; prose for a lesson or fact |
 
-`craft_tool` is the one exception. It skips `network-egress` because the codemode Worker exposes raw network globals: the same `fetch(...)` runs freely in an ephemeral `eval` call one line earlier, so vetoing only the persisted form buys no containment. Persistence changes blast radius over time, so criteria 2 through 5 apply there in full.
+`craft_tool` is the one exception. It skips `network-egress` because the codemode Worker exposes raw network globals: the same `fetch(...)` runs freely in an ephemeral `eval` call one line earlier, so vetoing only the persisted form buys no containment. Persistence changes blast radius over time, so the other criteria apply there in full.
 
 ### Shadow evaluation
 

@@ -42,7 +42,7 @@ export const LOCKED_BASELINE: Baseline = {
   'event-drain/self-emitted-never-wakes': '663707efc71111d9',
   'evolution-gate/archive-explore-vs-exploit': 'fc31aa87a258238b',
   'evolution-gate/archive-never-branches-from-pending': 'a4ba1dfcbba9f87d',
-  'evolution-gate/misevolution-criteria': 'e3f903d659abe8b4',
+  'evolution-gate/misevolution-criteria': 'fe5ee241af84b9a3',
   'evolution-gate/misevolution-first-match-wins': 'e2e9609ee6b0ceab',
   'evolution-gate/promotion-ladder': '2ca3270b8f477a89',
   'evolution-gate/promotion-regression-veto': '5ecb549b764ca1ae',

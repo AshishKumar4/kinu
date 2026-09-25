@@ -39,7 +39,7 @@ import { Inbox } from '../orchestrator/inbox';
 import { DrainScheduler } from '../orchestrator/drain-scheduler';
 import { formatApproval, gateExec, reviewCommand } from '../safety/approval-gate';
 import { argumentDigest } from '../safety/argument-digest';
-import { checkMisevolution } from '../scaffold/misevolution';
+import { checkMisevolution } from '../safety/misevolution';
 import { decidePromotion } from '../scaffold/shadow';
 import { selectEvolutionBase } from '../scaffold/archive';
 import { hybridSearch } from '../memory/hybrid-search';
@@ -186,7 +186,7 @@ export const SUBJECT_SOURCE = {
   gateExec: 'safety/approval-gate.ts',
   argumentDigest: 'safety/argument-digest.ts',
 
-  checkMisevolution: 'scaffold/misevolution.ts',
+  checkMisevolution: 'safety/misevolution.ts',
   decidePromotion: 'scaffold/shadow.ts',
   selectEvolutionBase: 'scaffold/archive.ts',
 

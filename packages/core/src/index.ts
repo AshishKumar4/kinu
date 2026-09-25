@@ -1036,8 +1036,8 @@ export { createScaffoldSurface, type ScaffoldSurfaceOpts } from './scaffold/surf
 // Misevolution gate: fixed safety criteria over every evolution surface.
 export {
   checkMisevolution, checkMisevolutionForSurface, recordMisevolutionVeto,
-  type MisevolutionSurface, type MisevolutionVerdict, type MisevolutionViolation,
-} from './scaffold/misevolution';
+  type EvolvedArtifact, type MisevolutionSurface, type MisevolutionVerdict, type MisevolutionViolation,
+} from './safety/misevolution';
 
 // Variant archive over scaffold_versions/scaffold_evaluations (no parallel store).
 export {

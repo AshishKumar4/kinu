@@ -17,7 +17,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import type { ScoreInterval } from '../utils/stats';
-import { checkMisevolution, recordMisevolutionVeto } from '../scaffold/misevolution';
+import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/misevolution';
 import { decidePromotion, DEFAULT_SHADOW_CONFIG, type PromotionDecision, type ScaffoldStatus } from '../scaffold/shadow';
 import { templateContract, type PromptSection } from './template';
 import { PROMPT_SECTIONS, type PromptSectionOverrides } from './section-templates';
@@ -230,7 +230,7 @@ export function proposePromptSection(
   }
 
   // Gate 3: misevolution.
-  const misevolution = checkMisevolution(source);
+  const misevolution = checkMisevolutionForSurface({ prose: source }, 'scaffold');
 
   if (!misevolution.ok) {
     recordMisevolutionVeto(sql, actor, {
@@ -375,7 +375,7 @@ export function applyPromptSectionDecision(
   actor.assertCurrent();
 
   if (decision === 'promote') {
-    const misevolution = checkMisevolution(pending.source);
+    const misevolution = checkMisevolutionForSurface({ prose: pending.source }, 'scaffold');
 
     if (!misevolution.ok) {
       recordMisevolutionVeto(sql, actor, {
