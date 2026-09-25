@@ -1,5 +1,5 @@
 {
-  "measured": "9369af820: 1190 test files, 1033 runnable suites, 12988 tests, 43 runners, 35 non-public product members",
+  "measured": "e67977c0f: 1190 test files, 1033 runnable suites, 12988 tests, 43 runners, 35 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-codemode-sandbox.test.ts :: (file scope) :: declared mirror",
@@ -203,7 +203,7 @@
     },
     {
       "key": "tautology_suspect :: tests/live/evolution-proof.test.ts :: the plaintext encodes back to the ciphertext, and Atbash is its own inverse :: expected side computed by the code under test",
-      "count": 2
+      "count": 1
     }
   ]
 }
