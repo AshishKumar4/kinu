@@ -1902,7 +1902,8 @@ export type {
 } from './read-models/tool-failures';
 
 export {
-  ChangeSetCache, getExecutorDiff, getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline, restoreWorkspaceBaseline,
+  CHANGES_MOVED_EVENT, ChangeSetCache, getExecutorDiff, getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
+  restoreWorkspaceBaseline,
 } from './read-models/workspace-diff';
 
 export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff';

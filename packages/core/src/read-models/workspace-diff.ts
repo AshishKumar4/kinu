@@ -621,6 +621,9 @@ function reviewsPath(path: string): boolean {
   return top !== undefined && REVIEWED_UNDER_ROOT.includes(top) && names.every(reviewed);
 }
 
+/** The frame a workspace sends its pages when its change-set moved: Changes reads again, shown or not. */
+export const CHANGES_MOVED_EVENT = 'changes_moved';
+
 /**
  * The workspace's change-set, read again only after something it reviews moved: a file event on a reviewed path, or
  * a baseline that Mark reviewed or Undo moved. A poll while nothing moved walks nothing.
@@ -628,25 +631,57 @@ function reviewsPath(path: string): boolean {
 export class ChangeSetCache {
   private generation = 0;
   private held: { readonly generation: number; readonly result: WorkspaceDiffResult } | null = null;
+  /**
+   * A move was announced and no read has settled since. A burst of writes is one frame, and a page told re-reads one
+   * walk at a time: a frame per read started would let each write start a walk beside the last.
+   */
+  private announced = false;
+
+  /** `announce` tells the workspace's pages that the change-set moved. */
+  constructor(private readonly announce: () => void) {}
 
   /** Paths a write touched, as the workspace's file events name them. */
   touched(paths: readonly string[]): void {
-    if (paths.some(reviewsPath)) this.generation += 1;
+    if (paths.some(reviewsPath)) this.move();
   }
 
   /** After Mark reviewed or Undo has moved the baseline. */
   moved(): void {
-    this.generation += 1;
+    this.move();
   }
 
   async read(load: () => Promise<WorkspaceDiffResult>): Promise<WorkspaceDiffResult> {
     const { generation } = this;
 
-    if (this.held?.generation === generation) return this.held.result;
-    const result = await load();
-    this.held = { generation, result };
+    try {
+      if (this.held?.generation === generation) return this.held.result;
+      const result = await load();
 
-    return result;
+      // A slower read of an older generation never replaces a newer one.
+      if (this.held === null || this.held.generation < generation) this.held = { generation, result };
+
+      return result;
+    } finally {
+      this.settled(generation);
+    }
+  }
+
+  private move(): void {
+    this.generation += 1;
+    this.tell();
+  }
+
+  /** A read of `generation` settled: a move it did not see is news again. */
+  private settled(generation: number): void {
+    this.announced = false;
+
+    if (this.generation !== generation) this.tell();
+  }
+
+  private tell(): void {
+    if (this.announced) return;
+    this.announced = true;
+    this.announce();
   }
 }
 

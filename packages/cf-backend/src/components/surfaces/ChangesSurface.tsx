@@ -101,13 +101,15 @@ function useDocumentVisible(): boolean {
 
 const UNDO_MS = 10_000;
 
-export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = null, active, turnLive, onOpenFile, onCount }: {
+export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = null, active, moved, turnLive, onOpenFile, onCount }: {
   executors: ExecutorInfo[];
   lastActiveExecutor?: string | null;
   rpc: Rpc;
   focus?: ChangesFocus | null;
   /** Whether Changes is the surface shown: only then does it poll. */
   active: boolean;
+  /** Counts the workspace's word that its change-set moved: a hire's, a job's or a slate server's write, or a review. */
+  moved?: number;
   /** Whether the workspace's turn is running: its writes are all in once it closes. */
   turnLive: boolean;
   onOpenFile: (path: string) => void;
@@ -152,11 +154,19 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
 
   const visible = useDocumentVisible();
   const seen = active && visible;
-  // Unseen, it reads only when a turn closes, it comes into view or the window takes focus.
+  // Unseen, it reads only when the workspace says its change-set moved, a turn closes, it comes into view or the
+  // window takes focus.
   const revalidate = useCallback(() => (seen ? 2_000 : null), [seen]);
   const { resource, reload } = useAsyncResource(load, revalidate);
   const wasLive = useRef(turnLive);
   const wasSeen = useRef(seen);
+  const wasMoved = useRef(moved);
+
+  // Shown or not: the tab and its count come from this read.
+  useEffect(() => {
+    if (moved !== wasMoved.current) reload();
+    wasMoved.current = moved;
+  }, [moved, reload]);
 
   useEffect(() => {
     if (seen && !wasSeen.current) reload();

@@ -401,7 +401,7 @@ describe('workspace diff lifecycle', () => {
   test('a poll while nothing reviewed moved walks nothing; a write, a shell write, a rename away or a review reads again', async () => {
     const { rt, workspace } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
-    const changes = new ChangeSetCache();
+    const changes = new ChangeSetCache(() => {});
     let delivered = Promise.withResolvers<void>();
 
     workspace.onFilesChanged((paths) => {
@@ -445,6 +445,56 @@ describe('workspace diff lifecycle', () => {
     await resetWorkspaceBaseline(rt);
     changes.moved();
     expect(await poll()).toEqual({ walked: true, listed: [] });
+  });
+
+  test('a move tells the pages once until a read settles, and a write Changes does not review tells nobody', async () => {
+    // Unseen, the Changes tab reads only when told. A frame per write, or per read started, would start a walk per
+    // write beside the one running.
+    const { rt, workspace } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    // Booting the workspace writes its home and scaffold, which a listener would hear.
+    await resetWorkspaceBaseline(rt);
+    let told = 0;
+    const changes = new ChangeSetCache(() => { told += 1; });
+    let delivered = Promise.withResolvers<void>();
+
+    workspace.onFilesChanged((paths) => {
+      changes.touched(paths);
+      delivered.resolve();
+    });
+
+    const landed = async (write: () => Promise<void>): Promise<void> => {
+      delivered = Promise.withResolvers<void>();
+      await write();
+      await delivered.promise;
+    };
+
+    const read = async (): Promise<void> => { await changes.read(() => getWorkspaceDiff(rt)); };
+
+    await read();
+    await landed(() => rt.storage.vfs.writeFile('.cache/state.json', '{}'));
+    expect(told).toBe(0);
+    await landed(() => rt.storage.vfs.writeFile('notes.md', 'one\n'));
+    await landed(() => rt.storage.vfs.writeFile('more.md', 'two\n'));
+    expect(told).toBe(1);
+    await read();
+    await landed(async () => { await workspace.shell.exec('echo from the shell > shell.txt'); });
+    expect(told).toBe(2);
+
+    // A write that lands during a walk is told when the walk settles, not beside it.
+    let toldMidWalk = -1;
+
+    await changes.read(async () => {
+      const result = await getWorkspaceDiff(rt);
+      await landed(() => rt.storage.vfs.writeFile('late.md', 'three\n'));
+      toldMidWalk = told;
+
+      return result;
+    });
+    expect([toldMidWalk, told]).toEqual([2, 3]);
+    await read();
+    changes.moved();
+    expect(told).toBe(4);
   });
 
   test('the change-set never holds more than one baseline body at a time', async () => {

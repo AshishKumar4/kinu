@@ -90,6 +90,8 @@ export interface WorkSurfaceProps {
   slates?: readonly SlateSummary[];
   /** Per-Slate remount counter from `slates_changed`; makes an open frame re-read its URL. */
   slateReloads?: ReadonlyMap<string, number>;
+  /** Counter from `changes_moved`; absent in fixture frames, which have no workspace to hear. */
+  changesMoved?: number;
   /** Absent in fixture frames, which keeps every tab visible: unknown is not empty. */
   tabPresence?: TabPresence;
   /** The workspace's presence read has not answered: no tab is marked until it has or the reader picks one. */
@@ -337,7 +339,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
       </div>
       <div className={surface === "Changes" ? "flex-1 min-h-0" : "hidden"}>
         <ChangesSurface executors={props.executors} lastActiveExecutor={props.lastActiveExecutor} rpc={props.rpc} focus={props.changesFocus ?? null}
-          active={surface === "Changes"} turnLive={props.isStreaming} onOpenFile={openChangedFile} onCount={setChangeCount} />
+          active={surface === "Changes"} moved={props.changesMoved} turnLive={props.isStreaming} onOpenFile={openChangedFile}
+          onCount={setChangeCount} />
       </div>
       <ListingStatus error={props.previewError} starting={props.previewStarting ?? []} onRetry={props.onRefreshPorts} />
       {connecting && <ConnectDeviceDialog onClose={closeConnect} />}

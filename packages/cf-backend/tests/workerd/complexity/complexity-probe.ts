@@ -473,7 +473,8 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
   async diffPoll(files: number): Promise<OperationCost> {
     const actor = this.main();
     const vfs = this.agentFiles();
-    const changes = new ChangeSetCache();
+    // No page listens here: the subject is the read, not the frame.
+    const changes = new ChangeSetCache(() => {});
 
     (await this.workspace()).events.on((batch) => changes.touched(batch.flatMap((event) => (event.oldPath === undefined ? [event.path] : [event.path, event.oldPath]))));
     initWorkspaceBaselineTable(this.execRaw);

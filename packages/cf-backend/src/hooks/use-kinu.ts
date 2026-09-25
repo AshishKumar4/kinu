@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo, type SetStateAction 
 import { useAgent } from "agents/react";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
-  branchHeadId, ORCHESTRATOR_AGENT_SLUG, SLATES_CHANGED_EVENT, hostedActorSocketPath,
+  branchHeadId, CHANGES_MOVED_EVENT, ORCHESTRATOR_AGENT_SLUG, SLATES_CHANGED_EVENT, hostedActorSocketPath,
   type PendingAction, type PlanReview, type ReasoningEffort, type RoleId, type SlateProblem, type SlateSummary, type TierSource,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
@@ -344,6 +344,7 @@ const SocketMessageSchema = v.variant("type", [
   v.object({ type: v.literal("work_cancelled") }),
   v.object({ type: v.literal("pending_actions_changed") }),
   v.object({ type: v.literal(SLATES_CHANGED_EVENT), ids: v.array(v.string()) }),
+  v.object({ type: v.literal(CHANGES_MOVED_EVENT) }),
   v.object({
     type: v.literal("branch_status"), branchId: v.string(), task: v.optional(v.string()),
     status: v.optional(v.string()), takeSetId: v.optional(v.string()),
@@ -869,6 +870,8 @@ export function useKinu(target?: string | KinuActorAddress) {
   const claimedWorkspacePlans = useRef(new Set<string>());
   const knownPlans = useRef(new Set<string>());
   const [slateReloads, setSlateReloads] = useState<ReadonlyMap<string, number>>(new Map());
+  /** Counts `changes_moved` frames: Changes reads again on each, shown or not. */
+  const [changesMoved, setChangesMoved] = useState(0);
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
   /** A connect clears it. */
   const [unavailableDevices, setUnavailableDevices] = useState<UnavailableDevice[] | null>(null);
@@ -1324,6 +1327,16 @@ export function useKinu(target?: string | KinuActorAddress) {
       }
     };
 
+    // A pending plan seen for the first time takes focus; a later revision of it does not.
+    const adoptPlan = (plan: PlanReview | null): void => {
+      if (!plan) return;
+      const key = `${plan.id}:${plan.revision}`;
+
+      if (!knownPlans.current.has(key) && plan.status === "pending") setPlanFocus(key);
+      knownPlans.current.add(key);
+      setActivePlan(plan);
+    };
+
     const handler = async (event: MessageEvent) => {
       const msg = paneFrame(event.data, { isSubordinate, ownActorId: ownActorIdRef.current });
 
@@ -1374,6 +1387,8 @@ export function useKinu(target?: string | KinuActorAddress) {
           });
 
           await reread('slates', refreshSlates);
+        } else if (msg.type === CHANGES_MOVED_EVENT) {
+          setChangesMoved((moved) => moved + 1);
         } else if (msg.type === "branch_status") {
           const status = branchRunStatus(msg.status);
 
@@ -1414,15 +1429,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
           if (card) setSignalCards((current) => applySignalCard(current, card));
         } else if (msg.type === "plan_updated") {
-          const plan = parsePlanReview({ value: msg.plan });
-
-          if (plan) {
-            const key = `${plan.id}:${plan.revision}`;
-
-            if (!knownPlans.current.has(key) && plan.status === "pending") setPlanFocus(key);
-            knownPlans.current.add(key);
-            setActivePlan(plan);
-          }
+          adoptPlan(parsePlanReview({ value: msg.plan }));
         } else if (msg.type === 'workspace_plan_updated') {
           const key = JSON.stringify(msg.reference);
 
@@ -2013,6 +2020,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     tabPresence,
     slates,
     slateReloads,
+    changesMoved,
     pendingConsents,
     resolveConsent,
     unavailableDevices,

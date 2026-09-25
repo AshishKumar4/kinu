@@ -167,7 +167,8 @@ import {
   type Page, type PageRequest,
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunEventText, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
-  ChangeSetCache, getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline, restoreWorkspaceBaseline,
+  CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
+  restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceDiffResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes,
   type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
@@ -398,8 +399,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Shared across boot retries. */
   private _workspace: HostedWorkspace | undefined;
 
-  /** The change-set the Changes poll reads, held until a file event or a baseline move makes it stale. */
-  private readonly changes = new ChangeSetCache();
+  /**
+   * The change-set the Changes poll reads, held until a file event or a baseline move makes it stale. A move tells the
+   * workspace's pages, so a Changes tab no one is looking at reads a hire's, a job's or a slate server's write too.
+   */
+  private readonly changes = new ChangeSetCache(() => {
+    this.broadcastToActor(null, JSON.stringify({ type: CHANGES_MOVED_EVENT }));
+  });
 
   private hostedWorkspace(): HostedWorkspace {
     this._workspace ??= createHostedWorkspace({
