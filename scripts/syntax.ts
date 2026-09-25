@@ -623,6 +623,67 @@ export function reExportBindings(statement: SyntaxNode): readonly ModuleBinding[
   return bound;
 }
 
+/** The module a published binding came from, and its name there. */
+export interface Origin {
+  readonly specifier: string;
+  readonly imported: string;
+}
+
+/** One name a module publishes; `origin` is undefined for a binding it declares itself. */
+export interface Published {
+  readonly name: string;
+  readonly origin: Origin | undefined;
+}
+
+/**
+ * Every name a module publishes, read off its top-level statements: exported
+ * declarations, `export { a as b }` as `b`, `export … from`, and `export default`
+ * as `default`. A re-published import keeps the origin its `import` gave it.
+ * `export * from` publishes names this file cannot list, and is one
+ * {@link NAMESPACE} entry.
+ */
+export function publishedNames(tree: SyntaxNode): readonly Published[] {
+  const imports = new Map<string, Origin>();
+
+  for (const statement of tree.children) {
+    if (statement.raw.type !== 'ImportDeclaration') continue;
+    const specifier = statement.raw.source.value;
+
+    for (const { local, imported } of importBindings(statement)) imports.set(local, { specifier, imported });
+  }
+
+  const published: Published[] = [];
+
+  for (const statement of tree.children) {
+    const { raw } = statement;
+    const source = raw.type === 'ExportAllDeclaration' || raw.type === 'ExportNamedDeclaration' ? raw.source : null;
+
+    if (source !== null && source !== undefined) {
+      const specifier = source.value;
+
+      for (const { local, imported } of reExportBindings(statement)) published.push({ name: local, origin: { specifier, imported } });
+    } else if (raw.type === 'ExportDefaultDeclaration') {
+      const local = identifierName(raw.declaration);
+
+      published.push({ name: 'default', origin: local === undefined ? undefined : imports.get(local) });
+    } else if (raw.type === 'ExportNamedDeclaration') {
+      const { node } = declarationOf(statement);
+      const declared = node.raw.type === 'VariableDeclaration' ? declaredBindings(node, false) : [declaredName(node)];
+
+      for (const name of declared) if (name !== undefined) published.push({ name, origin: undefined });
+
+      for (const specifier of raw.specifiers) {
+        const local = identifierName(specifier.local) ?? literalString(specifier.local);
+        const name = identifierName(specifier.exported) ?? literalString(specifier.exported);
+
+        if (local !== undefined && name !== undefined) published.push({ name, origin: imports.get(local) });
+      }
+    }
+  }
+
+  return published;
+}
+
 /**
  * Names this file REFERENCES, as against the names it declares, imports or
  * republishes. The question is "does anything here USE that binding", so three

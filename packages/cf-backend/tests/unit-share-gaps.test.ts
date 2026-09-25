@@ -209,13 +209,27 @@ test('D3: a credentialed share answers its consent page until the consent cookie
   expect(requests).toHaveLength(1);
 });
 
-test('a users share refuses a viewer it does not name', async () => {
+test('a users share lets in its owner and the people it names, each opening it as themselves, and no one else', async () => {
   const world = await twoUserWorld();
   cleanups.push(world.close);
 
   const created = await sharePublic(world, 'users');
+  const url = present(created.url, 'the share URL');
+  await world.owner.agent.shareLiveWith(created.share.id, [{ userId: VIEWER_ID, email: 'pat@example.test' }]);
 
-  expect((await visit(world, present(created.url, 'the share URL'), '203.0.113.5'))?.status).toBe(404);
+  const openAs = async (identity: AuthIdentity, ip: string): Promise<number | undefined> => {
+    const opened = await sharedRequest(world.env, identity, post('/api/shared/live/open', { workspace: 'issues-owner', share: created.share.id }));
+    const entry = await jsonBody(present(opened, 'the open answer'), v.object({ url: v.string() }));
+    const exchanged = await handleSlateShareHostRequest(new Request(entry.url, { headers: { 'cf-connecting-ip': ip } }), world.env);
+    const cookie = present(exchanged?.headers.get('set-cookie')?.split(';')[0], 'the viewer cookie');
+
+    return (await visit(world, url, ip, { cookie }))?.status;
+  };
+
+  expect(await openAs(identityOf(OWNER_ID, 'owner@example.test'), '203.0.113.5')).toBe(200);
+  expect(await openAs(identityOf(VIEWER_ID, 'pat@example.test'), '203.0.113.6')).toBe(200);
+  expect(await openAs(identityOf('00112233445566778899aabbccddeeff', 'sam@example.test'), '203.0.113.7')).toBe(404);
+  expect((await visit(world, url, '203.0.113.8'))?.status).toBe(404);
 });
 
 test('D1: a live share forks for who it names, refuses who it does not, honors fork:false, and its owner forks it too', async () => {
@@ -342,6 +356,27 @@ test("the owner's Drive lists its slates and shares from the tiles its workspace
 
   expect(after.mine.map((row) => row.kind)).toEqual(['blueprint']);
   expect(after.slates[0]?.visibility).toBeUndefined();
+});
+
+test("a slate's picture in its workspace's tile reaches the Drive's row for it, and a live share of it names it", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const userDO = world.ownerUser.userDO;
+  const push = userDO.putWorkspaceOverview.bind(userDO);
+  const digest = 'ab'.repeat(32);
+
+  // The capture is Browser Rendering's, so here the tile the workspace pushes is handed one.
+  Object.assign(userDO, {
+    putWorkspaceOverview: (...[caller, name, overview]: Parameters<typeof push>) =>
+      push(caller, name, { ...overview, slates: overview.slates.map((slate) => ({ ...slate, picture: digest })) }),
+  });
+  await sharePublic(world, 'public');
+  const shared = await jsonBody(present(await sharedRequest(world.env, owner, new Request('https://app.test/api/shared')), 'the library'), SharedLibrarySchema);
+
+  expect(shared.slates.map((slate) => [slate.id, slate.picture])).toEqual([['issues', digest]]);
+  // So the share's tile can find that picture among the owner's slates.
+  expect(shared.mine.filter((row) => row.kind === 'live').map((row) => row.slate)).toEqual(['issues']);
 });
 
 test('a change whose card cannot reach the tile is made and says the list is behind; a revoke during the backoff still moves it', async () => {

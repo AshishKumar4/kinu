@@ -38,7 +38,9 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { isTextSource, isVendoredSource, readMatching } from './sources';
+import { parseSync } from 'oxc-parser';
+import { isParseable, isTextSource, isVendoredSource, readMatching } from './sources';
+import { literalString, parse, walk } from './syntax';
 
 const repoRoot = new URL('..', import.meta.url).pathname;
 
@@ -435,6 +437,43 @@ function isIllustrative(site: CitationSite, seen: Citations): boolean {
 }
 
 /**
+ * A source file's prose at unchanged offsets: comments, strings with their
+ * quotes, template text, and JSX text, read by oxc. Every other non-blank
+ * character becomes NUL, which no citation pattern crosses, and a comment's own
+ * `//`, `/*` and `*\/` become spaces, so `// a,` over `// b` reads as one list.
+ * Code is not prose: a property named `lean` is not a module.
+ */
+function proseOf(file: string, text: string): string {
+  const PROSE = 1;
+  const DELIMITER = 2;
+  const mask = new Uint8Array(text.length);
+
+  walk(parse(file, text).root, ({ raw }) => {
+    if (raw.type === 'JSXText') mask.fill(PROSE, raw.start, raw.end);
+    else if (literalString(raw) !== undefined) mask.fill(PROSE, raw.start, raw.end);
+    else if (raw.type === 'TemplateElement') {
+      mask.fill(PROSE, raw.start + (text[raw.start] === '}' ? 1 : 0), raw.end - (text.startsWith('${', raw.end - 2) ? 2 : 0));
+    }
+  });
+
+  for (const comment of parseSync(file, text).comments) {
+    mask.fill(DELIMITER, comment.start, comment.end);
+    mask.fill(PROSE, comment.start + 2, comment.end - (comment.type === 'Block' ? 2 : 0));
+  }
+
+  let prose = '';
+
+  for (let at = 0; at < text.length; at += 1) {
+    const char = text[at] ?? '';
+    const blank = char === ' ' || char === '\t' || char === '\n';
+    const code = mask[at] === DELIMITER ? ' ' : '\0';
+    prose += mask[at] === PROSE || blank ? char : code;
+  }
+
+  return prose;
+}
+
+/**
  * One file, audited. Exported so every direction this gate claims to govern is
  * provable against synthetic text rather than by mutating the tree it governs.
  */
@@ -443,7 +482,7 @@ export function auditCitations(file: string, text: string, seen: Citations): str
   // Strip JSDoc continuation leaders, so a citation wrapped across lines reads as
   // one string. `consolidation_never_empties,\n * consolidation_nonincreasing` is
   // the live case.
-  const flat = text.replace(/^[ \t]*\*[ \t]?/gm, '');
+  const flat = (isParseable(file) ? proseOf(file, text) : text).replace(/^[ \t]*\*[ \t]?/gm, '');
 
   for (const match of flat.matchAll(LEAN_PATH)) {
     if (isIllustrative({ file, cites: citedToken(flat, match), text: flat, index: match.index }, seen)) {
@@ -604,6 +643,8 @@ if (import.meta.main) {
     + ' gate can actually verify; a line number is the shape it can only bound.'
     + ` ${String(vendored)} vendored file(s) under \`packages/agent-core/dist/\` are excluded:`
     + " they cite their own repository's Lean modules, which this tree does not carry, so"
-    + ' nothing here checks an upstream citation.',
+    + ' nothing here checks an upstream citation.'
+    + ' A TypeScript or JavaScript source is read as its comments, strings, template text and JSX'
+    + ' text only: a citation assembled at run time from pieces is not seen.',
   );
 }

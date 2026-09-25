@@ -142,7 +142,7 @@ import { TierIdSchema,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
-  admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode, toolSchemaDialect, withToolSchemaDialect,
+  admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode,
   createActorHost, defaultLoopOrigin, createDbCodemodeProvider,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
@@ -1649,10 +1649,7 @@ export class LocalAgentSession {
       Object.entries(this.filterToolsBySkills(activeSkills)).filter(([name]) => toolAllowed(name)),
     );
 
-    const filteredExternal = withToolSchemaDialect(
-      Object.fromEntries(Object.entries(this.extraTools).filter(([name]) => toolAllowed(name))),
-      toolSchemaDialect(this.effectiveModelSpec()),
-    );
+    const filteredExternal = Object.fromEntries(Object.entries(this.extraTools).filter(([name]) => toolAllowed(name)));
 
     const turnTools = toolsInWorkMode(this.actorSession.workMode, { ...filteredBuiltins, ...filteredExternal });
 

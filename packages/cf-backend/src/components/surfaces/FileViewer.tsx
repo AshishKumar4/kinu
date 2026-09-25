@@ -226,7 +226,7 @@ function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
     );
   }
 
-  if (body === "markdown") return <div className="p-3 text-xs p-text-2"><MarkdownContent content={frontmatterAsCode(content)} /></div>;
+  if (body === "markdown") return <div className="p-3 prose-chat"><MarkdownContent content={frontmatterAsCode(content)} /></div>;
 
   if (body === "html") {
     return (

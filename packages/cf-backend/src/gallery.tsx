@@ -1463,8 +1463,20 @@ const REVERT_LISTINGS = new Map<string | null, FileCheckpointListing>([
 const REVERT_LISTING: FileCheckpointListing = REVERT_LISTINGS.get(REVERT_CHECKPOINTS)
   ?? { availability: { available: false, reason: CHECKPOINTS_NO_DEVICE }, entries: [] };
 
+/* `&transcript=slates&slates=2`: the board twice, notes between, so the first board is superseded. */
+const SLATES_THREAD: UIMessage[] = [
+  msg({ id: "sb-u1", role: "user", createdAt: NOW - 9 * 60e3, parts: [{ type: "text", text: "Put this week's coupon redemptions on a board." }] }),
+  msg({ id: "sb-a1", role: "assistant", createdAt: NOW - 8 * 60e3, parts: [{ type: "text", text: "Here it is, grouped by code.\n\nslate://board" }] }),
+  msg({ id: "sb-u2", role: "user", createdAt: NOW - 7 * 60e3, parts: [{ type: "text", text: "Keep release notes beside it." }] }),
+  msg({ id: "sb-a2", role: "assistant", createdAt: NOW - 6 * 60e3, parts: [{ type: "text", text: "Started them.\n\nslate://notes" }] }),
+  msg({ id: "sb-u3", role: "user", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "Add when each coupon expires." }] }),
+  msg({ id: "sb-a3", role: "assistant", createdAt: NOW - 4 * 60e3, parts: [{ type: "text", text: "Added an expiry column.\n\nslate://board" }] }),
+];
+
 function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "revert") seedGalleryChat(REVERT_THREAD);
+
+  if (transcript === "slates") seedGalleryChat(SLATES_THREAD);
 }
 
 /** As the Durable Object broadcasts it after the walk-back. */
@@ -1500,6 +1512,10 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
   // Without an answer the strip hides Work on first paint.
   getWorkspaceTabPresence: () => ({ work: true, explorations: true }),
+  // Each slate's preview is its own page on the gallery's preview origin, served by a test or a capture.
+  previewSlate: (args?: unknown[]) => ({
+    ok: true, value: { url: new URL(v.parse(v.tuple([v.string()]), args)[0], SLATE_GALLERY_URL).href, port: 8789, inline: { height: 180 } },
+  }),
   listPendingConsents: () => [],
   // The seed is the whole conversation, so the storage walk is exhausted at once.
   getChatHistoryPage: () => ({ status: "end", items: [] }),
@@ -1687,7 +1703,7 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
 
   const page = WORKSPACE_PAGE_RPC.get(method);
 
-  if (page !== undefined) return rpcResult(v.parse(JsonValueSchema, page())).json<T>();
+  if (page !== undefined) return rpcResult(v.parse(JsonValueSchema, page(args))).json<T>();
   const agent = AGENT_RPC.get(method);
 
   if (agent !== undefined) return rpcResult(agent).json<T>();

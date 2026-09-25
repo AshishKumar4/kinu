@@ -733,7 +733,9 @@ added at most 90 to 127 MB of entries to `/var/tmp`, other lanes' included,
 and left no scratch root behind (three runs, 2026-09-24). One gap: under bun
 1.4.0, `Bun.spawn` with no `env` passes the environment bun started with, not
 `process.env` as the preload changed it, so those children keep the runner's
-`TMPDIR` instead of the scratch root.
+`TMPDIR` instead of the scratch root. One exception, 2026-09-25: a test
+browser's profile lives in `/tmp` until the browser closes, because one probe
+run wrote 174 MB of profile data in six minutes (`scripts/test-chrome.ts`).
 
 L11. A run or a test file that ends with processes of its own still running
 fails, and they are ended. Decided 2026-09-24. `runUnderDeadline` gives every

@@ -83,6 +83,8 @@ export interface InspectorLayout {
   readonly collapsed: boolean;
   readonly onLayoutChanged: (layout: Layout) => void;
   readonly toggleCollapsed: () => void;
+  /** Opens a collapsed inspector as the reader's own choice; an open one keeps the width they gave it. */
+  readonly reveal: () => void;
   readonly resetToDefault: () => void;
   readonly ready: boolean;
   readonly panelRef: RefObject<PanelImperativeHandle | null>;
@@ -219,6 +221,10 @@ export function useInspectorLayout(input: {
     else collapse();
   }, [collapse, expand]);
 
+  const reveal = useCallback(() => {
+    if (machineRef.current.collapsed) expand();
+  }, [expand]);
+
   const resetToDefault = useCallback(() => {
     claim({ collapsed: false, widthPx: INSPECTOR_DEFAULT_PX });
   }, [claim]);
@@ -354,6 +360,7 @@ export function useInspectorLayout(input: {
     collapsed,
     onLayoutChanged,
     toggleCollapsed,
+    reveal,
     resetToDefault,
     ready,
     panelRef,

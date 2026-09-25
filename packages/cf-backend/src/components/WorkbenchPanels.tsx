@@ -1,6 +1,6 @@
 /** Owns the inspector policy (`useInspectorLayout` over core's `decideInspector`). Below `md` the group is
  *  re-keyed so the library lays out from defaults rather than rescaling. */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useImperativeHandle, useState, type ReactNode, type Ref } from "react";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { SidebarSimpleIcon } from "@phosphor-icons/react";
 import { needsTheUser, type PersonAsks } from "@kinu.run/core";
@@ -14,6 +14,13 @@ export interface WorkbenchPanelsProps {
   readonly contents: PersonAsks;
   readonly chat: (inspector: InspectorControl | null) => ReactNode;
   readonly inspector: ReactNode;
+  /** Lets the page bring the inspector into view, where a surface it opens would otherwise stay hidden. */
+  readonly ref?: Ref<WorkbenchHandle>;
+}
+
+export interface WorkbenchHandle {
+  /** A collapsed inspector opens; on a phone, the Workspace pane replaces the chat. */
+  readonly reveal: () => void;
 }
 
 export interface InspectorControl {
@@ -38,7 +45,7 @@ export function InspectorToggle({ control }: { control: InspectorControl }) {
   );
 }
 
-export function WorkbenchPanels({ workspace, scope, contents, chat, inspector }: WorkbenchPanelsProps) {
+export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspector }: WorkbenchPanelsProps) {
   const [mobilePane, setMobilePane] = useState<"chat" | "workspace">("chat");
 
   const [desktopPanels, setDesktopPanels] = useState(
@@ -61,6 +68,15 @@ export function WorkbenchPanels({ workspace, scope, contents, chat, inspector }:
     mobileDefault: mobilePane === "workspace" ? "100%" : "0%",
     needsUser: needsTheUser(contents),
   });
+
+  const { reveal } = layout;
+
+  useImperativeHandle(ref, () => ({
+    reveal: () => {
+      if (desktopPanels) reveal();
+      else setMobilePane("workspace");
+    },
+  }), [desktopPanels, reveal]);
 
   const waiting = contents.pendingActions.length;
 

@@ -3,6 +3,7 @@
 // produces it: the tools a model call carries, the tables the object stores, and the model lanes
 // whose calls the object bills when a public operation runs on them.
 import { describe, test, expect } from 'bun:test';
+import { asSchema } from 'ai';
 import * as v from 'valibot';
 import {
   compareSurface, CONFORMANCE_PRODUCERS, normalizeObservedTables, observedActionEnum, renderConformanceFindings,
@@ -57,8 +58,8 @@ async function observe(): Promise<ObservedSurface> {
     root: 'cf-orchestrator',
     planes: {
       tool: new Set(Object.keys(tools)),
-      'agents-action': observedActionEnum(tools.agents),
-      'memory-action': observedActionEnum(tools.memory),
+      'agents-action': observedActionEnum(await asSchema(tools.agents?.inputSchema).jsonSchema),
+      'memory-action': observedActionEnum(await asSchema(tools.memory?.inputSchema).jsonSchema),
       table: normalizeObservedTables(workspace.tableNames()),
       producer: producersRecorded(workspace),
     },
@@ -84,8 +85,8 @@ async function observeSubordinate(): Promise<ObservedSurface> {
     root: 'cf-subordinate',
     planes: {
       tool: new Set(tools.keys()),
-      'agents-action': observedActionEnum(tools.get('agents')),
-      'memory-action': observedActionEnum(tools.get('memory')),
+      'agents-action': observedActionEnum(tools.get('agents')?.inputSchema),
+      'memory-action': observedActionEnum(tools.get('memory')?.inputSchema),
       table: normalizeObservedTables(workspace.tableNames()),
       producer: wiredProducers(child.actor.runtime),
     },

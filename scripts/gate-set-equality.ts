@@ -120,9 +120,10 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + 'point is to see what git never will.',
   ],
   [
-    'scripts/test-scratch-home.ts',
-    'reads the OS temp directory for scratch roots whose recorded owner process has ended. Not a '
-    + 'repository path: the roots are the test runs\' own, minted outside the tree.',
+    'scripts/process-owner.ts',
+    'reads a temp directory for scratch roots whose recorded owner process has ended: the test '
+    + 'preload reaps its run\'s temp directory and `preflight --reclaim` the browser profiles in '
+    + '/tmp. Not a repository path: the roots are the test runs\' own, minted outside the tree.',
   ],
   [
     'scripts/deadline.ts',

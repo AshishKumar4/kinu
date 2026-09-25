@@ -231,79 +231,196 @@ export interface PatchedFile {
   readonly preBlob: string | undefined;
 }
 
+const C_ESCAPES = new Map([['a', '\x07'], ['b', '\b'], ['f', '\f'], ['n', '\n'], ['r', '\r'], ['t', '\t'], ['v', '\v'], ['"', '"'], ['\\', '\\']]);
+
+/** A path as git quotes it (`"a\tb"`, octal bytes for non-ASCII), or as written when unquoted. */
+function unquoted(raw: string): string {
+  if (!raw.startsWith('"')) return raw;
+  const bytes: number[] = [];
+
+  for (let at = 1; at < raw.length; at += 1) {
+    const char = raw[at] ?? '';
+
+    if (char === '"') return new TextDecoder().decode(new Uint8Array(bytes));
+
+    if (char !== '\\') {
+      bytes.push(...new TextEncoder().encode(char));
+      continue;
+    }
+
+    at += 1;
+    const escape = raw[at] ?? '';
+
+    if (escape >= '0' && escape <= '7') {
+      bytes.push(Number.parseInt(raw.slice(at, at + 3), 8));
+      at += 2;
+    } else if (C_ESCAPES.has(escape)) {
+      bytes.push(...new TextEncoder().encode(C_ESCAPES.get(escape)));
+    } else {
+      throw new RefusedError('unmodelled_patch', `unknown escape \\${escape} in the quoted path ${raw}`);
+    }
+  }
+
+  throw new RefusedError('unmodelled_patch', `unterminated quoted path ${raw}`);
+}
+
+/** A `---`/`+++` operand: `/dev/null` is no file, a trailing tab starts a timestamp, and `a/` or `b/` is git's side prefix. */
+function sidePath(operand: string, prefix: string): string | undefined {
+  const path = operand.startsWith('"') ? unquoted(operand) : operand.split('\t')[0] ?? '';
+
+  if (path === '/dev/null') return undefined;
+
+  return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+
+/** The one path of `diff --git a/P b/P` when both sides name it, which is how git itself reads a header with no `---`/`+++`. */
+function headerPath(operands: string): string | undefined {
+  if (operands.startsWith('"')) {
+    const close = operands.indexOf('" ', 1);
+    const [left, right] = [unquoted(operands.slice(0, close + 1)), unquoted(operands.slice(close + 2))];
+
+    return left.slice(2) === right.slice(2) ? left.slice(2) : undefined;
+  }
+
+  const middle = (operands.length - 1) / 2;
+  const [left, right] = [operands.slice(0, middle), operands.slice(middle + 1)];
+
+  return Number.isInteger(middle) && left.startsWith('a/') && right.startsWith('b/') && left.slice(2) === right.slice(2)
+    ? left.slice(2)
+    : undefined;
+}
+
+/** One side's path: its `---`/`+++` operand; else none when the header says the file is created
+ *  (deleted); else the rename or copy header; else the one path of `diff --git`. */
+function sectionSide(
+  operand: string | undefined, prefix: string, absent: boolean, fallback: { moved: string | undefined; named: string | undefined },
+): string | undefined {
+  if (operand !== undefined) return sidePath(operand, prefix);
+
+  if (absent) return undefined;
+
+  return fallback.moved === undefined ? fallback.named : unquoted(fallback.moved);
+}
+
+/** Lines a hunk header `@@ -a[,n] +c[,m] @@` promises: n on the old side, m on the new; an omitted count is 1. */
+function hunkCounts(line: string) {
+  const [, oldRange = '', newRange = ''] = line.split(' ');
+
+  const count = (range: string): number => {
+    const comma = range.indexOf(',');
+
+    return comma === -1 ? 1 : Number(range.slice(comma + 1));
+  };
+
+  return { old: count(oldRange), new: count(newRange) };
+}
+
 /**
- * The files a patch touches.
+ * The files a patch touches, read with the grammar `git apply` accepts
+ * (git-diff(1), "Generating patch text with -p"; git-apply(1)):
  *
- * Paths come from the `---`/`+++` lines rather than the `diff --git` header,
- * which is genuinely ambiguous for a path containing a space. Only the lines
- * BEFORE the first `@@` are read: a removed line whose content begins `-- ` is
- * emitted as `--- ` and would otherwise be parsed as a header.
+ *   patch    := (other-line | section)*
+ *   section  := 'diff --git ' a/P ' ' b/P NL extended* [paths hunk*]   |   paths hunk+
+ *   extended := ('old mode' | 'new mode' | 'deleted file mode' | 'new file mode' | 'similarity index'
+ *                | 'dissimilarity index' | 'rename from' | 'rename to' | 'copy from' | 'copy to' | 'index') … NL
+ *   paths    := '--- ' path NL '+++ ' path NL
+ *   hunk     := '@@ -a[,n] +c[,m] @@' … NL then n old-side and m new-side lines (' ', '-', '+'), '\' lines between
  *
- * Anything not modelled is a REFUSAL naming the shape, never a silent skip. A
- * gate that quietly ignores the one section it did not understand is the defect
- * this file exists to close, one level up.
+ * A hunk ends by its counts, never by the look of the next line, so a removed
+ * line reading `-- x` is body. A section without `diff --git` is still a file
+ * `git apply` changes, and a section with no `---`/`+++` (an empty file created,
+ * a rename, a mode change) names its file in its header. Anything not modelled
+ * is a REFUSAL naming the shape, never a silent skip.
  */
 export function parsePatch(text: string): readonly PatchedFile[] {
   const files: PatchedFile[] = [];
-  const sections = text.split(/^(?=diff --git )/m).filter((s) => s.startsWith('diff --git '));
+  const lines = text.split('\n');
+  let at = 0;
 
-  for (const section of sections) {
-    const lines = section.split('\n');
-    const end = lines.findIndex((l) => l.startsWith('@@ '));
-    const header = end === -1 ? lines : lines.slice(0, end);
-    const headline = lines[0] ?? '';
+  while (at < lines.length) {
+    const line = lines[at] ?? '';
+    const git = line.startsWith('diff --git ');
 
-    if (header.some((l) => l.startsWith('GIT binary patch'))) {
-      throw new RefusedError(
-        'unmodelled_patch',
-        `${headline.trim()} is a binary hunk; this gate models text hunks only. Teach it the `
-        + 'shape rather than letting the section pass unchecked.',
-      );
+    if (!git && !(line.startsWith('--- ') && lines[at + 1]?.startsWith('+++ '))) {
+      at += 1;
+      continue;
     }
 
-    const minus = header.find((l) => l.startsWith('--- '));
-    const plus = header.find((l) => l.startsWith('+++ '));
+    const header: string[] = [];
 
-    if (minus === undefined || plus === undefined) {
-      throw new RefusedError(
-        'unmodelled_patch',
-        `${headline.trim()} carries no ---/+++ pair, so it is a mode-only or pure-rename change. `
-        + 'This gate compares content and would report it as matching.',
-      );
+    for (at += git ? 1 : 0; at < lines.length; at += 1) {
+      const next = lines[at] ?? '';
+
+      if (next.startsWith('@@ ') || next.startsWith('diff --git ') || (header.length > 0 && header.at(-1)?.startsWith('+++ '))) break;
+      header.push(next);
     }
 
-    const side = (line: string, prefix: string): string | undefined => {
-      const raw = line.slice(4).split('\t')[0] ?? '';
-
-      if (raw === '/dev/null') return undefined;
-
-      if (raw.startsWith('"')) {
-        throw new RefusedError(
-          'unmodelled_patch',
-          `${headline.trim()} names a quoted path (${raw}); this gate does not unquote them.`,
-        );
-      }
-
-      return raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
-    };
-
-    const index = header.find((l) => l.startsWith('index '));
-    const blobs = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/.exec(index ?? '');
-    const from = side(minus, 'a/');
-
-    if (from !== undefined && blobs === null) {
-      throw new RefusedError(
-        'unmodelled_patch',
-        `${headline.trim()} carries no \`index <pre>..<post>\` line. Without the declared `
-        + 'pre-image blob this gate cannot tell a corrupt cache from real drift, and would blame '
-        + 'the wrong one.',
-      );
-    }
-
-    files.push({ from, to: side(plus, 'b/'), preBlob: blobs?.[1] });
+    files.push(sectionFile(line, git, header));
+    at = pastHunks(lines, at, line.trim());
   }
 
   return files;
+}
+
+/** The file one section's header names, or the refusal naming what it cannot read. */
+function sectionFile(line: string, git: boolean, header: readonly string[]): PatchedFile {
+  const headline = line.trim();
+
+  const field = (name: string): string | undefined =>
+    header.find((l) => l.startsWith(`${name} `))?.slice(name.length + 1);
+
+  if (header.some((l) => l.startsWith('GIT binary patch') || (l.startsWith('Binary files ') && l.endsWith(' differ')))) {
+    throw new RefusedError(
+      'unmodelled_patch',
+      `${headline} is a binary hunk; this gate models text hunks only. Teach it the `
+      + 'shape rather than letting the section pass unchecked.',
+    );
+  }
+
+  const named = git ? headerPath(line.slice('diff --git '.length)) : undefined;
+  const from = sectionSide(field('---'), 'a/', field('new file mode') !== undefined, { moved: field('rename from') ?? field('copy from'), named });
+  const to = sectionSide(field('+++'), 'b/', field('deleted file mode') !== undefined, { moved: field('rename to') ?? field('copy to'), named });
+
+  if (from === undefined && to === undefined) {
+    throw new RefusedError('unmodelled_patch', `${headline} names no file this gate can read`);
+  }
+
+  const preBlob = field('index')?.split(' ')[0]?.split('..')[0];
+
+  if (from !== undefined && preBlob === undefined) {
+    throw new RefusedError(
+      'unmodelled_patch',
+      `${headline} carries no \`index <pre>..<post>\` line. Without the declared `
+      + 'pre-image blob this gate cannot tell a corrupt cache from real drift, and would blame '
+      + 'the wrong one.',
+    );
+  }
+
+  return { from, to, preBlob };
+}
+
+/** The line after the hunks starting at `at`, each ended by its own line counts. */
+function pastHunks(lines: readonly string[], start: number, headline: string): number {
+  let at = start;
+
+  while (lines[at]?.startsWith('@@ ')) {
+    const counts = hunkCounts(lines[at] ?? '');
+
+    for (at += 1; counts.old > 0 || counts.new > 0 || lines[at]?.startsWith('\\'); at += 1) {
+      const body = lines[at];
+
+      if (body === undefined) throw new RefusedError('unmodelled_patch', `${headline} ends inside a hunk`);
+
+      if (body.startsWith('-')) counts.old -= 1;
+      else if (body.startsWith('+')) counts.new -= 1;
+      else if (!body.startsWith('\\')) {
+        counts.old -= 1;
+        counts.new -= 1;
+      }
+    }
+  }
+
+  return at;
 }
 
 /** Blob SHA-1 of each path, in order, computed the way the patch's `index` line

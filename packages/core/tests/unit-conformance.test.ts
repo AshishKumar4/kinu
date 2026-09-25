@@ -160,9 +160,9 @@ describe('normalizeObservedTables', () => {
 });
 
 describe('observedActionEnum', () => {
-  test('reads the action enum from an ai-sdk jsonSchema wrapper', () => {
-    const tool = { inputSchema: { jsonSchema: { properties: { action: { enum: ['fork', 'hire'] } } } } };
-    expect([...observedActionEnum(tool)].sort()).toEqual(['fork', 'hire']);
+  test('reads the action enum from the JSON Schema a provider is sent', () => {
+    expect([...observedActionEnum({ type: 'object', properties: { action: { type: 'string', enum: ['hire', 'fork'] } } })].sort())
+      .toEqual(['fork', 'hire']);
   });
   test('an absent schema observes as empty, not as everything', () => {
     expect(observedActionEnum(undefined).size).toBe(0);

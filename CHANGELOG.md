@@ -20,6 +20,12 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- **A malformed tool call is refused before the tool runs.** Each built-in tool but `agents` now declares its input once, as a zod schema, which the model's call is checked against and which the same tool in eval reuses. Before, most tools handed the AI SDK an unchecked JSON Schema literal, so a call missing a field (an edit without `new_text`) could reach the tool. A refusal reaches the model as `bad_input` in one readable line that names the field, and for a choice lists the allowed values and what arrived. Every call that ran before still runs: limits the old schemas only advertised stay unenforced, a memory confidence above 1 is clamped as before, and `tasks.mode(null)` still reads the role. Each model now gets every tool's schema in its own dialect, so a Gemini turn no longer receives keys it rejects.
+- **Slate previews in the chat fold, and opening one always shows it.** A slate shown again later in the chat folds
+  its earlier previews ("Updated below"), and a slate open in the work surface beside the chat folds its preview
+  there until the surface moves off it. A preview's top bar folds it by hand. The open button now brings a hidden
+  work surface up on the slate, and on a phone switches to the Workspace pane; before, it did nothing while the
+  surface was hidden. The fold moves height and opacity on one curve, and holds still for reduced motion.
 - **See what each account has left.** `/stats` and Settings → Usage now open with each connected account's limits, read from the provider: Claude and ChatGPT sign-ins (5-hour and weekly windows), OpenCode Go (5-hour, weekly, monthly, from an undocumented source and labelled so) and OpenRouter keys (credit), each with used, left and the reset time. A read is kept for five minutes; `/stats refresh` or Read again asks now. An account that cannot be read says so instead of showing zero. This replaces the OpenRouter-only credit line.
 - **One model picker, and a Test on every model.** Every place that picks a model on the web (the composer, agents, the models settings and fallback chains) now opens on an empty search with the current model marked, so choosing another never starts by deleting text. Arrow keys and Enter choose; models are grouped by provider with its icon, show their context window, and a provider whose list failed shows its models as unavailable with the reason. Each row has a Test button: one request asking for one word, never retried, through the same path a turn takes, reporting time to first token and total time, or why it failed (signed out, allowance spent until a time, unknown model, unreachable). Alt+T tests the highlighted model on the web, Ctrl+T in the TUI. Tests run from the CLI are counted in `/stats`; tests from the web are not counted in Usage.
 - **Codex works on kinu.run.** chatgpt.com refuses Cloudflare Workers' network, so each user's Codex calls now go through their own small container, which chatgpt.com accepts. The first Codex call after a quiet spell takes about 2 to 4 seconds longer while the container wakes. A refused network now fails a Codex call once instead of three times.
@@ -704,6 +710,46 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A hovered sidebar row or chat tab no longer looks like the open one.** The open row in the sidebar reads as
+  "here": its icon and label in the accent, over a soft accent wash. A row under the pointer takes a neutral lift,
+  and rows sit 4 px apart, so the two never merge into one block. A closed chat tab under the pointer brightens
+  over a neutral bar, and the open tab keeps its accent bar.
+- **Slates show their picture in the Drive.** A slate's tile in My stuff draws its latest picture, as its
+  workspace's card does, instead of a letter; until the slate first renders, or if the picture fails to load, the
+  tile keeps its letter cover.
+- **A live share of yours shows its slate's picture.** In Shared, the tile of a slate you share live draws that
+  slate's picture, as its own tile does; a blueprint and a share someone gave you keep their covers.
+- **Stop sharing reads as a sentence, and an empty folder shows a folder.** The confirmation names the people
+  who lose access as "Sam and Lee" rather than a comma list, and says the slate can be shared again later. An
+  empty folder in the Drive shows a folder, not the Drive's own icon.
+- **An upload is a tile in its folder.** A file on its way into the Drive shows as a tile among the folder's files,
+  with its size and a moving bar, and Cancel upload in its menu stops it; one the Drive refuses stays as a tile with
+  the reason until it is dismissed. A folder with an upload in flight no longer says it is empty.
+- **A sheet's tile shows its cells, and code its line numbers.** In the Drive, a CSV or TSV file's tile draws its
+  first rows as a small sheet with a header, and a code file's tile its first lines numbered, as the design has them.
+- **You can open your own people-only share.** Open on a live share you gave to named people answered "Not
+  found", because the share let in only the people it names. It now lets in its owner too, as forking it
+  already did; nobody else gets in.
+- **The Skills folder wears the skills' mark.** In the Drive, the Skills folder showed a plain folder icon; it now
+  shows the green book the skills in it wear, as the design has it.
+- **An upload's bar can be seen.** The bar on an upload's tile was a faint shimmer that nearly vanished on the
+  tile, in both themes. It is now a sweep in the icon colour crossing a track, and it holds still for reduced
+  motion.
+- **A Markdown file's tile reads as its page.** Its first heading titles the page, headings stay bold, lists keep
+  a bullet, and Markdown's own marks (`#`, `-`, `**`, backticks, link targets) no longer show. A skill's tile no
+  longer repeats its name as its first step.
+- **A Markdown file opens as a document.** In the file viewer, in the Drive and in a workspace's Files, a heading
+  was body-sized text and a list lost its bullets or numbers. Rendered Markdown now reads as the chat's prose
+  does: headings above the text, lists with their markers.
+- **Publishing a blueprint, the secrets warning speaks to you.** It told the publisher to "check them before you
+  use this blueprint", the advice meant for someone forking it. It now says the lines go out with the blueprint
+  and to remove them before you publish; the blueprint's own page keeps its advice for readers.
+- **The share dialog's Reach row names what a slate reaches.** Folded, it listed the slate's own binding keys
+  ("GITHUB, FILES, NOTES"). It now names what they reach, as the unfolded rows do: "GitHub, workspace executor,
+  your workspace memory", and the count of changes allowed stays whole beside them however long the list runs.
+- **A chat preview you opened by hand stays open.** A preview you had folded and opened again folded itself once
+  its slate was shown beside the chat, or a later preview of it arrived. Your own choice now holds until the
+  reason that folds it on its own ends.
 - **Hired agents make slates.** Slates lived in the main agent's home, so an agent you hired could not create one
   ("can't promote to /home/main/slates/widgets (EACCES)"). They now live at `/slates`, the workspace's own
   directory. Every chat in the workspace makes, edits, previews and removes slates there as the main chat does, and

@@ -108,6 +108,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
     for (const slate of overview.slates) {
       slates.push({
         id: slate.id, title: slate.title, workspace, bindings: slate.bindings, ...(slate.visibility !== null && { visibility: slate.visibility }),
+        ...(slate.picture !== null && { picture: slate.picture }),
       });
     }
 
@@ -119,7 +120,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
 
       if (share.kind === 'live') {
         mine.push({
-          ...row, id: share.share, kind: 'live',
+          ...row, id: share.share, kind: 'live', slate: share.slate,
           ...(share.visibility !== undefined && { visibility: share.visibility }), ...(share.fork !== undefined && { fork: share.fork }),
         });
         continue;

@@ -50,7 +50,7 @@ import { createServer, type Server } from 'node:http';
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, extname, join } from 'node:path';
-import puppeteer, { type Browser, type LaunchOptions } from 'puppeteer';
+import type { Browser } from 'puppeteer';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
@@ -60,6 +60,7 @@ import {
 // The build under test, from the config the deploy path uses, resolved as
 // `vite build` resolves it. Imported rather than named by path: see `buildClient`.
 import clientConfigFor from '../packages/cf-backend/vite.config';
+import { withTestChrome } from './test-chrome';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -585,23 +586,6 @@ async function readRuntime(browser: Browser, origin: string, path: string): Prom
   }
 }
 
-function chromePath(): string | undefined {
-  for (const candidate of ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium']) {
-    if (existsSync(candidate)) return candidate;
-  }
-
-  return undefined;
-}
-
-async function launch(): Promise<Browser> {
-  const executablePath = chromePath();
-  const options: LaunchOptions = { args: ['--no-sandbox', '--disable-dev-shm-usage'] };
-
-  if (executablePath !== undefined) options.executablePath = executablePath;
-
-  return puppeteer.launch(options);
-}
-
 /** Every react and react-dom resolution the lockfile records. A key of
  *  `<parent>/react` is a nested copy, which is the multi-identity risk the
  *  finding names; a bare `react` key is the single hoisted one. */
@@ -643,9 +627,8 @@ const REACT_DOM_VERSION = installedVersion('react-dom');
 beforeAll(async () => {
   production = await buildClient(PRODUCTION_OUT, false);
   developmentBuild = await buildClient(DEVELOPMENT_OUT, true);
-  const browser = await launch();
 
-  try {
+  await withTestChrome(async (browser) => {
     const served = await serveArtifact(PRODUCTION_OUT);
 
     try {
@@ -664,9 +647,7 @@ beforeAll(async () => {
     } finally {
       servedDevelopment.close();
     }
-  } finally {
-    await browser.close();
-  }
+  });
 });
 
 afterAll(() => {
@@ -844,9 +825,7 @@ describe('the onboarding gate routes on the account the profile describes', () =
       createdAt: 0, lastSeenAt: 0, onboardedAt: null,
     };
 
-    const browser = await launch();
-
-    try {
+    await withTestChrome(async (browser) => {
       const established = await serveArtifact(PRODUCTION_OUT, { ...profile, workspaceCount: 1 });
 
       try {
@@ -879,8 +858,6 @@ describe('the onboarding gate routes on the account the profile describes', () =
       } finally {
         fresh.close();
       }
-    } finally {
-      await browser.close();
-    }
+    });
   });
 });

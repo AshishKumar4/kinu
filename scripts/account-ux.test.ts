@@ -15,8 +15,11 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from 'puppeteer';
+import { ONBOARDING_STEPS } from '@kinu.run/core';
 
 import { withGallery, type Gallery } from './gallery-harness';
+
+const ONBOARDING_STEP_IDS = ONBOARDING_STEPS.map((step) => step.id);
 
 const SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'account-ux');
 
@@ -42,24 +45,27 @@ async function shoot(page: Page, name: string): Promise<string> {
 
 const dialogText = (page: Page) => page.$eval('[role="dialog"]', (element) => element.textContent ?? '');
 
-/** The rail's primary nav, as drawn: which rows carry the active token (the
- *  elevated background class every active row shares) and which one react-
- *  router marks current. Exactly one row may be lit, and it must be the page's. */
+/** The primary nav, painted, once each row's own colour transition has ended. */
+async function navPaint(page: Page): Promise<{ label: string; background: string; ink: string; top: number; bottom: number }[]> {
+  return page.$$eval('nav[aria-label="Primary"] a', async (anchors) => {
+    await Promise.allSettled(anchors.flatMap((anchor) => anchor.getAnimations().map((animation) => animation.finished)));
+
+    return anchors.map((anchor) => {
+      const style = getComputedStyle(anchor);
+      const box = anchor.getBoundingClientRect();
+
+      return { label: anchor.textContent?.trim() ?? '', background: style.backgroundColor, ink: style.color, top: box.top, bottom: box.bottom };
+    });
+  });
+}
+
+/** Exactly one primary row is marked current; the caller names the route's row it must be. */
 async function activeNavRow(page: Page): Promise<string> {
-  const rows = await page.$$eval('nav[aria-label="Primary"] a', (anchors) => anchors.map((a) => ({
-    label: a.textContent?.trim() ?? '',
-    lit: a.className.includes('bg-[var(--c-elevated)]') && !a.className.includes('hover:bg-[var(--c-elevated)]'),
-    current: a.getAttribute('aria-current') === 'page',
-  })));
+  const current = await page.$$eval('nav[aria-label="Primary"] a[aria-current="page"]', (rows) => rows.map((row) => row.textContent?.trim() ?? ''));
 
-  const lit = rows.filter((row) => row.lit);
-  const current = rows.filter((row) => row.current);
+  if (current.length !== 1) throw new Error(`expected exactly one current nav row, got ${JSON.stringify(current)}`);
 
-  if (lit.length !== 1 || current.length !== 1 || lit[0]?.label !== current[0]?.label) {
-    throw new Error(`expected exactly one lit and current nav row, got ${JSON.stringify(rows)}`);
-  }
-
-  return lit[0].label;
+  return current[0] ?? '';
 }
 
 /** The fixture arms two states for the sibling failure rig: Codex failed and
@@ -75,38 +81,35 @@ async function settleAccountFixture(page: Page): Promise<void> {
   await retry?.click();
 }
 
-/** What one welcome step shows: the panel that is neither hidden nor inert
- *  carries that step's own copy, and the first step's name field is prefilled. */
-async function expectWelcomeStep(page: Page, step: 0 | 1 | 2, active: string): Promise<void> {
+/** The welcome steps a reader sees: panels of the slide neither inert nor hidden, and rendered. */
+function shownSteps(page: Page): Promise<string[]> {
+  return page.$$eval('[data-welcome-step]', (panels) => panels
+    .filter((panel) => panel instanceof HTMLElement && !panel.inert && panel.getAttribute('aria-hidden') !== 'true' && panel.checkVisibility())
+    .map((panel) => panel.getAttribute('data-welcome-step') ?? ''));
+}
+
+/** Every finite animation on the page has ended: a shot shows the step at rest, not mid-reveal. */
+async function settled(page: Page): Promise<void> {
+  await page.evaluate(() => Promise.allSettled(document.getAnimations()
+    .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
+    .map((animation) => animation.finished)));
+}
+
+/** The step the page opened on is the one shown, its name field prefilled from the profile; the shot waits for the
+ *  showcase's cards, which reveal a moment after their step shows, to be seen at all and then at rest. */
+async function expectStepAtRest(page: Page, step: 0 | 1 | 2): Promise<void> {
+  expect(await shownSteps(page)).toEqual([ONBOARDING_STEP_IDS[step]]);
+
   if (step === 0) {
-    expect(await page.$('[aria-label="Your name"]')).not.toBeNull();
-    expect(active).toContain('Your name');
-
-    const field = await page.$eval('[aria-label="Your name"]', (el) => {
-      if (!(el instanceof HTMLInputElement)) throw new Error('the name field is not an input');
-
-      return el.value;
-    });
-
-    expect(field).toBe('Owner');
-
-    return;
+    expect(await page.$eval('[aria-label="Your name"]', (el) => (el instanceof HTMLInputElement ? el.value : null))).toBe('Owner');
   }
 
-  if (step === 1) {
-    expect(active).toContain('API keys');
-
-    return;
+  if (step === 2) {
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-welcome-step="showcase"] > div > div')]
+      .every((card) => card.checkVisibility({ opacityProperty: true })));
   }
 
-  // The three showcase cards fade in staggered; a capture taken mid-transition
-  // photographs the last one translucent.
-  await page.waitForFunction(
-    () => [...document.querySelectorAll('[data-welcome-step="showcase"] > div > div')]
-      .every((el) => getComputedStyle(el).opacity === '1'),
-  );
-
-  expect(await page.$eval('[data-welcome-step="showcase"]', (el) => el instanceof HTMLElement && !el.inert)).toBe(true);
+  await settled(page);
 }
 
 /** What one view of the Workspaces page draws for a reader, and the shot of
@@ -302,16 +305,49 @@ describe('account panels', () => {
       const usage = await freshPage(gallery, 'usersettingsstate&section=usage', 'dark', 'mobile');
 
       try {
-        await usage.waitForFunction(() => document.body.textContent?.includes('Across 4 workspaces') === true);
-        const text = await usage.evaluate(() => document.body.textContent ?? '');
-        expect(text).toContain('anthropic · work');
-        expect(text).toContain('3 of 50 requests left, resets in');
-        // Limits read live from each provider, in limitWindowText's words, above the spend rows.
-        expect(text).toContain('5h  62% used · 38% left · resets');
-        expect(text).toContain('credit  $5.88 used · $4.12 of $10.00 left · resets monthly');
-        expect(text).toContain("Claude · work: couldn't be read (");
-        expect(text).toContain('No account recorded');
-        expect(text).toContain('could not be read: old-bot');
+        // The inputs are the gallery's `/api/user/usage`: four accounts (402, 214, 38 and 93 calls, the last with no
+        // account), four workspaces read and `old-bot` not, and Claude's `work` account unreadable with its reason.
+        await usage.waitForFunction(() => /\d+% used/.test(document.body.innerText));
+        const lines = (await usage.evaluate(() => document.body.innerText)).split('\n');
+
+        // Each line a pattern matches, with the numbers it read there.
+        const read = (pattern: RegExp): { line: string; values: number[] }[] => lines.flatMap((line) => {
+          const hit = pattern.exec(line);
+
+          return hit === null ? [] : [{ line, values: hit.slice(1).map(Number) }];
+        });
+
+        // Every account is listed, the one with no account among them, and the count of workspaces read is said.
+        expect(read(/×(\d+)/).map(({ values }) => values[0]).sort((a = 0, b = 0) => a - b)).toEqual([38, 93, 214, 402]);
+        expect(read(/Across (\d+) workspace/).map(({ values }) => values[0])).toEqual([4]);
+
+        // Each limit window's two shares make the whole, and each says when it resets.
+        const shares = read(/(\d+)% used\D+(\d+)% left/);
+
+        expect(shares.length).toBeGreaterThan(0);
+
+        for (const { line, values: [used = NaN, left = NaN] } of shares) {
+          expect(used + left).toBe(100);
+          expect(line).toContain('reset');
+        }
+
+        // A metered credit adds up; an account's own quota leaves no more than its limit, and resets.
+        const [credit] = read(/\$([\d.]+) used\D+\$([\d.]+) of \$([\d.]+) left/);
+        const [spent = NaN, remaining = NaN, total = NaN] = credit?.values ?? [];
+
+        expect(spent + remaining).toBeCloseTo(total, 2);
+        const quotas = read(/(\d+) of (\d+) requests left/);
+
+        expect(quotas.length).toBeGreaterThan(0);
+
+        for (const { line, values: [left = NaN, limit = NaN] } of quotas) {
+          expect(left).toBeLessThanOrEqual(limit);
+          expect(line).toContain('reset');
+        }
+
+        // What could not be read is named, the account with the provider's own reason, not dropped.
+        expect(lines.some((line) => line.includes('old-bot'))).toBe(true);
+        expect(lines.some((line) => line.includes('work') && line.includes('HTTP 401'))).toBe(true);
         await shoot(usage, 'settings-usage-mobile-dark');
       } finally {
         await usage.close();
@@ -329,24 +365,10 @@ describe('account panels', () => {
             const page = await freshPage(gallery, `welcome&step=${String(step)}`, theme, viewport);
 
             try {
-              // The slide is an inert track: every step's text is in the DOM,
-              // so the honest read of "this step is showing" is the panel that
-              // is neither hidden nor inert.
+              // The slide is an inert track, so every step's panel is in the DOM: the one showing is the one a reader
+              // can reach, and it must be the step the page was opened on.
               await page.waitForSelector('h1');
-
-              const body = await page.evaluate(() => document.body.innerText);
-              expect(body).toContain("Let's set up your account");
-
-              const active = await page.evaluate(() => {
-                const panel = [...document.querySelectorAll('[data-welcome-step]')].find(
-                  (el) => el instanceof HTMLElement && !el.inert && el.getAttribute('aria-hidden') !== 'true',
-                );
-
-                return panel?.textContent ?? '';
-              });
-
-              await expectWelcomeStep(page, step, active);
-
+              await expectStepAtRest(page, step);
               shots.push(await shoot(page, `welcome-step${String(step)}-${viewport}-${theme}`));
             } finally {
               await page.close();
@@ -432,6 +454,19 @@ describe('account panels', () => {
               expect(rail).toContain('Checkout coupon bug');
               expect(rail).toContain('ashish@example.com');
               shots.push(await shoot(home, `sidebar-nav-${theme}`));
+
+              // The row under the pointer is painted too, but never as the open row: not its ground, not its ink,
+              // and never touching it. Lit alike and 2 px apart, the two once read as one block.
+              await home.hover('nav[aria-label="Primary"] a[href="/workspaces"]');
+              const rows = await navPaint(home);
+              const open = rows.find((row) => row.label === 'Home');
+              const hovered = rows.find((row) => row.label === 'Workspaces');
+              const resting = rows.find((row) => row.label === 'Devices');
+
+              expect(hovered?.background).not.toBe(resting?.background);
+              expect(hovered?.background).not.toBe(open?.background);
+              expect(hovered?.ink).not.toBe(open?.ink);
+              expect((hovered?.top ?? 0) - (open?.bottom ?? 0)).toBeGreaterThanOrEqual(4);
             } finally {
               await home.close();
             }

@@ -7,6 +7,7 @@ import { applyFileEdits, formatFileSlice, type FileEditFailure } from '../src/to
 import { scanFileWindow } from '../src/tools/file-scan';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
+import { withCheckedInput } from '../src/tools/tool-schema';
 import { SPILL_DIRS, TurnContextBudget } from '../src/context-budget';
 import { JsonObjectSchema } from '../src/utils/json';
 import { makeVfsError } from '../src/vfs/errno';
@@ -462,11 +463,12 @@ function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; 
   };
 }
 
-/** What the model can emit: the AI SDK does not validate jsonSchema tool input, so actions and paths may be off-schema. */
-type FileToolTestInput = FileToolInput | { action: string; path: string | number };
+/** What a program can pass: it calls `execute` directly, so actions, paths and edits may be off-schema. */
+type FileToolTestInput = FileToolInput | { action: string; path: string | number } | { action: 'edit'; path: string; edits: Array<{ old_text: string }> };
 
+/** The entry as the tool surface serves it: behind the input check a program meets. */
 function toolFor(vfs: VFS, ledger = new TurnFileLedger()) {
-  const entry = createFileTool({ vfs, ledger, budget: new TurnContextBudget() });
+  const entry = withCheckedInput('file', createFileTool({ vfs, ledger, budget: new TurnContextBudget() }));
 
   return { call: toolExecute<FileToolTestInput, JsonValue>(entry), ledger };
 }
@@ -583,7 +585,7 @@ describe('file tool', () => {
     const { call } = toolFor(vfs);
     await call({ action: 'read', path: 'a.ts' });
     const result = call({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha' }] });
-    await expect(result).rejects.toThrow('needs both old_text and new_text');
+    await expect(result).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('edits[0].new_text') });
     expect(vfs.files.get('a.ts')).toBe('alpha\n');
     expect(await call({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha', new_text: '' }] }))
       .toMatchObject({ ok: true });
@@ -676,7 +678,7 @@ describe('file tool', () => {
   test('a path of the wrong type is refused, not fed to `path.trim()`', async () => {
     // A non-string path must be answered, not thrown as a TypeError.
     const { call } = toolFor(memoryVfs());
-    await expect(call({ action: 'read', path: 7 })).rejects.toMatchObject({ code: 'bad_input', message: 'file requires `path`.' });
+    await expect(call({ action: 'read', path: 7 })).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('path') });
   });
 });
 

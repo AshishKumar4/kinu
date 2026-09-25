@@ -1,8 +1,8 @@
 /** Codemode sandbox contract: namespace names, the crafted `tools.*` declaration, and crafted-tool labelling. */
 
 import * as v from 'valibot';
-import type { Schema, ToolSet } from 'ai';
-import { jsonSchema } from 'ai';
+import type { ToolSet } from 'ai';
+import { z } from 'zod';
 import { JsonObjectSchema, decodeJsonValue, type JsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 import { hasPlanPermission, workModeRefusal } from '../execution/work-mode';
@@ -24,13 +24,11 @@ export function craftedToolDescription(name: string, description?: string): stri
 }
 
 
+const CodemodeInputSchema = z.object({ code: z.string().describe(CODEMODE_CODE_DESCRIPTION) });
+
 /** Shared by both backends; CF reassigns it over `createCodeTool`'s own schema. */
-export function codemodeInputSchema(): Schema<{ code: string }> {
-  return jsonSchema<{ code: string }>({
-    type: 'object',
-    properties: { code: { type: 'string', description: CODEMODE_CODE_DESCRIPTION } },
-    required: ['code'],
-  });
+export function codemodeInputSchema(): typeof CodemodeInputSchema {
+  return CodemodeInputSchema;
 }
 
 export interface CraftedDeclaration {

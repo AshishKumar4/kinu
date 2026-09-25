@@ -1,8 +1,8 @@
 import * as v from 'valibot';
-import { asSchema, jsonSchema, type ToolSet } from 'ai';
-import { KinuError } from '../obs/index';
+import { asSchema, InvalidToolInputError, jsonSchema, type ToolSet } from 'ai';
+import { z } from 'zod';
+import { KinuError, refusedInput } from '../obs/index';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
-import { isMcpToolKey } from './mcp-naming';
 
 export type ToolSchemaDialect = 'openai' | 'anthropic' | 'gemini';
 
@@ -150,8 +150,8 @@ function geminiNode(node: JsonObject): JsonObject {
       continue;
     }
 
-    if (key === 'oneOf') {
-      out.anyOf = value;
+    if (key === 'oneOf' || key === 'anyOf') {
+      Object.assign(out, geminiUnion(value));
       continue;
     }
 
@@ -168,17 +168,33 @@ function geminiNode(node: JsonObject): JsonObject {
   return out;
 }
 
+/** A union with a `null` member (zod's nullable) is Gemini's `nullable` on the rest. */
+function geminiUnion(value: JsonValue): JsonObject {
+  if (!v.is(JsonListSchema, value)) return { anyOf: value };
+  const rest = value.filter((member) => !v.is(v.object({ type: v.literal('null') }), member));
+
+  if (rest.length === value.length) return { anyOf: value };
+  const [only] = rest;
+
+  return rest.length === 1 && v.is(JsonObjectSchema, only) && !v.is(JsonListSchema, only)
+    ? { ...only, nullable: true }
+    : { anyOf: rest, nullable: true };
+}
+
 const normalizedTools = new WeakMap<ToolSet[string], Map<ToolSchemaDialect, ToolSet[string]>>();
 
 export function withToolSchemaDialect(tools: ToolSet, dialect: ToolSchemaDialect): ToolSet {
   return Object.fromEntries(Object.entries(tools).map(([name, entry]) => {
-    if (!isMcpToolKey(name)) return [name, entry];
     const byDialect = normalizedTools.get(entry) ?? new Map<ToolSchemaDialect, ToolSet[string]>();
     const known = byDialect.get(dialect);
 
     if (known !== undefined) return [name, known];
-    const raw = v.parse(JsonObjectSchema, asSchema(entry.inputSchema).jsonSchema);
-    const normalized = { ...entry, inputSchema: jsonSchema<JsonObject>(normalizeToolInputSchema(raw, dialect)) };
+    const declared = asSchema(entry.inputSchema);
+    const raw = v.parse(JsonObjectSchema, declared.jsonSchema);
+    // A built-in keeps its own validator; only what the provider reads changes.
+    const validate = declared.validate?.bind(declared);
+    const sent = normalizeToolInputSchema(raw, dialect);
+    const normalized = { ...entry, inputSchema: validate === undefined ? jsonSchema<JsonObject>(sent) : jsonSchema(sent, { validate }) };
     byDialect.set(dialect, normalized);
     normalizedTools.set(entry, byDialect);
 
@@ -258,10 +274,8 @@ function fieldProblems(name: string, contract: InputContract, fields: v.InferOut
 }
 
 /**
- * `entry`, refusing as `bad_input`, before it runs, a call lacking a required field or giving a declared field another
- * type. The SDK checks nothing (a `jsonSchema()` without a validator passes any input), so the check rides on the
- * entry, where the model, a program and a scaffold each meet it once. An enum stays advisory: a tool resolves other
- * values itself (a device runtime goes by nickname).
+ * `entry`, refusing a call its schema refuses as `bad_input`: programs call `execute` without the SDK's check. A raw
+ * JSON Schema (MCP) gets the shallow check; its enum stays advisory (a device goes by nickname).
  */
 export function withCheckedInput(name: string, entry: ToolSet[string]): ToolSet[string] {
   const execute = entry.execute;
@@ -272,6 +286,17 @@ export function withCheckedInput(name: string, entry: ToolSet[string]): ToolSet[
   return {
     ...entry,
     execute: async (input, options) => {
+      const schema = asSchema(entry.inputSchema);
+      const validate = schema.validate?.bind(schema);
+
+      if (validate !== undefined) {
+        const checked = await validate(input);
+
+        if (!checked.success) throw refusedInput(name, checked.error);
+
+        return execute(checked.value, options);
+      }
+
       contract ??= inputContract(entry);
       // A record admits an array; no tool takes one as its input.
       const fields = Array.isArray(input) ? undefined : v.safeParse(FieldsSchema, input);
@@ -287,6 +312,13 @@ export function withCheckedInput(name: string, entry: ToolSet[string]): ToolSet[
   };
 }
 
+/** A choice whose refusal names the vocabulary and echoes what arrived. */
+export function oneOf<const Values extends readonly string[]>(values: Values) {
+  return z.enum(values, {
+    error: (issue) => `one of ${values.join(', ')}; got ${issue.input === undefined ? 'nothing' : JSON.stringify(issue.input)}`,
+  });
+}
+
 /** Every entry of `tools` behind {@link withCheckedInput}. */
 export function withCheckedInputs(tools: ToolSet): ToolSet {
   const checked: ToolSet = {};
@@ -294,4 +326,11 @@ export function withCheckedInputs(tools: ToolSet): ToolSet {
   for (const [name, entry] of Object.entries(tools)) checked[name] = withCheckedInput(name, entry);
 
   return checked;
+}
+
+/** The SDK's schema refusal of a model's call, as a program gets it. Only the tool-call part holds the error. */
+export function invalidToolCallRefusal(part: { readonly toolName: string; readonly invalid?: boolean; readonly error?: unknown }): KinuError | undefined {
+  if (part.invalid !== true || !InvalidToolInputError.isInstance(part.error)) return undefined;
+
+  return refusedInput(part.toolName, part.error);
 }

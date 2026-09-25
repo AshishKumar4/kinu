@@ -620,7 +620,7 @@ export type OutcomeEvalInstance = EvalInstance<string, OutcomeEvalExpectation>;
  * How every scorer names a negative instance's complaint. The `user` wording is the
  * sentence the prompts carried before advisor notes existed, byte for byte.
  */
-export const CRITIC_PROSE = {
+const CRITIC_PROSE = {
   user: { verdict: 'the user had to correct it', complaint: "User's correction" },
   advisor: {
     verdict: 'no user ever graded it, and a second model reviewing the turn found this',
@@ -695,7 +695,7 @@ export interface OutcomeEvalSplit {
 /** Lesson sources in canonical order; the table's CHECK constraint derives from
  *  this list. `execution_recovery` is bound to no turn, so it is never corroborated;
  *  `import` is born corroborated. Corroboration lives only in the row's status. */
-export const LESSON_SOURCES = [
+const LESSON_SOURCES = [
   'turn_reflection', 'session_reflection', 'execution_recovery', 'import',
 ] as const;
 

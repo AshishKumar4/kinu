@@ -26,3 +26,11 @@ export function navActive(item: { readonly to: string; readonly end: boolean; re
 
   return item.also !== undefined && under(item.also);
 }
+
+/** Neutral, so a row under the pointer never reads as the open row's accent. */
+export const NAV_HOVER = "hover:bg-[color-mix(in_srgb,var(--c-text)_6%,transparent)] hover:p-text";
+
+/** A sidebar row's ground and ink: the open one in the accent, any other in `rest` until hovered. */
+export function navRowCls(open: boolean, rest = "p-text-2"): string {
+  return open ? "bg-[var(--c-accent-subtle)] p-accent" : `${rest} ${NAV_HOVER}`;
+}

@@ -47,6 +47,7 @@ export interface SlateHostDeps extends ResidentSlateDeps {
   /** Debits the per-share per-day spend label; absent means no spend bound. */
   budget?(): MissionGovernor;
   ownerTitle?(): Promise<string>;
+  ownerUserId?(): string | null;
   forgetPicture?(slate: string): Promise<void>;
   sharesChanged?(): Promise<'current' | 'pending'>;
 }
@@ -204,7 +205,7 @@ export class SlateHost {
 
     if (share === undefined) return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
 
-    if (share.visibility === 'users' && (input.claim.userId === null || !this.live.hasUser(share.id, input.claim.userId))) {
+    if (share.visibility === 'users' && (input.claim.userId === null || !this.liveShareAdmitsUser(share.id, input.claim.userId))) {
       return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
     }
 
@@ -420,7 +421,7 @@ export class SlateHost {
   }
 
   liveShareAdmitsUser(share: string, userId: string): boolean {
-    return this.live.hasUser(share, userId);
+    return userId === this.deps.ownerUserId?.() || this.live.hasUser(share, userId);
   }
 
   /** Admission is checked only by the caller. */

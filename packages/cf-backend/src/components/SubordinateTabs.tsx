@@ -104,9 +104,9 @@ export function SubordinateTabs({
                   <Link
                     to={`${mainPath}/agents/${subordinate.name}`}
                     title={subordinate.currentTask ?? title}
-                    className={`${tabCls} h-full max-w-52 px-3 p-text-3`}
+                    className={`${tabCls} h-full max-w-52 px-3`}
                   >
-                    <span className={`truncate ${subordinate.displayName ? "" : "italic p-text-3"}`}>{title}</span>
+                    <span className={`truncate ${subordinate.displayName ? "" : "italic"}`}>{title}</span>
                     <StatusMark subordinate={subordinate} />
                   </Link>
                 )}
@@ -162,7 +162,7 @@ export function SubordinateTabs({
               type="button"
               onClick={() => setShowDismissed(!dismissedOpen)}
               aria-expanded={dismissedOpen}
-              className={`${tabCls} h-full shrink-0 px-2.5 p-text-3`}
+              className={`${tabCls} h-full shrink-0 px-2.5`}
               title="Agents no longer taking work. Their conversations are kept."
             >
               {dismissedOpen ? <CaretDownIcon size={11} /> : <CaretRightIcon size={11} />}

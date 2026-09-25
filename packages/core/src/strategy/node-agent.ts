@@ -6,7 +6,9 @@
  */
 
 import { REAL_CLOCK, type Clock } from '../types/clock';
-import { jsonSchema, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { z } from 'zod';
+import { oneOf } from '../tools/tool-schema';
 import { HEAD_BUILTIN_TOOLS } from '../heads/types';
 import { HeadCapture, runHeadInference, withHeadCaptureRecording } from '../heads/head-inference';
 import type { PublishHeadStream, ReportHeadDelta } from '../heads/head-stream';
@@ -207,6 +209,17 @@ interface NodeScratch {
 }
 
 /** *Arbitration* as a tool: the verdict is the return value, and a refusal's text is written for the node. */
+/** The width band is shown, not checked: the arbiter enforces it, so an out-of-range request gets a reason-coded
+ *  refusal rather than a schema error. */
+const ProposeBranchInputSchema = z.object({
+  rationale: z.string(),
+  branches: z.array(z.object({
+    task: z.string(),
+    rationale: z.string(),
+    context: oneOf(SWARM_CONTEXTS).default('fresh'),
+  })).meta({ minItems: BRANCH_PROPOSAL_WIDTH.min, maxItems: BRANCH_PROPOSAL_WIDTH.max }),
+});
+
 function buildProposeTool(
   arbitrate: NodeArbiter,
   scratch: NodeScratch,
@@ -221,30 +234,7 @@ function buildProposeTool(
         + 'branch names what it starts from — "inherit" gives it your whole conversation, "fresh" gives '
         + 'it your report and its own focus. Call it at most once, when one thread genuinely '
         + 'deserves its own budget.',
-      inputSchema: jsonSchema<{
-        rationale: string;
-        branches: Array<{ task: string; rationale: string; context?: BranchContext }>;
-      }>({
-        type: 'object',
-        required: ['rationale', 'branches'],
-        properties: {
-          rationale: { type: 'string' },
-          branches: {
-            type: 'array',
-            minItems: BRANCH_PROPOSAL_WIDTH.min,
-            maxItems: BRANCH_PROPOSAL_WIDTH.max,
-            items: {
-              type: 'object',
-              required: ['task', 'rationale', 'context'],
-              properties: {
-                task: { type: 'string' },
-                rationale: { type: 'string' },
-                context: { type: 'string', enum: [...SWARM_CONTEXTS] },
-              },
-            },
-          },
-        },
-      }),
+      inputSchema: ProposeBranchInputSchema,
       execute: async ({ rationale, branches }): Promise<string> => {
         // Once per node: the engine reads only the last grant, so a second arbitrate would debit the
         // budget again and strand the first grant.
@@ -262,17 +252,7 @@ function buildProposeTool(
           return `Refused (already proposed; ${prior.policy}): ${prior.error}`;
         }
 
-        // The width band is enforced by the arbiter so an out-of-range request gets a reason-coded
-        // refusal; the AI SDK does not validate `jsonSchema` input.
-        const attempt = Promise.resolve(arbitrate({
-          rationale,
-          branches: branches.map((branch) => ({
-            task: branch.task,
-            rationale: branch.rationale,
-            // An absent `context` narrows to 'fresh'.
-            context: branch.context ?? 'fresh',
-          })),
-        }));
+        const attempt = Promise.resolve(arbitrate({ rationale, branches }));
 
         // Reserved before the first await: AI SDK executes same-step tool calls
         // concurrently, so both calls must observe one shared arbitration.

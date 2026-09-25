@@ -23,12 +23,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { git } from '@kinu.run/test-utils';
 import type { Subprocess } from 'bun';
-import puppeteer, { type Browser, type LaunchOptions, type Page } from 'puppeteer';
+import type { Browser, Page } from 'puppeteer';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '@kinu.run/core';
 import { holdForRelease, releaseScratch, scratchDir } from '../packages/test-utils/src/scratch';
 import { declaredSettings } from './browser-declarations';
 import { signalGroup } from './process-group';
+import { withTestChrome } from './test-chrome';
 import { devPreviewTlsDir } from '../packages/cf-backend/vite-preview-zone';
 
 const REPO = join(import.meta.dir, '..');
@@ -151,14 +152,6 @@ export interface LiveApp {
    *  root minted for this boot, never the checkout's. The plugin writes its
    *  `v3/do/<namespace>` tree under it. */
   readonly statePath: string;
-}
-
-function chromePath(): string | undefined {
-  for (const candidate of ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium']) {
-    if (existsSync(candidate)) return candidate;
-  }
-
-  return undefined;
 }
 
 /** Wait until the dev server ANSWERS its port — the banner line is decoration
@@ -334,27 +327,6 @@ function freePort(): number {
   return port;
 }
 
-/** Chrome for a browser row: the box's own build when one is installed, a
- *  desktop pointer and colour scheme declared, and no protocol clock. */
-async function openBrowser(extraArgs: readonly string[]): Promise<Browser> {
-  const launchOptions: LaunchOptions = {
-    args: [
-      '--no-sandbox',
-      '--disable-dev-shm-usage',
-      declaredSettings({ mouse: true }),
-      ...devPreviewTrust(),
-      ...extraArgs,
-    ],
-    protocolTimeout: 0,
-  };
-
-  const executablePath = chromePath();
-
-  if (executablePath) launchOptions.executablePath = executablePath;
-
-  return puppeteer.launch(launchOptions);
-}
-
 /** Boot vite dev, run `body` against it, tear it down entirely. */
 export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, options: LiveAppOptions = {}): Promise<T> {
   if (options.port === 3000) throw new Error('withDevServer: port 3000 is reserved');
@@ -434,26 +406,9 @@ export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, 
   }
 }
 
-/** Launch Chrome, run `body` with it, and end it and every process it started.
- *  Puppeteer spawns Chrome detached, outside this process group, so a killed
- *  row would leak it but for the hold. */
+/** A browser row's Chrome, with a desktop pointer and colour scheme declared, for the length of `body`. */
 export async function withBrowser<T>(body: (browser: Browser) => Promise<T>, extraArgs: readonly string[] = []): Promise<T> {
-  const browser = await openBrowser(extraArgs);
-  const group = browser.process()?.pid;
-
-  const held = holdForRelease('a row\'s browser', () => {
-    signalGroup(group, 'SIGTERM');
-    signalGroup(group, 'SIGKILL');
-  });
-
-  try {
-    return await body(browser);
-  } finally {
-    held();
-    signalGroup(group, 'SIGTERM');
-    await browser.close();
-    signalGroup(group, 'SIGKILL');
-  }
+  return withTestChrome(body, { args: [declaredSettings({ mouse: true }), ...devPreviewTrust(), ...extraArgs] });
 }
 
 /** Boot vite dev, launch the browser, run `body`, tear both down entirely. */

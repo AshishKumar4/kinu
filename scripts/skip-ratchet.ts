@@ -48,6 +48,7 @@ import { join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { isBunDiscoverableSuite } from './sources';
+import { elementsNamed, parseXml, textOf } from './xml';
 import { INFRA_FAILURE_MARKER } from '../packages/test-utils/src/live-model';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -125,33 +126,13 @@ export interface TestReport {
   readonly files: ReadonlySet<string>;
 }
 
-// `&amp;` is replaced LAST: unescaping it first would turn `&amp;lt;` into
-// `&lt;` and then into `<`, inventing markup the report never contained.
-const XML_ENTITIES = {
-  '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'", '&amp;': '&',
-} satisfies Record<string, string>;
-
-function unescapeXML(text: string): string {
-  let out = text;
-
-  for (const [entity, char] of Object.entries(XML_ENTITIES)) out = out.replaceAll(entity, char);
-
-  return out;
-}
-
-function attribute(attrs: string, name: string): string {
-  const match = new RegExp(`\\b${name}="([^"]*)"`).exec(attrs);
-
-  return match?.[1] === undefined ? '' : unescapeXML(match[1]);
-}
-
 /**
  * Parse a JUnit report from either runner in the eval tier.
  *
- * A `<testcase>` is self-closing when it passed and carries a `<skipped />` or
- * `<failure>` child otherwise, so both forms have to be matched — treating only
- * the self-closing form as a testcase would silently count zero skips, which is
- * the failure mode this gate is about.
+ * The report is read as XML (`xml.ts`), so a testcase is an element whatever
+ * its attribute order, quoting or entities, and an outcome is a CHILD element:
+ * `<skipped>`, `<failure>`, or `<error>`. A `<skipped/>` spelled inside captured
+ * output is text, not an outcome.
  *
  * THE TWO REPORTERS DISAGREE ABOUT WHERE THE FILE IS. Bun writes
  * `file="tests/a.test.ts" classname="Suite A"`; vitest writes no `file` at all
@@ -165,17 +146,10 @@ export function parseJUnit(xml: string): TestReport {
   const skipped: SkippedTest[] = [];
   const failed: FailedTest[] = [];
   const files = new Set<string>();
-  let total = 0;
+  const testcases = elementsNamed(parseXml(xml), 'testcase');
 
-  const testcase = /<testcase\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g;
-
-  for (const match of xml.matchAll(testcase)) {
-    const attrs = match[1] ?? '';
-    const body = match[2] ?? '';
-    total += 1;
-    const classname = attribute(attrs, 'classname');
-    const name = attribute(attrs, 'name');
-    const declared = attribute(attrs, 'file');
+  for (const testcase of testcases) {
+    const { classname = '', name = '', file: declared = '' } = testcase.attributes;
     const file = declared || classname;
 
     if (file) files.add(file);
@@ -183,25 +157,22 @@ export function parseJUnit(xml: string): TestReport {
     // already joined the describe path into `name` — so spelling one would put
     // the file in the key twice.
     const key = declared ? `${file} › ${classname} › ${name}` : `${file} › ${name}`;
+    const outcomes = testcase.children.flatMap((child) => child.kind === 'element' ? [child.name] : []);
 
-    if (body.includes('<failure')) {
+    if (outcomes.includes('failure') || outcomes.includes('error')) {
       // The MARKER decides, never a guess at the message. A classifier that
       // sniffed for "timeout" or "503" would let a real behavioural failure hide
       // behind an infrastructure excuse the moment a model wrote one of those
       // words into its answer. Unmarked therefore means behavioural HERE, which
       // under-claims infrastructure rather than over-claiming it — and the
       // refusal below states that so the count is read for what it is.
-      failed.push({
-        key,
-        file,
-        infra: unescapeXML(body).includes(INFRA_FAILURE_MARKER),
-      });
+      failed.push({ key, file, infra: textOf(testcase).includes(INFRA_FAILURE_MARKER) });
     }
 
-    if (body.includes('<skipped')) skipped.push({ key, file });
+    if (outcomes.includes('skipped')) skipped.push({ key, file });
   }
 
-  return { total, failed, skipped, files };
+  return { total: testcases.length, failed, skipped, files };
 }
 
 /** A locked skip and why it is acceptable. A skip whose reason nobody wrote

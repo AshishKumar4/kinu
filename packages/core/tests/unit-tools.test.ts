@@ -2,7 +2,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
-import { tool, jsonSchema } from 'ai';
+import { asSchema, tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
 import { createTestRuntime, storesFor } from './helpers';
 import {
@@ -219,13 +219,13 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(names.length).toBe(BUILTIN_TOOLS.length);
   });
 
-  test('each tool carries description + inputSchema', () => {
+  test('each tool carries description + inputSchema', async () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
 
     for (const [, entry] of Object.entries(t)) {
       expect(entry.description).toMatch(/\S/);
-      const schema = v.parse(v.object({ jsonSchema: v.object({ type: v.string() }) }), entry.inputSchema);
+      const schema = v.parse(v.object({ jsonSchema: v.object({ type: v.string() }) }), { jsonSchema: await asSchema(entry.inputSchema).jsonSchema });
       expect(schema.jsonSchema.type).toBe('object');
     }
   });
@@ -302,7 +302,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(t.memory.description).toBe(BUILTIN_TOOL_DESCRIPTIONS.memory);
   });
 
-  test('without a facts store the keyed-fact actions are not on the schema', () => {
+  test('without a facts store the keyed-fact actions are not on the schema', async () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
 
@@ -310,7 +310,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       jsonSchema: v.object({
         properties: v.object({ action: v.object({ enum: v.array(v.string()) }) }),
       }),
-    }), t.memory.inputSchema);
+    }), { jsonSchema: await asSchema(t.memory.inputSchema).jsonSchema });
 
     expect(schema.jsonSchema.properties.action.enum).toEqual(['save', 'search', 'conversations']);
     expect(t.memory.description).not.toContain('remember');
@@ -406,19 +406,19 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(delivered).toHaveLength(1);
   });
 
-  test('the native `report` declares the handoff fields — except to a destination that reads only the body', () => {
+  test('the native `report` declares the handoff fields — except to a destination that reads only the body', async () => {
     const { rt } = createTestRuntime();
 
-    const propertiesOf = (report: ReportToolDeps): string[] => Object.keys(v.parse(
-      v.object({ jsonSchema: v.object({ properties: v.record(v.string(), v.unknown()) }) }),
-      buildBuiltinTools({ rt, report, history: storesFor(rt).history }).report?.inputSchema,
-    ).jsonSchema.properties);
+    const propertiesOf = async (report: ReportToolDeps): Promise<string[]> => Object.keys(v.parse(
+      v.object({ properties: v.record(v.string(), v.unknown()) }),
+      await asSchema(buildBuiltinTools({ rt, report, history: storesFor(rt).history }).report?.inputSchema).jsonSchema,
+    ).properties);
 
     const sink: ReportToolDeps['report'] = async () => ({ ok: true });
-    expect(propertiesOf({ report: sink }))
+    expect(await propertiesOf({ report: sink }))
       .toEqual(['status', 'content', 'concerns', 'deviations', 'findings', 'open_work']);
     // A slot the destination drops must not be offered: the model fills it and the parent never sees it.
-    expect(propertiesOf({ report: sink, bodyOnly: true })).toEqual(['status', 'content']);
+    expect(await propertiesOf({ report: sink, bodyOnly: true })).toEqual(['status', 'content']);
   });
 
   test('run with no workspace shell REFUSES with a classification, not a bare string', async () => {

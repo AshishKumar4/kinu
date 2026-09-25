@@ -482,7 +482,7 @@ export const AGENTS_FIELD_TS_TYPES = {
 } as const satisfies Record<AgentsToolInputField, string>;
 
 /** Fields each action's caller must supply; dispatch arms re-check them because the sandbox parse cannot. */
-export const AGENTS_ACTION_REQUIRED_FIELDS = {
+const AGENTS_ACTION_REQUIRED_FIELDS = {
   swarm: ['task'],
   // The create variant, which a bare `hire` means; read only by the single-variant path.
   hire: ['role', 'mission'],

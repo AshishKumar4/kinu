@@ -9,7 +9,7 @@ import {
   SUBORDINATE_REPORT_STATUSES,
   type AgentRuntime, type WebSearchProvider,
 } from '../src/index';
-import type { ToolSet } from 'ai';
+import { asSchema, type ToolSet } from 'ai';
 import { storesFor } from './helpers';
 
 /** The malformed argument a model actually emitted, kept verbatim. */
@@ -89,7 +89,7 @@ describe('a model-supplied discriminant is refused with its vocabulary', () => {
     });
   }
 
-  test('the surface list is the whole dispatching surface (guards the guard)', () => {
+  test('the surface list is the whole dispatching surface (guards the guard)', async () => {
     // Every native tool whose schema declares an enum'd discriminant must appear above.
     const rt = runtime();
 
@@ -102,10 +102,14 @@ describe('a model-supplied discriminant is refused with its vocabulary', () => {
 
     const named = SURFACES.map((surface) => surface.tool);
 
+    const sent = new Map<string, unknown>();
+
+    for (const [name, entry] of Object.entries(tools)) sent.set(name, { jsonSchema: await asSchema(entry.inputSchema).jsonSchema });
+
     const dispatching = Object.keys(tools).filter((name) => {
       const parsed = v.safeParse(
         v.object({ jsonSchema: v.object({ properties: v.record(v.string(), v.unknown()) }) }),
-        tools[name]?.inputSchema,
+        sent.get(name),
       );
 
       if (!parsed.success) return false;

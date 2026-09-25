@@ -29,9 +29,7 @@ export {
 
 export {
   EGRESS_PLACEHOLDER_PREFIX,
-  EGRESS_PLACEHOLDER_BYTES,
   PLACEHOLDER_BODY_LENGTH,
-  EGRESS_EXECUTOR,
   grantedEgressBindings,
   isEgressPlaceholder,
   findEgressPlaceholders,
@@ -39,7 +37,6 @@ export {
   parseEgressSecretRule,
   egressHostMatches,
   reviewEgressBinding,
-  egressBindingAction,
   planEgress,
   scrubText,
   createScrubStream,
@@ -136,7 +133,6 @@ export {
   initDeviceConsentRequestsTable,
   DEVICE_CONSENT_DENIED,
   DEVICE_CONSENT_UNANSWERED,
-  DEVICE_CONSENT_TIMEOUT_MS,
   DEVICE_CONNECT_DISCLOSURE,
   summarizeDeviceAction,
   type DeviceConsentDecision,

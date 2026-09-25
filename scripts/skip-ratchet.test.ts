@@ -141,6 +141,26 @@ describe('parseJUnit', () => {
       'tests/a.test.ts › Suite A › skips two & more',
     ]);
   });
+
+  test('a testcase is read as XML: any quoting, any attribute text, outcomes only as elements', () => {
+    const report = parseJUnit(`<testsuites>
+  <testcase file='tests/q.test.ts' classname='Quoted' name='single quotes'><skipped/></testcase>
+  <testcase name="a &gt; b > c" classname="Arrows" file="tests/q.test.ts"><skipped/></testcase>
+  <testcase name="passes" classname="Output" file="tests/q.test.ts"><system-out><![CDATA[printed <skipped/> and <failure>]]></system-out></testcase>
+  <testcase name="errors" classname="Errored" file="tests/q.test.ts"><error message="TypeError: x is undefined"/></testcase>
+</testsuites>`);
+
+    expect(report.total).toBe(4);
+    expect(report.skipped.map((s) => s.key)).toEqual([
+      'tests/q.test.ts › Quoted › single quotes',
+      'tests/q.test.ts › Arrows › a > b > c',
+    ]);
+    expect(report.failed.map((f) => f.key)).toEqual(['tests/q.test.ts › Errored › errors']);
+  });
+
+  test('a report the reader cannot read is refused, not counted short', () => {
+    expect(() => parseJUnit('<testsuites><testcase name="cut off"><skipped/></testsuites>')).toThrow('does not close');
+  });
 });
 
 describe('mergeReports', () => {

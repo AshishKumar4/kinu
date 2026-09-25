@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-25",
-  "files": 2700,
-  "functions": 66248,
+  "files": 2701,
+  "functions": 66317,
   "ceiling": 87,
   "line": 31,
   "inventory": [
@@ -142,10 +142,6 @@
       "complexity": 34
     },
     {
-      "key": "packages/core/src/tools/file-tool.ts#createFileDispatcher>fn",
-      "complexity": 34
-    },
-    {
       "key": "packages/core/src/vfs/context-plane.ts#contextFiles>document",
       "complexity": 34
     },
@@ -191,10 +187,6 @@
     },
     {
       "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
-      "complexity": 32
-    },
-    {
-      "key": "packages/core/src/prompting/tool-error-feedback.ts#projectToolErrorFeedback",
       "complexity": 32
     },
     {
@@ -267,6 +259,10 @@
     },
     {
       "key": "packages/core/src/scaffold/chat-transform.ts#scaffoldTurn",
+      "complexity": 31
+    },
+    {
+      "key": "packages/core/src/tools/file-tool.ts#createFileDispatcher>fn",
       "complexity": 31
     },
     {

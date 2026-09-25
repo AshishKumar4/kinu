@@ -53,6 +53,8 @@ import {
 } from './sources';
 import { CLI_TEST_ROOT } from './test-cli';
 import { modulesReaching } from './import-closure';
+import type { ModuleEdges } from './import-graph';
+import { identifierCalleeName, literalString, walk, type Parsed } from './syntax';
 import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, LIVE_MODEL_ENV } from '../packages/test-utils/src/index';
 import { COST_TABLE, type CostTable, costRssMb, costThreads, machineName, readCosts } from './gate-cost';
 
@@ -1128,6 +1130,24 @@ export const LADDER: readonly Gate[] = [
       + 'The remaining headroom under a per-user quota: the probe writes 1 MiB, so only an '
       + 'exhausted quota is red.',
     inputs: AMBIENT_BY_NAME,
+  },
+  {
+    run: 'bun test --timeout=0 scripts/test-chrome.test.ts',
+    label: 'Test browsers end with their launcher',
+    tier: 'push',
+    // Measured 2026-09-25 on the 24-thread box (load 1.6): 0.9-1.0 s wall, three runs and the cost table.
+    seconds: 1,
+    catches: 'a test browser that outlives the process that launched it. The launcher is killed with '
+      + 'SIGKILL mid-use, which runs no teardown, and every Chrome process on its profile must still '
+      + 'end, and the abandoned-root reap that `preflight --reclaim` runs must remove the profile left '
+      + 'in RAM; a closed browser leaves no process and no profile. With the port-driven launch it '
+      + 'replaced, the killed launcher\'s Chrome ran on under PID 1 and the case waited on it until the '
+      + 'deadline.',
+    blind: 'a browser started outside `scripts/test-chrome.ts`: the first-run tier, liveness-capture, '
+      + 'review-round2 and ws-reconnect-drill still launch their own. `preflight --reclaim` ends one '
+      + 'orphaned under a test\'s scratch home, and none a bare script left. An orphan a subreaper '
+      + 'adopts instead of PID 1 is not seen.',
+    inputs: { ...AMBIENT_BY_NAME, reads: ['scripts/fixtures/test-chrome/'] },
   },
   {
     run: 'bun test --timeout=0 scripts/gate-set-equality.test.ts',
@@ -2489,15 +2509,38 @@ export function printPlan(rows: readonly PlanRow[]): string {
  *  port another worktree's dev server holds is not a measurement at all. */
 export const SHARED_POOL = /(?:vitest|workerd|vite )/u;
 
-/** A module that reaches the browser ITSELF, as the seed of the closure
- *  below. One signal, never a list of suites: the harnesses are the only
- *  place puppeteer is imported, and a suite reaches Chrome by importing one
- *  of them — often two hops out (`computed-style.test.ts` →
- *  `computed-style.ts` → `gallery-harness.ts` → puppeteer). */
-const BROWSER_IMPORT = /from ['"]puppeteer['"]/u;
+/** The module a browser harness loads to drive Chrome. */
+const BROWSER_MODULE = 'puppeteer';
+
+/** Whether a module loads puppeteer ITSELF, as the seed of the closure below:
+ *  a value edge to it, or an `import(name)` / `require(name)` whose argument is
+ *  a `const` this file binds to that specifier. One signal, never a list of
+ *  suites: the harnesses are the only place puppeteer is loaded, and a suite
+ *  reaches Chrome by importing one of them — often two hops out
+ *  (`computed-style.test.ts` → `computed-style.ts` → `gallery-harness.ts` →
+ *  puppeteer). A type-only import loads nothing and is not a seed. */
+function loadsBrowser(parsed: Parsed, { edges }: ModuleEdges): boolean {
+  if (edges.some(({ specifier, kind }) => kind === 'value' && specifier === BROWSER_MODULE)) return true;
+  const constants = new Set<string>();
+  const loadedByName: string[] = [];
+  walk(parsed.root, (node) => {
+    const { raw } = node;
+
+    if (raw.type === 'VariableDeclarator' && node.parent?.raw.type === 'VariableDeclaration' && node.parent.raw.kind === 'const'
+      && raw.id.type === 'Identifier' && raw.init !== null && literalString(raw.init) === BROWSER_MODULE) constants.add(raw.id.name);
+
+    if (raw.type === 'ImportExpression' && raw.source.type === 'Identifier') loadedByName.push(raw.source.name);
+
+    const [argument] = raw.type === 'CallExpression' && identifierCalleeName(node) === 'require' ? raw.arguments : [];
+
+    if (argument?.type === 'Identifier') loadedByName.push(argument.name);
+  });
+
+  return loadedByName.some((name) => constants.has(name));
+}
 
 /**
- * Every module in `sources` that reaches a headless browser: one that imports
+ * Every module in `sources` that reaches a headless browser: one that loads
  * puppeteer, or one that imports — however many hops out — a module that does.
  *
  * A CLOSURE AND NOT A TEXT MATCH ON THE SUITE. `SHARED_BROWSER` was one regex
@@ -2510,7 +2553,7 @@ const BROWSER_IMPORT = /from ['"]puppeteer['"]/u;
  * row, which is the 2026-09-18 failure.
  */
 export function browserModules(sources: ReadonlyMap<string, string>): ReadonlySet<string> {
-  return modulesReaching(sources, (_file, text) => BROWSER_IMPORT.test(text));
+  return modulesReaching(sources, (_file, parsed, edges) => loadsBrowser(parsed, edges));
 }
 
 /** The corpus the closure reads: every parseable tracked file. Measured

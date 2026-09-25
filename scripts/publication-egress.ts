@@ -17,6 +17,8 @@ import type { Node } from 'oxc-parser';
 
 import { assertMeasured, finding } from './gate-ratchet';
 import { readRepositoryFile } from './sources';
+import { cstVisitor, type Node as SqlNode } from 'sql-parser-cst';
+import { holesAsNames, operandTables, sqlProgram, type SqlString, sqlStrings } from './sql-text';
 import { parse, walk, type SyntaxNode } from './syntax';
 import type { PublicationSurface } from '../packages/core/src/types/objective';
 
@@ -63,15 +65,13 @@ export const BLIND_SPOTS: readonly string[] = [
     + 'name, and a disclosure import that starts writing (say `searchTree`) is not re-derived',
   'egress other than a SQL tagged template, `memory.append` and `memory.index`: a VFS write, a '
     + 'fetch, an RPC or a queue send from this module reads as nothing',
-  'SQL assembled at runtime: only a tagged template\'s own text is read, so a statement built by '
-    + 'concatenation or handed in from elsewhere is invisible',
+  'SQL assembled at runtime: a `sql` template is read with the consts it names folded in, and any '
+    + 'other interpolation is a parameter, so a statement handed in from elsewhere is invisible',
   'whether a live writer consults `admitsPublication` before it writes: this gate classifies the '
     + 'writes, it does not prove the seal is asked',
   'the rest of the settle path: only convergence.ts is read, and its imports are classified by '
     + 'name, not followed',
 ];
-
-const SQL_WRITE = /\b(INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+([a-z_]+)/gi;
 
 const MEMORY_WRITES: ReadonlySet<string> = new Set(['append', 'index']);
 
@@ -82,15 +82,41 @@ const identifierName = (raw: Node | null | undefined): string | undefined =>
 const accessedName = (raw: Node): string | undefined =>
   raw.type === 'MemberExpression' && !raw.computed ? identifierName(raw.property) : identifierName(raw);
 
+/** Each table one SQL statement writes, as `VERB table`: the statement kinds SQLite
+ *  runs, read off the parse, so a CTE, a comment, quoting or case cannot hide one
+ *  and a string literal or an upsert's `DO UPDATE` cannot fake one. */
+function sqlWrites(program: SqlNode): string[] {
+  const writes: string[] = [];
+
+  const write = (verb: string, target: SqlNode) => {
+    for (const table of operandTables(target)) writes.push(`${verb} ${table}`);
+  };
+
+  cstVisitor({
+    insert_clause: (clause) => write(
+      [clause.insertKw.name, ...clause.orAction === undefined ? [] : ['OR', clause.orAction.actionKw.name], 'INTO'].join(' '),
+      clause.table,
+    ),
+    update_clause: (clause) => write('UPDATE', clause.tables),
+    delete_clause: (clause) => write('DELETE FROM', clause.tables),
+  })(program);
+
+  return writes;
+}
+
 /** The durable writes one node performs: a SQL tagged template's statements, a memory write. */
-function writesOf(node: SyntaxNode): readonly string[] {
+function writesOf(node: SyntaxNode, templates: ReadonlyMap<number, SqlString>): readonly string[] {
   const { raw } = node;
 
   if (raw.type === 'TaggedTemplateExpression' && accessedName(raw.tag) === 'sql') {
-    const text = raw.quasi.quasis.map((quasi) => quasi.value.cooked ?? quasi.value.raw).join(' ');
+    const template = templates.get(raw.quasi.start);
+    const program = template === undefined ? undefined : sqlProgram(template.text) ?? sqlProgram(holesAsNames(template));
 
-    return [...text.matchAll(SQL_WRITE)].map(([, verb = '', table = '']) =>
-      `${verb.replaceAll(/\s+/gu, ' ').toUpperCase()} ${table}`);
+    if (template === undefined || program === undefined) {
+      throw new Error(`publication-egress: a sql template at offset ${String(node.start)} does not parse as SQLite, so its writes cannot be classified`);
+    }
+
+    return sqlWrites(program);
   }
 
   if (raw.type === 'CallExpression' && raw.callee.type === 'MemberExpression' && !raw.callee.computed) {
@@ -132,6 +158,7 @@ export interface Egress {
 
 export function egressOf(file: string, text: string): Egress {
   const { root } = parse(file, text);
+  const templates = new Map(sqlStrings(file, text).map((string) => [string.node.start, string]));
   const imports = new Set<string>();
   const writers = new Set<string>();
   const writes = new Set<string>();
@@ -150,7 +177,7 @@ export function egressOf(file: string, text: string): Egress {
   }
 
   walk(root, (node) => {
-    const found = writesOf(node);
+    const found = writesOf(node, templates);
 
     if (found.length === 0) return;
 

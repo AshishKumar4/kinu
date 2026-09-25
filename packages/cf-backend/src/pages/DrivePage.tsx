@@ -3,7 +3,7 @@ import { startTransition, useCallback, useEffect, useRef, useState, type ReactNo
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
-  ArrowSquareOutIcon, BookOpenIcon, CaretRightIcon, CopyIcon, DownloadSimpleIcon, GitForkIcon, GlobeIcon, HardDrivesIcon,
+  ArrowSquareOutIcon, BookOpenIcon, CaretRightIcon, CopyIcon, DownloadSimpleIcon, FolderSimpleIcon, GitForkIcon, GlobeIcon, HardDrivesIcon,
   PencilSimpleIcon, ProhibitIcon, ShareNetworkIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon, UsersIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import * as v from "valibot";
@@ -28,6 +28,7 @@ import {
 } from "@/components/drive/DriveTiles";
 import { DriveDialog, pickedFolderName, PrimaryAction, type DriveDialogState } from "@/components/drive/DriveActions";
 import { FileViewer } from "@/components/surfaces/FileViewer";
+import { SlatePicture } from "@/components/slates/SlatePicture";
 
 export type DriveTab = "mine" | "shared";
 
@@ -94,26 +95,119 @@ const TEXT = /\.(?:md|markdown|txt|csv|tsv|json|ya?ml|toml|ts|tsx|js|jsx|py|sh|c
 
 const PROSE = /\.(?:md|markdown|txt)$/iu;
 
-/** A SKILL.md is drawn as its name over its description and steps; any other file as its first lines. */
-function coverLines(text: string, skill: boolean): [string | null, string[]] {
-  const parsed = skill ? parseSkillFile(text) : null;
+const MARKDOWN = /\.(?:md|markdown)$/iu;
 
-  if (parsed?.ok !== true) return [null, text.split("\n").slice(0, 14)];
-  const steps = parsed.skill.body.split("\n").filter((line) => line.trim() !== "");
+const SHEET = /\.(?:csv|tsv)$/iu;
 
-  return [parsed.skill.name, [parsed.skill.description, "", ...steps].slice(0, 12)];
+interface CoverLine { readonly text: string; readonly heading: boolean }
+
+const blank = (line: CoverLine): boolean => line.text.trim() === "";
+
+/** A Markdown line as its page reads: marks gone, headings kept. */
+function pageLine(line: string): CoverLine {
+  const heading = /^#{1,6}\s+(.*)$/u.exec(line)?.[1];
+  const text = (heading ?? line).replace(/^(\s*)[-*+]\s+/u, "$1• ").replace(/\[([^\]]*)\]\([^)]*\)/gu, "$1").replace(/\*\*|__|`/gu, "");
+
+  return { text, heading: heading !== undefined };
+}
+
+const pageLines = (markdown: string): CoverLine[] =>
+  markdown.replace(/^---\n[\s\S]*?\n---\n/u, "").split("\n").filter((line) => !line.startsWith("```")).map(pageLine);
+
+/** A skill's name over its description and steps, Markdown's first heading over the rest, else first lines. */
+function coverLines(text: string, name: string): [string | null, CoverLine[]] {
+  if (!MARKDOWN.test(name)) return [null, text.split("\n").slice(0, 14).map((line) => ({ text: line, heading: false }))];
+  const parsed = parseSkillFile(text);
+
+  if (parsed.ok) {
+    const { name: skill, description, body } = parsed.skill;
+    const steps = pageLines(body).filter((line) => !blank(line) && !(line.heading && line.text.toLowerCase() === skill.toLowerCase()));
+
+    return [skill, [{ text: description, heading: false }, { text: "", heading: false }, ...steps].slice(0, 12)];
+  }
+
+  const lines = pageLines(text);
+  const first = lines.findIndex((line) => !blank(line));
+  const title = lines[first];
+
+  if (title?.heading !== true) return [null, lines.slice(0, 14)];
+  const rest = lines.slice(first + 1);
+  const start = Math.max(0, rest.findIndex((line) => !blank(line)));
+
+  return [title.text, rest.slice(start, start + 12)];
+}
+
+function sheetRows(text: string, name: string): string[][] {
+  const separator = /\.tsv$/iu.test(name) ? "\t" : ",";
+
+  return text.split("\n").filter((line) => line.trim() !== "").slice(0, 9).map((line) => {
+    const cells: string[] = [];
+    let cell = "";
+    let quoted = false;
+
+    for (const char of line) {
+      if (char === '"') quoted = !quoted;
+      else if (char === separator && !quoted) {
+        cells.push(cell);
+        cell = "";
+      } else cell += char;
+    }
+
+    return [...cells, cell];
+  });
+}
+
+const NUMERIC = /^-?[\d.,$%]+$/u;
+
+function SheetCover({ rows }: { rows: readonly (readonly string[])[] }) {
+  const columns = Math.min(4, rows[0]?.length ?? 1);
+  const right = Array.from({ length: columns }, (_, column) => rows.slice(1).every((row) => NUMERIC.test(row[column]?.trim() ?? "")));
+  const grid = { gridTemplateColumns: `repeat(${String(columns)}, minmax(0, 1fr))` };
+
+  return (
+    <span className="absolute inset-0 overflow-hidden p-surface text-[8.5px] leading-[1.45]">
+      {rows.map((row, index) => (
+        <span key={index} data-drive-sheet-row style={grid}
+          className={`grid gap-2 px-4 ${index === 0 ? "p-recessed py-2 font-semibold p-text-2" : "border-t p-border py-[5px] font-mono p-text-3"}`}>
+          {row.slice(0, columns).map((cell, column) => <span key={column} className={`truncate ${right[column] === true ? "text-right" : ""}`}>{cell}</span>)}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function CodeCover({ lines }: { lines: readonly string[] }) {
+  return (
+    <span className="absolute inset-0 overflow-hidden p-recessed px-3 pt-3 font-mono text-[8.5px] leading-[1.6]">
+      {lines.map((line, index) => (
+        <span key={index} data-drive-code-line className="flex gap-2.5">
+          <span className="min-w-3 shrink-0 text-right tabular-nums p-text-4">{index + 1}</span>
+          <span className="min-w-0 overflow-hidden text-ellipsis whitespace-pre p-text-3">{line === "" ? "\u00a0" : line}</span>
+        </span>
+      ))}
+    </span>
+  );
 }
 
 function TextPage({ text, name }: { text: string | null; name: string }) {
-  const [heading, lines] = text === null ? [null, []] : coverLines(text, name === "SKILL.md");
+  const rows = text !== null && SHEET.test(name) ? sheetRows(text, name) : [];
 
-  if (lines.length === 0) return <FileCover name={name} />;
+  if (rows.length > 0) return <SheetCover rows={rows} />;
+  const [heading, lines] = text === null ? [null, []] : coverLines(text, name);
+
+  if (heading === null && lines.length === 0) return <FileCover name={name} />;
+
+  if (heading === null && !PROSE.test(name)) return <CodeCover lines={lines.map((line) => line.text)} />;
 
   return (
     <span className="absolute inset-0 overflow-hidden p-recessed px-[14%] pt-[5%]">
-      <span className={`block h-full overflow-hidden rounded-t-md border border-b-0 p-border p-surface px-3 pt-2.5 text-[8.5px] leading-[1.45] p-text-3 ${PROSE.test(name) ? "" : "font-mono"}`}>
-        {heading !== null && <span className="mb-1 block truncate text-[11px] font-semibold p-text">{heading}</span>}
-        {lines.map((line, index) => <span key={index} className="block truncate">{line === "" ? "\u00a0" : line}</span>)}
+      <span className="block h-full overflow-hidden rounded-t-md border border-b-0 p-border p-surface px-3 pt-2.5 text-[8.5px] leading-[1.45] p-text-3">
+        {heading !== null && <span data-drive-page-heading className="mb-1 block truncate text-[11px] font-semibold p-text">{heading}</span>}
+        {lines.map((line, index) => (
+          <span key={index} data-drive-page-line className={`block truncate ${line.heading ? "mt-0.5 font-semibold p-text-2" : ""}`}>
+            {line.text === "" ? "\u00a0" : line.text}
+          </span>
+        ))}
       </span>
     </span>
   );
@@ -151,9 +245,20 @@ function TextCover({ path, name }: { path: string; name: string }) {
 
 interface Transfer {
   readonly id: number;
+  readonly folder: string;
   readonly name: string;
-  readonly status: "uploading" | "failed";
+  readonly size: number;
+  readonly status: "uploading" | "landed" | "failed";
   readonly error?: string;
+  readonly stop: () => void;
+}
+
+function TransferPicture({ status }: { status: Transfer["status"] }) {
+  return (
+    <span className="absolute inset-0 flex items-center justify-center p-recessed">
+      {status === "failed" ? <WarningIcon size={24} className="p-danger" /> : <span role="progressbar" aria-label="Uploading" className="h-1 w-1/2 p-busy-bar" />}
+    </span>
+  );
 }
 
 function VisibilityGlyph({ visibility }: { visibility: LiveShareVisibility | undefined }) {
@@ -301,7 +406,7 @@ function MineBody({ resource, onRetry, empty, children }: {
   return (
     <div data-drive-empty className="flex flex-col items-center px-6 py-16 text-center sm:py-24">
       <span className="flex size-14 items-center justify-center rounded-2xl p-text-3 bg-[color-mix(in_srgb,var(--c-text)_7%,transparent)]">
-        <HardDrivesIcon size={26} />
+        <FolderSimpleIcon size={26} />
       </span>
       <h2 className="mt-5 p-heading text-[19px] p-text">This folder is empty</h2>
       <p className="mt-2 max-w-[26rem] p-row-text p-text-3">Drop files here, or use New.</p>
@@ -329,33 +434,13 @@ function DropZone({ label, onFiles, children }: { label: string; onFiles: (files
   );
 }
 
-function TransferRow({ row, onDismiss }: { row: Transfer; onDismiss: () => void }) {
-  if (row.status === "uploading") {
-    return (
-      <li data-drive-transfer={row.status} className="flex items-center gap-2 text-xs">
-        <Loader size="sm" /><span className="truncate p-text-2">{row.name}</span><span className="p-text-3">uploading…</span>
-      </li>
-    );
-  }
-
-  return (
-    <li data-drive-transfer={row.status} className="flex items-center gap-2 text-xs">
-      <WarningIcon size={13} className="shrink-0 p-danger" /><span className="truncate p-text-2">{row.name}</span>
-      <span className="min-w-0 truncate p-danger" title={row.error}>{row.error}</span>
-      <button type="button" onClick={onDismiss} className="ml-auto shrink-0 p-text-3 hover:p-text" aria-label={`Dismiss ${row.name}`}><XIcon size={12} /></button>
-    </li>
-  );
-}
-
-function DriveNotices({ notice, onDismissNotice, listingPending, libraryResource, onRetryLibrary, copyStatus, transfers, onDismissTransfer }: {
+function DriveNotices({ notice, onDismissNotice, listingPending, libraryResource, onRetryLibrary, copyStatus }: {
   notice: string | null;
   listingPending: boolean;
   onDismissNotice: () => void;
   libraryResource: AsyncResource<SharedLibrary>;
   onRetryLibrary: () => void;
   copyStatus: ReturnType<typeof useCopy>["status"];
-  transfers: readonly Transfer[];
-  onDismissTransfer: (id: number) => void;
 }) {
   return (
     <>
@@ -371,11 +456,6 @@ function DriveNotices({ notice, onDismissNotice, listingPending, libraryResource
         <LoadFailure what="your slates and shares" message={libraryResource.message} onRetry={onRetryLibrary} className="mt-4" />
       )}
       {copyStatus !== "idle" && <p role="status" className="mt-4 p-meta p-text-3">{copyStatus === "copied" ? "Link copied." : "Could not copy the link."}</p>}
-      {transfers.length > 0 && (
-        <ul className="mt-4 space-y-1">
-          {transfers.map((row) => <TransferRow key={row.id} row={row} onDismiss={() => onDismissTransfer(row.id)} />)}
-        </ul>
-      )}
     </>
   );
 }
@@ -441,22 +521,26 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     return entry === undefined ? workspace : workspaceDisplayTitle(entry);
   };
 
-  const transfer = useCallback((name: string, work: () => Promise<void>): void => {
+  const transfer = useCallback((folder: string, name: string, size: number, work: (signal: AbortSignal) => Promise<void>): void => {
     const id = ++nextTransfer.current;
-    setTransfers((rows) => [...rows, { id, name, status: "uploading" }]);
+    const abort = new AbortController();
+    const drop = (): void => setTransfers((rows) => rows.filter((row) => row.id !== id));
+
+    setTransfers((rows) => [...rows, { id, folder, name, size, status: "uploading", stop: () => abort.abort() }]);
     startTransition(async () => {
       try {
-        await work();
-        setTransfers((rows) => rows.filter((row) => row.id !== id));
+        await work(abort.signal);
+        setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, status: "landed" } : row));
         listing.reload();
       } catch (cause) {
-        setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, status: "failed", error: renderThrownChain({ cause }) } : row));
+        if (abort.signal.aborted) drop();
+        else setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, status: "failed", error: renderThrownChain({ cause }), stop: drop } : row));
       }
     });
   }, [listing]);
 
   const uploadFiles = (files: File[]): void => {
-    for (const file of files) transfer(file.name, () => uploadFile(joinDir(path, file.name), file));
+    for (const file of files) transfer(path, file.name, file.size, (signal) => uploadFile(joinDir(path, file.name), file, signal));
   };
 
   const background = (work: () => Promise<void>): void => {
@@ -553,9 +637,13 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     }
 
     const meta = mine ? whoCanOpen(row) : [row.kind === "live" ? "Live" : "Blueprint", row.owner, shortAge(row.createdAt)].filter(Boolean).join(" · ");
+    const cover = <Cover title={row.title} seed={row.share} />;
+    // A live share of yours shows the picture of the slate it shares.
+    const slate = mine && row.kind === "live" ? shared?.slates.find((each) => each.workspace === row.workspace && each.id === row.slate) : undefined;
 
     return (
-      <Tile key={`${row.kind}:${row.id}`} title={row.title} picture={<Cover title={row.title} seed={row.share} />} icon={SHARE_ICON[row.kind]}
+      <Tile key={`${row.kind}:${row.id}`} title={row.title} icon={SHARE_ICON[row.kind]}
+        picture={slate === undefined ? cover : <SlatePicture workspace={slate.workspace} slate={slate} className="absolute inset-0 size-full object-cover object-top" fallback={cover} />}
         href={row.kind === "blueprint" ? blueprintPagePath(row.id) : undefined} onOpen={row.kind === "live" ? () => openLive(row) : undefined}
         meta={<span className="truncate">{meta}</span>} menu={menu}
         attributes={{ "data-drive-share": row.id, "data-drive-share-kind": row.kind }} />
@@ -563,7 +651,9 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   };
 
   const slateTile = (slate: OwnedSlate): ReactNode => (
-    <Tile key={`${slate.workspace}:${slate.id}`} title={slate.title} picture={<Cover title={slate.title} seed={`${slate.workspace}/${slate.id}`} />}
+    <Tile key={`${slate.workspace}:${slate.id}`} title={slate.title}
+      picture={<SlatePicture workspace={slate.workspace} slate={slate} className="absolute inset-0 size-full object-cover object-top"
+        fallback={<Cover title={slate.title} seed={`${slate.workspace}/${slate.id}`} />} />}
       icon={SLATE_ICON} href={slateHref(slate)}
       meta={<><span className="truncate">{titleOf(slate.workspace)}</span><VisibilityGlyph visibility={slate.visibility} /></>}
       attributes={{ "data-drive-slate": slate.id, "data-drive-workspace": slate.workspace }}
@@ -578,9 +668,9 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     const full = joinDir(path, entry.name);
     const opens = entry.kind === "symlink" && entry.target !== undefined ? entry.target : full;
     const attributes = { "data-drive-entry": entry.name, "data-drive-kind": entry.kind, "data-drive-skill": entry.skill ? "true" : "false" };
-    let icon = entry.skill ? SKILLS_ICON : FOLDER_ICON;
+    let icon = entry.kind === "symlink" ? LINK_ICON : FOLDER_ICON;
 
-    if (entry.kind === "symlink") icon = entry.skill ? SKILLS_ICON : LINK_ICON;
+    if (entry.skill || full === DRIVE_SKILLS_DIR) icon = SKILLS_ICON;
 
     if (inSkills && entry.skill) {
       return (
@@ -622,6 +712,25 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     );
   };
 
+  // Kept until listed, so the Files never blink.
+  const listed = new Set(contents.files.map((entry) => entry.name));
+  const shown = transfers.filter((row) => row.status === "landed" && row.folder === path && listed.has(row.name));
+
+  if (shown.length > 0) setTransfers((rows) => rows.filter((row) => !shown.includes(row)));
+
+  const uploads = transfers.filter((row) => row.folder === path && !shown.includes(row));
+
+  const uploadTile = (row: Transfer): ReactNode => (
+    <Tile key={`upload:${String(row.id)}`} title={row.name} icon={fileIcon(row.name)} picture={<TransferPicture status={row.status} />}
+      meta={row.status === "failed"
+        ? <span className="truncate p-danger" title={row.error}>{row.error}</span>
+        : <span className="truncate">{row.size > 0 ? `Uploading · ${formatBytes(row.size)}` : "Uploading"}</span>}
+      menu={[row.status === "failed"
+        ? { label: "Dismiss", icon: <XIcon size={15} />, marker: "data-drive-dismiss-upload", onSelect: row.stop }
+        : { label: "Cancel upload", icon: <XIcon size={15} />, marker: "data-drive-cancel-upload", danger: true, onSelect: row.stop }]}
+      attributes={{ "data-drive-transfer": row.status }} />
+  );
+
   const opened = contents.files.find((entry) => entry.name === search.get("file"));
   const builtin = contents.builtins.find((name) => name === search.get("skill"));
   const subtitle = subtitleOf(tab, path);
@@ -635,8 +744,8 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
           {tab === "mine" && (
             <div className="ml-auto">
               <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
-                onFolder={(picks) => { if (picks.length > 0) transfer(pickedFolderName(picks) ?? "folder", () => uploadFolder(path, picks)); }}
-                onZip={(file) => transfer(file.name, () => uploadZip(joinDir(path, file.name.replace(/\.zip$/iu, "")), file))}
+                onFolder={(picks) => { if (picks.length > 0) transfer(path, pickedFolderName(picks) ?? "folder", picks.reduce((sum, pick) => sum + pick.file.size, 0), (signal) => uploadFolder(path, picks, signal)); }}
+                onZip={(file) => transfer(path, file.name, file.size, (signal) => uploadZip(joinDir(path, file.name.replace(/\.zip$/iu, "")), file, signal))}
                 onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
             </div>
           )}
@@ -655,16 +764,16 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
         {subtitle !== null && <p className={`p-meta p-text-3 ${isRoot ? "mt-4" : "mt-1"}`}>{subtitle}</p>}
 
         <DriveNotices notice={notice} onDismissNotice={() => setNotice(null)} listingPending={listingPending} libraryResource={library.resource} onRetryLibrary={library.reload}
-          copyStatus={copier.status} transfers={transfers} onDismissTransfer={(id) => setTransfers((rows) => rows.filter((row) => row.id !== id))} />
+          copyStatus={copier.status} />
 
         {tab === "mine" ? (
           <DropZone label={isRoot ? "My stuff" : path.slice(path.lastIndexOf("/") + 1)} onFiles={uploadFiles}>
-            <MineBody resource={listing.resource} onRetry={listing.reload} empty={isEmptyMine(contents)}>
+            <MineBody resource={listing.resource} onRetry={listing.reload} empty={isEmptyMine(contents) && uploads.length === 0}>
               <SectionList groups={[
                 { label: "Slates", tiles: contents.slates.map(slateTile) },
                 { label: "Blueprints", tiles: contents.blueprints.map((row) => shareTile(row, true)) },
                 { label: inSkills ? "Skills" : "Folders", tiles: inSkills ? skillTiles() : contents.folders.map(folderTile) },
-                { label: "Files", tiles: contents.files.map(fileTile) },
+                { label: "Files", tiles: [...contents.files.map(fileTile), ...uploads.map(uploadTile)] },
               ]} />
             </MineBody>
           </DropZone>

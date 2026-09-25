@@ -25,6 +25,16 @@ import { mulberry32 } from './fixtures/payload-transport/container-harness';
 import { wranglerProvesAbsence } from './fixtures/r2-bench/deploy-substrate';
 import { configFor, deployArgs, withAuthoritativeBucket } from './bench-payload-transports';
 import { isProductSource, readMatching } from './sources';
+import { moduleEdges } from './import-graph';
+import { IMPORT_CANDIDATES, collapsePath, parse } from './syntax';
+
+const RELAY = 'scripts/fixtures/payload-transport/isolate-relay.ts';
+
+/** Whether `file` loads the relay: a relative edge of any form that resolves to it. */
+function reachesRelay(file: string, text: string): boolean {
+  return moduleEdges(parse(file, text)).edges.some(({ specifier }) => specifier.startsWith('.')
+    && IMPORT_CANDIDATES.some((suffix) => collapsePath(`${dirname(file)}/${specifier}`) + suffix === RELAY));
+}
 
 const ROOT = join(dirname(new URL(import.meta.url).pathname));
 
@@ -115,13 +125,21 @@ describe('the owning-DO arm measures the shape devbox had, not a fresh reassembl
     // dependency; a substring scan would report that sentence as the defect
     // and would then have to be relaxed to pass, which is how a gate loses its
     // teeth on the day it is written.
-    const reaches = /from\s+'[^']*isolate-relay'|import\(\s*'[^']*isolate-relay'\s*\)/;
-
     const importers = [...readMatching(isProductSource)]
-      .filter(([, text]) => reaches.test(text))
+      .filter(([file, text]) => reachesRelay(file, text))
       .map(([file]) => file);
 
     expect(importers).toEqual([]);
+  });
+
+  test('an edge to the relay is any import form that resolves to it, and a mention is none', () => {
+    const at = 'packages/core/src/store.ts';
+    const relay = '../../../scripts/fixtures/payload-transport/isolate-relay';
+
+    expect(reachesRelay(at, `import { relay } from "${relay}";`)).toBe(true);
+    expect(reachesRelay(at, `const { relay } = require('${relay}.ts');`)).toBe(true);
+    expect(reachesRelay(at, `export * from '${relay}';`)).toBe(true);
+    expect(reachesRelay(at, `// the upload went from '${relay}' to a store mount\nexport const x = 1;`)).toBe(false);
   });
 });
 

@@ -5,6 +5,11 @@ import { admitMcpDescriptors, describeMcpTool } from '../src/tools/mcp-surface';
 import { toolSchemaDialect, withToolSchemaDialect, type ToolSchemaDialect } from '../src/tools/tool-schema';
 import * as v from 'valibot';
 import { JsonObjectSchema, type JsonObject } from '../src/utils/json';
+import { createTestRuntime } from '@kinu.run/test-utils';
+import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
+import { buildBuiltinTools } from '../src/tools/builtins';
+import { runChat, UNBOUNDED_STEPS, type ChatEvent } from '../src/chat';
+import { storesFor } from './helpers';
 
 /** An MCP tool whose schema uses what providers reject: `$schema`, `const`, `oneOf`, a boolean subschema, a root `anyOf`. */
 const REMOTE_SCHEMA: JsonObject = {
@@ -99,6 +104,55 @@ describe('MCP input schemas per provider', () => {
       'anthropic/claude-opus-4-7', 'openrouter/anthropic/claude-sonnet-4.6', 'openrouter/google/gemini-2.5-pro',
       'google/gemini-2.5-flash', 'openai/gpt-5.5', 'codex/gpt-5.5', 'openrouter/deepseek/deepseek-v4',
     ].map(toolSchemaDialect)).toEqual(['anthropic', 'anthropic', 'gemini', 'gemini', 'openai', 'openai', 'openai']);
+  });
+});
+
+describe('built-in input schemas per provider', () => {
+  /** One turn on `spec` whose model calls tasks with an off-vocabulary status: what it was sent, and what came back. */
+  async function builtinTurn(spec: string) {
+    const { rt } = createTestRuntime();
+    let step = 0;
+    const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } };
+
+    const model = scriptedTurnModel({
+      doGenerate: () => (step++ === 0
+        ? { content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'tasks', input: JSON.stringify({ action: 'update', id: 't1', status: 'Done' }) }], finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [] }
+        : { content: [{ type: 'text', text: 'done' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] }),
+    });
+
+    const results: Extract<ChatEvent, { type: 'tool-result' }>[] = [];
+
+    for await (const event of runChat({
+      model, modelSpec: spec, system: 's', history: [{ role: 'user', content: 'go' }], stopWhen: UNBOUNDED_STEPS,
+      tools: buildBuiltinTools({ rt, history: storesFor(rt).history }),
+    })) {
+      if (event.type === 'tool-result') results.push(event);
+    }
+
+    const sent = new Map((model.doStreamCalls[0]?.tools ?? []).flatMap((entry) => entry.type === 'function' ? [[entry.name, entry.inputSchema] as const] : []));
+
+    return { sent, results };
+  }
+
+  test('a Gemini turn sends each built-in in its subset: no $schema or additionalProperties, a nullable as `nullable`', async () => {
+    const { sent } = await builtinTurn('google/gemini-2.5-pro');
+
+    expect(sent.size).toBeGreaterThan(0);
+
+    for (const [name, schema] of sent) {
+      expect({ name, meta: JSON.stringify(schema).includes('"$schema"'), closed: JSON.stringify(schema).includes('"additionalProperties"') })
+        .toEqual({ name, meta: false, closed: false });
+    }
+
+    expect(obj(obj(v.parse(JsonObjectSchema, sent.get('tasks')).properties).note)).toMatchObject({ type: 'string', nullable: true });
+  });
+
+  test('a normalized built-in is still checked by its own schema', async () => {
+    for (const spec of ['google/gemini-2.5-pro', 'openai/gpt-5.5']) {
+      const { results } = await builtinTurn(spec);
+
+      expect({ spec, outcome: results[0] }).toMatchObject({ spec, outcome: { success: false, reason: 'bad_input', error: expect.stringContaining('got "Done"') } });
+    }
   });
 });
 

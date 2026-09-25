@@ -17,24 +17,31 @@ test('a turn sleeping out a provider wait says who it is waiting on, not working
     await page.goto(`${origin}/gallery.html?frame=providerwait`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('.p-workbench');
 
-    // The one state chip the workspace header carries. `providerwait` is the
-    // only frame that passes a wait, so the word exists nowhere else to be
-    // found — and its own title answers when the retry is due, which the word
-    // alone cannot.
-    const chip = await page.waitForSelector('.p-workbench [title^="Retry in"]');
+    // The task indicator is the header's status region. It names the provider and counts down the time
+    // the provider set; a working turn names no provider and shows no time.
+    const chip = await page.waitForSelector('.p-workbench [role="status"][aria-label="Task state"]');
 
-    if (chip === null) throw new Error("no provider-wait chip in the workspace header");
+    if (chip === null) throw new Error('no task indicator in the workspace header');
 
-    // The frame's wait ends 45 s after it renders and the chip counts down, so a loaded
-    // machine reads 44s or less. Text and title are read together so no tick falls between.
-    const { text, title } = await chip.evaluate((el) => ({ text: el.textContent ?? '', title: el.getAttribute('title') }));
-    const said = 'waiting on anthropic · ';
-    const left = Number(text.slice(said.length, -1));
+    const secondsIn = (text: string): number => Number(/\d+/u.exec(text)?.[0] ?? Number.NaN);
+    const before = await chip.evaluate((el) => el.textContent ?? '');
 
-    expect(text).toBe(`${said}${String(left)}s`);
-    expect(left).toBeGreaterThan(0);
-    expect(left).toBeLessThanOrEqual(45);
-    expect(title).toBe(`Retry in ${String(left)}s`);
+    // The next tick of the countdown: the indicator's text changes on its own.
+    const after = await chip.evaluate((el, seen) => new Promise<string>((resolve) => {
+      const observer = new MutationObserver(() => {
+        if ((el.textContent ?? '') === seen) return;
+
+        observer.disconnect();
+        resolve(el.textContent ?? '');
+      });
+
+      observer.observe(el, { subtree: true, childList: true, characterData: true });
+    }), before);
+
+    expect(before).toContain('anthropic');
+    expect(secondsIn(before)).toBeGreaterThan(0);
+    expect(secondsIn(before)).toBeLessThanOrEqual(45);
+    expect(secondsIn(after)).toBeLessThan(secondsIn(before));
 
     await page.close();
   });

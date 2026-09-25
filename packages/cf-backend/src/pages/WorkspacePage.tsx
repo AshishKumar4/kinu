@@ -34,6 +34,7 @@ import { classifyProgrammaticTurn, messageSignalId, threadLiveTail } from "@kinu
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import type { ChangesFocus } from "@/components/surfaces/ChangesSurface";
 import { SlateInlineContext } from "@/components/slates/context";
+import { ChatSlates } from "@/components/slates/InlineSlate";
 import { SLATE_PREFIX, type SurfaceKind } from "@kinu.run/core";
 import { ConversationStartBoundary, HistoryBoundary } from "@/components/surfaces/shared";
 import { KinuMark } from "@/components/ui/KinuLogo";
@@ -44,7 +45,7 @@ import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
 import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
 import { workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
-import { InspectorToggle, WorkbenchPanels } from "@/components/WorkbenchPanels";
+import { InspectorToggle, WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
 
 /** Composed key: Kumo's `Button` requires a `shape` prop, `anti-slop/no-shape-in-symbol-names`
  *  bans the substring in symbol names, and lint suppression comments are forbidden. */
@@ -544,20 +545,28 @@ export default function WorkspacePage() {
   const visiblePlan = state.activePlan;
   const [surface, setSurface] = useState<SurfaceKind>("Work");
   const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null);
+  const workbench = useRef<WorkbenchHandle | null>(null);
+
+  // Every surface opened from the chat, a note or a landing is brought into view: a collapsed inspector, or a phone
+  // showing the chat, would otherwise change what nobody can see.
+  const show = useCallback((next: SurfaceKind): void => {
+    setSurface(next);
+    workbench.current?.reveal();
+  }, []);
 
   const openChangeNote = useCallback((source: string, anchor: DiffAnchor | undefined): void => {
-    setSurface("Changes");
+    show("Changes");
     setChangesFocus((prior) => ({ source, path: anchor?.path ?? null, nonce: (prior?.nonce ?? 0) + 1 }));
-  }, []);
+  }, [show]);
 
   // `?slate=<id>&unmapped=1` is a blueprint fork's landing; the jump waits until the listing names the slate.
   const [landingSlate, setLandingSlate] = useState<string | null>(() => new URLSearchParams(location.search).get("slate"));
   const [unmappedSlate, setUnmappedSlate] = useState<string | null>(() => new URLSearchParams(location.search).get("unmapped") === "1" ? new URLSearchParams(location.search).get("slate") : null);
   useEffect(() => {
     if (landingSlate === null || !state.slates.some((slate) => slate.id === landingSlate)) return;
-    setSurface(`slate:${landingSlate}`);
+    show(`${SLATE_PREFIX}${landingSlate}`);
     setLandingSlate(null);
-  }, [landingSlate, state.slates]);
+  }, [landingSlate, state.slates, show]);
   const ui = useConversationUiState(`${agentId ?? ""}/main`);
   const setChatMode = ui.setMode;
   const planGate = usePlanGatedMode(subName === undefined ? state.activePlan : null, ui);
@@ -769,8 +778,12 @@ export default function WorkspacePage() {
 
   const slateInline = useMemo(() => ({
     rpc: state.rpc,
-    openSlate: (id: string): void => { setSurface(`${SLATE_PREFIX}${id}`); },
-  }), [state.rpc]);
+    openSlate: (id: string): void => show(`${SLATE_PREFIX}${id}`),
+  }), [state.rpc, show]);
+
+  // The slate the inspector shows beside the chat folds its chat previews; a phone never shows both.
+  const panelSlate = (control: InspectorControl | null): string | null =>
+    control !== null && !control.collapsed && surface.startsWith(SLATE_PREFIX) ? surface.slice(SLATE_PREFIX.length) : null;
 
   // Never unmount on transient WS errors.
   if (state.connectionStatus === "connecting" && !state.agentStatus) return (
@@ -843,9 +856,10 @@ export default function WorkspacePage() {
         </div>
       ) : (
       <WorkbenchPanels
+        ref={workbench}
         workspace={agentId}
         contents={state}
-        chat={(inspectorControl) => <>
+        chat={(inspectorControl) => <ChatSlates shownInPanel={panelSlate(inspectorControl)}>
             <SubordinateTabs
               workspace={agentId}
               subordinates={state.subordinates}
@@ -1020,7 +1034,7 @@ export default function WorkspacePage() {
             </div>
             </div>
             )}
-        </>}
+        </ChatSlates>}
         inspector={(
           // `planOwner` must be the actor's registered name as the work read reports it; the root's is the workspace name.
           <WorkSurface

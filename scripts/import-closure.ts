@@ -6,26 +6,11 @@
  *
  * Its own module, with nothing heavy imported, because Vite bundles the
  * first-run config and cannot bundle `ladder.ts`, whose tier runner awaits at
- * the top level.
+ * the top level. Edges are `moduleEdges`' (`import-graph.ts`), the one reader
+ * of a module's imports; a type-only edge loads nothing, so it is not followed.
  */
-
-/** A relative module edge, as this repository spells one: extensionless, so
- *  the resolution below appends `.ts` and keeps only what the corpus holds. */
-const RELATIVE_IMPORT = /(?:from|import)\s*\(?\s*['"](\.[^'"]+)['"]/gu;
-
-function collapseRelative(from: string, specifier: string): string {
-  const parts = `${from.slice(0, from.lastIndexOf('/'))}/${specifier}`.split('/');
-  const out: string[] = [];
-
-  for (const part of parts) {
-    if (part === '.' || part === '') continue;
-
-    if (part === '..') out.pop();
-    else out.push(part);
-  }
-
-  return out.join('/');
-}
+import { moduleEdges, type ModuleEdges } from './import-graph';
+import { IMPORT_CANDIDATES, collapsePath, parse, type Parsed } from './syntax';
 
 /**
  * Every module in `sources` that `seeds` holds, or that imports — however many
@@ -36,25 +21,27 @@ function collapseRelative(from: string, specifier: string): string {
  */
 export function modulesReaching(
   sources: ReadonlyMap<string, string>,
-  seeds: (file: string, text: string) => boolean,
+  seeds: (file: string, parsed: Parsed, edges: ModuleEdges) => boolean,
 ): ReadonlySet<string> {
   const reaching = new Set<string>();
   const importers = new Map<string, string[]>();
 
   for (const [file, text] of sources) {
-    if (seeds(file, text)) reaching.add(file);
+    const parsed = parse(file, text);
+    const edges = moduleEdges(parsed);
 
-    for (const [, specifier] of text.matchAll(RELATIVE_IMPORT)) {
-      if (specifier === undefined) continue;
-      const base = collapseRelative(file, specifier);
+    if (seeds(file, parsed, edges)) reaching.add(file);
 
-      for (const target of [base, `${base}.ts`]) {
-        if (!sources.has(target)) continue;
-        const seen = importers.get(target);
+    for (const { specifier, kind } of edges.edges) {
+      if (kind === 'type' || !specifier.startsWith('.')) continue;
+      const base = collapsePath(`${file.slice(0, file.lastIndexOf('/') + 1)}${specifier}`);
+      const target = IMPORT_CANDIDATES.map((suffix) => base + suffix).find((path) => sources.has(path));
 
-        if (seen === undefined) importers.set(target, [file]);
-        else seen.push(file);
-      }
+      if (target === undefined) continue;
+      const seen = importers.get(target);
+
+      if (seen === undefined) importers.set(target, [file]);
+      else seen.push(file);
     }
   }
 

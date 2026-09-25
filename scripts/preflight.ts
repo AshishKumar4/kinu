@@ -42,8 +42,13 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import type { CallExpression, Node } from 'oxc-parser';
+import { tolerate } from '@kinu.run/core/obs';
 import { assertMeasured, finding } from './gate-ratchet';
-import { SCRATCH_PREFIXES } from '@kinu.run/test-utils';
+import { declaredName, parse, walk } from './syntax';
+import { BROWSER_PROFILE_PARENT, SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX } from '@kinu.run/test-utils';
+import { procFile, reapAbandonedRoots } from './process-owner';
+import { signalGroup } from './process-group';
 
 /** This checkout, so the merge-state probe reads THIS tree's git directory
  *  rather than whatever directory the gate happened to be invoked from. */
@@ -187,14 +192,37 @@ const ENGINE = 'packages/cli-backend/src/checkpoints.ts';
  * the bound, that marker owns every host write beneath it — measured at
  * 24,483 ms for one `device.writeFile`, which surfaces as a 5,000 ms timeout
  * in whichever suite wrote first. So the marker is a FINDING only while the
- * bound is missing, and this is the half that decides which.
+ * bound is missing, and this is the half that decides which. Read as syntax:
+ * `temp` bound to `resolve(tmpdir())`, and an `if` comparing `probe === temp`
+ * and `real === realTemp` (either order) whose whole branch is `break`.
  */
 export function engineBoundsTempWalk(source: string): boolean {
-  const walk = source.slice(source.indexOf('workdirForPath(path: string): string {'));
-  const body = walk.slice(0, walk.indexOf('\n    },'));
+  const calls = (raw: Node | null | undefined, name: string): raw is CallExpression =>
+    raw?.type === 'CallExpression' && raw.callee.type === 'Identifier' && raw.callee.name === name;
 
-  return body.includes('resolve(tmpdir())')
-    && /if \(probe === temp \|\| real === realTemp\) break;/u.test(body);
+  const compares = (raw: Node, pair: readonly [string, string]): boolean => raw.type === 'BinaryExpression' && raw.operator === '==='
+    && raw.left.type === 'Identifier' && raw.right.type === 'Identifier' && [raw.left.name, raw.right.name].sort().join() === [...pair].sort().join();
+
+  let tempIsTmpdir = false;
+  let breaksAtTemp = false;
+
+  walk(parse(ENGINE, source).root, (method) => {
+    if (declaredName(method) !== 'workdirForPath') return;
+    walk(method, ({ raw }) => {
+      if (raw.type === 'VariableDeclarator' && raw.id.type === 'Identifier' && raw.id.name === 'temp'
+        && calls(raw.init, 'resolve') && calls(raw.init.arguments[0], 'tmpdir')) tempIsTmpdir = true;
+
+      if (raw.type !== 'IfStatement' || raw.test.type !== 'LogicalExpression' || raw.test.operator !== '||') return;
+      const branch = raw.consequent.type === 'BlockStatement' && raw.consequent.body.length === 1 ? raw.consequent.body[0] : raw.consequent;
+      const { left, right } = raw.test;
+
+      if (branch?.type === 'BreakStatement'
+        && ((compares(left, ['probe', 'temp']) && compares(right, ['real', 'realTemp']))
+          || (compares(right, ['probe', 'temp']) && compares(left, ['real', 'realTemp'])))) breaksAtTemp = true;
+    });
+  });
+
+  return tempIsTmpdir && breaksAtTemp;
 }
 
 export interface Environment {
@@ -213,6 +241,8 @@ export interface Environment {
   readonly workdirWalkBounded: boolean;
   readonly scratchOrphans: number;
   readonly tempEntries: number;
+  /** Test browsers still running after the launcher that started them ended ({@link orphanTestBrowsers}). */
+  readonly orphanBrowsers: number;
   /** The commit being merged in, when a merge is half-resolved. A tree in that
    *  state holds BOTH versions of every conflicted file, so nothing downstream
    *  is measuring either one. */
@@ -236,6 +266,72 @@ export function unboundedWorkdirsAbove(from: string, home: string): string[] {
   return hits;
 }
 
+/** One process, as `/proc` names it. */
+export interface ProcessRow {
+  readonly pid: number;
+  readonly ppid: number;
+  readonly group: number;
+  readonly args: readonly string[];
+}
+
+/** A `/proc/<pid>/cmdline`'s arguments. Chrome rewrites its own, so they read back joined by spaces, not NULs. */
+export function argsOf(cmdline: string): string[] {
+  return cmdline.split(/[\0 ]/u).filter((arg) => arg !== '');
+}
+
+/** Every process `/proc` lists now; one that ends mid-read is left out. */
+function processTable(): ProcessRow[] {
+  const rows: ProcessRow[] = [];
+
+  for (const name of readdirSync('/proc')) {
+    if (!/^\d+$/u.test(name)) continue;
+    const cmdline = procFile(name, 'cmdline');
+    const stat = procFile(name, 'stat');
+
+    if (cmdline === undefined || stat === undefined) continue;
+    // After the parenthesised command name, which may hold spaces: state, ppid, process group.
+    const [, ppid, group] = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+
+    rows.push({ pid: Number(name), ppid: Number(ppid), group: Number(group), args: argsOf(cmdline) });
+  }
+
+  return rows;
+}
+
+/** The profile a browser runs from when it is one of our scratch roots, so a test launched it; otherwise undefined. */
+export function testBrowserProfile(args: readonly string[]): string | undefined {
+  const profile = args.find((arg) => arg.startsWith('--user-data-dir='))?.slice('--user-data-dir='.length);
+
+  return profile?.split('/').some((name) => name.startsWith(SCRATCH_ROOT_PREFIX)) === true ? profile : undefined;
+}
+
+/**
+ * Test browsers whose launcher has ended: a Chrome on a scratch profile, re-parented to PID 1. A launcher
+ * is Chrome's parent while it runs, so nothing that still owns one is here. Puppeteer's port-driven Chrome outlived a
+ * killed runner: the owner found six on 2026-09-25, up to 10 h old, holding about 1.2 GB.
+ */
+export function orphanTestBrowsers(table: readonly ProcessRow[]): ProcessRow[] {
+  return table.filter((row) => row.ppid === 1 && testBrowserProfile(row.args) !== undefined);
+}
+
+/** How many browsers `rows` are, one per profile. */
+function browsersIn(rows: readonly ProcessRow[]): number {
+  return new Set(rows.map((row) => testBrowserProfile(row.args))).size;
+}
+
+/** Ends every orphaned test browser; returns how many it ended. */
+function endOrphanTestBrowsers(): number {
+  const orphans = orphanTestBrowsers(processTable());
+
+  for (const orphan of orphans) {
+    // Puppeteer starts Chrome as the leader of its own group, which holds its zygotes and renderers.
+    if (orphan.group === orphan.pid) signalGroup(orphan.group, 'SIGKILL');
+    else tolerate(() => process.kill(orphan.pid, 'SIGKILL'), 'esrch');
+  }
+
+  return browsersIn(orphans);
+}
+
 export function observe(): Environment {
   const temp = resolve(tmpdir());
   const fs = statfsSync(temp);
@@ -255,6 +351,7 @@ export function observe(): Environment {
     workdirWalkBounded: engineBoundsTempWalk(readFileSync(join(repo, ENGINE), 'utf8')),
     scratchOrphans: orphans,
     tempEntries: entries.length,
+    orphanBrowsers: browsersIn(orphanTestBrowsers(processTable())),
     mergeInProgress: existsSync(join(repo, '.git/MERGE_HEAD'))
       ? readFileSync(join(repo, '.git/MERGE_HEAD'), 'utf8').trim().slice(0, 12)
       : null,
@@ -408,10 +505,14 @@ if (import.meta.main) {
 
   if (process.argv.includes('--reclaim')) {
     const { removed, kept } = reclaim(env.temp, 2 * 60 * 60 * 1000);
+    const browsers = endOrphanTestBrowsers();
+    // A profile's owner record names its launcher, so one whose launcher has ended is abandoned whatever its age.
+    const profiles = reapAbandonedRoots(BROWSER_PROFILE_PARENT, '').length;
     const after = observe();
     console.log(
       `preflight: reclaimed ${String(removed)} scratch entries (kept ${String(kept)} younger `
-      + `than 2h); free inodes ${String(env.freeInodes)} → ${String(after.freeInodes)}`,
+      + `than 2h); ended ${String(browsers)} orphaned test browser(s) and removed ${String(profiles)} abandoned `
+      + `scratch root(s) in ${BROWSER_PROFILE_PARENT}; free inodes ${String(env.freeInodes)} → ${String(after.freeInodes)}`,
     );
     process.exit(0);
   }
@@ -438,15 +539,20 @@ if (import.meta.main) {
 
   const problems = judge(env);
 
+  // A count, not a verdict, like the scratch count: it names a leak and the command that ends it.
+  const browsers = env.orphanBrowsers === 0
+    ? 'no test browser outlived its launcher'
+    : `${String(env.orphanBrowsers)} test browser(s) outlived their launcher (bun scripts/preflight.ts --reclaim ends them)`;
+
   if (problems.length === 0) {
     console.log(`preflight: ok — ${measured}, ${String(env.tempEntries)} entries in the temp directory, `
-      + `${String(env.scratchOrphans)} of them our own leaked test scratch, no merge in progress; `
+      + `${String(env.scratchOrphans)} of them our own leaked test scratch, ${browsers}, no merge in progress; `
       + `a ${String(PROBE_BYTES / 2 ** 20)} MiB write succeeded, so a per-user quota is not exhausted `
       + '(its remaining headroom is unmeasured: statfs reports the filesystem, not the user)');
     process.exit(0);
   }
 
-  console.error(`preflight: ${String(problems.length)} environment fault(s)\n`);
+  console.error(`preflight: ${String(problems.length)} environment fault(s); ${browsers}\n`);
 
   for (const problem of problems) console.error(problem);
   console.error(

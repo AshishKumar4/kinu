@@ -229,7 +229,7 @@ export function supersedeGeneration(
  *  (`..`, a path separator, another box's guess) dies before it becomes a key. */
 const CHAIN_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function isChainId(id: string): boolean {
+function isChainId(id: string): boolean {
   return CHAIN_ID_RE.test(id);
 }
 
@@ -316,7 +316,7 @@ function isOverlayMounted(procMounts: string, dir: string): boolean {
 
 /** Size is not identity: `digest` (SHA-256, store-confirmed only for checksummed single PUTs)
  *  and per-upload `objectVersion` both check it; an absent side is unknown and skipped. */
-export function layerIntegrityFailure(input: {
+function layerIntegrityFailure(input: {
   declared: ChainLayer | undefined;
   stored: ChainLayer | undefined;
   label: string;

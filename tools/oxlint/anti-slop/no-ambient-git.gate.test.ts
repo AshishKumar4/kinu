@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { isParseable, isTestFile, trackedFiles } from "../../../scripts/sources.ts";
+import { parse, publishedNames } from "../../../scripts/syntax.ts";
 import { lintJson, type LintDiagnostic } from "./shared/oxlint-json.ts";
 
 const repoRoot = process.cwd();
@@ -146,7 +147,6 @@ function corpus(): {
   readonly governed: number;
   readonly unparsable: number;
   readonly ignoredByConfig: number;
-  readonly remedyExports: readonly string[];
 } {
   const counted = trackedFiles().filter(isTestFile);
   const parsable = counted.filter(isParseable);
@@ -154,21 +154,15 @@ function corpus(): {
     ignorePatterns.some((pattern) => file === pattern || file.startsWith(`${pattern}/`)),
   );
 
-  const helper = join(repoRoot, "packages/test-utils/src/git.ts");
-  const source = readFileSync(helper, "utf8");
-  const remedyExports = ["git", "gitEnv", "initRepo"].filter((name) =>
-    new RegExp(`export (function|const) ${name}\\b`).test(source),
-  );
   return {
     counted: counted.length,
     governed: parsable.length - ignored.length,
     unparsable: counted.length - parsable.length,
     ignoredByConfig: ignored.length,
-    remedyExports,
   };
 }
 
-const { counted, governed, unparsable, ignoredByConfig, remedyExports } = corpus();
+const { counted, governed, unparsable, ignoredByConfig } = corpus();
 assert.ok(
   governed > 0,
   `${counted} files match the rule's TEST_FILE pattern but 0 of them are inside the lint: it would match nothing by construction`,
@@ -178,10 +172,23 @@ assert.equal(
   governed + unparsable + ignoredByConfig,
   "the corpus partition does not add up, so one of these populations is being counted twice or not at all",
 );
+
+/** The helpers this rule's message tells people to use, as the module publishes them. */
+const REMEDIES = ["git", "gitEnv", "initRepo"];
+const remedyExports = (file: string, source: string): readonly string[] => {
+  const published = new Set(publishedNames(parse(file, source).root).map(({ name }) => name));
+  return REMEDIES.filter((name) => published.has(name));
+};
 assert.deepEqual(
-  [...remedyExports].sort(),
-  ["git", "gitEnv", "initRepo"],
-  "packages/test-utils/src/git.ts no longer exports the helpers this rule's message tells people to use",
+  remedyExports("git.ts", "export async function git() {}\n// export function gitEnv() {}\nfunction initRepo() {}\nexport { initRepo };\n"),
+  ["git", "initRepo"],
+  "an async export and an export clause publish a helper; a commented-out export does not",
+);
+const GIT_HELPER = "packages/test-utils/src/git.ts";
+assert.deepEqual(
+  remedyExports(GIT_HELPER, readFileSync(join(repoRoot, GIT_HELPER), "utf8")),
+  REMEDIES,
+  `${GIT_HELPER} no longer exports the helpers this rule's message tells people to use`,
 );
 
 /**

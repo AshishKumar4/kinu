@@ -904,6 +904,17 @@
       "samples": 193,
       "loadAtStart": 3.71,
       "exit": 0
+    },
+    "bun test --timeout=0 scripts/test-chrome.test.ts": {
+      "wallSeconds": 0.94,
+      "cpuSeconds": 0.84,
+      "peakRssMb": 479.84,
+      "peakRunnable": 14,
+      "peakCpuThreads": 1.52,
+      "meanThreads": 0.89,
+      "samples": 16,
+      "loadAtStart": 1.59,
+      "exit": 0
     }
   }
 }

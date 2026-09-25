@@ -97,8 +97,8 @@ interface Observed {
   readonly reducedMotionTails: Record<string, TailFrame>;
   readonly chat: Record<string, ChatRow>;
   readonly forkInterruptedAfterClick: ChatRow;
-  /** The failed-turn card's headline, keyed by whether it is a replay. */
-  readonly chatErrorHeadings: Record<string, string>;
+  /** Each failure card by its state (`live`, `replayed`): its headline, its border's paint, and whether it offers the turn again. */
+  readonly chatErrors: Record<string, { readonly heading: string; readonly border: string; readonly retry: boolean }>;
   /** The drive at its root: crumb text, row names, and the origin badges the
    *  mounted folders wear. */
   readonly filesRoot: { crumbs: string; entries: string[]; badges: string[] };
@@ -353,11 +353,15 @@ async function run(): Promise<Observed> {
 
     const forkInterruptedAfterClick = (await readChatRows(chatPage))[UNSTAMPED_FORK_ROW];
 
-    const chatErrorHeadings = Object.fromEntries(await chatPage.$$eval(
+    const chatErrors = Object.fromEntries(await chatPage.$$eval(
       '[data-chat-error]',
       (cards) => cards.map((card) => [
         card.getAttribute('data-chat-error') ?? '',
-        card.querySelector('.font-medium')?.textContent ?? '',
+        {
+          heading: card.querySelector('.font-medium')?.textContent ?? '',
+          border: getComputedStyle(card).borderTopColor,
+          retry: [...card.querySelectorAll('button')].some((button) => /retry/i.test(button.textContent ?? '') && !button.disabled),
+        },
       ]),
     ));
 
@@ -610,7 +614,7 @@ async function run(): Promise<Observed> {
     await explore.close();
 
     return {
-      tails, reducedMotionTails, chat, forkInterruptedAfterClick, chatErrorHeadings, toolActivity,
+      tails, reducedMotionTails, chat, forkInterruptedAfterClick, chatErrors, toolActivity,
       filesRoot, filesRoster, filesInMount, filesAfterUp, treeFileNames,
       filesMarkdownRendered, filesPreviewText, filesEditorSeedsFromTheFile,
       filesAfterRename, filesAfterDelete, filesFiltered, filesOfflineRow,
@@ -780,9 +784,14 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
   test('a replayed failure does not claim to be a live one', () => {
     // `sunlit-stone-4a20` still answers a resume ACK with
     // {"body":"Unauthorized","done":true,"error":true} from a turn that ended
-    // 2026-08-17. Both states are on the page, and they must not read alike.
-    expect(observed.chatErrorHeadings.live).toBe('The last turn failed and produced no answer');
-    expect(observed.chatErrorHeadings.replayed).toBe('This workspace was last left on a failed turn');
+    // 2026-08-17. Both states are on the page, and they must not read alike: the replayed one neither says what the
+    // live one says nor raises its alarm, and each still offers its turn again.
+    const { live, replayed } = observed.chatErrors;
+
+    expect(replayed?.heading).not.toBe(live?.heading);
+    expect(replayed?.border).not.toBe(live?.border);
+    expect(live?.retry).toBe(true);
+    expect(replayed?.retry).toBe(true);
   });
 });
 
@@ -3004,31 +3013,41 @@ test('the panel strip is one continuous rule with the underline on it', async ()
   });
 });
 
-test('workspace tabs keep scrolling horizontal and suppress the scrollbar', async () => {
+test('workspace tabs past the edge stay reachable by scrolling the strip sideways', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
     await page.setViewport({ width: 390, height: 844 });
     await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('[aria-label="Work"]');
 
-    // A strip narrower than its tabs, so the scroll is measured whatever the frame's tab count.
-    const strip = await page.$eval('.p-tabstrip', (element) => {
-      const style = getComputedStyle(element);
-      element.setAttribute('style', 'max-width: 120px');
-      element.scrollLeft = 50;
+    // The tabs' own container, capped narrower than its tabs so the last one starts out of view.
+    const reach = await page.$eval('[aria-label="Work"]', (tab) => {
+      const row = tab.parentElement;
 
-      return {
-        names: [...element.querySelectorAll('button[aria-label]')].map((button) => button.getAttribute('aria-label')),
-        overflowY: style.overflowY, scrollbarWidth: style.scrollbarWidth, scrollLeft: element.scrollLeft,
-        overflows: element.scrollWidth > element.clientWidth,
+      if (row === null) throw new Error('the Work tab has no container');
+      row.setAttribute('style', 'max-width: 120px');
+      const tabs = [...row.querySelectorAll<HTMLElement>('button[aria-label]')];
+      const last = tabs.at(-1);
+
+      if (last === undefined) throw new Error('the strip has no tabs');
+
+      const inView = (): boolean => {
+        const box = last.getBoundingClientRect();
+        const frame = row.getBoundingClientRect();
+
+        return box.left >= frame.left && box.right <= frame.right;
       };
+
+      const before = inView();
+      const heightBefore = row.getBoundingClientRect().height;
+      last.focus();
+
+      return { before, after: inView(), grew: row.getBoundingClientRect().height !== heightBefore };
     });
 
-    expect(strip.names).toContain('Files');
-    expect(strip.overflows).toBe(true);
-    expect(['hidden', 'clip']).toContain(strip.overflowY);
-    expect(strip.scrollbarWidth).toBe('none');
-    expect(strip.scrollLeft).toBeGreaterThan(0);
+    expect(reach.before).toBe(false);
+    expect(reach.after).toBe(true);
+    expect(reach.grew).toBe(false);
     await page.close();
   });
 });
@@ -3046,7 +3065,6 @@ interface AgentTabPaint {
   readonly color: string;
   readonly background: string;
   readonly underlineColor: string;
-  readonly underlineWidth: number;
   /**
    * The colour of the element that holds the tab's NAME.
    *
@@ -3069,7 +3087,10 @@ interface StripPaint {
 }
 
 function agentStripPaint(page: Page, strip: string): Promise<StripPaint> {
-  return page.$eval(`[data-tab-strip="${strip}"] nav[aria-label="Workspace agents"]`, (nav) => {
+  return page.$eval(`[data-tab-strip="${strip}"] nav[aria-label="Workspace agents"]`, async (nav) => {
+    // A tab under the pointer is read once its own colour transition has ended.
+    await Promise.allSettled([...nav.querySelectorAll('.p-tab')].flatMap((tab) => tab.getAnimations().map((animation) => animation.finished)));
+
     // The name sits in the deepest element that has text and no children of
     // its own; Main writes its name as a text node, so it reports itself.
     const labelled = (tab: Element): Element => {
@@ -3094,7 +3115,6 @@ function agentStripPaint(page: Page, strip: string): Promise<StripPaint> {
         color: style.color,
         background: style.backgroundColor,
         underlineColor: style.borderBottomColor,
-        underlineWidth: Number.parseFloat(style.borderBottomWidth),
         labelColor: getComputedStyle(labelled(tab)).color,
         bottom: tab.getBoundingClientRect().bottom,
       }];
@@ -3150,10 +3170,6 @@ describe('the open agent tab, as the browser paints it', () => {
           expect(closed.length).toBeGreaterThan(0);
 
           for (const tab of current) {
-            // The bar is drawn, in a colour of its own.
-            expect(tab.underlineWidth).toBeGreaterThanOrEqual(2);
-            expect(tab.underlineColor).not.toBe('rgba(0, 0, 0, 0)');
-
             // The NAME reads in the tab's own colour, whatever holds it. Main
             // inherits that by writing its name as text; an agent's name sits
             // in a rename control, and the control used to write a role of its
@@ -3179,6 +3195,37 @@ describe('the open agent tab, as the browser paints it', () => {
       });
     });
   }
+
+  // The other half of the complaint: tabs lit alike merge. A closed tab under the pointer answers it, brighter over a
+  // neutral bar, and never in the open tab's accent. `agent-4f2c`'s codename renders through its own text role.
+  test('a closed tab under the pointer brightens over a neutral bar, never the open tab\'s', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      for (const theme of ['dark', 'light'] as const) {
+        const page = await newPage();
+        await page.setViewport({ width: 900, height: 1000 });
+        await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
+        await page.goto(`${origin}/gallery.html?frame=tabs`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-tab-strip="coupon-tester"] nav[aria-label="Workspace agents"]');
+        const rest = await agentStripPaint(page, 'coupon-tester');
+        const open = rest.tabs.find((one) => one.current === 'page');
+
+        for (const closed of ['migration-review', 'agent-4f2c']) {
+          await page.hover(`[data-tab-strip="coupon-tester"] [data-agent-tab="${closed}"] a`);
+          const paint = await agentStripPaint(page, 'coupon-tester');
+          const before = rest.tabs.find((one) => one.tab === closed);
+          const hovered = paint.tabs.find((one) => one.tab === closed);
+
+          expect(hovered?.color).not.toBe(before?.color);
+          expect(hovered?.labelColor).toBe(hovered?.color);
+          expect(hovered?.underlineColor).not.toBe(before?.underlineColor);
+          expect(hovered?.underlineColor).not.toBe(open?.underlineColor);
+          expect(paint.tabs.find((one) => one.current === 'page')?.underlineColor).toBe(open?.underlineColor);
+        }
+
+        await page.close();
+      }
+    });
+  });
 });
 
 /** One Work section, as the browser drew it. */

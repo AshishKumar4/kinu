@@ -46,6 +46,12 @@ export const SCRATCH_PREFIXES = [
 /** The namespace every directory minted through {@link scratchDir} carries. */
 export const SCRATCH_ROOT_PREFIX = 'kinu-scratch-';
 
+/**
+ * Where a test browser's throwaway profile is minted: RAM, not the scratch disk, since one probe run wrote 174 MB of
+ * profile data in six minutes (owner, 2026-09-25). It goes when the browser closes.
+ */
+export const BROWSER_PROFILE_PARENT = '/tmp';
+
 /** Directories this process minted and still owns. */
 const minted = new Set<string>();
 

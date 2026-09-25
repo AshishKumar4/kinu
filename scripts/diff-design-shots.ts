@@ -8,10 +8,11 @@
  *   bun scripts/diff-design-shots.ts                         # through the gallery harness (a frozen build)
  *   bun scripts/diff-design-shots.ts --dev http://127.0.0.1:5272 --only changes,file --vp desktop --theme dark
  */
-import { existsSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import puppeteer, { type LaunchOptions, type Page } from 'puppeteer';
+import type { Page } from 'puppeteer';
 import { withGallery } from './gallery-harness';
+import { withTestChrome } from './test-chrome';
 
 const OUT = join(import.meta.dir, '..', '..', 'kinu-logs', 'diff-design');
 
@@ -137,17 +138,7 @@ async function shoot(newPage: () => Promise<Page>, origin: string): Promise<stri
 }
 
 async function shootDev(origin: string): Promise<string[]> {
-  const options: LaunchOptions = { args: ['--no-sandbox', '--disable-dev-shm-usage'] };
-  const executablePath = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium'].find((candidate) => existsSync(candidate));
-
-  if (executablePath !== undefined) options.executablePath = executablePath;
-  const browser = await puppeteer.launch(options);
-
-  try {
-    return await shoot(() => browser.newPage(), origin);
-  } finally {
-    await browser.close();
-  }
+  return withTestChrome((browser) => shoot(() => browser.newPage(), origin));
 }
 
 mkdirSync(OUT, { recursive: true });

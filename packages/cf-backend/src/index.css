@@ -194,6 +194,7 @@ html, body, #root {
   --dur-fast: 120ms;
   --dur-base: 150ms;
   --dur-enter: 220ms;
+  --dur-fold: 300ms;  /* a block that folds: longer than a control's change, since it moves a whole block */
 
   /* ── DARK (default) — the owner's app mock, verbatim ───────────────
      Every value below is the mock's own dark theme (Kinu App v2.dc.html,
@@ -232,6 +233,7 @@ html, body, #root {
   --c-accent-fg: #E3D2AE;  /* mock --silk — the bright end: links, brand ink, inline code */
   --c-accent-on: #1A1408;  /* mock --goldInk, 8.4:1 on gold */
   --c-accent-subtle: rgba(224, 164, 88, 0.12);
+  --c-accent-mark:   var(--c-accent);  /* an icon that marks "here": the gold itself, where the ground is dark */
 
   /* Status hues. good/bad are the mock's own; warning and info have no
      mock literal and keep the family's tan and slate. */
@@ -397,6 +399,7 @@ html, body, #root {
   --c-accent-fg: #7A5514;  /* mock --silk — links, brand ink, inline code, 5.2:1 on bg */
   --c-accent-on: #1F1503;  /* mock --goldInk, 7.4:1 on the fill */
   --c-accent-subtle: rgba(216, 154, 68, 0.16);
+  --c-accent-mark:   var(--c-accent-fg);  /* the gold is under 2:1 on the light wash; the ink is 4.9:1 */
 
   --c-success:  #316530;   /* mock --good #356B35 lifted for AA on wells (4.9:1 worst) */
   --c-warning:  #7E5205;
@@ -481,6 +484,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 @utility p-text-3 { color: var(--c-text-3); }
 @utility p-text-4 { color: var(--c-text-4); }
 @utility p-accent { color: var(--c-accent-fg); }
+@utility p-accent-mark { color: var(--c-accent-mark); }
 @utility p-accent-subtle { background: var(--c-accent-subtle); }
 
 @utility p-success { color: var(--c-success); }
@@ -722,22 +726,41 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 /* ── Tabs ──────────────────────────────────────────────────────────
    A tab belongs to the panel underneath it, and says so with its bottom
-   edge. It is never a box: a four-sided tab is a chip that has floated
-   free of the thing it switches, which is what the agent tab strip had
-   become. One grammar for all three strips — work surfaces, output
-   sub-tabs, and the agent tabs above the chat. Pair with `-mb-px` on the
-   strip so the active bar lands on the strip's own rule. */
+   edge: accent when open, neutral on hover. It is never a box, which
+   floats free of what it switches. One grammar for all three strips —
+   work surfaces, output sub-tabs, and the agent tabs above the chat.
+   Pair with `-mb-px` on the strip so the bar lands on its rule. */
 .p-tab {
   border-bottom: 2px solid transparent;
   color: var(--c-text-3);
   transition: color var(--dur-base) ease-out, border-color var(--dur-base) ease-out;
 }
-.p-tab:hover { color: var(--c-text-2); }
+.p-tab:hover { color: var(--c-text-2); border-bottom-color: var(--c-border-strong); }
 .p-tab-active {
   color: var(--c-accent-fg);
   border-bottom-color: var(--c-accent);
 }
-.p-tab-active:hover { color: var(--c-accent-fg); }
+.p-tab-active:hover { color: var(--c-accent-fg); border-bottom-color: var(--c-accent); }
+
+/* ── Fold ──────────────────────────────────────────────────────────
+   A block folds by its height and its opacity together, on one curve, so
+   nothing jumps and nothing moves twice. The grid's one row goes from the
+   content's height to none, and its child clips. Inside `data-fold-still`
+   (a card's first frame) nothing moves: a card that mounts folded is drawn
+   folded, not folded in view. */
+.p-fold {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--dur-fold) var(--ease-out-strong), opacity var(--dur-fold) var(--ease-out-strong);
+}
+.p-fold[data-folded] { grid-template-rows: 0fr; opacity: 0; }
+.p-fold > * { min-height: 0; overflow: hidden; }
+.p-fold-turn { transition: rotate var(--dur-fold) var(--ease-out-strong); }
+.p-fold-frame { transition: height var(--dur-fold) var(--ease-out-strong); }
+[data-fold-still] :is(.p-fold, .p-fold-turn) { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  .p-fold, .p-fold-turn, .p-fold-frame { transition: none; }
+}
 
 /* Tab strip — scrolls when its column is narrower than the set of surfaces,
    rather than clipping a label. It carries the scroll-edge affordance above;
@@ -922,6 +945,24 @@ body { background: var(--c-bg); color: var(--c-text); }
   animation: p-shimmer 1.8s linear infinite;
 }
 
+/* Work with no progress to report: a sweep in the icon ink crosses a track. */
+.p-busy-bar {
+  position: relative;
+  overflow: hidden;
+  border-radius: 9999px;
+  background-color: var(--c-border-strong);
+}
+.p-busy-bar::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 40%;
+  border-radius: inherit;
+  background-color: var(--c-accent-mark);
+  animation: p-busy 1.4s ease-in-out infinite;
+}
+
 /* The workspace thread column: centred at 780px with the chat's side gutter.
    The message list, the device-consent rail below it and the composer all sit
    on this one column — a consent card that ran the container's full width
@@ -953,6 +994,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 } /* end @layer components */
 
 @keyframes p-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@keyframes p-busy { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
 
 /* ════════════════════════════════════════════════════════════════════
    Deliberately unlayered — these two have to outrank utilities.
@@ -1018,6 +1060,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   .animate-fade-in, .animate-scale-in { animation: none; }
   /* The skeleton still marks where the transcript will land; it just holds. */
   .p-skeleton-bar { animation: none; }
+  .p-busy-bar::after { animation: none; left: 30%; }
   /* The caret still marks where the text is being written; it just holds. */
   .p-streaming > :last-child::after { animation: none; }
   .p-btn:active, .p-btn-quiet:active { transform: none; }

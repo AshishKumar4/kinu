@@ -14,7 +14,7 @@ import {
   OPENAI_BASE_URL,
   OPENAI_DEFAULT_MODEL,
   OPENROUTER_BASE_URL,
-  JsonObjectSchema, accountCredentialKey, openWorkspaceMainActor, discoverOpenAICompatibleModels, specWithoutAccount,
+  JsonObjectSchema, accountCredentialKey, credentialToHeaders, openWorkspaceMainActor, discoverOpenAICompatibleModels, specWithoutAccount,
   ProfileCatalogEnvelopeSchema,
   type JsonObject,
   type LLMProviderConfig,
@@ -874,7 +874,7 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
     return {
       name: 'openai',
       baseURL: OPENAI_BASE_URL,
-      headers: { Authorization: `Bearer ${openaiKey}` },
+      headers: credentialToHeaders('openai.bearer', { kind: 'bearer', token: openaiKey }),
       model: stripProvider(providerModel ?? OPENAI_DEFAULT_MODEL, 'openai'),
     };
   }
@@ -885,10 +885,7 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
     return {
       name: 'openrouter',
       baseURL: OPENROUTER_BASE_URL,
-      headers: {
-        Authorization: `Bearer ${openrouterKey}`,
-        'X-Title': 'Kinu CLI',
-      },
+      headers: { ...credentialToHeaders('openrouter.bearer', { kind: 'bearer', token: openrouterKey }), 'X-Title': 'Kinu CLI' },
       model: stripProvider(providerModel, 'openrouter'),
     };
   }
@@ -899,10 +896,7 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
     return {
       name: 'anthropic',
       baseURL: ANTHROPIC_BASE_URL,
-      headers: {
-        'x-api-key': anthropicKey,
-        'anthropic-version': '2023-06-01',
-      },
+      headers: credentialToHeaders('anthropic.bearer', { kind: 'bearer', token: anthropicKey }),
       model: stripProvider(providerModel, 'anthropic'),
     };
   }

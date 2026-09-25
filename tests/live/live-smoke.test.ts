@@ -41,9 +41,8 @@
 
 import { describe, test, expect, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import puppeteer, { type LaunchOptions, type Page } from 'puppeteer';
+import type { Page } from 'puppeteer';
 import * as v from 'valibot';
 
 import { initWorkspaceSchema, openWorkspaceMainActor, type LLMProviderConfig } from '../../packages/core/src/index';
@@ -56,6 +55,7 @@ import {
 } from '../../packages/cli/src/cloud-api';
 import { CloudAgentClient } from '../../packages/cli/src/cloud-agent-client';
 import { requireSandboxedExecutors } from './harness';
+import { launchTestChrome } from '../../scripts/test-chrome';
 import {
   evalWorkspaceName, infraBoundary, liveChatModel, liveModelTarget, recordLiveModelEpisode,
   recordWorkspaceSpend, reportLiveModelSpend, scratchDir, UNCONFIGURED_LLM,
@@ -119,23 +119,6 @@ const WEB_SMOKE_MARKER = 'WEB_UI_SMOKE_OK';
 
 const WEB_SMOKE_PROMPT = `Use the file tool to write the exact text ${WEB_SMOKE_MARKER} `
   + `into web-ui-smoke.txt, then reply with only ${WEB_SMOKE_MARKER}.`;
-
-function browserLaunchOptions(): LaunchOptions {
-  const options: LaunchOptions = {
-    headless: true,
-    args: ['--no-sandbox', '--disable-dev-shm-usage'],
-  };
-
-  const executablePath = [
-    '/usr/bin/google-chrome',
-    '/usr/bin/google-chrome-stable',
-    '/usr/bin/chromium',
-  ].find(existsSync);
-
-  if (executablePath) options.executablePath = executablePath;
-
-  return options;
-}
 
 async function clickButton(page: Page, label: string): Promise<void> {
   const clicked = await page.evaluate((text) => {
@@ -300,7 +283,8 @@ describe('Live Smoke — one real turn per backend', () => {
   hostedTest('signed-in web app: create, rename, run, inspect, and use mobile panels', async () => {
     if (!HOSTED) throw new Error('unreachable: hostedTest runs only with a worker target');
     const { origin, token } = workerSession(HOSTED.llm);
-    const browser = await puppeteer.launch(browserLaunchOptions());
+    const chrome = await launchTestChrome();
+    const { browser } = chrome;
 
     try {
       const page = await browser.newPage();
@@ -457,7 +441,7 @@ describe('Live Smoke — one real turn per backend', () => {
 
       expect(actions).toEqual(['0.6', '0.6', '0.6']);
     } finally {
-      await browser.close();
+      await chrome.close();
     }
   }, 600_000);
 
