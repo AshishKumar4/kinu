@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The product flows (scripts/product-flows.ts) in real Chrome against the
-# deployment that just went up, as the eval identity. The same file runs before
-# the deploy against the local dev server (scripts/with-dev-server.ts); the
-# origin is the only difference, and it arrives as KINU_ORIGIN either way.
+# deployment that just went up, as the eval identity, on its real model. The
+# same file runs before the deploy against the local dev server
+# (scripts/with-dev-server.ts) on the flows' scripted model; the origin arrives
+# as KINU_ORIGIN either way.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

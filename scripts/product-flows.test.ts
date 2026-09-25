@@ -193,14 +193,14 @@ describe('a slate with no bindings shares from its tile, and stops (#25)', () =>
     const shared = verdictOf(observed.slateShare, 'slate-share');
 
     expect(shared.reachRow).toBe(false);
-    expect(shared.limits).toContain(String(SHARE_VIEWER_REQUESTS_PER_MINUTE));
-    expect(shared.limits).not.toContain('$');
+    expect(shared.limitsStated).toEqual([SHARE_VIEWER_REQUESTS_PER_MINUTE]);
   });
 
-  test('the share is made and listed under Shared by you', () => {
+  test('the share is made, its link copies, and it is listed under Shared by you', () => {
     const shared = verdictOf(observed.slateShare, 'slate-share');
 
-    expect(shared.created).toContain('Anyone with the link can open it.');
+    expect(shared.link).not.toBeNull();
+    expect(shared.copied).toBe(shared.link);
     expect(shared.sharedByYou).toContain(DRIVE_SLATE.title);
   });
 

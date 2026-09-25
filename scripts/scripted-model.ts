@@ -13,7 +13,8 @@
  * a `delta.content` chunk finished with `stop`, or a `delta.tool_calls` chunk
  * carrying the complete argument JSON, finished with `tool_calls` (the parser
  * emits the tool call as soon as the arguments parse — see
- * openai-compatible-chat-language-model.ts:605, `isParsableJson`).
+ * openai-compatible-chat-language-model.ts:605, `isParsableJson`). A request
+ * that asks for no stream, as a workspace's titling does, gets one completion.
  */
 import { createServer as createHttpServer, type ServerResponse } from 'node:http';
 import * as v from 'valibot';
@@ -108,6 +109,7 @@ const OutboundBodySchema = v.object({
   tools: v.optional(v.array(v.object({
     function: v.optional(v.object({ name: v.optional(v.string()) })),
   }))),
+  stream: v.optional(v.boolean()),
 });
 
 /** A user-role message the product wrote: its live state or the unapproved workspace files
@@ -138,6 +140,28 @@ export function readScriptedRequest(body: string): ScriptedRequest {
 
 const CHUNK = { id: 'chatcmpl-scripted', object: 'chat.completion.chunk', created: 1, model: SCRIPTED_MODEL_ID };
 
+/** The answer's tool call as the wire carries it, with its own id per `step`. */
+function wireCall(call: NonNullable<ScriptedAnswer['toolCall']>, step: number) {
+  return { id: `call-${call.name}-${String(step)}`, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.arguments) } };
+}
+
+/** The answer to a request that asked for no stream, as one completion: a workspace's title is asked this way. */
+function completionOf(answer: ScriptedAnswer, step: number): string {
+  const call = answer.toolCall;
+  const content = answer.text ?? null;
+
+  const message = call === undefined
+    ? { role: 'assistant', content }
+    : { role: 'assistant', content, tool_calls: [wireCall(call, step)] };
+
+  return JSON.stringify({
+    ...CHUNK,
+    object: 'chat.completion',
+    choices: [{ index: 0, message, finish_reason: call === undefined ? 'stop' : 'tool_calls' }],
+    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  });
+}
+
 /** `step`: the calls the request already holds, so each call a turn makes has its own id, as a provider gives it. */
 function streamOf(answer: ScriptedAnswer, step: number): string {
   const events: unknown[] = [];
@@ -154,12 +178,7 @@ function streamOf(answer: ScriptedAnswer, step: number): string {
         index: 0,
         delta: {
           role: 'assistant',
-          tool_calls: [{
-            index: 0,
-            id: `call-${call.name}-${String(step)}`,
-            type: 'function',
-            function: { name: call.name, arguments: JSON.stringify(call.arguments) },
-          }],
+          tool_calls: [{ index: 0, ...wireCall(call, step) }],
         },
         finish_reason: null,
       }],
@@ -217,10 +236,19 @@ export async function startScriptedModel(script: ScriptedModel): Promise<Scripte
       if (url.pathname === '/chat/completions' && request.method === 'POST') {
         const asked = readScriptedRequest(body);
         const answer = script(asked);
+        const streamed = v.parse(OutboundBodySchema, parseJsonValue(body)).stream === true;
         // Every request's surface, on the run's own log: a script that answered
         // prose where a tool call was meant is read here first.
         process.stderr.write(`scripted-model: tools=${asked.available.join(',')} called=${asked.called.join(',')} users=${JSON.stringify(asked.userTexts)}\n`);
         answers.push(answer);
+
+        if (!streamed) {
+          response.setHeader('content-type', 'application/json');
+          response.end(completionOf(answer, asked.called.length));
+
+          return;
+        }
+
         response.setHeader('content-type', 'text/event-stream');
 
         if (answer.pace === undefined) response.end(streamOf(answer, asked.called.length));
@@ -253,15 +281,34 @@ export async function startScriptedModel(script: ScriptedModel): Promise<Scripte
   };
 }
 
-/** Point the deployment's `openai-compat` credential at this server. */
-export async function registerScriptedModel(origin: string, port: number): Promise<void> {
+/** Point the `openai-compat` credential of the account `headers` name at this server. */
+export async function registerScriptedModel(origin: string, port: number, headers: Record<string, string> = {}): Promise<void> {
   await apiJson(origin, `/api/user/credentials/${SCRIPTED_CREDENTIAL}`, {
     method: 'POST',
+    headers,
     body: JSON.stringify({
       kind: 'openai-compat',
       baseURL: `http://127.0.0.1:${String(port)}`,
       apiKey: 'fake-key',
     }),
+  });
+}
+
+const ProfileCatalogEnvelopeSchema = v.object({
+  version: v.number(),
+  catalog: v.looseObject({ tiers: v.looseObject({ default: v.looseObject({}) }) }),
+});
+
+/** Make the scripted model the default tier of the account `headers` name, so every workspace it makes runs on it,
+ *  the ones made from the home page included. Its credential must be registered first. */
+export async function defaultToScriptedModel(origin: string, headers: Record<string, string> = {}): Promise<void> {
+  const { version, catalog } = v.parse(ProfileCatalogEnvelopeSchema, await apiJson(origin, '/api/user/profile-catalog', { headers }));
+  const tiers = { ...catalog.tiers, default: { ...catalog.tiers.default, model: SCRIPTED_MODEL_SPEC } };
+
+  await apiJson(origin, '/api/user/profile-catalog', {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ catalog: { ...catalog, tiers }, expectedVersion: version }),
   });
 }
 
