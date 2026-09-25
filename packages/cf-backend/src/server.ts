@@ -35,7 +35,7 @@ import { claimOwnedWorkspace } from "./user/workspace-ownership";
 import { err } from "@kinu.run/core";
 import { isControlPlaneSurface, verifyControlPlaneAccess } from "./control-plane/access-gate";
 import {
-  adminDenialMessage, adminDenialStatus, reportAdminDenial,
+  adminDenialAnswer, reportAdminDenial,
 } from "./control-plane/admin-caller";
 import { observeIdentity, observeWorkspaceUse } from "./control-plane/index-feed";
 import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
@@ -305,7 +305,9 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     if (!access.ok) {
       reportAdminDenial(access.denial, url.pathname, request.method);
 
-      return err(adminDenialStatus(access.denial), adminDenialMessage(access.denial));
+      const answer = adminDenialAnswer(access.denial);
+
+      return err(answer.status, answer.message);
     }
   }
 

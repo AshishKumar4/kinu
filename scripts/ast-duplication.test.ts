@@ -1,12 +1,12 @@
 /**
- * What `bun scripts/ast-duplication.ts --lock` may write.
+ * What `bun scripts/ast-duplication.ts` reports, and what `--lock` may write.
  *
- * The gate's detection is proven in `gates.test.ts`, over sources. This file
- * takes the other half: the lock is a ledger of duplication that already
- * exists, and the direction it is allowed to move. A lock a red run can
- * re-record is an ignore list with an extra step, so every case here is driven
- * with two small in-memory lists — the old lock and the candidate census — and
- * the red ones assert the refusal itself rather than anything printed.
+ * Detection is driven over small in-memory sources. The lock half treats the
+ * lock as a ledger of duplication that already exists, and the direction it is
+ * allowed to move. A lock a red run can re-record is an ignore list with an
+ * extra step, so every lock case is driven with two small in-memory lists — the
+ * old lock and the candidate census — and the red ones assert the refusal
+ * itself rather than anything printed.
  *
  * There is no ceiling and no budget line to test beside them: this lock records
  * group identities and no tree-wide number at all, which is why the copy count
@@ -19,6 +19,175 @@ import { scratchPath } from '@kinu.run/test-utils';
 
 import { findDuplicateGroups, shrinkGroups } from './ast-duplication';
 import { readLock, writeLock } from './gate-ratchet';
+
+/** A body large enough to clear a real threshold, written twice with every
+ *  identifier renamed. A text- or token-similarity tool matches on the names;
+ *  this gate must not need them. */
+const ORIGINAL = `
+export function summarise(input: string): string {
+  const trimmed = input.trim();
+  const parts = trimmed.split(',');
+  const kept: string[] = [];
+  for (const part of parts) {
+    if (part.length > 0) kept.push(part.toUpperCase());
+  }
+  return kept.join('|');
+}
+`;
+
+const RENAMED = `
+export function condense(raw: string): string {
+  const clean = raw.trim();
+  const chunks = clean.split(',');
+  const keep: string[] = [];
+  for (const chunk of chunks) {
+    if (chunk.length > 0) keep.push(chunk.toUpperCase());
+  }
+  return keep.join('|');
+}
+`;
+
+describe('ast duplication gate', () => {
+  test('a copy with every identifier renamed is still one group', () => {
+    const groups = findDuplicateGroups(new Map([
+      ['packages/core/src/a.ts', ORIGINAL],
+      ['packages/core/src/b.ts', RENAMED],
+    ]), 25);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].members.map((m) => `${m.file}#${m.name}`)).toEqual([
+      'packages/core/src/a.ts#summarise',
+      'packages/core/src/b.ts#condense',
+    ]);
+  });
+
+  test('a copy whose units, numbers and messages were also edited is still one group', () => {
+    // The pair that went unseen while literal text was part of the identity:
+    // one size formatter in the web UI, one in the CLI, over different units.
+    const size = (name: string, base: number, units: readonly string[]): string => `
+      export function ${name}(n: number): string {
+        if (n < ${base}) return \`\${n} ${units[0]}\`;
+        if (n < ${base} * ${base}) return \`\${(n / ${base}).toFixed(1)} ${units[1]}\`;
+        return \`\${(n / (${base} * ${base})).toFixed(1)} ${units[2]}\`;
+      }
+    `;
+
+    const groups = findDuplicateGroups(new Map([
+      ['packages/cf-backend/src/files.tsx', size('fmtSize', 1024, ['B', 'KB', 'MB'])],
+      ['packages/cli/src/display.ts', size('formatBytes', 1000, ['bytes', 'kB', 'megabytes'])],
+    ]), 20);
+
+    expect(groups.map((g) => g.members.map((m) => m.name))).toEqual([['fmtSize', 'formatBytes']]);
+  });
+
+  test('two getters over different SQL are not a copy, through either SQL port', () => {
+    const tagged = (table: string): string => `
+      export function read(sql: SqlExecutor, id: string): Row | undefined {
+        const row = sql<Row>\`SELECT id, name, created_at FROM ${table} WHERE id = \${id}\`[0];
+        if (row === undefined) return undefined;
+        return { id: row.id, name: row.name, createdAt: row.created_at };
+      }
+    `;
+
+    const positional = (table: string): string => `
+      export function read(db: SqlExec, id: string): Row | undefined {
+        const row = db.exec('SELECT id, name, created_at FROM ${table} WHERE id = ?', id).toArray()[0];
+        if (row === undefined) return undefined;
+        return { id: row.id, name: row.name, createdAt: row.created_at };
+      }
+    `;
+
+    for (const getter of [tagged, positional]) {
+      const over = (a: string, b: string) => findDuplicateGroups(new Map([
+        ['packages/core/src/a.ts', getter(a)],
+        ['packages/core/src/b.ts', getter(b)],
+      ]), 20);
+
+      expect(over('crafted_tools', 'memory_chunks')).toEqual([]);
+      // The same query twice is a copy, so the silence above is the query's doing.
+      expect(over('crafted_tools', 'crafted_tools')).toHaveLength(1);
+    }
+  });
+
+  test('two wrappers over different intrinsic JSX tags are not a copy', () => {
+    const wrapper = (outer: string, head: string, body: string): string => `
+      function Frame({ label, children }: { label: string; children: ReactNode }) {
+        return (
+          <${outer} className="frame">
+            <${head} className="frame-head">{label}</${head}>
+            <${body} className="frame-body">{children}</${body}>
+          </${outer}>
+        );
+      }
+    `;
+
+    const over = (b: string) => findDuplicateGroups(new Map([
+      ['packages/cf-backend/src/a.tsx', wrapper('div', 'dt', 'dd')],
+      ['packages/cf-backend/src/b.tsx', b],
+    ]), 20);
+
+    expect(over(wrapper('section', 'h2', 'div'))).toEqual([]);
+    expect(over(wrapper('div', 'dt', 'dd'))).toHaveLength(1);
+  });
+
+  test('a duplicate below the threshold is not reported', () => {
+    const groups = findDuplicateGroups(new Map([
+      ['packages/core/src/a.ts', ORIGINAL],
+      ['packages/core/src/b.ts', RENAMED],
+    ]), 500);
+
+    expect(groups).toEqual([]);
+  });
+
+  test('a copy across two packages is ranked as cross-package', () => {
+    const groups = findDuplicateGroups(new Map([
+      ['packages/core/src/a.ts', ORIGINAL],
+      ['packages/cf-backend/src/b.ts', RENAMED],
+      ['packages/cli/src/c.ts', ORIGINAL],
+    ]), 25);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].kind).toBe('cross-package');
+    expect(groups[0].members).toHaveLength(3);
+  });
+
+  test('a duplicate nested inside a duplicate is reported once, outermost', () => {
+    const groups = findDuplicateGroups(new Map([
+      ['packages/core/src/a.ts', ORIGINAL],
+      ['packages/core/src/b.ts', RENAMED],
+    ]), 5);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].members.map((m) => m.name)).toEqual(['summarise', 'condense']);
+  });
+
+  test('an anonymous callback is reported under its owner and its call', () => {
+    const component = (tail: string): string => `
+      export function Panel(): unknown {
+        const grow = useCallback(() => {
+          const el = ref.current;
+          if (!el) return;
+          el.style.height = 'auto';
+          el.style.height = \`\${el.scrollHeight}px\`;
+          el.dataset.grown = 'yes';
+        }, [value]);
+        ${tail}
+        return grow;
+      }
+    `;
+
+    const groups = findDuplicateGroups(new Map([
+      ['packages/cf-backend/src/a.tsx', component('log("a");')],
+      ['packages/cf-backend/src/b.tsx', component('warn("b", 2);')],
+    ]), 20);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].members.map((m) => m.name)).toEqual([
+      'grow > useCallback',
+      'grow > useCallback',
+    ]);
+  });
+});
 
 /** Two copies, the shape the live lock is mostly made of. */
 const PAIR = 'cross-file packages/core/src/file-edit.ts#lineSpan '

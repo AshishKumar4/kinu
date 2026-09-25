@@ -10,7 +10,7 @@ import { appendMemoryNote } from '../memory/note';
 import { isVfsError, vfsAddressingHint, withVfsErrorHint } from '../vfs/errno';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
-import { commandResult } from './exec-result';
+import { commandResult, existsTool } from './exec-result';
 import { diagnostics, KinuError, refusalOf, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
@@ -184,20 +184,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       },
     },
 
-    exists: {
-      planAllowed: true,
-      description: 'Check if a path exists.',
-      execute: async (...args: unknown[]) => {
-        const path = parseInput(StringSchema, { value: args[0] });
+    exists: existsTool(vfs, { description: 'Check if a path exists.', operation: 'workspace.exists' }),
 
-        // A failed check is not an absence.
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'workspace.exists: path must be a string'));
-        }
-
-        return vfs.exists(path);
-      },
-    },
 
     exec: {
       description:

@@ -10,7 +10,7 @@ import type { VFS } from '../types/primitives';
 import { makeVfsError, type VfsErrorCode } from '../vfs/errno';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
-import { commandResult } from './exec-result';
+import { commandResult, existsTool } from './exec-result';
 import { KinuError, refusalOf } from '../obs/index';
 
 type Stat = { size: number; mtimeMs: number; isDir: boolean } | null;
@@ -181,19 +181,8 @@ export function createParentExecutor(deps: {
           return vfs.readdir(path);
         },
       },
-      exists: {
-        planAllowed: true,
-        description: 'Check whether a path exists in the parent workspace.',
-        execute: async (...args: unknown[]) => {
-          const path = parseInput(StringSchema, { value: args[0] });
+      exists: existsTool(vfs, { description: 'Check whether a path exists in the parent workspace.', operation: 'parent exists' }),
 
-          if (path === undefined) {
-            return refusalOf(new KinuError('bad_input', 'parent exists: path must be a string'));
-          }
-
-          return vfs.exists(path);
-        },
-      },
       exec: {
         description:
           "Run one command in the parent workspace's real shell — the full coreutils set, pipes, "

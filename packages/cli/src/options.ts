@@ -30,11 +30,16 @@ export function parseTime(value: string, label: string): number {
   return parsed;
 }
 
-export function normalizeWebhookAuthMode(value: string | undefined): CloudWebhookTriggerInput['auth_mode'] {
-  const raw = (value ?? 'hmac').toLowerCase();
+export function oneOfFlag<T extends string>(value: string | undefined, flag: string, allowed: readonly [T, ...T[]]): T {
+  const raw = (value ?? allowed[0]).toLowerCase();
+  const hit = allowed.find((option) => option === raw);
 
-  if (raw === 'hmac' || raw === 'bearer' || raw === 'mtls') return raw;
-  throw new Error('--auth-mode must be hmac, bearer, or mtls');
+  if (hit !== undefined) return hit;
+  throw new Error(`${flag} must be ${allowed.slice(0, -1).join(', ')}, or ${allowed.at(-1)}`);
+}
+
+export function normalizeWebhookAuthMode(value: string | undefined): CloudWebhookTriggerInput['auth_mode'] {
+  return oneOfFlag(value, '--auth-mode', ['hmac', 'bearer', 'mtls']);
 }
 
 /** Non-objects are kept under `key` so the payload survives. */

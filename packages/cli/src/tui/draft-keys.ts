@@ -67,6 +67,12 @@ export function composerKeyHandlers(deps: ComposerKeyDeps): Partial<Record<TuiAc
     deps.setPromptCursor(stepped.cursor);
   };
 
+  const submitDraft = (event: (draft: string) => InputMachineEvent) => (key: KeyEvent): void => {
+    key.preventDefault();
+
+    return deps.runInputEffects(deps.dispatchInput(event(deps.expandPastes(deps.input.current?.plainText ?? ''))));
+  };
+
   const escapeDraft = () =>
     deps.runInputEffects(deps.dispatchInput({
       type: 'escape',
@@ -114,16 +120,8 @@ export function composerKeyHandlers(deps: ComposerKeyDeps): Partial<Record<TuiAc
 
       return escapeDraft();
     },
-    'conversation.branch': (key) => {
-      key.preventDefault();
-
-      return deps.runInputEffects(deps.dispatchInput({ type: 'branch', draft: deps.expandPastes(deps.input.current?.plainText ?? '') }));
-    },
-    'queue.add': (key) => {
-      key.preventDefault();
-
-      return deps.runInputEffects(deps.dispatchInput({ type: 'queue', text: deps.expandPastes(deps.input.current?.plainText ?? '') }));
-    },
+    'conversation.branch': submitDraft((draft) => ({ type: 'branch', draft })),
+    'queue.add': submitDraft((text) => ({ type: 'queue', text })),
     'queue.edit-last': () => {
       deps.dispatchInput({ type: 'backspace', draft: deps.input.current?.plainText ?? '' });
     },

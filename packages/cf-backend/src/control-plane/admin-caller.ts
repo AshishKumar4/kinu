@@ -114,31 +114,19 @@ export function authorizeAdmin(
   return { ok: true, admin: { email: operator.email, userId: identity.userId, fresh, access } };
 }
 
-/** 404 hides the admin surface (every `access_*` arm too, even unconfigured);
- *  403 only for a recognized operator needing step-up. Keep the switch exhaustive. */
-export function adminDenialStatus(denial: AdminDenial): number {
-  switch (denial) {
-    case 'unconfigured': return 503;
-    case 'stale_auth': return 403;
-    case 'access_unconfigured':
-    case 'access_missing':
-    case 'access_invalid':
-    case 'access_no_email':
-    case 'access_mismatch':
-    case 'no_admins_configured':
-    case 'not_admin':
-    case 'dev_identity':
-    case 'token_identity':
-      return 404;
-  }
+export interface AdminDenialAnswer {
+  readonly status: number;
+  readonly message: string;
 }
 
-export function adminDenialMessage(denial: AdminDenial): string {
+/** 404 hides the admin surface (every `access_*` arm too, even unconfigured);
+ *  403 only for a recognized operator needing step-up. Keep the switch exhaustive. */
+export function adminDenialAnswer(denial: AdminDenial): AdminDenialAnswer {
   switch (denial) {
     case 'unconfigured':
-      return 'The control plane is not configured on this deployment.';
+      return { status: 503, message: 'The control plane is not configured on this deployment.' };
     case 'stale_auth':
-      return 'This action needs a fresh sign-in. Sign in again, then retry within five minutes.';
+      return { status: 403, message: 'This action needs a fresh sign-in. Sign in again, then retry within five minutes.' };
     case 'access_unconfigured':
     case 'access_missing':
     case 'access_invalid':
@@ -148,7 +136,7 @@ export function adminDenialMessage(denial: AdminDenial): string {
     case 'not_admin':
     case 'dev_identity':
     case 'token_identity':
-      return 'Not found';
+      return { status: 404, message: 'Not found' };
   }
 }
 

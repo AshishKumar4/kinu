@@ -11,7 +11,7 @@ import {
   type ControlPlaneAccessEnv,
 } from '../src/control-plane/access-gate';
 import {
-  adminDenialMessage, adminDenialStatus, authorizeAdmin, isControlPlaneOperator,
+  adminDenialAnswer, authorizeAdmin, isControlPlaneOperator,
 } from '../src/control-plane/admin-caller';
 import { requestUrl } from '@kinu.run/core';
 
@@ -167,8 +167,7 @@ describe('the assertion is verified, never trusted', () => {
 
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_missing');
-    expect(adminDenialStatus(answer.denial)).toBe(404);
-    expect(adminDenialMessage(answer.denial)).toBe('Not found');
+    expect(adminDenialAnswer(answer.denial)).toEqual({ status: 404, message: 'Not found' });
   });
 
   test('an empty assertion header is missing rather than invalid', async () => {
@@ -376,12 +375,10 @@ describe('an unconfigured deployment has no admin plane', () => {
 
   test('unconfigured answers 404 and says nothing about the admin surface', () => {
     // A 503 would tell a stranger the path exists.
-    expect(adminDenialStatus('access_unconfigured')).toBe(404);
-    expect(adminDenialMessage('access_unconfigured')).toBe('Not found');
+    expect(adminDenialAnswer('access_unconfigured')).toEqual({ status: 404, message: 'Not found' });
 
     for (const denial of ['access_missing', 'access_invalid', 'access_no_email'] as const) {
-      expect(adminDenialStatus(denial)).toBe(404);
-      expect(adminDenialMessage(denial)).toBe('Not found');
+      expect(adminDenialAnswer(denial)).toEqual({ status: 404, message: 'Not found' });
     }
   });
 
@@ -450,7 +447,7 @@ describe('the two gates are joined by the email, and both still apply', () => {
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_mismatch');
     // 404 like every admin-existence refusal: confirming the path teaches a non-operator.
-    expect(adminDenialStatus(answer.denial)).toBe(404);
+    expect(adminDenialAnswer(answer.denial).status).toBe(404);
   });
 
   test('the mismatch is decided before the step-up window, so a mismatch never reads as 403', async () => {

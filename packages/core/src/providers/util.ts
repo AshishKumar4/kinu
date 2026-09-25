@@ -148,7 +148,7 @@ export async function catalogModelInfo(
 }
 
 export function positiveInteger(input: { value: unknown }): number | undefined {
-  const parsed = v.safeParse(v.pipe(v.number(), v.finite(), v.gtValue(0)), input.value);
+  const parsed = v.safeParse(v.pipe(v.number(), v.finite(), v.minValue(1)), input.value);
 
   return parsed.success ? Math.floor(parsed.output) : undefined;
 }

@@ -621,7 +621,7 @@ export { initWorkspaceActorTable, WorkspaceActorDirectory, actorScaffoldPath, ac
 
 // open-38: one physical workspace SQLite for every logical actor.
 export {
-  createActorHost, recoverActorTurns, childContextResolver,
+  createActorHost, recoverActorTurns, childContextResolver, registeredParent,
   type ActorHost, type ActorHostDeps, type BoundActor, type HostedActor,
   type LoopSeed, type ActorRetirement, type ResumableActorTurn,
 } from './state/actor-host';

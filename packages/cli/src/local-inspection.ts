@@ -17,6 +17,7 @@ import {
   WorkspaceActorDirectory,
   createAgentConfigStore,
   type ActorHandle,
+  type SqlExecutor,
   type WorkspaceActor,
   createFactsStore,
   initEventsHubTables,
@@ -313,24 +314,14 @@ export function listLocalEvents(name: string, opts: { variant?: string; since?: 
 }
 
 export function listLocalRuns(name: string, limit = 50): RunListEntry[] {
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'run_events')) return [];
-    const sql = makeSql(db);
-
-    return [...listRuns(new RunEventRecorder(sql, openWorkspaceMainActor(sql)), null, limit).items];
-  });
+  return readMainActorTable(name, 'run_events', [], (sql, actor) => [...listRuns(new RunEventRecorder(sql, actor), null, limit).items]);
 }
 
 /** `since` is inclusive. */
 export function listLocalRunEvents(
   name: string, runId: string, opts: { since?: number; limit?: number } = {},
 ): RunEvent[] {
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'run_events')) return [];
-    const sql = makeSql(db);
-
-    return new RunEventRecorder(sql, openWorkspaceMainActor(sql)).read(runId, opts);
-  });
+  return readMainActorTable(name, 'run_events', [], (sql, actor) => new RunEventRecorder(sql, actor).read(runId, opts));
 }
 
 /** Local peer of core's `getRunTimeline`, sharing its ceiling; `limit` is user input bound to raw `LIMIT ?`. */
@@ -439,12 +430,7 @@ export function listLocalMcts(name: string): SearchNode[] {
 }
 
 export function listLocalMctsSearchRuns(name: string, limit = 20): MctsSearchRunSummary[] {
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'mcts_search_runs')) return [];
-    const sql = makeSql(db);
-
-    return new MctsSearchStore(sql, openWorkspaceMainActor(sql)).list(limit);
-  });
+  return readMainActorTable(name, 'mcts_search_runs', [], (sql, actor) => new MctsSearchStore(sql, actor).list(limit));
 }
 
 /** Local peers of the three record RPCs. A workspace predating `exploration_records` has no table: an absence, not a failure. */
@@ -486,12 +472,7 @@ export function getLocalMctsNode(name: string, nodeId: string): SearchNodeDetail
 }
 
 export function listLocalHeads(name: string, limit = 20): HeadRunView[] {
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'head_journal')) return [];
-    const sql = makeSql(db);
-
-    return new HeadJournal(sql, openWorkspaceMainActor(sql)).listRuns(limit);
-  });
+  return readMainActorTable(name, 'head_journal', [], (sql, actor) => new HeadJournal(sql, actor).listRuns(limit));
 }
 
 export function listLocalGepaRuns(name: string, limit = 20): GepaRunSummary[] {
@@ -781,12 +762,7 @@ export async function readLocalWorkspacePins(name: string): Promise<{ model: str
 }
 
 export function listLocalJobs(name: string, limit = 20): BackgroundJob[] {
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'background_jobs')) return [];
-    const sql = makeSql(db);
-
-    return new BackgroundJobStore(sql, openWorkspaceMainActor(sql)).list(limit);
-  });
+  return readMainActorTable(name, 'background_jobs', [], (sql, actor) => new BackgroundJobStore(sql, actor).list(limit));
 }
 
 export async function cancelLocalJob(name: string, id: string): Promise<{ ok: boolean }> {
@@ -856,6 +832,15 @@ function openLocalDb(name: string): SqliteDb {
   if (!existsSync(dbPath)) throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
 
   return new Database(dbPath, { readonly: true });
+}
+
+function readMainActorTable<T>(name: string, table: string, absent: T, read: (sql: SqlExecutor, actor: ActorHandle) => T): T {
+  return withLocalDb(name, (db) => {
+    if (!tableExists(db, table)) return absent;
+    const sql = makeSql(db);
+
+    return read(sql, openWorkspaceMainActor(sql));
+  });
 }
 
 function withLocalDb<T>(name: string, fn: (db: SqliteDb) => T): T {

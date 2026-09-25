@@ -9,6 +9,7 @@ import {
   DEVICE_CONFIG_PATH,
   DEVICE_CONNECT_DISCLOSURE,
   type ConnectDeviceResult,
+  waitingDots,
 } from '../device-connect';
 import { readDaemonLogTail } from '../daemon-log';
 import { ACCENT, DIM, ERR, OK } from '../display';
@@ -33,29 +34,19 @@ export async function desktopCommand(action: string | undefined, opts: { label?:
       return;
     }
 
-    let waiting = false;
+    const dots = waitingDots('');
     let result: ConnectDeviceResult;
 
     try {
-      result = await connectDevice(auth, {
-        label: name,
-        onWaiting: () => {
-          if (!waiting) {
-            process.stdout.write(DIM('Waiting for the daemon to connect'));
-            waiting = true;
-          }
-
-          process.stdout.write(DIM('.'));
-        },
-      });
+      result = await connectDevice(auth, { label: name, onWaiting: dots.onWaiting });
     } catch (err) {
       // The readiness failure already quotes the daemon log; this only ends the progress line.
-      if (waiting) process.stdout.write('\n');
+      dots.end();
       console.error(`${ERR('✗')} ${renderThrownChain({ cause: err })}`);
       process.exit(1);
     }
 
-    if (waiting) process.stdout.write('\n');
+    dots.end();
 
     if (result.kind !== 'connected') {
       console.error(`${ERR('✗')} ${describeConnectOutcome(result, false).message}`);

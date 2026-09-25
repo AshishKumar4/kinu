@@ -1,10 +1,11 @@
 /** Command result projection and display formatting. Invocation status never comes from text. */
 
 import * as v from 'valibot';
-import { ERROR_CODES, type Refusal } from '../obs/index';
+import { ERROR_CODES, KinuError, refusalOf, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import { FILE_REFUSAL_REASONS } from '../types/file-edits';
-import type { PreviewRouteCheck } from './types';
+import type { VFS } from '../types/primitives';
+import type { ExecutorTool, PreviewRouteCheck } from './types';
 
 const RefusalSchema = v.object({
   reason: v.picklist(ERROR_CODES),
@@ -88,3 +89,16 @@ export function formatExecResult(result: ExecOutcome): string {
   return sections.join('\n');
 }
 
+export function existsTool(vfs: Pick<VFS, 'exists'>, input: { readonly description: string; readonly operation: string }): ExecutorTool {
+  return {
+    planAllowed: true,
+    description: input.description,
+    execute: async (...args: unknown[]) => {
+      const path = v.safeParse(v.string(), args[0]);
+
+      if (!path.success) return refusalOf(new KinuError('bad_input', `${input.operation}: path must be a string`));
+
+      return vfs.exists(path.output);
+    },
+  };
+}
