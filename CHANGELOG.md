@@ -731,6 +731,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   already did; nobody else gets in.
 - **The Skills folder wears the skills' mark.** In the Drive, the Skills folder showed a plain folder icon; it now
   shows the green book the skills in it wear, as the design has it.
+- **An upload's bar can be seen.** The bar on an upload's tile was a faint shimmer that nearly vanished on the
+  tile, in both themes. It is now a sweep in the icon colour crossing a track, and it holds still for reduced
+  motion.
 - **Hired agents make slates.** Slates lived in the main agent's home, so an agent you hired could not create one
   ("can't promote to /home/main/slates/widgets (EACCES)"). They now live at `/slates`, the workspace's own
   directory. Every chat in the workspace makes, edits, previews and removes slates there as the main chat does, and

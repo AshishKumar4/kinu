@@ -219,11 +219,10 @@ interface Transfer {
   readonly stop: () => void;
 }
 
-/** No upload reports progress, so the bar only moves. */
 function TransferPicture({ status }: { status: Transfer["status"] }) {
   return (
     <span className="absolute inset-0 flex items-center justify-center p-recessed">
-      {status === "failed" ? <WarningIcon size={24} className="p-danger" /> : <span className="h-1 w-1/2 rounded-full p-skeleton-bar" />}
+      {status === "failed" ? <WarningIcon size={24} className="p-danger" /> : <span role="progressbar" aria-label="Uploading" className="h-1 w-1/2 p-busy-bar" />}
     </span>
   );
 }

@@ -25,7 +25,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
-import { withGallery, type Gallery } from './gallery-harness';
+import { contrast, rgba, withGallery, type Gallery } from './gallery-harness';
 
 const SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'drive-ux');
 
@@ -232,6 +232,38 @@ describe('the Drive', () => {
       // gave you, keep their covers.
       expect(tiles.filter(([, how]) => how === 'picture').map(([id]) => id)).toEqual(['live-board-1']);
       expect(tiles.length).toBe(4);
+    });
+  });
+
+  test("an upload's bar stands out on its tile, on both themes", async () => {
+    await withGallery(async (gallery) => {
+      for (const theme of ['dark', 'light'] as const) {
+        const page = await freshPage(gallery, 'drive&path=/projects/ops', theme, 'desktop');
+
+        try {
+          // Held in flight: the page's own fetch never answers the upload.
+          await page.evaluate(() => {
+            const real = window.fetch;
+
+            window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => (init?.method === 'PUT' ? new Promise<Response>(() => {}) : real(input, init)), { preconnect: real.preconnect });
+          });
+          const input = await page.$('input[data-drive-files-input]');
+
+          if (input === null) throw new Error('no files input');
+          await input.uploadFile(join(import.meta.dir, 'drive-ux.test.ts'));
+          await page.waitForSelector('[data-drive-transfer="uploading"]');
+
+          const [sweep, ground] = await page.$eval('[data-drive-transfer="uploading"] [role="progressbar"]', (bar) => [
+            getComputedStyle(bar, '::after').backgroundColor,
+            getComputedStyle(bar.parentElement ?? bar).backgroundColor,
+          ]);
+
+          // WCAG's floor for a graphic that carries meaning.
+          expect(contrast(rgba(sweep), rgba(ground))).toBeGreaterThanOrEqual(3);
+        } finally {
+          await page.close();
+        }
+      }
     });
   });
 

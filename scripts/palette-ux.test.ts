@@ -8,7 +8,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 
-import { unruledClasses, withGallery } from './gallery-harness';
+import { contrast, over, rgba, type Rgba, unruledClasses, withGallery } from './gallery-harness';
 
 const MODES = ['dark', 'light'] as const;
 
@@ -67,45 +67,6 @@ function paletteOf(asked: readonly string[]): Palette {
   }
 
   return { mode: document.documentElement.dataset.mode, colours };
-}
-
-interface Rgba { readonly r: number; readonly g: number; readonly b: number; readonly a: number }
-
-/** A computed `color`: Chromium serialises sRGB colours as `rgb(…)` or `rgba(…)`. */
-function rgba(computed: string): Rgba {
-  const channels = /^rgba?\(([^)]+)\)$/u.exec(computed)?.[1]?.split(',').map((part) => Number(part.trim()));
-
-  if (channels === undefined || channels.length < 3 || channels.some(Number.isNaN)) {
-    throw new Error(`not an sRGB computed colour: ${computed}`);
-  }
-
-  const [r = 0, g = 0, b = 0, a = 1] = channels;
-
-  return { r, g, b, a };
-}
-
-const over = (ink: Rgba, paper: Rgba): Rgba => ({
-  r: ink.r * ink.a + paper.r * (1 - ink.a),
-  g: ink.g * ink.a + paper.g * (1 - ink.a),
-  b: ink.b * ink.a + paper.b * (1 - ink.a),
-  a: 1,
-});
-
-function luminance({ r, g, b }: Rgba): number {
-  const channel = (value: number): number => {
-    const unit = value / 255;
-
-    return unit <= 0.039_28 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
-  };
-
-  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
-}
-
-function contrast(ink: Rgba, paper: Rgba): number {
-  const light = luminance(over(ink, paper));
-  const dark = luminance(paper);
-
-  return Number(((Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05)).toFixed(2));
 }
 
 /** Kumo's colour families: the size scale and the raw neutral ramp are inputs, not surfaces the palette themes. */

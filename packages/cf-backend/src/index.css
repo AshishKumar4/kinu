@@ -945,6 +945,24 @@ body { background: var(--c-bg); color: var(--c-text); }
   animation: p-shimmer 1.8s linear infinite;
 }
 
+/* Work with no progress to report: a sweep in the icon ink crosses a track. */
+.p-busy-bar {
+  position: relative;
+  overflow: hidden;
+  border-radius: 9999px;
+  background-color: var(--c-border-strong);
+}
+.p-busy-bar::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 40%;
+  border-radius: inherit;
+  background-color: var(--c-accent-mark);
+  animation: p-busy 1.4s ease-in-out infinite;
+}
+
 /* The workspace thread column: centred at 780px with the chat's side gutter.
    The message list, the device-consent rail below it and the composer all sit
    on this one column — a consent card that ran the container's full width
@@ -976,6 +994,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 } /* end @layer components */
 
 @keyframes p-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@keyframes p-busy { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
 
 /* ════════════════════════════════════════════════════════════════════
    Deliberately unlayered — these two have to outrank utilities.
@@ -1041,6 +1060,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   .animate-fade-in, .animate-scale-in { animation: none; }
   /* The skeleton still marks where the transcript will land; it just holds. */
   .p-skeleton-bar { animation: none; }
+  .p-busy-bar::after { animation: none; left: 30%; }
   /* The caret still marks where the text is being written; it just holds. */
   .p-streaming > :last-child::after { animation: none; }
   .p-btn:active, .p-btn-quiet:active { transform: none; }
